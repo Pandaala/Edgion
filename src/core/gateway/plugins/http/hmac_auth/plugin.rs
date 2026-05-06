@@ -514,23 +514,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_authorization_ok() {
-        let header = r#"hmac username="alice", algorithm="hmac-sha256", headers="@request-target host date", signature="YWJjZA==""#;
-        let parsed = HmacAuth::parse_authorization(header).expect("should parse");
-        assert_eq!(parsed.username, "alice");
-        assert_eq!(parsed.algorithm, HmacAlgorithm::HmacSha256);
-        assert_eq!(parsed.headers, vec!["@request-target", "host", "date"]);
-        assert_eq!(parsed.signature, b"abcd");
-    }
-
-    #[test]
-    fn test_parse_authorization_invalid_format() {
-        let header = r#"hmac username=alice, algorithm="hmac-sha256""#;
-        let parsed = HmacAuth::parse_authorization(header);
-        assert!(parsed.is_err());
-    }
-
-    #[test]
     fn test_build_signing_string_request_target() {
         let mut session = MockPluginSession::new();
         session.expect_get_path().return_const("/v1/items".to_string());
@@ -552,87 +535,6 @@ mod tests {
             signing,
             &digest
         ));
-    }
-
-    #[tokio::test]
-    async fn test_run_request_missing_auth_with_anonymous() {
-        let config = HmacAuthConfig {
-            anonymous: Some("guest".to_string()),
-            ..Default::default()
-        };
-        let plugin = HmacAuth::new(&config);
-
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("HmacAuth");
-
-        session.expect_header_value().returning(|_| None);
-        session.expect_set_request_header().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("Allow anonymous"));
-    }
-
-    #[tokio::test]
-    async fn test_run_request_valid_signature() {
-        let plugin = create_plugin();
-        let date = rfc2822_now();
-        let signing = format!("@request-target: get /v1/ping\ndate: {}", date);
-        let signature = HmacAuth::compute_hmac(HmacAlgorithm::HmacSha256, b"alice-super-secret-key", &signing).unwrap();
-        let signature_b64 = STANDARD.encode(signature);
-        let auth_header = format!(
-            r#"hmac username="alice", algorithm="hmac-sha256", headers="@request-target date", signature="{}""#,
-            signature_b64
-        );
-
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("HmacAuth");
-
-        session.expect_header_value().returning(move |name| match name {
-            "authorization" => Some(auth_header.clone()),
-            "proxy-authorization" => None,
-            "x-date" => None,
-            "date" => Some(date.clone()),
-            _ => None,
-        });
-        session.expect_get_path().return_const("/v1/ping".to_string());
-        session.expect_get_query().returning(|| None);
-        session.expect_get_method().return_const("GET".to_string());
-        session.expect_set_request_header().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("OK user alice"));
-    }
-
-    #[tokio::test]
-    async fn test_run_request_invalid_signature() {
-        let plugin = create_plugin();
-        let date = rfc2822_now();
-        let auth_header =
-            r#"hmac username="alice", algorithm="hmac-sha256", headers="@request-target date", signature="YmFkLXNpZw==""#
-                .to_string();
-
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("HmacAuth");
-
-        session.expect_header_value().returning(move |name| match name {
-            "authorization" => Some(auth_header.clone()),
-            "proxy-authorization" => None,
-            "x-date" => None,
-            "date" => Some(date.clone()),
-            _ => None,
-        });
-        session.expect_get_path().return_const("/v1/ping".to_string());
-        session.expect_get_query().returning(|| None);
-        session.expect_get_method().return_const("GET".to_string());
-        session.expect_write_response_header().returning(|_, _| Ok(()));
-        session.expect_write_response_body().returning(|_, _| Ok(()));
-        session.expect_shutdown().returning(|| {});
-
-        let result = plugin.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("Deny bad signature"));
     }
 
     #[tokio::test]

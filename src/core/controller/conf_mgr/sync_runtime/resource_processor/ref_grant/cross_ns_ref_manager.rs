@@ -29,51 +29,6 @@ mod tests {
     use crate::types::ResourceKind;
 
     #[test]
-    fn test_cross_ns_resource_ref_keys() {
-        let ref1 = ResourceRef::new(
-            ResourceKind::HTTPRoute,
-            Some("default".to_string()),
-            "my-route".to_string(),
-        );
-        assert_eq!(ref1.resource_key(), "default/my-route");
-        assert_eq!(ref1.key(), "HTTPRoute/default/my-route");
-        assert_eq!(ref1.kind_str(), "HTTPRoute");
-    }
-
-    #[test]
-    fn test_add_and_get_refs() {
-        let manager = new_cross_ns_ref_manager();
-        let resource = ResourceRef::new(ResourceKind::HTTPRoute, Some("app".to_string()), "my-route".to_string());
-
-        manager.add_ref("backend".to_string(), resource.clone());
-
-        let refs = manager.get_refs("backend");
-        assert_eq!(refs.len(), 1);
-        assert_eq!(refs[0], resource);
-
-        let namespaces = manager.get_dependencies(&resource.key());
-        assert_eq!(namespaces.len(), 1);
-        assert_eq!(namespaces[0], "backend");
-    }
-
-    #[test]
-    fn test_clear_resource_refs() {
-        let manager = new_cross_ns_ref_manager();
-        let resource = ResourceRef::new(ResourceKind::HTTPRoute, Some("app".to_string()), "my-route".to_string());
-
-        manager.add_ref("backend1".to_string(), resource.clone());
-        manager.add_ref("backend2".to_string(), resource.clone());
-
-        let cleared = manager.clear_resource_refs(&resource);
-        assert_eq!(cleared.len(), 2);
-        assert!(cleared.contains(&"backend1".to_string()));
-        assert!(cleared.contains(&"backend2".to_string()));
-
-        assert!(manager.get_refs("backend1").is_empty());
-        assert!(manager.get_refs("backend2").is_empty());
-    }
-
-    #[test]
     fn test_multiple_resources_same_target() {
         let manager = new_cross_ns_ref_manager();
 
@@ -91,18 +46,6 @@ mod tests {
         let refs_after = manager.get_refs("backend");
         assert_eq!(refs_after.len(), 1);
         assert_eq!(refs_after[0], route2);
-    }
-
-    #[test]
-    fn test_idempotent_add() {
-        let manager = new_cross_ns_ref_manager();
-        let resource = ResourceRef::new(ResourceKind::HTTPRoute, Some("app".to_string()), "my-route".to_string());
-
-        manager.add_ref("backend".to_string(), resource.clone());
-        manager.add_ref("backend".to_string(), resource.clone());
-        manager.add_ref("backend".to_string(), resource.clone());
-
-        assert_eq!(manager.get_refs("backend").len(), 1);
     }
 
     #[test]

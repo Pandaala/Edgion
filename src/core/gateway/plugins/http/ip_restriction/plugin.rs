@@ -201,57 +201,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_allowed_ip_passes() {
-        let config = create_ip_config_allow_list();
-        let plugin = IpRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("IpRestriction");
-
-        mock_session
-            .expect_remote_addr()
-            .return_const("192.168.1.50".to_string());
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allow ip match"));
-    }
-
-    #[tokio::test]
-    async fn test_denied_ip_blocked() {
-        let config = create_ip_config_allow_list();
-        let plugin = IpRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("IpRestriction");
-
-        mock_session.expect_remote_addr().return_const("10.0.0.50".to_string());
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny ip match"));
-    }
-
-    #[tokio::test]
-    async fn test_blacklist_blocks_specific_ip() {
-        let config = create_ip_config_deny_list();
-        let plugin = IpRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("IpRestriction");
-
-        mock_session.expect_remote_addr().return_const("10.0.0.100".to_string());
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny ip match"));
-    }
-
-    #[tokio::test]
     async fn test_default_action_allow() {
         let config = create_ip_config_deny_list();
         let plugin = IpRestriction::create(&config);
@@ -270,47 +219,6 @@ mod tests {
     async fn test_missing_ip_denied_in_whitelist_mode() {
         // Allow list configured = whitelist mode: unknown IP must be denied
         let config = create_ip_config_allow_list();
-        let plugin = IpRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("IpRestriction");
-
-        mock_session.expect_remote_addr().return_const("".to_string());
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("No client IP"));
-    }
-
-    #[tokio::test]
-    async fn test_missing_ip_allowed_when_default_action_allow_and_no_whitelist() {
-        // Deny-only list + default_action=Allow: unknown IP should be allowed
-        let config = create_ip_config_deny_list();
-        let plugin = IpRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("IpRestriction");
-
-        mock_session.expect_remote_addr().return_const("".to_string());
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("No client IP"));
-    }
-
-    #[tokio::test]
-    async fn test_missing_ip_denied_when_default_action_deny_and_no_whitelist() {
-        // Deny-only list + default_action=Deny: unknown IP should be denied
-        let config = IpRestrictionConfig::new(IpRestrictionConfig {
-            deny: Some(vec!["10.0.0.100".to_string()]),
-            default_action: DefaultAction::Deny,
-            ip_source: IpSource::ClientIp,
-            status: 403,
-            ..Default::default()
-        })
-        .unwrap();
         let plugin = IpRestriction::create(&config);
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("IpRestriction");

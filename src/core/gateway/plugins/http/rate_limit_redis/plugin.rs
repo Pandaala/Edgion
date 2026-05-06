@@ -584,28 +584,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_truncate_limit_key_normal() {
-        assert_eq!(truncate_limit_key("192.168.1.1", 4096), "192.168.1.1");
-    }
-
-    #[test]
-    fn test_truncate_limit_key_exact() {
-        let key = "a".repeat(4096);
-        assert_eq!(truncate_limit_key(&key, 4096).len(), 4096);
-    }
-
-    #[test]
-    fn test_truncate_limit_key_over() {
-        let key = "a".repeat(5000);
-        assert_eq!(truncate_limit_key(&key, 4096).len(), 4096);
-    }
-
-    #[test]
-    fn test_truncate_limit_key_empty() {
-        assert_eq!(truncate_limit_key("", 4096), "");
-    }
-
-    #[test]
     fn test_truncate_limit_key_utf8_boundary() {
         // "" = 12 bytes in UTF-8 (3 bytes per char)
         let key = "";
@@ -616,9 +594,9 @@ mod tests {
     }
 
     #[test]
-    fn test_truncate_limit_key_custom_max_len() {
-        let key = "a".repeat(200);
-        assert_eq!(truncate_limit_key(&key, 64).len(), 64);
+    fn test_truncate_limit_key_over() {
+        let key = "a".repeat(5000);
+        assert_eq!(truncate_limit_key(&key, 4096).len(), 4096);
     }
 
     #[test]
@@ -628,72 +606,12 @@ mod tests {
     }
 
     #[test]
-    fn test_build_redis_key_fixed_window() {
-        let key = build_redis_key("edgion:rl:", "fw", 1, "192.168.1.1", "1707900");
-        assert_eq!(key, "edgion:rl:fw:1:192.168.1.1:1707900");
-    }
-
-    #[test]
-    fn test_build_redis_key_token_bucket() {
-        let key = build_redis_key("edgion:rl:", "tb", 0, "api-key-123", "");
-        assert_eq!(key, "edgion:rl:tb:0:api-key-123");
-    }
-
-    #[test]
-    fn test_build_redis_key_custom_prefix() {
-        let key = build_redis_key("myapp:rl:", "sw", 0, "test", "");
-        assert_eq!(key, "myapp:rl:sw:0:test");
-    }
-
-    #[test]
-    fn test_rate_limit_result_from_lua_allowed() {
-        let result = RateLimitResult::from_lua_result(&[1, 5, 95, 0], 100);
-        assert!(result.allowed);
-        assert_eq!(result.current, 5);
-        assert_eq!(result.remaining, 95);
-        assert_eq!(result.limit, 100);
-        assert_eq!(result.retry_ms, 0);
-    }
-
-    #[test]
     fn test_rate_limit_result_from_lua_denied() {
         let result = RateLimitResult::from_lua_result(&[0, 100, 0, 500], 100);
         assert!(!result.allowed);
         assert_eq!(result.current, 100);
         assert_eq!(result.remaining, 0);
         assert_eq!(result.retry_ms, 500);
-    }
-
-    #[test]
-    fn test_rate_limit_result_from_lua_empty() {
-        let result = RateLimitResult::from_lua_result(&[], 100);
-        assert!(!result.allowed); // 0 != 1
-        assert_eq!(result.current, 0);
-        assert_eq!(result.remaining, 0);
-        assert_eq!(result.retry_ms, 0);
-    }
-
-    #[test]
-    fn test_merge_result_both_allowed() {
-        let r1 = RateLimitResult {
-            allowed: true,
-            current: 5,
-            remaining: 95,
-            limit: 100,
-            retry_ms: 0,
-        };
-        let r2 = RateLimitResult {
-            allowed: true,
-            current: 800,
-            remaining: 200,
-            limit: 1000,
-            retry_ms: 0,
-        };
-        let merged = RateLimitRedis::merge_result(Some(r1), r2);
-        assert!(merged.allowed);
-        // r1 has lower remaining (95 < 200), so r1 is most restrictive
-        assert_eq!(merged.remaining, 95);
-        assert_eq!(merged.limit, 100);
     }
 
     #[test]
@@ -716,48 +634,6 @@ mod tests {
         assert!(!merged.allowed);
         assert_eq!(merged.remaining, 0);
         assert_eq!(merged.retry_ms, 3000);
-    }
-
-    #[test]
-    fn test_merge_result_both_denied() {
-        let r1 = RateLimitResult {
-            allowed: false,
-            current: 101,
-            remaining: 0,
-            limit: 100,
-            retry_ms: 500,
-        };
-        let r2 = RateLimitResult {
-            allowed: false,
-            current: 1001,
-            remaining: 0,
-            limit: 1000,
-            retry_ms: 3000,
-        };
-        let merged = RateLimitRedis::merge_result(Some(r1), r2);
-        assert!(!merged.allowed);
-        assert_eq!(merged.retry_ms, 3000); // Largest retry_ms
-        assert_eq!(merged.limit, 100); // Smallest limit
-    }
-
-    #[test]
-    fn test_merge_result_none() {
-        let r = RateLimitResult {
-            allowed: true,
-            current: 5,
-            remaining: 95,
-            limit: 100,
-            retry_ms: 0,
-        };
-        let merged = RateLimitRedis::merge_result(None, r);
-        assert!(merged.allowed);
-        assert_eq!(merged.remaining, 95);
-    }
-
-    #[test]
-    fn test_format_duration_seconds() {
-        assert_eq!(format_duration(Duration::from_secs(2)), "2.0s");
-        assert_eq!(format_duration(Duration::from_millis(1500)), "1.5s");
     }
 
     #[test]

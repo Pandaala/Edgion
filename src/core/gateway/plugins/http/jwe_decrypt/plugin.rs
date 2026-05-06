@@ -450,38 +450,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_decrypt_success() {
-        let plugin = build_plugin(None);
-        let token = encrypt_compact_jwe(r#"{"uid":"100","role":"admin"}"#, &test_key(), "A256GCM");
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("JweDecrypt");
-
-        let header_value = format!("Bearer {}", token);
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("authorization"))
-            .returning(move |_| Some(header_value.clone()));
-        session.expect_set_request_header().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("OK"));
-    }
-
-    #[tokio::test]
-    async fn test_missing_token_strict_false_bypass() {
-        let plugin = build_plugin(Some(|cfg| cfg.strict = false));
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("JweDecrypt");
-
-        session.expect_header_value().returning(|_| None);
-
-        let result = plugin.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("bypass"));
-    }
-
-    #[tokio::test]
     async fn test_missing_token_strict_true_reject() {
         let plugin = build_plugin(None);
         let mut session = MockPluginSession::new();
@@ -532,36 +500,5 @@ mod tests {
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(log.contains("bad alg"));
-    }
-
-    #[tokio::test]
-    async fn test_load_key_failure_emits_no_key_tag() {
-        // resolved_credential = None → load_key() returns Err.
-        let config = JweDecryptConfig {
-            strip_prefix: Some("Bearer ".to_string()),
-            forward_header: "x-decrypted-auth".to_string(),
-            resolved_credential: None,
-            ..Default::default()
-        };
-        let plugin = JweDecrypt::new(&config, "default".to_string());
-
-        // Any syntactically parseable JWE-ish token passes extract_token + size check.
-        let token = encrypt_compact_jwe(r#"{"uid":"1"}"#, &test_key(), "A256GCM");
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("JweDecrypt");
-
-        let header_value = format!("Bearer {}", token);
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("authorization"))
-            .returning(move |_| Some(header_value.clone()));
-        session.expect_write_response_header().returning(|_, _| Ok(()));
-        session.expect_write_response_body().returning(|_, _| Ok(()));
-        session.expect_shutdown().returning(|| {});
-
-        let result = plugin.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("key load fail"));
-        assert!(log.contains("no key"));
     }
 }

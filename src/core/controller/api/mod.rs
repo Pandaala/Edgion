@@ -329,16 +329,15 @@ mod auth_status_tests {
     }
 
     #[test]
-    fn build_auth_status_disabled_when_not_required() {
+    fn build_auth_status_non_ready_states() {
+        // When auth is not required: Disabled, auth_required == false, providers empty
         let state = UnifiedAuthState::from_configs(None, None, false, "test").unwrap();
         let resp = state.build_status();
         assert!(!resp.auth_required);
         assert!(resp.active_providers.is_empty());
         assert_eq!(resp.status, AuthStatus::Disabled);
-    }
 
-    #[test]
-    fn build_auth_status_initializing_when_required_but_no_provider() {
+        // When auth is required but no provider configured: Initializing, auth_required == true, providers empty
         let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
         let resp = state.build_status();
         assert!(resp.auth_required);
@@ -347,17 +346,16 @@ mod auth_status_tests {
     }
 
     #[test]
-    fn build_auth_status_ready_with_local() {
+    fn build_auth_status_ready_states() {
+        // When auth is required and local provider configured from the start: Ready, active_providers == ["local"]
         let cfg = valid_local();
         let state = UnifiedAuthState::from_configs(None, Some(&cfg), true, "test").unwrap();
         let resp = state.build_status();
         assert!(resp.auth_required);
         assert_eq!(resp.active_providers, vec!["local".to_string()]);
         assert_eq!(resp.status, AuthStatus::Ready);
-    }
 
-    #[test]
-    fn build_auth_status_ready_after_update_local() {
+        // Dynamic update: start Initializing -> call update_local -> becomes Ready
         let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
         assert_eq!(state.build_status().status, AuthStatus::Initializing);
         state.update_local(LocalAuthState::from_config(&valid_local()));

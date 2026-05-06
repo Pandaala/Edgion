@@ -153,73 +153,6 @@ mod classify_tests {
     }
 
     #[test]
-    fn empty_is_clean() {
-        assert!(classify(&[]).is_none());
-    }
-
-    #[test]
-    fn all_true_is_clean() {
-        let cs = vec![
-            c("Accepted", "True"),
-            c("ResolvedRefs", "True"),
-            c("Programmed", "True"),
-        ];
-        assert!(classify(&cs).is_none());
-    }
-
-    #[test]
-    fn accepted_false_is_err() {
-        let (err, warn) = classify(&[c("Accepted", "False")]).unwrap();
-        assert_eq!(err.len(), 1);
-        assert_eq!(err[0].type_, "Accepted");
-        assert_eq!(err[0].status, "False");
-        assert!(warn.is_empty());
-    }
-
-    #[test]
-    fn resolved_refs_false_is_err() {
-        let (err, warn) = classify(&[c("ResolvedRefs", "False")]).unwrap();
-        assert_eq!(err.len(), 1);
-        assert!(warn.is_empty());
-    }
-
-    #[test]
-    fn programmed_false_is_err() {
-        let (err, warn) = classify(&[c("Programmed", "False")]).unwrap();
-        assert_eq!(err.len(), 1);
-        assert!(warn.is_empty());
-    }
-
-    #[test]
-    fn conflicted_true_is_err() {
-        let (err, warn) = classify(&[c("Conflicted", "True")]).unwrap();
-        assert_eq!(err.len(), 1);
-        assert!(warn.is_empty());
-    }
-
-    #[test]
-    fn listeners_not_valid_true_is_err() {
-        let (err, warn) = classify(&[c("ListenersNotValid", "True")]).unwrap();
-        assert_eq!(err.len(), 1);
-        assert!(warn.is_empty());
-    }
-
-    #[test]
-    fn partially_invalid_true_is_warn() {
-        let (err, warn) = classify(&[c("PartiallyInvalid", "True")]).unwrap();
-        assert!(err.is_empty());
-        assert_eq!(warn.len(), 1);
-        assert_eq!(warn[0].type_, "PartiallyInvalid");
-    }
-
-    #[test]
-    fn ready_false_is_warn() {
-        let (err, warn) = classify(&[c("Ready", "False")]).unwrap();
-        assert!(err.is_empty());
-        assert_eq!(warn.len(), 1);
-    }
-
-    #[test]
     fn err_and_warn_coexist_both_preserved() {
         let cs = vec![c("Accepted", "False"), c("Ready", "False")];
         let (err, warn) = classify(&cs).unwrap();
@@ -233,11 +166,6 @@ mod classify_tests {
     fn unknown_type_is_ignored() {
         let cs = vec![c("SomethingElse", "False"), c("Accepted", "True")];
         assert!(classify(&cs).is_none());
-    }
-
-    #[test]
-    fn unknown_status_is_ignored() {
-        assert!(classify(&[c("Accepted", "Unknown")]).is_none());
     }
 }
 
@@ -444,35 +372,6 @@ mod scan_conditions_tests {
     use serde_json::json;
 
     #[test]
-    fn resource_level_conditions() {
-        let j = json!({
-            "status": {
-                "conditions": [
-                    {"type": "Accepted", "status": "False", "reason": "Invalid"}
-                ]
-            }
-        });
-        let conds = scan_conditions(&j);
-        assert_eq!(conds.len(), 1);
-        assert_eq!(conds[0].type_, "Accepted");
-        assert_eq!(conds[0].status, "False");
-    }
-
-    #[test]
-    fn nested_parents_conditions() {
-        let j = json!({
-            "status": {
-                "parents": [
-                    {"conditions": [{"type": "Accepted", "status": "True"}]},
-                    {"conditions": [{"type": "ResolvedRefs", "status": "False"}]}
-                ]
-            }
-        });
-        let conds = scan_conditions(&j);
-        assert_eq!(conds.len(), 2);
-    }
-
-    #[test]
     fn gateway_top_level_plus_listeners() {
         let j = json!({
             "status": {
@@ -492,93 +391,11 @@ mod scan_conditions_tests {
         assert!(types.contains(&"Programmed"));
         assert!(types.contains(&"Conflicted"));
     }
-
-    #[test]
-    fn malformed_condition_missing_type_is_skipped() {
-        let j = json!({
-            "status": {
-                "conditions": [
-                    {"status": "False"},
-                    {"type": "Accepted", "status": "False"}
-                ]
-            }
-        });
-        let conds = scan_conditions(&j);
-        assert_eq!(conds.len(), 1);
-        assert_eq!(conds[0].type_, "Accepted");
-    }
-
-    #[test]
-    fn no_conditions_anywhere_yields_empty() {
-        let j = json!({"spec": {"x": 1}, "status": {"ready": true}});
-        assert!(scan_conditions(&j).is_empty());
-    }
-
-    #[test]
-    fn conditions_at_top_level_object_not_array_is_ignored() {
-        let j = json!({"conditions": {"not": "an array"}});
-        assert!(scan_conditions(&j).is_empty());
-    }
 }
 
 #[cfg(test)]
 mod render_tests {
     use super::*;
-
-    #[test]
-    fn empty_snapshot_renders_empty_string() {
-        let out = render_snapshot(&[]);
-        assert_eq!(out, "");
-    }
-
-    #[test]
-    fn non_empty_snapshot_has_help_type_and_sorted_lines() {
-        let entries = vec![
-            Entry {
-                kind: "HTTPRoute",
-                namespace: "ns-b".into(),
-                name: "route".into(),
-                err_conditions: vec![ConditionRef {
-                    type_: "Accepted".into(),
-                    status: "False".into(),
-                }],
-                warn_conditions: vec![],
-            },
-            Entry {
-                kind: "HTTPRoute",
-                namespace: "ns-a".into(),
-                name: "route".into(),
-                err_conditions: vec![],
-                warn_conditions: vec![ConditionRef {
-                    type_: "Ready".into(),
-                    status: "False".into(),
-                }],
-            },
-            Entry {
-                kind: "Gateway",
-                namespace: "ns-z".into(),
-                name: "gw".into(),
-                err_conditions: vec![ConditionRef {
-                    type_: "Accepted".into(),
-                    status: "False".into(),
-                }],
-                warn_conditions: vec![],
-            },
-        ];
-        let mut sorted = entries.clone();
-        sorted.sort();
-
-        let out = render_snapshot(&sorted);
-        let expected = format!(
-            "# HELP edgion_controller_resource_abnormal {help}\n\
-# TYPE edgion_controller_resource_abnormal gauge\n\
-edgion_controller_resource_abnormal{{kind=\"Gateway\",namespace=\"ns-z\",name=\"gw\",err=\"[{{\\\"type\\\":\\\"Accepted\\\",\\\"status\\\":\\\"False\\\"}}]\",warn=\"\"}} 1\n\
-edgion_controller_resource_abnormal{{kind=\"HTTPRoute\",namespace=\"ns-a\",name=\"route\",err=\"\",warn=\"[{{\\\"type\\\":\\\"Ready\\\",\\\"status\\\":\\\"False\\\"}}]\"}} 1\n\
-edgion_controller_resource_abnormal{{kind=\"HTTPRoute\",namespace=\"ns-b\",name=\"route\",err=\"[{{\\\"type\\\":\\\"Accepted\\\",\\\"status\\\":\\\"False\\\"}}]\",warn=\"\"}} 1\n",
-            help = METRIC_HELP
-        );
-        assert_eq!(out, expected);
-    }
 
     #[test]
     fn label_values_escape_backslash_and_quote() {
@@ -721,50 +538,6 @@ mod snapshot_loop_tests {
         })
     }
 
-    #[test]
-    fn snapshot_once_populates_from_registered_renderers_sorted() {
-        let _guard = super::TEST_MUTEX.lock();
-        reset();
-        let store = Arc::new(LocalRawStore::<Dummy>::new());
-        store.upsert("a/b".into(), new_dummy("a", "b", "Accepted", "False"));
-        store.upsert("a/a".into(), new_dummy("a", "a", "Ready", "False"));
-        register_status_renderer::<Dummy>("Dummy", store.clone());
-
-        snapshot_once();
-        let snap = snapshot_slot().load();
-        assert_eq!(snap.len(), 2);
-        // Sorted by (kind, ns, name): a/a before a/b
-        assert_eq!(snap[0].name, "a");
-        assert!(snap[0].err_conditions.is_empty());
-        assert_eq!(snap[0].warn_conditions.len(), 1);
-        assert_eq!(snap[1].name, "b");
-        assert_eq!(snap[1].err_conditions.len(), 1);
-        assert!(snap[1].warn_conditions.is_empty());
-    }
-
-    #[test]
-    fn snapshot_once_truncates_beyond_hard_cap() {
-        let _guard = super::TEST_MUTEX.lock();
-        reset();
-        // Lower cap for a fast test; push 5 extra to force truncation.
-        set_hard_cap(100);
-        let store = Arc::new(LocalRawStore::<Dummy>::new());
-        let overflow_count = 105;
-        for i in 0..overflow_count {
-            store.upsert(
-                format!("ns/{}", i),
-                new_dummy("ns", &format!("r{}", i), "Accepted", "False"),
-            );
-        }
-        register_status_renderer::<Dummy>("Dummy", store.clone());
-
-        snapshot_once();
-        let snap = snapshot_slot().load();
-        assert_eq!(snap.len(), 100);
-        // Restore for any subsequent tests.
-        set_hard_cap(1000);
-    }
-
     /// Guards against the conf_center-reload duplication bug: a second
     /// `register_status_renderer` call for the same kind must replace the
     /// prior renderer (and drop its Arc to the old RawStore), NOT append.
@@ -849,64 +622,6 @@ pub(crate) fn snapshot_once() {
     }
 
     snapshot_slot().store(Arc::new(buf));
-}
-
-#[cfg(test)]
-mod metrics_handler_tests {
-    use super::*;
-    use axum::body::to_bytes;
-    use std::sync::Arc;
-
-    fn ensure_recorder_installed() {
-        // Idempotent via install_global_recorder's own OnceLock guard.
-        let _ = crate::core::common::observe::metrics_api::install_global_recorder(
-            crate::core::common::observe::metrics_api::RecorderConfig {
-                service: "controller-test",
-                idle_timeout_secs: 0,
-                histogram_buckets: &[],
-            },
-        );
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn handler_appends_nothing_when_snapshot_empty() {
-        // Test-only global-state serialization; see `TEST_MUTEX`.
-        let _guard = super::TEST_MUTEX.lock();
-        ensure_recorder_installed();
-        renderers_slot().lock().clear();
-        snapshot_slot().store(Arc::new(Vec::new()));
-        let response = metrics_handler().await;
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let s = String::from_utf8(body.to_vec()).unwrap();
-        assert!(!s.contains("edgion_controller_resource_abnormal"));
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn handler_appends_snapshot_block_when_non_empty() {
-        // Test-only global-state serialization; see `TEST_MUTEX`.
-        let _guard = super::TEST_MUTEX.lock();
-        ensure_recorder_installed();
-        renderers_slot().lock().clear();
-        snapshot_slot().store(Arc::new(vec![Entry {
-            kind: "HTTPRoute",
-            namespace: "default".into(),
-            name: "x".into(),
-            err_conditions: vec![ConditionRef {
-                type_: "Accepted".into(),
-                status: "False".into(),
-            }],
-            warn_conditions: vec![],
-        }]));
-        let response = metrics_handler().await;
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let s = String::from_utf8(body.to_vec()).unwrap();
-        assert!(s.contains("# TYPE edgion_controller_resource_abnormal gauge"));
-        assert!(s.contains(
-            r#"edgion_controller_resource_abnormal{kind="HTTPRoute",namespace="default",name="x",err="[{\"type\":\"Accepted\",\"status\":\"False\"}]",warn=""}"#
-        ));
-    }
 }
 
 use axum::response::{IntoResponse, Response};

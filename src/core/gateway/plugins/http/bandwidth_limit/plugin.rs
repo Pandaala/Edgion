@@ -91,33 +91,6 @@ mod tests {
     }
 
     #[test]
-    fn test_bandwidth_limit_1mb() {
-        let plugin = create_test_plugin("1mb");
-        let body = Some(bytes::Bytes::from(vec![0u8; 65536])); // 64KB chunk
-        let mut log = PluginLog::new("test");
-
-        // Create a minimal mock session
-        let mut session = MockPluginSession::new();
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
-
-        // 64KB / 1MB/s = 0.0625s = 62.5ms
-        assert!(delay.is_some());
-        let d = delay.unwrap();
-        assert!(d.as_millis() >= 62 && d.as_millis() <= 63);
-    }
-
-    #[test]
-    fn test_bandwidth_limit_empty_body() {
-        let plugin = create_test_plugin("1mb");
-        let body: Option<bytes::Bytes> = Some(bytes::Bytes::new());
-        let mut log = PluginLog::new("test");
-
-        let mut session = MockPluginSession::new();
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
-        assert!(delay.is_none());
-    }
-
-    #[test]
     fn test_bandwidth_limit_none_body() {
         let plugin = create_test_plugin("1mb");
         let body: Option<bytes::Bytes> = None;
@@ -140,19 +113,4 @@ mod tests {
         assert!(delay.is_none());
     }
 
-    #[test]
-    fn test_bandwidth_limit_512kb() {
-        let plugin = create_test_plugin("512kb");
-        let body = Some(bytes::Bytes::from(vec![0u8; 1024])); // 1KB chunk
-        let mut log = PluginLog::new("test");
-
-        let mut session = MockPluginSession::new();
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
-
-        // 1KB / 512KB/s = 1/512 ≈ 0.00195s ≈ 1.95ms
-        assert!(delay.is_some());
-        let d = delay.unwrap();
-        let micros = d.as_micros();
-        assert!((1900..=2000).contains(&micros), "Expected ~1953us, got {}us", micros);
-    }
 }

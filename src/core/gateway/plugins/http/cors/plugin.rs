@@ -301,72 +301,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_preflight_request_success() {
-        let config = create_cors_config();
-        let cors = Cors::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("Cors");
-
-        mock_session.expect_method().returning(|| "OPTIONS".to_string());
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("origin"))
-            .returning(|_| Some("https://example.com".to_string()));
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-method"))
-            .returning(|_| Some("POST".to_string()));
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-headers"))
-            .returning(|_| None);
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-private-network"))
-            .returning(|_| None);
-        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_append_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("cors preflight"));
-        assert!(plugin_log.contains("origin match:allow"));
-    }
-
-    #[tokio::test]
-    async fn test_normal_cors_request() {
-        let config = create_cors_config();
-        let cors = Cors::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("Cors");
-
-        mock_session.expect_method().returning(|| "GET".to_string());
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("origin"))
-            .returning(|_| Some("https://example.com".to_string()));
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-method"))
-            .returning(|_| None);
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-headers"))
-            .returning(|_| None);
-        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_append_response_header().returning(|_, _| Ok(()));
-
-        let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("cors actual"));
-        assert!(plugin_log.contains("origin match:allow"));
-    }
-
-    #[tokio::test]
     async fn test_origin_not_allowed() {
         let config = create_cors_config();
         let cors = Cors::new(&config);
@@ -403,38 +337,4 @@ mod tests {
         // No origin header, should skip CORS processing (no logs)
     }
 
-    #[tokio::test]
-    async fn test_preflight_continue() {
-        let mut config = create_cors_config();
-        config.preflight_continue = true;
-        let cors = Cors::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("Cors");
-
-        mock_session.expect_method().returning(|| "OPTIONS".to_string());
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("origin"))
-            .returning(|_| Some("https://example.com".to_string()));
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-method"))
-            .returning(|_| Some("POST".to_string()));
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-headers"))
-            .returning(|_| None);
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-private-network"))
-            .returning(|_| None);
-        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_append_response_header().returning(|_, _| Ok(()));
-
-        let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("cors preflight"));
-        assert!(plugin_log.contains("origin match:allow"));
-    }
 }

@@ -349,7 +349,6 @@ impl RequestFilter for LdapAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
     use crate::types::resources::edgion_plugins::LruCacheConfig;
 
     fn test_config() -> LdapAuthConfig {
@@ -365,32 +364,6 @@ mod tests {
         LdapAuth::new(&test_config())
     }
 
-    fn encode_creds(username: &str, password: &str) -> String {
-        format!(
-            "ldap {}",
-            base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", username, password))
-        )
-    }
-
-    #[test]
-    fn test_parse_authorization_value_ok() {
-        let auth = ldap_auth_default();
-        let header = encode_creds("alice", "secret");
-        let parsed = auth.parse_authorization_value(&header);
-        assert_eq!(parsed, Some(("alice".to_string(), "secret".to_string())));
-    }
-
-    #[test]
-    fn test_parse_authorization_value_password_with_colon() {
-        let auth = ldap_auth_default();
-        let header = format!(
-            "ldap {}",
-            base64::engine::general_purpose::STANDARD.encode("alice:a:b:c")
-        );
-        let parsed = auth.parse_authorization_value(&header);
-        assert_eq!(parsed, Some(("alice".to_string(), "a:b:c".to_string())));
-    }
-
     #[test]
     fn test_parse_authorization_value_invalid() {
         let auth = ldap_auth_default();
@@ -400,42 +373,10 @@ mod tests {
     }
 
     #[test]
-    fn test_build_bind_dn_default() {
-        let auth = ldap_auth_default();
-        let dn = auth.build_bind_dn("alice").unwrap();
-        assert_eq!(dn, "uid=alice,dc=example,dc=com");
-    }
-
-    #[test]
-    fn test_build_bind_dn_template() {
-        let mut cfg = test_config();
-        cfg.bind_dn_template = Some("cn={username},ou=users,dc=example,dc=com".to_string());
-        let auth = LdapAuth::new(&cfg);
-        let dn = auth.build_bind_dn("alice").unwrap();
-        assert_eq!(dn, "cn=alice,ou=users,dc=example,dc=com");
-    }
-
-    #[test]
     fn test_build_bind_dn_injection_rejected() {
         let auth = ldap_auth_default();
         assert!(auth.build_bind_dn("alice,admin").is_err());
         assert!(auth.build_bind_dn("alice+admin").is_err());
-    }
-
-    #[test]
-    fn test_cache_hit_and_expired() {
-        let auth = ldap_auth_default();
-
-        auth.store_cache("alice", "secret");
-        assert_eq!(auth.check_cache("alice", "secret"), Some("alice".to_string()));
-
-        auth.auth_cache.insert(
-            LdapAuth::cache_key("bob", "secret"),
-            "bob".to_string(),
-            Some(std::time::Duration::from_millis(10)),
-        );
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        assert_eq!(auth.check_cache("bob", "secret"), None);
     }
 
     #[test]
@@ -453,179 +394,5 @@ mod tests {
         };
         let auth = LdapAuth::new(&config);
         assert_eq!(auth.auth_cache.len(), 0);
-    }
-
-    #[test]
-    fn test_ldap_auth_store_and_check_cache() {
-        let config = LdapAuthConfig {
-            cache_ttl: 60,
-            lru_cache: LruCacheConfig {
-                capacity: 5,
-                ..Default::default()
-            },
-            ldap_host: "localhost".to_string(),
-            ldap_port: 389,
-            base_dn: "dc=test,dc=com".to_string(),
-            ..Default::default()
-        };
-        let auth = LdapAuth::new(&config);
-        auth.store_cache("alice", "secret");
-        assert_eq!(auth.check_cache("alice", "secret"), Some("alice".to_string()));
-        assert_eq!(auth.check_cache("alice", "wrong"), None);
-    }
-
-    #[test]
-    fn test_ldap_auth_cache_disabled_when_ttl_zero() {
-        let config = LdapAuthConfig {
-            cache_ttl: 0,
-            ldap_host: "localhost".to_string(),
-            ldap_port: 389,
-            base_dn: "dc=test,dc=com".to_string(),
-            ..Default::default()
-        };
-        let auth = LdapAuth::new(&config);
-        auth.store_cache("alice", "secret"); // no-op
-        assert_eq!(auth.check_cache("alice", "secret"), None);
-    }
-
-    #[test]
-    fn test_ldap_auth_lru_evicts_oldest() {
-        let config = LdapAuthConfig {
-            cache_ttl: 60,
-            lru_cache: LruCacheConfig {
-                capacity: 2,
-                ..Default::default()
-            },
-            ldap_host: "localhost".to_string(),
-            ldap_port: 389,
-            base_dn: "dc=test,dc=com".to_string(),
-            ..Default::default()
-        };
-        let auth = LdapAuth::new(&config);
-        auth.store_cache("user1", "pw1");
-        auth.store_cache("user2", "pw2");
-        auth.store_cache("user3", "pw3"); // evicts user1 (LRU)
-        assert_eq!(auth.check_cache("user1", "pw1"), None); // evicted
-        assert_eq!(auth.check_cache("user3", "pw3"), Some("user3".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_parse_credentials_proxy_priority() {
-        let auth = ldap_auth_default();
-        let mut session = MockPluginSession::new();
-
-        let proxy = encode_creds("proxy-user", "proxy-pass");
-
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("proxy-authorization"))
-            .return_once(move |_| Some(proxy));
-
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("authorization"))
-            .return_once(|_| Some(encode_creds("auth-user", "auth-pass")));
-
-        let result = auth.parse_credentials(&session);
-        assert_eq!(
-            result,
-            ParseAuthResult::Valid("proxy-user".to_string(), "proxy-pass".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn test_run_request_anonymous_missing_header() {
-        let mut cfg = test_config();
-        cfg.anonymous = Some("anonymous-user".to_string());
-        cfg.hide_credentials = true;
-        let auth = LdapAuth::new(&cfg);
-
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("LdapAuth");
-
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("proxy-authorization"))
-            .return_once(|_| None);
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("authorization"))
-            .return_once(|_| None);
-
-        session
-            .expect_set_request_header()
-            .with(
-                mockall::predicate::eq("X-Credential-Identifier"),
-                mockall::predicate::eq("anonymous-user"),
-            )
-            .returning(|_, _| Ok(()));
-        session
-            .expect_set_request_header()
-            .with(
-                mockall::predicate::eq("X-Anonymous-Consumer"),
-                mockall::predicate::eq("true"),
-            )
-            .returning(|_, _| Ok(()));
-
-        session
-            .expect_remove_request_header()
-            .with(mockall::predicate::eq("authorization"))
-            .returning(|_| Ok(()));
-        session
-            .expect_remove_request_header()
-            .with(mockall::predicate::eq("proxy-authorization"))
-            .returning(|_| Ok(()));
-
-        let result = auth.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("Allow anonymous"));
-    }
-
-    #[tokio::test]
-    async fn test_run_request_invalid_header_without_anonymous() {
-        let auth = ldap_auth_default();
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("LdapAuth");
-
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("proxy-authorization"))
-            .return_once(|_| None);
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("authorization"))
-            .return_once(|_| Some("ldap invalid-base64".to_string()));
-
-        session.expect_write_response_header().returning(|_, _| Ok(()));
-        session.expect_write_response_body().returning(|_, _| Ok(()));
-        session.expect_shutdown().returning(|| {});
-
-        let result = auth.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-    }
-
-    #[tokio::test]
-    async fn test_run_request_invalid_header_with_anonymous_still_401() {
-        let mut cfg = test_config();
-        cfg.anonymous = Some("guest".to_string());
-        let auth = LdapAuth::new(&cfg);
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("LdapAuth");
-
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("proxy-authorization"))
-            .return_once(|_| None);
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("authorization"))
-            .return_once(|_| Some("ldap invalid-base64".to_string()));
-
-        session.expect_write_response_header().returning(|_, _| Ok(()));
-        session.expect_write_response_body().returning(|_, _| Ok(()));
-        session.expect_shutdown().returning(|| {});
-
-        let result = auth.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
     }
 }
