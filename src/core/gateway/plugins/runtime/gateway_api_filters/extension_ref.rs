@@ -55,6 +55,12 @@ pub struct ExtensionRefFilter {
     ext_ref: LocalObjectReference,
     /// Max depth allowed for this filter instance
     max_depth: usize,
+    /// Position in the rule's ExtensionRef list, assigned at route build time.
+    /// `Some(idx)` -> look up resolved target via `session.resolved_route_ext_ref(idx)`.
+    /// `None` -> backend-level filter (no per-request resolve cache); fall back to
+    /// direct global store lookup. Set to `None` initially; rule-scope builder
+    /// patches to `Some` in a later task.
+    index: Option<usize>,
 }
 
 impl ExtensionRefFilter {
@@ -63,7 +69,15 @@ impl ExtensionRefFilter {
             namespace,
             ext_ref,
             max_depth,
+            index: None,
         }
+    }
+
+    /// Assign the rule-scope index. Called by the rule-scope builder
+    /// (`PluginRuntime::add_from_httproute_filters_inner` with assign_indices=true).
+    /// No-op when called twice — idempotent on `clone()`-fanout.
+    pub(crate) fn set_index(&mut self, index: usize) {
+        self.index = Some(index);
     }
 
     #[inline]
@@ -112,10 +126,25 @@ impl ExtensionRefFilter {
 
         session.push_plugin_ref(key.clone());
 
-        let Some(plugin_runtime) = get_global_plugin_store().get_plugin_runtime(&key) else {
-            log.push_err("extension ref not found");
-            session.pop_plugin_ref();
-            return Err(());
+        // Resolve target: rule-scope reads pre-resolved Vec via index;
+        // backend-scope falls back to direct global store lookup.
+        let plugin_runtime = match self.index {
+            Some(idx) => match session.resolved_route_ext_ref(idx) {
+                Some(rt) => rt,
+                None => {
+                    log.push_err("extension ref not found");
+                    session.pop_plugin_ref();
+                    return Err(());
+                }
+            },
+            None => match get_global_plugin_store().get_plugin_runtime(&key) {
+                Some(rt) => rt,
+                None => {
+                    log.push_err("extension ref not found");
+                    session.pop_plugin_ref();
+                    return Err(());
+                }
+            },
         };
 
         let token = session.start_edgion_plugins_log(self.ext_ref.name.clone());
@@ -449,6 +478,84 @@ mod tests {
         let result = filter
             .run_extension_async(PluginRunningStage::Request, &mut session, &mut log)
             .await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    }
+
+    // ============================================
+    // Tests for the rule-scope index path (Task 6)
+    // ============================================
+
+    /// Rule-scope filter with valid index: resolved_route_ext_ref returns Some.
+    /// prepare_execution should not touch the global store; it uses the
+    /// pre-resolved target. Run via the sync upstream_response_filter stage so
+    /// the test stays simple.
+    #[test]
+    fn index_hit_uses_resolved_target() {
+        use crate::core::gateway::plugins::runtime::PluginRuntime;
+
+        let target = std::sync::Arc::new(PluginRuntime::new());
+        let target_for_mock = std::sync::Arc::clone(&target);
+
+        let mut session = MockPluginSession::new();
+        session.expect_has_plugin_ref().with(eq("ns/p1")).return_const(false);
+        session.expect_plugin_ref_depth().return_const(0usize);
+        session.expect_push_plugin_ref().return_const(());
+        session
+            .expect_resolved_route_ext_ref()
+            .with(eq(0usize))
+            .times(1)
+            .returning(move |_| Some(std::sync::Arc::clone(&target_for_mock)));
+        session
+            .expect_start_edgion_plugins_log()
+            .returning(|_| EdgionPluginsLogToken::new(0, 0));
+        session.expect_pop_plugin_ref().return_const(());
+
+        let mut filter = ExtensionRefFilter::new(
+            "ns".to_string(),
+            LocalObjectReference {
+                group: "".into(),
+                kind: "EdgionPlugins".into(),
+                name: "p1".into(),
+            },
+            DEFAULT_PLUGIN_REF_DEPTH,
+        );
+        filter.set_index(0);
+
+        let mut log = PluginLog::new("test");
+        let result = filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log);
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    /// Rule-scope filter with index pointing to a None slot (dangling at resolve
+    /// time). prepare_execution must push "extension ref not found" log error,
+    /// pop_plugin_ref, and return ErrTerminateRequest. The global store is NOT
+    /// consulted (verified by the absence of any global store setup in this test).
+    #[test]
+    fn index_miss_terminates_request() {
+        let mut session = MockPluginSession::new();
+        session.expect_has_plugin_ref().with(eq("ns/p1")).return_const(false);
+        session.expect_plugin_ref_depth().return_const(0usize);
+        session.expect_push_plugin_ref().return_const(());
+        session
+            .expect_resolved_route_ext_ref()
+            .with(eq(7usize))
+            .times(1)
+            .return_const(None);
+        session.expect_pop_plugin_ref().return_const(());
+
+        let mut filter = ExtensionRefFilter::new(
+            "ns".to_string(),
+            LocalObjectReference {
+                group: "".into(),
+                kind: "EdgionPlugins".into(),
+                name: "p1".into(),
+            },
+            DEFAULT_PLUGIN_REF_DEPTH,
+        );
+        filter.set_index(7);
+
+        let mut log = PluginLog::new("test");
+        let result = filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log);
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
     }
 }

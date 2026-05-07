@@ -68,6 +68,13 @@ pub struct PluginRuntime {
     upstream_response_body_plugins: Vec<Box<dyn UpstreamResponseBodyFilter>>,
     /// Plugins for response_filter stage (async)
     upstream_response_async_plugins: Vec<Box<dyn UpstreamResponse>>,
+    /// (namespace, name) of every ExtensionRef in this runtime, in build order.
+    /// Position == index assigned via `ExtensionRefFilter::set_index`. Empty
+    /// when this runtime is built via the backend-scope path
+    /// (`from_httproute_filters_for_backend` / `from_grpcroute_filters_for_backend`),
+    /// because backend-scope ExtensionRefFilters keep `index = None` and use
+    /// the legacy direct-store-lookup path.
+    ext_ref_keys: Vec<(String, String)>,
 }
 
 /// Result of attempting to build a stage-specific filter from an EdgionPlugin.
@@ -121,16 +128,48 @@ impl PluginRuntime {
             upstream_response_plugins: vec![],
             upstream_response_body_plugins: vec![],
             upstream_response_async_plugins: vec![],
+            ext_ref_keys: Vec::new(),
         }
     }
 
-    pub fn from_httproute_filters(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
+    /// Static list of (namespace, name) for every ExtensionRef in this runtime,
+    /// in the order they were added. Position == `ExtensionRefFilter.index`.
+    /// Populated only by `from_httproute_filters_for_rule` /
+    /// `from_grpcroute_filters_for_rule`. Returns an empty slice for backend-scope.
+    pub fn ext_ref_keys(&self) -> &[(String, String)] {
+        &self.ext_ref_keys
+    }
+
+    /// Build a runtime for a route rule. Assigns ExtensionRef indices for the
+    /// per-request resolve cache and records (ns, name) in `ext_ref_keys`.
+    pub fn from_httproute_filters_for_rule(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
         let mut runtime = Self::new();
-        runtime.add_from_httproute_filters(filters, namespace);
+        runtime.add_from_httproute_filters_inner(filters, namespace, true);
         runtime
     }
 
+    /// Build a runtime for a backend reference. ExtensionRef filters retain
+    /// `index = None` and fall back to direct global store lookup at exec time
+    /// (no per-request resolve cache for backend scope yet).
+    pub fn from_httproute_filters_for_backend(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
+        let mut runtime = Self::new();
+        runtime.add_from_httproute_filters_inner(filters, namespace, false);
+        runtime
+    }
+
+    /// Deprecated: prefer `from_httproute_filters_for_rule` or `_for_backend`
+    /// to make the scope explicit. Defaults to rule-scope behavior.
+    #[deprecated(note = "use from_httproute_filters_for_rule or from_httproute_filters_for_backend")]
+    pub fn from_httproute_filters(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
+        Self::from_httproute_filters_for_rule(filters, namespace)
+    }
+
+    #[deprecated(note = "use from_httproute_filters_for_rule or _for_backend wrappers")]
     pub fn add_from_httproute_filters(&mut self, filters: &[HTTPRouteFilter], namespace: &str) {
+        self.add_from_httproute_filters_inner(filters, namespace, true);
+    }
+
+    fn add_from_httproute_filters_inner(&mut self, filters: &[HTTPRouteFilter], namespace: &str, assign_indices: bool) {
         for filter in filters {
             match filter.filter_type {
                 HTTPRouteFilterType::RequestHeaderModifier => {
@@ -181,7 +220,12 @@ impl PluginRuntime {
                 HTTPRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
                         let max_depth = filter.extension_ref_max_depth.unwrap_or(DEFAULT_PLUGIN_REF_DEPTH);
-                        let ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), max_depth);
+                        let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), max_depth);
+                        if assign_indices {
+                            let idx = self.ext_ref_keys.len();
+                            self.ext_ref_keys.push((namespace.to_string(), ext_ref.name.clone()));
+                            ext_filter.set_index(idx);
+                        }
                         self.add_request_filter(Box::new(ext_filter.clone()));
                         self.add_upstream_response_filter(Box::new(ext_filter.clone()));
                         self.add_upstream_response_body_filter(Box::new(ext_filter));
@@ -191,13 +235,35 @@ impl PluginRuntime {
         }
     }
 
-    pub fn from_grpcroute_filters(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
+    /// Build a runtime for a gRPC route rule. Assigns ExtensionRef indices for
+    /// the per-request resolve cache and records (ns, name) in `ext_ref_keys`.
+    pub fn from_grpcroute_filters_for_rule(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
         let mut runtime = Self::new();
-        runtime.add_from_grpcroute_filters(filters, namespace);
+        runtime.add_from_grpcroute_filters_inner(filters, namespace, true);
         runtime
     }
 
+    /// Build a runtime for a gRPC backend reference. ExtensionRef filters retain
+    /// `index = None` and fall back to direct global store lookup at exec time.
+    pub fn from_grpcroute_filters_for_backend(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
+        let mut runtime = Self::new();
+        runtime.add_from_grpcroute_filters_inner(filters, namespace, false);
+        runtime
+    }
+
+    /// Deprecated: prefer `from_grpcroute_filters_for_rule` or `_for_backend`
+    /// to make the scope explicit. Defaults to rule-scope behavior.
+    #[deprecated(note = "use from_grpcroute_filters_for_rule or from_grpcroute_filters_for_backend")]
+    pub fn from_grpcroute_filters(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
+        Self::from_grpcroute_filters_for_rule(filters, namespace)
+    }
+
+    #[deprecated(note = "use from_grpcroute_filters_for_rule or _for_backend wrappers")]
     pub fn add_from_grpcroute_filters(&mut self, filters: &[GRPCRouteFilter], namespace: &str) {
+        self.add_from_grpcroute_filters_inner(filters, namespace, true);
+    }
+
+    fn add_from_grpcroute_filters_inner(&mut self, filters: &[GRPCRouteFilter], namespace: &str, assign_indices: bool) {
         for filter in filters {
             match filter.filter_type {
                 GRPCRouteFilterType::RequestHeaderModifier => {
@@ -215,7 +281,12 @@ impl PluginRuntime {
                 GRPCRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
                         let max_depth = filter.extension_ref_max_depth.unwrap_or(DEFAULT_PLUGIN_REF_DEPTH);
-                        let ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), max_depth);
+                        let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), max_depth);
+                        if assign_indices {
+                            let idx = self.ext_ref_keys.len();
+                            self.ext_ref_keys.push((namespace.to_string(), ext_ref.name.clone()));
+                            ext_filter.set_index(idx);
+                        }
                         self.add_request_filter(Box::new(ext_filter.clone()));
                         self.add_upstream_response_filter(Box::new(ext_filter.clone()));
                         self.add_upstream_response_body_filter(Box::new(ext_filter));
@@ -229,7 +300,8 @@ impl PluginRuntime {
     /// Add request filters from entries (only enabled)
     ///
     /// Filters are wrapped with ConditionalRequestFilter to support condition-based execution.
-    /// Gateway API filters (via add_from_httproute_filters) are NOT wrapped to maintain compatibility.
+    /// Gateway API filters (via add_from_httproute_filters_inner — invoked through
+    /// `from_httproute_filters_for_rule` / `_for_backend`) are NOT wrapped to maintain compatibility.
     ///
     /// # Arguments
     /// * `entries` - The request filter entries
@@ -930,5 +1002,47 @@ fn check_response_stage_terminate(result: &PluginRunningResult, plugin_log: &mut
             true
         }
         PluginRunningResult::Nothing | PluginRunningResult::GoodNext => false,
+    }
+}
+
+#[cfg(test)]
+mod ext_ref_index_tests {
+    use super::*;
+    use crate::types::resources::LocalObjectReference;
+
+    fn make_ext_ref_filter(name: &str) -> HTTPRouteFilter {
+        HTTPRouteFilter {
+            filter_type: HTTPRouteFilterType::ExtensionRef,
+            request_header_modifier: None,
+            response_header_modifier: None,
+            request_redirect: None,
+            url_rewrite: None,
+            request_mirror: None,
+            cors: None,
+            external_auth: None,
+            extension_ref: Some(LocalObjectReference {
+                group: "edgion.io".into(),
+                kind: "EdgionPlugins".into(),
+                name: name.into(),
+            }),
+            extension_ref_max_depth: None,
+        }
+    }
+
+    #[test]
+    fn rule_scope_assigns_sequential_indices() {
+        let filters = vec![make_ext_ref_filter("p1"), make_ext_ref_filter("p2")];
+        let rt = PluginRuntime::from_httproute_filters_for_rule(&filters, "ns1");
+        let keys = rt.ext_ref_keys();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], ("ns1".to_string(), "p1".to_string()));
+        assert_eq!(keys[1], ("ns1".to_string(), "p2".to_string()));
+    }
+
+    #[test]
+    fn backend_scope_does_not_collect_keys() {
+        let filters = vec![make_ext_ref_filter("p1")];
+        let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1");
+        assert!(rt.ext_ref_keys().is_empty());
     }
 }

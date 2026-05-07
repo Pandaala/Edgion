@@ -6,7 +6,7 @@
 //!                     EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy
 //! Tier 2 (config):    Gateway, GatewayClass, EdgionGatewayConfig, EdgionTls, EdgionAcme,
 //!                     PluginMetaData, LinkSys, ReferenceGrant
-//! Tier 3 (low-level): Service, Endpoints, EndpointSlice, Secret, ConfigMap
+//! Tier 3 (low-level): Service, EndpointSlice, Secret, ConfigMap
 
 use crate::core::common::api::ApiResponse;
 use crate::core::controller::api::types::AdminState;

@@ -19,6 +19,33 @@ use crate::types::resources::backend_tls_policy::{
 use crate::types::resources::common::{is_core_api_group, ParentReference};
 use crate::types::ResourceKind;
 
+/// Decide whether sibling BackendTLSPolicies (those targeting the same
+/// resource) must be requeued after this policy was processed.
+///
+/// Returns `true` when either of the precedence-relevant inputs changed:
+///
+/// - **Target set changed** (`old_target_keys != new_target_keys`): old
+///   siblings may no longer conflict with this policy and new siblings need
+///   to (re)evaluate the conflict against this policy.
+/// - **Creation timestamp changed** with target set unchanged: this happens
+///   when a BackendTLSPolicy is delete+recreated (same name, possibly with
+///   updated `validation` block) within one PollWatcher tick. The new
+///   timestamp shifts precedence ordering, so previously-`Conflicted` siblings
+///   may now win — and previously-`Accepted` siblings may now lose.
+///
+/// Returns `false` for no-op updates (e.g. a `resourceVersion` bump with
+/// identical targets and identical timestamp). Skipping requeue here is
+/// important: it prevents A→B→A→B ping-pong cycles between conflicting
+/// policies that would otherwise reprocess each other forever.
+fn should_requeue_siblings(
+    old_target_keys: &[String],
+    new_target_keys: &[String],
+    old_timestamp: Option<&str>,
+    new_timestamp: Option<&str>,
+) -> bool {
+    old_target_keys != new_target_keys || old_timestamp != new_timestamp
+}
+
 /// BackendTLSPolicy handler
 pub struct BackendTlsPolicyHandler {
     controller_name: String,
@@ -79,16 +106,25 @@ impl BackendTlsPolicyHandler {
         }
 
         // --- Conflict detection: register target refs ---
+        // The snapshot → clear → re-register sequence below is not atomic at
+        // the store level, but is safe because the BackendTLSPolicy
+        // FileSystemResourceController processes one policy key at a time on
+        // its receive loop — no concurrent parse_policy runs against the same
+        // policy_resource_key. If the framework is ever changed to parallelise
+        // per-key work this would need a finer lock.
         let target_manager = ctx.runtime().backend_tls_policy.target_mgr();
 
-        // Snapshot old target keys and siblings BEFORE clearing, so we can
-        // detect whether the target set actually changed.
+        // Snapshot old target keys, siblings, and creation timestamp BEFORE
+        // mutating any state, so we can detect whether either the target set
+        // or the precedence-relevant metadata changed.
         let old_target_keys = {
             let mut keys = target_manager.get_dependencies(&resource_ref.key());
             keys.sort();
             keys
         };
         let old_siblings = ctx.runtime().backend_tls_policy.get_siblings(&resource_ref);
+        let policy_resource_key = resource_ref.resource_key();
+        let old_timestamp = ctx.runtime().backend_tls_policy.timestamp_of(&policy_resource_key);
 
         // Clear old target registrations and re-register with current targetRefs.
         target_manager.clear_resource_refs(&resource_ref);
@@ -104,17 +140,28 @@ impl BackendTlsPolicyHandler {
         new_target_keys.sort();
 
         // Store creation timestamp for conflict precedence sorting.
-        let policy_resource_key = resource_ref.resource_key();
-        let ts_string = btp.metadata.creation_timestamp.as_ref().map(|t| t.0.to_rfc3339());
+        let new_timestamp = btp.metadata.creation_timestamp.as_ref().map(|t| t.0.to_rfc3339());
         ctx.runtime()
             .backend_tls_policy
-            .set_timestamp(&policy_resource_key, ts_string.as_deref());
+            .set_timestamp(&policy_resource_key, new_timestamp.as_deref());
 
-        // Only requeue siblings when the target set actually changed.
-        // This prevents the A→B→A→B ping-pong cycle that occurs when two
-        // policies share a target and each processing unconditionally requeues
-        // the other.
-        if old_target_keys != new_target_keys {
+        // Decide whether to requeue siblings. Two precedence-relevant signals:
+        //   (a) target set changed — old siblings may no longer conflict, new
+        //       siblings need to (re)evaluate against this policy.
+        //   (b) target set is unchanged but creation_timestamp changed — this
+        //       happens when a BTP is delete+recreated (same name) within one
+        //       PollWatcher tick. The new timestamp shifts precedence ordering,
+        //       so previously-Conflicted siblings may now win (or lose).
+        //
+        // Otherwise (no-op update — e.g. resourceVersion bump with identical
+        // targets and timestamp) skip requeue to avoid the A→B→A→B ping-pong
+        // cycle between conflicting policies.
+        if should_requeue_siblings(
+            &old_target_keys,
+            &new_target_keys,
+            old_timestamp.as_deref(),
+            new_timestamp.as_deref(),
+        ) {
             for sibling in &old_siblings {
                 ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
             }
@@ -624,5 +671,243 @@ impl ProcessorHandler<BackendTLSPolicyAlpha3> for BackendTlsPolicyAlpha3Handler 
         let mut v1: BackendTLSPolicy = btp.clone().into();
         self.inner.update_policy_status(&mut v1, ctx, validation_errors);
         *btp = v1.into();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::SecretRefManager;
+    use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
+    use crate::core::controller::conf_mgr::ControllerRuntime;
+    use crate::types::resources::backend_tls_policy::{
+        BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation, WellKnownCACertificates,
+    };
+    use crate::types::ResourceKind;
+    use chrono::{DateTime, Utc};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+    use kube::api::ObjectMeta;
+    use std::sync::Arc;
+
+    // -------- should_requeue_siblings (pure decision) --------
+
+    #[test]
+    fn should_requeue_when_target_set_changes() {
+        assert!(should_requeue_siblings(
+            &["ns/svc-a".to_string()],
+            &["ns/svc-b".to_string()],
+            Some("2024-01-01T00:00:00+00:00"),
+            Some("2024-01-01T00:00:00+00:00"),
+        ));
+    }
+
+    #[test]
+    fn should_requeue_when_timestamp_changes_with_same_targets() {
+        // The bug: BTP delete+recreated within one PollWatcher tick — same
+        // name, same targets, but a new creation_timestamp must trigger
+        // sibling re-evaluation.
+        let targets = ["ns/my-svc".to_string()];
+        assert!(should_requeue_siblings(
+            &targets,
+            &targets,
+            Some("2024-01-01T00:00:00+00:00"),
+            Some("2024-06-01T00:00:00+00:00"),
+        ));
+    }
+
+    #[test]
+    fn should_not_requeue_on_noop_update() {
+        // Steady state: identical targets, identical timestamp (e.g. a
+        // resourceVersion bump from a status write). Skipping requeue is
+        // what prevents the A→B→A→B ping-pong between conflicting policies.
+        let targets = ["ns/my-svc".to_string()];
+        assert!(!should_requeue_siblings(
+            &targets,
+            &targets,
+            Some("2024-01-01T00:00:00+00:00"),
+            Some("2024-01-01T00:00:00+00:00"),
+        ));
+    }
+
+    #[test]
+    fn should_requeue_when_old_timestamp_was_missing() {
+        // First registration after a controller restart: old timestamp is
+        // None, new timestamp is Some. Treat as a precedence-relevant change.
+        let targets = ["ns/my-svc".to_string()];
+        assert!(should_requeue_siblings(
+            &targets,
+            &targets,
+            None,
+            Some("2024-01-01T00:00:00+00:00"),
+        ));
+    }
+
+    // -------- parse_policy delete+recreate path (state-level) --------
+
+    fn make_ctx() -> (HandlerContext, Arc<ControllerRuntime>) {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let secret_ref_manager = Arc::new(SecretRefManager::new());
+        let ctx = HandlerContext::new(
+            secret_ref_manager,
+            None,
+            None,
+            TriggerChain::default(),
+            5,
+            20,
+            runtime.clone(),
+        );
+        (ctx, runtime)
+    }
+
+    fn make_btp(ns: &str, name: &str, target_svc: &str, creation_ts: &str) -> BackendTLSPolicy {
+        let ts: DateTime<Utc> = creation_ts.parse().expect("valid RFC3339 timestamp in test");
+        BackendTLSPolicy {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(ns.to_string()),
+                creation_timestamp: Some(Time(ts)),
+                ..Default::default()
+            },
+            spec: BackendTLSPolicySpec {
+                target_refs: vec![BackendTLSPolicyTargetRef {
+                    group: "".to_string(),
+                    kind: "Service".to_string(),
+                    name: target_svc.to_string(),
+                    section_name: None,
+                }],
+                validation: BackendTLSPolicyValidation {
+                    ca_certificate_refs: None,
+                    hostname: "backend.example.com".to_string(),
+                    subject_alt_names: None,
+                    well_known_ca_certificates: Some(WellKnownCACertificates::System),
+                },
+                options: None,
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
+                use_system_ca: false,
+            },
+            status: None,
+        }
+    }
+
+    /// Regression test for the precedence-staleness bug.
+    ///
+    /// Setup: two BTPs (winner, sibling) both target the same Service.
+    /// `winner` has the older creation_timestamp, so it wins; `sibling` is
+    /// `Conflicted`.
+    ///
+    /// Then `winner` is delete+recreated within one PollWatcher tick — same
+    /// name, same targets, but a NEWER creation_timestamp than `sibling`.
+    /// After processing, `sibling` should now win, and `parse_policy` must
+    /// have observed the precedence flip via the `should_requeue_siblings`
+    /// helper so siblings get requeued.
+    ///
+    /// Without the fix, the timestamp-only change is ignored and `sibling`
+    /// keeps a stale `Conflicted` status until the next unrelated event.
+    ///
+    /// Scope: this asserts on the **state-level outcome** (precedence in the
+    /// `BackendTLSPolicyState` flips correctly).  It does not directly observe
+    /// `ctx.requeue` invocation, because the test runtime has no processor
+    /// registered for `BackendTLSPolicy` (so requeue is a no-op log).  The
+    /// `should_requeue_siblings` helper is independently covered by the four
+    /// pure-decision tests above.
+    #[tokio::test]
+    async fn parse_policy_requeues_siblings_when_winner_replaced_with_newer_timestamp() {
+        let (ctx, runtime) = make_ctx();
+        let handler = BackendTlsPolicyHandler::default();
+
+        // 1. Initial state: winner is OLDER, sibling is YOUNGER.
+        let winner = make_btp("ns", "winner", "my-svc", "2024-01-01T00:00:00+00:00");
+        let sibling = make_btp("ns", "sibling", "my-svc", "2024-06-01T00:00:00+00:00");
+
+        let _ = handler.parse_policy(winner, &ctx).await;
+        let _ = handler.parse_policy(sibling, &ctx).await;
+
+        let target_key = make_target_conflict_key("ns", "my-svc", None);
+        assert!(
+            runtime.backend_tls_policy.is_winner("ns/winner", &target_key),
+            "older winner should be the precedence winner before the recreate"
+        );
+        assert!(
+            !runtime.backend_tls_policy.is_winner("ns/sibling", &target_key),
+            "younger sibling should be conflicted before the recreate"
+        );
+
+        // 2. Sanity: a no-op reparse of the winner does NOT change precedence
+        //    state and should be detected as not-requeue-worthy by the helper.
+        //    (Verified by re-checking is_winner — same result.)
+        let winner_noop = make_btp("ns", "winner", "my-svc", "2024-01-01T00:00:00+00:00");
+        let _ = handler.parse_policy(winner_noop, &ctx).await;
+        assert!(
+            runtime.backend_tls_policy.is_winner("ns/winner", &target_key),
+            "noop reparse must not flip precedence"
+        );
+
+        // 3. Bug scenario: winner is deleted and recreated within one tick
+        //    with the SAME name and SAME targets but a NEWER timestamp than
+        //    `sibling`. After parse, the timestamp store reflects the new
+        //    timestamp, and `sibling` should now win on creation_timestamp
+        //    ordering.
+        let winner_recreated = make_btp("ns", "winner", "my-svc", "2024-12-01T00:00:00+00:00");
+        let old_ts_before_recreate = runtime.backend_tls_policy.timestamp_of("ns/winner");
+        let _ = handler.parse_policy(winner_recreated, &ctx).await;
+        let new_ts_after_recreate = runtime.backend_tls_policy.timestamp_of("ns/winner");
+
+        assert_ne!(
+            old_ts_before_recreate, new_ts_after_recreate,
+            "timestamp store must reflect the recreated BTP's new creation_timestamp"
+        );
+
+        // The recreated winner is now YOUNGER than sibling, so sibling must
+        // now win the target on precedence — confirming the precedence flip
+        // that should_requeue_siblings detects via the timestamp delta.
+        assert!(
+            runtime.backend_tls_policy.is_winner("ns/sibling", &target_key),
+            "sibling should now win after the winner was recreated with a newer timestamp"
+        );
+        assert!(
+            !runtime.backend_tls_policy.is_winner("ns/winner", &target_key),
+            "recreated winner is now the younger policy and should be conflicted"
+        );
+
+        // 4. Direct check on the decision helper: with same target set but a
+        //    different timestamp, siblings MUST be requeued. This is the
+        //    specific code path that was missing before the fix.
+        let targets = vec![target_key.clone()];
+        assert!(should_requeue_siblings(
+            &targets,
+            &targets,
+            old_ts_before_recreate.as_deref(),
+            new_ts_after_recreate.as_deref(),
+        ));
+    }
+
+    #[test]
+    fn get_siblings_returns_other_policies_targeting_same_service() {
+        let runtime = ControllerRuntime::default();
+        let target_key = make_target_conflict_key("ns", "my-svc", None);
+
+        let winner = ResourceRef::new(
+            ResourceKind::BackendTLSPolicy,
+            Some("ns".to_string()),
+            "winner".to_string(),
+        );
+        let sibling = ResourceRef::new(
+            ResourceKind::BackendTLSPolicy,
+            Some("ns".to_string()),
+            "sibling".to_string(),
+        );
+
+        runtime
+            .backend_tls_policy
+            .target_mgr()
+            .add_ref(target_key.clone(), winner.clone());
+        runtime
+            .backend_tls_policy
+            .target_mgr()
+            .add_ref(target_key, sibling.clone());
+
+        let siblings_of_winner = runtime.backend_tls_policy.get_siblings(&winner);
+        assert_eq!(siblings_of_winner, vec![sibling]);
     }
 }

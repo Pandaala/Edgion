@@ -1,6 +1,7 @@
 use crate::core::gateway::backends::EdgionService;
 use crate::core::gateway::lb::edgion_backend::EdgionBackend;
 use crate::core::gateway::observe::logs::LogBuffer;
+use crate::core::gateway::plugins::runtime::PluginRuntime;
 use crate::core::gateway::plugins::{EdgionPluginsLog, StageLogs};
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
 use crate::core::gateway::routes::HttpRouteRuleUnit;
@@ -689,6 +690,37 @@ pub struct EdgionHttpContext {
     /// Consumed by `pg_logging` at request end, which computes latency from
     /// `attempt_start` rather than the request start.
     pub last_ewma_backend: Option<(Arc<EdgionBackend>, Instant)>,
+
+    /// Snapshot of resolved global plugin runtimes for this request, taken at
+    /// `request_filter` entry. Each entry is one EdgionPlugins resource;
+    /// per-stage bucketing is handled by `PluginRuntime`'s internal stage Vecs.
+    /// `None` until resolve runs; `Some` with empty Vec if config has no
+    /// `global_plugins_ref` or all refs are dangling.
+    ///
+    /// Populated by `pg_request_filter` (early stage), read by:
+    ///   - Step-2 global iteration in `pg_request_filter`
+    ///   - global iteration in `pg_upstream_response_filter` (sync)
+    ///   - global iteration in `pg_upstream_response_body_filter` (per-chunk hot path)
+    ///   - global iteration in `pg_response_filter` (async)
+    ///
+    /// `Arc<Vec<...>>` lets call sites `Arc::clone` once to release the borrow on
+    /// `ctx` before iterating, avoiding `&ctx` / `&mut ctx` conflicts when running
+    /// plugins.
+    pub resolved_global_plugins: Option<Arc<Vec<Arc<PluginRuntime>>>>,
+
+    /// Resolved targets of every ExtensionRef in the matched route's filter list,
+    /// indexed by `ExtensionRefFilter.index` (assigned at route build time by
+    /// `PluginRuntime::from_httproute_filters_for_rule` /
+    /// `from_grpcroute_filters_for_rule`).
+    ///
+    /// Slot value `None` = dangling ref (target not in plugin store at resolve
+    /// time); the slot is preserved so the index continues to align with
+    /// `ExtensionRefFilter.index`.
+    /// Outer `None` = resolve has not run yet.
+    ///
+    /// Populated by `pg_request_filter`, read by `ExtensionRefFilter::prepare_execution`
+    /// via `PluginSession::resolved_route_ext_ref(index)` (added in Task 4).
+    pub resolved_route_ext_refs: Option<Arc<Vec<Option<Arc<PluginRuntime>>>>>,
 }
 
 impl Default for EdgionHttpContext {
@@ -732,6 +764,8 @@ impl EdgionHttpContext {
             allow_loopback_upstream: false,
             leastconn_incremented_backend: None,
             last_ewma_backend: None,
+            resolved_global_plugins: None,
+            resolved_route_ext_refs: None,
         }
     }
 

@@ -44,7 +44,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 链路是：
 
-- `HTTPRoute` / `GRPCRoute` 预解析时构建 `PluginRuntime::from_httproute_filters()` 或 `from_grpcroute_filters()`
+- `HTTPRoute` / `GRPCRoute` 预解析时按 scope 构建：rule 级用 `PluginRuntime::from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`，backend 级用 `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`。旧的 `from_httproute_filters()` / `from_grpcroute_filters()` 已 `#[deprecated]`，默认按 rule scope 转发到新入口
 
 这条路径主要服务：
 
@@ -222,7 +222,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 重要区别：
 
 - `EdgionPlugins` 里的条目会自动包上 `Conditional*` wrapper
-- 通过 `from_httproute_filters()` / `from_grpcroute_filters()` 加进来的标准 Gateway API filters 当前不会自动套这个条件包装
+- 通过 scope-explicit 入口（`from_httproute_filters_for_rule` / `from_httproute_filters_for_backend` 及 gRPC 同名变体）加进来的标准 Gateway API filters 当前不会自动套这个条件包装（内部由私有 `add_from_httproute_filters_inner` 添加）
 
 跨插件传值优先使用：
 

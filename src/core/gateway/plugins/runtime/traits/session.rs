@@ -192,6 +192,22 @@ pub trait PluginSession: Send + Sync {
     /// Check whether reference key already exists in stack
     fn has_plugin_ref(&self, key: &str) -> bool;
 
+    /// Look up the resolved target `PluginRuntime` for an `ExtensionRef` at the
+    /// given index (assigned at route build time by
+    /// `PluginRuntime::from_httproute_filters_for_rule` /
+    /// `from_grpcroute_filters_for_rule`). Returns `None` if the ref was
+    /// dangling at resolve time, or if `index` is out of range (defensive).
+    ///
+    /// Default impl returns `None` — used by adapters that don't carry an
+    /// `EdgionHttpContext` (e.g. some test mocks). Production path is
+    /// `PingoraSessionAdapter`, which reads `ctx.resolved_route_ext_refs`.
+    fn resolved_route_ext_ref(
+        &self,
+        _index: usize,
+    ) -> Option<std::sync::Arc<crate::core::gateway::plugins::runtime::PluginRuntime>> {
+        None
+    }
+
     /// Push EdgionPlugins execution log to pending list (for ExtensionRef)
     fn push_edgion_plugins_log(&mut self, log: EdgionPluginsLog);
 

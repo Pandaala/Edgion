@@ -1,7 +1,7 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::EdgionHttpProxy;
-use crate::core::gateway::plugins::http::get_global_plugin_store;
 use crate::types::EdgionHttpContext;
 use pingora_proxy::Session;
 
@@ -44,23 +44,18 @@ pub fn upstream_response_body_filter(
         }
     }
 
-    // Run global plugins body filter
-    if let Some(ref global_plugins_ref) = _edgion_http.edgion_gateway_config.spec.global_plugins_ref {
-        for plugin_ref in global_plugins_ref {
-            let plugin_key = format!(
-                "{}/{}",
-                plugin_ref.namespace.as_deref().unwrap_or("default"),
-                &plugin_ref.name
-            );
-            if let Some(runtime) = get_global_plugin_store().get_plugin_runtime(&plugin_key) {
-                if runtime.upstream_response_body_plugins_count() > 0 {
-                    if let Some(delay) = runtime.run_upstream_response_body_plugins(session, ctx, body, end_of_stream) {
-                        max_delay = Some(match max_delay {
-                            Some(current) => current.max(delay),
-                            None => delay,
-                        });
-                    }
-                }
+    // Run global plugins body filter (read from per-request snapshot; zero
+    // format/store cost on the per-chunk hot path).
+    if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(Arc::clone) {
+        for runtime in plugins.iter() {
+            if runtime.upstream_response_body_plugins_count() == 0 {
+                continue;
+            }
+            if let Some(delay) = runtime.run_upstream_response_body_plugins(session, ctx, body, end_of_stream) {
+                max_delay = Some(match max_delay {
+                    Some(current) => current.max(delay),
+                    None => delay,
+                });
             }
         }
     }

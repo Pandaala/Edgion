@@ -1,4 +1,4 @@
-use super::EdgionHttpProxy;
+use super::{resolve_global_plugins, resolve_route_ext_refs, EdgionHttpProxy};
 use crate::core::gateway::cli::config::get_path_normalization_config;
 use crate::core::gateway::path_normalization::{
     contains_escaped_slash, has_invalid_percent_encoding, normalize_path, PathNormalizationConfig,
@@ -170,22 +170,43 @@ pub async fn request_filter(
         }
     }
 
-    // Step 2: Run global plugins from EdgionGatewayConfig (executed before route-level plugins)
-    if let Some(ref plugin_refs) = edgion_http.edgion_gateway_config.spec.global_plugins_ref {
-        for plugin_ref in plugin_refs {
-            // Construct plugin key: namespace/name
-            let plugin_key = format!(
-                "{}/{}",
-                plugin_ref.namespace.as_deref().unwrap_or("default"),
-                plugin_ref.name
-            );
+    // === Per-request resolve (Phase 4 of unified plugin snapshot) ===
+    // Resolve once at request_filter entry; later stages read directly from
+    // ctx without paying any format!() / store-lookup cost.
+    if ctx.resolved_global_plugins.is_none() {
+        let gw_name = edgion_http
+            .edgion_gateway_config
+            .metadata
+            .name
+            .as_deref()
+            .unwrap_or("<unnamed>");
+        let resolved = resolve_global_plugins(
+            edgion_http.edgion_gateway_config.spec.global_plugins_ref.as_deref(),
+            gw_name,
+        );
+        ctx.resolved_global_plugins = Some(Arc::new(resolved));
+    }
 
-            if let Some(runtime) = get_global_plugin_store().get_plugin_runtime(&plugin_key) {
-                runtime.run_request_plugins(session, ctx).await;
-                if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-                    let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
-                    return Ok(true);
-                }
+    if ctx.resolved_route_ext_refs.is_none() {
+        let resolved = match (&ctx.route_unit, &ctx.grpc_route_unit) {
+            (Some(unit), _) => resolve_route_ext_refs(unit.rule.plugin_runtime.ext_ref_keys(), &unit.resource_key),
+            (_, Some(unit)) => resolve_route_ext_refs(unit.rule.plugin_runtime.ext_ref_keys(), &unit.resource_key),
+            _ => Vec::new(),
+        };
+        ctx.resolved_route_ext_refs = Some(Arc::new(resolved));
+    }
+
+    // Step 2: Run global plugins from EdgionGatewayConfig (executed before route-level plugins)
+    // Reads the per-request snapshot populated above (zero format!/store cost).
+    if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(Arc::clone) {
+        for runtime in plugins.iter() {
+            if runtime.request_plugins_count() == 0 {
+                continue;
+            }
+            runtime.run_request_plugins(session, ctx).await;
+            if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+                let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
+                return Ok(true);
             }
         }
     }

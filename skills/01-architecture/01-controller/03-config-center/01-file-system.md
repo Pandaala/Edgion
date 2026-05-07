@@ -20,7 +20,7 @@ FileSystemCenter
 
 FileSystemController.run()
 ├── FileSystemWatcher（共享，集中式文件监听）
-│   ├── [inotify/kqueue] → [debouncer] → [dispatcher] → [kind channels]
+│   ├── [PollWatcher (1s stat-diff)] → [dispatcher] → [kind channels]
 │   │                                        ├── HTTPRoute channel
 │   │                                        ├── Gateway channel
 │   │                                        └── ... 其他 kind channels
@@ -84,7 +84,7 @@ start(shutdown_handle)
     │   │    LinkSys, EdgionAcme, EdgionGatewayConfig）
     │   └── FileSystemWatcher.run()
     │       ├── init_phase: 扫描目录 → 按 kind 分组 → Init/InitApply/InitDone
-    │       └── runtime_phase: notify 监听 → debounce(1s) → Apply/Delete 分发
+    │       └── runtime_phase: PollWatcher（1s stat 差分） → Apply/Delete 直接分发
     ├── 3. wait_registry_ready(30s)
     ├── 4. 触发跨命名空间重新验证
     ├── 5. 创建 ConfigSyncServer + 注册所有 WatchObj
@@ -108,40 +108,42 @@ start(shutdown_handle)
 
 ### Runtime 阶段细节
 
-`FileSystemWatcher.runtime_phase()` 使用 `notify` 库的 `RecommendedWatcher`：
+`FileSystemWatcher.runtime_phase()` 使用 `notify` 库的 `PollWatcher`：
 
-1. 创建 `RecommendedWatcher`（poll interval 2s），将原始事件发送到 `mpsc::channel(100)`
+1. 创建 `PollWatcher`（poll_interval = 1s），将原始事件发送到 `mpsc::unbounded_channel`
 2. 忽略 `EventKind::Access`（只读访问不触发处理）
-3. 使用 1 秒 interval debounce 去抖：用 `HashMap<PathBuf, EventKind>` 收集路径与**最后一次**事件类型，定时批量分发
-   - 同一 debounce 窗口内多个事件时，最新的 EventKind 覆盖旧的（`pending.insert(path, event.kind)`）
-4. `dispatch_file_event(path, last_kind)` 通过 `infer_dispatch_action` 三段判定：
-   - `Remove(_)` 或 `Modify(Name(From))` → **Delete**（明确移除或改名走，无论文件是否存在）
-   - `Create(_)` 或 `Modify(Name(To))` → **Apply**（明确创建或改名进来）
-   - 其它（`Modify(Data/Metadata/Any)`、`Any`、`Other`、`Name(Both/Any)`）→ 根据 `path.exists()`：
-     - 存在 → Apply
-     - 不存在 → **Recheck**：sleep 200ms 后再检查，仍不存在则 Delete
+3. 主循环对每个事件直接调用 `dispatch_file_event`，不做应用层 debounce ——
+   PollWatcher 已在每个 poll 周期内对同一路径合并到一个事件
+4. `dispatch_file_event(path, kind)` 通过 `infer_dispatch_action` 判定：
+   - `Remove(_)` 或 `Modify(Name(From))` → **Delete**
+   - `Create(_)` 或 `Modify(Name(To))` → **Apply**
+   - 其它模糊事件 → 根据 `path.exists()` 判定 Apply / Recheck（PollWatcher 几乎不发模糊事件，此分支保留作 defense-in-depth）
 5. 通过 `broadcast::channel` 按 Kind 分发给对应的 `FileSystemResourceController`
 
-### dispatch 设计决策与权衡
+### 设计决策与权衡
 
-**为什么用 EventKind 而不是仅用 path.exists()**
+**为什么用 PollWatcher 而不是 RecommendedWatcher（FSEvents/inotify）**
 
-vim、kubectl edit 等工具使用原子替换（`rename(tmp, target)`）写文件。notify 在同一 debounce 窗口内会同时产生 `Remove(target)` 和 `Create(target)` 或 `Modify(Name(Both))`，若恰好在 debounce 边界处仅看到 Remove，旧逻辑的 `!path.exists()` 会触发假 Delete → controller 误删缓存 → 写空 status → 再 Apply。引入 EventKind 后，窗口内 Create 覆盖 Remove，dispatch 看到 Create + exists=true → Apply，根因消除。
+最初实现使用 `RecommendedWatcher`（macOS 上是 FSEvents、Linux 上是 inotify），并在应用层加了 1 秒 debounce + `HashMap<PathBuf, EventKind>` 收集 + `had_genuine_remove` 跟踪等机制处理事件去重和 atomic-replace 语义。
 
-**`Remove + path_exists=true → Delete`（保守设计，有意为之）**
+**实测发现**：macOS FSEvents 在高并发批量删除场景下会**静默丢失大量事件**——一次删除 656 个文件（156ms 内完成），FSEvents 只投递了约 64 个 Remove 事件（损失率 ~90%），且未设置 `kFSEventStreamEventFlagMustScanSubDirs` rescan 标志，OS 完全没有溢出告警。这导致 `cache_residue` 集成测试持续失败，runtime store 与 gateway client cache 都无法清空。
 
-Remove 事件明确来自内核，被保守地处理为 Delete，不论 `path.exists()` 的瞬时结果。这样做的原因：
-- 正常的 atomic-replace（rename）会让 Create 覆盖 pending 中的 Remove，dispatch 时不会看到 Remove 作为最后事件
-- 若 debounce tick 恰好落在 Remove 和 Create 事件之间（毫秒级概率），pending 最后是 Remove，path 可能已重建（exists=true）。此时发出 Delete，下一个 tick 再发 Apply，造成短暂状态抖动——对 config controller 可以接受
-- 若改为 `Remove + exists=true → Recheck`，会对每个真实删除多等 200ms，且语义更复杂
+切换到 `PollWatcher` 后：
+- 永不丢事件（每个 poll 周期 stat 整个目录，对比上次快照差分）
+- 应用层不再需要 debounce / pending HashMap / `had_genuine_remove`，代码简化约 100 行
+- 跨平台行为一致（PollWatcher 完全是 user-space 实现，与 OS push API 解耦）
 
-**Recheck 200ms 作为事件丢失兜底**
+**代价**：固定 1s 延迟（poll_interval）。对 config controller 完全可接受。
 
-`mpsc::channel(100)` 满时，Remove 事件可能被丢弃，此时 pending 中只剩 `Modify(Data)` + 文件不存在。旧逻辑靠 `!path.exists()` 偶然兜底了这种情况；新逻辑通过 Recheck 显式处理：sleep 200ms 等待可能的 in-flight create 完成，仍不存在则 Delete。
+**FS 模式延迟下限**
+
+FileSystemCenter 模式下，从「写入配置文件」到「Apply 事件分发」的最小延迟为 1 秒（PollWatcher 的下一个 poll tick）。这是 PollWatcher 设计本身的属性，不是 bug。
+
+测试和工具如果对 FS 模式的响应做了断言（例如「写文件后 < N 秒内状态应更新」），需确保超时预算 ≥ 1.5 秒。
 
 **已知限制**
 
-- Recheck 期间（200ms sleep）select loop 不处理新事件，若 pending 中有多个 Recheck 路径会串行累加延迟。config dir 文件量有限，生产中极少触发。若需高吞吐，可改为 `tokio::spawn` 并发 dispatch。
+- **删后立刻重建（同 1s 周期内）会被合并为单个 Modify**：PollWatcher 只看快照差分，看不到中间删除态。如果 ConfHandler 依赖在 on_delete / on_change 之间做差量计算（例如反向引用清理），需要在 `parse()` 里基于「旧值 vs 新值」做对比，而不是依赖 on_delete。详见 `reference_grant.rs` 与 `backend_tls_policy.rs` 的实现模式。
 - init_phase 扫描完成后才启动 watcher，两者之间的事件会丢失（独立已知问题，待单独修复）。
 
 ## 分阶段初始化
@@ -174,7 +176,7 @@ Phase 2 等待 Phase 1 所有 Kind 在 `PROCESSOR_REGISTRY` 中标记 ready（�
 
 | 方面 | FileSystemCenter | KubernetesCenter |
 |------|-----------------|-----------------|
-| 事件来源 | `notify` 库 inotify/kqueue | K8s API Reflector watch stream |
+| 事件来源 | `notify::PollWatcher`（1s stat-diff） | K8s API Reflector watch stream |
 | Status 持久化 | `.status` 文件（YAML） | K8s API `PATCH /status`（JSON Merge Patch） |
 | Leader Election | 无（单实例，`leader_handle = None`） | Lease-based 分布式选举 |
 | Status 写入守卫 | `is_none_or` 始终返回 true | `leader_handle.is_leader()` 守卫 |

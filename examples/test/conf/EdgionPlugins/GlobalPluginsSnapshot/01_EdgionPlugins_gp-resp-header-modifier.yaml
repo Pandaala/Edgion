@@ -1,0 +1,17 @@
+# Global EdgionPlugins for unified plugin snapshot integration test.
+# Adds a response header via ResponseHeaderModifier in the
+# upstreamResponseFilterPlugins stage. This is the D3-A path that was
+# previously silently dropped before the unified plugin snapshot fix.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: gp-resp-header-modifier
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: ResponseHeaderModifier
+      config:
+        add:
+          - name: "X-Global-Plugin"
+            value: "yes"

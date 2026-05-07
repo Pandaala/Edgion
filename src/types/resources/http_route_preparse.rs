@@ -130,7 +130,7 @@ impl HTTPRoute {
         for rule in rules.iter_mut() {
             // Initialize rule-level plugin_runtime from rule.plugins
             if let Some(filters) = &rule.filters {
-                rule.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters, namespace));
+                rule.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters_for_rule(filters, namespace));
             }
 
             rule.parsed_forward_raw_path = parsed_forward_raw_path;
@@ -157,7 +157,8 @@ impl HTTPRoute {
 
                 // Initialize plugin_runtime from plugins
                 if let Some(filters) = &backend_ref.filters {
-                    backend_ref.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters, namespace));
+                    backend_ref.plugin_runtime =
+                        Arc::new(PluginRuntime::from_httproute_filters_for_backend(filters, namespace));
                 }
             }
         }

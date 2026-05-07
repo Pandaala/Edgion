@@ -572,6 +572,18 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.has_plugin_ref(key)
     }
 
+    fn resolved_route_ext_ref(
+        &self,
+        index: usize,
+    ) -> Option<std::sync::Arc<crate::core::gateway::plugins::runtime::PluginRuntime>> {
+        self.ctx
+            .resolved_route_ext_refs
+            .as_ref()?
+            .get(index)?
+            .as_ref()
+            .map(std::sync::Arc::clone)
+    }
+
     fn push_edgion_plugins_log(&mut self, log: EdgionPluginsLog) {
         self.ctx.pending_edgion_plugins_logs.push(log);
     }

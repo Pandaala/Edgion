@@ -165,7 +165,11 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "global-connection-ip-restriction" | "globalconnectioniprestriction" | "gcir" => {
                 "EdgionPlugins/GlobalConnectionIpRestriction".to_string()
             }
+            "global-plugins-snapshot" | "globalpluginssnapshot" | "gp-snapshot" => {
+                "EdgionPlugins/GlobalPluginsSnapshot".to_string()
+            }
             "resolved-refs" | "resolvedrefs" | "ep-resolved-refs" => "EdgionPlugins/ResolvedRefs".to_string(),
+            "dangling-extension-ref" | "danglingextensionref" => "HTTPRoute/DanglingExtensionRef".to_string(),
             "linksys-status" | "linksysstatus" | "ls-status" => "LinkSys/Status".to_string(),
             "ref-grant-status" => "Status/RefGrant".to_string(),
             "hostname-intersection-status" => "Status/HostnameIntersection".to_string(),
@@ -216,6 +220,9 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Protocol/WebSocket" => "HTTPRoute/Protocol/WebSocket",
         "HTTPRoute/Protocol/H2C" => "HTTPRoute/Protocol/H2C",
         "HTTPRoute/MultiPort" => "HTTPRoute/MultiPort",
+        // DanglingExtensionRef is parented to edgion-plugins-gateway (port 31180),
+        // shared with EdgionPlugins ExtensionRef-based scenarios.
+        "HTTPRoute/DanglingExtensionRef" => "EdgionPlugins",
         // GRPCRoute
         "GRPCRoute/Basic" | "GRPCRoute" => "GRPCRoute/Basic",
         "GRPCRoute/Match" => "GRPCRoute/Match",
@@ -273,6 +280,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/RegionRoute" => "EdgionPlugins",
         "EdgionPlugins/PluginMetaDataManaged" | "EdgionPlugins/plugin-metadata-managed" => "EdgionPlugins",
         "EdgionPlugins/GlobalConnectionIpRestriction" => "EdgionPlugins",
+        "EdgionPlugins/GlobalPluginsSnapshot" => "EdgionPlugins",
         "EdgionPlugins/PluginMetaDataStatus" => "EdgionPlugins",
         "EdgionPlugins/PluginMetaDataStatus/RefFlap" => "EdgionPlugins",
         "EdgionPlugins/PluginValidationStatus" => "EdgionPlugins",
@@ -498,6 +506,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::HeaderModifierTestSuite));
+        }
+        "HTTPRoute/DanglingExtensionRef" => {
+            if !gateway {
+                eprintln!("Error: HTTPRoute/DanglingExtensionRef tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::DanglingExtensionRefTestSuite));
         }
         "HTTPRoute/Protocol" => {
             runner.add_suite(Box::new(suites::WebSocketTestSuite));
@@ -1028,6 +1043,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::CorsPluginTestSuite));
+        }
+        "EdgionPlugins/GlobalPluginsSnapshot" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/GlobalPluginsSnapshot tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GlobalPluginsSnapshotTestSuite));
         }
         "EdgionPlugins/Csrf" => {
             if !gateway {

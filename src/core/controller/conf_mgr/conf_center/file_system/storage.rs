@@ -304,6 +304,25 @@ impl CenterApi for FileSystemStorage {
             .await
             .map_err(|e| ConfWriterError::io("Failed to delete file", e))?;
 
+        // Best-effort cleanup of the sidecar `<file>.yaml.status` so it doesn't
+        // outlive its config file.  The resource_controller also deletes status
+        // files when it processes a Delete event, but that path depends on the
+        // file_watcher delivering the event in time — for bulk deletes (e.g.
+        // wipe_all) PollWatcher's poll_interval can leave many `.status`
+        // orphans visible for a moment.  Removing it here closes that window.
+        // NotFound is fine (resource may have never produced a status).
+        let status_path = super::status::FileSystemStatusHandler::status_path(&path);
+        if let Err(e) = fs::remove_file(&status_path).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::debug!(
+                    component = "file_system_writer",
+                    status_file = %status_path.display(),
+                    error = %e,
+                    "Failed to remove sidecar status file (non-fatal)"
+                );
+            }
+        }
+
         tracing::info!(
             component = "file_system_writer",
             event = "resource_deleted",

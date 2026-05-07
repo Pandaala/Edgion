@@ -244,12 +244,15 @@ report_test() {
     local result=$2
     local duration=$3
     
-    ((TOTAL_TESTS++))
+    # Pre-increment everywhere: under `set -e`, post-increment on a counter at 0
+    # returns the pre-value (0), which bash treats as failure and aborts the script.
+    # Pre-increment returns the post-value (>=1), so set -e never fires.
+    ((++TOTAL_TESTS))
     if [ "$result" = "PASS" ]; then
-        ((PASSED_TESTS++))
+        ((++PASSED_TESTS))
         echo "[PASS] ${name} (${duration}s)" >> "$REPORT_FILE"
     else
-        ((FAILED_TESTS++))
+        ((++FAILED_TESTS))
         echo "[FAIL] ${name} (${duration}s)" >> "$REPORT_FILE"
     fi
 }
@@ -548,7 +551,7 @@ show_help() {
     echo "  --suites <list>        Specify test suites to load (comma separated)"
     echo "  --with-reload          Run tests twice with reload in between (verify server_id changes)"
     echo "  --skip-residue-check   Skip cache residue detection after tests (also set via SKIP_RESIDUE_CHECK=true)"
-    echo "                         Set RESIDUE_MODE=fail env to make leaks count as failed tests (default: warn — log only)"
+    echo "                         Set RESIDUE_MODE=warn env to log leaks without failing the build (default: fail — leaks are errors)"
     echo "  -h, --help             Show help"
     echo ""
     echo "Examples:"
@@ -1345,8 +1348,8 @@ main() {
         if [ -n "$residue_bin" ] && [ -x "$residue_bin" ]; then
             # Always invoke validator with --mode fail so exit 1 unambiguously means
             # "residue detected". Shell-side RESIDUE_MODE then decides whether to
-            # block the build (default: warn — log but do not fail).
-            local residue_mode="${RESIDUE_MODE:-warn}"
+            # block the build (default: fail — opt out with RESIDUE_MODE=warn).
+            local residue_mode="${RESIDUE_MODE:-fail}"
             "$residue_bin" \
                 --controller-addr "http://127.0.0.1:5800" \
                 --gateway-addr    "http://127.0.0.1:5900" \
@@ -1359,16 +1362,19 @@ main() {
             elif [ $rc -eq 1 ]; then
                 if [ "$residue_mode" = "fail" ]; then
                     log_error "Cache residue detected (RESIDUE_MODE=fail) — see report above"
-                    ((FAILED_TESTS++))
+                    ((++FAILED_TESTS))
+                    test_failed=true
                 else
                     log_warn "Cache residue detected (RESIDUE_MODE=warn — not failing build); see report above"
                 fi
             elif [ $rc -eq 2 ]; then
                 log_error "cache_residue infrastructure error (rc=2)"
-                ((FAILED_TESTS++))
+                ((++FAILED_TESTS))
+                test_failed=true
             else
                 log_error "cache_residue unexpected exit code: $rc"
-                ((FAILED_TESTS++))
+                ((++FAILED_TESTS))
+                test_failed=true
             fi
         fi
     fi

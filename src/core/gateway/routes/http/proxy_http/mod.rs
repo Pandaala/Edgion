@@ -13,6 +13,7 @@ use crate::core::gateway::runtime::server::server_header::ServerHeaderOpts;
 use crate::types::{EdgionGatewayConfig, EdgionHttpContext, Listener, ListenerKey};
 
 // Sub-modules
+pub mod global_plugins_resolve;
 pub mod parse_timeout;
 pub mod preflight_handler;
 
@@ -33,6 +34,7 @@ mod pg_upstream_response_body_filter;
 mod pg_upstream_response_filter;
 
 // Re-exports
+pub use global_plugins_resolve::{resolve_global_plugins, resolve_route_ext_refs};
 pub use parse_timeout::{ParsedBackendTimeout, ParsedClientTimeout, ParsedTimeouts};
 pub use preflight_handler::PreflightHandler;
 

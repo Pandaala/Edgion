@@ -1,0 +1,56 @@
+# Override of the cluster-scoped EdgionGatewayConfig "example-gateway".
+# Apply order overwrites the base config (same name), so this overlay
+# duplicates the base spec verbatim and only adds globalPluginsRef.
+#
+# Two refs are declared:
+#   - gp-resp-header-modifier  (real, defined in 01_EdgionPlugins_*.yaml)
+#   - ghost / edgion-default   (DANGLING, intentional - Task 14 dangling-ref test)
+#
+# A request through this gateway should still succeed (200), with X-Global-Plugin
+# added by the resp-header-modifier global plugin, and a single tracing::warn!
+# logged for the dangling "ghost" reference.
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: example-gateway
+spec:
+  server:
+    threads: 4
+    workStealing: true
+    gracePeriodSeconds: 30
+    gracefulShutdownTimeoutS: 10
+    upstreamKeepalivePoolSize: 128
+    downstreamKeepaliveRequestLimit: 1000
+
+  realIp:
+    trustedIps:
+      - "127.0.0.0/8"
+      - "198.51.100.0/24"
+      - "192.168.0.0/16"
+      - "10.0.0.0/8"
+      - "172.16.0.0/12"
+    realIpHeader: "X-Forwarded-For"
+
+  securityProtect:
+    xForwardedForLimit: 200
+    requireSniHostMatch: true
+    fallbackSni: "default.example.com"
+
+  httpTimeout:
+    client:
+      readTimeout: 60s
+      writeTimeout: 60s
+      keepaliveTimeout: 75s
+    backend:
+      defaultConnectTimeout: 5s
+      defaultRequestTimeout: 60s
+      defaultIdleTimeout: 300s
+
+  globalPluginsRef:
+    - name: gp-resp-header-modifier
+      namespace: edgion-default
+    # Dangling reference (intentional): no EdgionPlugins by this name exists.
+    # Verifies the resolver tolerates missing refs (request still 200) and
+    # emits a single tracing::warn! per request rather than failing.
+    - name: ghost
+      namespace: edgion-default

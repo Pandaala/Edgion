@@ -403,7 +403,7 @@ impl GRPCRoute {
         for rule in rules.iter_mut() {
             // Initialize rule-level plugin_runtime from rule.plugins
             if let Some(filters) = &rule.filters {
-                rule.plugin_runtime = Arc::new(PluginRuntime::from_grpcroute_filters(filters, namespace));
+                rule.plugin_runtime = Arc::new(PluginRuntime::from_grpcroute_filters_for_rule(filters, namespace));
             }
 
             let Some(backend_refs) = rule.backend_refs.as_mut() else {
@@ -428,7 +428,8 @@ impl GRPCRoute {
 
                 // Initialize plugin_runtime from plugins
                 if let Some(filters) = &backend_ref.filters {
-                    backend_ref.plugin_runtime = Arc::new(PluginRuntime::from_grpcroute_filters(filters, namespace));
+                    backend_ref.plugin_runtime =
+                        Arc::new(PluginRuntime::from_grpcroute_filters_for_backend(filters, namespace));
                 }
             }
         }

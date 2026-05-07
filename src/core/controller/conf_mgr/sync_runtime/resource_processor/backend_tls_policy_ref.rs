@@ -41,9 +41,20 @@ impl BackendTLSPolicyState {
     }
 
     /// Store the creation timestamp for a policy (used for conflict precedence).
+    ///
+    /// Passing `None` clears any previously-stored timestamp for the key — this
+    /// keeps the stored map in sync with the policy's actual metadata (e.g. on
+    /// recreate without a creation_timestamp the old value must not linger,
+    /// otherwise `is_winner` would compare a stale Some against fresh peers).
     pub fn set_timestamp(&self, policy_key: &str, timestamp: Option<&str>) {
-        if let Some(ts) = timestamp {
-            self.timestamps.write().insert(policy_key.to_string(), ts.to_string());
+        let mut map = self.timestamps.write();
+        match timestamp {
+            Some(ts) => {
+                map.insert(policy_key.to_string(), ts.to_string());
+            }
+            None => {
+                map.remove(policy_key);
+            }
         }
     }
 
@@ -55,6 +66,16 @@ impl BackendTLSPolicyState {
     /// Get the stored creation timestamp for a policy.
     fn get_timestamp(&self, policy_key: &str) -> Option<String> {
         self.timestamps.read().get(policy_key).cloned()
+    }
+
+    /// Public read of the stored creation timestamp for a policy.
+    ///
+    /// Used by `parse_policy` to detect delete+recreate within a single
+    /// PollWatcher tick: same name, same target set, but a new
+    /// `creation_timestamp` shifts precedence ordering so siblings must be
+    /// re-evaluated.
+    pub fn timestamp_of(&self, policy_key: &str) -> Option<String> {
+        self.get_timestamp(policy_key)
     }
 
     /// Determine if a policy is the winner among all policies targeting the same target.

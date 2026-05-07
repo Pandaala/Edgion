@@ -44,5 +44,18 @@ pub async fn response_filter(
             .await;
     }
 
+    // Run global plugins (D3-A gap fill from unified snapshot Phase 2).
+    // Order: route → backend → global (onion: response stages go inner → outer).
+    if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(std::sync::Arc::clone) {
+        for runtime in plugins.iter() {
+            if runtime.upstream_response_async_plugins_count() == 0 {
+                continue;
+            }
+            runtime
+                .run_upstream_response_plugins_async(session, ctx, upstream_response)
+                .await;
+        }
+    }
+
     Ok(())
 }

@@ -36,7 +36,7 @@ pub struct PluginRuntime {
 }
 ```
 
-**构建时机**：HTTPRoute/GRPCRoute preparse 阶段（非每请求）。入口：`from_httproute_filters()` / `from_grpcroute_filters()`（Gateway API 标准 filter）；EdgionPlugins CRD 条目通过 `add_from_request_filters()` / `add_from_upstream_response_filters()` / `add_from_upstream_response_body_filters()` / `add_from_upstream_responses()` 加载，各返回 `Vec<String>` 验证错误。`clone()` 返回空实例（preparse 时重建）。
+**构建时机**：HTTPRoute/GRPCRoute preparse 阶段（非每请求）。入口（Gateway API 标准 filter）按 scope 分两个：rule 级用 `from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`，backend 级用 `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`；旧的 `from_httproute_filters()` / `from_grpcroute_filters()` 已 `#[deprecated]`，默认按 rule scope 转发到新入口。EdgionPlugins CRD 条目通过 `add_from_request_filters()` / `add_from_upstream_response_filters()` / `add_from_upstream_response_body_filters()` / `add_from_upstream_responses()` 加载，各返回 `Vec<String>` 验证错误。`clone()` 返回空实例（preparse 时重建）。
 
 ## 条件执行
 
@@ -63,7 +63,7 @@ EdgionPlugins 定义的插件通过 `Conditional*` wrapper 自动包装，支持
 
 条件评估分为异步版本（`evaluate_detail`）和同步版本（`evaluate_detail_sync`），分别用于 async 和 sync 阶段。
 
-Gateway API 标准 filter（通过 `add_from_httproute_filters` 添加的）不包装条件，始终执行。
+Gateway API 标准 filter（通过私有 `add_from_httproute_filters_inner` 添加的，公开入口为上文 scope-explicit 的 `from_httproute_filters_for_rule` / `from_httproute_filters_for_backend`）不包装条件，始终执行。
 
 跳过日志格式：`"skip:keyExist,hdr:X-Internal"` 或 `"!run:include,method"`。
 
