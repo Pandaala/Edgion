@@ -99,7 +99,6 @@ spec:
             group: edgion.io
             kind: EdgionPlugins
             name: my-plugins
-          extensionRefMaxDepth: 5                  # 嵌套 ExtensionRef 最大深度
 
       backendRefs:                                 # 后端引用
         - name: api-service
@@ -190,15 +189,14 @@ spec:
 
 违反约束的规则将被标记为 `PartiallyInvalid`，该规则不会生效，但 HTTPRoute 中其他有效规则仍正常工作。
 
-### ExtensionRef 嵌套深度限制
+### ExtensionRef 复用约定
 
-`ExtensionRef` 引用的 `EdgionPlugins` 内部可以继续包含 `ExtensionRef`，形成嵌套引用链。为防止递归引用导致的性能问题，Edgion 限制嵌套解析的最大深度：
+`ExtensionRef` 是 Gateway API 标准 filter，按 `namespace/name` 引用一个 `EdgionPlugins` 资源。**EdgionPlugins.spec.\*Plugins 内部的 `type: ExtensionRef`（"插件引用插件"嵌套形态）已在 release `<version>` 移除**。多插件复用通过两种方式表达：
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `extensionRefMaxDepth` | `u32` | `5` | 嵌套 ExtensionRef 解析的最大层数 |
+- **Aggregate 模式**：把多个插件合并到一个 `EdgionPlugins` 资源，路由只需一次 `ExtensionRef`。
+- **Side-by-side 模式**：在 `rules[].filters` 里并列写多个 `ExtensionRef`，分别指向不同的 `EdgionPlugins`。
 
-超过深度限制的引用将被忽略，不会触发错误。大多数场景下默认值 5 已足够，仅在插件链特别复杂时才需要调整。
+详见 `docs/zh-CN/user-guide/http-route/filters/plugin-composition.md` 与 `docs/zh-CN/migrations/<version>-extension-ref.md`。
 
 ## 超时与重试
 

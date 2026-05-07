@@ -90,23 +90,23 @@ where
     let kind = K::resource_kind();
 
     if kind != ResourceKind::BackendTLSPolicy && kind != ResourceKind::TLSRoute {
-        return serde_yaml::from_str::<K>(content);
-    }
-
-    match extract_api_version(content).as_deref() {
-        Some("gateway.networking.k8s.io/v1alpha3") if kind == ResourceKind::BackendTLSPolicy => {
-            let legacy: BackendTLSPolicyAlpha3 = serde_yaml::from_str(content)?;
-            let canonical: BackendTLSPolicy = legacy.into();
-            let normalized = serde_yaml::to_string(&canonical)?;
-            serde_yaml::from_str::<K>(&normalized)
+        serde_yaml::from_str::<K>(content)
+    } else {
+        match extract_api_version(content).as_deref() {
+            Some("gateway.networking.k8s.io/v1alpha3") if kind == ResourceKind::BackendTLSPolicy => {
+                let legacy: BackendTLSPolicyAlpha3 = serde_yaml::from_str(content)?;
+                let canonical: BackendTLSPolicy = legacy.into();
+                let normalized = serde_yaml::to_string(&canonical)?;
+                serde_yaml::from_str::<K>(&normalized)
+            }
+            Some("gateway.networking.k8s.io/v1alpha3") if kind == ResourceKind::TLSRoute => {
+                let legacy: TLSRouteAlpha3 = serde_yaml::from_str(content)?;
+                let canonical: TLSRoute = legacy.into();
+                let normalized = serde_yaml::to_string(&canonical)?;
+                serde_yaml::from_str::<K>(&normalized)
+            }
+            _ => serde_yaml::from_str::<K>(content),
         }
-        Some("gateway.networking.k8s.io/v1alpha3") if kind == ResourceKind::TLSRoute => {
-            let legacy: TLSRouteAlpha3 = serde_yaml::from_str(content)?;
-            let canonical: TLSRoute = legacy.into();
-            let normalized = serde_yaml::to_string(&canonical)?;
-            serde_yaml::from_str::<K>(&normalized)
-        }
-        _ => serde_yaml::from_str::<K>(content),
     }
 }
 

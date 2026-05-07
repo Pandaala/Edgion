@@ -556,22 +556,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.request_info.grpc_method.clone()
     }
 
-    fn push_plugin_ref(&mut self, key: String) {
-        self.ctx.push_plugin_ref(key);
-    }
-
-    fn pop_plugin_ref(&mut self) {
-        self.ctx.pop_plugin_ref();
-    }
-
-    fn plugin_ref_depth(&self) -> usize {
-        self.ctx.plugin_ref_depth()
-    }
-
-    fn has_plugin_ref(&self, key: &str) -> bool {
-        self.ctx.has_plugin_ref(key)
-    }
-
     fn resolved_route_ext_ref(
         &self,
         index: usize,
@@ -590,21 +574,13 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn start_edgion_plugins_log(&mut self, name: String) -> EdgionPluginsLogToken {
         let idx = self.ctx.pending_edgion_plugins_logs.len();
-        let depth = self.ctx.plugin_ref_depth();
         self.ctx
             .pending_edgion_plugins_logs
             .push(EdgionPluginsLog { name, logs: Vec::new() });
-        EdgionPluginsLogToken::new(idx, depth)
+        EdgionPluginsLogToken::new(idx)
     }
 
     fn push_to_edgion_plugins_log(&mut self, token: &EdgionPluginsLogToken, log: PluginLog) {
-        debug_assert_eq!(
-            self.ctx.plugin_ref_depth(),
-            token.depth(),
-            "EdgionPluginsLogToken used in wrong scope: expected depth {}, got {}",
-            token.depth(),
-            self.ctx.plugin_ref_depth()
-        );
         if let Some(edgion_log) = self.ctx.pending_edgion_plugins_logs.get_mut(token.idx()) {
             edgion_log.logs.push(log);
         }

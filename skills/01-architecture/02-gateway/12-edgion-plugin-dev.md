@@ -3,7 +3,7 @@
 用于这些任务：
 
 - 新增或扩展 `EdgionPlugins` HTTP 层插件
-- 调整 `PluginRuntime`、`ExtensionRef`、`PluginSession`、条件执行或 PluginLog
+- 调整 `PluginRuntime`、`ExtensionRef`（route/backend filter list 引用）、`PluginSession`、条件执行或 PluginLog
 - 排查“插件配置有了，但路由没执行 / 执行顺序不对 / Secret 没解析 / access log 不对”
 
 ## 先读这些真实入口
@@ -37,7 +37,6 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 这条路径主要服务：
 
 - `EdgionPlugins` 这种可复用插件资源
-- `ExtensionRef` 嵌套调用
 - 依赖 Secret 解析的 HTTP 插件
 
 ### 2. Route/Gateway API filter 路径
@@ -233,11 +232,9 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 不要为了读前置插件结果，重复解析整份请求。
 
-## ExtensionRef 的两种形态（不要混淆）
+## ExtensionRef 的唯一形态：HTTPRoute / GRPCRoute filter list
 
-Edgion 在两个位置接受 ExtensionRef，**fanout 行为不同**：
-
-### 形态 A：HTTPRoute / GRPCRoute filter list（推荐主用）
+> **Note:** `EdgionPlugin::ExtensionRef`（嵌套形态，即在 `EdgionPlugins.spec.*Plugins` 里写 `type: ExtensionRef`）已移除（release `<version>`）——"插件引用插件"不再支持。Route 和 backend 级的 `ExtensionRef`（HTTPRoute / GRPCRoute / HTTPBackendRef 的 filter lists，Gateway API 标准）保留。详见 `docs/zh-CN/migrations/<version>-extension-ref.md`。
 
 ```yaml
 HTTPRoute.rules[].filters:
@@ -251,56 +248,32 @@ HTTPRoute.rules[].filters:
 - 构建期 clone 到三个 Vec，详见 `plugin_runtime.rs::add_from_httproute_filters_inner` 的 `HTTPRouteFilterType::ExtensionRef` 分支
 - 已享受 per-request snapshot 优化（`ctx.resolved_route_ext_refs` index 化路径）
 
-### 形态 B：EdgionPlugins 内嵌（高级用法，少用）
+### 多插件复用的两种推荐模式
+
+- **Aggregate 模式**：把多个插件合并到一个 `EdgionPlugins` 资源，路由只需一次 `ExtensionRef`。
+- **Side-by-side 模式**：在 `HTTPRoute.rules[].filters` 里并列写多个 `ExtensionRef`，分别指向不同的 `EdgionPlugins`。
 
 ```yaml
-EdgionPlugins/A.requestPlugins:
+HTTPRoute.rules[].filters:
   - type: ExtensionRef
-    extensionRef: { kind: EdgionPlugins, name: B }
+    extensionRef: { kind: EdgionPlugins, name: shared-bundle-1 }
+  - type: ExtensionRef
+    extensionRef: { kind: EdgionPlugins, name: shared-bundle-2 }
 ```
 
-- 一次声明 → **仅触发当前所在的那个 stage**
-- 想要 B 的其他 stage 也跑，必须在 A 对应 stage list 里再写一次
-- 适合"在某个 stage 插入一段子链"这类细粒度场景
-- 走 legacy 直查表路径（`extension_ref.rs::prepare_execution` 的 `self.index == None` 分支），未享受 per-request snapshot 优化
+复用通过"多 Route 引用同一资源"实现（对标 Envoy ECDS），不通过"插件引用插件"。
 
-### 反模式
+### 评估当前集群的嵌套用法（forensic 工具）
 
-- **误把形态 B 当形态 A**：以为在 `A.requestPlugins` 写 ExtRef→B 就能让 B 的 response 端也跑——不会
-- **target 存在但当前 stage 子集为空**（"stage 不匹配"）：`A.requestPlugins` 引用一个只有 `responsePlugins` 的 B → **完全静默 no-op，连 plugin log 都不会记录**。对照：kind 错误的情况至少会 push_err `"extension ref kind not supported"`，但 stage 不匹配的情况一行 log 都没有，诊断难度高。建议优先在 A/B 两侧都明确 stage 归属
-- **复用建议**：优先用"一个 EdgionPlugins 资源里塞多个 plugin"做 bundle，而不是嵌套 ExtRef
-
-### 长期方向
-
-形态 B 是历史包袱，与 Envoy filter chain 的"扁平 list"模型不一致。未来版本计划软迁移、最终移除，向 Envoy 路线收敛。详见 `tasks/todo/extension-ref-envoy-alignment.md`。
-
-### 评估迁移时机（运维参考）
-
-Controller admin API 暴露一个 diagnostic endpoint，用于盘点当前集群里形态 B 的真实使用率：
+Controller admin API 仍保留一个 diagnostic endpoint，用于盘点存量 yaml 里残留的嵌套 ExtensionRef（仅 forensic 用途，CRD schema 已不再接受嵌套形态）：
 
 ```
 GET /api/v1/diagnostics/nested_ext_ref_usage
-→ {
-    "total_edgion_plugins": N,
-    "with_nested_ext_ref": M,
-    "examples": [
-      { "namespace": "...", "name": "...", "stage": "request" },
-      ...
-    ]
-  }
 ```
 
-- `with_nested_ext_ref` 是形态 B 的 EdgionPlugins 数量；M=0 表示集群里没人在用嵌套 ExtensionRef
-- `examples` 最多 20 条，便于直接定位需要迁移的资源（一个资源只报第一个命中的 stage）
-- 实现位置：`src/core/controller/api/diagnostics_handlers.rs`
+实现位置：`src/core/controller/api/diagnostics_handlers.rs`。
 
-**Phase 2 / Phase 3 推进的硬数据条件**（详见 `tasks/todo/extension-ref-envoy-alignment.md`）：
-
-- M=0 → 可考虑直接走 Phase 3（硬破坏 / 删除嵌套）
-- M>0 但比例 <5% → 走 Phase 2 软破坏 + deprecation window
-- M 较多 → 暂不推进，先看 examples 评估迁移成本
-
-## `ExtensionRef` 和嵌套执行
+## `ExtensionRef` 执行链路
 
 如果插件是通过 `ExtensionRef` 被 route 引用，重点看：
 
@@ -310,10 +283,9 @@ GET /api/v1/diagnostics/nested_ext_ref_usage
 
 - 运行时从 `PluginStore` 按 `namespace/name` 取 `EdgionPlugins`
 - 使用 `spec.plugin_runtime` 执行
-- 通过深度限制和引用栈防循环
-- 把嵌套插件日志压入 `edgion_plugins` 专用日志结构
+- 把插件日志压入 `edgion_plugins` 专用日志结构
 
-如果你在调试“ExtensionRef 没生效 / 嵌套插件日志不见了 / 递归引用”，先从这里追。
+如果你在调试"ExtensionRef 没生效 / 插件日志不见了"，先从这里追。
 
 ## 读取请求 Path
 

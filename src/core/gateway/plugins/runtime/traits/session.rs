@@ -180,18 +180,6 @@ pub trait PluginSession: Send + Sync {
     /// ctx fields; only the error list.
     fn add_error(&mut self, status: EdgionStatus);
 
-    /// Track nested plugin references to prevent cycles
-    fn push_plugin_ref(&mut self, key: String);
-
-    /// Remove last tracked plugin reference
-    fn pop_plugin_ref(&mut self);
-
-    /// Current depth of nested plugin references
-    fn plugin_ref_depth(&self) -> usize;
-
-    /// Check whether reference key already exists in stack
-    fn has_plugin_ref(&self, key: &str) -> bool;
-
     /// Look up the resolved target `PluginRuntime` for an `ExtensionRef` at the
     /// given index (assigned at route build time by
     /// `PluginRuntime::from_httproute_filters_for_rule` /

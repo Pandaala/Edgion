@@ -597,9 +597,6 @@ pub struct EdgionHttpContext {
     /// Pending EdgionPlugins logs (collected during current stage, merged at stage end)
     pub pending_edgion_plugins_logs: Vec<EdgionPluginsLog>,
 
-    /// Tracking stack for nested plugin references to prevent cycles
-    pub plugin_ref_stack: Vec<String>,
-
     /// Plugin running result
     pub plugin_running_result: PluginRunningResult,
 
@@ -745,7 +742,6 @@ impl EdgionHttpContext {
             backend_context: None,
             stage_logs: Vec::with_capacity(3),
             pending_edgion_plugins_logs: Vec::new(),
-            plugin_ref_stack: Vec::new(),
             plugin_running_result: PluginRunningResult::Nothing,
             try_cnt: 0,
             retry_on_status: false,
@@ -895,26 +891,6 @@ impl EdgionHttpContext {
         self.backend_context
             .as_ref()
             .and_then(|bc| bc.current_upstream_id.and_then(|id| bc.upstreams.get(id)))
-    }
-
-    /// Push a plugin reference path onto the stack
-    pub fn push_plugin_ref(&mut self, key: String) {
-        self.plugin_ref_stack.push(key);
-    }
-
-    /// Pop a plugin reference path from the stack
-    pub fn pop_plugin_ref(&mut self) {
-        self.plugin_ref_stack.pop();
-    }
-
-    /// Current depth of nested plugin references
-    pub fn plugin_ref_depth(&self) -> usize {
-        self.plugin_ref_stack.len()
-    }
-
-    /// Whether the stack already contains the given reference key (for cycle detection)
-    pub fn has_plugin_ref(&self, key: &str) -> bool {
-        self.plugin_ref_stack.iter().any(|k| k == key)
     }
 
     // ========== Context variable methods ==========

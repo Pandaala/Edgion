@@ -53,7 +53,6 @@ use crate::core::gateway::plugins::http::region_route::RegionRoute;
 use crate::core::gateway::plugins::http::request_mirror::RequestMirrorPlugin;
 use crate::core::gateway::plugins::http::request_restriction::RequestRestriction;
 use crate::core::gateway::plugins::http::response_rewrite::ResponseRewrite;
-use crate::core::gateway::plugins::runtime::gateway_api_filters::extension_ref::DEFAULT_PLUGIN_REF_DEPTH;
 use crate::core::gateway::plugins::runtime::gateway_api_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, GapiCorsFilter, RequestHeaderModifierFilter,
     RequestRedirectFilter, ResponseHeaderModifierFilter, URLRewriteFilter,
@@ -219,8 +218,7 @@ impl PluginRuntime {
                 }
                 HTTPRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
-                        let max_depth = filter.extension_ref_max_depth.unwrap_or(DEFAULT_PLUGIN_REF_DEPTH);
-                        let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), max_depth);
+                        let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
                         if assign_indices {
                             let idx = self.ext_ref_keys.len();
                             self.ext_ref_keys.push((namespace.to_string(), ext_ref.name.clone()));
@@ -280,8 +278,7 @@ impl PluginRuntime {
                 }
                 GRPCRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
-                        let max_depth = filter.extension_ref_max_depth.unwrap_or(DEFAULT_PLUGIN_REF_DEPTH);
-                        let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), max_depth);
+                        let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
                         if assign_indices {
                             let idx = self.ext_ref_keys.len();
                             self.ext_ref_keys.push((namespace.to_string(), ext_ref.name.clone()));
@@ -540,11 +537,6 @@ impl PluginRuntime {
             EdgionPlugin::OpenidConnect(config) => {
                 CreateResult::Ok(Some(Box::new(OpenidConnect::new(config, namespace.to_string()))))
             }
-            EdgionPlugin::ExtensionRef(ext_ref) => {
-                let ext_filter =
-                    ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
-                CreateResult::Ok(Some(Box::new(ext_filter)))
-            }
             EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config(config)),
             EdgionPlugin::RegionRoute(config) => CreateResult::Ok(Some(RegionRoute::create(config, namespace))),
             // Response-stage only — not applicable to request filters
@@ -558,7 +550,7 @@ impl PluginRuntime {
     /// Create an UpstreamResponseFilter instance from EdgionPlugin enum
     fn create_upstream_response_filter_from_edgion(
         plugin: &EdgionPlugin,
-        namespace: &str,
+        _namespace: &str,
     ) -> CreateResult<Box<dyn UpstreamResponseFilter>> {
         match plugin {
             EdgionPlugin::ResponseHeaderModifier(config) => {
@@ -568,11 +560,6 @@ impl PluginRuntime {
                 CreateResult::Ok(Some(Box::new(DebugAccessLogToHeaderFilter::new(config))))
             }
             EdgionPlugin::ResponseRewrite(config) => CreateResult::Ok(Some(Box::new(ResponseRewrite::new(config)))),
-            EdgionPlugin::ExtensionRef(ext_ref) => {
-                let ext_filter =
-                    ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
-                CreateResult::Ok(Some(Box::new(ext_filter)))
-            }
             EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config_response(config)),
             // Request-stage or other-stage plugins — not applicable to upstream response filters
             EdgionPlugin::RequestHeaderModifier(_)
@@ -619,15 +606,10 @@ impl PluginRuntime {
     /// Create an UpstreamResponseBodyFilter instance from EdgionPlugin enum
     fn create_upstream_response_body_filter_from_edgion(
         plugin: &EdgionPlugin,
-        namespace: &str,
+        _namespace: &str,
     ) -> CreateResult<Box<dyn UpstreamResponseBodyFilter>> {
         match plugin {
             EdgionPlugin::BandwidthLimit(config) => CreateResult::Ok(Some(BandwidthLimit::create(config))),
-            EdgionPlugin::ExtensionRef(ext_ref) => {
-                let ext_filter =
-                    ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
-                CreateResult::Ok(Some(Box::new(ext_filter)))
-            }
             // Not body-filter plugins
             EdgionPlugin::RequestHeaderModifier(_)
             | EdgionPlugin::ResponseHeaderModifier(_)
@@ -696,7 +678,6 @@ impl PluginRuntime {
             EdgionPlugin::AllEndpointStatus(_) => "AllEndpointStatus",
             EdgionPlugin::DynamicInternalUpstream(_) => "DynamicInternalUpstream",
             EdgionPlugin::DynamicExternalUpstream(_) => "DynamicExternalUpstream",
-            EdgionPlugin::ExtensionRef(_) => "ExtensionRef",
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
             EdgionPlugin::Dsl(_) => "Dsl",
@@ -1025,7 +1006,6 @@ mod ext_ref_index_tests {
                 kind: "EdgionPlugins".into(),
                 name: name.into(),
             }),
-            extension_ref_max_depth: None,
         }
     }
 

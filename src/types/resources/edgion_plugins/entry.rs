@@ -117,7 +117,7 @@ impl PluginEntry {
 ///
 /// Supports plugins:
 /// - BasicAuth, Cors, Csrf, IpRestriction, JwtAuth, Mock (from edgion_plugins)
-/// - RequestHeaderModifier, RequestRedirect, ExtensionRef (from gapi_filters)
+/// - RequestHeaderModifier, RequestRedirect (from gapi_filters)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestFilterEntry {

@@ -80,11 +80,12 @@ spec:
 
 | 类型 | 说明 |
 |------|------|
-| `ExtensionRef` | 嵌套引用其他 EdgionPlugins |
 | `DirectEndpoint` | 直接指定后端端点 |
 | `DynamicInternalUpstream` | 动态内部上游 |
 | `DynamicExternalUpstream` | 动态外部上游 |
 | `AllEndpointStatus` | 所有端点状态查询 |
+
+> 注：`EdgionPlugin::ExtensionRef`（嵌套形态）已移除。多插件复用通过 aggregate EdgionPlugins 或在 HTTPRoute filter list 里并列写多个 ExtensionRef 实现，详见 `docs/zh-CN/migrations/<version>-extension-ref.md`。
 
 ### 调试/测试类
 

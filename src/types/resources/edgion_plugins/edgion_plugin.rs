@@ -12,7 +12,7 @@ use super::plugin_configs::{
     RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
-    HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
+    HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter,
 };
 
 /// Plugin enum for all supported plugin types
@@ -34,8 +34,6 @@ pub enum EdgionPlugin {
     UrlRewrite(HTTPURLRewriteFilter),
     /// Request mirror filter
     RequestMirror(HTTPRequestMirrorFilter),
-    /// Extension reference filter
-    ExtensionRef(LocalObjectReference),
 
     // ========== Custom Edgion plugins ==========
     /// Basic Authentication filter
@@ -111,7 +109,6 @@ impl EdgionPlugin {
             EdgionPlugin::RequestRedirect(_) => "RequestRedirect",
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
-            EdgionPlugin::ExtensionRef(_) => "ExtensionRef",
             EdgionPlugin::BasicAuth(_) => "BasicAuth",
             EdgionPlugin::Cors(_) => "Cors",
             EdgionPlugin::Csrf(_) => "Csrf",
@@ -197,8 +194,7 @@ impl EdgionPlugin {
             | EdgionPlugin::ResponseHeaderModifier(_)
             | EdgionPlugin::RequestRedirect(_)
             | EdgionPlugin::UrlRewrite(_)
-            | EdgionPlugin::RequestMirror(_)
-            | EdgionPlugin::ExtensionRef(_) => None,
+            | EdgionPlugin::RequestMirror(_) => None,
         }
     }
 }

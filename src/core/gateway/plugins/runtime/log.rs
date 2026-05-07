@@ -331,8 +331,8 @@ pub struct EdgionPluginsLog {
 /// Token for safely pushing logs to a specific EdgionPluginsLog.
 ///
 /// This token is returned by `start_edgion_plugins_log` and must be used
-/// with `push_to_edgion_plugins_log` to append plugin logs. The token
-/// includes depth validation to prevent misuse across nested scopes.
+/// with `push_to_edgion_plugins_log` to append plugin logs. It carries the
+/// index of the active edgion-plugins log entry.
 ///
 /// The token is intentionally NOT Clone or Copy to prevent accidental
 /// sharing across different scopes.
@@ -340,26 +340,18 @@ pub struct EdgionPluginsLog {
 pub struct EdgionPluginsLogToken {
     /// Index in pending_edgion_plugins_logs
     pub(crate) idx: usize,
-    /// Depth at creation time (for validation)
-    pub(crate) depth: usize,
 }
 
 impl EdgionPluginsLogToken {
     /// Create a new token (internal use only)
-    pub(crate) fn new(idx: usize, depth: usize) -> Self {
-        Self { idx, depth }
+    pub(crate) fn new(idx: usize) -> Self {
+        Self { idx }
     }
 
     /// Get the index
     #[inline]
     pub fn idx(&self) -> usize {
         self.idx
-    }
-
-    /// Get the depth at creation time
-    #[inline]
-    pub fn depth(&self) -> usize {
-        self.depth
     }
 }
 
