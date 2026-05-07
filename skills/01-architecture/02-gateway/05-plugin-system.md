@@ -261,7 +261,7 @@ src/core/gateway/plugins/
         ├── response_header_modifier.rs
         ├── request_redirect.rs
         ├── url_rewrite.rs
-        ├── extension_ref.rs       # ExtensionRef（递归引用 EdgionPlugins）
+        ├── extension_ref.rs       # ExtensionRef（递归引用 EdgionPlugins）— 两种形态语义见 12-edgion-plugin-dev.md《ExtensionRef 的两种形态》
         ├── cors_filter.rs
         └── debug_access_log.rs
 ```

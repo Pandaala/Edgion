@@ -2,6 +2,7 @@ mod cluster_handlers;
 mod common;
 mod configserver_handlers;
 mod debug_handlers;
+mod diagnostics_handlers;
 mod namespaced_handlers;
 mod region_route_handlers;
 mod types;
@@ -209,6 +210,11 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         )
         // Services: ACME manual trigger
         .route("/api/v1/services/acme/{namespace}/{name}/trigger", post(trigger_acme))
+        // Diagnostics: roadmap data conditions (e.g. ExtensionRef → Envoy alignment)
+        .route(
+            "/api/v1/diagnostics/nested_ext_ref_usage",
+            get(diagnostics_handlers::nested_ext_ref_usage),
+        )
         // ConfigServer endpoints (for edgion-cli --target server)
         .route("/configserver/{kind}/list", get(configserver_handlers::list_resources))
         .route("/configserver/{kind}", get(configserver_handlers::get_resource))

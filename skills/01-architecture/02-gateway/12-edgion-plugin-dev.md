@@ -233,6 +233,73 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 
 不要为了读前置插件结果，重复解析整份请求。
 
+## ExtensionRef 的两种形态（不要混淆）
+
+Edgion 在两个位置接受 ExtensionRef，**fanout 行为不同**：
+
+### 形态 A：HTTPRoute / GRPCRoute filter list（推荐主用）
+
+```yaml
+HTTPRoute.rules[].filters:
+  - type: ExtensionRef
+    extensionRef: { kind: EdgionPlugins, name: B }
+```
+
+- 一次声明 → 三个 stage 自动 fanout（request / upstream_response_filter / upstream_response_body_filter）
+- 每个 stage 自动从 B 拉同 stage 子集
+- 这是 Gateway API 标准约定，等价于"把 B 当 bundle 插入到这条路由"
+- 构建期 clone 到三个 Vec，详见 `plugin_runtime.rs::add_from_httproute_filters_inner` 的 `HTTPRouteFilterType::ExtensionRef` 分支
+- 已享受 per-request snapshot 优化（`ctx.resolved_route_ext_refs` index 化路径）
+
+### 形态 B：EdgionPlugins 内嵌（高级用法，少用）
+
+```yaml
+EdgionPlugins/A.requestPlugins:
+  - type: ExtensionRef
+    extensionRef: { kind: EdgionPlugins, name: B }
+```
+
+- 一次声明 → **仅触发当前所在的那个 stage**
+- 想要 B 的其他 stage 也跑，必须在 A 对应 stage list 里再写一次
+- 适合"在某个 stage 插入一段子链"这类细粒度场景
+- 走 legacy 直查表路径（`extension_ref.rs::prepare_execution` 的 `self.index == None` 分支），未享受 per-request snapshot 优化
+
+### 反模式
+
+- **误把形态 B 当形态 A**：以为在 `A.requestPlugins` 写 ExtRef→B 就能让 B 的 response 端也跑——不会
+- **target 存在但当前 stage 子集为空**（"stage 不匹配"）：`A.requestPlugins` 引用一个只有 `responsePlugins` 的 B → **完全静默 no-op，连 plugin log 都不会记录**。对照：kind 错误的情况至少会 push_err `"extension ref kind not supported"`，但 stage 不匹配的情况一行 log 都没有，诊断难度高。建议优先在 A/B 两侧都明确 stage 归属
+- **复用建议**：优先用"一个 EdgionPlugins 资源里塞多个 plugin"做 bundle，而不是嵌套 ExtRef
+
+### 长期方向
+
+形态 B 是历史包袱，与 Envoy filter chain 的"扁平 list"模型不一致。未来版本计划软迁移、最终移除，向 Envoy 路线收敛。详见 `tasks/todo/extension-ref-envoy-alignment.md`。
+
+### 评估迁移时机（运维参考）
+
+Controller admin API 暴露一个 diagnostic endpoint，用于盘点当前集群里形态 B 的真实使用率：
+
+```
+GET /api/v1/diagnostics/nested_ext_ref_usage
+→ {
+    "total_edgion_plugins": N,
+    "with_nested_ext_ref": M,
+    "examples": [
+      { "namespace": "...", "name": "...", "stage": "request" },
+      ...
+    ]
+  }
+```
+
+- `with_nested_ext_ref` 是形态 B 的 EdgionPlugins 数量；M=0 表示集群里没人在用嵌套 ExtensionRef
+- `examples` 最多 20 条，便于直接定位需要迁移的资源（一个资源只报第一个命中的 stage）
+- 实现位置：`src/core/controller/api/diagnostics_handlers.rs`
+
+**Phase 2 / Phase 3 推进的硬数据条件**（详见 `tasks/todo/extension-ref-envoy-alignment.md`）：
+
+- M=0 → 可考虑直接走 Phase 3（硬破坏 / 删除嵌套）
+- M>0 但比例 <5% → 走 Phase 2 软破坏 + deprecation window
+- M 较多 → 暂不推进，先看 examples 评估迁移成本
+
 ## `ExtensionRef` 和嵌套执行
 
 如果插件是通过 `ExtensionRef` 被 route 引用，重点看：
