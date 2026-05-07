@@ -700,5 +700,4 @@ mod tests {
             other => panic!("expected PluginMetaDataNotFound, got: {:?}", other),
         }
     }
-
 }

@@ -13,10 +13,12 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use reqwest::Client;
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
 
 use async_trait::async_trait;
 
@@ -50,6 +52,9 @@ pub struct EsLinkClient {
     bulk_sender: parking_lot::Mutex<Option<mpsc::Sender<String>>>,
     /// Shutdown signal sender (populated after init)
     shutdown_tx: parking_lot::Mutex<Option<watch::Sender<bool>>>,
+    /// Handle to the spawned bulk ingest task (populated after init), awaited in `shutdown()`
+    /// to drain buffered docs before returning.
+    bulk_task: parking_lot::Mutex<Option<JoinHandle<()>>>,
 }
 
 impl EsLinkClient {
@@ -71,6 +76,7 @@ impl EsLinkClient {
             bulk_config,
             bulk_sender: parking_lot::Mutex::new(None),
             shutdown_tx: parking_lot::Mutex::new(None),
+            bulk_task: parking_lot::Mutex::new(None),
         })
     }
 
@@ -105,12 +111,13 @@ impl EsLinkClient {
         let healthy = self.healthy.clone();
         let name = self.name.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             bulk_ingest_loop(client, endpoints, bulk_config, healthy, name, rx, shutdown_rx).await;
         });
 
         *self.bulk_sender.lock() = Some(tx);
         *self.shutdown_tx.lock() = Some(shutdown_sender);
+        *self.bulk_task.lock() = Some(handle);
 
         tracing::info!("ES [{}] initialized, bulk ingest task started", self.name);
         Ok(())
@@ -162,7 +169,7 @@ impl EsLinkClient {
         Ok(())
     }
 
-    /// Graceful shutdown: signal background task and drop sender.
+    /// Graceful shutdown: signal background task and drop sender, then await drain.
     pub async fn shutdown(&self) -> Result<()> {
         tracing::info!("ES [{}] shutting down", self.name);
 
@@ -174,6 +181,25 @@ impl EsLinkClient {
         // Drop the bulk sender to unblock the receiver
         *self.bulk_sender.lock() = None;
         self.healthy.store(false, Ordering::Relaxed);
+
+        // Await the bulk task so buffered docs get flushed before we return.
+        // Bound the wait so a hung HTTP flush cannot stall the caller indefinitely
+        // (per-request timeout + retries can reach ~90s; we cap the total wait at 10s).
+        let handle = self.bulk_task.lock().take();
+        if let Some(handle) = handle {
+            match tokio::time::timeout(Duration::from_secs(10), handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::warn!("ES [{}] bulk task join error: {:?}", self.name, e);
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "ES [{}] bulk task did not drain within 10s; buffered docs may be lost",
+                        self.name
+                    );
+                }
+            }
+        }
 
         Ok(())
     }

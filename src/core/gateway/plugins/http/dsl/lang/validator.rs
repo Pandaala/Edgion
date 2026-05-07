@@ -201,13 +201,22 @@ impl Validator {
             }
         }
 
-        // 9. LoopInit / LoopEnd balance check
+        // 9. LoopInit / LoopEnd balance check + observed max depth
+        //
+        // Re-derive the maximum loop nesting depth directly from the opcode stream rather than
+        // trusting `script.max_loop_depth`. The bytecode field is operator-supplied (via the
+        // `bytecode:` config knob) and an adversary can declare `max_loop_depth: 0` while shipping
+        // arbitrarily-nested LoopInit/LoopEnd pairs, which the runtime would then execute.
+        let mut loop_depth: i32 = 0;
+        let mut max_observed_depth: i32 = 0;
         {
-            let mut loop_depth: i32 = 0;
             for (i, op) in script.code.iter().enumerate() {
                 match op {
                     OpCode::LoopInit => {
                         loop_depth += 1;
+                        if loop_depth > max_observed_depth {
+                            max_observed_depth = loop_depth;
+                        }
                     }
                     OpCode::LoopEnd => {
                         loop_depth -= 1;
@@ -237,11 +246,20 @@ impl Validator {
             }
         }
 
-        // 10. Loop nesting depth
-        if script.max_loop_depth as usize > self.limits.max_loop_depth {
+        // 10. Loop nesting depth — check the depth observed in the opcode stream, not the
+        // self-declared field. Also reject scripts whose declared `max_loop_depth` understates
+        // the real depth, so dishonest hand-crafted payloads fail loudly.
+        let observed_depth = max_observed_depth.max(0) as usize;
+        if observed_depth > self.limits.max_loop_depth {
             errors.push(ValidationError::new(format!(
                 "loop nesting too deep: {} (max {})",
-                script.max_loop_depth, self.limits.max_loop_depth
+                observed_depth, self.limits.max_loop_depth
+            )));
+        }
+        if (script.max_loop_depth as usize) < observed_depth {
+            errors.push(ValidationError::new(format!(
+                "declared max_loop_depth {} is less than observed depth {}",
+                script.max_loop_depth, observed_depth
             )));
         }
 
@@ -332,6 +350,65 @@ mod tests {
         let script = CompiledScript::deserialize_base64(&bytecode_b64).unwrap();
         assert!(!script.code.is_empty());
         assert_eq!(script.local_count, 1);
+    }
+
+    #[test]
+    fn test_validate_rejects_dishonest_max_loop_depth() {
+        // Hand-crafted bytecode declares max_loop_depth=0 but actually nests LoopInit pairs
+        // beyond the configured limit. Mimics an operator-supplied `bytecode:` payload.
+        let limits = ValidationLimits {
+            max_loop_depth: 2,
+            ..Default::default()
+        };
+        let mut code = Vec::new();
+        for _ in 0..5 {
+            code.push(OpCode::LoopInit);
+        }
+        for _ in 0..5 {
+            code.push(OpCode::LoopEnd);
+        }
+        code.push(OpCode::ReturnNext);
+        let script = CompiledScript {
+            version: BYTECODE_VERSION,
+            code,
+            constants: vec![],
+            local_count: 0,
+            max_loop_depth: 0, // dishonest — real depth is 5
+            source: None,
+        };
+        let errors = Validator::new(limits).validate(&script);
+        let joined = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("|");
+        assert!(
+            joined.contains("loop nesting too deep"),
+            "expected observed-depth limit error, got: {}",
+            joined
+        );
+        assert!(
+            joined.contains("declared max_loop_depth"),
+            "expected declared/observed mismatch error, got: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_validate_accepts_honest_loop_depth() {
+        let limits = ValidationLimits::default();
+        let script = CompiledScript {
+            version: BYTECODE_VERSION,
+            code: vec![
+                OpCode::LoopInit,
+                OpCode::LoopInit,
+                OpCode::LoopEnd,
+                OpCode::LoopEnd,
+                OpCode::ReturnNext,
+            ],
+            constants: vec![],
+            local_count: 0,
+            max_loop_depth: 2,
+            source: None,
+        };
+        let errors = Validator::new(limits).validate(&script);
+        assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
     }
 
     #[test]

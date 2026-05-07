@@ -156,24 +156,18 @@ impl UpstreamResponseBodyFilter for ConditionalUpstreamResponseBodyFilter {
         body: &Option<bytes::Bytes>,
         end_of_stream: bool,
         session: &mut dyn PluginSession,
-        log: &mut PluginLog,
     ) -> Option<Duration> {
-        // Check conditions before running (sync version for sync filter context)
+        // Body stage runs per chunk and does not surface PluginLog entries, so we
+        // use the log-less evaluate variant. Skip-cause is intentionally not
+        // recorded; emitting it per chunk would explode log volume.
         if let Some(conditions) = &self.conditions {
-            if conditions.should_evaluate() {
-                let eval = conditions.evaluate_detail_sync(session, log);
-                if eval.result == EvaluationResult::Skip {
-                    if let Some(cond) = eval.matched {
-                        log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
-                    }
-                    return None;
-                }
+            if conditions.should_evaluate() && conditions.evaluate_sync(session) == EvaluationResult::Skip {
+                return None;
             }
         }
 
-        // Conditions satisfied or none defined, run the inner filter
         self.inner
-            .run_upstream_response_body_filter(body, end_of_stream, session, log)
+            .run_upstream_response_body_filter(body, end_of_stream, session)
     }
 }
 

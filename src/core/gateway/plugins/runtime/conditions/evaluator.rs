@@ -77,6 +77,34 @@ impl PluginConditions {
         }
     }
 
+    /// Synchronous, log-less variant of `evaluate` for body-stage filters.
+    ///
+    /// Body filters run per-chunk and do not surface PluginLog entries, so this
+    /// path dispatches through `Condition::evaluate_sync_silent` and never
+    /// allocates a PluginLog. The only diagnostic that the regular sync path
+    /// would emit ("regex not compiled") is silently dropped — that condition
+    /// indicates a build-time compile failure and should already be visible
+    /// through `EdgionPlugin::validation_error`.
+    pub fn evaluate_sync(&self, session: &dyn PluginSession) -> EvaluationResult {
+        if let Some(skip_conditions) = &self.skip {
+            for condition in skip_conditions {
+                if condition.evaluate_sync_silent(session) {
+                    return EvaluationResult::Skip;
+                }
+            }
+        }
+
+        if let Some(run_conditions) = &self.run {
+            for condition in run_conditions {
+                if !condition.evaluate_sync_silent(session) {
+                    return EvaluationResult::Skip;
+                }
+            }
+        }
+
+        EvaluationResult::Run
+    }
+
     /// Synchronous version of evaluate_detail for use in sync filter contexts
     /// (UpstreamResponseFilter, UpstreamResponseBodyFilter).
     ///
@@ -152,6 +180,22 @@ impl Condition {
         }
     }
 
+    /// Log-less synchronous evaluation for body-stage filters.
+    ///
+    /// KeyExist / TimeRange / Probability never write to a log; KeyMatch /
+    /// Include / Exclude only push "regex not compiled" on a build-time bug
+    /// path, which is intentionally suppressed here.
+    pub fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool {
+        match self {
+            Condition::KeyExist(c) => c.evaluate_sync(session),
+            Condition::KeyMatch(c) => c.evaluate_sync_silent(session),
+            Condition::TimeRange(c) => c.evaluate(),
+            Condition::Probability(c) => c.evaluate_sync(session),
+            Condition::Include(c) => c.evaluate_sync_silent(session),
+            Condition::Exclude(c) => c.evaluate_sync_silent(session),
+        }
+    }
+
     /// Get condition type name
     pub fn cond_type(&self) -> &'static str {
         match self {
@@ -196,7 +240,7 @@ impl KeyMatchCondition {
             Some(v) => v,
             None => return false,
         };
-        self.match_value(&value, log)
+        self.match_value(&value, Some(log))
     }
 
     /// Sync version using key_get_local
@@ -205,11 +249,20 @@ impl KeyMatchCondition {
             Some(v) => v,
             None => return false,
         };
-        self.match_value(&value, log)
+        self.match_value(&value, Some(log))
+    }
+
+    /// Sync version with no log surface (body-stage path)
+    pub fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool {
+        let value = match session.key_get_local(&self.key) {
+            Some(v) => v,
+            None => return false,
+        };
+        self.match_value(&value, None)
     }
 
     /// Check if a value matches any of the configured patterns
-    fn match_value(&self, value: &str, log: &mut PluginLog) -> bool {
+    fn match_value(&self, value: &str, log: Option<&mut PluginLog>) -> bool {
         // 1. Check single value (backward compatible)
         if let Some(expected) = &self.value {
             if value == expected {
@@ -237,7 +290,9 @@ impl KeyMatchCondition {
                 return true;
             }
         } else if self.regex.as_ref().map_or(false, |p| !p.is_empty()) {
-            log.push_err("regex not compiled");
+            if let Some(log) = log {
+                log.push_err("regex not compiled");
+            }
         }
 
         false
@@ -328,17 +383,23 @@ impl IncludeCondition {
     /// Returns true if value matches ANY item in the list or any regex pattern
     pub async fn evaluate(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
         let value = session.key_get(&self.key).await.unwrap_or_default();
-        self.matches_value(&value, log)
+        self.matches_value(&value, Some(log))
     }
 
     /// Sync version using key_get_local
     pub fn evaluate_sync(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
         let value = session.key_get_local(&self.key).unwrap_or_default();
-        self.matches_value(&value, log)
+        self.matches_value(&value, Some(log))
+    }
+
+    /// Sync version with no log surface (body-stage path)
+    pub fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool {
+        let value = session.key_get_local(&self.key).unwrap_or_default();
+        self.matches_value(&value, None)
     }
 
     /// Check if a value matches any of the configured patterns
-    fn matches_value(&self, value: &str, log: &mut PluginLog) -> bool {
+    fn matches_value(&self, value: &str, log: Option<&mut PluginLog>) -> bool {
         // 1. Check HashSet first for O(1) exact match lookup
         if let Some(set) = &self.values_set {
             if set.contains(value) {
@@ -361,7 +422,9 @@ impl IncludeCondition {
                 return true;
             }
         } else if self.regex.as_ref().map_or(false, |p| !p.is_empty()) {
-            log.push_err("regex not compiled");
+            if let Some(log) = log {
+                log.push_err("regex not compiled");
+            }
         }
 
         false
@@ -373,17 +436,23 @@ impl ExcludeCondition {
     /// Returns true if value does NOT match ANY item in the list or any regex pattern
     pub async fn evaluate(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
         let value = session.key_get(&self.key).await.unwrap_or_default();
-        !self.matches_value(&value, log)
+        !self.matches_value(&value, Some(log))
     }
 
     /// Sync version using key_get_local
     pub fn evaluate_sync(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
         let value = session.key_get_local(&self.key).unwrap_or_default();
-        !self.matches_value(&value, log)
+        !self.matches_value(&value, Some(log))
+    }
+
+    /// Sync version with no log surface (body-stage path)
+    pub fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool {
+        let value = session.key_get_local(&self.key).unwrap_or_default();
+        !self.matches_value(&value, None)
     }
 
     /// Check if a value matches any of the configured patterns (excluded)
-    fn matches_value(&self, value: &str, log: &mut PluginLog) -> bool {
+    fn matches_value(&self, value: &str, log: Option<&mut PluginLog>) -> bool {
         // 1. Check HashSet first for O(1) exact match lookup
         if let Some(set) = &self.values_set {
             if set.contains(value) {
@@ -406,7 +475,9 @@ impl ExcludeCondition {
                 return true;
             }
         } else if self.regex.as_ref().map_or(false, |p| !p.is_empty()) {
-            log.push_err("regex not compiled");
+            if let Some(log) = log {
+                log.push_err("regex not compiled");
+            }
         }
 
         false

@@ -84,6 +84,25 @@ impl ExtensionRefFilter {
         self.ext_ref.kind == "EdgionPlugins" && (self.ext_ref.group.is_empty() || self.ext_ref.group == "edgion.io")
     }
 
+    /// Resolve the referenced plugin runtime without touching PluginLog or
+    /// `pending_edgion_plugins_logs`.
+    ///
+    /// This is the body-stage path: body filters run per chunk and do not
+    /// surface PluginLog entries, so calling `start_edgion_plugins_log` here
+    /// would push entries that no stage drains, leaking into
+    /// `EdgionHttpContext.pending_edgion_plugins_logs` for the entire request
+    /// lifetime (one entry per chunk on long streams). This sibling helper
+    /// returns just the runtime, with no log side-effects at all.
+    fn resolve_runtime_silent(&self, session: &mut dyn PluginSession) -> Option<Arc<PluginRuntime>> {
+        if !self.is_edgion_plugins() {
+            return None;
+        }
+        match self.index {
+            Some(idx) => session.resolved_route_ext_ref(idx),
+            None => get_global_plugin_store().get_plugin_runtime(&self.plugin_key()),
+        }
+    }
+
     /// Helper to prepare plugin execution: validation, lookup, logging setup
     /// Returns:
     /// - Ok(Some((plugin, token))): Success
@@ -219,28 +238,21 @@ impl ExtensionRefFilter {
         }
     }
 
-    /// Run extension ref for body filter stage
+    /// Run extension ref for body filter stage.
+    ///
+    /// Resolves silently and dispatches to inner body plugins without any
+    /// per-chunk log allocation. See `resolve_runtime_silent` for why.
     fn run_extension_body(
         &self,
         body: &Option<bytes::Bytes>,
         end_of_stream: bool,
         session: &mut dyn PluginSession,
-        log: &mut PluginLog,
     ) -> Option<std::time::Duration> {
-        let (plugin_runtime, log_token) = match self.prepare_execution(session, log) {
-            Ok(Some(res)) => res,
-            Ok(None) => return None,
-            Err(_) => return None,
-        };
+        let plugin_runtime = self.resolve_runtime_silent(session)?;
 
         let mut max_delay: Option<std::time::Duration> = None;
-
         for plugin in plugin_runtime.upstream_response_body_plugins_iter() {
-            let mut inner_log = PluginLog::new(plugin.name());
-            let delay = plugin.run_upstream_response_body_filter(body, end_of_stream, session, &mut inner_log);
-            session.push_to_edgion_plugins_log(&log_token, inner_log);
-
-            if let Some(d) = delay {
+            if let Some(d) = plugin.run_upstream_response_body_filter(body, end_of_stream, session) {
                 max_delay = Some(match max_delay {
                     Some(current) => current.max(d),
                     None => d,
@@ -288,9 +300,8 @@ impl UpstreamResponseBodyFilter for ExtensionRefFilter {
         body: &Option<bytes::Bytes>,
         end_of_stream: bool,
         session: &mut dyn PluginSession,
-        log: &mut PluginLog,
     ) -> Option<std::time::Duration> {
-        self.run_extension_body(body, end_of_stream, session, log)
+        self.run_extension_body(body, end_of_stream, session)
     }
 }
 

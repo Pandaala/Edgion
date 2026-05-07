@@ -8,11 +8,11 @@ use bytes::Bytes;
 use pingora_http::ResponseHeader;
 
 use crate::core::gateway::plugins::runtime::log::PluginLog;
-use crate::core::gateway::plugins::runtime::traits::{PluginSession, RequestFilter};
+use crate::core::gateway::plugins::runtime::traits::{PluginSession, RequestFilter, UpstreamResponseFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::HTTPCORSFilter;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct GapiCorsFilter {
     config: HTTPCORSFilter,
 }
@@ -175,19 +175,9 @@ impl GapiCorsFilter {
         headers
     }
 
-    /// Apply CORS headers to the upstream response via session queue.
-    /// Used for simple (non-preflight) requests where headers are applied
-    /// later during the upstream response phase.
-    fn set_cors_headers_via_session(&self, session: &mut dyn PluginSession, origin: &str) {
-        let headers = self.build_cors_headers(session, origin, false);
-        for (name, value) in &headers {
-            let _ = session.set_response_header(name, value);
-        }
-        let _ = session.append_response_header("Vary", "Origin");
-    }
-
     /// Build a 204 preflight response with CORS headers set directly on the ResponseHeader.
-    /// This avoids the session queue which is only consumed during the upstream response phase.
+    /// Preflight terminates at the request stage and never reaches the upstream-response
+    /// stage, so headers must be written onto a locally-built ResponseHeader here.
     fn build_preflight_response(&self, session: &mut dyn PluginSession, origin: &str) -> Option<Box<ResponseHeader>> {
         let headers = self.build_cors_headers(session, origin, true);
         let mut resp = ResponseHeader::build(204, Some(headers.len() + 1)).ok()?;
@@ -244,8 +234,8 @@ impl RequestFilter for GapiCorsFilter {
 
         if self.is_preflight(session) {
             // Build preflight response with CORS headers set directly on ResponseHeader.
-            // Cannot use session.set_response_header() here because it queues headers
-            // for the upstream response phase, which never runs for terminated requests.
+            // Preflight terminates the request, so the upstream-response stage never
+            // runs for this request — headers must be written here, not deferred.
             if let Some(resp) = self.build_preflight_response(session, &origin) {
                 let _ = session.write_response_header(resp, true).await;
                 let _ = session.write_response_body(Some(Bytes::new()), true).await;
@@ -255,9 +245,38 @@ impl RequestFilter for GapiCorsFilter {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        // Normal CORS request: queue headers for application during upstream response phase
-        self.set_cors_headers_via_session(session, &origin);
+        // Normal CORS request: defer header writing to the upstream-response stage,
+        // where the real ResponseHeader is available and append/set semantics apply directly.
         plugin_log.push("cors actual");
+        PluginRunningResult::GoodNext
+    }
+}
+
+impl UpstreamResponseFilter for GapiCorsFilter {
+    fn name(&self) -> &str {
+        "GapiCorsFilter"
+    }
+
+    fn run_upstream_response_filter(
+        &self,
+        session: &mut dyn PluginSession,
+        plugin_log: &mut PluginLog,
+    ) -> PluginRunningResult {
+        let origin = match session.header_value("origin") {
+            Some(o) => o,
+            None => return PluginRunningResult::GoodNext,
+        };
+
+        if !self.is_origin_allowed(&origin) {
+            return PluginRunningResult::GoodNext;
+        }
+
+        let headers = self.build_cors_headers(session, &origin, false);
+        for (name, value) in &headers {
+            let _ = session.set_response_header(name, value);
+        }
+        let _ = session.append_response_header("Vary", "Origin");
+        plugin_log.push("cors response headers applied");
         PluginRunningResult::GoodNext
     }
 }

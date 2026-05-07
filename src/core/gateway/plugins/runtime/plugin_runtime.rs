@@ -203,7 +203,8 @@ impl PluginRuntime {
                     if let Some(config) = &filter.cors {
                         match GapiCorsFilter::try_new(config.clone()) {
                             Ok(cors_filter) => {
-                                self.add_request_filter(Box::new(cors_filter));
+                                self.add_request_filter(Box::new(cors_filter.clone()));
+                                self.add_upstream_response_filter(Box::new(cors_filter));
                             }
                             Err(e) => {
                                 tracing::error!("CORS filter config rejected: {}", e);
@@ -867,9 +868,10 @@ impl PluginRuntime {
     /// an optional Duration for bandwidth throttling. When multiple plugins return
     /// a duration, the largest (most restrictive) one wins.
     ///
-    /// NOTE: Unlike other stages, this does NOT log per-chunk execution to avoid
-    /// excessive logging overhead (body filter is called for every chunk).
-    /// The first invocation logs stage info only.
+    /// Body filters do not produce per-chunk PluginLog entries (see
+    /// `UpstreamResponseBodyFilter` trait docs): a long stream would emit
+    /// thousands of identical entries, so the trait omits the log argument and
+    /// no PluginLog is allocated here per chunk.
     ///
     /// # Arguments
     /// * `s` - The Pingora session (for condition evaluation)
@@ -892,32 +894,16 @@ impl PluginRuntime {
         }
 
         let mut max_delay: Option<Duration> = None;
+        let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
-        // Create a session adapter for condition evaluation
-        // Use a scoped borrow to avoid lifetime issues with ctx
-        {
-            let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
-
-            for filter in &self.upstream_response_body_plugins {
-                let mut plugin_log = PluginLog::new(filter.name());
-
-                let delay = filter.run_upstream_response_body_filter(
-                    body,
-                    end_of_stream,
-                    &mut session_adapter,
-                    &mut plugin_log,
-                );
-
-                // Take the largest delay (most restrictive rate limit)
-                if let Some(d) = delay {
-                    max_delay = Some(match max_delay {
-                        Some(current) => current.max(d),
-                        None => d,
-                    });
-                }
+        for filter in &self.upstream_response_body_plugins {
+            if let Some(d) = filter.run_upstream_response_body_filter(body, end_of_stream, &mut session_adapter) {
+                max_delay = Some(match max_delay {
+                    Some(current) => current.max(d),
+                    None => d,
+                });
             }
         }
-        // session_adapter dropped here, ctx borrow released
 
         max_delay
     }

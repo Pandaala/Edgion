@@ -63,14 +63,13 @@ where
         }
     }
 
-    /// Get slices for a service from data layer (acquires lock).
-    /// Used by health-check manager and EpSliceHandler.
+    /// Get slices for a service from data layer.
+    ///
+    /// Lock-free read path: writers (`replace_data_only`, `update_data_only`)
+    /// hold both `service_to_slices` and `ep_slices` write guards
+    /// simultaneously, so the two RwLock acquisitions below observe a
+    /// consistent snapshot without needing `creation_lock`.
     pub fn get_slices_for_service(&self, service_key: &str) -> Option<Vec<EndpointSlice>> {
-        let _lock = self.creation_lock.lock();
-        self.get_slices_for_service_internal(service_key)
-    }
-
-    fn get_slices_for_service_internal(&self, service_key: &str) -> Option<Vec<EndpointSlice>> {
         let service_to_slices = self.service_to_slices.read();
         let ep_slices = self.ep_slices.read();
 
@@ -104,8 +103,12 @@ where
             new_service_to_slices.entry(service_key).or_default().insert(ep_key);
         }
 
-        *self.service_to_slices.write() = new_service_to_slices;
-        *self.ep_slices.write() = new_ep_slices;
+        // Hold both write guards simultaneously so readers (which no longer
+        // take `creation_lock`) cannot observe a half-applied snapshot.
+        let mut service_to_slices_guard = self.service_to_slices.write();
+        let mut ep_slices_guard = self.ep_slices.write();
+        *service_to_slices_guard = new_service_to_slices;
+        *ep_slices_guard = new_ep_slices;
 
         tracing::debug!(services = all_services.len(), "Replaced data layer (data only)");
 

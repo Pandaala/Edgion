@@ -18,7 +18,6 @@
 
 use std::time::Duration;
 
-use crate::core::gateway::plugins::runtime::log::PluginLog;
 use crate::core::gateway::plugins::runtime::traits::{PluginSession, UpstreamResponseBodyFilter};
 use crate::types::resources::edgion_plugins::plugin_configs::BandwidthLimitConfig;
 
@@ -57,10 +56,8 @@ impl UpstreamResponseBodyFilter for BandwidthLimit {
         body: &Option<bytes::Bytes>,
         _end_of_stream: bool,
         _session: &mut dyn PluginSession,
-        log: &mut PluginLog,
     ) -> Option<Duration> {
         if self.rate_bps == 0 {
-            log.push("Skip bandwidth zero");
             return None;
         }
 
@@ -68,7 +65,6 @@ impl UpstreamResponseBodyFilter for BandwidthLimit {
             let chunk_size = data.len();
             if chunk_size > 0 {
                 let delay_secs = chunk_size as f64 / self.rate_bps as f64;
-                log.push("Rate bandwidth");
                 return Some(Duration::from_secs_f64(delay_secs));
             }
         }
@@ -94,10 +90,9 @@ mod tests {
     fn test_bandwidth_limit_none_body() {
         let plugin = create_test_plugin("1mb");
         let body: Option<bytes::Bytes> = None;
-        let mut log = PluginLog::new("test");
 
         let mut session = MockPluginSession::new();
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
+        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session);
         assert!(delay.is_none());
     }
 
@@ -105,10 +100,9 @@ mod tests {
     fn test_bandwidth_limit_invalid_rate() {
         let plugin = create_test_plugin("invalid");
         let body = Some(bytes::Bytes::from(vec![0u8; 1024]));
-        let mut log = PluginLog::new("test");
 
         let mut session = MockPluginSession::new();
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
+        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session);
         // Invalid rate -> fail-open, no throttling
         assert!(delay.is_none());
     }
