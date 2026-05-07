@@ -1,0 +1,17 @@
+# H2 trailer malformed backend endpoint slice
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: test-h2-trailer-malformed
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: test-h2-trailer-malformed
+addressType: IPv4
+ports:
+  - port: 30025
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true

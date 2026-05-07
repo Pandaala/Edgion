@@ -14,8 +14,9 @@ pub mod udp_route;
 
 // Re-export all test suites for convenience
 pub use http_route::{
-    CircuitBreakerTestSuite, DanglingExtensionRefTestSuite, DnsResolutionFailureTestSuite, FilterConflictTestSuite,
-    GrpcHealthCheckTestSuite, H2cTestSuite, HeaderModifierTestSuite, HealthCheckTestSuite,
+    BackendTlsSniHostOverrideTestSuite, CircuitBreakerTestSuite, DanglingExtensionRefTestSuite,
+    DnsResolutionFailureTestSuite, FilterConflictTestSuite, GrpcHealthCheckTestSuite, H2MtlsPersistenceTestSuite,
+    H2TrailerMalformedTestSuite, H2cTestSuite, HeaderModifierTestSuite, HealthCheckTestSuite,
     HealthCheckTransitionTestSuite, HttpMatchTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite,
     LBConsistentHashTestSuite, LBLeastConnRetryOnStatusTestSuite, LBLeastConnTestSuite, LBRoundRobinTestSuite,
     MultiPortTestSuite, PartiallyInvalidTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite,
@@ -61,9 +62,9 @@ pub use edgion_plugins::{
     PathNormalizationForwardViewTestSuite, PathNormalizationPreserveParamTestSuite, PathNormalizationTestSuite,
     PluginConditionTestSuite, PluginLogsTestSuite, PluginMetaDataManagedTestSuite, PluginMetaDataStatusTestSuite,
     PluginValidationStatusTestSuite, PmdFlapInitialTestSuite, PmdFlapInvalidTestSuite, PmdFlapValidTestSuite,
-    ProxyRewriteTestSuite, RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitTestSuite,
-    RealIpPluginTestSuite, RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite,
-    ResolvedRefsTestSuite, ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
+    ProxyRewriteTestSuite, RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitRedisTestSuite,
+    RateLimitTestSuite, RealIpPluginTestSuite, RegionRouteTestSuite, RequestMirrorTestSuite,
+    RequestRestrictionTestSuite, ResolvedRefsTestSuite, ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
 };
 
 // LinkSys tests

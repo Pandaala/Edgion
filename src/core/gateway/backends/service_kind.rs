@@ -38,61 +38,71 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_edgion_service_from_kind_default() {
-        assert_eq!(EdgionService::from_kind(None), EdgionService::Service);
-        assert_eq!(EdgionService::from_kind(Some(&String::new())), EdgionService::Service);
-    }
+    fn test_edgion_service_from_kind_table() {
+        // Each row: (label, input as Option<String>, expected output)
+        let cases: &[(&str, Option<String>, EdgionService)] = &[
+            // default: None and empty string both fall back to Service
+            ("default_none", None, EdgionService::Service),
+            ("default_empty", Some(String::new()), EdgionService::Service),
+            // standard named kinds
+            ("standard_service", Some("Service".to_string()), EdgionService::Service),
+            (
+                "standard_cluster_ip",
+                Some("ServiceClusterIp".to_string()),
+                EdgionService::ServiceClusterIp,
+            ),
+            (
+                "standard_import",
+                Some("ServiceImport".to_string()),
+                EdgionService::ServiceImport,
+            ),
+            (
+                "standard_external_name",
+                Some("ServiceExternalName".to_string()),
+                EdgionService::ServiceExternalName,
+            ),
+            // explicit EndpointSlice aliases
+            (
+                "endpoint_slice_long",
+                Some("ServiceEndpointSlice".to_string()),
+                EdgionService::ServiceEndpointSlice,
+            ),
+            (
+                "endpoint_slice_short",
+                Some("EndpointSlice".to_string()),
+                EdgionService::ServiceEndpointSlice,
+            ),
+            // unknown / legacy-unsupported kinds
+            (
+                "unknown_kind",
+                Some("UnknownKind".to_string()),
+                EdgionService::Unsupported("UnknownKind".to_string()),
+            ),
+            (
+                "unknown_random",
+                Some("RandomString".to_string()),
+                EdgionService::Unsupported("RandomString".to_string()),
+            ),
+            // Legacy endpoint kinds are now unsupported
+            (
+                "legacy_service_endpoint",
+                Some("ServiceEndpoint".to_string()),
+                EdgionService::Unsupported("ServiceEndpoint".to_string()),
+            ),
+            (
+                "legacy_endpoint",
+                Some("Endpoint".to_string()),
+                EdgionService::Unsupported("Endpoint".to_string()),
+            ),
+        ];
 
-    #[test]
-    fn test_edgion_service_from_kind_standard() {
-        assert_eq!(
-            EdgionService::from_kind(Some(&"Service".to_string())),
-            EdgionService::Service
-        );
-        assert_eq!(
-            EdgionService::from_kind(Some(&"ServiceClusterIp".to_string())),
-            EdgionService::ServiceClusterIp
-        );
-        assert_eq!(
-            EdgionService::from_kind(Some(&"ServiceImport".to_string())),
-            EdgionService::ServiceImport
-        );
-        assert_eq!(
-            EdgionService::from_kind(Some(&"ServiceExternalName".to_string())),
-            EdgionService::ServiceExternalName
-        );
-    }
-
-    #[test]
-    fn test_edgion_service_from_kind_explicit_endpoint_slice() {
-        assert_eq!(
-            EdgionService::from_kind(Some(&"ServiceEndpointSlice".to_string())),
-            EdgionService::ServiceEndpointSlice
-        );
-        assert_eq!(
-            EdgionService::from_kind(Some(&"EndpointSlice".to_string())),
-            EdgionService::ServiceEndpointSlice
-        );
-    }
-
-    #[test]
-    fn test_edgion_service_from_kind_unknown() {
-        assert_eq!(
-            EdgionService::from_kind(Some(&"UnknownKind".to_string())),
-            EdgionService::Unsupported("UnknownKind".to_string())
-        );
-        assert_eq!(
-            EdgionService::from_kind(Some(&"RandomString".to_string())),
-            EdgionService::Unsupported("RandomString".to_string())
-        );
-        // Legacy endpoint kinds are now unsupported
-        assert_eq!(
-            EdgionService::from_kind(Some(&"ServiceEndpoint".to_string())),
-            EdgionService::Unsupported("ServiceEndpoint".to_string())
-        );
-        assert_eq!(
-            EdgionService::from_kind(Some(&"Endpoint".to_string())),
-            EdgionService::Unsupported("Endpoint".to_string())
-        );
+        for (label, input, expected) in cases {
+            assert_eq!(
+                EdgionService::from_kind(input.as_ref()),
+                *expected,
+                "case '{}' failed",
+                label
+            );
+        }
     }
 }

@@ -298,7 +298,11 @@ start_test_server() {
     BACKEND_CERT="${PROJECT_ROOT}/examples/test/certs/backend/server.crt"
     BACKEND_KEY="${PROJECT_ROOT}/examples/test/certs/backend/server.key"
     BACKEND_MTLS_CLIENT_CA="${PROJECT_ROOT}/examples/test/certs/mtls/client-ca.crt"
-    
+    BACKEND_CERT_A="${PROJECT_ROOT}/examples/test/certs/backend/server-a.crt"
+    BACKEND_KEY_A="${PROJECT_ROOT}/examples/test/certs/backend/server-a.key"
+    BACKEND_CERT_B="${PROJECT_ROOT}/examples/test/certs/backend/server-b.crt"
+    BACKEND_KEY_B="${PROJECT_ROOT}/examples/test/certs/backend/server-b.key"
+
     # Checkafter TLS certificate
     local https_backend_args=""
     if [ -f "$BACKEND_CERT" ] && [ -f "$BACKEND_KEY" ]; then
@@ -315,7 +319,15 @@ start_test_server() {
     else
         log_warning "Backend mTLS ，Skip HTTPS mTLS after"
     fi
-    
+
+    local https_backend_multi_sni_args=""
+    if [ -f "$BACKEND_CERT_A" ] && [ -f "$BACKEND_KEY_A" ] && [ -f "$BACKEND_CERT_B" ] && [ -f "$BACKEND_KEY_B" ]; then
+        https_backend_multi_sni_args="--https-backend-multi-sni-port 30026 --multi-sni-cert-a $BACKEND_CERT_A --multi-sni-key-a $BACKEND_KEY_A --multi-sni-cert-b $BACKEND_CERT_B --multi-sni-key-b $BACKEND_KEY_B"
+        log_info "HTTPS multi-SNI backend on port 30026"
+    else
+        log_warning "Backend multi-SNI certs not found, skipping multi-SNI backend (port 30026)"
+    fi
+
     "${BIN_DIR}/examples/test_server" \
         --http-ports "30001,30002,30003" \
         --grpc-ports "30021,30022,30023" \
@@ -324,9 +336,11 @@ start_test_server() {
         --udp-port 30011 \
         --tcp-pp2-port 30012 \
         --auth-port 30040 \
+        --h2-trailer-malformed-port 30025 \
         --log-level info \
         $https_backend_args \
         $https_backend_mtls_args \
+        $https_backend_multi_sni_args \
         > "${LOG_DIR}/test_server.log" 2>&1 &
     
     local pid=$!

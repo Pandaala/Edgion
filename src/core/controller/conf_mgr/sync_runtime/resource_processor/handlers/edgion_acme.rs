@@ -718,139 +718,284 @@ mod tests {
     }
 
     // ========================================================================
-    // Test: Happy path — Secret present with valid accountCredentials
+    // Shared scenario type and driver for parse() table-driven tests
     // ========================================================================
 
-    #[tokio::test]
-    async fn test_account_credential_happy_path() {
-        let (key, secret) = make_secret("default", "acme-account", &[("accountCredentials", br#"{"ok":true}"#)]);
-        let (ctx, _runtime) = make_ctx(HashMap::from([(key, secret)]));
+    struct AcmeParseScenario {
+        name: &'static str,
+        secrets: Vec<(String, Secret)>,
+        acme: EdgionAcme,
+        expected_status: &'static str,
+        expected_reason: Option<&'static str>,
+        expected_message_substrings: &'static [&'static str],
+        /// Each entry is a secret store key (e.g. "default/missing-secret").
+        /// The driver asserts that the EdgionAcme owner is registered for that key.
+        expected_refs_owner_for_keys: &'static [&'static str],
+    }
+
+    async fn run_acme_parse_scenario(scenario: AcmeParseScenario) {
+        let secrets: HashMap<String, Secret> = scenario.secrets.into_iter().collect();
+        let (ctx, _runtime) = make_ctx(secrets);
         let handler = EdgionAcmeHandler::new();
-        let acme = make_acme("default", "my-acme", "acme-account");
 
-        let result = handler.parse(acme, &ctx).await;
+        let acme_ns = scenario.acme.metadata.namespace.clone().unwrap_or_default();
+        let acme_name = scenario.acme.metadata.name.clone().unwrap_or_default();
 
-        match result {
+        let result = handler.parse(scenario.acme, &ctx).await;
+
+        let resolved = match result {
             ProcessResult::Continue(acme) => {
-                let status = acme.status.expect("status should be set");
-                let resolved = status
+                let status = acme
+                    .status
+                    .unwrap_or_else(|| panic!("[{}] status should be set", scenario.name));
+                status
                     .conditions
-                    .iter()
+                    .into_iter()
                     .find(|c| c.type_ == "ResolvedRefs")
-                    .expect("ResolvedRefs condition should exist");
-                assert_eq!(resolved.status, "True");
+                    .unwrap_or_else(|| panic!("[{}] ResolvedRefs condition should exist", scenario.name))
             }
             ProcessResult::Skip { reason } => {
-                panic!("expected Continue, got Skip: {reason}")
+                panic!("[{}] expected Continue, got Skip: {reason}", scenario.name)
             }
+        };
+
+        assert_eq!(
+            resolved.status, scenario.expected_status,
+            "[{}] status mismatch",
+            scenario.name
+        );
+
+        if let Some(expected_reason) = scenario.expected_reason {
+            assert_eq!(resolved.reason, expected_reason, "[{}] reason mismatch", scenario.name);
+        }
+
+        for &substr in scenario.expected_message_substrings {
+            assert!(
+                resolved.message.contains(substr),
+                "[{}] message missing {:?}, got: {}",
+                scenario.name,
+                substr,
+                resolved.message
+            );
+        }
+
+        let owner = ResourceRef::new(ResourceKind::EdgionAcme, Some(acme_ns), acme_name);
+        for &secret_key in scenario.expected_refs_owner_for_keys {
+            let refs = ctx.secret_ref_manager().get_refs(secret_key);
+            assert!(
+                refs.contains(&owner),
+                "[{}] SecretRefManager should contain owner for key {secret_key}",
+                scenario.name
+            );
         }
     }
 
     // ========================================================================
-    // Test: Secret not found → NeedsRegistration (Unknown)
+    // Test: account-branch parse scenarios (Http01 challenge)
     // ========================================================================
 
     #[tokio::test]
-    async fn test_secret_not_found_needs_registration() {
-        let (ctx, _runtime) = make_ctx(HashMap::new());
-        let handler = EdgionAcmeHandler::new();
-        let acme = make_acme("default", "my-acme", "missing-secret");
+    async fn test_acme_account_resolve_scenarios() {
+        let scenarios: Vec<AcmeParseScenario> = vec![
+            // 1. Happy path — Secret present with valid accountCredentials.
+            AcmeParseScenario {
+                name: "account_credential_happy_path",
+                secrets: vec![make_secret(
+                    "default",
+                    "acme-account",
+                    &[("accountCredentials", br#"{"ok":true}"#)],
+                )],
+                acme: make_acme("default", "my-acme", "acme-account"),
+                expected_status: "True",
+                expected_reason: None,
+                expected_message_substrings: &[],
+                expected_refs_owner_for_keys: &[],
+            },
+            // 2. Secret not found → NeedsRegistration (Unknown).
+            //    SecretRefManager must register the missing secret so the
+            //    resource re-reconciles when it arrives.
+            AcmeParseScenario {
+                name: "secret_not_found_needs_registration",
+                secrets: vec![],
+                acme: make_acme("default", "my-acme", "missing-secret"),
+                expected_status: "Unknown",
+                expected_reason: Some("NeedsRegistration"),
+                expected_message_substrings: &[],
+                expected_refs_owner_for_keys: &["default/missing-secret"],
+            },
+            // 3. Secret exists but missing accountCredentials key → NeedsRegistration.
+            AcmeParseScenario {
+                name: "secret_missing_key_needs_registration",
+                secrets: vec![make_secret("default", "acme-account", &[("wrongKey", b"some-value")])],
+                acme: make_acme("default", "my-acme", "acme-account"),
+                expected_status: "Unknown",
+                expected_reason: Some("NeedsRegistration"),
+                expected_message_substrings: &[],
+                expected_refs_owner_for_keys: &[],
+            },
+            // 4. Corrupt account data → Continue + ResolvedRefs=False/DecodeError.
+            //    ACME uses the generic DecodeError reason (M6/G) shared with
+            //    LinkSys / EdgionPlugins / EdgionTls instead of a private bucket.
+            AcmeParseScenario {
+                name: "corrupt_account_data_returns_continue_with_resolved_refs_false",
+                secrets: vec![make_secret(
+                    "default",
+                    "acme-account",
+                    &[("accountCredentials", b"not-valid-json")],
+                )],
+                acme: make_acme("default", "my-acme", "acme-account"),
+                expected_status: "False",
+                expected_reason: Some("DecodeError"),
+                expected_message_substrings: &["decode failed"],
+                expected_refs_owner_for_keys: &[],
+            },
+        ];
 
-        let result = handler.parse(acme, &ctx).await;
-
-        match result {
-            ProcessResult::Continue(acme) => {
-                let status = acme.status.expect("status should be set");
-                let resolved = status
-                    .conditions
-                    .iter()
-                    .find(|c| c.type_ == "ResolvedRefs")
-                    .expect("ResolvedRefs condition should exist");
-                assert_eq!(resolved.status, "Unknown");
-                assert_eq!(resolved.reason, "NeedsRegistration");
-
-                // Verify SecretRefManager registration
-                let refs = ctx.secret_ref_manager().get_refs("default/missing-secret");
-                let owner = ResourceRef::new(
-                    ResourceKind::EdgionAcme,
-                    Some("default".to_string()),
-                    "my-acme".to_string(),
-                );
-                assert!(refs.contains(&owner), "SecretRefManager should contain owner");
-            }
-            ProcessResult::Skip { reason } => {
-                panic!("expected Continue, got Skip: {reason}")
-            }
+        for scenario in scenarios {
+            run_acme_parse_scenario(scenario).await;
         }
     }
 
     // ========================================================================
-    // Test: Secret exists but missing accountCredentials key → NeedsRegistration
+    // Test: DNS-branch parse scenarios (Dns01 challenge)
     // ========================================================================
+    //
+    // These cover the four ResolveOutcome paths the DNS resolve branch can
+    // take — SecretNotFound, ReferenceGrantMissing, MissingKeys, and the
+    // happy path. The account Secret is present and valid where noted so
+    // the tests isolate the DNS branch's contribution to ResolvedRefs.
 
     #[tokio::test]
-    async fn test_secret_missing_key_needs_registration() {
-        let (key, secret) = make_secret("default", "acme-account", &[("wrongKey", b"some-value")]);
-        let (ctx, _runtime) = make_ctx(HashMap::from([(key, secret)]));
-        let handler = EdgionAcmeHandler::new();
-        let acme = make_acme("default", "my-acme", "acme-account");
+    async fn test_acme_dns_resolve_scenarios() {
+        let (valid_account_key, valid_account_secret) =
+            make_secret("default", "acme-account", &[("accountCredentials", br#"{"ok":true}"#)]);
 
-        let result = handler.parse(acme, &ctx).await;
+        let scenarios: Vec<AcmeParseScenario> = vec![
+            // 6. DNS Secret missing → ResolvedRefs=False/SecretNotFound.
+            //    Account Secret present so account branch writes True first;
+            //    DNS branch must override with False/SecretNotFound.
+            AcmeParseScenario {
+                name: "dns_credential_secret_not_found",
+                secrets: vec![(valid_account_key.clone(), valid_account_secret.clone())],
+                acme: make_acme_dns01("default", "my-acme", "acme-account", "cloudflare", "missing-dns", None),
+                expected_status: "False",
+                expected_reason: Some("SecretNotFound"),
+                expected_message_substrings: &["DNS credential"],
+                expected_refs_owner_for_keys: &["default/missing-dns"],
+            },
+            // 7. Cloudflare DNS Secret missing api-token → ResolvedRefs=False/MissingKeys.
+            AcmeParseScenario {
+                name: "dns_credential_missing_api_token",
+                secrets: vec![
+                    (valid_account_key.clone(), valid_account_secret.clone()),
+                    make_secret("default", "cf-secret", &[("wrong-key", b"value")]),
+                ],
+                acme: make_acme_dns01("default", "my-acme", "acme-account", "cloudflare", "cf-secret", None),
+                expected_status: "False",
+                expected_reason: Some("MissingKeys"),
+                expected_message_substrings: &["api-token"],
+                expected_refs_owner_for_keys: &[],
+            },
+            // 8. AliDNS Secret missing both keys → message names both.
+            AcmeParseScenario {
+                name: "dns_credential_alidns_missing_both_keys",
+                secrets: vec![
+                    (valid_account_key.clone(), valid_account_secret.clone()),
+                    make_secret("default", "alidns-secret", &[("unrelated", b"v")]),
+                ],
+                acme: make_acme_dns01("default", "my-acme", "acme-account", "alidns", "alidns-secret", None),
+                expected_status: "False",
+                expected_reason: Some("MissingKeys"),
+                expected_message_substrings: &["access-key-id", "access-key-secret"],
+                expected_refs_owner_for_keys: &[],
+            },
+            // 9. DNS Secret happy path + account happy path → True/ResolvedRefs.
+            //    Reason must equal the literal "ResolvedRefs" constant (not just status==True).
+            AcmeParseScenario {
+                name: "dns_credential_happy_path_preserves_true",
+                secrets: vec![
+                    (valid_account_key.clone(), valid_account_secret.clone()),
+                    make_secret("default", "cf-secret", &[("api-token", b"cf-token-value")]),
+                ],
+                acme: make_acme_dns01("default", "my-acme", "acme-account", "cloudflare", "cf-secret", None),
+                expected_status: "True",
+                expected_reason: Some("ResolvedRefs"),
+                expected_message_substrings: &[],
+                expected_refs_owner_for_keys: &[],
+            },
+            // 10. DNS Ok but account pending (NeedsRegistration) → Unknown survives.
+            //     DNS success must NOT override account's soft Unknown state.
+            AcmeParseScenario {
+                name: "dns_credential_ok_preserves_account_needs_registration",
+                secrets: vec![make_secret("default", "cf-secret", &[("api-token", b"cf-token")])],
+                acme: make_acme_dns01("default", "my-acme", "missing-account", "cloudflare", "cf-secret", None),
+                expected_status: "Unknown",
+                expected_reason: Some("NeedsRegistration"),
+                expected_message_substrings: &[],
+                expected_refs_owner_for_keys: &[],
+            },
+            // 11. Account pending + DNS missing → DNS False overrides account's soft Unknown.
+            //     Hard failure (False) beats soft pending (Unknown).
+            AcmeParseScenario {
+                name: "dns_credential_false_overrides_account_needs_registration",
+                secrets: vec![],
+                acme: make_acme_dns01(
+                    "default",
+                    "my-acme",
+                    "missing-account",
+                    "cloudflare",
+                    "missing-dns",
+                    None,
+                ),
+                expected_status: "False",
+                expected_reason: Some("SecretNotFound"),
+                expected_message_substrings: &["DNS credential"],
+                expected_refs_owner_for_keys: &[],
+            },
+            // 12. Cross-namespace DNS credential without ReferenceGrant →
+            //     ResolvedRefs=False/RefNotPermitted; message must name the target ns.
+            AcmeParseScenario {
+                name: "dns_credential_cross_namespace_denied",
+                secrets: vec![
+                    (valid_account_key.clone(), valid_account_secret.clone()),
+                    make_secret("credentials", "cf-secret", &[("api-token", b"cf-token")]),
+                ],
+                acme: make_acme_dns01(
+                    "default",
+                    "my-acme",
+                    "acme-account",
+                    "cloudflare",
+                    "cf-secret",
+                    Some("credentials"),
+                ),
+                expected_status: "False",
+                expected_reason: Some("RefNotPermitted"),
+                expected_message_substrings: &["credentials"],
+                expected_refs_owner_for_keys: &[],
+            },
+            // 13. Unknown DNS provider → DNS resolve branch is a no-op
+            //     (validate() is the canonical error path).
+            //     Account's True must survive. Reason is not checked (None).
+            AcmeParseScenario {
+                name: "dns_credential_unknown_provider_skips_dns_resolve",
+                secrets: vec![(valid_account_key.clone(), valid_account_secret.clone())],
+                acme: make_acme_dns01(
+                    "default",
+                    "my-acme",
+                    "acme-account",
+                    "route53-not-supported",
+                    "any-secret",
+                    None,
+                ),
+                expected_status: "True",
+                expected_reason: None,
+                expected_message_substrings: &[],
+                expected_refs_owner_for_keys: &[],
+            },
+        ];
 
-        match result {
-            ProcessResult::Continue(acme) => {
-                let status = acme.status.expect("status should be set");
-                let resolved = status
-                    .conditions
-                    .iter()
-                    .find(|c| c.type_ == "ResolvedRefs")
-                    .expect("ResolvedRefs condition should exist");
-                assert_eq!(resolved.status, "Unknown");
-                assert_eq!(resolved.reason, "NeedsRegistration");
-            }
-            ProcessResult::Skip { reason } => {
-                panic!("expected Continue, got Skip: {reason}")
-            }
-        }
-    }
-
-    // ========================================================================
-    // Test: DecodeError (corrupt data) → Continue + ResolvedRefs=False
-    //       (no notify to AcmeService — corrupted account is not an
-    //        actionable bootstrap state)
-    // ========================================================================
-
-    #[tokio::test]
-    async fn test_corrupt_account_data_returns_continue_with_resolved_refs_false() {
-        let (key, secret) = make_secret("default", "acme-account", &[("accountCredentials", b"not-valid-json")]);
-        let (ctx, _runtime) = make_ctx(HashMap::from([(key, secret)]));
-        let handler = EdgionAcmeHandler::new();
-        let acme = make_acme("default", "my-acme", "acme-account");
-
-        let result = handler.parse(acme, &ctx).await;
-
-        match result {
-            ProcessResult::Continue(acme) => {
-                let status = acme.status.expect("status should be set");
-                let resolved = status
-                    .conditions
-                    .iter()
-                    .find(|c| c.type_ == "ResolvedRefs")
-                    .expect("ResolvedRefs condition should exist");
-                assert_eq!(resolved.status, "False");
-                // M6/G: ACME now uses the generic `DecodeError` reason shared
-                // with LinkSys / EdgionPlugins / EdgionTls instead of a
-                // private `AcmeAccountCorrupted` bucket.
-                assert_eq!(resolved.reason, "DecodeError");
-                assert!(
-                    resolved.message.contains("decode failed"),
-                    "message should mention decode failure, got: {}",
-                    resolved.message
-                );
-            }
-            ProcessResult::Skip { reason } => {
-                panic!("expected Continue so status persists, got Skip: {reason}")
-            }
+        for scenario in scenarios {
+            run_acme_parse_scenario(scenario).await;
         }
     }
 
@@ -883,15 +1028,6 @@ mod tests {
         let refs = ctx.secret_ref_manager().get_refs("default/acme-account");
         assert!(!refs.contains(&owner), "reference should be cleared after on_delete");
     }
-
-    // ========================================================================
-    // DNS-01 credential pipeline tests (M8)
-    // ========================================================================
-    //
-    // These cover the four `ResolveOutcome` paths the DNS resolve branch can
-    // take — `SecretNotFound`, `ReferenceGrantMissing`, `MissingKeys`, and
-    // the happy path. The account Secret is always present and valid so the
-    // tests isolate the DNS branch's contribution to `ResolvedRefs`.
 
     fn make_acme_dns01(
         ns: &str,
@@ -942,550 +1078,277 @@ mod tests {
         }
     }
 
-    /// DNS Secret missing → `ResolvedRefs=False/SecretNotFound`.
-    #[tokio::test]
-    async fn test_dns_credential_secret_not_found() {
-        // Account Secret present so the account branch writes `True`; DNS
-        // branch must override with `False/SecretNotFound`.
-        let (k, s) = make_secret("default", "acme-account", &[("accountCredentials", br#"{"ok":true}"#)]);
-        let (ctx, _rt) = make_ctx(HashMap::from([(k, s)]));
-        let handler = EdgionAcmeHandler::new();
-        let acme = make_acme_dns01("default", "my-acme", "acme-account", "cloudflare", "missing-dns", None);
+    // ========================================================================
+    // outcome_to_resolved_refs_action: table-driven tests
+    // ========================================================================
 
-        let result = handler.parse(acme, &ctx).await;
-
-        match result {
-            ProcessResult::Continue(acme) => {
-                let status = acme.status.expect("status");
-                let resolved = status
-                    .conditions
-                    .iter()
-                    .find(|c| c.type_ == "ResolvedRefs")
-                    .expect("ResolvedRefs");
-                assert_eq!(resolved.status, "False");
-                assert_eq!(resolved.reason, "SecretNotFound");
-                assert!(
-                    resolved.message.contains("DNS credential"),
-                    "message should mention DNS credential, got: {}",
-                    resolved.message
-                );
-                // SecretRefManager must track the missing DNS Secret so the
-                // resource re-reconciles when it arrives.
-                let refs = ctx.secret_ref_manager().get_refs("default/missing-dns");
-                let owner = ResourceRef::new(
-                    ResourceKind::EdgionAcme,
-                    Some("default".to_string()),
-                    "my-acme".to_string(),
-                );
-                assert!(
-                    refs.contains(&owner),
-                    "SecretRefManager must track the missing DNS Secret"
-                );
-            }
-            ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
-        }
+    /// Expected outcome shape for a single scenario row.
+    enum ExpectedAction {
+        /// AcmeResolveAction::NoAction
+        NoAction,
+        /// AcmeResolveAction::Continue with the given field expectations
+        Continue {
+            status: &'static str,
+            reason: &'static str,
+            message_substrings: &'static [&'static str],
+        },
+        /// AcmeResolveAction::Abort with the given field expectations
+        Abort {
+            status: &'static str,
+            reason: &'static str,
+            message_substrings: &'static [&'static str],
+        },
     }
 
-    /// Cloudflare DNS Secret missing `api-token` → `ResolvedRefs=False/MissingKeys`.
-    #[tokio::test]
-    async fn test_dns_credential_missing_api_token() {
-        let (k1, s1) = make_secret("default", "acme-account", &[("accountCredentials", br#"{"ok":true}"#)]);
-        let (k2, s2) = make_secret("default", "cf-secret", &[("wrong-key", b"value")]);
-        let (ctx, _rt) = make_ctx(HashMap::from([(k1, s1), (k2, s2)]));
-        let handler = EdgionAcmeHandler::new();
-        let acme = make_acme_dns01("default", "my-acme", "acme-account", "cloudflare", "cf-secret", None);
-
-        let result = handler.parse(acme, &ctx).await;
-
-        match result {
-            ProcessResult::Continue(acme) => {
-                let status = acme.status.expect("status");
-                let resolved = status
-                    .conditions
-                    .iter()
-                    .find(|c| c.type_ == "ResolvedRefs")
-                    .expect("ResolvedRefs");
-                assert_eq!(resolved.status, "False");
-                assert_eq!(resolved.reason, "MissingKeys");
-                assert!(
-                    resolved.message.contains("api-token"),
-                    "message should name the missing key, got: {}",
-                    resolved.message
-                );
-            }
-            ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
-        }
+    struct OutcomeScenario {
+        name: &'static str,
+        outcome: ResolveOutcome<Secret>,
+        ctx: AcmeResolveCtx<'static>,
+        generation: Option<i64>,
+        expected: ExpectedAction,
     }
 
-    /// AliDNS DNS Secret missing both keys → message names both.
-    #[tokio::test]
-    async fn test_dns_credential_alidns_missing_both_keys() {
-        let (k1, s1) = make_secret("default", "acme-account", &[("accountCredentials", br#"{"ok":true}"#)]);
-        let (k2, s2) = make_secret("default", "alidns-secret", &[("unrelated", b"v")]);
-        let (ctx, _rt) = make_ctx(HashMap::from([(k1, s1), (k2, s2)]));
-        let handler = EdgionAcmeHandler::new();
-        let acme = make_acme_dns01("default", "my-acme", "acme-account", "alidns", "alidns-secret", None);
-
-        let result = handler.parse(acme, &ctx).await;
-
-        match result {
-            ProcessResult::Continue(acme) => {
-                let status = acme.status.expect("status");
-                let resolved = status
-                    .conditions
-                    .iter()
-                    .find(|c| c.type_ == "ResolvedRefs")
-                    .expect("ResolvedRefs");
-                assert_eq!(resolved.status, "False");
-                assert_eq!(resolved.reason, "MissingKeys");
-                assert!(resolved.message.contains("access-key-id"), "got {}", resolved.message);
-                assert!(
-                    resolved.message.contains("access-key-secret"),
-                    "got {}",
-                    resolved.message
-                );
-            }
-            ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
-        }
-    }
-
-    /// DNS Secret happy path + account happy path → account's `True` survives
-    /// (DNS Ok is a no-op).
-    #[tokio::test]
-    async fn test_dns_credential_happy_path_preserves_true() {
-        let (k1, s1) = make_secret("default", "acme-account", &[("accountCredentials", br#"{"ok":true}"#)]);
-        let (k2, s2) = make_secret("default", "cf-secret", &[("api-token", b"cf-token-value")]);
-        let (ctx, _rt) = make_ctx(HashMap::from([(k1, s1), (k2, s2)]));
-        let handler = EdgionAcmeHandler::new();
-        let acme = make_acme_dns01("default", "my-acme", "acme-account", "cloudflare", "cf-secret", None);
-
-        let result = handler.parse(acme, &ctx).await;
-
-        match result {
-            ProcessResult::Continue(acme) => {
-                let status = acme.status.expect("status");
-                let resolved = status
-                    .conditions
-                    .iter()
-                    .find(|c| c.type_ == "ResolvedRefs")
-                    .expect("ResolvedRefs");
-                assert_eq!(resolved.status, "True");
-                assert_eq!(resolved.reason, "ResolvedRefs");
-            }
-            ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
-        }
-    }
-
-    /// DNS Ok but account pending (NeedsRegistration) → soft Unknown state
-    /// survives (DNS Ok is a no-op, doesn't overwrite account's `Unknown`).
-    #[tokio::test]
-    async fn test_dns_credential_ok_preserves_account_needs_registration() {
-        let (k2, s2) = make_secret("default", "cf-secret", &[("api-token", b"cf-token")]);
-        // account Secret absent → Unknown(NeedsRegistration) from account branch.
-        let (ctx, _rt) = make_ctx(HashMap::from([(k2, s2)]));
-        let handler = EdgionAcmeHandler::new();
-        let acme = make_acme_dns01("default", "my-acme", "missing-account", "cloudflare", "cf-secret", None);
-
-        let result = handler.parse(acme, &ctx).await;
-
-        match result {
-            ProcessResult::Continue(acme) => {
-                let status = acme.status.expect("status");
-                let resolved = status
-                    .conditions
-                    .iter()
-                    .find(|c| c.type_ == "ResolvedRefs")
-                    .expect("ResolvedRefs");
+    fn run_outcome_scenario(scenario: OutcomeScenario) {
+        let action =
+            outcome_to_resolved_refs_action(&scenario.outcome, "default/acme", scenario.generation, &scenario.ctx);
+        match (&scenario.expected, action) {
+            (ExpectedAction::NoAction, AcmeResolveAction::NoAction) => {}
+            (
+                ExpectedAction::Continue {
+                    status,
+                    reason,
+                    message_substrings,
+                },
+                AcmeResolveAction::Continue(cond),
+            ) => {
+                assert_eq!(cond.status, *status, "[{}] status mismatch", scenario.name);
+                assert_eq!(cond.reason, *reason, "[{}] reason mismatch", scenario.name);
+                for &substr in *message_substrings {
+                    assert!(
+                        cond.message.contains(substr),
+                        "[{}] message missing {:?}, got: {}",
+                        scenario.name,
+                        substr,
+                        cond.message
+                    );
+                }
                 assert_eq!(
-                    resolved.status, "Unknown",
-                    "DNS success must not override account NeedsRegistration"
-                );
-                assert_eq!(resolved.reason, "NeedsRegistration");
-            }
-            ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
-        }
-    }
-
-    /// Account pending + DNS missing → DNS `False` overrides account's
-    /// soft `Unknown` (hard failure beats soft).
-    #[tokio::test]
-    async fn test_dns_credential_false_overrides_account_needs_registration() {
-        // No account Secret, no DNS Secret.
-        let (ctx, _rt) = make_ctx(HashMap::new());
-        let handler = EdgionAcmeHandler::new();
-        let acme = make_acme_dns01(
-            "default",
-            "my-acme",
-            "missing-account",
-            "cloudflare",
-            "missing-dns",
-            None,
-        );
-
-        let result = handler.parse(acme, &ctx).await;
-
-        match result {
-            ProcessResult::Continue(acme) => {
-                let status = acme.status.expect("status");
-                let resolved = status
-                    .conditions
-                    .iter()
-                    .find(|c| c.type_ == "ResolvedRefs")
-                    .expect("ResolvedRefs");
-                assert_eq!(resolved.status, "False");
-                assert_eq!(resolved.reason, "SecretNotFound");
-                assert!(
-                    resolved.message.contains("DNS credential"),
-                    "DNS error must be surfaced, got: {}",
-                    resolved.message
+                    cond.observed_generation, scenario.generation,
+                    "[{}] generation mismatch",
+                    scenario.name
                 );
             }
-            ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
-        }
-    }
-
-    /// Cross-namespace DNS credential without a ReferenceGrant →
-    /// `ResolvedRefs=False/RefNotPermitted`.
-    #[tokio::test]
-    async fn test_dns_credential_cross_namespace_denied() {
-        let (k1, s1) = make_secret("default", "acme-account", &[("accountCredentials", br#"{"ok":true}"#)]);
-        let (k2, s2) = make_secret("credentials", "cf-secret", &[("api-token", b"cf-token")]);
-        let (ctx, _rt) = make_ctx(HashMap::from([(k1, s1), (k2, s2)]));
-        let handler = EdgionAcmeHandler::new();
-        let acme = make_acme_dns01(
-            "default",
-            "my-acme",
-            "acme-account",
-            "cloudflare",
-            "cf-secret",
-            Some("credentials"),
-        );
-
-        let result = handler.parse(acme, &ctx).await;
-
-        match result {
-            ProcessResult::Continue(acme) => {
-                let status = acme.status.expect("status");
-                let resolved = status
-                    .conditions
-                    .iter()
-                    .find(|c| c.type_ == "ResolvedRefs")
-                    .expect("ResolvedRefs");
-                assert_eq!(resolved.status, "False");
-                assert_eq!(resolved.reason, "RefNotPermitted");
-                assert!(
-                    resolved.message.contains("credentials"),
-                    "cross-ns message should mention target ns, got: {}",
-                    resolved.message
+            (
+                ExpectedAction::Abort {
+                    status,
+                    reason,
+                    message_substrings,
+                },
+                AcmeResolveAction::Abort(cond),
+            ) => {
+                assert_eq!(cond.status, *status, "[{}] status mismatch", scenario.name);
+                assert_eq!(cond.reason, *reason, "[{}] reason mismatch", scenario.name);
+                for &substr in *message_substrings {
+                    assert!(
+                        cond.message.contains(substr),
+                        "[{}] message missing {:?}, got: {}",
+                        scenario.name,
+                        substr,
+                        cond.message
+                    );
+                }
+                assert_eq!(
+                    cond.observed_generation, scenario.generation,
+                    "[{}] generation mismatch",
+                    scenario.name
                 );
             }
-            ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
-        }
-    }
-
-    /// Unknown DNS provider → DNS resolve branch is a no-op (validate() is
-    /// the canonical error path). Account's `True` must survive.
-    #[tokio::test]
-    async fn test_dns_credential_unknown_provider_skips_dns_resolve() {
-        let (k, s) = make_secret("default", "acme-account", &[("accountCredentials", br#"{"ok":true}"#)]);
-        let (ctx, _rt) = make_ctx(HashMap::from([(k, s)]));
-        let handler = EdgionAcmeHandler::new();
-        let acme = make_acme_dns01(
-            "default",
-            "my-acme",
-            "acme-account",
-            "route53-not-supported",
-            "any-secret",
-            None,
-        );
-
-        let result = handler.parse(acme, &ctx).await;
-
-        match result {
-            ProcessResult::Continue(acme) => {
-                let status = acme.status.expect("status");
-                let resolved = status
-                    .conditions
-                    .iter()
-                    .find(|c| c.type_ == "ResolvedRefs")
-                    .expect("ResolvedRefs");
-                // account = True, DNS resolve skipped → condition unchanged.
-                assert_eq!(resolved.status, "True");
+            (expected, got) => {
+                let expected_label = match expected {
+                    ExpectedAction::NoAction => "NoAction",
+                    ExpectedAction::Continue { .. } => "Continue",
+                    ExpectedAction::Abort { .. } => "Abort",
+                };
+                panic!("[{}] expected {}, got {:?}", scenario.name, expected_label, got);
             }
-            ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
-        }
-    }
-
-    // ========================================================================
-    // outcome_to_resolved_refs_action: Account role
-    // ========================================================================
-
-    fn account_ctx() -> AcmeResolveCtx<'static> {
-        AcmeResolveCtx::Account
-    }
-
-    #[test]
-    fn account_ok_returns_continue_with_true_resolved_refs() {
-        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Ok(Secret::default());
-        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(1), &account_ctx());
-        match action {
-            AcmeResolveAction::Continue(cond) => {
-                assert_eq!(cond.type_, condition_types::RESOLVED_REFS);
-                assert_eq!(cond.status, "True");
-                assert_eq!(cond.reason, condition_reasons::RESOLVED_REFS);
-                assert!(
-                    cond.message.contains("ACME account credentials loaded"),
-                    "got: {}",
-                    cond.message
-                );
-                assert_eq!(cond.observed_generation, Some(1));
-            }
-            other => panic!("expected Continue, got {:?}", other),
         }
     }
 
     #[test]
-    fn account_secret_not_found_returns_continue_unknown_needs_registration() {
-        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Pending(PendingReason::SecretNotFound {
-            namespace: "default".to_string(),
-            name: "acme-account".to_string(),
-        });
-        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(2), &account_ctx());
-        match action {
-            AcmeResolveAction::Continue(cond) => {
-                assert_eq!(cond.status, "Unknown");
-                assert_eq!(cond.reason, acme_reasons::NEEDS_REGISTRATION);
-                assert!(cond.message.contains("Account Secret absent"), "got: {}", cond.message);
-                assert_eq!(cond.observed_generation, Some(2));
-            }
-            other => panic!("expected Continue(Unknown), got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn account_ref_grant_missing_returns_continue_false_ref_not_permitted() {
-        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
-            from_ns: "default".to_string(),
-            to_ns: "secrets".to_string(),
-            secret_name: "acme-key".to_string(),
-        });
-        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(3), &account_ctx());
-        match action {
-            AcmeResolveAction::Continue(cond) => {
-                assert_eq!(cond.status, "False");
-                assert_eq!(cond.reason, condition_reasons::REF_NOT_PERMITTED);
-                assert!(
-                    cond.message
-                        .contains("Reference from default/EdgionAcme to Secret \"secrets/acme-key\""),
-                    "got: {}",
-                    cond.message
-                );
-                assert_eq!(cond.observed_generation, Some(3));
-            }
-            other => panic!("expected Continue(False), got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn account_missing_keys_returns_continue_unknown_needs_registration() {
-        let outcome: ResolveOutcome<Secret> =
-            ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(vec!["accountCredentials"]));
-        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(4), &account_ctx());
-        match action {
-            AcmeResolveAction::Continue(cond) => {
-                assert_eq!(cond.status, "Unknown");
-                assert_eq!(cond.reason, acme_reasons::NEEDS_REGISTRATION);
-                assert!(cond.message.contains("Account Secret absent"), "got: {}", cond.message);
+    fn test_account_outcome_scenarios() {
+        let scenarios: Vec<OutcomeScenario> = vec![
+            OutcomeScenario {
+                name: "account_ok_returns_continue_with_true_resolved_refs",
+                outcome: ResolveOutcome::Ok(Secret::default()),
+                ctx: AcmeResolveCtx::Account,
+                generation: Some(1),
+                expected: ExpectedAction::Continue {
+                    status: "True",
+                    reason: condition_reasons::RESOLVED_REFS,
+                    message_substrings: &["ACME account credentials loaded"],
+                },
+            },
+            OutcomeScenario {
+                name: "account_secret_not_found_returns_continue_unknown_needs_registration",
+                outcome: ResolveOutcome::Pending(PendingReason::SecretNotFound {
+                    namespace: "default".to_string(),
+                    name: "acme-account".to_string(),
+                }),
+                ctx: AcmeResolveCtx::Account,
+                generation: Some(2),
+                expected: ExpectedAction::Continue {
+                    status: "Unknown",
+                    reason: acme_reasons::NEEDS_REGISTRATION,
+                    message_substrings: &["Account Secret absent"],
+                },
+            },
+            OutcomeScenario {
+                name: "account_ref_grant_missing_returns_continue_false_ref_not_permitted",
+                outcome: ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
+                    from_ns: "default".to_string(),
+                    to_ns: "secrets".to_string(),
+                    secret_name: "acme-key".to_string(),
+                }),
+                ctx: AcmeResolveCtx::Account,
+                generation: Some(3),
+                expected: ExpectedAction::Continue {
+                    status: "False",
+                    reason: condition_reasons::REF_NOT_PERMITTED,
+                    message_substrings: &["Reference from default/EdgionAcme to Secret \"secrets/acme-key\""],
+                },
+            },
+            OutcomeScenario {
+                name: "account_missing_keys_returns_continue_unknown_needs_registration",
                 // The Account MissingKeys arm uses a fixed bootstrap-state message
                 // (NeedsRegistration) rather than interpolating the `keys` vec.
-                // Note: the hardcoded message text itself contains "accountCredentials" as
-                // part of the human-readable description — this is intentional and differs
-                // from the Dns MissingKeys arm which does format keys into the message.
-                assert_eq!(cond.observed_generation, Some(4));
-            }
-            other => panic!("expected Continue(Unknown), got {:?}", other),
+                outcome: ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(vec!["accountCredentials"])),
+                ctx: AcmeResolveCtx::Account,
+                generation: Some(4),
+                expected: ExpectedAction::Continue {
+                    status: "Unknown",
+                    reason: acme_reasons::NEEDS_REGISTRATION,
+                    message_substrings: &["Account Secret absent"],
+                },
+            },
+            OutcomeScenario {
+                name: "account_decode_error_returns_abort_false_decode_error",
+                outcome: ResolveOutcome::Invalid(InvalidCredentialError::DecodeError {
+                    key: "accountCredentials",
+                    detail: "invalid utf-8 at byte 3".to_string(),
+                }),
+                ctx: AcmeResolveCtx::Account,
+                generation: Some(5),
+                expected: ExpectedAction::Abort {
+                    status: "False",
+                    reason: condition_reasons::DECODE_ERROR,
+                    message_substrings: &["credential decode failed for key 'accountCredentials'", "invalid utf-8"],
+                },
+            },
+            OutcomeScenario {
+                name: "account_invalid_secret_type_returns_abort_false_invalid_type",
+                outcome: ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType {
+                    got: "Opaque".to_string(),
+                    allowed: &["edgion.io/acme-account"],
+                }),
+                ctx: AcmeResolveCtx::Account,
+                generation: Some(6),
+                expected: ExpectedAction::Abort {
+                    status: "False",
+                    reason: condition_reasons::INVALID_SECRET_TYPE,
+                    message_substrings: &["Secret.type", "Opaque", "not accepted for this credential"],
+                },
+            },
+        ];
+
+        for scenario in scenarios {
+            run_outcome_scenario(scenario);
         }
     }
 
     #[test]
-    fn account_decode_error_returns_abort_false_decode_error() {
-        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Invalid(InvalidCredentialError::DecodeError {
-            key: "accountCredentials",
-            detail: "invalid utf-8 at byte 3".to_string(),
-        });
-        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(5), &account_ctx());
-        match action {
-            AcmeResolveAction::Abort(cond) => {
-                assert_eq!(cond.status, "False");
-                assert_eq!(cond.reason, condition_reasons::DECODE_ERROR);
-                assert!(
-                    cond.message
-                        .contains("credential decode failed for key 'accountCredentials'"),
-                    "got: {}",
-                    cond.message
-                );
-                assert!(cond.message.contains("invalid utf-8"), "got: {}", cond.message);
-                assert_eq!(cond.observed_generation, Some(5));
-            }
-            other => panic!("expected Abort, got {:?}", other),
-        }
-    }
+    fn test_dns_outcome_scenarios() {
+        let scenarios: Vec<OutcomeScenario> = vec![
+            OutcomeScenario {
+                name: "dns_ok_returns_no_action",
+                outcome: ResolveOutcome::Ok(Secret::default()),
+                ctx: AcmeResolveCtx::Dns { provider: "cloudflare" },
+                generation: Some(1),
+                expected: ExpectedAction::NoAction,
+            },
+            OutcomeScenario {
+                name: "dns_secret_not_found_returns_continue_false_secret_not_found",
+                outcome: ResolveOutcome::Pending(PendingReason::SecretNotFound {
+                    namespace: "default".to_string(),
+                    name: "cf-token".to_string(),
+                }),
+                ctx: AcmeResolveCtx::Dns { provider: "cloudflare" },
+                generation: Some(2),
+                expected: ExpectedAction::Continue {
+                    status: "False",
+                    reason: condition_reasons::SECRET_NOT_FOUND,
+                    message_substrings: &["DNS credential Secret 'default/cf-token' not found"],
+                },
+            },
+            OutcomeScenario {
+                name: "dns_ref_grant_missing_returns_continue_false_ref_not_permitted_with_dns_label",
+                outcome: ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
+                    from_ns: "default".to_string(),
+                    to_ns: "secrets".to_string(),
+                    secret_name: "cf-token".to_string(),
+                }),
+                ctx: AcmeResolveCtx::Dns { provider: "cloudflare" },
+                generation: Some(3),
+                expected: ExpectedAction::Continue {
+                    status: "False",
+                    reason: condition_reasons::REF_NOT_PERMITTED,
+                    message_substrings: &[
+                        "Reference from default/EdgionAcme to DNS credential Secret \"secrets/cf-token\"",
+                    ],
+                },
+            },
+            OutcomeScenario {
+                name: "dns_missing_keys_returns_continue_false_missing_keys_with_provider",
+                outcome: ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(vec!["api-token"])),
+                ctx: AcmeResolveCtx::Dns { provider: "cloudflare" },
+                generation: Some(4),
+                expected: ExpectedAction::Continue {
+                    status: "False",
+                    reason: condition_reasons::MISSING_KEYS,
+                    message_substrings: &["DNS credential Secret for provider 'cloudflare'", "api-token"],
+                },
+            },
+            OutcomeScenario {
+                name: "dns_decode_error_returns_continue_false_decode_error_with_dns_label",
+                outcome: ResolveOutcome::Invalid(InvalidCredentialError::DecodeError {
+                    key: "api-token",
+                    detail: "invalid utf-8 at byte 1".to_string(),
+                }),
+                ctx: AcmeResolveCtx::Dns { provider: "cloudflare" },
+                generation: Some(5),
+                expected: ExpectedAction::Continue {
+                    status: "False",
+                    reason: condition_reasons::DECODE_ERROR,
+                    message_substrings: &["DNS credential decode failed for key 'api-token'", "invalid utf-8"],
+                },
+            },
+            OutcomeScenario {
+                name: "dns_invalid_secret_type_returns_continue_false_invalid_type_with_dns_label",
+                outcome: ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType {
+                    got: "kubernetes.io/tls".to_string(),
+                    allowed: &["Opaque"],
+                }),
+                ctx: AcmeResolveCtx::Dns { provider: "cloudflare" },
+                generation: Some(6),
+                expected: ExpectedAction::Continue {
+                    status: "False",
+                    reason: condition_reasons::INVALID_SECRET_TYPE,
+                    message_substrings: &["DNS credential Secret.type", "kubernetes.io/tls", "not accepted"],
+                },
+            },
+        ];
 
-    #[test]
-    fn account_invalid_secret_type_returns_abort_false_invalid_type() {
-        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType {
-            got: "Opaque".to_string(),
-            allowed: &["edgion.io/acme-account"],
-        });
-        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(6), &account_ctx());
-        match action {
-            AcmeResolveAction::Abort(cond) => {
-                assert_eq!(cond.status, "False");
-                assert_eq!(cond.reason, condition_reasons::INVALID_SECRET_TYPE);
-                assert!(cond.message.contains("Secret.type"), "got: {}", cond.message);
-                assert!(cond.message.contains("Opaque"), "got: {}", cond.message);
-                assert!(
-                    cond.message.contains("not accepted for this credential"),
-                    "got: {}",
-                    cond.message
-                );
-                assert_eq!(cond.observed_generation, Some(6));
-            }
-            other => panic!("expected Abort, got {:?}", other),
-        }
-    }
-
-    // ========================================================================
-    // outcome_to_resolved_refs_action: Dns role
-    // ========================================================================
-
-    fn dns_ctx() -> AcmeResolveCtx<'static> {
-        AcmeResolveCtx::Dns { provider: "cloudflare" }
-    }
-
-    #[test]
-    fn dns_ok_returns_no_action() {
-        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Ok(Secret::default());
-        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(1), &dns_ctx());
-        match action {
-            AcmeResolveAction::NoAction => {}
-            other => panic!("expected NoAction, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn dns_secret_not_found_returns_continue_false_secret_not_found() {
-        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Pending(PendingReason::SecretNotFound {
-            namespace: "default".to_string(),
-            name: "cf-token".to_string(),
-        });
-        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(2), &dns_ctx());
-        match action {
-            AcmeResolveAction::Continue(cond) => {
-                assert_eq!(cond.status, "False");
-                assert_eq!(cond.reason, condition_reasons::SECRET_NOT_FOUND);
-                assert!(
-                    cond.message
-                        .contains("DNS credential Secret 'default/cf-token' not found"),
-                    "got: {}",
-                    cond.message
-                );
-                assert_eq!(cond.observed_generation, Some(2));
-            }
-            other => panic!("expected Continue(False), got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn dns_ref_grant_missing_returns_continue_false_ref_not_permitted_with_dns_label() {
-        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
-            from_ns: "default".to_string(),
-            to_ns: "secrets".to_string(),
-            secret_name: "cf-token".to_string(),
-        });
-        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(3), &dns_ctx());
-        match action {
-            AcmeResolveAction::Continue(cond) => {
-                assert_eq!(cond.status, "False");
-                assert_eq!(cond.reason, condition_reasons::REF_NOT_PERMITTED);
-                assert!(
-                    cond.message
-                        .contains("Reference from default/EdgionAcme to DNS credential Secret \"secrets/cf-token\""),
-                    "got: {}",
-                    cond.message
-                );
-                assert_eq!(cond.observed_generation, Some(3));
-            }
-            other => panic!("expected Continue(False), got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn dns_missing_keys_returns_continue_false_missing_keys_with_provider() {
-        let outcome: ResolveOutcome<Secret> =
-            ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(vec!["api-token"]));
-        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(4), &dns_ctx());
-        match action {
-            AcmeResolveAction::Continue(cond) => {
-                assert_eq!(cond.status, "False");
-                assert_eq!(cond.reason, condition_reasons::MISSING_KEYS);
-                assert!(
-                    cond.message.contains("DNS credential Secret for provider 'cloudflare'"),
-                    "got: {}",
-                    cond.message
-                );
-                assert!(cond.message.contains("api-token"), "got: {}", cond.message);
-                assert_eq!(cond.observed_generation, Some(4));
-            }
-            other => panic!("expected Continue(False), got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn dns_decode_error_returns_continue_false_decode_error_with_dns_label() {
-        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Invalid(InvalidCredentialError::DecodeError {
-            key: "api-token",
-            detail: "invalid utf-8 at byte 1".to_string(),
-        });
-        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(5), &dns_ctx());
-        match action {
-            AcmeResolveAction::Continue(cond) => {
-                assert_eq!(cond.status, "False");
-                assert_eq!(cond.reason, condition_reasons::DECODE_ERROR);
-                assert!(
-                    cond.message
-                        .contains("DNS credential decode failed for key 'api-token'"),
-                    "got: {}",
-                    cond.message
-                );
-                assert!(cond.message.contains("invalid utf-8"), "got: {}", cond.message);
-                assert_eq!(cond.observed_generation, Some(5));
-            }
-            other => panic!("expected Continue(False), got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn dns_invalid_secret_type_returns_continue_false_invalid_type_with_dns_label() {
-        let outcome: ResolveOutcome<Secret> = ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType {
-            got: "kubernetes.io/tls".to_string(),
-            allowed: &["Opaque"],
-        });
-        let action = outcome_to_resolved_refs_action(&outcome, "default/acme", Some(6), &dns_ctx());
-        match action {
-            AcmeResolveAction::Continue(cond) => {
-                assert_eq!(cond.status, "False");
-                assert_eq!(cond.reason, condition_reasons::INVALID_SECRET_TYPE);
-                assert!(
-                    cond.message.contains("DNS credential Secret.type"),
-                    "got: {}",
-                    cond.message
-                );
-                assert!(cond.message.contains("kubernetes.io/tls"), "got: {}", cond.message);
-                assert!(cond.message.contains("not accepted"), "got: {}", cond.message);
-                assert_eq!(cond.observed_generation, Some(6));
-            }
-            other => panic!("expected Continue(False), got {:?}", other),
+        for scenario in scenarios {
+            run_outcome_scenario(scenario);
         }
     }
 }

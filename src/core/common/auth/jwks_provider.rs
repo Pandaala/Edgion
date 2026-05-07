@@ -466,4 +466,296 @@ mod tests {
             "cache must remain empty after validator failure"
         );
     }
+
+    // ---------------------------------------------------------------------
+    // Exception-path tests using wiremock for fine-grained server control.
+    // ---------------------------------------------------------------------
+
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Build a config pointing at a wiremock server with a custom request timeout.
+    fn wm_config(addr: &str, ttl_ms: u64, min_refresh_ms: u64, timeout_ms: u64) -> JwksProviderConfig {
+        JwksProviderConfig {
+            discovery_url: format!("{}/.well-known/openid-configuration", addr),
+            jwks_cache_ttl: Duration::from_millis(ttl_ms),
+            jwks_min_refresh_interval: Duration::from_millis(min_refresh_ms),
+            discovery_max_response_bytes: 65_536,
+            jwks_max_response_bytes: 1_048_576,
+            request_timeout: Duration::from_millis(timeout_ms),
+            component_label: "test",
+        }
+    }
+
+    /// Mount a happy-path discovery endpoint pointing jwks_uri at the same server.
+    async fn mount_ok_discovery(server: &MockServer) {
+        let body = serde_json::json!({
+            "issuer": server.uri(),
+            "jwks_uri": format!("{}/jwks", server.uri()),
+        });
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+
+    fn build_provider(cfg: JwksProviderConfig) -> Arc<JwksProvider<LeanDiscoveryDocument>> {
+        let client = Arc::new(Client::builder().build().unwrap());
+        JwksProvider::new(cfg, client, no_op_validator())
+    }
+
+    #[tokio::test]
+    async fn test_jwks_fetch_timeout_returns_error_when_no_cache() {
+        // Discovery is fast, JWKS is slow → request-level timeout fires.
+        let server = MockServer::start().await;
+        mount_ok_discovery(&server).await;
+        let body = serde_json::json!({
+            "keys": [{"kty":"oct","kid":"k0","k":"AAAAAA","alg":"HS256"}],
+        });
+        Mock::given(method("GET"))
+            .and(path("/jwks"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(body)
+                    .set_delay(Duration::from_millis(500)),
+            )
+            .mount(&server)
+            .await;
+        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 100));
+        let err = p
+            .get_jwks(false)
+            .await
+            .expect_err("timeout must error with empty cache");
+        let lc = err.to_lowercase();
+        assert!(
+            lc.contains("timeout") || lc.contains("timed out") || lc.contains("jwks request failed"),
+            "expected timeout-shaped error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jwks_fetch_5xx_returns_error_when_no_cache() {
+        // 5xx with no cache → hard fail (stale-while-revalidate has nothing to serve).
+        let server = MockServer::start().await;
+        mount_ok_discovery(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/jwks"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let err = p.get_jwks(false).await.expect_err("5xx without cache must error");
+        assert!(
+            err.contains("500") || err.contains("status"),
+            "expected status error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jwks_fetch_5xx_falls_back_to_cache() {
+        // First fetch succeeds (populates cache), second fetch sees 5xx → stale fallback.
+        let server = MockServer::start().await;
+        mount_ok_discovery(&server).await;
+        let body_ok = serde_json::json!({
+            "keys": [{"kty":"oct","kid":"k0","k":"AAAAAA","alg":"HS256"}],
+        });
+        // Two scoped responders: first OK (limit 1), then 5xx for everything after.
+        Mock::given(method("GET"))
+            .and(path("/jwks"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body_ok))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/jwks"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        // ttl very short so the 2nd call triggers a refetch.
+        let p = build_provider(wm_config(&server.uri(), 30, 0, 2_000));
+        let first = p.get_jwks(false).await.expect("initial fetch ok");
+        assert_eq!(first.keys.len(), 1);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let second = p.get_jwks(false).await.expect("stale fallback must serve cache on 5xx");
+        assert_eq!(second.keys.len(), 1, "should serve cached set after 5xx");
+    }
+
+    #[tokio::test]
+    async fn test_jwks_malformed_json_returns_parse_error() {
+        let server = MockServer::start().await;
+        mount_ok_discovery(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/jwks"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{not-valid-json"))
+            .mount(&server)
+            .await;
+        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let err = p.get_jwks(false).await.expect_err("malformed JSON must error");
+        let lc = err.to_lowercase();
+        assert!(
+            lc.contains("parse") || lc.contains("jwks"),
+            "expected parse error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jwks_empty_keys_returns_error() {
+        // Provider explicitly rejects empty keys list ("JWKS endpoint returned empty keys").
+        let server = MockServer::start().await;
+        mount_ok_discovery(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/jwks"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"keys": []})))
+            .mount(&server)
+            .await;
+        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let err = p.get_jwks(false).await.expect_err("empty keys must error");
+        assert!(err.contains("empty keys"), "expected 'empty keys' message, got: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_discovery_5xx_returns_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let err = p.get_or_fetch_discovery().await.expect_err("discovery 5xx must error");
+        assert!(
+            err.contains("503") || err.contains("status"),
+            "expected discovery status error, got: {err}"
+        );
+        assert!(
+            p.cached_discovery().await.is_none(),
+            "discovery cache must remain empty after upstream 5xx"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_discovery_malformed_json_returns_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not-json"))
+            .mount(&server)
+            .await;
+        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let err = p
+            .get_or_fetch_discovery()
+            .await
+            .expect_err("discovery malformed JSON must error");
+        let lc = err.to_lowercase();
+        assert!(
+            lc.contains("parse") || lc.contains("oidc discovery"),
+            "expected parse error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_discovery_missing_jwks_uri_returns_error() {
+        let server = MockServer::start().await;
+        // Valid JSON but jwks_uri is empty.
+        let body = serde_json::json!({
+            "issuer": server.uri(),
+            "jwks_uri": "",
+        });
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let err = p
+            .get_or_fetch_discovery()
+            .await
+            .expect_err("missing jwks_uri must error");
+        assert!(
+            err.contains("jwks_uri"),
+            "expected 'jwks_uri' in error message, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_discovery_missing_issuer_returns_error() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "issuer": "",
+            "jwks_uri": format!("{}/jwks", server.uri()),
+        });
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let err = p.get_or_fetch_discovery().await.expect_err("missing issuer must error");
+        assert!(err.contains("issuer"), "expected 'issuer' in error message, got: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_discovery_unreachable_returns_error() {
+        // Port 1 is reserved/unused — connection should fail fast.
+        let cfg = JwksProviderConfig {
+            discovery_url: "http://127.0.0.1:1/.well-known/openid-configuration".to_string(),
+            jwks_cache_ttl: Duration::from_secs(60),
+            jwks_min_refresh_interval: Duration::from_millis(0),
+            discovery_max_response_bytes: 65_536,
+            jwks_max_response_bytes: 1_048_576,
+            request_timeout: Duration::from_millis(500),
+            component_label: "test",
+        };
+        let p = build_provider(cfg);
+        let err = p
+            .get_or_fetch_discovery()
+            .await
+            .expect_err("unreachable discovery must error");
+        assert!(
+            err.contains("Failed to fetch discovery document"),
+            "expected fetch failure, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jwks_kid_rotation_force_refresh_loads_new_keys() {
+        // Simulate a kid rotation: initial JWKS has kid=k_old; after rotation only k_new.
+        // Caller observes kid miss on k_old → invokes get_jwks(force_refresh=true) and gets k_new.
+        let server = MockServer::start().await;
+        mount_ok_discovery(&server).await;
+        let body_old = serde_json::json!({
+            "keys": [{"kty":"oct","kid":"k_old","k":"AAAAAA","alg":"HS256"}],
+        });
+        let body_new = serde_json::json!({
+            "keys": [{"kty":"oct","kid":"k_new","k":"BBBBBB","alg":"HS256"}],
+        });
+        Mock::given(method("GET"))
+            .and(path("/jwks"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body_old))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/jwks"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body_new))
+            .mount(&server)
+            .await;
+        // min_refresh=0 so force_refresh is not throttled.
+        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let first = p.get_jwks(false).await.expect("initial fetch ok");
+        assert_eq!(first.keys.len(), 1);
+        let kid_first = first.keys[0].common.key_id.as_deref();
+        assert_eq!(kid_first, Some("k_old"));
+
+        let rotated = p.get_jwks(true).await.expect("force refresh fetch ok");
+        assert_eq!(rotated.keys.len(), 1);
+        let kid_rot = rotated.keys[0].common.key_id.as_deref();
+        assert_eq!(kid_rot, Some("k_new"), "force_refresh should pick up rotated kid");
+        // Old kid no longer present in the returned set.
+        assert!(
+            !rotated.keys.iter().any(|k| k.common.key_id.as_deref() == Some("k_old")),
+            "old kid must be gone after rotation"
+        );
+    }
 }

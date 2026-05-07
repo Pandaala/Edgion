@@ -1,0 +1,15 @@
+# Service B for BackendTLSSNIHostOverride suite.
+# Same endpoint (127.0.0.1:30026) as service-a; the per-service BackendTLSPolicy
+# is the only thing that differs — it carries a different validation.hostname.
+apiVersion: v1
+kind: Service
+metadata:
+  name: btls-sni-service-b
+  namespace: edgion-test
+spec:
+  ports:
+    - name: https
+      port: 30026
+      protocol: TCP
+      targetPort: 30026
+  type: ClusterIP

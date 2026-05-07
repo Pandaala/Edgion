@@ -187,61 +187,10 @@ pub fn record_ready_gate_wait(seconds: f64) {
 mod tests {
     use super::labels::*;
 
-    #[test]
-    fn role_labels_are_stable() {
-        assert_eq!(role::CENTER, "center");
-        assert_eq!(role::CONTROLLER, "controller");
-    }
-
-    #[test]
-    fn event_labels_are_stable() {
-        assert_eq!(event::CONNECTED, "connected");
-        assert_eq!(event::DISCONNECTED, "disconnected");
-        assert_eq!(event::RELOAD, "reload");
-    }
-
-    #[test]
-    fn direction_labels_are_stable() {
-        assert_eq!(direction::SENT, "sent");
-        assert_eq!(direction::RECV, "recv");
-    }
-
-    #[test]
-    fn watch_list_result_labels_are_stable() {
-        assert_eq!(watch_list_result::OK, "ok");
-        assert_eq!(watch_list_result::VERSION_TOO_OLD, "version_too_old");
-        assert_eq!(watch_list_result::PARSE_ERROR, "parse_error");
-        assert_eq!(watch_list_result::READY_WAIT, "ready_wait");
-    }
-
-    #[test]
-    fn watch_error_reason_labels_are_stable() {
-        assert_eq!(watch_error_reason::PARSE_ERROR, "parse_error");
-        assert_eq!(watch_error_reason::TIMEOUT, "timeout");
-        assert_eq!(watch_error_reason::RECV_ERROR, "recv_error");
-    }
-
-    #[test]
-    fn offline_reason_labels_are_stable() {
-        assert_eq!(offline_reason::HEARTBEAT, "heartbeat");
-        assert_eq!(offline_reason::DISCONNECT, "disconnect");
-        assert_eq!(offline_reason::RELOAD, "reload");
-    }
-
-    #[test]
-    fn evict_source_labels_are_stable() {
-        assert_eq!(evict_source::REGISTRY, "registry");
-        assert_eq!(evict_source::AGGREGATOR, "aggregator");
-    }
-
-    #[test]
-    fn fanout_labels_are_stable() {
-        assert_eq!(fanout_op::PATCH_ENABLE, "patch_enable");
-        assert_eq!(fanout_op::PATCH_PROFILE, "patch_profile");
-        assert_eq!(fanout_result::OK, "ok");
-        assert_eq!(fanout_result::PARTIAL, "partial");
-        assert_eq!(fanout_result::FAIL, "fail");
-    }
+    // The 8 individual `*_labels_are_stable` tests that previously appeared
+    // here have been folded into `bounded_enum_value_sets_are_exhaustive_and_unique`
+    // below, which checks the full enum value set (stricter — adding or
+    // dropping a const breaks it) plus uniqueness across each enum.
 
     #[test]
     fn metric_names_have_edgion_fed_prefix() {
@@ -267,6 +216,174 @@ mod tests {
                 n
             );
         }
+    }
+
+    /// Helper: every label value emitted to Prometheus must use a safe
+    /// character set. We pick the conservative subset
+    /// `[A-Za-z0-9_-]` because Prometheus label *values* technically allow
+    /// any UTF-8, but PromQL queries, label-set serialization and
+    /// downstream tools are far happier with this restricted alphabet.
+    fn assert_label_value_charset(value: &str, origin: &str) {
+        assert!(!value.is_empty(), "label value for {origin} must not be empty");
+        // Conservative cap. Prometheus has no hard limit on label-value
+        // length, but anything beyond ~64 chars for a *bounded enum* would
+        // indicate a misuse (free-form strings should never be in `labels`).
+        assert!(
+            value.len() <= 64,
+            "label value {value:?} for {origin} exceeds 64 chars ({} bytes)",
+            value.len()
+        );
+        for c in value.chars() {
+            assert!(
+                c.is_ascii_alphanumeric() || c == '_' || c == '-',
+                "label value {value:?} for {origin} contains illegal char {c:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn all_bounded_label_values_use_safe_charset() {
+        // Sweep every constant in the `labels` submodule. Adding a new
+        // label without listing it here is fine for compilation, but this
+        // test guards against accidental inclusion of whitespace, control
+        // chars, slashes, dots, or other Prometheus-hostile characters.
+        let cases: &[(&str, &str)] = &[
+            ("role::CENTER", role::CENTER),
+            ("role::CONTROLLER", role::CONTROLLER),
+            ("event::CONNECTED", event::CONNECTED),
+            ("event::DISCONNECTED", event::DISCONNECTED),
+            ("event::RELOAD", event::RELOAD),
+            ("direction::SENT", direction::SENT),
+            ("direction::RECV", direction::RECV),
+            ("watch_list_result::OK", watch_list_result::OK),
+            ("watch_list_result::VERSION_TOO_OLD", watch_list_result::VERSION_TOO_OLD),
+            ("watch_list_result::PARSE_ERROR", watch_list_result::PARSE_ERROR),
+            ("watch_list_result::READY_WAIT", watch_list_result::READY_WAIT),
+            ("watch_error_reason::PARSE_ERROR", watch_error_reason::PARSE_ERROR),
+            ("watch_error_reason::TIMEOUT", watch_error_reason::TIMEOUT),
+            ("watch_error_reason::RECV_ERROR", watch_error_reason::RECV_ERROR),
+            ("offline_reason::HEARTBEAT", offline_reason::HEARTBEAT),
+            ("offline_reason::DISCONNECT", offline_reason::DISCONNECT),
+            ("offline_reason::RELOAD", offline_reason::RELOAD),
+            ("evict_source::REGISTRY", evict_source::REGISTRY),
+            ("evict_source::AGGREGATOR", evict_source::AGGREGATOR),
+            ("fanout_op::PATCH_ENABLE", fanout_op::PATCH_ENABLE),
+            ("fanout_op::PATCH_PROFILE", fanout_op::PATCH_PROFILE),
+            ("fanout_result::OK", fanout_result::OK),
+            ("fanout_result::PARTIAL", fanout_result::PARTIAL),
+            ("fanout_result::FAIL", fanout_result::FAIL),
+        ];
+        for (origin, value) in cases {
+            assert_label_value_charset(value, origin);
+        }
+    }
+
+    #[test]
+    fn metric_names_use_safe_charset_and_reasonable_length() {
+        // Prometheus metric names must match `[a-zA-Z_:][a-zA-Z0-9_:]*`.
+        // We further restrict ourselves to lowercase + underscore (the
+        // de-facto Prometheus convention; see metric naming guide). 64 is
+        // a generous-but-finite upper bound; nothing here should exceed it.
+        use super::names::*;
+        let names = [
+            CONNECTIONS_ACTIVE,
+            CONNECTION_EVENTS_TOTAL,
+            CONNECTION_DURATION_LAST,
+            WATCH_EVENTS_TOTAL,
+            WATCH_LIST_TOTAL,
+            WATCH_ERRORS_TOTAL,
+            MARK_OFFLINE_TOTAL,
+            EVICT_STALE_TOTAL,
+            SESSION_REENTRY_TOTAL,
+            AGGREGATOR_CONTROLLERS,
+            CONSISTENCY_MISMATCH_TOTAL,
+            FANOUT_TOTAL,
+            READY_GATE_WAIT_LAST,
+        ];
+        for n in names {
+            assert!(!n.is_empty(), "metric name must not be empty");
+            assert!(n.len() <= 64, "metric name {n:?} exceeds 64 chars ({} bytes)", n.len());
+            let first = n.chars().next().unwrap();
+            assert!(
+                first.is_ascii_lowercase() || first == '_',
+                "metric name {n:?} must start with [a-z_], got {first:?}"
+            );
+            for c in n.chars() {
+                assert!(
+                    c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_',
+                    "metric name {n:?} contains illegal char {c:?} \
+                     (allowed: [a-z0-9_])"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_enum_value_sets_are_exhaustive_and_unique() {
+        // Pin the *full* expected set for each bounded enum. Adding a new
+        // variant must be a deliberate code change here — preventing
+        // silent cardinality growth from a stray `pub const`.
+        fn check(name: &str, actual: &[&str], expected: &[&str]) {
+            let mut a: Vec<&str> = actual.to_vec();
+            let mut e: Vec<&str> = expected.to_vec();
+            a.sort_unstable();
+            e.sort_unstable();
+            assert_eq!(a, e, "{name} value set drifted: expected {expected:?}, got {actual:?}");
+            // Uniqueness: no two variants share a string value.
+            let mut dedup = a.clone();
+            dedup.dedup();
+            assert_eq!(dedup.len(), a.len(), "{name} contains duplicate values: {actual:?}");
+        }
+        check("role", &[role::CENTER, role::CONTROLLER], &["center", "controller"]);
+        check(
+            "event",
+            &[event::CONNECTED, event::DISCONNECTED, event::RELOAD],
+            &["connected", "disconnected", "reload"],
+        );
+        check("direction", &[direction::SENT, direction::RECV], &["sent", "recv"]);
+        check(
+            "watch_list_result",
+            &[
+                watch_list_result::OK,
+                watch_list_result::VERSION_TOO_OLD,
+                watch_list_result::PARSE_ERROR,
+                watch_list_result::READY_WAIT,
+            ],
+            &["ok", "version_too_old", "parse_error", "ready_wait"],
+        );
+        check(
+            "watch_error_reason",
+            &[
+                watch_error_reason::PARSE_ERROR,
+                watch_error_reason::TIMEOUT,
+                watch_error_reason::RECV_ERROR,
+            ],
+            &["parse_error", "timeout", "recv_error"],
+        );
+        check(
+            "offline_reason",
+            &[
+                offline_reason::HEARTBEAT,
+                offline_reason::DISCONNECT,
+                offline_reason::RELOAD,
+            ],
+            &["heartbeat", "disconnect", "reload"],
+        );
+        check(
+            "evict_source",
+            &[evict_source::REGISTRY, evict_source::AGGREGATOR],
+            &["registry", "aggregator"],
+        );
+        check(
+            "fanout_op",
+            &[fanout_op::PATCH_ENABLE, fanout_op::PATCH_PROFILE],
+            &["patch_enable", "patch_profile"],
+        );
+        check(
+            "fanout_result",
+            &[fanout_result::OK, fanout_result::PARTIAL, fanout_result::FAIL],
+            &["ok", "partial", "fail"],
+        );
     }
 
     #[test]

@@ -99,6 +99,7 @@ mod tests {
     use super::*;
     use metrics_exporter_prometheus::PrometheusBuilder;
     use pingora_core::protocols::l4::socket::SocketAddr as PSocketAddr;
+    use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     fn make_backend(i: u32) -> Backend {
@@ -109,6 +110,12 @@ mod tests {
             weight: 1,
             ext: Default::default(),
         }
+    }
+
+    fn make_backend_weighted(i: u32, weight: usize) -> Backend {
+        let mut b = make_backend(i);
+        b.weight = weight;
+        b
     }
 
     #[test]
@@ -131,5 +138,136 @@ mod tests {
                 "counter must appear on truncation, got:\n{rendered}"
             );
         });
+    }
+
+    #[test]
+    fn empty_backend_list_returns_none() {
+        let selector = RoundRobinSelector::build(&[]);
+        assert!(selector.select(8, |_| true).is_none());
+        assert_eq!(selector.backend_count(), 0);
+    }
+
+    #[test]
+    fn single_backend_returns_it_when_healthy() {
+        let backends = vec![make_backend(1)];
+        let selector = RoundRobinSelector::build(&backends);
+        for _ in 0..5 {
+            let picked = selector.select(8, |_| true).expect("healthy backend");
+            assert_eq!(picked.addr, backends[0].addr);
+        }
+    }
+
+    #[test]
+    fn single_backend_returns_none_when_unhealthy() {
+        let backends = vec![make_backend(1)];
+        let selector = RoundRobinSelector::build(&backends);
+        assert!(selector.select(8, |_| false).is_none());
+    }
+
+    #[test]
+    fn distribution_uniform_for_equal_weights() {
+        // N equal-weight backends, N consecutive selections must touch each
+        // backend exactly once thanks to the deterministic counter.
+        let n = 5u32;
+        let backends: Vec<Backend> = (1..=n).map(make_backend).collect();
+        let selector = RoundRobinSelector::build(&backends);
+
+        let mut counts: HashMap<PSocketAddr, usize> = HashMap::new();
+        for _ in 0..n {
+            let picked = selector.select(8, |_| true).expect("healthy backend");
+            *counts.entry(picked.addr).or_default() += 1;
+        }
+        assert_eq!(counts.len(), n as usize, "each backend must be picked once");
+        for (_, c) in counts {
+            assert_eq!(c, 1);
+        }
+    }
+
+    #[test]
+    fn distribution_respects_weights() {
+        // Weights 1:2:5 => over 8 calls each backend appears `weight` times.
+        let backends = vec![
+            make_backend_weighted(1, 1),
+            make_backend_weighted(2, 2),
+            make_backend_weighted(3, 5),
+        ];
+        let selector = RoundRobinSelector::build(&backends);
+
+        let total: usize = backends.iter().map(|b| b.weight).sum();
+        let mut counts: HashMap<PSocketAddr, usize> = HashMap::new();
+        for _ in 0..total {
+            let picked = selector.select(8, |_| true).expect("healthy backend");
+            *counts.entry(picked.addr).or_default() += 1;
+        }
+        // The selector sorts by addr; addresses 10.0.0.1/2/3 keep order.
+        assert_eq!(counts.get(&backends[0].addr).copied().unwrap_or(0), 1);
+        assert_eq!(counts.get(&backends[1].addr).copied().unwrap_or(0), 2);
+        assert_eq!(counts.get(&backends[2].addr).copied().unwrap_or(0), 5);
+    }
+
+    #[test]
+    fn zero_weight_treated_as_one() {
+        // weight = 0 should be normalized to 1, so the backend still appears.
+        let backends = vec![make_backend_weighted(1, 0), make_backend_weighted(2, 0)];
+        let selector = RoundRobinSelector::build(&backends);
+
+        let mut seen: HashMap<PSocketAddr, usize> = HashMap::new();
+        for _ in 0..4 {
+            let picked = selector.select(8, |_| true).expect("healthy backend");
+            *seen.entry(picked.addr).or_default() += 1;
+        }
+        assert_eq!(seen.len(), 2, "both zero-weight backends must rotate in");
+    }
+
+    #[test]
+    fn all_unhealthy_returns_none() {
+        let backends: Vec<Backend> = (1..=4).map(make_backend).collect();
+        let selector = RoundRobinSelector::build(&backends);
+        assert!(selector.select(16, |_| false).is_none());
+    }
+
+    #[test]
+    fn fallback_walks_to_lone_healthy_backend() {
+        let backends: Vec<Backend> = (1..=8).map(make_backend).collect();
+        let selector = RoundRobinSelector::build(&backends);
+        let healthy = backends[5].addr.clone();
+        let picked = selector
+            .select(16, |b| b.addr == healthy)
+            .expect("must locate the lone healthy backend");
+        assert_eq!(picked.addr, healthy);
+    }
+
+    #[test]
+    fn max_iterations_caps_fallback_search() {
+        // With max_iterations = 1 the fallback loop body never runs (the
+        // condition is `1..max_iterations.min(blen)` which is empty), so the
+        // lone healthy backend must NOT be reached when the first weighted
+        // pick is unhealthy.
+        let backends: Vec<Backend> = (1..=4).map(make_backend).collect();
+        let selector = RoundRobinSelector::build(&backends);
+        let healthy = backends[2].addr.clone();
+        // Force the first counter pick to land on a non-healthy backend by
+        // exhausting until counter % 4 == 0 (backends[0]).
+        // counter starts at 0 → idx 0 (unhealthy). Fallback does nothing.
+        let picked = selector.select(1, |b| b.addr == healthy);
+        assert!(
+            picked.is_none(),
+            "max_iterations=1 must skip fallback walk, got {:?}",
+            picked
+        );
+    }
+
+    #[test]
+    fn backends_accessor_returns_sorted_unique_list() {
+        // Build with shuffled input; ensure backends() is sorted by addr.
+        let mut backends: Vec<Backend> = (1..=4).map(make_backend).collect();
+        backends.swap(0, 3);
+        backends.swap(1, 2);
+        let selector = RoundRobinSelector::build(&backends);
+        let stored = selector.backends();
+        assert_eq!(stored.len(), 4);
+        for w in stored.windows(2) {
+            assert!(w[0].addr <= w[1].addr, "backends must be sorted by addr");
+        }
     }
 }

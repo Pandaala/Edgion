@@ -1,0 +1,27 @@
+# HTTPRoute for H2 backend mTLS + SessionPersistence
+# Routes h2-mtls-sp.example.com to the mTLS backend with cookie-based session persistence.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: h2-mtls-sp-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: h2-mtls-sp-gateway
+      namespace: edgion-test
+  hostnames:
+    - "h2-mtls-sp.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      sessionPersistence:
+        sessionName: "edgion-h2-mtls-sp"
+        type: Cookie
+        absoluteTimeout: "1h"
+        cookieConfig:
+          lifetimeType: Permanent
+      backendRefs:
+        - name: h2-mtls-sp-service
+          port: 30052

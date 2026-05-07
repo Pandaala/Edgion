@@ -225,6 +225,35 @@ ensure_nofile_limit() {
     return 0
 }
 
+# Verify exactly one edgion-gateway process is owned by the current user.
+# Multiple processes mean a violation of the "shared Gateway" principle:
+# new suites must reuse the main Gateway started by start_all_with_conf.sh,
+# not spawn their own. Independent-topology scripts (test_file_watcher.sh,
+# test_resource_abnormal_metrics.sh, run_conf_sync_mtls_test.sh, etc.) run
+# outside this entry point and are not subject to this check.
+# See skills/05-testing/01-integration-testing.md "Gateway / Controller 复用原则".
+check_single_gateway_process() {
+    local pids count
+    pids=$(pgrep -u "$USER" edgion-gateway 2>/dev/null || true)
+    if [ -z "$pids" ]; then
+        log_error "No edgion-gateway process found after start. Check start_all_with_conf.sh logs."
+        return 1
+    fi
+    count=$(echo "$pids" | wc -l | tr -d ' ')
+    if [ "$count" -gt 1 ]; then
+        log_error "Detected ${count} edgion-gateway processes — violates the shared-Gateway principle"
+        log_error "Integration suites must reuse the main Gateway. See:"
+        log_error "  skills/05-testing/01-integration-testing.md (Gateway / Controller 复用原则)"
+        log_error "Offending PIDs:"
+        for pid in $pids; do
+            ps -o pid=,command= -p "$pid" 2>/dev/null | sed 's/^/  /' >&2 || true
+        done
+        return 1
+    fi
+    log_success "Single edgion-gateway process verified (pid=${pids})"
+    return 0
+}
+
 # =============================================================================
 # Report functions
 # =============================================================================
@@ -603,6 +632,7 @@ run_all_tests() {
                     run_test "HTTPRoute_Filters" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters" || test_failed=true
                     run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/WebSocket" || test_failed=true
                     run_test "HTTPRoute_Protocol_H2C" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/H2C" || test_failed=true
+                    run_test "HTTPRoute_Protocol_H2TrailerMalformed" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/H2TrailerMalformed" || test_failed=true
                     run_test "HTTPRoute_MultiPort" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i MultiPort" || test_failed=true
                 else
                     # Run specified sub-item test
@@ -687,6 +717,7 @@ run_all_tests() {
                     fi
                     run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
                     run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
+                    run_test "EdgionPlugins_RateLimitRedis" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
                     run_test "EdgionPlugins_RealIp" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RealIp" || test_failed=true
                     run_test "EdgionPlugins_RequestMirror" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestMirror" || test_failed=true
                     run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
@@ -801,6 +832,8 @@ run_all_tests() {
         run_test "HTTPRoute_Backend_RetryOnStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/RetryOnStatus" || test_failed=true
         run_test "HTTPRoute_Backend_CircuitBreaker" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/CircuitBreaker" || test_failed=true
         run_test "HTTPRoute_Backend_SessionPersistence" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/SessionPersistence" || test_failed=true
+        run_test "HTTPRoute_Backend_H2BackendMtlsPersistence" "${PROJECT_ROOT}/target/debug/examples/test_client -g h2-mtls-sp" || test_failed=true
+        run_test "HTTPRoute_Backend_BackendTLSSNIHostOverride" "${PROJECT_ROOT}/target/debug/examples/test_client -g btls-sni" || test_failed=true
         run_test "HTTPRoute_Backend_PartiallyInvalid" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/PartiallyInvalid" || test_failed=true
         run_test "HTTPRoute_Backend_GrpcHealthCheck" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/GrpcHealthCheck" || test_failed=true
         run_test "HTTPRoute_Backend_DnsResolutionFailure" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/DnsResolutionFailure" || test_failed=true
@@ -852,6 +885,7 @@ run_all_tests() {
         fi
         run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
         run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
+        run_test "EdgionPlugins_RateLimitRedis" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
         run_test "EdgionPlugins_RealIp" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RealIp" || test_failed=true
         run_test "EdgionPlugins_RequestMirror" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestMirror" || test_failed=true
         run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
@@ -1171,7 +1205,12 @@ main() {
             log_info "Using existing work directory: ${WORK_DIR}"
         fi
     fi
-    
+
+    # Enforce shared-Gateway principle: exactly one edgion-gateway process.
+    if ! check_single_gateway_process; then
+        exit 1
+    fi
+
     # Create test log directory
     TEST_LOG_DIR="${WORK_DIR}/test_logs"
     mkdir -p "$TEST_LOG_DIR"

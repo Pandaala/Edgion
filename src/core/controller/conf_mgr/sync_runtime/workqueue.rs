@@ -666,49 +666,78 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_enqueue_dequeue() {
-        let queue = Workqueue::with_defaults("test");
+    async fn test_workqueue_lifecycle_scenarios() {
+        // scenario: baseline enqueue + dequeue
+        {
+            let queue = Workqueue::with_defaults("test");
 
-        assert!(queue.enqueue("ns/name".to_string()).await);
-        assert_eq!(queue.len(), 1);
+            assert!(queue.enqueue("ns/name".to_string()).await);
+            assert_eq!(queue.len(), 1);
 
-        let item = queue.dequeue().await.unwrap();
-        assert_eq!(item.key, "ns/name");
-        assert!(item.trigger_chain.sources.is_empty());
-        assert_eq!(queue.len(), 0);
+            let item = queue.dequeue().await.unwrap();
+            assert_eq!(item.key, "ns/name");
+            assert!(item.trigger_chain.sources.is_empty());
+            assert_eq!(queue.len(), 0);
 
-        queue.done(&item.key);
-    }
+            queue.done(&item.key);
+        }
 
-    #[tokio::test]
-    async fn test_deduplication() {
-        let queue = Workqueue::with_defaults("test");
+        // scenario: dedup — second enqueue of same key returns false
+        {
+            let queue = Workqueue::with_defaults("test");
 
-        assert!(queue.enqueue("ns/name".to_string()).await);
-        assert!(!queue.enqueue("ns/name".to_string()).await);
-        assert_eq!(queue.len(), 1);
-    }
+            assert!(queue.enqueue("ns/name".to_string()).await);
+            assert!(!queue.enqueue("ns/name".to_string()).await);
+            assert_eq!(queue.len(), 1);
+        }
 
-    #[tokio::test]
-    async fn test_enqueue_during_processing() {
-        let queue = Workqueue::with_defaults("test");
+        // scenario: re-enqueue while item is in-flight (after dequeue, before done)
+        {
+            // lifecycle phase: item dequeued but not yet done — key removed from pending,
+            // so a new enqueue of the same key must succeed
+            let queue = Workqueue::with_defaults("test");
 
-        queue.enqueue("ns/name".to_string()).await;
-        let _item = queue.dequeue().await.unwrap();
+            queue.enqueue("ns/name".to_string()).await;
+            let _item = queue.dequeue().await.unwrap();
 
-        assert!(queue.enqueue("ns/name".to_string()).await);
-        assert_eq!(queue.len(), 1);
-    }
+            assert!(queue.enqueue("ns/name".to_string()).await);
+            assert_eq!(queue.len(), 1);
+        }
 
-    #[tokio::test]
-    async fn test_requeue_after_done() {
-        let queue = Workqueue::with_defaults("test");
+        // scenario: done releases the slot for re-enqueue
+        {
+            let queue = Workqueue::with_defaults("test");
 
-        queue.enqueue("ns/name".to_string()).await;
-        let item = queue.dequeue().await.unwrap();
-        queue.done(&item.key);
+            queue.enqueue("ns/name".to_string()).await;
+            let item = queue.dequeue().await.unwrap();
+            queue.done(&item.key);
 
-        assert!(queue.enqueue("ns/name".to_string()).await);
+            assert!(queue.enqueue("ns/name".to_string()).await);
+        }
+
+        // scenario: dirty requeue — re-enqueue lands while in-flight, second dequeue returns same key
+        {
+            // lifecycle phase: item is in-flight (dequeued, not yet done) when the same key
+            // is re-enqueued; done() must promote the dirty entry so the next dequeue sees it
+            let queue = Workqueue::with_defaults("test");
+
+            queue.enqueue("ns/resource".to_string()).await;
+
+            let item = queue.dequeue().await.unwrap();
+            assert_eq!(item.key, "ns/resource");
+
+            assert!(queue.enqueue("ns/resource".to_string()).await);
+
+            queue.done(&item.key);
+
+            assert_eq!(queue.len(), 1);
+
+            let item2 = queue.dequeue().await.unwrap();
+            assert_eq!(item2.key, "ns/resource");
+            queue.done(&item2.key);
+
+            assert_eq!(queue.len(), 0);
+        }
     }
 
     #[tokio::test]
@@ -729,28 +758,6 @@ mod tests {
 
         queue.done(&item.key);
         assert_eq!(queue.metrics().get_depth(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_dirty_requeue_pattern() {
-        let queue = Workqueue::with_defaults("test");
-
-        queue.enqueue("ns/resource".to_string()).await;
-
-        let item = queue.dequeue().await.unwrap();
-        assert_eq!(item.key, "ns/resource");
-
-        assert!(queue.enqueue("ns/resource".to_string()).await);
-
-        queue.done(&item.key);
-
-        assert_eq!(queue.len(), 1);
-
-        let item2 = queue.dequeue().await.unwrap();
-        assert_eq!(item2.key, "ns/resource");
-        queue.done(&item2.key);
-
-        assert_eq!(queue.len(), 0);
     }
 
     #[tokio::test]

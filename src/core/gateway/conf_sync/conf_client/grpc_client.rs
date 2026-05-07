@@ -289,3 +289,63 @@ fn build_grpc_uri(addr: &str, tls: bool) -> String {
         format!("http://{}", host)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the small pure helpers in this module.
+    //!
+    //! `ConfigSyncClient::new`, `start_watch_server_meta` and
+    //! `start_watch_kinds` all require a live tonic Channel / gRPC server to
+    //! exercise meaningfully — those paths are deferred to integration
+    //! coverage (see `tasks/todo-test-cover/05-integration-gaps-controller.md`
+    //! #3 conf_sync relist storm and #4 server_id failover). Here we cover
+    //! only the URI scheme builder, which has no I/O dependencies.
+    use super::build_grpc_uri;
+
+    #[test]
+    fn plain_addr_without_tls_uses_http_scheme() {
+        assert_eq!(build_grpc_uri("controller:9443", false), "http://controller:9443");
+    }
+
+    #[test]
+    fn plain_addr_with_tls_uses_https_scheme() {
+        assert_eq!(build_grpc_uri("controller:9443", true), "https://controller:9443");
+    }
+
+    #[test]
+    fn http_prefix_stripped_then_https_applied_when_tls_enabled() {
+        // Operator may configure `http://...`; when TLS is on we still emit `https://`.
+        assert_eq!(
+            build_grpc_uri("http://controller:9443", true),
+            "https://controller:9443"
+        );
+    }
+
+    #[test]
+    fn https_prefix_stripped_then_http_applied_when_tls_disabled() {
+        // Symmetric: a stale `https://` prefix must not survive when TLS is off.
+        assert_eq!(
+            build_grpc_uri("https://controller:9443", false),
+            "http://controller:9443"
+        );
+    }
+
+    #[test]
+    fn ipv4_with_port_round_trips() {
+        assert_eq!(build_grpc_uri("127.0.0.1:9443", false), "http://127.0.0.1:9443");
+        assert_eq!(build_grpc_uri("127.0.0.1:9443", true), "https://127.0.0.1:9443");
+    }
+
+    #[test]
+    fn matching_existing_scheme_is_idempotent() {
+        // Same scheme requested → unchanged URI.
+        assert_eq!(
+            build_grpc_uri("https://controller:9443", true),
+            "https://controller:9443"
+        );
+        assert_eq!(
+            build_grpc_uri("http://controller:9443", false),
+            "http://controller:9443"
+        );
+    }
+}

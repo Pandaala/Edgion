@@ -259,6 +259,44 @@ sleep 3
 启动日志包含 `No authentication configured` WARN。作为 fix #01 bug 1/4 + Task 4 fix 的
 结构性回归被纳入 `run_integration.sh` 的前置检查，不依赖 Controller/Gateway/test_server 环境。
 
+## Gateway / Controller 复用原则
+
+> 集成测试的设计前提：**同一类测试复用同一套 Gateway + Controller**。新增 suite 默认挂主 `run_integration.sh` 的进程，**不得**自己 spawn 新的 `edgion-gateway` / `edgion-controller`。
+
+### 主流程
+
+`run_integration.sh` → `start_all_with_conf.sh` 启动 1 套 Gateway + 1 套 Controller，所有 family 的 suite（HTTPRoute / GRPCRoute / TCPRoute / UDPRoute / TLSRoute / EdgionPlugins / EdgionTls / Gateway / Status / LinkSys / dynamic scenarios）共享同一进程，通过 `TestContext::apply_yaml()` / `delete_resource()` 在线变更配置驱动 Controller 同步到 Gateway，无重启。
+
+### 独立拓扑例外（合理）
+
+只有需要**完全不同的进程级配置**才独立启动，每个独立场景仍只启一套：
+
+| 脚本 | 独立拓扑原因 |
+|---|---|
+| `test_file_watcher.sh` | Controller FileSystem 源（与 K8s 模式互斥） |
+| `test_resource_abnormal_metrics.sh` | Controller `tick_secs=30` 慢测试专用 |
+| `test_center_no_auth.sh` | Center 无 auth fail-close 验证（无 Controller/Gateway） |
+| `run_center_test.sh` | 1 Center + 2 Controllers 联邦验证 |
+| `run_fed_sync_test.sh` | Center + 多 Controllers 联邦同步 |
+| `run_conf_sync_mtls_test.sh` | Controller↔Gateway mTLS 通道 |
+| `run_acme_test.sh` | 独立 ACME 拓扑 |
+
+新增独立脚本必须在脚本头部注释里说明"为什么不能复用主环境"，否则 PR 不予合并。
+
+### 反模式（reviewer 阻塞合并的信号）
+
+新 suite / 新脚本里出现以下任意一项，需要 reviewer 阻塞合并并要求作者改为复用主进程或并入上表例外：
+
+- `Command::new("edgion-gateway")` / `Command::new("./edgion-gateway")` / `spawn_gateway` 类调用
+- 在 `examples/code/client/` 或 `examples/test/scripts/` 新加非例外清单内的脚本调用 `start_all` / `start_all_with_conf`
+- 同一脚本内反复 kill / 重启 `edgion-gateway`（除非测的就是 Gateway 重启行为本身——此时也只允许 1 次重启循环）
+
+合理的 `Command::new` 例子（不阻塞）：调用外部工具如 `openssl`、`docker`、`curl` 验证客户端协议；它们不属于"启 Gateway"。
+
+### CI 兜底
+
+`run_integration.sh` 启动后会做 `pgrep -c edgion-gateway` 自检，运行期间检测到 ≥ 2 个 `edgion-gateway` 进程则 fail fast 并退出（避免悄悄违规）。如果你的新 suite 触发了这个检查，先看是不是漏了 cleanup 或误用了 `Command::new("edgion-gateway")`。
+
 ## 容易踩坑的地方
 
 - YAML 在 `examples/test/conf/` 写了，但 `test_client.rs` 没注册，结果用例根本没跑到

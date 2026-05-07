@@ -1,0 +1,12 @@
+# H2 trailer malformed backend service
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-h2-trailer-malformed
+  namespace: edgion-test
+spec:
+  ports:
+    - port: 30025
+      targetPort: 30025
+      protocol: TCP
+      appProtocol: kubernetes.io/h2c

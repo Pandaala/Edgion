@@ -647,27 +647,6 @@ fn validate_resolved_domain_addr(
     Ok(())
 }
 
-#[cfg(test)]
-async fn resolve_domain_checked(
-    domain: &str,
-    port: u16,
-    allow_loopback_upstream: bool,
-) -> pingora_core::Result<std::net::SocketAddr> {
-    let addr = resolve_domain(domain, port).await?;
-    validate_resolved_domain_addr(&addr, allow_loopback_upstream).map_err(|status| {
-        let reason = match status {
-            EdgionStatus::BackendLocalhostNotAllowed => "localhost",
-            EdgionStatus::BackendAddrLinkLocalNotAllowed => "link-local/metadata",
-            _ => "unsafe",
-        };
-        PingoraError::explain(
-            ErrorType::ConnectError,
-            format!("Domain {} resolved to {} address (rejected)", domain, reason),
-        )
-    })?;
-    Ok(addr)
-}
-
 fn record_unsafe_resolved_upstream_attempt(
     ctx: &mut EdgionHttpContext,
     addr: std::net::SocketAddr,

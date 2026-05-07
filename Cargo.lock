@@ -1330,6 +1330,7 @@ dependencies = [
  "etcd-client",
  "fred",
  "futures",
+ "h2",
  "hex",
  "hmac",
  "http",

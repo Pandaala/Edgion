@@ -450,14 +450,82 @@ mod tests {
     }
 
     #[test]
-    fn test_ttl_expiration() {
-        let cache = LocalLruCache::new(2);
+    fn test_lru_ttl_scenarios() {
+        struct TtlScenario {
+            /// Scenario label — kept for readability in the table below.
+            #[allow(dead_code)]
+            name: &'static str,
+            run: fn(),
+        }
 
-        cache.insert("a", 1, Some(Duration::from_millis(10)));
-        std::thread::sleep(Duration::from_millis(20));
+        let scenarios: &[TtlScenario] = &[
+            TtlScenario {
+                name: "ttl_expiration",
+                run: || {
+                    // Basic TTL: an entry past its deadline must return Expired
+                    // and the cache must report empty after the access drains it.
+                    let cache = LocalLruCache::new(2);
+                    cache.insert("a", 1, Some(Duration::from_millis(10)));
+                    std::thread::sleep(Duration::from_millis(20));
+                    assert_eq!(cache.get_with_status(&"a"), (None, CacheStatus::Expired));
+                    assert!(cache.is_empty());
+                },
+            },
+            TtlScenario {
+                name: "zero_ttl_removes_value",
+                run: || {
+                    // Duration::ZERO means "already expired at insert time": the
+                    // value must be unreachable immediately after the call returns.
+                    let cache = LocalLruCache::new(2);
+                    cache.insert("a", 1, None);
+                    cache.insert("a", 2, Some(Duration::ZERO));
+                    assert_eq!(cache.get(&"a"), None);
+                    assert!(cache.is_empty());
+                },
+            },
+            TtlScenario {
+                name: "insert_prunes_expired_before_evicting_valid_entry",
+                run: || {
+                    // Invariant: MRU expired entry is pruned before any live entry
+                    // is displaced by LRU eviction.
+                    //
+                    // "b" is touched after insert so it becomes MRU. After it
+                    // expires the next insert("c") must prune "b" (not evict "a"),
+                    // even though "b" would normally be the *last* to be evicted.
+                    let cache = LocalLruCache::new(2);
+                    cache.insert("a", 1, None);
+                    cache.insert("b", 2, Some(Duration::from_millis(10)));
+                    assert_eq!(cache.get(&"b"), Some(2)); // touch b -> b is MRU
+                    std::thread::sleep(Duration::from_millis(20));
+                    cache.insert("c", 3, None);
+                    // "a" must survive; "b" pruned despite being MRU; "c" inserted.
+                    assert_eq!(cache.get(&"a"), Some(1));
+                    assert_eq!(cache.get_with_status(&"b"), (None, CacheStatus::Miss));
+                    assert_eq!(cache.get(&"c"), Some(3));
+                },
+            },
+            TtlScenario {
+                name: "get_keys_excludes_expired_entries",
+                run: || {
+                    // get_keys() must filter out expired entries even before
+                    // they are pruned from the node pool.
+                    let cache = LocalLruCache::new(4);
+                    cache.insert("a", 1, None);
+                    cache.insert("b", 2, Some(Duration::from_millis(10)));
+                    std::thread::sleep(Duration::from_millis(20));
+                    // "b" is expired but not yet pruned — still counted by len()
+                    let keys = cache.get_keys();
+                    assert!(!keys.contains(&"b"), "expired entry must not appear in get_keys");
+                    assert!(keys.contains(&"a"));
+                    // Documented invariant: get_keys().len() may be < len()
+                    assert!(cache.get_keys().len() <= cache.len());
+                },
+            },
+        ];
 
-        assert_eq!(cache.get_with_status(&"a"), (None, CacheStatus::Expired));
-        assert!(cache.is_empty());
+        for s in scenarios {
+            (s.run)();
+        }
     }
 
     #[test]
@@ -489,17 +557,6 @@ mod tests {
     }
 
     #[test]
-    fn test_zero_ttl_removes_value() {
-        let cache = LocalLruCache::new(2);
-
-        cache.insert("a", 1, None);
-        cache.insert("a", 2, Some(Duration::ZERO));
-
-        assert_eq!(cache.get(&"a"), None);
-        assert!(cache.is_empty());
-    }
-
-    #[test]
     fn test_remove_and_clear() {
         let cache = LocalLruCache::new(3);
 
@@ -512,22 +569,6 @@ mod tests {
 
         cache.clear();
         assert!(cache.is_empty());
-    }
-
-    #[test]
-    fn test_insert_prunes_expired_before_evicting_valid_entry() {
-        let cache = LocalLruCache::new(2);
-
-        cache.insert("a", 1, None);
-        cache.insert("b", 2, Some(Duration::from_millis(10)));
-        assert_eq!(cache.get(&"b"), Some(2)); // make b more recent than a
-        std::thread::sleep(Duration::from_millis(20));
-
-        cache.insert("c", 3, None);
-
-        assert_eq!(cache.get(&"a"), Some(1));
-        assert_eq!(cache.get_with_status(&"b"), (None, CacheStatus::Miss));
-        assert_eq!(cache.get(&"c"), Some(3));
     }
 
     #[test]
@@ -700,23 +741,6 @@ mod tests {
     fn test_get_keys_empty_cache() {
         let cache: LocalLruCache<&str, i32> = LocalLruCache::new(4);
         assert!(cache.get_keys().is_empty());
-    }
-
-    #[test]
-    fn test_get_keys_excludes_expired_entries() {
-        let cache = LocalLruCache::new(4);
-
-        cache.insert("a", 1, None);
-        cache.insert("b", 2, Some(Duration::from_millis(10)));
-        std::thread::sleep(Duration::from_millis(20));
-
-        // "b" is expired but not yet pruned — still in node pool, counted by len()
-        let keys = cache.get_keys();
-        assert!(!keys.contains(&"b"), "expired entry must not appear in get_keys");
-        assert!(keys.contains(&"a"));
-
-        // Demonstrate the documented invariant: get_keys().len() may be < len()
-        assert!(cache.get_keys().len() <= cache.len());
     }
 
     #[test]

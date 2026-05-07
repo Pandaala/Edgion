@@ -788,6 +788,105 @@ mod tests {
         }
     }
 
+    // -------------------------------------------------------------------
+    // Token expiration / nbf / missing-claim tests for try_local_validation.
+    //
+    // `try_local_validation` decodes into `LocalAuthClaims { sub, iat, exp }`
+    // with `Validation { validate_exp = true, validate_aud = false }`.
+    // `validate_nbf` is left at its `Validation::new` default, which is
+    // `false` — so a token with a future `nbf` is NOT rejected here. The
+    // tests below pin that contract.
+    // -------------------------------------------------------------------
+
+    fn encode_local_token(secret: &str, claims: &serde_json::Value) -> String {
+        use jsonwebtoken::{encode, EncodingKey, Header};
+        encode(
+            &Header::new(Algorithm::HS256),
+            claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .expect("encode test token")
+    }
+
+    fn now_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_secs()
+    }
+
+    #[test]
+    fn local_validation_rejects_expired_token() {
+        let cfg = valid_local_cfg();
+        let local_state = LocalAuthState::from_config(&cfg);
+        let now = now_secs();
+        // jsonwebtoken's `Validation::new` defaults `leeway` to 60s, so the
+        // exp must be older than that to be considered expired.
+        let claims = serde_json::json!({
+            "sub": "admin",
+            "iat": now - 600,
+            "exp": now - 300,
+        });
+        let token = encode_local_token(&cfg.jwt_secret, &claims);
+
+        let err = try_local_validation(&local_state, &token).expect_err("expired token must be rejected");
+        // jsonwebtoken's ExpiredSignature renders as "ExpiredSignature".
+        assert!(
+            err.to_lowercase().contains("expired"),
+            "error should mention expiration, got: {err}"
+        );
+    }
+
+    #[test]
+    fn local_validation_does_not_check_nbf() {
+        // try_local_validation leaves validate_nbf at its default (false),
+        // so a token whose nbf is in the future must still validate.
+        let cfg = valid_local_cfg();
+        let local_state = LocalAuthState::from_config(&cfg);
+        let now = now_secs();
+        let claims = serde_json::json!({
+            "sub": "admin",
+            "iat": now,
+            "exp": now + 3600,
+            "nbf": now + 3600, // not yet valid by nbf semantics
+        });
+        let token = encode_local_token(&cfg.jwt_secret, &claims);
+
+        let result = try_local_validation(&local_state, &token);
+        assert!(
+            result.is_ok(),
+            "local validation must ignore nbf (current contract); got: {:?}",
+            result.err()
+        );
+        let claims_out = result.unwrap();
+        assert_eq!(claims_out.provider, AuthProvider::Local);
+        assert_eq!(claims_out.sub.as_deref(), Some("admin"));
+    }
+
+    #[test]
+    fn local_validation_rejects_token_missing_exp() {
+        // `LocalAuthClaims.exp` is a non-Option `usize`; serde must fail to
+        // deserialize a payload without `exp`, so the decode call returns Err.
+        let cfg = valid_local_cfg();
+        let local_state = LocalAuthState::from_config(&cfg);
+        let now = now_secs();
+        let claims = serde_json::json!({
+            "sub": "admin",
+            "iat": now,
+            // no `exp` field on purpose
+        });
+        let token = encode_local_token(&cfg.jwt_secret, &claims);
+
+        let err = try_local_validation(&local_state, &token).expect_err("token without exp must be rejected");
+        // jsonwebtoken with default Validation surfaces missing `exp` as
+        // a missing-required-claim error before ever touching serde.
+        let lower = err.to_lowercase();
+        assert!(
+            lower.contains("missing") || lower.contains("exp"),
+            "error should reference missing exp, got: {err}"
+        );
+    }
+
     /// Regression test for the `/configserver/` prefix bypass removed in the
     /// C1 fix: these paths must now traverse the normal auth path. If the
     /// bypass returns, this test will get 200 instead of 503.

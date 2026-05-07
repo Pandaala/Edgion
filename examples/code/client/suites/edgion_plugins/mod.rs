@@ -31,6 +31,7 @@ mod plugin_metadata_status;
 mod plugin_validation_status;
 mod proxy_rewrite;
 mod rate_limit;
+mod rate_limit_redis;
 mod real_ip;
 mod region_route;
 mod request_mirror;
@@ -71,6 +72,7 @@ pub use plugin_metadata_status::{
 pub use plugin_validation_status::PluginValidationStatusTestSuite;
 pub use proxy_rewrite::ProxyRewriteTestSuite;
 pub use rate_limit::{RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitTestSuite};
+pub use rate_limit_redis::RateLimitRedisTestSuite;
 pub use real_ip::RealIpPluginTestSuite;
 pub use region_route::RegionRouteTestSuite;
 pub use request_mirror::RequestMirrorTestSuite;

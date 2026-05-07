@@ -105,6 +105,9 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "https" => "EdgionTls/https".to_string(),
             "websocket" => "HTTPRoute/Protocol/WebSocket".to_string(),
             "h2c" => "HTTPRoute/Protocol/H2C".to_string(),
+            "h2-trailer-malformed" | "h2trailermalformed" | "h2tm" => {
+                "HTTPRoute/Protocol/H2TrailerMalformed".to_string()
+            }
             "lb-rr" | "lbrr" | "lb-roundrobin" => "HTTPRoute/Backend/LBRoundRobin".to_string(),
             "lb-ch" | "lbch" | "lb-consistenthash" => "HTTPRoute/Backend/LBConsistentHash".to_string(),
             "lb-lc" | "lblc" | "lb-leastconn" => "HTTPRoute/Backend/LBLeastConn".to_string(),
@@ -121,6 +124,10 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
                 "HTTPRoute/Backend/HealthCheckTransition".to_string()
             }
             "session-persistence" | "sp" => "HTTPRoute/Backend/SessionPersistence".to_string(),
+            "h2-mtls-sp" | "h2_mtls_sp" | "h2mtlssp" => "HTTPRoute/Backend/H2BackendMtlsPersistence".to_string(),
+            "backend-tls-sni-host-override" | "backend-tls-sni" | "btls-sni" => {
+                "HTTPRoute/Backend/BackendTLSSNIHostOverride".to_string()
+            }
             "grpc" => "GRPCRoute/Basic".to_string(),
             "grpc-match" | "grpcmatch" => "GRPCRoute/Match".to_string(),
             "grpc-tls" | "grpctls" => "EdgionTls/grpctls".to_string(),
@@ -158,6 +165,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "forward-auth" | "forwardauth" => "EdgionPlugins/ForwardAuth".to_string(),
             "openid-connect" | "openidconnect" | "oidc" => "EdgionPlugins/OpenidConnect".to_string(),
             "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
+            "rate-limit-redis" | "ratelimitredis" | "rlr" => "EdgionPlugins/RateLimitRedis".to_string(),
             "dsl" => "EdgionPlugins/Dsl".to_string(),
             "plugin-metadata-managed" | "pluginmetadatamanaged" | "pm-managed" => {
                 "EdgionPlugins/PluginMetaDataManaged".to_string()
@@ -212,6 +220,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Backend/PartiallyInvalid" => "HTTPRoute/Backend/PartiallyInvalid",
         "HTTPRoute/Backend/SessionPersistence" => "HTTPRoute/Backend/SessionPersistence",
         "HTTPRoute/Backend/SessionPersistenceBackendChange" => "HTTPRoute/Backend/SessionPersistenceBackendChange",
+        "HTTPRoute/Backend/H2BackendMtlsPersistence" => "HTTPRoute/Backend/H2BackendMtlsPersistence",
         "HTTPRoute/Filters/FilterConflict" => "HTTPRoute/Filters/FilterConflict",
         "HTTPRoute/Filters/PercentMirror" => "HTTPRoute/Filters/PercentMirror",
         "HTTPRoute/Filters" | "HTTPRoute/Filters/Redirect" => "HTTPRoute/Filters/Redirect",
@@ -219,6 +228,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Protocol" => "HTTPRoute/Protocol/WebSocket",
         "HTTPRoute/Protocol/WebSocket" => "HTTPRoute/Protocol/WebSocket",
         "HTTPRoute/Protocol/H2C" => "HTTPRoute/Protocol/H2C",
+        "HTTPRoute/Protocol/H2TrailerMalformed" => "HTTPRoute/Protocol/H2TrailerMalformed",
         "HTTPRoute/MultiPort" => "HTTPRoute/MultiPort",
         // DanglingExtensionRef is parented to edgion-plugins-gateway (port 31180),
         // shared with EdgionPlugins ExtensionRef-based scenarios.
@@ -268,6 +278,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/ProxyRewrite" => "EdgionPlugins",
         "EdgionPlugins/RateLimit" => "EdgionPlugins",
         "EdgionPlugins/RateLimitDynamic" => "EdgionPlugins",
+        "EdgionPlugins/RateLimitRedis" => "EdgionPlugins",
         "EdgionPlugins/BandwidthLimit" => "EdgionPlugins",
         "EdgionPlugins/RealIp" => "EdgionPlugins",
         "EdgionPlugins/RequestMirror" => "EdgionPlugins",
@@ -461,6 +472,20 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 }
             }
         }
+        "HTTPRoute/Backend/H2BackendMtlsPersistence" => {
+            if !gateway {
+                eprintln!("Error: H2BackendMtlsPersistence tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::H2MtlsPersistenceTestSuite));
+        }
+        "HTTPRoute/Backend/BackendTLSSNIHostOverride" => {
+            if !gateway {
+                eprintln!("Error: BackendTLSSNIHostOverride tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::BackendTlsSniHostOverrideTestSuite));
+        }
         "HTTPRoute/Filters" => {
             if !gateway {
                 eprintln!("Error: HTTPRoute/Filters tests require --gateway flag");
@@ -530,6 +555,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::H2cTestSuite));
+        }
+        "HTTPRoute/Protocol/H2TrailerMalformed" => {
+            if !gateway {
+                eprintln!("Error: HTTPRoute/Protocol/H2TrailerMalformed tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::H2TrailerMalformedTestSuite));
         }
         "HTTPRoute/Protocol/HTTPS" => {
             if !gateway {
@@ -862,6 +894,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                     runner.add_suite(Box::new(suites::RateLimitDynamicUpdateTestSuite));
                 }
             }
+        }
+        "EdgionPlugins/RateLimitRedis" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/RateLimitRedis tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::RateLimitRedisTestSuite));
         }
         "EdgionPlugins/RealIp" => {
             if !gateway {

@@ -436,60 +436,111 @@ mod tests {
     }
 
     #[test]
-    fn test_regex_method_routes_classified() {
-        // When type=RegularExpression, both service and method are compiled as regex.
-        // "test.Service" is a valid regex (matches "testXService" etc.), so both compile.
-        let route = make_route(
-            Some("test.Service"),
-            Some("Say.*"),
-            Some(GRPCMethodMatchType::RegularExpression),
-            "regex-method",
-        );
-        assert!(route.matched_info.compiled_method_regex.is_some());
-        // type applies to both fields, so service is also compiled as regex
-        assert!(route.matched_info.compiled_service_regex.is_some());
+    fn test_grpc_regex_classification_and_sort() {
+        // --- Part a: Classification table ---
+        // Each case is a single-route engine; asserts the named bucket receives the route
+        // and the other two relevant buckets remain empty.
+        struct Case {
+            label: &'static str,
+            service: Option<&'static str>,
+            method: Option<&'static str>,
+            // pre-assertions: whether compiled_service_regex / compiled_method_regex must be Some
+            expect_svc_regex: bool,
+            expect_method_regex: bool,
+            // expected bucket: "regex_service_regex_method" | "regex_service_only"
+            expected_bucket: &'static str,
+        }
 
-        let engine = GrpcMatchEngine::new(vec![route]);
-        // Both compiled → goes to regex_service_regex_method
-        assert_eq!(engine.regex_service_regex_method.len(), 1);
-        assert!(engine.exact_service_regex_method.is_empty());
-        assert!(engine.regex_service_exact_method.is_empty());
-    }
+        let cases = [
+            // test_regex_method_routes_classified: both fields present, type=Regex → both compiled
+            Case {
+                label: "regex-method (service+method, type=Regex)",
+                service: Some("test.Service"),
+                method: Some("Say.*"),
+                expect_svc_regex: true,
+                expect_method_regex: true,
+                expected_bucket: "regex_service_regex_method",
+            },
+            // test_regex_service_routes_classified: explicit regex service pattern + method, type=Regex
+            Case {
+                label: "regex-both (explicit regex service+method, type=Regex)",
+                service: Some("test\\..*"),
+                method: Some("Method.*"),
+                expect_svc_regex: true,
+                expect_method_regex: true,
+                expected_bucket: "regex_service_regex_method",
+            },
+            // test_regex_service_only_classified: service-only regex, no method field
+            Case {
+                label: "regex-svc-only (service only, no method)",
+                service: Some("test\\..*"),
+                method: None,
+                expect_svc_regex: true,
+                expect_method_regex: false,
+                expected_bucket: "regex_service_only",
+            },
+        ];
 
-    #[test]
-    fn test_regex_service_routes_classified() {
-        // Regex service + Exact method (both fields present, type=Regex → both compiled)
-        // When type=Regex and both service+method present, both are compiled as regex
-        let route = make_route(
-            Some("test\\..*"),
-            Some("Method.*"),
-            Some(GRPCMethodMatchType::RegularExpression),
-            "regex-both",
-        );
-        // Both should be compiled since match_type applies to both
-        assert!(route.matched_info.compiled_service_regex.is_some());
-        assert!(route.matched_info.compiled_method_regex.is_some());
+        for case in &cases {
+            let route = make_route(
+                case.service,
+                case.method,
+                Some(GRPCMethodMatchType::RegularExpression),
+                case.label,
+            );
 
-        let engine = GrpcMatchEngine::new(vec![route]);
-        assert_eq!(engine.regex_service_regex_method.len(), 1);
-    }
+            // Pre-assertions: document why the bucket placement is correct; a future change to
+            // make_route's regex-compilation logic would be caught here before silently mis-routing.
+            if case.expect_svc_regex {
+                assert!(
+                    route.matched_info.compiled_service_regex.is_some(),
+                    "[{}] expected compiled_service_regex to be Some",
+                    case.label
+                );
+            }
+            if case.expect_method_regex {
+                assert!(
+                    route.matched_info.compiled_method_regex.is_some(),
+                    "[{}] expected compiled_method_regex to be Some",
+                    case.label
+                );
+            }
 
-    #[test]
-    fn test_regex_service_only_classified() {
-        let route = make_route(
-            Some("test\\..*"),
-            None,
-            Some(GRPCMethodMatchType::RegularExpression),
-            "regex-svc-only",
-        );
-        assert!(route.matched_info.compiled_service_regex.is_some());
+            let engine = GrpcMatchEngine::new(vec![route]);
 
-        let engine = GrpcMatchEngine::new(vec![route]);
-        assert_eq!(engine.regex_service_only.len(), 1);
-    }
+            match case.expected_bucket {
+                "regex_service_regex_method" => {
+                    assert_eq!(
+                        engine.regex_service_regex_method.len(),
+                        1,
+                        "[{}] expected regex_service_regex_method.len() == 1",
+                        case.label
+                    );
+                    assert!(
+                        engine.exact_service_regex_method.is_empty(),
+                        "[{}] expected exact_service_regex_method to be empty",
+                        case.label
+                    );
+                    assert!(
+                        engine.regex_service_exact_method.is_empty(),
+                        "[{}] expected regex_service_exact_method to be empty",
+                        case.label
+                    );
+                }
+                "regex_service_only" => {
+                    assert_eq!(
+                        engine.regex_service_only.len(),
+                        1,
+                        "[{}] expected regex_service_only.len() == 1",
+                        case.label
+                    );
+                }
+                other => panic!("unknown expected_bucket: {}", other),
+            }
+        }
 
-    #[test]
-    fn test_regex_routes_sorted_by_pattern_length() {
+        // --- Part b: Sort by pattern length ---
+        // Two-route engine; longest combined pattern must come first.
         let short = make_route(
             Some("a"),
             Some("b.*"),

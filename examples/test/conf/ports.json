@@ -1,5 +1,5 @@
 {
-  "current_max": 31383,
+  "current_max": 31385,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -49,6 +49,9 @@
     },
     "HTTPRoute/Protocol/H2C": {
       "http": 31081
+    },
+    "HTTPRoute/Protocol/H2TrailerMalformed": {
+      "http": 31082
     },
     "GRPCRoute/Basic": {
       "grpc": 31050
@@ -212,6 +215,12 @@
     },
     "HTTPRoute/Backend/LBLeastConnRetryOnStatus": {
       "http": 31124
+    },
+    "HTTPRoute/Backend/H2BackendMtlsPersistence": {
+      "http": 31384
+    },
+    "HTTPRoute/Backend/BackendTLSSNIHostOverride": {
+      "http": 31385
     }
   }
 }

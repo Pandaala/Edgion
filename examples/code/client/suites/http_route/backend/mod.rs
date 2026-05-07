@@ -1,9 +1,11 @@
 // HTTP Route Backend test module
 // Contains LB policy, weighted backend, timeout and other backend tests
 
+mod backend_tls_sni_host_override;
 mod circuit_breaker;
 mod dns_resolution_failure;
 mod grpc_health_check;
+mod h2_mtls_persistence;
 mod health_check;
 mod health_check_transition;
 mod lb_consistenthash;
@@ -17,9 +19,11 @@ mod sp_backend_change;
 mod timeout;
 mod weighted_backend;
 
+pub use backend_tls_sni_host_override::BackendTlsSniHostOverrideTestSuite;
 pub use circuit_breaker::CircuitBreakerTestSuite;
 pub use dns_resolution_failure::DnsResolutionFailureTestSuite;
 pub use grpc_health_check::GrpcHealthCheckTestSuite;
+pub use h2_mtls_persistence::H2MtlsPersistenceTestSuite;
 pub use health_check::HealthCheckTestSuite;
 pub use health_check_transition::HealthCheckTransitionTestSuite;
 pub use lb_consistenthash::LBConsistentHashTestSuite;

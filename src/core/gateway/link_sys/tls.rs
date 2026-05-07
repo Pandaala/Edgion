@@ -180,92 +180,141 @@ mod tests {
         }
     }
 
+    /// Table-driven tests for `build_material`.
+    ///
+    /// `expected` encodes the return value:
+    ///   - `None`  → `build_material` must return `None`
+    ///   - `Some((ca, cert, key))` → must return `Some(material)` with those field values
+    ///
+    /// The "key always from secret, never from inline" invariant is explicit in case
+    /// `inline_overrides_secret_for_public_material`: inline ca/cert win, but the key
+    /// is still the one from the secret, not overridable by any inline field.
     #[test]
-    fn returns_none_without_certs() {
-        let tls = TlsConfig {
-            enabled: true,
-            certs: None,
-            insecure_skip_verify: None,
-        };
-        assert!(build_material(&tls).is_none());
-    }
+    fn test_build_material_matrix() {
+        struct BuildMaterialCase {
+            name: &'static str,
+            tls: TlsConfig,
+            /// None  → expect build_material to return None
+            /// Some((ca, cert, key)) → expect Some(material) with these field values
+            expected: Option<(Option<&'static [u8]>, Option<&'static [u8]>, Option<&'static [u8]>)>,
+        }
 
-    #[test]
-    fn extracts_from_secret_only() {
-        let tls = TlsConfig {
-            enabled: true,
-            certs: Some(TlsCerts {
-                ca_cert: None,
-                client_cert: None,
-                secret_ref: None,
-                secret: Some(secret_with(&[
-                    ("ca.crt", b"CA"),
-                    ("tls.crt", b"CERT"),
-                    ("tls.key", b"KEY"),
-                ])),
-            }),
-            insecure_skip_verify: None,
-        };
-        let m = build_material(&tls).expect("material");
-        assert_eq!(m.ca_pem.as_deref(), Some(b"CA".as_ref()));
-        assert_eq!(m.client_cert_pem.as_deref(), Some(b"CERT".as_ref()));
-        assert_eq!(m.client_key_pem.as_ref().map(|z| z.as_slice()), Some(b"KEY".as_ref()));
-    }
+        let cases = vec![
+            // Case 1 (was: returns_none_without_certs)
+            // certs field absent → None
+            BuildMaterialCase {
+                name: "returns_none_without_certs",
+                tls: TlsConfig {
+                    enabled: true,
+                    certs: None,
+                    insecure_skip_verify: None,
+                },
+                expected: None,
+            },
+            // Case 2 (was: extracts_from_secret_only)
+            // All three fields sourced from secret; no inline overrides present
+            BuildMaterialCase {
+                name: "extracts_from_secret_only",
+                tls: TlsConfig {
+                    enabled: true,
+                    certs: Some(TlsCerts {
+                        ca_cert: None,
+                        client_cert: None,
+                        secret_ref: None,
+                        secret: Some(secret_with(&[
+                            ("ca.crt", b"CA"),
+                            ("tls.crt", b"CERT"),
+                            ("tls.key", b"KEY"),
+                        ])),
+                    }),
+                    insecure_skip_verify: None,
+                },
+                expected: Some((Some(b"CA"), Some(b"CERT"), Some(b"KEY"))),
+            },
+            // Case 3 (was: inline_overrides_secret_for_public_material)
+            // Inline ca/cert override their secret counterparts; the key is NOT
+            // overridable by inline — it always comes from the secret.
+            BuildMaterialCase {
+                name: "inline_overrides_secret_for_public_material",
+                tls: TlsConfig {
+                    enabled: true,
+                    certs: Some(TlsCerts {
+                        ca_cert: Some("INLINE_CA".into()),
+                        client_cert: Some("INLINE_CERT".into()),
+                        secret_ref: None,
+                        secret: Some(secret_with(&[
+                            ("ca.crt", b"SECRET_CA"),
+                            ("tls.crt", b"SECRET_CERT"),
+                            ("tls.key", b"KEY"),
+                        ])),
+                    }),
+                    insecure_skip_verify: None,
+                },
+                // ca and cert come from inline; key still from secret (invariant)
+                expected: Some((Some(b"INLINE_CA"), Some(b"INLINE_CERT"), Some(b"KEY"))),
+            },
+            // Case 4 (was: inline_only_ca)
+            // Only inline ca provided; no secret → cert and key are absent
+            BuildMaterialCase {
+                name: "inline_only_ca",
+                tls: TlsConfig {
+                    enabled: true,
+                    certs: Some(TlsCerts {
+                        ca_cert: Some("CA".into()),
+                        client_cert: None,
+                        secret_ref: None,
+                        secret: None,
+                    }),
+                    insecure_skip_verify: None,
+                },
+                expected: Some((Some(b"CA"), None, None)),
+            },
+            // Case 5 (was: empty_certs_returns_none)
+            // TlsCerts present but all fields None → None
+            BuildMaterialCase {
+                name: "empty_certs_returns_none",
+                tls: TlsConfig {
+                    enabled: true,
+                    certs: Some(TlsCerts {
+                        ca_cert: None,
+                        client_cert: None,
+                        secret_ref: None,
+                        secret: None,
+                    }),
+                    insecure_skip_verify: None,
+                },
+                expected: None,
+            },
+        ];
 
-    #[test]
-    fn inline_overrides_secret_for_public_material() {
-        let tls = TlsConfig {
-            enabled: true,
-            certs: Some(TlsCerts {
-                ca_cert: Some("INLINE_CA".into()),
-                client_cert: Some("INLINE_CERT".into()),
-                secret_ref: None,
-                secret: Some(secret_with(&[
-                    ("ca.crt", b"SECRET_CA"),
-                    ("tls.crt", b"SECRET_CERT"),
-                    ("tls.key", b"KEY"),
-                ])),
-            }),
-            insecure_skip_verify: None,
-        };
-        let m = build_material(&tls).unwrap();
-        assert_eq!(m.ca_pem.as_deref(), Some(b"INLINE_CA".as_ref()));
-        assert_eq!(m.client_cert_pem.as_deref(), Some(b"INLINE_CERT".as_ref()));
-        // key always from secret
-        assert_eq!(m.client_key_pem.as_ref().map(|z| z.as_slice()), Some(b"KEY".as_ref()));
-    }
-
-    #[test]
-    fn inline_only_ca() {
-        let tls = TlsConfig {
-            enabled: true,
-            certs: Some(TlsCerts {
-                ca_cert: Some("CA".into()),
-                client_cert: None,
-                secret_ref: None,
-                secret: None,
-            }),
-            insecure_skip_verify: None,
-        };
-        let m = build_material(&tls).unwrap();
-        assert_eq!(m.ca_pem.as_deref(), Some(b"CA".as_ref()));
-        assert!(m.client_cert_pem.is_none());
-        assert!(m.client_key_pem.is_none());
-    }
-
-    #[test]
-    fn empty_certs_returns_none() {
-        let tls = TlsConfig {
-            enabled: true,
-            certs: Some(TlsCerts {
-                ca_cert: None,
-                client_cert: None,
-                secret_ref: None,
-                secret: None,
-            }),
-            insecure_skip_verify: None,
-        };
-        assert!(build_material(&tls).is_none());
+        for case in &cases {
+            match &case.expected {
+                None => {
+                    assert!(
+                        build_material(&case.tls).is_none(),
+                        "[{}] expected None but got Some",
+                        case.name,
+                    );
+                }
+                Some((exp_ca, exp_cert, exp_key)) => {
+                    let m = build_material(&case.tls)
+                        .unwrap_or_else(|| panic!("[{}] expected Some but got None", case.name));
+                    assert_eq!(m.ca_pem.as_deref(), *exp_ca, "[{}] ca_pem mismatch", case.name,);
+                    assert_eq!(
+                        m.client_cert_pem.as_deref(),
+                        *exp_cert,
+                        "[{}] client_cert_pem mismatch",
+                        case.name,
+                    );
+                    assert_eq!(
+                        m.client_key_pem.as_ref().map(|z| z.as_slice()),
+                        *exp_key,
+                        "[{}] client_key_pem mismatch — key must always come from secret, never from inline",
+                        case.name,
+                    );
+                }
+            }
+        }
     }
 
     #[test]

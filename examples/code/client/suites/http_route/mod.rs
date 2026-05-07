@@ -19,14 +19,15 @@ pub use multi_port::MultiPortTestSuite;
 
 // Export sub-module tests
 pub use backend::{
-    CircuitBreakerTestSuite, DnsResolutionFailureTestSuite, GrpcHealthCheckTestSuite, HealthCheckTestSuite,
-    HealthCheckTransitionTestSuite, LBConsistentHashTestSuite, LBLeastConnRetryOnStatusTestSuite, LBLeastConnTestSuite,
-    LBRoundRobinTestSuite, PartiallyInvalidTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite,
-    SpChangeFinalTestSuite, SpChangeInitialTestSuite, TimeoutTestSuite, WeightedBackendTestSuite,
+    BackendTlsSniHostOverrideTestSuite, CircuitBreakerTestSuite, DnsResolutionFailureTestSuite,
+    GrpcHealthCheckTestSuite, H2MtlsPersistenceTestSuite, HealthCheckTestSuite, HealthCheckTransitionTestSuite,
+    LBConsistentHashTestSuite, LBLeastConnRetryOnStatusTestSuite, LBLeastConnTestSuite, LBRoundRobinTestSuite,
+    PartiallyInvalidTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite, SpChangeFinalTestSuite,
+    SpChangeInitialTestSuite, TimeoutTestSuite, WeightedBackendTestSuite,
 };
 pub use filters::{
     FilterConflictTestSuite, HeaderModifierTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite,
     PercentMirrorTestSuite,
 };
-pub use protocol::{H2cTestSuite, WebSocketTestSuite};
+pub use protocol::{H2TrailerMalformedTestSuite, H2cTestSuite, WebSocketTestSuite};
 pub use r#match::HttpMatchTestSuite;
