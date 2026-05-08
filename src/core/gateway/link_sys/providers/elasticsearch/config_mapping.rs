@@ -147,21 +147,7 @@ fn apply_tls(builder: ClientBuilder, crd: &ElasticsearchClientConfig) -> Result<
     let mut builder = builder;
     if let Some(tls) = &crd.tls {
         if tls.enabled {
-            if let Some(true) = tls.insecure_skip_verify {
-                let is_prod = std::env::var("EDGION_ENV")
-                    .map(|v| v.eq_ignore_ascii_case("production"))
-                    .unwrap_or(false);
-                if is_prod {
-                    anyhow::bail!(
-                        "Elasticsearch insecure_skip_verify cannot be enabled in production (EDGION_ENV=production). \
-                         Use a proper CA certificate or disable TLS verification only in non-production environments."
-                    );
-                }
-                tracing::warn!(
-                    "ES client: TLS certificate verification disabled — insecure! Not allowed when EDGION_ENV=production"
-                );
-                builder = builder.danger_accept_invalid_certs(true);
-            }
+            builder = tls_helper::apply_insecure_skip_verify(builder, tls, "Elasticsearch")?;
             if let Some(material) = tls_helper::build_material(tls) {
                 if let Some(ca_pem) = &material.ca_pem {
                     let cert = Certificate::from_pem(ca_pem).context("invalid ES CA certificate PEM")?;
@@ -428,9 +414,17 @@ mod tests {
     /// `insecure_skip_verify`. Without this gate ES diverges from Redis/Etcd
     /// and would `bail!` on `insecure_skip_verify: true` in production even
     /// though the operator has not opted into TLS.
+    ///
+    /// Serialised via `link_sys::tls::ENV_TEST_MUTEX` because this test
+    /// mutates `EDGION_ENV` (a process-global table) and would race against
+    /// the `apply_insecure_skip_verify_prod_bails_nonprod_accepts` test in
+    /// the same test binary otherwise.
     #[test]
     fn test_tls_disabled_ignores_insecure_skip_verify_even_in_prod() {
         use crate::types::resources::common::TlsConfig;
+
+        let _env_guard = crate::core::gateway::link_sys::tls::ENV_TEST_MUTEX.lock();
+
         let crd = ElasticsearchClientConfig {
             tls: Some(TlsConfig {
                 enabled: false,
@@ -439,10 +433,14 @@ mod tests {
             }),
             ..Default::default()
         };
+        let prior = std::env::var("EDGION_ENV").ok();
         // Simulate production: would bail if the `enabled` gate were missing.
         std::env::set_var("EDGION_ENV", "production");
         let result = build_es_client(&crd, &no_auth());
-        std::env::remove_var("EDGION_ENV");
+        match prior {
+            Some(v) => std::env::set_var("EDGION_ENV", v),
+            None => std::env::remove_var("EDGION_ENV"),
+        }
         assert!(
             result.is_ok(),
             "tls.enabled=false must skip insecure_skip_verify handling, got: {:?}",

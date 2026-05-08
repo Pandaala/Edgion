@@ -77,7 +77,7 @@ impl RateLimit {
     /// automatically loaded from the toml config file via `validate()`.
     pub fn create(config: &RateLimitConfig) -> Box<dyn RequestFilter> {
         let mut validated_config = config.clone();
-        validated_config.validate();
+        let _ = validated_config.validate();
 
         let plugin = RateLimit {
             name: "RateLimit".to_string(),
@@ -217,10 +217,11 @@ impl RequestFilter for RateLimit {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
+        use crate::types::resources::edgion_plugins::PluginValidation;
         // PluginLog must stay short (≤40B) and must never contain the resolved
         // limit_key — it can be a user-identifying value (API key, user_id).
         // Check for configuration errors
-        if !self.config.is_valid() {
+        if self.config.validation_error().is_some() {
             plugin_log.push_err("cfg load fail");
             // Allow request to proceed on config error (fail-open)
             return PluginRunningResult::GoodNext;
@@ -303,7 +304,7 @@ mod tests {
             reject_message: Some("Too many requests".to_string()),
             ..Default::default()
         };
-        config.validate();
+        let _ = config.validate();
         config
     }
 
@@ -313,7 +314,7 @@ mod tests {
             rate: 0, // Invalid rate
             ..Default::default()
         };
-        config.validate();
+        let _ = config.validate();
 
         let plugin = RateLimit::create(&config);
 

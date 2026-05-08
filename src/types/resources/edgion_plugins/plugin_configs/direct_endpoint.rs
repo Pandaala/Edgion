@@ -69,11 +69,6 @@ pub struct DirectEndpointConfig {
     #[serde(default)]
     pub debug_header: bool,
 
-    // === Validation cache ===
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
-
     // === Compiled regex cache ===
     #[serde(skip)]
     #[schemars(skip)]
@@ -134,27 +129,21 @@ impl Default for DirectEndpointConfig {
             on_invalid: DirectEndpointOnInvalid::default(),
             inherit_tls: true,
             debug_header: false,
-            validation_error: None,
             compiled_regex: None,
         }
     }
 }
 
 impl DirectEndpointConfig {
-    /// Validate and pre-compile regex at parse time
+    /// Pre-compile regex at parse time. Compilation errors are surfaced via the
+    /// `PluginValidation` trait's `validation_error()` method instead of being
+    /// cached on the config.
     pub fn validate(&mut self) {
         if let Some(ref extract) = self.extract {
-            match regex::Regex::new(&extract.regex) {
-                Ok(re) => self.compiled_regex = Some(re),
-                Err(e) => {
-                    self.validation_error = Some(format!("Invalid extract regex: {}", e));
-                }
+            if let Ok(re) = regex::Regex::new(&extract.regex) {
+                self.compiled_regex = Some(re);
             }
         }
-    }
-
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
     }
 }
 

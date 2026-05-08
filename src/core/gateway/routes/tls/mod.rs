@@ -64,8 +64,15 @@ pub(super) async fn run_tls_route_plugins(
 
     let store = get_global_stream_plugin_store();
     let Some(resource) = store.get(store_key) else {
-        ctx.push_log("stream plugin resource not found, allowing");
-        return true;
+        // Fail-close: TLSRoute rule references an ESP but it is not in the
+        // store. The policy (typically an IP allowlist) cannot be enforced;
+        // silently admitting traffic would be a security bypass. Startup-time
+        // sync race is gated by `ConfigClient::is_ready()` before listeners
+        // bind, so reaching this branch means misconfiguration or hot-delete.
+        ctx.err_log = Some(format!(
+            "stream plugin resource '{store_key}' not found; rejecting (fail-close)"
+        ));
+        return false;
     };
 
     // Prefer Stage 2 (TlsRoute) runtime
@@ -124,3 +131,68 @@ pub use gateway_tls_routes::TlsRouteTable;
 // Export TLS proxy types
 pub use passthrough_proxy::EdgionTlsPassthroughProxy;
 pub use proxy::EdgionTlsTcpProxy;
+
+#[cfg(test)]
+mod fail_close_tests {
+    use super::*;
+    use crate::core::gateway::lb::BackendSelector;
+    use crate::types::resources::tls_route::TLSRouteRule;
+
+    fn empty_rule_with_store_key(key: Option<String>) -> TLSRouteRule {
+        TLSRouteRule {
+            backend_refs: None,
+            backend_finder: BackendSelector::new(),
+            plugin_runtime: Default::default(),
+            proxy_protocol_version: None,
+            stream_plugin_store_key: key,
+            max_connect_retries: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn fail_close_when_store_key_not_in_store() {
+        // Stage-2 fail-close: rule references "default/missing" but store is
+        // empty. Must reject and surface an err_log entry.
+        let store = get_global_stream_plugin_store();
+        // Avoid touching other tests' state: make sure this key is not present.
+        // (The global store is shared; we only assert the missing-key path,
+        // which never inserts anything.)
+        let key = "default/__fail_close_missing__".to_string();
+        assert!(store.get(&key).is_none(), "test precondition: key must not be in store");
+
+        let rule = empty_rule_with_store_key(Some(key.clone()));
+        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000);
+
+        let allowed = run_tls_route_plugins(&rule, &mut ctx, "example.com", 443, None, false).await;
+        assert!(!allowed, "missing ESP must fail-close");
+        let err = ctx.err_log.as_deref().unwrap_or("");
+        assert!(
+            err.contains("fail-close"),
+            "err_log should mention fail-close, got: {err}"
+        );
+        assert!(
+            err.contains(&key),
+            "err_log should include the missing store key, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_when_store_key_is_none() {
+        // No ESP attached to the rule — intentional pass-through, must allow.
+        let rule = empty_rule_with_store_key(None);
+        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000);
+        let allowed = run_tls_route_plugins(&rule, &mut ctx, "example.com", 443, None, false).await;
+        assert!(allowed, "rule with no store_key must pass through");
+        assert!(ctx.err_log.is_none());
+    }
+
+    #[tokio::test]
+    async fn admit_when_client_addr_unparseable() {
+        // Rule references an ESP but client_addr is not a valid IP.
+        // Pre-existing behavior: pass through (kept unchanged by fail-close fix).
+        let rule = empty_rule_with_store_key(Some("default/anything".to_string()));
+        let mut ctx = TlsContext::new(443, "unknown".to_string(), 0);
+        let allowed = run_tls_route_plugins(&rule, &mut ctx, "example.com", 443, None, false).await;
+        assert!(allowed, "unparseable client_addr keeps existing pass-through");
+    }
+}

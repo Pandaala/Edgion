@@ -68,6 +68,22 @@ pub struct Listener {
     pub allowed_routes: Option<AllowedRoutes>,
 }
 
+/// Validation mode for frontend client certificate verification.
+///
+/// Mirrors Gateway API v1.5 `FrontendTLSValidation.mode`. Stored as a typed
+/// enum so typos produce a deserialization error instead of silently falling
+/// back to the strict default.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq, Default)]
+pub enum FrontendValidationMode {
+    /// Reject connections whose client certificate fails validation (default).
+    #[default]
+    AllowValidOnly,
+    /// Request a client certificate but accept the handshake even when the
+    /// certificate is missing or invalid. Validation outcome is exposed to
+    /// downstream layers; intended for migration/monitoring scenarios.
+    AllowInsecureFallback,
+}
+
 /// FrontendTLSValidation holds configuration for validating client certificates
 /// at the Gateway listener level (Gateway API standard mTLS).
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -78,9 +94,9 @@ pub struct FrontendTLSValidation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca_certificate_refs: Option<Vec<SecretObjectReference>>,
 
-    /// Validation mode: "AllowValidOnly" (default) or "AllowInsecureFallback"
+    /// Validation mode (default: AllowValidOnly).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
+    pub mode: Option<FrontendValidationMode>,
 }
 
 /// Gateway-level TLS configuration (Gateway API v1.5 spec.tls)
@@ -362,5 +378,41 @@ spec:
         let ca_refs = fv.ca_certificate_refs.as_ref().unwrap();
         assert_eq!(ca_refs.len(), 1);
         assert_eq!(ca_refs[0].name, "client-ca");
+    }
+
+    #[test]
+    fn frontend_validation_mode_accepts_known_values() {
+        for (input, expected) in [
+            ("AllowValidOnly", FrontendValidationMode::AllowValidOnly),
+            ("AllowInsecureFallback", FrontendValidationMode::AllowInsecureFallback),
+        ] {
+            let yaml = format!("mode: {input}\n");
+            let fv: FrontendTLSValidation = serde_yaml::from_str(&yaml).unwrap();
+            assert_eq!(fv.mode, Some(expected));
+        }
+    }
+
+    #[test]
+    fn frontend_validation_mode_default_when_absent() {
+        let fv: FrontendTLSValidation = serde_yaml::from_str("{}").unwrap();
+        assert!(fv.mode.is_none());
+        // Consumers fall back to AllowValidOnly via Default when None.
+        assert_eq!(
+            FrontendValidationMode::default(),
+            FrontendValidationMode::AllowValidOnly
+        );
+    }
+
+    #[test]
+    fn frontend_validation_mode_rejects_typo() {
+        // Previous behavior silently mapped unknown strings to the strict default.
+        // After typing the field, unknown values must fail deserialization so the
+        // controller surfaces the error instead of silently overriding intent.
+        let err = serde_yaml::from_str::<FrontendTLSValidation>("mode: AllowFoo\n").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("AllowFoo") || msg.contains("variant"),
+            "expected variant error, got: {msg}"
+        );
     }
 }

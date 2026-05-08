@@ -494,7 +494,7 @@ fn apply_connection_filter<A>(service: &mut Service<A>, context: &ListenerContex
             listener=%context.listener.name,
             store_key=%store_key,
             "edgion-stream-plugins reference not found in gateway store; \
-             connections will be admitted until resource is synced"
+             connections will be rejected until resource is synced (fail-close)"
         );
     }
 

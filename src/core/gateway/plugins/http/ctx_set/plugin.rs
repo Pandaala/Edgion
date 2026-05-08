@@ -48,7 +48,7 @@ impl CtxSet {
     /// Create a new CtxSet plugin from configuration
     pub fn create(config: &CtxSetConfig) -> Box<dyn RequestFilter> {
         let mut validated_config = config.clone();
-        validated_config.validate();
+        let _ = validated_config.validate();
 
         let plugin = CtxSet {
             name: "CtxSet".to_string(),
@@ -203,9 +203,9 @@ impl RequestFilter for CtxSet {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
+        use crate::types::resources::edgion_plugins::PluginValidation;
         // Check for configuration errors
-        if !self.config.is_valid() {
-            let _error = self.config.get_validation_error().unwrap_or("Unknown error");
+        if self.config.validation_error().is_some() {
             plugin_log.push_err("config validation fail");
             // Fail-open: allow request to proceed on config error
             return PluginRunningResult::GoodNext;
@@ -241,10 +241,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_config_error_fail_open() {
-        let config = CtxSetConfig {
-            validation_error: Some("test error".to_string()),
-            ..Default::default()
-        };
+        // An empty vars list is invalid; the trait validator surfaces the error,
+        // and the plugin fails open.
+        let config = CtxSetConfig::default();
         let plugin = CtxSet {
             name: "CtxSet".to_string(),
             config,
@@ -266,8 +265,7 @@ vars:
     template: "${header:X-Inject}"
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         let plugin = CtxSet::create(&config);
 
         let mut mock_session = MockPluginSession::new();

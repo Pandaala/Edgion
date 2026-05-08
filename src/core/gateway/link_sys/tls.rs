@@ -160,6 +160,65 @@ pub fn combined_identity_pem(m: &TlsMaterial) -> Option<Zeroizing<Vec<u8>>> {
     Some(Zeroizing::new(out))
 }
 
+/// Cross-test mutex for any test that reads/writes `EDGION_ENV`. `cargo test`
+/// runs tests within a single binary in parallel by default, and `std::env::set_var`
+/// mutates a process-global table; concurrent env-touching tests can clobber each
+/// other's `set_var`/`remove_var` calls and produce flaky CI failures. Each such
+/// test must `let _guard = ENV_TEST_MUTEX.lock();` for the duration of its
+/// snapshot/mutate/restore window. A shared mutex is used (not one per file) so
+/// tests in `tls.rs` and `providers/elasticsearch/config_mapping.rs` serialize
+/// against each other.
+#[cfg(test)]
+pub(crate) static ENV_TEST_MUTEX: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+/// Apply the `tls.insecure_skip_verify` flag to a reqwest client builder under a
+/// uniform cross-provider policy.
+///
+/// Policy when `insecure_skip_verify == Some(true)`:
+/// - `EDGION_ENV=production` → return an error so the LinkSys refuses to start,
+///   surfacing the misconfiguration loudly instead of silently disabling
+///   verification on a production data path.
+/// - otherwise → emit a warning and call `danger_accept_invalid_certs(true)`.
+///
+/// When `insecure_skip_verify` is unset or `false`, the builder is returned
+/// unchanged.
+///
+/// Caller responsibilities:
+/// - When `tls.enabled == false`, skip this entirely (the flag is moot when TLS
+///   is not enabled). Mirror the ES behaviour by only calling this helper from
+///   inside an `if tls.enabled { ... }` branch.
+/// - Redis / Etcd SDKs do not expose a skip-verify knob — those providers
+///   `bail!` at the call site rather than going through this helper.
+pub fn apply_insecure_skip_verify(
+    builder: reqwest::ClientBuilder,
+    tls: &TlsConfig,
+    provider: &str,
+) -> Result<reqwest::ClientBuilder> {
+    if tls.insecure_skip_verify != Some(true) {
+        return Ok(builder);
+    }
+    let is_prod = std::env::var("EDGION_ENV")
+        .map(|v| v.eq_ignore_ascii_case("production"))
+        .unwrap_or(false);
+    if is_prod {
+        anyhow::bail!(
+            "{} TLS insecure_skip_verify cannot be enabled in production (EDGION_ENV=production). \
+             Use a proper CA certificate or disable TLS verification only in non-production environments.",
+            provider
+        );
+    }
+    // TODO(g9a-003-followup): once `edgion_system_error_state` (skip-list #12) is
+    // wired into the gateway crate, increment a labelled counter / set a gauge
+    // here so an operator can alert on "TLS verification disabled" outside of
+    // log scrapers. The deferral is intentional — the gauge is not yet defined
+    // anywhere in the codebase and wiring it would explode the safety-fix scope.
+    tracing::warn!(
+        provider = provider,
+        "TLS certificate verification disabled — insecure! Not allowed when EDGION_ENV=production",
+    );
+    Ok(builder.danger_accept_invalid_certs(true))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,6 +488,70 @@ mod tests {
             insecure_skip_verify: None,
         };
         assert!(build_rustls_client_config(&tls).is_err());
+    }
+
+    /// `apply_insecure_skip_verify` must `bail!` when `EDGION_ENV=production` and the
+    /// flag is set, so a misconfigured LinkSys refuses to start instead of silently
+    /// disabling certificate verification on a production data path.
+    ///
+    /// The non-prod branch must accept the flag (warn + apply) so dev/staging keeps
+    /// the existing escape hatch.
+    ///
+    /// Note: this test mutates the global `EDGION_ENV` env var. The
+    /// `super::ENV_TEST_MUTEX` guard serialises against any other env-touching
+    /// test (e.g. ES `test_tls_disabled_ignores_insecure_skip_verify_even_in_prod`)
+    /// so concurrent runs in the same test binary cannot clobber each other's
+    /// `set_var` / `remove_var` calls. The prior value is snapshotted and
+    /// restored before the guard releases.
+    #[test]
+    fn apply_insecure_skip_verify_prod_bails_nonprod_accepts() {
+        let _env_guard = super::ENV_TEST_MUTEX.lock();
+
+        let tls_skip = TlsConfig {
+            enabled: true,
+            certs: None,
+            insecure_skip_verify: Some(true),
+        };
+        let tls_nop = TlsConfig {
+            enabled: true,
+            certs: None,
+            insecure_skip_verify: None,
+        };
+
+        let prior = std::env::var("EDGION_ENV").ok();
+
+        // 1. Production → bail.
+        std::env::set_var("EDGION_ENV", "production");
+        let prod_err = apply_insecure_skip_verify(reqwest::Client::builder(), &tls_skip, "TestProvider").err();
+        assert!(
+            prod_err
+                .as_ref()
+                .is_some_and(|e| e.to_string().contains("EDGION_ENV=production")),
+            "prod must bail with EDGION_ENV mention, got: {:?}",
+            prod_err
+        );
+
+        // 2. Non-production (or unset) → accepts. We don't assert on the resulting
+        //    builder's internal state (reqwest exposes no introspection); the contract
+        //    is that no error is returned.
+        std::env::remove_var("EDGION_ENV");
+        assert!(
+            apply_insecure_skip_verify(reqwest::Client::builder(), &tls_skip, "TestProvider").is_ok(),
+            "non-prod must accept insecure_skip_verify=true"
+        );
+
+        // 3. Flag absent → noop pass-through, even in production.
+        std::env::set_var("EDGION_ENV", "production");
+        assert!(
+            apply_insecure_skip_verify(reqwest::Client::builder(), &tls_nop, "TestProvider").is_ok(),
+            "missing insecure_skip_verify must pass through unchanged"
+        );
+
+        // Restore prior state.
+        match prior {
+            Some(v) => std::env::set_var("EDGION_ENV", v),
+            None => std::env::remove_var("EDGION_ENV"),
+        }
     }
 
     #[test]

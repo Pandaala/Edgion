@@ -54,11 +54,6 @@ pub struct BasicAuthConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_users: Option<HashMap<String, String>>,
-
-    /// Validation error cache.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 fn default_realm() -> String {
@@ -85,16 +80,11 @@ impl Default for BasicAuthConfig {
             realm: default_realm(),
             anonymous: None,
             resolved_users: None,
-            validation_error: None,
         }
     }
 }
 
 impl BasicAuthConfig {
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
-    }
-
     pub fn detect_validation_error(&self) -> Option<String> {
         if self.realm.trim().is_empty() {
             return Some("realm cannot be empty".to_string());

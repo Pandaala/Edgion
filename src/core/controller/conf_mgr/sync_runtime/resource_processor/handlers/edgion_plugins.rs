@@ -642,11 +642,10 @@ mod tests {
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
 
-        let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
+        let _config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
             EdgionPlugin::RegionRoute(c) => c,
             _ => panic!("unexpected plugin type"),
         };
-        assert!(config.validation_error.is_none());
     }
 
     #[tokio::test]
@@ -676,16 +675,11 @@ mod tests {
             preparse_errors
         );
 
-        // parse() does not set validation_error on the config either
+        // parse() must succeed — missing PM is a ref-resolution concern, not a parse error.
         let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
-        let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
-            EdgionPlugin::RegionRoute(c) => c,
-            _ => panic!("unexpected plugin type"),
-        };
-        assert!(config.validation_error.is_none());
 
         // resolve_pm_refs() is the path that surfaces the missing PluginMetaData.
         let ref_errors = super::resolve_pm_refs(&parsed, &ctx);

@@ -41,7 +41,7 @@ impl KeyAuth {
     /// This method validates the config and initializes the key store.
     pub fn create(config: &KeyAuthConfig) -> Box<dyn RequestFilter> {
         let mut validated_config = config.clone();
-        validated_config.validate();
+        let _ = validated_config.validate();
 
         let keys = hash_keys(validated_config.resolved_keys.take().unwrap_or_default());
 
@@ -239,7 +239,6 @@ mod tests {
             secret_refs: None,
             upstream_header_fields: vec!["X-Consumer-Username".to_string(), "X-Customer-ID".to_string()],
             resolved_keys: None,
-            validation_error: None,
         }
     }
 

@@ -32,10 +32,6 @@ pub struct RegionRouteConfig {
     /// it in turn references the ClusterRegionRoute PluginMetaData via its clusterRef.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_region_route_ref: Option<String>,
-
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 /// Cluster definition
@@ -188,19 +184,6 @@ impl RegionRouteConfig {
     /// PluginMetaData chain resolution at preparse time.
     fn check_fields(&self) -> Option<String> {
         None
-    }
-
-    /// Return a cached validation error set by the Controller, if any.
-    ///
-    /// `validation_error` is `#[serde(skip)]` so it is never serialized/deserialized.
-    /// On the Controller side the field is no longer written (validation is done via
-    /// status conditions in `preparse()`). On the Gateway side this method is checked
-    /// at plugin-build time; it will always return `None` because the field is never set
-    /// after deserialization. Kept for API compatibility with the plugin_runtime dispatch
-    /// table in `plugin_runtime.rs`.
-    #[deprecated(note = "use PluginValidation::validation_error() instead; this always returns None")]
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
     }
 }
 

@@ -67,7 +67,7 @@ impl RequestRestriction {
     pub fn create(config: &RequestRestrictionConfig) -> Box<dyn RequestFilter> {
         // Clone and validate the config to compile regex patterns
         let mut validated_config = config.clone();
-        validated_config.validate();
+        let _ = validated_config.validate();
 
         let plugin = RequestRestriction {
             name: "RequestRestriction".to_string(),
@@ -160,8 +160,9 @@ impl RequestFilter for RequestRestriction {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
+        use crate::types::resources::edgion_plugins::PluginValidation;
         // Check for configuration errors
-        if !self.config.is_valid() {
+        if self.config.validation_error().is_some() {
             plugin_log.push_err("restriction config invalid");
             let resp = Box::new(
                 ResponseHeader::build(500, None)
@@ -246,7 +247,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
+        let _ = config.validate();
 
         let plugin = RequestRestriction::create(&config);
         let mut mock_session = MockPluginSession::new();
@@ -278,8 +279,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let plugin = RequestRestriction::create(&config);
         let mut mock_session = MockPluginSession::new();

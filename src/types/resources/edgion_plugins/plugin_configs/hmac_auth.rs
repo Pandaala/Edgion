@@ -124,11 +124,6 @@ pub struct HmacAuthConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_credentials: Option<HashMap<String, HmacCredential>>,
-
-    // === Validation fields ===
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 fn default_algorithms() -> Vec<HmacAlgorithm> {
@@ -176,16 +171,11 @@ impl Default for HmacAuthConfig {
             username_field: default_username_field(),
             upstream_header_fields: vec![],
             resolved_credentials: None,
-            validation_error: None,
         }
     }
 }
 
 impl HmacAuthConfig {
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
-    }
-
     pub fn detect_validation_error(&self) -> Option<String> {
         fn has_control_chars(s: &str) -> bool {
             s.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')

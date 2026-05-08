@@ -83,11 +83,6 @@ pub struct RequestRestrictionConfig {
     /// Custom rejection message
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-
-    /// Validation error message (runtime only)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 /// A single restriction rule
@@ -217,7 +212,6 @@ impl Default for RequestRestrictionConfig {
             match_mode: RuleMatchMode::default(),
             status: default_status(),
             message: None,
-            validation_error: None,
         }
     }
 }
@@ -243,21 +237,12 @@ impl Default for RestrictionRule {
 }
 
 impl RequestRestrictionConfig {
-    /// Validate configuration and compile matchers
-    pub fn validate(&mut self) {
-        if let Err(e) = self.validate_and_compile() {
-            self.validation_error = Some(e);
-        }
-    }
-
-    /// Check if configuration is valid
-    pub fn is_valid(&self) -> bool {
-        self.validation_error.is_none()
-    }
-
-    /// Get validation error message
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
+    /// Validate configuration and compile matchers.
+    ///
+    /// Returns `Err(message)` if any rule is malformed; on success every rule has
+    /// its compiled matchers (HashSets, regex) populated.
+    pub fn validate(&mut self) -> Result<(), String> {
+        self.validate_and_compile()
     }
 
     /// Stateless field validation — mirrors every error branch of validate_and_compile
@@ -610,9 +595,8 @@ mod tests {
     #[test]
     fn test_empty_rules_validation() {
         let mut config = RequestRestrictionConfig::default();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("At least one rule"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("At least one rule"));
     }
 
     #[test]
@@ -626,9 +610,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("key"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("key"));
     }
 
     #[test]
@@ -642,8 +625,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -657,8 +639,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(Some("bad")), Some(true)); // Denied
@@ -677,8 +658,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(Some("Googlebot/2.1")), Some(true)); // Denied
@@ -697,8 +677,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(Some("/admin")), Some(true)); // Denied (exact)
@@ -717,8 +696,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(Some("GET")), Some(false)); // Allowed
@@ -736,8 +714,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(Some("/api/v1/users")), Some(false)); // Allowed
@@ -759,7 +736,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
+        let _ = config.validate();
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(None), Some(false)); // Allow when missing
 
@@ -774,7 +751,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config2.validate();
+        let _ = config2.validate();
         let rule2 = &config2.rules[0];
         assert_eq!(rule2.check_value(None), Some(true)); // Deny when missing
 
@@ -789,7 +766,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config3.validate();
+        let _ = config3.validate();
         let rule3 = &config3.rules[0];
         assert_eq!(rule3.check_value(None), None); // Skip rule
     }
@@ -806,8 +783,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(Some("badvalue")), Some(true)); // Denied (case insensitive)
@@ -826,8 +802,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(Some("/api/users")), Some(false)); // Allowed
@@ -848,8 +823,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert!(rule.deny_set.is_some()); // HashSet should be compiled
@@ -873,8 +847,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert!(rule.deny_set.is_none()); // HashSet should NOT be compiled
@@ -891,9 +864,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("Invalid"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("Invalid"));
     }
 
     #[test]
@@ -907,9 +879,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("cannot be empty"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("cannot be empty"));
     }
 
     #[test]
@@ -923,9 +894,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("at least one"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("at least one"));
     }
 
     // ------------------------------------------------------------------
@@ -1026,8 +996,6 @@ mod validation_trait_tests {
         // Default config has no rules — first error from check_fields is "At least one rule".
         let config = RequestRestrictionConfig::default();
         let result = config.validation_error();
-        // Must not touch the cached field (check_fields is stateless)
-        assert!(config.validation_error.is_none(), "must not touch cached field");
         assert!(
             result.as_deref().unwrap_or("").contains("At least one rule"),
             "expected 'At least one rule' error, got: {:?}",
@@ -1047,8 +1015,6 @@ mod validation_trait_tests {
             ..Default::default()
         };
         assert_eq!(config.validation_error(), None);
-        // Cached field must still be None (stateless)
-        assert!(config.validation_error.is_none(), "must not touch cached field");
     }
 
     #[test]
@@ -1063,7 +1029,6 @@ mod validation_trait_tests {
             ..Default::default()
         };
         let result = config.validation_error();
-        assert!(config.validation_error.is_none(), "must not touch cached field");
         assert!(
             result.as_deref().unwrap_or("").contains("key"),
             "expected 'key' error, got: {:?}",
@@ -1083,7 +1048,6 @@ mod validation_trait_tests {
             ..Default::default()
         };
         let result = config.validation_error();
-        assert!(config.validation_error.is_none(), "must not touch cached field");
         assert!(
             result.as_deref().unwrap_or("").contains("Invalid"),
             "expected 'Invalid' regex error, got: {:?}",

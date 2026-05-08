@@ -51,6 +51,7 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **PluginConditions regex 必须在 preparse compile** | `conditions/types.rs`, `edgion_plugins/mod.rs` | `compiled_regex` 是 `#[serde(skip)]`，反序列化后为 None。必须在 `EdgionPlugins::preparse()` 阶段调用 `compile_conditions()` 完成编译，否则每请求触发 `Regex::new()`。新增带 regex 的条件类型时，同步在 `Condition::compile()` 加 match 臂。详见 [05-plugin-system.md §条件执行](01-architecture/02-gateway/05-plugin-system.md) |
 | **gRPC H2 grpc-status 必须放 trailers** | Pingora H2 响应路径 | 放在 response headers 里 tonic 会返回 Internal(13)，必须放 trailers |
 | **数据面请求/连接热路径禁止 tracing** | `skills/03-coding/01-log-safety.md` 铁律 3 | 请求/连接处理路径只能用 access log / `PluginLog` / `ctx.err_log` / Metrics，任何 `tracing::` 宏（含 `debug!`）都禁止。例外：配置加载路径、进程启动/关闭、`pg_logging.rs` access log 发送失败。插件 `run_request` / `run_upstream_response` / TLS proxy / stream proxy 全部适用。 |
+| **`UpstreamResponseBodyFilter` body 阶段无 PluginLog** | `traits/upstream_response_body_filter.rs`, `conditions/evaluator.rs` | trait 签名故意省略 `&mut PluginLog`，body 阶段每 chunk 调一次，per-chunk 任何堆分配（PluginLog / String / Vec）都会以 O(chunks×plugins) 累积。新加 body 阶段 filter / wrapper 时不要写 log，条件评估用 `evaluate_sync_silent` 链不用 `evaluate_detail_sync`，ExtensionRef 走 `resolve_runtime_silent`。曾因 ExtensionRef 误调 `start_edgion_plugins_log` 引入长流内存泄漏（issue g2-001）。详见 [05-plugin-system.md §body 阶段无 PluginLog](01-architecture/02-gateway/05-plugin-system.md) |
 
 ## 目录总览
 

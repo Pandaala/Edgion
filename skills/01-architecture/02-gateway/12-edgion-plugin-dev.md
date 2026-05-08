@@ -79,7 +79,7 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 |------|-------|----------|----------|
 | 请求阶段 | `RequestFilter` | 发往上游前 | Auth、RateLimit、Rewrite、Mirror、直接拒绝 |
 | 响应头阶段 | `UpstreamResponseFilter` | 上游响应头到达时 | 改响应头、基于 header 快速判断 |
-| 响应体阶段 | `UpstreamResponseBodyFilter` | 每个 body chunk | 带宽限制、chunk 检查 |
+| 响应体阶段 | `UpstreamResponseBodyFilter` | 每个 body chunk | 带宽限制、chunk 检查（**trait 签名故意无 `&mut PluginLog`**，per-chunk 路径必须 0 分配，详见 [05-plugin-system.md](05-plugin-system.md#关键约束body-阶段无-pluginlogper-chunk-路径必须-0-分配)） |
 | 响应结束阶段 | `UpstreamResponse` | 完整响应结束后 | 少数需要完整响应上下文的逻辑 |
 
 默认优先选 `RequestFilter`。  
@@ -383,6 +383,7 @@ session.set_upstream_uri(&new_uri)?;
 - 用短语和分号结尾，例如 `OK u=jack; `
 - verbose 调试用 `tracing::debug!()`，不要把 access log 当调试 dump
 - 条件跳过 `cond_skip` 由 conditional wrapper 自动写，不要重复造自己的格式
+- **`UpstreamResponseBodyFilter` 阶段无 PluginLog**：trait 签名故意没有 log 参数，body 阶段每 chunk 调一次，per-chunk 写日志会爆。完整约束见 [05-plugin-system.md](05-plugin-system.md#关键约束body-阶段无-pluginlogper-chunk-路径必须-0-分配)
 
 ## `ErrTerminateRequest` — write the response first
 

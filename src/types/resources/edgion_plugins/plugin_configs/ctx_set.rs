@@ -90,11 +90,6 @@ pub struct CtxSetConfig {
     /// List of context variable rules
     pub vars: Vec<CtxVarRule>,
 
-    /// Internal validation error (set during validation)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
-
     /// Compiled regex patterns for extract (populated during validation)
     #[serde(skip)]
     #[schemars(skip)]
@@ -507,32 +502,31 @@ impl CtxSetConfig {
         None
     }
 
-    /// Validate configuration and compile regex patterns
-    pub fn validate(&mut self) {
-        self.validation_error = None;
+    /// Validate configuration and compile regex patterns.
+    ///
+    /// Returns `Err(message)` on the first invalid rule. On success the compiled
+    /// regex / template caches are populated.
+    pub fn validate(&mut self) -> Result<(), String> {
         self.compiled_patterns.clear();
         self.compiled_transform_patterns.clear();
         self.compiled_templates.clear();
 
         if self.vars.is_empty() {
-            self.validation_error = Some("vars list is empty".to_string());
-            return;
+            return Err("vars list is empty".to_string());
         }
 
         for (idx, rule) in self.vars.iter().enumerate() {
             // Validate rule name
             if rule.name.is_empty() {
-                self.validation_error = Some(format!("vars[{}]: name is empty", idx));
-                return;
+                return Err(format!("vars[{}]: name is empty", idx));
             }
 
             // Must have at least one value source
             if rule.value.is_none() && rule.from.is_none() && rule.template.is_none() {
-                self.validation_error = Some(format!(
+                return Err(format!(
                     "vars[{}] '{}': must specify 'value', 'from', or 'template'",
                     idx, rule.name
                 ));
-                return;
             }
 
             // Compile extract regex if present
@@ -542,11 +536,10 @@ impl CtxSetConfig {
                         self.compiled_patterns.insert(idx, re);
                     }
                     Err(e) => {
-                        self.validation_error = Some(format!(
+                        return Err(format!(
                             "vars[{}] '{}': invalid extract regex '{}': {}",
                             idx, rule.name, extract.regex, e
                         ));
-                        return;
                     }
                 }
             }
@@ -559,11 +552,10 @@ impl CtxSetConfig {
                             self.compiled_transform_patterns.insert(idx, re);
                         }
                         Err(e) => {
-                            self.validation_error = Some(format!(
+                            return Err(format!(
                                 "vars[{}] '{}': invalid transform.replace pattern '{}': {}",
                                 idx, rule.name, pattern, e
                             ));
-                            return;
                         }
                     }
                 }
@@ -571,11 +563,10 @@ impl CtxSetConfig {
                 // Validate substring bounds
                 if let Some(TransformType::Substring(start, end)) = transform.get_transform_type() {
                     if start > end {
-                        self.validation_error = Some(format!(
+                        return Err(format!(
                             "vars[{}] '{}': substring start ({}) > end ({})",
                             idx, rule.name, start, end
                         ));
-                        return;
                     }
                 }
             }
@@ -587,22 +578,12 @@ impl CtxSetConfig {
                         self.compiled_templates.insert(idx, compiled);
                     }
                     Err(e) => {
-                        self.validation_error = Some(format!("vars[{}] '{}': invalid template: {}", idx, rule.name, e));
-                        return;
+                        return Err(format!("vars[{}] '{}': invalid template: {}", idx, rule.name, e));
                     }
                 }
             }
         }
-    }
-
-    /// Check if configuration is valid
-    pub fn is_valid(&self) -> bool {
-        self.validation_error.is_none()
-    }
-
-    /// Get validation error message
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
+        Ok(())
     }
 
     /// Get compiled extract regex for a rule by index
@@ -647,8 +628,7 @@ vars:
       name: X-User-Id
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(config.is_valid(), "Error: {:?}", config.validation_error);
+        config.validate().expect("validate should succeed");
         assert_eq!(config.vars.len(), 1);
         assert_eq!(config.vars[0].name, "user_id");
     }
@@ -661,8 +641,7 @@ vars:
     value: production
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         assert_eq!(config.vars[0].value, Some("production".to_string()));
     }
 
@@ -674,8 +653,7 @@ vars:
     template: "${header:X-Tenant}_${clientIp}"
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         assert_eq!(
             config.vars[0].template,
             Some("${header:X-Tenant}_${clientIp}".to_string())
@@ -695,8 +673,7 @@ vars:
       group: 1
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(config.is_valid(), "Error: {:?}", config.validation_error);
+        config.validate().expect("validate should succeed");
         assert!(config.get_compiled_regex(0).is_some());
     }
 
@@ -713,8 +690,7 @@ vars:
         with: "/"
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(config.is_valid(), "Error: {:?}", config.validation_error);
+        config.validate().expect("validate should succeed");
     }
 
     #[test]
@@ -728,8 +704,7 @@ vars:
       case: lower
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         let transform = config.vars[0].transform.as_ref().unwrap();
         assert!(matches!(transform.case, Some(CaseType::Lower)));
     }
@@ -746,8 +721,7 @@ vars:
       substring: [0, 8]
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         let transform = config.vars[0].transform.as_ref().unwrap();
         assert_eq!(transform.substring, Some((0, 8)));
     }
@@ -770,8 +744,7 @@ vars:
       suffix: "_v2"
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         let t0 = config.vars[0].transform.as_ref().unwrap();
         let t1 = config.vars[1].transform.as_ref().unwrap();
         assert!(t0.prefix.is_some());
@@ -794,8 +767,7 @@ vars:
       default: tier_3
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         let mapping = config.vars[0].mapping.as_ref().unwrap();
         assert_eq!(mapping.values.get("premium"), Some(&"tier_1".to_string()));
         assert_eq!(mapping.default, Some("tier_3".to_string()));
@@ -822,8 +794,7 @@ vars:
     default: unknown_tenant
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(config.is_valid(), "Error: {:?}", config.validation_error);
+        config.validate().expect("validate should succeed");
     }
 
     #[test]
@@ -832,9 +803,8 @@ vars:
 vars: []
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("vars list is empty"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("vars list is empty"));
     }
 
     #[test]
@@ -845,9 +815,8 @@ vars:
     value: test
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("name is empty"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("name is empty"));
     }
 
     #[test]
@@ -857,9 +826,8 @@ vars:
   - name: test_var
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("must specify"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("must specify"));
     }
 
     #[test]
@@ -874,9 +842,8 @@ vars:
       regex: "([invalid"
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("invalid extract regex"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("invalid extract regex"));
     }
 
     #[test]
@@ -892,12 +859,8 @@ vars:
         with: ""
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config
-            .get_validation_error()
-            .unwrap()
-            .contains("invalid transform.replace pattern"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("invalid transform.replace pattern"));
     }
 
     #[test]
@@ -912,9 +875,8 @@ vars:
       substring: [10, 5]
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("substring start"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("substring start"));
     }
 
     #[test]
@@ -959,7 +921,6 @@ vars:
     fn validation_error_without_validate_call() {
         let config = CtxSetConfig::default(); // vars is empty
         assert_eq!(config.validation_error(), Some("vars list is empty".to_string()));
-        assert!(config.validation_error.is_none()); // cache must NOT be touched
     }
 
     #[test]
@@ -970,8 +931,7 @@ vars:
     template: "hello ${header:oops"
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("invalid template"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("invalid template"));
     }
 }

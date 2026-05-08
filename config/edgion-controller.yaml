@@ -105,9 +105,9 @@ logging:
 #   leader_election:
 #     lease_name: edgion-controller-leader    # Lease resource name
 #     lease_namespace: edgion-system          # Namespace for Lease (default: from POD_NAMESPACE env)
-#     lease_duration_secs: 15                 # Lease validity period
-#     renew_period_secs: 10                   # How often leader renews lease
-#     retry_period_secs: 2                    # How often non-leaders retry
+#     lease_duration_secs: 15                 # Lease validity period (apiserver-side)
+#     renew_deadline_secs: 10                 # Window for retaining leadership across transient errors
+#     retry_period_secs: 2                    # Single sleep cadence between every acquire/renew attempt (matches client-go RetryPeriod)
 #
 #   metadata_filter:
 #     blocked_annotations:                    # Annotations to remove from resources

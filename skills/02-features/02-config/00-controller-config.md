@@ -76,9 +76,9 @@ conf_center:
 #   leader_election:
 #     lease_name: edgion-controller-leader
 #     lease_namespace: edgion-system
-#     lease_duration_seconds: 15
-#     renew_deadline_seconds: 10
-#     retry_period_seconds: 2
+#     lease_duration_secs: 15
+#     renew_deadline_secs: 10
+#     retry_period_secs: 2
 #   metadata_filter:
 #     label_selector: ""                  # 资源标签过滤
 #     field_selector: ""                  # 资源字段过滤
@@ -173,9 +173,9 @@ CLI 特例：
 |------|------|------|------|
 | `lease_name` | `String` | `edgion-controller-leader` | K8s Lease 名称 |
 | `lease_namespace` | `String` | `edgion-system` | K8s Lease 命名空间 |
-| `lease_duration_seconds` | `u64` | `15` | 租约持续秒数 |
-| `renew_deadline_seconds` | `u64` | `10` | 续约截止秒数 |
-| `retry_period_seconds` | `u64` | `2` | 竞选重试间隔秒数 |
+| `lease_duration_secs` | `u64` | `15` | 租约持续秒数（apiserver 端有效期） |
+| `renew_deadline_secs` | `u64` | `10` | 续约截止窗口：Leader 在最近一次成功续约后此窗口内即使遇到 transient 错误（5xx / 网络）也保留领导权重试，避免 apiserver 抖动导致 leader 假性翻转。约束：`retry_period_secs < renew_deadline_secs < lease_duration_secs` |
+| `retry_period_secs` | `u64` | `2` | 每次 acquire/renew 尝试的统一 sleep 间隔（对应 client-go `RetryPeriod`）。一个 `renew_deadline_secs` 窗口内大约会重试 `renew_deadline_secs / retry_period_secs` 次 |
 
 ### [conf_center.metadata_filter]
 

@@ -130,7 +130,7 @@ impl RateLimitRedis {
     /// Create a new RateLimitRedis plugin from configuration.
     pub fn create(config: &RateLimitRedisConfig) -> Box<dyn RequestFilter> {
         let mut validated = config.clone();
-        validated.validate();
+        let _ = validated.validate();
         Box::new(RateLimitRedis {
             name: "RateLimitRedis".to_string(),
             config: validated,
@@ -495,7 +495,8 @@ impl RequestFilter for RateLimitRedis {
         // diagnostics go to tracing / metrics instead.
 
         // 1. Validate config
-        if !self.config.is_valid() {
+        use crate::types::resources::edgion_plugins::PluginValidation;
+        if self.config.validation_error().is_some() {
             plugin_log.push_err("cfg load fail");
             let resp = Box::new(
                 ResponseHeader::build(500, None)

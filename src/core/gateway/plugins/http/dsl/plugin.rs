@@ -56,13 +56,7 @@ impl DslPlugin {
             return Ok(script);
         }
 
-        // 2. Use cached bytecode from validation phase (avoids double compilation)
-        if let Some(cached_b64) = config.get_compiled_bytecode() {
-            return CompiledScript::deserialize_base64(&cached_b64)
-                .map_err(|e| format!("cached bytecode deserialization failed: {}", e));
-        }
-
-        // 3. Compile from source code (fallback if cache was not populated)
+        // 2. Compile from source code
         if let Some(source) = &config.source {
             let bytecode_b64 = compile_dsl_source(source, &ValidationLimits::default())
                 .map_err(|errs| format!("DSL compile errors: {}", errs.join("; ")))?;

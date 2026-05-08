@@ -128,3 +128,120 @@ pub enum EdgionStatus {
     /// also fail. Surfaced to the client as 504.
     RequestTimeoutExceeded = 504_01,
 }
+
+impl EdgionStatus {
+    /// HTTP status implied by the discriminant, if any.
+    ///
+    /// Convention: discriminant is encoded as `<http>_<sub>` where `<http>` is
+    /// the 3-digit HTTP status (e.g. `400_01` → 400). The `999` family is a
+    /// catch-all for codes with no HTTP semantics and returns `None`.
+    #[inline]
+    pub fn http_status(self) -> Option<u16> {
+        let code = self as u32;
+        let prefix = if code < 1_000 { code } else { code / 100 };
+        if (200..=599).contains(&prefix) {
+            Some(prefix as u16)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Exhaustive map from variant to its expected HTTP status. The match is
+    /// exhaustive on purpose: adding a new variant fails to compile until an
+    /// explicit decision is recorded here, which guards the discriminant
+    /// encoding convention against silent drift.
+    fn expected_http(s: EdgionStatus) -> Option<u16> {
+        match s {
+            EdgionStatus::Unknown => None,
+            EdgionStatus::UnknownGRPCERR => None,
+            EdgionStatus::AccessLogSerializeFailed => None,
+            EdgionStatus::AcmeChallengeServed => Some(200),
+            EdgionStatus::HostMissing => Some(400),
+            EdgionStatus::XffHeaderTooLong => Some(400),
+            EdgionStatus::PathEscapedSlashRejected => Some(400),
+            EdgionStatus::PathInvalidPercentEncoding => Some(400),
+            EdgionStatus::RouteNotFound => Some(404),
+            EdgionStatus::SniHostMismatch => Some(421),
+            EdgionStatus::ClientCertInvalid => Some(403),
+            EdgionStatus::UpstreamNotRouteMatched => Some(500),
+            EdgionStatus::UpstreamNotBackendRefs => Some(500),
+            EdgionStatus::UpstreamInconsistentWeight => Some(500),
+            EdgionStatus::GrpcUpstreamNotRouteMatched => Some(500),
+            EdgionStatus::BackendEndpointSliceNotFoundByConsistent => Some(500),
+            EdgionStatus::BackendEndpointSliceNotFoundByLeastConn => Some(500),
+            EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin => Some(500),
+            EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault => Some(500),
+            EdgionStatus::BackendEndpointSliceNotFoundByEwma => Some(500),
+            EdgionStatus::BackendServiceNotFound => Some(503),
+            EdgionStatus::BackendClusterIpNotFound => Some(503),
+            EdgionStatus::BackendExternalNameNotFound => Some(503),
+            EdgionStatus::BackendPortResolutionFailed => Some(503),
+            EdgionStatus::BackendAddressParsingFailed => Some(503),
+            EdgionStatus::BackendLoadBalancerSelectionFailed => Some(503),
+            EdgionStatus::BackendServiceImportNotImplemented => Some(503),
+            EdgionStatus::BackendLocalhostNotAllowed => Some(503),
+            EdgionStatus::Http2Required => Some(503),
+            EdgionStatus::GrpcUpstreamNotBackendRefs => Some(503),
+            EdgionStatus::RefDenied => Some(503),
+            EdgionStatus::BackendAddrLinkLocalNotAllowed => Some(503),
+            EdgionStatus::BackendUnsupportedKind => Some(500),
+            EdgionStatus::StickyBackendUnhealthy => Some(500),
+            EdgionStatus::BackendTlsSanValidationFailed => Some(502),
+            EdgionStatus::PluginTerminateWithoutResponse => Some(502),
+            EdgionStatus::ForwardAuthServiceUnreachable => Some(503),
+            EdgionStatus::RequestTimeoutExceeded => Some(504),
+        }
+    }
+
+    #[test]
+    fn http_status_matches_for_all_variants() {
+        let all: &[EdgionStatus] = &[
+            EdgionStatus::Unknown,
+            EdgionStatus::UnknownGRPCERR,
+            EdgionStatus::AccessLogSerializeFailed,
+            EdgionStatus::AcmeChallengeServed,
+            EdgionStatus::HostMissing,
+            EdgionStatus::XffHeaderTooLong,
+            EdgionStatus::PathEscapedSlashRejected,
+            EdgionStatus::PathInvalidPercentEncoding,
+            EdgionStatus::RouteNotFound,
+            EdgionStatus::SniHostMismatch,
+            EdgionStatus::ClientCertInvalid,
+            EdgionStatus::UpstreamNotRouteMatched,
+            EdgionStatus::UpstreamNotBackendRefs,
+            EdgionStatus::UpstreamInconsistentWeight,
+            EdgionStatus::GrpcUpstreamNotRouteMatched,
+            EdgionStatus::BackendEndpointSliceNotFoundByConsistent,
+            EdgionStatus::BackendEndpointSliceNotFoundByLeastConn,
+            EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin,
+            EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault,
+            EdgionStatus::BackendEndpointSliceNotFoundByEwma,
+            EdgionStatus::BackendServiceNotFound,
+            EdgionStatus::BackendClusterIpNotFound,
+            EdgionStatus::BackendExternalNameNotFound,
+            EdgionStatus::BackendPortResolutionFailed,
+            EdgionStatus::BackendAddressParsingFailed,
+            EdgionStatus::BackendLoadBalancerSelectionFailed,
+            EdgionStatus::BackendServiceImportNotImplemented,
+            EdgionStatus::BackendLocalhostNotAllowed,
+            EdgionStatus::Http2Required,
+            EdgionStatus::GrpcUpstreamNotBackendRefs,
+            EdgionStatus::RefDenied,
+            EdgionStatus::BackendAddrLinkLocalNotAllowed,
+            EdgionStatus::BackendUnsupportedKind,
+            EdgionStatus::StickyBackendUnhealthy,
+            EdgionStatus::BackendTlsSanValidationFailed,
+            EdgionStatus::PluginTerminateWithoutResponse,
+            EdgionStatus::ForwardAuthServiceUnreachable,
+            EdgionStatus::RequestTimeoutExceeded,
+        ];
+        for &s in all {
+            assert_eq!(s.http_status(), expected_http(s), "http_status mismatch for {s:?}");
+        }
+    }
+}

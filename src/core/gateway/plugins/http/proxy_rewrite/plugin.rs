@@ -315,8 +315,9 @@ impl RequestFilter for ProxyRewrite {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
+        use crate::types::resources::edgion_plugins::PluginValidation;
         // Check if configuration is valid
-        if !self.config.is_valid() {
+        if self.config.validation_error().is_some() {
             plugin_log.push_err("config invalid");
             return PluginRunningResult::GoodNext;
         }
@@ -363,6 +364,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_config() {
+        use crate::types::resources::edgion_plugins::PluginValidation;
         let mut config = ProxyRewriteConfig {
             uri: None,
             regex_uri: Some(RegexUri {
@@ -373,14 +375,12 @@ mod tests {
             method: None,
             headers: None,
             compiled_regex: None,
-            validation_error: None,
         };
 
         // Verify config validation catches invalid regex
         let is_valid = config.precompile();
         assert!(!is_valid);
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("Invalid regex"));
+        assert!(config.validation_error().unwrap().contains("Invalid regex"));
 
         // Create plugin and run with invalid config
         let plugin = ProxyRewrite::new(&ProxyRewriteConfig {

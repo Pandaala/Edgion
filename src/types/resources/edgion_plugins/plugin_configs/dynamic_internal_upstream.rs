@@ -74,11 +74,6 @@ pub struct DynamicInternalUpstreamConfig {
     #[serde(default)]
     pub debug_header: bool,
 
-    // === Validation cache ===
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
-
     // === Compiled regex cache ===
     #[serde(skip)]
     #[schemars(skip)]
@@ -172,31 +167,23 @@ impl Default for DynamicInternalUpstreamConfig {
             on_no_match: DynUpstreamOnNoMatch::default(),
             on_invalid: DynUpstreamOnInvalid::default(),
             debug_header: false,
-            validation_error: None,
             compiled_regex: None,
         }
     }
 }
 
 impl DynamicInternalUpstreamConfig {
-    /// Validate and pre-compile regex at parse time
+    /// Pre-compile regex at parse time when fields are valid.
+    /// Field-level errors are surfaced via the `PluginValidation` trait.
     pub fn validate(&mut self) {
-        self.validation_error = self.check_fields();
-
-        // Pre-compile regex if validation passed and extract is set
-        if self.validation_error.is_none() {
-            if let Some(ref extract) = self.extract {
-                if let Ok(re) = regex::Regex::new(&extract.regex) {
-                    self.compiled_regex = Some(re);
-                }
+        if self.check_fields().is_some() {
+            return;
+        }
+        if let Some(ref extract) = self.extract {
+            if let Ok(re) = regex::Regex::new(&extract.regex) {
+                self.compiled_regex = Some(re);
             }
         }
-    }
-
-    /// Return validation error if config is invalid.
-    /// Called during preparse for status reporting.
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
     }
 
     /// Check all validation rules without mutating self.
@@ -272,14 +259,11 @@ mod validation_trait_tests {
     /// The trait impl calls `check_fields()` directly, so no mutable state is required.
     #[test]
     fn validation_error_returns_field_error_without_validate_call() {
-        // Empty rules list is invalid: validate() would set the cached error, but we skip that.
+        // Empty rules list is invalid; the trait reports the error directly.
         let config = DynamicInternalUpstreamConfig {
             rules: Some(vec![]),
             ..Default::default()
         };
-        // The cached field must still be None — we never called validate().
-        assert!(config.validation_error.is_none());
-        // The trait method must still report the error via check_fields().
         let result = PluginValidation::validation_error(&config);
         assert_eq!(
             result.as_deref(),
@@ -347,20 +331,6 @@ mod validation_trait_tests {
         assert_eq!(result.as_deref(), Some("Rule[0]: backendRef.name cannot be empty"));
     }
 
-    /// validate() must still populate the cached field for backward compatibility.
-    #[test]
-    fn validate_still_caches_error() {
-        let mut config = DynamicInternalUpstreamConfig {
-            rules: Some(vec![]),
-            ..Default::default()
-        };
-        config.validate();
-        assert_eq!(
-            config.validation_error.as_deref(),
-            Some("Rules list is empty; omit 'rules' for direct mode")
-        );
-    }
-
     /// validate() on a valid config with regex must compile the regex.
     #[test]
     fn validate_compiles_regex_on_valid_config() {
@@ -372,7 +342,6 @@ mod validation_trait_tests {
             ..Default::default()
         };
         config.validate();
-        assert!(config.validation_error.is_none());
         assert!(config.compiled_regex.is_some());
     }
 }

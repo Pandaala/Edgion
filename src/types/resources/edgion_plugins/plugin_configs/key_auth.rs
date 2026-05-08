@@ -84,12 +84,6 @@ pub struct KeyAuthConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_keys: Option<HashMap<String, KeyMetadata>>,
-
-    // === Validation fields ===
-    /// Validation error message (populated during preparse)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 /// API Key metadata containing headers to forward to upstream
@@ -132,34 +126,14 @@ impl Default for KeyAuthConfig {
             secret_refs: None,
             upstream_header_fields: vec![],
             resolved_keys: None,
-            validation_error: None,
         }
     }
 }
 
 impl KeyAuthConfig {
-    /// Validate configuration and return true if valid
-    pub fn validate(&mut self) -> bool {
-        match self.validate_and_check() {
-            Ok(()) => {
-                self.validation_error = None;
-                true
-            }
-            Err(e) => {
-                self.validation_error = Some(e);
-                false
-            }
-        }
-    }
-
-    /// Check if configuration is valid
-    pub fn is_valid(&self) -> bool {
-        self.validation_error.is_none()
-    }
-
-    /// Get validation error message
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
+    /// Validate configuration. Returns `Err(message)` if invalid.
+    pub fn validate(&self) -> Result<(), String> {
+        self.validate_and_check()
     }
 
     /// Internal validation logic
@@ -319,74 +293,63 @@ realm: "Production API"
 
     #[test]
     fn test_validate_default_config() {
-        let mut config = KeyAuthConfig::default();
-        assert!(config.validate());
-        assert!(config.is_valid());
-        assert!(config.get_validation_error().is_none());
+        let config = KeyAuthConfig::default();
+        assert!(config.validate().is_ok());
     }
 
     #[test]
     fn test_validate_empty_key_sources() {
-        let mut config = KeyAuthConfig {
+        let config = KeyAuthConfig {
             key_sources: vec![],
             ..Default::default()
         };
-        assert!(!config.validate());
-        assert!(!config.is_valid());
         assert_eq!(
-            config.get_validation_error(),
-            Some("key_sources cannot be empty - at least one key source must be specified")
+            config.validate().unwrap_err(),
+            "key_sources cannot be empty - at least one key source must be specified"
         );
     }
 
     #[test]
     fn test_validate_empty_name_in_key_source() {
-        let mut config = KeyAuthConfig {
+        let config = KeyAuthConfig {
             key_sources: vec![KeyGet::Header { name: "".to_string() }],
             ..Default::default()
         };
-        assert!(!config.validate());
-        assert_eq!(
-            config.get_validation_error(),
-            Some("key_sources[0]: name cannot be empty")
-        );
+        assert_eq!(config.validate().unwrap_err(), "key_sources[0]: name cannot be empty");
     }
 
     #[test]
     fn test_validate_unsupported_key_source() {
-        let mut config = KeyAuthConfig {
+        let config = KeyAuthConfig {
             key_sources: vec![KeyGet::ClientIp],
             ..Default::default()
         };
-        assert!(!config.validate());
-        let error = config.get_validation_error().unwrap();
+        let error = config.validate().unwrap_err();
         assert!(error.contains("unsupported source type"));
         assert!(error.contains("clientIp"));
     }
 
     #[test]
     fn test_validate_empty_key_field() {
-        let mut config = KeyAuthConfig {
+        let config = KeyAuthConfig {
             key_field: "".to_string(),
             ..Default::default()
         };
-        assert!(!config.validate());
-        assert_eq!(config.get_validation_error(), Some("key_field cannot be empty"));
+        assert_eq!(config.validate().unwrap_err(), "key_field cannot be empty");
     }
 
     #[test]
     fn test_validate_empty_realm() {
-        let mut config = KeyAuthConfig {
+        let config = KeyAuthConfig {
             realm: "".to_string(),
             ..Default::default()
         };
-        assert!(!config.validate());
-        assert_eq!(config.get_validation_error(), Some("realm cannot be empty"));
+        assert_eq!(config.validate().unwrap_err(), "realm cannot be empty");
     }
 
     #[test]
     fn test_validate_valid_custom_config() {
-        let mut config = KeyAuthConfig {
+        let config = KeyAuthConfig {
             key_sources: vec![
                 KeyGet::Header {
                     name: "X-API-Key".to_string(),
@@ -402,8 +365,7 @@ realm: "Production API"
             realm: "My API".to_string(),
             ..Default::default()
         };
-        assert!(config.validate());
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
     }
 }
 
@@ -421,6 +383,5 @@ mod validation_trait_tests {
             config.validation_error(),
             Some("key_sources cannot be empty - at least one key source must be specified".to_string())
         );
-        assert!(config.validation_error.is_none());
     }
 }

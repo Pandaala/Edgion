@@ -41,8 +41,8 @@ pub use self::resource::{
 pub use self::constants::app::*;
 pub use self::ctx::{
     BackendContext, BackendTlsInfo, DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset,
-    MatchInfo, MatchedInfo, MirrorConfig, MirrorState, RequestInfo, Rsc, SessionPersistenceState, TlsConnId,
-    TlsConnMeta, UpstreamInfo,
+    MatchInfo, MatchedInfo, MirrorConfig, MirrorState, PendingHeaderOp, RequestInfo, Rsc, SessionPersistenceState,
+    TlsConnId, TlsConnMeta, UpstreamInfo,
 };
 pub use self::edgion_status::EdgionStatus;
 pub use self::err::{

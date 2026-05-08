@@ -32,7 +32,7 @@ data:
         lease_name: edgion-controller-leader
         lease_namespace: edgion-system
         lease_duration_secs: 15
-        renew_period_secs: 10
+        renew_deadline_secs: 10
         retry_period_secs: 2
 
       metadata_filter:

@@ -66,11 +66,6 @@ pub struct DynamicExternalUpstreamConfig {
     #[serde(default)]
     pub debug_header: bool,
 
-    // === Validation cache ===
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
-
     // === Compiled regex cache ===
     #[serde(skip)]
     #[schemars(skip)]
@@ -191,7 +186,6 @@ impl Default for DynamicExternalUpstreamConfig {
             on_missing: ExtUpstreamOnMissing::default(),
             on_no_match: ExtUpstreamOnNoMatch::default(),
             debug_header: false,
-            validation_error: None,
             compiled_regex: None,
         }
     }
@@ -237,24 +231,17 @@ impl DynamicExternalUpstreamConfig {
         None
     }
 
-    /// Validate configuration and pre-compile regex at parse time
+    /// Pre-compile regex at parse time when fields are valid.
+    /// Field-level errors are surfaced via the `PluginValidation` trait.
     pub fn validate(&mut self) {
-        self.validation_error = self.check_fields();
-
-        // Pre-compile regex if validation passed and extract is set
-        if self.validation_error.is_none() {
-            if let Some(ref extract) = self.extract {
-                if let Ok(re) = regex::Regex::new(&extract.regex) {
-                    self.compiled_regex = Some(re);
-                }
+        if self.check_fields().is_some() {
+            return;
+        }
+        if let Some(ref extract) = self.extract {
+            if let Ok(re) = regex::Regex::new(&extract.regex) {
+                self.compiled_regex = Some(re);
             }
         }
-    }
-
-    /// Return validation error if config is invalid.
-    /// Called during preparse for status reporting.
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
     }
 
     /// Look up target domain by routing key
@@ -279,20 +266,19 @@ mod validation_trait_tests {
         // Default config has an empty domain_map, which is the first field error
         // (after regex check passes since extract is None).
         let config = DynamicExternalUpstreamConfig::default();
-        assert!(config.validation_error.is_none(), "trait must not touch cached field");
         let result = config.validation_error();
         assert_eq!(result, Some("domainMap cannot be empty".to_string()));
     }
 
     #[test]
     fn validation_error_detects_invalid_regex() {
-        let mut config = DynamicExternalUpstreamConfig::default();
-        config.extract = Some(ExtUpstreamExtract {
-            regex: "[invalid".to_string(),
-            group: 1,
-        });
-        // validation_error field is still None — no validate() called
-        assert!(config.validation_error.is_none());
+        let config = DynamicExternalUpstreamConfig {
+            extract: Some(ExtUpstreamExtract {
+                regex: "[invalid".to_string(),
+                group: 1,
+            }),
+            ..Default::default()
+        };
         let result = config.validation_error();
         assert!(
             result.as_deref().unwrap_or("").starts_with("Invalid extract regex:"),

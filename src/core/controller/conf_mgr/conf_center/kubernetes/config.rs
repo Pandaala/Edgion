@@ -211,10 +211,13 @@ pub struct LeaderElectionConfig {
     #[serde(default = "default_lease_duration_secs")]
     pub lease_duration_secs: i32,
 
-    /// Renew period in seconds (how often the leader renews the lease)
-    /// Should be less than lease_duration_secs
-    #[serde(default = "default_renew_period_secs")]
-    pub renew_period_secs: u64,
+    /// Renew deadline in seconds. Mirrors client-go's `RenewDeadline`: the
+    /// leader keeps leadership across transient apiserver errors (5xx,
+    /// network) as long as the previous successful renew was within this
+    /// window. Must satisfy
+    /// `retry_period_secs < renew_deadline_secs < lease_duration_secs`.
+    #[serde(default = "default_renew_deadline_secs")]
+    pub renew_deadline_secs: u64,
 
     /// Retry period in seconds (how often non-leaders try to acquire)
     #[serde(default = "default_retry_period_secs")]
@@ -227,7 +230,7 @@ impl Default for LeaderElectionConfig {
             lease_name: default_lease_name(),
             lease_namespace: default_lease_namespace(),
             lease_duration_secs: default_lease_duration_secs(),
-            renew_period_secs: default_renew_period_secs(),
+            renew_deadline_secs: default_renew_deadline_secs(),
             retry_period_secs: default_retry_period_secs(),
         }
     }
@@ -250,7 +253,7 @@ fn default_lease_duration_secs() -> i32 {
     15
 }
 
-fn default_renew_period_secs() -> u64 {
+fn default_renew_deadline_secs() -> u64 {
     10
 }
 
@@ -360,7 +363,7 @@ label_selector: app=edgion
         let config = LeaderElectionConfig::default();
         assert_eq!(config.lease_name, "edgion-controller-leader");
         assert_eq!(config.lease_duration_secs, 15);
-        assert_eq!(config.renew_period_secs, 10);
+        assert_eq!(config.renew_deadline_secs, 10);
         assert_eq!(config.retry_period_secs, 2);
     }
 
@@ -386,7 +389,7 @@ label_selector: app=edgion
             lease_name: "my-lease".to_string(),
             lease_namespace: "my-namespace".to_string(),
             lease_duration_secs: 30,
-            renew_period_secs: 20,
+            renew_deadline_secs: 20,
             retry_period_secs: 5,
         };
 

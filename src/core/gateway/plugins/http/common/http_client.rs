@@ -97,9 +97,13 @@ pub fn get_http_client_with_ssl_verify(ssl_verify: bool) -> &'static Client {
 /// When `config.tls` is present, builds a custom client with the configured TLS settings
 /// (insecure_skip_verify, custom CA, client certs). When no TLS config, returns `None` to
 /// indicate the caller should use `get_http_client()` for connection pooling.
+///
+/// `insecure_skip_verify` is gated through the shared
+/// [`link_sys::tls::apply_insecure_skip_verify`] helper, which refuses to honour the flag
+/// when `EDGION_ENV=production`.
 pub fn build_webhook_client(
     config: &crate::types::resources::link_sys::webhook::WebhookServiceConfig,
-) -> Option<Result<Client, reqwest::Error>> {
+) -> Option<anyhow::Result<Client>> {
     let tls = config.tls.as_ref()?;
 
     let mut builder = Client::builder()
@@ -108,10 +112,10 @@ pub fn build_webhook_client(
         .connect_timeout(Duration::from_secs(5))
         .redirect(reqwest::redirect::Policy::none());
 
-    if tls.insecure_skip_verify == Some(true) {
-        tracing::warn!("Webhook TLS: insecure_skip_verify enabled — certificate verification disabled");
-        builder = builder.danger_accept_invalid_certs(true);
-    }
+    builder = match crate::core::gateway::link_sys::tls::apply_insecure_skip_verify(builder, tls, "Webhook") {
+        Ok(b) => b,
+        Err(e) => return Some(Err(e)),
+    };
 
     // Resolve CA / mTLS from inline PEM + embedded Secret (private key is
     // secret-only; inline is rejected by `TlsCerts::deny_unknown_fields`).
@@ -122,8 +126,9 @@ pub fn build_webhook_client(
                     builder = builder.add_root_certificate(cert);
                 }
                 Err(e) => {
-                    tracing::error!("Webhook TLS: invalid CA certificate PEM: {}", e);
-                    return Some(Err(e));
+                    return Some(Err(
+                        anyhow::Error::from(e).context("Webhook TLS: invalid CA certificate PEM")
+                    ));
                 }
             }
         }
@@ -134,14 +139,15 @@ pub fn build_webhook_client(
                     builder = builder.identity(identity);
                 }
                 Err(e) => {
-                    tracing::error!("Webhook TLS: invalid client certificate PEM: {}", e);
-                    return Some(Err(e));
+                    return Some(Err(
+                        anyhow::Error::from(e).context("Webhook TLS: invalid client certificate PEM")
+                    ));
                 }
             }
         }
     }
 
-    Some(builder.build())
+    Some(builder.build().map_err(anyhow::Error::from))
 }
 
 /// Hop-by-hop headers that MUST NOT be forwarded to external services.

@@ -78,7 +78,7 @@ LeaderElection
 │   ├── pod_namespace: $POD_NAMESPACE（Downward API）
 │   ├── identity: $POD_NAME（Downward API）
 │   ├── lease_duration_secs: 15
-│   ├── renew_period_secs: 10
+│   ├── renew_deadline_secs: 10
 │   └── retry_period_secs: 2
 └── is_leader: Arc<AtomicBool>
 ```
@@ -241,7 +241,7 @@ ha_mode = "leader-only"            # or "all-serve"
 lease_name = "edgion-controller-leader"
 lease_namespace = "edgion-system"
 lease_duration_secs = 15
-renew_period_secs = 10
+renew_deadline_secs = 10
 retry_period_secs = 2
 ```
 

@@ -141,10 +141,6 @@ pub struct JweDecryptConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_credential: Option<ResolvedJweCredential>,
-
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 fn default_header() -> String {
@@ -191,16 +187,11 @@ impl Default for JweDecryptConfig {
             max_header_value_bytes: default_max_header_value_bytes(),
             max_total_header_bytes: default_max_total_header_bytes(),
             resolved_credential: None,
-            validation_error: None,
         }
     }
 }
 
 impl JweDecryptConfig {
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
-    }
-
     pub fn detect_validation_error(&self) -> Option<String> {
         if self.secret_ref.is_none() && self.resolved_credential.is_none() {
             return Some("secretRef is required".to_string());

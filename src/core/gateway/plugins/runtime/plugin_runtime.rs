@@ -782,6 +782,12 @@ impl PluginRuntime {
                         let body_bytes = body.map(bytes::Bytes::from);
                         let len = body_bytes.as_ref().map(|b| b.len()).unwrap_or(0);
                         let _ = resp.insert_header("content-length", len.to_string());
+                        // Apply queued ops AFTER defaults so plugin-set values
+                        // (e.g. Mock's Content-Type) override the runtime defaults.
+                        // Plugins must not queue Content-Length: the runtime computes
+                        // it from `body` above, and a queued Set("Content-Length", ...)
+                        // would silently desync framing from the actual body length.
+                        session_adapter.drain_pending_response_header_ops(&mut resp);
 
                         let _ = session_adapter
                             .write_response_header(Box::new(resp), body_bytes.is_none())
@@ -817,16 +823,10 @@ impl PluginRuntime {
         ctx: &mut EdgionHttpContext,
         response_header: &mut ResponseHeader,
     ) {
-        // Apply queued response headers from request stage
-        // Use a temporary vector to avoid borrowing issues if we iterate ctx directly while modifying response_header
-        // But ctx and response_header are separate arguments.
-        // wait, drain requires &mut ctx.
-        if !ctx.response_headers_to_add.is_empty() {
-            let headers = std::mem::take(&mut ctx.response_headers_to_add);
-            for (name, value) in headers {
-                let _ = response_header.insert_header(name, value);
-            }
-        }
+        // Apply queued response-header ops from request stage. Each op carries
+        // its own kind (Set/Append/Remove) so semantics are preserved across
+        // the deferral.
+        ctx.drain_pending_response_header_ops(response_header);
 
         if self.upstream_response_plugins.is_empty() {
             return;

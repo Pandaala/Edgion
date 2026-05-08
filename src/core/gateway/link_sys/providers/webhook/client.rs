@@ -54,8 +54,7 @@ impl LinkSysLifecycle for WebhookLinkClient {
     const SHUTDOWN_ON_REPLACE: bool = false;
 
     async fn init(&self) -> anyhow::Result<()> {
-        self.manager.upsert(&self.key, self.config.clone()).await;
-        Ok(())
+        self.manager.upsert(&self.key, self.config.clone()).await
     }
 
     async fn shutdown(&self) -> anyhow::Result<()> {
@@ -81,8 +80,9 @@ mod tests {
 
     #[async_trait]
     impl WebhookManagerOps for FakeManager {
-        async fn upsert(&self, key: &str, _config: WebhookServiceConfig) {
+        async fn upsert(&self, key: &str, _config: WebhookServiceConfig) -> anyhow::Result<()> {
             self.calls.lock().push(("upsert".into(), key.into()));
+            Ok(())
         }
 
         async fn remove(&self, key: &str) {

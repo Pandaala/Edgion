@@ -219,12 +219,6 @@ pub struct RateLimitRedisConfig {
     #[serde(default = "default_max_key_len")]
     #[schemars(range(min = 64, max = 65536))]
     pub max_key_len: usize,
-
-    // --- Runtime fields (skip serialization) ---
-    /// Validation error (runtime only)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 // ========== Default Functions ==========
@@ -267,7 +261,6 @@ impl Default for RateLimitRedisConfig {
             on_redis_failure: OnRedisFailure::default(),
             cost: default_cost(),
             max_key_len: default_max_key_len(),
-            validation_error: None,
         }
     }
 }
@@ -275,21 +268,12 @@ impl Default for RateLimitRedisConfig {
 // ========== Validation ==========
 
 impl RateLimitRedisConfig {
-    /// Validate and compile the configuration.
-    pub fn validate(&mut self) {
-        if let Err(e) = self.validate_inner() {
-            self.validation_error = Some(e);
-        }
-    }
-
-    /// Check if configuration is valid.
-    pub fn is_valid(&self) -> bool {
-        self.validation_error.is_none()
-    }
-
-    /// Get validation error message.
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
+    /// Validate the configuration and populate `interval_duration` for each policy.
+    ///
+    /// Returns `Err(message)` if any field is invalid. On success, every policy
+    /// has its `interval_duration` parsed and stored.
+    pub fn validate(&mut self) -> Result<(), String> {
+        self.validate_inner()
     }
 
     /// Get custom header names (if configured).
@@ -439,34 +423,30 @@ mod tests {
     #[test]
     fn test_valid_config() {
         let mut config = create_valid_config();
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
     }
 
     #[test]
     fn test_invalid_redis_ref_empty() {
         let mut config = create_valid_config();
         config.redis_ref = "".to_string();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("redis_ref"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("redis_ref"));
     }
 
     #[test]
     fn test_invalid_redis_ref_no_slash() {
         let mut config = create_valid_config();
         config.redis_ref = "shared-redis".to_string();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("redis_ref"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("redis_ref"));
     }
 
     #[test]
     fn test_invalid_redis_ref_special_chars() {
         let mut config = create_valid_config();
         config.redis_ref = "default/redis@cluster".to_string();
-        config.validate();
-        assert!(!config.is_valid());
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -476,9 +456,8 @@ mod tests {
             policies: vec![],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("At least one"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("At least one"));
     }
 
     #[test]
@@ -495,9 +474,8 @@ mod tests {
                 .collect(),
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("Too many"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("Too many"));
     }
 
     #[test]
@@ -512,9 +490,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("rate must be > 0"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("rate must be > 0"));
     }
 
     #[test]
@@ -529,52 +506,46 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("too small"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("too small"));
     }
 
     #[test]
     fn test_invalid_key_prefix_no_colon() {
         let mut config = create_valid_config();
         config.key_prefix = "edgion_rl".to_string();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("must end with ':'"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("must end with ':'"));
     }
 
     #[test]
     fn test_invalid_key_prefix_empty() {
         let mut config = create_valid_config();
         config.key_prefix = "".to_string();
-        config.validate();
-        assert!(!config.is_valid());
+        assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_zero_cost() {
         let mut config = create_valid_config();
         config.cost = 0;
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("cost"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("cost"));
     }
 
     #[test]
     fn test_max_key_len_too_small() {
         let mut config = create_valid_config();
         config.max_key_len = 32;
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("max_key_len"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("max_key_len"));
     }
 
     #[test]
     fn test_max_key_len_too_large() {
         let mut config = create_valid_config();
         config.max_key_len = 100_000;
-        config.validate();
-        assert!(!config.is_valid());
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -597,8 +568,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
         assert_eq!(config.policies[0].interval_duration, Some(Duration::from_secs(1)));
         assert_eq!(config.policies[1].interval_duration, Some(Duration::from_secs(3600)));
     }
@@ -663,18 +633,16 @@ keyPrefix: "myapp:rl:"
     fn test_invalid_reject_status() {
         let mut config = create_valid_config();
         config.reject_status = 600;
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("reject_status"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("reject_status"));
     }
 
     #[test]
     fn test_empty_key_name() {
         let mut config = create_valid_config();
         config.key = vec![KeyGet::Header { name: "".to_string() }];
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("key[0].name"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("key[0].name"));
     }
 
     #[test]
@@ -702,7 +670,6 @@ keyPrefix: "myapp:rl:"
                 ..Default::default()
             };
             assert!(config.validation_error().is_some());
-            assert!(config.validation_error.is_none()); // cache must NOT be touched
         }
 
         #[test]

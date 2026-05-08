@@ -11,6 +11,7 @@ use crate::types::resources::http_route_preparse::ParsedLBPolicy;
 use crate::types::{EdgionStatus, GRPCBackendRef, HTTPBackendRef, HTTPRouteMatch};
 use bytes::Bytes;
 use pingora_core::protocols::l4::socket::SocketAddr;
+use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -556,6 +557,41 @@ pub enum MirrorState {
     Abandoned,
 }
 
+/// A response-header mutation queued by a plugin in a stage where the real
+/// `ResponseHeader` is not yet available (typically `request_filter`).
+///
+/// Drained onto the real `ResponseHeader` at the upstream-response stage
+/// (`run_upstream_response_plugins_sync`) and at request-stage termination
+/// points that build their own response (`ErrResponse`, gRPC errors).
+#[derive(Debug, Clone)]
+pub enum PendingHeaderOp {
+    Set { name: String, value: String },
+    Append { name: String, value: String },
+    Remove { name: String },
+}
+
+impl PendingHeaderOp {
+    /// Apply this queued operation to a real ResponseHeader.
+    ///
+    /// `insert_header` / `append_header` errors (invalid header value bytes,
+    /// e.g. control chars) are intentionally swallowed: dropping a malformed
+    /// queued op silently is preferable to failing the entire response, and
+    /// matches the behavior of the pre-tagged-queue implementation.
+    pub fn apply(self, response_header: &mut ResponseHeader) {
+        match self {
+            PendingHeaderOp::Set { name, value } => {
+                let _ = response_header.insert_header(name, value);
+            }
+            PendingHeaderOp::Append { name, value } => {
+                let _ = response_header.append_header(name, value);
+            }
+            PendingHeaderOp::Remove { name } => {
+                response_header.remove_header(&name);
+            }
+        }
+    }
+}
+
 pub struct EdgionHttpContext {
     /// Request start time for latency calculation
     pub start_time: Instant,
@@ -654,8 +690,31 @@ pub struct EdgionHttpContext {
     ///   - mirror / fan-out consumers see consistent `req_header.uri`
     pub uri_finalized: bool,
 
-    /// Response headers to add (queued from request stage)
-    pub response_headers_to_add: Vec<(String, String)>,
+    /// Response-header mutations queued by plugins running before the real
+    /// `ResponseHeader` is available (typically request stage). Drained onto
+    /// the real `ResponseHeader` at three sites:
+    ///   1. `run_upstream_response_plugins_sync` — applied before any
+    ///      response-stage plugin runs, so they can further mutate the
+    ///      already-merged headers.
+    ///   2. `ErrResponse` request-stage termination handler — applied after
+    ///      runtime defaults (`content-type: text/plain`, `content-length`),
+    ///      so plugin Set ops override defaults.
+    ///   3. `send_grpc_error_direct` — applied before re-asserting
+    ///      `content-type: application/grpc` so the gRPC contract value
+    ///      cannot be overwritten by a queued Set.
+    ///
+    /// **Known gap (tracked as P2-g2-011 follow-up):** the
+    /// `send_grpc_error_three_frame` path in `session_adapter` does **not**
+    /// currently drain this queue. Plugins that queue `Set-Cookie` /
+    /// `X-Trace-Id` and then terminate a gRPC request with a non-200 status in
+    /// the request stage will see those queued ops silently dropped. This is
+    /// pre-existing behaviour from before the queue was tagged; left out of
+    /// the g2-002 fix scope to keep the change surface small.
+    ///
+    /// Each entry carries an explicit op (Set/Append/Remove) so semantics
+    /// are preserved across the deferral — without this tag, an `Append`
+    /// would silently degrade to `Set` at drain time.
+    pub pending_response_header_ops: Vec<PendingHeaderOp>,
 
     /// Per-request mirror state for RequestMirror plugin.
     pub mirror_state: Option<MirrorState>,
@@ -727,6 +786,20 @@ impl Default for EdgionHttpContext {
 }
 
 impl EdgionHttpContext {
+    /// Drain queued response-header ops onto the given real `ResponseHeader`,
+    /// preserving each op's original semantics (Set/Append/Remove). Called
+    /// from drain points: upstream-response stage and request-stage termination
+    /// paths that build their own response (ErrResponse, gRPC errors).
+    pub fn drain_pending_response_header_ops(&mut self, response_header: &mut ResponseHeader) {
+        if self.pending_response_header_ops.is_empty() {
+            return;
+        }
+        let ops = std::mem::take(&mut self.pending_response_header_ops);
+        for op in ops {
+            op.apply(response_header);
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             start_time: Instant::now(),
@@ -753,7 +826,7 @@ impl EdgionHttpContext {
             internal_jump: None,
             external_jump: None,
             uri_finalized: false,
-            response_headers_to_add: Vec::new(),
+            pending_response_header_ops: Vec::new(),
             mirror_state: None,
             sp_state: SessionPersistenceState::Inactive,
             sp_target_addr: None,

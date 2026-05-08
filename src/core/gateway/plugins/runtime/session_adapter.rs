@@ -12,6 +12,7 @@ use crate::types::common::{KeyGet, KeySet, WebhookExtract};
 use crate::types::filters::PluginRunningResult;
 use crate::types::{
     DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, HTTPBackendRef, InternalJumpPreset, MirrorState,
+    PendingHeaderOp,
 };
 
 pub struct PingoraSessionAdapter<'a> {
@@ -53,6 +54,14 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.ctx.plugin_running_result = PluginRunningResult::ErrTerminateRequest;
     }
 
+    /// Apply queued response-header ops onto a freshly-built `ResponseHeader`.
+    /// Used by request-stage termination paths (ErrResponse) that build their
+    /// own response and would otherwise drop plugin-queued headers on the floor.
+    #[inline]
+    pub fn drain_pending_response_header_ops(&mut self, response_header: &mut ResponseHeader) {
+        self.ctx.drain_pending_response_header_ops(response_header);
+    }
+
     /// Send a gRPC error response with user-specified grpc-status and grpc-message.
     ///
     /// Uses the same three-frame pattern as `send_grpc_error_three_frame`:
@@ -66,6 +75,12 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.grpc_response_terminated = true;
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
+        // Apply queued ops first so request-stage plugins (e.g. cookie issuance)
+        // still land their headers even when the request terminates with a
+        // gRPC error. Then write content-type LAST so a queued Set on
+        // "content-type" cannot overwrite the gRPC contract value and break
+        // tonic clients with Internal(13).
+        self.ctx.drain_pending_response_header_ops(&mut resp);
         resp.insert_header("content-type", "application/grpc")
             .map_err(|e| Box::new(e) as PluginSessionError)?;
         self.inner
@@ -383,10 +398,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             resp.insert_header(name.to_string(), value.to_string())
                 .map_err(|e| Box::new(e) as PluginSessionError)?;
         } else {
-            // Queue for later application
-            self.ctx
-                .response_headers_to_add
-                .push((name.to_string(), value.to_string()));
+            self.ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+                name: name.to_string(),
+                value: value.to_string(),
+            });
         }
         Ok(())
     }
@@ -396,10 +411,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             resp.append_header(name.to_string(), value.to_string())
                 .map_err(|e| Box::new(e) as PluginSessionError)?;
         } else {
-            // Queue for later application
-            self.ctx
-                .response_headers_to_add
-                .push((name.to_string(), value.to_string()));
+            self.ctx.pending_response_header_ops.push(PendingHeaderOp::Append {
+                name: name.to_string(),
+                value: value.to_string(),
+            });
         }
         Ok(())
     }
@@ -407,6 +422,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn remove_response_header(&mut self, name: &str) -> PluginSessionResult<()> {
         if let Some(resp) = &mut self.response_header {
             resp.remove_header(name);
+        } else {
+            self.ctx
+                .pending_response_header_ops
+                .push(PendingHeaderOp::Remove { name: name.to_string() });
         }
         Ok(())
     }

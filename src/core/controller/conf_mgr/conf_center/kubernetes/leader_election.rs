@@ -12,15 +12,18 @@ use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::Client;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::controller_metrics;
 
-/// Default lease duration in seconds
+/// Default lease duration in seconds (matches client-go default).
 const DEFAULT_LEASE_DURATION_SECS: i32 = 15;
-/// Default renew deadline in seconds
+/// Default renew deadline in seconds: leader retains leadership across
+/// transient errors as long as the previous successful renew was within
+/// this window. Mirrors client-go's `RenewDeadline`.
 const DEFAULT_RENEW_DEADLINE_SECS: u64 = 10;
-/// Default retry period in seconds  
+/// Default retry period in seconds: sleep between every renew/acquire
+/// attempt. Mirrors client-go's `RetryPeriod`.
 const DEFAULT_RETRY_PERIOD_SECS: u64 = 2;
 
 /// Leader election configuration
@@ -34,11 +37,17 @@ pub struct LeaderElectionConfig {
     pub pod_namespace: String,
     /// Identity of this instance (usually pod name)
     pub identity: String,
-    /// Lease duration in seconds
+    /// Lease duration in seconds (server-side validity of the Lease).
     pub lease_duration_secs: i32,
-    /// How often to renew the lease
-    pub renew_period_secs: u64,
-    /// How often non-leaders should retry acquiring the lease
+    /// Window (since last successful renew) within which transient errors
+    /// do not cause leadership loss. Must satisfy
+    /// `retry_period_secs < renew_deadline_secs < lease_duration_secs`.
+    pub renew_deadline_secs: u64,
+    /// Single sleep cadence between every acquire/renew attempt. Mirrors
+    /// client-go's `RetryPeriod`. A transient failure window of
+    /// `renew_deadline_secs` therefore produces roughly
+    /// `renew_deadline_secs / retry_period_secs` retry attempts before
+    /// step-down.
     pub retry_period_secs: u64,
 }
 
@@ -70,7 +79,7 @@ impl LeaderElectionConfig {
             pod_namespace,
             identity,
             lease_duration_secs: DEFAULT_LEASE_DURATION_SECS,
-            renew_period_secs: DEFAULT_RENEW_DEADLINE_SECS,
+            renew_deadline_secs: DEFAULT_RENEW_DEADLINE_SECS,
             retry_period_secs: DEFAULT_RETRY_PERIOD_SECS,
         })
     }
@@ -87,9 +96,9 @@ impl LeaderElectionConfig {
         self
     }
 
-    /// Set the renew period (how often the leader renews the lease)
-    pub fn with_renew_period_secs(mut self, secs: u64) -> Self {
-        self.renew_period_secs = secs;
+    /// Set the renew deadline (transient-error tolerance window).
+    pub fn with_renew_deadline_secs(mut self, secs: u64) -> Self {
+        self.renew_deadline_secs = secs;
         self
     }
 
@@ -97,6 +106,44 @@ impl LeaderElectionConfig {
     pub fn with_retry_period_secs(mut self, secs: u64) -> Self {
         self.retry_period_secs = secs;
         self
+    }
+
+    /// Validate timing invariants required by client-go-style leader election:
+    /// `retry_period_secs < renew_deadline_secs < lease_duration_secs`, and all
+    /// values must be > 0. Violations risk split-brain (deadline ≥ lease) or
+    /// defeat the deadline (retry ≥ deadline).
+    pub fn validate(&self) -> Result<()> {
+        if self.lease_duration_secs <= 0 {
+            anyhow::bail!(
+                "leader election misconfig: lease_duration_secs must be > 0 (got {})",
+                self.lease_duration_secs
+            );
+        }
+        let lease_duration = self.lease_duration_secs as u64;
+        if self.retry_period_secs == 0 {
+            anyhow::bail!("leader election misconfig: retry_period_secs must be > 0");
+        }
+        if self.renew_deadline_secs == 0 {
+            anyhow::bail!("leader election misconfig: renew_deadline_secs must be > 0");
+        }
+        if self.renew_deadline_secs >= lease_duration {
+            anyhow::bail!(
+                "leader election misconfig: renew_deadline_secs ({}) must be < lease_duration_secs ({}); \
+                 otherwise the leader can renew after the lease has already expired on the apiserver, \
+                 risking split-brain",
+                self.renew_deadline_secs,
+                lease_duration
+            );
+        }
+        if self.retry_period_secs >= self.renew_deadline_secs {
+            anyhow::bail!(
+                "leader election misconfig: retry_period_secs ({}) must be < renew_deadline_secs ({}); \
+                 retry interval at or above the deadline leaves no room to recover from a transient error",
+                self.retry_period_secs,
+                self.renew_deadline_secs
+            );
+        }
+        Ok(())
     }
 }
 
@@ -136,6 +183,10 @@ impl LeaderElection {
     /// - Lease resource can be created/read in `lease_namespace`
     /// - Current Pod label can be patched in `pod_namespace`
     pub async fn preflight_check(&self) -> Result<()> {
+        // Fail fast on bad timing config before touching the apiserver: bad
+        // values here can cause split-brain at runtime, which is much worse
+        // than a startup error.
+        self.config.validate()?;
         let lease_api: Api<Lease> = Api::namespaced(self.client.clone(), &self.config.lease_namespace);
         self.ensure_lease_exists(&lease_api).await?;
         self.ensure_pod_label_patch_ready().await?;
@@ -161,13 +212,16 @@ impl LeaderElection {
             "Starting leader election"
         );
 
+        let renew_deadline = Duration::from_secs(self.config.renew_deadline_secs);
+        // Tracks the last successful renew/acquire. Local to this loop because
+        // only the run loop reads/writes it.
+        let mut last_renewed: Option<Instant> = None;
+
         loop {
-            // Use different intervals: leader renews more frequently, non-leader retries slower
-            let sleep_duration = if self.is_leader.load(Ordering::Acquire) {
-                Duration::from_secs(self.config.renew_period_secs)
-            } else {
-                Duration::from_secs(self.config.retry_period_secs)
-            };
+            // Single sleep cadence (matches client-go's RetryPeriod): a
+            // transient failure window of renew_deadline_secs produces
+            // ~renew_deadline_secs/retry_period_secs retry attempts.
+            let sleep_duration = Duration::from_secs(self.config.retry_period_secs);
 
             // Check for shutdown signal during sleep
             if let Some(ref mut signal) = shutdown_signal {
@@ -192,6 +246,7 @@ impl LeaderElection {
 
             match self.try_acquire_or_renew(&lease_api).await {
                 Ok(true) => {
+                    last_renewed = Some(Instant::now());
                     if !self.is_leader.swap(true, Ordering::Release) {
                         tracing::info!(
                             component = "leader_election",
@@ -203,6 +258,10 @@ impl LeaderElection {
                     }
                 }
                 Ok(false) => {
+                    // Clean step-down: the apiserver replied; lease is held by
+                    // someone else (or we lost a CAS race). Reset deadline
+                    // tracking so a future re-acquire starts a fresh window.
+                    last_renewed = None;
                     if self.is_leader.swap(false, Ordering::Release) {
                         tracing::info!(
                             component = "leader_election",
@@ -214,19 +273,95 @@ impl LeaderElection {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        component = "leader_election",
-                        error = %e,
-                        "Failed to acquire/renew lease"
-                    );
-                    if self.is_leader.swap(false, Ordering::Release) {
-                        tracing::info!(
+                    // Detect 404: lease was deleted out-of-band. The
+                    // RenewDeadline reasoning ("lease still valid server-side
+                    // until expiry") does not apply when the lease object
+                    // itself is gone, so we must step down immediately to
+                    // avoid split-brain if another actor recreates the lease
+                    // within our deadline window. Then attempt recreation so
+                    // the cluster can resume electing without operator
+                    // intervention. 404 can originate from either api.get()
+                    // or api.replace() inside try_acquire_or_renew; downcast
+                    // covers both paths.
+                    let is_lease_missing = e
+                        .downcast_ref::<kube::Error>()
+                        .map(|ke| matches!(ke, kube::Error::Api(api_err) if api_err.code == 404))
+                        .unwrap_or(false);
+
+                    if is_lease_missing {
+                        tracing::warn!(
                             component = "leader_election",
                             identity = %self.config.identity,
-                            "Lost leadership due to lease error"
+                            lease_name = %self.config.lease_name,
+                            lease_namespace = %self.config.lease_namespace,
+                            "Lease resource missing (404); forcing step-down and attempting recreate"
                         );
-                        controller_metrics().set_leader(false);
-                        self.update_pod_leader_label(false).await;
+                        if self.is_leader.swap(false, Ordering::Release) {
+                            tracing::info!(
+                                component = "leader_election",
+                                identity = %self.config.identity,
+                                "Lost leadership: lease resource was deleted out-of-band"
+                            );
+                            controller_metrics().set_leader(false);
+                            self.update_pod_leader_label(false).await;
+                        }
+                        last_renewed = None;
+                        if let Err(recreate_err) = self.ensure_lease_exists(&lease_api).await {
+                            tracing::warn!(
+                                component = "leader_election",
+                                identity = %self.config.identity,
+                                error = %recreate_err,
+                                "Failed to recreate missing lease; will retry on next tick"
+                            );
+                        }
+                        // Skip the deadline-aware logic below: either we now
+                        // have a fresh lease (next tick re-acquires cleanly)
+                        // or recreate failed and we'll retry the same path.
+                        continue;
+                    }
+
+                    let was_leader = self.is_leader.load(Ordering::Acquire);
+                    let within_deadline =
+                        was_leader && last_renewed.map(|t| t.elapsed() < renew_deadline).unwrap_or(false);
+
+                    if within_deadline {
+                        // Lease is still valid on the apiserver (renew_time +
+                        // lease_duration > now), so no other replica will
+                        // take over. Retain leadership and retry — this
+                        // absorbs apiserver flakes (5xx, network) without
+                        // flapping pod label / metrics / reconcile.
+                        let remaining = renew_deadline.saturating_sub(
+                            last_renewed
+                                .expect("within_deadline implies last_renewed is Some")
+                                .elapsed(),
+                        );
+                        tracing::warn!(
+                            component = "leader_election",
+                            identity = %self.config.identity,
+                            error = %e,
+                            deadline_remaining_secs = remaining.as_secs(),
+                            "Transient lease error; retaining leadership within renew deadline"
+                        );
+                    } else {
+                        tracing::warn!(
+                            component = "leader_election",
+                            error = %e,
+                            "Failed to acquire/renew lease"
+                        );
+                        if self.is_leader.swap(false, Ordering::Release) {
+                            tracing::info!(
+                                component = "leader_election",
+                                identity = %self.config.identity,
+                                "Lost leadership: renew deadline exceeded after lease error"
+                            );
+                            controller_metrics().set_leader(false);
+                            self.update_pod_leader_label(false).await;
+                        }
+                        // Reset unconditionally for symmetry with the 404 branch:
+                        // any future re-acquire should start a fresh deadline
+                        // window, regardless of whether we held leadership when
+                        // this error fired.
+                        last_renewed = None;
                     }
                 }
             }

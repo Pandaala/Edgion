@@ -14,7 +14,7 @@ description: 插件系统架构：4 阶段执行、PluginRuntime 预构建、条
 |------|-------|------|-----------|----------|--------|
 | RequestFilter | `RequestFilter` | 转发到上游之前 | async | `run_request(&self, session, log) -> PluginRunningResult` | 可终止请求或返回自定义响应 |
 | UpstreamResponseFilter | `UpstreamResponseFilter` | 收到上游响应 headers 之后 | sync | `run_upstream_response_filter(&self, session, log) -> PluginRunningResult` | 可修改响应头、终止 |
-| UpstreamResponseBodyFilter | `UpstreamResponseBodyFilter` | 每个响应 body chunk | sync | `run_upstream_response_body_filter(&self, body, end_of_stream, session, log) -> Option<Duration>` | 返回 Duration 用于带宽限制 |
+| UpstreamResponseBodyFilter | `UpstreamResponseBodyFilter` | 每个响应 body chunk | sync | `run_upstream_response_body_filter(&self, body, end_of_stream, session) -> Option<Duration>` | 返回 Duration 用于带宽限制；**注意签名故意没有 `&mut PluginLog`**，详见下方"body 阶段无 PluginLog"约束 |
 | UpstreamResponse | `UpstreamResponse` | 上游响应完成之后 | async | `run_upstream_response(&self, session, log) -> PluginRunningResult` | 异步后处理 |
 
 执行流程要点：
@@ -22,6 +22,7 @@ description: 插件系统架构：4 阶段执行、PluginRuntime 预构建、条
 - 任一插件返回 `ErrTerminateRequest` 或 `ErrResponse` 时立即终止该阶段，后续插件不再执行
 - UpstreamResponseBodyFilter 阶段当多个插件返回 Duration 时，取最大值（最严格的限流生效）
 - 每个阶段执行结束后，插件日志记录到 `ctx.stage_logs` 中，包含插件名、耗时、条件跳过信息
+- **例外**：UpstreamResponseBodyFilter 阶段**不写** `ctx.stage_logs`、不向 `ctx.pending_edgion_plugins_logs` 推送条目。该阶段每个 chunk 调一次，per-chunk 写日志会让长流爆掉日志量。详见下方"body 阶段无 PluginLog"约束
 
 ## PluginRuntime
 
@@ -61,7 +62,10 @@ EdgionPlugins 定义的插件通过 `Conditional*` wrapper 自动包装，支持
 - `TimeRange` — 当前时间是否在指定范围内
 - `Probability` — 概率性执行（如 10% 采样）
 
-条件评估分为异步版本（`evaluate_detail`）和同步版本（`evaluate_detail_sync`），分别用于 async 和 sync 阶段。
+条件评估分三条路径：
+- `evaluate_detail` (async)：用于 async 阶段（RequestFilter、UpstreamResponse），带 `&mut PluginLog`
+- `evaluate_detail_sync` (sync)：用于 sync 阶段且需要把 `cond_skip` 写入外层 PluginLog 的场景（`ConditionalUpstreamResponseFilter`）
+- `evaluate_sync` / `Condition::evaluate_sync_silent`：**body 阶段专用**，不带 log、零分配。内部走 `KeyMatchCondition::evaluate_sync_silent` / `IncludeCondition::evaluate_sync_silent` / `ExcludeCondition::evaluate_sync_silent`。**不要在 body 阶段调用 `evaluate_detail_sync`**，否则会重新引入 per-chunk PluginLog 分配。
 
 Gateway API 标准 filter（通过私有 `add_from_httproute_filters_inner` 添加的，公开入口为上文 scope-explicit 的 `from_httproute_filters_for_rule` / `from_httproute_filters_for_backend`）不包装条件，始终执行。
 
@@ -83,6 +87,29 @@ resource.pre_parse()                        # event_dispatch.rs
 ```
 
 **新增带 regex 的条件类型时**：在 `Condition::compile()` 的 match 臂中加入对应分支，否则该类型 regex 永远不会被编译。
+
+### ⚠️ 关键约束：body 阶段无 PluginLog（per-chunk 路径必须 0 分配）
+
+**背景**：`UpstreamResponseBodyFilter::run_upstream_response_body_filter` 的 trait 签名**故意省略** `&mut PluginLog` 参数。body 阶段每个 chunk 调一次，对长流（gRPC server-streaming、大文件下载）来说每个请求会触发数百到数千次。任何 per-chunk 的日志分配都会以 O(chunks × plugins) 速率累积，早期就因此引入过两个问题：
+
+- `ExtensionRefFilter` 在 body 阶段调 `start_edgion_plugins_log`，每 chunk 向 `ctx.pending_edgion_plugins_logs` push 一条，没有 stage drain，长流持续泄漏内存（已修，issue g2-001）。
+- `run_upstream_response_body_plugins` 给每个 filter 每 chunk 分配一个 `PluginLog::new(filter.name())` 然后立即丢弃，纯浪费分配且 `cond_skip` 等诊断 silent loss（已修，issue g2-004）。
+
+**今后做新插件、新条件、新包装层时必须遵守的硬约束**：
+
+1. **不要给 `UpstreamResponseBodyFilter::run_upstream_response_body_filter` 加 `&mut PluginLog` 参数**。trait 签名是契约，承诺该阶段无 per-chunk 日志。如果哪一天真的需要诊断信息，按 #4 走。
+2. **新增 body 阶段 filter impl** 时，filter 内部不要调用任何 `log.push*`、`log.set_*`，因为没有 log 可调；用 `tracing::debug!` 做 dev 日志。
+3. **新增 body 阶段 wrapper** 时（类似 `ConditionalUpstreamResponseBodyFilter`），不要在内部 `PluginLog::new(...)` 创建临时 log；条件评估必须走 `PluginConditions::evaluate_sync` 或 `Condition::evaluate_sync_silent` 链，不要走 `evaluate_detail_sync`。
+4. **想做"body 阶段摘要"**（如本请求触发了多少次限流）：必须 per-request 聚合，而不是 per-chunk 推日志。在 `EdgionHttpContext` 加一个聚合槽位，body 阶段累加到聚合槽，request 结束阶段一次性 emit 到 `stage_logs`。**绝对不要**把单个 chunk 的执行轨迹写入 access log。
+5. **ExtensionRef body 路径** 用 `ExtensionRefFilter::resolve_runtime_silent`，**不要**用 `prepare_execution`（后者会调 `start_edgion_plugins_log`）。
+6. **资源/配置错误诊断**（"找不到引用的 EdgionPlugins"、"kind 不对"等）应在 Controller preparse / status conditions 里暴露，**不要**指望 body 阶段 runtime 日志兜底——body 阶段会静默 no-op，且 per-chunk 喷错误日志反而是 DoS 风险。
+
+**自检表**（PR review 时对 body 阶段改动逐条过一遍）：
+
+- [ ] 没给 `UpstreamResponseBodyFilter` trait 或其 impl 加 `&mut PluginLog`
+- [ ] 没在 body 阶段 hot path 里 `PluginLog::new(...)`、`String::from(...)`、`format!(...)`、`Vec::new()` 等堆分配
+- [ ] 条件评估走的是 silent 链（grep `evaluate_sync_silent` / `evaluate_sync` 而不是 `evaluate_detail_sync`）
+- [ ] 没有 `ctx.pending_edgion_plugins_logs.push`、`session.start_edgion_plugins_log` 在 body 路径上的调用
 
 ## HTTP 插件列表（29 个）
 

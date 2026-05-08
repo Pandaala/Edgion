@@ -120,11 +120,6 @@ pub struct HeaderCertAuthConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_ca_secrets: Option<Vec<Secret>>,
-
-    // === Validation fields ===
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -179,16 +174,11 @@ impl Default for HeaderCertAuthConfig {
             error_message: default_error_message(),
             auth_failure_delay_ms: 0,
             resolved_ca_secrets: None,
-            validation_error: None,
         }
     }
 }
 
 impl HeaderCertAuthConfig {
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
-    }
-
     pub fn detect_validation_error(&self) -> Option<String> {
         fn has_control_chars(s: &str) -> bool {
             s.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')

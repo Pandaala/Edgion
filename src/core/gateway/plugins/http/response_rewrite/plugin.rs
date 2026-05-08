@@ -19,13 +19,9 @@ pub struct ResponseRewrite {
 impl ResponseRewrite {
     /// Create a new ResponseRewrite plugin from configuration
     pub fn new(config: &ResponseRewriteConfig) -> Self {
-        let mut config = config.clone();
-        // Validate configuration
-        config.validate();
-
         ResponseRewrite {
             name: "ResponseRewrite".to_string(),
-            config,
+            config: config.clone(),
         }
     }
 
@@ -116,8 +112,9 @@ impl UpstreamResponseFilter for ResponseRewrite {
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
     ) -> PluginRunningResult {
+        use crate::types::resources::edgion_plugins::PluginValidation;
         // Check if configuration is valid
-        if !self.config.is_valid() {
+        if self.config.validation_error().is_some() {
             plugin_log.push_err("config invalid");
             return PluginRunningResult::GoodNext;
         }
@@ -152,7 +149,6 @@ mod tests {
                     to: "X-New".to_string(),
                 }]),
             }),
-            validation_error: None,
         };
         let plugin = ResponseRewrite::new(&config);
         let mut mock_session = MockPluginSession::new();
@@ -176,7 +172,6 @@ mod tests {
         let config = ResponseRewriteConfig {
             status_code: Some(600), // Invalid
             headers: None,
-            validation_error: None,
         };
         let plugin = ResponseRewrite::new(&config);
         let mut mock_session = MockPluginSession::new();

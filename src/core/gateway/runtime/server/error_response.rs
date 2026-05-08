@@ -451,15 +451,17 @@ mod tests {
         );
     }
 
-    /// Verify that `EdgionStatus::PluginTerminateWithoutResponse` has the expected
-    /// discriminant value (50202). This pins the numeric code used in access log
-    /// serialization so that any accidental renumbering causes a test failure.
+    /// Pin the discriminant of `EdgionStatus::PluginTerminateWithoutResponse`
+    /// to 50202. Access logs serialize the variant name, not this integer, so
+    /// the value is internal — but the `<http>_<sub>` encoding is a documented
+    /// convention (see `EdgionStatus::http_status`) and the assertion guards
+    /// against accidental renumbering.
     #[test]
     fn plugin_terminate_without_response_discriminant() {
         assert_eq!(
             EdgionStatus::PluginTerminateWithoutResponse as u32,
             50202u32,
-            "PluginTerminateWithoutResponse discriminant must be 50202 for access log compatibility"
+            "PluginTerminateWithoutResponse discriminant must remain 50202 (502_02 convention)"
         );
     }
 

@@ -9,6 +9,7 @@ use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use crate::types::listener_key::ListenerKey;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
+use crate::types::resources::gateway::FrontendValidationMode;
 use crate::types::{MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
 use anyhow::anyhow;
 use anyhow::Result;
@@ -737,10 +738,11 @@ impl TlsCallback {
         let mode = gateway_tls
             .frontend_validation
             .as_ref()
-            .and_then(|fv| fv.mode.as_deref())
-            .unwrap_or("AllowValidOnly");
+            .and_then(|fv| fv.mode.as_ref())
+            .cloned()
+            .unwrap_or_default();
 
-        if mode == "AllowInsecureFallback" {
+        if matches!(mode, FrontendValidationMode::AllowInsecureFallback) {
             // InsecureFallback: request client cert but accept all results (including
             // invalid/missing certs). A plain SslVerifyMode::PEER still rejects invalid
             // certs, so we need a custom verify callback that always returns 1.

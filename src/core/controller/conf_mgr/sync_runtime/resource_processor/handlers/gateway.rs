@@ -19,8 +19,8 @@ use crate::types::listener_key::resolve_listener_addr;
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::common::is_core_api_group;
 use crate::types::resources::gateway::{
-    GatewayAddress, GatewayStatus, GatewayStatusAddress, GatewayTLSConfig, Listener as GatewayListener, ListenerStatus,
-    RouteGroupKind,
+    FrontendValidationMode, GatewayAddress, GatewayStatus, GatewayStatusAddress, GatewayTLSConfig,
+    Listener as GatewayListener, ListenerStatus, RouteGroupKind,
 };
 use crate::types::ResourceKind;
 use k8s_openapi::api::core::v1::Service;
@@ -554,8 +554,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     .tls
                     .as_ref()
                     .and_then(|t| t.frontend_validation.as_ref())
-                    .and_then(|fv| fv.mode.as_deref())
-                    == Some("AllowInsecureFallback");
+                    .and_then(|fv| fv.mode.as_ref())
+                    == Some(&FrontendValidationMode::AllowInsecureFallback);
 
                 let unsupported_tls_mode = listener_has_unsupported_tls_mode(l);
                 let mixed_tls_conflict = mixed_tls_listeners.contains(&l.name);

@@ -65,8 +65,17 @@ impl WebhookManager {
         self.services.read().await.get(webhook_ref).map(|e| e.runtime.clone())
     }
 
-    /// Register or update a webhook from a LinkSys resource change
-    pub async fn upsert(&self, webhook_ref: &str, config: WebhookServiceConfig) {
+    /// Register or update a webhook from a LinkSys resource change.
+    ///
+    /// Returns `Err` when `build_webhook_client` rejects the config — currently
+    /// when `tls.insecure_skip_verify=true` is set with `EDGION_ENV=production`,
+    /// or when the supplied PEM material is malformed. The webhook is **not**
+    /// registered in that case, so the LinkSys's `init()` surfaces the failure
+    /// to the resource processor (matching the Elasticsearch / Redis / Etcd
+    /// providers, which already propagate build-time errors). This avoids
+    /// silently downgrading a misconfigured webhook to the default secure
+    /// client (which has no private CA wired in and would fail every call).
+    pub async fn upsert(&self, webhook_ref: &str, config: WebhookServiceConfig) -> anyhow::Result<()> {
         let rate_counter = config
             .rate_limit
             .as_ref()
@@ -79,9 +88,9 @@ impl WebhookManager {
                 tracing::error!(
                     webhook = %webhook_ref,
                     error = %e,
-                    "Failed to build webhook HTTP client with TLS config, falling back to default"
+                    "Failed to build webhook HTTP client with TLS config; refusing to register"
                 );
-                get_http_client_arc()
+                return Err(e.context(format!("build_webhook_client failed for webhook '{}'", webhook_ref)));
             }
         };
 
@@ -119,6 +128,7 @@ impl WebhookManager {
         }
         services.insert(webhook_ref.to_string(), WebhookEntry { runtime, health_task });
         tracing::info!(webhook = %webhook_ref, "Webhook registered/updated in manager");
+        Ok(())
     }
 
     /// Remove a webhook (LinkSys resource deleted)
@@ -143,7 +153,7 @@ impl WebhookManager {
 /// global `get_webhook_manager()`. Tests provide their own implementor.
 #[async_trait]
 pub trait WebhookManagerOps: Send + Sync + 'static {
-    async fn upsert(&self, key: &str, config: WebhookServiceConfig);
+    async fn upsert(&self, key: &str, config: WebhookServiceConfig) -> anyhow::Result<()>;
     async fn remove(&self, key: &str);
 }
 
@@ -154,7 +164,7 @@ pub struct StaticWebhookManagerAdapter;
 
 #[async_trait]
 impl WebhookManagerOps for StaticWebhookManagerAdapter {
-    async fn upsert(&self, key: &str, config: WebhookServiceConfig) {
+    async fn upsert(&self, key: &str, config: WebhookServiceConfig) -> anyhow::Result<()> {
         get_webhook_manager().upsert(key, config).await
     }
 
@@ -209,7 +219,10 @@ mod tests {
             uri: "http://localhost:8080/resolve".to_string(),
             ..Default::default()
         };
-        manager.upsert("test/webhook", config).await;
+        manager
+            .upsert("test/webhook", config)
+            .await
+            .expect("upsert should succeed without TLS config");
 
         let runtime = manager.get("test/webhook").await;
         assert!(runtime.is_some());
@@ -223,7 +236,10 @@ mod tests {
             uri: "http://localhost:8080/resolve".to_string(),
             ..Default::default()
         };
-        manager.upsert("test/webhook", config).await;
+        manager
+            .upsert("test/webhook", config)
+            .await
+            .expect("upsert should succeed without TLS config");
         manager.remove("test/webhook").await;
 
         let runtime = manager.get("test/webhook").await;

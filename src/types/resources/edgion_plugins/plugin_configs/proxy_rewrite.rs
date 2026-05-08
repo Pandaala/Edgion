@@ -86,11 +86,6 @@ pub struct ProxyRewriteConfig {
     #[serde(skip)]
     #[schemars(skip)]
     pub compiled_regex: Option<Regex>,
-
-    /// Configuration validation error.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 /// Regex URI rewrite configuration.
@@ -191,8 +186,7 @@ impl ProxyRewriteConfig {
     ///
     /// Returns true if configuration is valid, false otherwise.
     pub fn precompile(&mut self) -> bool {
-        if let Some(err) = self.check_fields() {
-            self.validation_error = Some(err);
+        if self.check_fields().is_some() {
             return false;
         }
 
@@ -202,25 +196,11 @@ impl ProxyRewriteConfig {
                 Ok(regex) => {
                     self.compiled_regex = Some(regex);
                 }
-                Err(e) => {
-                    self.validation_error = Some(format!("Invalid regex pattern: {}", e));
-                    return false;
-                }
+                Err(_) => return false,
             }
         }
 
-        self.validation_error = None;
         true
-    }
-
-    /// Check if configuration is valid.
-    pub fn is_valid(&self) -> bool {
-        self.validation_error.is_none()
-    }
-
-    /// Get validation error message.
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
     }
 
     /// Check if any rewrite is configured (for logging purposes)
@@ -268,7 +248,7 @@ mod tests {
         assert!(config.host.is_none());
         assert!(config.method.is_none());
         assert!(config.headers.is_none());
-        assert!(config.is_valid());
+        assert!(config.check_fields().is_none());
         assert!(!config.has_any_config());
     }
 
@@ -283,7 +263,6 @@ mod tests {
         };
 
         assert!(config.precompile());
-        assert!(config.is_valid());
         assert!(config.compiled_regex.is_some());
     }
 
@@ -298,8 +277,7 @@ mod tests {
         };
 
         assert!(!config.precompile());
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().is_some());
+        assert!(config.check_fields().is_some());
     }
 
     #[test]
@@ -318,8 +296,7 @@ mod tests {
         };
 
         assert!(!config.precompile());
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("Conflict"));
+        assert!(config.check_fields().unwrap().contains("Conflict"));
     }
 
     #[test]
@@ -424,9 +401,6 @@ mod validation_trait_tests {
             ..Default::default()
         };
 
-        // validation_error field must remain untouched (precompile was never called).
-        assert!(config.validation_error.is_none(), "cached field must not be touched");
-
         let result = PluginValidation::validation_error(&config);
         assert_eq!(
             result,
@@ -456,9 +430,6 @@ mod validation_trait_tests {
             }),
             ..Default::default()
         };
-
-        // validation_error field must remain untouched (precompile was never called).
-        assert!(config.validation_error.is_none(), "cached field must not be touched");
 
         let result = PluginValidation::validation_error(&config);
         assert!(result.is_some());

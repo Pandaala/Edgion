@@ -106,9 +106,9 @@ conf_center:
   leader_election:
     lease_name: edgion-controller-leader
     lease_namespace: edgion-system
-    lease_duration_seconds: 15
-    renew_deadline_seconds: 10
-    retry_period_seconds: 2
+    lease_duration_secs: 15
+    renew_deadline_secs: 10
+    retry_period_secs: 2
 ```
 
 ### Leader 选举字段 Schema
@@ -117,9 +117,9 @@ conf_center:
 |------|------|------|------|
 | `lease_name` | `String` | `"edgion-controller-leader"` | Lease 资源名称 |
 | `lease_namespace` | `String` | `"edgion-system"` | Lease 资源命名空间 |
-| `lease_duration_seconds` | `u64` | `15` | 租约持续时间 |
-| `renew_deadline_seconds` | `u64` | `10` | 续约截止时间 |
-| `retry_period_seconds` | `u64` | `2` | 重试间隔 |
+| `lease_duration_secs` | `u64` | `15` | 租约持续时间（apiserver 端有效期） |
+| `renew_deadline_secs` | `u64` | `10` | 续约截止窗口（transient 错误吸收窗口） |
+| `retry_period_secs` | `u64` | `2` | 每次 acquire/renew 尝试的统一 sleep 间隔（对应 client-go `RetryPeriod`） |
 
 ### HA 行为
 - **仅 Leader** 执行：资源处理、status 回写、ACME 证书签发、gRPC 推送

@@ -69,9 +69,12 @@ impl ConnectionFilter for StreamPluginConnectionFilter {
             return true; // No address info, allow by default
         };
 
-        // Look up the referenced EdgionStreamPlugins resource from the store
+        // Look up the referenced EdgionStreamPlugins resource from the store.
+        // Fail-close: a missing reference means the configured policy (e.g. an
+        // IP allowlist) cannot be enforced, so we reject rather than silently
+        // admit traffic that an operator expected to be filtered.
         let Some(stream_plugins) = self.store.get(&self.store_key) else {
-            return true;
+            return false;
         };
 
         // Use the pre-computed runtime (initialized at config sync time)
@@ -85,5 +88,58 @@ impl ConnectionFilter for StreamPluginConnectionFilter {
             StreamPluginResult::Allow => true,
             StreamPluginResult::Deny(_) => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::resources::edgion_stream_plugins::EdgionStreamPlugins;
+
+    fn empty_esp_yaml() -> EdgionStreamPlugins {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: empty
+  namespace: default
+spec: {}
+"#;
+        serde_yaml::from_str(yaml).expect("YAML must parse")
+    }
+
+    #[tokio::test]
+    async fn fail_close_when_store_missing_key() {
+        let store = Arc::new(StreamPluginStore::new());
+        let filter = StreamPluginConnectionFilter::new(store, "default/missing".to_string(), 8080);
+        let addr: SocketAddr = "10.0.0.1:54321".parse().unwrap();
+
+        assert!(
+            !filter.should_accept(Some(&addr)).await,
+            "missing reference must reject (fail-close), not admit"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_when_store_has_empty_runtime() {
+        let store = Arc::new(StreamPluginStore::new());
+        let mut map = std::collections::HashMap::new();
+        map.insert("default/empty".to_string(), Arc::new(empty_esp_yaml()));
+        store.replace_all(map);
+
+        let filter = StreamPluginConnectionFilter::new(store, "default/empty".to_string(), 8080);
+        let addr: SocketAddr = "10.0.0.1:54321".parse().unwrap();
+
+        assert!(
+            filter.should_accept(Some(&addr)).await,
+            "operator-created ESP with no plugins is intentional pass-through"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_when_address_is_none() {
+        let store = Arc::new(StreamPluginStore::new());
+        let filter = StreamPluginConnectionFilter::new(store, "default/missing".to_string(), 8080);
+        assert!(filter.should_accept(None).await);
     }
 }

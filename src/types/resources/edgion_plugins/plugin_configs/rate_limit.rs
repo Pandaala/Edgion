@@ -296,11 +296,6 @@ pub struct RateLimitConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimator_slots_k: Option<usize>,
 
-    /// Validation error (runtime only)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
-
     /// Parsed interval duration (runtime only)
     #[serde(skip)]
     #[schemars(skip)]
@@ -344,7 +339,6 @@ impl Default for RateLimitConfig {
             scope: RateLimitScope::default(),
             skew_tolerance: default_skew_tolerance(),
             estimator_slots_k: None,
-            validation_error: None,
             interval_duration: None,
             effective_slots: None,
         }
@@ -357,30 +351,20 @@ pub use crate::core::gateway::cli::config::{
 };
 
 impl RateLimitConfig {
-    /// Validate and compile the configuration
+    /// Validate and compile the configuration.
     ///
     /// Uses the global RateLimit configuration from toml config file.
-    pub fn validate(&mut self) {
+    /// Returns `Err(message)` if invalid; on success, `interval_duration` and
+    /// `effective_slots` are populated.
+    pub fn validate(&mut self) -> Result<(), String> {
         let default_slots = get_default_estimator_slots();
         let max_slots = get_max_estimator_slots();
-        self.validate_with_global_config(default_slots, max_slots);
+        self.validate_with_global_config(default_slots, max_slots)
     }
 
-    /// Validate and compile the configuration with global config values
-    pub fn validate_with_global_config(&mut self, default_slots: usize, max_slots: usize) {
-        if let Err(e) = self.validate_and_compile(default_slots, max_slots) {
-            self.validation_error = Some(e);
-        }
-    }
-
-    /// Check if configuration is valid
-    pub fn is_valid(&self) -> bool {
-        self.validation_error.is_none()
-    }
-
-    /// Get validation error message
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
+    /// Validate and compile the configuration with explicit global config values.
+    pub fn validate_with_global_config(&mut self, default_slots: usize, max_slots: usize) -> Result<(), String> {
+        self.validate_and_compile(default_slots, max_slots)
     }
 
     /// Get the parsed interval duration
@@ -592,9 +576,8 @@ mod tests {
             rate: 0,
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("rate"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("rate"));
     }
 
     #[test]
@@ -604,9 +587,8 @@ mod tests {
             key: vec![KeyGet::Header { name: "".to_string() }],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("key[0].name"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("key[0].name"));
     }
 
     #[test]
@@ -615,8 +597,7 @@ mod tests {
             rate: 10,
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         assert_eq!(config.get_interval_duration(), Duration::from_secs(1));
     }
 
@@ -637,8 +618,7 @@ mod tests {
             interval: "5s".to_string(),
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         assert_eq!(config.interval_duration, Some(Duration::from_secs(5)));
     }
 
@@ -663,8 +643,7 @@ mod tests {
             rate: 10,
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         // Default should be 64K = 65536 (from global config)
         assert_eq!(config.get_effective_slots(), get_default_estimator_slots());
     }
@@ -676,8 +655,7 @@ mod tests {
             estimator_slots_k: Some(16), // 16K = 16384 slots
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         assert_eq!(config.get_effective_slots(), 16 * SLOTS_K);
     }
 
@@ -689,8 +667,9 @@ mod tests {
             ..Default::default()
         };
         // Global config: default=64K, max=256K for this test
-        config.validate_with_global_config(64 * SLOTS_K, 256 * SLOTS_K);
-        assert!(config.is_valid());
+        config
+            .validate_with_global_config(64 * SLOTS_K, 256 * SLOTS_K)
+            .expect("validate should succeed");
         assert_eq!(config.get_effective_slots(), 256 * SLOTS_K); // Capped at max
     }
 
@@ -703,8 +682,7 @@ mod tests {
             estimator_slots_k: Some(0),
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         assert_eq!(config.get_effective_slots(), get_min_estimator_slots()); // At least minimum (1K)
     }
 
@@ -912,9 +890,8 @@ rate: 50
             scope: RateLimitScope::Cluster,
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("Cluster scope"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("Cluster scope"));
     }
 
     #[test]
@@ -925,8 +902,7 @@ rate: 50
             skew_tolerance: 0.5, // Below minimum
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         assert_eq!(config.skew_tolerance, 1.0); // Clamped to 1.0
     }
 
@@ -938,8 +914,7 @@ rate: 50
             skew_tolerance: 3.0, // Above maximum
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         assert_eq!(config.skew_tolerance, 2.0); // Clamped to 2.0
     }
 
@@ -1017,7 +992,6 @@ mod validation_trait_tests {
         };
         // Should report an error about rate, without any validate() call.
         assert!(config.validation_error().is_some(), "rate=0 must be invalid");
-        assert!(config.validation_error.is_none(), "must not touch cached field");
     }
 
     #[test]

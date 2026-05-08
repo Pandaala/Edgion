@@ -88,11 +88,6 @@ pub struct LdapAuthConfig {
     /// Header set to true for anonymous requests
     #[serde(default = "default_anonymous_header")]
     pub anonymous_header: String,
-
-    // === Validation ===
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 fn default_ldap_port() -> u16 {
@@ -153,7 +148,6 @@ impl Default for LdapAuthConfig {
             keepalive: default_keepalive(),
             credential_identifier_header: default_credential_identifier_header(),
             anonymous_header: default_anonymous_header(),
-            validation_error: None,
         }
     }
 }

@@ -105,7 +105,8 @@ impl RequestFilter for DirectEndpoint {
         }
 
         // 1. Check config validation
-        if let Some(_err) = self.config.get_validation_error() {
+        use crate::types::resources::edgion_plugins::PluginValidation;
+        if self.config.validation_error().is_some() {
             log.push("config invalid");
             return PluginRunningResult::GoodNext; // Fail-open on config error
         }
