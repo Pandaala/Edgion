@@ -36,11 +36,16 @@ use crate::types::resources::plugin_metadata::PluginMetaData;
 const PLUGIN_METADATA_KIND: &str = "PluginMetaData";
 
 /// Typed representation of a single watch event from the controller.
+///
+/// `data` is borrowed as `&RawValue` so the outer batch parse only slices the
+/// array; each item's payload is deserialized lazily into its concrete type,
+/// avoiding an intermediate `serde_json::Value` tree per event.
 #[derive(serde::Deserialize)]
-struct WatchEventRaw {
+struct WatchEventRaw<'a> {
     #[serde(rename = "type")]
     event_type: String,
-    data: serde_json::Value,
+    #[serde(borrow)]
+    data: &'a serde_json::value::RawValue,
     #[serde(default)]
     #[allow(dead_code)]
     sync_version: u64,
@@ -528,7 +533,7 @@ impl FederationSync for FederationGrpcServer {
                                                         continue;
                                                     }
                                                 };
-                                                match serde_json::from_value::<PluginMetaData>(raw.data) {
+                                                match serde_json::from_str::<PluginMetaData>(raw.data.get()) {
                                                     Ok(pm) => {
                                                         let key = pm.key_name();
                                                         events.push(WatchEventSimple {

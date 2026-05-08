@@ -47,13 +47,6 @@ pub struct ConsistencyResult {
     pub conflicts: Vec<String>,
 }
 
-fn split_pm_key(key: &str) -> (String, String) {
-    let mut parts = key.splitn(2, '/');
-    let ns = parts.next().unwrap_or("").to_string();
-    let name = parts.next().unwrap_or("").to_string();
-    (ns, name)
-}
-
 fn online_controllers(state: &ApiState) -> Vec<String> {
     state
         .aggregator
@@ -68,18 +61,15 @@ fn online_controllers(state: &ApiState) -> Vec<String> {
 pub async fn list_global_ip_restrictions(
     State(state): State<ApiState>,
 ) -> Json<ApiResponse<Vec<CenterGlobalIpRestrictionView>>> {
-    let raw = state.metadata_store.list_global_ip_restrictions();
+    let entries = state.metadata_store.list_global_ip_restrictions();
     let online = online_controllers(&state);
-    let items: Vec<_> = raw
+    let items: Vec<_> = entries
         .into_iter()
-        .map(|(pm_key, per_ctrl)| {
-            let (namespace, name) = split_pm_key(&pm_key);
-            CenterGlobalIpRestrictionView {
-                namespace,
-                name,
-                controllers: per_ctrl,
-                online_controller_ids: online.clone(),
-            }
+        .map(|e| CenterGlobalIpRestrictionView {
+            namespace: e.namespace,
+            name: e.name,
+            controllers: e.controllers,
+            online_controller_ids: online.clone(),
         })
         .collect();
     Json(ApiResponse::success(items))
@@ -113,12 +103,11 @@ pub async fn get_global_ip_restriction(
 pub async fn global_ip_restrictions_consistency(
     State(state): State<ApiState>,
 ) -> Json<ApiResponse<Vec<ConsistencyResult>>> {
-    let raw = state.metadata_store.list_global_ip_restrictions();
-    let items: Vec<_> = raw
+    let entries = state.metadata_store.list_global_ip_restrictions();
+    let items: Vec<_> = entries
         .into_iter()
-        .map(|(pm_key, per_ctrl)| {
-            let (namespace, name) = split_pm_key(&pm_key);
-            let hashes: HashSet<String> = per_ctrl.values().map(|e| e.content_hash.clone()).collect();
+        .map(|e| {
+            let hashes: HashSet<&str> = e.controllers.values().map(|c| c.content_hash.as_str()).collect();
             let consistent = hashes.len() <= 1;
             // v1: report whole-entry mismatch; per-field conflicts left to v2
             let conflicts = if consistent {
@@ -127,10 +116,10 @@ pub async fn global_ip_restrictions_consistency(
                 vec!["contentHash".to_string()]
             };
             ConsistencyResult {
-                namespace,
-                name,
+                namespace: e.namespace,
+                name: e.name,
                 consistent,
-                controller_count: per_ctrl.len(),
+                controller_count: e.controllers.len(),
                 conflicts,
             }
         })

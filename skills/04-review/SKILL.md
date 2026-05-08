@@ -17,6 +17,8 @@ description: Review-specific knowledge for Edgion. Use when auditing code review
 - 判定 CPU/Memory 性能问题时：
   - **通用方法论**（如何判断是否误报）→ [cpu-memory/performance-review-methodology.md](cpu-memory/performance-review-methodology.md)
   - **已确认的误报场景**（具体案例）→ [cpu-memory/not-a-performance-issue.md](cpu-memory/not-a-performance-issue.md)
+  - 审查 `record_cross_ns_refs` / 类似 reconcile handler 中"循环单次锁应改 batch / 单次锁内完成"类 finding 时，先看 [cpu-memory/not-a-performance-issue.md](cpu-memory/not-a-performance-issue.md) 的「Route handlers `record_cross_ns_refs` 循环 `add_ref` 不是锁热点」——K8s reconcile 事件级冷路径，单路由 backend_refs 1-10 个总锁开销 µs 级，批量化要改 5 个 handler 且零可观测收益
+  - 审查 `BidirectionalRefManager` / `SecretRefManager` / `ServiceRefManager` / `CrossNamespaceRefManager` "无 GC / 过期 / 周期校验，引用会永久残留"类 finding 时，先看 [cpu-memory/not-a-performance-issue.md](cpu-memory/not-a-performance-issue.md) 的「`BidirectionalRefManager` 无 GC/过期机制不是内存泄漏」——它是 K8s 资源图的索引而非 cache，clear-then-readd 模式 + delete 路径 + watch resync + leader 切换 reset 已四重闭环，加 GC 反而与 reconcile 状态机冲突
 - 审查 `RwLock`/`Mutex` `.unwrap()` 时，先看 [rwlock-unwrap/rwlock-unwrap-rule.md](rwlock-unwrap/rwlock-unwrap-rule.md)
 - 审查 handler 时，先看 [handler-requeue/handler-requeue-rule.md](handler-requeue/handler-requeue-rule.md)
 - 审查 DSL `log_warn(value)` / `log_error(value)` 写入 PluginLog 类 finding 时：动态值通过 `push_sensitive` 写入，行为受 `[access_log_sensitive]` 全局开关控制（默认 off → 明文，replace → `***`，wrap → `<E>...</E>`）。普通插件代码用 `push_fmt` + `sensitive(...)` 标注敏感参数。如 finding 是「应用脱敏后还能看到值」——默认 off 时正是预期行为，由部署方按合规要求开启 replace/wrap

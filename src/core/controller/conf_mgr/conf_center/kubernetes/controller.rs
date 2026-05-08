@@ -295,14 +295,16 @@ async fn requeue_selector_gateways(runtime: Arc<ControllerRuntime>) {
     let Some(processor) = runtime.processor_registry.get("Gateway") else {
         return;
     };
-    let Ok((json, _)) = processor.as_watch_obj().list_json() else {
-        return;
-    };
-    let gateways: Vec<crate::types::prelude_resources::Gateway> = match serde_json::from_str(&json) {
-        Ok(g) => g,
-        Err(_) => return,
-    };
-    for gw in &gateways {
+    // Iterate cache keys (already filtered by our gatewayClassName via the
+    // handler) rather than raw_store, to avoid requeuing Gateways owned by
+    // other controllers.
+    for key in processor.list_keys() {
+        let Some(any) = processor.get_raw_any(&key) else {
+            continue;
+        };
+        let Ok(gw) = any.downcast::<crate::types::prelude_resources::Gateway>() else {
+            continue;
+        };
         let uses_selector = gw.spec.listeners.as_deref().unwrap_or_default().iter().any(|l| {
             l.allowed_routes
                 .as_ref()
@@ -311,11 +313,6 @@ async fn requeue_selector_gateways(runtime: Arc<ControllerRuntime>) {
                 == Some("Selector")
         });
         if uses_selector {
-            let key = format!(
-                "{}/{}",
-                gw.metadata.namespace.as_deref().unwrap_or("default"),
-                gw.metadata.name.as_deref().unwrap_or("")
-            );
             runtime.processor_registry.requeue("Gateway", key).await;
         }
     }

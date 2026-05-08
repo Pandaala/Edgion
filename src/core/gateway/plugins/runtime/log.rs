@@ -1,5 +1,6 @@
 use crate::core::gateway::observe::logs::{LogBuffer, ULogBuffer};
 use serde::Serialize;
+use smallvec::SmallVec;
 
 // LocalObjectReference no longer needed - refer_to is now just a String
 
@@ -54,6 +55,27 @@ macro_rules! la {
     };
 }
 pub use la;
+
+/// Render `fmt` with `{}` placeholders substituted by `args` directly into `buf`.
+/// Sensitive args run through the active masking mode.
+#[inline]
+fn format_into<A: smallvec::Array<Item = u8>>(buf: &mut SmallVec<A>, fmt: &str, args: &[LogArg<'_>]) {
+    let mut arg_iter = args.iter();
+    let mut rest = fmt;
+    while let Some(pos) = rest.find("{}") {
+        buf.extend_from_slice(rest[..pos].as_bytes());
+        rest = &rest[pos + 2..];
+        if let Some(arg) = arg_iter.next() {
+            match arg {
+                LogArg::Plain(s) => buf.extend_from_slice(s.as_bytes()),
+                LogArg::Sensitive(s) => {
+                    crate::types::sensitive::apply_sensitive(s, |w| buf.extend_from_slice(w.as_bytes()));
+                }
+            }
+        }
+    }
+    buf.extend_from_slice(rest.as_bytes());
+}
 
 /// Plugin log entry
 /// Fixed structure for plugin execution logging
@@ -232,23 +254,12 @@ impl PluginLog {
     /// log.push_fmt("user {} from {}", la!["admin", sensitive(&client_ip)]);
     /// ```
     pub fn push_fmt(&mut self, fmt: &str, args: &[LogArg<'_>]) -> bool {
-        let mut buf = String::new();
-        let mut arg_iter = args.iter();
-        let mut rest = fmt;
-        while let Some(pos) = rest.find("{}") {
-            buf.push_str(&rest[..pos]);
-            rest = &rest[pos + 2..];
-            if let Some(arg) = arg_iter.next() {
-                match arg {
-                    LogArg::Plain(s) => buf.push_str(s),
-                    LogArg::Sensitive(s) => {
-                        crate::types::sensitive::apply_sensitive(s, |w| buf.push_str(w));
-                    }
-                }
-            }
-        }
-        buf.push_str(rest);
-        let ok = self.log.get_or_insert_with(LogBuffer::new).push(&buf);
+        // Stack-inlined scratch buffer: LogBuffer caps each entry at 100 bytes,
+        // so 128 bytes inline always avoids heap allocation here.
+        let mut buf: SmallVec<[u8; 128]> = SmallVec::new();
+        format_into(&mut buf, fmt, args);
+        let s = std::str::from_utf8(&buf).unwrap_or("");
+        let ok = self.log.get_or_insert_with(LogBuffer::new).push(s);
         if !ok {
             self.log_full = Some(true);
         }
@@ -257,23 +268,12 @@ impl PluginLog {
 
     /// Unbounded-buffer counterpart of [`push_fmt`].
     pub fn u_push_fmt(&mut self, fmt: &str, args: &[LogArg<'_>]) -> bool {
-        let mut buf = String::new();
-        let mut arg_iter = args.iter();
-        let mut rest = fmt;
-        while let Some(pos) = rest.find("{}") {
-            buf.push_str(&rest[..pos]);
-            rest = &rest[pos + 2..];
-            if let Some(arg) = arg_iter.next() {
-                match arg {
-                    LogArg::Plain(s) => buf.push_str(s),
-                    LogArg::Sensitive(s) => {
-                        crate::types::sensitive::apply_sensitive(s, |w| buf.push_str(w));
-                    }
-                }
-            }
-        }
-        buf.push_str(rest);
-        self.ulog.get_or_insert_with(ULogBuffer::new).push(&buf)
+        // 256 bytes inline covers typical entries without heap; oversize entries
+        // spill once via SmallVec growth, still better than always-heap String.
+        let mut buf: SmallVec<[u8; 256]> = SmallVec::new();
+        format_into(&mut buf, fmt, args);
+        let s = std::str::from_utf8(&buf).unwrap_or("");
+        self.ulog.get_or_insert_with(ULogBuffer::new).push(s)
     }
 
     /// Helper method for tests: checks if log buffer contains a substring

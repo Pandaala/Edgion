@@ -422,13 +422,8 @@ async fn try_oidc_validation(state: &AuthMiddlewareState, token: &str) -> Result
     let header = decode_header(token).map_err(|e| format!("Invalid token header: {}", e))?;
 
     // Resolve algorithm policy.
-    let allowed_algs_strs: Option<Vec<String>> = if state.allowed_algorithms.is_empty() {
-        None
-    } else {
-        Some(state.allowed_algorithms.clone())
-    };
-    let (expected_alg, allowed_algs) =
-        resolve_algorithm_policy(None, allowed_algs_strs.as_deref().map(|v| v as &[String])).map_err(|(_, msg)| msg)?;
+    let allowed = (!state.allowed_algorithms.is_empty()).then(|| state.allowed_algorithms.as_slice());
+    let (expected_alg, allowed_algs) = resolve_algorithm_policy(None, allowed).map_err(|(_, msg)| msg)?;
 
     // Validate token algorithm against policy.
     validate_token_alg(header.alg, expected_alg, &allowed_algs).map_err(|(_, msg)| msg)?;

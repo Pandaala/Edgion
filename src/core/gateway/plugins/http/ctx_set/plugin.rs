@@ -97,7 +97,13 @@ impl CtxSet {
     /// Process a single variable rule
     ///
     /// Returns the final value to set, or None if the value should not be set
-    async fn process_rule(&self, rule: &CtxVarRule, rule_idx: usize, session: &dyn PluginSession) -> Option<String> {
+    async fn process_rule(
+        &self,
+        rule: &CtxVarRule,
+        rule_idx: usize,
+        session: &dyn PluginSession,
+        plugin_log: &mut PluginLog,
+    ) -> Option<String> {
         // Priority: value > template > from
         let mut value = if let Some(ref static_value) = rule.value {
             // Static value has highest priority
@@ -127,7 +133,7 @@ impl CtxSet {
         // Apply transform
         if let Some(ref transform) = rule.transform {
             let compiled_replace = self.config.get_compiled_transform_regex(rule_idx);
-            value = match self.apply_transform(&value, transform, compiled_replace) {
+            value = match self.apply_transform(&value, transform, compiled_replace, plugin_log) {
                 Some(transformed) => transformed,
                 None => {
                     return rule.default.clone();
@@ -164,21 +170,21 @@ impl CtxSet {
         value: &str,
         transform: &TransformConfig,
         compiled_replace: Option<&Regex>,
+        plugin_log: &mut PluginLog,
     ) -> Option<String> {
         // Get the transform type from the config struct
         let transform_type = transform.get_transform_type()?;
 
         match transform_type {
-            TransformType::Replace { pattern, with } => {
-                if let Some(re) = compiled_replace {
-                    Some(re.replace_all(value, with.as_str()).to_string())
-                } else {
-                    // Fallback: should not happen after validate(), pattern already validated
-                    Regex::new(&pattern)
-                        .ok()
-                        .map(|re| re.replace_all(value, with.as_str()).to_string())
+            TransformType::Replace { with, .. } => match compiled_replace {
+                Some(re) => Some(re.replace_all(value, with.as_str()).to_string()),
+                None => {
+                    // Invariant: validate() compiles every Replace pattern; reaching
+                    // here means the config bypassed validation. Fail-open via default.
+                    plugin_log.push_err("transform regex missing");
+                    None
                 }
-            }
+            },
             TransformType::Substring(start, end) => {
                 let chars: Vec<char> = value.chars().collect();
                 let start = start.min(chars.len());
@@ -212,7 +218,7 @@ impl RequestFilter for CtxSet {
         }
 
         for (idx, rule) in self.config.vars.iter().enumerate() {
-            let value = self.process_rule(rule, idx, session).await;
+            let value = self.process_rule(rule, idx, session, plugin_log).await;
 
             match value {
                 Some(v) => {

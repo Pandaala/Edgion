@@ -54,6 +54,16 @@ pub struct ControllerPmEntry {
     pub last_modified: i64,
 }
 
+/// Aggregated view of one GlobalConnectionIpRestriction PM across all Controllers.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CenterGlobalIpRestrictionEntryView {
+    pub namespace: String,
+    pub name: String,
+    /// Map of controller_id → ControllerPmEntry
+    pub controllers: HashMap<String, ControllerPmEntry>,
+}
+
 /// Aggregates RegionRoute PluginMetaData across all controllers.
 ///
 /// Internal structure:
@@ -111,9 +121,21 @@ impl CenterMetaDataStore {
     }
 
     /// List all GlobalConnectionIpRestriction PMs aggregated across Controllers.
-    /// Returns `pm_key → { controller_id → entry }`.
-    pub fn list_global_ip_restrictions(&self) -> HashMap<String, HashMap<String, ControllerPmEntry>> {
-        self.global_ip_restrictions.read().clone()
+    /// Returns one view per `pm_key`, with the outer key already split into
+    /// `namespace`/`name` so callers don't pay for an extra `pm_key` clone.
+    pub fn list_global_ip_restrictions(&self) -> Vec<CenterGlobalIpRestrictionEntryView> {
+        self.global_ip_restrictions
+            .read()
+            .iter()
+            .map(|(pm_key, controllers)| {
+                let (namespace, name) = split_pm_key(pm_key);
+                CenterGlobalIpRestrictionEntryView {
+                    namespace,
+                    name,
+                    controllers: controllers.clone(),
+                }
+            })
+            .collect()
     }
 
     /// Get a single PM's entries across Controllers.
@@ -559,9 +581,12 @@ mod tests {
 
         let result = store.list_global_ip_restrictions();
         assert_eq!(result.len(), 1);
-        let inner = result.get("prod/global-ip").expect("should have pm_key");
-        assert!(inner.contains_key("ctrl-1"));
-        let entry = &inner["ctrl-1"];
+        let view = result
+            .iter()
+            .find(|v| v.namespace == "prod" && v.name == "global-ip")
+            .expect("should have pm_key");
+        assert!(view.controllers.contains_key("ctrl-1"));
+        let entry = &view.controllers["ctrl-1"];
         assert_eq!(entry.pm_namespace, "prod");
         assert_eq!(entry.pm_name, "global-ip");
         assert!(entry.enable);
@@ -584,8 +609,8 @@ mod tests {
 
         let result = store.list_global_ip_restrictions();
         assert_eq!(result.len(), 1, "old entry should be gone");
-        assert!(result.contains_key("prod/gir-new"));
-        assert!(!result.contains_key("prod/gir-old"));
+        assert!(result.iter().any(|v| v.namespace == "prod" && v.name == "gir-new"));
+        assert!(!result.iter().any(|v| v.namespace == "prod" && v.name == "gir-old"));
     }
 
     #[test]
@@ -602,10 +627,13 @@ mod tests {
 
         let result = store.list_global_ip_restrictions();
         assert_eq!(result.len(), 1, "same pm_key → one outer entry");
-        let inner = &result["prod/shared-gir"];
-        assert_eq!(inner.len(), 2, "two controllers");
-        assert!(inner.contains_key("ctrl-1"));
-        assert!(inner.contains_key("ctrl-2"));
+        let view = result
+            .iter()
+            .find(|v| v.namespace == "prod" && v.name == "shared-gir")
+            .expect("should have pm_key");
+        assert_eq!(view.controllers.len(), 2, "two controllers");
+        assert!(view.controllers.contains_key("ctrl-1"));
+        assert!(view.controllers.contains_key("ctrl-2"));
     }
 
     #[test]
@@ -629,7 +657,7 @@ mod tests {
         store.partial_update("ctrl-1", HashMap::new(), HashMap::new(), remove);
         let result = store.list_global_ip_restrictions();
         assert_eq!(result.len(), 1);
-        assert!(result.contains_key("prod/gir-b"));
+        assert!(result.iter().any(|v| v.namespace == "prod" && v.name == "gir-b"));
     }
 
     #[test]
