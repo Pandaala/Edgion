@@ -113,23 +113,16 @@ impl EdgionTcpProxy {
         };
 
         // 3. Execute stream plugins (dynamic lookup from StreamPluginStore)
-        if let Some(store_key) = &rule.stream_plugin_store_key {
-            if let Ok(client_ip) = ctx.client_addr.parse() {
-                let store = get_global_stream_plugin_store();
-                if let Some(resource) = store.get(store_key) {
-                    let runtime = &resource.spec.stream_plugin_runtime;
-                    if !runtime.is_empty() {
-                        let stream_ctx = StreamContext::new(client_ip, self.listener_port);
-                        match runtime.run(&stream_ctx).await {
-                            StreamPluginResult::Allow => {}
-                            StreamPluginResult::Deny(_) => {
-                                ctx.status = TcpStatus::PluginDenied;
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
+        if let StreamPluginCheck::Deny = check_stream_plugins(
+            rule.stream_plugin_store_key.as_deref(),
+            &ctx.client_addr,
+            self.listener_port,
+            &self.listener_key,
+        )
+        .await
+        {
+            ctx.status = TcpStatus::PluginDenied;
+            return;
         }
 
         // 4. Select backend
@@ -244,5 +237,116 @@ impl EdgionTcpProxy {
             .as_ref()
             .map(|s| s.allow_loopback_upstream)
             .unwrap_or(false)
+    }
+}
+
+/// Outcome of section-3 stream plugin enforcement on a TCP connection.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum StreamPluginCheck {
+    /// Connection may proceed to backend selection.
+    Allow,
+    /// Connection must be rejected. Caller sets `TcpStatus::PluginDenied`.
+    Deny,
+}
+
+/// Stage-1 stream plugin enforcement for TCPRoute.
+///
+/// Fail-close: if a rule references an `EdgionStreamPlugins` (ESP) resource
+/// but the policy cannot be evaluated (client IP unparseable, ESP missing
+/// from the global store), reject the connection rather than admitting it.
+/// Silently admitting traffic past a configured allowlist would be a
+/// security bypass. Startup-time sync race is gated by
+/// `ConfigClient::is_ready()` before listeners bind, so reaching the
+/// missing-ESP branch implies misconfiguration or hot-delete.
+///
+/// Pass-through cases (return `Allow`):
+/// - rule has no `stream_plugin_store_key` (no ESP attached);
+/// - ESP exists but its runtime is empty (operator intent: declare an ESP
+///   with no rules to act as a no-op).
+pub(crate) async fn check_stream_plugins(
+    store_key: Option<&str>,
+    client_addr: &str,
+    listener_port: u16,
+    listener_key: &ListenerKey,
+) -> StreamPluginCheck {
+    let Some(store_key) = store_key else {
+        return StreamPluginCheck::Allow;
+    };
+
+    let Ok(client_ip) = client_addr.parse() else {
+        tracing::warn!(
+            listener = %listener_key,
+            store_key = %store_key,
+            client_addr = %client_addr,
+            "TCP stream plugin: client address unparseable; rejecting (fail-close)"
+        );
+        return StreamPluginCheck::Deny;
+    };
+
+    let store = get_global_stream_plugin_store();
+    let Some(resource) = store.get(store_key) else {
+        tracing::warn!(
+            listener = %listener_key,
+            store_key = %store_key,
+            "TCP stream plugin: resource not found in store; rejecting (fail-close)"
+        );
+        return StreamPluginCheck::Deny;
+    };
+
+    let runtime = &resource.spec.stream_plugin_runtime;
+    if runtime.is_empty() {
+        // Empty runtime is operator intent — pass through silently.
+        return StreamPluginCheck::Allow;
+    }
+
+    let stream_ctx = StreamContext::new(client_ip, listener_port);
+    match runtime.run(&stream_ctx).await {
+        StreamPluginResult::Allow => StreamPluginCheck::Allow,
+        StreamPluginResult::Deny(_) => StreamPluginCheck::Deny,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_listener_key() -> ListenerKey {
+        let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 9000);
+        ListenerKey::new(addr, "TCP")
+    }
+
+    #[tokio::test]
+    async fn fail_close_when_store_key_missing_in_tcp() {
+        // Rule references an ESP but the global store does not contain it.
+        // Must reject (fail-close).
+        let store = get_global_stream_plugin_store();
+        let key = "default/__tcp_fail_close_missing__";
+        assert!(store.get(key).is_none(), "test precondition: key must not be in store");
+
+        let result = check_stream_plugins(Some(key), "127.0.0.1", 9000, &test_listener_key()).await;
+        assert_eq!(result, StreamPluginCheck::Deny, "missing ESP must fail-close");
+    }
+
+    #[tokio::test]
+    async fn fail_close_when_tcp_client_addr_unparseable() {
+        // Rule references an ESP but client_addr is not a valid IP literal
+        // (e.g. peer addr extraction returned "unknown"). Must reject.
+        let result = check_stream_plugins(Some("default/something"), "unknown", 9000, &test_listener_key()).await;
+        assert_eq!(
+            result,
+            StreamPluginCheck::Deny,
+            "unparseable client addr must fail-close"
+        );
+    }
+
+    #[tokio::test]
+    async fn pass_through_when_store_key_none() {
+        // No ESP attached at all — section 3 is a no-op. Must allow.
+        let result = check_stream_plugins(None, "127.0.0.1", 9000, &test_listener_key()).await;
+        assert_eq!(
+            result,
+            StreamPluginCheck::Allow,
+            "rule with no store_key must pass through"
+        );
     }
 }

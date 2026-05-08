@@ -58,8 +58,16 @@ pub(super) async fn run_tls_route_plugins(
     let Some(store_key) = &rule.stream_plugin_store_key else {
         return true;
     };
+    // Fail-close: if the client address cannot be parsed (e.g. Pingora set it
+    // to the literal "unknown" because peer extraction failed), an IP-allowlist
+    // policy referenced by the rule cannot be enforced. Admitting the
+    // connection here would silently bypass that policy.
     let Ok(client_ip) = ctx.client_addr.parse() else {
-        return true;
+        ctx.err_log = Some(format!(
+            "client address '{}' could not be parsed; rejecting (fail-close)",
+            ctx.client_addr,
+        ));
+        return false;
     };
 
     let store = get_global_stream_plugin_store();
@@ -187,12 +195,23 @@ mod fail_close_tests {
     }
 
     #[tokio::test]
-    async fn admit_when_client_addr_unparseable() {
-        // Rule references an ESP but client_addr is not a valid IP.
-        // Pre-existing behavior: pass through (kept unchanged by fail-close fix).
+    async fn reject_when_client_addr_unparseable() {
+        // Rule references an ESP but client_addr is not a valid IP (e.g. the
+        // literal "unknown" set when Pingora cannot extract the peer addr).
+        // Without a parseable client IP we cannot evaluate an IP-allowlist
+        // policy, so the connection must be rejected (fail-close).
         let rule = empty_rule_with_store_key(Some("default/anything".to_string()));
         let mut ctx = TlsContext::new(443, "unknown".to_string(), 0);
         let allowed = run_tls_route_plugins(&rule, &mut ctx, "example.com", 443, None, false).await;
-        assert!(allowed, "unparseable client_addr keeps existing pass-through");
+        assert!(!allowed, "unparseable client_addr must fail-close");
+        let err = ctx.err_log.as_deref().unwrap_or("");
+        assert!(
+            err.contains("fail-close"),
+            "err_log should mention fail-close, got: {err}"
+        );
+        assert!(
+            err.contains("client address"),
+            "err_log should mention 'client address', got: {err}"
+        );
     }
 }
