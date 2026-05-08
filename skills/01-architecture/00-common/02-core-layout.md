@@ -1,215 +1,215 @@
 ---
 name: core-layout
-description: Core 模块分层规范：顶级分组、各 bin 布局、放置规则、anti-patterns。
+description: Core module layering conventions — top-level grouping, per-bin layout, placement rules, anti-patterns.
 ---
 
-# Core 分层规范
+# Core layering conventions
 
-> 本文件是新增代码时的放置规则参考。
+> This file is the placement reference for adding new code.
 
-## 顶级分组
+## Top-level grouping
 
-`src/core/` 只有四个顶级组：
+`src/core/` has only four top-level groups:
 
 ```
 src/core/
-├── controller/   # edgion-controller 归属逻辑
-├── gateway/      # edgion-gateway 归属逻辑
-├── ctl/          # edgion-cli 归属逻辑
-└── common/       # 跨 bin 共享代码
+├── controller/   # Logic belonging to edgion-controller
+├── gateway/      # Logic belonging to edgion-gateway
+├── ctl/          # Logic belonging to edgion-cli
+└── common/       # Code shared across bins
 ```
 
-**放置原则**：
-- 只服务控制面 → `controller/`
-- 只服务数据面 → `gateway/`
-- 只服务 CLI → `ctl/`
-- 至少两个 bin 依赖且无隐式运行时耦合 → `common/`
+**Placement principles**:
+- Serves the control plane only → `controller/`
+- Serves the data plane only → `gateway/`
+- Serves only the CLI → `ctl/`
+- Depended on by at least two bins with no implicit runtime coupling → `common/`
 
-## Gateway 布局
+## Gateway layout
 
-按子系统组织，而非按技术原语：
+Organized by subsystem, not by technical primitive:
 
 ```
 src/core/gateway/
-├── api/          # Admin/测试 API
-├── backends/     # 后端发现 / 健康检查 / BackendTLSPolicy
-│   ├── discovery/    # Endpoint / EndpointSlice / Service 发现
-│   ├── health/       # 主动健康检查
-│   ├── policy/       # 后端 TLS 策略
-│   ├── preload/      # LB 预加载
-│   └── validation/   # 端点验证
-├── cache/        # LRU 缓存
-├── cli/          # CLI 入口 + Pingora 启动
-├── config/       # GatewayClass / EdgionGatewayConfig 处理器和存储
-├── conf_sync/    # gRPC 配置客户端 + ClientCache
-│   ├── conf_client/  # gRPC 客户端实现
-│   └── cache_client/ # 本地缓存 + 事件分发
-├── lb/           # 负载均衡策略实现
-│   ├── backend_selector/  # 加权轮询选择器
-│   ├── ewma/              # EWMA 算法
-│   ├── leastconn/         # 最少连接
-│   ├── lb_policy/         # LB 策略定义
-│   ├── runtime_state/     # 每后端运行时状态
-│   └── selection/         # 算法工厂
-├── link_sys/     # 外部系统提供程序 + 运行时存储
+├── api/          # Admin / test API
+├── backends/     # Backend discovery / health checks / BackendTLSPolicy
+│   ├── discovery/    # Endpoint / EndpointSlice / Service discovery
+│   ├── health/       # Active health checks
+│   ├── policy/       # Backend TLS policy
+│   ├── preload/      # LB preloading
+│   └── validation/   # Endpoint validation
+├── cache/        # LRU cache
+├── cli/          # CLI entry + Pingora startup
+├── config/       # GatewayClass / EdgionGatewayConfig handlers and storage
+├── conf_sync/    # gRPC config client + ClientCache
+│   ├── conf_client/  # gRPC client implementation
+│   └── cache_client/ # Local cache + event dispatch
+├── lb/           # Load-balancing policy implementations
+│   ├── backend_selector/  # Weighted round-robin selector
+│   ├── ewma/              # EWMA algorithm
+│   ├── leastconn/         # Least connections
+│   ├── lb_policy/         # LB policy definitions
+│   ├── runtime_state/     # Per-backend runtime state
+│   └── selection/         # Algorithm factory
+├── link_sys/     # External system providers + runtime store
 │   ├── providers/    # Redis / Etcd / ES / Webhook / LocalFile
 │   └── runtime/      # LinkSysStore + DataSender
-├── observe/      # AccessLog / Metrics / SSL/TCP/TLS/UDP 日志
-├── plugins/      # 插件系统
-│   ├── http/         # 28 个 HTTP 插件实现
-│   ├── stream/       # Stream 插件（IP 限制 + TLS 路由）
-│   └── runtime/      # PluginRuntime + 条件 + Gateway API 过滤器
-├── routes/       # 路由处理
-│   ├── http/         # HTTPRoute 匹配 + proxy_http
-│   ├── grpc/         # GRPCRoute 匹配 + gRPC 集成
-│   ├── tcp/          # TCPRoute 运行时
-│   ├── tls/          # TLSRoute 运行时
-│   └── udp/          # UDPRoute 运行时
-├── runtime/      # Pingora 运行时核心
-│   ├── server/       # Listener 构建器 + 错误响应
-│   ├── matching/     # Gateway/Route/TLS 匹配
-│   └── store/        # Gateway + Route 配置存储
-├── services/     # Gateway 侧服务（ACME challenge）
-└── tls/          # TLS 管理
-    ├── boringssl/    # BoringSSL 后端（feature）
-    ├── runtime/      # 下游/上游 TLS 回调
-    ├── store/        # 证书存储 + SNI 匹配
-    └── validation/   # 证书验证
+├── observe/      # AccessLog / Metrics / SSL/TCP/TLS/UDP logs
+├── plugins/      # Plugin system
+│   ├── http/         # 28 HTTP plugin implementations
+│   ├── stream/       # Stream plugins (IP restriction + TLS routing)
+│   └── runtime/      # PluginRuntime + conditions + Gateway API filters
+├── routes/       # Route processing
+│   ├── http/         # HTTPRoute matching + proxy_http
+│   ├── grpc/         # GRPCRoute matching + gRPC integration
+│   ├── tcp/          # TCPRoute runtime
+│   ├── tls/          # TLSRoute runtime
+│   └── udp/          # UDPRoute runtime
+├── runtime/      # Pingora runtime core
+│   ├── server/       # Listener builders + error responses
+│   ├── matching/     # Gateway/Route/TLS matching
+│   └── store/        # Gateway + Route configuration storage
+├── services/     # Gateway-side services (ACME challenge)
+└── tls/          # TLS management
+    ├── boringssl/    # BoringSSL backend (feature)
+    ├── runtime/      # Downstream/upstream TLS callbacks
+    ├── store/        # Certificate store + SNI matching
+    └── validation/   # Certificate validation
 ```
 
-**二级规则**：
-- `runtime/` — 仅限 Pingora 运行时核心
-- `routes/` — 仅限路由管理器、匹配器、协议服务
-- `plugins/` — 仅限插件实现和执行框架
-- `backends/` — 仅限上游发现、健康过滤、后端策略
-- `tls/` — 仅限下游 TLS 证书处理和验证
-- `link_sys/` — 仅限 LinkSys 声明的外部系统
-- `config/` — 仅限影响网关运行时的配置资源，不放 gRPC 同步机制
+**Second-level rules**:
+- `runtime/` — Pingora runtime core only
+- `routes/` — route managers, matchers, protocol services only
+- `plugins/` — plugin implementations and execution framework only
+- `backends/` — upstream discovery, health filtering, backend policies only
+- `tls/` — downstream TLS certificate handling and validation only
+- `link_sys/` — external systems declared by LinkSys only
+- `config/` — only configuration resources that affect the gateway runtime; do not place gRPC sync mechanisms here
 
-## Controller 布局
+## Controller layout
 
 ```
 src/core/controller/
-├── api/          # Admin API 端点
-│   ├── cluster_handlers/      # 集群级资源 CRUD
-│   ├── namespaced_handlers/   # 命名空间级资源 CRUD
-│   ├── configserver_handlers/ # ConfigServer 端点（for ctl）
-│   └── common/                # 共享处理逻辑
-├── cli/          # CLI 入口和启动
-├── conf_mgr/     # 配置管理器（核心）
-│   ├── conf_center/           # 配置源抽象
-│   │   ├── file_system/       #   FileSystemCenter 实现
-│   │   └── kubernetes/        #   KubernetesCenter 实现
-│   ├── sync_runtime/          # 同步运行时
-│   │   ├── workqueue/         #   工作队列
-│   │   ├── resource_processor/#   资源处理管道
-│   │   │   ├── handlers/      #     23 种资源处理器
-│   │   │   ├── ref_grant/     #     跨命名空间引用验证
-│   │   │   ├── secret_utils/  #     Secret 依赖跟踪
-│   │   │   └── configmap_utils/#    ConfigMap 工具
-│   │   ├── shutdown/          #   优雅关闭
-│   │   └── metrics/           #   Prometheus 指标
-│   ├── processor_registry/    # 全局处理器注册表
-│   └── schema_validator/      # CRD Schema 验证
-├── conf_sync/    # 配置同步（gRPC 服务端）
-│   ├── conf_server/           # ConfigSyncServer + gRPC 实现
+├── api/          # Admin API endpoints
+│   ├── cluster_handlers/      # Cluster-scoped resource CRUD
+│   ├── namespaced_handlers/   # Namespaced resource CRUD
+│   ├── configserver_handlers/ # ConfigServer endpoints (for ctl)
+│   └── common/                # Shared handler logic
+├── cli/          # CLI entry and startup
+├── conf_mgr/     # Configuration manager (core)
+│   ├── conf_center/           # Configuration source abstraction
+│   │   ├── file_system/       #   FileSystemCenter implementation
+│   │   └── kubernetes/        #   KubernetesCenter implementation
+│   ├── sync_runtime/          # Sync runtime
+│   │   ├── workqueue/         #   Work queue
+│   │   ├── resource_processor/#   Resource processing pipeline
+│   │   │   ├── handlers/      #     23 resource handlers
+│   │   │   ├── ref_grant/     #     Cross-namespace reference validation
+│   │   │   ├── secret_utils/  #     Secret dependency tracking
+│   │   │   └── configmap_utils/#    ConfigMap utilities
+│   │   ├── shutdown/          #   Graceful shutdown
+│   │   └── metrics/           #   Prometheus metrics
+│   ├── processor_registry/    # Global processor registry
+│   └── schema_validator/      # CRD Schema validation
+├── conf_sync/    # Config sync (gRPC server side)
+│   ├── conf_server/           # ConfigSyncServer + gRPC implementation
 │   └── cache_server/          # ServerCache + EventStore
-├── observe/      # 日志 facade
-└── services/     # Controller 侧服务
-    └── acme/                  # ACME 证书自动化
+├── observe/      # Logging facade
+└── services/     # Controller-side services
+    └── acme/                  # ACME certificate automation
 ```
 
-**放置规则**：
-- K8s watch/list、parse/preparse、引用管理、状态回写 → `conf_mgr/`
-- 面向 Gateway 的配置分发 → `conf_sync/`
+**Placement rules**:
+- K8s watch/list, parse/preparse, reference management, status writeback → `conf_mgr/`
+- Configuration distribution toward the Gateway → `conf_sync/`
 
-## Common 布局
+## Common layout
 
-刻意保持小规模：
+Deliberately kept small:
 
 ```
 src/core/common/
-├── auth/         # OIDC JWT 认证状态（AuthMiddlewareState、JWKS 缓存）
-├── local_auth/   # 本地 HS256 JWT 认证（登录、token 签发）
-├── unified_auth/ # 统一认证中间件（OIDC + local 顺序验证）
-├── api/          # Admin API 路由组合工具（compose、auth 层包装）
-├── jwt_common.rs # 通用 JWT/JWK 工具函数（算法策略、JWK 选择、错误映射）
-│                 #   ← common 和 gateway 均依赖此模块；gateway 不可反向依赖 common
-├── conf_sync/    # 共享 proto / traits / 同步类型
-│   ├── proto/        # protobuf 定义
+├── auth/         # OIDC JWT authentication state (AuthMiddlewareState, JWKS cache)
+├── local_auth/   # Local HS256 JWT authentication (login, token issuance)
+├── unified_auth/ # Unified authentication middleware (OIDC + local sequential validation)
+├── api/          # Admin API route composition utilities (compose, auth-layer wrapping)
+├── jwt_common.rs # Common JWT/JWK utility functions (algorithm policy, JWK selection, error mapping)
+│                 #   ← both common and gateway depend on this module; gateway must not be reverse-depended on by common
+├── conf_sync/    # Shared proto / traits / sync types
+│   ├── proto/        # protobuf definitions
 │   ├── traits/       # CacheEventDispatch + ConfHandler
-│   └── types/        # 同步相关类型
-├── config/       # 共享启动配置
-├── matcher/      # 共享匹配算法
-│   ├── host_match/   # 域名匹配（Hash + Radix）
-│   ├── ip_radix_tree/ # IP Radix 树
-│   └── radix_tree/   # 通用 Radix 树
-└── utils/        # 可复用工具
-    ├── net/              # IP 验证、解析
-    ├── duration/         # 时间解析
-    ├── real_ip_extractor/# 真实 IP 提取
-    ├── metadata_filter/  # 元数据清理
+│   └── types/        # Sync-related types
+├── config/       # Shared startup configuration
+├── matcher/      # Shared matching algorithms
+│   ├── host_match/   # Domain matching (Hash + Radix)
+│   ├── ip_radix_tree/ # IP Radix tree
+│   └── radix_tree/   # Generic Radix tree
+└── utils/        # Reusable utilities
+    ├── net/              # IP validation, parsing
+    ├── duration/         # Duration parsing
+    ├── real_ip_extractor/# Real-IP extraction
+    ├── metadata_filter/  # Metadata cleansing
     └── proxy_protocol/   # PROXY Protocol
 ```
 
-**依赖方向约束**：
-- `common` 不可依赖 `gateway`
-- `common` 不可依赖 `controller`（有 3 处历史遗留例外待清理，见下）
-- `center` 不可依赖 `controller`
+**Dependency direction constraints**:
+- `common` must not depend on `gateway`
+- `common` must not depend on `controller` (3 historical legacy exceptions remain to be cleaned up; see below)
+- `center` must not depend on `controller`
 
-跨 bin 共用的类型（如 RegionRoute Entry 类型）必须放在 `types/`，让各方依赖 `types` 而非互相依赖。JWT/JWK 工具等被双方共用的逻辑必须放在 `common/`，由 gateway/center 反过来引用。
+Types shared across bins (such as RegionRoute Entry types) must live in `types/`, so each side depends on `types` rather than depending on each other. JWT/JWK utilities and other logic shared by both sides must live in `common/`, with gateway/center depending on it.
 
-**已知历史遗留例外（`common → controller`，待后续清理）：**
+**Known historical legacy exceptions (`common → controller`, to be cleaned up later):**
 - `common/config/mod.rs` → `controller::conf_mgr::{ConfCenterConfig, FileSystemConfig}`
 - `common/utils/metadata_filter.rs` → `controller::conf_mgr::conf_center::MetadataFilterConfig`
 - `common/local_auth/secret.rs` → `controller::conf_mgr::conf_center::traits::{CenterApi, ConfWriterError}`
 
-遇到这三处时不要误判为新违规；修复它们需要将相关配置/traits 提升到 `types/` 或 `common/`，是独立任务。
+When you encounter these three places do not mistake them for new violations; fixing them requires lifting the related configuration/traits up into `types/` or `common/`, which is a separate task.
 
-不要仅为了避免跨模块导入就把代码移到 `common/`。保持业务归属明确。
+Do not move code into `common/` simply to avoid a cross-module import. Keep ownership clear by business domain.
 
-## Types 布局
+## Types layout
 
 ```
 src/types/
-├── resource/         # 资源系统基础设施
-│   ├── kind/         #   ResourceKind 枚举
-│   ├── defs/         #   define_resources! 宏声明
-│   ├── macros/       #   宏定义
+├── resource/         # Resource system infrastructure
+│   ├── kind/         #   ResourceKind enum
+│   ├── defs/         #   define_resources! macro declarations
+│   ├── macros/       #   Macro definitions
 │   ├── meta/         #   ResourceMeta trait
-│   └── registry/     #   资源类型注册表
-├── resources/        # 各类资源结构体（对应 CRD）
+│   └── registry/     #   Resource type registry
+├── resources/        # Per-kind resource structs (corresponding to CRDs)
 │   ├── gateway/      #   Gateway
 │   ├── http_route/   #   HTTPRoute
 │   ├── edgion_plugins/#  EdgionPlugins
-│   └── ...           #   其余 17 种资源
-├── common/           # KeyGet/KeySet 统一访问器
-├── constants/        # 集中式常量
-│   ├── app/          #   应用标识符
-│   ├── labels/       #   K8s 标签
-│   ├── annotations/  #   K8s 注解
-│   ├── headers/      #   HTTP 头部
-│   └── secret_keys/  #   Secret 数据键
+│   └── ...           #   The remaining 17 resources
+├── common/           # KeyGet/KeySet unified accessors
+├── constants/        # Centralized constants
+│   ├── app/          #   Application identifiers
+│   ├── labels/       #   K8s labels
+│   ├── annotations/  #   K8s annotations
+│   ├── headers/      #   HTTP headers
+│   └── secret_keys/  #   Secret data keys
 ├── ctx.rs            # EdgionHttpContext
 ├── filters.rs        # PluginRunningResult
 ├── schema.rs         # JSON Schema
-├── err.rs            # 错误类型
-├── work_dir.rs       # 工作目录
-└── observe.rs        # 可观测配置
+├── err.rs            # Error types
+├── work_dir.rs       # Working directory
+└── observe.rs        # Observability configuration
 ```
 
-## Anti-Patterns
+## Anti-patterns
 
-避免重新引入以下模式：
+Avoid reintroducing the following patterns:
 
-| 反面模式 | 正确做法 |
+| Anti-pattern | Correct approach |
 |---------|---------|
-| 顶层 `src/core/api`、`src/core/cli`、`src/core/conf_sync` | 放在对应 bin 组下 |
-| 扁平 gateway 桶如 `gateway/http_routes`、`gateway/health_check` | 按子系统组织 |
-| 新的兼容性 shim 隐藏真实归属 | 直接放在正确的 bin 组 |
-| 在 `types/` 中放执行逻辑 | types 只放数据定义 |
-| `common` 或 `center` 导入 `controller` 内部模块 | 将共用类型提升到 `types/`，让各方依赖 types |
-| 在 gateway 中直接调用 kube-rs API | 通过 ConfigClient 从 Controller 同步 |
-| 插件直接访问数据库/外部系统 | 通过 LinkSysStore 中的客户端 |
+| Top-level `src/core/api`, `src/core/cli`, `src/core/conf_sync` | Place under the corresponding bin group |
+| Flat gateway buckets such as `gateway/http_routes`, `gateway/health_check` | Organize by subsystem |
+| New compatibility shims that hide the real ownership | Place directly in the correct bin group |
+| Putting execution logic in `types/` | types only holds data definitions |
+| `common` or `center` importing internal `controller` modules | Lift shared types into `types/`, have each side depend on types |
+| Calling kube-rs API directly inside the gateway | Sync from the Controller via ConfigClient |
+| Plugins accessing databases / external systems directly | Go through the client in LinkSysStore |
 
-如果新子系统需要归属，优先在正确的 bin 组下创建清晰的目录，而不是添加另一个跨领域的顶层桶。
+If a new subsystem needs ownership, prefer creating a clear directory under the correct bin group rather than adding yet another cross-cutting top-level bucket.

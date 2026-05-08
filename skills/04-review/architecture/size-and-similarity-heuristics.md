@@ -1,66 +1,66 @@
 ---
 name: size-and-similarity-heuristics
-description: 判定"按行数/表面相似度推 split / 抽公共"类 finding。需先验证三项前置条件，否则直接关闭。
+description: Decide on "split / extract common code based on line count or surface similarity" findings. Three preconditions must be verified, otherwise close directly.
 ---
 
-# 行数 / 表面相似度驱动的重构建议 — 验收三件套
+# Refactoring Suggestions Driven by Line Count / Surface Similarity — Acceptance Triple
 
-**审计日期**：2026-04-26
-**关联 issue**：P2-11（已关闭，未修复）
-**结论**：**仅"文件大 / 看起来类似"不构成 finding。提交此类建议前必须给出三项证据；否则直接关闭。**
+**Audit date**: 2026-04-26
+**Linked issue**: P2-11 (closed, not fixed)
+**Conclusion**: **"Big file / looks similar" alone is not a finding. Three pieces of evidence must be supplied with the finding; otherwise close directly.**
 
-## 三项必备证据
+## Three Required Pieces of Evidence
 
-提"应拆 / 应抽公共"类 finding 时，**必须**在 finding 中明确：
+When filing a "should split / should extract common" finding, the finding **must** explicitly include:
 
-1. **真实重复**：不是「都做某件事」，而是**行级近似**（同样的几十行代码块出现 ≥2 次）。「两个插件都写 429 响应」不是重复，「两个插件都用同样 30 行构造同样的 ResponseHeader」才是。
-2. **真实耦合泄漏**：拆分目标的内部细节**已经被外部引用**（grep 出 ≥2 处跨模块直接 import 内部类型/常量），或类型层面已经分裂（如 enum variant 携带的字段彻底不同）。
-3. **拆开后追踪成本下降**：读者按一条故事线（一次请求 / 一次 reconcile / 一次启动）跟踪时，**不需要在新拆出的多个文件之间反复跳转**。线性故事被横向切开是负价值。
+1. **Real duplication**: not "both do something", but **line-level near-duplicate** (the same dozens of lines of code blocks appear ≥ 2 times). "Both plugins write 429 responses" is not duplication; "both plugins use the same 30 lines to construct the same ResponseHeader" is.
+2. **Real coupling leak**: internal details of the to-be-split target are **already referenced externally** (≥ 2 cross-module direct imports of internal types/constants are grep-able), or they have already split at the type level (e.g., enum variant carrying completely different fields).
+3. **Tracking cost decreases after splitting**: when readers follow a single story line (one request / one reconcile / one startup), they **do not need to jump back and forth among the newly-split files**. A linear story sliced horizontally is negative-value.
 
-三项缺一就是「按行数 / 看起来像」推动的形式重构，不接受。
+If any of the three is missing, it is a "based on line count / looks similar"-driven form-only refactor; not accepted.
 
-## 已审计的具体点（本次扫描覆盖，未来不重提）
+## Already-Audited Specific Points (covered in this scan; not to be filed again)
 
-### (a) `src/types/resources/common/mod.rs`（124 行）"路由 vs LinkSys 混合"
+### (a) `src/types/resources/common/mod.rs` (124 lines) "route vs LinkSys mixed"
 
-- **前提错误**：`secret_object_ref` / `secret_slot` / `tls` 三子模块被 `gateway.rs`、`edgion_acme`、`EdgionTls`、`EdgionPlugins`、`link_sys` **全部资源类型共享**，并非 LinkSys 专用。
-- **判定**：误报。124 行也远低于值得拆的阈值。
+- **Premise wrong**: the `secret_object_ref` / `secret_slot` / `tls` submodules are **shared by all resource types** including `gateway.rs`, `edgion_acme`, `EdgionTls`, `EdgionPlugins`, `link_sys`; not LinkSys-only.
+- **Verdict**: false positive. 124 lines is also far below any threshold worth splitting.
 
-### (b) `src/types/mod.rs:53` `pub use self::resources::*` "新增资源自动成为对外 API"
+### (b) `src/types/mod.rs:53` `pub use self::resources::*` "new resources automatically become public API"
 
-- **前提不适用**：Edgion 是 binary 项目（Controller / Gateway / edgion-cli / Center），不发布 lib，没有"对外 API 稳定边界"概念。
-- **判定**：不适用。binary 内部 glob re-export 是合理选择。
+- **Premise does not apply**: Edgion is a binary project (Controller / Gateway / edgion-cli / Center); does not publish a lib; there is no concept of "stable public API boundary".
+- **Verdict**: not applicable. Glob re-export inside a binary is a reasonable choice.
 
-### (c) `edgion_acme.rs` parse "ResolveOutcome 全分支内联大 match"
+### (c) `edgion_acme.rs` parse "all-branch inline big match for ResolveOutcome"
 
-- **已完成**：`outcome_to_resolved_refs_action(outcome, role, …)` 已存在（文件 ~322 行附近），`AcmeResolveCtx` / `AcmeResolveAction` enum 静态约束 Account vs Dns 语义。`parse()` 内只剩薄 dispatch + `update_condition`，正是当年 finding 想要的形态。
-- **判定**：已修复，issue 漏关。
+- **Already done**: `outcome_to_resolved_refs_action(outcome, role, …)` exists (around line 322 of the file); `AcmeResolveCtx` / `AcmeResolveAction` enum statically constrains Account vs Dns semantics. Inside `parse()` there is only a thin dispatch + `update_condition`, exactly the shape that the original finding wanted.
+- **Verdict**: already fixed; the issue was missed-close.
 
-### (d) `rate_limit` vs `rate_limit_redis` "共同逻辑未抽取"
+### (d) `rate_limit` vs `rate_limit_redis` "common logic not extracted"
 
-- **不通过验收**：两者 `add_headers` / `reject_request` 操作不同类型（`isize` vs `i64`、`Rate` 本地 CMS vs Redis Lua 脚本结果），可抽公共部分仅约 30 行 header 写入和 429 body 构建，且会把两个目前**完全独立**的插件强耦合。`get_header_names()` 的 helper 已经覆盖了真正可复用的部分。
-- **判定**：插件独立性优先，不接受抽公共建议。
+- **Fails acceptance**: the two operate on different types in `add_headers` / `reject_request` (`isize` vs `i64`, `Rate` local CMS vs Redis Lua script result); the extractable common part is only ~30 lines of header writing and 429 body construction, and would forcibly couple two currently **completely independent** plugins. The `get_header_names()` helper already covers the genuinely reusable part.
+- **Verdict**: plugin independence takes priority; "extract common" suggestion not accepted.
 
-### (e) `src/core/gateway/runtime/store/config.rs`（622 行）"对照 `ConfigClient::required_cache_names` 改 `is_ready`"
+### (e) `src/core/gateway/runtime/store/config.rs` (622 lines) "modify `is_ready` against `ConfigClient::required_cache_names`"
 
-- **引用不存在的 API**：`required_cache_names` 在仓库 grep 无结果；该文件也没有 `is_ready` 函数，单一职责为 `GatewayListenerConfig` 查询逻辑。
-- **判定**：finding 前提错误，关闭。
+- **Cites a non-existent API**: `required_cache_names` does not appear in repo grep; this file also has no `is_ready` function; its single responsibility is `GatewayListenerConfig` query logic.
+- **Verdict**: finding's premise is wrong; close.
 
-### (f) `src/core/common/unified_auth/mod.rs`（808 行 = 559 非测试 + 249 测试）"应拆 state/middleware/oidc/local"
+### (f) `src/core/common/unified_auth/mod.rs` (808 lines = 559 non-test + 249 test) "should split into state/middleware/oidc/local"
 
-- **故事线完整**：types → state 构造 → middleware 主流程 → 两个 validator → helpers，线性可读，无重复无耦合泄漏。
-- **拆开是负价值**：`try_oidc_validation` / `try_local_validation` 是 `AuthMiddlewareState` / `LocalAuthState` 的薄 adapter，外部不引用；拆出后读者理解一次请求要在 3 个文件间跳。
-- **唯一勉强可做的小整理**：`UnifiedAuthState::from_configs`（~135 行启动期构造）可单独挪到 `state.rs`，理由是「启动期 vs 热路径」分离 —— 但收益微弱，不构成 P2/P3。
-- **判定**：不接受拆分。项目内 559 行非测试代码不算大（参照 `edgion_acme.rs` 1491 行、`config.rs` 622 行）。
+- **Story line is complete**: types → state construction → middleware main flow → two validators → helpers; linearly readable, no duplication, no coupling leak.
+- **Splitting is negative-value**: `try_oidc_validation` / `try_local_validation` are thin adapters over `AuthMiddlewareState` / `LocalAuthState` and are not externally referenced; after splitting, readers must jump among 3 files to understand one request.
+- **The only marginally doable small cleanup**: `UnifiedAuthState::from_configs` (~135 lines, startup-time construction) could be moved into `state.rs` separately, with the rationale of "startup vs hot path" separation — but the benefit is weak and does not constitute P2/P3.
+- **Verdict**: split not accepted. 559 non-test lines is not large within this project (compare `edgion_acme.rs` 1491 lines, `config.rs` 622 lines).
 
-## 何时重新评估
+## When to Re-Evaluate
 
-- 上述任何文件出现**真实**的行级重复（≥2 处 30 行+ 近似块），重新评估 (d)。
-- `unified_auth` 增加 ≥1 个新 provider（如 SAML），(f) 拆分价值显著上升。
-- 新增可被 grep 验证的"对外 API 稳定承诺"机制，(b) 重新评估。
+- Any of the above files develop **real** line-level duplication (≥ 2 places with 30+ similar blocks); re-evaluate (d).
+- `unified_auth` adds ≥ 1 new provider (e.g., SAML); the split value of (f) rises significantly.
+- A grep-verifiable "stable public API commitment" mechanism is added; re-evaluate (b).
 
-## 不接受的修复建议清单
+## Fix Suggestions Not Accepted (list)
 
-- "文件 X 行太多，应拆分" —— 不附三项证据直接关闭。
-- "两个模块看起来都做 Y，应抽公共" —— 不附 ≥2 处 30 行+ 行级近似证据直接关闭。
-- "新增 X 自动成为对外 API" —— 不区分 binary / lib 项目直接关闭。
+- "File X has too many lines, should be split" — close directly without the three pieces of evidence.
+- "Two modules look like they both do Y; should extract common code" — close directly without ≥ 2 places of 30+ line-level near-duplicate evidence.
+- "Adding X automatically becomes public API" — close directly without distinguishing binary / lib projects.

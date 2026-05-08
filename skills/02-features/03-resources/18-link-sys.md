@@ -1,15 +1,15 @@
 ---
 name: link-sys-detail
-description: LinkSys CRD 完整 Schema：Redis/Etcd/Elasticsearch/Webhook/Kafka 连接器配置，统一 secretRef/TLS 凭据模型。
+description: Full LinkSys CRD schema: Redis/Etcd/Elasticsearch/Webhook/Kafka connector configuration with a unified secretRef/TLS credential model.
 ---
 
-# LinkSys 资源
+# LinkSys Resource
 
 > API: `edgion.io/v1` | Scope: Namespaced | ShortName: `lsys`
 
-LinkSys 是统一的外部系统连接器资源。通过顶层 `spec.type` 区分后端，`spec.config` 承载对应后端的详细配置。凭据全部走 `secretRef` 引用 K8s `Secret`，**不允许**在 CRD 里内联用户名、密码、token、`clientKey` 等敏感字段（会被 `deny_unknown_fields` 在反序列化阶段硬拒）。
+LinkSys is the unified external-system connector resource. The top-level `spec.type` distinguishes the backend, and `spec.config` carries the detailed configuration for that backend. All credentials go through `secretRef` referencing K8s `Secret`; **inlining** sensitive fields such as username, password, token, or `clientKey` in the CRD is **not allowed** (they are hard-rejected at deserialization by `deny_unknown_fields`).
 
-## 顶层 Schema
+## Top-level Schema
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -19,65 +19,65 @@ metadata:
   namespace: default
 spec:
   type: redis                 # redis | etcd | elasticsearch | webhook | kafka
-  config:                     # 后端类型特定配置（下方按 type 展开）
+  config:                     # Backend-type-specific configuration (expanded by type below)
     ...
 ```
 
-`type` 与 `config` 是 `#[serde(tag = "type", content = "config")]` 的 tagged enum：YAML 里 `type: redis` 对应 `RedisClientConfig`，`type: webhook` 对应 `WebhookServiceConfig`，以此类推。旧版本把 `type` 放在 `spec.config.type` 里的写法已失效。
+`type` and `config` form a tagged enum with `#[serde(tag = "type", content = "config")]`: `type: redis` in YAML corresponds to `RedisClientConfig`, `type: webhook` to `WebhookServiceConfig`, and so on. The older form that placed `type` inside `spec.config.type` is no longer supported.
 
-## 凭据模型（通用）
+## Credential Model (Common)
 
-### Secret 引用：`SecretObjectReference`
+### Secret Reference: `SecretObjectReference`
 
 ```yaml
 secretRef:
-  name: my-secret           # 必填
-  namespace: credentials    # 可选；缺省=LinkSys 所在 namespace
-  # group / kind 可省略，缺省即 core/Secret
-  # 保留字段，供将来扩展非 Secret 凭据源（Vault / ExternalSecret）使用
+  name: my-secret           # Required
+  namespace: credentials    # Optional; defaults to the LinkSys namespace
+  # group / kind may be omitted; default is core/Secret
+  # Reserved fields, kept for future support of non-Secret credential sources (Vault / ExternalSecret)
 ```
 
-- 跨 namespace（`namespace != 当前资源 namespace`）需要目标 namespace 下存在允许 `Secret` 的 Gateway API `ReferenceGrant`，否则 `ResolvedRefs=False/RefNotPermitted`。
-- Secret 的键走 **well-known 约定**（下表），CRD 不支持自定义 `usernameKey` / `passwordKey` 这类字段。
-- 底层类型为 `SecretObjectReference`（`group / kind / name / namespace`），`group` 与 `kind` 缺省即 `core/Secret`，为将来扩展非 Secret 凭据源（Vault / ExternalSecret）保留能力。
+- Cross-namespace (`namespace != current resource namespace`) requires a Gateway API `ReferenceGrant` permitting `Secret` in the target namespace; otherwise `ResolvedRefs=False/RefNotPermitted`.
+- Secret keys follow the **well-known convention** (table below); the CRD does not support custom fields like `usernameKey` / `passwordKey`.
+- The underlying type is `SecretObjectReference` (`group / kind / name / namespace`); `group` and `kind` default to `core/Secret`, retaining the ability to extend to non-Secret credential sources (Vault / ExternalSecret) in the future.
 
-### Secret 键约定（与 resolver 对齐）
+### Secret Key Convention (aligned with the resolver)
 
-| 认证类型 | 推荐 Secret.type | 必需 key | 可选 key |
-|---------|------------------|----------|---------|
-| basic（Redis/Etcd/ES/Webhook） | `kubernetes.io/basic-auth` 或 `Opaque` | `password` | `username`（缺省=后端默认 ACL） |
-| apiKey（Elasticsearch） | `Opaque` | `apiKeyId`, `apiKeySecret` | — |
-| bearer（Elasticsearch/Webhook） | `Opaque` | `bearerToken` | — |
-| hmac（Webhook） | `Opaque` | `hmacKey` | — |
-| TLS（所有 provider） | `kubernetes.io/tls` 或 `Opaque` | `tls.crt` / `tls.key` / `ca.crt` 三者**至少一个** | — |
+| Auth Type | Recommended Secret.type | Required Keys | Optional Keys |
+|-----------|--------------------------|----------------|----------------|
+| basic (Redis/Etcd/ES/Webhook) | `kubernetes.io/basic-auth` or `Opaque` | `password` | `username` (default = backend default ACL) |
+| apiKey (Elasticsearch) | `Opaque` | `apiKeyId`, `apiKeySecret` | — |
+| bearer (Elasticsearch/Webhook) | `Opaque` | `bearerToken` | — |
+| hmac (Webhook) | `Opaque` | `hmacKey` | — |
+| TLS (all providers) | `kubernetes.io/tls` or `Opaque` | **At least one of** `tls.crt` / `tls.key` / `ca.crt` | — |
 
-所有应用层键名使用 **camelCase**；TLS 键沿用 K8s `kubernetes.io/tls` 标准（含点号）。
+All application-layer key names use **camelCase**; TLS keys follow the K8s `kubernetes.io/tls` standard (which contains dots).
 
-> **破坏性变更提示**：所有 `*Auth` 结构体已开启 `deny_unknown_fields`，CRD YAML 里写 `username: ...` / `password: ...` / `bearerToken: ...` / `apiKeyId: ...` / `clientKey: ...` 会直接解析失败（不会被静默忽略）。
+> **Breaking change notice**: all `*Auth` structs have `deny_unknown_fields` enabled. Writing `username: ...` / `password: ...` / `bearerToken: ...` / `apiKeyId: ...` / `clientKey: ...` directly in the CRD YAML causes parsing to fail (it is not silently ignored).
 
-### TLS 凭据结构
+### TLS Credential Structure
 
 ```yaml
 tls:
   enabled: true
-  insecureSkipVerify: false       # 仅开发/测试；Redis/Etcd 不支持，写 true 会直接拒绝启动
+  insecureSkipVerify: false       # Development/testing only; Redis/Etcd do not support it — setting true rejects startup outright
   certs:
-    caCert: |                      # 公开材料，可内联
+    caCert: |                      # Public material, can be inlined
       -----BEGIN CERTIFICATE-----
       ...
-    clientCert: |                  # 公开材料，可内联
+    clientCert: |                  # Public material, can be inlined
       -----BEGIN CERTIFICATE-----
       ...
-    secretRef:                     # 私钥 tls.key 必须走 secretRef
+    secretRef:                     # The private key tls.key must come from secretRef
       name: my-client-tls
-      # namespace 省略时同 LinkSys
+      # Defaults to the same namespace as LinkSys when omitted
 ```
 
-- 客户端私钥 **只能**通过 `certs.secretRef` 提供，指向 `kubernetes.io/tls`（键 `tls.key`）或 `Opaque`（同名键）的 Secret。
-- `caCert` / `clientCert` 是公开材料，保留 inline PEM 能力。
-- 对于 URL 已经隐含 TLS 的 provider（`https://`、`rediss://`），`enabled: true` 只额外启用自定义 CA / 客户端证书处理；纯走系统 CA 时可不写 `tls`。
+- The client private key **must** be provided via `certs.secretRef`, pointing to a `kubernetes.io/tls` (key `tls.key`) or `Opaque` (same key name) Secret.
+- `caCert` / `clientCert` are public material; the inline PEM capability is preserved.
+- For providers whose URLs already imply TLS (`https://`, `rediss://`), `enabled: true` only additionally enables custom CA / client certificate handling; `tls` may be omitted when only system CAs are used.
 
-## 按 type 展开配置
+## Configuration by `type`
 
 ### `type: redis`
 
@@ -85,10 +85,10 @@ tls:
 spec:
   type: redis
   config:
-    endpoints:                    # 必填，至少一个
+    endpoints:                    # Required, at least one
       - "redis://redis:6379"
-    db: 0                         # 0-15，Redis 标准库编号
-    auth:                         # 可选；存在则 secretRef 必填
+    db: 0                         # 0-15, Redis standard database index
+    auth:                         # Optional; secretRef is required when present
       secretRef:
         name: redis-auth
     pool:
@@ -98,12 +98,12 @@ spec:
       connect: 3000               # ms
       read: 2000
       write: 2000
-    topology:                     # standalone（默认） | sentinel | cluster
+    topology:                     # standalone (default) | sentinel | cluster
       mode: sentinel
       sentinel:
         masterName: mymaster
         sentinels: ["sentinel-1:26379", "sentinel-2:26379"]
-        password: "..."           # Sentinel 自身密码，独立于 Redis 节点鉴权
+        password: "..."           # The Sentinel's own password, independent of Redis node auth
       # cluster:
       #   readFromReplicas: true
       #   maxRedirects: 6
@@ -116,8 +116,8 @@ spec:
       metrics: { enabled: true, labels: { env: prod } }
 ```
 
-- `topology.mode=sentinel` 时 `sentinel` 必填，`mode=cluster` 时 `cluster` 必填，否则 `Accepted=False/Invalid`。
-- `auth` 使用 `BasicAuthResolver`：Secret 里至少提供 `password`；`username` 可选（Redis 6+ ACL）。
+- When `topology.mode=sentinel`, `sentinel` is required; when `mode=cluster`, `cluster` is required; otherwise `Accepted=False/Invalid`.
+- `auth` uses `BasicAuthResolver`: the Secret must provide at least `password`; `username` is optional (Redis 6+ ACL).
 
 ### `type: etcd`
 
@@ -128,7 +128,7 @@ spec:
     endpoints:
       - "https://etcd-1:2379"
       - "https://etcd-2:2379"
-    auth:                         # 可选
+    auth:                         # Optional
       secretRef:
         name: etcd-creds
         namespace: credentials
@@ -140,12 +140,12 @@ spec:
       dial: 5000
       request: 10000
       keepAlive: 30000
-    keepAlive:                    # HTTP/2 keepalive，单位秒
+    keepAlive:                    # HTTP/2 keepalive, in seconds
       time: 30
       timeout: 10
       permitWithoutStream: true
-    namespace: "/my-app/"         # etcd v3 key 前缀
-    autoSyncInterval: 300         # 秒；0 关闭
+    namespace: "/my-app/"         # etcd v3 key prefix
+    autoSyncInterval: 300         # seconds; 0 disables it
     maxCallSendSize: 2097152
     maxCallRecvSize: 4194304
     userAgent: "edgion-gateway/v1"
@@ -155,8 +155,8 @@ spec:
       metrics: { enabled: true, labels: { env: prod } }
 ```
 
-- `auth` 同样使用 `BasicAuthResolver`（username + password，etcd 通常二者都必填）。
-- etcd-client 不支持 `insecureSkipVerify`：显式设为 `true` 会直接 `bail!` 拒绝启动（与 Redis 对齐，避免"已忽略却继续严格验证"导致的配置错觉）。要跳过验证只能通过其他机制。
+- `auth` likewise uses `BasicAuthResolver` (username + password, both typically required for etcd).
+- etcd-client does not support `insecureSkipVerify`: setting it explicitly to `true` directly `bail!`s and rejects startup (consistent with Redis, avoiding the "silently ignored yet still strictly verifies" configuration illusion). To skip verification, use other mechanisms.
 
 ### `type: elasticsearch`
 
@@ -167,7 +167,7 @@ spec:
     endpoints:
       - "https://es-1:9200"
       - "https://es-2:9200"
-    auth:                         # tagged enum，必须带 type
+    auth:                         # Tagged enum; type is required
       type: apiKey                # basic | apiKey | bearer
       secretRef:
         name: es-api-key
@@ -200,8 +200,8 @@ spec:
       vendor: elasticsearch       # elasticsearch | opensearch
 ```
 
-- Auth tagged-enum：`type: basic` → `BasicAuthResolver`、`type: apiKey` → `EsApiKeyResolver`、`type: bearer` → `BearerResolver`。
-- 运行期使用 reqwest 直接打 HTTP，不依赖官方 `elasticsearch` crate；与 OpenSearch 兼容。
+- Auth tagged-enum: `type: basic` → `BasicAuthResolver`, `type: apiKey` → `EsApiKeyResolver`, `type: bearer` → `BearerResolver`.
+- At runtime, requests are issued via reqwest directly over HTTP, without depending on the official `elasticsearch` crate; OpenSearch-compatible.
 
 ### `type: webhook`
 
@@ -209,10 +209,10 @@ spec:
 spec:
   type: webhook
   config:
-    uri: "https://key-service.internal/resolve"   # 必填，http/https
-    requestMethod: POST                            # 默认 GET
+    uri: "https://key-service.internal/resolve"   # Required, http/https
+    requestMethod: POST                            # Default GET
     timeoutMs: 3000
-    auth:                                          # 可选
+    auth:                                          # Optional
       type: bearer                                 # basic | bearer | hmac
       secretRef:
         name: webhook-token
@@ -220,19 +220,19 @@ spec:
       enabled: true
       certs:
         secretRef: { name: webhook-client-tls }
-    defaultHeaders:                                # 静态出站 headers，每次调用都带上
+    defaultHeaders:                                # Static outgoing headers, sent on every call
       X-Source: edgion
     successStatusCodes: [200]
-    maxResponseBytes: 2048                         # 默认硬上限 16 KiB（可经 EdgionGatewayConfig.linkSys.webhookMaxResponseBytes 调整）
-    allowDegradation: true                         # 故障时静默降级返回 None
-    statusOnError: 503                             # allowDegradation=false 且 webhook 是唯一 key 来源时的返回码
+    maxResponseBytes: 2048                         # Default hard upper bound 16 KiB (configurable via EdgionGatewayConfig.linkSys.webhookMaxResponseBytes)
+    allowDegradation: true                         # Silently degrade to None on failure
+    statusOnError: 503                             # Status code returned when allowDegradation=false and the webhook is the sole key source
     retry:
       maxRetries: 1
       retryDelayMs: 100
       retryOnTimeout: true
       retryOnConnectError: true
       retryOnStatus: [502, 503, 504]
-    rateLimit:                                     # 对外部 webhook 的保护
+    rateLimit:                                     # Protection for the external webhook
       rate: 200
       windowSec: 1
     healthCheck:
@@ -246,15 +246,15 @@ spec:
         unhealthyThreshold: 3
         failureStatusCodes: [500, 502, 503, 504]
         countTimeout: true
-        # backoff:                                 # 仅 active 关闭时生效
+        # backoff:                                 # Effective only when active is disabled
         #   initialSec: 5
         #   multiplier: 2.0
         #   maxSec: 60
 ```
 
-- Auth tagged-enum：`type: basic` → `BasicAuthResolver`、`type: bearer` → `BearerResolver`、`type: hmac` → `HmacResolver`（Secret 键 `hmacKey`）、`type: apiKey` → `WebhookApiKeyResolver`（Secret 键 `apiKey`，注入 header 或 query）。
-- `uri` 必须 `http://` 或 `https://`；`requestMethod` 必须是合法 HTTP 方法；`statusOnError` ∈ [200, 599]；`maxResponseBytes` 在调用时 clamp 至 `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes`（默认 16 KiB）。
-- 调用语义（method/path/headers/body）由消费方决定：`KeyGet::Webhook` 通过 `forwardHeaders` 选择从入站请求转发哪些 header、`pathSuffix` 拼接到 `uri` 末尾；其他消费方通过 `get_webhook_call_handle()` + `WebhookCallRequest` 自定义。
+- Auth tagged-enum: `type: basic` → `BasicAuthResolver`, `type: bearer` → `BearerResolver`, `type: hmac` → `HmacResolver` (Secret key `hmacKey`), `type: apiKey` → `WebhookApiKeyResolver` (Secret key `apiKey`, injected as a header or query parameter).
+- `uri` must be `http://` or `https://`; `requestMethod` must be a valid HTTP method; `statusOnError` ∈ [200, 599]; `maxResponseBytes` is clamped at call time to `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes` (default 16 KiB).
+- Call semantics (method/path/headers/body) are decided by the consumer: `KeyGet::Webhook` selects which inbound request headers to forward via `forwardHeaders`, and appends `pathSuffix` to the end of `uri`; other consumers customize via `get_webhook_call_handle()` + `WebhookCallRequest`.
 
 ### `type: kafka`
 
@@ -266,48 +266,48 @@ spec:
       - "kafka:9092"
 ```
 
-- Kafka 目前是占位（schema 合法，Gateway 端尚未接入 provider）。`Accepted=True`，运行期是否可用视后续版本。
+- Kafka is currently a placeholder (the schema is valid, but the Gateway side has not yet integrated a provider). `Accepted=True`; runtime availability depends on later releases.
 
 ## Status Schema
 
 ```yaml
 status:
   conditions:
-    - type: Accepted              # spec 是否结构合法 + per-provider validate
+    - type: Accepted              # Whether the spec is structurally valid + per-provider validate
       status: "True"
       reason: Accepted
-    - type: ResolvedRefs          # 全部 secretRef / tls.secretRef 是否都已成功解析
+    - type: ResolvedRefs          # Whether all secretRef / tls.secretRef have been successfully resolved
       status: "True"
       reason: ResolvedRefs
 ```
 
-**`Accepted`**：
-- `True/Accepted` — 结构 + `validate_config()` 全过。
-- `False/Invalid` — 有 validation error（endpoint 为空、Sentinel/Cluster 缺子配置、Webhook URI 非法等），`message` 是错误拼接。
+**`Accepted`**:
+- `True/Accepted` — structure + `validate_config()` both passed.
+- `False/Invalid` — has validation errors (empty endpoints, missing Sentinel/Cluster sub-config, invalid Webhook URI, etc.); `message` concatenates the errors.
 
-**`ResolvedRefs`**：
-- `True/ResolvedRefs` — 所有引用的 `Secret` 都已找到、`Secret.type` 合法、必需 key 全部存在且可解码。
-- `False/SecretNotFound` — Secret 尚未出现在 apiserver（Controller 会随 Secret 创建事件自动 requeue）。
-- `False/RefNotPermitted` — 跨 namespace 且没有匹配的 `ReferenceGrant`。
-- `False/InvalidSecretType` — Secret.type 不在该 resolver 的白名单（例如 basic auth 拿到了 `kubernetes.io/dockerconfigjson`）。
-- `False/MissingKeys` — Secret 里没有必需的 key（如 basic 缺 `password`、apiKey 缺 `apiKeyId` + `apiKeySecret`）。
-- `False/DecodeError` — 某个 key 的 UTF-8 解码或 JSON 解析失败（仅 ACME 私钥走 JSON 校验，LinkSys 基本不会命中）。
+**`ResolvedRefs`**:
+- `True/ResolvedRefs` — all referenced `Secret`s have been found, `Secret.type` is valid, and all required keys exist and are decodable.
+- `False/SecretNotFound` — the Secret has not yet appeared in the apiserver (the Controller automatically requeues on Secret creation events).
+- `False/RefNotPermitted` — cross-namespace, no matching `ReferenceGrant`.
+- `False/InvalidSecretType` — `Secret.type` is not in the resolver's allowlist (e.g., basic auth received `kubernetes.io/dockerconfigjson`).
+- `False/MissingKeys` — the Secret is missing required keys (e.g., basic missing `password`, apiKey missing `apiKeyId` + `apiKeySecret`).
+- `False/DecodeError` — UTF-8 decoding or JSON parsing of a key failed (only ACME private keys go through JSON validation; LinkSys essentially never hits this).
 
-`kubectl get linksys` 会直接显示 `Accepted` / `ResolvedRefs` 两列。
+`kubectl get linksys` directly displays the `Accepted` / `ResolvedRefs` columns.
 
-## 运行时行为
+## Runtime Behavior
 
-- **Controller 侧**：解析 `secretRef` → 在 `SecretRefManager` 登记 owner→secret 依赖（Secret 更新/删除会级联 requeue 本资源）→ 把整份 `Secret` 内嵌到 `spec.config.<auth>.secret` / `spec.config.tls.certs.secret` → 通过 conf_sync gRPC 同步到 Gateway。`Secret` 本身是 `no_sync_kind`，不会被单独同步。
-- **Gateway 侧**：`LinkSysStore` 收到 spec 后，用 `src/types/credentials` 里的 resolver 再次从内嵌 `Secret.data` 算出 `Material`，交给 Redis / Etcd / ES / Webhook client 构建连接。凭据四态（`NotRequired` / `Pending` / `Invalid` / `Resolved`）中只有前者或 `Resolved` 允许构建 client，其余 fail-fast，**不会**退化为匿名连接。
-- **热更新**：secretRef 指向的 Secret 变更 → Controller 重算 → 通过 conf_sync 推新版 spec → Gateway 重建对应 provider client，老连接优雅退出。
+- **Controller side**: parse `secretRef` → register an owner→secret dependency in `SecretRefManager` (Secret update/delete cascades requeue this resource) → embed the entire `Secret` into `spec.config.<auth>.secret` / `spec.config.tls.certs.secret` → sync to the Gateway via conf_sync gRPC. The `Secret` itself is a `no_sync_kind` and is not synced separately.
+- **Gateway side**: after `LinkSysStore` receives the spec, it uses the resolvers in `src/types/credentials` to recompute `Material` from the embedded `Secret.data` and hands it to the Redis / Etcd / ES / Webhook client to build the connection. Of the four credential states (`NotRequired` / `Pending` / `Invalid` / `Resolved`), only the former or `Resolved` allows building a client; the rest fail-fast and **do not** degrade to anonymous connections.
+- **Hot reload**: when a Secret pointed to by secretRef changes → the Controller recomputes → pushes the new spec via conf_sync → the Gateway rebuilds the corresponding provider client and the old connections drain gracefully.
 
-## 跨引用与依赖
+## Cross-references and Dependencies
 
-| 引用方向 | 目标资源 | 机制 | 典型场景 |
-|---------|---------|------|---------|
-| LinkSys → Secret | `Secret` | `secretRef` / `tls.certs.secretRef` + `SecretRefManager` | 所有 auth / mTLS 凭据 |
-| LinkSys → ReferenceGrant | `ReferenceGrant` | 跨 namespace `secretRef` 授权 | 把凭据集中到 `credentials` namespace |
-| AccessLog → LinkSys | `LinkSys`（type=elasticsearch/redis/webhook） | 配置里按 `namespace/name` 引用 | 日志输出到 ES / Redis |
-| EdgionPlugins → LinkSys | `LinkSys`（type=redis/webhook） | 插件配置按 `namespace/name` 引用 | 分布式限流、Webhook Key 解析 |
+| Reference Direction | Target Resource | Mechanism | Typical Scenario |
+|---------------------|-----------------|-----------|------------------|
+| LinkSys → Secret | `Secret` | `secretRef` / `tls.certs.secretRef` + `SecretRefManager` | All auth / mTLS credentials |
+| LinkSys → ReferenceGrant | `ReferenceGrant` | Authorization for cross-namespace `secretRef` | Centralize credentials in a `credentials` namespace |
+| AccessLog → LinkSys | `LinkSys` (type=elasticsearch/redis/webhook) | Reference by `namespace/name` in configuration | Log output to ES / Redis |
+| EdgionPlugins → LinkSys | `LinkSys` (type=redis/webhook) | Reference by `namespace/name` in plugin configuration | Distributed rate limiting, Webhook key resolution |
 
-内部实现与 Handler 流程见 [01-architecture/05-resources/18-link-sys.md](../../01-architecture/05-resources/18-link-sys.md)。
+For the internal implementation and Handler flow, see [01-architecture/05-resources/18-link-sys.md](../../01-architecture/05-resources/18-link-sys.md).

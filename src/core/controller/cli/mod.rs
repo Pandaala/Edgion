@@ -579,9 +579,10 @@ mod require_auth_tests {
         c
     }
 
-    /// 双显式 opt-out：operator 明确 disabled 两边。require_auth 应为 false
-    /// （respect 明示意图）。守护：未来若有人把"any None/disabled → true"简化
-    /// 进公式，会打破 no-auth 模式。
+    /// Double explicit opt-out: the operator explicitly disabled both sides.
+    /// require_auth must be false (respect the explicit intent). Guard: if
+    /// someone later simplifies the formula to "any None/disabled -> true",
+    /// it would break the no-auth mode.
     #[test]
     fn require_auth_both_explicit_disabled_false() {
         let oidc = oidc_disabled();

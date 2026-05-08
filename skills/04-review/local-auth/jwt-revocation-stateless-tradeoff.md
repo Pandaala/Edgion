@@ -1,63 +1,63 @@
-# 本地 Admin JWT 无服务端撤销：stateless 取舍 + OIDC 作为撤销路径
+# Local Admin JWT Has No Server-Side Revocation: Stateless Tradeoff + OIDC as Revocation Path
 
-## 结论
+## Conclusion
 
-`[local_auth]` 模式签发的 admin JWT 是 **stateless** 的——`POST /api/v1/auth/logout` 只清 cookie，已签发 token 在 `exp` 前仍然有效，无服务端黑名单。这是**已评估的架构取舍**，**不应**要求在代码层引入 token 黑名单（无论是内存还是 Redis 后端）。
+Admin JWTs issued in `[local_auth]` mode are **stateless** — `POST /api/v1/auth/logout` only clears the cookie; an issued token remains valid until `exp`, with no server-side blacklist. This is an **already-evaluated architectural tradeoff**; it **should not** require introducing a token blacklist (whether memory or Redis-backed) at the code level.
 
-遇到 review 报"本地 admin JWT 应该有撤销机制 / 应该加 Redis 黑名单 / 应该改短期 access token + refresh token"时，按下述规则关闭。
+When a review reports "local admin JWT should have a revocation mechanism / should add a Redis blacklist / should switch to short-lived access token + refresh token", close per the rules below.
 
-## 原因
+## Reasons
 
-1. **行业一致性**：
-   - Argo CD 本地管理员：纯 stateless JWT，无撤销，推荐 SSO
-   - Kubernetes Dashboard 内置 token：同模式
-   - 需要 stateful session 的产品（Portainer / Grafana / GitLab）走完全不同架构（DB-backed session，每请求 DB 查询），不是"给 JWT 加黑名单"
-2. **网关层黑名单的架构困境**：
-   - **内存黑名单（`HashSet<jti>`）**：多实例 HA 时每实例独立；logout 打到实例 A、后续请求打到实例 B → B 不知道撤销 → **假象防御**；进程重启清零
-   - **Redis 黑名单**：Admin API 路径引入 Redis 硬依赖（当前 Redis 只是 `rate_limit_redis` 可选后端，不是 Admin API 依赖）+ 每请求 1 次 RT 延迟 + Redis 故障时 fail-open（安全失效）/ fail-close（可用性失效）两难
-3. **Edgion 已内置撤销能力路径**：`unified_auth` 的 `[auth]` OIDC 配置让 IdP（Keycloak / Auth0 / Okta / Azure AD / Google）承担 session revocation——IdP 撤销 session/refresh token 即 Edgion 端立即失效。这是业界管理端认证需要撤销能力时的标准路径
-4. **文档已明确 tradeoff + 提供 3 种退役运维替代操作**（`skills/02-features/02-config/03-auth-bootstrap.md`）：
-   - 改密码（新登录须用新密码）
-   - 轮换 `jwt_secret`（**一键 revoke all**，适合紧急情况）
-   - 等窗口过期（配合缩短 `jwt_expiry_hours` 到 1-4h）
-5. **CLI / Dashboard 不受 expiry 缩短影响**：`edgion-cli` `ensure_auth()` 自动 re-login；dashboard 是 UX 影响不是功能影响
+1. **Industry consistency**:
+   - Argo CD local administrator: pure stateless JWT, no revocation, recommends SSO
+   - Kubernetes Dashboard built-in token: same pattern
+   - Products that need stateful sessions (Portainer / Grafana / GitLab) take a completely different architecture (DB-backed sessions, DB query per request); not "add a blacklist to JWT"
+2. **Architectural dilemma of a gateway-layer blacklist**:
+   - **In-memory blacklist (`HashSet<jti>`)**: in multi-instance HA, each instance is independent; logout hits instance A, subsequent requests hit B → B does not know about the revocation → **illusory defense**; cleared on process restart
+   - **Redis blacklist**: introduces a hard Redis dependency on the Admin API path (Redis is currently only an optional backend for `rate_limit_redis`, not an Admin API dependency) + 1 RT latency per request + when Redis fails, fail-open (security failure) vs fail-close (availability failure) is a dilemma
+3. **Edgion already has a built-in revocation path**: `unified_auth`'s `[auth]` OIDC config delegates session revocation to the IdP (Keycloak / Auth0 / Okta / Azure AD / Google) — the IdP revoking the session/refresh token causes immediate invalidation on the Edgion side. This is the industry-standard path when management-side authentication needs revocation
+4. **Documentation makes the tradeoff explicit + provides 3 alternative offboarding ops** (`skills/02-features/02-config/03-auth-bootstrap.md`):
+   - Change the password (new logins must use the new password)
+   - Rotate `jwt_secret` (**one-click revoke all**, suitable for emergencies)
+   - Wait out the window (combined with shortening `jwt_expiry_hours` to 1-4h)
+5. **CLI / Dashboard not affected by shortened expiry**: `edgion-cli` `ensure_auth()` re-logs in automatically; the dashboard is a UX impact, not a functional impact
 
-## 判定规则
+## Decision Rule
 
-当 review / 审计报告出现以下模式时，按"架构取舍 + 已有 OIDC 撤销路径"关闭：
+When a review/audit report contains the following patterns, close as "architectural tradeoff + already-existing OIDC revocation path":
 
-1. "logout 后 24h 内已签发 JWT 仍有效，应加服务端黑名单"
-2. "应引入 Redis 后端存储 revoked jti"
-3. "应改成短期 access token + refresh token 模式"
-4. "应把 `jwt_expiry_hours` 默认值强制改为 1h"
+1. "JWTs issued within 24h before logout remain valid; should add a server-side blacklist"
+2. "Should introduce a Redis backend to store revoked jti"
+3. "Should switch to a short-lived access token + refresh token model"
+4. "Should change the default of `jwt_expiry_hours` to 1h"
 
-验证三点再关闭：
+Verify three points before closing:
 
-- `local_auth/handlers.rs` 的 `logout_handler` 仍只清 cookie（无黑名单调用）
-- `LocalAuthConfig` 无 `revocation_backend` / `token_blacklist` 字段
-- `skills/02-features/02-config/03-auth-bootstrap.md` 仍含"JWT 撤销语义"小节，明确 stateless 取舍 + OIDC 路径 + 退役运维 3 种操作
+- `local_auth/handlers.rs`'s `logout_handler` still only clears the cookie (no blacklist call)
+- `LocalAuthConfig` has no `revocation_backend` / `token_blacklist` field
+- `skills/02-features/02-config/03-auth-bootstrap.md` still contains the "JWT revocation semantics" section, making explicit the stateless tradeoff + OIDC path + 3 offboarding ops alternatives
 
-三点满足 → 架构取舍，指向 `tasks/security-audit/03-cryptography.md` M11 FIXED（doc-only）决策关闭。
+All three satisfied → architectural tradeoff; point to `tasks/security-audit/03-cryptography.md` M11 FIXED (doc-only) decision and close.
 
-## 例外场景（需重评）
+## Exceptional Scenarios (need reassessment)
 
-- 行业主流（Argo CD / K8s Dashboard）转向为本地 admin 提供服务端黑名单 → 重评跟随
-- 出现合规要求（PCI-DSS / FIPS / 特定行业）强制管理端 token 必须可即时撤销且不能走 OIDC → 按合规要求另立项目实现
-- `unified_auth` 的 OIDC 支持被删或变为可选不可靠 → 重评（届时 OIDC 撤销路径不再成立）
+- Industry mainstream (Argo CD / K8s Dashboard) shifts to providing a server-side blacklist for local admin → reassess and follow
+- A compliance requirement (PCI-DSS / FIPS / certain industries) mandates that management-side tokens must be instantly revocable and cannot go through OIDC → start a separate project to implement per compliance requirement
+- `unified_auth`'s OIDC support is removed or becomes optional/unreliable → reassess (the OIDC revocation path no longer holds at that point)
 
-## 与其他 stateless/doc-only 决策的交叉引用
+## Cross-Reference with Other Stateless/Doc-Only Decisions
 
-本决策与以下规则同属"**代码保持业界 stateless 模式 + 文档提供替代路径和配置建议**"：
+This decision belongs to the same category as the following rules: "**code keeps the industry stateless pattern + documentation provides alternative paths and config recommendations**":
 
-- `hmac-auth/replay-protection-timestamp-only.md`（M6）——HMAC nonce dedup 同类拒绝理由
-- `observability/system-error-state-metric.md`（M2）——保留紧急逃生门 + 可观测兜底
-- `oidc/nonce-pkce-defaults.md`（M8）——doc-only 推荐生产 opt-in
+- `hmac-auth/replay-protection-timestamp-only.md` (M6) — same rejection rationale for HMAC nonce dedup
+- `observability/system-error-state-metric.md` (M2) — preserve emergency escape hatch + observability backstop
+- `oidc/nonce-pkce-defaults.md` (M8) — doc-only recommendation to opt-in for production
 
-共同模式：**代码反对引入"分布式一致性 / 强依赖"的假象防御基础设施**，把"真正需要此能力"的路径指向已有的合适机制（OIDC、业务层 idempotency、Alertmanager 等）。
+Common pattern: **the code refuses to introduce illusory defense infrastructure of the "distributed consistency / hard dependency" kind**, pointing the path that "truly needs this capability" to existing appropriate mechanisms (OIDC, business-layer idempotency, Alertmanager, etc.).
 
-## 背景记录
+## Background Notes
 
-- 决策日期：2026-04-22
-- 决策来源：`tasks/security-audit/03-cryptography.md` M11（Option E — doc-only）
-- 本次改动：`skills/02-features/02-config/03-auth-bootstrap.md` 新增"JWT 撤销语义"小节 + `src/core/common/local_auth/config.rs` 的 `jwt_expiry_hours` 字段 doc comment 增强。**零代码行为变更**
-- 相关参考：Argo CD 的 [Self-Signed JWT for Local Account](https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/#local-users-and-accounts) 是最接近 Edgion 本地 admin JWT 的业界对应模式
+- Decision date: 2026-04-22
+- Decision source: `tasks/security-audit/03-cryptography.md` M11 (Option E — doc-only)
+- Changes this round: `skills/02-features/02-config/03-auth-bootstrap.md` adds a "JWT revocation semantics" section + the doc comment of the `jwt_expiry_hours` field in `src/core/common/local_auth/config.rs` is enhanced. **Zero code behavior change**
+- Related references: Argo CD's [Self-Signed JWT for Local Account](https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/#local-users-and-accounts) is the closest industry analog to Edgion's local admin JWT

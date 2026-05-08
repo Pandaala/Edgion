@@ -1,22 +1,22 @@
 ---
 name: ip-source-client-ip-false-positive
-description: IP 限制 / 限流 ClientIp finding 判定规则。审查"未配置 RealIp 时 ClientIp 可被 XFF 伪造"类 finding 时先读此文件。
+description: Decision rule for IP restriction / rate limiting ClientIp findings. Read this file first when reviewing "ClientIp can be spoofed via XFF when RealIp is not configured" findings.
 ---
 
 # IpSource::ClientIp / KeyGet::ClientIp — NOT-AN-ISSUE
 
-## 结论
+## Conclusion
 
-"未启用 RealIp 插件时，攻击者可通过伪造 `X-Forwarded-For` 绕过 IP 白名单/限流" 这类 finding 前提错误，判定为 NOT-AN-ISSUE。
+Findings of the form "without the RealIp plugin enabled, an attacker can bypass the IP allowlist/rate limit by spoofing `X-Forwarded-For`" rest on a wrong premise; classified as NOT-AN-ISSUE.
 
-## 代码路径（关键证据）
+## Code Path (key evidence)
 
 ```
 IpSource::ClientIp  → session.remote_addr() → ctx.request_info.remote_addr
 KeyGet::ClientIp    → self.remote_addr()    → ctx.request_info.remote_addr
 ```
 
-`remote_addr` 在 `src/core/gateway/routes/http/proxy_http/pg_request_filter.rs:261-266` 初始化：
+`remote_addr` is initialized in `src/core/gateway/routes/http/proxy_http/pg_request_filter.rs:261-266`:
 
 ```rust
 ctx.request_info.remote_addr = if let Some(extractor) = &edgion_http.real_ip_extractor {
@@ -27,34 +27,34 @@ ctx.request_info.remote_addr = if let Some(extractor) = &edgion_http.real_ip_ext
 };
 ```
 
-**未配置 `real_ip_extractor` 时，`remote_addr` 直接等于 `client_addr`（TCP 连接 IP），完全不读取 XFF/X-Real-IP 请求头。**
+**When `real_ip_extractor` is not configured, `remote_addr` is set directly to `client_addr` (the TCP connection IP); XFF/X-Real-IP request headers are not read at all.**
 
-## 为何 doc comment 看起来像"读 XFF"
+## Why the doc comment looked like "reads XFF"
 
-`IpSource::ClientIp` 的原始 doc comment 写的是 "Extract from X-Forwarded-For (first IP) or fallback to X-Real-IP"，描述误导。
-实际上，读 XFF/X-Real-IP 的工作由 **RealIp 插件**或**全局 `spec.realIp` 配置**完成，结果写入 `remote_addr`。
-`IpSource::ClientIp` 只是**消费**已经处理过的 `remote_addr`，自身不解析任何 Header。
+The original doc comment for `IpSource::ClientIp` read "Extract from X-Forwarded-For (first IP) or fallback to X-Real-IP", which is misleading.
+In reality, reading XFF/X-Real-IP is performed by the **RealIp plugin** or the **global `spec.realIp` config**; the result is written into `remote_addr`.
+`IpSource::ClientIp` only **consumes** the already-processed `remote_addr`; it does not parse any header itself.
 
-doc comment 已于 2026-04-22 修正（`ip_restriction.rs`）。
+The doc comment was corrected on 2026-04-22 (`ip_restriction.rs`).
 
-## 配置场景分析
+## Configuration Scenario Analysis
 
-| 场景 | `remote_addr` 内容 | XFF 是否可伪造 |
+| Scenario | Content of `remote_addr` | Can XFF be spoofed |
 |------|------------------|---------------|
-| 未配置 RealIp | TCP IP（`client_addr`） | ❌ 无效，XFF 不被读取 |
-| 配置了 RealIp 插件 | RealIp 萃取结果 | 取决于 `trustedIps` 配置是否精确 |
-| 配置了全局 `spec.realIp` | 全局 RealIp 萃取结果 | 同上 |
+| RealIp not configured | TCP IP (`client_addr`) | ❌ Ineffective; XFF is not read |
+| RealIp plugin configured | RealIp extraction result | Depends on whether `trustedIps` is configured precisely |
+| Global `spec.realIp` configured | Global RealIp extraction result | Same as above |
 
-operator 需要"基于真实 client IP"时，正确做法是显式配置 RealIp，不是改插件默认行为。
+When the operator wants "based on real client IP", the correct approach is to explicitly configure RealIp, not to change the plugin default behavior.
 
-## 不接受的修复建议
+## Fix Suggestions Not Accepted
 
-- "当 RealIp 未配置时自动回退到 TCP IP" — **已经是这个行为**，不需要额外修改
-- "在文档里强制说明 ClientIp 必须与 RealIp 配合" — doc comment 已修正，文档无需重复强调错误前提
-- "增加 RemoteAddr key 选项用于限流" — `RemoteAddr` 选项已存在（`IpSource::RemoteAddr`）
+- "When RealIp is not configured, automatically fall back to TCP IP" — **this is already the behavior**; no extra change needed
+- "Force the docs to state that ClientIp must be paired with RealIp" — the doc comment has been corrected; the documentation does not need to repeatedly emphasize a wrong premise
+- "Add a RemoteAddr key option for rate limiting" — the `RemoteAddr` option already exists (`IpSource::RemoteAddr`)
 
-## `KeyGet::Header` 的情况
+## The `KeyGet::Header` Case
 
-`KeyGet::Header` 依赖可伪造的请求头是**已知设计取舍**，与 Nginx/Envoy/Kong 限流行为一致。
-Operator 选择 Header 作为限流 key 时，需自行评估上游可信度（如 CDN 固定注入的 `X-Real-IP`）。
-这不属于安全漏洞，是配置权衡，文档有说明。
+`KeyGet::Header` depending on a spoofable request header is a **known design tradeoff**, consistent with rate-limiting behavior in Nginx/Envoy/Kong.
+When the operator chooses Header as the rate-limit key, they must evaluate upstream trust themselves (e.g., a `X-Real-IP` injected fixedly by the CDN).
+This is not a security vulnerability; it is a configuration tradeoff that the documentation explains.

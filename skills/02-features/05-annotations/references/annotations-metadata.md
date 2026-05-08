@@ -47,16 +47,16 @@ Notes:
 
 ### `edgion.io/forward-raw-path`
 
-- **生效粒度**：HTTPRoute（应用到该 HTTPRoute 下所有 rules）
-- **有效值**：
-  - `"true"` —— 强制 raw 转发（盖过全局 `forward_normalized_path` / region_route 默认）
-  - `"false"` —— 强制 normalized 转发（盖过 region_route 类的 `preserve_raw_path = true`）
-  - 缺省 —— 走默认流程（rewrite 终态 → external_jump → 全局开关 → 默认 normalized）
-- **解析时机**：HTTPRoute 加载（`http_route_preparse.rs`）
-- **存储位置**：`HTTPRouteRule.parsed_forward_raw_path: Option<bool>`
-- **非法值处理**：tracing INFO 日志（含 ns / name / value）+ 当作缺省，不 reject route
-- **优先级**：注解最高，盖过 `external_jump.preserve_raw_path` 与全局 `forward_normalized_path`
-- **示例**：
+- **Granularity**: HTTPRoute (applied to all rules under this HTTPRoute).
+- **Valid values**:
+  - `"true"` — force raw forwarding (overrides the global `forward_normalized_path` / region_route default).
+  - `"false"` — force normalized forwarding (overrides region_route-style `preserve_raw_path = true`).
+  - absent — use the default flow (rewrite final state → external_jump → global switch → normalized by default).
+- **Parsing time**: HTTPRoute load (`http_route_preparse.rs`).
+- **Storage**: `HTTPRouteRule.parsed_forward_raw_path: Option<bool>`.
+- **Invalid value handling**: tracing INFO log (including ns / name / value) + treat as absent; the route is not rejected.
+- **Priority**: the annotation has the highest priority, overriding `external_jump.preserve_raw_path` and the global `forward_normalized_path`.
+- **Example**:
 
   ```yaml
   apiVersion: gateway.networking.k8s.io/v1
@@ -65,7 +65,7 @@ Notes:
     name: legacy-app-raw-path
     namespace: production
     annotations:
-      edgion.io/forward-raw-path: "true"   # 上游对 path 字面格式敏感，禁止规范化
+      edgion.io/forward-raw-path: "true"   # Upstream is sensitive to literal path format; normalization is forbidden
   spec:
     rules:
       - matches:

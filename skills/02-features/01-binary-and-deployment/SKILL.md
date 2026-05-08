@@ -1,16 +1,16 @@
 ---
 name: binary-and-deployment
-description: 四个 bin（edgion-controller/gateway/cli/center）的启动方式、CLI 参数、部署模式、Feature Flags。
+description: Startup, CLI arguments, deployment patterns, and Feature Flags for the four binaries (edgion-controller/gateway/cli/center).
 ---
 
-# 01 二进制与部署
+# 01 Binary and Deployment
 
-> Edgion 是单 Crate、四 bin 的项目。本节描述各 bin 的启动方式、CLI 参数和常见部署模式。
+> Edgion is a single-crate, four-binary project. This section describes each binary's startup methods, CLI arguments, and common deployment patterns.
 
-## 文件清单
+## File List
 
-| 文件 | 主题 |
-|------|------|
-| [00-binaries.md](00-binaries.md) | 四个 bin 的入口、CLI 参数完整参考、work_dir 优先级 |
-| [01-deployment-patterns.md](01-deployment-patterns.md) | 常见部署方式：FileSystem 开发模式、K8s 生产模式、HA 部署 |
-| [02-feature-flags.md](02-feature-flags.md) | Cargo Feature Flags 矩阵：allocator / TLS backend / 测试选项 |
+| File | Topic |
+|------|-------|
+| [00-binaries.md](00-binaries.md) | Entry points of the four binaries, full CLI argument reference, work_dir priority |
+| [01-deployment-patterns.md](01-deployment-patterns.md) | Common deployment methods: FileSystem development mode, K8s production mode, HA deployment |
+| [02-feature-flags.md](02-feature-flags.md) | Cargo Feature Flags matrix: allocator / TLS backend / testing options |

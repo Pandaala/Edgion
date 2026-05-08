@@ -1,60 +1,60 @@
 ---
 name: resource-edgion-tls
-description: EdgionTls 资源：扩展 TLS 证书配置、mTLS、Secret 引用解析、Gateway 绑定。
+description: EdgionTls resource — extended TLS certificate configuration, mTLS, Secret reference resolution, Gateway binding.
 ---
 
-# EdgionTls 资源
+# EdgionTls resource
 
-> **通用流程**: 参见 [00-resource-flow.md](00-resource-flow.md)
+> **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-EdgionTls 是 Edgion 的自定义扩展资源，提供比 Gateway 内置 certificateRefs 更丰富的 TLS 证书管理能力，支持独立的服务端证书配置、客户端认证（mTLS）、最低 TLS 版本和密码套件选择等。
+EdgionTls is Edgion's custom-extension resource that provides richer TLS certificate management than Gateway's built-in certificateRefs, supporting independent server-side certificate configuration, client authentication (mTLS), minimum TLS version, and cipher suite selection.
 
-## 源码位置
+## Source code locations
 
 - Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_tls.rs`
-- 类型定义: `src/types/resources/edgion_tls.rs`
+- Type definitions: `src/types/resources/edgion_tls.rs`
 
-## Controller 侧处理
+## Controller-side processing
 
 ### validate
 
-1. 检查 `parent_refs` 是否存在且非空，未设置则警告不会生效
-2. 从 GLOBAL_SECRET_STORE 检查 `secret_ref` 引用的 Secret 是否存在，不存在则警告（可能后续到达）
-3. **证书/私钥匹配校验**：若 Secret 已存在，提取 `tls.crt` 和 `tls.key`，通过 `check_key_matches_cert()`（`x509-parser` + `rcgen`，纯 Rust 无 TLS 后端依赖）比对公钥字节，不匹配则警告。Secret 未到时跳过，依赖 SecretRefManager requeue 后重试
+1. Check that `parent_refs` exists and is non-empty; if unset, warn that it will not take effect
+2. Check from GLOBAL_SECRET_STORE whether the Secret referenced by `secret_ref` exists; if not, warn (it may arrive later)
+3. **Cert/private-key match check**: if the Secret is already present, extract `tls.crt` and `tls.key` and compare public-key bytes via `check_key_matches_cert()` (`x509-parser` + `rcgen`, pure Rust with no TLS-backend dependency); on mismatch, warn. When the Secret has not arrived, skip and rely on SecretRefManager requeue to retry.
 
 ### parse
 
-1. **清除旧引用**：清除 SecretRefManager 中该 EdgionTls 的旧记录
-2. **解析服务端证书 Secret**：从 `spec.secret_ref` 获取 Secret 引用，在 SecretRefManager 注册，从 GLOBAL_SECRET_STORE 读取 Secret 数据填入 `spec.secret`
-3. **解析 CA 证书 Secret（mTLS）**：若配置了 `spec.client_auth.ca_secret_ref`，同样注册并解析 CA Secret，填入 `client_auth.ca_secret`
-4. **解析 resolved_listeners**：通过 `resolve_listener_keys()` 从 parentRef 解析 `Vec<ListenerKey>`，逻辑与路由资源一致：总是查找 Gateway 获取地址和协议，sectionName+port 同时存在时校验一致性，受 allowedRoutes 命名空间策略约束
+1. **Clear stale references**: clear records for this EdgionTls in SecretRefManager
+2. **Resolve server-side certificate Secret**: from `spec.secret_ref`, obtain the Secret reference, register in SecretRefManager, read Secret data from GLOBAL_SECRET_STORE, and populate `spec.secret`
+3. **Resolve CA certificate Secret (mTLS)**: if `spec.client_auth.ca_secret_ref` is configured, similarly register and resolve the CA Secret, populating `client_auth.ca_secret`
+4. **Resolve resolved_listeners**: resolve `Vec<ListenerKey>` from parentRef via `resolve_listener_keys()`; logic is identical to route resources: always look up the Gateway to obtain address and protocol, validate consistency when sectionName+port are both present, subject to the allowedRoutes namespace policy
 
 ### on_change
 
-注册到 GatewayRouteIndex，确保 Gateway 的 hostname/port 变更时能 requeue 此 EdgionTls（重新计算 resolved_listeners）。
+Register into GatewayRouteIndex to ensure that hostname/port changes on the Gateway can requeue this EdgionTls (recomputing resolved_listeners).
 
 ### on_delete
 
-清除 SecretRefManager 引用和 GatewayRouteIndex 注册。
+Clear SecretRefManager references and the GatewayRouteIndex registration.
 
 ### update_status
 
-为每个 parentRef 生成独立的 RouteParentStatus：
-- `Accepted`：无 validation_errors 时为 True，有错误时为 False（reason=Invalid），同时校验 parentRef 对应的 Gateway 是否存在
-- `ResolvedRefs`：检查 secret_ref 引用的 Secret 是否在 GLOBAL_SECRET_STORE 中存在，不存在则 False（reason=SecretNotFound）
-- 仅设置 Accepted 和 ResolvedRefs 两个 Condition，不设置 Programmed/Ready
+Produce an independent RouteParentStatus for each parentRef:
+- `Accepted`: True when there are no validation_errors; False (reason=Invalid) when errors exist; also validates whether the Gateway corresponding to parentRef exists
+- `ResolvedRefs`: checks whether the Secret referenced by secret_ref exists in GLOBAL_SECRET_STORE; if not, False (reason=SecretNotFound)
+- Sets only the Accepted and ResolvedRefs Conditions; does not set Programmed/Ready
 
-## Gateway 侧处理
+## Gateway-side processing
 
-EdgionTls 同步到 Gateway 后存入 TlsStore，提供 SNI 匹配的证书。请求到达时，根据 TLS ClientHello 的 SNI 字段匹配证书，支持按 hostname 和端口维度的精确匹配。
+After EdgionTls is synced to the Gateway side, it is stored in TlsStore and provides certificates for SNI matching. When a request arrives, the certificate is matched against the SNI field of the TLS ClientHello, supporting precise matching by hostname and port.
 
-TlsStore 写入时调用 `validate_cert()` 做二次校验（含 cert/key 匹配），无效证书不进入 `TlsCertMatcher`，作为 Controller 校验的兜底防线。
+When TlsStore writes, it calls `validate_cert()` for a secondary check (including cert/key matching); invalid certificates do not enter `TlsCertMatcher`, serving as a fallback to the Controller-side validation.
 
-## 跨资源关联
+## Cross-resource relationships
 
-| 关联方向 | 目标资源 | 关联机制 | 说明 |
+| Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
-| EdgionTls → Secret | Secret | secret_ref | 服务端 TLS 证书和私钥 |
-| EdgionTls → Secret | Secret | client_auth.ca_secret_ref | mTLS 的 CA 证书 |
-| EdgionTls → Gateway | Gateway | parentRef | 绑定到 Gateway 的特定 Listener |
-| EdgionTls ← SecretRefManager | Secret | 级联 requeue | Secret 变更时自动重新处理 EdgionTls |
+| EdgionTls → Secret | Secret | secret_ref | Server-side TLS certificate and private key |
+| EdgionTls → Secret | Secret | client_auth.ca_secret_ref | CA certificate for mTLS |
+| EdgionTls → Gateway | Gateway | parentRef | Bound to a specific Listener of a Gateway |
+| EdgionTls ← SecretRefManager | Secret | cascading requeue | Secret changes automatically re-process EdgionTls |

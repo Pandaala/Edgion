@@ -254,26 +254,26 @@ secretRef:
     fn redis_auth_rejects_inline_password() {
         let yaml = "secretRef:\n  name: r\npassword: leaked";
         let r: Result<RedisAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline password 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline password must be rejected by deny_unknown_fields");
     }
 
     #[test]
     fn redis_auth_rejects_inline_username() {
         let yaml = "secretRef:\n  name: r\nusername: admin";
         let r: Result<RedisAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline username 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline username must be rejected by deny_unknown_fields");
     }
 
     #[test]
     fn redis_auth_rejects_missing_secret_ref() {
         let yaml = "{}";
         let r: Result<RedisAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "secretRef 是必需字段");
+        assert!(r.is_err(), "secretRef is a required field");
     }
 
     #[test]
     fn redis_auth_yaml_roundtrip_unchanged() {
-        // 改造前后 YAML 形态必须一致（#[serde(flatten)] 验证）
+        // YAML shape must remain identical before and after refactoring (#[serde(flatten)] verification)
         let yaml = "secretRef:\n  name: redis-creds\n  namespace: default";
         let auth: super::RedisAuth = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(auth.slot.secret_ref.name, "redis-creds");

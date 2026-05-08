@@ -29,8 +29,8 @@ message FedWatchEventResponse {
     string error         = 5;  // Non-empty = error code
 }
 
-// Controller (client) 连接 Center (server) 的持久双向流
-// Controller 第一条消息必须是 RegisterRequest
+// Persistent bidirectional stream from Controller (client) to Center (server).
+// The first message from Controller must be a RegisterRequest.
 service FederationSync {
     rpc Sync(stream ControllerMessage) returns (stream CenterMessage);
 }
@@ -39,52 +39,52 @@ service FederationSync {
 
 message ControllerMessage {
     oneof payload {
-        RegisterRequest      register              = 1;  // 首条消息，注册自身信息
-        Pong                 pong                  = 2;  // 心跳响应
-        CommandResponse      command_response      = 4;  // 响应 center 的命令
-        HttpProxyResponse    http_proxy_response   = 5;  // HTTP 代理响应
-        FedWatchListResponse watch_list_response   = 6;  // 反向 list/watch：全量列表响应
-        FedWatchEventResponse watch_event_response = 7;  // 反向 list/watch：增量事件响应
+        RegisterRequest      register              = 1;  // First message: register self info
+        Pong                 pong                  = 2;  // Heartbeat response
+        CommandResponse      command_response      = 4;  // Response to a command from center
+        HttpProxyResponse    http_proxy_response   = 5;  // HTTP proxy response
+        FedWatchListResponse watch_list_response   = 6;  // Reverse list/watch: full list response
+        FedWatchEventResponse watch_event_response = 7;  // Reverse list/watch: incremental event response
     }
 }
 
 message RegisterRequest {
-    string          controller_id   = 1;  // 稳定标识：cluster + name 拼接，跨重启不变
-    string          cluster         = 2;  // 集群标识（固定 string）
-    repeated string env             = 3;  // 环境标签列表
-    repeated string tag             = 4;  // 扩展标签列表
-    repeated string supported_kinds = 5;  // 本 controller 持有的资源 kind 列表（已排除 no_sync_kinds）
+    string          controller_id   = 1;  // Stable identifier: cluster + name concatenated; unchanged across restarts
+    string          cluster         = 2;  // Cluster identifier (fixed string)
+    repeated string env             = 3;  // Environment label list
+    repeated string tag             = 4;  // Extended label list
+    repeated string supported_kinds = 5;  // List of resource kinds held by this controller (excluding no_sync_kinds)
 }
 
 message Pong {
-    uint64 timestamp = 1;  // echo Ping.timestamp，毫秒时间戳
+    uint64 timestamp = 1;  // echo Ping.timestamp, millisecond timestamp
 }
 
 message CommandResponse {
     string request_id = 1;
     bool   success    = 2;
-    string message    = 3;  // 失败时的错误信息
+    string message    = 3;  // Error message on failure
 }
 
 // ── Center → Controller ──────────────────────────────────────
 
 message CenterMessage {
     oneof payload {
-        RegisterAck      register_ack  = 1;  // 注册确认
-        Ping             ping          = 2;  // 心跳
-        CommandRequest   command       = 4;  // 下发命令
-        HttpProxyRequest http_proxy    = 5;  // HTTP 代理请求（Center 转发前端请求）
-        FedWatchRequest  watch_request = 6;  // 请求 controller 反向 list/watch
+        RegisterAck      register_ack  = 1;  // Registration acknowledgement
+        Ping             ping          = 2;  // Heartbeat
+        CommandRequest   command       = 4;  // Dispatched command
+        HttpProxyRequest http_proxy    = 5;  // HTTP proxy request (Center forwards a frontend request)
+        FedWatchRequest  watch_request = 6;  // Request controller to perform reverse list/watch
     }
 }
 
 message RegisterAck {
-    // session_id 是 center 内部概念，仅用于日志追踪，controller 不需要回传
+    // session_id is a Center-internal concept used only for log tracing; the controller does not need to echo it back
     string session_id = 1;
 }
 
 message Ping {
-    uint64 timestamp = 1;  // 毫秒时间戳
+    uint64 timestamp = 1;  // Millisecond timestamp
 }
 
 message CommandRequest {
@@ -100,7 +100,7 @@ message ReloadCommand {}
 
 message ApplyCommand {
     string kind = 1;
-    string data = 2;  // 资源 JSON（ConfCenter 原始格式）
+    string data = 2;  // Resource JSON (ConfCenter raw format)
 }
 
 message DeleteCommand {
@@ -109,21 +109,21 @@ message DeleteCommand {
     string name      = 3;
 }
 
-// ── HTTP Proxy（Center ↔ Controller HTTP 隧道）────────────────
+// ── HTTP Proxy (Center <-> Controller HTTP tunnel) ────────────
 
-// Center → Controller: 将前端 HTTP 请求封装后通过 gRPC 流发送
+// Center -> Controller: encapsulates a frontend HTTP request and sends it over the gRPC stream
 message HttpProxyRequest {
-    string              request_id = 1;  // UUID，用于关联响应
-    string              method     = 2;  // HTTP 方法：GET, POST, PUT, DELETE
-    string              path       = 3;  // 请求路径：/api/v1/namespaced/httproute
-    map<string, string> headers    = 4;  // HTTP 请求头
-    bytes               body       = 5;  // 请求体
+    string              request_id = 1;  // UUID, used to correlate the response
+    string              method     = 2;  // HTTP method: GET, POST, PUT, DELETE
+    string              path       = 3;  // Request path, e.g. /api/v1/namespaced/httproute
+    map<string, string> headers    = 4;  // HTTP request headers
+    bytes               body       = 5;  // Request body
 }
 
-// Controller → Center: 将内部路由执行结果封装返回
+// Controller -> Center: encapsulates the result of executing the internal route and returns it
 message HttpProxyResponse {
     string              request_id  = 1;  // echo HttpProxyRequest.request_id
-    uint32              status_code = 2;  // HTTP 状态码：200, 404, 500...
-    map<string, string> headers     = 3;  // HTTP 响应头
-    bytes               body        = 4;  // 响应体
+    uint32              status_code = 2;  // HTTP status code: 200, 404, 500, ...
+    map<string, string> headers     = 3;  // HTTP response headers
+    bytes               body        = 4;  // Response body
 }

@@ -1,54 +1,54 @@
-# ConfCenter etcd 抽象边界 — 已审计的设计取舍
+# ConfCenter etcd Abstraction Boundary — Audited Design Tradeoff
 
-**审计日期**：2026-04-26
-**关联 issue**：P1-09 (已关闭，未修复)
-**结论**：**已知设计取舍，不修复**。下一次 code review 看到这些"问题"时，先读这份文档再决定是否新开 issue。
+**Audit date**: 2026-04-26
+**Linked issue**: P1-09 (closed, not fixed)
+**Conclusion**: **Known design tradeoff, will not fix.** When you see these "issues" in the next code review, read this document first before deciding to file a new issue.
 
-## 涉及代码
+## Code Involved
 
 - `src/core/controller/conf_mgr/conf_center/etcd/config.rs:140-211`
-  （`EtcdConfig::to_client_config`）
+  (`EtcdConfig::to_client_config`)
 - `src/core/controller/conf_mgr/conf_center/etcd/center.rs:47-48`
-  （`EtcdCenter::new` 直接 new `EtcdLinkClient`）
+  (`EtcdCenter::new` directly news `EtcdLinkClient`)
 - `src/core/gateway/link_sys/providers/etcd/config_mapping.rs:38`
-  （`build_connect_options` 签名同时服务 CRD 流和 TOML 流）
+  (`build_connect_options` signature serves both the CRD flow and the TOML flow)
 
-## 看上去像问题的三个点（都不修）
+## Three Points That Look Like Issues (none will be fixed)
 
-### 1. ConfCenter 合成假 `Secret` / `SecretObjectReference`（"抽象泄漏"）
+### 1. ConfCenter Synthesizes a Fake `Secret` / `SecretObjectReference` ("abstraction leak")
 
-`config.rs:140-211` 直接 `use k8s_openapi::Secret` 和 `link_sys::TlsConfig`，并构造占位 `secret_ref`（`name: "conf-center-toml"`）+ 内嵌合成 `Secret`。
+`config.rs:140-211` directly `use k8s_openapi::Secret` and `link_sys::TlsConfig`, and constructs a placeholder `secret_ref` (`name: "conf-center-toml"`) + an embedded synthetic `Secret`.
 
-**为什么这样写**：复用 Gateway 端 `build_connect_options` 处理 TLS/auth 的代码路径，避免写第二份处理逻辑。代码注释已经明确标注 *"synthetic placeholder — secret_ref not used by the provider"*。
+**Why it is written this way**: to reuse the Gateway-side `build_connect_options` code path that handles TLS/auth, avoiding writing a second processing logic. The code comment already explicitly notes *"synthetic placeholder — secret_ref not used by the provider"*.
 
-**为什么不修**：
-- 只有 2 个调用方（CRD 流 + TOML 流），没有第三种连接来源出现
-- 修复要重写 `build_connect_options` 签名 + 设计 `EtcdLinkClient` 重连语义（重连路径 `client.rs:126, 205` 复用了存下来的 `EtcdClientConfig`，改 DTO 后要想清楚 Secret 更新如何注入）
-- 这恰是刚修过的 I4 静默回归（参考 `to_client_config` 注释里 "regression of the fix-change effort"）— 为"优雅"碰一个刚修好的关键路径不划算
-- 没有运行时风险（不是内存/数据泄漏，纯设计气味）
+**Why it will not be fixed**:
+- Only 2 callers (CRD flow + TOML flow); no third connection source has appeared
+- Fixing would require rewriting the `build_connect_options` signature + designing `EtcdLinkClient` reconnect semantics (the reconnect path at `client.rs:126, 205` reuses the stored `EtcdClientConfig`; after changing the DTO you must think through how Secret updates are injected)
+- This is precisely the just-fixed I4 silent regression (see "regression of the fix-change effort" in the `to_client_config` comment) — touching a just-fixed critical path for "elegance" is not worthwhile
+- No runtime risk (not a memory/data leak, purely a design smell)
 
-**何时再考虑修**（触发条件，任一满足即重启此讨论）：
-- 出现第 3 种连接来源（Vault / Consul / 其他 KV）
-- 有人要修改 `Secret` 或 `link_sys::TlsConfig` 字段结构
-- 因抽象泄漏出现了真实 bug
+**When to reconsider fixing** (any of the trigger conditions reignites this discussion):
+- A 3rd connection source appears (Vault / Consul / other KV)
+- Someone wants to modify the field structure of `Secret` or `link_sys::TlsConfig`
+- The abstraction leak causes a real bug
 
-### 2. 构造用 `anyhow::Result` vs writer 用 `ConfWriterError`（"错误类型不一致"）
+### 2. Construction Uses `anyhow::Result` vs Writer Uses `ConfWriterError` ("inconsistent error types")
 
-**不是不一致，是分层**：
-- 构造期错误（`EtcdCenter::new` / `to_client_config`）：操作员看上下文/堆栈即可，`anyhow` 合适
-- 运行期 writer 操作（`CenterApi`）：调用方需要区分 NotFound / Conflict 等，typed error 合适
+**Not inconsistent — layered**:
+- Construction-time errors (`EtcdCenter::new` / `to_client_config`): operator looks at context/stack, `anyhow` is appropriate
+- Runtime writer operations (`CenterApi`): the caller needs to distinguish NotFound / Conflict, etc.; typed errors are appropriate
 
-Rust 生态常见模式。**不要再把这个标为问题**。
+A common pattern in the Rust ecosystem. **Stop flagging this as an issue.**
 
-### 3. `EtcdLinkClient` 未 trait 化（"难以 mock"）
+### 3. `EtcdLinkClient` is Not Trait-ified ("hard to mock")
 
-**YAGNI**：
-- `EtcdLinkClient` 全仓只有一个实现
-- writer 层已由 `EtcdStorage` + `CenterApi` trait 提供抽象（这才是 ConfCenter 的真实抽象边界）
-- 没有"替换后端"的现实需求；提前抽 trait 只增加维护成本
+**YAGNI**:
+- `EtcdLinkClient` has only one implementation in the entire repo
+- The writer layer is already abstracted by `EtcdStorage` + `CenterApi` traits (this is the real abstraction boundary of ConfCenter)
+- There is no real demand for "swap backend"; pre-extracting a trait only adds maintenance cost
 
-**不要再把这个标为问题**，除非要真正 mock 它（例如新增 fault injection 测试）。
+**Stop flagging this as an issue**, unless you actually need to mock it (e.g., adding a fault-injection test).
 
-## 给未来 reviewer 的提示
+## Hint for Future Reviewers
 
-如果你正在审计 `conf_center/etcd/` 并打算开"抽象泄漏 / 错误类型不一致 / 接口未抽象"类 issue —— 先确认你的论据是否超出本文档已覆盖的 3 个点。如果只是同样的论据，直接关闭你的 issue 草稿。
+If you are auditing `conf_center/etcd/` and plan to file an "abstraction leak / inconsistent error types / interface not abstracted" type of issue — first confirm whether your reasoning goes beyond the 3 points already covered in this document. If the reasoning is the same, just close your draft issue.

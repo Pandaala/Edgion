@@ -1,35 +1,35 @@
 ---
 name: redis-fail-open
-description: Redis 限流 fail-open 默认行为类 finding 判定规则。审查"Redis 故障时限流被完全绕过"类 finding 时先读此文件。
+description: Decision rule for findings about the Redis rate-limiting fail-open default behavior. Read this file first when reviewing "rate limiting is fully bypassed when Redis fails" findings.
 ---
 
-# Redis 限流 fail-open — NOT-AN-ISSUE
+# Redis Rate Limiting Fail-Open — NOT-AN-ISSUE
 
-## 结论
+## Conclusion
 
-`onRedisFailure` 默认为 `Allow`（fail-open）判定为 NOT-AN-ISSUE。不接受"改默认为 `Deny`"或"fail-open 是安全漏洞"类修复建议。
+`onRedisFailure` defaulting to `Allow` (fail-open) is classified as NOT-AN-ISSUE. Fix suggestions of the form "change default to `Deny`" or "fail-open is a security vulnerability" are not accepted.
 
-## 核心理由
+## Core Rationale
 
-**1. 配置项已存在，operator 可自主选择**
+**1. The configuration option exists; the operator can choose**
 
-`onRedisFailure: Deny` 选项已实现且有文档说明。需要 fail-close 的高安全场景，operator 显式配置即可。这不是缺失功能，是已提供的选择项。
+The `onRedisFailure: Deny` option is implemented and documented. For high-security scenarios that need fail-close, the operator can configure it explicitly. This is not a missing feature; it is an option already provided.
 
-**2. fail-open vs fail-close 是运维权衡，没有唯一正确答案**
+**2. fail-open vs fail-close is an operational tradeoff with no single correct answer**
 
-- **fail-open（默认）**：Redis 故障时服务继续，限流暂时失效。对大多数业务场景，"服务可用但无限流"优于"服务不可用"
-- **fail-close**：Redis 故障时拒绝所有受限流保护的请求，相当于主动造成服务中断
+- **fail-open (default)**: when Redis fails, the service continues; rate limiting is temporarily ineffective. For most business scenarios, "service available without rate limit" is preferable to "service unavailable"
+- **fail-close**: when Redis fails, all requests covered by rate limiting are rejected — equivalent to actively causing a service outage
 
-**3. 行业一致**
+**3. Industry consistency**
 
-Kong Redis 限流插件、APISIX Redis 限流插件均默认 fail-open，理由相同：Redis 是可选的辅助组件，其故障不应级联成服务中断。
+The Kong Redis rate-limit plugin and the APISIX Redis rate-limit plugin both default to fail-open for the same reason: Redis is an optional auxiliary component; its failure should not cascade into a service outage.
 
-**4. 攻击者触发 Redis 故障的门槛极高**
+**4. The bar for an attacker triggering a Redis failure is very high**
 
-攻击者若能触发 Redis 集群故障（通常是强大的 DDoS 能力），已经可以直接打 Gateway，绕过限流是次要威胁。
+If an attacker can take down a Redis cluster (typically requires strong DDoS capability), they can already attack the Gateway directly; bypassing rate limiting is a secondary threat.
 
-## 不接受的修复建议
+## Fix Suggestions Not Accepted
 
-- 将默认值改为 `Deny`（会在 Redis 故障时意外中断服务，影响所有依赖限流的路由）
-- 将 fail-open 标为"安全缺陷"（这是有文档说明的设计取舍）
-- 强制要求 operator 显式配置 `onRedisFailure`（增加配置负担，对大多数场景没有价值）
+- Change the default to `Deny` (would unexpectedly interrupt service when Redis fails, affecting all routes that depend on rate limiting)
+- Tag fail-open as a "security defect" (this is a documented design tradeoff)
+- Force the operator to explicitly configure `onRedisFailure` (adds configuration burden with no value for most scenarios)

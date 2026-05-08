@@ -1,41 +1,41 @@
 ---
 name: deployment-patterns
-description: Edgion 常见部署模式：FileSystem 本地开发、K8s 生产部署、HA 模式。
+description: Common Edgion deployment patterns: FileSystem local development, K8s production deployment, HA mode.
 ---
 
-# 部署模式
+# Deployment Patterns
 
-## 模式总览
+## Pattern Overview
 
-| 模式 | conf_center | 适用场景 | 特点 |
-|------|-------------|---------|------|
-| FileSystem | `type = "filesystem"` | 本地开发/测试/CI | YAML 文件驱动，无需 K8s |
-| Kubernetes 单实例 | `type = "kubernetes"` | 小规模/测试 K8s | 直接 watch K8s API |
-| Kubernetes HA | `type = "kubernetes"` + `ha_mode = true` | 生产环境 | Leader 选举，多副本高可用 |
+| Pattern | conf_center | Use Case | Characteristics |
+|---------|-------------|----------|-----------------|
+| FileSystem | `type = "filesystem"` | Local development/testing/CI | Driven by YAML files, no K8s required |
+| Kubernetes single instance | `type = "kubernetes"` | Small scale/K8s testing | Watches the K8s API directly |
+| Kubernetes HA | `type = "kubernetes"` + `ha_mode = true` | Production | Leader election, multi-replica high availability |
 
-## FileSystem 模式
+## FileSystem Mode
 
 ```
                 edgion-controller              edgion-gateway
-                (FileSystem ConfCenter)        (数据面)
-  YAML Files ──► conf_dir ──► 处理 ──► gRPC ──► 代理流量
+                (FileSystem ConfCenter)        (data plane)
+  YAML Files ──► conf_dir ──► process ──► gRPC ──► proxy traffic
 ```
 
-### 配置示例
+### Configuration Example
 
 ```yaml
 # edgion-controller.yaml
 conf_center:
   type: filesystem
-  conf_dir: config/resources     # YAML 资源目录
+  conf_dir: config/resources     # YAML resource directory
 ```
 
-### 适用场景
-- 本地开发和调试
-- CI/CD 集成测试
-- 不依赖 K8s 的独立部署
+### Use Cases
+- Local development and debugging
+- CI/CD integration testing
+- Standalone deployments that do not depend on K8s
 
-### 典型启动
+### Typical Startup
 
 ```bash
 # Terminal 1: Controller
@@ -47,7 +47,7 @@ edgion-gateway --server-addr http://127.0.0.1:50051
 
 ---
 
-## Kubernetes 模式
+## Kubernetes Mode
 
 ```
   K8s API Server
@@ -56,47 +56,47 @@ edgion-gateway --server-addr http://127.0.0.1:50051
   edgion-controller (KubernetesCenter)
        │ gRPC
        ▼
-  edgion-gateway × N (数据面 Pod)
+  edgion-gateway × N (data plane Pods)
 ```
 
-### 配置示例
+### Configuration Example
 
 ```yaml
 # edgion-controller-k8s.yaml
 conf_center:
   type: kubernetes
-  gateway_class: edgion          # 必填：匹配的 GatewayClass 名称
+  gateway_class: edgion          # Required: name of the GatewayClass to match
 
-  # 可选：命名空间过滤
+  # Optional: namespace filter
   watch_namespaces: [default, production]
 
-  # 可选：标签过滤
+  # Optional: label filter
   metadata_filter:
     label_selector: app=edgion
 ```
 
-### 关键字段
+### Key Fields
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `gateway_class` | `String` | **必填** | 只处理此 GatewayClass 的资源 |
-| `watch_namespaces` | `Vec<String>` | 全部 | 限制 watch 的命名空间列表 |
-| `gateway_address` | `String?` | — | Gateway status 中报告的地址 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `gateway_class` | `String` | **Required** | Only process resources for this GatewayClass |
+| `watch_namespaces` | `Vec<String>` | All | List of namespaces to restrict watching to |
+| `gateway_address` | `String?` | — | Address reported in the Gateway status |
 
 ---
 
-## Kubernetes HA 模式
+## Kubernetes HA Mode
 
 ```
-  edgion-controller-0 (Leader)  ◄── 写入 status、推送 gRPC
-  edgion-controller-1 (Standby) ◄── 等待 Leader 租约过期
+  edgion-controller-0 (Leader)  ◄── Writes status, pushes via gRPC
+  edgion-controller-1 (Standby) ◄── Waits for the Leader lease to expire
   edgion-controller-2 (Standby)
-       │ gRPC (仅 Leader)
+       │ gRPC (Leader only)
        ▼
   edgion-gateway × N
 ```
 
-### 配置示例
+### Configuration Example
 
 ```yaml
 conf_center:
@@ -111,32 +111,32 @@ conf_center:
     retry_period_secs: 2
 ```
 
-### Leader 选举字段 Schema
+### Leader Election Field Schema
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `lease_name` | `String` | `"edgion-controller-leader"` | Lease 资源名称 |
-| `lease_namespace` | `String` | `"edgion-system"` | Lease 资源命名空间 |
-| `lease_duration_secs` | `u64` | `15` | 租约持续时间（apiserver 端有效期） |
-| `renew_deadline_secs` | `u64` | `10` | 续约截止窗口（transient 错误吸收窗口） |
-| `retry_period_secs` | `u64` | `2` | 每次 acquire/renew 尝试的统一 sleep 间隔（对应 client-go `RetryPeriod`） |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `lease_name` | `String` | `"edgion-controller-leader"` | Lease resource name |
+| `lease_namespace` | `String` | `"edgion-system"` | Lease resource namespace |
+| `lease_duration_secs` | `u64` | `15` | Lease duration (validity on the apiserver side) |
+| `renew_deadline_secs` | `u64` | `10` | Renewal deadline window (window absorbing transient errors) |
+| `retry_period_secs` | `u64` | `2` | Uniform sleep interval between each acquire/renew attempt (corresponds to client-go `RetryPeriod`) |
 
-### HA 行为
-- **仅 Leader** 执行：资源处理、status 回写、ACME 证书签发、gRPC 推送
-- **Standby** 行为：watch K8s 资源但不处理，等待 Leader 故障转移
-- **故障转移**：Leader 租约过期后 Standby 竞争成为新 Leader，重新全量处理
+### HA Behavior
+- **Leader only** performs: resource processing, status write-back, ACME certificate issuance, gRPC push.
+- **Standby** behavior: watches K8s resources but does not process them, waiting for Leader failover.
+- **Failover**: after the Leader lease expires, Standbys compete to become the new Leader and fully reprocess from scratch.
 
 ---
 
-## 部署拓扑建议
+## Deployment Topology Recommendations
 
-| 场景 | Controller | Gateway | 建议 |
-|------|-----------|---------|------|
-| 开发环境 | 1 (FileSystem) | 1 | 单进程，快速迭代 |
-| 测试环境 | 1 (K8s) | 1-2 | 验证 K8s 集成 |
-| 生产环境 | 3 (K8s HA) | 2+ | 高可用，Gateway 按需扩缩 |
+| Scenario | Controller | Gateway | Recommendation |
+|----------|------------|---------|----------------|
+| Development | 1 (FileSystem) | 1 | Single process, fast iteration |
+| Testing | 1 (K8s) | 1-2 | Validate K8s integration |
+| Production | 3 (K8s HA) | 2+ | High availability, scale Gateway as needed |
 
-### Gateway 扩缩
-- Gateway 是**无状态**的数据面，可自由水平扩缩
-- 每个 Gateway Pod 独立从 Controller 获取配置
-- 通过 K8s Service/LoadBalancer 做流量分发
+### Gateway Scaling
+- Gateway is a **stateless** data plane and can be horizontally scaled freely.
+- Each Gateway Pod fetches its configuration independently from the Controller.
+- Traffic is distributed via K8s Service/LoadBalancer.

@@ -1,30 +1,30 @@
 ---
 name: backends-features-detail
-description: 后端服务发现、健康检查配置、负载均衡策略完整参考。
+description: Full reference for backend service discovery, health check configuration, and load balancing strategies.
 ---
 
-# 后端功能
+# Backend Features
 
-## 服务发现
+## Service Discovery
 
-Edgion 通过 Kubernetes EndpointSlice API 发现后端端点。Controller 通过 K8s watch 机制持续同步 EndpointSlice 资源，并通过 gRPC ConfigSync 将端点信息推送到 Gateway。
+Edgion discovers backend endpoints via the Kubernetes EndpointSlice API. The Controller continuously syncs EndpointSlice resources via K8s watch, and pushes endpoint information to the Gateway via gRPC ConfigSync.
 
-### Service 资源
+### Service Resource
 
-路由通过 `backendRefs` 引用 Service：
+Routes reference Services via `backendRefs`:
 
 ```yaml
 backendRefs:
-  - name: my-service          # Service 名称
-    port: 8080                # Service 端口
-    weight: 100               # 流量权重
+  - name: my-service          # Service name
+    port: 8080                # Service port
+    weight: 100               # Traffic weight
 ```
 
-Service 变更（如端口更新）会通过 ServiceRefManager 自动触发依赖路由重新处理。
+Service changes (e.g., port updates) automatically trigger reprocessing of dependent routes via ServiceRefManager.
 
-## 健康检查
+## Health Checks
 
-通过 Service 注解配置健康检查：
+Configure health checks via Service annotations:
 
 ```yaml
 apiVersion: v1
@@ -42,28 +42,28 @@ metadata:
       port: 8080
 ```
 
-### 健康检查 Schema
+### Health Check Schema
 
 ```yaml
 edgion.io/health-check: |
   type: String              # http | tcp | grpc
-  # HTTP 模式
-  path: String              # 健康检查路径（http 必填）
-  expectedStatuses: [u16]   # 期望 HTTP 状态码（仅 http）
-  host: String              # Host 头覆盖（仅 http）
-  # gRPC 模式
-  grpcServiceName: String   # gRPC Health Check 的 service name（仅 grpc，默认空=检查整个服务器）
-  # 通用
-  interval: Duration        # 检查间隔
-  timeout: Duration         # 超时
-  unhealthyThreshold: u32   # 不健康阈值
-  healthyThreshold: u32     # 健康恢复阈值
-  port: u16                 # 检查端口（可选，默认使用 Service 端口）
+  # HTTP mode
+  path: String              # Health check path (required for http)
+  expectedStatuses: [u16]   # Expected HTTP status codes (http only)
+  host: String              # Host header override (http only)
+  # gRPC mode
+  grpcServiceName: String   # Service name for gRPC Health Check (grpc only; default empty = check the entire server)
+  # Common
+  interval: Duration        # Check interval
+  timeout: Duration         # Timeout
+  unhealthyThreshold: u32   # Unhealthy threshold
+  healthyThreshold: u32     # Healthy recovery threshold
+  port: u16                 # Check port (optional, defaults to the Service port)
 ```
 
-## 熔断器
+## Circuit Breaker
 
-通过 Service 注解配置被动熔断（per-endpoint 逐出）：
+Configure passive circuit breaking (per-endpoint ejection) via Service annotations:
 
 ```yaml
 apiVersion: v1
@@ -77,31 +77,31 @@ metadata:
       maxEjectionPercent: 50
 ```
 
-### 熔断器 Schema
+### Circuit Breaker Schema
 
 ```yaml
 edgion.io/circuit-breaker: |
-  consecutiveErrors: u32    # 连续失败次数后逐出（默认 5，最小 1）
-  ejectionSeconds: u64      # 逐出冷却时间秒数（默认 30，最小 1）
-  maxEjectionPercent: u32   # 最大逐出比例百分比（默认 50，0=不限制）
+  consecutiveErrors: u32    # Eject after this many consecutive failures (default 5, minimum 1)
+  ejectionSeconds: u64      # Cooldown duration after ejection in seconds (default 30, minimum 1)
+  maxEjectionPercent: u32   # Maximum ejection ratio percent (default 50, 0 = unlimited)
 ```
 
-配置挂在 Service 上，逐出跟踪在 EndpointSlice 内部独立工作，与健康检查互补。
+The configuration is attached to the Service, while ejection tracking works independently inside the EndpointSlice — complementary to health checks.
 
-## 负载均衡策略
+## Load Balancing Strategies
 
-Edgion 支持 5 种负载均衡算法：
+Edgion supports 5 load balancing algorithms:
 
-| 算法 | 说明 | 适用场景 |
-|------|------|---------|
-| `RoundRobin` | 轮询（默认） | 通用 |
-| `EWMA` | 指数加权移动平均（基于响应时间） | 后端性能不均 |
-| `LeastConn` | 最少连接 | 长连接场景 |
-| `ConsistentHash` | 一致性哈希 | 需要会话亲和 |
-| `Weighted` | 加权轮询 | 按权重分配 |
+| Algorithm | Description | Use Case |
+|-----------|-------------|----------|
+| `RoundRobin` | Round-robin (default) | General use |
+| `EWMA` | Exponentially Weighted Moving Average (based on response time) | Uneven backend performance |
+| `LeastConn` | Least connections | Long-connection scenarios |
+| `ConsistentHash` | Consistent hashing | When session affinity is required |
+| `Weighted` | Weighted round-robin | Distribution by weight |
 
-负载均衡策略通过 backendRefs 的 weight 字段和 EdgionGatewayConfig 配置。
+The load balancing strategy is configured via the weight field in backendRefs and via EdgionGatewayConfig.
 
 ## BackendTLSPolicy
 
-网关到后端的 TLS 配置详见 [12-backend-tls-policy.md](12-backend-tls-policy.md)。
+For gateway-to-backend TLS configuration, see [12-backend-tls-policy.md](12-backend-tls-policy.md).

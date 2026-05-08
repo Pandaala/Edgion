@@ -1,62 +1,62 @@
 ---
 name: uri-normalization-review
-description: URI 规范化相关 review 判定规则：哪些场景已关闭、哪些仍要报、两条 lint 规则与白名单。
+description: Review decision rules for URI normalization — which scenarios are closed, which still need to be reported, the two lint rules and the allowlist.
 ---
 
-# URI 规范化 Review 判定规则
+# URI Normalization Review Decision Rules
 
-> 对应 spec §9。权威架构文档：[../../01-architecture/02-gateway/uri-normalization/SKILL.md](../../01-architecture/02-gateway/uri-normalization/SKILL.md)
-
----
-
-## 已关闭场景（不再报）
-
-以下 finding 已被 path normalization 默认机制覆盖，**不再是有效漏洞**，直接关闭：
-
-- 路径类 ACL 用 `RestrictionSource::Path`——path normalization 默认启用（无 `enabled` 开关），此类规则已在规范化 path 上比较，无法被 `%XX` / `//` / `/../` 等绕过
-- HTTPRoute / TLSRoute / GRPCRoute 用 `Exact` / `PathPrefix` 路径匹配——配置侧加载时规范化 + 请求侧规范化，匹配在同一 normalized space 上进行
-- HTTPRoute `RegularExpression` 匹配——请求侧已规范化（注意：regex 模式本身不规范化，operator 负责把 regex 写在 normalized space 上，见「仍要报场景」第 5 条）
-- path-parameter `..;/` 类绕过——`strip_path_parameters` 算法（步骤 A3）已处理
-  - **注脚 (v4)**：仅在 `preserve_path_parameters=false`（默认）时关闭。若 operator 启用 opt-out (`preserve_path_parameters=true`)，承诺退化，此类 finding 仍要报，提示 operator 用 `RestrictionSource::RequestPath` regex 拦截 `;` 模式或修正 ACL 规则。
-- 标准 percent-encoding 绕过、双斜杠绕过、dot-segment 绕过——均在承诺范围内，已被规范化算法覆盖
+> Corresponds to spec §9. Authoritative architecture document: [../../01-architecture/02-gateway/uri-normalization/SKILL.md](../../01-architecture/02-gateway/uri-normalization/SKILL.md)
 
 ---
 
-## 仍要报场景
+## Closed Scenarios (no longer reported)
 
-以下场景**仍要上报**：
+The following findings have been covered by the path normalization default mechanism and are **no longer valid vulnerabilities** — close directly:
 
-1. **DSL 用 `req.request_path` 做 ACL 判断**（而非 `req.path`）——误用 entry raw 视图做安全决策，绕过窗口仍存在。提示改用 `req.path`，或说明为何需要 entry raw（需明确注释）
-
-2. **DSL 安全规则混用 `req.path` 和 `req.request_path` 在同一决策链路且无意图注释**——提示 reviewer 确认操作意图，两视图语义不同，混用可能逻辑错误
-
-3. **上游对 `%2F` 字面量敏感，且业务依赖 raw forward**——Edgion path normalization 不改写 `req_header().uri`，上游收到 raw 入口形态（这是设计承诺，不是漏洞）。需要在文档/注释明示此行为
-
-4. **配置中 `RestrictionSource::Path` 的 `deny` 列表写得像针对 raw**（含 `%XX` 字面量）——提示 operator：`Path` 视图在规范化后比较，`%XX` 字面不会被命中；应改用 `RestrictionSource::RequestPath` 或修正为 normalized 写法
-
-5. **`RegularExpression` 路径配置中含 `%XX` / `//` / `/.` / `..;` 字面量**——请求侧已规范化，含上述字面量的 regex 永远不命中（静默失效）；operator 必须把 regex 改写为 normalized 等价形态
-
-6. **承诺范围外攻击**（overlong UTF-8 / 双重 percent-encoding / 非合规上游解析分歧）——若发现明确攻击场景，提示 operator 启用 `reject_invalid_percent_encoding = true`（扩大承诺范围）。这不是代码 bug，是已知设计边界（见 spec §1.4）
-
-7. **HTTPRoute 注解 `edgion.io/forward-raw-path` 值非 "true" / "false"**——配置非法值，gateway 当作 None 处理但实际 operator 意图丢失；提示修正为合法值
-
-8. **`forward_normalized_path = false` + 业务 ACL 规则同时混用 `Path` 和 `RequestPath`**——全局 raw 模式下 `Path` 视图与 `RequestPath` 视图实际上都是 raw（`Path` 仍走规范化但 upstream 收到 raw），混用可能掩盖 raw forward 副作用
+- Path-based ACL using `RestrictionSource::Path` — path normalization is enabled by default (no `enabled` switch); such rules are already compared on the normalized path and cannot be bypassed by `%XX` / `//` / `/../`
+- HTTPRoute / TLSRoute / GRPCRoute using `Exact` / `PathPrefix` path matching — config side is normalized at load time + request side is normalized; matching is performed in the same normalized space
+- HTTPRoute `RegularExpression` matching — request side is already normalized (note: regex patterns themselves are not normalized; the operator is responsible for writing the regex in normalized space, see "Scenarios still to report" item 5)
+- path-parameter `..;/`-style bypass — handled by the `strip_path_parameters` algorithm (step A3)
+  - **Footnote (v4)**: only closed when `preserve_path_parameters=false` (default). If the operator enables opt-out (`preserve_path_parameters=true`), the commitment degrades; such findings still need to be reported, prompting the operator to use `RestrictionSource::RequestPath` regex to block `;` patterns or to fix the ACL rule.
+- Standard percent-encoding bypass, double-slash bypass, dot-segment bypass — all within commitment scope; covered by the normalization algorithm
 
 ---
 
-## Lint 规则
+## Scenarios Still to Report
 
-### Rule 1：禁止业务代码直读 `req_header().uri.path()`
+The following scenarios **still need to be reported**:
 
-**违规形态**：
+1. **DSL uses `req.request_path` for ACL decisions** (instead of `req.path`) — misuse of the entry raw view for security decisions; the bypass window still exists. Suggest changing to `req.path`, or explain why the entry raw is needed (must be clearly commented)
+
+2. **DSL security rules mixing `req.path` and `req.request_path` in the same decision chain without an intent comment** — prompt the reviewer to confirm operator intent; the two views differ in semantics, mixing them may be a logic error
+
+3. **Upstream is sensitive to literal `%2F` and the business depends on raw forwarding** — Edgion path normalization does not rewrite `req_header().uri`; the upstream receives the raw entry form (this is a design commitment, not a vulnerability). This behavior must be made explicit in documentation/comments
+
+4. **`RestrictionSource::Path` `deny` list in config is written as if targeting raw** (containing `%XX` literals) — prompt the operator: the `Path` view is compared after normalization; `%XX` literals will not match; should change to `RestrictionSource::RequestPath` or fix to a normalized form
+
+5. **`RegularExpression` path config containing `%XX` / `//` / `/.` / `..;` literals** — request side is already normalized; regex containing the above literals never matches (silently ineffective); the operator must rewrite the regex into its normalized equivalent
+
+6. **Attacks beyond commitment scope** (overlong UTF-8 / double percent-encoding / non-compliant upstream parsing divergence) — if a clear attack scenario is found, prompt the operator to enable `reject_invalid_percent_encoding = true` (expand the commitment scope). This is not a code bug; it is a known design boundary (see spec §1.4)
+
+7. **HTTPRoute annotation `edgion.io/forward-raw-path` value other than "true" / "false"** — illegal config value; gateway treats as None but the operator's actual intent is lost; prompt to correct to a legal value
+
+8. **`forward_normalized_path = false` + business ACL rules mixing `Path` and `RequestPath`** — under global raw mode both `Path` and `RequestPath` views are effectively raw (`Path` still goes through normalization but upstream receives raw); mixing may mask raw-forward side effects
+
+---
+
+## Lint Rules
+
+### Rule 1: Business Code Must Not Read `req_header().uri.path()` Directly
+
+**Violating form**:
 
 ```rust
-// ❌ 业务代码中直读 pingora 原始字段
+// ❌ Business code reading pingora raw fields directly
 let path = session.req_header().uri.path();
 let path = ctx.inner.req_header().uri.path();
 ```
 
-**要求改为**：
+**Required change**:
 
 ```rust
 // ✅
@@ -64,50 +64,50 @@ let path = session.get_path();          // session trait
 let path = ctx.path();                  // ctx canonical
 ```
 
-**白名单**（以下位置直读合法，不报）：
+**Allowlist** (the following locations may read directly without report):
 
-- `src/types/ctx.rs` 内的 ctx path/uri 方法实现本身
-- `pg_early_request_filter.rs` 入口快照代码块（path normalization 入口层）
-- ACME / well-known 协议处理代码（`/.well-known/` 路径分发）
-- pingora 默认转发逻辑路径
-- `session_adapter.rs` 内的 session trait 实现（`get_path` 等的 adapter 实现）
+- The ctx path/uri method implementations themselves inside `src/types/ctx.rs`
+- The entry-snapshot code block in `pg_early_request_filter.rs` (path normalization entry layer)
+- ACME / well-known protocol handling code (`/.well-known/` path dispatch)
+- pingora default forwarding logic paths
+- The session trait implementations inside `session_adapter.rs` (adapter implementations of `get_path` etc.)
 
-### Rule 2：禁止业务代码裸写 `req_header_mut().set_uri()`
+### Rule 2: Business Code Must Not Bare-Write `req_header_mut().set_uri()`
 
-**违规形态**：
+**Violating form**:
 
 ```rust
-// ❌ 任何业务代码中裸写（除 session_adapter::set_upstream_uri 实现本身）
+// ❌ Bare-writing in any business code (other than the session_adapter::set_upstream_uri implementation itself)
 session.req_header_mut().set_uri(new_uri);
 self.inner.req_header_mut().set_uri(parsed);
 ```
 
-**后果**：ctx 缓存（`normalized_current_path`）与 pingora uri 不一致，导致 ACL / access_log / 路由决策读到 stale path。
+**Consequence**: ctx cache (`normalized_current_path`) becomes inconsistent with pingora uri, causing ACL / access_log / routing decisions to read a stale path.
 
-**v4 起合法位置 2 处**（且每处都必须紧随 `ctx.uri_finalized = true`）：
+**Two legal locations starting from v4** (and each must be immediately followed by `ctx.uri_finalized = true`):
 
 1. `src/core/gateway/plugins/runtime/session_adapter.rs::set_upstream_uri`
-   - rewrite 类插件触发（url_rewrite / proxy_rewrite / DSL `req.set_uri` / Gateway API URLRewrite filter）
-   - 写入次序：`set_uri(parsed)` → `refresh_normalized_path(req, cfg)` → `uri_finalized = true`
+   - Triggered by rewrite plugins (url_rewrite / proxy_rewrite / DSL `req.set_uri` / Gateway API URLRewrite filter)
+   - Write order: `set_uri(parsed)` → `refresh_normalized_path(req, cfg)` → `uri_finalized = true`
 
-2. `src/core/gateway/routes/http/proxy_http/pg_upstream_peer.rs::upstream_peer_http` 单点决策块（v4 新增）
-   - 入门检查 `!ctx.uri_finalized`
-   - 写入次序（仅 `want_raw=false` 分支会 set_uri）：`set_uri(normalized)` → `uri_finalized = true`（无条件置位）
+2. `src/core/gateway/routes/http/proxy_http/pg_upstream_peer.rs::upstream_peer_http` single-point decision block (newly added in v4)
+   - Entry check `!ctx.uri_finalized`
+   - Write order (only the `want_raw=false` branch calls set_uri): `set_uri(normalized)` → `uri_finalized = true` (set unconditionally)
 
-**Rule 2.1** (v4)：上述两处合法位置的 `set_uri` 调用未紧随 `uri_finalized = true` → 强报。
+**Rule 2.1** (v4): If `set_uri` calls at the two legal locations above are not immediately followed by `uri_finalized = true` → report mandatorily.
 
-**所有 rewrite 插件**改 path 必须走 trait 方法 `session.set_upstream_uri()`，不能裸调。
+**All rewrite plugins** must change paths via the trait method `session.set_upstream_uri()`; bare calls are not allowed.
 
 ---
 
-## 承诺范围摘要
+## Commitment Scope Summary
 
-| 攻击类型 | 默认是否覆盖 | 高安全加固方式 |
+| Attack type | Default coverage | High-security hardening |
 |----------|-------------|----------------|
-| percent-encoding 绕过（`%61dmin`） | ✅ | — |
-| `%2F` / `%5C` 编码斜杠绕过 | ✅（decode 后 merge） | `reject_escaped_slashes = true`（直接拒绝含编码斜杠请求） |
-| 双斜杠 / dot-segment 绕过 | ✅ | — |
-| path-parameter `..;/` 绕过 | ✅ | — |
-| overlong UTF-8（`%c0%ae`）| ❌ 承诺范围外 | `reject_invalid_percent_encoding = true` |
-| 双重 percent-encoding（`%252E`）| ❌ 承诺范围外 | `reject_invalid_percent_encoding = true` |
-| 非合规上游解析分歧 | ❌ 超出控制范围 | operator 自行按上游行为写 ACL 规则 |
+| Percent-encoding bypass (`%61dmin`) | ✅ | — |
+| `%2F` / `%5C` encoded slash bypass | ✅ (decoded then merged) | `reject_escaped_slashes = true` (reject requests containing encoded slashes outright) |
+| Double slash / dot-segment bypass | ✅ | — |
+| path-parameter `..;/` bypass | ✅ | — |
+| Overlong UTF-8 (`%c0%ae`) | ❌ outside commitment | `reject_invalid_percent_encoding = true` |
+| Double percent-encoding (`%252E`) | ❌ outside commitment | `reject_invalid_percent_encoding = true` |
+| Non-compliant upstream parsing divergence | ❌ outside our control | Operator writes ACL rules per upstream behavior |

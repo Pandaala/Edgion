@@ -1,38 +1,38 @@
-# Key Auth HashMap 查找非 constant-time：非真实攻击面
+# Key Auth HashMap Lookup is Not Constant-Time: Not a Real Attack Surface
 
-## 结论
+## Conclusion
 
-`key_auth` 插件用 `HashMap<[u8;32], KeyMetadata>::get(&sha256_of(key))` 查找 API key，HashMap 本身不是常数时间、`[u8;32]` 比较也会短路。**此非真实攻击面**，不接受"改线性扫描 + `subtle::ConstantTimeEq`"类修复建议。
+The `key_auth` plugin uses `HashMap<[u8;32], KeyMetadata>::get(&sha256_of(key))` to look up API keys; HashMap itself is not constant-time and `[u8;32]` comparison short-circuits. **This is not a real attack surface**; fix suggestions of the form "switch to linear scan + `subtle::ConstantTimeEq`" are not accepted.
 
-## 原因
+## Reasons
 
-1. **输入先过 SHA-256**：攻击者控制的是 `key_candidate` 原串，SHA-256 输出是伪随机的，无法构造"在第 N 字节处差异可控"的候选来做分字节时序推断
-2. **HashMap 时序泄露量极小且无价值**：最多泄露"sha256 输出头几 byte 的桶命中相似度"，但 SHA-256 单向不可逆，这个信息对恢复原始 key 无任何帮助
-3. **401 响应已是二元 oracle**：`validate_key` 返回 None → 401、返回 Some → 200；"key 是否在表中"直接从状态码就能判断，时序 oracle 不增加攻击者的信息收获
-4. **经典分字节时序侧信道不成立**：SHA-256 预处理摊平了输入差异，"改一字节看匹配多几位"的攻击立足点不存在
-5. **同类网关一致做法**：Kong、APISIX、Tyk、Traefik 等主流 API 网关的 key 查找同样是 HashMap / etcd 查找，无一做 CT 线性扫描
+1. **Input is first run through SHA-256**: the attacker controls the original `key_candidate` string; SHA-256 output is pseudorandom, so candidates with "controlled difference at the Nth byte" cannot be constructed for byte-by-byte timing inference
+2. **HashMap timing leakage is minimal and worthless**: at most leaks "bucket-hit similarity of the first few bytes of sha256 output", but SHA-256 is one-way irreversible; this information does not help recover the original key
+3. **The 401 response is already a binary oracle**: `validate_key` returns None → 401, returns Some → 200; "is the key in the table" can be inferred directly from the status code; the timing oracle does not add information for the attacker
+4. **Classic byte-by-byte timing side channel does not hold**: SHA-256 preprocessing flattens input differences; the foothold for "change one byte and see how many more match" attacks does not exist
+5. **Same approach in peer gateways**: mainstream API gateways like Kong, APISIX, Tyk, Traefik likewise use HashMap / etcd lookup for keys; none do CT linear scans
 
-## 判定规则
+## Decision Rule
 
-当 review / 审计报告出现以下模式时，按"非真实问题"关闭：
+When a review/audit report contains the following patterns, close as "not a real issue":
 
-1. "key_auth HashMap::get 非 constant-time，存在时序侧信道"
-2. "建议改用 `subtle::ConstantTimeEq` 或线性扫描所有哈希做 CT 比较"
-3. "[u8;32] == 会短路，泄露匹配字节数"
+1. "key_auth HashMap::get is not constant-time; timing side channel exists"
+2. "Recommend `subtle::ConstantTimeEq` or linear scan over all hashes for CT comparison"
+3. "[u8;32] == short-circuits, leaking number of matched bytes"
 
-验证两点再关闭：
+Verify two points before closing:
 
-- `key_auth/plugin.rs` 的 `validate_key` 仍走 `self.keys.get(&sha256_of(key))`（非线性扫描）
-- 输入 key 确实先经 SHA-256（未改成直接存明文 key）
+- `key_auth/plugin.rs`'s `validate_key` still uses `self.keys.get(&sha256_of(key))` (not linear scan)
+- The input key is indeed first SHA-256ed (not changed to storing the plaintext key directly)
 
-两点满足 → 非真实问题，指向 `tasks/security-audit/01-auth-plugins.md` 的 M10 NOT-AN-ISSUE 决策，关闭。
+Both satisfied → not a real issue; point to the M10 NOT-AN-ISSUE decision in `tasks/security-audit/01-auth-plugins.md` and close.
 
-## 例外场景（仅在极端威胁模型下需重评）
+## Exceptional Scenarios (need reassessment only under extreme threat models)
 
-如果未来在"攻击者可精确测量本地 / 旁路通道纳秒级时序"的场景下部署（如公有硬件 / SGX / 租户共享内核），这个结论需要重评。普通 K8s 部署不在此列。
+If in the future deployment occurs in a "the attacker can precisely measure local / sidechannel nanosecond timing" environment (e.g., public hardware / SGX / tenant-shared kernel), this conclusion needs reassessment. Normal K8s deployments do not fall into this category.
 
-## 背景记录
+## Background Notes
 
-- 决策日期：2026-04-21
-- 决策来源：`tasks/security-audit/` M10 条目
-- 对比文件：`auth-timing/basic-auth-username-enumeration.md`（M4，同样是"网关层反时序防护主流不做"的模式；但 M4 有实际可利用性，走 doc-only；M10 无实际可利用性，走 NOT-AN-ISSUE）
+- Decision date: 2026-04-21
+- Decision source: `tasks/security-audit/` M10 entry
+- Comparison file: `auth-timing/basic-auth-username-enumeration.md` (M4, also "mainstream does not do gateway-layer anti-timing protection"; but M4 has actual exploitability and goes doc-only; M10 has no actual exploitability and goes NOT-AN-ISSUE)

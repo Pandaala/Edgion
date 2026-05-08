@@ -1,10 +1,14 @@
 //! Generic JWKS + OIDC discovery cache provider.
 //!
-//! 单实例同时维护 discovery 文档与 JWKS 缓存，**统一 stale-while-revalidate 语义**：
-//! 当 JWKS 端点不可达且本地有缓存 set 时，返回缓存（带 warn 日志）而非传播 fetch 错误。
-//! 由 `JwksProviderConfig` 参数化 TTL / min refresh interval / 响应字节上限 / timeout /
-//! 组件 label。Discovery 文档形态由泛型 `D: DiscoveryDoc` 决定 —— admin 用精简版仅含
-//! `issuer + jwks_uri`，OIDC 网关插件用扩展版（包含 5 个 optional endpoints）。
+//! A single instance maintains both the discovery document and the JWKS cache,
+//! **with unified stale-while-revalidate semantics**: when the JWKS endpoint is
+//! unreachable and a cached set exists locally, the cached set is returned (with
+//! a warn log) instead of propagating the fetch error.
+//! `JwksProviderConfig` parameterizes TTL / min refresh interval / response byte
+//! limit / timeout / component label. The discovery document shape is determined
+//! by the generic `D: DiscoveryDoc` -- admin uses a slim variant containing only
+//! `issuer + jwks_uri`, while the OIDC gateway plugin uses an extended variant
+//! (including 5 optional endpoints).
 
 use jsonwebtoken::jwk::JwkSet;
 use reqwest::Client;

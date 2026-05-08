@@ -1,72 +1,72 @@
-# 文档 Review 检查清单
+# Documentation Review Checklist
 
-审阅 `docs/` 下的文档时使用此清单。按优先级排列：技术准确性 > 完整性 > 一致性 > 格式。
+Use this checklist when reviewing documents under `docs/`. Ordered by priority: technical accuracy > completeness > consistency > formatting.
 
-## 技术准确性
+## Technical accuracy
 
-- [ ] **参数表与代码一致**：参数名、类型、默认值与实际 Schema/代码匹配
-- [ ] **YAML 示例可用**：示例可以直接 `kubectl apply`（或稍作修改后使用），apiVersion/kind/metadata 完整
-- [ ] **行为描述准确**：文档中描述的功能行为与实际代码行为一致
-- [ ] **版本信息正确**：最低版本要求、Breaking Change 版本号准确
-- [ ] **无过时内容**：没有已删除的字段、已弃用的用法、或已改变的默认值
+- [ ] **Parameter table matches code**: parameter names, types, defaults match the actual schema/code
+- [ ] **YAML examples work**: examples can be applied directly with `kubectl apply` (or with minor edits); apiVersion/kind/metadata are complete
+- [ ] **Behavior described accurately**: feature behavior described in the doc matches actual code behavior
+- [ ] **Version info correct**: minimum version requirements and Breaking Change version numbers are accurate
+- [ ] **No stale content**: no removed fields, deprecated usage, or changed defaults
 
-## 完整性
+## Completeness
 
-- [ ] **必选章节齐全**：按页面模板（[02-page-template.md](02-page-template.md)）检查必选章节
-- [ ] **参数表完整**：所有用户可配置的参数都已列出
-- [ ] **常见场景覆盖**：至少 3 个场景示例（插件页）
-- [ ] **完整配置示例**：有至少一个生产级的完整 YAML（包含 Route 外壳）
-- [ ] **相关文档链接**：页面末尾有相关文档章节
+- [ ] **All required sections present**: check required sections per the page template ([02-page-template.md](02-page-template.md))
+- [ ] **Parameter table complete**: every user-configurable parameter is listed
+- [ ] **Common scenarios covered**: at least 3 scenario examples (plugin pages)
+- [ ] **Complete configuration example**: at least one production-grade complete YAML (including the Route envelope)
+- [ ] **Related-documents links**: there is a related-documents section at the end of the page
 
-## 多语言同步
+## Multilingual sync
 
-- [ ] **zh-CN 和 en 对称**：两个语言版本的文件都存在
-- [ ] **章节结构一致**：章节数量、顺序、层级相同
-- [ ] **YAML 示例相同**：代码块内容一致，仅注释语言不同
-- [ ] **参数表一致**：参数名、类型、默认值相同，仅说明列语言不同
-- [ ] **无翻译遗漏**：没有中英混杂的段落（标准不翻译的术语除外）
+- [ ] **zh-CN and en are symmetric**: both language versions have the file
+- [ ] **Section structure consistent**: same number, order, and level of sections
+- [ ] **YAML examples identical**: code-block content is identical; only comment language differs
+- [ ] **Parameter tables match**: parameter names, types, and defaults are identical; only the description column differs by language
+- [ ] **No translation gaps**: no paragraphs that mix Chinese and English (except for terms that are deliberately not translated)
 
-## 链接有效性
+## Link validity
 
-- [ ] **内部链接有效**：所有相对路径内部链接指向存在的文件
-- [ ] **锚点有效**：带 `#section` 锚点的链接，其目标锚点在目标文件中存在
-- [ ] **外部链接合理**：外部链接指向权威来源（MDN、K8s 官方、RFC），不指向博客或可能失效的页面
-- [ ] **不链接到 skills/**：docs/ 中没有直接链接到 skills/ 目录的引用
+- [ ] **Internal links valid**: all relative-path internal links point to existing files
+- [ ] **Anchors valid**: links with `#section` anchors point to anchors that exist in the target file
+- [ ] **External links reasonable**: external links point to authoritative sources (MDN, K8s official, RFC), not blogs or pages likely to break
+- [ ] **No links to skills/**: documents under docs/ do not reference the skills/ directory directly
 
-## 写作风格
+## Writing style
 
-- [ ] **人称正确**：用"你"称呼读者，不用"用户"
-- [ ] **标题简洁**：一级标题是功能名，不加冗余前缀
-- [ ] **Edgion 扩展标注**：非标准 Gateway API 功能有 `🔌 Edgion 扩展` 标注
-- [ ] **无内部实现细节**：不涉及 Handler 流程、源码位置、Rust 数据结构（dev-guide 除外）
-- [ ] **术语一致**：按术语表使用术语，Gateway API 标准术语不翻译
+- [ ] **Person correct**: address the reader as "you", not "users"
+- [ ] **Concise headings**: H1 is the feature name, with no redundant prefix
+- [ ] **Edgion-extension callout**: non-standard Gateway API features have the `🔌 Edgion extension` callout
+- [ ] **No internal implementation details**: no handler flows, source-code locations, or Rust data structures (dev-guide is the exception)
+- [ ] **Terminology consistent**: terms follow the glossary; standard Gateway API terms are not translated
 
-## 格式与排版
+## Formatting and typography
 
-- [ ] **参数表格式**：四列（参数/类型/默认值/说明），类型用统一标注
-- [ ] **代码块标注**：YAML 用 `yaml`，Shell 用 `bash`，日志用 `text`
-- [ ] **正反示例标注**：✅/❌ 标注正确和错误的做法
-- [ ] **中文排版**：中英文之间有空格，使用全角标点
-- [ ] **安全警告**：涉及安全的开发环境示例有 ⚠️ 标注
+- [ ] **Parameter table format**: four columns (parameter / type / default / description); types use the unified labels
+- [ ] **Code-block tags**: YAML uses `yaml`, Shell uses `bash`, logs use `text`
+- [ ] **Right / wrong example markers**: ✅/❌ to indicate correct vs. incorrect approaches
+- [ ] **Chinese typography**: spaces between Chinese and English; full-width punctuation
+- [ ] **Security warnings**: development-only examples involving security carry ⚠️ markers
 
-## 结构与导航
+## Structure and navigation
 
-- [ ] **章节顺序正确**：遵循渐进复杂度（概述 → 配置 → 场景 → 高级 → FAQ → 链接）
-- [ ] **README.md 更新**：如果是新文档，所在目录的 README.md 已更新
-- [ ] **DIRECTORY.md 更新**：如果新增/删除/移动文档，DIRECTORY.md 已同步
+- [ ] **Section order correct**: follows progressive complexity (overview → configuration → scenarios → advanced → FAQ → links)
+- [ ] **README.md updated**: for new documents, the README.md of the containing directory is updated
+- [ ] **DIRECTORY.md updated**: when adding / removing / moving documents, DIRECTORY.md is in sync
 
-## 安全审查
+## Security review
 
-- [ ] **无敏感信息**：示例中不包含真实 Token、密码、证书内容、内部 IP
-- [ ] **安全警告到位**：不安全的配置方式（如通配符 `*`）有明确的安全警告
-- [ ] **生产 vs 开发**：明确标注哪些配置仅适用于开发环境
+- [ ] **No sensitive information**: examples contain no real tokens, passwords, certificate contents, or internal IPs
+- [ ] **Security warnings in place**: insecure configurations (such as wildcard `*`) carry explicit security warnings
+- [ ] **Production vs. development**: clearly state which configurations are for development environments only
 
-## 快速 Review 模式
+## Quick review mode
 
-如果时间有限，至少检查以下 5 项：
+If time is limited, check at least these 5 items:
 
-1. ✅ YAML 示例可以 `kubectl apply`
-2. ✅ 参数表与代码一致
-3. ✅ zh-CN 和 en 都有对应文件
-4. ✅ 没有敏感信息
-5. ✅ 内部链接有效
+1. ✅ YAML examples can be applied with `kubectl apply`
+2. ✅ Parameter tables match the code
+3. ✅ Both zh-CN and en have the corresponding files
+4. ✅ No sensitive information
+5. ✅ Internal links are valid

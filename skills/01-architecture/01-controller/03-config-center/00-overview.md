@@ -1,106 +1,106 @@
 ---
 name: config-center-overview
-description: ConfCenter trait 架构：CenterApi、CenterLifeCycle、Workqueue 流水线、BidirectionalRefManager、Secret 管理。
+description: ConfCenter trait architecture — CenterApi, CenterLifeCycle, Workqueue pipeline, BidirectionalRefManager, Secret management.
 ---
 
-# 配置中心架构总览
+# ConfigCenter Architecture Overview
 
-配置中心是 Controller 的核心子系统，将配置来源（文件系统 / Kubernetes）抽象为统一的 trait 体系，
-两种后端共享完全相同的 Workqueue + ResourceProcessor 处理管线。
+The ConfigCenter is a core Controller subsystem that abstracts configuration sources (file system / Kubernetes) into a unified trait system.
+Both backends share an identical Workqueue + ResourceProcessor processing pipeline.
 
-## ConfCenter Trait 体系
+## ConfCenter Trait Hierarchy
 
 ```
 ConfMgr (facade, manager.rs)
 └── Arc<dyn ConfCenter>
-    ├── FileSystemCenter   — 监听本地 YAML 目录
-    ├── KubernetesCenter   — K8s API watchers + Leader Election
-    └── EtcdCenter         — etcd KV 存储 + watch 事件（单 Controller 专用）
+    ├── FileSystemCenter   — watches a local YAML directory
+    ├── KubernetesCenter   — K8s API watchers + leader election
+    └── EtcdCenter         — etcd KV store + watch events (single-Controller only)
 ```
 
-Trait 组合关系：
+Trait composition:
 
-| Trait | 职责 | 关键方法 |
-|-------|------|---------|
-| `CenterApi` | CRUD 操作 | `set_one`, `create_one`, `update_one`, `delete_one`, `get_one`, `get_list_by_kind`, `get_list_by_kind_ns`, `cnt_by_kind`, `cnt_by_kind_ns`, `list_all` |
-| `CenterLifeCycle` | 生命周期管理 | `start`, `is_ready`, `config_sync_server`, `is_k8s_mode`, `request_reload` |
-| `ConfCenter` | 完整接口 | `= CenterApi + CenterLifeCycle`（blanket impl：任何同时实现两者的类型自动获得 `ConfCenter`） |
+| Trait | Responsibility | Key methods |
+|-------|----------------|-------------|
+| `CenterApi` | CRUD operations | `set_one`, `create_one`, `update_one`, `delete_one`, `get_one`, `get_list_by_kind`, `get_list_by_kind_ns`, `cnt_by_kind`, `cnt_by_kind_ns`, `list_all` |
+| `CenterLifeCycle` | Lifecycle management | `start`, `is_ready`, `config_sync_server`, `is_k8s_mode`, `request_reload` |
+| `ConfCenter` | Full interface | `= CenterApi + CenterLifeCycle` (blanket impl: any type that implements both automatically gets `ConfCenter`) |
 
-`CenterApi` 由存储层实现：`FileSystemStorage`（本地文件读写）、`KubernetesStorage`（K8s API 调用）、`EtcdStorage`（etcd KV 读写）。
-`CenterLifeCycle` 由中心层实现：`FileSystemCenter` 和 `KubernetesCenter`。
-Center 层通过委托模式将 CRUD 操作转发给 Storage 层，自身专注于生命周期管理。
+`CenterApi` is implemented at the storage layer: `FileSystemStorage` (local file I/O), `KubernetesStorage` (K8s API calls), `EtcdStorage` (etcd KV I/O).
+`CenterLifeCycle` is implemented at the center layer: `FileSystemCenter` and `KubernetesCenter`.
+The center layer delegates CRUD operations to the storage layer via the delegation pattern, focusing on lifecycle management itself.
 
-### ConfMgr 门面
+### ConfMgr Facade
 
-`ConfMgr` 是对外统一入口，内部持有 `Arc<dyn ConfCenter>`。
-工厂方法根据配置 `conf_center.type` 选择实例化 `FileSystemCenter` 或 `KubernetesCenter`。
-外部模块（Admin API、gRPC 服务）通过 `ConfMgr` 访问所有配置操作，无需知道底层后端类型。
+`ConfMgr` is the unified entry point for external callers; internally it holds an `Arc<dyn ConfCenter>`.
+The factory chooses to instantiate either `FileSystemCenter` or `KubernetesCenter` based on `conf_center.type`.
+External modules (Admin API, gRPC server) access all configuration operations through `ConfMgr` without needing to know the underlying backend type.
 
-## Workqueue + ResourceProcessor 统一管线
+## Unified Workqueue + ResourceProcessor Pipeline
 
-两种后端共享完全相同的处理管线。每种资源类型拥有独立的 `ResourceProcessor<K>` + `Workqueue`：
+Both backends share an identical processing pipeline. Each resource type owns its own `ResourceProcessor<K>` + `Workqueue`:
 
 ```mermaid
 flowchart TD
-    A["事件（文件变更 / K8s watch）"] --> B["ResourceController\non_apply(key) / on_delete(key)"]
-    B --> C["Workqueue.enqueue(key)\n按 key 去重（pending set）"]
-    C --> D["Worker loop: dequeue()\nKey 从 pending 释放（dirty requeue）"]
+    A["Event (file change / K8s watch)"] --> B["ResourceController\non_apply(key) / on_delete(key)"]
+    B --> C["Workqueue.enqueue(key)\nDedup by key (pending set)"]
+    C --> D["Worker loop: dequeue()\nKey released from pending (dirty requeue)"]
     D --> E["store.get(key)"]
-    E --> F["handler.validate(obj)\nSchema + 语义校验"]
-    F --> G["handler.preparse(obj)\n构建运行时结构"]
-    G --> H["handler.parse(obj)\n更新缓存、解析引用"]
-    H --> I["handler.on_change(obj)\n通知依赖资源"]
-    I --> J["handler.update_status(obj)\n回写 status"]
+    E --> F["handler.validate(obj)\nSchema + semantic validation"]
+    F --> G["handler.preparse(obj)\nBuild runtime structures"]
+    G --> H["handler.parse(obj)\nUpdate cache, resolve references"]
+    H --> I["handler.on_change(obj)\nNotify dependent resources"]
+    I --> J["handler.update_status(obj)\nWrite back status"]
 ```
 
-差异仅在两端：
+The differences are only at the two ends:
 
-| 差异点 | FileSystemCenter | KubernetesCenter | EtcdCenter |
-|--------|-----------------|-----------------|------------|
-| 事件源 | `notify` 库 inotify/kqueue 文件监听 | K8s API Reflector watch stream | etcd watch stream |
-| Status 持久化 | `.status` 文件（YAML 格式） | K8s API `PATCH /status`（JSON Merge Patch） | 无（不持久化 status） |
-| Leader Election | 无（单实例） | Lease-based 分布式选举 | 无（单实例） |
-| 410 Gone 处理 | 不适用 | 检测到 watcher 重连，触发 KubernetesController 重建 | 不适用 |
-| 并发写约束 | 单进程，check-then-write 非原子 | K8s API Server 保证原子性 | **单 Controller 独占**，check-then-write 非原子，设计上不支持多 Controller 并发写同一 etcd |
+| Difference | FileSystemCenter | KubernetesCenter | EtcdCenter |
+|------------|-----------------|-----------------|------------|
+| Event source | `notify` crate, inotify/kqueue file watching | K8s API Reflector watch stream | etcd watch stream |
+| Status persistence | `.status` file (YAML) | K8s API `PATCH /status` (JSON Merge Patch) | None (status is not persisted) |
+| Leader election | None (single instance) | Lease-based distributed election | None (single instance) |
+| 410 Gone handling | N/A | When detected, watcher reconnect triggers KubernetesController rebuild | N/A |
+| Concurrent-write constraint | Single process; check-then-write is non-atomic | K8s API Server provides atomicity | **Single Controller exclusive**; check-then-write is non-atomic; by design does not support concurrent writes from multiple Controllers to the same etcd |
 
-中间的 Workqueue、ResourceProcessor、ProcessorHandler、ServerCache、引用管理器等完全复用。
+The middle layers (Workqueue, ResourceProcessor, ProcessorHandler, ServerCache, reference managers, etc.) are fully reused.
 
 ### Requeue with Backoff
 
-失败的 work item 按指数退避重试：`initial_backoff * 2^retry_count`，上限为 `max_backoff`。
-超过 `max_retries` 后该 item 被放弃，不再重新入队。
+Failed work items are retried with exponential backoff: `initial_backoff * 2^retry_count`, capped at `max_backoff`.
+After exceeding `max_retries`, the item is dropped and not re-enqueued.
 
 ### Dirty Requeue
 
-Key 在 dequeue 时从 `pending` set 中移除（而非处理完成后），因此同一 key 在处理期间可以被重新 enqueue。
-这确保不会丢失任何事件——即使在处理 key A 的过程中 A 再次变更，新事件也会被捕获并触发下一轮处理。
+The key is removed from the `pending` set on dequeue (rather than after processing completes), so the same key can be re-enqueued during processing.
+This ensures no events are lost — even if key A changes again while it is being processed, the new event is captured and will trigger another round of processing.
 
-## BidirectionalRefManager — 通用引用追踪
+## BidirectionalRefManager — Generic Reference Tracking
 
-三种引用管理器共享同一个泛型实现 `BidirectionalRefManager<V: RefValue>`：
+The three reference managers share a single generic implementation `BidirectionalRefManager<V: RefValue>`:
 
 ```
 BidirectionalRefManager<V>
-├── Forward:  source_key → HashSet<V>         // 一个 source 被哪些 value 引用
-├── Reverse:  value_key  → HashSet<source_key> // 一个 value 依赖哪些 source
+├── Forward:  source_key → HashSet<V>         // which values reference a given source
+├── Reverse:  value_key  → HashSet<source_key> // which sources a given value depends on
 └── Methods:  add_ref, get_refs, get_dependencies, clear_value_refs, all_source_keys, stats, clear
 ```
 
-| 类型别名 | Source Key | 用途 |
-|----------|-----------|------|
-| `SecretRefManager` | Secret key（`"ns/name"`） | Secret 变更 → requeue 依赖资源 |
-| `ServiceRefManager` | Service key（`"ns/name"`） | Service 变更 → requeue 依赖路由 |
-| `CrossNamespaceRefManager` | 目标 namespace（`"ns"`） | ReferenceGrant 变更 → requeue 跨命名空间资源 |
+| Type alias | Source key | Purpose |
+|-----------|-----------|---------|
+| `SecretRefManager` | Secret key (`"ns/name"`) | Secret change → requeue dependent resources |
+| `ServiceRefManager` | Service key (`"ns/name"`) | Service change → requeue dependent routes |
+| `CrossNamespaceRefManager` | Target namespace (`"ns"`) | ReferenceGrant change → requeue cross-namespace resources |
 
-**工作流程：**
+**Workflow:**
 
-1. Handler 在 `parse()` 阶段注册引用关系（如 HTTPRoute 引用 Secret `tls/cert`）
-2. Handler 在 `on_delete()` 阶段清理引用关系
-3. Source handler 的 `on_change()` 查询 `get_refs()` 找到所有依赖者并 requeue
+1. Handlers register reference relationships during the `parse()` phase (e.g., HTTPRoute references Secret `tls/cert`)
+2. Handlers clean up reference relationships during the `on_delete()` phase
+3. The source handler's `on_change()` calls `get_refs()` to find all dependents and requeue them
 
-### 跨资源 Requeue DAG
+### Cross-resource Requeue DAG
 
-跨资源 requeue 必须形成有向无环图，禁止循环触发：
+Cross-resource requeue must form a directed acyclic graph; circular triggering is forbidden:
 
 ```mermaid
 flowchart LR
@@ -123,10 +123,10 @@ flowchart LR
     Route["Route (any)"] -->|"requeue parent gateways\nfor status update"| Gateway3["Gateway"]
 ```
 
-关键约束：Gateway 不可以触发 Route requeue，否则 `Route → Gateway → Route` 形成无限循环。
-TriggerChain 机制在每次跨资源 requeue 时记录路径，超过 `max_trigger_cycles` 深度则停止。
+Key constraint: Gateway must not trigger Route requeue, otherwise `Route → Gateway → Route` would form an infinite loop.
+The TriggerChain mechanism records the path on each cross-resource requeue and stops once the depth exceeds `max_trigger_cycles`.
 
-## Secret 管理 — GLOBAL_SECRET_STORE
+## Secret Management — GLOBAL_SECRET_STORE
 
 ```
 GLOBAL_SECRET_STORE (LazyLock<SecretStore>)
@@ -136,36 +136,36 @@ GLOBAL_SECRET_STORE (LazyLock<SecretStore>)
 └── replace_all_secrets()
 
 SecretHandler
-├── parse: 更新 SecretStore
-├── on_change: 通过 SecretRefManager 级联 requeue 所有依赖者
-└── on_delete: 从 SecretStore 移除 + 级联 requeue
+├── parse: update SecretStore
+├── on_change: cascade requeue all dependents via SecretRefManager
+└── on_delete: remove from SecretStore + cascade requeue
 ```
 
-`GLOBAL_SECRET_STORE` 使用 `LazyLock` 实现全局单例，所有 Handler 在 `parse()` 阶段通过它查询 Secret 内容。
-Secret 变更时，`SecretHandler.on_change()` 查询 `SecretRefManager` 获取所有引用该 Secret 的资源，
-然后通过 `PROCESSOR_REGISTRY.requeue()` 触发级联重新处理。
+`GLOBAL_SECRET_STORE` is implemented as a `LazyLock` global singleton that all handlers query during `parse()` to read Secret contents.
+On Secret changes, `SecretHandler.on_change()` queries `SecretRefManager` to obtain all resources referencing that Secret,
+then triggers cascading reprocessing through `PROCESSOR_REGISTRY.requeue()`.
 
-## ProcessorRegistry — 全局注册表
+## ProcessorRegistry — Global Registry
 
 ```rust
 pub static PROCESSOR_REGISTRY: LazyLock<ProcessorRegistry> = LazyLock::new(ProcessorRegistry::new);
 ```
 
-| 方法 | 用途 |
-|------|------|
-| `register(processor)` | 注册处理器（启动时） |
-| `get(kind)` | 按种类名获取 |
-| `requeue(kind, key)` | 跨资源即时 requeue |
-| `requeue_with_chain(kind, key, chain)` | 带触发链的跨资源 requeue |
-| `requeue_all()` | 全量 requeue（leader 切换时） |
-| `is_all_ready()` | 检查所有缓存是否就绪 |
-| `wait_kinds_ready(kinds, timeout)` | 等待指定 kinds 初始化完成 |
-| `all_watch_objs(no_sync)` | 收集 WatchObj 给 ConfigSyncServer |
-| `clear_registry()` | 清空所有处理器（重启/失去 leadership） |
+| Method | Purpose |
+|--------|---------|
+| `register(processor)` | Register a processor (at startup) |
+| `get(kind)` | Look up a processor by kind name |
+| `requeue(kind, key)` | Immediate cross-resource requeue |
+| `requeue_with_chain(kind, key, chain)` | Cross-resource requeue carrying a trigger chain |
+| `requeue_all()` | Full requeue (on leader switchover) |
+| `is_all_ready()` | Check whether all caches are ready |
+| `wait_kinds_ready(kinds, timeout)` | Wait for the specified kinds to finish initialization |
+| `all_watch_objs(no_sync)` | Collect WatchObjs for the ConfigSyncServer |
+| `clear_registry()` | Clear all processors (on restart / loss of leadership) |
 
-## 关键文件
+## Key Files
 
-- `src/core/controller/conf_mgr/conf_center/traits.rs` — trait 定义
+- `src/core/controller/conf_mgr/conf_center/traits.rs` — trait definitions
 - `src/core/controller/conf_mgr/conf_center/file_system/center.rs` — `FileSystemCenter`
 - `src/core/controller/conf_mgr/conf_center/kubernetes/center.rs` — `KubernetesCenter`
 - `src/core/controller/conf_mgr/manager.rs` — `ConfMgr` facade
@@ -173,7 +173,7 @@ pub static PROCESSOR_REGISTRY: LazyLock<ProcessorRegistry> = LazyLock::new(Proce
 - `src/core/controller/conf_mgr/sync_runtime/resource_processor/processor.rs` — `ResourceProcessor<K>`
 - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handler.rs` — `ProcessorHandler` trait
 - `src/core/controller/conf_mgr/sync_runtime/resource_processor/ref_manager.rs` — `BidirectionalRefManager`
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/secret_utils/secret_ref.rs` — Secret 引用管理
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/service_ref.rs` — Service 引用管理
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/ref_grant/cross_ns_ref_manager.rs` — 跨命名空间引用
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/secret_utils/secret_ref.rs` — Secret reference management
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/service_ref.rs` — Service reference management
+- `src/core/controller/conf_mgr/sync_runtime/resource_processor/ref_grant/cross_ns_ref_manager.rs` — cross-namespace references
 - `src/core/controller/conf_mgr/processor_registry.rs` — `PROCESSOR_REGISTRY`

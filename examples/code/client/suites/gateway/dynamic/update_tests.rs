@@ -26,7 +26,7 @@ impl UpdatePhaseTestSuite {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-                    // ，（ 502 backend ）
+                    // After the update the hostname restriction is removed; expect success or 502/503 from the backend.
                     let resp = client
                         .get(format!("http://{}:31250/match", ctx.target_host))
                         .header("Host", "other.example.com")
@@ -36,7 +36,7 @@ impl UpdatePhaseTestSuite {
                     match resp {
                         Ok(resp) => {
                             let status = resp.status();
-                            //  200502  503， 404
+                            // Accept 200, 502, or 503; 404 means the hostname restriction is still active.
                             if status.is_success() || status == 502 || status == 503 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
@@ -71,7 +71,7 @@ impl UpdatePhaseTestSuite {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-                    // GET  (404)（ Host header）
+                    // GET should return 404 after the update (with the matching Host header).
                     let get_resp = client
                         .get(format!("http://{}:31251/api/v1", ctx.target_host))
                         .header("Host", "method-test.example.com")
@@ -90,7 +90,7 @@ impl UpdatePhaseTestSuite {
                         );
                     }
 
-                    // POST  (200  502)（ Host header）
+                    // POST should pass through (200 or 502) with the matching Host header.
                     let post_resp = client
                         .post(format!("http://{}:31251/api/v1", ctx.target_host))
                         .header("Host", "method-test.example.com")
@@ -100,10 +100,10 @@ impl UpdatePhaseTestSuite {
                     match post_resp {
                         Ok(resp) => {
                             let status = resp.status();
-                            // 期望 POST 通过了 gateway 路由匹配（无论 backend 怎么回应）。
-                            // 200/502/503 是预期的 gateway-backend 链路结果；405 是 backend
-                            // (test_server `/{*path}` catch-all 只支持 GET) 拒绝 POST，但这
-                            // 仍证明 gateway 的 method=POST 路由匹配生效（已转发到 backend）。
+                            // We expect POST to match the gateway route (regardless of backend response).
+                            // 200/502/503 are the expected gateway-to-backend outcomes; 405 means the backend
+                            // (test_server's `/{*path}` catch-all only supports GET) rejected POST, which still
+                            // proves the gateway's method=POST route matched (it was forwarded to the backend).
                             if status.is_success() || status == 405 || status == 502 || status == 503 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),

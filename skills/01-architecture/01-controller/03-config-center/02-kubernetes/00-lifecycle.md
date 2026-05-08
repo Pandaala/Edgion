@@ -1,34 +1,34 @@
 ---
 name: kubernetes-lifecycle
-description: KubernetesCenter 启动流程与 Leader 选举：Lease-based 选举、事件驱动主循环、Watcher 任务管理、ConfigSyncServer 发布时机。
+description: KubernetesCenter startup flow and leader election — Lease-based election, event-driven main loop, watcher task management, ConfigSyncServer publish timing.
 ---
 
-# Kubernetes 配置中心 — 生命周期
+# Kubernetes ConfigCenter — Lifecycle
 
-## 启动流程
+## Startup Flow
 
-`KubernetesCenter::start()` 是 Kubernetes 模式的入口，根据 `ha_mode` 配置分发到不同生命周期：
+`KubernetesCenter::start()` is the entry point in Kubernetes mode; it dispatches to different lifecycles depending on `ha_mode`:
 
 ```
 start(shutdown_handle)
-├── 1. Client::try_default()              # 创建 K8s 客户端（集群内 ServiceAccount 或 kubeconfig）
-├── 2. LeaderElection::new(client, config) # 初始化 Leader Election
-├── 3. leader_election.preflight_check()   # 前置校验（失败直接返回 Err，进程退出）
-│      ├── ensure_lease_exists()           #   确认 Lease 对象可读/可创建
-│      └── ensure_pod_label_patch_ready()  #   确认 Pod label 可 patch（RBAC 权限检查）
-├── 4. tokio::spawn(le.run())             # 校验通过后才启动后台选举循环
+├── 1. Client::try_default()              # create K8s client (in-cluster ServiceAccount or kubeconfig)
+├── 2. LeaderElection::new(client, config) # initialize leader election
+├── 3. leader_election.preflight_check()   # preflight checks (failure returns Err and the process exits)
+│      ├── ensure_lease_exists()           #   verify the Lease object is readable/creatable
+│      └── ensure_pod_label_patch_ready()  #   verify Pod label is patchable (RBAC permission check)
+├── 4. tokio::spawn(le.run())             # only start the background election loop after preflight passes
 └── 5. match ha_mode:
     ├── LeaderOnly → run_leader_only_lifecycle(client, leader_handle, shutdown_handle)
     └── AllServe   → run_all_serve_lifecycle(client, leader_handle, shutdown_handle)
 ```
 
-## Leader-Only 生命周期（默认）
+## Leader-Only Lifecycle (default)
 
 ```
 run_leader_only_lifecycle()
 └── loop:
-    ├── wait_until_leader()               # 阻塞直到成为 Leader
-    ├── run_main_flow()                   # 运行所有 watchers + gRPC
+    ├── wait_until_leader()               # block until this replica becomes Leader
+    ├── run_main_flow()                   # run all watchers + gRPC
     │   ├── start_event_watchers()
     │   ├── event loop (CachesReady → set gRPC server)
     │   └── cleanup on exit (stop ACME, clear registry)
@@ -37,19 +37,19 @@ run_leader_only_lifecycle()
         └── LostLeadership → set_config_sync_server(None) + clear + loop back
 ```
 
-非 Leader 副本完全待机，不启动任何 watcher，不消耗 K8s API 连接或内存。
-失去 leadership 后清空所有状态并回到等待循环。
+Non-leader replicas are entirely idle: they start no watchers and consume no K8s API connections or memory.
+On loss of leadership, all state is cleared and the loop returns to waiting.
 
-## All-Serve 生命周期
+## All-Serve Lifecycle
 
 ```
 run_all_serve_lifecycle()
 └── loop:
-    └── run_serving_flow()                # 不等 leadership，立即启动
+    └── run_serving_flow()                # do not wait for leadership; start immediately
         ├── start_event_watchers_all_serve()
-        │   ├── Controller（with leader_handle）  # status 写入受守卫
-        │   ├── Caches watcher（no ACME）         # ACME 移到 leader services
-        │   ├── Leadership watcher（bidirectional）
+        │   ├── Controller (with leader_handle)   # status writes are guarded
+        │   ├── Caches watcher (no ACME)          # ACME is moved to leader services
+        │   ├── Leadership watcher (bidirectional)
         │   └── Reload watcher
         ├── event loop:
         │   ├── CachesReady → set gRPC server
@@ -57,17 +57,17 @@ run_all_serve_lifecycle()
         │   ├── LeadershipAcquired
         │   │   └── if caches_ready → start_leader_services()
         │   ├── LeadershipLost
-        │   │   └── stop_leader_services()（继续 gRPC 服务！）
+        │   │   └── stop_leader_services() (continue serving gRPC!)
         │   └── ControllerExit / ReloadRequested → exit
         └── cleanup: set_config_sync_server(None), clear registry
 ```
 
-所有副本独立运行 K8s watchers 和 gRPC 服务，Leader 额外承担 status 回写和 ACME。
-详细对比见 [01-ha-mode.md](01-ha-mode.md)。
+All replicas independently run K8s watchers and the gRPC service; the Leader additionally takes on status writeback and ACME.
+For a detailed comparison see [01-ha-mode.md](01-ha-mode.md).
 
-## Leader Election（Lease-based）
+## Leader Election (Lease-based)
 
-使用 Kubernetes Lease 对象实现分布式 Leader Election：
+Distributed leader election is implemented using a Kubernetes Lease object:
 
 ```
 LeaderElection
@@ -75,36 +75,36 @@ LeaderElection
 ├── config: LeaderElectionConfig
 │   ├── lease_name: "edgion-controller-leader"
 │   ├── lease_namespace: "edgion-system"
-│   ├── pod_namespace: $POD_NAMESPACE（Downward API）
-│   ├── identity: $POD_NAME（Downward API）
+│   ├── pod_namespace: $POD_NAMESPACE (Downward API)
+│   ├── identity: $POD_NAME (Downward API)
 │   ├── lease_duration_secs: 15
 │   ├── renew_deadline_secs: 10
 │   └── retry_period_secs: 2
 └── is_leader: Arc<AtomicBool>
 ```
 
-### 选举循环
+### Election Loop
 
 ```
-run():                                    # tokio::spawn 后台运行
+run():                                    # tokio::spawn background task
 └── loop:
     ├── sleep(renew/retry interval)
     ├── try_acquire_or_renew()
-    │   ├── 读取当前 Lease
-    │   ├── 检查 holder_identity 和过期时间
-    │   └── Server-Side Apply 更新 Lease
+    │   ├── read the current Lease
+    │   ├── check holder_identity and expiration
+    │   └── update the Lease via Server-Side Apply
     └── match result:
-        ├── Ok(true)  → store is_leader=true (Release), update pod label
-        ├── Ok(false) → store is_leader=false (Release), update pod label
-        └── Err       → assume lost, store is_leader=false (Release), update pod label
+        ├── Ok(true)  → store is_leader=true (Release), update Pod label
+        ├── Ok(false) → store is_leader=false (Release), update Pod label
+        └── Err       → assume lost, store is_leader=false (Release), update Pod label
 ```
 
-**内存序说明**：`is_leader` 的写操作使用 `Ordering::Release`，读操作使用 `Ordering::Acquire`，
-保证跨线程的 happens-before 语义，在 ARM/M1 等弱内存序架构上确保 status write 守卫的正确性。
+**Memory ordering note**: writes to `is_leader` use `Ordering::Release`, reads use `Ordering::Acquire`,
+guaranteeing cross-thread happens-before semantics so that the status-write guard remains correct on weakly-ordered architectures (e.g. ARM/M1).
 
 ### Pod Leader Label
 
-每次 leadership 状态变化时更新 Pod label：
+The Pod label is updated whenever leadership state changes:
 
 ```yaml
 metadata:
@@ -112,12 +112,12 @@ metadata:
     edgion.io/leader: "true"   # or "false"
 ```
 
-`edgion-controller-leader` Service 通过此 selector 只路由到 leader Pod。
-Label 更新是 fire-and-forget，失败不阻塞选举循环。
+The `edgion-controller-leader` Service uses this selector to route only to the leader Pod.
+Label updates are fire-and-forget; failures do not block the election loop.
 
 ### LeaderHandle
 
-轻量级 clone-able 句柄，内部持有 `Arc<AtomicBool>`：
+A lightweight cloneable handle that internally holds an `Arc<AtomicBool>`:
 
 ```rust
 pub struct LeaderHandle {
@@ -126,109 +126,108 @@ pub struct LeaderHandle {
 
 impl LeaderHandle {
     pub fn is_leader(&self) -> bool;                          // Acquire load
-    pub async fn wait_until_leader(&self);                    // 阻塞等待
+    pub async fn wait_until_leader(&self);                    // block waiting
     pub async fn wait_until_leader_with_shutdown(&self, ...) -> bool;
 }
 ```
 
-传递给 `ResourceController`，用于 `persist_k8s_status()` 的 leader 守卫。
+Passed to `ResourceController` for the leader guard in `persist_k8s_status()`.
 
-## 事件驱动主流程（Event-Driven Main Flow）
+## Event-Driven Main Flow
 
-`run_main_flow()` 使用事件驱动架构，通过 `mpsc::channel<LifecycleEvent>` 接收生命周期事件：
+`run_main_flow()` uses an event-driven architecture and receives lifecycle events through `mpsc::channel<LifecycleEvent>`:
 
 ```rust
 enum LifecycleEvent {
-    CachesReady,                  // 所有 phased processors 已注册 + 所有 sync kinds 已就绪
-    CachesTimeout,                // 超时未就绪
-    LeadershipLost,               // 失去 leadership
-    LeadershipAcquired,           // 获得 leadership（all-serve 模式专用）
-    ControllerExit(reason),       // KubernetesController 退出（正常/410 Gone/错误）
-    ReloadRequested,              // Admin API 触发 reload
+    CachesReady,                  // all phased processors are registered + all sync kinds are ready
+    CachesTimeout,                // not ready before timeout
+    LeadershipLost,               // lost leadership
+    LeadershipAcquired,           // acquired leadership (all-serve mode only)
+    ControllerExit(reason),       // KubernetesController exited (normal/410 Gone/error)
+    ReloadRequested,              // Admin API triggered a reload
 }
 ```
 
-主循环是一个简单的 `match event_rx.recv().await`，没有复杂的 `select!`，事件处理逻辑清晰：
+The main loop is a simple `match event_rx.recv().await`, with no complex `select!`; the event-handling logic is straightforward:
 
-| 事件 | leader-only 处理 | all-serve 处理 |
-|------|-----------------|----------------|
-| `CachesReady` | 创建 ConfigSyncServer + 注册 WatchObj | 同左，若已是 leader 则额外 start_leader_services |
-| `CachesTimeout` | 同上（降级处理） | 同上 |
-| `LeadershipLost` | 退出 run_main_flow | stop_leader_services，继续 gRPC 服务 |
-| `LeadershipAcquired` | 不使用 | 若 caches_ready 则 start_leader_services |
-| `ControllerExit` | 退出循环，触发重试/重建 | 同左 |
-| `ReloadRequested` | 退出循环，触发 reload | 同左 |
+| Event | leader-only handling | all-serve handling |
+|-------|-----------------------|--------------------|
+| `CachesReady` | Create ConfigSyncServer + register WatchObjs | Same as left; if already leader, additionally start_leader_services |
+| `CachesTimeout` | Same as above (degraded) | Same as above |
+| `LeadershipLost` | Exit run_main_flow | stop_leader_services, keep serving gRPC |
+| `LeadershipAcquired` | Not used | If caches_ready, start_leader_services |
+| `ControllerExit` | Exit the loop, trigger retry/rebuild | Same as left |
+| `ReloadRequested` | Exit the loop, trigger reload | Same as left |
 
-## Watcher 任务
+## Watcher Tasks
 
-### Gateway API CRD 预检
+### Gateway API CRD Preflight
 
-`start_event_watchers()` 和 `start_event_watchers_all_serve()` 在 endpoint mode 解析之后、创建 Controller 之前执行 CRD 预检（`preflight_check_gateway_api_crds()`）。
+`start_event_watchers()` and `start_event_watchers_all_serve()` perform a CRD preflight check (`preflight_check_gateway_api_crds()`) after endpoint-mode resolution and before creating the Controller.
 
-预检逻辑（`version_detection.rs`）：
-- 对所有 Gateway API 资源（GatewayClass、Gateway、HTTPRoute、GRPCRoute、TLSRoute、ReferenceGrant、TCPRoute、UDPRoute、BackendTLSPolicy）逐个用 `Api::<DynamicObject>::list(limit=1)` 探测
-- `no_watch_kinds` 中列出的资源跳过探测
-- 任何未跳过但不存在的 CRD → 收集后一次性报错，controller 启动失败
-- 错误信息包含缺失资源列表、CRD 安装命令和 `no_watch_kinds` 配置提示
+Preflight logic (`version_detection.rs`):
+- For each Gateway API resource (GatewayClass, Gateway, HTTPRoute, GRPCRoute, TLSRoute, ReferenceGrant, TCPRoute, UDPRoute, BackendTLSPolicy), probe one by one with `Api::<DynamicObject>::list(limit=1)`
+- Resources listed in `no_watch_kinds` are skipped
+- Any non-skipped CRD that is missing → collected and reported in one error; the controller fails to start
+- The error message includes the list of missing resources, the CRD install command, and a hint about the `no_watch_kinds` configuration
 
-`no_watch_kinds` 配置（`KubernetesConfig`）：
-- 值为 PascalCase kind name，如 `["TCPRoute", "UDPRoute", "BackendTLSPolicy"]`
-- 列出的资源：不探测、不 spawn watcher、从 `all_processor_kinds()` 排除
-- 只在 Kubernetes 模式下生效，FileSystem 模式无此配置
+`no_watch_kinds` configuration (`KubernetesConfig`):
+- The values are PascalCase kind names, e.g. `["TCPRoute", "UDPRoute", "BackendTLSPolicy"]`
+- Listed resources: not probed, no watcher spawned, excluded from `all_processor_kinds()`
+- Effective only in Kubernetes mode; FileSystem mode does not have this option
 
-### Watcher 任务
+### Watcher Tasks
 
-`start_event_watchers()` 启动四个后台 tokio 任务：
+`start_event_watchers()` spawns four background tokio tasks:
 
-| Task | 职责 | 发送事件 |
-|------|------|---------|
-| **Controller** | 运行 `KubernetesController.run()`（spawn 所有 ResourceController） | `ControllerExit(reason)` |
-| **Caches** | 等待所有 phased processors 注册完成 + 所有同步到 Gateway 的 kinds ready | `CachesReady` / `CachesTimeout` |
-| **Leader** | 监控 leadership 状态变化（100ms 轮询 `AtomicBool`） | `LeadershipLost` / `LeadershipAcquired` |
-| **Reload** | 监听 Admin API reload 信号（`mpsc::Receiver`） | `ReloadRequested` |
+| Task | Responsibility | Events emitted |
+|------|----------------|----------------|
+| **Controller** | Run `KubernetesController.run()` (spawn all ResourceControllers) | `ControllerExit(reason)` |
+| **Caches** | Wait for all phased processors to register + all sync-to-Gateway kinds to be ready | `CachesReady` / `CachesTimeout` |
+| **Leader** | Monitor leadership state changes (poll the `AtomicBool` every 100ms) | `LeadershipLost` / `LeadershipAcquired` |
+| **Reload** | Listen for Admin API reload signals (`mpsc::Receiver`) | `ReloadRequested` |
 
-**Leader Watcher 初始状态广播**（all-serve 模式）：
-Leader watcher 启动时立即检查当前状态，若已是 leader 则立刻发送一次 `LeadershipAcquired`，
-而不等待下一次 100ms 轮询。这保证副本重启后（重启前已是 leader）能立即恢复 leader 服务。
+**Leader watcher initial-state broadcast** (all-serve mode):
+At startup, the leader watcher checks the current state immediately; if it is already leader it emits a `LeadershipAcquired` immediately rather than waiting for the next 100ms tick.
+This ensures that, after a replica restart (when it was already leader), it can resume leader services right away.
 
-`WatcherHandles` 结构体持有所有四个任务的 `JoinHandle`，清理时通过 `abort_and_wait()` 统一终止。
+The `WatcherHandles` struct holds the `JoinHandle` for all four tasks and uses `abort_and_wait()` to terminate them uniformly during cleanup.
 
-## ConfigSyncServer 发布时机
+## ConfigSyncServer Publish Timing
 
-ConfigSyncServer 的发布（`set_config_sync_server(Some(...))`）必须满足严格的时序条件。
+The publication of ConfigSyncServer (`set_config_sync_server(Some(...))`) must satisfy strict timing conditions.
 
-### 问题场景
+### Problem Scenario
 
-Kubernetes 分阶段初始化中，Phase 2 资源（HTTPRoute、GRPCRoute、EdgionTls、EdgionPlugins 等）
-在 Phase 1 之后才注册到 `PROCESSOR_REGISTRY`。如果 Caches watcher 只检查
-"当前 registry 里没有 not_ready kinds"就发送 `CachesReady`，会导致 ConfigSyncServer
-只包含 Phase 1 的 WatchObj 集合。Gateway 对 Phase 2 kinds 做 `List(kind)` 会收到 `Unknown kind`。
+In Kubernetes phased initialization, Phase 2 resources (HTTPRoute, GRPCRoute, EdgionTls, EdgionPlugins, etc.)
+are registered into `PROCESSOR_REGISTRY` only after Phase 1. If the Caches watcher emits `CachesReady` based purely on
+"the registry currently has no not_ready kinds", the ConfigSyncServer would only contain the Phase 1 WatchObj set. A Gateway calling `List(kind)` for Phase 2 kinds would receive `Unknown kind`.
 
-### 正确规则
+### Correct Rule
 
-1. **等待所有 phased processors 注册完成**（Phase 1 + Phase 2 全部 spawn 完毕）
-2. **等待所有会同步到 Gateway 的 kinds 标记 ready**（init 阶段完成）
-3. **执行 `PROCESSOR_REGISTRY.all_watch_objs(no_sync_kinds)` 并发布 `CachesReady`**
+1. **Wait for all phased processors to finish registering** (Phase 1 + Phase 2 are all spawned)
+2. **Wait for all kinds that sync to Gateway to be marked ready** (init phase complete)
+3. **Run `PROCESSOR_REGISTRY.all_watch_objs(no_sync_kinds)` and emit `CachesReady`**
 
-### 排障提示
+### Troubleshooting Tip
 
-如果 Gateway 日志反复出现 `Failed to list resources: Unknown kind: HTTPRoute/GRPCRoute/EdgionTls/...`，
-但已有流量仍可用，优先检查是否 controller restart/reload 后只发布了部分 WatchObj。
+If Gateway logs repeatedly show `Failed to list resources: Unknown kind: HTTPRoute/GRPCRoute/EdgionTls/...`,
+but existing traffic still works, prioritize checking whether only a partial set of WatchObjs was published after a Controller restart/reload.
 
-## 重试与 Backoff
+## Retry and Backoff
 
-`run_main_flow` 内置指数退避重试机制：
+`run_main_flow` has a built-in exponential-backoff retry mechanism:
 
-| 参数 | 值 |
-|------|-----|
-| 退避公式 | `2^min(failures, 6)` 秒（1s → 2s → 4s → 8s → 16s → 32s → 64s） |
-| 最大连续失败 | 10 次后放弃（进程退出） |
-| 稳定运行重置 | 连续运行 5 分钟后重置失败计数 |
+| Parameter | Value |
+|-----------|-------|
+| Backoff formula | `2^min(failures, 6)` seconds (1s → 2s → 4s → 8s → 16s → 32s → 64s) |
+| Max consecutive failures | Give up after 10 (process exits) |
+| Stable-run reset | Reset the failure counter after 5 minutes of continuous running |
 
-每次 controller 异常退出或 410 Gone 触发重建时，连续失败计数 +1。
-如果一次迭代稳定运行超过 5 分钟，计数归零。
+Each abnormal controller exit or 410 Gone-triggered rebuild increments the consecutive-failure count by 1.
+If a single iteration runs stably for more than 5 minutes, the count is reset to zero.
 
-## 配置参考
+## Configuration Reference
 
 ```toml
 [conf_center]
@@ -245,10 +244,10 @@ renew_deadline_secs = 10
 retry_period_secs = 2
 ```
 
-## 关键文件
+## Key Files
 
-- `src/core/controller/conf_mgr/conf_center/kubernetes/center.rs` — 生命周期核心（`start`, `run_main_flow`, `run_serving_flow`）
-- `src/core/controller/conf_mgr/conf_center/kubernetes/leader_election.rs` — Leader Election 实现
-- `src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs` — `KubernetesController`（spawn 资源控制器）
+- `src/core/controller/conf_mgr/conf_center/kubernetes/center.rs` — lifecycle core (`start`, `run_main_flow`, `run_serving_flow`)
+- `src/core/controller/conf_mgr/conf_center/kubernetes/leader_election.rs` — leader election implementation
+- `src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs` — `KubernetesController` (spawns resource controllers)
 - `src/core/controller/conf_mgr/conf_center/kubernetes/config.rs` — `KubernetesConfig`, `HaMode`
 - `src/core/controller/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `ResourceController<K>`

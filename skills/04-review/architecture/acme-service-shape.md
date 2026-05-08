@@ -1,45 +1,45 @@
 ---
 name: acme-service-shape
-description: 判定 ACME `service.rs` "巨型阶段函数应拆 / 全局单例应改 DI" 类 finding。已审计为设计取舍，不接受重构类修复建议。
+description: Decide on ACME `service.rs` "huge phase function should be split / global singleton should use DI" findings. Audited as design tradeoff; refactoring fix suggestions not accepted.
 ---
 
-# ACME service.rs 形态 — 已审计取舍
+# ACME service.rs Shape — Audited Tradeoff
 
-**审计日期**：2026-04-26
-**关联 issue**：P1-05（已关闭，仅修代码缺陷部分，不做架构重构）
-**文件**：`src/core/controller/services/acme/service.rs`（~1158 行）
+**Audit date**: 2026-04-26
+**Linked issue**: P1-05 (closed, only the code-defect parts fixed; no architectural refactoring)
+**File**: `src/core/controller/services/acme/service.rs` (~1158 lines)
 
-## 已修复（曾经的真实缺陷）
+## Already Fixed (former real defects)
 
-- 状态写回静默丢弃 → 现在 `if let Err(status_err) = update_acme_status(...)` 打 `tracing::warn!`（service.rs:395-409）
-- DNS 凭据非 UTF-8 静默回退 base64 → 现在显式 `String::from_utf8(...).map_err(...)?` 返回 Err（service.rs:751）
+- Status write-back was silently dropped → now `if let Err(status_err) = update_acme_status(...)` logs `tracing::warn!` (service.rs:395-409)
+- Non-UTF-8 DNS credentials silently fell back to base64 → now explicit `String::from_utf8(...).map_err(...)?` returns Err (service.rs:751)
 
-新出现这两类（吞错 / 非 UTF-8 静默降级）才接受 finding。
+Only newly emerging cases of these two categories (swallowed error / non-UTF-8 silent fallback) are accepted as findings.
 
-## 不接受的修复建议（本次审计后）
+## Fix Suggestions Not Accepted (after this audit)
 
-### 1. "`execute_http01_flow` / `execute_dns01_flow` 90 行太长，应拆 phase 子函数"
+### 1. "`execute_http01_flow` / `execute_dns01_flow` are 90 lines too long; should split into phase sub-functions"
 
-- ACME 协议天然线性流程：account → order → challenge → finalize → certificate，每步依赖前一步结果。
-- 拆出的子函数只被本流程各调用一次，参数列表长（client、acme、status、challenge state…），读者要在 5–6 个文件间反复跳。
-- "线性故事被横向切开" 属负价值，命中 `architecture/size-and-similarity-heuristics.md` 验收三件套未过。
-- **判定**：不接受拆分。
+- ACME protocol is a naturally linear flow: account → order → challenge → finalize → certificate; each step depends on the previous.
+- The split sub-functions are each called once by this flow only, with long parameter lists (client, acme, status, challenge state…); readers would jump back and forth among 5–6 files.
+- "Linear story sliced horizontally" is negative-value, hitting a failed acceptance against the triple in `architecture/size-and-similarity-heuristics.md`.
+- **Verdict**: split not accepted.
 
-### 2. "`handle_resource_check`（~173 行）应拆"
+### 2. "`handle_resource_check` (~173 lines) should be split"
 
-- 大头是 `tokio::spawn` 内联块（成功/失败/重试调度三分支）。
-- 抽成 `async fn run_acme_flow(...)` 是机械操作，行为不变，收益仅"少一层缩进"。
-- 可做可不做，不构成 P1/P2 级 finding；提交此类建议需附"读者实际困惑"证据。
+- The bulk is the inline block inside `tokio::spawn` (success/failure/retry-scheduling three-branch).
+- Extracting to `async fn run_acme_flow(...)` is a mechanical operation; behavior unchanged; benefit is only "one less indentation level".
+- Optional; does not constitute P1/P2 finding; filing such suggestions requires "real reader confusion" evidence.
 
-### 3. "`ACME_SERVICE: Mutex<Option<AcmeServiceHandle>>` 全局单例应换 `Arc<...>` 注入 HandlerContext"
+### 3. "`ACME_SERVICE: Mutex<Option<AcmeServiceHandle>>` global singleton should switch to `Arc<...>` injected into HandlerContext"
 
-- Controller 是 leader-elected 单活模型，多实例并发不在设计目标内。
-- 唯一痛点是单测不便，但 ACME 流程瓶颈是 K8s API + 外部 ACME server，换实例化方式仍然测不了，只是把 mutex 搬家。
-- 改造扩散到 HandlerContext + 所有 handler 签名，收益虚。
-- **判定**：不接受 DI 重构。如果未来真要给 ACME 加单测或多租户拆分，再开新 issue 针对性做。
+- The Controller is a leader-elected single-active model; multi-instance concurrency is not a design goal.
+- The only pain is unit-test inconvenience, but the ACME flow bottleneck is K8s API + external ACME server; switching instantiation method still cannot test it; it just moves the mutex.
+- The change cascades to HandlerContext + all handler signatures; benefit is illusory.
+- **Verdict**: DI refactoring not accepted. If in the future ACME really needs unit tests or multi-tenant splitting, file a new targeted issue.
 
-## 何时重新评估
+## When to Re-Evaluate
 
-- ACME service 真的要支持多实例（如多租户隔离）→ 重新评估 #3。
-- 出现真实可单测的逻辑分层（如把 ACME state machine 抽成纯函数模块）→ 重新评估 #1#2 拆分价值。
-- 出现新的吞错 / 静默降级（status 写回、外部 IO、密钥解析）→ 走"已修复"那一类正常 finding。
+- ACME service really needs multi-instance support (e.g., multi-tenant isolation) → re-evaluate #3.
+- A real unit-testable logic separation appears (e.g., extracting the ACME state machine into a pure-function module) → re-evaluate the split value of #1, #2.
+- New swallowed errors / silent fallbacks appear (status write-back, external IO, key parsing) → file as a normal finding under "Already Fixed".

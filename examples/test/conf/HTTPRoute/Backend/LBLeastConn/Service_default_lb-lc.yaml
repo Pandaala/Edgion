@@ -1,4 +1,4 @@
-# LeastConn 后端 Service
+# LeastConn backend Service
 apiVersion: v1
 kind: Service
 metadata:

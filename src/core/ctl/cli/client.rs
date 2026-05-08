@@ -77,7 +77,7 @@ impl EdgionClient {
         let status_code = resp.status();
         if !status_code.is_success() {
             bail!(
-                "/auth/status returned HTTP {} — controller 版本过老或配置异常",
+                "/auth/status returned HTTP {} -- controller is too old or misconfigured",
                 status_code
             );
         }
@@ -91,7 +91,7 @@ impl EdgionClient {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("/auth/status missing `data` field"))?;
         let status: AuthStatusResponse =
-            serde_json::from_value(data).context("/auth/status schema unrecognized — CLI/controller 版本不匹配")?;
+            serde_json::from_value(data).context("/auth/status schema unrecognized -- CLI/controller version mismatch")?;
 
         match status.status {
             AuthStatus::Disabled => return Ok(()),
@@ -462,8 +462,8 @@ mod ensure_auth_tests {
         assert!(r.is_err(), "404 must bail, got {:?}", r);
         let msg = format!("{:?}", r.unwrap_err());
         assert!(
-            msg.contains("404") || msg.contains("过老") || msg.contains("too old"),
-            "err message should mention 404/版本过老: {msg}"
+            msg.contains("404") || msg.contains("too old"),
+            "err message should mention 404 / too old: {msg}"
         );
     }
 

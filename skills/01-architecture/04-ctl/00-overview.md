@@ -1,19 +1,19 @@
 ---
 name: ctl-overview
-description: edgion-cli 总览：三种 Target 模式（center/server/client）、EdgionClient、API 路由、调试用法。
+description: edgion-cli overview — three target modes (center/server/client), EdgionClient, API routes, debugging usage.
 ---
 
-# edgion-cli 总览
+# edgion-cli overview
 
-edgion-cli 是 Edgion 的命令行管理工具，基于 clap 构建。通过 HTTP API 与 Controller 和 Gateway 交互，支持资源 CRUD、缓存查询和运维操作。其核心价值在于可以对比三级缓存（ConfCenter → ServerCache → ClientCache）排查配置同步问题。
+edgion-cli is Edgion's command-line management tool, built on clap. It interacts with Controller and Gateway via HTTP API and supports resource CRUD, cache queries, and operations commands. Its core value is the ability to compare the three-tier cache (ConfCenter → ServerCache → ClientCache) to troubleshoot configuration sync issues.
 
-## 三种 Target 模式
+## Three target modes
 
-| Target | 连接目标 | 默认端口 | 能力 | 数据源 |
+| Target | Connection target | Default port | Capability | Data source |
 |--------|---------|---------|------|--------|
-| **center**（默认） | Controller Admin API | :5800 | 完整 CRUD + reload | ConfCenter（配置中心） |
-| **server** | Controller Admin API | :5800 | 只读查询 | ServerCache（gRPC 服务端缓存） |
-| **client** | Gateway Admin API | :5900 | 只读查询 | ClientCache（gRPC 客户端缓存） |
+| **center** (default) | Controller Admin API | :5800 | Full CRUD + reload | ConfCenter (configuration center) |
+| **server** | Controller Admin API | :5800 | Read-only query | ServerCache (gRPC server-side cache) |
+| **client** | Gateway Admin API | :5900 | Read-only query | ClientCache (gRPC client-side cache) |
 
 ```
                     edgion-cli
@@ -24,144 +24,144 @@ edgion-cli 是 Edgion 的命令行管理工具，基于 clap 构建。通过 HTT
                    └──────────┘
 ```
 
-### Target 与命令的权限关系
+### Target vs command capability
 
-| 命令 | center | server | client |
+| Command | center | server | client |
 |------|--------|--------|--------|
-| get | 支持 | 支持 | 支持 |
-| apply | 支持 | 不支持 | 不支持 |
-| delete | 支持 | 不支持 | 不支持 |
-| reload | 支持 | 不支持 | 不支持 |
+| get | Supported | Supported | Supported |
+| apply | Supported | Not supported | Not supported |
+| delete | Supported | Not supported | Not supported |
+| reload | Supported | Not supported | Not supported |
 
-写操作（apply/delete/reload）仅在 center 模式下可用。server 和 client 模式为只读，用于查看各级缓存的状态。
+Write operations (apply/delete/reload) are only available in center mode. server and client modes are read-only and used to inspect the state of each cache tier.
 
-## API 路由
+## API routes
 
-不同 target 对应不同的 HTTP API 路由：
+Different targets correspond to different HTTP API routes:
 
-### center 路由（ConfCenter API）
-
-```
-GET    /api/v1/namespaced/{kind}              # 列出所有命名空间下的资源
-GET    /api/v1/namespaced/{kind}/{namespace}   # 列出指定命名空间下的资源
-GET    /api/v1/namespaced/{kind}/{ns}/{name}   # 获取指定资源
-GET    /api/v1/cluster/{kind}/{name}           # 获取集群级资源
-POST   /api/v1/namespaced/{kind}/{namespace}   # 创建命名空间资源
-POST   /api/v1/cluster/{kind}                  # 创建集群级资源
-PUT    /api/v1/namespaced/{kind}/{ns}/{name}   # 更新命名空间资源
-PUT    /api/v1/cluster/{kind}/{name}           # 更新集群级资源
-DELETE /api/v1/namespaced/{kind}/{ns}/{name}   # 删除命名空间资源
-DELETE /api/v1/cluster/{kind}/{name}           # 删除集群级资源
-POST   /api/v1/reload                          # 重载所有资源
-```
-
-### server 路由（ConfigServer 缓存）
+### center routes (ConfCenter API)
 
 ```
-GET    /configserver/{kind}/list               # 列出所有资源
-GET    /configserver/{kind}?name=N&namespace=NS  # 按名称/命名空间过滤
+GET    /api/v1/namespaced/{kind}              # List resources across all namespaces
+GET    /api/v1/namespaced/{kind}/{namespace}   # List resources in the specified namespace
+GET    /api/v1/namespaced/{kind}/{ns}/{name}   # Get the specified resource
+GET    /api/v1/cluster/{kind}/{name}           # Get a cluster-scoped resource
+POST   /api/v1/namespaced/{kind}/{namespace}   # Create a namespaced resource
+POST   /api/v1/cluster/{kind}                  # Create a cluster-scoped resource
+PUT    /api/v1/namespaced/{kind}/{ns}/{name}   # Update a namespaced resource
+PUT    /api/v1/cluster/{kind}/{name}           # Update a cluster-scoped resource
+DELETE /api/v1/namespaced/{kind}/{ns}/{name}   # Delete a namespaced resource
+DELETE /api/v1/cluster/{kind}/{name}           # Delete a cluster-scoped resource
+POST   /api/v1/reload                          # Reload all resources
 ```
 
-### client 路由（ConfigClient 缓存）
+### server routes (ConfigServer cache)
 
 ```
-GET    /configclient/{kind}/list               # 列出所有资源
-GET    /configclient/{kind}?name=N&namespace=NS  # 按名称/命名空间过滤
+GET    /configserver/{kind}/list               # List all resources
+GET    /configserver/{kind}?name=N&namespace=NS  # Filter by name/namespace
 ```
 
-server 和 client 路由的过滤是客户端侧完成的——先获取全量数据，再在 edgion-cli 内部过滤。
+### client routes (ConfigClient cache)
+
+```
+GET    /configclient/{kind}/list               # List all resources
+GET    /configclient/{kind}?name=N&namespace=NS  # Filter by name/namespace
+```
+
+The filtering for server and client routes is done client-side — the full data is fetched first, then filtered inside edgion-cli.
 
 ## EdgionClient
 
-HTTP 客户端实现，封装了与 Controller/Gateway 的 HTTP 通信逻辑。
+The HTTP client implementation; encapsulates the HTTP communication logic with Controller/Gateway.
 
 ```rust
 pub struct EdgionClient {
-    client: Client,         // reqwest HTTP 客户端
-    base_url: String,       // 基础 URL（如 http://localhost:5800）
-    target: TargetType,     // 目标类型
-    socket_path: Option<PathBuf>,  // Unix socket 路径（可选）
+    client: Client,         // reqwest HTTP client
+    base_url: String,       // Base URL (e.g., http://localhost:5800)
+    target: TargetType,     // Target type
+    socket_path: Option<PathBuf>,  // Unix socket path (optional)
 }
 ```
 
-### 连接方式
+### Connection methods
 
-- **HTTP**：默认方式，根据 target 类型选择端口（center/server → 5800，client → 5900）
-- **Unix Socket**：通过 `--socket` 参数指定，适用于同一节点上的本地通信
+- **HTTP**: the default; the port is chosen based on target type (center/server → 5800, client → 5900)
+- **Unix Socket**: specified via the `--socket` argument, suitable for local communication on the same node
 
-### 错误处理
+### Error handling
 
-EdgionClient 提供详细的网络错误诊断：
-- 连接拒绝 → 提示对应组件（controller/gateway）可能未运行
-- DNS 解析失败 → 提示检查主机名
-- 超时 → 提示服务可能过载
-- 通用连接错误 → 提示检查服务器地址
+EdgionClient provides detailed network-error diagnostics:
+- Connection refused → suggests the corresponding component (controller/gateway) may not be running
+- DNS resolution failed → suggests checking the hostname
+- Timeout → suggests the service may be overloaded
+- Generic connection error → suggests checking the server address
 
-## 输出格式
+## Output formats
 
-| 格式 | 说明 |
+| Format | Description |
 |------|------|
-| `table`（默认） | 表格形式，显示关键字段 |
-| `json` | 完整 JSON 输出，适合程序化处理 |
-| `yaml` | 完整 YAML 输出，与配置文件格式一致 |
-| `wide` | 宽表格，显示更多字段 |
+| `table` (default) | Tabular form, shows key fields |
+| `json` | Full JSON output, suitable for programmatic processing |
+| `yaml` | Full YAML output, consistent with the configuration file format |
+| `wide` | Wide table, shows more fields |
 
-通过 `-o` 参数指定：`edgion-cli get httproute -o json`
+Specified via `-o`: `edgion-cli get httproute -o json`
 
-## 调试用法
+## Debugging usage
 
-edgion-cli 最有价值的用途是排查配置同步问题。通过对比三级缓存可以快速定位问题所在层级：
+The most valuable use of edgion-cli is troubleshooting configuration sync issues. By comparing the three cache tiers you can quickly locate which layer the issue is in:
 
-### 场景 1：配置已 apply 但 Gateway 未生效
+### Scenario 1: configuration applied but not in effect on the Gateway
 
 ```bash
-# 1. 确认 center 是否已写入
+# 1. Confirm center has been written
 edgion-cli get httproute my-route -n default -o yaml
 
-# 2. 确认 server 缓存是否已更新
+# 2. Confirm the server cache has been updated
 edgion-cli -t server get httproute my-route -n default -o yaml
 
-# 3. 确认 client 缓存是否已同步
+# 3. Confirm the client cache has been synced
 edgion-cli -t client get httproute my-route -n default -o yaml
 ```
 
-- center 有但 server 没有 → 问题在 ResourceProcessor 处理阶段
-- server 有但 client 没有 → 问题在 gRPC 同步阶段
-- client 有但未生效 → 问题在 ConfHandler / preparse 阶段
+- center has it but server doesn't → issue is in the ResourceProcessor processing phase
+- server has it but client doesn't → issue is in the gRPC sync phase
+- client has it but it's not in effect → issue is in the ConfHandler / preparse phase
 
-### 场景 2：检查同步状态
+### Scenario 2: check sync status
 
 ```bash
-# 对比 server 和 client 的资源数量
+# Compare the resource counts in server and client
 edgion-cli -t server get httproute -o json | jq length
 edgion-cli -t client get httproute -o json | jq length
 ```
 
-## CLI 参数总览
+## CLI argument overview
 
-| 参数 | 短选项 | 说明 |
+| Argument | Short | Description |
 |------|--------|------|
-| `--target` | `-t` | Target 模式：center（默认）、server、client |
-| `--server` | | 服务器地址（如 `http://10.0.0.1:5800`） |
-| `--socket` | | Unix socket 路径 |
-| `--namespace` | `-n` | 命名空间过滤 |
-| `--output` | `-o` | 输出格式：table、json、yaml、wide |
-| `--file` | `-f` | 文件/目录路径（apply/delete 用） |
-| `--dry-run` | | Dry run 模式（仅 apply） |
+| `--target` | `-t` | Target mode: center (default), server, client |
+| `--server` | | Server address (e.g., `http://10.0.0.1:5800`) |
+| `--socket` | | Unix socket path |
+| `--namespace` | `-n` | Namespace filter |
+| `--output` | `-o` | Output format: table, json, yaml, wide |
+| `--file` | `-f` | File/directory path (for apply/delete) |
+| `--dry-run` | | Dry-run mode (apply only) |
 
-## 模块结构
+## Module structure
 
 ```
 src/core/ctl/
 ├── cli/
-│   ├── mod.rs              # Cli 结构、TargetType、Commands 枚举、命令路由
-│   ├── client.rs           # EdgionClient HTTP 客户端实现
-│   ├── output.rs           # OutputFormat、表格/JSON/YAML 输出格式化
+│   ├── mod.rs              # Cli struct, TargetType, Commands enum, command routing
+│   ├── client.rs           # EdgionClient HTTP client implementation
+│   ├── output.rs           # OutputFormat, table/JSON/YAML output formatting
 │   └── commands/
-│       ├── mod.rs          # 子命令模块导出
-│       ├── apply.rs        # apply 命令（YAML 解析 → API 调用）
-│       ├── get.rs          # get 命令（查询 + 格式化输出）
-│       ├── delete.rs       # delete 命令
-│       └── reload.rs       # reload 命令
+│       ├── mod.rs          # Subcommand module exports
+│       ├── apply.rs        # apply command (YAML parsing → API call)
+│       ├── get.rs          # get command (query + formatted output)
+│       ├── delete.rs       # delete command
+│       └── reload.rs       # reload command
 └── mod.rs
 ```

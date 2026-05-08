@@ -1,94 +1,94 @@
 ---
 name: metrics-features
-description: Prometheus Metrics 端点和可用指标。
+description: Prometheus Metrics endpoints and available metrics.
 ---
 
 # Metrics
 
-## 端点
+## Endpoints
 
-| 端点 | 端口 | 路径 | Auth | 说明 |
-|------|------|------|------|------|
-| Gateway Metrics | `:5901` | `/metrics` | 无 | 独立监听端口，`serve_with_shutdown` 启动 |
-| Controller Metrics | Admin API（默认 `:8080`） | `/metrics` | 免 auth（unified_auth skip_paths） | 挂在现有 admin router 下 |
-| Center Metrics | Admin API（默认 `:5810`） | `/metrics` | 免 auth（unified_auth skip_paths） | 挂在现有 router 下 |
+| Endpoint | Port | Path | Auth | Description |
+|----------|------|------|------|-------------|
+| Gateway Metrics | `:5901` | `/metrics` | None | Independent listening port, started via `serve_with_shutdown` |
+| Controller Metrics | Admin API (default `:8080`) | `/metrics` | No auth (unified_auth skip_paths) | Mounted under the existing admin router |
+| Center Metrics | Admin API (default `:5810`) | `/metrics` | No auth (unified_auth skip_paths) | Mounted under the existing router |
 
-> Prometheus scrape 按 K8s controller-manager 惯例免 auth。`/metrics` 内容为聚合数字，不包含资源名/请求体。
+> Prometheus scrape skips auth following K8s controller-manager convention. `/metrics` content is aggregated numbers and does not contain resource names or request bodies.
 
-## 指标规范
+## Metric Conventions
 
-Edgion 的 Metrics 设计原则（Gateway 数据面严规，控制面较松但按"新增前先问"节制）：
+Edgion's Metrics design principles (strict for the Gateway data plane; looser for the control plane but governed by an "ask before adding" rule):
 
-1. **Gateway 数据面无 Histogram**：数据面每请求路径上 histogram × 多 label 笛卡尔积易爆炸，只用 Counter 和 Gauge。**唯一存量例外**：`edgion_gateway_request_duration_ms`（核心 SLI，默认关闭、需显式启用，bucket 显式配置）。新增 histogram 被禁止——如果认为必须加，请先改 `skills/03-coding/observability/01-metrics.md` 的规则并在 code review 里说明理由。
-2. **Controller / Center 控制面允许 histogram 但节制**：控制面触发频率低、label 基数受部署规模约束，cardinality 风险小，**技术上允许** histogram。但按"新增指标前先问"原则仍应优先 counter/gauge + access log 聚合，只在分布形态（非"最近一次"）是核心决策依据时才加 histogram。目前控制面 0 条 histogram（`edgion_fed_*` / `edgion_controller_*` 家族全是 counter + gauge）。
-3. **Label 基数有限**：每个 Label 的值域 ≤ 数十个（数据面 + 控制面都适用）
-4. **通过 GatewayMetrics struct 管理**：不直接使用 `metrics::counter!()` 宏（Gateway 侧；Controller/Center 参见 `common/observe/fed_metrics.rs`，控制面可直接用宏）
-5. **Gauge 平衡**：所有 +1 路径都有对应的 -1
-6. **混合注册策略**：Hot 每请求路径（ctx_created / gateway_request_bytes 等）`Counter`/`Gauge` 直存、`new()` 急注册；Cold 失败/低频路径用 `OnceLock<Counter>/<Gauge>`，首次 record 才注册——未触发的指标不会出现在 `/metrics`，零值不占带宽
-7. **细粒度观测走 access log 聚合**：Prometheus 只承担**低基数告警 + 秒级聚合**。更细的问题（per-request 时延、per-target 分布、trace-level 回放）原始数据在 access log（以及 `mirror_log` / `ssl_log` / `tls_log` / `tcp_log` / `udp_log`）里，用 Loki / Elasticsearch / ClickHouse 查询时聚合即可得到任意维度的 rate / percentile。不要为"想看更细"的需求扩 Prometheus 指标。
+1. **No Histograms in the Gateway data plane**: histograms multiplied by many labels on the data plane per-request path can produce a Cartesian-product explosion. Use only Counter and Gauge. **The single existing exception**: `edgion_gateway_request_duration_ms` (a core SLI, disabled by default and requiring explicit opt-in, with explicitly configured buckets). Adding new histograms is forbidden — if you believe one is necessary, first amend the rules in `skills/03-coding/observability/01-metrics.md` and explain the reasoning in code review.
+2. **Histograms are allowed but restrained on the Controller / Center control plane**: the control plane has low trigger frequency, label cardinality is bounded by deployment scale, and cardinality risk is low — histograms are **technically allowed**. However, following the "ask before adding a metric" principle, prefer counter/gauge + access log aggregation, and only add a histogram when distribution shape (not "most recent") is the core decision input. There are currently 0 histograms on the control plane (the `edgion_fed_*` / `edgion_controller_*` families are all counters and gauges).
+3. **Bounded label cardinality**: each label's value domain is ≤ a few dozen (applies to both data plane and control plane).
+4. **Managed via the GatewayMetrics struct**: do not directly use the `metrics::counter!()` macro (on the Gateway side; for Controller/Center see `common/observe/fed_metrics.rs` — the control plane may use macros directly).
+5. **Gauge balance**: every +1 path has a matching -1.
+6. **Hybrid registration strategy**: hot per-request paths (ctx_created / gateway_request_bytes, etc.) store `Counter`/`Gauge` directly with eager registration in `new()`; cold failure/low-frequency paths use `OnceLock<Counter>/<Gauge>` and register on first record — untouched metrics do not appear in `/metrics`, so zero values do not consume bandwidth.
+7. **Fine-grained observation goes through access log aggregation**: Prometheus carries only **low-cardinality alerting + second-level aggregation**. Finer questions (per-request latency, per-target distributions, trace-level replay) have raw data in the access log (and `mirror_log` / `ssl_log` / `tls_log` / `tcp_log` / `udp_log`); use Loki / Elasticsearch / ClickHouse to aggregate at query time and you get rates / percentiles in any dimension. Do not expand Prometheus metrics for "I want more detail" needs.
 
-### 观测分工速查
+### Observability Responsibility Cheat Sheet
 
-| 问题 | 看哪里 |
-|------|--------|
-| "gateway 现在错误率多少？要不要告警？" | Prometheus counter（`edgion_requests_failed_total` / `edgion_backend_requests_total{status="5xx"}` 等） |
-| "x-trace-id=abc 这条请求发生了什么？" | access log |
-| "mirror 当前是否跟上主流量？" | Prometheus counter `edgion_mirror_requests_total{status="channel_full"\|"timeout"}` |
-| "mirror 的 p99 耗时分布？" | mirror access log 的 `et` 字段聚合（不加 histogram） |
-| "某 backend 最近 5 分钟 503 比例？" | Prometheus counter `rate()` |
-| "某一次 5xx 的 upstream 响应头是什么？" | access log |
+| Question | Where to look |
+|----------|---------------|
+| "What is the gateway's current error rate? Should we alert?" | Prometheus counters (`edgion_requests_failed_total` / `edgion_backend_requests_total{status="5xx"}`, etc.) |
+| "What happened on the request with x-trace-id=abc?" | access log |
+| "Is mirror keeping up with primary traffic?" | Prometheus counter `edgion_mirror_requests_total{status="channel_full"\|"timeout"}` |
+| "What is the p99 latency distribution of mirror?" | aggregate the `et` field in the mirror access log (do not add a histogram) |
+| "What is the 503 ratio for some backend in the last 5 minutes?" | Prometheus counter `rate()` |
+| "What were the upstream response headers for one specific 5xx?" | access log |
 
-### 常见指标
+### Common Metrics
 
-| 指标名 | 类型 | 说明 |
-|--------|------|------|
-| `edgion_requests_total` | Counter | 总请求数 |
-| `edgion_requests_failed_total` | Counter | 失败请求数 |
-| `edgion_backend_requests_total` | Counter | 后端请求总数。Label **可配置**（见下方"backend_requests label 配置"），默认仅 `gateway_namespace` + `gateway_name` + `protocol` + `status`；需要 `route_*` / `backend_*` drill-down 时在 `[metrics.backend_requests.labels]` 里开启。⚠️ `test_key` / `test_data` 仅在 `--integration-testing-mode` 下且 Gateway annotation 显式 opt-in 才会出现；`test_data` 会随请求变化（含 ip / latency_ms 等），**绝不要在生产开启此 flag** |
-| `edgion_ctx_active` | Gauge | 当前活跃请求上下文 |
-| `edgion_gateway_request_duration_ms` | **Histogram（Gateway 数据面唯一例外）** | 端到端请求时延，核心 SLI。默认关闭；启用后 bucket 由 `MetricsConfig::request_duration` 配置 |
-| `edgion_mirror_requests_total{status}` | Counter | Request mirror 插件每次 mirror 的结果，`status` ∈ `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout`（**mirror latency 不再有 histogram，查 mirror_log 的 `et` 字段**） |
-| `edgion_rr_selector_truncated_total` | Counter | RoundRobin 后端数 > `u16::MAX` 的截断事件（极罕见配置异常告警用，无 label） |
-| `edgion_link_sys_es_send_total{result}` | Counter | Elasticsearch DataSender 每次 send 的结果，`result` ∈ `ok` / `failed_fallback` / `failed_no_cache` |
+| Metric Name | Type | Description |
+|-------------|------|-------------|
+| `edgion_requests_total` | Counter | Total requests |
+| `edgion_requests_failed_total` | Counter | Failed requests |
+| `edgion_backend_requests_total` | Counter | Total backend requests. Labels are **configurable** (see "backend_requests label configuration" below). By default only `gateway_namespace` + `gateway_name` + `protocol` + `status`; enable `route_*` / `backend_*` drill-down via `[metrics.backend_requests.labels]` when needed. ⚠️ `test_key` / `test_data` only appear under `--integration-testing-mode` with explicit Gateway annotation opt-in; `test_data` varies per request (containing ip / latency_ms, etc.), so **never enable this flag in production**. |
+| `edgion_ctx_active` | Gauge | Currently active request contexts |
+| `edgion_gateway_request_duration_ms` | **Histogram (the only exception on the Gateway data plane)** | End-to-end request latency, core SLI. Disabled by default; once enabled, buckets are configured via `MetricsConfig::request_duration`. |
+| `edgion_mirror_requests_total{status}` | Counter | Result of each mirror by the request mirror plugin. `status` ∈ `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout` (**mirror latency no longer has a histogram — query the `et` field in mirror_log**). |
+| `edgion_rr_selector_truncated_total` | Counter | RoundRobin truncation events when backend count > `u16::MAX` (extremely rare, used to alert on configuration anomalies; no labels). |
+| `edgion_link_sys_es_send_total{result}` | Counter | Result of each Elasticsearch DataSender send. `result` ∈ `ok` / `failed_fallback` / `failed_no_cache`. |
 
-### `backend_requests` label 配置
+### `backend_requests` Label Configuration
 
-`edgion_backend_requests_total` 的 label 完全由 `[metrics.backend_requests.labels]` 控制，改变默认行为需要重启（OnceLock 不支持热更）。默认保守：
+The labels of `edgion_backend_requests_total` are entirely controlled by `[metrics.backend_requests.labels]`. Changing the default behavior requires a restart (OnceLock does not support hot reload). The defaults are conservative:
 
 ```toml
 [metrics.backend_requests.labels]
-gateway  = true    # 开启 gateway_namespace + gateway_name 两条 label
-route    = false   # 开启 route_namespace + route_name
-backend  = false   # 开启 backend_namespace + backend_name
-protocol = true    # 有限枚举（http/grpc/websocket），cardinality 成本几乎为零
-status   = true    # 有限枚举（2xx/3xx/4xx/5xx/failed），同上
+gateway  = true    # Enable the gateway_namespace + gateway_name pair
+route    = false   # Enable route_namespace + route_name
+backend  = false   # Enable backend_namespace + backend_name
+protocol = true    # Bounded enum (http/grpc/websocket), cardinality cost is essentially zero
+status   = true    # Bounded enum (2xx/3xx/4xx/5xx/failed), same as above
 ```
 
-设计原则：
+Design principles:
 
-- 每个 `gateway` / `route` / `backend` 开关控制一对 `*_namespace` + `*_name` label——K8s 资源身份天然成对，拆开配置没意义
-- 默认 15 条时序（1 gateway × 1 gateway × 3 protocol × 5 status）足够撑起 "错误率/流量比例" 类告警
-- 需要 "per-backend 错误率" / "per-route 流量" 时显式打开 `backend = true` / `route = true`，**明知 cardinality 代价**再开
-- per-request 细节回放查 access log，不要靠扩 Prometheus label 解决
+- Each `gateway` / `route` / `backend` switch controls a `*_namespace` + `*_name` pair — K8s resource identity is naturally a pair; configuring them separately is meaningless.
+- The default 15 series (1 gateway × 1 gateway × 3 protocols × 5 statuses) is enough to support "error rate / traffic ratio"-style alerts.
+- When you need "per-backend error rate" / "per-route traffic", explicitly enable `backend = true` / `route = true`, **knowing the cardinality cost** before doing so.
+- For per-request detail replay, query the access log; do not solve it by expanding Prometheus labels.
 
-cardinality 放大系数参考（单 Gateway 部署）：
+Cardinality multiplier reference (single Gateway deployment):
 
-| 默认状态 | 开 `backend` | 开 `backend` + `route` |
-|---------|------------|----------------------|
-| 15 时序 | 15 × N_backend | 15 × N_backend × N_route |
+| Default | With `backend` | With `backend` + `route` |
+|---------|----------------|--------------------------|
+| 15 series | 15 × N_backend | 15 × N_backend × N_route |
 
-N_backend / N_route 由集群规模决定；生产环境建议默认 + `backend = true` 起步，观察 Prometheus `{__name__="edgion_backend_requests_total"}` 时序数后再决定是否开 `route`。
+N_backend / N_route depend on cluster scale; in production, start with the default + `backend = true`, observe the Prometheus `{__name__="edgion_backend_requests_total"}` series count, then decide whether to enable `route`.
 
-### Federation Metrics（Center + Controller）
+### Federation Metrics (Center + Controller)
 
-Federation baseline metric 全部以 `edgion_fed_` 前缀暴露，定义与 helper 在 `src/core/common/observe/fed_metrics.rs`。所有 label 值域都是编译期常量（见同文件 `labels` 子模块）。
+All Federation baseline metrics are exposed under the `edgion_fed_` prefix. Definitions and helpers are in `src/core/common/observe/fed_metrics.rs`. All label value domains are compile-time constants (see the `labels` submodule in the same file).
 
-| 指标 | 类型 | Labels | 来源进程 |
-|------|------|--------|---------|
-| `edgion_fed_connections_active` | Gauge | `role` ∈ center/controller | 双 |
-| `edgion_fed_connection_events_total` | Counter | `role`, `event` ∈ connected/disconnected/reload | 双 |
-| `edgion_fed_connection_duration_seconds_last` | Gauge | `role` | 双 |
-| `edgion_fed_watch_events_total` | Counter | `kind`, `direction` ∈ sent/recv | 双 |
+| Metric | Type | Labels | Source Process |
+|--------|------|--------|----------------|
+| `edgion_fed_connections_active` | Gauge | `role` ∈ center/controller | Both |
+| `edgion_fed_connection_events_total` | Counter | `role`, `event` ∈ connected/disconnected/reload | Both |
+| `edgion_fed_connection_duration_seconds_last` | Gauge | `role` | Both |
+| `edgion_fed_watch_events_total` | Counter | `kind`, `direction` ∈ sent/recv | Both |
 | `edgion_fed_watch_list_total` | Counter | `kind`, `result` ∈ ok/version_too_old/parse_error/ready_wait | Center |
 | `edgion_fed_watch_errors_total` | Counter | `kind`, `reason` ∈ parse_error/timeout/recv_error | Center |
 | `edgion_fed_mark_offline_total` | Counter | `reason` ∈ heartbeat/disconnect/reload | Center |
@@ -100,6 +100,6 @@ Federation baseline metric 全部以 `edgion_fed_` 前缀暴露，定义与 help
 | `edgion_fed_fanout_total` | Counter | `op` ∈ patch_enable/patch_profile, `result` ∈ ok/partial/fail | Center |
 | `edgion_fed_ready_gate_wait_seconds_last` | Gauge | — | Controller |
 
-> 注：原 ticket 的 `edgion_fed_stream_tx_drops_total` 暂未落盘——fed_sync 目前无 `try_send` 路径，补该 metric 需先引入 backpressure；未来工单再处理。
+> Note: the `edgion_fed_stream_tx_drops_total` from the original ticket is not yet implemented — fed_sync currently has no `try_send` path; adding this metric requires introducing backpressure first; it will be handled in a future ticket.
 
-详细指标规范见 [../../03-coding/observability/01-metrics.md](../../03-coding/observability/01-metrics.md)。
+See [../../03-coding/observability/01-metrics.md](../../03-coding/observability/01-metrics.md) for the detailed metric conventions.

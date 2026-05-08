@@ -1,8 +1,8 @@
-// DslDynamic scenario — 复用现有 DslDynamicInitialTestSuite / DslDynamicUpdateTestSuite。
+// DslDynamic scenario — reuses the existing DslDynamicInitialTestSuite / DslDynamicUpdateTestSuite.
 //
-// Initial: X-Version=v1 → 200, X-Version=v2 → 403
-// Transition: apply updates/ (DSL source 切换到 v2 放行)
-// Update: X-Version=v2 → 200, X-Version=v1 → 403
+// Initial: X-Version=v1 -> 200, X-Version=v2 -> 403
+// Transition: apply updates/ (DSL source switched to allow v2)
+// Update: X-Version=v2 -> 200, X-Version=v1 -> 403
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario};
 use crate::dynamic::ScenarioCtx;

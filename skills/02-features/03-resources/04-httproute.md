@@ -1,16 +1,16 @@
 ---
 name: httproute-features
-description: HTTPRoute 完整 Schema 与功能：匹配条件、过滤器、后端引用、超时/重试、会话保持。
+description: Full HTTPRoute schema and features: match conditions, filters, backend references, timeouts/retries, session persistence.
 ---
 
-# HTTPRoute 资源
+# HTTPRoute Resource
 
 > API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
-> Gateway API v1.4.0 Core 资源
+> Gateway API v1.4.0 Core resource
 
-HTTPRoute 是 Edgion 中最复杂的路由资源，定义 HTTP/HTTPS 层的路由规则。
+HTTPRoute is the most complex routing resource in Edgion, defining routing rules at the HTTP/HTTPS layer.
 
-## 完整 Schema
+## Full Schema
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -19,18 +19,18 @@ metadata:
   name: my-route
   namespace: default
 spec:
-  parentRefs:                                      # 挂载到 Gateway（见 00-common-concepts.md）
+  parentRefs:                                      # Attach to a Gateway (see 00-common-concepts.md)
     - name: my-gateway
       sectionName: https
 
-  hostnames:                                       # 匹配的主机名列表
+  hostnames:                                       # List of matched hostnames
     - "api.example.com"
-    - "*.example.com"                              # 支持通配符
+    - "*.example.com"                              # Wildcards supported
 
   rules:
-    - name: "api-v1"                               # 规则名称（可选，用于可观测性）
+    - name: "api-v1"                               # Rule name (optional, used for observability)
 
-      matches:                                     # 匹配条件（OR 关系）
+      matches:                                     # Match conditions (OR relationship)
         - path:
             type: PathPrefix                       # Exact | PathPrefix | RegularExpression
             value: "/api/v1"
@@ -42,9 +42,9 @@ spec:
             - type: Exact                          # Exact | RegularExpression
               name: debug
               value: "true"
-          method: GET                              # HTTP 方法
+          method: GET                              # HTTP method
 
-      filters:                                     # 过滤器链
+      filters:                                     # Filter chain
         - type: RequestHeaderModifier
           requestHeaderModifier:
             set:
@@ -86,184 +86,184 @@ spec:
               port: 8080
             fraction:
               numerator: 10
-              denominator: 100                     # 10% 镜像
-            connectTimeoutMs: 1000                 # 连接超时（ms）
-            writeTimeoutMs: 1000                   # 写入超时（ms）
-            maxBufferedChunks: 5                   # 最大缓冲 body chunk 数
-            mirrorLog: true                        # 镜像是否单独记录 access log
-            maxConcurrent: 1024                    # 最大并发镜像任务
-            channelFullTimeoutMs: 0                # channel 满时等待（ms）
+              denominator: 100                     # Mirror 10%
+            connectTimeoutMs: 1000                 # Connect timeout (ms)
+            writeTimeoutMs: 1000                   # Write timeout (ms)
+            maxBufferedChunks: 5                   # Max buffered body chunks
+            mirrorLog: true                        # Whether mirror keeps a separate access log
+            maxConcurrent: 1024                    # Max concurrent mirror tasks
+            channelFullTimeoutMs: 0                # Wait when channel is full (ms)
 
-        - type: ExtensionRef                       # 引用 EdgionPlugins
+        - type: ExtensionRef                       # Reference an EdgionPlugins resource
           extensionRef:
             group: edgion.io
             kind: EdgionPlugins
             name: my-plugins
 
-      backendRefs:                                 # 后端引用
+      backendRefs:                                 # Backend references
         - name: api-service
           port: 8080
           weight: 80
         - name: api-service-canary
           port: 8080
           weight: 20
-          filters:                                 # backendRef 级别过滤器
+          filters:                                 # backendRef-level filters
             - type: RequestHeaderModifier
               requestHeaderModifier:
                 set:
                   - name: X-Canary
                     value: "true"
 
-      timeouts:                                    # Gateway API v1.4 标准超时
-        request: "30s"                             # 端到端请求超时（含重试）
-        backendRequest: "10s"                      # 单次后端请求超时
+      timeouts:                                    # Gateway API v1.4 standard timeouts
+        request: "30s"                             # End-to-end request timeout (including retries)
+        backendRequest: "10s"                      # Per-backend request timeout
 
-      retry:                                       # Gateway API v1.4 标准重试
-        attempts: 3                                # 最大重试次数
-        backoff: "1s"                              # 重试间隔
-        codes:                                     # 触发重试的 HTTP 状态码
+      retry:                                       # Gateway API v1.4 standard retry
+        attempts: 3                                # Maximum retry attempts
+        backoff: "1s"                              # Retry interval
+        codes:                                     # HTTP status codes that trigger a retry
           - 502
           - 503
           - 504
 
-      sessionPersistence:                          # 会话保持
-        sessionName: "EDGION_SESSION"              # 会话 token 名称
-        absoluteTimeout: "1h"                      # 绝对超时
-        idleTimeout: "30m"                         # 空闲超时
+      sessionPersistence:                          # Session persistence
+        sessionName: "EDGION_SESSION"              # Session token name
+        absoluteTimeout: "1h"                      # Absolute timeout
+        idleTimeout: "30m"                         # Idle timeout
         type: Cookie                               # Cookie | Header
         cookieConfig:
           lifetimeType: Permanent                  # Permanent | Session
 ```
 
-## 匹配条件 Schema
+## Match Condition Schema
 
 ### HTTPRouteMatch
 
-多个 match 之间是 **OR** 关系；单个 match 内的 path/headers/queryParams/method 是 **AND** 关系。
+Multiple matches have an **OR** relationship; the path/headers/queryParams/method inside a single match have an **AND** relationship.
 
 #### path
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
+| Field | Type | Description |
+|-------|------|-------------|
 | `type` | `String` | `Exact` / `PathPrefix` / `RegularExpression` |
-| `value` | `String` | 匹配值（PathPrefix 默认 `/`） |
+| `value` | `String` | Match value (PathPrefix defaults to `/`) |
 
 #### headers
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
+| Field | Type | Description |
+|-------|------|-------------|
 | `type` | `String` | `Exact` / `RegularExpression` |
-| `name` | `String` | Header 名称（大小写不敏感） |
-| `value` | `String` | 匹配值 |
+| `name` | `String` | Header name (case-insensitive) |
+| `value` | `String` | Match value |
 
 #### queryParams
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
+| Field | Type | Description |
+|-------|------|-------------|
 | `type` | `String` | `Exact` / `RegularExpression` |
-| `name` | `String` | 查询参数名称 |
-| `value` | `String` | 匹配值 |
+| `name` | `String` | Query parameter name |
+| `value` | `String` | Match value |
 
 #### method
 
 `String`: `GET` / `POST` / `PUT` / `DELETE` / `PATCH` / `HEAD` / `OPTIONS` / `CONNECT`
 
-## 过滤器类型
+## Filter Types
 
-| 类型 | 说明 | 阶段 |
-|------|------|------|
-| `RequestHeaderModifier` | 修改请求头（set/add/remove） | 请求阶段 |
-| `ResponseHeaderModifier` | 修改响应头（set/add/remove） | 响应阶段 |
-| `RequestRedirect` | HTTP 重定向（301/302） | 请求阶段（终止） |
-| `URLRewrite` | URL 重写（hostname/path） | 请求阶段 |
-| `RequestMirror` | 请求镜像到备份后端 | 请求阶段（非阻塞） |
-| `ExtensionRef` | 引用 EdgionPlugins 扩展插件 | 取决于插件 |
+| Type | Description | Stage |
+|------|-------------|-------|
+| `RequestHeaderModifier` | Modify request headers (set/add/remove) | Request stage |
+| `ResponseHeaderModifier` | Modify response headers (set/add/remove) | Response stage |
+| `RequestRedirect` | HTTP redirect (301/302) | Request stage (terminating) |
+| `URLRewrite` | URL rewrite (hostname/path) | Request stage |
+| `RequestMirror` | Mirror requests to a backup backend | Request stage (non-blocking) |
+| `ExtensionRef` | Reference an EdgionPlugins extension plugin | Depends on the plugin |
 
-### 过滤器互斥约束
+### Filter Mutual-Exclusion Constraints
 
-`URLRewrite` 和 `RequestRedirect` **互斥**，不能在同一规则中同时出现。冲突检查覆盖三个层级：
+`URLRewrite` and `RequestRedirect` are **mutually exclusive** and cannot appear in the same rule. The conflict check covers three levels:
 
-1. **规则级**：`rule.filters` 中同时包含 URLRewrite 和 RequestRedirect
-2. **BackendRef 级**：`backendRef.filters` 中同时包含两者
-3. **跨级别**：`rule.filters` 包含其中一个，`backendRef.filters` 包含另一个
+1. **Rule level**: `rule.filters` contains both URLRewrite and RequestRedirect.
+2. **BackendRef level**: `backendRef.filters` contains both.
+3. **Cross-level**: `rule.filters` contains one and `backendRef.filters` contains the other.
 
-违反约束的规则将被标记为 `PartiallyInvalid`，该规则不会生效，但 HTTPRoute 中其他有效规则仍正常工作。
+A rule that violates the constraint is marked `PartiallyInvalid`; that rule does not take effect, but other valid rules in the HTTPRoute continue to work.
 
-### ExtensionRef 复用约定
+### ExtensionRef Reuse Convention
 
-`ExtensionRef` 是 Gateway API 标准 filter，按 `namespace/name` 引用一个 `EdgionPlugins` 资源。**EdgionPlugins.spec.\*Plugins 内部的 `type: ExtensionRef`（"插件引用插件"嵌套形态）已在 release `<version>` 移除**。多插件复用通过两种方式表达：
+`ExtensionRef` is the standard Gateway API filter, referencing one `EdgionPlugins` resource by `namespace/name`. **The `type: ExtensionRef` (the "plugin referencing plugin" nested form) inside `EdgionPlugins.spec.\*Plugins` was removed in release `<version>`.** Multi-plugin reuse is expressed in two ways:
 
-- **Aggregate 模式**：把多个插件合并到一个 `EdgionPlugins` 资源，路由只需一次 `ExtensionRef`。
-- **Side-by-side 模式**：在 `rules[].filters` 里并列写多个 `ExtensionRef`，分别指向不同的 `EdgionPlugins`。
+- **Aggregate mode**: combine multiple plugins into one `EdgionPlugins` resource; the route only needs a single `ExtensionRef`.
+- **Side-by-side mode**: write multiple `ExtensionRef` entries side-by-side in `rules[].filters`, each pointing to a different `EdgionPlugins`.
 
-详见 `docs/zh-CN/user-guide/http-route/filters/plugin-composition.md` 与 `docs/zh-CN/migrations/<version>-extension-ref.md`。
+See `docs/zh-CN/user-guide/http-route/filters/plugin-composition.md` and `docs/zh-CN/migrations/<version>-extension-ref.md` for details.
 
-## 超时与重试
+## Timeouts and Retries
 
 ### timeouts (Gateway API v1.4)
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `request` | `Duration` | EdgionGatewayConfig 全局值 | 端到端请求超时（**含重试**） |
-| `backendRequest` | `Duration` | EdgionGatewayConfig 全局值 | 单次后端请求超时（不得超过 `request`） |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `request` | `Duration` | EdgionGatewayConfig global value | End-to-end request timeout (**including retries**) |
+| `backendRequest` | `Duration` | EdgionGatewayConfig global value | Per-backend request timeout (must not exceed `request`) |
 
-> **约束**：`backendRequest` 不能超过 `request`。如果配置的 `backendRequest` 大于 `request`，将被自动 clamp 为 `request` 的值，确保单次后端请求超时不会超过端到端限制。
+> **Constraint**: `backendRequest` must not exceed `request`. If the configured `backendRequest` is greater than `request`, it is automatically clamped to `request`, ensuring that a single backend request timeout does not exceed the end-to-end limit.
 
 ### retry (Gateway API v1.4)
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `attempts` | `i32` | `EdgionGatewayConfig.spec.maxRetries`（默认 3） | 最大重试次数（`0` 禁用重试） |
-| `backoff` | `Duration` | — | 重试最小间隔（指数退避基数，上限 30s） |
-| `codes` | `Vec<i32>` | — | 触发重试的 HTTP 状态码（100-599） |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `attempts` | `i32` | `EdgionGatewayConfig.spec.maxRetries` (default 3) | Max retry attempts (`0` disables retry) |
+| `backoff` | `Duration` | — | Minimum retry interval (exponential backoff base, capped at 30s) |
+| `codes` | `Vec<i32>` | — | HTTP status codes that trigger a retry (100-599) |
 
-> **优先级**：`rule.retry.attempts` > `EdgionGatewayConfig.spec.maxRetries`（全局默认）。连接失败和状态码重试共享同一个 attempts 计数器。`backendRequest` timeout 同时作为 Pingora `connection_timeout` / `read_timeout` / `write_timeout` 的路由级覆盖。
+> **Priority**: `rule.retry.attempts` > `EdgionGatewayConfig.spec.maxRetries` (global default). Connection failures and status-code retries share the same attempts counter. The `backendRequest` timeout simultaneously serves as the route-level override for Pingora `connection_timeout` / `read_timeout` / `write_timeout`.
 
-## 会话保持 Schema
+## Session Persistence Schema
 
 ```yaml
 sessionPersistence:
-  sessionName: String?               # 会话 token 名称（默认 edgion-session-affinity）
-  absoluteTimeout: Duration?         # 绝对超时（Permanent Cookie 映射为 Max-Age）
-  idleTimeout: Duration?             # 空闲超时（当前版本不支持，预留 Redis 模式）
-  type: Cookie | Header              # 保持类型（默认 Cookie）
+  sessionName: String?               # Session token name (default edgion-session-affinity)
+  absoluteTimeout: Duration?         # Absolute timeout (mapped to Max-Age for Permanent Cookies)
+  idleTimeout: Duration?             # Idle timeout (not supported in the current version, reserved for Redis mode)
+  type: Cookie | Header              # Persistence type (default Cookie)
   cookieConfig:
-    lifetimeType: Permanent | Session # Cookie 生命周期
-  strict: bool?                      # Edgion 扩展：strict 模式（默认 false）
+    lifetimeType: Permanent | Session # Cookie lifetime
+  strict: bool?                      # Edgion extension: strict mode (default false)
 ```
 
-### 运行时行为
+### Runtime Behavior
 
-- **Token 生成**：后端 `ip:port` 的 CRC32 哈希（8 位 hex），不暴露后端拓扑
-- **Cookie 模式**：首次响应注入 `Set-Cookie: <name>=<token>; Path=/; HttpOnly; SameSite=Lax`（Permanent 加 `Max-Age`）
-- **Header 模式**：首次响应注入 `<name>: <token>`，客户端需在后续请求中携带
-- **后端选择**：Token 作为一致性哈希 key，确保同一 token 路由到同一后端
-- **Fallback**（默认）：绑定后端不可用时 fallback 到正常 LB，更新 token
-- **Strict 模式**：`strict: true` 时不 fallback，返回 503
+- **Token generation**: CRC32 hash of the backend's `ip:port` (8-character hex), does not expose the backend topology.
+- **Cookie mode**: the first response injects `Set-Cookie: <name>=<token>; Path=/; HttpOnly; SameSite=Lax` (Permanent adds `Max-Age`).
+- **Header mode**: the first response injects `<name>: <token>`; the client must include it in subsequent requests.
+- **Backend selection**: the token is used as a consistent-hashing key, ensuring the same token is routed to the same backend.
+- **Fallback** (default): when the bound backend is unavailable, fall back to normal load balancing and update the token.
+- **Strict mode**: when `strict: true`, do not fall back; return 503.
 
-### 与插件的优先级
+### Priority with Plugins
 
 DirectEndpoint / ExternalJump > Session Persistence > InternalJump > Round-Robin
 
-## 流量分割
+## Traffic Splitting
 
-通过 `backendRefs` 的 `weight` 字段实现：
+Achieved via the `weight` field in `backendRefs`:
 
 ```yaml
 backendRefs:
   - name: v1-service
     port: 8080
-    weight: 90    # 90% 流量
+    weight: 90    # 90% of traffic
   - name: v2-service
     port: 8080
-    weight: 10    # 10% 流量（金丝雀）
+    weight: 10    # 10% of traffic (canary)
 ```
 
-## Edgion 扩展注解
+## Edgion Extension Annotations
 
-以下注解放在 `HTTPRoute.metadata.annotations`（GRPCRoute 同）。完整规范和解析细节见 [`skills/02-features/05-annotations/references/annotations-metadata.md`](../05-annotations/references/annotations-metadata.md) 的 "HTTPRoute / GRPCRoute" 节。
+The following annotations are placed in `HTTPRoute.metadata.annotations` (same for GRPCRoute). For the full specification and parsing details, see the "HTTPRoute / GRPCRoute" section of [`skills/02-features/05-annotations/references/annotations-metadata.md`](../05-annotations/references/annotations-metadata.md).
 
-| 注解 | 类型 | 默认 | 适用资源 | 说明 |
-|------|------|------|----------|------|
-| `edgion.io/forward-raw-path` | `"true"` \| `"false"` | 缺省（走全局开关） | HTTPRoute | 覆盖路径规范化行为。`"true"` 强制转发原始路径；`"false"` 强制规范化；缺省走全局 `forward_normalized_path`。非法值以 INFO 日志警告并按缺省处理。 |
-| `edgion.io/hostname-resolution` | controller 写入字符串 | system-managed | HTTPRoute, GRPCRoute | 控制器在解析阶段写入的诊断注解，描述生效的 hostname 解析结果。**不要手写此字段。** |
+| Annotation | Type | Default | Applicable Resource | Description |
+|------------|------|---------|---------------------|-------------|
+| `edgion.io/forward-raw-path` | `"true"` \| `"false"` | absent (use the global switch) | HTTPRoute | Override path normalization behavior. `"true"` forces forwarding of the raw path; `"false"` forces normalization; absent uses the global `forward_normalized_path`. Invalid values produce an INFO-level warning and the absent-value behavior. |
+| `edgion.io/hostname-resolution` | controller-written string | system-managed | HTTPRoute, GRPCRoute | A diagnostic annotation written by the controller during resolution that describes the hostname resolution outcome. **Do not write this field manually.** |

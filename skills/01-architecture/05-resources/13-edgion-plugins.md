@@ -1,59 +1,59 @@
 ---
 name: resource-edgion-plugins
-description: EdgionPlugins 资源：HTTP 插件配置、Secret 引用解析、PluginRuntime 构建、ExtensionRef 绑定。
+description: EdgionPlugins resource — HTTP plugin configuration, Secret reference resolution, PluginRuntime build, ExtensionRef binding.
 ---
 
-# EdgionPlugins 资源
+# EdgionPlugins resource
 
-> **通用流程**: 参见 [00-resource-flow.md](00-resource-flow.md)
+> **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-EdgionPlugins 是 Edgion 的自定义扩展资源，定义 HTTP 层的插件配置。支持 28 种内置插件（认证、限流、重写、CORS 等），通过 HTTPRoute/GRPCRoute 的 ExtensionRef filter 引用。
+EdgionPlugins is Edgion's custom-extension resource that defines HTTP-layer plugin configuration. It supports 28 built-in plugins (authentication, rate limiting, rewriting, CORS, etc.) and is referenced via the ExtensionRef filter on HTTPRoute / GRPCRoute.
 
-## 源码位置
+## Source code locations
 
 - Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs`
 - Gateway ConfHandler: `src/core/gateway/plugins/http/conf_handler_impl.rs`
-- 插件类型定义: `src/types/resources/edgion_plugins/`
-- 插件配置类型: `src/types/resources/edgion_plugins/plugin_configs/`
+- Plugin type definitions: `src/types/resources/edgion_plugins/`
+- Plugin config types: `src/types/resources/edgion_plugins/plugin_configs/`
 
-## Controller 侧处理
+## Controller-side processing
 
 ### parse
 
-EdgionPluginsHandler 的 parse 阶段执行大量 Secret 引用解析，为认证类插件填充凭证数据：
+The EdgionPluginsHandler parse stage performs extensive Secret-reference resolution to fill in credentials for authentication-class plugins:
 
-1. **清除旧引用**：清除 SecretRefManager 中该 EdgionPlugins 的旧记录
-2. **BasicAuth Secret 解析**：遍历 `secret_refs`，从 Secret 读取 username/password，填入 `resolved_users`
-3. **JwtAuth Secret 解析**：遍历 `secret_refs`，从 Secret 读取 JWT 签名密钥（支持 RSA/EC/HMAC/EdDSA 多种算法），解析公钥元数据（KeyMetadata），填入 `resolved_credentials`
-4. **JweAuth Secret 解析**：类似 JwtAuth，解析 JWE 加密密钥
-5. **HmacAuth Secret 解析**：从 Secret 读取 HMAC 凭证（access_key + secret_key），填入 `resolved_credentials`
-6. **KeyAuth Secret 解析**：从 Secret 读取 API key，填入 `resolved_keys`
-7. **OIDC Secret 解析**：从 Secret 读取 client_secret 和 session_secret
-8. **CertAuth 证书解析**：根据 `cert_source` 模式（Inline/Secret/SecretCa），从 Secret 读取 CA 证书
-9. **每个 Secret 引用**都在 SecretRefManager 注册，确保 Secret 变更时自动 requeue
+1. **Clear stale references**: clear records for this EdgionPlugins in SecretRefManager
+2. **BasicAuth Secret resolution**: iterate `secret_refs`, read username/password from each Secret, populate `resolved_users`
+3. **JwtAuth Secret resolution**: iterate `secret_refs`, read JWT signing keys from each Secret (supports RSA/EC/HMAC/EdDSA algorithms), parse public-key metadata (KeyMetadata), populate `resolved_credentials`
+4. **JweAuth Secret resolution**: similar to JwtAuth, parse JWE encryption keys
+5. **HmacAuth Secret resolution**: read HMAC credentials (access_key + secret_key) from each Secret, populate `resolved_credentials`
+6. **KeyAuth Secret resolution**: read API keys from each Secret, populate `resolved_keys`
+7. **OIDC Secret resolution**: read client_secret and session_secret from the Secret
+8. **CertAuth certificate resolution**: based on `cert_source` mode (Inline/Secret/SecretCa), read the CA certificate from a Secret
+9. **Every Secret reference** is registered in SecretRefManager so that Secret changes automatically requeue this resource
 
 ### on_delete
 
-清除 SecretRefManager 中该 EdgionPlugins 的所有引用。
+Clear all references for this EdgionPlugins in SecretRefManager.
 
 ### update_status
 
-Gateway API 风格两个 condition（`k8s_openapi::Condition` 类型）：
+Two Gateway-API-style conditions (`k8s_openapi::Condition` type):
 
-- **`Accepted`**：无 validation_errors 时为 True（reason=Accepted），有错误时为 False（reason=Invalid）
-- **`ResolvedRefs`**：通过 `SecretRefManager::get_dependencies(ep_key)` 聚合此 EP 在 parse 阶段注册的**全部** Secret 引用，逐一检查 `secret_store.get(ns, name)`。任何 Secret 未解析 → `ResolvedRefsError::SecretNotFound`（reason 映射为 `BackendNotFound`），message 列出所有缺失的 `ns/name`。所有引用都解析 → True
+- **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False (reason=Invalid) when errors exist
+- **`ResolvedRefs`**: via `SecretRefManager::get_dependencies(ep_key)`, aggregate **all** Secret references registered by this EP during parse, and check `secret_store.get(ns, name)` one by one. Any unresolved Secret → `ResolvedRefsError::SecretNotFound` (reason mapped to `BackendNotFound`); the message lists all missing `ns/name`. When all references resolve → True
 
-注意：`ResolvedRefs` 目前只检查 Secret **存在性**，不检查 Secret 内字段是否有需要的 key（如 BasicAuth 的 Secret 缺少 `username` 字段）。后者在 parse 阶段仅 `tracing::warn!`，不反映到 condition。
+Note: `ResolvedRefs` currently checks only Secret **existence**, not whether the Secret contains the required keys (e.g., a BasicAuth Secret missing the `username` field). The latter only emits `tracing::warn!` during parse and is not reflected in the condition.
 
-## Gateway 侧处理
+## Gateway-side processing
 
-EdgionPlugins 同步到 Gateway 后，存入插件配置存储。HTTPRoute/GRPCRoute 通过 ExtensionRef 引用 EdgionPlugins，在路由 preparse 阶段构建 `PluginRuntime` 执行链。请求处理时按配置的执行阶段（request_plugins/response_plugins）依次执行插件。
+After EdgionPlugins is synced to the Gateway side, it is stored in plugin-configuration storage. HTTPRoute / GRPCRoute references EdgionPlugins via ExtensionRef; during route preparse, a `PluginRuntime` execution chain is built. During request handling, plugins are executed in the configured execution stages (request_plugins / response_plugins) in order.
 
-## 跨资源关联
+## Cross-resource relationships
 
-| 关联方向 | 目标资源 | 关联机制 | 说明 |
+| Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
-| EdgionPlugins → Secret | Secret | secret_refs（多种插件） | 认证插件引用 Secret 中的凭证数据 |
-| EdgionPlugins ← HTTPRoute | HTTPRoute | ExtensionRef filter | HTTPRoute 通过 ExtensionRef 引用插件 |
-| EdgionPlugins ← GRPCRoute | GRPCRoute | ExtensionRef filter | GRPCRoute 通过 ExtensionRef 引用插件 |
-| EdgionPlugins ← SecretRefManager | Secret | 级联 requeue | Secret 变更时自动重新处理 |
+| EdgionPlugins → Secret | Secret | secret_refs (multiple plugins) | Authentication plugins reference credentials in Secrets |
+| EdgionPlugins ← HTTPRoute | HTTPRoute | ExtensionRef filter | HTTPRoute references the plugin via ExtensionRef |
+| EdgionPlugins ← GRPCRoute | GRPCRoute | ExtensionRef filter | GRPCRoute references the plugin via ExtensionRef |
+| EdgionPlugins ← SecretRefManager | Secret | cascading requeue | Secret changes automatically re-process EdgionPlugins |

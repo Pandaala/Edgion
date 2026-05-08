@@ -1,11 +1,11 @@
-# Status Management — update_status 实现规范
+# Status Management — update_status Implementation Rules
 
-> 各资源状态字段的位置见 [05-resources/SKILL.md](../05-resources/SKILL.md)；本文只讲状态写入流程、字段规范、测试要点。
+> For the location of status fields per resource, see [05-resources/SKILL.md](../05-resources/SKILL.md); this document covers only the status write flow, field rules, and testing points.
 >
-> ProcessorHandler::update_status() 的正确实现方式、已知陷阱和审查清单。
-> 本文档面向需要实现或修改 CRD status 的开发者。
+> The correct way to implement ProcessorHandler::update_status(), known pitfalls, and a review checklist.
+> This document targets developers who need to implement or modify CRD status.
 
-## 1. Status 在处理管线中的位置
+## 1. Status Position in the Processing Pipeline
 
 ```
 process_resource(obj):
@@ -44,7 +44,7 @@ control plane:
 
 ### Conditions We Do NOT Set: Programmed and Ready
 
-**决定：不实现。**
+**Decision: not implemented.**
 
 `Programmed` and `Ready` require **data-plane feedback** to be accurate.
 Our Controller-Gateway architecture uses async gRPC config sync where
@@ -52,11 +52,10 @@ Gateway actively pulls config via Watch/List. The Controller cannot confirm
 whether the Gateway has loaded any specific configuration. Setting these
 from the control plane would be misleading.
 
-曾评估过 Controller → Gateway HTTP Pull 反查方案（设计完成到文件级实现计划），
-但引入全新通信路径、proto 改动、延时队列等，复杂度过高，决定不实施。
+A Controller → Gateway HTTP Pull reverse-query scheme was once evaluated (with design completed down to a file-level implementation plan), but it would have introduced an entirely new communication path, proto changes, delay queues, and so on. The complexity was too high, so it was decided not to implement.
 
-- 该方案的设计文档已删除，未保留备查文件。
-- 不实现决策记录：[skills/08-kubernetes/01-gateway-api/01-not-implemented.md](../../../skills/08-kubernetes/01-gateway-api/01-not-implemented.md)
+- The design document for that scheme has been deleted; no reference file is retained.
+- Decision-of-record for not implementing: [skills/08-kubernetes/01-gateway-api/01-not-implemented.md](../../../skills/08-kubernetes/01-gateway-api/01-not-implemented.md)
 
 ## 4. Resource Categories and Status Patterns
 
@@ -64,14 +63,14 @@ from the control plane would be misleading.
 
 **Pattern:** GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy, PluginMetaData
 
-**Condition 类型选择的实现拆分** — 本仓库两种风格并存：
+**Implementation split of Condition-type choice** — both styles coexist in this repo:
 
-| 类型 | 使用的 Condition 库 | 使用的 helpers | 资源 |
-|------|-------------------|---------------|------|
-| 内部 `types::resources::common::Condition` | `status_utils::{accepted_condition, condition_false, update_condition}` | GatewayClass, EdgionGatewayConfig, LinkSys, BackendTLSPolicy |
-| `k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition` | 每个 handler 本地的 `k8s_condition_true/false` + `update_k8s_condition`（存在一定重复） | EdgionPlugins, EdgionStreamPlugins, EdgionAcme, PluginMetaData |
+| Style | Condition library used | Helpers used | Resources |
+|-------|-----------------------|--------------|-----------|
+| Internal `types::resources::common::Condition` | `status_utils::{accepted_condition, condition_false, update_condition}` | GatewayClass, EdgionGatewayConfig, LinkSys, BackendTLSPolicy |
+| `k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition` | Per-handler local `k8s_condition_true/false` + `update_k8s_condition` (with some duplication) | EdgionPlugins, EdgionStreamPlugins, EdgionAcme, PluginMetaData |
 
-新资源倾向用 `k8s_openapi::Condition`（与 kube-rs 生态一致）。两种风格的 `update_condition`/`update_k8s_condition` 行为等价：只在 status 变化时刷新 `last_transition_time`。
+New resources should prefer `k8s_openapi::Condition` (aligned with the kube-rs ecosystem). The two styles of `update_condition`/`update_k8s_condition` behave equivalently: they refresh `last_transition_time` only when the status actually changes.
 
 **GatewayClass special:** GatewayClassStatus also has `supported_features: Option<Vec<String>>`,
 populated in `update_status()` with the full list of supported Gateway API features (matching
@@ -167,11 +166,11 @@ respect `validation_errors`.
 
 ### 4.4 EdgionAcme (hybrid: Accepted condition + lifecycle fields)
 
-EdgionAcme 同时有 Gateway API 风格的 `Accepted` condition 和 ACME 特有的 lifecycle 字段（`phase` / `certificate_serial` / `last_renewal_time` / 等）：
+EdgionAcme has both a Gateway API-style `Accepted` condition and ACME-specific lifecycle fields (`phase` / `certificate_serial` / `last_renewal_time` / etc.):
 
-- **Handler** (`EdgionAcmeHandler::update_status`) 只写 `status.conditions[Accepted]`，反映 spec 校验结果
-- **后台 AcmeService** 通过 Server-Side Apply 独立更新 `phase` 及时间戳字段（field manager `edgion-acme-controller`）。AcmeService 的 SSA patch 利用 `skip_serializing_if = "Vec::is_empty"` 跳过 `conditions`，不会清空 handler 写的 condition
-- `last_failure_reason` 仍保留，供老工具使用
+- **Handler** (`EdgionAcmeHandler::update_status`) writes only `status.conditions[Accepted]`, reflecting the spec validation result
+- **Background AcmeService** independently updates `phase` and the timestamp fields via Server-Side Apply (field manager `edgion-acme-controller`). The AcmeService SSA patch uses `skip_serializing_if = "Vec::is_empty"` to skip `conditions`, so it does not clear the condition written by the handler
+- `last_failure_reason` is retained for legacy tooling
 
 ### 4.5 Resources without status
 
@@ -179,20 +178,20 @@ EdgionAcme 同时有 Gateway API 风格的 `Accepted` condition 和 ACME 特有�
 
 These use `DefaultHandler` or a handler with empty `update_status()`.
 
-（PluginMetaData 之前在此列表中，现已归入 4.1 — Gateway API 风格 Accepted + ResolvedRefs；见 [05-resources/15-plugin-metadata.md](../05-resources/15-plugin-metadata.md) 的 `update_status` 节。）
+(PluginMetaData was previously in this list; it has been moved to 4.1 — Gateway API-style Accepted + ResolvedRefs; see the `update_status` section in [05-resources/15-plugin-metadata.md](../05-resources/15-plugin-metadata.md).)
 
 ### 4.6 Cross-resource reference resolution (new)
 
-多个简单资源通过 `plugin_metadata_refs` / `SecretRefManager` 等索引在 `parse` 阶段注册出向引用、在 `on_delete` 阶段 `clear_refs_from` 对称清理，然后在 `update_status` 阶段反查 store 计算 `ResolvedRefs`：
+Several simple resources register outbound references during `parse` via indices such as `plugin_metadata_refs` / `SecretRefManager`, symmetrically clean them up during `on_delete` via `clear_refs_from`, and then look them up in the store during `update_status` to compute `ResolvedRefs`:
 
-| Handler | 引用类型 | resolved via | 未解析时 reason |
-|--------|---------|-------------|----------------|
-| EdgionPlugins | Secret | `SecretRefManager::get_dependencies(ep_key)` | `BackendNotFound`（`ResolvedRefsError::SecretNotFound`）|
-| EdgionStreamPlugins | PluginMetaData (GCIR) | 遍历 spec 的 GCIR entry → `plugin_metadata_store.get(ns, name)` 且 type 匹配 | `InvalidPluginMetaDataRef` |
-| PluginMetaData (ServiceRegionRoute) | PluginMetaData (ClusterRegionRoute) | `plugin_metadata_store.get` 且 type 匹配 | `InvalidPluginMetaDataRef` |
-| EdgionTls | Secret | `secret_store.get` | `BackendNotFound`（`ResolvedRefsError::SecretNotFound`）|
+| Handler | Reference type | resolved via | Reason when unresolved |
+|---------|---------------|--------------|-------------------------|
+| EdgionPlugins | Secret | `SecretRefManager::get_dependencies(ep_key)` | `BackendNotFound` (`ResolvedRefsError::SecretNotFound`) |
+| EdgionStreamPlugins | PluginMetaData (GCIR) | iterate GCIR entries in spec → `plugin_metadata_store.get(ns, name)` with matching type | `InvalidPluginMetaDataRef` |
+| PluginMetaData (ServiceRegionRoute) | PluginMetaData (ClusterRegionRoute) | `plugin_metadata_store.get` with matching type | `InvalidPluginMetaDataRef` |
+| EdgionTls | Secret | `secret_store.get` | `BackendNotFound` (`ResolvedRefsError::SecretNotFound`) |
 
-被引用方变更时通过 `plugin_metadata_refs` / `SecretRefManager` 做反向 requeue，让消费方的 ResolvedRefs 自愈。Cross-PM 的反向 requeue 通过 `ep_key` 格式 `"<Kind>:<ns>/<name>"` 编码 kind，`requeue_pm_referrers` 用 `split_once(':')` 分发到对应 processor。
+When the referenced object changes, a reverse requeue is performed via `plugin_metadata_refs` / `SecretRefManager`, allowing the consumer's ResolvedRefs to self-heal. The reverse requeue for cross-PM cases encodes the kind in the `ep_key` format `"<Kind>:<ns>/<name>"`; `requeue_pm_referrers` uses `split_once(':')` to dispatch to the corresponding processor.
 
 ## 5. The set_parent_conditions_full Contract
 

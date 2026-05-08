@@ -1,32 +1,32 @@
 ---
 name: gateway-api-conformance-testing
-description: 如何运行、调试和逐步验证 Gateway API conformance tests
+description: How to run, debug, and incrementally validate Gateway API conformance tests
 ---
 
 # Gateway API Conformance Testing
 
-## 脚本位置
+## Script location
 
 `examples/gateway-api-conformance/scripts/run.sh`
 
-## Feature 声明权威来源
+## Authoritative source for feature declarations
 
-**`conformance_test.go` 是 supported features 的唯一权威来源。**
+**`conformance_test.go` is the single authoritative source for supported features.**
 
-`run.sh` 默认不传 `-supported-features`，让 `conformance_test.go` 里的 `opts.SupportedFeatures` 生效。
-只有显式传 `--core`、`--extended`、`--supported-features <list>` 时才覆盖。
+`run.sh` does not pass `-supported-features` by default, letting `opts.SupportedFeatures` from `conformance_test.go` take effect.
+It is overridden only when `--core`, `--extended`, or `--supported-features <list>` is explicitly passed.
 
-新增 feature 支持时：
-1. 在 `conformance_test.go` 里 `opts.SupportedFeatures.Insert(features.SupportXxx)` 添加
-2. `run.sh` 无需改动
+When adding feature support:
+1. Add it via `opts.SupportedFeatures.Insert(features.SupportXxx)` in `conformance_test.go`
+2. `run.sh` does not need changes
 
-## 超时配置
+## Timeout configuration
 
-`conformance_test.go` 统一配置超时。`MaxTimeToConsistency` 设为 120s 以容纳
-TLS Passthrough 数据面测试的证书传播延迟：
+`conformance_test.go` configures timeouts in one place. `MaxTimeToConsistency` is set to 120s to accommodate
+the certificate-propagation delay of TLS Passthrough data-plane tests:
 
-| 参数 | 配置值 | 库默认值 |
-|------|--------|---------|
+| Parameter | Configured | Library default |
+|-----------|------------|-----------------|
 | `GatewayMustHaveAddress` | 10s | 180s |
 | `GatewayMustHaveCondition` | 10s | 180s |
 | `GatewayStatusMustHaveListeners` | 10s | 60s |
@@ -38,37 +38,37 @@ TLS Passthrough 数据面测试的证书传播延迟：
 | `DefaultTestTimeout` | 15s | 60s |
 | `RequiredConsecutiveSuccesses` | 3 | 3 |
 
-**重要**：如果 status 类测试等待超时（10s 后 context deadline exceeded），根因几乎总是 status condition 设置错误，而非超时太短。控制器正常时状态在 1s 内更新。
+**Important**: When status-class tests time out (context deadline exceeded after 10s), the root cause is almost always an incorrect status condition setting, not a timeout that is too short. When the controller is healthy, status updates within 1s.
 
-## 运行粒度
+## Run granularity
 
-### 单个测试
+### Single test
 
 ```bash
 cd examples/gateway-api-conformance
 GO_RUN_FILTER="TestConformance/GatewayObservedGenerationBump" bash scripts/run.sh
 ```
 
-`GO_RUN_FILTER` 转换为 `go test -run <filter>`，在 profile 模式下正确过滤子测试（`--run-test` 在 profile 模式下无效）。
+`GO_RUN_FILTER` is converted to `go test -run <filter>`, which correctly filters subtests under profile mode (`--run-test` is ineffective in profile mode).
 
-### 按名称前缀跑一批
+### Run a batch by name prefix
 
 ```bash
-# 所有 Gateway/GatewayClass 测试
+# All Gateway / GatewayClass tests
 GO_RUN_FILTER="TestConformance/Gateway" bash scripts/run.sh
 
-# 所有 HTTPRoute 测试
+# All HTTPRoute tests
 GO_RUN_FILTER="TestConformance/HTTPRoute" bash scripts/run.sh
 ```
 
-### 预设
+### Presets
 
-| 预设 | 命令 | 说明 |
-|------|------|------|
-| 默认（全部声明 features） | `bash scripts/run.sh` | 使用 conformance_test.go 里声明的全套 features |
-| Core only | `--core` | 强制只跑 Gateway+HTTPRoute+ReferenceGrant |
-| Extended | `--extended` | 扩展 feature 集合（含 redirect、mirror 等） |
-| All features | `--all-features` | 所有 feature（含未实现的，会有 FAIL） |
+| Preset | Command | Description |
+|--------|---------|-------------|
+| Default (all declared features) | `bash scripts/run.sh` | Use the full feature set declared in conformance_test.go |
+| Core only | `--core` | Force only Gateway+HTTPRoute+ReferenceGrant |
+| Extended | `--extended` | Extended feature set (includes redirect, mirror, etc.) |
+| All features | `--all-features` | All features (including unimplemented ones; will FAIL) |
 
 ### Split-Profile Run (mandatory)
 
@@ -101,34 +101,34 @@ invocation causes TLSRoute data-plane tests to time out.
 See cookbook 2.3.1 for technical details and affected tests.
 See `reports/README.md` for current results and known failures.
 
-### 单独指定 features（覆盖 conformance_test.go）
+### Specifying features individually (overrides conformance_test.go)
 
 ```bash
 bash scripts/run.sh --supported-features "Gateway,HTTPRoute,ReferenceGrant"
 ```
 
-### Port-Forward 模式（TAL）
+### Port-Forward mode (TAL)
 
-集群 Pod IP 不可达时使用。TAL（Transport Access Layer）负责统一处理地址改写，支持灵活的端口映射配置。
+Use this when cluster pod IPs are unreachable. TAL (Transport Access Layer) handles address rewriting in a unified way and supports flexible port-mapping configuration.
 
-**快速启用：**
+**Quick enable:**
 
 ```bash
 bash scripts/run.sh --port-forward
 ```
 
-自动启动 `kubectl port-forward` 到 edgion-gateway pod，默认绑定本地端口（HTTP:18080, HTTPS:18443, HTTPS-8443:28443）。
+Automatically starts `kubectl port-forward` to the edgion-gateway pod, binding default local ports (HTTP:18080, HTTPS:18443, HTTPS-8443:28443).
 
-**高级用法 — 统一端口映射表（推荐）：**
+**Advanced — unified port-mapping table (recommended):**
 
 ```bash
 export GATEWAY_PROXY_PORT_MAP="80:18080,443:18443,8443:28443"
 ./scripts/run.sh --port-forward
 ```
 
-`GATEWAY_PROXY_PORT_MAP` 格式：`gwPort:localPort,gwPort:localPort,...`，允许为每个 gateway 端口独立配置本地转发端口。
+`GATEWAY_PROXY_PORT_MAP` format: `gwPort:localPort,gwPort:localPort,...`, allowing each gateway port to have its own local forwarding port.
 
-**兼容旧用法（逐个指定）：**
+**Backward-compatible (specify individually):**
 
 ```bash
 export GATEWAY_PROXY_HOST=127.0.0.1
@@ -138,34 +138,34 @@ export GATEWAY_PROXY_HTTPS_8443_PORT=28443
 ./scripts/run.sh --port-forward
 ```
 
-**启用 gRPC proxy：**
+**Enable gRPC proxy:**
 
 ```bash
 GATEWAY_PROXY_ENABLE_GRPC=true ./scripts/run.sh --port-forward
 ```
 
-用于 `GRPCRoute*` 系列测试。
+For the `GRPCRoute*` test family.
 
-**调试 TAL 地址改写：**
+**Debug TAL address rewriting:**
 
 ```bash
 TAL_DEBUG=true ./scripts/run.sh --port-forward
 ```
 
-在 test 输出中查看 `[TAL] resolved ...` 日志。
+Look for `[TAL] resolved ...` lines in the test output.
 
-## 更新二进制（localpatch）
+## Update binaries (localpatch)
 
 ```bash
-# 只更新 controller
+# Update only the controller
 ./examples/gateway-api-conformance/scripts/orbstack-dev.sh localpatch c
 
-# 更新 controller + gateway
+# Update controller + gateway
 ./examples/gateway-api-conformance/scripts/orbstack-dev.sh localpatch
 ```
 
-**注意 Pod 进程结构**：PID 1 是 shell loop（`while true; do /usr/local/edgion/edgion-controller; done`），不要 kill PID 1，否则 OrbStack 会用原始镜像重启容器（丢失已复制的新二进制）。
-应 kill controller 子进程，让 shell loop 用新二进制重启：
+**Note about pod process structure**: PID 1 is a shell loop (`while true; do /usr/local/edgion/edgion-controller; done`). Do not kill PID 1, otherwise OrbStack will restart the container from the original image (losing the new binary that was copied in).
+Kill the controller subprocess so the shell loop restarts with the new binary:
 
 ```bash
 POD=$(kubectl get pods -n edgion-system -l app=edgion-controller -o jsonpath='{.items[0].metadata.name}')
@@ -176,105 +176,105 @@ CTRL_PID=$(kubectl exec -n edgion-system $POD -- sh -c \
 kubectl exec -n edgion-system $POD -- sh -c "kill -9 $CTRL_PID"
 ```
 
-## Status Condition 调试
+## Status condition debugging
 
-**大多数 conformance test 失败根因是 status condition 设置错误**，而非路由/数据面问题。
+**The root cause of most conformance test failures is incorrect status condition settings**, not routing / data-plane issues.
 
-### 调试流程
+### Debug workflow
 
-1. 跑单个失败测试，看 `context deadline exceeded` 的具体 condition：
+1. Run a single failing test and inspect which condition the `context deadline exceeded` belongs to:
    ```
    Programmed condition set to Status False with Reason Invalid, expected Status True
    ```
 
-2. 检查集群中资源的实际 status：
+2. Check the actual status of the resource in the cluster:
    ```bash
    kubectl get gateway <name> -n gateway-conformance-infra -o yaml | grep -A 30 "status:"
    ```
 
-3. 对照 `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs` 的 `update_status()` 和 `update_listener_conditions()` 逻辑
+3. Compare with the logic in `update_status()` and `update_listener_conditions()` in `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs`
 
-### 常见 Status 问题
+### Common status issues
 
-| 症状 | 根因 | 修复位置 |
-|------|------|---------|
-| `Programmed=False(Invalid)` 但预期 `True` | 冲突检测误判 / unresolved refs 逻辑问题 | `listener_port_manager.rs` / `update_listener_conditions()` |
-| `Programmed=True` 但预期 `False` | 未将 `has_unresolved_refs` 纳入 `Programmed` 判断 | `update_listener_conditions()` |
-| `AttachedRoutes=0` 但预期 `>0` | route tracker 未计数 / gateway 有 unresolved refs 时未计 | `update_status()` 里的 `tracker.count_for_listener()` |
-| `ResolvedRefs=False(RefNotPermitted)` 误判 | ReferenceGrant 解析逻辑 | `validate_listener_resolved_refs()` |
+| Symptom | Root cause | Fix location |
+|---------|------------|--------------|
+| `Programmed=False(Invalid)` but expected `True` | Conflict-detection misjudgment / unresolved-refs logic problem | `listener_port_manager.rs` / `update_listener_conditions()` |
+| `Programmed=True` but expected `False` | `has_unresolved_refs` not factored into `Programmed` decision | `update_listener_conditions()` |
+| `AttachedRoutes=0` but expected `>0` | Route tracker not counted; gateway with unresolved refs is not counted | `tracker.count_for_listener()` in `update_status()` |
+| `ResolvedRefs=False(RefNotPermitted)` misjudgment | ReferenceGrant resolution logic | `validate_listener_resolved_refs()` |
 
-### Hostname 冲突检测规则（重要）
+### Hostname conflict-detection rule (important)
 
-Gateway API 规范定义 `Conflicted` 为 **完全相同** 的 socket-address+hostname 组合（冲突检测 key 通过 `make_conflict_key(SocketAddr)` 按 socket 地址分组），不是 hostname 相交。
+The Gateway API spec defines `Conflicted` as **exactly identical** socket-address+hostname combinations (the conflict-detection key is grouped by socket address via `make_conflict_key(SocketAddr)`), not as hostname intersection.
 
-- `None`（wildcard）+ `None` → **Conflicted**（两个都是 wildcard）
+- `None` (wildcard) + `None` → **Conflicted** (both are wildcards)
 - `foo.example.com` + `foo.example.com` → **Conflicted**
-- `None` + `foo.example.com` → **不冲突**（相交但不同）
-- `*.example.com` + `foo.example.com` → **不冲突**（相交但不同）
+- `None` + `foo.example.com` → **not conflicting** (intersect but different)
+- `*.example.com` + `foo.example.com` → **not conflicting** (intersect but different)
 
-错误地将"相交"视为"冲突"会导致多个测试失败（`GatewayHTTPListenerIsolation` 等）。
+Mistakenly treating "intersection" as "conflict" causes multiple test failures (e.g. `GatewayHTTPListenerIsolation`).
 
-## Conformance 最新结果（feature-04-06, 2026-04-07）
+## Latest conformance results (feature-04-06, 2026-04-07)
 
-**ALL PASS**（in-cluster 模式，split-profile 运行）
+**ALL PASS** (in-cluster mode, split-profile run)
 
 - GATEWAY-HTTP: Core 33/33, Extended 32/32
 - GATEWAY-GRPC: Core 13/13
 - GATEWAY-TLS: Core 18/18, Extended 3/3
 
-详见 `SKILL.md` 中的 profile 状态表和 `reports/README.md`。
+For details see the profile status table in `SKILL.md` and `reports/README.md`.
 
-## In-Cluster 运行方式（推荐）
+## In-cluster execution (recommended)
 
-远程集群、Pod IP 不稳定、或 gRPC 经过 `kubectl port-forward` 不可靠时，优先用仓库自带脚本：
+For remote clusters, unstable Pod IPs, or unreliable gRPC over `kubectl port-forward`, prefer the script bundled with the repository:
 
 `examples/gateway-api-conformance/scripts/in-cluster-runner.sh`
 
-这个脚本会统一处理：
-- 交叉编译 conformance test binary（当前脚本固定为 `linux/amd64`）
-- 创建/复用 `conformance-runner` Pod 和 RBAC
-- 把测试 binary 拷进 Pod
-- 在 Pod 内执行 conformance，并把 report 拉回项目目录
+The script handles uniformly:
+- Cross-compiling the conformance test binary (currently fixed at `linux/amd64`)
+- Creating / reusing the `conformance-runner` Pod and RBAC
+- Copying the test binary into the Pod
+- Executing conformance inside the Pod and pulling the report back to the project directory
 
-### 最常用命令
+### Most common commands
 
 ```bash
 cd examples/gateway-api-conformance
 
-# 全量：编译 + 部署/复用 runner + 执行
+# Full run: compile + deploy/reuse runner + execute
 ./scripts/in-cluster-runner.sh \
   --conformance-profiles "GATEWAY-HTTP,GATEWAY-GRPC,GATEWAY-TLS" \
   --timeout 30m
 
-# 只重跑，不重新编译
+# Re-run only, do not recompile
 ./scripts/in-cluster-runner.sh \
   --run-only \
   --conformance-profiles "GATEWAY-TLS" \
   --timeout 20m
 
-# 强制重新拷贝 binary
+# Force re-copy of the binary
 ./scripts/in-cluster-runner.sh \
   --force-copy \
   --conformance-profiles "GATEWAY-TLS" \
   --timeout 20m
 
-# 单个测试
+# Single test
 ./scripts/in-cluster-runner.sh \
   --run-only \
   --conformance-profiles "GATEWAY-TLS" \
   --run-test "TLSRouteHostnameIntersection" \
   --timeout 10m
 
-# 清理 runner Pod + RBAC
+# Clean up runner Pod + RBAC
 ./scripts/in-cluster-runner.sh --cleanup
 ```
 
-### 输出与注意事项
+### Output and notes
 
-- Reports 回收到 `examples/gateway-api-conformance/reports/` 下，文件名按 profile 自动派生：
+- Reports are pulled back into `examples/gateway-api-conformance/reports/`; filenames are derived from the profile:
   - `gateway-http-grpc-conformance-report.yaml`
   - `gateway-tls-conformance-report.yaml`
-- 脚本内部固定传 `-cleanup-base-resources=false`，避免 conformance 框架把 base Gateway 清掉后导致后续用例端口未绑定
-- `--clean-slate` 会自动 rollout restart TLS backend pods，确保 cert Secret 重建后 pod 加载新证书
-- 如果你的集群节点不是 `linux/amd64`，不要直接照搬，先调整脚本里的 `GOARCH`
-- 更底层的失败模式、TLS pre-bind、TLS-only profile 排障，转去 [06-conformance-debug-cookbook.md](06-conformance-debug-cookbook.md)
+- The script internally always passes `-cleanup-base-resources=false` to prevent the conformance framework from removing the base Gateway and leaving subsequent test cases without bound ports
+- `--clean-slate` automatically rolls out a restart of the TLS backend pods to ensure they load the new certificate after the cert Secret is recreated
+- If your cluster nodes are not `linux/amd64`, do not copy the script verbatim — adjust `GOARCH` first
+- For deeper failure modes, TLS pre-bind, and TLS-only profile troubleshooting, go to [06-conformance-debug-cookbook.md](06-conformance-debug-cookbook.md)

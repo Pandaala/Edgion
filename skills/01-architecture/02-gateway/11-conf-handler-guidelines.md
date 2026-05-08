@@ -1,70 +1,70 @@
-# ConfHandler 开发规范
+# ConfHandler development guidelines
 
-> Gateway 侧 ConfHandler<T> 的职责、分类、增量更新约束和安全要求。
+> Responsibilities, classification, incremental-update constraints, and security requirements for the Gateway-side ConfHandler<T>.
 
-## 1. 什么是 ConfHandler
+## 1. What is ConfHandler
 
-`ConfHandler<T>` 是 **Gateway 数据面**接收并处理配置变更的标准接口（定义于 `src/core/common/conf_sync/traits.rs`）。
+`ConfHandler<T>` is the standard interface used by the **Gateway data plane** to receive and process configuration changes (defined in `src/core/common/conf_sync/traits.rs`).
 
 ```
 Controller → gRPC Watch/List → ClientCache → ConfHandler<T>.full_set / partial_update
 ```
 
-- `full_set(&HashMap<String, T>)` — 全量替换，由 `List()` 或 gRPC 重连后触发
-- `partial_update(add, update, remove)` — 增量更新，由 Watch 事件经 100ms 压缩窗口后触发
+- `full_set(&HashMap<String, T>)` — full replace, triggered by `List()` or after a gRPC reconnect.
+- `partial_update(add, update, remove)` — incremental update, triggered by Watch events after the 100 ms compression window.
 
-每种 K8s/CRD 资源在 `ConfigClient::new()` 中注册一个 `ConfHandler`。
+Each K8s / CRD resource registers one `ConfHandler` in `ConfigClient::new()`.
 
-## 2. 资源分类
+## 2. Resource categories
 
-| 分类 | 特征 | 代表资源 | 更新策略 |
-|------|------|---------|---------|
-| **存储型** | 数据存入 KV store，请求时按 key 查找 | Service、EdgionPlugins、EdgionTls、BackendTLSPolicy、LinkSys、EdgionAcme、EdgionStreamPlugins | insert/remove 即可 |
-| **引擎型** | 需构建匹配引擎（radix tree、regex set 等） | HTTPRoute、GRPCRoute、TLSRoute、TCPRoute、UDPRoute | 必须实现影响范围计算 |
-| **配置型** | 低频、少量的基础配置 | Gateway、GatewayClass、EdgionGatewayConfig | 可容忍全量重建 |
+| Category | Characteristics | Representative resources | Update strategy |
+|----------|-----------------|--------------------------|-----------------|
+| **Storage** | Data is stored in a KV store and looked up by key per request | Service, EdgionPlugins, EdgionTls, BackendTLSPolicy, LinkSys, EdgionAcme, EdgionStreamPlugins | insert / remove suffices |
+| **Engine** | Requires building a matching engine (radix tree, regex set, etc.) | HTTPRoute, GRPCRoute, TLSRoute, TCPRoute, UDPRoute | Must compute affected scope |
+| **Configuration** | Low frequency, small amount of base configuration | Gateway, GatewayClass, EdgionGatewayConfig | Tolerates full rebuild |
 
-## 3. 增量更新规范
+## 3. Incremental update conventions
 
-### 3.1 禁止"假增量"
+### 3.1 No "fake incremental"
 
-`partial_update` 不得在内部 merge 到全量数据后调用等同于 `full_set` 的全量 build。
-如果暂时无法做真正增量，**必须**标注 `// TODO: incremental rebuild`。
+`partial_update` MUST NOT internally merge into the full data and then call a full build equivalent to `full_set`.
+If true incremental work is not possible yet, **mark with** `// TODO: incremental rebuild`.
 
-### 3.2 引擎型资源必须计算影响范围
+### 3.2 Engine resources must compute affected scope
 
 ```
 partial_update(add, update, remove)
-  → 计算 affected_scope (hostname / listener_key / service_key)
-  → 只对受影响的子引擎 rebuild
-  → 未受影响部分通过 Arc 复用
+  → compute affected_scope (hostname / listener_key / service_key)
+  → rebuild only sub-engines in the affected scope
+  → unaffected parts are reused via Arc
 ```
 
-参考实现：HTTPRoute 的 `build_affected_hostnames` + per-hostname `rebuild_exact_hostname`。
+Reference implementation: HTTPRoute's `build_affected_hostnames` + per-hostname `rebuild_exact_hostname`.
 
-### 3.3 ArcSwap 仅用于数据面
+### 3.3 ArcSwap is data-plane only
 
-- 数据面（Gateway）的热路径 store 使用 `ArcSwap`，实现 lock-free 读取
-- 控制面（Controller）不使用 `ArcSwap`，用 `RwLock` 即可
-- 写端模式：clone current map → modify → `store(Arc::new(new_map))`
+- The data plane (Gateway) uses `ArcSwap` for hot-path stores to enable lock-free reads.
+- The control plane (Controller) does not use `ArcSwap`; `RwLock` suffices.
+- Write pattern: clone current map → modify → `store(Arc::new(new_map))`.
 
-## 4. 配置泄漏防护
+## 4. Configuration leak protection
 
-- ConfHandler **不得**在日志中打印资源的完整内容（Secret、TLS 证书等）
-- 日志只记录 `key_name`、计数、affected scope 等元数据
-- 错误日志只包含错误信息，不含资源 spec
-- 参考 [01-log-safety.md](../../03-coding/01-log-safety.md) 的完整规范
+- ConfHandlers MUST NOT log the full content of resources (Secrets, TLS certificates, etc.).
+- Logs only record metadata such as `key_name`, counts, affected scope.
+- Error logs only contain the error message, never the resource spec.
+- See [01-log-safety.md](../../03-coding/01-log-safety.md) for the full convention.
 
-## 5. 注意事项
+## 5. Notes
 
-- `full_set` 和 `partial_update` 在同一线程（压缩事件处理线程）执行，不会并发调用
-- `full_set` 在 gRPC 重连/relist 时触发，必须能处理空 data（清空状态）
-- `partial_update` 的 add/update 已经过 preparse（Controller 侧），但 Gateway 侧可能需要额外 preparse（如 GRPCRoute、EdgionPlugins）
-- 路由表更新必须是原子的（ArcSwap::store），不能出现"半构建"的中间态
+- `full_set` and `partial_update` execute on the same thread (the compressed-event handling thread); they are never invoked concurrently.
+- `full_set` is triggered on gRPC reconnect / relist and must handle empty data (clearing state).
+- `add` / `update` in `partial_update` have already been preparsed (Controller side), but Gateway-side may need additional preparse (e.g., GRPCRoute, EdgionPlugins).
+- Route table updates must be atomic (`ArcSwap::store`); no "half-built" intermediate state.
 
-## 6. 现有 Handler 清单
+## 6. Existing handler list
 
-| Handler | 资源 | 文件路径 |
-|---------|------|---------|
+| Handler | Resource | File path |
+|---------|----------|-----------|
 | RouteManager | HTTPRoute | `routes/http/conf_handler_impl.rs` |
 | GrpcRouteManager | GRPCRoute | `routes/grpc/conf_handler_impl.rs` |
 | GlobalTlsRouteManagers | TLSRoute | `routes/tls/conf_handler_impl.rs` |
@@ -83,70 +83,70 @@ partial_update(add, update, remove)
 | AcmeConfHandler | EdgionAcme | `services/acme/conf_handler_impl.rs` |
 | LinkSysStore | LinkSys | `link_sys/runtime/conf_handler.rs` |
 
-> 所有路径相对于 `src/core/gateway/`。
+> All paths are relative to `src/core/gateway/`.
 
-## 7. 引擎型资源增量更新最佳实践
+## 7. Best practices for incremental updates of engine resources
 
-引擎型资源（需构建匹配引擎的）的 `partial_update` 应遵循以下模式：
+`partial_update` for engine resources (those that need a matching engine) should follow these patterns:
 
-### 7.1 按影响范围 rebuild（推荐）
+### 7.1 Rebuild by affected scope (recommended)
 
-适用于有多维度分桶的资源（HTTPRoute 按 hostname，TLSRoute 按 listener_key）。
-
-```
-partial_update:
-  1. 在修改 cache 之前，收集旧数据的 affected_scope（旧 hostname / 旧 listener_key）
-  2. 修改 cache（insert / remove）
-  3. 收集新数据的 affected_scope（新 hostname / 新 listener_key）
-  4. 合并 affected_scope = old ∪ new
-  5. 只对 affected_scope 内的子引擎 rebuild
-```
-
-参考：
-- HTTPRoute `build_affected_hostnames` → per-hostname `rebuild_exact_hostname`
-- TLSRoute `rebuild_affected_listener_managers(&affected_listeners)`
-
-### 7.2 缓存解析结果（次优）
-
-适用于无分桶维度的全局引擎（GRPCRoute）。
+Suitable for resources that are bucketed across multiple dimensions (HTTPRoute by hostname, TLSRoute by listener_key).
 
 ```
 partial_update:
-  1. 只对 add/update 的 route 做 parse → 更新 route_units_cache
-  2. 删除 remove 的 cache entry
-  3. 合并 cache 全部 units → 重建引擎
+  1. Before modifying the cache, collect old data's affected_scope (old hostname / old listener_key).
+  2. Modify the cache (insert / remove).
+  3. Collect new data's affected_scope (new hostname / new listener_key).
+  4. Merge affected_scope = old ∪ new.
+  5. Rebuild only the sub-engines within affected_scope.
 ```
 
-省去了对未变更 route 的 preparse + 校验 + unit 构建，也避免了全量 HashMap 深拷贝。
+References:
+- HTTPRoute `build_affected_hostnames` → per-hostname `rebuild_exact_hostname`.
+- TLSRoute `rebuild_affected_listener_managers(&affected_listeners)`.
 
-### 7.3 短路判断（兜底）
+### 7.2 Cache parsed results (suboptimal)
 
-适用于数量极少但有昂贵重建操作的资源（Gateway）。
+Suitable for global engines without bucketing dimensions (GRPCRoute).
+
+```
+partial_update:
+  1. Parse only the add/update routes → update route_units_cache.
+  2. Delete cache entries for removed routes.
+  3. Merge all units in the cache → rebuild the engine.
+```
+
+Skips preparse + validation + unit construction for unchanged routes, and avoids deep-copying the full HashMap.
+
+### 7.3 Short-circuit (last resort)
+
+Suitable for resources with very few items but expensive rebuild operations (Gateway).
 
 ```
 partial_update:
   if add.is_empty() && update.is_empty() && remove.is_empty() { return; }
-  // ... 执行变更和重建
+  // ... apply changes and rebuild
 ```
 
-## 8. 各资源增量能力评级
+## 8. Per-resource incremental capability rating
 
-| 资源 | 评级 | 策略 |
-|------|------|------|
-| HTTPRoute | A | 按 affected hostname 精确 rebuild，未变 hostname 通过 Arc 复用 |
-| TLSRoute | A | 按 affected listener rebuild，未变 listener 不触发 |
-| TCPRoute | A | 逐条 add_route / remove_route，无全量 rebuild |
-| UDPRoute | A | 同 TCPRoute |
-| EndpointSlice | A | 按 affected_services 增量更新 LB |
-| Endpoints | A | 同 EndpointSlice |
-| GRPCRoute | B | route_units_cache 增量，但仍需合并全部 units 重建 GrpcMatchEngine |
-| Service | B | Store 增量 + 逐条 health check reconcile |
+| Resource | Rating | Strategy |
+|----------|--------|----------|
+| HTTPRoute | A | Rebuild by affected hostname; unchanged hostnames are reused via Arc |
+| TLSRoute | A | Rebuild by affected listener; unchanged listeners are not touched |
+| TCPRoute | A | Per-route add_route / remove_route; no full rebuild |
+| UDPRoute | A | Same as TCPRoute |
+| EndpointSlice | A | Update LB incrementally by affected_services |
+| Endpoints | A | Same as EndpointSlice |
+| GRPCRoute | B | Incremental route_units_cache, but still merges all units to rebuild GrpcMatchEngine |
+| Service | B | Incremental store + per-item health check reconciliation |
 | EdgionPlugins | B | ArcSwap clone-modify-swap |
-| EdgionTls | B | RwLock 逐条 insert/remove |
+| EdgionTls | B | RwLock per-item insert / remove |
 | EdgionStreamPlugins | B | ArcSwap clone-modify-swap |
 | BackendTLSPolicy | B | ArcSwap clone-modify-swap |
 | LinkSys | B | ArcSwap clone-modify-swap |
-| EdgionAcme | B | challenge store 增量 |
-| Gateway | B | GatewayConfigStore 增量，TLS matcher 全量重建（短路优化） |
-| GatewayClass | C | Vec 线性扫描，数量极少可接受 |
-| EdgionGatewayConfig | C | 同 GatewayClass |
+| EdgionAcme | B | Incremental challenge store |
+| Gateway | B | Incremental GatewayConfigStore; full TLS matcher rebuild (with short-circuit optimization) |
+| GatewayClass | C | Linear Vec scan, acceptable due to very small count |
+| EdgionGatewayConfig | C | Same as GatewayClass |

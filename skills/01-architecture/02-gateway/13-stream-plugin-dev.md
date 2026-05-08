@@ -4,14 +4,14 @@ description: Use when implementing or extending EdgionStreamPlugins, wiring Gate
 ---
 # Stream Plugin Development
 
-用于回答这些问题：
+Use this to answer questions like:
 
-- 怎么新增或扩展 `EdgionStreamPlugins`
-- Gateway / `TCPRoute` / `TLSRoute` 上的 `edgion.io/edgion-stream-plugins` 到底接到哪里
-- Stage 1 `ConnectionFilter` 和 Stage 2 `TlsRoute` 插件运行时的区别是什么
-- 为什么 YAML 改了，但 Gateway 上没有热更新或运行结果不对
+- How do I add or extend `EdgionStreamPlugins`?
+- Where do `edgion.io/edgion-stream-plugins` annotations on Gateway / `TCPRoute` / `TLSRoute` actually wire into?
+- What's the difference between Stage 1 `ConnectionFilter` and Stage 2 `TlsRoute` plugin runtimes?
+- Why did the YAML change but the Gateway didn't hot-reload, or the runtime result is wrong?
 
-## 先看这些真实入口
+## Read these real entry points first
 
 - [../../../src/types/resources/edgion_stream_plugins/mod.rs](../../../src/types/resources/edgion_stream_plugins/mod.rs)
 - [../../../src/types/resources/edgion_stream_plugins/stream_plugins.rs](../../../src/types/resources/edgion_stream_plugins/stream_plugins.rs)
@@ -26,99 +26,99 @@ description: Use when implementing or extending EdgionStreamPlugins, wiring Gate
 - [../../../src/core/gateway/routes/tcp/conf_handler_impl.rs](../../../src/core/gateway/routes/tcp/conf_handler_impl.rs)
 - [../../../src/core/gateway/routes/tls/proxy.rs](../../../src/core/gateway/routes/tls/proxy.rs)
 
-## 心智模型
+## Mental model
 
-这套链路不是单纯的“写一个 trait”。
-当前仓库里的真实路径是：
+This pipeline is more than "write a trait".
+The current real path in this repo is:
 
-1. 定义 `EdgionStreamPlugins` 资源结构
-2. 在 `ResourceMeta` 预处理里初始化运行时对象
-3. Controller 负责接收资源、校验并写 status
-4. Gateway `ConfigClient` 把资源同步进 `StreamPluginStore`
-5. Gateway / `TCPRoute` / `TLSRoute` 通过 `edgion.io/edgion-stream-plugins` 注解引用资源
-6. 数据面在不同阶段执行运行时：
-   - Stage 1: `ConnectionFilter`，握手前，只有 IP / 端口等连接上下文
-   - Stage 2: `TlsRoute`，TLS 握手与路由匹配后，可以拿到 SNI、匹配路由、mTLS 状态等
+1. Define the `EdgionStreamPlugins` resource structure.
+2. Initialize the runtime object during `ResourceMeta` preprocessing.
+3. The Controller receives the resource, validates it, and writes status.
+4. The Gateway `ConfigClient` syncs the resource into `StreamPluginStore`.
+5. Gateway / `TCPRoute` / `TLSRoute` reference the resource through the `edgion.io/edgion-stream-plugins` annotation.
+6. The data plane runs the runtime at different stages:
+   - Stage 1: `ConnectionFilter` — pre-handshake, only IP / port and other connection context are available.
+   - Stage 2: `TlsRoute` — after the TLS handshake and route match; SNI, matched route, mTLS state, etc. are available.
 
-## 当前代码布局
+## Current code layout
 
 ```text
 src/types/resources/edgion_stream_plugins/
-  mod.rs                    # CRD、spec/status、runtime 初始化入口
+  mod.rs                    # CRD, spec/status, runtime initialization entry
   stream_plugins.rs         # Stage 1 plugin enum: EdgionStreamPlugin
   tls_route_plugins.rs      # Stage 2 plugin enum: TlsRouteStreamPlugin
 
 src/core/gateway/plugins/stream/
   stream_plugin_trait.rs    # StreamPlugin / StreamContext / StreamPluginResult
-  stream_plugin_runtime.rs  # Stage 1 runtime: 从 entries 构建插件链
-  stream_plugin_store.rs    # Gateway 全局热更新 store（ArcSwap）
+  stream_plugin_runtime.rs  # Stage 1 runtime: builds the plugin chain from entries
+  stream_plugin_store.rs    # Gateway global hot-reload store (ArcSwap)
   connection_filter_bridge.rs
-  ip_restriction/           # 现成参考实现
-  tls_route/                # Stage 2 runtime 和 trait
+  ip_restriction/           # ready reference implementation
+  tls_route/                # Stage 2 runtime and trait
 ```
 
-## 两个运行阶段
+## The two execution stages
 
 ### Stage 1: ConnectionFilter
 
-- trait 在 [../../../src/core/gateway/plugins/stream/stream_plugin_trait.rs](../../../src/core/gateway/plugins/stream/stream_plugin_trait.rs)
-- 上下文是 `StreamContext`
-- 返回值是：
+- The trait lives in [../../../src/core/gateway/plugins/stream/stream_plugin_trait.rs](../../../src/core/gateway/plugins/stream/stream_plugin_trait.rs).
+- The context is `StreamContext`.
+- Return value:
   - `StreamPluginResult::Allow`
   - `StreamPluginResult::Deny(String)`
-- 典型绑定入口：
-  - Gateway listener 级别：`listener_builder.rs`
-  - `TCPRoute` 级别：`routes/tcp/conf_handler_impl.rs`
-- 适合：
-  - IP allow/deny
-  - 尽早拒绝连接
-  - 不需要 SNI / route match / mTLS 信息的逻辑
+- Typical binding sites:
+  - Gateway listener level: `listener_builder.rs`.
+  - `TCPRoute` level: `routes/tcp/conf_handler_impl.rs`.
+- Suitable for:
+  - IP allow/deny.
+  - Rejecting connections as early as possible.
+  - Logic that does not need SNI / route match / mTLS info.
 
 ### Stage 2: TlsRoute
 
-- 运行时入口在 [../../../src/core/gateway/routes/tls/proxy.rs](../../../src/core/gateway/routes/tls/proxy.rs)
-- 优先执行 `tls_route_plugin_runtime`
-- 如果资源没有 `tlsRoutePlugins`，但有老的 `plugins`，当前实现会 fallback 到 Stage 1 runtime 做兼容
-- 适合：
-  - 依赖 SNI 的逻辑
-  - 依赖匹配到哪条 `TLSRoute` 的逻辑
-  - 依赖 `is_mtls` 等 TLS 上下文的逻辑
+- The runtime entry is in [../../../src/core/gateway/routes/tls/proxy.rs](../../../src/core/gateway/routes/tls/proxy.rs).
+- `tls_route_plugin_runtime` runs first.
+- If a resource has no `tlsRoutePlugins` but has the legacy `plugins`, the current implementation falls back to the Stage 1 runtime for compatibility.
+- Suitable for:
+  - SNI-dependent logic.
+  - Logic that depends on which `TLSRoute` was matched.
+  - Logic that depends on `is_mtls` and other TLS context.
 
-## 新增一个 stream plugin 的最小清单
+## Minimum checklist for adding a new stream plugin
 
-### 1. 先决定它属于哪个阶段
+### 1. Decide which stage it belongs to
 
-- 只依赖 IP / 连接端口：放 Stage 1
-- 依赖 SNI / 路由 / mTLS：放 Stage 2
-- 两边都要：可以同时在 `EdgionStreamPlugin` 和 `TlsRouteStreamPlugin` 里接入
+- Depends only on IP / connection port: Stage 1.
+- Depends on SNI / route / mTLS: Stage 2.
+- Both: it can be added to both `EdgionStreamPlugin` and `TlsRouteStreamPlugin`.
 
-### 2. 定义或复用配置结构
+### 2. Define or reuse the configuration struct
 
-当前 `IpRestriction` 直接复用了 HTTP 插件侧的 `IpRestrictionConfig`：
+The current `IpRestriction` reuses `IpRestrictionConfig` from the HTTP plugin side directly:
 
 - [../../../src/types/resources/edgion_plugins/plugin_configs/](../../../src/types/resources/edgion_plugins/plugin_configs/)
 
-如果你的 stream plugin 也能和 HTTP 层共享配置，优先复用；否则再新增专属配置。
+If your stream plugin can also share configuration with the HTTP layer, prefer reuse; otherwise add a dedicated configuration.
 
-## 3. 把新类型接进资源 enum
+## 3. Wire the new type into the resource enum
 
 Stage 1:
 
-- 修改 [../../../src/types/resources/edgion_stream_plugins/stream_plugins.rs](../../../src/types/resources/edgion_stream_plugins/stream_plugins.rs)
+- Modify [../../../src/types/resources/edgion_stream_plugins/stream_plugins.rs](../../../src/types/resources/edgion_stream_plugins/stream_plugins.rs).
 
 Stage 2:
 
-- 修改 [../../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs](../../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs)
+- Modify [../../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs](../../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs).
 
-至少要补：
+At minimum, add:
 
-- enum variant
-- `type_name()`
-- serde / schema 兼容性
+- The enum variant.
+- `type_name()`.
+- serde / schema compatibility.
 
-## 4. 实现运行时插件
+## 4. Implement the runtime plugin
 
-Stage 1 插件要实现：
+A Stage 1 plugin must implement:
 
 ```rust
 #[async_trait]
@@ -128,47 +128,47 @@ pub trait StreamPlugin: Send + Sync {
 }
 ```
 
-最直接的参考实现：
+The most direct reference implementation:
 
 - [../../../src/core/gateway/plugins/stream/ip_restriction/stream_ip_restriction.rs](../../../src/core/gateway/plugins/stream/ip_restriction/stream_ip_restriction.rs)
 
-Stage 2 插件则看：
+For Stage 2 plugins, look at:
 
 - [../../../src/core/gateway/plugins/stream/tls_route/](../../../src/core/gateway/plugins/stream/tls_route/)
 
-## 5. 在 runtime 里注册构造逻辑
+## 5. Register the construction logic in the runtime
 
-Stage 1 runtime：
+Stage 1 runtime:
 
 - [../../../src/core/gateway/plugins/stream/stream_plugin_runtime.rs](../../../src/core/gateway/plugins/stream/stream_plugin_runtime.rs)
 
-Stage 2 runtime：
+Stage 2 runtime:
 
 - [../../../src/core/gateway/plugins/stream/tls_route/tls_route_plugin_runtime.rs](../../../src/core/gateway/plugins/stream/tls_route/tls_route_plugin_runtime.rs)
 
-这里是“资源配置 -> 运行时插件对象”的真正装配点。只改 enum、不改 runtime，Gateway 不会执行你的新插件。
+This is the actual "resource configuration → runtime plugin object" assembly point. Modifying only the enum without modifying the runtime means the Gateway will not execute your new plugin.
 
-## 6. 确认预处理和热更新链路不用补洞
+## 6. Confirm preprocessing and hot-reload paths need no fixes
 
-当前 `EdgionStreamPlugins` 的 runtime 初始化不是在 handler 里做，而是在：
+Currently, runtime initialization for `EdgionStreamPlugins` is not done in the handler — it lives in:
 
 - [../../../src/types/resource/meta/impls.rs](../../../src/types/resource/meta/impls.rs)
 
-也就是 `ResourceMeta` 预处理阶段会调用：
+That is, the `ResourceMeta` preprocessing phase calls:
 
 - `init_stream_plugin_runtime()`
 - `init_tls_route_plugin_runtime()`
 
-Controller handler [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs) 目前主要负责 status，而不是构建运行时。
+The Controller handler [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs) currently mainly handles status, not runtime construction.
 
-Gateway 侧热更新入口是：
+The Gateway-side hot-reload entries are:
 
 - [../../../src/core/gateway/plugins/stream/stream_plugin_store.rs](../../../src/core/gateway/plugins/stream/stream_plugin_store.rs)
 - [../../../src/core/gateway/conf_sync/conf_client/config_client.rs](../../../src/core/gateway/conf_sync/conf_client/config_client.rs)
 
-## 7. 绑定 YAML 注解并验证引用路径
+## 7. Bind via YAML annotation and verify the reference path
 
-当前主键是：
+The current key is:
 
 ```yaml
 metadata:
@@ -176,19 +176,19 @@ metadata:
     edgion.io/edgion-stream-plugins: "namespace/name"
 ```
 
-现有绑定点：
+Existing binding sites:
 
-- Gateway listener 级别：`listener_builder.rs`
-- `TCPRoute`：`routes/tcp/conf_handler_impl.rs`
-- `TLSRoute`：`routes/tls/conf_handler_impl.rs` + `routes/tls/proxy.rs`
+- Gateway listener level: `listener_builder.rs`.
+- `TCPRoute`: `routes/tcp/conf_handler_impl.rs`.
+- `TLSRoute`: `routes/tls/conf_handler_impl.rs` + `routes/tls/proxy.rs`.
 
-如果只写了资源和 runtime，但没有把路由 / listener 侧引用接上，运行时也不会触发。
+If you only added the resource and the runtime but did not wire the route / listener side reference, the runtime will not fire either.
 
-我当前没有在仓库里找到 `UDPRoute` 对这个注解的专用处理代码，所以不要默认认为 UDP 已经和 TCP/TLS 一样接通。
+I have not currently found any code in the repo that handles this annotation specifically for `UDPRoute`, so do not assume UDP is wired the same as TCP/TLS.
 
-## 最小 YAML 例子
+## Minimal YAML example
 
-### 定义资源
+### Define the resource
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -204,7 +204,7 @@ spec:
           - 127.0.0.1/32
 ```
 
-### 在 `TCPRoute` / `TLSRoute` / Gateway 上引用
+### Reference it from a `TCPRoute` / `TLSRoute` / Gateway
 
 ```yaml
 metadata:
@@ -212,15 +212,15 @@ metadata:
     edgion.io/edgion-stream-plugins: edgion-test/tcp-allow-localhost
 ```
 
-## 和 HTTP 插件的关键区别
+## Key differences from HTTP plugins
 
-| 维度 | Stream plugin | HTTP plugin |
-|------|---------------|-------------|
-| 执行层级 | TCP/TLS 连接层 | HTTP 请求/响应层 |
-| 主要上下文 | `StreamContext` / `TlsRouteContext` | `PluginSession` |
-| 失败动作 | 拒绝连接 | 返回 HTTP 响应或终止请求 |
-| 绑定方式 | `edgion.io/edgion-stream-plugins` 注解引用资源 | Route/Gateway 上的 `EdgionPlugins` 运行时链 |
-| 热更新来源 | `StreamPluginStore` | HTTP plugin runtime/store |
+| Dimension | Stream plugin | HTTP plugin |
+|-----------|---------------|-------------|
+| Execution layer | TCP/TLS connection layer | HTTP request/response layer |
+| Main context | `StreamContext` / `TlsRouteContext` | `PluginSession` |
+| Failure action | Reject the connection | Return an HTTP response or terminate the request |
+| Binding | The `edgion.io/edgion-stream-plugins` annotation references the resource | The `EdgionPlugins` runtime chain on the Route/Gateway |
+| Hot-reload source | `StreamPluginStore` | HTTP plugin runtime / store |
 
 ## Validation
 
@@ -257,36 +257,36 @@ fn validation_error_returns_field_error_without_validate_call() {
 }
 ```
 
-## 测试建议
+## Testing recommendations
 
-优先补这三类：
+Cover these three areas in priority order:
 
-1. 资源状态是否正确
-2. Gateway / `TCPRoute` / `TLSRoute` 引用后是否真的命中插件
-3. 更新 / 删除 `EdgionStreamPlugins` 后，热更新是否生效、旧配置是否残留
+1. Whether the resource status is correct.
+2. Whether the plugin actually fires after Gateway / `TCPRoute` / `TLSRoute` references it.
+3. Whether hot-reload takes effect after `EdgionStreamPlugins` is updated / deleted, and whether the old configuration leaves residue.
 
-参考现有样例：
+References for existing samples:
 
 - [../../../examples/test/conf/Gateway/StreamPlugins/](../../../examples/test/conf/Gateway/StreamPlugins/)
 - [../../../examples/test/conf/TCPRoute/StreamPlugins/](../../../examples/test/conf/TCPRoute/StreamPlugins/)
 - [../../../examples/test/conf/TLSRoute/StreamPlugins/](../../../examples/test/conf/TLSRoute/StreamPlugins/)
 
-### 第 3 项的执行入口：dynamic scenario 框架
+### Item 3 entry: the dynamic scenario framework
 
-热更新链路的回归不应停在"看 store 是否有新值"——要让连接/路由实际行为也跑一次。`examples/code/client/dynamic/` 框架支持 N-phase 状态机断言，目前内置 scenario 都是 HTTP 层（`gateway_dynamic`、`dsl_dynamic`、`basic_auth_dynamic`、`rate_limit_dynamic`），stream 插件**尚无 scenario 模板**——`ScenarioCtx` / `assert_phase` 通过 `TestSuite` 调度，原则上只要写一个发 TCP/TLS 流量的 `TestSuite` 就能复用整套编排。
+Hot-reload regression must not stop at "is the new value in the store" — make the connection / route actually exercise the new behavior. The `examples/code/client/dynamic/` framework supports N-phase state-machine assertions; the built-in scenarios are HTTP-level (`gateway_dynamic`, `dsl_dynamic`, `basic_auth_dynamic`, `rate_limit_dynamic`); stream plugins **don't have a scenario template yet** — `ScenarioCtx` / `assert_phase` is scheduled by `TestSuite`, so in principle writing a `TestSuite` that emits TCP/TLS traffic is enough to reuse the entire orchestration.
 
-写法：参考 `examples/code/client/dynamic/scenarios/basic_auth_dynamic.rs` 的结构，把 phase suite 换成 stream-aware 的（验证连接拒绝/通过、TLS handshake 行为等）。详细注册位置和 CLI 入口见 [../../05-testing/01-integration-testing.md「动态（热更新）测试」节](../../05-testing/01-integration-testing.md)。
+How to write it: follow the structure of `examples/code/client/dynamic/scenarios/basic_auth_dynamic.rs`, replacing the phase suite with a stream-aware one (verifying connection accept/deny, TLS handshake behavior, etc.). For detailed registration sites and CLI entry, see [../../05-testing/01-integration-testing.md "Dynamic (hot reload) testing" section](../../05-testing/01-integration-testing.md).
 
-## 审查清单
+## Review checklist
 
-- 新插件到底属于 Stage 1、Stage 2，还是两边都要
-- enum、runtime、module export 是否都已接线
-- 是否复用了已有配置结构，而不是复制一份几乎相同的 config
-- `ResourceMeta` 预处理后，runtime 字段是否真的初始化
-- 注解解析是否支持 `name` 和 `namespace/name` 两种引用格式
-- 更新 / 删除资源后，Gateway store 是否能正确热更新
+- Is the new plugin Stage 1, Stage 2, or both?
+- Are the enum, runtime, and module exports all wired?
+- Is an existing configuration struct reused instead of copying a near-duplicate one?
+- After `ResourceMeta` preprocessing, are the runtime fields actually initialized?
+- Does annotation parsing support both `name` and `namespace/name` reference formats?
+- After updating / deleting the resource, does the Gateway store hot-reload correctly?
 
-## 相关
+## Related
 
 - [00-annotations-overview.md](../../02-features/05-annotations/00-annotations-overview.md)
 - [11-conf-handler-guidelines.md](11-conf-handler-guidelines.md)

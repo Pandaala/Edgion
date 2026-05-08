@@ -1,34 +1,34 @@
-# Basic Auth 用户名存在性时序差异：不走代码层 dummy bcrypt
+# Basic Auth Username-Existence Timing Difference: No Code-Layer Dummy Bcrypt
 
-## 结论
+## Conclusion
 
-`basic_auth` 插件在"用户名不存在"与"用户名存在但密码错"两条路径上的响应时间差异（<1ms vs ~200ms bcrypt）是**已知、已评估、已以文档方式缓解**的情况。**不应**要求引入 dummy bcrypt 或类似代码修复。
+The response-time difference between the "username does not exist" and "username exists but password wrong" paths in the `basic_auth` plugin (<1ms vs ~200ms bcrypt) is **known, evaluated, and mitigated via documentation**. It **should not** require introducing dummy bcrypt or a similar code fix.
 
-## 原因
+## Reasons
 
-- **网关场景中 dummy bcrypt 是反模式**：对未知用户强制执行 bcrypt（~200ms / 1 core）会形成 CPU 放大 DoS 向量，攻击者用枚举流量即可烧掉网关算力
-- **同类网关产品一致不实现**：Traefik (`basicauth`)、Nginx (`auth_basic`)、Envoy (`basic_auth` filter)、Kong (`basic-auth` plugin)、HAProxy (`http-request auth`)、APISIX (`basic-auth`) 均未在代码层做 dummy verify；是"网关层主流做法"
-- **Spring Security / Django 走 dummy verify** 是因为框架层单机验证场景没有 CPU 放大顾虑，不等价于网关场景
-- **Edgion 的缓解在配置层**：`BasicAuthConfig.authFailureDelayMs` 存在且可用；`RateLimit` 插件可叠加在上游限制枚举速率
+- **Dummy bcrypt is an anti-pattern in gateway scenarios**: forcing bcrypt for unknown users (~200ms / 1 core) creates a CPU-amplification DoS vector; an attacker can burn the gateway's compute with enumeration traffic
+- **Peer gateway products consistently do not implement it**: Traefik (`basicauth`), Nginx (`auth_basic`), Envoy (`basic_auth` filter), Kong (`basic-auth` plugin), HAProxy (`http-request auth`), APISIX (`basic-auth`) all do not perform code-layer dummy verify; this is "the mainstream gateway-layer practice"
+- **Spring Security / Django doing dummy verify** is because in framework-layer single-machine validation scenarios there is no CPU-amplification concern, which is not equivalent to the gateway scenario
+- **Edgion's mitigation is at the config layer**: `BasicAuthConfig.authFailureDelayMs` exists and is available; the `RateLimit` plugin can stack on top to limit enumeration rate
 
-## 判定规则
+## Decision Rule
 
-当 review / 审计报告出现以下模式时，按"非代码修复"关闭：
+When a review/audit report contains the following patterns, close as "no code fix":
 
-1. "basic_auth 用户名不存在直接返回，未执行 bcrypt" / "用户名枚举时序侧信道"
-2. "建议对固定哈希执行 dummy bcrypt::verify 消除时序差"
-3. "应把 `auth_failure_delay_ms` 默认值设为 500ms"（属破坏性默认变更，不自动应用）
+1. "basic_auth returns directly when username does not exist; bcrypt not executed" / "username enumeration timing side channel"
+2. "Recommend dummy bcrypt::verify on a fixed hash to eliminate timing differences"
+3. "Should set `auth_failure_delay_ms` default to 500ms" (a breaking default change; not auto-applied)
 
-验证三点再关闭：
+Verify three points before closing:
 
-- `basic_auth/plugin.rs` 未引入 dummy bcrypt（保持"未知用户立即返回"路径）
-- `BasicAuthConfig.auth_failure_delay_ms` 默认仍为 `0`（operator 显式启用）
-- `docs/{zh-CN,en}/user-guide/http-route/filters/edgion-plugins/basic-auth.md` "安全最佳实践"小节仍包含"防枚举与暴力破解（推荐配置）"段落，且推荐值 `>= 500`
+- `basic_auth/plugin.rs` does not introduce dummy bcrypt (keeps the "return immediately for unknown user" path)
+- `BasicAuthConfig.auth_failure_delay_ms` still defaults to `0` (operator enables explicitly)
+- `docs/{zh-CN,en}/user-guide/http-route/filters/edgion-plugins/basic-auth.md` "Security Best Practices" section still contains a "Defense against enumeration and brute force (recommended config)" paragraph, with recommended value `>= 500`
 
-三点满足 → 非真实问题，指向 `tasks/security-audit/01-auth-plugins.md` 的 M4 FIXED（doc-only）决策，关闭。
+All three satisfied → not a real issue; point to the M4 FIXED (doc-only) decision in `tasks/security-audit/01-auth-plugins.md` and close.
 
-## 背景记录
+## Background Notes
 
-- 决策日期：2026-04-21
-- 决策来源：`tasks/security-audit/` M4 条目，选择 Option C
-- 相关 finding：该审计 H8（admin 登录用户名比较非 CT）属 admin API 路径而非插件路径，不适用本结论，需单独评估
+- Decision date: 2026-04-21
+- Decision source: `tasks/security-audit/` M4 entry, chose Option C
+- Related finding: H8 (admin login username comparison is not CT) in this audit belongs to the admin API path rather than the plugin path; this conclusion does not apply; needs separate evaluation

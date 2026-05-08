@@ -1,35 +1,35 @@
 ---
 name: 02-gateway
-description: edgion-gateway 数据面架构：Pingora 集成、路由匹配、TLS 管理、插件系统、负载均衡、后端发现、可观测性、LinkSys。
+description: edgion-gateway data plane architecture — Pingora integration, route matching, TLS management, plugin system, load balancing, backend discovery, observability, LinkSys.
 ---
 
-# 02 Gateway 架构（edgion-gateway）
+# 02 Gateway Architecture (edgion-gateway)
 
-> edgion-gateway 是数据面，基于 Pingora 构建的高性能代理服务器。
-> 从 Controller 通过 gRPC 接收配置，处理 HTTP/gRPC/TCP/TLS/UDP 流量。
+> edgion-gateway is the data plane, a high-performance proxy server built on Pingora.
+> It receives configuration from the Controller via gRPC and processes HTTP/gRPC/TCP/TLS/UDP traffic.
 
-## 文件清单
+## File list
 
-| 文件 | 主题 | 推荐阅读场景 |
-|------|------|-------------|
-| [00-overview.md](00-overview.md) | Gateway 总体架构 | 首次了解 Gateway 设计 |
-| [01-startup-shutdown.md](01-startup-shutdown.md) | 启动/关闭 + Pingora 集成 | 调试启动问题、理解初始化顺序 |
-| [02-pingora-lifecycle.md](02-pingora-lifecycle.md) | ProxyHttp 回调、ConnectionFilter | 修改请求处理流程、理解代理生命周期 |
-| [03-routes/](03-routes/) | 路由子系统 | 修改路由逻辑、排查路由不匹配 |
-| [04-tls/](04-tls/) | TLS 子系统 | TLS 证书管理、mTLS 配置 |
-| [05-plugin-system.md](05-plugin-system.md) | 插件系统（4 阶段执行模型） | 理解插件执行流程、开发新插件、修改条件执行逻辑 |
-| [06-load-balancing.md](06-load-balancing.md) | 负载均衡策略 | 修改 LB 策略、理解 RoundRobin/EWMA/LeastConn/ConsistentHash 选择算法 |
-| [07-backends.md](07-backends.md) | 后端发现 + 健康检查 | 修改 Endpoint/EndpointSlice 发现、健康检查配置、BackendTLSPolicy |
-| [08-observe.md](08-observe.md) | 可观测性 | AccessLog 零拷贝输出、Prometheus 指标、协议日志 |
-| [09-link-sys.md](09-link-sys.md) | LinkSys 外部系统集成 | ES/Redis/Etcd/Webhook/LocalFile 客户端管理、DataSender 实现 |
-| [10-runtime-store.md](10-runtime-store.md) | 运行时存储 | Gateway/Listener 配置存储、ArcSwap 无锁读取模式 |
-| [11-conf-handler-guidelines.md](11-conf-handler-guidelines.md) | ConfHandler 开发规范 | 实现/修改 ConfHandler 的 full_set/partial_update |
-| [12-edgion-plugin-dev.md](12-edgion-plugin-dev.md) | HTTP 插件开发指南 | 开发新的 EdgionPlugin |
-| [13-stream-plugin-dev.md](13-stream-plugin-dev.md) | Stream 插件开发指南 | 开发 TCP/TLS 层插件 |
-| [14-link-sys-dev.md](14-link-sys-dev.md) | LinkSys 连接器开发指南 | 开发新的外部系统连接器 |
-| [uri-normalization/SKILL.md](uri-normalization/SKILL.md) | URI 规范化架构（全栈命名表、双视图、铁律、安全承诺） | 开发插件读写 path、审查 ACL 代码、排查路径绕过 |
+| File | Topic | Recommended reading scenario |
+|------|-------|------------------------------|
+| [00-overview.md](00-overview.md) | Gateway overall architecture | First-time understanding of Gateway design |
+| [01-startup-shutdown.md](01-startup-shutdown.md) | Startup / shutdown + Pingora integration | Debug startup issues, understand initialization order |
+| [02-pingora-lifecycle.md](02-pingora-lifecycle.md) | ProxyHttp callbacks, ConnectionFilter | Modify request handling flow, understand proxy lifecycle |
+| [03-routes/](03-routes/) | Route subsystem | Modify route logic, troubleshoot route mismatches |
+| [04-tls/](04-tls/) | TLS subsystem | TLS certificate management, mTLS configuration |
+| [05-plugin-system.md](05-plugin-system.md) | Plugin system (4-phase execution model) | Understand plugin execution flow, develop new plugins, modify conditional execution logic |
+| [06-load-balancing.md](06-load-balancing.md) | Load balancing strategies | Modify LB strategies, understand RoundRobin/EWMA/LeastConn/ConsistentHash selection algorithms |
+| [07-backends.md](07-backends.md) | Backend discovery + health check | Modify Endpoint/EndpointSlice discovery, health check configuration, BackendTLSPolicy |
+| [08-observe.md](08-observe.md) | Observability | AccessLog zero-copy output, Prometheus metrics, protocol logs |
+| [09-link-sys.md](09-link-sys.md) | LinkSys external system integration | ES/Redis/Etcd/Webhook/LocalFile client management, DataSender implementation |
+| [10-runtime-store.md](10-runtime-store.md) | Runtime stores | Gateway/Listener configuration storage, ArcSwap lock-free read pattern |
+| [11-conf-handler-guidelines.md](11-conf-handler-guidelines.md) | ConfHandler development guidelines | Implement / modify full_set / partial_update for ConfHandler |
+| [12-edgion-plugin-dev.md](12-edgion-plugin-dev.md) | HTTP plugin development guide | Develop a new EdgionPlugin |
+| [13-stream-plugin-dev.md](13-stream-plugin-dev.md) | Stream plugin development guide | Develop TCP/TLS layer plugins |
+| [14-link-sys-dev.md](14-link-sys-dev.md) | LinkSys connector development guide | Develop a new external-system connector |
+| [uri-normalization/SKILL.md](uri-normalization/SKILL.md) | URI normalization architecture (full-stack naming table, dual-view, iron rules, security guarantees) | Develop plugins that read/write path, review ACL code, troubleshoot path bypass |
 
-## 架构总览
+## Architecture overview
 
 ```
                           edgion-gateway
@@ -40,29 +40,29 @@ description: edgion-gateway 数据面架构：Pingora 集成、路由匹配、TL
 │                       └── ConfHandler (per-kind)             │
 │                                                              │
 │  Pingora Server                                              │
-│  ├── ConnectionFilter (TCP 层, StreamPlugins)                │
+│  ├── ConnectionFilter (TCP layer, StreamPlugins)             │
 │  │                                                           │
-│  ├── ProxyHttp (HTTP/gRPC 生命周期)                          │
+│  ├── ProxyHttp (HTTP/gRPC lifecycle)                         │
 │  │   ├── early_request_filter → timeouts + keepalive         │
-│  │   ├── request_filter       → metadata + ACME + route       │
+│  │   ├── request_filter       → metadata + ACME + route      │
 │  │   ├── upstream_peer        → backend selection + LB       │
 │  │   ├── upstream_response    → response plugins             │
 │  │   └── logging              → AccessLog + Metrics          │
 │  │                                                           │
-│  ├── TCP/TLS Routes (per-listener 路由)                      │
-│  └── UDP Routes (per-listener 路由)                          │
+│  ├── TCP/TLS Routes (per-listener routing)                   │
+│  └── UDP Routes (per-listener routing)                       │
 │                                                              │
 │  Admin API (:5900)   Metrics API (:5901)                     │
 │                                                              │
 │  Backends                                                    │
-│  ├── Service/EndpointSlice/Endpoint 发现                     │
-│  ├── Health Check 管理                                       │
+│  ├── Service/EndpointSlice/Endpoint discovery                │
+│  ├── Health Check management                                 │
 │  └── BackendTLSPolicy                                        │
 │                                                              │
-│  TLS 子系统                                                   │
-│  ├── TLS Store (证书存储 + SNI 匹配)                          │
-│  ├── 下游 TLS (客户端→网关)                                   │
-│  └── 上游 TLS (网关→后端 mTLS)                               │
+│  TLS subsystem                                               │
+│  ├── TLS Store (certificate storage + SNI matching)          │
+│  ├── Downstream TLS (client→gateway)                         │
+│  └── Upstream TLS (gateway→backend mTLS)                     │
 │                                                              │
 │  LinkSys (ES, Redis, Etcd, Webhook, File)                    │
 └──────────────────────────────────────────────────────────────┘

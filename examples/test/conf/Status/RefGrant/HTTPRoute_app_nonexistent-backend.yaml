@@ -15,6 +15,6 @@ spec:
             type: PathPrefix
             value: /
       backendRefs:
-        # 同命名空间，但 Service 不存在，应触发 ResolvedRefs=False/BackendNotFound
+        # Same namespace, but the Service does not exist; should trigger ResolvedRefs=False/BackendNotFound
         - name: nonexistent-svc
           port: 80

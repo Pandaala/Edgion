@@ -1,94 +1,94 @@
 ---
 name: gateway-grpc-route-engine
-description: gRPC 路由引擎：Service/Method 匹配、gRPC-Web 支持、HTTP 管线集成。
+description: gRPC route engine — Service / Method matching, gRPC-Web support, HTTP pipeline integration.
 ---
 
-# gRPC 路由引擎
+# gRPC route engine
 
-## 概述
+## Overview
 
-gRPC 路由基于 Gateway API `GRPCRoute` CRD 实现，通过解析 HTTP/2 路径中的 `/{service}/{method}` 进行服务和方法级别的路由。gRPC 路由集成在 HTTP 管道中，共享 Pingora ProxyHttp 基础设施。
+gRPC routing is implemented based on the Gateway API `GRPCRoute` CRD. Service- and method-level routing is performed by parsing `/{service}/{method}` from the HTTP/2 path. The gRPC route is integrated into the HTTP pipeline and shares the Pingora ProxyHttp infrastructure.
 
-## 模块结构
+## Module structure
 
 ```
 src/core/gateway/routes/grpc/
-├── mod.rs                # 模块入口与类型导出
-├── conf_handler_impl.rs  # ConfHandler<GRPCRoute> 实现
-├── match_engine.rs       # GrpcMatchEngine：service/method 路由匹配
-├── match_unit.rs         # GrpcRouteRuleUnit：路由匹配单元
+├── mod.rs                # module entry and type exports
+├── conf_handler_impl.rs  # ConfHandler<GRPCRoute> implementation
+├── match_engine.rs       # GrpcMatchEngine: service/method route matching
+├── match_unit.rs         # GrpcRouteRuleUnit: route match unit
 ├── routes_mgr.rs         # GrpcRouteRules / GlobalGrpcRouteManagers
-└── integration.rs        # HTTP 管道集成接口
+└── integration.rs        # HTTP pipeline integration
 ```
 
-## Service/Method 匹配
+## Service / Method matching
 
-`GrpcMatchEngine` 支持 Exact 和 RegularExpression 两种匹配类型，实现七级优先级匹配：
+`GrpcMatchEngine` supports both Exact and RegularExpression match types and implements a seven-level priority match:
 
-| 优先级 | 匹配类型 | 数据结构 | 说明 |
-|--------|----------|----------|------|
-| 1 | Exact service + Exact method | `HashMap<(String, String), Vec<...>>` | 精确匹配，O(1) |
-| 2 | Exact service + Regex method | `Vec<Arc<GrpcRouteRuleUnit>>` | service 精确 + method 正则 |
-| 3 | Regex service + Exact method | `Vec<Arc<GrpcRouteRuleUnit>>` | service 正则 + method 精确 |
-| 4 | Regex service + Regex method | `Vec<Arc<GrpcRouteRuleUnit>>` | 双正则匹配 |
-| 5 | Exact service only | `HashMap<String, Vec<...>>` | 仅指定 service，匹配所有 method |
-| 6 | Regex service only | `Vec<Arc<GrpcRouteRuleUnit>>` | service 正则，method 未指定 |
-| 7 | catch-all | `Option<Arc<GrpcRouteRuleUnit>>` | 未指定 service 和 method |
+| Priority | Match type | Data structure | Description |
+|----------|------------|----------------|-------------|
+| 1 | Exact service + Exact method | `HashMap<(String, String), Vec<...>>` | Exact match, O(1) |
+| 2 | Exact service + Regex method | `Vec<Arc<GrpcRouteRuleUnit>>` | Exact service + regex method |
+| 3 | Regex service + Exact method | `Vec<Arc<GrpcRouteRuleUnit>>` | Regex service + exact method |
+| 4 | Regex service + Regex method | `Vec<Arc<GrpcRouteRuleUnit>>` | Both regex |
+| 5 | Exact service only | `HashMap<String, Vec<...>>` | Service specified, matches any method |
+| 6 | Regex service only | `Vec<Arc<GrpcRouteRuleUnit>>` | Regex service, no method specified |
+| 7 | catch-all | `Option<Arc<GrpcRouteRuleUnit>>` | Neither service nor method specified |
 
-gRPC 路径解析规则（`parse_grpc_path` 函数）：
+gRPC path parsing (`parse_grpc_path`):
 
-- 输入：`/helloworld.Greeter/SayHello`
-- 输出：service = `helloworld.Greeter`，method = `SayHello`
-- 路径必须恰好两段，否则返回 `InvalidGrpcPath` 错误。
+- Input: `/helloworld.Greeter/SayHello`
+- Output: service = `helloworld.Greeter`, method = `SayHello`
+- The path must have exactly two segments; otherwise an `InvalidGrpcPath` error is returned.
 
-同一个 (service, method) 组合可以有多条路由（不同 hostname 或 header 条件），存储为 `Vec<Arc<GrpcRouteRuleUnit>>`，按顺序执行 `deep_match` 直到首个匹配。
+Multiple routes can share the same (service, method) combination (different hostnames or header conditions). They are stored as `Vec<Arc<GrpcRouteRuleUnit>>` and `deep_match` runs in order until the first match.
 
-### 正则匹配
+### Regex match
 
-当 `GRPCMethodMatch.type = RegularExpression` 时，`type` 同时作用于 service 和 method 两个字段（Gateway API 规范语义）。正则模式在路由加载时预编译为 `Arc<Regex>`，存储在 `GrpcMatchInfo` 的 `compiled_service_regex` / `compiled_method_regex` 字段中。正则路由按模式长度降序排列（更长 = 更具体 = 更高优先级）。
+When `GRPCMethodMatch.type = RegularExpression`, the `type` applies to both the service and method fields (per Gateway API semantics). Regex patterns are precompiled into `Arc<Regex>` at route load time, stored in the `compiled_service_regex` / `compiled_method_regex` fields of `GrpcMatchInfo`. Regex routes are sorted by pattern length descending (longer = more specific = higher priority).
 
-与 HTTPRoute 的 `RegexRoutesEngine` 不同，gRPC 正则匹配不使用 `RegexSet`，而是线性遍历预编译正则——因为 gRPC 正则路由数量通常很少。
+Unlike HTTPRoute's `RegexRoutesEngine`, gRPC regex matching does not use `RegexSet` — it walks the precompiled regexes linearly, since gRPC regex routes are usually few.
 
-## gRPC-Web 支持
+## gRPC-Web support
 
-gRPC-Web 协议在 `early_request_filter` 阶段通过请求 Content-Type 识别：
+The gRPC-Web protocol is identified during the `early_request_filter` phase via the request Content-Type:
 
-- `application/grpc` → 标记为 `grpc`
-- `application/grpc-web` 或 `application/grpc-web+proto` → 标记为 `grpc-web`
+- `application/grpc` → marked as `grpc`.
+- `application/grpc-web` or `application/grpc-web+proto` → marked as `grpc-web`.
 
-识别结果存储在 `ctx.request_info.discover_protocol` 中。`is_grpc_protocol` 辅助函数检查该字段，gRPC 和 gRPC-Web 使用相同的路由匹配逻辑。
+The result is stored in `ctx.request_info.discover_protocol`. The `is_grpc_protocol` helper checks this field; gRPC and gRPC-Web share the same route-matching logic.
 
-## HTTP 管道集成
+## HTTP pipeline integration
 
-gRPC 路由通过 `integration.rs` 模块集成到 HTTP 请求处理管道中：
+The gRPC route is integrated into the HTTP request handling pipeline via the `integration.rs` module:
 
 ### try_match_grpc_route
 
-在 `pg_request_filter` 中调用，尝试匹配 gRPC 路由：
+Called inside `pg_request_filter`, attempts to match a gRPC route:
 
-1. 解析 gRPC 路径为 service/method，存入 `ctx.request_info`。
-2. 调用 `DomainGrpcRouteRules::match_route` 执行匹配。
-3. 匹配成功：设置 `ctx.grpc_route_unit` 和 `ctx.gateway_info`，标记 `ctx.is_grpc_route_matched = true`。
-4. 匹配失败：返回 `Ok(false)`，回退到 HTTP 路由匹配。
+1. Parse the gRPC path into service / method and store in `ctx.request_info`.
+2. Call `DomainGrpcRouteRules::match_route` to perform matching.
+3. On success: set `ctx.grpc_route_unit` and `ctx.gateway_info`, mark `ctx.is_grpc_route_matched = true`.
+4. On failure: return `Ok(false)` and fall back to HTTP route matching.
 
 ### handle_grpc_upstream
 
-在 `upstream_peer` 中调用，处理 gRPC 后端选择：
+Called inside `upstream_peer`, handles gRPC backend selection:
 
-1. 检查是否已有选定后端（`ctx.selected_grpc_backend`）。
-2. 从 `grpc_route_unit` 的 rule 中通过 `GrpcRouteRules::select_backend` 加权选择后端。
-3. 建立上游连接（与 HTTP 路由共享后端连接逻辑）。
+1. Check whether a backend is already selected (`ctx.selected_grpc_backend`).
+2. From the rule of `grpc_route_unit`, weighted-select a backend via `GrpcRouteRules::select_backend`.
+3. Establish the upstream connection (sharing the backend connection logic with HTTP routes).
 
-### 后端选择
+### Backend selection
 
-`GrpcRouteRules::select_backend` 使用 `BackendSelector` 进行加权随机选择：
+`GrpcRouteRules::select_backend` uses `BackendSelector` to perform weighted random selection:
 
-- 默认权重为 1（未指定时）。
-- 支持 `ref_denied` 检查（跨命名空间引用需要 ReferenceGrant）。
+- Default weight is 1 (when not specified).
+- Supports `ref_denied` checks (cross-namespace references require a ReferenceGrant).
 
-## 路由管理
+## Route management
 
-`GlobalGrpcRouteManagers` 遵循与 HTTP 相同的 per-listener 管理模式：
+`GlobalGrpcRouteManagers` follows the same per-listener management pattern as HTTP:
 
 ```
 GlobalGrpcRouteManagers
@@ -97,19 +97,19 @@ GlobalGrpcRouteManagers
 └── route_units_cache: Mutex<HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>>
 ```
 
-特有设计：
+Specifics:
 
-- `route_units_cache` 缓存解析后的路由单元，避免每次 listener 重建时重复解析。
-- gRPC 不使用 hostname 维度分隔（与 HTTP 不同），所有路由放入单个 `GrpcRouteRules`。
-- 在 `GrpcMatchEngine::match_route` 中通过 `deep_match` 验证请求 hostname 与路由 `effective_hostnames` 的关系。
-- listener 分桶逻辑与 HTTP 一致：`resolved_listeners` 为空的路由直接 skip+warn（不再有广播到所有端口的兜底行为）。
+- `route_units_cache` caches parsed route units to avoid re-parsing on every listener rebuild.
+- gRPC does not bucket by hostname (unlike HTTP); all routes go into a single `GrpcRouteRules`.
+- Inside `GrpcMatchEngine::match_route`, `deep_match` validates the request hostname against the route's `effective_hostnames`.
+- Listener bucketing matches HTTP: routes with empty `resolved_listeners` are skipped + warned (no broadcast-to-all-ports fallback).
 
-## 关键源文件
+## Key source files
 
-| 文件 | 职责 |
-|------|------|
-| `src/core/gateway/routes/grpc/match_engine.rs` | GrpcMatchEngine、parse_grpc_path |
-| `src/core/gateway/routes/grpc/match_unit.rs` | GrpcRouteRuleUnit、GrpcMatchInfo |
-| `src/core/gateway/routes/grpc/routes_mgr.rs` | GlobalGrpcRouteManagers、GrpcRouteRules |
-| `src/core/gateway/routes/grpc/conf_handler_impl.rs` | ConfHandler<GRPCRoute> 实现 |
-| `src/core/gateway/routes/grpc/integration.rs` | try_match_grpc_route、handle_grpc_upstream |
+| File | Responsibility |
+|------|----------------|
+| `src/core/gateway/routes/grpc/match_engine.rs` | GrpcMatchEngine, parse_grpc_path |
+| `src/core/gateway/routes/grpc/match_unit.rs` | GrpcRouteRuleUnit, GrpcMatchInfo |
+| `src/core/gateway/routes/grpc/routes_mgr.rs` | GlobalGrpcRouteManagers, GrpcRouteRules |
+| `src/core/gateway/routes/grpc/conf_handler_impl.rs` | ConfHandler<GRPCRoute> implementation |
+| `src/core/gateway/routes/grpc/integration.rs` | try_match_grpc_route, handle_grpc_upstream |

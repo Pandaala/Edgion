@@ -1,11 +1,11 @@
 ---
 name: project-overview
-description: Edgion 项目高层架构图、Crate 结构、三个 bin 定义、代码组织、EdgionHttpContext、测试基础设施、关键依赖。
+description: Edgion project high-level architecture diagram, Crate structure, three bin definitions, code organization, EdgionHttpContext, testing infrastructure, key dependencies.
 ---
 
-# 项目总览
+# Project overview
 
-## 高层架构
+## High-level architecture
 
 ```mermaid
 flowchart TD
@@ -40,117 +40,117 @@ flowchart TD
     end
 ```
 
-## Crate 结构
+## Crate structure
 
-单 Crate（非 workspace），四个 `[[bin]]` 目标：
+A single Crate (not a workspace) with four `[[bin]]` targets:
 
-| Binary | 入口文件 | 运行时模型 | 角色 |
+| Binary | Entry file | Runtime model | Role |
 |--------|---------|-----------|------|
-| `edgion-gateway` | `src/bin/edgion_gateway.rs` | 同步入口，内部自管理 Tokio + Pingora 主循环 | 数据面 |
-| `edgion-controller` | `src/bin/edgion_controller.rs` | `#[tokio::main(multi_thread)]` | 控制面 |
-| `edgion-cli` | `src/bin/edgion_ctl.rs` | `#[tokio::main]` 单线程 | CLI 工具 |
-| `edgion-center` | `src/bin/edgion_center.rs` | `#[tokio::main(multi_thread)]` | 联邦中心 |
+| `edgion-gateway` | `src/bin/edgion_gateway.rs` | Synchronous entry; internally manages its own Tokio + Pingora main loop | Data plane |
+| `edgion-controller` | `src/bin/edgion_controller.rs` | `#[tokio::main(multi_thread)]` | Control plane |
+| `edgion-cli` | `src/bin/edgion_ctl.rs` | `#[tokio::main]` single-threaded | CLI tool |
+| `edgion-center` | `src/bin/edgion_center.rs` | `#[tokio::main(multi_thread)]` | Federation Center |
 
-示例二进制（测试用）：`test_server`、`test_client`、`test_client_direct`、`resource_diff`、`config_load_validator`。
+Example binaries (used in testing): `test_server`, `test_client`, `test_client_direct`, `resource_diff`, `config_load_validator`.
 
-默认 features：`allocator-jemalloc` + `boringssl`。
+Default features: `allocator-jemalloc` + `boringssl`.
 
-## 代码目录组织
+## Code directory organization
 
 ```
 src/
-├── bin/                         # 薄入口包装（thin wrappers）
+├── bin/                         # Thin entry wrappers
 │   ├── edgion_gateway.rs        #   → EdgionGatewayCli::run()
 │   ├── edgion_controller.rs     #   → EdgionControllerCli::run()
 │   ├── edgion_ctl.rs            #   → Cli::run() (edgion-cli)
 │   └── edgion_center.rs         #   → EdgionCenterCli::run()
 ├── lib.rs                       # Crate root: pub mod core, pub mod types
-├── core/                        # 所有业务逻辑
-│   ├── controller/              # edgion-controller 归属代码
+├── core/                        # All business logic
+│   ├── controller/              # Code belonging to edgion-controller
 │   │   ├── api/                 #   Admin API
-│   │   ├── cli/                 #   CLI 入口和启动
-│   │   ├── conf_mgr/            #   配置中心 / Workqueue / ResourceProcessor
+│   │   ├── cli/                 #   CLI entry and startup
+│   │   ├── conf_mgr/            #   ConfigCenter / Workqueue / ResourceProcessor
 │   │   ├── conf_sync/           #   gRPC server + ServerCache
-│   │   ├── observe/             #   日志 facade
-│   │   └── services/            #   ACME 等服务
-│   ├── gateway/                 # edgion-gateway 归属代码
+│   │   ├── observe/             #   Logging facade
+│   │   └── services/            #   ACME and other services
+│   ├── gateway/                 # Code belonging to edgion-gateway
 │   │   ├── api/                 #   Admin API
-│   │   ├── backends/            #   后端发现 / 健康检查 / BackendTLSPolicy
-│   │   ├── cli/                 #   CLI 入口和 Pingora 启动
+│   │   ├── backends/            #   Backend discovery / health checks / BackendTLSPolicy
+│   │   ├── cli/                 #   CLI entry and Pingora startup
 │   │   ├── config/              #   GatewayClass / EdgionGatewayConfig
 │   │   ├── conf_sync/           #   gRPC client + ClientCache
-│   │   ├── lb/                  #   负载均衡算法
-│   │   ├── link_sys/            #   外部系统（Redis/Etcd/ES/Webhook/File）
-│   │   ├── observe/             #   AccessLog / Metrics / 协议日志
-│   │   ├── plugins/             #   插件系统（http / stream / runtime）
-│   │   ├── routes/              #   HTTP / gRPC / TCP / TLS / UDP 路由
-│   │   ├── runtime/             #   Pingora 运行时（server / matching / store）
-│   │   ├── services/            #   ACME challenge 服务
-│   │   └── tls/                 #   TLS 运行时 / 证书存储 / 验证
-│   ├── ctl/                     # edgion-cli 归属代码
+│   │   ├── lb/                  #   Load-balancing algorithms
+│   │   ├── link_sys/            #   External systems (Redis/Etcd/ES/Webhook/File)
+│   │   ├── observe/             #   AccessLog / Metrics / protocol logs
+│   │   ├── plugins/             #   Plugin system (http / stream / runtime)
+│   │   ├── routes/              #   HTTP / gRPC / TCP / TLS / UDP routes
+│   │   ├── runtime/             #   Pingora runtime (server / matching / store)
+│   │   ├── services/            #   ACME challenge service
+│   │   └── tls/                 #   TLS runtime / certificate store / validation
+│   ├── ctl/                     # Code belonging to edgion-cli
 │   │   └── cli/                 #   commands / output / client
-│   └── common/                  # 跨 bin 共享模块
-│       ├── config/              #   共享启动配置（test mode, cache config）
-│       ├── conf_sync/           #   gRPC proto / traits / 共享类型
-│       ├── matcher/             #   域名匹配、IP Radix 树
-│       └── utils/               #   metadata / net / duration / real_ip 等工具
-└── types/                       # 纯数据定义（无业务逻辑）
-    ├── resource/                # 资源系统（define_resources!, ResourceKind, ResourceMeta）
-    ├── resources/               # 各类资源结构体（Gateway, HTTPRoute, EdgionPlugins, ...）
-    ├── common/                  # KeyGet/KeySet 统一访问器
-    ├── constants/               # 注解、标签、头部、Secret 键
-    ├── ctx.rs                   # EdgionHttpContext（每请求状态）
+│   └── common/                  # Cross-bin shared modules
+│       ├── config/              #   Shared startup configuration (test mode, cache config)
+│       ├── conf_sync/           #   gRPC proto / traits / shared types
+│       ├── matcher/             #   Domain matching, IP Radix tree
+│       └── utils/               #   metadata / net / duration / real_ip and other utilities
+└── types/                       # Pure data definitions (no business logic)
+    ├── resource/                # Resource system (define_resources!, ResourceKind, ResourceMeta)
+    ├── resources/               # Per-kind resource structs (Gateway, HTTPRoute, EdgionPlugins, ...)
+    ├── common/                  # KeyGet/KeySet unified accessors
+    ├── constants/               # Annotations, labels, headers, Secret keys
+    ├── ctx.rs                   # EdgionHttpContext (per-request state)
     ├── filters.rs               # PluginRunningResult, PluginRunningStage
-    ├── schema.rs                # JSON Schema 验证
-    └── err.rs                   # 错误类型
+    ├── schema.rs                # JSON Schema validation
+    └── err.rs                   # Error types
 ```
 
-**设计原则**：`types/` 只放纯数据定义，`core/` 放所有逻辑。`core/` 按二进制归属分层（controller / gateway / ctl / common），不使用顶层 shim 模块。
+**Design principles**: `types/` only holds pure data definitions; `core/` holds all logic. `core/` is layered by bin ownership (controller / gateway / ctl / common); no top-level shim modules are used.
 
-## EdgionHttpContext — 每请求状态载体
+## EdgionHttpContext — per-request state container
 
-定义在 `src/types/ctx.rs`，贯穿整个 HTTP 请求生命周期的"背包"：
+Defined in `src/types/ctx.rs`, the "backpack" carried through the entire HTTP request lifecycle:
 
-| 字段 | 用途 |
+| Field | Purpose |
 |------|------|
-| `start_time` | 请求计时 |
-| `gateway_info` | Gateway 元数据 |
-| `request_info` | 客户端地址、hostname、path、trace ID、SNI、gRPC 元数据 |
-| `edgion_status` | 处理过程中累积的错误码 |
-| `route_unit` / `grpc_route_unit` | 匹配到的路由规则（内含 `PluginRuntime`） |
-| `selected_backend` / `selected_grpc_backend` | 选中的后端引用 |
-| `backend_context` | Service 名称、上游尝试次数、连接时间 |
-| `stage_logs` | `Vec<StageLogs>` — 每执行阶段的插件日志 |
-| `plugin_running_result` | 当前插件链执行结果 |
-| `ctx_map` | `HashMap<String, String>` — 插件设置的变量 |
-| `path_params` | 路由路径参数（懒提取） |
-| `hash_key` | 一致性哈希键 |
-| `try_cnt` | 上游连接尝试计数器 |
+| `start_time` | Request timing |
+| `gateway_info` | Gateway metadata |
+| `request_info` | Client address, hostname, path, trace ID, SNI, gRPC metadata |
+| `edgion_status` | Error codes accumulated during processing |
+| `route_unit` / `grpc_route_unit` | The matched routing rule (containing `PluginRuntime`) |
+| `selected_backend` / `selected_grpc_backend` | The selected backend reference |
+| `backend_context` | Service name, upstream attempt count, connection time |
+| `stage_logs` | `Vec<StageLogs>` — plugin logs per execution phase |
+| `plugin_running_result` | Current plugin chain execution result |
+| `ctx_map` | `HashMap<String, String>` — variables set by plugins |
+| `path_params` | Routing path parameters (lazily extracted) |
+| `hash_key` | Consistent-hashing key |
+| `try_cnt` | Upstream connection attempt counter |
 
-在 `new_ctx()` 中创建，在 `logging()` 中消费。插件通过 `PluginSession` 适配器与之交互。
+Created in `new_ctx()` and consumed in `logging()`. Plugins interact with it through the `PluginSession` adapter.
 
-## 测试基础设施
+## Testing infrastructure
 
-| 组件 | 路径 | 用途 |
+| Component | Path | Purpose |
 |------|------|------|
-| `test_server` | `examples/code/server/test_server.rs` | 多协议回显后端（HTTP、gRPC、WebSocket、TCP、UDP、auth） |
-| `test_client` | `examples/code/client/test_client.rs` | 基于 TestSuite trait 的测试运行器 |
-| `resource_diff` | `examples/code/validator/resource_diff.rs` | Controller ↔ Gateway 同步验证 |
-| `run_integration.sh` | `examples/test/scripts/integration/` | 完整集成测试编排 |
-| 测试配置 | `examples/test/conf/` | 按 `Resource/Item/` 组织的 YAML 资源 |
-| 端口注册 | `examples/test/conf/ports.json` | 每个测试套件的唯一端口分配 |
+| `test_server` | `examples/code/server/test_server.rs` | Multi-protocol echo backend (HTTP, gRPC, WebSocket, TCP, UDP, auth) |
+| `test_client` | `examples/code/client/test_client.rs` | Test runner based on the TestSuite trait |
+| `resource_diff` | `examples/code/validator/resource_diff.rs` | Controller ↔ Gateway sync verification |
+| `run_integration.sh` | `examples/test/scripts/integration/` | End-to-end integration test orchestration |
+| Test configurations | `examples/test/conf/` | YAML resources organized by `Resource/Item/` |
+| Port registry | `examples/test/conf/ports.json` | Unique port allocation per test suite |
 
-## 关键依赖
+## Key dependencies
 
-| 类别 | Crate | 用途 |
+| Category | Crate | Purpose |
 |------|-------|------|
-| **代理核心** | `pingora-core`, `pingora-proxy`, `pingora-http`, `pingora-load-balancing` | HTTP 代理引擎 |
-| **异步** | `tokio`, `tokio-stream`, `futures`, `async-trait` | 异步运行时 |
-| **gRPC** | `tonic`, `tonic-reflection`, `prost` | Controller ↔ Gateway 通信 |
+| **Proxy core** | `pingora-core`, `pingora-proxy`, `pingora-http`, `pingora-load-balancing` | HTTP proxy engine |
+| **Async** | `tokio`, `tokio-stream`, `futures`, `async-trait` | Async runtime |
+| **gRPC** | `tonic`, `tonic-reflection`, `prost` | Controller ↔ Gateway communication |
 | **HTTP API** | `axum`, `tower-http`, `hyper-util` | Admin API |
-| **K8s** | `kube`, `k8s-openapi`, `schemars` | K8s 集成 + CRD Schema |
-| **序列化** | `serde`, `serde_json`, `serde_yaml`, `toml` | 配置解析 |
-| **TLS** | `rustls`, `tokio-rustls`, `boring-sys` | TLS 终止（rustls 或 BoringSSL） |
-| **可观测** | `tracing`, `metrics` | 日志 + 指标 |
-| **安全** | `jsonwebtoken`, `bcrypt`, `base64` | 认证插件 |
-| **性能** | `tikv-jemallocator`, `dashmap`, `arc-swap`, `smallvec` | 内存分配器、并发 Map、无锁读、栈缓冲 |
+| **K8s** | `kube`, `k8s-openapi`, `schemars` | K8s integration + CRD Schema |
+| **Serialization** | `serde`, `serde_json`, `serde_yaml`, `toml` | Configuration parsing |
+| **TLS** | `rustls`, `tokio-rustls`, `boring-sys` | TLS termination (rustls or BoringSSL) |
+| **Observability** | `tracing`, `metrics` | Logging + metrics |
+| **Security** | `jsonwebtoken`, `bcrypt`, `base64` | Authentication plugin |
+| **Performance** | `tikv-jemallocator`, `dashmap`, `arc-swap`, `smallvec` | Memory allocator, concurrent map, lock-free reads, stack buffers |

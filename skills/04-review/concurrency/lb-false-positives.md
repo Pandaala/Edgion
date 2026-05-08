@@ -1,149 +1,149 @@
-# LB 模块常见误判场景
+# Common LB Module False-Positive Scenarios
 
-> 来源：2026-04 LB 模块 Review，逐一对照源码核实后的结论。
-
----
-
-## BackendSelector ArcSwap 初始化 TOCTOU 不是实际问题
-
-**误判场景**：`BackendSelector::init` 使用 `load` 判断后 `store`，与调用方 `is_initialized()` + `init()` 组合形成 TOCTOU，多线程可重复执行 `create_state` 并覆盖写入。
-
-**实际情况**：
-
-1. **输入恒等**：所有并发 `init` 的数据来源是同一个 `Arc<HTTPRouteRule>` 的不可变字段 `backend_refs`，输入完全一致，`create_state` 产出逻辑等价。
-2. **整体替换**：配置更新时创建全新 `RouteRules`（含新 `BackendSelector`），不存在"用不同参数 reinit 同一 selector"的场景。
-3. **窗口极小**：竞态仅在路由首次被请求时触发，之后 `is_initialized()` 直接返回 true，走快速路径。额外开销仅为几次 clone + 一次多余 store。
-4. **内存安全**：`ArcSwap` 保证原子性，无数据撕裂或 UAF。
-
-**判定**：理论上是经典 TOCTOU 模式，但结合项目约束（同源输入、整体替换、一次性触发），无可观测的负面后果，不需要修复。若未来改为原地 reinit 或支持不同参数的二次初始化，再引入 CAS 或 `OnceLock`。
+> Source: 2026-04 LB module review; conclusions verified one-by-one against source code.
 
 ---
 
-## ConsistentHashRing 不支持 Unix Domain Socket 不是实际问题
+## BackendSelector ArcSwap Initialization TOCTOU is Not a Real Issue
 
-**误判场景**：`ConsistentHashRing::build` 和 `sp_affinity_build` 中 `filter_map` 仅处理 `SocketAddr::Inet`，`SocketAddr::Unix` 被静默丢弃，UDS 后端不参与一致性哈希和会话持久化。
+**False-positive scenario**: `BackendSelector::init` uses `load` to check then `store`; combined with the caller's `is_initialized()` + `init()` it forms a TOCTOU; multiple threads may execute `create_state` repeatedly and overwrite the result.
 
-**实际情况**：
+**Reality**:
 
-1. **发现层只产生 Inet 地址**：Backend 地址来自 K8s Endpoint/EndpointSlice 的 IP:port，通过 `"ip:port".parse::<SocketAddr>()` 构造（`endpoint_slice/discovery_impl.rs`、`endpoint/discovery_impl.rs`），永远是 `Inet`。
-2. **UDS 后端在当前架构中不可能出现**：没有任何发现/构造路径会生成 `SocketAddr::Unix` 的 `Backend`。`filter_map` 的 `else` 分支是针对 pingora 类型系统的穷尽匹配，实际是死代码。
-3. **SP affinity 同理**：`sp_affinity_build` / `sp_affinity_get_or_build` 的 Inet-only 过滤不影响实际行为。
+1. **Inputs are identical**: All concurrent `init` data comes from the same `Arc<HTTPRouteRule>`'s immutable field `backend_refs`; inputs are completely identical and `create_state` produces logically equivalent results.
+2. **Whole replacement**: On config update a brand new `RouteRules` is created (containing a new `BackendSelector`); there is no scenario of "reinit the same selector with different parameters".
+3. **Window is tiny**: The race only fires the first time a route is requested; afterwards `is_initialized()` returns true directly and the fast path is taken. Extra cost is just a few clones + one redundant store.
+4. **Memory safety**: `ArcSwap` guarantees atomicity, no data tearing or UAF.
 
-**判定**：类型系统层面的未覆盖分支，但运行时不可达。若未来引入 UDS 后端发现（如 sidecar 场景），需同步扩展 CH 和 SP 路径，届时自然会处理。当前不需要修复，也不需要加 warn 日志（会造成无意义噪声）。
-
----
-
-## EWMA 整数运算精度损失不是实际问题
-
-**误判场景**：`update_ewma` 使用百分制整数 alpha（0-100）和 `/ 100` 截断除法更新 `AtomicU64`，每步丢弃余数。初始值 1ms 与真实 RTT 脱节。全局 alpha 无法 per-service 配置。
-
-**实际情况**：
-
-1. **截断误差可忽略**：数值模拟显示，整数 vs 浮点的累积差异始终在 ~2µs 以内。EWMA 用于比较的后端延迟差异通常在 ms 级别，截断误差仅占信号的 ~0.05%，对选路决策无影响。
-2. **初始值收敛快**：从 1ms 初始值到 50ms 真实 RTT，alpha=20 时约 10 次观测即收敛到 90%+。给新后端多发几个请求本质上是合理的探测行为。
-3. **alpha 粒度足够**：EWMA 本身是启发式近似，1% 步长对负载均衡选路决策没有实际影响。
-4. **全局 alpha 是设计选择**：per-service alpha 属功能增强，非 bug。
-
-**判定**：实现正确，精度对负载均衡场景完全足够，不需要修复。
+**Verdict**: Theoretically a classic TOCTOU pattern, but combined with project constraints (same-source inputs, whole replacement, one-shot trigger) there is no observable negative consequence; no fix needed. If we ever switch to in-place reinit or support second-time initialization with different parameters, introduce CAS or `OnceLock`.
 
 ---
 
-## Session Persistence CRC32 碰撞不是实际问题
+## ConsistentHashRing Not Supporting Unix Domain Socket is Not a Real Issue
 
-**误判场景**：SP affinity map 用 CRC32 哈希 `ip:port` 作 token 键，2^32 空间存在生日悖论碰撞；`HashMap::insert` 静默覆盖导致后端丢失。另涉 token 安全性、缓存一致性、1024 硬编码上限等。
+**False-positive scenario**: In `ConsistentHashRing::build` and `sp_affinity_build`, `filter_map` only handles `SocketAddr::Inet`; `SocketAddr::Unix` is silently dropped and UDS backends do not participate in consistent hashing or session persistence.
 
-**实际情况**：
+**Reality**:
 
-1. **碰撞概率极低**：典型 K8s Service 3-50 endpoints，n=50 时碰撞概率 2.85e-7（约 350 万个 Service 才碰一次）。即使达 1024 上限仅 0.012%。实测 1024 个结构化 K8s IP 零碰撞。
-2. **Token 安全性足够**：CRC32 不可逆，cookie 已有 HttpOnly + SameSite=Lax。猜中 token 仅粘到某后端，不构成权限提升。网关领域标准做法。
-3. **缓存一致性是共享模式**：SP_AFFINITY 与 RR_CACHE、CH_CACHE 共用 `invalidate_selector_cache`，由 endpoint discovery handler 触发，非 SP 特有问题。
-4. **1024 上限合理**：K8s Service 极少超此数，属 nice-to-have。
-5. **`sp_affinity_build` 死代码**：确认无调用方，P3 代码卫生，不影响正确性。
+1. **Discovery layer only produces Inet addresses**: Backend addresses come from K8s Endpoint/EndpointSlice IP:port, constructed via `"ip:port".parse::<SocketAddr>()` (`endpoint_slice/discovery_impl.rs`, `endpoint/discovery_impl.rs`); always `Inet`.
+2. **UDS backends cannot appear in the current architecture**: No discovery/construction path generates a `SocketAddr::Unix` `Backend`. The `else` branch of `filter_map` is exhaustive matching for the pingora type system; effectively dead code.
+3. **SP affinity is the same**: Inet-only filtering in `sp_affinity_build` / `sp_affinity_get_or_build` does not affect actual behavior.
 
-**判定**：设计合理，碰撞风险在实际规模下可忽略，不需要修复。
+**Verdict**: An uncovered branch at the type-system level but unreachable at runtime. If UDS backend discovery is introduced in the future (e.g., sidecar scenarios), the CH and SP paths must be extended in sync; that will be handled naturally then. No fix is needed now, nor a warn log (which would create meaningless noise).
 
 ---
 
-## PolicyStore remove_by_route 的 clone 不是性能问题
+## EWMA Integer Arithmetic Precision Loss is Not a Real Issue
 
-**误判场景**：`remove_by_route` 在 `DashMap::retain` 回调里对每条 `ServiceLbPolicy` 执行 `clone()` 再写回，引入与 store 规模成正比的深拷贝开销。`batch_remove_routes` 对每个路由重复全表扫描。
+**False-positive scenario**: `update_ewma` uses percent-based integer alpha (0-100) and `/ 100` truncating division to update `AtomicU64`, discarding remainders at every step. Initial value 1ms is detached from real RTT. Global alpha cannot be configured per-service.
 
-**实际情况**：
+**Reality**:
 
-1. **控制面冷路径**：`remove_by_route` 仅在 HTTPRoute 删除/同步时调用，非每请求的数据面路径，频率极低。
-2. **数据规模极小**：DashMap 大小 = 配置了 LB 策略的 Service 数（通常个位数到几十）。`ServiceLbPolicy` 仅含短 `Vec<LbPolicy>` + 小 `HashSet<String>`，clone 开销可忽略。
-3. **`changed` 语义正确**：仅检测 policies 长度变化是合理的——`route_refs` 变化不改变实际 LB 行为，不需要触发 endpoint slice 更新。
+1. **Truncation error is negligible**: Numerical simulation shows the cumulative difference between integer and float remains within ~2µs. EWMA is used for comparing backend latency differences which are typically at the ms level; truncation error is only ~0.05% of the signal and has no impact on routing decisions.
+2. **Initial value converges quickly**: From 1ms initial to 50ms real RTT, with alpha=20 it converges to 90%+ in about 10 observations. Sending a few extra requests to a new backend is essentially reasonable probing behavior.
+3. **alpha granularity is sufficient**: EWMA itself is a heuristic approximation; 1% step has no real impact on load-balancing decisions.
+4. **Global alpha is a design choice**: Per-service alpha is a feature enhancement, not a bug.
 
-**判定**：代码可以更简洁（直接原地修改而非 clone+写回），但在控制面冷路径+极小数据规模下性能影响为零，不需要修复。
-
----
-
-## BackendCleaner 缺少优雅关闭不是实际问题
-
-**误判场景**：`BackendCleaner::stop()` 仅设标志位不等待任务退出，`start()` 丢弃 JoinHandle，无法 await 优雅关闭。存在关闭顺序竞态和 panic 隔离缺失。
-
-**实际情况**：
-
-1. **`stop()` 从未被调用**：全仓库无调用方。cleaner 随进程生命周期存活，进程退出时 runtime drop 自然终止任务。
-2. **关闭由 Pingora 管理**：优雅关闭走 Pingora Server 的 grace_period + graceful_shutdown_timeout，排空在途请求。cleaner 清理的是内存中的统计状态，进程退出后自动消失，无需显式清理。
-3. **并发安全由 DashMap 保证**：cleaner 与 endpoint discovery 并发不会损坏数据，最多多/少做一次清理，下周期自动修正。
-4. **JoinHandle 丢弃是标准模式**：fire-and-forget 后台任务与进程同生命周期，不保存 handle 是常见做法。
-
-**判定**：cleaner 是进程级后台任务，无需独立于进程的优雅关闭语义，不需要修复。
+**Verdict**: The implementation is correct; precision is fully sufficient for load-balancing scenarios; no fix needed.
 
 ---
 
-## select_by_min_metric BinaryHeap 小规模性能不是问题
+## Session Persistence CRC32 Collision is Not a Real Issue
 
-**误判场景**：`select_by_min_metric` 每次选路创建 BinaryHeap，对 3-10 个后端的小池子 heapify 开销高于线性扫描。
+**False-positive scenario**: SP affinity map uses CRC32 hash of `ip:port` as token key; in 2^32 space there is birthday-paradox collision risk; `HashMap::insert` silently overwrites and loses backends. Also concerns about token security, cache consistency, hard-coded 1024 cap, etc.
 
-**实际情况**：每个后端需做 `is_backend_active`（DashMap lookup）+ `metric_fn`（DashMap lookup），两次并发 map 查找才是真正的时间开销。对 3-10 个元素 heapify vs 线性扫描的差异是纳秒级，完全被 DashMap 读取淹没。`with_capacity(n)` 对 n<10 分配几十字节，现代分配器接近 noop。
+**Reality**:
 
-**判定**：瓶颈在 DashMap 查表而非数据结构选择，为微优化引入阈值分支反增复杂度，不需要修复。
+1. **Collision probability is extremely low**: A typical K8s Service has 3-50 endpoints; at n=50 the collision probability is 2.85e-7 (about 1 in 3.5 million Services). Even at the 1024 cap it is only 0.012%. Empirically zero collisions with 1024 structured K8s IPs.
+2. **Token security is sufficient**: CRC32 is non-reversible; the cookie already has HttpOnly + SameSite=Lax. Guessing a token only sticks the user to a backend, not a privilege escalation. Standard gateway practice.
+3. **Cache consistency is a shared pattern**: SP_AFFINITY shares `invalidate_selector_cache` with RR_CACHE and CH_CACHE, triggered by the endpoint discovery handler; not an SP-specific issue.
+4. **1024 cap is reasonable**: K8s Services rarely exceed this; nice-to-have at most.
+5. **`sp_affinity_build` is dead code**: Confirmed no callers; P3 code hygiene, doesn't affect correctness.
 
----
-
-## try_get_peer 重复代码已修复
-
-**原问题**：`try_get_peer` 的 Service/ServiceEndpointSlice 等 match 臂有 ~25 行重复的 upstream 填充 + peer 构建逻辑。
-
-**修复**：提取 `build_peer_from_lb_selection` 公共函数，各 match 臂简化为"选 backend + 调用 build_peer_from_lb_selection"。消除 ~60 行重复。注意：因 `lb_policy` 借用自 `ctx`，提取函数时需先 clone `lb_policy` 断开借用。
+**Verdict**: The design is reasonable; collision risk is negligible at real-world scale; no fix needed.
 
 ---
 
-## ServiceLbPolicy::add_route_ref 「去重 push」是有意设计
+## PolicyStore remove_by_route Clone is Not a Performance Issue
 
-**误判场景**：`policy_store.rs` 的 `add_route_ref`（旧称 `merge`）对新 policies 做"已有则跳过、否则 push"，与"最后一写获胜"不一致；多 route 引用同 service 时旧 policy 不会被覆盖。
+**False-positive scenario**: `remove_by_route` calls `clone()` on each `ServiceLbPolicy` inside the `DashMap::retain` callback and writes back, introducing deep-copy overhead proportional to store size. `batch_remove_routes` performs full table scans repeatedly per route.
 
-**实际情况**：
+**Reality**:
 
-1. **联合语义是产品定义**：一个 Service 可被多 HTTPRoute 引用，每条 route 声明的 LB 策略都应被该 Service 尊重；策略列表是所有引用 route 的并集，由 LB 层按请求选取，而非 store 层仲裁。
-2. **生命周期由 route_refs 管理**：策略只在最后一个引用 route 被 `remove_by_route` 移除时才会被清理，不存在"route 单独把自己之前注册的策略清掉"的场景，也不需要这种语义。
-3. **已在 2026-04 P2-03 中加注释说明**：`policies/lb_policy/policy_store.rs` 注释明确写出 union semantics 与 LWW 的差别。
+1. **Control-plane cold path**: `remove_by_route` is only called when an HTTPRoute is deleted/synced; not a per-request data-plane path; frequency is extremely low.
+2. **Data scale is tiny**: DashMap size = number of Services with LB policies configured (typically single digits to a few dozen). `ServiceLbPolicy` only contains a short `Vec<LbPolicy>` + small `HashSet<String>`; clone overhead is negligible.
+3. **`changed` semantics are correct**: Detecting only policies length change is reasonable — `route_refs` changes do not change actual LB behavior, no need to trigger an endpoint slice update.
 
-**判定**：联合 + 引用计数清理是有意设计，下次 review 不应再以「不是 last-write-wins」为由提报。
-
----
-
-## ConfigClient 多 ClientCache 无跨缓存事务不是问题
-
-**误判场景**：`conf_sync/conf_client/config_client.rs` 同时持有十几个 `ClientCache<T>`，更新各 cache 之间没有跨 cache 的事务/一致性 barrier；某些资源依赖关系（如 EndpointSlice 依赖 Service、HTTPRoute 依赖 Listener resolved）未在代码中显式排序或文档化。
-
-**实际情况**：
-
-1. **配置同步本就是最终一致**：Controller→Gateway 走 gRPC list/watch，server 侧已按版本号驱动事件；client 侧的 cache 在任意时刻可能领先/落后于其他 cache 一小段，所有 reader 路径都做了"找不到就降级"或"等下次重建"。
-2. **Readiness 已有 barrier**：`required_cache_names` + `is_ready()` 在启动期阻塞业务流量，直到关键 cache 全部就位（见 `config_client.rs:40-42`）；运行期增量更新时短暂不一致由 reader 侧容忍。
-3. **顺序约束在子模块内被强制**：单个 ConfHandler（如 HTTPRoute）内部已显式按"sync LB → mutate cache → rebuild"顺序更新（见 `gateway/routes/http/conf_handler_impl.rs` 顶部注释及对应测试）；跨 cache 的顺序不需要在 ConfigClient 层文档化。
-4. **强事务代价过高**：要在数据面引入跨 cache 的写锁/版本 barrier，会把每次配置同步串行化，得不偿失。
-
-**判定**：跨 cache 最终一致 + 子模块内强顺序 + readiness barrier，是经过权衡的设计，不需要在 ConfigClient 层加事务或全局顺序文档。
+**Verdict**: The code could be simpler (in-place modification rather than clone+write-back), but performance impact is zero on a control-plane cold path with tiny data scale; no fix needed.
 
 ---
 
-## pick 多参数不需要重构
+## BackendCleaner Lacking Graceful Shutdown is Not a Real Issue
 
-**误判场景**：`pick`（在 `selector.rs`）封装了 EdgionStatus 错误码（per-policy 组合），可能建议进一步抽象为 source 枚举映射。
+**False-positive scenario**: `BackendCleaner::stop()` only sets a flag without waiting for the task to exit; `start()` discards the JoinHandle, making graceful shutdown await impossible. There is shutdown-ordering race and missing panic isolation.
 
-**实际情况**：唯一调用方是 `select_from_endpoint_slice`（同文件紧邻定义）。错误码变体全仓库仅在 `backends/mod.rs` 使用，无外部消费。新增 LB 算法频率极低。重构为 source 枚举 + 映射函数只会把显式参数变成隐式映射，调试反而多一层。
+**Reality**:
 
-**判定**：单一调用方、同文件可见、扩展频率极低，不需要重构。
+1. **`stop()` is never called**: No callers in the entire repo. The cleaner lives for the process lifetime; on process exit the runtime drop naturally terminates the task.
+2. **Shutdown is managed by Pingora**: Graceful shutdown goes through Pingora Server's grace_period + graceful_shutdown_timeout, draining in-flight requests. The cleaner cleans in-memory statistics state, which disappears automatically on process exit; no explicit cleanup needed.
+3. **Concurrency safety is guaranteed by DashMap**: Concurrency between cleaner and endpoint discovery does not corrupt data; at most one extra/missing cleanup, auto-corrected next cycle.
+4. **Discarding JoinHandle is a standard pattern**: Fire-and-forget background tasks that share the process lifetime; not retaining the handle is common practice.
+
+**Verdict**: The cleaner is a process-level background task; no need for graceful shutdown semantics independent of the process; no fix needed.
+
+---
+
+## select_by_min_metric BinaryHeap Small-Scale Performance is Not an Issue
+
+**False-positive scenario**: `select_by_min_metric` creates a BinaryHeap on every selection; for a small pool of 3-10 backends, heapify overhead exceeds linear scanning.
+
+**Reality**: For each backend, `is_backend_active` (DashMap lookup) + `metric_fn` (DashMap lookup) is required — two concurrent map lookups are the real time cost. For 3-10 elements, the difference between heapify and linear scan is in nanoseconds, completely dwarfed by DashMap reads. `with_capacity(n)` for n<10 allocates a few dozen bytes — modern allocators treat this as near no-op.
+
+**Verdict**: The bottleneck is DashMap lookup rather than data structure choice; introducing a threshold branch for micro-optimization adds complexity instead; no fix needed.
+
+---
+
+## try_get_peer Duplicated Code Has Been Fixed
+
+**Original issue**: The Service/ServiceEndpointSlice match arms of `try_get_peer` had ~25 lines of duplicated upstream-fill + peer-build logic.
+
+**Fix**: Extracted the shared function `build_peer_from_lb_selection`; each match arm simplified to "select backend + call build_peer_from_lb_selection". Eliminates ~60 lines of duplication. Note: because `lb_policy` is borrowed from `ctx`, when extracting the function `lb_policy` must be cloned first to break the borrow.
+
+---
+
+## ServiceLbPolicy::add_route_ref "Dedup-Push" is Intentional Design
+
+**False-positive scenario**: `policy_store.rs`'s `add_route_ref` (formerly `merge`) does "skip if exists, else push" on new policies; inconsistent with "last-write-wins"; when multiple routes reference the same service, old policies are not overwritten.
+
+**Reality**:
+
+1. **Union semantics is the product definition**: A Service can be referenced by multiple HTTPRoutes, and the LB policy declared by each route should be respected by that Service; the policy list is the union of all referencing routes, selected per-request by the LB layer rather than arbitrated at the store layer.
+2. **Lifecycle is managed by route_refs**: A policy is only cleaned up when the last referencing route is removed via `remove_by_route`; there is no scenario of "a route unilaterally clearing its previously registered policy", nor is such semantics needed.
+3. **Already commented in 2026-04 P2-03**: Comments in `policies/lb_policy/policy_store.rs` explicitly write out the difference between union semantics and LWW.
+
+**Verdict**: Union + reference-counted cleanup is intentional design; future reviews should not file this as "not last-write-wins".
+
+---
+
+## ConfigClient Multiple ClientCaches with No Cross-Cache Transaction is Not an Issue
+
+**False-positive scenario**: `conf_sync/conf_client/config_client.rs` holds a dozen-or-so `ClientCache<T>` simultaneously; updates across caches lack a cross-cache transaction/consistency barrier; some resource dependencies (e.g., EndpointSlice depends on Service, HTTPRoute depends on Listener resolved) are not explicitly ordered or documented in code.
+
+**Reality**:
+
+1. **Configuration sync is eventually consistent by nature**: Controller→Gateway uses gRPC list/watch; the server side is already version-driven for events; the client cache may at any moment be slightly ahead/behind other caches; all reader paths "downgrade if not found" or "wait for next rebuild".
+2. **Readiness has a barrier already**: `required_cache_names` + `is_ready()` blocks business traffic during startup until critical caches are all in place (see `config_client.rs:40-42`); short-term inconsistency during runtime incremental updates is tolerated by readers.
+3. **Order constraints are enforced inside submodules**: Within a single ConfHandler (e.g., HTTPRoute), updates are explicitly ordered as "sync LB → mutate cache → rebuild" (see comments at the top of `gateway/routes/http/conf_handler_impl.rs` and corresponding tests); cross-cache ordering does not need to be documented at the ConfigClient layer.
+4. **Strong transactions cost too much**: Introducing cross-cache write locks/version barriers in the data plane would serialize every config sync; not worth it.
+
+**Verdict**: Cross-cache eventual consistency + strong ordering inside submodules + readiness barrier is a tradeoff design; no transaction or global ordering documentation needs to be added at the ConfigClient layer.
+
+---
+
+## pick Multi-Parameter Does Not Need Refactoring
+
+**False-positive scenario**: `pick` (in `selector.rs`) wraps EdgionStatus error codes (per-policy combination); a suggestion may be to further abstract into source enum mapping.
+
+**Reality**: The only caller is `select_from_endpoint_slice` (defined in the same file nearby). Error code variants are only used in `backends/mod.rs` repo-wide; no external consumer. New LB algorithms are added very infrequently. Refactoring to a source enum + mapping function would only convert explicit parameters to implicit mapping, adding a layer to debugging.
+
+**Verdict**: Single caller, same-file visibility, very low extension frequency; no refactoring needed.

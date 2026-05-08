@@ -1,18 +1,18 @@
 ---
 name: 03-resources
-description: 所有 Kubernetes 资源的功能与配置 Schema 参考。编号与 01-architecture/05-resources 对齐，按资源类型统一组织。
+description: Feature and configuration schema reference for all Kubernetes resources. Numbering aligns with 01-architecture/05-resources, organized uniformly by resource type.
 ---
 
-# 03 资源功能参考
+# 03 Resource Feature Reference
 
-> 所有 Gateway API 标准资源和 Edgion 扩展资源的**外部契约**：完整 YAML Schema、字段类型与默认值、配置示例。
-> 资源的**内部实现**（Handler 流程、requeue 关联、源码位置）见 [01-architecture/05-resources/](../../01-architecture/05-resources/SKILL.md)——两边编号一一对齐，改代码通常两边都要看。
+> **External contracts** for all Gateway API standard resources and Edgion extension resources: full YAML schema, field types and default values, configuration examples.
+> The **internal implementation** of resources (Handler flow, requeue associations, source locations) is in [01-architecture/05-resources/](../../01-architecture/05-resources/SKILL.md) — both sides share the same numbering one-to-one; you typically need to look at both when modifying code.
 
-## 编号对齐说明
+## Numbering Alignment
 
-| # | 资源 | 架构文档 | 功能文档（本目录） |
-|---|------|---------|-------------------|
-| 00 | 通用概念 | `05-resources/00-resource-flow.md` | [00-common-concepts.md](00-common-concepts.md) |
+| # | Resource | Architecture Doc | Feature Doc (this directory) |
+|---|----------|------------------|------------------------------|
+| 00 | Common concepts | `05-resources/00-resource-flow.md` | [00-common-concepts.md](00-common-concepts.md) |
 | 01 | Gateway | `05-resources/01-gateway.md` | [01-gateway.md](01-gateway.md) |
 | 02 | GatewayClass | `05-resources/02-gateway-class.md` | [02-gateway-class.md](02-gateway-class.md) |
 | 03 | EdgionGatewayConfig | `05-resources/03-edgion-gateway-config.md` | → [../02-config/02-edgion-gateway-config.md](../02-config/02-edgion-gateway-config.md) |
@@ -25,67 +25,67 @@ description: 所有 Kubernetes 资源的功能与配置 Schema 参考。编号�
 | 12 | BackendTLSPolicy | `05-resources/12-backend-tls-policy.md` | [12-backend-tls-policy.md](12-backend-tls-policy.md) |
 | 13 | EdgionPlugins | `05-resources/13-edgion-plugins.md` | [13-edgion-plugins.md](13-edgion-plugins.md) |
 | 14 | EdgionStreamPlugins | `05-resources/14-edgion-stream-plugins.md` | [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) |
-| 15 | PluginMetaData | `05-resources/15-plugin-metadata.md` | 插件元数据，含 RegionRoute 状态管理变体 |
+| 15 | PluginMetaData | `05-resources/15-plugin-metadata.md` | Plugin metadata, including the RegionRoute state-management variant |
 | 16 | Service/Endpoints | `05-resources/16-service-endpoints.md` | [16-service-backends.md](16-service-backends.md) |
 | 17 | EdgionAcme | `05-resources/17-edgion-acme.md` | [17-acme.md](17-acme.md) |
 | 18 | LinkSys | `05-resources/18-link-sys.md` | [18-link-sys.md](18-link-sys.md) |
 
-> 编号 03（EdgionGatewayConfig）的功能文档在 `02-config/` 下，因为它本质是配置层资源。
-> 编号 10（Secret）、11（ReferenceGrant）、15（PluginMetaData）暂无独立功能文档，参见架构文档。
+> The feature documentation for #03 (EdgionGatewayConfig) lives under `02-config/` because it is essentially a configuration-layer resource.
+> #10 (Secret), #11 (ReferenceGrant), and #15 (PluginMetaData) currently have no standalone feature documentation; see the architecture documentation.
 
-## 按分类浏览
+## Browse by Category
 
-### 网关入口
+### Gateway Entry
 
-| 资源 | 说明 |
-|------|------|
-| [01-gateway.md](01-gateway.md) | Listener 配置、协议、端口、TLS 绑定、AllowedRoutes |
-| [02-gateway-class.md](02-gateway-class.md) | GatewayClass 与 parametersRef |
+| Resource | Description |
+|----------|-------------|
+| [01-gateway.md](01-gateway.md) | Listener configuration, protocols, ports, TLS binding, AllowedRoutes |
+| [02-gateway-class.md](02-gateway-class.md) | GatewayClass and parametersRef |
 
-### 路由
+### Routes
 
-| 资源 | 说明 |
-|------|------|
-| [00-common-concepts.md](00-common-concepts.md) | parentRef/backendRef 通用概念、跨命名空间、hostname 交集 |
-| [04-httproute.md](04-httproute.md) | HTTP 路由匹配、Filter、超时重试、Session Persistence |
-| [05-grpcroute.md](05-grpcroute.md) | gRPC 路由匹配、gRPC-Web |
-| [06-tcproute.md](06-tcproute.md) | TCP 路由、Stream 插件注解 |
-| [07-tlsroute.md](07-tlsroute.md) | TLS Passthrough 路由、SNI 匹配 |
-| [08-udproute.md](08-udproute.md) | UDP 路由 |
+| Resource | Description |
+|----------|-------------|
+| [00-common-concepts.md](00-common-concepts.md) | Common parentRef/backendRef concepts, cross-namespace, hostname intersection |
+| [04-httproute.md](04-httproute.md) | HTTP route matching, Filters, timeouts and retries, Session Persistence |
+| [05-grpcroute.md](05-grpcroute.md) | gRPC route matching, gRPC-Web |
+| [06-tcproute.md](06-tcproute.md) | TCP routing, Stream plugin annotations |
+| [07-tlsroute.md](07-tlsroute.md) | TLS Passthrough routing, SNI matching |
+| [08-udproute.md](08-udproute.md) | UDP routing |
 
-### TLS 与证书
+### TLS and Certificates
 
-| 资源 | 说明 |
-|------|------|
-| [09-edgion-tls.md](09-edgion-tls.md) | 扩展 TLS：mTLS、版本、密码套件、OCSP |
-| [12-backend-tls-policy.md](12-backend-tls-policy.md) | 上游 TLS 校验、CA、SAN |
-| [17-acme.md](17-acme.md) | ACME 自动证书：HTTP-01/DNS-01、续期、存储 |
+| Resource | Description |
+|----------|-------------|
+| [09-edgion-tls.md](09-edgion-tls.md) | Extended TLS: mTLS, versions, cipher suites, OCSP |
+| [12-backend-tls-policy.md](12-backend-tls-policy.md) | Upstream TLS validation, CA, SAN |
+| [17-acme.md](17-acme.md) | ACME automatic certificates: HTTP-01/DNS-01, renewal, storage |
 
-### 插件
+### Plugins
 
-| 资源 | 说明 |
-|------|------|
-| [13-edgion-plugins.md](13-edgion-plugins.md) | 28 个 HTTP 插件目录与配置 |
-| [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) | Stream 插件两阶段模型 |
+| Resource | Description |
+|----------|-------------|
+| [13-edgion-plugins.md](13-edgion-plugins.md) | Catalog and configuration of 28 HTTP plugins |
+| [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) | Stream plugin two-stage model |
 
-### 后端与外部系统
+### Backends and External Systems
 
-| 资源 | 说明 |
-|------|------|
-| [16-service-backends.md](16-service-backends.md) | Service 发现、健康检查、负载均衡策略 |
-| [18-link-sys.md](18-link-sys.md) | Redis/Etcd/ES/Webhook/Kafka 连接器 |
+| Resource | Description |
+|----------|-------------|
+| [16-service-backends.md](16-service-backends.md) | Service discovery, health checks, load balancing policies |
+| [18-link-sys.md](18-link-sys.md) | Redis/Etcd/ES/Webhook/Kafka connectors |
 
-## 快速定位
+## Quick Lookup
 
-| 你想… | 直接打开 |
-|-------|---------|
-| 配置 Gateway Listener | [01-gateway.md](01-gateway.md) |
-| 配置 HTTP 路由规则 | [04-httproute.md](04-httproute.md) |
-| 配置 gRPC 路由 | [05-grpcroute.md](05-grpcroute.md) |
-| 配置 TLS/mTLS | [09-edgion-tls.md](09-edgion-tls.md) |
-| 配置自动证书 | [17-acme.md](17-acme.md) |
-| 查找 HTTP 插件 | [13-edgion-plugins.md](13-edgion-plugins.md) |
-| 配置 TCP 层插件 | [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) |
-| 配置健康检查/负载均衡 | [16-service-backends.md](16-service-backends.md) |
-| 接入外部系统 | [18-link-sys.md](18-link-sys.md) |
-| 配置上游 TLS | [12-backend-tls-policy.md](12-backend-tls-policy.md) |
+| You want to… | Open directly |
+|--------------|---------------|
+| Configure a Gateway Listener | [01-gateway.md](01-gateway.md) |
+| Configure HTTP routing rules | [04-httproute.md](04-httproute.md) |
+| Configure gRPC routes | [05-grpcroute.md](05-grpcroute.md) |
+| Configure TLS/mTLS | [09-edgion-tls.md](09-edgion-tls.md) |
+| Configure automatic certificates | [17-acme.md](17-acme.md) |
+| Look up HTTP plugins | [13-edgion-plugins.md](13-edgion-plugins.md) |
+| Configure TCP-layer plugins | [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) |
+| Configure health checks/load balancing | [16-service-backends.md](16-service-backends.md) |
+| Integrate with external systems | [18-link-sys.md](18-link-sys.md) |
+| Configure upstream TLS | [12-backend-tls-policy.md](12-backend-tls-policy.md) |

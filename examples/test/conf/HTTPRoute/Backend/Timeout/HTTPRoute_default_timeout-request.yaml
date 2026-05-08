@@ -15,7 +15,7 @@ spec:
             type: PathPrefix
             value: /
       timeouts:
-        request: "1s"    # 端到端请求超时，后端延迟超过此值应返回 504
+        request: "1s"    # End-to-end request timeout; backend delays exceeding this should return 504
       backendRefs:
         - name: test-http
           namespace: edgion-test

@@ -1,53 +1,53 @@
 ---
 name: gateway-load-balancing
-description: 负载均衡策略：RoundRobin、Random、EWMA、LeastConn、ConsistentHash、WeightedSelector，以及后端选择流程。
+description: Load balancing strategies — RoundRobin, Random, EWMA, LeastConn, ConsistentHash, WeightedSelector, and the backend selection flow.
 ---
 
-# 负载均衡
+# Load balancing
 
-> 负载均衡模块负责从后端列表中选择目标实例。
-> 默认使用加权轮询（WeightedRoundRobin），可通过 HTTPRoute 的 ExtensionRef filter 指定 LoadBalancer 策略。
+> The load balancing module is responsible for selecting a target instance from the backend list.
+> The default is weighted round-robin (WeightedRoundRobin); a LoadBalancer policy can be specified via the HTTPRoute ExtensionRef filter.
 
-## 负载均衡策略
+## Load balancing strategies
 
-| 策略 | 类型 | 配置别名 | 说明 |
-|------|------|----------|------|
-| RoundRobin | 默认 | （默认，无需配置） | 加权轮询，通过 `WeightedRoundRobin<T>` 实现 |
-| Random | 内置 | （随机选择） | 随机后端选择 |
-| EWMA | `LbPolicy::Ewma` | `"ewma"` | 基于响应时间的指数加权移动平均值，优先选择延迟低的后端 |
-| LeastConn | `LbPolicy::LeastConnection` | `"leastconn"`, `"least-connection"`, `"leastconnection"`, `"least_connection"` | 最少连接数，优先选择活跃连接最少的后端 |
-| ConsistentHash | `LbPolicy::Consistent` | `"consistent"`, `"consistent-hash"`, `"ketama"` | 一致性哈希，支持按 header/cookie/IP/query param 等计算哈希 |
-| WeightedSelector | — | — | `BackendSelector<T>` 实现的通用加权选择器，用于多 BackendRef 间的选择 |
+| Strategy | Type | Configuration alias | Description |
+|----------|------|---------------------|-------------|
+| RoundRobin | default | (default, no configuration needed) | Weighted round-robin, implemented via `WeightedRoundRobin<T>` |
+| Random | built-in | (random selection) | Random backend selection |
+| EWMA | `LbPolicy::Ewma` | `"ewma"` | Exponentially weighted moving average of response time, prefers low-latency backends |
+| LeastConn | `LbPolicy::LeastConnection` | `"leastconn"`, `"least-connection"`, `"leastconnection"`, `"least_connection"` | Least connections, prefers the backend with the fewest active connections |
+| ConsistentHash | `LbPolicy::Consistent` | `"consistent"`, `"consistent-hash"`, `"ketama"` | Consistent hashing, supports computing the hash from header/cookie/IP/query param, etc. |
+| WeightedSelector | — | — | A general-purpose weighted selector implemented by `BackendSelector<T>`, used for selection across multiple BackendRefs |
 
-## LB 策略解析
+## LB policy parsing
 
-`LbPolicy` 枚举定义了三种非默认策略：
+The `LbPolicy` enum defines three non-default strategies:
 
 ```rust
 pub enum LbPolicy {
-    Consistent,       // 一致性哈希
-    LeastConnection,  // 最少连接
-    Ewma,             // 指数加权移动平均
+    Consistent,       // consistent hashing
+    LeastConnection,  // least connections
+    Ewma,             // exponentially weighted moving average
 }
 ```
 
-- 通过 `LbPolicy::parse()` 解析字符串配置
-- 支持 `LbPolicy::parse_from_string()` 解析逗号分隔的多策略字符串
-- 未配置时默认使用 RoundRobin
+- `LbPolicy::parse()` parses string configuration.
+- `LbPolicy::parse_from_string()` supports comma-separated multi-policy strings.
+- When not configured, RoundRobin is used by default.
 
-## EWMA 和 LeastConn 的选择算法
+## EWMA and LeastConn selection algorithm
 
-EWMA 和 LeastConn 共享 `select_by_min_metric()` 算法：
+EWMA and LeastConn share the `select_by_min_metric()` algorithm:
 
-1. 构建最小堆（BinaryHeap + Reverse），按 metric 值排序
-2. 跳过非活跃后端（通过 `runtime_state::is_backend_active()` 检查）
-3. 从堆中依次弹出候选者，通过 `health_filter` 检查健康状态
-4. 返回第一个通过健康检查的最低 metric 后端
-5. 最多迭代 `max_iterations` 次
+1. Build a min-heap (BinaryHeap + Reverse) sorted by metric value.
+2. Skip inactive backends (checked via `runtime_state::is_backend_active()`).
+3. Pop candidates from the heap one by one and check health via the `health_filter`.
+4. Return the first backend with the lowest metric that passes the health check.
+5. Iterate at most `max_iterations` times.
 
 ## BackendSelector
 
-`BackendSelector<T>` 是通用的后端选择器，用于 Route 中多个 BackendRef 之间的加权选择：
+`BackendSelector<T>` is a generic backend selector for weighted selection across multiple BackendRefs in a Route:
 
 ```rust
 pub struct BackendSelector<T> {
@@ -55,44 +55,44 @@ pub struct BackendSelector<T> {
 }
 
 enum SelectorState<T> {
-    Error(u32),                    // 配置错误（无 BackendRef 或权重不一致）
-    Single(T),                     // 单后端，直接返回
-    Multiple(WeightedRoundRobin<T>), // 多后端，加权轮询
+    Error(u32),                    // configuration error (no BackendRef or inconsistent weights)
+    Single(T),                     // single backend, returned directly
+    Multiple(WeightedRoundRobin<T>), // multiple backends, weighted round-robin
 }
 ```
 
-特点：
-- 懒初始化：首次使用时通过 `init(items, weights)` 初始化
-- 线程安全：内部使用 ArcSwap
-- 权重验证：要么全部配置权重，要么全部不配置；权重为 0 的后端被过滤掉
-- 错误码：`ERR_NO_BACKEND_REFS`(1) 和 `ERR_INCONSISTENT_WEIGHT`(2)
+Characteristics:
+- Lazy initialization: initialized on first use via `init(items, weights)`.
+- Thread-safe: uses ArcSwap internally.
+- Weight validation: weights must be configured for all or for none; backends with weight 0 are filtered out.
+- Error codes: `ERR_NO_BACKEND_REFS`(1) and `ERR_INCONSISTENT_WEIGHT`(2).
 
-## 后端选择流程
+## Backend selection flow
 
 ```
 HTTPRoute rule
-  └── BackendRef[] (带可选 weight)
+  └── BackendRef[] (with optional weight)
        │
-       ├── BackendSelector.select()  →  选择目标 BackendRef
+       ├── BackendSelector.select()  →  select target BackendRef
        │
-       └── 解析 service_key (namespace/name)
+       └── Resolve service_key (namespace/name)
             │
-            ├── 从 EndpointSlice/Endpoint store 获取后端列表 (Backend[])
+            ├── Get backend list (Backend[]) from EndpointSlice/Endpoint store
             │
-            ├── 应用 LB 策略选择具体后端
-            │   ├── 默认: RoundRobin (Pingora LoadBalancer)
-            │   ├── ConsistentHash: 按请求特征哈希
-            │   ├── LeastConn: 最少连接
-            │   └── EWMA: 最低延迟
+            ├── Apply LB strategy to select a specific backend
+            │   ├── Default: RoundRobin (Pingora LoadBalancer)
+            │   ├── ConsistentHash: hash by request feature
+            │   ├── LeastConn: least connections
+            │   └── EWMA: lowest latency
             │
-            ├── 健康检查过滤 (Pingora Backend health)
+            ├── Health check filtering (Pingora Backend health)
             │
-            └── 返回 HttpPeer (IP:Port + TLS 配置)
+            └── Return HttpPeer (IP:Port + TLS configuration)
 ```
 
-## LB 配置方式
+## LB configuration
 
-通过 HTTPRoute/GRPCRoute 的 `ExtensionRef` filter 引用 `LoadBalancer` 类型资源：
+Reference a `LoadBalancer` resource via the HTTPRoute / GRPCRoute `ExtensionRef` filter:
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -110,42 +110,42 @@ spec:
             name: my-lb-policy
 ```
 
-`ParsedLBPolicy` 在 BackendRef 的 `extension_info` 字段中解析后存储，支持：
-- `ConsistentHash(ConsistentHashOn)` — 指定哈希源
-- `LeastConn`
-- `Ewma`
+`ParsedLBPolicy` is parsed and stored in the `extension_info` field of the BackendRef. Supported entries:
+- `ConsistentHash(ConsistentHashOn)` — specifies the hash source.
+- `LeastConn`.
+- `Ewma`.
 
-## LB Preload（预热）
+## LB Preload (warmup)
 
-`preload_load_balancers()` 在启动完成后（`wait_for_ready()` 之后）调用，减少首请求延迟：
+`preload_load_balancers()` is called after startup completes (after `wait_for_ready()`) to reduce first-request latency:
 
-1. 收集所有路由类型（HTTP/gRPC/TCP/UDP/TLS）中引用的 (service_key, lb_policy) 对
-2. 使用 HashSet 去重
-3. 对每个 key 调用 `get_or_create()` 预创建 RoundRobin LB 实例
-4. LeastConn/EWMA/ConsistentHash 读取 RR 的 backend 列表，不需要单独预创建
+1. Collect (service_key, lb_policy) pairs referenced by all route kinds (HTTP/gRPC/TCP/UDP/TLS).
+2. Deduplicate using HashSet.
+3. For each key, call `get_or_create()` to pre-create a RoundRobin LB instance.
+4. LeastConn / EWMA / ConsistentHash read RR's backend list; no separate pre-creation is needed.
 
-## 目录布局
+## Directory layout
 
 ```
 src/core/gateway/lb/
-├── mod.rs                    # 模块导出
-├── backend_selector/         # 通用后端选择器
-│   ├── selector.rs           # BackendSelector<T> 实现
-│   └── weighted_selector.rs  # WeightedRoundRobin<T> 实现
-├── selection/                # 各策略实现
-│   ├── round_robin.rs        # RoundRobin 选择
-│   ├── consistent_hash.rs    # 一致性哈希选择
-│   ├── ewma.rs               # EWMA 选择
-│   └── least_conn.rs         # 最少连接选择
-├── ewma/                     # EWMA 指标跟踪
-│   └── metrics.rs            # EWMA 延迟指标
-├── leastconn/                # LeastConn 状态管理
-│   ├── backend_state.rs      # 后端连接状态
-│   └── cleaner.rs            # 过期状态清理
-├── lb_policy/                # LB 策略配置
-│   ├── types.rs              # LbPolicy 枚举定义
-│   ├── config.rs             # 策略配置解析
-│   └── policy_store.rs       # 策略存储
-└── runtime_state/            # 运行时后端状态
-    └── mod.rs                # 后端活跃状态跟踪
+├── mod.rs                    # module exports
+├── backend_selector/         # general-purpose backend selector
+│   ├── selector.rs           # BackendSelector<T> implementation
+│   └── weighted_selector.rs  # WeightedRoundRobin<T> implementation
+├── selection/                # strategy implementations
+│   ├── round_robin.rs        # RoundRobin selection
+│   ├── consistent_hash.rs    # consistent hashing selection
+│   ├── ewma.rs               # EWMA selection
+│   └── least_conn.rs         # least-connection selection
+├── ewma/                     # EWMA metric tracking
+│   └── metrics.rs            # EWMA latency metrics
+├── leastconn/                # LeastConn state management
+│   ├── backend_state.rs      # backend connection state
+│   └── cleaner.rs            # stale-state cleaner
+├── lb_policy/                # LB policy configuration
+│   ├── types.rs              # LbPolicy enum definition
+│   ├── config.rs             # policy configuration parsing
+│   └── policy_store.rs       # policy store
+└── runtime_state/            # runtime backend state
+    └── mod.rs                # backend active-state tracking
 ```

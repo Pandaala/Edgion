@@ -1,28 +1,28 @@
-# 控制面日志与 Tracing 规范
+# Control-plane logging and Tracing rules
 
-> 控制面使用 `tracing` crate 做结构化日志。本文档覆盖结构化日志规范、Level 选择、
-> 错误上下文、instrument 命名、优雅降级等最佳实践。
+> The control plane uses the `tracing` crate for structured logging. This document covers structured-log conventions, level selection,
+> error context, instrument naming, graceful degradation, and other best practices.
 >
-> 热路径约束和敏感信息规则详见 [../01-log-safety.md](../01-log-safety.md)。
+> For hot-path constraints and sensitive-information rules see [../01-log-safety.md](../01-log-safety.md).
 
-## 信息分层：三层日志各司其职
+## Information layering: three log layers, each in its own role
 
-| 层次 | 工具 | 目标受众 | 保留时间 |
+| Layer | Tool | Target audience | Retention |
 |------|------|---------|---------|
-| 请求粒度 | access log（JSON） | 运维排障、审计 | 天~周 |
-| 系统事件 | `tracing::info/warn/error` | 开发调试、告警 | 小时~天 |
-| 性能聚合 | Prometheus metrics | SRE、Grafana | 月 |
+| Request granularity | access log (JSON) | Ops troubleshooting, audit | days~weeks |
+| System events | `tracing::info/warn/error` | Developer debugging, alerts | hours~days |
+| Performance aggregation | Prometheus metrics | SRE, Grafana | months |
 
-**原则**：access log 聚焦请求维度；系统日志聚焦组件事件；metrics 聚焦趋势聚合。三者互补，不要用 access log 当系统日志用，也不要用 metrics 存原始请求细节。
+**Principle**: the access log focuses on request granularity; system logs focus on component events; metrics focus on trend aggregation. They complement each other — do not use the access log as a system log, and do not store raw request details in metrics.
 
 ---
 
-## 结构化日志规范
+## Structured-log conventions
 
-使用 key-value 结构化字段，便于日志系统索引：
+Use key-value structured fields so the log system can index them:
 
 ```rust
-// ✅ 正确：结构化字段
+// Correct: structured fields
 tracing::warn!(
     component = "grpc_client",
     error = %e,
@@ -30,11 +30,11 @@ tracing::warn!(
     "WatchServerMeta connection failed, retrying"
 );
 
-// ❌ 错误：拼接字符串，丢失结构
+// Wrong: spliced string, structure lost
 tracing::warn!("WatchServerMeta connection failed: {}, retry in {}s", e, backoff.as_secs());
 ```
 
-**固定使用 `component` 字段标识模块**，方便按组件过滤日志：
+**Always use a `component` field to identify the module**, so logs can be filtered by component:
 
 ```rust
 tracing::info!(component = "grpc_server", ...);
@@ -42,26 +42,26 @@ tracing::info!(component = "k8s_status", ...);
 tracing::info!(component = "conf_client", ...);
 ```
 
-**span 继承规则**：如果 `component` 已在外层 span 中声明，span 内的日志自动继承，无需重复写。例如 `process_resource` 的 span 已带 `component = "resource_processor"`，内部所有日志不需要再写 `component`、`kind`、`name`、`ns`、`rv`、`sv`。
+**Span inheritance rule**: if `component` is already declared in an outer span, logs inside the span inherit it automatically and do not need to repeat it. For example, the span of `process_resource` carries `component = "resource_processor"`, so all logs inside it do not need `component`, `kind`, `name`, `ns`, `rv`, or `sv` repeated.
 
 ---
 
-## Level 选择
+## Level selection
 
-| Level | 适用场景 |
+| Level | When to use |
 |-------|---------|
-| `error!` | 影响请求/数据的错误（需要立即处理） |
-| `warn!` | 可恢复的异常、重试、降级（需要关注但不紧急） |
-| `info!` | 重要的生命周期事件（启动、关闭、reload、连接建立/断开） |
-| `debug!` | 排查时有用的中间状态（正常运行时不需要看） |
-| `trace!` | 极度详细的流程追踪（性能分析专用） |
+| `error!` | Errors affecting requests/data (require immediate attention) |
+| `warn!` | Recoverable exceptions, retries, degradations (need attention but not urgent) |
+| `info!` | Important lifecycle events (startup, shutdown, reload, connection established/dropped) |
+| `debug!` | Intermediate state useful while troubleshooting (not needed during normal operation) |
+| `trace!` | Extremely detailed flow tracing (for performance analysis) |
 
 ---
 
-## 错误信息要有定位价值
+## Error messages must carry locating value
 
 ```rust
-// ✅ 有价值：包含 what/where/why
+// Valuable: contains what/where/why
 tracing::error!(
     component = "k8s_status",
     kind = "HTTPRoute",
@@ -71,32 +71,32 @@ tracing::error!(
     "Failed to update K8s status"
 );
 
-// ❌ 无价值：看不出发生了什么
+// Worthless: cannot tell what happened
 tracing::error!("error: {}", e);
 ```
 
 ---
 
-## 优雅降级
+## Graceful degradation
 
-在 observability 相关代码中，数据收集失败不应该导致请求失败：
+In observability-related code, a data-collection failure must not cause request failure:
 
 ```rust
-// ✅ 优雅降级：收集失败不影响请求
+// Graceful degradation: collection failure does not break the request
 let json = serde_json::to_string(&entry).unwrap_or_else(|e| {
     tracing::warn!(component = "access_log", error = %e, "Failed to serialize log entry");
     String::new()
 });
 
-// ❌ panic 导致请求中断
+// panic interrupts the request
 let json = serde_json::to_string(&entry).unwrap();
 ```
 
 ---
 
-## instrument 与 span 命名
+## instrument and span naming
 
-涉及异步任务的长运行逻辑，善用 `instrument` 给 span 命名：
+For long-running logic involving async tasks, make good use of `instrument` to name the span:
 
 ```rust
 use tracing::instrument;
@@ -107,9 +107,9 @@ pub async fn start_watch_server_meta(self: Arc<Self>) {
 }
 ```
 
-### Processor 的 span 模式
+### Processor span pattern
 
-`process_resource` / `process_delete` 使用 `info_span` + `.instrument()` 包裹整个处理流程（async 兼容，不能用 `.entered()`）：
+`process_resource` / `process_delete` use `info_span` + `.instrument()` to wrap the whole processing flow (async-compatible; `.entered()` cannot be used):
 
 ```rust
 let span = tracing::info_span!("process_resource", kind = self.kind, name = %name, ns = %namespace, rv, sv);
@@ -118,11 +118,11 @@ self.process_resource_inner(obj, ctx, is_init, existing_status_json, sv)
     .await
 ```
 
-span 内的所有日志自动继承 `kind/name/ns/rv/sv`，**不需要手动重复这些字段**，只写消息和额外字段（如 `error`、`reason`、`phase`）。
+All logs inside the span inherit `kind/name/ns/rv/sv` automatically — **do not repeat those fields manually**; just write the message and extra fields (such as `error`, `reason`, `phase`).
 
 ---
 
-## 相关规范
+## Related rules
 
-- **[../00-logging-and-tracing-ids.md](../00-logging-and-tracing-ids.md)** — rv / sv 传播机制和排障流程
-- **[../01-log-safety.md](../01-log-safety.md)** — 敏感信息防泄漏、数据面禁止 tracing 的铁律
+- **[../00-logging-and-tracing-ids.md](../00-logging-and-tracing-ids.md)** — rv / sv propagation mechanism and troubleshooting flow
+- **[../01-log-safety.md](../01-log-safety.md)** — Iron rules for sensitive-information protection and data-plane tracing prohibition

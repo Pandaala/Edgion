@@ -3,63 +3,63 @@ name: 09-misc
 description: Miscellaneous skill for Edgion. Includes CI/CD (compiling binaries, feature flags, Docker builds, release workflows) and TLS debugging.
 ---
 
-# 09 杂项
+# 09 Miscellaneous
 
-> Edgion 构建与发布流程。Rust 1.75+ 单 Crate 项目，默认 features: `allocator-jemalloc` + `boringssl`。
-> 三个二进制：`edgion-gateway`（数据面）、`edgion-controller`（控制面）、`edgion-cli`（CLI）。
+> Edgion build and release workflow. Rust 1.75+ single-crate project, default features: `allocator-jemalloc` + `boringssl`.
+> Three binaries: `edgion-gateway` (data plane), `edgion-controller` (control plane), `edgion-cli` (CLI).
 
-## 文件清单
+## File list
 
-| 文件 | 主题 | 状态 |
-|------|------|------|
-| [cicd/](cicd/) | CI/CD：本地构建、Docker 构建、GitHub Workflow、Release 发布 | ✅ |
-| [debugging-tls-gateway.md](debugging-tls-gateway.md) | K8s 环境下 TLS 专项调试（kubectl exec + 日志文件 + grep 模式） | ✅ |
-| [debugging-conformance.md](debugging-conformance.md) | Conformance 测试调试：rv/sv/access log 三元组、orbstack-dev.sh 日志命令、各 profile 失败模式 | ✅ |
-| [03-dev-deploy-hot-replace.md](03-dev-deploy-hot-replace.md) | 开发部署热替换：原生镜像 + shell restart loop + 交叉编译 + kubectl cp 全流程 | ✅ |
+| File | Topic | Status |
+|------|-------|--------|
+| [cicd/](cicd/) | CI/CD: local build, Docker build, GitHub Workflow, Release publishing | ✅ |
+| [debugging-tls-gateway.md](debugging-tls-gateway.md) | Targeted TLS debugging in K8s environments (kubectl exec + log files + grep patterns) | ✅ |
+| [debugging-conformance.md](debugging-conformance.md) | Conformance test debugging: rv/sv/access log triple, orbstack-dev.sh log commands, per-profile failure modes | ✅ |
+| [03-dev-deploy-hot-replace.md](03-dev-deploy-hot-replace.md) | Dev deployment hot replace: native image + shell restart loop + cross compile + kubectl cp end-to-end flow | ✅ |
 
-## 快速参考
+## Quick reference
 
-### 本地构建
+### Local build
 ```bash
-# 开发模式（快速编译）
+# Development mode (fast compile)
 cargo build
 
-# 发布模式
+# Release mode
 cargo build --release
 
-# 指定 TLS 后端（rustls 实验构建）
+# Specify TLS backend (rustls experimental build)
 cargo build --release --no-default-features --features "allocator-jemalloc,rustls"
 
-# 代码检查
+# Code checks
 cargo check && cargo clippy && cargo fmt --check
 make check-agent-docs
 ```
 
-补充入口：
+Additional entry points:
 
-- 本地构建细节见 [cicd/00-local-build.md](cicd/00-local-build.md)
-- Feature 组合细节见 [../02-features/01-binary-and-deployment/02-feature-flags.md](../02-features/01-binary-and-deployment/02-feature-flags.md)
+- Local build details: [cicd/00-local-build.md](cicd/00-local-build.md)
+- Feature combination details: [../02-features/01-binary-and-deployment/02-feature-flags.md](../02-features/01-binary-and-deployment/02-feature-flags.md)
 
-### Docker 构建
+### Docker build
 ```bash
-# 参考 docker/ 目录下的 Dockerfile
+# See the Dockerfiles under the docker/ directory
 docker build -f docker/Dockerfile -t edgion .
 ```
 
-### 发布流程
+### Release workflow
 ```
 git tag v0.x.x → push → build-image.yml → Docker Hub pandaala/edgion-*
 ```
 
-## Cargo Features 速查
+## Cargo features cheat sheet
 
-| Feature | 说明 | 默认 |
-|---------|------|------|
-| `allocator-jemalloc` | 使用 jemalloc 内存分配器 | ✅ |
-| `boringssl` | 使用 BoringSSL 作为 TLS 后端 | ✅ |
-| `rustls` | 使用 rustls 作为 TLS 后端 | |
-| `allocator-mimalloc` | 使用 mimalloc 内存分配器 | |
-| `allocator-system` | 使用系统默认分配器 | |
-| `legacy_route_tests` | 启用旧版路由测试 | |
+| Feature | Description | Default |
+|---------|-------------|---------|
+| `allocator-jemalloc` | Use the jemalloc memory allocator | ✅ |
+| `boringssl` | Use BoringSSL as the TLS backend | ✅ |
+| `rustls` | Use rustls as the TLS backend | |
+| `allocator-mimalloc` | Use the mimalloc memory allocator | |
+| `allocator-system` | Use the system default allocator | |
+| `legacy_route_tests` | Enable legacy route tests | |
 
-> ⚠️ `boringssl`、`rustls` 二选一，不可同时启用。
+> ⚠️ `boringssl` and `rustls` are mutually exclusive and cannot be enabled simultaneously.

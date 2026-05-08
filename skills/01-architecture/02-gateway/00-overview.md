@@ -1,24 +1,24 @@
 ---
 name: gateway-overview
-description: edgion-gateway 总体架构：双运行时模型、配置同步管线、Pingora 代理层、模块划分、关键数据流。
+description: edgion-gateway overall architecture — dual runtime model, configuration sync pipeline, Pingora proxy layer, module layout, key data flows.
 ---
 
-# Gateway 总体架构
+# Gateway overall architecture
 
-edgion-gateway 是 Edgion 的数据面，基于 Cloudflare Pingora 构建的高性能反向代理。它通过 gRPC 从 Controller 接收 Kubernetes 风格的资源配置，并将其转化为运行时代理行为。
+edgion-gateway is Edgion's data plane, a high-performance reverse proxy built on Cloudflare Pingora. It receives Kubernetes-style resource configuration from the Controller via gRPC and translates it into runtime proxy behavior.
 
-## 双运行时模型
+## Dual runtime model
 
-Gateway 进程内并存两个运行时：
+Two runtimes coexist within the Gateway process:
 
-| 运行时 | 职责 | 生命周期 |
-|--------|------|---------|
-| **Tokio** | gRPC Watch/List、配置处理、辅助服务（Admin API、Metrics API、健康检查）、所有 async 任务 | 启动时创建，Phase 2 前移入后台线程，以 `std::future::pending` 永久挂起保持存活 |
-| **Pingora** | 代理主循环：TCP 连接接收、TLS 握手、HTTP/gRPC 请求处理、上游连接复用 | 由 `Server::run_forever()` 在主线程阻塞运行 |
+| Runtime | Responsibility | Lifecycle |
+|---------|----------------|-----------|
+| **Tokio** | gRPC Watch/List, configuration handling, auxiliary services (Admin API, Metrics API, health checks), all async tasks | Created at startup, moved to a background thread before Phase 2, kept alive via `std::future::pending` permanent suspension |
+| **Pingora** | Proxy main loop: TCP connection accept, TLS handshake, HTTP/gRPC request handling, upstream connection reuse | Runs blocking on the main thread via `Server::run_forever()` |
 
-两个运行时通过 **ArcSwap** 原子指针共享配置数据——Tokio 侧写入，Pingora 侧无锁读取。这种设计使得配置热更新不会阻塞代理请求处理。
+The two runtimes share configuration data via an **ArcSwap** atomic pointer — the Tokio side writes, the Pingora side reads lock-free. This design ensures that hot configuration updates do not block proxy request handling.
 
-## 配置同步管线
+## Configuration sync pipeline
 
 ```mermaid
 flowchart TD
@@ -28,121 +28,121 @@ flowchart TD
     D --> E["Runtime Stores (ArcSwap atomic swap)"]
 ```
 
-关键组件说明：
+Key components:
 
-- **ConfigSyncClient** (`conf_sync/conf_client/grpc_client.rs`)：管理与 Controller 的 gRPC 连接，负责 List/Watch 调用、版本跟踪、断线重连。通过 `get_server_info()` 获取 server_id 和 supported_kinds。
-- **ClientCache\<T\>** (`conf_sync/cache_client/cache.rs`)：每种资源类型一个缓存实例，内部持有 `CacheData<T>`（RwLock 保护）和 gRPC 客户端引用。实现了 `DynClientCache` trait 以支持类型擦除的统一调度。
-- **event_dispatch** (`conf_sync/cache_client/event_dispatch.rs`)：实现 `CacheEventDispatch<T>` trait，将 gRPC 事件（InitAdd/EventAdd/EventUpdate/EventDelete）应用到 CacheData，并压缩事件批次。
-- **ConfHandler\<T\>** (`core/common/conf_sync/traits.rs`)：资源处理器 trait，每种资源类型一个实现。提供 `full_set()` 和 `partial_update(add, update, remove)` 两种回调，负责将资源写入运行时存储。
-- **ConfigClient** (`conf_sync/conf_client/config_client.rs`)：聚合所有资源类型的 ClientCache，提供 `list_gateways()`、`get_gateway_class()`、`get_edgion_gateway_config()` 等类型安全的查询接口，以及 `is_ready()` 就绪检查。
+- **ConfigSyncClient** (`conf_sync/conf_client/grpc_client.rs`): manages the gRPC connection to the Controller, handles List/Watch calls, version tracking, and reconnection. Calls `get_server_info()` to obtain server_id and supported_kinds.
+- **ClientCache\<T\>** (`conf_sync/cache_client/cache.rs`): one cache instance per resource kind, holding `CacheData<T>` (RwLock-protected) and a gRPC client reference. Implements the `DynClientCache` trait to enable type-erased unified dispatching.
+- **event_dispatch** (`conf_sync/cache_client/event_dispatch.rs`): implements the `CacheEventDispatch<T>` trait, applying gRPC events (InitAdd/EventAdd/EventUpdate/EventDelete) to CacheData and compressing event batches.
+- **ConfHandler\<T\>** (`core/common/conf_sync/traits.rs`): a resource-handler trait, one implementation per resource kind. Provides two callbacks, `full_set()` and `partial_update(add, update, remove)`, responsible for writing resources into runtime stores.
+- **ConfigClient** (`conf_sync/conf_client/config_client.rs`): aggregates ClientCache instances of all resource kinds and exposes type-safe query interfaces such as `list_gateways()`, `get_gateway_class()`, `get_edgion_gateway_config()`, plus an `is_ready()` readiness check.
 
-## Pingora 代理层
+## Pingora proxy layer
 
-### ConnectionFilter（TCP 层）
+### ConnectionFilter (TCP layer)
 
-`StreamPluginConnectionFilter` 实现 Pingora 的 `ConnectionFilter` trait，在 TLS 握手和 HTTP 解析之前对原始 TCP 连接执行过滤。通过 Gateway annotation `edgion.io/edgion-stream-plugins` 引用 `EdgionStreamPlugins` 资源，从全局 `StreamPluginStore`（ArcSwap）读取最新配置，支持热重载。每次连接调用 `should_accept(addr)` 执行所有 StreamPlugin 链。
+`StreamPluginConnectionFilter` implements Pingora's `ConnectionFilter` trait, filtering raw TCP connections before TLS handshake and HTTP parsing. It references the `EdgionStreamPlugins` resource via the Gateway annotation `edgion.io/edgion-stream-plugins` and reads the latest configuration from the global `StreamPluginStore` (ArcSwap), supporting hot reload. Each connection invokes `should_accept(addr)` to execute all StreamPlugin chains.
 
-### ProxyHttp（HTTP/gRPC 层）
+### ProxyHttp (HTTP/gRPC layer)
 
-`EdgionHttpProxy` 实现 Pingora 的 `ProxyHttp` trait，处理 HTTP 和 gRPC 请求的完整生命周期。以 `EdgionHttpContext` 为每请求状态载体，经过 early_request_filter → request_filter → upstream_peer → connected_to_upstream → upstream_response_filter → upstream_response_body_filter → response_filter → logging 八个阶段。
+`EdgionHttpProxy` implements Pingora's `ProxyHttp` trait and handles the full lifecycle of HTTP and gRPC requests. With `EdgionHttpContext` as the per-request state carrier, requests pass through eight phases: early_request_filter → request_filter → upstream_peer → connected_to_upstream → upstream_response_filter → upstream_response_body_filter → response_filter → logging.
 
-### TCP/TLS/UDP 路由
+### TCP/TLS/UDP routes
 
-除 HTTP/gRPC 外，Gateway 还支持：
-- **TCPRoute**：TCP 四层代理，按端口和 SNI 匹配
-- **TLSRoute**：TLS passthrough 代理，按 SNI 匹配后直接转发加密流量
-- **UDPRoute**：UDP 代理
+Beyond HTTP/gRPC, the Gateway also supports:
+- **TCPRoute**: TCP layer-4 proxy, matched by port and SNI.
+- **TLSRoute**: TLS passthrough proxy, matched by SNI and forwards encrypted traffic directly.
+- **UDPRoute**: UDP proxy.
 
-每种协议类型有独立的 `routes_mgr`（路由管理器）和 `route_table`（路由表），均使用 ArcSwap 实现无锁热更新。
+Each protocol has an independent `routes_mgr` (route manager) and `route_table`, both implemented with ArcSwap for lock-free hot updates.
 
-## 模块布局
+## Module layout
 
 ```
 src/core/gateway/
-├── api/           # Admin API 服务器 (:5900)，提供运行时状态查询
-├── backends/      # 后端管理
-│   ├── discovery/ # 后端发现：Endpoint / EndpointSlice / Service 三种存储
-│   ├── health/    # 健康检查：annotation 驱动的探针、状态存储、Manager 调度
-│   ├── policy/    # BackendTLSPolicy 处理
-│   ├── preload.rs # 启动时预加载所有路由的负载均衡器
+├── api/           # Admin API server (:5900), exposes runtime state queries
+├── backends/      # Backend management
+│   ├── discovery/ # Backend discovery: Endpoint / EndpointSlice / Service stores
+│   ├── health/    # Health checks: annotation-driven probes, status store, manager scheduling
+│   ├── policy/    # BackendTLSPolicy handling
+│   ├── preload.rs # Preload load balancers for all routes at startup
 │   └── validation.rs
-├── cache/         # LRU 缓存
-├── cli/           # 启动入口 (EdgionGatewayCli::run())
-│   ├── config.rs  # EdgionGatewayConfig TOML 配置结构
-│   ├── pingora.rs # Pingora Server 创建与运行 (两阶段)
+├── cache/         # LRU cache
+├── cli/           # Startup entry (EdgionGatewayCli::run())
+│   ├── config.rs  # EdgionGatewayConfig TOML configuration structure
+│   ├── pingora.rs # Pingora Server creation and run (two-phase)
 │   └── log_config.rs
-├── conf_sync/     # 配置同步
-│   ├── cache_client/ # ClientCache<T>、CacheData、event_dispatch
-│   └── conf_client/  # ConfigSyncClient (gRPC)、ConfigClient (聚合查询)
-├── config/        # 资源配置处理
+├── conf_sync/     # Configuration sync
+│   ├── cache_client/ # ClientCache<T>, CacheData, event_dispatch
+│   └── conf_client/  # ConfigSyncClient (gRPC), ConfigClient (aggregated queries)
+├── config/        # Resource configuration handlers
 │   ├── edgion_gateway/ # EdgionGatewayConfig ConfHandler
 │   └── gateway_class/  # GatewayClass ConfHandler
-├── lb/            # 负载均衡
-│   ├── backend_selector/ # 后端选择器 (加权轮询)
-│   ├── selection/        # 策略实现：ConsistentHash、EWMA、LeastConn
-│   ├── ewma/             # EWMA 指标收集
-│   ├── leastconn/        # 最少连接状态与清理器
-│   ├── lb_policy/        # LB 策略配置与类型
-│   └── runtime_state/    # 运行时 LB 状态 (increment/decrement/update_ewma)
-├── link_sys/      # 外部系统集成 (LinkSys)
-│   ├── providers/ # Elasticsearch、Etcd、Redis、Webhook、LocalFile
-│   └── runtime/   # ConfHandler、DataSender
-├── observe/       # 可观测性
-│   ├── access_log/  # AccessLog：entry 定义、logger、store
-│   └── metrics/     # Prometheus 指标、全局计数器
-│   └── logs/        # 系统日志、SSL/TCP/TLS/UDP 日志
-├── plugins/       # 插件系统
-│   ├── http/      # HTTP 插件集合
-│   ├── stream/    # Stream 插件 (ConnectionFilter bridge、TLS route 插件)
-│   └── runtime/   # 插件执行引擎 (PluginRuntime、SessionAdapter)
-├── routes/        # 多协议路由
-│   ├── http/      # HTTPRoute：匹配引擎 (radix + regex)、路由管理器、ProxyHttp 实现
-│   ├── grpc/      # GRPCRoute：匹配与上游处理
+├── lb/            # Load balancing
+│   ├── backend_selector/ # Backend selector (weighted round-robin)
+│   ├── selection/        # Strategy implementations: ConsistentHash, EWMA, LeastConn
+│   ├── ewma/             # EWMA metric collection
+│   ├── leastconn/        # Least-connection state and cleaner
+│   ├── lb_policy/        # LB policy configuration and types
+│   └── runtime_state/    # Runtime LB state (increment/decrement/update_ewma)
+├── link_sys/      # External system integration (LinkSys)
+│   ├── providers/ # Elasticsearch, Etcd, Redis, Webhook, LocalFile
+│   └── runtime/   # ConfHandler, DataSender
+├── observe/       # Observability
+│   ├── access_log/  # AccessLog: entry definition, logger, store
+│   └── metrics/     # Prometheus metrics, global counters
+│   └── logs/        # System logs, SSL/TCP/TLS/UDP logs
+├── plugins/       # Plugin system
+│   ├── http/      # HTTP plugin set
+│   ├── stream/    # Stream plugins (ConnectionFilter bridge, TLS route plugins)
+│   └── runtime/   # Plugin execution engine (PluginRuntime, SessionAdapter)
+├── routes/        # Multi-protocol routing
+│   ├── http/      # HTTPRoute: matching engine (radix + regex), route manager, ProxyHttp impl
+│   ├── grpc/      # GRPCRoute: matching and upstream handling
 │   ├── tcp/       # TCPRoute
 │   ├── tls/       # TLSRoute
 │   └── udp/       # UDPRoute
-├── runtime/       # Pingora 运行时
-│   ├── server/    # GatewayBase、listener_builder、error_response、server_header
-│   ├── matching/  # Gateway 匹配、TLS 证书匹配 (ArcSwap)
-│   ├── store/     # GatewayStore、GatewayConfigStore、ListenerGatewayInfoStore (ArcSwap)
-│   ├── handler.rs # Gateway 资源 ConfHandler 实现
+├── runtime/       # Pingora runtime
+│   ├── server/    # GatewayBase, listener_builder, error_response, server_header
+│   ├── matching/  # Gateway matching, TLS certificate matching (ArcSwap)
+│   ├── store/     # GatewayStore, GatewayConfigStore, ListenerGatewayInfoStore (ArcSwap)
+│   ├── handler.rs # ConfHandler implementation for the Gateway resource
 │   └── gateway_info.rs
-├── services/      # 附加服务
-│   └── acme/      # ACME 证书自动签发 (challenge store)
-└── tls/           # TLS 证书管理
-    ├── boringssl/ # BoringSSL 后端
-    ├── openssl/   # OpenSSL 后端
-    ├── runtime/   # TLS 回调 (SNI 匹配、证书选择)
-    ├── store/     # 证书存储
-    └── validation/ # 证书校验
+├── services/      # Auxiliary services
+│   └── acme/      # ACME automatic certificate issuance (challenge store)
+└── tls/           # TLS certificate management
+    ├── boringssl/ # BoringSSL backend
+    ├── openssl/   # OpenSSL backend
+    ├── runtime/   # TLS callbacks (SNI matching, certificate selection)
+    ├── store/     # Certificate storage
+    └── validation/ # Certificate validation
 ```
 
-## 关键数据流
+## Key data flows
 
-### 配置更新流
-
-```
-Controller 推送资源变更
-  → ConfigSyncClient 接收 gRPC Watch 事件
-    → ClientCache<T>.apply_change() 更新 CacheData
-      → 事件压缩 (compress_events)
-        → ConfHandler<T>.full_set() 或 partial_update()
-          → 写入运行时存储 (ArcSwap.store())
-            → Pingora 代理侧下次读取即生效 (无锁)
-```
-
-### 请求处理流
+### Configuration update flow
 
 ```
-客户端 TCP 连接
-  → ConnectionFilter: StreamPlugins 过滤 (IP 限制等)
-    → TLS 握手: SNI 匹配证书 (GatewayTlsMatcher via ArcSwap)
-      → HTTP 解析
-        → early_request_filter: 超时设置、keepalive 管理
-          → request_filter: 元数据提取、ACME challenge、路由匹配、插件执行
-            → upstream_peer: 后端选择、LB 策略
-              → 代理请求到上游
-                → upstream_response_filter/body_filter: 响应处理
-                  → response_filter: 异步响应插件
-                    → logging: 指标记录 + AccessLog
+Controller pushes resource changes
+  → ConfigSyncClient receives gRPC Watch event
+    → ClientCache<T>.apply_change() updates CacheData
+      → Event compression (compress_events)
+        → ConfHandler<T>.full_set() or partial_update()
+          → Writes to runtime store (ArcSwap.store())
+            → Pingora proxy side picks it up on next read (lock-free)
+```
+
+### Request handling flow
+
+```
+Client TCP connection
+  → ConnectionFilter: StreamPlugins filtering (IP restrictions, etc.)
+    → TLS handshake: SNI-based certificate match (GatewayTlsMatcher via ArcSwap)
+      → HTTP parsing
+        → early_request_filter: timeout setup, keepalive management
+          → request_filter: metadata extraction, ACME challenge, route matching, plugin execution
+            → upstream_peer: backend selection, LB strategy
+              → Proxy request to upstream
+                → upstream_response_filter/body_filter: response handling
+                  → response_filter: async response plugins
+                    → logging: metric recording + AccessLog
 ```

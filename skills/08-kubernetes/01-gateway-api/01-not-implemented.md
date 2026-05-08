@@ -1,191 +1,194 @@
 ---
 name: gateway-api-not-implemented
-description: Gateway API 规范中 Edgion 明确不实现的功能清单及原因
+description: List of Gateway API spec features that Edgion explicitly does not implement, with rationale
 ---
 
-# Gateway API — 不实现的功能
+# Gateway API — Features Not Implemented
 
-本文件记录 Gateway API 规范中 Edgion 经过评估后决定不实现的功能。
+This file records Gateway API spec features that Edgion has evaluated and decided not to implement.
 
-## Programmed / Ready 状态条件
+## Programmed / Ready status conditions
 
-**决定：简化实现（已完成）**
+**Decision: simplified implementation (completed)**
 
-Gateway API 规范将 `Programmed` 列为 Core 必需条件，要求确认配置已编程到数据面。Edgion 的 Controller-Gateway 架构使用异步 gRPC 配置同步（Gateway 主动 Watch/List 拉取），Controller 无法精确得知 Gateway 是否已加载某条具体配置。
+The Gateway API spec lists `Programmed` as a Core required condition, requiring confirmation that the configuration has been programmed into the data plane. Edgion's Controller-Gateway architecture uses asynchronous gRPC configuration sync (the Gateway actively pulls via Watch/List), so the Controller cannot precisely know whether the Gateway has loaded a specific piece of configuration.
 
-曾评估过 Controller → Gateway HTTP Pull 方案（设计完成到 Step 03），但引入了全新通信路径、proto 改动、延时队列等，复杂度过高，决定不实施。该方案的设计文档已删除，未保留备查文件。
+A Controller → Gateway HTTP Pull approach was once evaluated (design completed up to Step 03), but it introduced a brand-new communication path, proto changes, delay queues, and so on; complexity was too high and the approach was not adopted. The design document for that approach has been deleted and no archive copy was retained.
 
-当前采用简化策略：Controller 处理资源后即设置 `Programmed=True`（因为配置会通过 gRPC 同步推送到数据面），当 listener 存在冲突、未解析引用、无效 TLS 配置等异常时设置 `Programmed=False`。这满足 conformance test 的要求，但不代表数据面已实际加载配置。
+The current simplified strategy: after the Controller processes a resource, it sets `Programmed=True` (because the configuration will be synced down to the data plane via gRPC); when there are listener conflicts, unresolved references, invalid TLS configuration, or other anomalies, it sets `Programmed=False`. This satisfies conformance test requirements but does not mean the data plane has actually loaded the configuration.
 
-- Gateway 级和 Listener 级均设置 `Programmed` 条件
-- 详细架构决策见 [skills/01-architecture/01-controller/10-status-management.md](../../01-architecture/01-controller/10-status-management.md)
+- The `Programmed` condition is set at both the Gateway level and the Listener level
+- See [skills/01-architecture/01-controller/10-status-management.md](../../01-architecture/01-controller/10-status-management.md) for detailed architectural decisions
 
-## Gateway addresses 实际绑定地址上报 / GatewayStaticAddresses / GatewayOptionalAddressValue
+## Gateway addresses actual-binding reporting / GatewayStaticAddresses / GatewayOptionalAddressValue
 
-**决定：不实现**
+**Decision: not implemented**
 
-`GatewayStaticAddresses` conformance test 要求 Gateway 实际绑定到 `spec.addresses` 指定的地址。Edgion 是预部署的 binary，监听地址来自 TOML 配置，不会根据 Gateway `spec.addresses` 动态改变绑定行为。同样受限于无数据面→Controller 状态回传通道。
+The `GatewayStaticAddresses` conformance test requires the Gateway to actually bind to the addresses specified in `spec.addresses`. Edgion is a pre-deployed binary; its listening addresses come from TOML configuration and do not dynamically change binding behavior based on Gateway `spec.addresses`. This is also limited by the lack of a data plane → Controller status feedback channel.
 
-当前行为：`derive_gateway_addresses()` 将 `spec.addresses` 复制到 `status.addresses`，但数据面实际绑定地址不变（仍由 TOML 配置决定）。不声明 `SupportGatewayStaticAddresses` 和 `SupportGatewayAddressEmpty`。
+Current behavior: `derive_gateway_addresses()` copies `spec.addresses` to `status.addresses`, but the data-plane actual binding addresses do not change (they are still determined by TOML configuration). `SupportGatewayStaticAddresses` and `SupportGatewayAddressEmpty` are not declared.
 
-## GRPCRoute 与 HTTPRoute 跨类型 Hostname 冲突检测
+## Cross-type Hostname conflict detection between GRPCRoute and HTTPRoute
 
-**决定：不实现**
+**Decision: not implemented**
 
-Gateway API 规范建议同一 Listener 上 GRPCRoute 和 HTTPRoute 的 hostname 具有唯一性，冲突时应设置 status condition。
+The Gateway API spec recommends that hostnames of GRPCRoute and HTTPRoute on the same Listener be unique, with a status condition set on conflict.
 
-Edgion 当前架构中 gRPC 请求先匹配 GRPCRoute、不匹配再 fallback HTTPRoute，优先级逻辑合理。同一 hostname 上 GRPCRoute + HTTPRoute 共存是正常使用模式，主流实现（Envoy Gateway、Istio）也不做跨类型冲突检测。
+In Edgion's current architecture, gRPC requests match GRPCRoute first and fall back to HTTPRoute on no match — a reasonable priority. Coexistence of GRPCRoute + HTTPRoute on the same hostname is a normal use pattern, and major implementations (Envoy Gateway, Istio) do not perform cross-type conflict detection either.
 
-- 相关跟踪条目尚未在 `tasks/` 中归档（如需推进请新建任务）
+- A related tracking item has not yet been filed under `tasks/` (file a new task to drive this).
 
-## Gateway infrastructure 字段
+## Gateway infrastructure field
 
-**决定：暂不实现**
+**Decision: not yet implemented**
 
-Gateway API Extended 功能，允许用户在 `GatewaySpec.infrastructure` 中声明期望的基础设施资源（IP 地址、负载均衡器类型、云厂商参数等）。Gateway Controller 据此自动创建/配置云资源。
+A Gateway API Extended feature that lets users declare desired infrastructure resources (IP addresses, load-balancer types, cloud-provider parameters, etc.) in `GatewaySpec.infrastructure`. The Gateway Controller then automatically creates / configures cloud resources accordingly.
 
-Edgion 是自部署网关，不负责创建云基础设施资源，当前无 cloud provider 集成需求。
+Edgion is a self-deployed gateway and is not responsible for creating cloud infrastructure resources; there is currently no need for cloud-provider integration.
 
-- 仅在有云厂商集成需求时考虑实现
-- 相关跟踪条目尚未在 `tasks/` 中归档（如需推进请新建任务）
+- Will be considered only when there is a need for cloud-provider integration
+- A related tracking item has not yet been filed under `tasks/` (file a new task to drive this).
 
 ## ListenerSet
 
-**决定：暂不实现**
+**Decision: not yet implemented**
 
-Gateway API v1.5 引入 `ListenerSet`，允许在不直接修改 `Gateway` 的情况下，
-由其他资源向现有 Gateway 追加 listeners，并通过 `allowedListeners`、
-命名空间约束和 `ReferenceGrant` 控制授权关系。
+Gateway API v1.5 introduced `ListenerSet`, allowing other resources to append
+listeners to an existing Gateway without modifying the `Gateway` directly, with
+authorization controlled via `allowedListeners`, namespace constraints, and
+`ReferenceGrant`.
 
-Edgion 当前不计划实现该能力，原因：
+Edgion does not plan to implement this capability for the following reasons:
 
-- Edgion 更偏向单团队或单控制面直接管理 `Gateway` 的使用模型，独立 `Gateway` 比共享 `Gateway` + 委托追加 listener 更自然
-- `ListenerSet` 会显著增加资源模型复杂度：listener 合并、优先级、冲突检测、route parentRef 语义、attachedRoutes 统计、status 回写都需要扩展
-- 该能力主要解决多团队共享单个 Gateway 的治理问题，不是 Edgion 当前的核心代理能力缺口
+- Edgion leans toward a single-team or single-control-plane usage model where `Gateway` is managed directly; an independent `Gateway` is more natural than a shared `Gateway` + delegated listener appending
+- `ListenerSet` significantly increases resource-model complexity: listener merging, priority, conflict detection, route parentRef semantics, attachedRoutes accounting, and status writebacks all need extensions
+- The capability mainly addresses governance for multiple teams sharing a single Gateway, which is not a current proxy-capability gap for Edgion
 
-因此：
+Therefore:
 
-- 不声明 `SupportListenerSet`
-- 不以 ListenerSet conformance tests 作为当前目标
-- 若未来出现明确的多团队共享 Gateway 诉求，再重新评估
+- Do not declare `SupportListenerSet`
+- Do not target ListenerSet conformance tests for now
+- If clear demand for multi-team sharing of a Gateway emerges in the future, re-evaluate
 
 ## HTTPRoute Multiple Mirrors
 
-**决定：不实现**
+**Decision: not implemented**
 
-Gateway API 的 `HTTPRouteRequestMultipleMirrors` 允许单条 HTTPRoute 规则同时配置多个 request mirror 目标。
+The Gateway API `HTTPRouteRequestMultipleMirrors` allows a single HTTPRoute rule to configure multiple request-mirror targets simultaneously.
 
-Edgion 当前保留单 mirror 能力，但不计划扩展到多 mirror，原因：
+Edgion currently retains single-mirror capability but does not plan to extend to multi-mirror, for these reasons:
 
-- 多 mirror 属于较弱需求，收益不足以覆盖实现和维护成本
-- 会增加请求复制、body tee、异步任务管理、日志与指标聚合的复杂度
-- 对当前 Edgion 目标场景，单 mirror 已足够覆盖大多数 shadow/审计类用法
+- Multi-mirror is a relatively weak need; the benefit does not justify the implementation and maintenance cost
+- It increases the complexity of request copying, body teeing, async task management, and log/metric aggregation
+- For Edgion's current target scenarios, single mirror already covers most shadow / audit-style use cases
 
-因此：
+Therefore:
 
-- 不声明 `SupportHTTPRouteRequestMultipleMirrors`
-- 不以 `HTTPRouteRequestMultipleMirrors` conformance test 作为当前目标
-- 保留现有单 mirror 能力，不向多目标镜像扩展
+- Do not declare `SupportHTTPRouteRequestMultipleMirrors`
+- Do not target the `HTTPRouteRequestMultipleMirrors` conformance test for now
+- Keep the existing single-mirror capability; do not extend to multi-target mirroring
 
 ## TLSRouteModeMixed
 
-**决定：不实现**
+**Decision: not implemented**
 
-Edgion 支持：
+Edgion supports:
 
 - `TLSRoute` + `TLS listener(mode=Passthrough)`
 - `TLSRoute` + `TLS listener(mode=Terminate)`
 
-但明确不支持 `TLSRouteModeMixed`，即：
+But explicitly does not support `TLSRouteModeMixed`, that is:
 
-- 在同端口、同 listener 能力域内，按 SNI 动态决定一条 TLS 连接是 passthrough 还是 terminate
+- On the same port and within the same listener capability, dynamically deciding per SNI whether a TLS connection is passthrough or terminate
 
-原因：
+Reasons:
 
-- 需要单个 TCP listener 先读取 `ClientHello` 再动态切换处理路径，架构复杂度明显上升
-- 同一入口混用 passthrough / terminate 会增加证书选择、流量走向和安全边界的排障复杂度
-- 对当前 Edgion 目标场景，标准 `Passthrough` 和标准 `Terminate` 已足够覆盖主要需求
+- Requires a single TCP listener to first read `ClientHello` and then dynamically switch the processing path; architectural complexity rises significantly
+- Mixing passthrough / terminate on the same entry point increases the troubleshooting complexity of certificate selection, traffic flow, and security boundaries
+- For Edgion's current target scenarios, the standard `Passthrough` and standard `Terminate` already cover the major needs
 
-因此：
+Therefore:
 
-- `TLSRouteModeTerminate` 可以作为后续 conformance 目标推进
-- `TLSRouteModeMixed` 不作为当前实现目标，也不应在 supported features 中声明
+- `TLSRouteModeTerminate` may be pursued as a follow-up conformance target
+- `TLSRouteModeMixed` is not a current implementation target and should not be declared in supported features
 
-## GatewayPort8080 / HTTPRouteParentRefPort / 动态端口绑定
+## GatewayPort8080 / HTTPRouteParentRefPort / dynamic port binding
 
-**决定：不实现**
+**Decision: not implemented**
 
-`SupportGatewayPort8080` 和 `SupportHTTPRouteParentRefPort` conformance features 都要求网关能动态绑定非标准端口（8080、8090 等）。
+The `SupportGatewayPort8080` and `SupportHTTPRouteParentRefPort` conformance features both require the gateway to dynamically bind non-standard ports (8080, 8090, etc.).
 
-Edgion 的 Gateway 进程在**启动时**通过 `configure_listeners` 绑定所有端口。端口绑定是一次性操作：Pingora 服务初始化后无法在运行时动态添加新端口。如果某个 Gateway 资源在网关进程启动后才被创建（如 conformance 测试的临时 Gateway），其监听端口无法被绑定。
+Edgion's Gateway process binds all ports via `configure_listeners` **at startup**. Port binding is a one-time operation: after Pingora services are initialized, new ports cannot be added at runtime. If a Gateway resource is created after the gateway process has started (such as a temporary Gateway in a conformance test), its listening ports cannot be bound.
 
-- 不声明 `SupportGatewayPort8080`（已从 `conformance_test.go` 和 `run.sh` 移除）
-- 不声明 `SupportHTTPRouteParentRefPort`（已从 `conformance_test.go` 注释移除，2026-03-27）
-- conformance 报告中 `GatewayWithAttachedRoutesWithPort8080`、`GatewayPort8080`、`HTTPRouteListenerPortMatching`、`HTTPRouteRedirectPortAndScheme` 标记为 skipped
-- 若未来需要支持动态端口，需要重新评估 Pingora 的 `Server::add_service` 是否支持运行时调用，以及 Controller→Gateway 配置同步的时序问题
+- Do not declare `SupportGatewayPort8080` (already removed from `conformance_test.go` and `run.sh`)
+- Do not declare `SupportHTTPRouteParentRefPort` (already removed from `conformance_test.go` comments, 2026-03-27)
+- In the conformance report, `GatewayWithAttachedRoutesWithPort8080`, `GatewayPort8080`, `HTTPRouteListenerPortMatching`, and `HTTPRouteRedirectPortAndScheme` are marked as skipped
+- To support dynamic ports in the future, re-evaluate whether Pingora's `Server::add_service` supports runtime invocation, plus the Controller→Gateway sync timing problem
 
 ## BackendTLSPolicy Conformance
 
-**决定：已实现（声明 `SupportBackendTLSPolicy`，暂不声明 `SupportBackendTLSPolicySANValidation`）**
+**Decision: implemented (declares `SupportBackendTLSPolicy`; does not yet declare `SupportBackendTLSPolicySANValidation`)**
 
-数据面和控制面 status 均已实现：
-- ancestorRef 正确指向关联的 Gateway（通过 Service → Route → Gateway 三步查询）
-- 支持 Secret 和 ConfigMap 类型的 `caCertificateRefs`
-- 同一 Service 多 Policy 冲突检测（按 creationTimestamp + name 排序）
-- Status reason 值符合 conformance 精确要求（`InvalidKind`、`InvalidCACertificateRef`、`Conflicted`）
-- Route on_change/on_delete 自动 requeue 关联的 BackendTLSPolicy 以更新 ancestor 状态
+Both data-plane and control-plane status are implemented:
+- `ancestorRef` correctly points to the associated Gateway (via the three-step Service → Route → Gateway lookup)
+- Supports `caCertificateRefs` of type Secret and ConfigMap
+- Conflict detection across multiple Policies on the same Service (sorted by creationTimestamp + name)
+- Status reason values match the conformance spec exactly (`InvalidKind`, `InvalidCACertificateRef`, `Conflicted`)
+- Route on_change/on_delete automatically requeues the associated BackendTLSPolicy to refresh the ancestor status
 
-Status 报告的局限性：`ancestorRef` 指向 Gateway 表示"控制面认为该 Policy 在此 Gateway 上生效"，但不代表数据面 TLS 连接一定成功（证书不匹配、后端不支持 TLS 等运行时问题无法通过 status 反映）。
+Status-reporting limitations: `ancestorRef` pointing to a Gateway means "the control plane considers this Policy to be in effect on this Gateway", but does not mean a data-plane TLS connection will succeed (cert mismatch, backend not supporting TLS, and other runtime issues cannot be reflected in status).
 
-**适用范围：仅 HTTPRoute / GRPCRoute。** BackendTLSPolicy 不对 TLSRoute 生效。TLSRoute Passthrough 透传原始 TLS 流量，Gateway 不与后端建立新连接；TLSRoute Terminate 按 SNI 转发解密流量到后端，属于纯 stream 层代理，不涉及 L7 后端 TLS 配置。需要后端 TLS（re-encrypt）的场景应使用 HTTPRoute / GRPCRoute + BackendTLSPolicy。
+**Scope: HTTPRoute / GRPCRoute only.** BackendTLSPolicy does not apply to TLSRoute. TLSRoute Passthrough transparently forwards the original TLS traffic — the Gateway does not establish a new connection to the backend; TLSRoute Terminate forwards decrypted traffic to the backend by SNI, which is pure stream-level proxying and does not involve L7 backend TLS configuration. For scenarios needing backend TLS (re-encrypt), use HTTPRoute / GRPCRoute + BackendTLSPolicy.
 
 ## BackendTrafficPolicy (BTP)
 
-**决定：暂不实现（仍为 Experimental，等 Standard/GA）**
+**Decision: not yet implemented (still Experimental; wait for Standard/GA)**
 
-Gateway API v1.3 引入实验性 BackendTrafficPolicy（当前 v1.5 experimental
-CRD 中仍以 `XBackendTrafficPolicy` 暴露在 `gateway.networking.x-k8s.io`
-API group 下）。Gateway API v1.5 将多个特性提升到 Standard channel，但
-BackendTrafficPolicy 不在 v1.5 的 Standard/GA promotion 列表中。
+Gateway API v1.3 introduced experimental BackendTrafficPolicy (in the current
+v1.5 experimental CRD it is still exposed as `XBackendTrafficPolicy` under
+the `gateway.networking.x-k8s.io` API group). Gateway API v1.5 promoted
+several features to the Standard channel, but BackendTrafficPolicy is not in
+v1.5's Standard/GA promotion list.
 
-BackendTrafficPolicy 的方向是统一管理后端流量行为（例如 retry budget 等；
-后续可能扩展到连接池、熔断器、健康检查、重试策略）。
+The direction of BackendTrafficPolicy is to unify management of backend
+traffic behaviors (such as retry budget; later possibly extending to
+connection pool, circuit breaker, health check, retry policy).
 
-Edgion 已通过 annotation 分散实现了这些功能（`edgion.io/circuit-breaker`、`health_check.rs`、`edgion_gateway_config.rs`），功能完整，但不通过标准 BTP CRD 暴露。
+Edgion has implemented these features in a distributed manner via annotations (`edgion.io/circuit-breaker`, `health_check.rs`, `edgion_gateway_config.rs`); features are complete, but they are not exposed via the standard BTP CRD.
 
-- 等 BTP 从 Experimental 毕业到 Standard/GA 后再考虑统一到标准 CRD
-- 当前 annotation 方式对用户可用，不影响实际功能
-- 相关跟踪条目尚未在 `tasks/` 中归档（如需推进请新建任务）
+- Will reconsider unifying behind the standard CRD only after BTP graduates from Experimental to Standard/GA
+- The current annotation-based approach is usable by users and does not affect actual functionality
+- A related tracking item has not yet been filed under `tasks/` (file a new task to drive this).
 
-## ~~frontendValidation 标准化~~ ✅ 已完成
+## ~~frontendValidation standardization~~ ✅ done
 
-Controller 解析 `frontend_validation` CA 引用（Secret/ConfigMap），per-listener 合并，设置 listener status conditions。Gateway 数据面 `configure_gateway_frontend_mtls()` 加载 CA 证书配置 SSL verify mode：AllowValidOnly 用 `PEER | FAIL_IF_NO_PEER_CERT`，AllowInsecureFallback 用自定义 verify callback 始终 accept（boringssl FFI）。与 EdgionTls `client_auth` 完全独立。
+The Controller parses `frontend_validation` CA references (Secret/ConfigMap), merges per listener, and sets listener status conditions. The Gateway data plane's `configure_gateway_frontend_mtls()` loads the CA and configures the SSL verify mode: AllowValidOnly uses `PEER | FAIL_IF_NO_PEER_CERT`, and AllowInsecureFallback uses a custom verify callback that always accepts (boringssl FFI). Fully independent from EdgionTls `client_auth`.
 
 ## GRPCRoute retry.codes
 
-**决定：不实现（架构限制）**
+**Decision: not implemented (architectural limitation)**
 
-gRPC 状态码（0–16）位于 HTTP/2 trailers 的 `grpc-status` 头中。基于状态码的重试需要在响应流结束前读取 trailers 并做出重试决策，但 Pingora 代理架构在响应完成后才能读取 trailers，此时已无法回溯重试。
+The gRPC status code (0–16) lives in the `grpc-status` header in HTTP/2 trailers. Status-code-based retries require reading trailers and making the retry decision before the response stream ends, but the Pingora proxy architecture can read trailers only after the response is complete, at which point retries are no longer possible.
 
-GRPCRoute retry 的其他字段正常工作：
+Other GRPCRoute retry fields work normally:
 
-- `retry.attempts`：支持（控制最大重试次数）
-- `retry.backoff`：支持（指数退避，上限 30s）
-- `retry.codes`：**不支持**，YAML 中可以填写但运行时忽略，并输出 warn 日志
+- `retry.attempts`: supported (controls the maximum retry count)
+- `retry.backoff`: supported (exponential backoff, capped at 30s)
+- `retry.codes`: **not supported**; can be filled in YAML but is ignored at runtime, with a warn-level log emitted
 
-当前行为：Controller 解析 GRPCRoute 时，若 `retry.codes` 非空，输出警告日志 `"GRPCRoute retry.codes is not yet supported (requires gRPC trailers interception); codes will be ignored"`，然后将 `ParsedRouteRetry.codes` 设为 `None`。重试仅基于连接错误 / 上游不可达触发，不按 gRPC 状态码区分。
+Current behavior: when the Controller parses a GRPCRoute, if `retry.codes` is non-empty it logs a warning `"GRPCRoute retry.codes is not yet supported (requires gRPC trailers interception); codes will be ignored"`, then sets `ParsedRouteRetry.codes` to `None`. Retries trigger only on connection error / upstream unreachable; gRPC status codes are not used to differentiate.
 
-- 替代方案：在客户端 gRPC SDK 层配置 retry policy（如 gRPC service config 的 `retryPolicy.retryableStatusCodes`），客户端能完整读取 trailers 并按状态码重试
-- 相关代码：`src/types/resources/grpc_route.rs` 第 526–541 行
+- Workaround: configure a retry policy in the client gRPC SDK (such as `retryPolicy.retryableStatusCodes` in the gRPC service config); the client can read trailers in full and retry by status code
+- Related code: `src/types/resources/grpc_route.rs` lines 526–541
 
 ## GATEWAY-TLS ConformanceProfile
 
-**决定：暂不声明**
+**Decision: not yet declared**
 
-TLS Passthrough 功能已实现；TLS Terminate 也已有数据面主路径，但 TLSRoute conformance tests 尚未系统跑通。预计需要修复 status condition 相关逻辑（ResolvedRefs、Accepted、supportedKinds for TLSRoute）并补 terminate 测试后，才能声明 profile。
+TLS Passthrough is implemented; TLS Terminate also has the data-plane main path, but TLSRoute conformance tests have not yet been driven through systematically. Status-condition-related logic (ResolvedRefs, Accepted, supportedKinds for TLSRoute) is expected to need fixes, and terminate tests need to be filled in, before the profile can be declared.
 
-- 需在 SupportedFeatures 中声明 `SupportTLSRoute` 并跑通 core passthrough tests 后再声明 profile
-- `TLSRouteModeTerminate` 可作为后续增强继续推进
-- `TLSRouteModeMixed` 明确不实现
-- MESH-HTTP / MESH-GRPC：Edgion 不是 service mesh，不适用
-- 相关跟踪条目尚未在 `tasks/` 中归档（如需推进请新建任务）
+- Need to declare `SupportTLSRoute` in SupportedFeatures and pass core passthrough tests before declaring the profile
+- `TLSRouteModeTerminate` can continue to be pursued as a follow-up enhancement
+- `TLSRouteModeMixed` is explicitly not implemented
+- MESH-HTTP / MESH-GRPC: Edgion is not a service mesh; not applicable
+- A related tracking item has not yet been filed under `tasks/` (file a new task to drive this).

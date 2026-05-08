@@ -1,126 +1,126 @@
 ---
 name: center-db
-description: Center 联邦持久化：SQLite controllers 表、CenterDb 结构体、database 配置。新的 PluginMetaData 联邦数据流通过反向 Watch 同步（CenterWatchCache → CenterMetaDataStore），无 SQLite 缓存层。
+description: Center federated persistence — SQLite controllers table, CenterDb struct, database configuration. The new PluginMetaData federation data flow synchronizes via a reverse Watch (CenterWatchCache → CenterMetaDataStore); there is no SQLite cache layer.
 ---
 
-# Center 联邦持久化（SQLite）
+# Center Federated Persistence (SQLite)
 
-## 背景与核心决策
+## Background and core decision
 
-Center 使用 SQLite 持久化 **controller 注册信息**（上下线状态、标签等），保证 Center 重启后不丢失已注册的 controller 记录。
+Center uses SQLite to persist **controller registration information** (online/offline state, labels, etc.), ensuring that already-registered controller records are not lost when Center restarts.
 
-**为什么选 SQLite bundled 而非运行时依赖：**
-- `rusqlite = { features = ["bundled"] }` 在编译期从 C 源码编译 SQLite 并静态链接
-- 运行时不需要 `libsqlite3.so`，部署到 ubuntu:24.04 的 `Dockerfile.runtime` 无需任何改动
-- 构建端 `Dockerfile.builder`（rust:bookworm，含 gcc）也无需改动——C 源码编译已被 cargo 处理
-- 对比"系统动态库"方案：bundled 的好处是零运行时依赖，代价是首次编译慢约 30 秒（C 代码编译）
+**Why bundled SQLite rather than a runtime dependency:**
+- `rusqlite = { features = ["bundled"] }` compiles SQLite from C source and statically links it at compile time
+- No `libsqlite3.so` is needed at runtime; deploying to `Dockerfile.runtime` (ubuntu:24.04) requires no changes
+- The build-side `Dockerfile.builder` (rust:bookworm, includes gcc) needs no changes either — C source compilation is handled by cargo
+- Compared with the "system dynamic library" approach: bundled has zero runtime dependencies, at the cost of an additional ~30 seconds on first compile (compiling the C code)
 
-**并发访问模型：**
-- 单个 `Arc<Mutex<Connection>>`（`parking_lot::Mutex`）
-- 所有 DB 操作包在 `spawn_blocking` 中执行，不阻塞异步运行时
-- 写操作串行化（Mutex），读操作也串行（同一 Connection）——Center 写压力低，这是合理简化
+**Concurrent-access model:**
+- A single `Arc<Mutex<Connection>>` (`parking_lot::Mutex`)
+- All DB operations are wrapped in `spawn_blocking` so they don't block the async runtime
+- Writes are serialized (Mutex); reads are also serial (single Connection) — Center's write pressure is low, so this simplification is reasonable
 
-## DB Schema
+## DB schema
 
 ```sql
 CREATE TABLE controllers (
     controller_id TEXT PRIMARY KEY,
     cluster       TEXT NOT NULL DEFAULT '',
-    env           TEXT NOT NULL DEFAULT '[]',   -- JSON 数组
-    tag           TEXT NOT NULL DEFAULT '[]',   -- JSON 数组
+    env           TEXT NOT NULL DEFAULT '[]',   -- JSON array
+    tag           TEXT NOT NULL DEFAULT '[]',   -- JSON array
     online        INTEGER NOT NULL DEFAULT 0,
     last_seen_at  INTEGER NOT NULL,
     created_at    INTEGER NOT NULL
 );
 ```
 
-设计要点：
-- `controllers` 表持久化 controller 的注册元信息，Center 重启后可恢复已知 controller 列表
-- `online` 字段在 controller 连接/断开 federation gRPC 流时更新
+Design notes:
+- The `controllers` table persists controller registration metadata; Center can recover the known controller list after restart
+- The `online` field is updated when a controller connects to / disconnects from the federation gRPC stream
 
-> **已移除的表**：`cluster_plugin_metadata_cache` 和 `service_plugin_metadata_cache`（曾用于缓存 PluginMetaData 轮询结果）已随 PM 反向 Watch 重构一并删除，不再存在于 schema 中。
+> **Removed tables**: `cluster_plugin_metadata_cache` and `service_plugin_metadata_cache` (formerly used to cache PluginMetaData polling results) were removed together with the PM reverse-Watch refactor and no longer exist in the schema.
 
-## 配置（edgion-center.yaml）
+## Configuration (edgion-center.yaml)
 
 ```yaml
 database:
   enabled: true
-  sqlite_path: data/center.db  # 相对路径，以 work_dir 为基准
-  sync_interval_secs: 60       # 已弃用，保留用于向后兼容，实际不再使用
+  sqlite_path: data/center.db  # Relative path, based on work_dir
+  sync_interval_secs: 60       # Deprecated; kept for backward compatibility, no longer used
 ```
 
-- `enabled: false` 时所有依赖 DB 的 Admin API（如 `GET /admin/controllers`）返回 503
-- `sync_interval_secs`：**向后兼容字段**，旧版本用于控制 HTTP 轮询间隔；新架构通过反向 Watch 实时推送，此字段保留但不生效
+- When `enabled: false`, all DB-dependent Admin APIs (such as `GET /admin/controllers`) return 503
+- `sync_interval_secs`: a **backward-compatibility field**; older versions used it to control HTTP polling intervals; the new architecture pushes in real time via reverse Watch, so this field is kept but has no effect
 
-## PluginMetaData 数据流：反向 Watch 架构
+## PluginMetaData data flow: reverse-Watch architecture
 
-PluginMetaData（集群/服务维度的路由元数据）不再通过 SQLite 缓存，而是走 **federation gRPC 双向流反向 Watch**：
+PluginMetaData (cluster/service-dimensional routing metadata) is no longer cached in SQLite; it goes through **federation gRPC bidirectional-stream reverse Watch**:
 
 ```
-Controller（数据源）
-    │  FedWatchEventResponse（推送）
+Controller (data source)
+    │  FedWatchEventResponse (push)
     ▼
-CenterSyncClient（per-controller gRPC stream 客户端）
+CenterSyncClient (per-controller gRPC stream client)
     │
     ▼
-CenterWatchCache<T>（per-controller 内存缓存，强类型）
+CenterWatchCache<T> (per-controller in-memory cache, strongly typed)
     │
     ▼
-CenterMetaDataStore（全局聚合视图，跨 controller 合并）
+CenterMetaDataStore (global aggregated view, merged across controllers)
     │
     ▼
-API Handler（直接读内存，无 SQLite）
+API Handler (reads memory directly, no SQLite)
 ```
 
-关键特性：
-- **实时推送**：Controller 资源变更立即通过 FedWatchEventResponse 推送到 Center，无轮询延迟
-- **无 SQLite PM 缓存**：PluginMetaData 完全存活于内存；Controller 离线时其数据从聚合视图中移除（不保留历史快照）
-- **强类型**：`CenterWatchCache<T>` 泛型设计，`T` 目前包含 ClusterRegionRoute PM 和 ServiceRegionRoute PM
+Key properties:
+- **Real-time push**: controller resource changes are pushed to Center immediately via FedWatchEventResponse, with no polling delay
+- **No SQLite PM cache**: PluginMetaData lives entirely in memory; when a controller goes offline, its data is removed from the aggregated view (no historical snapshot is retained)
+- **Strong typing**: `CenterWatchCache<T>` is generic; `T` currently includes ClusterRegionRoute PM and ServiceRegionRoute PM
 
-详细设计见项目设计规范（如有 ADR 文档，从 `docs/` 或 `tasks/` 中查阅）。
+For detailed design, see the project design specs (if there is an ADR document, look under `docs/` or `tasks/`).
 
 ## Admin API
 
-所有端点在 `database.enabled = false` 时返回 503。
+All endpoints return 503 when `database.enabled = false`.
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/api/v1/center/admin/controllers` | 列出 DB 中持久化的 controller 记录（含离线记录） |
-| `DELETE` | `/api/v1/center/admin/controllers/{id}` | 删除指定 controller 记录及其所有关联数据 |
-| `GET` | `/api/v1/center/cluster-region-routes` | 实时聚合的集群维度 RegionRoute PM（来自内存，非 SQLite） |
-| `GET` | `/api/v1/center/service-region-routes` | 实时聚合的服务维度 RegionRoute PM（来自内存，非 SQLite） |
-| `GET` | `/api/v1/center/cluster-region-routes/consistency` | 集群维度 RegionRoute 一致性检查 |
-| `GET` | `/api/v1/center/service-region-routes/consistency` | 服务维度 RegionRoute 一致性检查 |
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/center/admin/controllers` | List controller records persisted in the DB (including offline records) |
+| `DELETE` | `/api/v1/center/admin/controllers/{id}` | Delete the specified controller record and all associated data |
+| `GET` | `/api/v1/center/cluster-region-routes` | Real-time aggregated cluster-dimensional RegionRoute PM (from memory, not SQLite) |
+| `GET` | `/api/v1/center/service-region-routes` | Real-time aggregated service-dimensional RegionRoute PM (from memory, not SQLite) |
+| `GET` | `/api/v1/center/cluster-region-routes/consistency` | Cluster-dimensional RegionRoute consistency check |
+| `GET` | `/api/v1/center/service-region-routes/consistency` | Service-dimensional RegionRoute consistency check |
 
-**典型运维场景：**
-- Controller 永久下线 → `DELETE /admin/controllers/{id}` 清除其持久化记录
-- 查看当前实时 PM 数据 → `GET /cluster-region-routes` 或 `/service-region-routes`（内存数据，实时）
+**Typical operational scenarios:**
+- Permanently retire a controller → `DELETE /admin/controllers/{id}` to remove its persisted record
+- View current real-time PM data → `GET /cluster-region-routes` or `/service-region-routes` (in-memory data, real-time)
 
-**离线/上线标记（持久化，2026-04 #20 补齐）：**
-- Controller register → `controllers` 表 `upsert(online=true, last_seen_at=now, cluster/env/tag)`
-- Heartbeat 超时 / stream error / stream closed → `UPDATE online=0, last_seen_at=now`（narrow update，不碰 cluster/env/tag）
-- 写入异步（`tokio::spawn_blocking`），DB 失败只打 warn 日志，不阻塞联邦流
-- `GET /api/v1/resources` 聚合视图过滤 offline controller 的 keys（防陈旧数据误导）；`GET /admin/controllers` 列出所有历史（含 offline）
-- `DELETE /admin/controllers/{id}` **5 路级联**：`ControllerRegistry` + `ResourceAggregator` + `CenterWatchCacheRegistry` + `CenterMetaDataStore`（经 `controller_removed` handler 链间接清理）+ DB 行
-- Center 进程重启后 Admin API 能从 DB 恢复 controller 历史列表；内存结构靠 Controller 重连驱动重建
+**Offline / online marking (persistent, completed in 2026-04 #20):**
+- Controller register → `controllers` table `upsert(online=true, last_seen_at=now, cluster/env/tag)`
+- Heartbeat timeout / stream error / stream closed → `UPDATE online=0, last_seen_at=now` (narrow update; does not touch cluster/env/tag)
+- Writes are async (`tokio::spawn_blocking`); on DB failure only a warning is logged, the federation stream is not blocked
+- The `GET /api/v1/resources` aggregated view filters out keys for offline controllers (to avoid stale data being misleading); `GET /admin/controllers` lists all history (including offline)
+- `DELETE /admin/controllers/{id}` performs a **5-way cascade**: `ControllerRegistry` + `ResourceAggregator` + `CenterWatchCacheRegistry` + `CenterMetaDataStore` (cleaned up indirectly via the `controller_removed` handler chain) + DB row
+- After the Center process restarts, the Admin API can recover the controller history list from the DB; in-memory structures are rebuilt as controllers reconnect
 
-## Docker 构建注意事项
+## Docker build notes
 
-`rusqlite bundled` 在 **编译期** 完成所有工作：
-- `Dockerfile.builder`（rust:bookworm + gcc）：无需额外包，gcc 已包含
-- `Dockerfile.runtime`（ubuntu:24.04 + libssl3）：无需安装 `libsqlite3`，SQLite 已静态链接进二进制
+`rusqlite bundled` does all of its work at **compile time**:
+- `Dockerfile.builder` (rust:bookworm + gcc): no extra packages required, gcc is already included
+- `Dockerfile.runtime` (ubuntu:24.04 + libssl3): no need to install `libsqlite3`; SQLite is statically linked into the binary
 
-唯一的影响是首次全量编译多约 30 秒（C 代码编译），之后 cargo 缓存层命中不会重复编译。
+The only impact is that the first full compile takes ~30 seconds longer (compiling the C code); subsequent builds hit the cargo cache and do not recompile.
 
-## 源码位置
+## Source locations
 
-| 模块 | 路径 |
-|------|------|
-| DB 初始化 & 连接管理 | `src/core/center/db/mod.rs` |
-| Schema 建表 SQL | `src/core/center/db/schema.rs`（或 `mod.rs` 内联） |
-| CenterDb（controller upsert/delete） | `src/core/center/db/mod.rs` |
+| Module | Path |
+|--------|------|
+| DB initialization & connection management | `src/core/center/db/mod.rs` |
+| Schema CREATE TABLE SQL | `src/core/center/db/schema.rs` (or inlined in `mod.rs`) |
+| CenterDb (controller upsert/delete) | `src/core/center/db/mod.rs` |
 | Admin API handlers | `src/core/center/api/admin_handlers.rs` |
-| Center 配置结构 | `src/core/center/config.rs`（`DatabaseConfig` 字段） |
-| **反向 Watch 缓存层** | `src/core/center/watch_cache/`（CenterWatchCache、CenterWatchCacheRegistry、CenterSyncClient、CenterConfHandler） |
-| **PM 聚合视图** | `src/core/center/metadata_store/`（CenterMetaDataStore） |
-| **共享解析工具** | `src/core/common/metadata_conf_handler.rs`（parse_region_route() 等） |
+| Center configuration struct | `src/core/center/config.rs` (`DatabaseConfig` field) |
+| **Reverse-Watch cache layer** | `src/core/center/watch_cache/` (CenterWatchCache, CenterWatchCacheRegistry, CenterSyncClient, CenterConfHandler) |
+| **PM aggregated view** | `src/core/center/metadata_store/` (CenterMetaDataStore) |
+| **Shared parsing utilities** | `src/core/common/metadata_conf_handler.rs` (parse_region_route(), etc.) |

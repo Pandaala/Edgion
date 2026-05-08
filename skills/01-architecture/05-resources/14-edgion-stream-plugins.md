@@ -1,53 +1,53 @@
 ---
 name: resource-edgion-stream-plugins
-description: EdgionStreamPlugins 资源：Stream/TCP 层插件配置、连接级别过滤。
+description: EdgionStreamPlugins resource — Stream/TCP-layer plugin configuration, connection-level filters.
 ---
 
-# EdgionStreamPlugins 资源
+# EdgionStreamPlugins resource
 
-> **通用流程**: 参见 [00-resource-flow.md](00-resource-flow.md)
+> **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-EdgionStreamPlugins 是 Edgion 的自定义扩展资源，定义 Stream/TCP 层的插件配置。与 EdgionPlugins 工作在 HTTP 层不同，EdgionStreamPlugins 在连接建立阶段（ConnectionFilter）执行，适用于 IP 限制、TLS 路由选择等场景。
+EdgionStreamPlugins is Edgion's custom-extension resource that defines Stream/TCP-layer plugin configuration. Unlike EdgionPlugins, which works at the HTTP layer, EdgionStreamPlugins runs during connection establishment (ConnectionFilter) and applies to scenarios such as IP restriction and TLS route selection.
 
-## 源码位置
+## Source code locations
 
 - Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs`
-- 类型定义: `src/types/resources/edgion_stream_plugins/`
+- Type definitions: `src/types/resources/edgion_stream_plugins/`
 
-## Controller 侧处理
+## Controller-side processing
 
 ### preparse
 
-扫描 Stage 1 `plugins` 数组，检测 legacy HTTP 字段写到 L4 `IpRestriction` 配置上的陈旧 schema，带 `[LEGACY_SCHEMA_DEPRECATED]` 前缀返回 error。update_status 识别前缀后把 reason 映射为 `LegacySchemaDeprecated` 而不是泛化的 `Invalid`，方便 operator 定位迁移指引。
+Scan the Stage 1 `plugins` array and detect legacy HTTP fields written into the L4 `IpRestriction` config — a stale schema. Return an error prefixed with `[LEGACY_SCHEMA_DEPRECATED]`. update_status recognizes the prefix and maps reason to `LegacySchemaDeprecated` rather than the generic `Invalid`, making it easier for operators to find migration guidance.
 
 ### parse
 
-- **Cross-PM ref 注册**：先 `clear_refs_from` 本资源在 `plugin_metadata_refs` 中的旧 ref，再遍历 Stage 1 每个 `EdgionStreamPlugin::GlobalConnectionIpRestriction` entry，将 `plugin_metadata_ref.namespace/name` 注册为 cluster_pm_key，value 为 `"EdgionStreamPlugins:<this_ns>/<this_name>"`
-- 这样当被引用的 GCIR PM 变更时，PM handler 的 `requeue_pm_referrers` 会把 ESP 重新入队，刷新 ResolvedRefs
+- **Cross-PM ref registration**: first `clear_refs_from` clears this resource's old refs in `plugin_metadata_refs`, then iterate each Stage 1 `EdgionStreamPlugin::GlobalConnectionIpRestriction` entry, registering `plugin_metadata_ref.namespace/name` as the cluster_pm_key with value `"EdgionStreamPlugins:<this_ns>/<this_name>"`
+- This way, when the referenced GCIR PM changes, the PM handler's `requeue_pm_referrers` will requeue this ESP and refresh ResolvedRefs
 
 ### on_delete
 
-- `clear_refs_from` 清除本资源在 `plugin_metadata_refs` 中的所有注册
+- `clear_refs_from` clears all registrations of this resource in `plugin_metadata_refs`
 
 ### update_status
 
-使用 `k8s_openapi::Condition` 类型，写两个 condition：
+Uses `k8s_openapi::Condition`, writing two conditions:
 
-- **`Accepted`**：无 validation_errors 时为 True（reason=Accepted）；有 legacy-schema 错误时为 False/`LegacySchemaDeprecated`；其他错误为 False/`Invalid`
-- **`ResolvedRefs`**：遍历 Stage 1 每个 `GlobalConnectionIpRestriction` entry，要求 `plugin_metadata_ref` 指向的 PM 存在且 `spec.metadata.type = GlobalConnectionIpRestriction`。任何不满足 → `ResolvedRefsError::PluginMetaDataNotFound`，reason 为 `InvalidPluginMetaDataRef`。Stage 2 `tls_route_plugins` 目前都是内联配置，无外部 ref
+- **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False/`LegacySchemaDeprecated` for legacy-schema errors; False/`Invalid` for other errors
+- **`ResolvedRefs`**: iterate each Stage 1 `GlobalConnectionIpRestriction` entry, requiring the PM referenced by `plugin_metadata_ref` to exist with `spec.metadata.type = GlobalConnectionIpRestriction`. Any failure → `ResolvedRefsError::PluginMetaDataNotFound`, reason `InvalidPluginMetaDataRef`. Stage 2 `tls_route_plugins` are currently all inline configurations with no external refs
 
-## Gateway 侧处理
+## Gateway-side processing
 
-EdgionStreamPlugins 同步到 Gateway 后，在连接建立阶段执行。典型的 Stream 插件包括：
+After EdgionStreamPlugins is synced to the Gateway side, it runs during connection establishment. Typical Stream plugins include:
 
-- **IP 限制**：基于客户端 IP 地址的黑白名单控制
-- **TLS 路由选择**：基于 TLS ClientHello 中的 SNI 信息选择路由
+- **IP restriction**: allowlist/denylist control based on the client IP address
+- **TLS route selection**: route selection based on the SNI in the TLS ClientHello
 
-这些插件在 TCP 连接级别执行，不需要 HTTP 协议解析。
+These plugins run at the TCP-connection level and do not require HTTP protocol parsing.
 
-## 跨资源关联
+## Cross-resource relationships
 
-| 关联方向 | 目标资源 | 关联机制 | 说明 |
+| Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
-| EdgionStreamPlugins ← 路由资源 | HTTPRoute/GRPCRoute/TCPRoute/TLSRoute | 关联引用 | 路由资源可引用 Stream 插件 |
-| EdgionStreamPlugins → PluginMetaData | PluginMetaData | `GlobalConnectionIpRestriction.pluginMetadataRef` | 引用 GCIR PM；通过 `plugin_metadata_refs` 建立反向 requeue 索引，PM 变更时 ESP 被重新处理 |
+| EdgionStreamPlugins ← Route resources | HTTPRoute/GRPCRoute/TCPRoute/TLSRoute | association reference | Route resources may reference Stream plugins |
+| EdgionStreamPlugins → PluginMetaData | PluginMetaData | `GlobalConnectionIpRestriction.pluginMetadataRef` | References a GCIR PM; a reverse-requeue index is built via `plugin_metadata_refs`, so PM changes re-process ESP |

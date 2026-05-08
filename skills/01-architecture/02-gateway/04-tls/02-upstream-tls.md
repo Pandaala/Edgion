@@ -1,45 +1,45 @@
 ---
 name: gateway-upstream-tls
-description: 上游 TLS（网关→后端）：mTLS 配置、BackendTLSPolicy、证书提取。
+description: Upstream TLS (gateway→backend) — mTLS configuration, BackendTLSPolicy, certificate extraction.
 ---
 
-# 上游 TLS（网关→后端）
+# Upstream TLS (gateway→backend)
 
-## 概述
+## Overview
 
-上游 TLS 处理 Gateway 到后端服务的 TLS 连接。当后端要求 TLS 时，Gateway 作为 TLS 客户端与后端建立安全连接。配置由 Gateway API 的 `BackendTLSPolicy` 资源驱动。
+Upstream TLS handles the TLS connection from the Gateway to backend services. When a backend requires TLS, the Gateway acts as a TLS client to establish a secure connection. Configuration is driven by the Gateway API `BackendTLSPolicy` resource.
 
-## 模块结构
+## Module structure
 
 ```
 src/core/gateway/tls/runtime/backend/
-├── mod.rs               # 模块入口，条件编译 (#[cfg(any(feature = "boringssl", feature = "openssl"))])
-├── backend_api.rs       # 统一后端 API（BoringSSL/OpenSSL 分派）
-└── cert_extractor.rs    # 客户端证书信息提取工具
+├── mod.rs               # module entry, conditional compilation (#[cfg(any(feature = "boringssl", feature = "openssl"))])
+├── backend_api.rs       # unified backend API (BoringSSL/OpenSSL dispatch)
+└── cert_extractor.rs    # client certificate info extraction utility
 ```
 
 ## BackendTLSPolicy
 
-`BackendTLSPolicy` 是 Gateway API 标准资源，定义了 Gateway 到特定后端服务的 TLS 策略。在路由匹配完成、后端选择后，`pg_upstream_peer.rs` 查询该策略来决定上游连接的 TLS 配置。
+`BackendTLSPolicy` is a Gateway API standard resource that defines the TLS policy from the Gateway to a specific backend service. After route matching and backend selection complete, `pg_upstream_peer.rs` queries this policy to decide the TLS configuration of the upstream connection.
 
-核心配置项：
+Key configuration items:
 
-- **目标后端**：通过 `targetRef` 指定要启用 TLS 的 Service。
-- **验证配置**：CA 证书、主机名验证。
-- **mTLS**：Gateway 作为客户端提供证书给后端。
+- **Target backend**: the Service to enable TLS against, specified via `targetRef`.
+- **Verification**: CA certificate, hostname verification.
+- **mTLS**: the Gateway, acting as the client, presents its certificate to the backend.
 
-BackendTLSPolicy 查询发生在 `pg_upstream_peer.rs` 中，此时路由命名空间信息可用，能正确处理命名空间继承。
+The BackendTLSPolicy lookup happens inside `pg_upstream_peer.rs`, where the route namespace info is available, so namespace inheritance is handled correctly.
 
-## mTLS 到后端
+## mTLS to backend
 
-当 BackendTLSPolicy 要求 mTLS 时，Gateway 需要同时：
+When BackendTLSPolicy requires mTLS, the Gateway must:
 
-1. 验证后端的服务端证书。
-2. 向后端出示自己的客户端证书。
+1. Verify the backend's server certificate.
+2. Present its own client certificate to the backend.
 
-### 验证回调设置
+### Verify callback setup
 
-`backend_api.rs` 提供统一的 `set_mtls_verify_callback` 函数，根据编译特性分派到具体后端：
+`backend_api.rs` provides a unified `set_mtls_verify_callback` function that dispatches to a specific backend at compile time:
 
 ```rust
 pub fn set_mtls_verify_callback(
@@ -49,74 +49,74 @@ pub fn set_mtls_verify_callback(
 ) -> Result<(), String>
 ```
 
-- **BoringSSL**：调用 `boringssl::mtls_verify_callback::set_verify_callback_with_whitelist`，支持完整的 SAN/CN 白名单验证。
-- **OpenSSL**：当前未实现，返回错误信息。
+- **BoringSSL**: calls `boringssl::mtls_verify_callback::set_verify_callback_with_whitelist`, supports full SAN/CN allowlist verification.
+- **OpenSSL**: not implemented; returns an error.
 
-## 证书信息提取
+## Certificate info extraction
 
-`cert_extractor.rs` 提供 `extract_client_cert_info` 函数，从 SSL 连接中提取对端证书的详细信息：
+`cert_extractor.rs` provides the `extract_client_cert_info` function, which extracts detailed information about the peer certificate from an SSL connection:
 
 ```rust
 pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo>
 ```
 
-提取的信息：
+Extracted information:
 
-| 字段 | 说明 |
-|------|------|
-| `subject` | 证书 Subject DN，格式为 `CN=xxx, O=yyy` |
+| Field | Description |
+|-------|-------------|
+| `subject` | Certificate Subject DN, formatted as `CN=xxx, O=yyy` |
 | `cn` | Common Name |
-| `sans` | Subject Alternative Names 列表 |
-| `fingerprint` | SHA256 指纹，格式为 `xx:xx:xx:...` |
+| `sans` | List of Subject Alternative Names |
+| `fingerprint` | SHA256 fingerprint, formatted as `xx:xx:xx:...` |
 
-### SAN 提取
+### SAN extraction
 
-支持的 SAN 类型：
+Supported SAN types:
 
-- **DNS**：直接提取为字符串。
-- **IP**：解析二进制数据为 IPv4（4 字节）或 IPv6（16 字节，使用 `std::net::Ipv6Addr` 格式化），前缀 `IP:`。
-- **Email**：前缀 `email:`。
-- **URI**：前缀 `uri:`。
+- **DNS**: extracted directly as a string.
+- **IP**: parses the binary as IPv4 (4 bytes) or IPv6 (16 bytes, formatted via `std::net::Ipv6Addr`); prefixed with `IP:`.
+- **Email**: prefixed with `email:`.
+- **URI**: prefixed with `uri:`.
 
-该函数主要用于下游 mTLS 场景（`handshake_complete_callback` 中提取客户端证书），但同样可用于上游连接的证书检查。
+The function is mainly used in downstream mTLS scenarios (the `handshake_complete_callback` extracting client certs), but it can also be used to inspect upstream-connection certificates.
 
-## 后端证书 SAN 验证
+## Backend certificate SAN verification
 
-`BackendTLSPolicy.validation.subjectAltNames` 配置后端证书 SAN 验证，支持 Hostname 和 URI（SPIFFE）两种类型。
+`BackendTLSPolicy.validation.subjectAltNames` configures backend certificate SAN verification, supporting Hostname and URI (SPIFFE) types.
 
-### 验证流程
+### Verification flow
 
-1. `create_tls_peer()` 检测到 `subjectAltNames` 非空时，设置 Pingora 的 `upstream_tls_handshake_complete_hook`
-2. TLS 握手完成后，hook 通过 `extract_sans_from_ssl()` 提取后端证书 SAN
-3. `validate_backend_sans()` 比对证书 SAN 与 policy 配置（任一匹配即通过）
-4. 验证结果存入 `SslDigest.extension`
-5. `connected_to_upstream()` 读取结果，不匹配则返回错误断开连接
+1. When `create_tls_peer()` detects non-empty `subjectAltNames`, it sets Pingora's `upstream_tls_handshake_complete_hook`.
+2. After the TLS handshake, the hook extracts backend certificate SANs via `extract_sans_from_ssl()`.
+3. `validate_backend_sans()` compares the certificate SANs with the policy (any match passes).
+4. The verification result is stored in `SslDigest.extension`.
+5. `connected_to_upstream()` reads the result and disconnects if it does not match.
 
-### 连接池隔离
+### Connection-pool isolation
 
-不同 `subjectAltNames` 配置的 peer 使用不同的 `group_key`（基于 SAN 内容 hash），防止 Pingora 复用不同 SAN 策略的连接。
+Peers with different `subjectAltNames` configurations use different `group_key`s (based on a hash of the SAN content) to prevent Pingora from reusing connections across different SAN policies.
 
-### 匹配规则
+### Match rules
 
-- **Hostname**：精确匹配或通配符（`*.example.com` 匹配单级子域名）
-- **URI**：精确匹配（如 `spiffe://cluster.local/ns/default/sa/myapp`）
-- 未配置 `subjectAltNames` 时保持现有行为
+- **Hostname**: exact match or wildcard (`*.example.com` matches a single subdomain level).
+- **URI**: exact match (e.g., `spiffe://cluster.local/ns/default/sa/myapp`).
+- When `subjectAltNames` is not configured, existing behavior is preserved.
 
-## 证书验证
+## Certificate validation
 
-`tls/validation/` 模块提供证书有效性验证：
+The `tls/validation/` module provides certificate validity checks:
 
-- `validate_cert`：验证 EdgionTls 资源的证书是否有效（PEM 格式、私钥匹配等）。
-- `CertValidationResult`：验证结果，包含 `is_valid` 标记和 `errors` 列表。
-- 验证在证书写入 TlsStore 时同步执行，无效证书不进入匹配器。
+- `validate_cert`: checks whether an EdgionTls resource's certificate is valid (PEM format, key match, etc.).
+- `CertValidationResult`: validation result, containing an `is_valid` flag and an `errors` list.
+- Validation runs synchronously when a certificate is written into TlsStore; invalid certificates are not added to the matcher.
 
-## 关键源文件
+## Key source files
 
-| 文件 | 职责 |
-|------|------|
-| `src/core/gateway/tls/runtime/backend/backend_api.rs` | 统一后端 API、set_mtls_verify_callback |
-| `src/core/gateway/tls/runtime/backend/cert_extractor.rs` | 证书信息提取（subject/SAN/fingerprint）+ `extract_sans_from_ssl` |
-| `src/core/gateway/tls/validation/backend_san.rs` | 后端证书 SAN 验证（Hostname/URI 匹配） |
-| `src/core/gateway/tls/validation/cert.rs` | 证书有效性验证 |
-| `src/core/gateway/tls/validation/mtls.rs` | mTLS 相关验证 |
-| `src/core/gateway/routes/http/proxy_http/pg_upstream_peer.rs` | BackendTLSPolicy 查询与上游 TLS 连接 |
+| File | Responsibility |
+|------|----------------|
+| `src/core/gateway/tls/runtime/backend/backend_api.rs` | Unified backend API, set_mtls_verify_callback |
+| `src/core/gateway/tls/runtime/backend/cert_extractor.rs` | Certificate info extraction (subject / SAN / fingerprint) + `extract_sans_from_ssl` |
+| `src/core/gateway/tls/validation/backend_san.rs` | Backend certificate SAN validation (Hostname / URI matching) |
+| `src/core/gateway/tls/validation/cert.rs` | Certificate validity checks |
+| `src/core/gateway/tls/validation/mtls.rs` | mTLS-related validation |
+| `src/core/gateway/routes/http/proxy_http/pg_upstream_peer.rs` | BackendTLSPolicy lookup and upstream TLS connection |

@@ -356,7 +356,7 @@ across all conformance namespaces, then re-applies base manifests).
 ### 3.1 In-cluster mode (recommended)
 
 Avoids all OrbStack routing / port-forward / gRPC proxy issues. Full steps in
-`02-conformance-testing.md` "In-Cluster 运行方式" section.
+`02-conformance-testing.md` "In-cluster execution" section.
 
 ### 3.2 Profile-scoped runs
 
@@ -409,18 +409,18 @@ When Secrets are deleted/recreated, backend pods **must** be restarted.
 
 ## 5. TLS Data Plane Quick Checklist
 
-当 `TLSRoute` / TLS listener 相关用例失败时，按这个顺序排：
+When `TLSRoute` / TLS-listener test cases fail, work through this in order:
 
-1. **看 Gateway / listener status**：是否 `Accepted=True`、`Programmed=True`，是否有 `ProtocolConflict` / `UnsupportedValue`
-2. **看端口是否真的绑定**：在 gateway Pod 里检查 `443` / `8443` / `8883`
-3. **看 `tls_access.log`**：连接有没有真的进代理，`err_log` 是 `no match`、`no listener accepts SNI` 还是 `no backend`
-4. **看 gateway 结构化日志**：listener 初始化、证书加载、TLS callback 有没有报错
-5. **看 `kubectl logs`**：有没有 crash-loop、`anyhow::bail!`、shell loop 的 `[restart]`
-6. **看 `TLSRoute` status**：父引用、`Accepted`、`ResolvedRefs` 是否正确
-7. **看 backend 健康度**：Service / EndpointSlice / Secret 是否齐全
-8. **看 pre-bind manifest**：端口、hostname、TLS mode 是否和测试预期完全一致
+1. **Check Gateway / listener status**: is `Accepted=True`, `Programmed=True`; any `ProtocolConflict` / `UnsupportedValue`?
+2. **Check whether the port is actually bound**: inside the gateway pod, verify `443` / `8443` / `8883`
+3. **Check `tls_access.log`**: did the connection actually reach the proxy; is `err_log` `no match`, `no listener accepts SNI`, or `no backend`?
+4. **Check the gateway structured logs**: any errors during listener init, certificate load, or TLS callback?
+5. **Check `kubectl logs`**: any crash-loops, `anyhow::bail!`, or `[restart]` lines from the shell loop?
+6. **Check `TLSRoute` status**: parent refs, `Accepted`, `ResolvedRefs` correct?
+7. **Check backend health**: are Service / EndpointSlice / Secret all present?
+8. **Check the pre-bind manifest**: do the port, hostname, and TLS mode exactly match what the test expects?
 
-常用命令（`GW_POD` 见 §1.2）：
+Common commands (`GW_POD` from §1.2):
 
 ```bash
 kubectl get gateway -n gateway-conformance-infra

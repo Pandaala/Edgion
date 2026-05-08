@@ -1,7 +1,8 @@
 //! OIDC plugin verification error type.
 //!
-//! 仅为实际驱动控制流分支的错误语义建模专用变体；其余错误用 `Other` 兜底以保留
-//! HTTP status 与用户可见消息的精确还原。
+//! Only model dedicated variants for the error semantics that actually drive
+//! control-flow branches; fall back to `Other` for the rest, to preserve the
+//! exact HTTP status and user-visible message.
 
 use std::borrow::Cow;
 

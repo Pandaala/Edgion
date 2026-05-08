@@ -338,11 +338,13 @@ fn webhook_runtime_replace_all(
 // Generic dispatch helpers
 // ============================================================
 
-/// remove / disable 路径共用的 helper：如果有旧 client，spawn shutdown。
+/// Helper shared by the remove / disable paths: if there is an old client,
+/// spawn its shutdown.
 ///
-/// 注意：本 helper 永远调 `shutdown`，不看 `SHUTDOWN_ON_REPLACE`。该 const 只控制
-/// *replace* 场景（update 时的旧 Arc），不影响 *remove*——真正删除时所有 provider
-/// 都需要清理（包括 Webhook 的 `manager.remove`）。
+/// Note: this helper always calls `shutdown` and ignores `SHUTDOWN_ON_REPLACE`.
+/// That const only controls the *replace* case (the old Arc on update); it
+/// does not affect *remove* -- on a real removal every provider needs cleanup
+/// (including Webhook's `manager.remove`).
 fn spawn_shutdown_if_present<C: LinkSysLifecycle>(client: Option<Arc<C>>, label: &'static str) {
     if let Some(c) = client {
         tokio::spawn(async move {
@@ -353,8 +355,9 @@ fn spawn_shutdown_if_present<C: LinkSysLifecycle>(client: Option<Arc<C>>, label:
     }
 }
 
-/// `dispatch_partial_update` 场景：未就绪时保持现状（live store 中的旧 Arc 仍在服务）。
-/// 返回 `true` 表示已处理，调用方应 `continue`。
+/// `dispatch_partial_update` case: when not ready, keep the current state
+/// (the old Arc in the live store keeps serving).
+/// Returns `true` to indicate handled; the caller should `continue`.
 fn preserve_if_not_ready<C>(
     key: &str,
     label: &'static str,
@@ -379,17 +382,22 @@ fn preserve_if_not_ready<C>(
     true
 }
 
-/// 构建新 client，swap 进 store；后台 init 新 client，并（如适用）后台 shutdown 旧 client。
-/// 用于 `dispatch_partial_update`。
+/// Build a new client and swap it into the store; init the new client in
+/// the background and (if applicable) shut down the old client in the
+/// background. Used by `dispatch_partial_update`.
 ///
-/// 内部全部走 `tokio::spawn`，本身不 await，因此为同步 `fn`。
-/// 调用方必须在 tokio 运行时上下文中调用。
+/// Everything inside is dispatched via `tokio::spawn` and the function
+/// itself does not await, so it is a synchronous `fn`. Callers must invoke
+/// it from a tokio runtime context.
 ///
-/// **关键不变量**：old 的读取（`runtime.load().get(key).cloned()`）是只读的；之后
-/// `insert_fn` 一次原子 `ArcSwap.store()` 把 new map 放进去（new map 里的该 key
-/// 已经是 new client）。这样 `get_*_client(key)` 从始至终看到的要么是 old 要么是 new，
-/// **不会出现 None 的窗口**。如果换成先 `remove` 再 `insert`，中间就会有一次
-/// store 操作让 key 暂时消失——这正是重构前原代码显式避免的 invariant。
+/// **Key invariant**: reading `old` (`runtime.load().get(key).cloned()`) is
+/// read-only; afterwards `insert_fn` performs a single atomic
+/// `ArcSwap.store()` that swaps in the new map (where that key already
+/// points to the new client). This way `get_*_client(key)` always sees
+/// either the old or the new client -- **there is never a window where it
+/// is None**. If we instead did `remove` followed by `insert`, the
+/// intermediate store would temporarily drop the key -- exactly the
+/// invariant that the pre-refactor code explicitly avoided.
 fn spawn_and_swap_partial<C, F>(
     key: &str,
     label: &'static str,
@@ -407,7 +415,7 @@ fn spawn_and_swap_partial<C, F>(
             let old = runtime.load().get(key).cloned();
             insert_fn(key.to_string(), client.clone());
 
-            // 新 client：永远后台 init
+            // New client: always init in the background
             let c = client.clone();
             let k = key.to_string();
             tokio::spawn(async move {
@@ -416,7 +424,7 @@ fn spawn_and_swap_partial<C, F>(
                 }
             });
 
-            // 旧 client：仅当 provider 声明 SHUTDOWN_ON_REPLACE 时才关
+            // Old client: shut down only when the provider declares SHUTDOWN_ON_REPLACE
             if let Some(old_client) = old {
                 if C::SHUTDOWN_ON_REPLACE {
                     tokio::spawn(async move {
@@ -425,14 +433,14 @@ fn spawn_and_swap_partial<C, F>(
                         }
                     });
                 }
-                // 否则 Arc drop，引用计数自然回收，manager 状态由新 init 的 upsert 维护
+                // Otherwise the Arc is dropped and the refcount is reclaimed naturally; manager state is maintained by the new init's upsert
             }
         }
     }
 }
 
-/// `dispatch_full_set` 场景：未就绪时把旧 Arc carry-over 到 new_map。
-/// 返回 `true` 表示已处理，调用方应 `continue`。
+/// `dispatch_full_set` case: when not ready, carry the old Arc over into new_map.
+/// Returns `true` to indicate handled; the caller should `continue`.
 fn carry_over_if_not_ready<C>(
     key: &str,
     label: &'static str,
@@ -468,8 +476,8 @@ fn carry_over_if_not_ready<C>(
     true
 }
 
-/// `dispatch_full_set` 场景：把新 client 加入 new_map，后台 init。
-/// 若构建失败则什么都不加（对应从 map 移除的语义）。
+/// `dispatch_full_set` case: add the new client to new_map and init in the background.
+/// If construction fails, nothing is added (which matches "removed from the map" semantics).
 fn register_for_full_set<C: LinkSysLifecycle>(
     key: &str,
     label: &'static str,
@@ -491,8 +499,9 @@ fn register_for_full_set<C: LinkSysLifecycle>(
     }
 }
 
-/// `dispatch_full_set` 结束后，原子交换各 provider 的 store；对被淘汰的旧 Arc
-/// （若 provider 声明 SHUTDOWN_ON_REPLACE）在后台并发 shutdown。
+/// At the end of `dispatch_full_set`, atomically swap each provider's store;
+/// for evicted old Arcs (when the provider declares SHUTDOWN_ON_REPLACE),
+/// shut them down concurrently in the background.
 fn swap_and_shutdown_olds<C: LinkSysLifecycle>(
     label: &'static str,
     new_map: HashMap<String, Arc<C>>,
@@ -506,7 +515,7 @@ fn swap_and_shutdown_olds<C: LinkSysLifecycle>(
     tokio::spawn(async move {
         for (k, client) in old {
             if preserved.contains(&k) {
-                continue; // carry-over Arc 在 new_map 中是同一份，不能关
+                continue; // carry-over Arc is the same one in new_map; do not shut down
             }
             if let Err(e) = client.shutdown().await {
                 tracing::warn!(label, key = %k, error = %e, "shutdown old client failed");
@@ -639,7 +648,7 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
         }
     }
 
-    // Atomic swap + background shutdown of淘汰旧 Arc，按 SHUTDOWN_ON_REPLACE 控制
+    // Atomic swap + background shutdown of evicted old Arcs, gated by SHUTDOWN_ON_REPLACE
     swap_and_shutdown_olds(
         "Webhook",
         new_webhook_map,
@@ -657,9 +666,9 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
     for (key, ls) in add_or_update {
         match &ls.spec.config {
             crate::types::resources::link_sys::SystemConfig::Webhook(config) => {
-                let auth_kind = "NotRequired"; // Webhook 走 manager 内部 auth，dispatch 不解析
+                let auth_kind = "NotRequired"; // Webhook uses manager-internal auth; dispatch does not resolve it
                 let tls_ok = true;
-                let ready = true; // Webhook 没有 credential gating，永远就绪
+                let ready = true; // Webhook has no credential gating; always ready
                 if preserve_if_not_ready(key, "Webhook", auth_kind, tls_ok, ready, &WEBHOOK_RUNTIME) {
                     continue;
                 }
@@ -1076,9 +1085,10 @@ mod tests {
         use crate::types::resources::link_sys::webhook::WebhookServiceConfig;
         use crate::types::resources::link_sys::{LinkSysSpec, SystemConfig};
 
-        // 与其他直接调 dispatch_* 的测试（I5/M4 系列）共享一把全局锁串行化。
-        // 不持锁会被它们的 `dispatch_full_set` 调用通过空的 new_webhook_map
-        // 经 `webhook_runtime_replace_all` 抹掉本测试插入的 key。
+        // Share a global lock with other tests that call dispatch_* directly
+        // (I5/M4 series) to serialize. Without holding the lock, their
+        // `dispatch_full_set` calls would wipe the key inserted by this test
+        // via an empty new_webhook_map through `webhook_runtime_replace_all`.
         let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // Use a unique key to also avoid interference with other tests' add/remove paths.

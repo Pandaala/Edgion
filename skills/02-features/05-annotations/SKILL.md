@@ -1,17 +1,17 @@
 ---
 name: annotations-features
-description: Edgion 注解和 Options 键完整参考：metadata.annotations、tls.options、spec.options、系统保留键。
+description: Full reference for Edgion annotations and Options keys: metadata.annotations, tls.options, spec.options, and system reserved keys.
 ---
 
-# 05 注解与 Options 参考
+# 05 Annotations and Options Reference
 
-> 所有 `edgion.io/*` 键的完整列表和使用指南。
+> Complete list and usage guide for all `edgion.io/*` keys.
 
-## 文件清单
+## File List
 
-| 文件 | 主题 |
-|------|------|
-| [00-annotations-overview.md](00-annotations-overview.md) | 注解总览和快速查找 |
-| [references/annotations-metadata.md](references/annotations-metadata.md) | `metadata.annotations` 详细参考 |
-| [references/annotations-options-and-labels.md](references/annotations-options-and-labels.md) | `options` 键和 Labels 参考 |
-| [references/annotations-system-and-test-keys.md](references/annotations-system-and-test-keys.md) | 系统保留键和测试键 |
+| File | Topic |
+|------|-------|
+| [00-annotations-overview.md](00-annotations-overview.md) | Annotations overview and quick lookup |
+| [references/annotations-metadata.md](references/annotations-metadata.md) | Detailed reference for `metadata.annotations` |
+| [references/annotations-options-and-labels.md](references/annotations-options-and-labels.md) | Reference for `options` keys and Labels |
+| [references/annotations-system-and-test-keys.md](references/annotations-system-and-test-keys.md) | System reserved keys and test keys |

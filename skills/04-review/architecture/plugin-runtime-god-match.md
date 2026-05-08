@@ -1,17 +1,17 @@
 ---
 name: plugin-runtime-god-match
-description: 判定 plugin_runtime.rs 中央 match 分发"god object/巨型文件"类 finding。已审计的设计取舍，不修。
+description: Decide on "god object / huge file / should use registry / should use enum_dispatch / should split files by stage" findings about the central match dispatch in plugin_runtime.rs. Audited design tradeoff, will not fix.
 ---
 
-# plugin_runtime.rs 中央 match 分发 — 已审计的设计取舍
+# plugin_runtime.rs Central Match Dispatch — Audited Design Tradeoff
 
-**审计日期**：2026-04-26
-**关联 issue**：P2-06（已关闭，未修复）
-**结论**：**当前的中央 match 分发是刻意保留的，不接受"god object / 应改注册表 / 应用 enum_dispatch / 应分阶段拆文件"类修复建议。**
+**Audit date**: 2026-04-26
+**Linked issue**: P2-06 (closed, not fixed)
+**Conclusion**: **The current central match dispatch is deliberately retained; "god object / should use registry / should use enum_dispatch / should split files by stage" fix suggestions are not accepted.**
 
-## 涉及代码
+## Code Involved
 
-- `src/core/gateway/plugins/runtime/plugin_runtime.rs`（~987 行）
+- `src/core/gateway/plugins/runtime/plugin_runtime.rs` (~987 lines)
   - `create_request_filter_from_edgion`
   - `create_upstream_response_filter_from_edgion`
   - `create_upstream_response_body_filter_from_edgion`
@@ -19,54 +19,54 @@ description: 判定 plugin_runtime.rs 中央 match 分发"god object/巨型文�
   - `get_plugin_validation_error`
   - `get_plugin_name`
 
-## 看上去像问题的点（都不修）
+## Points That Look Like Issues (none will be fixed)
 
-### 1. 一个文件 ~900 行，6 个并列的中央 match
+### 1. One File ~900 Lines, 6 Parallel Central Matches
 
-`EdgionPlugin` 有 33 个 variant，每加一个 HTTP 插件需要在 `plugin_runtime.rs` 改 4 个位置（`use` + 构造 match + validation match + name match）。表面上是教科书式的 god object。
+`EdgionPlugin` has 33 variants; each new HTTP plugin requires changes at 4 places in `plugin_runtime.rs` (`use` + construction match + validation match + name match). On the surface, a textbook god object.
 
-**为什么不改**：
+**Why it will not be changed**:
 
-- 这些 match 是**穷举式**的，少处理一个 variant Rust 编译器会在多处报错。**编译期穷举检查是核心安全保证**，禁止替换为运行时注册（inventory/linkme）。
-- 中央 match 提供了三项实际价值：
-  1. **插件全景一处可见**：打开一个文件即可看到「网关支持哪些 HTTP 插件、各属哪个 stage」。
-  2. **stage 约束显式中央化**：`CreateResult::WrongStage` 显式表达了"哪个插件能进哪个 stage"的部署语义。trait 化（default impl 返回 WrongStage）会让这层约束**变得不可见**。
-  3. **stage-specific 错误消息集中**：如 `"upstreamResponseFilterPlugins[{}] ({}): plugin is not valid for upstream response filter stage"`，集中维护比 33 个 trait impl 各写一遍清晰。
+- These matches are **exhaustive**; missing one variant causes the Rust compiler to error in multiple places. **Compile-time exhaustiveness is the core safety guarantee**; replacement with runtime registration (inventory/linkme) is forbidden.
+- The central match provides three concrete values:
+  1. **Plugin panorama in one place**: opening one file shows "which HTTP plugins the gateway supports and which stage each belongs to".
+  2. **Stage constraint is explicitly centralized**: `CreateResult::WrongStage` explicitly expresses the deployment semantic of "which plugin is allowed in which stage". Trait-ification (default impl returning WrongStage) would make this constraint **invisible**.
+  3. **Stage-specific error messages centralized**: messages like `"upstreamResponseFilterPlugins[{}] ({}): plugin is not valid for upstream response filter stage"` are clearer to maintain centrally than writing them in 33 trait impls separately.
 
-### 2. "应改 `enum_dispatch` + per-plugin trait 让新增插件零中央改动"
+### 2. "Should switch to `enum_dispatch` + per-plugin trait so adding a plugin requires no central change"
 
-这条建议**性能上无收益**，DX 上也不一定划算：
+This suggestion **brings no performance benefit** and is not a clear DX win:
 
-- **不动热路径**：当前请求路径已经是 `Vec<Box<dyn RequestFilter>>` 上的 vtable 调用。`enum_dispatch` 重构只动**配置构建期的中央 match**（每次 reload 几十次，纳秒级），不影响请求路径。
-- **要动热路径就是另一种重构**：把 `Vec<Box<dyn RequestFilter>>` 替换为 `Vec<RequestFilterPlugin>` 枚举。即使做了，vtable 节省 ~5-15ns/请求，相比 JWT 验签（~10-100µs）/ 正则匹配（~µs）/ Redis 限流（~ms）小 3-6 个数量级，**完全不是网关的瓶颈**。Pingora 自身大量使用 trait object 是同样的理由。
-- **DX 净收益不明确**：33 个 variant 的机械迁移有不可见回归风险（trait impl 签名一致但内容写错时编译能过），且 trait 化后调试体验更分散（堆栈中是 `<XConfig as PluginConfigExt>::build_request` 而非中央函数）。
+- **Hot path is untouched**: the current request path is already vtable calls on `Vec<Box<dyn RequestFilter>>`. `enum_dispatch` refactoring only touches the **central match at config-build time** (dozens of times per reload, nanoseconds), not the request path.
+- **Touching the hot path would be a different refactor**: replacing `Vec<Box<dyn RequestFilter>>` with `Vec<RequestFilterPlugin>` enum. Even doing that, vtable savings are ~5-15ns/request — 3-6 orders of magnitude smaller than JWT verification (~10-100µs) / regex matching (~µs) / Redis rate limiting (~ms); **definitely not the gateway bottleneck**. Pingora itself uses trait objects extensively for the same reason.
+- **DX net benefit is unclear**: mechanical migration of 33 variants has invisible regression risks (a trait impl with consistent signature but wrong content can compile); after trait-ification debugging is more dispersed (the stack shows `<XConfig as PluginConfigExt>::build_request` rather than the central function).
 
-### 3. "应分阶段拆 4 个文件"
+### 3. "Should split into 4 files by stage"
 
-不解决核心痛点（新增插件依然需要改中央分发），只是把中央 match 拆到 4 个文件。属于**形式重构**，无实质改进。
+Does not solve the core pain (adding a plugin still requires changing the central dispatch); just splits the central match into 4 files. **Form-only refactor**, no substantive improvement.
 
-## 何时重新评估
+## When to Re-Evaluate
 
-只有触发以下条件之一才考虑重写：
+Only consider rewriting when one of these triggers:
 
-- 未来 3 个月新增 ≥ 5 个 HTTP 插件（重构成本可摊回）。
-- 因其他原因（新 stage 模型、新 hook 点）正要重写 `plugin_runtime.rs`，可顺手做。
-- 新人持续在 4 处中央修改上犯错。
+- ≥ 5 new HTTP plugins added in the next 3 months (refactor cost can be amortized).
+- For other reasons (new stage model, new hook points), `plugin_runtime.rs` is being rewritten anyway; can be done along the way.
+- New developers continually make mistakes at 4 central modification points.
 
-否则，**新 finding 直接关闭**，引用本文。
+Otherwise, **close new findings directly**, citing this document.
 
-## 不接受的修复建议清单
+## Fix Suggestions Not Accepted (list)
 
-- "拆成插件注册表（inventory/linkme）"
-- "用 `enum_dispatch` 把分发表分散到各插件文件"
-- "按 stage 拆成 4 个文件"
-- "提一个 `PluginConfigExt` trait 取代中央 match"
-- "god object，应该重构"
-- "新增插件需要改 4 处中央代码"（这是已知 trade-off，不是缺陷）
+- "Split into a plugin registry (inventory/linkme)"
+- "Use `enum_dispatch` to disperse the dispatch table to each plugin file"
+- "Split into 4 files by stage"
+- "Introduce a `PluginConfigExt` trait to replace the central match"
+- "God object, should be refactored"
+- "Adding a plugin requires changing 4 central places" (this is a known trade-off, not a defect)
 
-## 可接受的小幅改进（如果未来真要做）
+## Acceptable Small Improvements (if undertaken in the future)
 
-- 用 `strum::IntoStaticStr` derive 替代 `get_plugin_name` 的手写 match（**减少 1 个**中央 match，保留其余结构）。
-- 把 `get_plugin_validation_error` 收口到 trait `PluginConfig::validation_error`（**减少 1 个**中央 match，但每个 config 都得实现）。
+- Use `strum::IntoStaticStr` derive to replace the hand-written match in `get_plugin_name` (**reduces 1** central match, keeps the rest).
+- Move `get_plugin_validation_error` into the trait `PluginConfig::validation_error` (**reduces 1** central match, but each config must implement it).
 
-这两个改动不打破中央化语义，单独评估。
+These two changes do not break the centralization semantic; evaluate separately.

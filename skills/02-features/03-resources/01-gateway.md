@@ -1,16 +1,16 @@
 ---
 name: gateway-resource
-description: Gateway 资源完整 Schema：Listener、协议、TLS、AllowedRoutes、Status。
+description: Full Gateway resource schema: Listener, protocol, TLS, AllowedRoutes, Status.
 ---
 
-# Gateway 资源
+# Gateway Resource
 
 > API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
-> Gateway API v1.4.0 Core 资源
+> Gateway API v1.4.0 Core resource
 
-Gateway 是 Edgion 的核心入口资源，定义网关实例的 Listener（监听端口、协议、主机名、TLS 配置），是所有路由资源的挂载点。
+Gateway is Edgion's core entry resource, defining a gateway instance's Listeners (listening ports, protocols, hostnames, TLS configuration). It is the attachment point for all route resources.
 
-## 完整 Schema
+## Full Schema
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -19,25 +19,25 @@ metadata:
   name: my-gateway
   namespace: default
   annotations:
-    # Edgion 扩展注解
-    edgion.io/enable-http2: "true"              # Listener 侧 HTTP/2（默认 true）
-    edgion.io/http-to-https-redirect: "true"    # HTTP→HTTPS 自动重定向
-    edgion.io/https-redirect-port: "443"        # HTTPS 重定向端口
-    edgion.io/edgion-stream-plugins: "ns/name"  # Gateway 级别 StreamPlugins 绑定
+    # Edgion extension annotations
+    edgion.io/enable-http2: "true"              # Listener-side HTTP/2 (default true)
+    edgion.io/http-to-https-redirect: "true"    # Automatic HTTP→HTTPS redirect
+    edgion.io/https-redirect-port: "443"        # HTTPS redirect port
+    edgion.io/edgion-stream-plugins: "ns/name"  # Gateway-level StreamPlugins binding
 spec:
-  gatewayClassName: edgion                       # 必填：关联的 GatewayClass 名称
+  gatewayClassName: edgion                       # Required: name of the associated GatewayClass
 
   listeners:
-    - name: http                                 # 必填：Listener 唯一名称
-      hostname: "*.example.com"                  # 可选：匹配的主机名（支持通配符）
-      port: 80                                   # 必填：监听端口
-      protocol: HTTP                             # 必填：协议类型
-      allowedRoutes:                             # 可选：路由挂载规则
+    - name: http                                 # Required: unique Listener name
+      hostname: "*.example.com"                  # Optional: matched hostname (wildcard supported)
+      port: 80                                   # Required: listening port
+      protocol: HTTP                             # Required: protocol type
+      allowedRoutes:                             # Optional: route attachment rules
         namespaces:
           from: Same                             # Same | All | Selector
-          # selector:                            # from=Selector 时必填
+          # selector:                            # Required when from=Selector
           #   matchLabels: {}
-        kinds:                                   # 可选：允许的路由类型
+        kinds:                                   # Optional: allowed route kinds
           - group: gateway.networking.k8s.io
             kind: HTTPRoute
 
@@ -45,20 +45,20 @@ spec:
       hostname: "*.example.com"
       port: 443
       protocol: HTTPS
-      tls:                                       # HTTPS/TLS 协议必填
+      tls:                                       # Required for HTTPS/TLS protocols
         mode: Terminate                          # Terminate | Passthrough
-        certificateRefs:                         # mode=Terminate 时的证书引用
-          - name: my-cert-secret                 # Secret 名称
-            namespace: default                   # 可选：跨命名空间需 ReferenceGrant
-            kind: Secret                         # 默认 Secret
-            group: ""                            # 默认 core group
-        frontendValidation:                      # 可选：Gateway API 标准 mTLS 客户端证书验证
-          caCertificateRefs:                     # CA 证书 Secret 引用（必须含 ca.crt key）
+        certificateRefs:                         # Certificate references when mode=Terminate
+          - name: my-cert-secret                 # Secret name
+            namespace: default                   # Optional: cross-namespace requires ReferenceGrant
+            kind: Secret                         # Default Secret
+            group: ""                            # Default core group
+        frontendValidation:                      # Optional: Gateway API standard mTLS client certificate validation
+          caCertificateRefs:                     # CA certificate Secret reference (must contain a ca.crt key)
             - name: client-ca
               kind: Secret
               group: ""
-        options:                                 # Edgion 扩展选项
-          edgion.io/cert-provider: "edgion-tls"  # 证书来源："secret"(默认) | "edgion-tls"
+        options:                                 # Edgion extension options
+          edgion.io/cert-provider: "edgion-tls"  # Certificate source: "secret" (default) | "edgion-tls"
 
     - name: tcp
       port: 9000
@@ -69,42 +69,42 @@ spec:
       port: 8443
       protocol: TLS
       tls:
-        mode: Passthrough                        # TLS 透传（不终止）
+        mode: Passthrough                        # TLS passthrough (no termination)
 
     - name: udp
       port: 5353
       protocol: UDP
 
-  addresses:                                     # 可选：请求分配的地址
+  addresses:                                     # Optional: addresses assigned for requests
     - type: IPAddress                            # IPAddress | Hostname
       value: "10.0.0.1"
 ```
 
-## Listener 配置详解
+## Listener Configuration Details
 
-### 协议支持
+### Protocol Support
 
-| Protocol | 适用路由 | TLS 要求 | 说明 |
-|----------|---------|---------|------|
-| `HTTP` | HTTPRoute, GRPCRoute | — | 纯 HTTP 流量 |
-| `HTTPS` | HTTPRoute, GRPCRoute | `tls` 必填 | TLS 终止后的 HTTP 流量 |
-| `TLS` | TLSRoute | `tls` 必填 | TLS 终止或透传 |
-| `TCP` | TCPRoute | — | 原始 TCP 流量 |
-| `UDP` | UDPRoute | — | UDP 流量 |
+| Protocol | Applicable Routes | TLS Requirement | Description |
+|----------|--------------------|-----------------|-------------|
+| `HTTP` | HTTPRoute, GRPCRoute | — | Plain HTTP traffic |
+| `HTTPS` | HTTPRoute, GRPCRoute | `tls` required | HTTP traffic after TLS termination |
+| `TLS` | TLSRoute | `tls` required | TLS termination or passthrough |
+| `TCP` | TCPRoute | — | Raw TCP traffic |
+| `UDP` | UDPRoute | — | UDP traffic |
 
-### TLS 配置 Schema
+### TLS Configuration Schema
 
 ```yaml
 tls:
   mode: String           # "Terminate" | "Passthrough"
-  certificateRefs:       # mode=Terminate 时的证书列表
-    - name: String       # Secret 名称（必填）
-      namespace: String? # 命名空间（跨命名空间需 ReferenceGrant）
-      kind: String?      # 默认 "Secret"
-      group: String?     # 默认 ""（core group）
-  options:               # 实现特定选项（JSON）
+  certificateRefs:       # Certificate list when mode=Terminate
+    - name: String       # Secret name (required)
+      namespace: String? # Namespace (cross-namespace requires ReferenceGrant)
+      kind: String?      # Default "Secret"
+      group: String?     # Default "" (core group)
+  options:               # Implementation-specific options (JSON)
     edgion.io/cert-provider: String   # "secret" | "edgion-tls"
-  # secrets: [...]       # 运行时填充（Controller 解析后注入，用户不填写）
+  # secrets: [...]       # Runtime-populated (injected by Controller after resolution; users do not fill this in)
 ```
 
 ### AllowedRoutes Schema
@@ -113,58 +113,58 @@ tls:
 allowedRoutes:
   namespaces:
     from: String         # "Same" | "All" | "Selector"
-    selector:            # from=Selector 时必填
+    selector:            # Required when from=Selector
       matchLabels: {}    # K8s label selector
-  kinds:                 # 允许挂载的路由类型列表
-    - group: String?     # 默认 "gateway.networking.k8s.io"
+  kinds:                 # List of route kinds allowed to attach
+    - group: String?     # Default "gateway.networking.k8s.io"
       kind: String       # HTTPRoute | GRPCRoute | TCPRoute | TLSRoute | UDPRoute
 ```
 
-**from 值**:
-| 值 | 说明 |
-|----|------|
-| `Same` | 仅允许与 Gateway 同命名空间的路由（默认） |
-| `All` | 允许所有命名空间的路由 |
-| `Selector` | 按 label selector 过滤命名空间 |
+**from values**:
+| Value | Description |
+|-------|-------------|
+| `Same` | Only allow routes in the same namespace as the Gateway (default) |
+| `All` | Allow routes from all namespaces |
+| `Selector` | Filter namespaces by label selector |
 
 ## Status Schema
 
 ```yaml
 status:
-  addresses:                              # 分配的地址
+  addresses:                              # Assigned addresses
     - type: IPAddress
       value: "10.0.0.1"
-  conditions:                             # Gateway 级别条件
-    - type: Accepted                      # 资源已接受
+  conditions:                             # Gateway-level conditions
+    - type: Accepted                      # Resource accepted
       status: "True"
       reason: Accepted
-    - type: ListenersNotValid             # 有端口冲突时为 True
+    - type: ListenersNotValid             # True when there is a port conflict
       status: "False"
       reason: Valid
-  listeners:                              # 每个 Listener 的状态
+  listeners:                              # Per-Listener status
     - name: http
-      supportedKinds:                     # 该 Listener 支持的路由类型
+      supportedKinds:                     # Route kinds supported by this Listener
         - group: gateway.networking.k8s.io
           kind: HTTPRoute
-      attachedRoutes: 3                   # 已挂载路由数
+      attachedRoutes: 3                   # Number of attached routes
       conditions:
         - type: Accepted
           status: "True"
-        - type: Conflicted                # 端口冲突
+        - type: Conflicted                # Port conflict
           status: "False"
-        - type: ResolvedRefs              # 证书引用已解析
+        - type: ResolvedRefs              # Certificate references resolved
           status: "True"
 ```
 
-## Listener 冲突检测
+## Listener Conflict Detection
 
-同一 `(socket_addr, hostname)` 组合在多个 Gateway 间冲突时，后创建的 Gateway 的 Listener 会被标记为 `Conflicted=True`。冲突检测 key 通过 `make_conflict_key(SocketAddr)` 按 socket 地址分组（而非 port+protocol）。冲突 Gateway 被删除后，自动恢复。
+When the same `(socket_addr, hostname)` combination conflicts across multiple Gateways, the Listener of the later-created Gateway is marked `Conflicted=True`. Conflict detection keys are grouped by socket address (rather than port+protocol) via `make_conflict_key(SocketAddr)`. After the conflicting Gateway is deleted, the state recovers automatically.
 
-## Edgion 扩展注解
+## Edgion Extension Annotations
 
-| 注解 | 值 | 默认 | 说明 |
-|------|---|------|------|
-| `edgion.io/enable-http2` | `"true"\|"false"` | `"true"` | Listener 侧 HTTP/2：HTTP listener 启用 h2c，HTTPS listener 启用 ALPN h2。不影响后端协议（后端走 Service `appProtocol`） |
-| `edgion.io/http-to-https-redirect` | `"true"\|"false"` | `"false"` | HTTP→HTTPS 自动重定向 |
-| `edgion.io/https-redirect-port` | `port` | `"443"` | HTTPS 重定向目标端口 |
-| `edgion.io/edgion-stream-plugins` | `ns/name` | — | Gateway 级别 StreamPlugins |
+| Annotation | Value | Default | Description |
+|------------|-------|---------|-------------|
+| `edgion.io/enable-http2` | `"true"\|"false"` | `"true"` | Listener-side HTTP/2: HTTP listener enables h2c, HTTPS listener enables ALPN h2. Does not affect the backend protocol (the backend is determined by Service `appProtocol`). |
+| `edgion.io/http-to-https-redirect` | `"true"\|"false"` | `"false"` | Automatic HTTP→HTTPS redirect |
+| `edgion.io/https-redirect-port` | `port` | `"443"` | HTTPS redirect target port |
+| `edgion.io/edgion-stream-plugins` | `ns/name` | — | Gateway-level StreamPlugins |

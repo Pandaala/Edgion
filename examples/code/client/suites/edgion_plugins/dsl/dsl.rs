@@ -308,7 +308,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 4: Set Request Header ====================
+    // ==================== Scenario 4: Set Request Header ====================
 
     fn test_set_request_header_with_user_id() -> TestCase {
         TestCase::new(
@@ -389,7 +389,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 5: Deny by Header ====================
+    // ==================== Scenario 5: Deny by Header ====================
 
     fn test_deny_by_header_blocked() -> TestCase {
         TestCase::new(
@@ -456,7 +456,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 6: Cookie Read ====================
+    // ==================== Scenario 6: Cookie Read ====================
 
     fn test_cookie_read_present() -> TestCase {
         TestCase::new(
@@ -535,7 +535,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 7: Ctx Chain ====================
+    // ==================== Scenario 7: Ctx Chain ====================
 
     fn test_ctx_chain_with_tenant() -> TestCase {
         TestCase::new(
@@ -622,7 +622,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 8: Multi Header Ops ====================
+    // ==================== Scenario 8: Multi Header Ops ====================
 
     fn test_multi_header_ops() -> TestCase {
         TestCase::new(
@@ -677,7 +677,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 9: URI Rewrite ====================
+    // ==================== Scenario 9: URI Rewrite ====================
 
     fn test_uri_rewrite_v1() -> TestCase {
         TestCase::new(
@@ -759,7 +759,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 10: SHA256 Sign ====================
+    // ==================== Scenario 10: SHA256 Sign ====================
 
     fn test_sha256_sign() -> TestCase {
         TestCase::new(
@@ -801,7 +801,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 11: Regex Extract ====================
+    // ==================== Scenario 11: Regex Extract ====================
 
     fn test_regex_extract_chrome() -> TestCase {
         TestCase::new(
@@ -877,7 +877,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 12: Response Inject ====================
+    // ==================== Scenario 12: Response Inject ====================
 
     fn test_response_inject() -> TestCase {
         TestCase::new(
@@ -926,7 +926,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 13: Resp Status Conditional ====================
+    // ==================== Scenario 13: Resp Status Conditional ====================
 
     fn test_resp_status_404() -> TestCase {
         TestCase::new(
@@ -1006,7 +1006,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 14: Deny with Body ====================
+    // ==================== Scenario 14: Deny with Body ====================
 
     fn test_deny_with_body_no_auth() -> TestCase {
         TestCase::new(
@@ -1105,7 +1105,7 @@ impl DslTestSuite {
             },
         )
     }
-    // ==================== 场景 15: Range Iterate ====================
+    // ==================== Scenario 15: Range Iterate ====================
 
     fn test_range_iterate() -> TestCase {
         TestCase::new(
@@ -1153,7 +1153,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 16: Regex Replace ====================
+    // ==================== Scenario 16: Regex Replace ====================
 
     fn test_regex_replace_versioned_path() -> TestCase {
         TestCase::new(
@@ -1226,7 +1226,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 17: Trim + Split ====================
+    // ==================== Scenario 17: Trim + Split ====================
 
     fn test_trim_split_with_admin() -> TestCase {
         TestCase::new(
@@ -1316,7 +1316,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 18: Break + Continue ====================
+    // ==================== Scenario 18: Break + Continue ====================
 
     fn test_break_continue() -> TestCase {
         TestCase::new(
@@ -1751,7 +1751,7 @@ impl TestSuite for DslTestSuite {
             // Scenario 3: Path deny (blocked / allowed)
             Self::test_deny_path_blocked(),
             Self::test_deny_path_allowed(),
-            // 新场景
+            // Additional scenarios
             Self::test_set_request_header_with_user_id(),
             Self::test_set_request_header_without_user_id(),
             Self::test_deny_by_header_blocked(),

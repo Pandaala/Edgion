@@ -1,30 +1,30 @@
 ---
 name: controller-architecture
-description: edgion-controller 控制面架构：总体设计、启动/关闭、Admin API、配置中心、Workqueue、ResourceProcessor、Requeue、CacheServer、ACME 服务。
+description: edgion-controller control plane architecture — overall design, startup/shutdown, Admin API, ConfigCenter, Workqueue, ResourceProcessor, Requeue, CacheServer, ACME service.
 ---
 
-# 01 Controller 架构（edgion-controller）
+# 01 Controller Architecture (edgion-controller)
 
-> edgion-controller 是控制面，负责资源的接收、校验、处理和分发。
-> 从 K8s API 或本地文件系统接收资源配置，经过校验/预解析/处理后，通过 gRPC 同步给 Gateway 实例。
+> edgion-controller is the control plane responsible for receiving, validating, processing, and dispatching resources.
+> It receives resource configuration from K8s API or the local file system, then validates / preparses / processes it and syncs the result to Gateway instances via gRPC.
 
-## 文件清单
+## File List
 
-| 文件 | 主题 | 推荐阅读场景 |
-|------|------|-------------|
-| [00-overview.md](00-overview.md) | Controller 总体架构 | 首次了解 Controller 设计 |
-| [01-startup-shutdown.md](01-startup-shutdown.md) | 程序启动与关闭流程 | 调试启动问题、理解初始化顺序 |
-| [02-admin-api.md](02-admin-api.md) | Admin HTTP API (:5800) | 使用/扩展管理接口 |
-| [03-config-center/](03-config-center/SKILL.md) | 配置中心子系统（ConfCenter trait + 双后端） | 修改资源处理流程、K8s HA |
-| [04-workqueue.md](04-workqueue.md) | Workqueue 去重与退避机制 | 调试处理延迟、理解去重和重试逻辑 |
-| [05-resource-processor.md](05-resource-processor.md) | ResourceProcessor 处理流水线 | 修改资源处理逻辑、理解 Handler 接口 |
-| [06-requeue-mechanism.md](06-requeue-mechanism.md) | 跨资源 Requeue 机制 | 排查依赖联动、理解 TriggerChain |
-| [07-cache-server.md](07-cache-server.md) | ServerCache + EventStore 内存缓存 | 调试 gRPC 同步数据源、理解版本机制 |
-| [08-acme-service.md](08-acme-service.md) | ACME 证书自动化服务 | 修改/调试自动证书签发与续期 |
-| [09-add-new-resource/](09-add-new-resource/00-guide.md) | 添加新资源 workflow + 4 类模板 | 需要添加新的 ResourceKind |
-| [10-status-management.md](10-status-management.md) | update_status 实现规范与陷阱 | 实现/修改 CRD status 回写 |
+| File | Topic | Recommended reading scenario |
+|------|-------|------------------------------|
+| [00-overview.md](00-overview.md) | Overall Controller architecture | First-time learners of the Controller design |
+| [01-startup-shutdown.md](01-startup-shutdown.md) | Process startup and shutdown flow | Debugging startup issues, understanding the initialization order |
+| [02-admin-api.md](02-admin-api.md) | Admin HTTP API (:5800) | Using or extending the management interface |
+| [03-config-center/](03-config-center/SKILL.md) | ConfigCenter subsystem (ConfCenter trait + dual backends) | Modifying the resource processing flow, K8s HA |
+| [04-workqueue.md](04-workqueue.md) | Workqueue dedup and backoff mechanism | Debugging processing latency, understanding dedup and retry logic |
+| [05-resource-processor.md](05-resource-processor.md) | ResourceProcessor processing pipeline | Modifying resource processing logic, understanding the Handler interface |
+| [06-requeue-mechanism.md](06-requeue-mechanism.md) | Cross-resource requeue mechanism | Investigating dependency interactions, understanding TriggerChain |
+| [07-cache-server.md](07-cache-server.md) | ServerCache + EventStore in-memory cache | Debugging the gRPC sync data source, understanding the version mechanism |
+| [08-acme-service.md](08-acme-service.md) | ACME certificate automation service | Modifying or debugging automatic certificate issuance and renewal |
+| [09-add-new-resource/](09-add-new-resource/00-guide.md) | Add-new-resource workflow + 4 template categories | When you need to add a new ResourceKind |
+| [10-status-management.md](10-status-management.md) | update_status implementation rules and pitfalls | Implementing or modifying CRD status writeback |
 
-## 架构总览
+## Architecture Overview
 
 ```
                          edgion-controller
@@ -37,22 +37,22 @@ description: edgion-controller 控制面架构：总体设计、启动/关闭、
 │  │           ├── validate → preparse → parse → on_change    │
 │  │           └── update ServerCache                         │
 │  │                                                          │
-│  ├── ProcessorRegistry (全局注册表)                          │
+│  ├── ProcessorRegistry (global registry)                    │
 │  ├── SecretRefManager / ServiceRefManager                   │
 │  ├── CrossNamespaceRefManager                               │
-│  └── RequeueChain (跨资源联动)                               │
+│  └── RequeueChain (cross-resource interactions)             │
 │                                                             │
 │  Admin API (:5800)                                          │
-│  ├── CRUD 接口 (namespaced / cluster)                       │
+│  ├── CRUD endpoints (namespaced / cluster)                  │
 │  ├── health / ready                                         │
 │  └── reload / server-info                                   │
 │                                                             │
 │  ConfigSyncServer (gRPC :50051)                             │
 │  ├── List / Watch (per-kind)                                │
 │  ├── WatchServerMeta                                        │
-│  └── ClientRegistry (已连接 Gateway)                        │
+│  └── ClientRegistry (connected Gateways)                    │
 │                                                             │
-│  ACME Service (可选, 仅 Leader)                             │
-│  └── Let's Encrypt 自动证书签发与续期                        │
+│  ACME Service (optional, Leader only)                       │
+│  └── Let's Encrypt automatic certificate issuance/renewal   │
 └─────────────────────────────────────────────────────────────┘
 ```

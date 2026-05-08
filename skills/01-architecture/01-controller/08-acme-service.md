@@ -1,91 +1,91 @@
 ---
 name: controller-acme
-description: ACME 证书自动化服务：EdgionAcme 资源驱动、Let's Encrypt 兼容客户端、DNS 提供商实现、仅 Leader 运行、Secret 集成。
+description: ACME certificate automation service — driven by the EdgionAcme resource, Let's Encrypt-compatible client, DNS provider implementations, Leader-only execution, Secret integration.
 ---
 
-# ACME 证书自动化服务
+# ACME Certificate Automation Service
 
-## 概述
+## Overview
 
-ACME 服务是 Controller 的可选组件，通过 Let's Encrypt（或兼容的 ACME 服务器）自动签发和续期 TLS 证书。该服务由 EdgionAcme 自定义资源驱动，用户只需声明域名和验证方式，系统自动完成证书生命周期管理。
+The ACME service is an optional Controller component that automatically issues and renews TLS certificates via Let's Encrypt (or any compatible ACME server). The service is driven by the EdgionAcme custom resource — users only declare the domain names and validation method, and the system handles the full certificate lifecycle automatically.
 
-核心组件：
+Core components:
 
-- **EdgionAcme 资源** — 声明式证书需求，定义域名、ACME 服务器、验证方式
-- **ACME 协议客户端** — 与 Let's Encrypt 兼容的 ACME v2 协议实现
-- **DNS 提供商** — 域名验证的多种 DNS 提供商实现
+- **EdgionAcme resource** — declarative certificate requirements that define domain names, ACME server, and validation method
+- **ACME protocol client** — Let's Encrypt-compatible ACME v2 protocol implementation
+- **DNS providers** — multiple DNS provider implementations for domain validation
 
-## 处理流程
+## Processing Flow
 
 ```
-用户创建/更新 EdgionAcme
+User creates/updates EdgionAcme
         │
         ▼
-  Handler 接收并处理请求
+  Handler receives and processes the request
         │
         ▼
-  ACME 客户端向 ACME 服务器发起挑战
+  ACME client initiates a challenge with the ACME server
         │
         ▼
-  DNS 提供商执行域名验证（DNS-01）
-  或 HTTP-01 挑战验证
+  DNS provider performs domain validation (DNS-01)
+  or HTTP-01 challenge validation
         │
         ▼
-  域名验证通过 → 证书签发
+  Domain validation passes → certificate issued
         │
         ▼
-  证书存储到 Secret 资源
+  Certificate stored into a Secret resource
         │
         ▼
-  EdgionAcme Status 更新（含过期时间）
+  EdgionAcme status is updated (with expiration time)
 ```
 
-### 详细步骤
+### Detailed Steps
 
-1. **资源接收**: 用户创建或更新 EdgionAcme 资源，进入 Workqueue → ResourceProcessor 流水线
-2. **Handler 处理**: EdgionAcme Handler 解析资源配置，提取域名列表、ACME 服务器地址、验证方式
-3. **ACME 客户端交互**: 向 ACME 服务器（如 Let's Encrypt）发起证书签发请求，获取挑战令牌
-4. **域名验证**: 根据配置的验证方式执行域名所有权证明（DNS-01 或 HTTP-01）
-5. **证书签发**: 验证通过后，ACME 服务器签发证书，客户端下载证书链和私钥
-6. **Secret 存储**: 将签发的证书和私钥写入对应的 Secret 资源，供 Gateway TLS 使用
-7. **状态更新**: 更新 EdgionAcme 资源的 Status，记录证书过期时间、签发状态等信息
+1. **Resource intake**: the user creates or updates an EdgionAcme resource; it enters the Workqueue → ResourceProcessor pipeline
+2. **Handler processing**: the EdgionAcme Handler parses the resource configuration, extracting the domain list, ACME server URL, and validation method
+3. **ACME client interaction**: requests certificate issuance from the ACME server (e.g. Let's Encrypt) and obtains the challenge token
+4. **Domain validation**: performs proof of domain ownership using the configured method (DNS-01 or HTTP-01)
+5. **Certificate issuance**: once validation passes, the ACME server issues the certificate; the client downloads the certificate chain and private key
+6. **Secret storage**: writes the issued certificate and private key into the corresponding Secret resource for use by Gateway TLS
+7. **Status update**: updates the status of the EdgionAcme resource, recording the certificate expiration time, issuance state, and so on
 
-## ACME 协议客户端
+## ACME Protocol Client
 
-ACME 客户端实现 RFC 8555 协议，兼容 Let's Encrypt 及其他 ACME v2 服务器。主要职责：
+The ACME client implements the RFC 8555 protocol and is compatible with Let's Encrypt and other ACME v2 servers. Main responsibilities:
 
-- 账户注册与密钥管理
-- 订单创建与挑战获取
-- 挑战响应提交与状态轮询
-- 证书下载与解析
+- Account registration and key management
+- Order creation and challenge retrieval
+- Challenge response submission and status polling
+- Certificate download and parsing
 
-## DNS 提供商
+## DNS Providers
 
-DNS-01 挑战需要在域名的 DNS 记录中添加 TXT 记录以证明域名所有权。系统提供多种 DNS 提供商实现，每种提供商封装对应的 API 调用逻辑：
+The DNS-01 challenge requires adding a TXT record to the domain's DNS records to prove ownership. The system provides multiple DNS provider implementations, each wrapping the corresponding API calls:
 
-- 创建 `_acme-challenge.<domain>` TXT 记录
-- 等待 DNS 传播
-- 验证完成后清理 TXT 记录
+- Create a `_acme-challenge.<domain>` TXT record
+- Wait for DNS propagation
+- Clean up the TXT record after validation
 
-## Leader-only 约束
+## Leader-only Constraint
 
-ACME 服务仅在 Leader 节点上运行。原因：
+The ACME service runs only on the Leader node. Reasons:
 
-- **HTTP-01 挑战**: 需要单一端点响应 ACME 服务器的 HTTP 验证请求，多实例运行会导致挑战响应不确定
-- **避免重复签发**: 多个实例同时向 ACME 服务器发起请求会导致不必要的重复操作和速率限制风险
-- **状态一致性**: Leader 独占处理确保证书签发流程的原子性和一致性
+- **HTTP-01 challenge**: requires a single endpoint to respond to the ACME server's HTTP validation request; running on multiple instances would make the challenge response non-deterministic
+- **Avoid duplicate issuance**: multiple instances simultaneously requesting from the ACME server would cause unnecessary duplicate operations and risk hitting rate limits
+- **State consistency**: exclusive Leader processing ensures atomicity and consistency of the certificate-issuance flow
 
-在 HA 模式下，当 Leader 切换时，新 Leader 接管 ACME 服务，未完成的签发流程会重新开始。
+In HA mode, when the Leader switches over, the new Leader takes over the ACME service and any in-flight issuance flow restarts.
 
-## 集成机制
+## Integration Mechanism
 
-### Secret 管理集成
+### Secret Management Integration
 
-证书签发完成后，ACME 服务将证书写入 Secret 资源。Secret 的变更会触发依赖它的其他资源（如 Gateway Listener）通过 Requeue 机制重新处理，从而实现证书的自动热更新。
+After issuance, the ACME service writes the certificate into a Secret resource. Changes to the Secret trigger reprocessing of dependent resources (such as a Gateway Listener) via the requeue mechanism, enabling automatic hot reload of certificates.
 
-### 级联 Requeue
+### Cascading Requeue
 
-EdgionAcme 资源的状态变更通过 RequeueChain 触发关联资源的重新处理：
+State changes of an EdgionAcme resource trigger reprocessing of related resources via RequeueChain:
 
-- EdgionAcme 签发成功 → Secret 更新 → 依赖该 Secret 的 Gateway/Listener 重新处理
-- 证书即将过期 → EdgionAcme 重新入队 → 自动续期流程启动
+- EdgionAcme issued successfully → Secret updated → Gateways/Listeners depending on that Secret are reprocessed
+- Certificate about to expire → EdgionAcme re-enqueued → automatic renewal flow starts

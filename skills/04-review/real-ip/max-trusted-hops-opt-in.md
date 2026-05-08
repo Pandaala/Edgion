@@ -1,60 +1,60 @@
-# RealIp `maxTrustedHops` opt-in：设计决策
+# RealIp `maxTrustedHops` opt-in: Design Decision
 
-## 结论
+## Conclusion
 
-`RealIpConfig.max_trusted_hops` 是 **opt-in 可选字段**，默认 `None`（Nginx 兼容行为，无上限）。这是 2026-04-22 对 M12 的刻意取舍——提供 Envoy 风格的跳数上限作为辅助防御，但**不**强制启用，也**不**改默认为某个具体数字。
+`RealIpConfig.max_trusted_hops` is an **opt-in optional field**, defaulting to `None` (Nginx-compatible behavior, no upper limit). This is a deliberate tradeoff for M12 on 2026-04-22 — provides Envoy-style hop cap as auxiliary defense, but is **not** mandatorily enabled, and the default is **not** changed to a specific number.
 
-遇到 review 报"RealIp 应把 `maxTrustedHops` 改为必填 / 设定保守默认值 / 移除该字段"时，按下述规则判定。
+When a review reports "RealIp should change `maxTrustedHops` to required / set a conservative default / remove this field", apply the rules below.
 
-## 背景威胁（M12）
+## Background Threat (M12)
 
-`recursive=true` 模式下，右→左遍历 `X-Forwarded-For` 列表直到遇到首个非可信 IP。若 `trusted_ips` 配得过宽（如 `10.0.0.0/8`）且攻击者能从该范围内的 IP 发起请求，可以通过构造任意长度的"可信 IP 前缀"把恶意 IP 推至最左端，让 `client_ip` 被伪造。
+In `recursive=true` mode, the `X-Forwarded-For` list is traversed right-to-left until the first non-trusted IP is encountered. If `trusted_ips` is configured too broadly (e.g., `10.0.0.0/8`) and an attacker can initiate requests from an IP within that range, they can construct a "trusted-IP prefix" of arbitrary length to push the malicious IP to the leftmost position, causing `client_ip` to be spoofed.
 
-`maxTrustedHops: Some(N)` 在递归遍历到第 N 个可信 hop 时停止，返回当前位置 IP——堵死"无限延长可信前缀"这条路。
+`maxTrustedHops: Some(N)` stops at the Nth trusted hop during recursive traversal and returns the IP at the current position — closing off this "infinitely extending trusted prefix" path.
 
-## 设计约束
+## Design Constraints
 
-1. **默认 `None`（无上限）**：保持 Nginx 兼容，升级部署零破坏
-2. **对齐 Envoy `xff_num_trusted_hops` 概念**：给 Envoy-familiar operator 熟悉的控制面
-3. **仅对 `recursive=true` 有意义**：非递归模式下字段存在但无效
-4. **主防御在 `trusted_ips`**：`maxTrustedHops` 是辅助防线，不是主防线；文档明确"双层防御"
-5. **字段类型 `Option<u32>`**：`None` = 无上限；`Some(0)` 合法但语义等于"不跳过任何可信 hop"（实际相当于非递归语义）
+1. **Default `None` (no upper limit)**: maintains Nginx compatibility; zero breakage on upgrade
+2. **Aligned with Envoy `xff_num_trusted_hops` concept**: gives Envoy-familiar operators a familiar control surface
+3. **Only meaningful for `recursive=true`**: the field exists in non-recursive mode but is ineffective
+4. **Main defense is in `trusted_ips`**: `maxTrustedHops` is an auxiliary defense, not the main one; documentation makes "two-layer defense" explicit
+5. **Field type is `Option<u32>`**: `None` = no upper limit; `Some(0)` is legal but means "do not skip any trusted hop" (effectively non-recursive semantics)
 
-## 判定规则
+## Decision Rule
 
-当 review 报告出现以下模式时，按"设计决策"关闭：
+When a review report contains the following patterns, close as "design decision":
 
-1. "`maxTrustedHops` 应改为必填，防止 operator 遗漏"
-2. "应把默认值从 `None` 改为 `5`（或其他具体数字）作为保守默认"
-3. "应删除 `maxTrustedHops`，由代码强制单 hop"
-4. "非递归模式下 `maxTrustedHops` 应报错（当前是忽略）"
+1. "`maxTrustedHops` should be required to prevent operator omission"
+2. "Should change the default from `None` to `5` (or another specific number) as a conservative default"
+3. "Should remove `maxTrustedHops`; the code should enforce single hop"
+4. "In non-recursive mode `maxTrustedHops` should error (currently ignored)"
 
-验证三点再关闭：
+Verify three points before closing:
 
-- `RealIpConfig.max_trusted_hops` 字段类型仍是 `Option<u32>`，默认 `None`
-- `RealIpExtractor::resolve_from_header` recursive 分支仍用 counter 实现 cap（非递归分支不读此字段）
-- 用户文档 `docs/{zh-CN,en}/user-guide/edgion-plugins/real-ip.md` "安全取舍" / "Security Trade-offs" 小节仍在，明确"第一道防线是精确 `trustedIps`、第二道是 `maxTrustedHops`"
+- The type of `RealIpConfig.max_trusted_hops` is still `Option<u32>`, default `None`
+- The recursive branch of `RealIpExtractor::resolve_from_header` still uses a counter to implement the cap (the non-recursive branch does not read this field)
+- The user documentation `docs/{zh-CN,en}/user-guide/edgion-plugins/real-ip.md` still has the "Security tradeoffs" / "Security Trade-offs" section, making "first defense is precise `trustedIps`; second is `maxTrustedHops`" explicit
 
-三点满足 → 设计决策，指向 `tasks/security-audit/02-access-control.md` M12 FIXED 条目关闭。
+All three satisfied → design decision; point to the M12 FIXED entry in `tasks/security-audit/02-access-control.md` and close.
 
-## 例外场景（需重评）
+## Exceptional Scenarios (need reassessment)
 
-- 行业最佳实践统一迁移到"强制 hop cap"（Envoy 已是 required）→ 评估是否把 Edgion 也改成必填
-- 出现大量"operator 因没配 `maxTrustedHops` 被攻击"的安全事件反馈 → 考虑改保守默认（伴随 breaking change 文档）
-- 加入 `recursive: false + maxTrustedHops` 组合的 validator error（当前是静默忽略）
+- Industry best practice unifies on "mandatory hop cap" (Envoy already requires it) → assess whether to also make Edgion required
+- Many "operator was attacked because `maxTrustedHops` was not configured" security-incident reports appear → consider changing to a conservative default (with breaking-change documentation)
+- Add a validator error for the `recursive: false + maxTrustedHops` combination (currently silently ignored)
 
-## 与其他 opt-in 安全增强的同类判定
+## Same-Category Decisions for Other Opt-In Security Enhancements
 
-本决策和以下 review 规则同属"**Edgion 自创语法糖/可选项，保留默认行为 + opt-in 增强**"模式，判定方式一致：
+This decision belongs to the same category as the following review rules: "**Edgion's bespoke syntactic sugar / optional items, preserve the default behavior + opt-in enhancement**":
 
-- `cors/subdomain-wildcard-https-only.md`（M13）——不同之处：M13 是 breaking 修复（改了简写语义），M12 是 non-breaking opt-in
-- `oidc/nonce-pkce-defaults.md`（M8）——M8 doc-only，M12 代码+文档
+- `cors/subdomain-wildcard-https-only.md` (M13) — difference: M13 is a breaking fix (changing shorthand semantics); M12 is non-breaking opt-in
+- `oidc/nonce-pkce-defaults.md` (M8) — M8 is doc-only; M12 is code + doc
 
-## 背景记录
+## Background Notes
 
-- 决策日期：2026-04-22
-- 决策来源：`tasks/security-audit/02-access-control.md` M12（Option B — code + 文档）
-- 实现文件：
+- Decision date: 2026-04-22
+- Decision source: `tasks/security-audit/02-access-control.md` M12 (Option B — code + doc)
+- Implementation files:
   - `src/types/resources/edgion_plugins/plugin_configs/real_ip.rs`
   - `src/core/common/utils/real_ip_extractor.rs`
-- 新增测试：`test_max_trusted_hops_caps_recursive_traversal`、`test_max_trusted_hops_does_not_block_real_client_within_window`、`test_max_trusted_hops_ignored_in_non_recursive_mode`
+- New tests: `test_max_trusted_hops_caps_recursive_traversal`, `test_max_trusted_hops_does_not_block_real_client_within_window`, `test_max_trusted_hops_ignored_in_non_recursive_mode`

@@ -3,67 +3,67 @@ name: 05-testing
 description: Testing skill for Edgion. Use when writing, running, or extending unit tests, integration tests, K8s tests, LinkSys tests, or configuration sync validation workflows.
 ---
 
-# 05 测试
+# 05 Testing
 
-> Edgion 测试体系，目标：单元测试 + 集成测试达到 **99% 代码覆盖率**。
-> 分为**标准测试**（覆盖率保证）和**专项测试**（特定场景验证）两部分。
+> Edgion test system. Goal: unit tests + integration tests reach **99% code coverage**.
+> Split into **standard tests** (coverage guarantee) and **dedicated tests** (specific-scenario validation).
 
-## 文件清单
+## File list
 
-### Part 1 — 标准测试（覆盖率保证）
+### Part 1 — Standard tests (coverage guarantee)
 
-| 文件 | 主题 | 状态 |
+| File | Topic | Status |
 |------|------|------|
-| [00-unit-testing.md](00-unit-testing.md) | 单元测试：inline test module、运行方式、编写规范、与集成测试的分工 | ✅ 完整 |
-| [01-integration-testing.md](01-integration-testing.md) | 集成测试：架构、运行流程、新增测试步骤、**动态（热更新）测试 scenario 框架** | ✅ 已重构 |
-| [02-k8s-integration-testing.md](02-k8s-integration-testing.md) | K8s 集成测试：与本地测试差异、改造清单、执行阶段 | ✅ 完整 |
+| [00-unit-testing.md](00-unit-testing.md) | Unit testing: inline test module, how to run, writing rules, division of labor with integration tests | Complete |
+| [01-integration-testing.md](01-integration-testing.md) | Integration testing: architecture, run flow, steps to add a test, **dynamic (hot reload) test scenario framework** | Refactored |
+| [02-k8s-integration-testing.md](02-k8s-integration-testing.md) | K8s integration testing: differences from local testing, modification checklist, execution phases | Complete |
 
-### Part 2 — 专项测试（特定场景验证）
+### Part 2 — Dedicated tests (specific-scenario validation)
 
-| 文件 | 主题 | 状态 |
+| File | Topic | Status |
 |------|------|------|
-| [03-link-sys-testing.md](03-link-sys-testing.md) | LinkSys 集成测试：bash 测试流程、Admin API 验证、Docker Compose | ✅ 完整 |
-| [04-conf-sync-leak-testing.md](04-conf-sync-leak-testing.md) | 配置同步泄漏检测：基础循环测试 + 高级边界场景 + **mTLS 通道测试** | ✅ 完整 |
-| [02-cache-residue-detection.md](02-cache-residue-detection.md) | Cache 残留检测：wipe-all + store-stats leak 检测，添加新 store / ignore-path、调试 leak 报告 | ✅ 完整 |
+| [03-link-sys-testing.md](03-link-sys-testing.md) | LinkSys integration tests: bash test flow, Admin API validation, Docker Compose | Complete |
+| [04-conf-sync-leak-testing.md](04-conf-sync-leak-testing.md) | Config-sync leak detection: basic loop test + advanced boundary scenarios + **mTLS channel test** | Complete |
+| [02-cache-residue-detection.md](02-cache-residue-detection.md) | Cache residue detection: wipe-all + store-stats leak detection, adding a new store / ignore-path, debugging leak reports | Complete |
 
-## 快速入门
+## Quick start
 
-### 运行单元测试
+### Run unit tests
 ```bash
 cargo test --all
 ```
 
-### 运行集成测试
+### Run integration tests
 ```bash
 ./examples/test/scripts/integration/run_integration.sh
 ```
 
-### 运行动态（热更新）测试
-Dynamic scenarios 默认作为完整 `run_integration.sh`（不带 `-r`）和 `-r Gateway` 路径的最后一步自动执行；窄域路径（`-r EdgionPlugins -i ...` 等）跳过。
+### Run dynamic (hot reload) tests
+Dynamic scenarios run by default as the final step of the full `run_integration.sh` (without `-r`) and the `-r Gateway` path; narrow paths (`-r EdgionPlugins -i ...` etc.) skip them.
 ```bash
-# 默认跑：包含 dynamic scenarios
+# Default run: includes dynamic scenarios
 ./examples/test/scripts/integration/run_integration.sh
 
-# 列出 / 单跑 scenario
+# List / run a single scenario
 ./target/debug/examples/test_client --list-dynamic-scenarios
 ./target/debug/examples/test_client -g --dynamic-scenario <id>
 ```
-Scenario 框架与新增方法见 [01-integration-testing.md「动态（热更新）测试」节](01-integration-testing.md)。
+For the scenario framework and how to add new scenarios see [the "Dynamic (hot reload) testing" section in 01-integration-testing.md](01-integration-testing.md).
 
-### 查看测试报告
+### View the test report
 ```bash
 cat ${WORK_DIR}/report.log
 ```
 
-### 关键测试目录
-- `examples/code/` — 测试代码（client/server/validator）
-- `examples/test/conf/` — 测试配置（按资源类型组织）
-- `examples/test/scripts/` — 测试脚本
-- `integration_testing/` — 运行时工作目录（gitignored）
+### Key test directories
+- `examples/code/` — test code (client/server/validator)
+- `examples/test/conf/` — test configurations (organized by resource type)
+- `examples/test/scripts/` — test scripts
+- `integration_testing/` — runtime working directory (gitignored)
 
-### 需要时再读
-- [references/integration-suite-map.md](references/integration-suite-map.md) — suite family、conf 目录、Rust suite、`--gateway` 映射
-- [references/test-server-capabilities.md](references/test-server-capabilities.md) — `test_server` 端口、HTTP 端点、OIDC/auth、mirror、TLS 后端能力
+### Read on demand
+- [references/integration-suite-map.md](references/integration-suite-map.md) — suite family, conf directory, Rust suite, `--gateway` mapping
+- [references/test-server-capabilities.md](references/test-server-capabilities.md) — `test_server` ports, HTTP endpoints, OIDC/auth, mirror, TLS backend capabilities
 
-### 调试排障（已移至独立目录）
-- [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md) — 日常开发调试、Admin API、edgion-cli、问题速查
+### Debugging and troubleshooting (moved to a separate directory)
+- [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md) — daily development debugging, Admin API, edgion-cli, quick lookup

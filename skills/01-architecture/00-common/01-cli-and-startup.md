@@ -1,25 +1,25 @@
 ---
 name: cli-and-startup
-description: 三个 bin 共同遵守的命令行约定、工作目录结构、配置文件路径规范、日志初始化、信号处理。
+description: Command-line conventions, working-directory layout, config-file path conventions, log initialization, and signal handling shared by all three bins.
 ---
 
-# 统一命令行与配置约定
+# Unified command-line and configuration conventions
 
-## 入口点模式
+## Entry-point pattern
 
-三个 bin 都采用**薄入口点**（thin entry point）模式 — `src/bin/*.rs` 只做最少的工作：
+All three bins follow the **thin entry point** pattern — `src/bin/*.rs` does the minimum amount of work:
 
-| bin | 入口逻辑 |
+| bin | Entry logic |
 |-----|---------|
-| edgion-controller | 安装 rustls 加密提供程序 → `parse_args()` → `run()` |
-| edgion-gateway | 安装 rustls 加密提供程序 → `parse_args()` → `run()`（普通 `fn main()`，自管理 Tokio 运行时） |
-| edgion-cli | `Cli::parse()` → `cli.run().await`（单线程 Tokio） |
+| edgion-controller | Install rustls crypto provider → `parse_args()` → `run()` |
+| edgion-gateway | Install rustls crypto provider → `parse_args()` → `run()` (plain `fn main()`, manages its own Tokio runtime) |
+| edgion-cli | `Cli::parse()` → `cli.run().await` (single-threaded Tokio) |
 
-## 命令行参数
+## Command-line arguments
 
-### 共享标志
+### Shared flags
 
-| 标志 | Controller | Gateway | ctl | 默认值 |
+| Flag | Controller | Gateway | ctl | Default |
 |------|:---------:|:-------:|:---:|--------|
 | `--work-dir` / `-w` | ✓ | ✓ | ✗ | `"."` |
 | `--config-file` / `-c` | ✓ | ✓ | ✗ | `config/edgion-{type}.yaml` |
@@ -29,50 +29,50 @@ description: 三个 bin 共同遵守的命令行约定、工作目录结构、�
 | `--console` | ✓ | ✓ | ✗ | `true` |
 | `--test-mode` | ✓ | ✗ | ✗ | `false` |
 
-### Controller 专用
+### Controller-specific
 
-| 标志 | 默认值 | 说明 |
+| Flag | Default | Description |
 |------|--------|------|
-| `--grpc-listen` | `0.0.0.0:50051` | gRPC 监听地址 |
-| `--admin-listen` | `0.0.0.0:5800` | Admin API 地址 |
-| `--conf-dir` | — | FileSystem 模式的配置目录 |
+| `--grpc-listen` | `0.0.0.0:50051` | gRPC listening address |
+| `--admin-listen` | `0.0.0.0:5800` | Admin API address |
+| `--conf-dir` | — | Configuration directory for FileSystem mode |
 
-### Gateway 专用
+### Gateway-specific
 
-| 标志 | 默认值 | 说明 |
+| Flag | Default | Description |
 |------|--------|------|
-| `--server-addr` | （必需） | Controller gRPC 地址 |
-| `--admin-listen` | — | Admin API 地址 |
-| `--threads` | CPU 核心数 | Pingora 工作线程 |
-| `--work-stealing` | `true` | 任务窃取 |
-| `--grace-period` | `30s` | 优雅关闭期 |
-| `--graceful-shutdown-timeout` | `10s` | 关闭超时 |
-| `--upstream-keepalive-pool-size` | `128` | 上游连接池 |
-| `--integration-testing-mode` | `false` | 集成测试模式 |
+| `--server-addr` | (required) | Controller gRPC address |
+| `--admin-listen` | — | Admin API address |
+| `--threads` | CPU core count | Pingora worker threads |
+| `--work-stealing` | `true` | Task stealing |
+| `--grace-period` | `30s` | Graceful shutdown period |
+| `--graceful-shutdown-timeout` | `10s` | Shutdown timeout |
+| `--upstream-keepalive-pool-size` | `128` | Upstream connection pool |
+| `--integration-testing-mode` | `false` | Integration testing mode |
 
-### ctl 专用
+### ctl-specific
 
-| 标志 | 默认值 | 说明 |
+| Flag | Default | Description |
 |------|--------|------|
-| `--target` / `-t` | `center` | 目标 API（center/server/client） |
-| `--server` | — | 服务器地址（HTTP） |
-| `--socket` | — | Unix socket 路径 |
-| `-f, --file` | — | 文件/目录路径（apply/delete） |
-| `-n, --namespace` | — | 命名空间过滤 |
-| `-o, --output` | `table` | 输出格式（table/json/yaml/wide） |
+| `--target` / `-t` | `center` | Target API (center/server/client) |
+| `--server` | — | Server address (HTTP) |
+| `--socket` | — | Unix socket path |
+| `-f, --file` | — | File/directory path (apply/delete) |
+| `-n, --namespace` | — | Namespace filter |
+| `-o, --output` | `table` | Output format (table/json/yaml/wide) |
 
-## 配置文件
+## Configuration file
 
-### 加载优先级（高 → 低）
+### Loading priority (high → low)
 
 ```
-1. 命令行参数（CLI flags）
-2. 环境变量（EDGION_WORK_DIR）
-3. 配置文件（YAML）
-4. 代码内默认值
+1. Command-line arguments (CLI flags)
+2. Environment variables (EDGION_WORK_DIR)
+3. Configuration file (YAML)
+4. In-code defaults
 ```
 
-### Controller 配置示例
+### Controller configuration example
 
 ```yaml
 server:
@@ -87,7 +87,7 @@ logging:
   console: true
 
 conf_center:
-  type: file_system  # 或 kubernetes
+  type: file_system  # or kubernetes
   conf_dir: examples/test/conf
 
 conf_sync:
@@ -95,7 +95,7 @@ conf_sync:
   no_sync_kinds: [ReferenceGrant, Secret]
 ```
 
-### Gateway 配置示例
+### Gateway configuration example
 
 ```yaml
 gateway:
@@ -119,52 +119,52 @@ access_log:
       path: logs/edgion_access.log
 ```
 
-## 工作目录
+## Working directory
 
-### WorkDir 结构（`src/types/work_dir.rs`）
+### WorkDir layout (`src/types/work_dir.rs`)
 
 ```
 work_dir/
-├── logs/              # 日志文件
-├── runtime/           # 运行时状态
-└── config/            # 配置文件
+├── logs/              # Log files
+├── runtime/           # Runtime state
+└── config/            # Configuration files
 ```
 
-### 初始化流程
+### Initialization flow
 
-1. **路径确定**：CLI `--work-dir` > 环境变量 `EDGION_WORK_DIR` > 配置文件 > 默认 `"."`
-2. **规范化**：空字符串或 `.` → `std::env::current_dir()` 转绝对路径；符号链接通过 `canonicalize()` 解析
-3. **验证创建**：检查目录存在或可创建、测试写权限（临时文件）、创建子目录
+1. **Path determination**: CLI `--work-dir` > environment variable `EDGION_WORK_DIR` > config file > default `"."`
+2. **Normalization**: empty string or `.` → `std::env::current_dir()` to absolute path; symlinks resolved via `canonicalize()`
+3. **Validation and creation**: check directory exists or can be created, test write permission (temporary file), create subdirectories
 
-### 全局访问
+### Global access
 
 ```rust
-init_work_dir(base);          // 启动时调用一次
-work_dir();                   // 获取全局实例
-wd.resolve("logs/app.log");   // 相对路径 → base/logs/app.log
-wd.resolve("/var/log/app.log"); // 绝对路径 → 保持不变
+init_work_dir(base);          // Called once at startup
+work_dir();                   // Get the global instance
+wd.resolve("logs/app.log");   // Relative path → base/logs/app.log
+wd.resolve("/var/log/app.log"); // Absolute path → unchanged
 ```
 
-## 日志初始化
+## Log initialization
 
-### 共享日志函数（`src/core/gateway/observe/logs/sys_log.rs`）
+### Shared logging function (`src/core/gateway/observe/logs/sys_log.rs`)
 
-Controller 和 Gateway 都调用同一个 `init_logging()` 函数：
+Both Controller and Gateway call the same `init_logging()` function:
 
 ```rust
 pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard>
 ```
 
-**初始化步骤**：
-1. 创建日志目录
-2. 创建文件追加器（固定文件名，类 nginx 风格，外部 logrotate 处理轮转）
-3. 包装为非阻塞 appender（后台 OS 线程）
-4. 构建 tracing subscriber（JSON 格式或纯文本 + 可选控制台彩色输出）
-5. 返回 `WorkerGuard`（必须保活）
+**Initialization steps**:
+1. Create the log directory
+2. Create a file appender (fixed file name, nginx-style; rotation handled by external logrotate)
+3. Wrap as a non-blocking appender (background OS thread)
+4. Build the tracing subscriber (JSON format or plain text + optional colored console output)
+5. Return a `WorkerGuard` (must be kept alive)
 
-### Gateway 额外日志
+### Gateway extra logs
 
-Gateway 除系统日志外，还初始化多个专用协议日志：
+In addition to system logs, the Gateway initializes several dedicated protocol logs:
 
 ```rust
 init_access_logger(&config.access_log);
@@ -174,11 +174,11 @@ init_tls_logger(&config.tls_log);
 init_udp_logger(&config.udp_log);
 ```
 
-## 信号处理
+## Signal handling
 
 ### Controller — ShutdownHandle
 
-位置：`src/core/controller/conf_mgr/sync_runtime/shutdown.rs`
+Location: `src/core/controller/conf_mgr/sync_runtime/shutdown.rs`
 
 ```rust
 pub struct ShutdownHandle {
@@ -187,25 +187,25 @@ pub struct ShutdownHandle {
 }
 ```
 
-- 使用 `tokio::signal` 监听 SIGTERM 和 SIGINT
-- `tokio::select!` 等待任一信号后触发 `shutdown()`
-- 传递给 ConfMgr 和所有服务，实现协调关闭
+- Uses `tokio::signal` to listen for SIGTERM and SIGINT
+- `tokio::select!` waits for either signal then triggers `shutdown()`
+- Propagated to ConfMgr and all services for coordinated shutdown
 
-### Gateway — Pingora 内置
+### Gateway — Pingora built-in
 
-Gateway 无显式信号处理，依赖 Pingora 的内置优雅关闭：
-- `grace_period_seconds`（默认 30s）
-- `graceful_shutdown_timeout_seconds`（默认 10s）
+The Gateway has no explicit signal handling and relies on Pingora's built-in graceful shutdown:
+- `grace_period_seconds` (default 30s)
+- `graceful_shutdown_timeout_seconds` (default 10s)
 
-### ctl — 不需要
+### ctl — not needed
 
-ctl 是同步 CLI 工具，命令完成即退出。
+ctl is a synchronous CLI tool that exits as soon as the command finishes.
 
-## 全局配置存储
+## Global configuration storage
 
-| 全局变量 | 位置 | 用途 |
+| Global variable | Location | Purpose |
 |---------|------|------|
-| `CONTROLLER_CONFIG` | `src/core/common/config/mod.rs` | Controller 全局配置（`OnceLock`） |
-| `GATEWAY_INSTANCE_COUNT` | 同上 | Gateway 集群实例数（`AtomicU32`，用于集群级速率限制） |
-| `GLOBAL_TEST_MODE` | 同上 | 测试模式标志（启用 metrics 测试功能） |
-| `GLOBAL_INTEGRATION_TESTING_MODE` | 同上 | 集成测试模式（启用 AccessLog 存储 + 指标测试数据） |
+| `CONTROLLER_CONFIG` | `src/core/common/config/mod.rs` | Controller global configuration (`OnceLock`) |
+| `GATEWAY_INSTANCE_COUNT` | same as above | Gateway cluster instance count (`AtomicU32`, used for cluster-level rate limiting) |
+| `GLOBAL_TEST_MODE` | same as above | Test mode flag (enables metrics test features) |
+| `GLOBAL_INTEGRATION_TESTING_MODE` | same as above | Integration testing mode (enables AccessLog storage + metrics test data) |

@@ -1,12 +1,12 @@
-// Wait helpers — 复用既有 resource_diff binary，避免库化改造。
+// Wait helpers — reuse the existing resource_diff binary to avoid converting it into a library.
 
 use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use std::time::Duration;
 use tokio::process::Command;
 
-/// 调用 target/debug/examples/resource_diff 校验 controller 与 gateway 的资源状态对齐。
-/// 返回 Ok(()) 表示 diff 通过；返回 Err 表示不对齐或调用失败。
+/// Invoke target/debug/examples/resource_diff to verify that the controller and gateway resource states align.
+/// Returns Ok(()) when the diff passes; returns Err when there is a mismatch or the call fails.
 pub async fn resource_diff(project_root: &Path, controller_url: &str, gateway_url: &str) -> Result<()> {
     let binary = project_root.join("target/debug/examples/resource_diff");
     if !binary.exists() {
@@ -35,8 +35,8 @@ pub async fn resource_diff(project_root: &Path, controller_url: &str, gateway_ur
     }
 }
 
-/// 在给定 timeout 内重复调用 resource_diff 直至通过或超时。
-/// poll_interval 建议 500ms。
+/// Repeatedly invoke resource_diff within the given timeout until it passes or the deadline is reached.
+/// A poll_interval of 500ms is recommended.
 pub async fn wait_for_resource_sync(
     project_root: &Path,
     controller_url: &str,

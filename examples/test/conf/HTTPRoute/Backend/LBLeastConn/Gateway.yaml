@@ -1,5 +1,5 @@
-# LB LeastConn 测试 Gateway
-# 注释开启 metrics test mode 用于校验 LB 分发
+# LB LeastConn test Gateway
+# Annotations enable metrics test mode for verifying LB distribution
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:

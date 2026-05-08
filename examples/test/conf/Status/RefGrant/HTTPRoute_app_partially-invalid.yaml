@@ -15,7 +15,7 @@ spec:
             type: PathPrefix
             value: /a
       backendRefs:
-        # Rule 0: 有 ReferenceGrant 允许，valid
+        # Rule 0: ReferenceGrant allows it, valid
         - name: cross-ns-svc
           namespace: backend
           port: 80
@@ -24,7 +24,7 @@ spec:
             type: PathPrefix
             value: /b
       backendRefs:
-        # Rule 1: 无 ReferenceGrant，ref_denied 会被设置，invalid
+        # Rule 1: no ReferenceGrant; ref_denied will be set, invalid
         - name: some-denied-svc
           namespace: edgion-system
           port: 80

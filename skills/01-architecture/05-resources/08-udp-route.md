@@ -1,70 +1,70 @@
 ---
 name: resource-udp-route
-description: UDPRoute 资源：L4 UDP 路由、per-listener 路由表、客户端会话响应路径。
+description: UDPRoute resource — L4 UDP routing, per-listener route table, client-session response path.
 ---
 
-# UDPRoute 资源
+# UDPRoute resource
 
-> **通用流程**: 参见 [00-resource-flow.md](00-resource-flow.md)
+> **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-UDPRoute 定义 L4 UDP 层的路由规则，将 UDP 数据包转发到后端 Service。UDP 协议本身无连接；Gateway 在 client→backend 方向按包查路由，在 backend→client 响应方向维护客户端会话。
+UDPRoute defines L4 UDP-layer routing rules, forwarding UDP datagrams to backend Services. UDP itself is connectionless; in the client→backend direction the Gateway looks up the route per packet, and in the backend→client direction it maintains a per-client session.
 
-## 源码位置
+## Source code locations
 
 - Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/udp_route.rs`
 - Gateway ConfHandler: `src/core/gateway/routes/udp/conf_handler_impl.rs`
-- 路由管理器: `src/core/gateway/routes/udp/routes_mgr.rs`（GlobalUdpRouteManagers）
-- 类型定义: `src/types/resources/udp_route.rs`
+- Route manager: `src/core/gateway/routes/udp/routes_mgr.rs` (GlobalUdpRouteManagers)
+- Type definitions: `src/types/resources/udp_route.rs`
 
-## Controller 侧处理
+## Controller-side processing
 
 ### validate
 
-1. 调用 `validate_udp_route_if_enabled()`（当前为空操作，跨命名空间校验由 parse 阶段的 `ref_denied` 处理）
-2. 调用 `validate_backend_refs()` 校验所有 backendRef
+1. Calls `validate_udp_route_if_enabled()` (currently a no-op; cross-namespace validation is handled via `ref_denied` in the parse stage)
+2. Calls `validate_backend_refs()` to validate all backendRefs
 
 ### parse
 
-1. 记录跨命名空间引用到 CrossNsRefManager
-2. 注册 Service 引用到 ServiceRefManager
-3. 标记被拒绝的跨命名空间 backendRef
-4. 清除并重算 `resolved_listeners`：通过 `resolve_listener_keys()` 从 parentRef 解析 `Vec<ListenerKey>`（逻辑与 TCPRoute/TLSRoute 一致）
-5. 若 resolved_listeners 为 None，记录 debug 日志
+1. Record cross-namespace references in CrossNsRefManager
+2. Register Service references in ServiceRefManager
+3. Mark rejected cross-namespace backendRefs
+4. Clear and recompute `resolved_listeners`: resolve `Vec<ListenerKey>` from parentRef via `resolve_listener_keys()` (logic is identical to TCPRoute / TLSRoute)
+5. If resolved_listeners is None, log a debug message
 
 ### on_change
 
-注册到 GatewayRouteIndex（Gateway 变更时 requeue），更新 AttachedRouteTracker，必要时 requeue 父 Gateway。
+Register into GatewayRouteIndex (Gateway changes trigger requeue), update AttachedRouteTracker, and requeue the parent Gateway when needed.
 
 ### on_delete
 
-清除 CrossNsRefManager、ServiceRefManager、GatewayRouteIndex、AttachedRouteTracker 注册。
+Clear registrations in CrossNsRefManager, ServiceRefManager, GatewayRouteIndex, and AttachedRouteTracker.
 
 ### update_status
 
-为每个 parentRef 生成 RouteParentStatus，设置 Accepted 和 ResolvedRefs Conditions。UDPRoute 不传递 route_hostnames（UDP 无域名概念）。
+Produce a RouteParentStatus for each parentRef and set the Accepted and ResolvedRefs Conditions. UDPRoute does not pass route_hostnames (UDP has no domain concept).
 
-## Gateway 侧处理
+## Gateway-side processing
 
-UDPRoute 的 ConfHandler 将路由编译到 `GlobalUdpRouteManagers`：
+UDPRoute's ConfHandler compiles routes into `GlobalUdpRouteManagers`:
 
-1. **路由初始化**：调用 `initialize_route()` 验证并准备路由数据
-2. **per-listener 管理**：根据 resolved_listeners 注册到对应 `ListenerKey` 的路由管理器
-3. **全量/增量更新**：full_set 时清空并重建；partial_update 时收集受影响 listener 仅重建这些 listener
-4. **数据面模型**：client→backend 每个包独立加载当前路由表并选择后端；backend→client 依赖客户端会话回写响应
+1. **Route initialization**: call `initialize_route()` to validate and prepare the route data
+2. **Per-listener management**: based on resolved_listeners, register into the route manager of the corresponding `ListenerKey`
+3. **Full / incremental updates**: full_set clears and rebuilds; partial_update collects affected listeners and rebuilds only those listeners
+4. **Data-plane model**: in client→backend direction, each packet independently loads the current route table and selects a backend; in backend→client direction, the per-client session is required to write the response back
 
-### 数据面会话
+### Data-plane sessions
 
-- 会话键为客户端地址；首次收到客户端包时创建会话，并为该会话绑定一个独立 upstream UDP socket
-- 会话上限 `MAX_UDP_SESSIONS = 10000`，超过后新客户端包记录 `SessionLimitReached` 并丢弃
-- `SESSION_TIMEOUT = 60s`，以双向包活动刷新；清理循环每 10s 移除超时会话并写 UDP access log
-- 主监听退出时取消清理循环和所有 per-session upstream 接收任务
+- The session key is the client address; on the first client packet a session is created and bound to a dedicated upstream UDP socket
+- Session limit `MAX_UDP_SESSIONS = 10000`; once exceeded, a new client packet logs `SessionLimitReached` and is dropped
+- `SESSION_TIMEOUT = 60s`, refreshed by traffic in either direction; the cleanup loop runs every 10s, removing expired sessions and writing UDP access logs
+- When the main listener exits, the cleanup loop and all per-session upstream receive tasks are cancelled
 
-运维上需按并发客户端数预估 fd、任务和内存占用；会话不是纯无状态转发，后端响应必须经对应 upstream socket 关联回客户端。
+Operationally, fd, task, and memory usage must be sized against the expected concurrent client count; sessions are not pure stateless forwarding — backend responses must be associated back to the client through their corresponding upstream socket.
 
-## 跨资源关联
+## Cross-resource relationships
 
-| 关联方向 | 目标资源 | 关联机制 | 说明 |
+| Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
-| UDPRoute → Gateway | Gateway | parentRef | 路由挂载到 Gateway 的 UDP 协议 Listener |
-| UDPRoute → Service | Service | backendRef | UDP 数据包转发的后端目标 |
-| UDPRoute ← ReferenceGrant | ReferenceGrant | 跨命名空间 backendRef | 控制跨命名空间后端引用的授权 |
+| UDPRoute → Gateway | Gateway | parentRef | Route attaches to the Gateway's UDP-protocol Listener |
+| UDPRoute → Service | Service | backendRef | Backend target for UDP-datagram forwarding |
+| UDPRoute ← ReferenceGrant | ReferenceGrant | cross-namespace backendRef | Authorizes cross-namespace backend references |

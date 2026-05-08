@@ -1,190 +1,190 @@
 ---
 name: new-feature-workflow
-description: 新功能完整交付工作流。用于在收到需求后，按分析、设计、设计复审、实现、代码复审、测试补强、全量验证和总结的顺序推进。
+description: End-to-end new-feature delivery workflow. Use after receiving a requirement to advance through analysis, design, design review, implementation, code review, test reinforcement, full validation, and summary in order.
 ---
 
 # New Feature Work Flow
 
-用于“提供一个新需求，希望 AI 从需求分析一路推进到实现、测试、复盘”的场景。
+For the scenario "given a new requirement, AI advances all the way from analysis to implementation, testing, and retrospection".
 
-## 适用范围
+## When to use
 
-- 新功能开发
-- 需要跨多个模块评估影响的功能增强
-- 需要明确设计评审、subagent 协作、测试补强和收尾总结的任务
+- New feature development
+- Feature enhancements requiring impact assessment across multiple modules
+- Tasks requiring explicit design review, subagent collaboration, test reinforcement, and a wrap-up summary
 
-不适用于：
+Not for:
 
-- 纯文档改动
-- 明确的小型 bugfix
-- 只做局部重构、没有外部行为变化的任务
+- Pure documentation changes
+- Clear-cut small bugfixes
+- Local refactors without external behavior changes
 
-## 核心规则
+## Core rules
 
-1. 先分析，再设计，再实现，不跳步骤直接写代码
-2. 通过 `skills/` 渐进式加载上下文，不从 `docs/` 开始
-3. 每一步都必须留下文档化产出，不能只在对话里口头完成
-4. 未完成设计 review 前，禁止开始正式实现
-5. subagent 必须分职责和文件边界，不能多个 agent 改同一块代码
-6. 测试阶段必须同时回答“覆盖了什么”和“还没覆盖什么”
-7. 任一步骤发现前置假设不成立，必须回退到对应阶段重做
+1. Analyze first, design next, implement after — do not skip steps and jump straight to code
+2. Load context progressively via `skills/`; do not start from `docs/`
+3. Every step must leave a documented output; do not finish only verbally in the chat
+4. Do not start formal implementation before the design review is complete
+5. Subagents must split by responsibility and file boundary; multiple agents must not change the same code area
+6. The test phase must answer both "what is covered" and "what is not yet covered"
+7. If any step finds a prerequisite assumption invalid, fall back to that phase and redo it
 
-## 配套文件
+## Companion files
 
-- 模板与记录格式：[`new_feature_work_flow_templates.md`](new_feature_work_flow_templates.md)
-- subagent 使用契约：[`new_feature_work_flow_subagents.md`](new_feature_work_flow_subagents.md)
+- Templates and recording format: [`new_feature_work_flow_templates.md`](new_feature_work_flow_templates.md)
+- Subagent contracts: [`new_feature_work_flow_subagents.md`](new_feature_work_flow_subagents.md)
 
-## 文档落点
+## Document landing places
 
-若任务落到 `tasks/`，默认使用以下文档：
+If the task lands under `tasks/`, the default documents are:
 
-| 步骤 | 默认文档 |
+| Step | Default document |
 |------|----------|
-| 0 上下文建立 | `<task-name>.md`、`00-context.md` |
-| 1 方案评估 | `01-design.md` |
-| 2 代码级设计 | `01-design.md` |
-| 3 设计 review | `06-decisions.md` 或 `01-design.md` |
-| 4 实现 | `02-implementation.md`、`03-subtasks.md` |
-| 5 代码 review | `06-decisions.md` 或 `02-implementation.md` |
-| 6 覆盖分析与补测 | `02-implementation.md` |
-| 7 测试执行 | `02-implementation.md` |
-| 8 收尾总结 | `<task-name>.md` 或 `07-changelog.md` |
+| 0 Context establishment | `<task-name>.md`, `00-context.md` |
+| 1 Solution assessment | `01-design.md` |
+| 2 Code-level design | `01-design.md` |
+| 3 Design review | `06-decisions.md` or `01-design.md` |
+| 4 Implementation | `02-implementation.md`, `03-subtasks.md` |
+| 5 Code review | `06-decisions.md` or `02-implementation.md` |
+| 6 Coverage analysis and reinforcement | `02-implementation.md` |
+| 7 Test execution | `02-implementation.md` |
+| 8 Wrap-up summary | `<task-name>.md` or `07-changelog.md` |
 
-## 8 步流程
+## 8-step flow
 
-### 0. 接收需求并建立上下文
+### 0. Receive requirement and establish context
 
-做什么：
+What to do:
 
-- 摘要需求、范围、限制条件
-- 从 `skills/SKILL.md` 选最小必要子树
-- 明确是否需要在 `tasks/` 下建文档
+- Summarize the requirement, scope, and constraints
+- Pick the minimal necessary subtree from `skills/SKILL.md`
+- Decide whether to create documents under `tasks/`
 
-完成条件：
+Done when:
 
-- 已有需求摘要
-- 已有相关 skill 路径
-- 已有初步影响模块判断
+- The requirement summary exists
+- Related skill paths are listed
+- A preliminary judgement of affected modules exists
 
-### 1. 需求分析与方案评估
+### 1. Requirement analysis and solution assessment
 
-做什么：
+What to do:
 
-- 评估修改难度、影响范围、安全性、实现价值、测试难度、兼容性、可回滚性
-- 如有多个方案，明确推荐方案与放弃原因
+- Assess change difficulty, impact scope, safety, implementation value, test difficulty, compatibility, rollback ability
+- If multiple options exist, state the recommended one and the reasons for rejecting the others
 
-完成条件：
+Done when:
 
-- 有结构化方案评估
-- 有推荐方案
-- 有待确认假设
+- A structured solution assessment exists
+- A recommended solution exists
+- Open assumptions are listed
 
-### 2. 按选定方案做代码级设计
+### 2. Code-level design for the chosen solution
 
-做什么：
+What to do:
 
-- 写清改动文件、关键函数、数据流、错误处理、兼容策略、测试设计
-- 明确哪些逻辑必须拆成可单测函数
+- Write down files to change, key functions, data flow, error handling, compatibility strategy, and test design
+- Identify which logic must be split into unit-testable functions
 
-完成条件：
+Done when:
 
-- 改动文件清单已列出
-- 关键调用链已写清
-- 单测和集成测试设计已覆盖
+- The list of files to change is recorded
+- Key call chains are written down
+- Unit and integration test design is covered
 
-### 3. 启动 subagent 做设计 review，并修正设计
+### 3. Run a subagent design review and revise the design
 
-做什么：
+What to do:
 
-- 让独立 subagent 只聚焦设计漏洞、遗漏和风险
-- 根据 findings 修订设计并给出采纳结论
+- Have an independent subagent focus only on design gaps, omissions, and risks
+- Revise the design per the findings and record an adoption decision
 
-完成条件：
+Done when:
 
-- 至少完成一次设计 review
-- 设计已修订并记录采纳结果
+- At least one design review is complete
+- The design has been revised and the adoption result recorded
 
-### 4. 启动 subagent 实现
+### 4. Run a subagent for implementation
 
-做什么：
+What to do:
 
-- 按定稿设计实现
-- 明确文件所有权和禁止改动范围
-- 同步补直接相关单元测试
+- Implement per the finalized design
+- Define file ownership and out-of-bounds areas
+- Add directly related unit tests in the same change
 
-完成条件：
+Done when:
 
-- 实现与设计一致
-- 无越权改动
-- 直接相关单元测试已补
+- Implementation matches the design
+- No out-of-scope changes
+- Directly related unit tests are added
 
-### 5. 对相关修改代码做深入 review
+### 5. Deep review of the modified code
 
-做什么：
+What to do:
 
-- 检查行为偏差、边界条件、性能问题、安全风险、抽象层次和隐藏耦合
-- 收敛为必须修复、建议修复、可接受风险
+- Check behavioral deviation, boundary conditions, performance issues, security risks, abstraction levels, and hidden coupling
+- Converge findings into Must Fix, Suggested Fix, and Acceptable Risk
 
-完成条件：
+Done when:
 
-- `Must Fix` 已收敛
-- 未修项已记录原因
+- `Must Fix` has been resolved
+- Unfixed items have a recorded reason
 
-### 6. 检查单元测试覆盖，补充集成测试
+### 6. Inspect unit-test coverage and add integration tests
 
-做什么：
+What to do:
 
-- 盘点已有覆盖和缺口
-- 对外部行为变化、同步链路、路由、插件执行优先补集成测试
-- 需要时再补 K8s 集成测试
+- Inventory existing coverage and gaps
+- Prefer integration tests for external behavior changes, sync chains, routing, and plugin execution
+- Add K8s integration tests when needed
 
-完成条件：
+Done when:
 
-- 已完成覆盖分析
-- 已补必要测试，或明确说明不补原因
+- Coverage analysis is complete
+- Necessary tests have been added, or a clear reason has been recorded for not adding
 
-### 7. 跑通测试
+### 7. Run the tests
 
-做什么：
+What to do:
 
-- 至少执行相关格式化、静态检查、单元测试和相关集成测试
-- 区分本次改动问题、环境问题和已有失败
+- At minimum run the related formatter, static checks, unit tests, and relevant integration tests
+- Distinguish between issues from this change, environment issues, and pre-existing failures
 
-完成条件：
+Done when:
 
-- 已记录实际执行命令与结果
-- 已说明失败归因或未跑全量的原因
+- The actual commands and results have been recorded
+- Failure attribution or the reason for skipping a full run has been stated
 
-### 8. 收尾总结
+### 8. Wrap-up summary
 
-做什么：
+What to do:
 
-- 总结最终方案、核心改动、关键修订、测试结果、剩余风险和后续建议
+- Summarize the final solution, core changes, key revisions, test results, residual risk, and follow-ups
 
-完成条件：
+Done when:
 
-- 有最终总结
-- 有剩余风险说明
+- A final summary exists
+- Residual risk is described
 
-## 失败出口
+## Failure exits
 
-出现以下情况时，必须先收敛记录再继续：
+When any of the following happen, converge and record before continuing:
 
-- 设计被否决：回到步骤 1 或 2
-- 实现中发现设计不可行：暂停实现，回到步骤 2
-- 测试无法完成：记录已执行命令、阻塞原因和下一步动作
-- subagent 结果不可靠：主 agent 复核，必要时重新 review
+- Design rejected: return to step 1 or 2
+- Implementation reveals the design is unworkable: pause implementation, return to step 2
+- Tests cannot be completed: record the executed commands, blocking reason, and next action
+- Subagent output is unreliable: the main agent rechecks; rerun the review if needed
 
-## 完成定义
+## Definition of done
 
-满足以下条件才算完成：
+Considered done only when:
 
-- 有明确方案评估结论
-- 有代码级设计
-- 至少一次设计 review
-- 已实现并完成实现后代码 review
-- 单元测试覆盖分析已完成
-- 集成测试已补充或明确说明为何不需要
-- 相关测试已实际执行
-- 有最终总结和剩余风险说明
-- 所有 subagent 产出都已被主 agent 复核并收敛
+- A clear solution-assessment conclusion exists
+- Code-level design exists
+- At least one design review has happened
+- Implementation is complete and post-implementation code review is done
+- Unit-test coverage analysis is complete
+- Integration tests have been added or a clear reason for not adding them has been stated
+- Related tests have actually been run
+- A final summary and residual-risk description exist
+- All subagent outputs have been rechecked and converged by the main agent

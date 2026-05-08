@@ -734,7 +734,7 @@ mod tests {
 
     #[test]
     fn test_expired_cert_is_invalid() {
-        // 证书昨天就过期了
+        // Cert expired yesterday
         let (cert_pem, key_pem) = make_cert_with_validity(-30, -1);
         let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
 
@@ -752,7 +752,7 @@ mod tests {
 
     #[test]
     fn test_not_yet_valid_cert_is_invalid() {
-        // 证书明天才生效
+        // Cert becomes valid tomorrow
         let (cert_pem, key_pem) = make_cert_with_validity(1, 365);
         let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
 
@@ -770,12 +770,12 @@ mod tests {
 
     #[test]
     fn test_valid_cert_passes_expiry_check() {
-        // 证书昨天生效，一年后过期
+        // Cert valid since yesterday, expires in one year
         let (cert_pem, key_pem) = make_cert_with_validity(-1, 365);
         let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
 
         let result = validate_cert(&tls);
-        // 只验证没有 CertExpired 错误
+        // Only assert that there is no CertExpired error
         assert!(
             !result
                 .errors

@@ -1,116 +1,116 @@
 ---
 name: fully-review
-description: Edgion 全局代码 Review 指南。包含 AI 执行全量 review 的结构化流程、各维度检查清单、已确认的误报和关闭条目（下次 review 直接跳过）。
+description: Edgion global code review guide. Includes the structured workflow for AI-driven full-codebase reviews, per-dimension checklists, and confirmed false positives / closed items (skip directly on the next review).
 ---
 
-# Edgion 全局 Review 指南
+# Edgion Global Review Guide
 
-> **何时使用**：当需要对整个代码库做系统性全局 review（安全、正确性、可观测性等维度），或评审 AI/外部提交的 review 报告、判定其中的误报时，使用本指南；日常单文件/单功能审查请用 `04-review/SKILL.md`。
+> **When to use**: Use this guide when performing systematic full-codebase reviews (security, correctness, observability, etc.) on the entire codebase, or when assessing AI- or externally-submitted review reports and judging false positives. For day-to-day single-file or single-feature reviews, use `04-review/SKILL.md`.
 
-> **使用场景**：对 Edgion 代码库进行全局安全/质量 review，或评审新提交的 review 报告。
-> **执行顺序**：先读本文件 → 按需加载各维度 → 对照关闭条目跳过已知误报。
+> **Use case**: Performing global security / quality reviews on the Edgion codebase, or evaluating newly submitted review reports.
+> **Order of execution**: Read this file first → load each dimension on demand → cross-check against closed items to skip known false positives.
 
 ---
 
-## 执行流程
+## Workflow
 
 ```
-1. 加载已有 review 知识（04-review/）
-2. 对照「已关闭条目」跳过已知误报
-3. 按以下维度逐项检查
-4. 每个发现：先核实可利用路径，再定级
+1. Load existing review knowledge (04-review/)
+2. Cross-check the closed-items list and skip known false positives
+3. Inspect each dimension below in turn
+4. For each finding: verify the exploitation path first, then assign severity
 ```
 
 ---
 
-## 维度一：安全
+## Dimension 1: Security
 
-### 通用原则
+### General principle
 
-在标记任何安全问题前，必须回答：
+Before flagging any security issue, you must answer:
 
-1. **攻击路径是否可达**？攻击者需要什么前提条件？
-2. **是否有独立熵阻断攻击**？（见下方 Timing Attack 判定规则）
-3. **修复是否治根**？弱密码格式的根本问题是算法弱，不是比较方式。
+1. **Is the attack path reachable?** What prerequisites does the attacker need?
+2. **Is there independent entropy that blocks the attack?** (See the Timing Attack rules below.)
+3. **Does the fix address the root cause?** The root issue with weak password formats is the algorithm being weak, not the comparison method.
 
-### Timing Attack 判定规则
+### Timing attack rules
 
-不能仅凭"使用了非恒定时间比较"直接定为高危，必须验证：
+Do not classify "uses non-constant-time comparison" as high severity by itself. You must verify:
 
-| 检查项 | 说明 |
-|--------|------|
-| 被比较的值是否含独立随机熵 | 若有 CSPRNG nonce 且验证时需全部字段匹配，计时 oracle 无法利用 |
-| 网络抖动是否淹没时间差 | 网关场景下毫秒级抖动远大于纳秒级短路差，实测信噪比极低 |
-| 攻击者是否能控制输入并大量重试 | 有速率限制或 token 一次性消耗时不可利用 |
+| Check | Description |
+|-------|-------------|
+| Whether the compared value contains independent random entropy | If a CSPRNG nonce is included and verification requires all fields to match, a timing oracle cannot be exploited |
+| Whether network jitter swamps the timing difference | In gateway scenarios, millisecond-level jitter is far larger than nanosecond-level short-circuit differences; measured signal-to-noise ratio is extremely low |
+| Whether the attacker can control the input and retry at scale | Not exploitable when there is rate limiting or single-use token consumption |
 
-**典型误判**：CSRF token 的签名比较。token 包含 CSPRNG random（256-bit），即使能猜出 sign，也无法与未知 random 配对，计时攻击无法利用。
+**Typical false positive**: signature comparison for CSRF tokens. The token contains a CSPRNG random (256-bit); even if the sign can be guessed, it cannot be paired with the unknown random, so timing attacks cannot exploit it.
 
-### 弱密码格式
+### Weak password formats
 
-弱哈希（SHA-1、MD5）的根本问题是**无 key-stretching**，加常时间比较是治标。正确处置：
+The root cause of weak hashes (SHA-1, MD5) is the **lack of key-stretching**; adding constant-time comparison is treating the symptom. Correct handling:
 
-- 弱格式的实际 threat 是离线暴力破解，不是计时侧信道
-- 常时间修复对已经弱的哈希收益极低，优先级应降低
-- 正确行动：文档明确推荐 bcrypt，运维层面迁移；弱格式警告放在控制面（Controller 加载配置时），不在数据面热路径
+- The real threat for weak formats is offline brute-force, not timing side channels
+- Constant-time fixes provide very little benefit for already-weak hashes; priority should be lowered
+- Correct action: explicitly recommend bcrypt in documentation, and migrate at the operations layer; emit weak-format warnings in the control plane (when the Controller loads config), not on the data-plane hot path
 
-### 密码/密钥缓存键
+### Password / key cache keys
 
-将明文或可逆编码（base64）存为 LRU cache key 的内存泄露风险：
+Memory-leak risk of using plaintext or reversibly-encoded values (base64) as LRU cache keys:
 
-- 需结合 **cache value** 一起分析：若 value 是 username，cache key 碰撞会导致认证错人，比内存泄露更严重
-- 哈希 key 方案（SHA-256/ahash）需能保证无碰撞，否则引入认证绕过
-- CRC32 碰撞概率在千用户规模不可接受，不适合用作认证 cache key
-- 若内存安全不是合规强制要求，该问题可降为观察项
+- Must be analyzed together with the **cache value**: if the value is the username, a cache-key collision causes authentication to be attributed to the wrong user — more severe than a memory leak
+- Hashed-key schemes (SHA-256 / ahash) need to guarantee no collisions, otherwise they introduce auth bypass
+- CRC32 collision probability is unacceptable at thousand-user scale and is unsuitable as an authentication cache key
+- If memory safety is not a compliance hard requirement, this issue can be downgraded to an observation item
 
-### Upstream 地址安全
+### Upstream address safety
 
-审查会改写或选择 upstream 的路径时，加载 [04-review/ssrf/upstream-address-safety.md](../04-review/ssrf/upstream-address-safety.md)。重点区分：
+When reviewing paths that rewrite or select upstreams, load [04-review/ssrf/upstream-address-safety.md](../04-review/ssrf/upstream-address-safety.md). Key distinctions:
 
-- `domainMap` / `backendRefs` / RegionRoute PM 是授权边界，不等于最终拨号地址安全。
-- 生产 upstream 最终拨号地址默认拒绝 loopback 与 link-local / metadata；Endpoint 派生路径只有 integration testing mode 可为本地 fixture 放行 loopback。
-- RFC1918 私网是合法 K8s / 跨集群 / 内网 API 目标，不应一刀切阻断。
-
----
-
-## 维度二：正确性
-
-- Controller 资源处理 requeue 规则 → [04-review/handler-requeue/](../04-review/handler-requeue/handler-requeue-rule.md)
-- 内存"泄漏"判定 → [04-review/memory-leak/](../04-review/memory-leak/not-a-memory-leak.md)
-- 路由架构一致性 → [04-review/architecture/route-architecture-consistency.md](../04-review/architecture/route-architecture-consistency.md)
-- LB 计数器：跨 retry 的 LeastConn 计数递增/递减对称性
+- `domainMap` / `backendRefs` / RegionRoute PM are authorization boundaries, not equivalent to final dial-address safety.
+- Production upstream final dial addresses reject loopback and link-local / metadata by default; in the Endpoint-derived path, only integration testing mode may allow loopback for local fixtures.
+- RFC1918 private networks are legitimate K8s / cross-cluster / internal-API targets and must not be blanket-blocked.
 
 ---
 
-## 维度三：可观测性
+## Dimension 2: Correctness
 
-完整规则 → [04-review/observability/](../04-review/observability/observability-review-rule.md)
-
-快速检查：
-
-- [ ] 数据面热路径无 `tracing::*`
-- [ ] PluginLog ≤ 40 字节，只记最终决策，不含敏感值
-- [ ] Metrics 无 Histogram，Label cardinality 有界
-- [ ] `ctx_map` 无原始 JWT claims / 密码
+- Controller resource handling requeue rules → [04-review/handler-requeue/](../04-review/handler-requeue/handler-requeue-rule.md)
+- "Memory leak" judgment → [04-review/memory-leak/](../04-review/memory-leak/not-a-memory-leak.md)
+- Route architecture consistency → [04-review/architecture/route-architecture-consistency.md](../04-review/architecture/route-architecture-consistency.md)
+- LB counters: increment/decrement symmetry of LeastConn counters across retries
 
 ---
 
-## 维度四：架构分层
+## Dimension 3: Observability
 
-- 弱密码检测、格式警告 → **Controller 层**（配置加载时），不在数据面
-- 配置校验、Schema 合法性 → Controller
-- 请求路由、插件执行、认证 → Gateway 数据面
-- 数据面若需运营警告，通过 PluginLog → access log 表达，不用 `tracing::warn!`
+Full rules → [04-review/observability/](../04-review/observability/observability-review-rule.md)
+
+Quick checks:
+
+- [ ] No `tracing::*` on the data-plane hot path
+- [ ] PluginLog ≤ 40 bytes, records only the final decision, contains no sensitive values
+- [ ] No Histogram metrics; label cardinality is bounded
+- [ ] `ctx_map` contains no raw JWT claims / passwords
 
 ---
 
-## 已关闭条目（Review 时直接跳过）
+## Dimension 4: Architectural layering
 
-下表记录经过深度分析后确认不需要修复的条目。再次 review 时如遇到相同问题，参考此处结论直接关闭。
+- Weak password detection and format warnings → **Controller layer** (during config load), not on the data plane
+- Configuration validation and schema legality → Controller
+- Request routing, plugin execution, authentication → Gateway data plane
+- If the data plane needs operational warnings, express them via PluginLog → access log; do not use `tracing::warn!`
 
-| ID | 模块 | 问题描述 | 结论 | 关闭原因 |
-|----|------|---------|------|---------|
-| P0-04 | `csrf/token.rs` | `self.sign != expected_sign` 非恒定时间比较；`SHA-256(expires+random+key)` 非 HMAC | **关闭** | token 含 256-bit CSPRNG random，计时 oracle 无法与 random 配对利用；Length extension 因 exact-match 验证无可利用路径 |
-| P0-04b | `csrf/token.rs` | key mixing 使用 SHA-256 而非 HMAC | **关闭** | 同上，验证逻辑为 exact-match，Length extension 构造的变体无法通过 `gen_sign` 格式验证 |
-| P0-05a | `basic_auth/htpasswd.rs` | SHA-1 / MD5-crypt 比较非恒定时间 | **关闭** | 根本问题是算法弱（无 key-stretching），常时间修复收益极低；网络抖动远大于比较时差；真正的行动是迁移到 bcrypt |
-| P0-05b | `basic_auth/plugin.rs` | LRU cache key 存 `base64(user:pass)` | **关闭** | 哈希 key 方案引入碰撞→认证错人风险；内存安全非当前合规要求；若未来需支持，加可选 config 项，key hash 用 ahash（非 CRC32） |
-| P0-09 | `csrf/token.rs` | `SystemTime::now().duration_since(UNIX_EPOCH).unwrap()` 在热路径（DoS 风险） | **关闭** | 触发条件是系统时钟早于 1970，实践中不可达（NTP 回拨/VM 漂移均不会回拨 56 年；`SystemTime` 返回 UTC，不受时区影响）。**建议的 `unwrap_or(Duration::from_secs(0))` 修复反而有安全副作用**：verify 时 `now=0`，`0 - expires`（正数）为负，永远 < max_expires，过期检查被静默绕过，CSRF 保护失效。panic 暴露问题，比静默安全降级更安全。 |
+---
+
+## Closed items (skip directly during review)
+
+The table below records items confirmed not to need fixing after deep analysis. If the same issue is encountered again during review, refer to this conclusion and close it directly.
+
+| ID | Module | Description | Conclusion | Reason for closure |
+|----|--------|-------------|------------|--------------------|
+| P0-04 | `csrf/token.rs` | `self.sign != expected_sign` is non-constant-time comparison; `SHA-256(expires+random+key)` is not HMAC | **Closed** | The token contains a 256-bit CSPRNG random; a timing oracle cannot pair with the random for exploitation; length extension has no exploitable path because validation is exact-match |
+| P0-04b | `csrf/token.rs` | Key mixing uses SHA-256 instead of HMAC | **Closed** | Same as above; verification is exact-match, and length-extension-constructed variants cannot pass `gen_sign` format validation |
+| P0-05a | `basic_auth/htpasswd.rs` | SHA-1 / MD5-crypt comparison is non-constant-time | **Closed** | The root cause is the algorithm being weak (no key-stretching); constant-time fixes have very low return; network jitter is far larger than the comparison time difference; the real action is migration to bcrypt |
+| P0-05b | `basic_auth/plugin.rs` | LRU cache key stores `base64(user:pass)` | **Closed** | A hashed-key scheme introduces collision → auth-misattribution risk; memory safety is not a current compliance requirement; if support is needed in the future, add an optional config item and use ahash (not CRC32) for the key hash |
+| P0-09 | `csrf/token.rs` | `SystemTime::now().duration_since(UNIX_EPOCH).unwrap()` on the hot path (DoS risk) | **Closed** | The trigger requires the system clock to be earlier than 1970, which is unreachable in practice (NTP step-back / VM drift will not roll back 56 years; `SystemTime` returns UTC and is not affected by time zone). **The proposed fix `unwrap_or(Duration::from_secs(0))` actually has a security side effect**: during verify, `now=0`, and `0 - expires` (positive) is negative, always less than max_expires, so the expiration check is silently bypassed and CSRF protection fails. Panicking exposes the issue, which is safer than silently degrading security. |

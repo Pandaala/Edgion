@@ -1,46 +1,46 @@
 ---
 name: jwt-auth-credentials-source-paths
-description: 判定 jwt_auth `load_credentials_from_secret` "4 路重复 / 应抽 helper" 类 finding。已审计的设计取舍，不修。
+description: Decide on jwt_auth `load_credentials_from_secret` "4-path duplication / should extract helper" findings. Audited design tradeoff, will not fix.
 ---
 
-# jwt_auth credentials.rs 4 路凭证加载 — 已审计的设计取舍
+# jwt_auth credentials.rs 4-Path Credential Loading — Audited Design Tradeoff
 
-**审计日期**：2026-04-26
-**关联 issue**：P2-12（已关闭，未修复）
-**结论**：**`src/core/gateway/plugins/http/jwt_auth/credentials.rs::JwtAuth::load_credentials_from_secret` 的 4 个分支保持现状，不接受"抽 helper / 消除重复 / 缩短主函数"类修复建议。**
+**Audit date**: 2026-04-26
+**Linked issue**: P2-12 (closed, not fixed)
+**Conclusion**: **The 4 branches of `src/core/gateway/plugins/http/jwt_auth/credentials.rs::JwtAuth::load_credentials_from_secret` keep their current shape; "extract helper / eliminate duplication / shorten the main function" fix suggestions are not accepted.**
 
-## 涉及代码
+## Code Involved
 
 - `src/core/gateway/plugins/http/jwt_auth/credentials.rs:66-186`
-  - 分支 1：`config.resolved_credential`（controller 预解析的单凭证）
-  - 分支 2：`config.resolved_credentials`（controller 预解析的多凭证 map）
-  - 分支 3：`config.secret_ref`（fallback：从 K8s Secret 拿单凭证）
-  - 分支 4：`config.secret_refs`（fallback：从 K8s Secret 拿多凭证）
+  - Branch 1: `config.resolved_credential` (controller-pre-resolved single credential)
+  - Branch 2: `config.resolved_credentials` (controller-pre-resolved multi-credential map)
+  - Branch 3: `config.secret_ref` (fallback: get single credential from K8s Secret)
+  - Branch 4: `config.secret_refs` (fallback: get multiple credentials from K8s Secret)
 
-## 看上去像问题的点（不修）
+## Points That Look Like Issues (will not be fixed)
 
-4 条路径都执行 symmetric/asymmetric 二分 + base64 解码 + UTF-8/PEM 提取 + 错误信息构造，函数 ~120 行。表面上是教科书式的"应抽 helper"。
+All 4 paths perform symmetric/asymmetric branching + base64 decoding + UTF-8/PEM extraction + error message construction; the function is ~120 lines. On the surface, a textbook "should extract a helper".
 
-## 为什么不改
+## Why It Will Not Be Changed
 
-1. **"重复"是结构性而非真重复**：4 条路径数据源类型不同
-   - resolved 路径：`String`（已 base64 编码，asymmetric 分支只 `pem.clone()`）
-   - secret 路径：`Vec<u8>`（K8s Secret 原始字节，asymmetric 分支要走 UTF-8 转换）
-   - 错误信息标签格式各异（"Resolved credential" vs "Secret {ns}/{name}" vs "Resolved credential '{key}'"）
-   - 抽 helper 必然要参数化"如何取数据 + 错误标签格式"，helper 本身复杂，节省的代码 = 几十行，引入的间接 = 一层
+1. **"Duplication" is structural rather than real**: the 4 paths differ in data source type
+   - resolved path: `String` (already base64-encoded; the asymmetric branch only does `pem.clone()`)
+   - secret path: `Vec<u8>` (raw K8s Secret bytes; the asymmetric branch needs UTF-8 conversion)
+   - Error message label formats differ ("Resolved credential" vs "Secret {ns}/{name}" vs "Resolved credential '{key}'")
+   - Extracting a helper inevitably parameterizes "how to fetch data + error label format"; the helper itself becomes complex; saved code = a few dozen lines, indirection added = one layer
 
-2. **不在热路径**：`load_credentials_from_secret` 被 `load_credentials` 缓存（`self.credentials: RwLock<Option<Credentials>>`），整个 JwtAuth 实例只调一次。性能、可读性诉求都很弱。
+2. **Not on the hot path**: `load_credentials_from_secret` is cached by `load_credentials` (`self.credentials: RwLock<Option<Credentials>>`); called only once per JwtAuth instance. Performance and readability demands are weak.
 
-3. **回归风险实在**：错误信息文案被 25 个集成测试逐字符校验（`tests/secret_decoding.rs`、`tests/algorithm.rs` 等）。重构收益是几十行代码，代价是认真对齐错误文案 + 跑全套测试。
+3. **Regression risk is real**: error wording is verified character-by-character by 25 integration tests (`tests/secret_decoding.rs`, `tests/algorithm.rs`, etc.). The refactoring benefit is a few dozen lines of code; the cost is carefully aligning error wording + running the full test suite.
 
-4. **结构稳定**：4 路由 schema 决定（resolved 单/多、fallback 单/多），不会再加第 5 路。"未来扩展" 动机不成立。
+4. **Structure is stable**: the 4 paths are determined by schema (resolved single/multi, fallback single/multi); there will not be a 5th path. The "future extension" motivation does not hold.
 
-## 适用判定规则
+## Applicable Decision Rule
 
-未来 review 看到以下 finding，直接关闭、不重新评估：
+In future reviews, the following findings should be closed directly without re-evaluation:
 
-- "`load_credentials_from_secret` 4 路重复，应抽 `build_credential_from_*` helper"
-- "120 行函数太长，应拆分"
-- "symmetric/asymmetric 二分写了 4 次，违反 DRY"
+- "`load_credentials_from_secret` 4-path duplication; should extract `build_credential_from_*` helper"
+- "120-line function is too long; should be split"
+- "symmetric/asymmetric branching is written 4 times; violates DRY"
 
-如果发现的是**新维度**（例如：4 路在某种边界条件下行为不一致、controller-resolved 与 fallback get_secret 路径有未文档化的语义差异），那是另一个 finding，按问题本身评估。
+If a **new dimension** is found (e.g., the 4 paths behave inconsistently under some boundary condition; the controller-resolved and fallback get_secret paths have an undocumented semantic difference), that is a different finding and should be evaluated on its own merits.

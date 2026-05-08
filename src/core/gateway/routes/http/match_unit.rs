@@ -452,12 +452,15 @@ mod tests {
 
     #[test]
     fn test_url_decode_multibyte_utf8() {
-        // Chinese character 你 = E4 BD A0
-        assert_eq!(HttpRouteRuleUnit::url_decode("%E4%BD%A0"), "你");
-        // Euro sign € = E2 82 AC
-        assert_eq!(HttpRouteRuleUnit::url_decode("%E2%82%AC"), "€");
+        // CJK character U+4F60 = E4 BD A0
+        assert_eq!(HttpRouteRuleUnit::url_decode("%E4%BD%A0"), "\u{4F60}");
+        // Euro sign U+20AC = E2 82 AC
+        assert_eq!(HttpRouteRuleUnit::url_decode("%E2%82%AC"), "\u{20AC}");
         // Mixed: ASCII + multi-byte + ASCII
-        assert_eq!(HttpRouteRuleUnit::url_decode("key%3D%E4%BD%A0%E5%A5%BD"), "key=你好");
+        assert_eq!(
+            HttpRouteRuleUnit::url_decode("key%3D%E4%BD%A0%E5%A5%BD"),
+            "key=\u{4F60}\u{597D}"
+        );
     }
 
     #[test]

@@ -672,14 +672,14 @@ secretRef:
     fn webhook_auth_rejects_inline_username() {
         let yaml = "type: basic\nsecretRef:\n  name: s\nusername: leaked";
         let r: Result<WebhookAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline username 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline username must be rejected by deny_unknown_fields");
     }
 
     #[test]
     fn webhook_auth_rejects_inline_password() {
         let yaml = "type: basic\nsecretRef:\n  name: s\npassword: leaked";
         let r: Result<WebhookAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline password 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline password must be rejected by deny_unknown_fields");
     }
 
     #[test]

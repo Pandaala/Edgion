@@ -281,7 +281,7 @@ pub async fn serve_with_shutdown(
     let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
 
     let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
-    // 装配顺序由 compose_admin_routes 内部固定（见其 doc）。
+    // The composition order is fixed inside compose_admin_routes (see its doc).
     let app = api::compose_admin_routes(base_router, auth_state.clone(), local_auth_intent);
 
     if needs_retry {
@@ -292,9 +292,10 @@ pub async fn serve_with_shutdown(
             Box::pin(async move { crate::core::common::local_auth::secret::ensure_admin_credentials(&*cm).await })
         });
         let exit: crate::core::common::local_auth::retry::ExitFn = Box::new(|| std::process::exit(1));
-        // 生产从不 cancel retry（它有自己的 10min 硬超时 + process::exit(1)），
-        // 传一个永不 cancel 的 token 即可。CancellationToken 的 drop-vs-cancel
-        // 语义细节见 `retry.rs` 模块 doc。
+        // Production never cancels the retry (it has its own 10-minute hard
+        // timeout plus process::exit(1)), so a never-cancelled token is
+        // sufficient. See the `retry.rs` module doc for details on the
+        // CancellationToken drop-vs-cancel semantics.
         let retry_shutdown = tokio_util::sync::CancellationToken::new();
         tokio::spawn(crate::core::common::local_auth::retry::secret_retry_loop(
             auth_state_for_retry,

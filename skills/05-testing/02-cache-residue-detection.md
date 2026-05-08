@@ -5,56 +5,56 @@ description: Cache residue detection — wipe-all + store-stats based leak detec
 
 # Cache Residue Detection
 
-> 在 `run_integration.sh` 全部 scenario 跑完之后，调 controller `wipe-all` 清空全部资源，然后断言所有 in-memory cache 计数为 0。任何残留视为 **leak**。
+> After all scenarios in `run_integration.sh` finish, the controller's `wipe-all` is invoked to clear every resource, and then we assert that all in-memory cache counts are 0. Any residue is treated as a **leak**.
 
-## 工作流
+## Workflow
 
-1. `run_integration.sh` 在所有 test loop 结束后、`cleanup` 之前调 `cache_residue` 二进制。
-2. `cache_residue` 调 `POST controller /api/v1/admin/wipe-all`（仅 testing-mode 注册），按 tier 顺序删除全部 21 个 kind。
-3. 调 `DELETE gateway /api/v1/testing/access-logs` 清 access log（去除 TTL false positive）。
-4. 轮询（默认 500ms 间隔，最多 30s）：
+1. `run_integration.sh` invokes the `cache_residue` binary after all test loops finish and before `cleanup`.
+2. `cache_residue` calls `POST controller /api/v1/admin/wipe-all` (registered only in testing mode), which deletes all 21 kinds in tier order.
+3. It calls `DELETE gateway /api/v1/testing/access-logs` to clear the access log (eliminates TTL false positives).
+4. It polls (default 500ms interval, up to 30s):
    - `GET controller /api/v1/debug/store-stats`
    - `GET gateway /api/v1/debug/store-stats`
-   - 内置 ignore-path 过滤结构性常量字段（如 `next_resource_version`）。
-5. 全 0 → exit 0；超时仍有残留 → exit 1（mode=fail）/ 0 + warning（mode=warn）；端点不可达 → exit 2。
+   - The built-in ignore-path filters out structural constant fields (e.g., `next_resource_version`).
+5. All zero → exit 0; residue still present after timeout → exit 1 (mode=fail) / 0 + warning (mode=warn); endpoint unreachable → exit 2.
 
-## 添加新的 store 到 leak 检测
+## Adding a new store to leak detection
 
-新增任何 in-memory store / cache 时，必须接入 store-stats，否则 `cache_residue` 检测不到该 store 的 leak。
+When adding any in-memory store / cache, it must be wired into store-stats, otherwise `cache_residue` cannot detect a leak in that store.
 
-### Gateway 端
+### Gateway side
 
-1. 在你的 store 上加 `pub fn count(&self) -> usize` 和 `pub fn keys(&self) -> Vec<String>`。
-2. 在 `src/core/gateway/api/mod.rs` 的 `StoreStatsResponse` 加字段，并在 `store_stats()` handler 里填充。
-3. 加单测：`empty store reports zero`。
+1. Add `pub fn count(&self) -> usize` and `pub fn keys(&self) -> Vec<String>` to the store.
+2. Add a field in `StoreStatsResponse` of `src/core/gateway/api/mod.rs` and populate it in the `store_stats()` handler.
+3. Add a unit test: `empty store reports zero`.
 
-### Controller 端
+### Controller side
 
-1. 在你的 store 上加同样的方法。
-2. 在 `src/core/controller/api/debug_handlers.rs` 的 `ControllerStoreStats` 加字段并填充。
-3. 加单测。
+1. Add the same methods on the store.
+2. Add a field in `ControllerStoreStats` of `src/core/controller/api/debug_handlers.rs` and populate it.
+3. Add a unit test.
 
-### 何时**不**需要加
+### When **not** to add it
 
-- Store 与某个父对象同生命周期（例如 plugin instance 内部 cache、route handler 私有 map）：父对象被 ArcSwap drop 时整体回收，无独立 leak 信号。leak 由父对象的 store-stats 暴露即可。
-- TTL-based store（如 access log）：在 cache_residue 调用前已有 clear API。
+- The store has the same lifecycle as a parent object (e.g., a cache inside a plugin instance, a private map of a route handler): the whole thing is reclaimed when the parent is dropped via ArcSwap; there is no independent leak signal. Leakage is exposed by the parent's store-stats.
+- TTL-based store (e.g., access log): a clear API already exists before cache_residue is called.
 
-## 添加新的 ignore-path
+## Adding a new ignore-path
 
-ignore-path 是结构性常量（不会归零的合法值），如：
-- 单调递增的 sequence counter
-- 固定数量的注册项（kind 列表、watch object 数）
-- 测试期 `>0` 是正常的（如 GatewayConfigStore.gateways）
+An ignore-path is a structural constant (a legitimate value that never returns to zero), such as:
+- Monotonically increasing sequence counters
+- A fixed number of registered items (kind list, watch object count)
+- Values that are normally `>0` during the test (e.g., GatewayConfigStore.gateways)
 
-修改 `IGNORE_PATHS` 常量于 `examples/code/validator/cache_residue.rs`。每加一项必须附 commit message 说明为什么这个字段不算 leak。
+Modify the `IGNORE_PATHS` constant in `examples/code/validator/cache_residue.rs`. Every addition must include a commit message explaining why this field does not count as a leak.
 
-## 反向验证
+## Reverse verification
 
-任何对 store-stats 或 wipe-all 的扩展，必须人工跑反向测试：临时短路 delete 路径 → 跑 `run_integration.sh` → 验证 cache_residue 报告精准定位。详见 spec §6.2。
+Any extension to store-stats or wipe-all must be reverse-tested manually: temporarily short-circuit the delete path → run `run_integration.sh` → verify that the cache_residue report precisely locates the issue. See spec §6.2.
 
-## 调试 leak 报告
+## Debugging a leak report
 
-报告示例：
+Example report:
 
 ```
 [FAIL] Cache residue detected after wipe-all (timeout 30s):
@@ -69,13 +69,13 @@ ignore-path 是结构性常量（不会归零的合法值），如：
 Total residue: 5 entries across 4 buckets
 ```
 
-诊断顺序：
-1. `controller.conf_center_storage.<Kind>` 残留 → wipe-all 漏删该 kind，检查 `wipe_handlers.rs` 的 TIER 列表
-2. `gateway.client_caches.by_kind.<Kind>` 残留 → controller→gateway 同步未对齐（增加 `--timeout-secs`），或 gateway ConfigClient delete 路径有 bug
-3. `gateway.<store_name>.*` 残留 → 该 store 的 delete 处理器没正确移除条目；按 sample key 倒查代码
-4. `gateway.plugin_store_v2.by_kind.<Kind>` 残留 → PluginStore 的 conf_handler 未响应 delete 事件
+Diagnosis order:
+1. Residue in `controller.conf_center_storage.<Kind>` → wipe-all missed that kind; check the TIER list in `wipe_handlers.rs`
+2. Residue in `gateway.client_caches.by_kind.<Kind>` → controller→gateway sync did not converge (raise `--timeout-secs`), or there is a bug in the gateway ConfigClient delete path
+3. Residue in `gateway.<store_name>.*` → the store's delete handler does not properly remove entries; trace the code by the sample key
+4. Residue in `gateway.plugin_store_v2.by_kind.<Kind>` → PluginStore's conf_handler does not respond to the delete event
 
-## 相关链接
+## Related links
 
 - Spec: `docs/superpowers/specs/2026-04-26-cache-residue-detection-design.md`
 - Plan: `docs/superpowers/plans/2026-04-26-cache-residue-detection.md`

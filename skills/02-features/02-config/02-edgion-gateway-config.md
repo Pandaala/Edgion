@@ -1,29 +1,29 @@
 ---
 name: edgion-gateway-config-crd
-description: EdgionGatewayConfig CRD Schema：GatewayClass 级别的运行时配置。
+description: EdgionGatewayConfig CRD schema: GatewayClass-level runtime configuration.
 ---
 
 # EdgionGatewayConfig CRD Schema
 
-> API Group: `edgion.io/v1alpha1` | Scope: Cluster | 通过 GatewayClass.spec.parametersRef 引用
+> API Group: `edgion.io/v1alpha1` | Scope: Cluster | Referenced via GatewayClass.spec.parametersRef
 
-## 什么时候改这一层
+## When to Change This Layer
 
-改这里，而不是改 Gateway TOML 的场景：
+Change here, instead of the Gateway TOML, when:
 
-- 某个 GatewayClass 想要自己的 server / timeout / security 默认值
-- 想配置全局插件引用
-- 想开启 preflight policy
-- 想把 real IP / ReferenceGrant 校验作为 GatewayClass 级策略
+- A specific GatewayClass needs its own server / timeout / security defaults
+- You want to configure global plugin references
+- You want to enable a preflight policy
+- You want real IP / ReferenceGrant validation as a GatewayClass-level policy
 
-入口关系：`GatewayClass.spec.parametersRef` -> `EdgionGatewayConfig`
+Entry relationship: `GatewayClass.spec.parametersRef` -> `EdgionGatewayConfig`
 
-## 看哪些文件
+## Files to Reference
 
-- 示例文件：`examples/test/conf/base/EdgionGatewayConfig.yaml`
-- 代码定义：`src/types/resources/edgion_gateway_config.rs`
+- Example file: `examples/test/conf/base/EdgionGatewayConfig.yaml`
+- Code definition: `src/types/resources/edgion_gateway_config.rs`
 
-## 关联方式
+## How to Associate
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -38,7 +38,7 @@ spec:
     name: default-config
 ```
 
-## 完整 Schema
+## Full Schema
 
 ```yaml
 apiVersion: edgion.io/v1alpha1
@@ -46,18 +46,18 @@ kind: EdgionGatewayConfig
 metadata:
   name: default-config
 spec:
-  # ─── Pingora Server 配置 ───
+  # ─── Pingora Server configuration ───
   server:
-    threads: 0                              # uint32, 默认 CPU 核心数
+    threads: 0                              # uint32, default = CPU core count
     workStealing: true                      # bool
     gracePeriodSeconds: 30                  # uint64
     gracefulShutdownTimeoutS: 10            # uint64
     upstreamKeepalivePoolSize: 128          # uint32
-    errorLog: ""                            # string, 可选
-    enableCompression: false                # bool, 下游响应压缩
-    downstreamKeepaliveRequestLimit: 1000   # uint32, 0=无限
+    errorLog: ""                            # string, optional
+    enableCompression: false                # bool, downstream response compression
+    downstreamKeepaliveRequestLimit: 1000   # uint32, 0 = unlimited
 
-  # ─── HTTP 超时 ───
+  # ─── HTTP timeouts ───
   httpTimeout:
     client:
       readTimeout: "60s"                    # Duration string
@@ -68,146 +68,146 @@ spec:
       defaultRequestTimeout: "60s"
       defaultIdleTimeout: "300s"
 
-  # ─── 最大重试 ───
-  maxRetries: 3                             # uint32, 上游连接最大重试次数
+  # ─── Max retries ───
+  maxRetries: 3                             # uint32, max upstream connection retries
 
-  # ─── 真实 IP 提取 ───
+  # ─── Real IP extraction ───
   realIp:
-    trustedIps: []                          # Vec<String>, 可信代理 IP/CIDR 列表
-    realIpHeader: "X-Forwarded-For"         # string, 提取真实 IP 的请求头
-    recursive: true                         # bool, 从右向左遍历 header，跳过 trustedIps，取第一个非信任 IP
+    trustedIps: []                          # Vec<String>, list of trusted proxy IPs/CIDRs
+    realIpHeader: "X-Forwarded-For"         # string, header used to extract the real IP
+    recursive: true                         # bool, traverse the header right-to-left, skip trustedIps, take the first untrusted IP
 
-  # ─── 安全防护 ───
+  # ─── Security protection ───
   securityProtect:
-    xForwardedForLimit: 200                 # usize, XFF 最大字节数
-    requireSniHostMatch: true               # bool, HTTPS listener 级别 421 Misdirected Request 检测
-    fallbackSni: ""                         # string?, 客户端无 SNI 时的备用值
-    tlsProxyLogRecord: true                 # bool, 记录 TLS 代理连接日志
+    xForwardedForLimit: 200                 # usize, max XFF byte length
+    requireSniHostMatch: true               # bool, HTTPS listener-level 421 Misdirected Request detection
+    fallbackSni: ""                         # string?, fallback value when the client provides no SNI
+    tlsProxyLogRecord: true                 # bool, record TLS proxy connection logs
 
-  # ─── 全局插件 ───
-  globalPluginsRef:                         # Vec<PluginReference>, 应用于所有路由
+  # ─── Global plugins ───
+  globalPluginsRef:                         # Vec<PluginReference>, applied to all routes
     - name: "global-cors"
-      namespace: "edgion-system"            # 默认 "default"
+      namespace: "edgion-system"            # default "default"
 
-  # ─── Preflight 策略 ───
+  # ─── Preflight policy ───
   preflightPolicy:
     mode: "cors-standard"                   # "cors-standard" | "all-options"
-    statusCode: 204                         # uint16, 无 CORS 插件时的响应码
+    statusCode: 204                         # uint16, response status when no CORS plugin is present
 
-  # ─── ReferenceGrant 校验 ───
+  # ─── ReferenceGrant validation ───
   enableReferenceGrantValidation: false     # bool
 
-  # ─── Path 规范化 ───
+  # ─── Path normalization ───
   pathNormalization:
-    rejectEscapedSlashes: false             # bool, 含 %2F / %5C 的请求是否直接 400 拒绝。默认 false。
-    rejectInvalidPercentEncoding: false     # bool, 含非法 percent-encoding（非法 hex 或 decode 后非 UTF-8）的请求是否直接 400 拒绝。默认 false。
+    rejectEscapedSlashes: false             # bool, whether requests containing %2F / %5C are rejected with 400. Default false.
+    rejectInvalidPercentEncoding: false     # bool, whether requests with invalid percent-encoding (invalid hex or non-UTF-8 after decoding) are rejected with 400. Default false.
 
-  # ─── LinkSys 全局配置 ───
+  # ─── LinkSys global configuration ───
   linkSys:
-    webhookMaxResponseBytes: 16384          # usize, webhook 响应体硬上限（默认 16 KiB）
+    webhookMaxResponseBytes: 16384          # usize, hard upper bound for webhook response body (default 16 KiB)
 ```
 
-## spec 字段详解
+## spec Field Details
 
 ### spec.server
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `threads` | `u32` | CPU 核心数 | Pingora 工作线程 |
-| `workStealing` | `bool` | `true` | 任务窃取 |
-| `gracePeriodSeconds` | `u64` | `30` | 优雅关闭等待 |
-| `gracefulShutdownTimeoutS` | `u64` | `10` | 关闭超时 |
-| `upstreamKeepalivePoolSize` | `u32` | `128` | 上游连接池 |
-| `errorLog` | `String?` | — | Pingora 错误日志 |
-| `enableCompression` | `bool` | `false` | 下游响应压缩 |
-| `downstreamKeepaliveRequestLimit` | `u32` | `1000` | 下游每连接最大请求数 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `threads` | `u32` | CPU core count | Pingora worker threads |
+| `workStealing` | `bool` | `true` | Task stealing |
+| `gracePeriodSeconds` | `u64` | `30` | Graceful shutdown wait |
+| `gracefulShutdownTimeoutS` | `u64` | `10` | Shutdown timeout |
+| `upstreamKeepalivePoolSize` | `u32` | `128` | Upstream connection pool |
+| `errorLog` | `String?` | — | Pingora error log |
+| `enableCompression` | `bool` | `false` | Downstream response compression |
+| `downstreamKeepaliveRequestLimit` | `u32` | `1000` | Maximum requests per downstream connection |
 
 ### spec.httpTimeout.client
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `readTimeout` | `Duration` | `60s` | 读取客户端请求超时 |
-| `writeTimeout` | `Duration` | `60s` | 写入客户端响应超时 |
-| `keepaliveTimeout` | `Duration` | `75s` | HTTP keepalive 超时 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `readTimeout` | `Duration` | `60s` | Timeout for reading the client request |
+| `writeTimeout` | `Duration` | `60s` | Timeout for writing the client response |
+| `keepaliveTimeout` | `Duration` | `75s` | HTTP keepalive timeout |
 
 ### spec.httpTimeout.backend
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `defaultConnectTimeout` | `Duration` | `5s` | 上游连接超时 |
-| `defaultRequestTimeout` | `Duration` | `60s` | 总请求超时（含重试） |
-| `defaultIdleTimeout` | `Duration` | `300s` | 连接池空闲超时 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `defaultConnectTimeout` | `Duration` | `5s` | Upstream connect timeout |
+| `defaultRequestTimeout` | `Duration` | `60s` | Total request timeout (including retries) |
+| `defaultIdleTimeout` | `Duration` | `300s` | Connection pool idle timeout |
 
 ### spec.realIp
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `trustedIps` | `Vec<String>` | `[]` | 可信代理 IP/CIDR 列表 |
-| `realIpHeader` | `String` | `X-Forwarded-For` | 真实 IP 提取的请求头名称 |
-| `recursive` | `bool` | `true` | 是否按 nginx 风格从右向左跳过受信代理 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `trustedIps` | `Vec<String>` | `[]` | List of trusted proxy IPs/CIDRs |
+| `realIpHeader` | `String` | `X-Forwarded-For` | Header name from which the real IP is extracted |
+| `recursive` | `bool` | `true` | Whether to skip trusted proxies right-to-left in nginx style |
 
-提取逻辑：从右向左遍历 `realIpHeader`，跳过 `trustedIps` 中的地址，取第一个非信任 IP。
+Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed in `trustedIps`, and take the first untrusted IP.
 
 ### spec.securityProtect
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `xForwardedForLimit` | `usize` | `200` | X-Forwarded-For 最大字节数 |
-| `requireSniHostMatch` | `bool` | `true` | HTTPS listener 级别 421 Misdirected Request 检测（可通过 Gateway 注解 per-Gateway 开启） |
-| `fallbackSni` | `String?` | — | 客户端未提供 SNI 时的备用主机名 |
-| `tlsProxyLogRecord` | `bool` | `true` | 记录 TLS 代理连接日志 |
-| `allowLoopbackUpstream` | `bool` | `false` | 显式放行 loopback upstream；不放行 link-local / metadata |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `xForwardedForLimit` | `usize` | `200` | Max byte length of X-Forwarded-For |
+| `requireSniHostMatch` | `bool` | `true` | HTTPS listener-level 421 Misdirected Request detection (can also be enabled per-Gateway via Gateway annotations) |
+| `fallbackSni` | `String?` | — | Fallback hostname when the client does not provide SNI |
+| `tlsProxyLogRecord` | `bool` | `true` | Record TLS proxy connection logs |
+| `allowLoopbackUpstream` | `bool` | `false` | Explicitly allow loopback upstream; link-local / metadata are not allowed |
 
 ### spec.preflightPolicy
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `mode` | `String` | `cors-standard` | `cors-standard`：OPTIONS + Origin + ACRM；`all-options`：所有 OPTIONS 请求 |
-| `statusCode` | `u16` | `204` | 无 CORS 插件时的 preflight 响应状态码 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | `String` | `cors-standard` | `cors-standard`: OPTIONS + Origin + ACRM; `all-options`: all OPTIONS requests |
+| `statusCode` | `u16` | `204` | Preflight response status code when no CORS plugin is present |
 
 ### spec.pathNormalization
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `rejectEscapedSlashes` | `bool` | `false` | 含 `%2F` / `%5C` 的请求直接 400 拒绝。高安全场景（要求 path 中不允许字面 `/` 字符出现）可开启。注意：会影响合法 API（如 base64 URL 参数含 `/`）。 |
-| `rejectInvalidPercentEncoding` | `bool` | `false` | 含非法 percent-encoding（非法 hex 或 decode 后非 UTF-8）的请求直接 400 拒绝。开启后捕获 IIS-style overlong UTF-8（`%c0%ae`）等异常输入，扩大安全承诺范围。 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `rejectEscapedSlashes` | `bool` | `false` | Reject requests containing `%2F` / `%5C` directly with 400. Can be enabled in high-security scenarios (where literal `/` characters in the path are not allowed). Note: this affects legitimate APIs (e.g., base64 URL parameters containing `/`). |
+| `rejectInvalidPercentEncoding` | `bool` | `false` | Reject requests with invalid percent-encoding (invalid hex or non-UTF-8 after decoding) directly with 400. Once enabled, captures abnormal inputs such as IIS-style overlong UTF-8 (`%c0%ae`), broadening the security guarantee scope. |
 
-**重要说明**：
+**Important notes**:
 
-- **无 `enabled` 字段**——path normalization 是 Edgion 默认行为，**不可禁用**
-- **无 per-Gateway / per-Listener 覆盖**——这两个开关是全局的
-- 安全承诺范围详见 spec §1.4：[tasks/todo/uri-normalization.md](../../../tasks/todo/uri-normalization.md)
+- **No `enabled` field** — path normalization is Edgion's default behavior and **cannot be disabled**.
+- **No per-Gateway / per-Listener override** — these two switches are global.
+- For the security guarantee scope see spec §1.4: [tasks/todo/uri-normalization.md](../../../tasks/todo/uri-normalization.md).
 
 ### spec.linkSys
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `webhookMaxResponseBytes` | `usize` | `16384` | LinkSys Webhook 响应体硬上限（字节）。所有 webhook 调用的响应大小都被 clamp 至 `min(per-resource maxResponseBytes, 此值)`。需要更大响应时（如插件调用外部 API 返回较大 JSON）同时调高这两个值。|
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `webhookMaxResponseBytes` | `usize` | `16384` | Hard upper bound for the LinkSys webhook response body (bytes). All webhook call response sizes are clamped to `min(per-resource maxResponseBytes, this value)`. When larger responses are needed (e.g., a plugin calling an external API that returns a sizable JSON), increase both values together. |
 
-> 修改后通过 `EdgionGatewayConfig` partial-update 即时生效，无需重启 Gateway。
+> Modifications take effect immediately via `EdgionGatewayConfig` partial-update; no Gateway restart is required.
 
 ### spec.globalPluginsRef
 
 ```yaml
 globalPluginsRef:
-  - name: String        # EdgionPlugins 资源名称
-    namespace: String?   # 默认 "default"
+  - name: String        # EdgionPlugins resource name
+    namespace: String?   # default "default"
 ```
 
-全局插件应用于所有路由，在路由级别插件之前执行。
+Global plugins are applied to all routes and execute before route-level plugins.
 
-## 与 TOML 配置的区别
+## Differences from TOML Configuration
 
-| 配置项 | TOML | EdgionGatewayConfig |
-|--------|------|---------------------|
-| 作用域 | 单个进程实例 | 整个 GatewayClass |
-| 变更方式 | 重启进程 | 动态生效（CRD 更新） |
-| 适合 | 进程连接参数、日志路径 | 业务级超时、安全策略、全局插件 |
+| Configuration Item | TOML | EdgionGatewayConfig |
+|--------------------|------|---------------------|
+| Scope | A single process instance | The entire GatewayClass |
+| Change Method | Restart the process | Takes effect dynamically (CRD update) |
+| Suitable For | Process connection parameters, log paths | Business-level timeouts, security policies, global plugins |
 
-## 什么时候不要改这一层
+## When Not to Change This Layer
 
-不要用 `EdgionGatewayConfig` 解决这些问题：
+Do not use `EdgionGatewayConfig` to solve these problems:
 
-- Gateway 进程连哪个 Controller：那是 Gateway TOML 的 `server_addr`
-- Gateway Admin / Metrics 端口：这是进程启动层
-- Controller 用 file_system 还是 kubernetes：这是 Controller TOML 的 `conf_center`
+- Which Controller the Gateway process connects to: that is `server_addr` in the Gateway TOML.
+- Gateway Admin / Metrics ports: that is the process startup layer.
+- Whether the Controller uses file_system or kubernetes: that is `conf_center` in the Controller TOML.

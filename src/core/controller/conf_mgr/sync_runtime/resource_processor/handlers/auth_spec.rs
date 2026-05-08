@@ -1,11 +1,13 @@
 //! `AuthSpec` / `TlsSpec` traits — bind a CRD auth/tls type to its resolver
 //! choice and `SecretSlot`, so `resolve_for_spec` can dispatch generically.
 //!
-//! 新增 backend 4 步：
-//!   1. 给新 *Auth 类型 impl AuthSpec（resolve() 内部挑 resolver + 调 resolve_one + 写回）
-//!   2. （如有 TLS）TlsConfig 已 impl TlsSpec，新 backend 复用
-//!   3. 在 SystemConfig enum 加变体
-//!   4. resolve_for_spec 加一行 drive_standard(...)
+//! Adding a new backend takes 4 steps:
+//!   1. impl AuthSpec for the new *Auth type (resolve() picks the resolver,
+//!      calls resolve_one, and writes the result back).
+//!   2. If TLS is involved, TlsConfig already impls TlsSpec; the new backend
+//!      reuses it.
+//!   3. Add a variant to the SystemConfig enum.
+//!   4. Add one drive_standard(...) line in resolve_for_spec.
 
 use async_trait::async_trait;
 

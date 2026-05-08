@@ -126,7 +126,7 @@ clientCert: "-----BEGIN CERTIFICATE-----"
 clientKey: "-----BEGIN PRIVATE KEY-----"
 "#;
         let r: Result<TlsCerts, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline clientKey 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline clientKey must be rejected by deny_unknown_fields");
     }
 
     #[test]
@@ -170,6 +170,6 @@ clientKey: "-----BEGIN PRIVATE KEY-----"
             secret: None,
         };
         let yaml = serde_yaml::to_string(&certs).expect("serialize");
-        assert!(!yaml.contains("secret:"), "secret=None 时不应出现在 YAML 中: {yaml}");
+        assert!(!yaml.contains("secret:"), "secret=None must not appear in YAML: {yaml}");
     }
 }

@@ -1,32 +1,32 @@
 ---
 name: controller-admin-api
-description: edgion-controller Admin HTTP API（Axum :5800）：全部端点、AdminState、健康检查、CRUD 与 ConfigServer 接口。
+description: edgion-controller Admin HTTP API (Axum :5800) — full endpoint list, AdminState, health check, CRUD, and ConfigServer endpoints.
 ---
 
 # Admin API (:5800)
 
-Controller 通过 Axum 提供 HTTP Admin API，监听端口 5800，供 edgion-cli 命令行工具和运维操作使用。
+The Controller exposes an HTTP Admin API via Axum, listening on port 5800, used by the edgion-cli command-line tool and operations workflows.
 
-## Router 装配（compose_admin_routes）
+## Router Composition (compose_admin_routes)
 
-Controller 与 Center 共享唯一的 admin router 装配入口：`src/core/common/api/compose.rs::compose_admin_routes(business, auth_state, local_auth_intent)`。
+Controller and Center share a single admin-router composition entry: `src/core/common/api/compose.rs::compose_admin_routes(business, auth_state, local_auth_intent)`.
 
-内部装配顺序固定（调用方无法影响）：
+The internal composition order is fixed (callers cannot influence it):
 
-1. `business`（各组件业务路由）
-2. `/api/v1/auth/{login, logout, me}`（`local_auth_intent = true` 时挂载）
-3. `/api/v1/auth/status`（无条件挂载——fix #01 round 3 回归点；CLI `ensure_auth` 需要它始终可达）
-4. `unified_auth` middleware（包所有路由；skip_paths 由 `auth_state` 提供）
+1. `business` (per-component business routes)
+2. `/api/v1/auth/{login, logout, me}` (mounted when `local_auth_intent = true`)
+3. `/api/v1/auth/status` (always mounted — fix #01 round 3 regression point; CLI `ensure_auth` requires it to be reachable at all times)
+4. `unified_auth` middleware (wraps every route; `skip_paths` is provided by `auth_state`)
 
-**终态约定**：返回的 `Router` 视为终态。调用方不得再 `.route()` / `.layer()`——任何追加都会绕过 auth middleware，等价于 fix #01 round 2 的 P0 bug。新增 admin 路由应放入 `business` 参数后再调用 `compose_admin_routes`。
+**Final-state contract**: the returned `Router` is final. Callers must not call `.route()` / `.layer()` on it again — any addition would bypass the auth middleware and is equivalent to the P0 bug from fix #01 round 2. New admin routes should be added to the `business` parameter before calling `compose_admin_routes`.
 
-**跨域说明**：Admin API 不挂 CORS 层。本地调试时由 `edgion-dashboard` 的 Vite `server.proxy` 处理（见 `edgion-dashboard/vite.config.ts`），生产由 dashboard 嵌入 Controller 同源部署。如未来出现独立 origin 部署需求，再引入精确来源白名单（对应 H1 修复记录）。
+**CORS note**: the Admin API does not include a CORS layer. For local debugging, `edgion-dashboard`'s Vite `server.proxy` handles it (see `edgion-dashboard/vite.config.ts`); in production, the dashboard is embedded into the Controller and served from the same origin. If a separate-origin deployment is required in the future, introduce a precise origin allowlist (corresponds to the H1 fix record).
 
-3 个辅助 helper（`add_local_auth_routes`、`add_auth_status_route`、`wrap_with_unified_auth_layer`）已降级 `pub(crate)`，外部不再支持直接调用；统一通过 `compose_admin_routes` 入口。
+The three helpers (`add_local_auth_routes`, `add_auth_status_route`, `wrap_with_unified_auth_layer`) have been demoted to `pub(crate)`; direct external invocation is no longer supported. Use `compose_admin_routes` exclusively.
 
-## AdminState 共享状态
+## AdminState — Shared State
 
-所有 handler 通过 Axum 的 `State<Arc<AdminState>>` 共享状态：
+All handlers share state through Axum's `State<Arc<AdminState>>`:
 
 ```rust
 pub struct AdminState {
@@ -35,121 +35,121 @@ pub struct AdminState {
 }
 ```
 
-`AdminState` 提供两层数据访问方法：
+`AdminState` provides two layers of data-access methods:
 
-| 方法前缀 | 数据源 | 用途 |
-|----------|--------|------|
-| `center_*` | ConfCenter（存储层） | `/api/v1/...` 端点使用，直接读写底层存储 |
-| `cache_*` | ConfigSyncServer（ServerCache） | `/configserver/...` 端点使用，读取处理后的缓存 |
+| Method prefix | Data source | Purpose |
+|---------------|-------------|---------|
+| `center_*` | ConfCenter (storage layer) | Used by `/api/v1/...` endpoints; reads/writes the underlying storage directly |
+| `cache_*` | ConfigSyncServer (ServerCache) | Used by `/configserver/...` endpoints; reads the processed cache |
 
-辅助方法：
+Helper methods:
 
-- `config_sync_server()` — 获取 `Arc<ConfigSyncServer>`，未就绪时返回 `503`
-- `is_ready()` — 检查 ConfigSyncServer 是否存在
-- `is_k8s_mode()` — 是否为 Kubernetes 模式（K8s 模式下跳过本地 Schema 校验）
+- `config_sync_server()` — get an `Arc<ConfigSyncServer>`; returns `503` if not ready
+- `is_ready()` — check whether ConfigSyncServer exists
+- `is_k8s_mode()` — whether the mode is Kubernetes (in K8s mode local schema validation is skipped)
 
-## 全部端点列表
+## Full Endpoint List
 
-### 健康与状态
+### Health and Status
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/health` | 存活探测（Liveness）。服务启动即返回 `200`，响应 `{"success":true,"data":"OK"}` |
-| GET | `/ready` | 就绪探测（Readiness）。ConfigSyncServer 就绪时返回 `200`，否则返回 `503` |
-| GET | `/api/v1/server-info` | 获取当前 `server_id` 和就绪状态。reload 后 `server_id` 会变更，可用于确认 reload 生效 |
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Liveness probe. Returns `200` as soon as the service starts; response body `{"success":true,"data":"OK"}` |
+| GET | `/ready` | Readiness probe. Returns `200` once ConfigSyncServer is ready, otherwise `503` |
+| GET | `/api/v1/server-info` | Get the current `server_id` and ready state. After reload `server_id` changes, which can be used to confirm the reload took effect |
 
 ### Reload
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/v1/reload` | 触发全量重载。异步执行：停止当前 controller -> 清空 PROCESSOR_REGISTRY -> 创建新 ConfigSyncServer（新 server_id）-> 重启 controller（完整 Init -> InitApply -> InitDone 流程）。Gateway 客户端检测到 server_id 变化后自动 re-list |
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/reload` | Trigger a full reload. Runs asynchronously: stop current controller -> clear PROCESSOR_REGISTRY -> create new ConfigSyncServer (new server_id) -> restart controller (full Init -> InitApply -> InitDone flow). Gateway clients re-list automatically once they detect the server_id change |
 
-### 命名空间级资源 CRUD
+### Namespaced Resource CRUD
 
-所有端点从 **ConfCenter 存储层** 读写。请求体支持 JSON 和 YAML 格式（优先尝试 JSON 解析）。
+All endpoints read/write the **ConfCenter storage layer**. The request body supports JSON and YAML (JSON parsing is tried first).
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/v1/namespaced/{kind}` | 列出某 kind 的所有命名空间下资源 |
-| GET | `/api/v1/namespaced/{kind}/{namespace}` | 列出某 kind 在指定命名空间下的资源 |
-| POST | `/api/v1/namespaced/{kind}/{namespace}` | 创建命名空间级资源 |
-| GET | `/api/v1/namespaced/{kind}/{namespace}/{name}` | 获取单个命名空间级资源 |
-| PUT | `/api/v1/namespaced/{kind}/{namespace}/{name}` | 更新命名空间级资源 |
-| DELETE | `/api/v1/namespaced/{kind}/{namespace}/{name}` | 删除命名空间级资源 |
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/namespaced/{kind}` | List all resources of a kind across all namespaces |
+| GET | `/api/v1/namespaced/{kind}/{namespace}` | List resources of a kind in the given namespace |
+| POST | `/api/v1/namespaced/{kind}/{namespace}` | Create a namespaced resource |
+| GET | `/api/v1/namespaced/{kind}/{namespace}/{name}` | Get a single namespaced resource |
+| PUT | `/api/v1/namespaced/{kind}/{namespace}/{name}` | Update a namespaced resource |
+| DELETE | `/api/v1/namespaced/{kind}/{namespace}/{name}` | Delete a namespaced resource |
 
-路径参数中的 `{kind}` 为资源类型名称（如 `HTTPRoute`、`Gateway`），通过 `parse_kind()` 进行大小写不敏感匹配，未知 kind 返回 `400`。
+The `{kind}` path parameter is the resource type name (e.g., `HTTPRoute`, `Gateway`); it is matched case-insensitively via `parse_kind()`, and unknown kinds return `400`.
 
-非 K8s 模式下，创建和更新操作会：
-1. 使用 `SchemaValidator` 进行 JSON Schema 校验（K8s 模式跳过，由 API Server 负责）
-2. 自动调用 `next_resource_version()` 分配递增的 `resourceVersion`
+In non-K8s mode, create and update operations:
+1. Run JSON Schema validation via `SchemaValidator` (skipped in K8s mode, which is handled by the API Server)
+2. Automatically call `next_resource_version()` to assign an incrementing `resourceVersion`
 
-### 集群级资源 CRUD
+### Cluster-scoped Resource CRUD
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/v1/cluster/{kind}` | 列出某 kind 的所有集群级资源 |
-| POST | `/api/v1/cluster/{kind}` | 创建集群级资源 |
-| GET | `/api/v1/cluster/{kind}/{name}` | 获取单个集群级资源 |
-| PUT | `/api/v1/cluster/{kind}/{name}` | 更新集群级资源 |
-| DELETE | `/api/v1/cluster/{kind}/{name}` | 删除集群级资源 |
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/cluster/{kind}` | List all cluster-scoped resources of a kind |
+| POST | `/api/v1/cluster/{kind}` | Create a cluster-scoped resource |
+| GET | `/api/v1/cluster/{kind}/{name}` | Get a single cluster-scoped resource |
+| PUT | `/api/v1/cluster/{kind}/{name}` | Update a cluster-scoped resource |
+| DELETE | `/api/v1/cluster/{kind}/{name}` | Delete a cluster-scoped resource |
 
-集群级资源（如 GatewayClass）没有 namespace 维度。handler 内部通过 `is_kind_cluster_scoped()` 校验 kind 是否确实是集群级的，不匹配则返回 `400`。
+Cluster-scoped resources (such as GatewayClass) have no namespace dimension. The handler validates internally via `is_kind_cluster_scoped()` whether the kind is actually cluster-scoped, and returns `400` if it does not match.
 
-### ConfigServer 端点
+### ConfigServer Endpoints
 
-供 `edgion-cli --target server` 使用，从 **ConfigSyncServer 缓存层**（ServerCache）读取数据。返回的是经过 ResourceProcessor 处理后的资源快照，格式与 Gateway 的 `/configclient/` API 兼容。
+Used by `edgion-cli --target server`; reads from the **ConfigSyncServer cache layer** (ServerCache). The returned data is the processed snapshot produced by ResourceProcessor, in a format compatible with Gateway's `/configclient/` API.
 
-| 方法 | 路径 | 查询参数 | 说明 |
-|------|------|----------|------|
-| GET | `/configserver/{kind}/list` | 无 | 列出某 kind 的所有缓存资源 |
-| GET | `/configserver/{kind}` | `namespace`（可选）、`name`（必须） | 获取单个缓存资源。命名空间级资源需传 namespace |
+| Method | Path | Query parameters | Description |
+|--------|------|------------------|-------------|
+| GET | `/configserver/{kind}/list` | none | List all cached resources of a kind |
+| GET | `/configserver/{kind}` | `namespace` (optional), `name` (required) | Get a single cached resource. Namespaced resources require namespace |
 
-响应格式示例：
+Response format examples:
 
 ```json
-// 列表响应
+// list response
 {"success": true, "data": [...], "count": 5}
 
-// 单资源响应
+// single-resource response
 {"success": true, "data": {"metadata": {...}, "spec": {...}}}
 
-// 错误响应
+// error response
 {"success": false, "error": "HTTPRoute not found"}
 ```
 
-### ACME 服务
+### ACME Service
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/v1/services/acme/{namespace}/{name}/trigger` | 手动触发指定 ACME 资源的证书签发/续期。重置重试计数器并重新评估资源 |
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/services/acme/{namespace}/{name}/trigger` | Manually trigger issuance/renewal for the specified ACME resource. Resets the retry counter and re-evaluates the resource |
 
-## Health 与 Readiness 语义
+## Health and Readiness Semantics
 
-| 探测 | 端点 | 语义 | K8s 用途 |
-|------|------|------|----------|
-| Liveness | `/health` | 进程存活即返回 200 | `livenessProbe` — 失败则重启 Pod |
-| Readiness | `/ready` | ConfigSyncServer 初始化完成且所有 Processor 就绪后返回 200 | `readinessProbe` — 未就绪时从 Service 端点摘除 |
+| Probe | Endpoint | Semantics | K8s usage |
+|-------|----------|-----------|-----------|
+| Liveness | `/health` | Returns 200 as long as the process is alive | `livenessProbe` — failing causes the Pod to restart |
+| Readiness | `/ready` | Returns 200 after ConfigSyncServer initialization is complete and all Processors are ready | `readinessProbe` — when not ready, the pod is removed from the Service endpoints |
 
-Readiness 的判定通过 `AdminState::is_ready()` -> `ConfMgr::is_ready()` -> `ConfCenter::is_ready()`，最终检查 ConfigSyncServer 是否已创建。
+Readiness is determined via `AdminState::is_ready()` -> `ConfMgr::is_ready()` -> `ConfCenter::is_ready()`, ultimately checking whether ConfigSyncServer has been created.
 
-## 与 edgion-cli 的交互
+## Interaction with edgion-cli
 
-edgion-cli 支持三种 `--target` 模式，对应不同端点：
+edgion-cli supports three `--target` modes that map to different endpoints:
 
-| target 模式 | 访问端点 | 数据源 | 说明 |
-|-------------|----------|--------|------|
-| `center` | `/api/v1/namespaced/...` 和 `/api/v1/cluster/...` | ConfCenter 存储层 | 查看/修改原始配置 |
-| `server` | `/configserver/...` | ConfigSyncServer 缓存 | 查看处理后的配置快照（与 Gateway 看到的一致） |
-| `client` | Gateway 的 `/configclient/...` | Gateway 本地缓存 | 查看 Gateway 实际使用的配置 |
+| target mode | Endpoints | Data source | Description |
+|-------------|-----------|-------------|-------------|
+| `center` | `/api/v1/namespaced/...` and `/api/v1/cluster/...` | ConfCenter storage layer | View/modify the original configuration |
+| `server` | `/configserver/...` | ConfigSyncServer cache | View processed configuration snapshots (matches what Gateway sees) |
+| `client` | Gateway's `/configclient/...` | Gateway local cache | View the configuration actually used by Gateway |
 
-这三层视图帮助运维人员定位配置同步链路上的问题：存储层有但缓存没有说明 Processor 处理异常；缓存有但 Gateway 没有说明 gRPC 同步异常。
+These three views help operators locate problems on the configuration sync pipeline: present in storage but missing from the cache means the Processor is failing; present in the cache but missing from Gateway means gRPC sync is failing.
 
-## 错误映射
+## Error Mapping
 
-`ConfWriterError` 到 HTTP 状态码的映射：
+Mapping from `ConfWriterError` to HTTP status codes:
 
-| ConfWriterError 变体 | HTTP 状态码 |
-|---------------------|-------------|
+| ConfWriterError variant | HTTP status |
+|-------------------------|-------------|
 | `NotFound` | 404 Not Found |
 | `AlreadyExists` | 409 Conflict |
 | `ValidationError` | 400 Bad Request |
@@ -160,69 +160,66 @@ edgion-cli 支持三种 `--target` 模式，对应不同端点：
 | `KubeError` | 500 Internal Server Error |
 | `InternalError` | 500 Internal Server Error |
 
-## 认证系统
+## Authentication System
 
-Admin API 集成了统一认证中间件，支持 OIDC 和本地 JWT 两种模式。
+The Admin API integrates a unified authentication middleware that supports OIDC and local JWT modes.
 
-### 认证中间件（unified_auth）
+### Authentication Middleware (unified_auth)
 
-模块位置：`src/core/common/unified_auth/mod.rs`
+Module location: `src/core/common/unified_auth/mod.rs`
 
-请求认证处理顺序：
+Request authentication order:
 
-1. 命中 `skip_paths`（默认 `/health`、`/ready`）→ 直接放行
-2. 公开认证端点（`/api/v1/auth/*`）→ 直接放行
-3. 尝试 OIDC Bearer token 验证（需配置 `[auth]`）
-4. 尝试本地 JWT（HS256）Bearer token 验证
-5. 尝试从 httpOnly Cookie 读取 token → 同上验证
-6. 均失败 → 返回 `401 Unauthorized`
+1. Match against `skip_paths` (defaults: `/health`, `/ready`) → pass through directly
+2. Public auth endpoints (`/api/v1/auth/*`) → pass through directly
+3. Try OIDC Bearer token validation (requires `[auth]` to be configured)
+4. Try local JWT (HS256) Bearer token validation
+5. Try reading the token from the httpOnly Cookie → validate as above
+6. All fail → return `401 Unauthorized`
 
-### 认证端点
+### Authentication Endpoints
 
-| 方法 | 路径 | 认证 | 说明 |
-|------|------|------|------|
-| POST | `/api/v1/auth/login` | 无需 | 用户名/密码登录；响应 body 含 token，同时设置 httpOnly Cookie |
-| POST | `/api/v1/auth/logout` | 无需 | 清除 httpOnly Cookie |
-| GET | `/api/v1/auth/status` | 无需（公开） | 返回当前认证模式（local/oidc/disabled） |
-| GET | `/api/v1/auth/me` | 需认证 | 返回当前登录用户信息 |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/v1/auth/login` | not required | Username/password login; the response body contains the token, and an httpOnly Cookie is also set |
+| POST | `/api/v1/auth/logout` | not required | Clear the httpOnly Cookie |
+| GET | `/api/v1/auth/status` | not required (public) | Return the current auth mode (local/oidc/disabled) |
+| GET | `/api/v1/auth/me` | required | Return the currently logged-in user info |
 
 ### httpOnly Cookie
 
-登录成功后，响应会 Set-Cookie 携带 httpOnly JWT Cookie，浏览器后续请求自动附带，无需手动管理 token。适合前端 Dashboard 使用。
+After a successful login, the response sets an httpOnly JWT Cookie. Browsers automatically attach it on subsequent requests, so the front end does not need to manage tokens manually. This is suitable for the Dashboard front end.
 
-### 自动生成凭据（仅 Controller）
+### Auto-generated Credentials (Controller only)
 
-当 Controller 的 TOML/YAML 中无 `[auth]`（OIDC）且无 `[local_auth]` 配置时：
+When the Controller's TOML/YAML has neither `[auth]` (OIDC) nor `[local_auth]` configured:
 
-1. Controller 启动时通过 CenterApi 检查 Secret `edgion-admin-credentials`（namespace: `edgion-system`）
-2. 不存在 → 生成随机 20 位密码 + 32 位 JWT secret → 创建 Secret
-3. 已存在 → 读取凭据继续启动
-4. FileSystem 模式存储位置：`{conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
-5. K8s 模式：通过 K8s API 创建真正的 Secret
-6. `secret_retry_loop` 在 Secret 延迟就绪时用 `tokio_util::sync::CancellationToken`
-   监听关停（不是 `broadcast::Receiver<()>`），避免 sender 提前 drop 导致轮询立刻退出
-   （fix #01 round 3 回归点）
+1. At startup, the Controller checks the Secret `edgion-admin-credentials` (namespace: `edgion-system`) via CenterApi
+2. If absent → generate a 20-character random password + 32-character JWT secret → create the Secret
+3. If present → read the credentials and continue starting up
+4. FileSystem mode storage location: `{conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
+5. K8s mode: creates a real Secret via the K8s API
+6. `secret_retry_loop` uses a `tokio_util::sync::CancellationToken` to listen for shutdown when the Secret is delayed in becoming ready (instead of `broadcast::Receiver<()>`), avoiding the case where the sender is dropped early and the polling exits immediately (fix #01 round 3 regression point)
 
-> **注意**：Center 没有此自动生成路径。无 `[local_auth]` + 无 `[auth]` 时 Center 启动，
-> 但所有业务路由返回 503。详见 `skills/02-features/02-config/03-auth-bootstrap.md`。
+> **Note**: Center has no auto-generation path. With neither `[local_auth]` nor `[auth]`, Center starts but all business routes return 503. See `skills/02-features/02-config/03-auth-bootstrap.md` for details.
 
-### 模块位置
+### Module Locations
 
-| 模块 | 路径 |
-|------|------|
-| 本地认证（config/handlers/middleware/secret） | `src/core/common/local_auth/` |
-| 统一认证中间件（OIDC + local） | `src/core/common/unified_auth/mod.rs` |
+| Module | Path |
+|--------|------|
+| Local auth (config/handlers/middleware/secret) | `src/core/common/local_auth/` |
+| Unified auth middleware (OIDC + local) | `src/core/common/unified_auth/mod.rs` |
 
-## 启动方式
+## Startup Modes
 
-Admin API 支持两种启动模式：
+The Admin API supports two startup modes:
 
 ```rust
-// 普通启动
+// regular startup
 api::serve(conf_mgr, schema_validator, addr).await?;
 
-// 带优雅关闭
+// startup with graceful shutdown
 api::serve_with_shutdown(conf_mgr, schema_validator, addr, shutdown_signal).await?;
 ```
 
-`serve_with_shutdown` 使用 Axum 的 `with_graceful_shutdown`，在收到关闭信号后停止接受新连接并等待已有请求完成。
+`serve_with_shutdown` uses Axum's `with_graceful_shutdown` to stop accepting new connections after a shutdown signal is received and wait for in-flight requests to complete.

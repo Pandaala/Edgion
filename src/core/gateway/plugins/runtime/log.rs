@@ -155,7 +155,7 @@ impl PluginLog {
     /// `"token refresh fail"`), not `"<plugin>:<event>"`.
     ///
     /// Format spec + examples: `skills/03-coding/observability/00-access-log.md`
-    /// (section "错误条目 API 约束"). Safety rationale: `skills/03-coding/01-log-safety.md`.
+    /// (section "Error entry API constraints"). Safety rationale: `skills/03-coding/01-log-safety.md`.
     #[inline]
     pub fn push_err(&mut self, kind: &'static str) -> bool {
         let result = self.log.get_or_insert_with(LogBuffer::new).push_err(kind);

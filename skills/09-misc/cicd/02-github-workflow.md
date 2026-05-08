@@ -4,14 +4,14 @@ description: Use when changing GitHub Actions CI, release tags, Docker image pub
 ---
 # GitHub Workflow
 
-用于回答这些问题：
+Use this skill to answer:
 
-- GitHub CI 现在到底跑了哪些 job、命令和缓存
-- tag 发布后 Docker 镜像是怎么分架构构建并合并 manifest 的
-- `setup-rust` 本地 action 该怎么改，才不会让 `ci.yml` 和 `build-image.yml` 一起坏掉
-- 本地要如何尽量复现 CI / release 构建路径
+- Which jobs, commands, and caches GitHub CI currently runs
+- After a tag is published, how Docker images are built per architecture and merged into a manifest
+- How to modify the `setup-rust` local action without simultaneously breaking `ci.yml` and `build-image.yml`
+- How to reproduce the CI / release build path locally as closely as possible
 
-## 先读这些真实入口
+## Read these real entry points first
 
 - [../../../.github/workflows/ci.yml](../../../.github/workflows/ci.yml)
 - [../../../.github/workflows/build-image.yml](../../../.github/workflows/build-image.yml)
@@ -20,29 +20,29 @@ description: Use when changing GitHub Actions CI, release tags, Docker image pub
 - [00-local-build.md](00-local-build.md)
 - [01-docker-build.md](01-docker-build.md)
 
-## 当前 CI 流水线
+## Current CI pipeline
 
-`ci.yml` 在 `push` / `pull_request` 到 `main` 或 `master` 时触发，顺序是：
+`ci.yml` triggers on `push` / `pull_request` to `main` or `master`, in the following order:
 
 1. `check` -> `cargo check --all-targets`
 2. `fmt` -> `cargo fmt --all -- --check`
 3. `agent-docs` -> `make check-agent-docs`
 4. `clippy` -> `cargo clippy --all-targets`
 5. `test` -> `cargo test --all`
-6. `ci-success` -> 汇总前五个 job 的结果，给 branch protection 一个稳定检查点
+6. `ci-success` -> aggregates the results of the previous five jobs to provide a stable check for branch protection
 
-几个关键事实：
+Key facts:
 
-- `check`、`fmt`、`clippy`、`test` 四个 Rust job 都会先走本地 action [../../../.github/actions/setup-rust/action.yml](../../../.github/actions/setup-rust/action.yml)
-- `agent-docs` 只需要 checkout + `make check-agent-docs`，不依赖 Rust toolchain 初始化
-- `fmt` 不安装系统依赖，也不开 cargo cache；其他构建型 Rust job 会装依赖并开启 cache
-- 当前 CI 命令没有 `--all-features`，改命令前要先确认是否真的要扩大矩阵，而不是顺手把 CI 成本抬高
+- The four Rust jobs `check`, `fmt`, `clippy`, and `test` each run the local action [../../../.github/actions/setup-rust/action.yml](../../../.github/actions/setup-rust/action.yml) first
+- `agent-docs` only needs checkout + `make check-agent-docs`; it does not depend on Rust toolchain initialization
+- `fmt` does not install system dependencies and does not enable cargo cache; the other build-style Rust jobs install dependencies and enable cache
+- The current CI commands do not include `--all-features`; before changing this, confirm whether you really want to expand the matrix rather than casually inflate CI cost
 
-## `setup-rust` 本地 action 负责什么
+## What the local `setup-rust` action does
 
-这个 action 是 CI 和 release 共享的公共前置层，当前职责只有三件事：
+This action is the shared front layer used by both CI and release. It currently has only three responsibilities:
 
-1. 按需安装 Ubuntu 构建依赖：
+1. Install Ubuntu build dependencies on demand:
    - `build-essential`
    - `cmake`
    - `pkg-config`
@@ -50,70 +50,70 @@ description: Use when changing GitHub Actions CI, release tags, Docker image pub
    - `libssl-dev`
    - `libclang-dev`
    - `clang`
-2. 恢复 / 保存 Cargo cache
-3. 安装 rustup toolchain、可选 component、可选 target
+2. Restore / save the Cargo cache
+3. Install the rustup toolchain, optional components, and optional targets
 
-如果你改它，要把它当成“共享基础设施”而不是某个 job 的私有脚本：
+When changing it, treat it as "shared infrastructure", not as a private script for some single job:
 
-- 改缓存路径或 key 时，要同时考虑 `ci.yml` 和 `build-image.yml`
-- 改依赖列表时，要核对 [../../../build.rs](../../../build.rs) 和 Docker builder 依赖是否仍然一致
-- 改 toolchain/component/target 输入时，要保证 `fmt`、`clippy`、交叉编译都还能表达
+- When changing the cache path or key, consider both `ci.yml` and `build-image.yml`
+- When changing the dependency list, verify [../../../build.rs](../../../build.rs) and the Docker builder dependencies remain consistent
+- When changing the toolchain/component/target inputs, ensure `fmt`, `clippy`, and cross-compilation can still express what they need
 
-## 当前 release 工作流
+## Current release workflow
 
-`build-image.yml` 在 push tag `v*` 时触发，分成 4 段：
+`build-image.yml` triggers on pushing tag `v*` and is split into 4 stages:
 
 1. `prepare-cargo-cache`
    - checkout
-   - 调用 `setup-rust`
-   - 只缓存 `~/.cargo/registry` 和 `~/.cargo/git`
+   - call `setup-rust`
+   - cache only `~/.cargo/registry` and `~/.cargo/git`
    - `cargo fetch`
 
 2. `build-binaries`
-   - `amd64` / `arm64` 矩阵
-   - arm64 额外安装 `gcc-aarch64-linux-gnu` / `g++-aarch64-linux-gnu`
-   - 构建三个二进制：
+   - `amd64` / `arm64` matrix
+   - arm64 additionally installs `gcc-aarch64-linux-gnu` / `g++-aarch64-linux-gnu`
+   - Builds three binaries:
      - `edgion-gateway`
      - `edgion-controller`
      - `edgion-cli`
-   - 上传产物 `edgion-binaries-<arch>`
+   - Uploads the artifact `edgion-binaries-<arch>`
 
 3. `build-and-push-images`
-   - 下载上一阶段的二进制产物
-   - 用 [../../../docker/Dockerfile.runtime](../../../docker/Dockerfile.runtime) 打 runtime 镜像
-   - 逐架构 push：
+   - Downloads the binaries from the previous stage
+   - Builds runtime images using [../../../docker/Dockerfile.runtime](../../../docker/Dockerfile.runtime)
+   - Pushes per architecture:
      - `pandaala/edgion-gateway:<tag>_amd64`
      - `pandaala/edgion-gateway:<tag>_arm64`
      - `pandaala/edgion-controller:<tag>_amd64`
      - `pandaala/edgion-controller:<tag>_arm64`
 
 4. `merge-manifests`
-   - 从 `refs/tags/vX.Y.Z` 提取：
-     - 完整版本 `X.Y.Z`
+   - Extracts from `refs/tags/vX.Y.Z`:
+     - Full version `X.Y.Z`
      - minor `X.Y`
      - major `X`
-   - 合并 manifest，最终生成：
+   - Merges the manifest, ultimately producing:
      - `:<full>`
      - `:<minor>`
      - `:<major>`
      - `:latest`
 
-## 发布 GitHub Release
+## Publishing a GitHub Release
 
-**发布步骤：**
+**Publishing steps:**
 
-1. 写好 `releases/<tag>.md`（如 `releases/v0.2.0.md`），commit 进仓库
-2. 推 tag → workflow 自动在镜像推完后创建 Release，body 取自该文件
+1. Write `releases/<tag>.md` (e.g. `releases/v0.2.0.md`) and commit it to the repo
+2. Push the tag → after the workflow finishes pushing images, it automatically creates a Release whose body is taken from that file
 
-**文件格式：** 纯 Markdown，按 `## Features` / `## Bug Fixes` 等分节，末尾加引流链接到 README。
+**File format:** plain Markdown, divided into sections such as `## Features` / `## Bug Fixes`, with a link at the end pointing to the README.
 
-**含 `-` 的 tag**（如 `v0.2.0-beta`）自动标为 pre-release。
+**Tags containing `-`** (e.g. `v0.2.0-beta`) are automatically marked as pre-release.
 
-> 历史发布说明存于 `releases/` 目录，文件名即 tag 名。
+> Historical release notes live in the `releases/` directory; the filename is the tag name.
 
-## 本地复现命令
+## Local reproduction commands
 
-### 复现 CI 检查
+### Reproduce CI checks
 
 ```bash
 cargo check --all-targets
@@ -123,7 +123,7 @@ cargo clippy --all-targets
 cargo test --all
 ```
 
-### 复现 release 二进制构建
+### Reproduce the release binary builds
 
 ```bash
 # amd64
@@ -136,7 +136,7 @@ cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-
   --target aarch64-unknown-linux-gnu
 ```
 
-### 复现 runtime 镜像封装
+### Reproduce the runtime image packaging
 
 ```bash
 docker build \
@@ -146,24 +146,24 @@ docker build \
   -t edgion-gateway:local .
 ```
 
-## 高风险改动点
+## High-risk change points
 
-- 改 `.github/workflows/*.yml` 时，先确认本地 action 的输入还够用
-- 改 tag 命名规则时，连带检查 `merge-manifests` 的版本提取逻辑
-- 改二进制名、产物路径或 target triple 时，连带检查 artifact upload/download 和 `Dockerfile.runtime`
-- 改 `cache-key-prefix` 或缓存路径时，避免不同 job 互相污染或完全失去复用
-- 改 CI 命令时，优先说明是“对齐本地常用命令”还是“扩大 CI 覆盖范围”
+- When changing `.github/workflows/*.yml`, first confirm whether the local action's inputs are still sufficient
+- When changing tag naming rules, also check the version-extraction logic in `merge-manifests`
+- When changing binary names, artifact paths, or target triples, also check artifact upload/download and `Dockerfile.runtime`
+- When changing `cache-key-prefix` or cache paths, avoid different jobs polluting each other or fully losing reuse
+- When changing CI commands, prioritize stating whether it is "aligning with common local commands" or "expanding CI coverage"
 
-## 审查清单
+## Review checklist
 
-- workflow 触发条件和分支 / tag 规则是否仍然正确
-- 本地 action 路径是否是 `./.github/actions/setup-rust`
-- `agent-docs` job 是否仍覆盖 `AGENTS.md` / `skills/` / `docs` 入口层
-- `fmt` / `clippy` job 是否仍只装它们真正需要的东西
-- release 是否仍只发布 `gateway` / `controller` 两个 runtime 镜像
-- 版本 tag、镜像 tag、manifest tag 是否保持一致
+- Are the workflow trigger conditions and branch / tag rules still correct
+- Is the local action path still `./.github/actions/setup-rust`
+- Does the `agent-docs` job still cover the entry layers `AGENTS.md` / `skills/` / `docs`
+- Do the `fmt` / `clippy` jobs still install only what they actually need
+- Does release still publish only the `gateway` / `controller` runtime images
+- Are version tag, image tag, and manifest tag still consistent
 
-## 相关
+## Related
 
 - [00-local-build.md](00-local-build.md)
 - [01-docker-build.md](01-docker-build.md)

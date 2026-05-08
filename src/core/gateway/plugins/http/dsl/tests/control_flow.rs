@@ -69,7 +69,7 @@ fn test_if_else_false_branch() {
 #[test]
 fn test_break_stops_loop() {
     let mut session = MockPluginSession::new();
-    // i=0,1,2 执行 set_header; i==3 时 break → 3 次调用
+    // i=0,1,2 execute set_header; break when i==3 -> 3 calls
     session.expect_set_request_header().times(3).returning(|_, _| Ok(()));
     let result = run(
         "let mut i = 0\nwhile i < 10 {\nif i == 3 { break }\nreq.set_header(\"X-Log\", to_str(i))\ni = i + 1\n}",
@@ -81,7 +81,7 @@ fn test_break_stops_loop() {
 #[test]
 fn test_continue_skips_iteration() {
     let mut session = MockPluginSession::new();
-    // i=0,2,4 执行; i=1,3 被 continue 跳过 → 3 次调用
+    // i=0,2,4 execute; i=1,3 are skipped by continue -> 3 calls
     session.expect_set_request_header().times(3).returning(|_, _| Ok(()));
     let result = run(
         "for i in range(0, 5) {\nif i == 1 { continue }\nif i == 3 { continue }\nreq.set_header(\"X-Log\", to_str(i))\n}",
@@ -93,7 +93,7 @@ fn test_continue_skips_iteration() {
 #[test]
 fn test_break_in_for_range() {
     let mut session = MockPluginSession::new();
-    // i=0,1,2 → i==3 break → 3 次
+    // i=0,1,2 -> i==3 break -> 3 iterations
     session.expect_set_request_header().times(3).returning(|_, _| Ok(()));
     let result = run(
         "for i in range(0, 10) {\nif i == 3 { break }\nreq.set_header(\"X-Log\", to_str(i))\n}",
@@ -125,7 +125,7 @@ fn test_break_in_for_in() {
 #[test]
 fn test_nested_while_break() {
     let mut session = MockPluginSession::new();
-    // outer 执行 3 次，inner 每次立即 break → 3 次 set_header
+    // outer runs 3 times; inner breaks immediately each time -> 3 set_header calls
     session.expect_set_request_header().times(3).returning(|_, _| Ok(()));
     let result = run(
         "let mut i = 0\nwhile i < 3 {\nlet mut j = 0\nwhile j < 5 {\nreq.set_header(\"X-Inner\", \"hit\")\nbreak\n}\ni = i + 1\n}",

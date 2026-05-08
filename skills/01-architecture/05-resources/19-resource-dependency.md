@@ -1,64 +1,64 @@
 ---
 name: resource-dependency
-description: 资源间依赖关系速查：spec 引用、Controller 内 Store 查询、requeue 级联。
+description: Quick reference for inter-resource dependencies — spec references, Controller-side Store queries, requeue cascades.
 ---
 
-# 资源间依赖关系
+# Inter-resource dependencies
 
-> 详细分析（规划中，尚未创建）：`tasks/references/resource-dependency-map.md`
+> Detailed analysis (planned, not yet created): `tasks/references/resource-dependency-map.md`
 
-## 依赖关系索引图
+## Dependency relationship index
 
 ```mermaid
 flowchart LR
-    subgraph Secret依赖
-        Secret -- "on_change requeue\nSecretRefManager 登记方" --> Gateway
-        Secret -- "certificateRef\nsecretRef / 凭据" --> EdgionTls
+    subgraph SecretDeps
+        Secret -- "on_change requeue\nSecretRefManager registrants" --> Gateway
+        Secret -- "certificateRef\nsecretRef / credentials" --> EdgionTls
         Secret --> EdgionPlugins
         Secret --> BackendTLSPolicy
         Secret --> EdgionAcme
     end
 
-    subgraph ConfigMap依赖
-        ConfigMap -- "on_change requeue\nSecretRefManager 登记方" --> Gateway2[Gateway]
+    subgraph ConfigMapDeps
+        ConfigMap -- "on_change requeue\nSecretRefManager registrants" --> Gateway2[Gateway]
         ConfigMap -- "frontend CA\nbackend CA" --> BackendTLSPolicy2[BackendTLSPolicy]
     end
 
-    subgraph Service依赖
-        Service -- "on_change requeue\nServiceRefManager 登记方" --> Routes["各类 Route\n（HTTP/GRPC/TCP/TLS/UDP）"]
-        Service -- "backendRef\nclusterIP" --> Gateway3["Gateway\n（推导 status 地址）"]
+    subgraph ServiceDeps
+        Service -- "on_change requeue\nServiceRefManager registrants" --> Routes["Route family\n(HTTP/GRPC/TCP/TLS/UDP)"]
+        Service -- "backendRef\nclusterIP" --> Gateway3["Gateway\n(derives status address)"]
     end
 
-    subgraph ReferenceGrant依赖
-        ReferenceGrant -- "on_change requeue\n跨 ns 引用方" --> Gateway4["Gateway\n（跨 ns Secret/CA）"]
-        ReferenceGrant -- "跨 ns 权限校验" --> Routes2["各类 Route\n（跨 ns backendRef）"]
+    subgraph ReferenceGrantDeps
+        ReferenceGrant -- "on_change requeue\ncross-ns referrers" --> Gateway4["Gateway\n(cross-ns Secret/CA)"]
+        ReferenceGrant -- "cross-ns authorization check" --> Routes2["Route family\n(cross-ns backendRef)"]
     end
 
-    subgraph Namespace依赖
-        Namespace -- "label 变更 requeue\nSelector Gateway" --> Routes3["各类 Route\n（listener 是否允许该 namespace）"]
+    subgraph NamespaceDeps
+        Namespace -- "label-change requeue\nSelector Gateway" --> Routes3["Route family\n(does the listener allow this namespace)"]
     end
 
-    subgraph Gateway依赖
-        GW[Gateway] -- "on_change requeue\ngateway_route_index" --> Routes4["各类 Route\n（验证 listener 匹配）"]
+    subgraph GatewayDeps
+        GW[Gateway] -- "on_change requeue\ngateway_route_index" --> Routes4["Route family\n(verifies listener match)"]
         GW -- "parentRef" --> EdgionTls2[EdgionTls]
         Routes4 -- "on_change requeue" --> GW
     end
 ```
 
-## Store 与写入/读取方
+## Stores: writers and readers
 
-| Store | 写入方 | 读取方 |
+| Store | Writer | Reader |
 |-------|--------|--------|
-| **SecretStore** | SecretHandler | Gateway、EdgionTls、EdgionPlugins、BackendTLSPolicy、EdgionAcme |
-| **ConfigMapStore** | ConfigMapHandler | Gateway（frontend CA）、BackendTLSPolicy（backend CA） |
-| **NamespaceStore** | K8s Namespace informer | 各类 Route（allowedRoutes Selector） |
-| **ReferenceGrantStore** | ReferenceGrantHandler | Gateway、各类 Route（跨 ns 权限） |
-| **SecretRefManager** | Gateway/EdgionTls/EdgionPlugins/BackendTLSPolicy/EdgionAcme（parse 时注册） | SecretHandler/ConfigMapHandler���on_change 时查依赖方） |
-| **ServiceRefManager** | ��类 Route（parse 时注册 backend） | ServiceHandler（on_change 时查依赖方）、BackendTLSPolicy（resolve_ancestor_gateways 时读取） |
-| **CrossNsRefManager** | Gateway/各类 Route（parse 时注册跨 ns 引用） | ReferenceGrantHandler（on_change 时查依赖方） |
-| **GatewayRouteIndex** | 各类 Route/EdgionTls（on_change 时写入） | GatewayHandler（on_change 时查关联 Route）、BackendTLSPolicy（resolve_ancestor_gateways 时读取） |
-| **BackendTLSPolicyTargetManager** | BackendTLSPolicy（parse 时注册 targetRef） | BackendTLSPolicy（update_status 时冲突检测） |
+| **SecretStore** | SecretHandler | Gateway, EdgionTls, EdgionPlugins, BackendTLSPolicy, EdgionAcme |
+| **ConfigMapStore** | ConfigMapHandler | Gateway (frontend CA), BackendTLSPolicy (backend CA) |
+| **NamespaceStore** | K8s Namespace informer | Route family (allowedRoutes Selector) |
+| **ReferenceGrantStore** | ReferenceGrantHandler | Gateway, Route family (cross-ns authorization) |
+| **SecretRefManager** | Gateway/EdgionTls/EdgionPlugins/BackendTLSPolicy/EdgionAcme (register during parse) | SecretHandler/ConfigMapHandler (look up dependents on on_change) |
+| **ServiceRefManager** | Route family (register backends during parse) | ServiceHandler (look up dependents on on_change), BackendTLSPolicy (read in resolve_ancestor_gateways) |
+| **CrossNsRefManager** | Gateway / Route family (register cross-ns references during parse) | ReferenceGrantHandler (look up dependents on on_change) |
+| **GatewayRouteIndex** | Route family / EdgionTls (write on on_change) | GatewayHandler (look up associated Routes on on_change), BackendTLSPolicy (read in resolve_ancestor_gateways) |
+| **BackendTLSPolicyTargetManager** | BackendTLSPolicy (register targetRef during parse) | BackendTLSPolicy (conflict detection in update_status) |
 
-## 无外部依赖的资源
+## Resources without external dependencies
 
-EdgionGatewayConfig、EdgionStreamPlugins、LinkSys、PluginMetaData、Endpoints/EndpointSlice、Namespace
+EdgionGatewayConfig, EdgionStreamPlugins, LinkSys, PluginMetaData, Endpoints/EndpointSlice, Namespace

@@ -1,8 +1,8 @@
-// Scenario 注册表。新增 scenario 只需在此列表中添加一项。
+// Scenario registry. To add a new scenario, append a single entry to this list.
 
 use crate::dynamic::scenario::Scenario;
 
-/// 所有已注册的 dynamic scenarios。
+/// All registered dynamic scenarios.
 pub fn all() -> Vec<&'static Scenario> {
     vec![
         crate::dynamic::scenarios::gateway_dynamic::SCENARIO,
@@ -16,7 +16,7 @@ pub fn all() -> Vec<&'static Scenario> {
     ]
 }
 
-/// 按 id 查找 scenario。
+/// Look up a scenario by id.
 pub fn find(id: &str) -> Option<&'static Scenario> {
     all().into_iter().find(|s| s.id == id)
 }

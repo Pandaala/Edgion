@@ -272,3 +272,10 @@ coverage-clean: ## Remove llvm-cov profraw and coverage reports
 	rm -f target/llvm-cov-target/*.profraw
 	rm -f target/llvm-cov-target/Edgion-profraw-list target/llvm-cov-target/Edgion.profdata
 	rm -rf target/coverage
+
+# =============================================================================
+# De-sinicization guard
+# =============================================================================
+.PHONY: check-no-chinese
+check-no-chinese: ## Fail if Chinese characters appear under src/ or examples/
+	./scripts/check_no_chinese.sh

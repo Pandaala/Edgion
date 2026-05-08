@@ -1,55 +1,55 @@
-# OpenidConnect `useNonce` / `usePkce` 默认关闭：设计取舍 + 文档推荐
+# OpenidConnect `useNonce` / `usePkce` Default Off: Design Tradeoff + Doc Recommendation
 
-## 结论
+## Conclusion
 
-`openid_connect` 插件的 `use_nonce` 与 `use_pkce` 默认均为 `false`。**此为已评估的设计取舍**——OIDC 规范对授权码流定义二者为 OPTIONAL，主流网关实现一致。**不应**要求把默认改为 `true`；operator 应通过文档建议显式启用。
+The `openid_connect` plugin's `use_nonce` and `use_pkce` both default to `false`. **This is an already-evaluated design tradeoff** — the OIDC spec defines both as OPTIONAL for the authorization-code flow; mainstream gateway implementations are consistent. It **should not** require changing the default to `true`; the operator should be advised to enable them explicitly via documentation.
 
-## 原因
+## Reasons
 
-1. **OIDC 规范允许**：Core spec § 3.1.2.1 对授权码流 `nonce` 定义为 OPTIONAL；PKCE（RFC 7636）是独立推荐机制，非 MUST
-2. **网关行业默认一致**：
-   - Kong `oidc` plugin — 默认 off
-   - APISIX `openid-connect` — 默认 off
-   - Envoy `oauth2` filter — 不强制
-   - oauth2-proxy — 较新版本 PKCE 默认 on，nonce 仍 off
-   - Edgion 与主流实现行为对齐
-3. **Edgion 代码路径下主要威胁已被覆盖**：
-   - 使用授权码流 + **服务器侧 token exchange**（ID Token 不经过浏览器）
-   - `state` 校验（`openid_impl.rs`）挡住经典 CSRF
-   - nonce / PKCE 的作用是纵深防御（IdP 压缩/重放、多客户端 token 混用、公共客户端场景等）
-4. **改默认的破坏性**：
-   - nonce 默认 on → 非标准 / 老旧 IdP 可能不把 `nonce` 回写到 ID Token 的 `nonce` claim → callback 校验失败 → 现有部署登录断裂
-   - PKCE 默认 on → 不支持 PKCE 的 IdP（罕见但存在）会拒绝 `/authorize` 请求
+1. **Allowed by the OIDC spec**: Core spec § 3.1.2.1 defines `nonce` as OPTIONAL for the authorization-code flow; PKCE (RFC 7636) is a separate recommended mechanism, not a MUST
+2. **Gateway industry defaults are consistent**:
+   - Kong `oidc` plugin — default off
+   - APISIX `openid-connect` — default off
+   - Envoy `oauth2` filter — does not enforce
+   - oauth2-proxy — recent versions default PKCE on; nonce still off
+   - Edgion aligns with mainstream implementation behavior
+3. **Major threats are already covered along the Edgion code path**:
+   - Uses authorization-code flow + **server-side token exchange** (ID Token does not pass through the browser)
+   - `state` verification (`openid_impl.rs`) blocks classic CSRF
+   - The roles of nonce / PKCE are defense in depth (IdP compression/replay, multi-client token mixing, public-client scenarios, etc.)
+4. **Breaking impact of changing the default**:
+   - nonce default on → non-standard / older IdPs may not write `nonce` back into the ID Token's `nonce` claim → callback verification fails → existing deployments lose login
+   - PKCE default on → IdPs not supporting PKCE (rare but extant) reject the `/authorize` request
 
-## 判定规则
+## Decision Rule
 
-当 review / 审计报告出现以下模式时，按"设计取舍 + 已有文档建议"关闭：
+When a review/audit report contains the following patterns, close as "design tradeoff + already-existing doc recommendation":
 
-1. "OIDC nonce 默认关闭，不防 ID Token 重放注入"
-2. "use_nonce / use_pkce 默认应改为 true"
-3. "应强制启用 nonce / PKCE"
-4. "不启用 nonce 应在运行时 warn!"
+1. "OIDC nonce default off does not protect against ID Token replay injection"
+2. "use_nonce / use_pkce default should be true"
+3. "Should enforce nonce / PKCE"
+4. "Not enabling nonce should warn! at runtime"
 
-验证三点再关闭：
+Verify three points before closing:
 
-- `src/types/resources/edgion_plugins/plugin_configs/openid_connect.rs` 中 `use_nonce` / `use_pkce` 默认仍为 `false`
-- `src/core/gateway/plugins/http/openid_connect/openid_impl.rs` 实现分支仍正确：
-  - 开启时 `/authorize` 带 `nonce` 参数、state cookie 存 `nonce`、callback 校验 `nonce` claim
-  - 开启时 `/authorize` 带 `code_challenge`、token exchange 带 `code_verifier`
-- `docs/{zh-CN,en}/user-guide/edgion-plugins/openid-connect.md` 仍含"**安全开关推荐配置**" / "Recommended Security Switches" 小节，明确推荐生产 `useNonce: true` + `usePkce: true` 并说明原因
+- `use_nonce` / `use_pkce` in `src/types/resources/edgion_plugins/plugin_configs/openid_connect.rs` still default to `false`
+- The implementation branches in `src/core/gateway/plugins/http/openid_connect/openid_impl.rs` are still correct:
+  - When enabled, `/authorize` carries the `nonce` parameter, the state cookie stores `nonce`, and the callback verifies the `nonce` claim
+  - When enabled, `/authorize` carries `code_challenge`, and token exchange carries `code_verifier`
+- `docs/{zh-CN,en}/user-guide/edgion-plugins/openid-connect.md` still contains the "**Recommended Security Switches**" / "Recommended Security Switches" section, explicitly recommending `useNonce: true` + `usePkce: true` in production with reasons
 
-三点满足 → 设计取舍已有文档建议，指向 `tasks/security-audit/01-auth-plugins.md` 的 M8 FIXED（doc-only）决策，关闭。
+All three satisfied → design tradeoff with documented recommendation; point to the M8 FIXED (doc-only) decision in `tasks/security-audit/01-auth-plugins.md` and close.
 
-## 例外场景（需重评）
+## Exceptional Scenarios (need reassessment)
 
-- 行业默认变化：若 Kong / APISIX 等同类网关把 nonce / PKCE 默认改为 on → 重评是否跟随
-- OIDC 规范修订把 nonce 升级为 MUST（当前为 OPTIONAL）→ 必须改默认
-- Edgion 改用 implicit flow 或 hybrid flow（spec 要求 nonce MUST）→ 改默认
-- Edgion 支持"客户端提交 ID Token"模式（bypass 服务端 exchange）→ ID Token injection 立即成为直接攻击面，必须改默认
+- Industry default change: if peer gateways (Kong / APISIX) change the default of nonce / PKCE to on → reassess whether to follow
+- OIDC spec revision upgrades nonce to MUST (currently OPTIONAL) → must change default
+- Edgion switches to implicit flow or hybrid flow (spec requires nonce MUST) → change default
+- Edgion supports a "client submits ID Token" mode (bypassing server-side exchange) → ID Token injection becomes a direct attack surface immediately; must change default
 
-## 背景记录
+## Background Notes
 
-- 决策日期：2026-04-21
-- 决策来源：`tasks/security-audit/` M8 条目（Option B — doc-only）
-- 与 M4 同 modal：有具体缓解建议 → doc-only，不改代码默认
-- 与 M7 区别：M7 是 NOT-AN-ISSUE（无代码 / 无文档工作，完全关闭）；M8 有实质 operator 行动建议
+- Decision date: 2026-04-21
+- Decision source: `tasks/security-audit/` M8 entry (Option B — doc-only)
+- Same modal as M4: has specific mitigation recommendations → doc-only, do not change code defaults
+- Difference from M7: M7 is NOT-AN-ISSUE (no code / no documentation work, fully closed); M8 has substantive operator action recommendations

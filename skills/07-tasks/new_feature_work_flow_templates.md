@@ -1,177 +1,177 @@
 # New Feature Work Flow Templates
 
-用于 `new_feature_work_flow.skill` 的配套模板。主 workflow 只描述流程，本文件负责固定输出格式。
+Companion templates for `new_feature_work_flow.skill`. The main workflow only describes the process; this file fixes the output format.
 
-## 0. 需求摘要模板
+## 0. Requirement summary template
 
 ```markdown
-## 需求摘要
-- 要解决的问题：
-- 预期行为：
-- 明确不做：
+## Requirement summary
+- Problem to solve:
+- Expected behavior:
+- Explicitly out of scope:
 
-## 影响初判
-- 可能影响模块：
-- 关键风险：
-- 是否需要 tasks 文档：是 / 否
+## Initial impact assessment
+- Possibly affected modules:
+- Key risks:
+- Need a tasks document: yes / no
 
-## 相关 Skills
+## Related Skills
 - `skills/...`
 - `skills/...`
 ```
 
-## 1. 方案评估模板
+## 1. Solution-assessment template
 
 ```markdown
-## 方案评估
+## Solution assessment
 
-| 维度 | 方案 A | 方案 B |
+| Dimension | Option A | Option B |
 |------|--------|--------|
-| 修改难度 |  |  |
-| 影响范围 |  |  |
-| 安全性 |  |  |
-| 实现价值 |  |  |
-| 测试难度 |  |  |
-| 兼容性 |  |  |
-| 可回滚性 |  |  |
+| Change difficulty |  |  |
+| Impact scope |  |  |
+| Safety |  |  |
+| Implementation value |  |  |
+| Test difficulty |  |  |
+| Compatibility |  |  |
+| Rollback ability |  |  |
 
-### 方案 A（推荐）
-- 核心思路：
-- 修改点：
-- 优点：
-- 风险：
-- 测试要求：
+### Option A (recommended)
+- Core idea:
+- Change points:
+- Strengths:
+- Risks:
+- Test requirements:
 
-### 方案 B（备选）
-- 核心思路：
-- 不选原因：
+### Option B (alternative)
+- Core idea:
+- Reason for rejection:
 
-## 评估结论
-- 推荐方案：
-- 原因：
-- 待确认点：
-- 被放弃方案的主要原因：
+## Assessment conclusion
+- Recommended option:
+- Reason:
+- Open assumptions:
+- Main reasons rejected options were dropped:
 ```
 
-禁止遗漏：
+Must not omit:
 
-- 安全性
-- 兼容性
-- 待确认假设
+- Safety
+- Compatibility
+- Open assumptions
 
-## 2. 代码级设计模板
+## 2. Code-level design template
 
 ```markdown
-## 代码改动计划
+## Code change plan
 
-### 文件 1
-- 路径：
-- 修改内容：
-- 关键函数：
+### File 1
+- Path:
+- Change content:
+- Key functions:
 
-### 文件 2
-- 路径：
-- 修改内容：
+### File 2
+- Path:
+- Change content:
 
-## 数据流
-- 请求/配置从哪里进入
-- 在哪里转换
-- 在哪里消费
+## Data flow
+- Where the request/config enters
+- Where it is transformed
+- Where it is consumed
 
-## 测试设计
-- 单元测试：
-- 集成测试：
+## Test design
+- Unit tests:
+- Integration tests:
 
-## 风险与兼容
-- 兼容性处理：
-- 失败回滚点：
+## Risks and compatibility
+- Compatibility handling:
+- Failure rollback points:
 ```
 
-设计最小要求：
+Minimum design requirements:
 
-- 每个会改动的文件都列职责
-- 每个新增行为至少对应一个测试点
-- 若涉及配置、注解、Schema、资源字段，要标对应来源文档
+- Every file to be changed lists its responsibility
+- Every new behavior is matched by at least one test point
+- For configuration, annotation, Schema, or resource-field changes, mark the corresponding source document
 
-## 3. 设计修订结论模板
+## 3. Design-revision conclusion template
 
 ```markdown
-## 设计修订结论
-- 已采纳：
-- 未采纳：
-- 原因：
+## Design revision conclusion
+- Adopted:
+- Not adopted:
+- Reason:
 ```
 
-## 4. 实现结果模板
+## 4. Implementation-result template
 
 ```markdown
 ## Implementation Result
-- 修改文件：
-- 核心实现：
-- 补充测试：
-- 遇到的问题：
+- Modified files:
+- Core implementation:
+- Tests added:
+- Issues encountered:
 ```
 
-## 5. 代码 review 收敛模板
+## 5. Code-review convergence template
 
 ```markdown
 ## Code Review Resolution
-- Must Fix 已修复：
-- Should Fix 未修复：
-- 原因：
-- Acceptable Risk：
+- Must Fix resolved:
+- Should Fix not resolved:
+- Reason:
+- Acceptable Risk:
 ```
 
-## 6. 测试覆盖分析模板
+## 6. Test-coverage analysis template
 
 ```markdown
-## 测试覆盖分析
+## Test coverage analysis
 
-| 变更点 | 现有单测 | 新增单测 | 现有集成 | 新增集成 | 剩余风险 |
+| Change point | Existing unit tests | Added unit tests | Existing integration | Added integration | Residual risk |
 |--------|----------|----------|----------|----------|----------|
 
-## 测试补充结论
-- 必须补的已补：
-- 暂不补的原因：
+## Test reinforcement conclusion
+- Must-add tests added:
+- Reason for items intentionally not added:
 ```
 
-## 7. 测试执行记录模板
+## 7. Test-execution record template
 
 ```markdown
-## 测试执行记录
+## Test execution record
 
-| 命令 | 结果 | 说明 |
+| Command | Result | Notes |
 |------|------|------|
 | `cargo fmt --all -- --check` | pass/fail |  |
 | `cargo clippy --all-targets` | pass/fail |  |
 | `cargo test --all` | pass/fail |  |
 | `./examples/test/scripts/integration/run_integration.sh --no-prepare -r ... -i ...` | pass/fail |  |
 
-## 失败归因
-- 本次改动：
-- 环境问题：
-- 已有失败：
+## Failure attribution
+- This change:
+- Environment issue:
+- Pre-existing failure:
 ```
 
-## 8. 完成总结模板
+## 8. Wrap-up summary template
 
 ```markdown
-## 完成总结
-- 方案：
-- 核心改动：
-- 关键修订：
-- 测试：
-- 风险：
-- 后续建议：
+## Wrap-up summary
+- Solution:
+- Core changes:
+- Key revisions:
+- Tests:
+- Risks:
+- Follow-ups:
 ```
 
-## 失败记录模板
+## Failure-record template
 
 ```markdown
-## 当前阻塞
-- 阶段：
-- 现象：
-- 根因判断：
-- 已做尝试：
-- 下一步动作：
+## Current blocker
+- Phase:
+- Symptom:
+- Root-cause assessment:
+- Attempts made:
+- Next action:
 ```

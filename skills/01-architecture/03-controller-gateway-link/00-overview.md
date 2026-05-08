@@ -1,15 +1,15 @@
 ---
 name: link-overview
-description: Controller↔Gateway gRPC 同步协议：Proto 定义、同步流程、版本追踪、资源变更事件、模块分布。
+description: Controller↔Gateway gRPC sync protocol — Proto definitions, sync flow, version tracking, resource change events, module distribution.
 ---
 
-# 同步协议总览
+# Sync protocol overview
 
-Controller 和 Gateway 通过 `ConfigSync` gRPC 服务实现配置同步。Gateway 启动后作为客户端连接 Controller，先获取服务器信息，再对每种资源执行 List（全量）+ Watch（增量）同步。
+Controller and Gateway sync configuration via the `ConfigSync` gRPC service. After startup, Gateway acts as the client and connects to Controller; it first fetches server info, then performs List (full) + Watch (incremental) sync for each resource kind.
 
-## Proto 定义
+## Proto definition
 
-Proto 文件位于 `src/core/common/conf_sync/proto/config_sync.proto`：
+The proto file lives at `src/core/common/conf_sync/proto/config_sync.proto`:
 
 ```protobuf
 service ConfigSync {
@@ -20,134 +20,134 @@ service ConfigSync {
 }
 ```
 
-### 4 个 RPC 方法
+### 4 RPC methods
 
-| RPC | 方向 | 说明 |
+| RPC | Direction | Description |
 |-----|------|------|
-| **GetServerInfo** | 一元 | 返回 `server_id`、`supported_kinds` 列表 |
-| **List** | 一元 | 按 kind 获取全量资源快照，返回 JSON 数据 + `sync_version` + `server_id` |
-| **Watch** | 服务端流 | 按 kind 持续接收增量变更事件，携带 `from_version` 实现续接 |
-| **WatchServerMeta** | 服务端流 | 接收服务器元数据变更（`gateway_instance_count`），用于集群级感知 |
+| **GetServerInfo** | Unary | Returns `server_id` and the `supported_kinds` list |
+| **List** | Unary | Fetches a full snapshot of resources for a kind, returns JSON data + `sync_version` + `server_id` |
+| **Watch** | Server stream | Continuously receives incremental change events for a kind, carries `from_version` to support resumption |
+| **WatchServerMeta** | Server stream | Receives server metadata changes (`gateway_instance_count`) for cluster-level awareness |
 
-### 关键消息字段
+### Key message fields
 
-| 消息 | 关键字段 |
+| Message | Key fields |
 |------|---------|
-| `ListRequest` | `kind`、`expected_server_id` |
-| `ListResponse` | `data`（JSON）、`sync_version`、`server_id` |
-| `WatchRequest` | `kind`、`client_id`、`client_name`、`from_version`、`expected_server_id` |
-| `WatchResponse` | `data`（JSON）、`sync_version`、`err`、`server_id` |
-| `ServerInfoResponse` | `server_id`、`supported_kinds` |
-| `ServerMetaEvent` | `server_id`、`gateway_instance_count`、`timestamp` |
+| `ListRequest` | `kind`, `expected_server_id` |
+| `ListResponse` | `data` (JSON), `sync_version`, `server_id` |
+| `WatchRequest` | `kind`, `client_id`, `client_name`, `from_version`, `expected_server_id` |
+| `WatchResponse` | `data` (JSON), `sync_version`, `err`, `server_id` |
+| `ServerInfoResponse` | `server_id`, `supported_kinds` |
+| `ServerMetaEvent` | `server_id`, `gateway_instance_count`, `timestamp` |
 
-## 同步流程
+## Sync flow
 
-### Gateway 启动同步
-
-```
-Gateway 启动:
-  1. GetServerInfo() → 获取 server_id, supported_kinds
-  2. 对每种 kind: List(kind) → 全量快照（InitStart → InitAdd × N → InitDone）
-  3. 对每种 kind: Watch(kind, from_version) → 持续接收增量变更
-```
-
-Gateway 通过 `supported_kinds` 确定需要同步哪些资源类型，然后逐一发起 List 和 Watch 调用。List 返回的 `sync_version` 作为 Watch 的 `from_version`，实现无缝衔接。
-
-### Controller 重载流程
+### Gateway startup sync
 
 ```
-Controller 重载（reload）:
-  1. Controller 生成新的 server_id
-  2. Watch 流发送 WATCH_ERR_SERVER_RELOAD 错误
-  3. Gateway 检测到 server_id 变化
-  4. Gateway 对所有 kind 重新执行 List（全量重同步）
+Gateway startup:
+  1. GetServerInfo() → fetch server_id, supported_kinds
+  2. For each kind: List(kind) → full snapshot (InitStart → InitAdd × N → InitDone)
+  3. For each kind: Watch(kind, from_version) → continuously receive incremental changes
 ```
 
-当 Controller 执行 reload 操作（如 K8s 模式下重新连接 API Server）时，会生成新的 `server_id` 并通过 Watch 流通知所有 Gateway 实例。Gateway 收到错误后触发全量 relist，确保配置一致性。
+Gateway uses `supported_kinds` to determine which resource types to sync, then issues List and Watch calls one by one. The `sync_version` returned by List is used as the `from_version` for Watch, providing seamless continuation.
 
-### server_id 不匹配检测
+### Controller reload flow
 
-List 和 Watch 请求均携带 `expected_server_id`。如果 Gateway 发送的 `expected_server_id` 与 Controller 当前 `server_id` 不一致，Controller 返回 `WATCH_ERR_SERVER_ID_MISMATCH` 错误，Gateway 将重新获取 ServerInfo 并执行全量同步。
+```
+Controller reload:
+  1. Controller generates a new server_id
+  2. Watch stream sends a WATCH_ERR_SERVER_RELOAD error
+  3. Gateway detects the server_id change
+  4. Gateway re-runs List for all kinds (full re-sync)
+```
 
-## 版本追踪
+When Controller performs a reload (for example, reconnecting to the K8s API Server in K8s mode), it generates a new `server_id` and notifies all Gateway instances via the Watch stream. After receiving the error, Gateway triggers a full relist to ensure configuration consistency.
 
-| 概念 | 类型 | 说明 |
+### server_id mismatch detection
+
+Both List and Watch requests carry `expected_server_id`. If the `expected_server_id` sent by Gateway does not match Controller's current `server_id`, Controller returns a `WATCH_ERR_SERVER_ID_MISMATCH` error; Gateway will then re-fetch ServerInfo and perform a full sync.
+
+## Version tracking
+
+| Concept | Type | Description |
 |------|------|------|
-| `sync_version` | `u64` | 全局单调递增版本号，通过 `utils::next_resource_version()` 生成，每次写入操作分配新值 |
-| `server_id` | `String` | Controller 实例 ID（毫秒时间戳），每次启动或 reload 时重新生成 |
-| `from_version` | `u64` | Gateway 侧记录的最后同步版本，用于 Watch 续接 |
-| `expected_server_id` | `String` | Gateway 在 List/Watch 请求中携带，用于检测 Controller 重启 |
+| `sync_version` | `u64` | Globally monotonically increasing version number, generated via `utils::next_resource_version()`; a new value is allocated on every write operation |
+| `server_id` | `String` | Controller instance ID (millisecond timestamp), regenerated on every startup or reload |
+| `from_version` | `u64` | The last sync version recorded on the Gateway side, used for Watch resumption |
+| `expected_server_id` | `String` | Carried by Gateway in List/Watch requests, used to detect Controller restarts |
 
-版本追踪机制确保：
-- **增量同步**：Watch 从 `from_version` 之后开始推送事件，避免重复传输
-- **过期检测**：当 `from_version` 太旧（事件已被环形缓冲区覆盖）时，返回 `TooOldVersion` 错误，触发全量重同步
-- **实例识别**：`server_id` 变化表示 Controller 重启或重载，Gateway 必须全量重同步
+The version-tracking mechanism guarantees:
+- **Incremental sync**: Watch starts pushing events from after `from_version`, avoiding redundant transmissions
+- **Stale detection**: when `from_version` is too old (events have been overwritten in the ring buffer), a `TooOldVersion` error is returned, triggering a full re-sync
+- **Instance identification**: a `server_id` change indicates a Controller restart or reload, after which Gateway must re-sync in full
 
-## 资源变更事件
+## Resource change events
 
-资源变更通过 `ResourceChange` 枚举表示，定义在 `src/core/common/conf_sync/traits.rs` 中：
+Resource changes are represented by the `ResourceChange` enum, defined in `src/core/common/conf_sync/traits.rs`:
 
-| 事件类型 | 阶段 | 说明 |
+| Event type | Phase | Description |
 |---------|------|------|
-| `InitStart` | 初始化 | 信号：初始化开始（仅日志，不携带资源数据） |
-| `InitAdd` | 初始化 | 初始化期间添加资源（写入 EventStore 的 data，不进入环形缓冲区） |
-| `InitDone` | 初始化 | 信号：初始化完成，缓存可标记为就绪 |
-| `EventAdd` | 运行时 | 运行时新增资源（写入环形缓冲区 + 通知 watcher） |
-| `EventUpdate` | 运行时 | 运行时更新资源（写入环形缓冲区 + 通知 watcher） |
-| `EventDelete` | 运行时 | 运行时删除资源（写入环形缓冲区 + 通知 watcher） |
+| `InitStart` | Initialization | Signal: initialization start (log only, carries no resource data) |
+| `InitAdd` | Initialization | Add a resource during initialization (writes to the EventStore data, does not enter the ring buffer) |
+| `InitDone` | Initialization | Signal: initialization complete; cache may be marked ready |
+| `EventAdd` | Runtime | Runtime resource add (writes to ring buffer + notifies watchers) |
+| `EventUpdate` | Runtime | Runtime resource update (writes to ring buffer + notifies watchers) |
+| `EventDelete` | Runtime | Runtime resource delete (writes to ring buffer + notifies watchers) |
 
-初始化阶段的事件（InitStart/InitAdd/InitDone）不进入环形缓冲区，仅更新全量快照。运行时事件（EventAdd/EventUpdate/EventDelete）同时写入环形缓冲区和更新快照，并触发 watcher 通知。
+Initialization-phase events (InitStart/InitAdd/InitDone) do not enter the ring buffer; they only update the full snapshot. Runtime events (EventAdd/EventUpdate/EventDelete) are written to both the ring buffer and the snapshot, and trigger watcher notifications.
 
-## 不同步的资源（no_sync_kinds）
+## Non-synced resources (no_sync_kinds)
 
-以下资源类型不会通过 gRPC 同步到 Gateway：
+The following resource types are not synced to the Gateway via gRPC:
 
-| 资源 | 原因 |
+| Resource | Reason |
 |------|------|
-| `ReferenceGrant` | 仅用于 Controller 侧的跨命名空间引用校验 |
-| `Secret` | 仅用于 Controller 侧的证书/密钥处理，解析后的 TLS 数据通过 EdgionTls 同步 |
+| `ReferenceGrant` | Used only for cross-namespace reference validation on the Controller side |
+| `Secret` | Used only for certificate/key handling on the Controller side; resolved TLS data is synced via EdgionTls |
 
-`no_sync_kinds` 在 `ProcessorRegistry.all_watch_objs()` 调用时排除这些资源，它们不会出现在 `supported_kinds` 列表中。
+`no_sync_kinds` are excluded when `ProcessorRegistry.all_watch_objs()` is called; they will not appear in the `supported_kinds` list.
 
-## 通道安全（mTLS）
+## Channel security (mTLS)
 
-两个 gRPC 通道均支持可选的 mTLS 加密：
+Both gRPC channels support optional mTLS encryption:
 
-| 通道 | 方向 | 配置字段 |
+| Channel | Direction | Configuration field |
 |------|------|---------|
 | **conf_sync** | Controller (server) ↔ Gateway (client) | `conf_sync_security` |
-| **federation** | Center (server) ↔ Controller (client) | `center.security`（客户端）/ `grpc_security`（Center 服务端） |
+| **federation** | Center (server) ↔ Controller (client) | `center.security` (client) / `grpc_security` (Center server) |
 
-### 配置结构
+### Configuration structure
 
 ```rust
 // src/core/common/config/mod.rs
 pub struct ConfSyncSecurityConfig {
-    pub active: Option<String>,          // 激活的证书名称
-    pub certs: Vec<ConfSyncTlsConfig>,   // 多证书集（[[...certs]] 数组）
-    pub tls: Option<ConfSyncTlsConfig>,  // 旧版单证书格式（向后兼容）
+    pub active: Option<String>,          // Name of the active certificate set
+    pub certs: Vec<ConfSyncTlsConfig>,   // Multi-cert sets ([[...certs]] array)
+    pub tls: Option<ConfSyncTlsConfig>,  // Legacy single-cert format (backward compatible)
 }
 
 pub struct ConfSyncTlsConfig {
-    pub name: Option<String>, // 证书集名称（多证书时必填）
-    pub cert: String,         // 证书路径（相对 work_dir 或绝对）
-    pub key: String,          // 私钥路径
-    pub ca: String,           // CA 证书路径（校验对端）
-    pub skip_tls: bool,       // 紧急跳过 TLS（仅故障降级用）
+    pub name: Option<String>, // Certificate set name (required when multiple certs)
+    pub cert: String,         // Certificate path (relative to work_dir or absolute)
+    pub key: String,          // Private key path
+    pub ca: String,           // CA certificate path (verifies peer)
+    pub skip_tls: bool,       // Emergency TLS bypass (for failure-mode degradation only)
 }
 ```
 
-`resolve_active_tls()` 按优先级解析生效的 TLS 配置：
-1. `certs` 数组：找到 `name == active` 的条目
-2. `certs` 仅有一条且 `active` 为 None：自动选用
-3. 回退到旧版 `tls` 字段
-4. 均无配置 → 明文 gRPC
+`resolve_active_tls()` resolves the effective TLS configuration by priority:
+1. `certs` array: find the entry where `name == active`
+2. `certs` has only one entry and `active` is None: pick it automatically
+3. Fall back to the legacy `tls` field
+4. None configured → plaintext gRPC
 
-路径解析通过 `ConfSyncTlsConfig::resolve_path()` 基于 `work_dir` 处理，与其他配置路径行为一致。
+Path resolution is handled via `ConfSyncTlsConfig::resolve_path()` based on `work_dir`, consistent with the behavior of other configuration paths.
 
-### YAML 配置示例
+### YAML configuration examples
 
-**旧版单证书格式（向后兼容）：**
+**Legacy single-cert format (backward compatible):**
 ```yaml
 conf_sync_security:
   tls:
@@ -156,7 +156,7 @@ conf_sync_security:
     ca: certs/grpc/ca.crt
 ```
 
-**多证书格式（支持证书轮换 / CA 迁移）：**
+**Multi-cert format (supports certificate rotation / CA migration):**
 ```yaml
 conf_sync_security:
   active: primary
@@ -171,7 +171,7 @@ conf_sync_security:
       ca: certs/grpc/new-ca/ca.crt
 ```
 
-**Center federation 通道（Center 服务端，`config/edgion-center.yaml`）：**
+**Center federation channel (Center server side, `config/edgion-center.yaml`):**
 ```yaml
 grpc_security:
   active: primary
@@ -182,7 +182,7 @@ grpc_security:
       ca: certs/grpc/primary/ca.crt
 ```
 
-**Controller federation 客户端（`config/edgion-controller.yaml`）：**
+**Controller federation client (`config/edgion-controller.yaml`):**
 ```yaml
 center:
   address: "https://center.example.com:50052"
@@ -195,73 +195,73 @@ center:
         ca: certs/grpc/primary/ca.crt
 ```
 
-### 工作模式
+### Operating modes
 
-| 配置状态 | 服务端（Controller / Center） | 客户端（Gateway / Controller） |
+| Configuration state | Server (Controller / Center) | Client (Gateway / Controller) |
 |----------|------------------------------|-------------------------------|
-| 无 security 配置 | 明文 gRPC（向后兼容） | 明文连接 |
-| 有 TLS config + 证书有效 | mTLS gRPC | mTLS 连接 |
-| 有 TLS config + 证书缺失 | **不启动**（严格模式） | 连接失败，backoff 重试 |
-| `skip_tls = true` | 明文 + ERROR 日志 | 明文 + ERROR 日志 |
+| No security configured | Plaintext gRPC (backward compatible) | Plaintext connection |
+| TLS config + valid certificates | mTLS gRPC | mTLS connection |
+| TLS config + missing certificates | **Refuses to start** (strict mode) | Connection fails, retries with backoff |
+| `skip_tls = true` | Plaintext + ERROR log | Plaintext + ERROR log |
 
-### 共享 TLS 加载层
+### Shared TLS loading layer
 
-TLS 文件读取逻辑统一在 `src/core/common/grpc_tls.rs`：
+TLS file reading logic is centralized in `src/core/common/grpc_tls.rs`:
 
-| 函数 | 用途 |
+| Function | Purpose |
 |------|------|
-| `load_server_tls(cfg)` | 读取 cert/key/ca，返回 `ServerTlsConfig` |
-| `load_client_tls(cfg)` | 读取 ca/cert/key，返回 `ClientTlsConfig` |
+| `load_server_tls(cfg)` | Read cert/key/ca, return `ServerTlsConfig` |
+| `load_client_tls(cfg)` | Read ca/cert/key, return `ClientTlsConfig` |
 
-### 实现位置
+### Implementation locations
 
-| 组件 | 文件 | 关键函数 |
+| Component | File | Key function |
 |------|------|---------|
-| 共享 TLS 加载 | `common/grpc_tls.rs` | `load_server_tls()` / `load_client_tls()` |
+| Shared TLS loading | `common/grpc_tls.rs` | `load_server_tls()` / `load_client_tls()` |
 | conf_sync Server TLS | `controller/conf_sync/conf_server/grpc_server.rs` | `serve_with_shutdown(security: &ConfSyncSecurityConfig)` |
 | conf_sync Client TLS | `gateway/conf_sync/conf_client/grpc_client.rs` | `new(security: &ConfSyncSecurityConfig)` |
 | Controller CLI | `controller/cli/mod.rs` | `start_services(security: ConfSyncSecurityConfig)` |
-| Gateway CLI | `gateway/cli/mod.rs` | `create_config_sync_client()` 传入 `&config.conf_sync_security` |
+| Gateway CLI | `gateway/cli/mod.rs` | `create_config_sync_client()` passes `&config.conf_sync_security` |
 | Center Server TLS | `center/cli/mod.rs` | TLS-aware `tonic::transport::Server::builder()` |
-| Federation Client TLS | `controller/fed_sync/fed_client/mod.rs` | `connect_and_run()` 使用 `config.security` |
+| Federation Client TLS | `controller/fed_sync/fed_client/mod.rs` | `connect_and_run()` uses `config.security` |
 
-### 证书生成
+### Certificate generation
 
-`edgion-cli gen-certs` 子命令使用 rcgen 生成完整证书束：
+The `edgion-cli gen-certs` subcommand uses rcgen to generate a complete certificate bundle:
 
-- **CA**：自签 ECDSA P-256，CN=edgion-grpc-ca
-- **Server cert**：CN=edgion-controller，SAN 含 localhost/127.0.0.1/::1 + K8s FQDN，EKU=ServerAuth
-- **Client cert**：CN=edgion-gateway，EKU=ClientAuth
+- **CA**: self-signed ECDSA P-256, CN=edgion-grpc-ca
+- **Server cert**: CN=edgion-controller, SAN includes localhost/127.0.0.1/::1 + K8s FQDN, EKU=ServerAuth
+- **Client cert**: CN=edgion-gateway, EKU=ClientAuth
 
-`--cert-name <NAME>`（默认 `primary`）参数：
-- **文件模式**：证书写入 `<output_dir>/<cert-name>/` 子目录，支持多套证书并存
-- **K8s 模式**：Secret 命名为 `{prefix}-controller-tls-{cert-name}` / `{prefix}-gateway-tls-{cert-name}`
+`--cert-name <NAME>` (default `primary`) parameter:
+- **File mode**: certificates are written to the `<output_dir>/<cert-name>/` subdirectory, supporting multiple certificate sets coexisting
+- **K8s mode**: Secrets are named `{prefix}-controller-tls-{cert-name}` / `{prefix}-gateway-tls-{cert-name}`
 
-证书生成逻辑：`src/core/ctl/certs/mod.rs`
-子命令入口：`src/core/ctl/cli/commands/gen_certs.rs`
+Certificate generation logic: `src/core/ctl/certs/mod.rs`
+Subcommand entry: `src/core/ctl/cli/commands/gen_certs.rs`
 
-### 集成测试
+### Integration testing
 
-`examples/test/scripts/conf-sync/run_conf_sync_mtls_test.sh` — 端到端 mTLS 测试，验证证书生成 → 配置注入 → mTLS 启动 → 配置同步 → 明文拒绝。详见 [05-testing/04-conf-sync-leak-testing.md](../../05-testing/04-conf-sync-leak-testing.md)。
+`examples/test/scripts/conf-sync/run_conf_sync_mtls_test.sh` — end-to-end mTLS test, verifying certificate generation → configuration injection → mTLS startup → configuration sync → plaintext rejection. See [05-testing/04-conf-sync-leak-testing.md](../../05-testing/04-conf-sync-leak-testing.md) for details.
 
-## 模块分布
+## Module distribution
 
-| 模块 | 路径 | 职责 |
+| Module | Path | Responsibility |
 |------|------|------|
-| **common/conf_sync** | `src/core/common/conf_sync/` | Proto 定义、共享 traits（`CacheEventDispatch`、`ConfHandler`、`ResourceChange`）、共享事件/列表/Watch 类型 |
-| **common/config** | `src/core/common/config/mod.rs` | `ConfSyncSecurityConfig`、`ConfSyncTlsConfig` 配置结构 |
-| **controller/conf_sync** | `src/core/controller/conf_sync/` | 服务端实现：`ConfigSyncServer`、`ConfigSyncGrpcServer`（含 mTLS）、`ClientRegistry`、`WatchObj` trait |
-| **gateway/conf_sync** | `src/core/gateway/conf_sync/` | 客户端实现：`ConfigSyncClient`（含 mTLS）、`ClientCache<T>`、`CacheData`、event_dispatch |
-| **ctl/certs** | `src/core/ctl/certs/mod.rs` | 证书生成（rcgen）：`generate_certs()` → `CertBundle` |
+| **common/conf_sync** | `src/core/common/conf_sync/` | Proto definitions, shared traits (`CacheEventDispatch`, `ConfHandler`, `ResourceChange`), shared event/list/Watch types |
+| **common/config** | `src/core/common/config/mod.rs` | `ConfSyncSecurityConfig`, `ConfSyncTlsConfig` configuration structs |
+| **controller/conf_sync** | `src/core/controller/conf_sync/` | Server-side implementation: `ConfigSyncServer`, `ConfigSyncGrpcServer` (with mTLS), `ClientRegistry`, `WatchObj` trait |
+| **gateway/conf_sync** | `src/core/gateway/conf_sync/` | Client-side implementation: `ConfigSyncClient` (with mTLS), `ClientCache<T>`, `CacheData`, event_dispatch |
+| **ctl/certs** | `src/core/ctl/certs/mod.rs` | Certificate generation (rcgen): `generate_certs()` → `CertBundle` |
 
-### 关键文件
+### Key files
 
-- `src/core/common/conf_sync/proto/config_sync.proto` — Proto 定义
-- `src/core/common/conf_sync/traits.rs` — `ResourceChange`、`CacheEventDispatch`、`ConfHandler`
+- `src/core/common/conf_sync/proto/config_sync.proto` — Proto definitions
+- `src/core/common/conf_sync/traits.rs` — `ResourceChange`, `CacheEventDispatch`, `ConfHandler`
 - `src/core/controller/conf_sync/conf_server/config_sync_server.rs` — `ConfigSyncServer`
-- `src/core/controller/conf_sync/conf_server/grpc_server.rs` — `ConfigSyncGrpcServer`、`ConfigSyncServerProvider`
+- `src/core/controller/conf_sync/conf_server/grpc_server.rs` — `ConfigSyncGrpcServer`, `ConfigSyncServerProvider`
 - `src/core/controller/conf_sync/conf_server/client_registry.rs` — `ClientRegistry`
-- `src/core/controller/conf_sync/conf_server/traits.rs` — `WatchObj`、`WatchResponseSimple`
+- `src/core/controller/conf_sync/conf_server/traits.rs` — `WatchObj`, `WatchResponseSimple`
 - `src/core/gateway/conf_sync/conf_client/grpc_client.rs` — `ConfigSyncClient`
-- `src/core/gateway/conf_sync/cache_client/cache.rs` — `ClientCache<T>`、`DynClientCache`
-- `src/core/gateway/conf_sync/cache_client/event_dispatch.rs` — 事件分发逻辑
+- `src/core/gateway/conf_sync/cache_client/cache.rs` — `ClientCache<T>`, `DynClientCache`
+- `src/core/gateway/conf_sync/cache_client/event_dispatch.rs` — Event dispatch logic

@@ -28,12 +28,12 @@ pub struct SecretObjectReference {
 }
 
 impl SecretObjectReference {
-    /// 解析出目标 namespace（缺省回落到 owner ns）
+    /// Resolve the target namespace (falls back to the owner namespace when absent)
     pub fn effective_namespace<'a>(&'a self, owner_ns: &'a str) -> &'a str {
         self.namespace.as_deref().unwrap_or(owner_ns)
     }
 
-    /// 是否跨 namespace 引用
+    /// Whether this is a cross-namespace reference
     pub fn is_cross_namespace(&self, owner_ns: &str) -> bool {
         match self.namespace.as_deref() {
             Some(ns) => ns != owner_ns,

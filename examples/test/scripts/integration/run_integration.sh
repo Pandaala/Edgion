@@ -231,7 +231,7 @@ ensure_nofile_limit() {
 # not spawn their own. Independent-topology scripts (test_file_watcher.sh,
 # test_resource_abnormal_metrics.sh, run_conf_sync_mtls_test.sh, etc.) run
 # outside this entry point and are not subject to this check.
-# See skills/05-testing/01-integration-testing.md "Gateway / Controller 复用原则".
+# See skills/05-testing/01-integration-testing.md "Gateway / Controller reuse principle".
 check_single_gateway_process() {
     local pids count
     pids=$(pgrep -u "$USER" edgion-gateway 2>/dev/null || true)
@@ -243,7 +243,7 @@ check_single_gateway_process() {
     if [ "$count" -gt 1 ]; then
         log_error "Detected ${count} edgion-gateway processes — violates the shared-Gateway principle"
         log_error "Integration suites must reuse the main Gateway. See:"
-        log_error "  skills/05-testing/01-integration-testing.md (Gateway / Controller 复用原则)"
+        log_error "  skills/05-testing/01-integration-testing.md (Gateway / Controller reuse principle)"
         log_error "Offending PIDs:"
         for pid in $pids; do
             ps -o pid=,command= -p "$pid" 2>/dev/null | sed 's/^/  /' >&2 || true

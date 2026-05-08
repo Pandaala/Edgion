@@ -1,314 +1,314 @@
-# Access Log 设计与规范
+# Access Log design and rules
 
-> Access Log 的核心原则：**单条日志能还原整个请求**。
-> 包含 AccessLogEntry 字段设计、PluginLog 格式规范、常见场景速查。
+> Core principle of access log: **a single entry can reconstruct the entire request**.
+> Includes AccessLogEntry field design, PluginLog format rules, and a common-scenario quick reference.
 
-## 核心原则
+## Core principles
 
-### 单条日志能还原整个请求
+### A single entry reconstructs the whole request
 
-每一条 access log 应当包含足够的信息，让运维人员无需翻其他日志就能定位问题。关注点包括：
+Each access log entry must contain enough information for an operator to locate the issue without flipping through other logs. Concerns include:
 
-- **路由命中情况**（哪条 route / backend 被选中）
-- **插件执行关键结果**（认证通过/拒绝、限流触发、改写了什么）
-- **上游连接情况**（重试次数、latency 各阶段、最终状态码）
-- **请求身份信息**（real IP、trace-id、sni）
+- **Routing match** (which route / backend was selected)
+- **Key plugin results** (auth allow/deny, rate-limit hit, what was rewritten)
+- **Upstream connection** (retry count, latency phases, final status code)
+- **Request identity** (real IP, trace-id, sni)
 
-### 只记录关键节点，不记过程
+### Record only key checkpoints, not the process
 
-❌ **不要记录**：
-- 插件内部的中间状态（"starting auth check"、"token parsed"）
-- 每次 header 读取、每次条件判断
-- 大量重复的 debug 信息（这些应进 `tracing::debug!()`）
+**Do not record**:
+- Plugin-internal intermediate states ("starting auth check", "token parsed")
+- Every header read or every conditional check
+- Verbose duplicate debug info (those belong to `tracing::debug!()`)
 
-✅ **要记录**：
-- 插件的**最终决策**（允许 / 拒绝 / 改写了什么值）
-- **异常路径**（连接失败、超时、校验错误的原因摘要）
-- **关键参数**（命中的 key、选中的 backend、retry 次数）
+**Do record**:
+- The plugin's **final decision** (allow / deny / what value was rewritten)
+- **Exception paths** (connection failure, timeout, validation error reason summary)
+- **Key parameters** (matched key, selected backend, retry count)
 
 ---
 
-## AccessLogEntry 字段
+## AccessLogEntry fields
 
-`src/core/gateway/observe/access_log/entry.rs` — 由 `AccessLogEntry::from_context(ctx)` 在 `pg_logging.rs` 的 `logging()` 阶段生成：
+`src/core/gateway/observe/access_log/entry.rs` — produced by `AccessLogEntry::from_context(ctx)` during the `logging()` phase of `pg_logging.rs`:
 
-| 字段 | 含义 |
+| Field | Meaning |
 |------|------|
-| `client-addr` | TCP 直连 IP |
-| `remote-addr` | 真实客户端 IP（经 RealIp 插件处理后） |
-| `host` / `path` | 请求 host 和 **规范化后** current path（不含 query） |
-| `request_uri` | **可选**——客户端入口 **raw URI**（raw path + raw query），仅当 `[access_log_options] include_raw_uri = true` 时输出 |
-| `x-trace-id` | trace id（客户端传入或自动生成 UUID） |
-| `status` | 最终响应状态码 |
-| `sni` | TLS SNI（HTTPS 连接） |
-| `tls_id` | TLS 连接 ID（用于关联 tls_access.log） |
-| `discover_protocol` | 自动探测协议（grpc / websocket 等） |
-| `info` | 网关内部正常处理事件（如 ACME 本地命中），不代表异常 |
-| `errors` | 网关内部异常/拒绝/失败原因 |
-| `match_info.sv` | sync_version — gRPC 同步版本号，用于关联控制面日志（0 时省略）。详见 [../00-logging-and-tracing-ids.md](../00-logging-and-tracing-ids.md) |
-| stage_logs | 各阶段插件日志（见下方 PluginLog） |
-| upstreams | 上游连接详情（ip、port、ct/ht/bt/et、retry） |
+| `client-addr` | Direct TCP IP |
+| `remote-addr` | Real client IP (after RealIp plugin processing) |
+| `host` / `path` | Request host and the **normalized** current path (no query) |
+| `request_uri` | **Optional** — client-entry **raw URI** (raw path + raw query); only emitted when `[access_log_options] include_raw_uri = true` |
+| `x-trace-id` | trace id (passed from client or auto-generated UUID) |
+| `status` | Final response status code |
+| `sni` | TLS SNI (HTTPS connections) |
+| `tls_id` | TLS connection ID (used to correlate tls_access.log) |
+| `discover_protocol` | Auto-detected protocol (grpc / websocket etc.) |
+| `info` | Gateway-internal normal handling events (e.g., ACME local hit); not an error |
+| `errors` | Gateway-internal exception/reject/failure reasons |
+| `match_info.sv` | sync_version — gRPC sync version, used to correlate control-plane logs (omitted when 0). See [../00-logging-and-tracing-ids.md](../00-logging-and-tracing-ids.md) |
+| stage_logs | Per-phase plugin logs (see PluginLog below) |
+| upstreams | Upstream connection details (ip, port, ct/ht/bt/et, retry) |
 
-### 何时增加新字段
+### When to add a new field
 
-**满足以下条件才增加：**
-1. 该字段在排障时**高频需要**，且无法从其他现有字段推断
-2. 字段是**请求级别**的（不是插件内部的中间状态）
-3. 字段值**不会导致存储爆炸**（避免把大 body 或长 token 放进去）
+**Add only when all hold**:
+1. The field is **frequently needed** during troubleshooting and cannot be inferred from other existing fields
+2. The field is **request-level** (not plugin-internal intermediate state)
+3. The field value **does not blow up storage** (avoid putting a large body or long token in)
 
-**正确示例**：
-- 新增 `grpc_service` / `grpc_method`（gRPC 路由排障必要信息）✅
-- 新增 `client_cert_info`（mTLS 开启后需要知道是哪个证书）✅
+**Good examples**:
+- Add `grpc_service` / `grpc_method` (necessary for gRPC route troubleshooting)
+- Add `client_cert_info` (knowing which cert was used after mTLS is enabled)
 
-**错误示例**：
-- 把整个请求 body 放进 access log ❌
-- 把每个 header 都展开进 access log ❌
+**Bad examples**:
+- Putting the full request body into the access log
+- Expanding every header into the access log
 
 ---
 
-## Plugin Log (PluginLog) 规范
+## Plugin Log (PluginLog) rules
 
-每个插件通过 `log: &mut PluginLog` 向 access log 写入紧凑的执行摘要。
+Each plugin writes a compact execution summary to the access log via `log: &mut PluginLog`.
 
-### 格式规范
+### Format
 
 ```
-<结果前缀>[:<关键参数>]; 
+<result-prefix>[:<key parameters>]; 
 ```
 
-- 以 `; ` 结尾（方便 grep / 拼接）
-- **结果前缀统一约定**：
+- Ends with `; ` (eases grep / concatenation)
+- **Result prefixes are uniformly defined**:
 
-| 前缀 | 含义 | 写入 API | 示例 |
+| Prefix | Meaning | Write API | Example |
 |------|------|---------|------|
-| `OK` | 正常放行 | `plugin_log.push("OK ...; ")` | `OK u=jack; ` |
-| `Deny` | 业务级拒绝（认证失败、限流等） | `plugin_log.push("Deny ...; ")` | `Deny no-key; ` |
-| `Skip` | 条件不满足，跳过执行 | `plugin_log.push("Skip; ")` 或 `set_cond_skip` | `Skip; ` |
-| `Rate` | 限流触发 | `plugin_log.push("Rate ...; ")` | `Rate 429; ` |
-| **`err: `** | **异常 / 配置降级** —— 替代数据面 `tracing::warn!`；带空格冒号分隔 | **`plugin_log.push_err("...")`**（见下） | `err: token refresh fail; ` |
+| `OK` | Allowed normally | `plugin_log.push("OK ...; ")` | `OK u=jack; ` |
+| `Deny` | Business-level reject (auth fail, rate limit, etc.) | `plugin_log.push("Deny ...; ")` | `Deny no-key; ` |
+| `Skip` | Condition not met, skipped | `plugin_log.push("Skip; ")` or `set_cond_skip` | `Skip; ` |
+| `Rate` | Rate-limit triggered | `plugin_log.push("Rate ...; ")` | `Rate 429; ` |
+| **`err: `** | **Exception / config degradation** — replaces data-plane `tracing::warn!`; separated by space-colon | **`plugin_log.push_err("...")`** (see below) | `err: token refresh fail; ` |
 
-- 关键参数用 `k=v` 格式，多个参数空格分隔
-- 存量代码里存在无空格旧写法 `"err:failoverTo invalid; "` / `"rl:err:cfg; "`（region_route + rate_limit 共 6 处），**属于 legacy**，由对应 wave 工单逐步迁移到 `push_err`，新代码一律走 `push_err`
+- Key parameters use the `k=v` format; multiple parameters are space-separated
+- Some legacy code uses no-space old forms `"err:failoverTo invalid; "` / `"rl:err:cfg; "` (6 sites total in region_route + rate_limit). These are **legacy** and are migrated to `push_err` by the corresponding wave tickets; new code always uses `push_err`
 
-### 错误条目 API 约束：必须用 `push_err`
+### Error-entry API constraint: must use `push_err`
 
-> **权威来源**：本节同时是 `skills/03-coding/01-log-safety.md` 铁律 1 的一部分；此处讲"在 access log 里长什么样"，log-safety.md 讲"为什么这么约束 + 安全规则"。
+> **Authoritative source**: this section is also part of iron rule 1 in `skills/03-coding/01-log-safety.md`. This section explains "what it looks like in the access log"; log-safety.md explains "why the constraint and the safety rule".
 
-**API**：
+**API**:
 
 ```rust
-// 定义：src/core/gateway/plugins/runtime/log.rs
+// Defined at: src/core/gateway/plugins/runtime/log.rs
 impl PluginLog {
-    pub fn push_err(&mut self, kind: &'static str) -> bool;   // 固定 buffer
-    pub fn u_push_err(&mut self, kind: &'static str) -> bool; // 调试 buffer
+    pub fn push_err(&mut self, kind: &'static str) -> bool;   // Fixed buffer
+    pub fn u_push_err(&mut self, kind: &'static str) -> bool; // Debug buffer
 }
 ```
 
-**调用样子**：
+**Call shape**:
 
 ```rust
-// ✅ 正确 —— kind 是字面量，不带 plugin 前缀（plugin 身份由 PluginLog.name 承担）
+// Correct — kind is a literal, no plugin prefix (plugin identity is in PluginLog.name)
 plugin_log.push_err("token refresh fail");    // → "err: token refresh fail; "
 plugin_log.push_err("jwks fetch timeout");    // → "err: jwks fetch timeout; "
 plugin_log.push_err("cfg invalid");           // → "err: cfg invalid; "
 
-// ✅ bounded enum 错误 —— 手动映射成静态标签
+// Bounded enum errors — manually map to a static label
 match jwt_err.kind() {
     ErrorKind::InvalidSignature => plugin_log.push_err("jwt sig invalid"),
     ErrorKind::ExpiredSignature => plugin_log.push_err("jwt expired"),
     _                           => plugin_log.push_err("jwt other"),
 };
 
-// ❌ 编译不过 —— &'static str 签名拦住所有动态字符串
+// Won't compile — the &'static str signature blocks all dynamic strings
 plugin_log.push_err(&format!("oidc: {}", e));
 plugin_log.push_err(&err.to_string());
 plugin_log.push_err(dynamic_kind.as_str());
 
-// ❌ 即使能编译，也禁止走 push 绕过 push_err 写错误（泄漏风险）
-plugin_log.push(&format!("Config error: {}; ", err));       // Display 可能含 token / claim
-plugin_log.push(&format!("Auth failed for user {}", name)); // PII 入 PluginLog
+// Even if it compiled, bypassing push_err via push to write errors is forbidden (leak risk)
+plugin_log.push(&format!("Config error: {}; ", err));       // Display may contain token / claim
+plugin_log.push(&format!("Auth failed for user {}", name)); // PII into PluginLog
 ```
 
-**`kind` 字面量约定**：
+**`kind` literal conventions**:
 
-- 小写单词 + **空格**分隔（不用下划线），15-40 字节
-- 只写"发生了什么"（事件名），**不带 plugin 前缀**（`PluginLog.name` 已经承担）
-- 不含动态值（token / claim / URL / header / 错误 Display）
-- 允许 `<event>:<action>` 两段冒号语法（两段都是完整词），详见下文「PluginLog 条目措辞规范」§1 rule 4
+- Lowercase words + **spaces** as separators (not underscores), 15-40 bytes
+- Write only "what happened" (the event name); **no plugin prefix** (`PluginLog.name` already carries it)
+- No dynamic values (token / claim / URL / header / error Display)
+- A two-segment `<event>:<action>` colon syntax is allowed (both segments are full words). See "PluginLog entry wording rules" §1 rule 4 below
 
-**何时用 `push_err` vs 继续写到 `ctx.err_log`**：`push_err` 做**分类**；`ctx.err_log` 留给**该错误必须保留的脱敏详情**（如后端地址）。同一错误只选一处记录，不要双写。
+**When to use `push_err` vs continuing to write to `ctx.err_log`**: `push_err` does **classification**; `ctx.err_log` keeps **the masked details that this error must preserve** (e.g., the backend address). Record each error in only one place — never both.
 
-**安全背景**：完整的 `&'static str` 约束理由、`Box::leak` 逃逸注意点、安全清单 → `skills/03-coding/01-log-safety.md` 的「PluginLog 错误条目：必须用 `push_err`」小节。
+**Safety background**: full reasoning for the `&'static str` constraint, `Box::leak` escape notes, and safety checklist → see "PluginLog error entries: must use `push_err`" in `skills/03-coding/01-log-safety.md`.
 
-### 好的 PluginLog 示例
+### Good PluginLog examples
 
 ```rust
-// KeyAuth — 认证通过
+// KeyAuth — auth passed
 log.push("OK u=jack; ");
 
-// KeyAuth — key 不存在
+// KeyAuth — key not found
 log.push("Deny no-key; ");
 
-// RateLimit — 触发限流
+// RateLimit — limit triggered
 log.push(&format!("Rate 429 k=user:{}; ", user_id));
 
-// RateLimit — 未触发
+// RateLimit — not triggered
 log.push("OK; ");
 
-// BasicAuth — 认证失败
+// BasicAuth — auth failed
 log.push("Deny bad-cred; ");
 
-// Redirect — 执行了跳转
+// Redirect — performed a redirect
 log.push(&format!("-> {} {}; ", code, location));
 
-// DirectEndpoint — 强制指定了 endpoint
+// DirectEndpoint — endpoint forced
 log.push(&format!("Direct {}:{}; ", ip, port));
 
-// OIDC — token refresh 失败（错误分类，替代 tracing::warn!）
+// OIDC — token refresh failure (error classification, replacing tracing::warn!)
 log.push_err("token refresh fail");
 
-// RegionRoute — failoverTo 配置无效（插件降级，该 region 跳过 redirect）
-//   新代码：
+// RegionRoute — failoverTo config invalid (plugin degradation, region skips redirect)
+//   New code:
 log.push_err("failover to invalid");
-//   旧代码 legacy 写法（`region_route/plugin.rs` 尚未迁移）：
+//   Legacy form (not yet migrated in `region_route/plugin.rs`):
 //   log.push("err:failoverTo invalid; ");
 ```
 
-### 不好的 PluginLog 示例
+### Bad PluginLog examples
 
 ```rust
-// ❌ 太啰嗦，占满 buffer
+// Too verbose, fills the buffer
 log.push("Starting JWT authentication process for incoming request");
 log.push("Successfully parsed and validated JWT token with RSA256 algorithm");
 
-// ❌ 内部细节，不是最终决策
+// Internal detail, not a final decision
 log.push("Checking rate limit window...");
 log.push("Window size = 60s");
 
-// ❌ 应该用 tracing::debug! 的内容
+// Belongs to tracing::debug!
 log.push(&format!("token_claims = {:?}", claims));
 
-// ❌ 错误路径走 push + format! —— 泄漏风险 + 绕过 push_err 约束
+// Error path via push + format! — leak risk + bypasses the push_err constraint
 log.push(&format!("OIDC token refresh failed: {}", jwt_err));
 log.push(&format!("Auth failed for user {}", username));
 ```
 
-### Buffer 限制
+### Buffer limit
 
-`PluginLog` 有固定大小的 buffer（默认 100 字节）。每条日志应保持在 **20~40 字节**以内，留出多个插件同时写入的空间。超出 buffer 的内容会被截断。
+`PluginLog` has a fixed-size buffer (default 100 bytes). Each entry should stay within **20~40 bytes** to leave room for multiple plugins to write together. Anything beyond the buffer is truncated.
 
-详细调试信息请用 `tracing::debug!`。
+For detailed debug info, use `tracing::debug!`.
 
 ---
 
-## 常见场景速查
+## Common-scenario quick reference
 
-### 场景 1：插件做了认证决策
+### Scenario 1: plugin made an auth decision
 ```rust
-log.push("OK u=alice; ");          // 通过
-log.push("Deny missing-token; ");  // 拒绝，附原因
+log.push("OK u=alice; ");          // allowed
+log.push("Deny missing-token; ");  // rejected, with reason
 ```
-不需要加 metrics（认证结果已体现在 `requests_failed` 和 `backend_requests_total` 的 status 中）。
+No metric needed (the auth result already shows up in the status of `requests_failed` and `backend_requests_total`).
 
-### 场景 2：插件改写了请求
+### Scenario 2: plugin rewrote the request
 ```rust
 log.push(&format!("Rewrite -> {}; ", new_path));
 ```
 
-### 场景 4：上游连接失败
-上游的 error 信息通过 `UpstreamInfo.err` 字段进入 access log，不需要在插件里单独记录。
+### Scenario 4: upstream connection failure
+The upstream error message flows into the access log via the `UpstreamInfo.err` field; the plugin does not need to record it separately.
 
-### 场景 5：tracing 日志还是 access log？
+### Scenario 5: tracing log or access log?
 
-| 信息类型 | 去处 |
+| Information type | Destination |
 |---------|------|
-| 请求最终决策 | `PluginLog` → access log |
-| 排查中间步骤 | `tracing::debug!()` → 系统日志 |
-| 异常/告警 | `tracing::warn!()` / `tracing::error!()` → 系统日志 |
-| 性能数据 | `Gauge` / `Counter` in `metrics.rs` → Prometheus |
+| Final request decision | `PluginLog` → access log |
+| Intermediate steps for troubleshooting | `tracing::debug!()` → system log |
+| Exception/alert | `tracing::warn!()` / `tracing::error!()` → system log |
+| Performance data | `Gauge` / `Counter` in `metrics.rs` → Prometheus |
 
 ---
 
 ---
 
-## Path / URI 变量语义（path normalization 后）
+## Path / URI variable semantics (after path normalization)
 
-### 变量速查
+### Variable cheat sheet
 
-| 变量 | 视图 | 含义 | 受 rewrite 影响 |
+| Variable | View | Meaning | Affected by rewrite |
 |------|------|------|----------------|
-| `$path` | current | 规范化后当前 path（post-rewrite） | 是 |
-| `$uri` | current | 规范化后当前 path + 当前 query | 是 |
-| `$query` | current | 当前 query（不规范化） | 是 |
-| `$request_path` | entry（冻结） | 客户端入口 raw path | 否 |
-| `$request_uri` | entry（冻结） | 客户端入口 raw path + raw query | 否 |
+| `$path` | current | Normalized current path (post-rewrite) | Yes |
+| `$uri` | current | Normalized current path + current query | Yes |
+| `$query` | current | Current query (not normalized) | Yes |
+| `$request_path` | entry (frozen) | Raw client-entry path | No |
+| `$request_uri` | entry (frozen) | Raw client-entry path + raw query | No |
 
-### 行为变更（迁移提示）
+### Behavior changes (migration note)
 
-- **`$path` / `$uri`** 语义由「raw current」切换为「normalized current」。对于已规范化的请求，行为不变；对含编码字符 / 双斜杠 / dot-segment 的请求，值会不同
-- **`$request_path` / `$request_uri`** 是新增变量，反映客户端原始形态，冻结不受 rewrite 影响
+- **`$path` / `$uri`** semantics switched from "raw current" to "normalized current". Behavior is unchanged for already-normalized requests; for requests with encoded chars / double slashes / dot-segments, values differ
+- **`$request_path` / `$request_uri`** are newly added variables that reflect the raw client form; frozen and unaffected by rewrite
 
-### rewrite 后的行为
+### Behavior after rewrite
 
-proxy_rewrite / url_rewrite 等插件修改 path 后：
+After plugins like proxy_rewrite / url_rewrite modify the path:
 
-- `$uri` 反映**新 path**（ctx 缓存已通过 `session.set_upstream_uri` 自动 refresh）
-- `$request_uri` 仍反映**入口 raw**
+- `$uri` reflects the **new path** (the ctx cache is auto-refreshed via `session.set_upstream_uri`)
+- `$request_uri` still reflects the **raw entry**
 
-示例（请求 `GET /%61dmin/data`，proxy_rewrite 改 path 为 `/backend/data`）：
+Example (request `GET /%61dmin/data`, proxy_rewrite changes path to `/backend/data`):
 
 ```
-$path         = /backend/data   （rewrite 后的新 path，已规范化）
-$uri          = /backend/data   （同上，无 query）
-$request_path = /%61dmin/data   （入口 raw，冻结）
-$request_uri  = /%61dmin/data   （入口 raw + query，冻结）
+$path         = /backend/data   (new path after rewrite, normalized)
+$uri          = /backend/data   (same, no query)
+$request_path = /%61dmin/data   (raw entry, frozen)
+$request_uri  = /%61dmin/data   (raw entry + query, frozen)
 ```
 
-### (v4) `$uri` 与 upstream 实际收到的 path 关系
+### (v4) Relationship between `$uri` and the path actually received by upstream
 
-v4 起 Edgion 默认把规范化 path 转发到上游（与 Envoy / Kong 对齐）。多数情况下 `$uri` 反映的就是 upstream 收到的形态。但**两种 raw forward opt-out 场景**会让 `$uri`（normalized）与 upstream 收到的 path 分歧：
+Since v4 Edgion forwards the normalized path to upstream by default (aligned with Envoy / Kong). In most cases `$uri` reflects what upstream received. But **two raw-forward opt-out scenarios** make `$uri` (normalized) diverge from the path received by upstream:
 
-| 场景 | 触发 | `$uri` 值 | upstream 收到 |
+| Scenario | Trigger | `$uri` value | Upstream receives |
 |---|---|---|---|
-| 默认 | 无注解、无 region_route、`forward_normalized_path=true` | normalized | normalized（一致） |
-| HTTPRoute 注解 force raw | `edgion.io/forward-raw-path: "true"` | normalized | **raw**（分歧！） |
-| `region_route` 命中 | 命中 region 互转规则、无注解覆盖 | normalized | **raw**（分歧！） |
-| 全局回退 | `forward_normalized_path = false` | normalized | **raw**（分歧！） |
+| Default | No annotation, no region_route, `forward_normalized_path=true` | normalized | normalized (consistent) |
+| HTTPRoute annotation force raw | `edgion.io/forward-raw-path: "true"` | normalized | **raw** (divergent!) |
+| `region_route` hits | Region cross-rule hit, no annotation override | normalized | **raw** (divergent!) |
+| Global fallback | `forward_normalized_path = false` | normalized | **raw** (divergent!) |
 
-**对审计/observability 的含义**：
-- `$uri` 始终是规范化视图，可控的 cardinality，适合 Prometheus 标签 / 聚合查询
-- 如需审计「客户端到底发了什么」，用 `$request_uri`（entry raw 视图，永远冻结）
-- 如需审计「upstream 到底收到了什么」——**这两者都不直接等于**。需要：
-  1. 检查路由是否带 `forward-raw-path: "true"` 注解（access log 可加 `route_namespace` / `route_name` tag 后查 K8s）
-  2. 或在 upstream 应用层记录其收到的 path
-  3. 或参考 spec §14.5「mirror 与 upstream 视图分歧」相关说明
+**Implications for audit/observability**:
+- `$uri` is always the normalized view, with controlled cardinality, suitable for Prometheus labels / aggregate queries
+- For "what the client actually sent", use `$request_uri` (entry raw view, always frozen)
+- For "what upstream actually received" — **neither directly equals it**. You need:
+  1. Check whether the route carries the `forward-raw-path: "true"` annotation (the access log can include `route_namespace` / `route_name` tags so you can look it up in K8s)
+  2. Or record the path actually received in the upstream application
+  3. Or refer to spec §14.5 "mirror vs upstream view divergence" notes
 
-详细决策矩阵见 spec `docs/superpowers/specs/2026-04-26-uri-normalization-design.md` §14。
+For the detailed decision matrix see spec `docs/superpowers/specs/2026-04-26-uri-normalization-design.md` §14.
 
-### query 视图不对称（已知 gap）
+### Query view asymmetry (known gap)
 
-`$request_query`（entry query）**不存在**。若需要审计 entry query，从 `$request_uri` split 即可。
+`$request_query` (entry query) **does not exist**. If you need to audit the entry query, split it from `$request_uri`.
 
-- 需要「客户端实际发送的完整 URI」→ 用 `$request_uri` ✓
-- 需要「rewrite 后转发到上游的 URI」→ 用 `$uri` ✓
-- 需要单独取 entry query → 自行从 `$request_uri` 中 split
+- Need "the full URI actually sent by the client" → use `$request_uri`
+- Need "the URI forwarded to upstream after rewrite" → use `$uri`
+- Need the entry query alone → split it from `$request_uri`
 
-### Access log JSON 中的字段
+### Fields in JSON access log
 
-JSON access log 默认只输出 **规范化** path，没有 raw 形态字段、不带 query：
+The JSON access log emits only the **normalized** path by default; no raw-form fields, no query:
 
 ```json
 { "ts": ..., "path": "/api/users/data", "host": "...", "status": 200, ... }
 ```
 
-需要「原始客户端发送的完整 URI」（含 query）时，开启全局选项：
+When "the full URI sent by the client" (with query) is needed, enable the global option:
 
 ```toml
 [access_log_options]
 include_raw_uri = true
 ```
 
-输出多一个 `request_uri` 字段，值为 entry raw path + entry raw query：
+An additional `request_uri` field is emitted, valued as entry raw path + entry raw query:
 
 ```json
 { "ts": ..., "path": "/api/users/data",
@@ -316,18 +316,18 @@ include_raw_uri = true
   "host": "...", "status": 200, ... }
 ```
 
-字段语义：
+Field semantics:
 
-| 字段 | 视图 | 是否默认输出 |
+| Field | View | Default emitted |
 |------|------|--------------|
-| `path` | normalized current（不含 query） | ✅ |
-| `request_uri` | raw entry path + raw entry query | ❌（默认隐藏，需开关） |
+| `path` | normalized current (no query) | Yes |
+| `request_uri` | raw entry path + raw entry query | No (hidden by default; needs the toggle) |
 
 ---
 
 ## Key Files
 
-- `src/types/ctx.rs` — `EdgionHttpContext`、`MatchInfo`（含 `sv` 字段）、`MatchedInfo`（含 `sv` 字段）
+- `src/types/ctx.rs` — `EdgionHttpContext`, `MatchInfo` (with `sv` field), `MatchedInfo` (with `sv` field)
 - `src/core/gateway/observe/access_log/entry.rs` — `AccessLogEntry`
 - `src/core/gateway/observe/access_log/logger.rs` — `AccessLogger`
 - `src/core/gateway/observe/logs/logger_factory.rs` — `create_async_logger()`
@@ -335,70 +335,70 @@ include_raw_uri = true
 
 ---
 
-## PluginLog 条目措辞规范
+## PluginLog entry wording rules
 
-### 1. 条目字面量风格（push 与 push_err 共用）
+### 1. Entry literal style (shared by push and push_err)
 
-1. 全小写英文单词 + 空格分词；每条 15-40 字节，≤ 4 个词（含动作词）
-2. 禁缩写。白名单（不展开）：ip, tls, http, https, tcp, udp, sni, id, url,
+1. All-lowercase English words separated by spaces; each entry 15-40 bytes, ≤ 4 words (including the action verb)
+2. No abbreviations. Whitelist (kept as-is): ip, tls, http, https, tcp, udp, sni, id, url,
    dns, jwt, jwks, cors, csrf
-3. 允许数字字面量：rate 429, retry 2, size 1024
-4. 事件+动作用冒号连接（两段都完整词，无空格粘连）：
-   `"key miss:allow"`、`"jwks refresh:stale"`、`"upstream select:failover"`
-   单段信息不加冒号：
-   `"upstream b selected"`、`"OK user jack"`
-5. 保留前缀动作词（不可改名）：OK / Deny / Rate / Allow / Skip
-6. **敏感动态值禁止**。push / push_err 的字符串中不得出现：token、claim 值、
-   raw header value、cookie、email、secrets（API key、password、session id）、
-   request/response body。
-   **允许的非敏感动态值**（仅 push 可用；push_err 参数已是 &'static str 编译期强制）：
-   - `ip`, `port`, `path`, `http status code`, `method`
-   - 数值（count, duration_ms, size, retry_n）
-   - user 身份（username, user_id）—— access log 已携带，一致性优先
-   - 闭集 tag（region name, upstream group name，代码层面的静态标签）
-   **错误路径永远走 push_err**（&'static str），绝不用 `push(&format!("...{}", err))`
-   拼错误信息 —— Display 可能泄漏 token/claim。
-7. 插件名不写入条目（已在 PluginLog.name 字段）。修正示例：
+3. Numeric literals allowed: rate 429, retry 2, size 1024
+4. Event+action joined by colon (both sides full words, no whitespace squeezing):
+   `"key miss:allow"`, `"jwks refresh:stale"`, `"upstream select:failover"`
+   Single-segment info has no colon:
+   `"upstream b selected"`, `"OK user jack"`
+5. Reserved prefix verbs (do not rename): OK / Deny / Rate / Allow / Skip
+6. **Sensitive dynamic values are forbidden**. The strings of push / push_err must not contain: token, claim values,
+   raw header value, cookie, email, secrets (API key, password, session id),
+   request/response body.
+   **Non-sensitive dynamic values allowed** (push only; push_err arguments are already &'static str at compile time):
+   - `ip`, `port`, `path`, http status code, `method`
+   - Numeric (count, duration_ms, size, retry_n)
+   - User identity (username, user_id) — already in the access log; consistency takes priority
+   - Bounded tags (region name, upstream group name — code-level static labels)
+   **Error paths always go through push_err** (&'static str); never use `push(&format!("...{}", err))`
+   to splice error info — Display may leak token/claim.
+7. Plugin name is not written into the entry (already in the PluginLog.name field). Fix example:
    "rl:nok:a" → "key miss:allow"
-8. **末尾 "; " 不要求**：push 条目无需手动加 "; " 结尾（JSON 数组序列化时每条本就是独立元素）。
-   push_err 的运行时仍然自动加 `"err: <kind>; "`（buffer.rs 内置行为），这部分不变。
-   建议示例：`log.push("OK user jack")`、`log.push(&format!("Direct {}:{}", ip, port))`。
-   （历史遗留的 "; " 条目先保留，后续审查统一整理。）
+8. **Trailing "; " is not required**: push entries do not need a manual trailing "; " (during JSON-array serialization each entry is already a separate element).
+   The runtime of push_err still automatically prepends `"err: <kind>; "` (built-in behavior of buffer.rs); that part is unchanged.
+   Suggested examples: `log.push("OK user jack")`, `log.push(&format!("Direct {}:{}", ip, port))`.
+   (Legacy "; " entries can be kept for now; cleanup will follow in a later review.)
 
-### 2. push vs push_err 判别
+### 2. push vs push_err
 
-- push：正常决策、分支命中、业务语义的 allow/deny、限流结果、降级但请求继续
-  例：`"OK user jack"` / `"Deny bad credential"` / `"Rate 429"` / `"key miss:allow"`
-- push_err：per-request 异常（config 读不出、远程调用失败、解码失败、内部
-  unreachable 分支）
-  例：`"token refresh fail"` / `"cache load fail"` / `"jwks fetch:timeout"`
-  （push_err 的 kind **不带** "; "，运行时自动补 `"err: <kind>; "`）
-kind 形如 `"<action> fail"` 或 `"<action>:<reason>"`。同一插件内两者可各自多次调用，
-最终 log 序列化为数组：
-`log: ["OK user jack", "err: jwks fetch:timeout; ", "OK fallback"]`。
+- push: normal decisions, branch hits, business-level allow/deny, rate-limit results, degraded-but-still-proceeding
+  Examples: `"OK user jack"` / `"Deny bad credential"` / `"Rate 429"` / `"key miss:allow"`
+- push_err: per-request exceptions (config not readable, remote call failure, decoding failure, internal
+  unreachable branch)
+  Examples: `"token refresh fail"` / `"cache load fail"` / `"jwks fetch:timeout"`
+  (push_err's kind has **no** "; "; the runtime auto-completes `"err: <kind>; "`)
+kind takes the form `"<action> fail"` or `"<action>:<reason>"`. Both can be called multiple times within the same plugin;
+the log is finally serialized as an array:
+`log: ["OK user jack", "err: jwks fetch:timeout; ", "OK fallback"]`.
 
-### 3. 关键节点筛选
+### 3. Key-checkpoint selection
 
-应加（删掉该条后，读 access log 看不出请求走向）：
-- 选了哪个 upstream / endpoint / region / failover
-- 选了哪条 auth 算法或 key 来源
-- 限流命中哪个 key/bucket、结果是 allow/throttle/deny
-- 缓存命中/未命中、是否走降级
-- 匹配到了哪条 rule/header/pattern
-- 所有能进入 PluginRunningResult::ErrTerminateRequest 的分支（必须 push_err 留痕）
+Add when (removing the entry would make the request flow unreadable in the access log):
+- Which upstream / endpoint / region / failover was selected
+- Which auth algorithm or key source was selected
+- Which key/bucket the rate limit hit, and the result (allow/throttle/deny)
+- Cache hit/miss, whether to fall back
+- Which rule/header/pattern matched
+- Every branch that can enter PluginRunningResult::ErrTerminateRequest (must push_err to leave a trace)
 
-不加：
-- 进入/离开函数、header 拆分、config 读取
-- 循环内部每次迭代
-- wrapper 层 run_if/skip_if（已由 conditional_filter.rs 自动 set_cond_skip）
-- 异常已有 push_err 就别再加一条 push("failed") 复述
+Do not add:
+- Function entry/exit, header parsing, config read
+- Each iteration inside a loop
+- Wrapper-layer run_if/skip_if (already handled by conditional_filter.rs via set_cond_skip)
+- Restating an exception with another push("failed") when push_err already exists
 
-### 4. tracing 边界（硬规则）
+### 4. tracing boundary (hard rule)
 
-per-request 调用链（filter 入口同步调用栈）范围内：
-- 错误 → push_err
-- 决策 → push
-- 禁止 tracing::{error,warn,info,debug,trace}!
+Within the per-request call chain (filter-entry synchronous call stack):
+- Errors → push_err
+- Decisions → push
+- tracing::{error,warn,info,debug,trace}! is forbidden
 
-允许保留 tracing::*! 的位置：插件构造函数 / new() / config load / 后台任务
-（JWKS 轮换、cache refresh timer、Redis reconnect）/ 模块初始化。
+Locations where tracing::*! may stay: plugin constructors / new() / config load / background tasks
+(JWKS rotation, cache refresh timer, Redis reconnect) / module initialization.

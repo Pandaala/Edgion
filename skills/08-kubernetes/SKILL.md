@@ -1,15 +1,15 @@
 ---
 name: kubernetes
-description: Kubernetes 相关知识：Gateway API 兼容性、API 版本升级策略等
+description: Kubernetes-related knowledge — Gateway API compatibility, API version upgrade strategy, and similar topics.
 ---
 
 # Kubernetes
 
-K8s 生态相关的知识和策略，包括 Gateway API 兼容性、资源版本升级等。
+Knowledge and strategies related to the K8s ecosystem, including Gateway API compatibility and resource version upgrades.
 
-## 文件索引
+## File index
 
-| 文件/目录 | 内容 |
-|----------|------|
-| [01-gateway-api/](01-gateway-api/SKILL.md) | Gateway API 兼容性备忘：不实现项、conformance 测试、TLS 策略 |
-| [04-api-version-upgrade.md](04-api-version-upgrade.md) | K8s API 版本升级策略：alpha/beta/GA 生命周期、控制器侧版本探测与回退、内部类型统一、测试矩阵 |
+| File / directory | Content |
+|------------------|---------|
+| [01-gateway-api/](01-gateway-api/SKILL.md) | Gateway API compatibility notes: not-implemented items, conformance tests, TLS strategy |
+| [04-api-version-upgrade.md](04-api-version-upgrade.md) | K8s API version upgrade strategy: alpha/beta/GA lifecycle, controller-side version probing and fallback, internal type unification, test matrix |

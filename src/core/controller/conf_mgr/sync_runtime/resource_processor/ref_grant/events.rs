@@ -42,11 +42,13 @@ impl ReferenceGrantEventDispatcher {
 
     /// Clear all registered listeners.
     ///
-    /// **不在正常 reset 流程中调用**——监听器在进程启动时通过 `ConfMgr::create()` 注册一次，
-    /// 必须跨 reset 持久存在。若在 reset 中调用此方法，首次重启后 ReferenceGrant 变更将
-    /// 永远无法触发路由重新入队（见 `ControllerRuntime::reset()` 注释）。
+    /// **Do not call this on the normal reset path** -- listeners are
+    /// registered once at process startup via `ConfMgr::create()` and must
+    /// persist across resets. If this method is called inside reset,
+    /// ReferenceGrant changes will never re-enqueue routes after the first
+    /// restart (see the `ControllerRuntime::reset()` comments).
     ///
-    /// 仅供测试使用。
+    /// For testing use only.
     pub fn clear_listeners(&self) {
         self.listeners.write().clear();
         tracing::debug!(component = "ref_grant_events", "Cleared all revalidation listeners");

@@ -1,16 +1,16 @@
 ---
 name: tcproute-features
-description: TCPRoute 完整 Schema：TCP 四层路由。
+description: Full TCPRoute schema: TCP layer-4 routing.
 ---
 
-# TCPRoute 资源
+# TCPRoute Resource
 
 > API: `gateway.networking.k8s.io/v1alpha2` | Scope: Namespaced
-> Gateway API v1.4.0 Experimental 资源
+> Gateway API v1.4.0 Experimental resource
 
-TCPRoute 定义原始 TCP 流量的路由规则。TCP 路由不做任何协议解析，仅按端口转发。
+TCPRoute defines routing rules for raw TCP traffic. TCP routes do not perform any protocol parsing; they only forward by port.
 
-## 完整 Schema
+## Full Schema
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1alpha2
@@ -19,9 +19,9 @@ metadata:
   name: my-tcp-route
   namespace: default
   annotations:
-    edgion.io/edgion-stream-plugins: "default/my-stream-plugins"  # StreamPlugins 绑定
-    edgion.io/proxy-protocol: "1"                                  # Proxy Protocol 版本
-    edgion.io/max-connect-retries: "3"                             # 最大连接重试
+    edgion.io/edgion-stream-plugins: "default/my-stream-plugins"  # StreamPlugins binding
+    edgion.io/proxy-protocol: "1"                                  # Proxy Protocol version
+    edgion.io/max-connect-retries: "3"                             # Max connection retries
 spec:
   parentRefs:
     - name: my-gateway
@@ -34,40 +34,40 @@ spec:
           weight: 100
 ```
 
-## spec 字段
+## spec Fields
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `parentRefs` | `Vec<ParentReference>` | 挂载到 Gateway 的 TCP 类型 Listener |
-| `rules` | `Vec<TCPRouteRule>` | TCP 路由规则（通常只有一条） |
+| Field | Type | Description |
+|-------|------|-------------|
+| `parentRefs` | `Vec<ParentReference>` | Attach to a TCP-type Listener of a Gateway |
+| `rules` | `Vec<TCPRouteRule>` | TCP routing rules (typically a single one) |
 
 ### TCPRouteRule
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `backendRefs` | `Vec<TCPBackendRef>` | TCP 后端引用 |
+| Field | Type | Description |
+|-------|------|-------------|
+| `backendRefs` | `Vec<TCPBackendRef>` | TCP backend references |
 
 ### TCPBackendRef
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `name` | `String` | 是 | Service 名称 |
-| `port` | `i32?` | 否 | 目标端口 |
-| `weight` | `i32?` | 否 | 流量权重 |
-| `namespace` | `String?` | 否 | 命名空间 |
-| `kind` | `String?` | 否 | 默认 `Service` |
-| `group` | `String?` | 否 | 默认 `""` |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | `String` | Yes | Service name |
+| `port` | `i32?` | No | Target port |
+| `weight` | `i32?` | No | Traffic weight |
+| `namespace` | `String?` | No | Namespace |
+| `kind` | `String?` | No | Default `Service` |
+| `group` | `String?` | No | Default `""` |
 
-## Edgion 扩展注解
+## Edgion Extension Annotations
 
-| 注解 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `edgion.io/edgion-stream-plugins` | `ns/name` | — | 绑定 EdgionStreamPlugins |
-| `edgion.io/proxy-protocol` | `"1"\|"2"` | — | 向上游发送 Proxy Protocol |
-| `edgion.io/max-connect-retries` | `u32` | `1` | 最大上游连接重试次数 |
+| Annotation | Type | Default | Description |
+|------------|------|---------|-------------|
+| `edgion.io/edgion-stream-plugins` | `ns/name` | — | Bind to an EdgionStreamPlugins resource |
+| `edgion.io/proxy-protocol` | `"1"\|"2"` | — | Send Proxy Protocol upstream |
+| `edgion.io/max-connect-retries` | `u32` | `1` | Max upstream connection retry count |
 
-## 特点
+## Characteristics
 
-- **无匹配条件**：TCP 路由仅按端口转发，不解析协议内容
-- **per-listener 隔离**：每个 Listener（按 `ListenerKey` 索引）独立路由
-- **StreamPlugins**：通过注解绑定 TCP 层插件（如 IP 限制）
+- **No match conditions**: TCP routes forward by port only and do not parse the protocol payload.
+- **Per-listener isolation**: each Listener (indexed by `ListenerKey`) routes independently.
+- **StreamPlugins**: bind TCP-layer plugins (e.g., IP restriction) via annotations.

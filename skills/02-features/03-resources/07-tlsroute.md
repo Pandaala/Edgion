@@ -1,25 +1,25 @@
 ---
 name: tlsroute-features
-description: TLSRoute 完整 Schema：基于 SNI 的 TLS 路由。
+description: Full TLSRoute schema: SNI-based TLS routing.
 ---
 
-# TLSRoute 资源
+# TLSRoute Resource
 
-> API: `gateway.networking.k8s.io/v1`（v1alpha3 兼容） | Scope: Namespaced
-> Gateway API v1.5.0 Standard 资源（v1.4.0 Experimental 下为 v1alpha3）
+> API: `gateway.networking.k8s.io/v1` (v1alpha3 compatible) | Scope: Namespaced
+> Gateway API v1.5.0 Standard resource (v1alpha3 in v1.4.0 Experimental)
 
-TLSRoute 基于 TLS ClientHello 中的 SNI（Server Name Indication）进行路由，支持 TLS 透传或终止后转发。
+TLSRoute routes based on the SNI (Server Name Indication) in the TLS ClientHello, supporting TLS passthrough or termination + forwarding.
 
-### 多版本兼容
+### Multi-version Compatibility
 
-| 安装清单 | v1alpha3 | v1 |
-|----------|----------|-----|
-| v1.4.0 experimental | **served=true, storage=true** | 不存在 |
+| Install Manifest | v1alpha3 | v1 |
+|------------------|----------|-----|
+| v1.4.0 experimental | **served=true, storage=true** | Does not exist |
 | v1.5.0 standard | served=false | **served=true, storage=true** |
 
-Edgion 控制器优先 watch v1，v1 不可用时 fallback v1alpha3（单活 watch）。v1alpha3 → v1 是纯版本晋升，spec 字段结构完全相同。FileSystem 模式下 v1alpha3 YAML 在解析入口自动归一化到 v1。
+The Edgion controller prefers to watch v1, falling back to v1alpha3 (single-active watch) when v1 is unavailable. v1alpha3 → v1 is a pure version promotion, with identical spec field structure. In FileSystem mode, v1alpha3 YAML is automatically normalized to v1 at the parsing entry.
 
-## 完整 Schema
+## Full Schema
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -30,13 +30,13 @@ metadata:
   annotations:
     edgion.io/edgion-stream-plugins: "default/my-stream-plugins"
     edgion.io/proxy-protocol: "2"
-    edgion.io/max-connect-retries: "3"             # 可选；默认 2，最高 5
+    edgion.io/max-connect-retries: "3"             # Optional; default 2, max 5
 spec:
   parentRefs:
     - name: my-gateway
       sectionName: tls-passthrough
 
-  hostnames:                                       # SNI 匹配
+  hostnames:                                       # SNI matching
     - "secure.example.com"
     - "*.internal.example.com"
 
@@ -47,57 +47,57 @@ spec:
           weight: 100
 ```
 
-## spec 字段
+## spec Fields
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `parentRefs` | `Vec<ParentReference>` | 挂载到 TLS 类型 Listener |
-| `hostnames` | `Vec<String>?` | SNI 主机名匹配列表（支持通配符） |
-| `rules` | `Vec<TLSRouteRule>` | TLS 路由规则 |
+| Field | Type | Description |
+|-------|------|-------------|
+| `parentRefs` | `Vec<ParentReference>` | Attach to a TLS-type Listener |
+| `hostnames` | `Vec<String>?` | SNI hostname match list (wildcards supported) |
+| `rules` | `Vec<TLSRouteRule>` | TLS routing rules |
 
 ### TLSRouteRule
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `backendRefs` | `Vec<TLSBackendRef>` | 后端引用 |
+| Field | Type | Description |
+|-------|------|-------------|
+| `backendRefs` | `Vec<TLSBackendRef>` | Backend references |
 
 ### TLSBackendRef
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `name` | `String` | 是 | Service 名称 |
-| `port` | `i32?` | 否 | 目标端口 |
-| `weight` | `i32?` | 否 | 流量权重 |
-| `namespace` | `String?` | 否 | 命名空间 |
-| `kind` | `String?` | 否 | 默认 `Service` |
-| `group` | `String?` | 否 | 默认 `""` |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | `String` | Yes | Service name |
+| `port` | `i32?` | No | Target port |
+| `weight` | `i32?` | No | Traffic weight |
+| `namespace` | `String?` | No | Namespace |
+| `kind` | `String?` | No | Default `Service` |
+| `group` | `String?` | No | Default `""` |
 
-## Edgion 扩展注解
+## Edgion Extension Annotations
 
-| 注解 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `edgion.io/edgion-stream-plugins` | `ns/name` | — | 绑定 EdgionStreamPlugins |
-| `edgion.io/proxy-protocol` | `"1"\|"2"` | — | 向上游发送 Proxy Protocol |
-| `edgion.io/max-connect-retries` | `u32` | `2` | 最大上游连接尝试次数，低于 `1` 归一化为 `1`，高于 `5` 封顶为 `5` |
+| Annotation | Type | Default | Description |
+|------------|------|---------|-------------|
+| `edgion.io/edgion-stream-plugins` | `ns/name` | — | Bind to an EdgionStreamPlugins resource |
+| `edgion.io/proxy-protocol` | `"1"\|"2"` | — | Send Proxy Protocol upstream |
+| `edgion.io/max-connect-retries` | `u32` | `2` | Max upstream connection attempts; values below `1` are normalized to `1`, values above `5` are capped at `5` |
 
-## 与 Gateway TLS 的配合
+## Coordination with Gateway TLS
 
-| Gateway Listener TLS Mode | TLSRoute 行为 |
-|---------------------------|--------------|
-| `Passthrough` | TLS 透传：Gateway 不终止 TLS，按 SNI 路由到后端 |
-| `Terminate` | TLS 终止：Gateway 解密后按 SNI 路由到后端 |
+| Gateway Listener TLS Mode | TLSRoute Behavior |
+|---------------------------|-------------------|
+| `Passthrough` | TLS passthrough: the Gateway does not terminate TLS and routes to the backend by SNI |
+| `Terminate` | TLS termination: after decryption, the Gateway routes to the backend by SNI |
 
-当前 Edgion 的产品边界：
+Current product boundaries in Edgion:
 
-- 支持标准 `Passthrough`
-- 支持标准 `Terminate`
-- 不支持 `TLSRouteModeMixed`
-- BackendTLSPolicy 不对 TLSRoute 生效（Passthrough 透传原始 TLS，Terminate 走 stream 层；需要后端 TLS 应使用 HTTPRoute/GRPCRoute）
+- Standard `Passthrough` is supported.
+- Standard `Terminate` is supported.
+- `TLSRouteModeMixed` is not supported.
+- BackendTLSPolicy does not apply to TLSRoute (Passthrough forwards the original TLS, and Terminate goes through the stream layer; use HTTPRoute/GRPCRoute when backend TLS is required).
 
-## 与 TCPRoute 的区别
+## Differences from TCPRoute
 
-| 维度 | TCPRoute | TLSRoute |
-|------|---------|---------|
-| 匹配维度 | 无（仅端口） | SNI hostname |
-| 协议感知 | 无 | TLS ClientHello |
-| 多路复用 | 一端口一路由 | 一端口多域名 |
+| Dimension | TCPRoute | TLSRoute |
+|-----------|----------|----------|
+| Match dimensions | None (port only) | SNI hostname |
+| Protocol awareness | None | TLS ClientHello |
+| Multiplexing | One route per port | Multiple hostnames per port |

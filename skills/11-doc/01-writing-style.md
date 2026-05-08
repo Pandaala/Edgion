@@ -1,74 +1,74 @@
-# 写作风格规范
+# Writing Style
 
-## 人称与语气
+## Person and tone
 
-| 规则 | 正确 | 错误 |
-|------|------|------|
-| 用"你"称呼读者 | "你可以通过…" | "用户可以通过…" |
-| 用主动语态 | "Gateway 解密 TLS 连接" | "TLS 连接被 Gateway 解密" |
-| 直接、简洁 | "配置 `allow_origins`" | "你需要去配置 `allow_origins` 这个字段" |
-| 不加无意义修饰 | "创建 Secret" | "请创建一个 Secret 资源" |
+| Rule | Correct | Incorrect |
+|------|---------|-----------|
+| Address the reader as "you" | "You can configure …" | "Users can configure …" |
+| Use active voice | "Gateway decrypts the TLS connection" | "The TLS connection is decrypted by Gateway" |
+| Direct and concise | "Configure `allow_origins`" | "You need to go and configure the `allow_origins` field" |
+| No meaningless padding | "Create a Secret" | "Please create a Secret resource" |
 
-**语气**：专业但不生硬。像同事间的技术交流，不是产品说明书。
+**Tone**: Professional but not stiff. Like technical conversation between colleagues, not a product manual.
 
-## 标题规则
+## Heading rules
 
-### 一级标题
+### H1
 
-- 就是功能/资源/概念的名称
-- 不加冗余前缀
+- It is the name of the feature, resource, or concept
+- No redundant prefixes
 
-| 正确 | 错误 |
-|------|------|
-| `# CORS 插件` | `# Edgion CORS 插件使用指南` |
-| `# TLS 终结` | `# 关于 TLS 终结的配置说明` |
-| `# HTTPRoute 总览` | `# HTTPRoute 用户指南总览文档` |
+| Correct | Incorrect |
+|---------|-----------|
+| `# CORS Plugin` | `# Edgion CORS Plugin Usage Guide` |
+| `# TLS Termination` | `# Configuration Notes about TLS Termination` |
+| `# HTTPRoute Overview` | `# HTTPRoute User Guide Overview Document` |
 
-### 章节标题
+### Section headings
 
-- 用动词或名词短语，不用完整句子
-- 按功能含义命名，不按文档位置命名
+- Use verbs or noun phrases, not full sentences
+- Name them by functional meaning, not by document position
 
-| 正确 | 错误 |
-|------|------|
-| `## 快速开始` | `## 第一节：快速开始` |
-| `## 配置参数` | `## 本章介绍配置参数` |
-| `## 常见问题` | `## FAQ 部分` |
+| Correct | Incorrect |
+|---------|-----------|
+| `## Quick Start` | `## Section 1: Quick Start` |
+| `## Configuration Parameters` | `## This Chapter Introduces Configuration Parameters` |
+| `## FAQ` | `## The FAQ Section` |
 
-## 开篇模式
+## Opening patterns
 
-### Edgion 扩展功能标注
+### Edgion extension callout
 
-属于 Edgion 扩展（非标准 Gateway API）的功能，在一级标题后立即用 blockquote 标注：
+For features that are Edgion extensions (not standard Gateway API), add a blockquote callout immediately after the H1:
 
 ```markdown
-# CORS 插件
+# CORS Plugin
 
-> **🔌 Edgion 扩展**
+> **🔌 Edgion extension**
 > 
-> CORS 是 `EdgionPlugins` CRD 提供的跨域配置插件，不属于标准 Gateway API。
+> CORS is a cross-origin configuration plugin provided by the `EdgionPlugins` CRD; it is not part of standard Gateway API.
 ```
 
-标注格式固定为：
-- 首行：`> **🔌 Edgion 扩展**`
-- 空行：`> `
-- 说明行：一句话说明这是什么 CRD / 什么能力，以及它不属于标准 Gateway API
+The callout format is fixed:
+- First line: `> **🔌 Edgion extension**`
+- Empty line: `> `
+- Description line: one sentence stating what CRD / what capability this is, and that it is not part of standard Gateway API
 
-**不需要标注的**：标准 Gateway API 功能（HTTPRoute、Gateway、GatewayClass 等）。
+**Does not need a callout**: standard Gateway API features (HTTPRoute, Gateway, GatewayClass, etc.).
 
-### 概述段落
+### Overview paragraph
 
-标注之后（或无标注时在一级标题后），用 1-3 句话说明：
-1. 这个功能是什么
-2. 解决什么问题
+After the callout (or, if there is none, after the H1), use 1–3 sentences to describe:
+1. What this feature is
+2. What problem it solves
 
-不要在概述段落讲配置细节。
+Do not put configuration details in the overview paragraph.
 
-## 技术术语
+## Technical terminology
 
-### 不翻译的术语
+### Terms not to translate
 
-以下 Gateway API 标准术语在中文文档中保持英文：
+The following standard Gateway API terms remain in English in Chinese documentation:
 
 - Gateway, GatewayClass, HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute
 - Listener, BackendRef, ParentRef, SectionName
@@ -76,104 +76,96 @@
 - Filter, Match, Rule
 - Endpoint, Service, Pod
 
-### 首次出现时标注
+### Annotate at first appearance
 
-中文文档中，Edgion 特有的概念首次出现时用括号标注英文原文：
+In Chinese documentation, Edgion-specific concepts are annotated with the original English in parentheses on first appearance — for example, the Chinese term for "control plane" should be followed by `(Controller)` the first time it appears, and the Chinese term for "data plane" should be followed by `(Gateway)`.
 
-```markdown
-控制面（Controller）负责 Kubernetes 资源处理，数据面（Gateway）负责流量代理。
-```
+Subsequent uses can use Chinese alone.
 
-后续出现直接用中文即可。
+### Names in code / configuration
 
-### 代码/配置中的名称
+YAML field names, CLI parameters, environment variables, etc. always use the original text wrapped in backticks. For example, in Chinese prose the field `allow_origins` is referenced as `` `allow_origins` ``, never translated or paraphrased.
 
-YAML 字段名、CLI 参数、环境变量等始终用原文加反引号：
+## Content boundaries
 
-```markdown
-配置 `allow_origins` 字段来指定允许的来源域名。
-```
+### What docs/ may cover
 
-## 内容边界
+- What a feature is and what problem it solves
+- How to configure it (YAML examples)
+- Configuration parameter descriptions
+- Use cases and best practices
+- FAQ and troubleshooting
+- Relationship to other features
 
-### docs/ 中可以讲的
+### What docs/ should not cover
 
-- 功能是什么、解决什么问题
-- 怎么配置（YAML 示例）
-- 配置参数说明
-- 使用场景和最佳实践
-- 常见问题和排错
-- 与其他功能的关联
+- Internal implementation details (handler flows, data structures, source locations)
+- Code-level design decisions
+- Performance implementation mechanisms
+- Concrete Rust code samples (dev-guide is the exception)
 
-### docs/ 中不要讲的
+If internal knowledge truly needs to be referenced, link to the corresponding document under dev-guide/.
 
-- 内部实现细节（Handler 流程、数据结构、源码位置）
-- 代码层面的设计决策
-- 性能实现机制
-- 具体的 Rust 代码示例（dev-guide 例外）
+## Format conventions
 
-如果确实需要涉及内部知识，链接到 dev-guide/ 的对应文档。
+### Emphasis
 
-## 格式约定
+| Purpose | Format | Example |
+|---------|--------|---------|
+| Code, configuration fields, CLI commands | Backticks | `allow_origins`, `kubectl apply` |
+| Important warning | Bold | **Do not use in production** |
+| Feature / product name | Plain text | Gateway API, Edgion |
+| Security warning | ⚠️ + bold | ⚠️ **For development only** |
+| New concept definition | Bold | **TLS termination** refers to … |
 
-### 强调
+### Lists
 
-| 用途 | 格式 | 示例 |
-|------|------|------|
-| 代码、配置字段、CLI 命令 | 反引号 | `allow_origins`、`kubectl apply` |
-| 重要警告 | 粗体 | **不要在生产环境使用** |
-| 功能名/产品名 | 普通文字 | Gateway API、Edgion |
-| 安全警告 | ⚠️ + 粗体 | ⚠️ **仅用于开发环境** |
-| 新概念定义 | 粗体 | **TLS 终结**是指… |
+- Use ordered lists (1. 2. 3.) for steps
+- Use unordered lists (-) to enumerate options
+- End list items with a period (Chinese) or no punctuation (phrase form)
 
-### 列表
+### Code blocks
 
-- 步骤用有序列表（1. 2. 3.）
-- 枚举选项用无序列表（-）
-- 列表项以句号结尾（中文）或不加标点（短语式）
+- Tag YAML configurations with the `yaml` language
+- Tag shell commands with `bash`
+- Use `text` (or no language tag) for output / logs
+- Use untagged code blocks for ASCII diagrams
 
-### 代码块
+### Right / wrong example markers
 
-- YAML 配置用 `yaml` 语法标注
-- Shell 命令用 `bash` 语法标注
-- 输出/日志用 `text` 或无标注
-- ASCII 图用无标注代码块
-
-### 正反示例标注
-
-当需要对比正确和错误的做法时，使用 ✅/❌ 标注：
+When contrasting correct and incorrect approaches, use ✅/❌:
 
 ```markdown
 ```yaml
-✅ 正确:
+✅ Correct:
 allow_origins: "https://app.example.com"
 allow_credentials: true
 
-❌ 错误:
+❌ Incorrect:
 allow_origins: "*"
 allow_credentials: true
-```（去掉此行前的反引号转义）
+``` (remove the backtick escape on the line above)
 ```
 
-或在表格中使用：
+Or in a table:
 
 ```markdown
-| 做法 | 示例 |
-|------|------|
-| ✅ 推荐 | `allow_origins: "https://app.example.com"` |
-| ❌ 避免 | `allow_origins: "*"` |
+| Practice | Example |
+|----------|---------|
+| ✅ Recommended | `allow_origins: "https://app.example.com"` |
+| ❌ Avoid | `allow_origins: "*"` |
 ```
 
 ---
 
-## YAML 示例规范
+## YAML example conventions
 
-### 完整性要求
+### Completeness requirement
 
-**每个 YAML 示例都必须是完整、可用的**。读者应该能直接复制粘贴并 `kubectl apply`（或稍作修改后使用）。
+**Every YAML example must be complete and runnable**. Readers should be able to copy-paste it directly and `kubectl apply` (or apply with minor edits).
 
 ```yaml
-# ✅ 完整示例：包含 apiVersion、kind、metadata、spec
+# ✅ Complete example: includes apiVersion, kind, metadata, spec
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -192,118 +184,118 @@ spec:
           port: 8080
 ```
 
-**例外**：插件文档的"快速开始"和"配置场景"章节可以只展示 `filters` 片段，但**完整配置示例**章节必须给出包含 HTTPRoute 外壳的完整 YAML。
+**Exception**: The "Quick Start" and "Configuration scenarios" sections of plugin docs may show only a `filters` snippet, but the **complete configuration example** section must give a full YAML including the HTTPRoute envelope.
 
-### 场景排列顺序
+### Scenario ordering
 
-从简单到复杂：
+From simple to complex:
 
-1. 最小可用配置（开发环境 / 快速验证）
-2. 单一场景（最常见的生产用法）
-3. 多选项组合
-4. 带安全/认证的配置
-5. 高级 / 边缘场景
+1. Minimum viable configuration (development / quick verification)
+2. Single scenario (most common production usage)
+3. Multi-option combination
+4. Configuration with security / authentication
+5. Advanced / edge scenarios
 
-每个场景都要有标题说明用途。
+Each scenario should have a heading describing its purpose.
 
-### 注释规则
+### Comment rules
 
-- 注释在字段上方，不在行尾
-- 中文文档用中文注释，英文文档用英文注释
-- 简洁，一行能说清
-- 不解释 YAML 语法本身
-- 字段名已自解释时不加注释
+- Place comments above the field, not at the end of the line
+- Chinese docs use Chinese comments; English docs use English comments
+- Concise — one line should suffice
+- Do not explain YAML syntax itself
+- Skip comments for self-explanatory field names
 
 ```yaml
-# ✅ 有价值的注释
+# ✅ Useful comment
 filters:
   - type: Cors
     config:
-      # 允许的前端域名
+      # Allowed frontend origins
       allow_origins: "https://app.example.com,https://admin.example.com"
-      # 预检请求缓存 24 小时
+      # Cache preflight requests for 24 hours
       max_age: 86400
 
-# ❌ 多余注释
+# ❌ Redundant comment
 filters:
-  - type: Cors          # 类型是 Cors
+  - type: Cors          # The type is Cors
     config:
-      allow_origins: "*" # 设置 allow_origins 为 *
+      allow_origins: "*" # Set allow_origins to *
 ```
 
-### 占位符统一
+### Placeholder consistency
 
-| 用途 | 占位符 | 不要用 |
-|------|--------|--------|
-| 域名 | `example.com`、`app.example.com`、`api.example.com` | `mysite.com`、`foo.bar` |
-| 管理域名 | `admin.example.com` | `management.xxx` |
-| 命名空间 | `production`、`staging`、`edgion-test` | `my-ns`、`test123` |
-| Service 名 | `api-service`、`echo-service`、`backend-service` | `svc1`、`my-svc` |
-| 端口 | `8080`（HTTP）、`443`（HTTPS）、`80`（HTTP 入口） | 随意数字 |
-| Secret 名 | `my-tls-secret`、`<purpose>-tls` | `secret1` |
-| Gateway 名 | `main-gateway`、`internal-gateway` | `gw1` |
-| Route 名 | `<purpose>-route`，如 `api-route`、`example-route` | `route1` |
-| IP 地址 | `192.168.1.x`（内网）、`10.0.0.x`（集群内） | `1.2.3.4` |
-| Base64 数据 | `<base64-encoded-cert>` 占位文字 | 真实 base64 长串 |
+| Purpose | Placeholder | Avoid |
+|---------|-------------|-------|
+| Domain | `example.com`, `app.example.com`, `api.example.com` | `mysite.com`, `foo.bar` |
+| Admin domain | `admin.example.com` | `management.xxx` |
+| Namespace | `production`, `staging`, `edgion-test` | `my-ns`, `test123` |
+| Service name | `api-service`, `echo-service`, `backend-service` | `svc1`, `my-svc` |
+| Port | `8080` (HTTP), `443` (HTTPS), `80` (HTTP entry) | Arbitrary numbers |
+| Secret name | `my-tls-secret`, `<purpose>-tls` | `secret1` |
+| Gateway name | `main-gateway`, `internal-gateway` | `gw1` |
+| Route name | `<purpose>-route`, e.g. `api-route`, `example-route` | `route1` |
+| IP address | `192.168.1.x` (private), `10.0.0.x` (in-cluster) | `1.2.3.4` |
+| Base64 data | `<base64-encoded-cert>` placeholder text | A real long base64 string |
 
-### 安全警告
+### Security warnings
 
-涉及安全的示例必须标注环境适用性：
+Examples involving security must be marked with environment applicability:
 
 ```markdown
-⚠️ **仅用于开发！不要在生产环境使用！**
+⚠️ **For development only! Do not use in production!**
 ```
 
-### YAML 格式
+### YAML formatting
 
-- 缩进用 2 个空格
-- 字符串值如包含特殊字符，使用双引号
-- 布尔值用 `true`/`false`，不用 `yes`/`no`
-- 空列表用 `[]`，空对象用 `{}`
-- 长行不折行（避免 `>` 或 `|` 多行语法，除非确有必要）
+- Indent with 2 spaces
+- Quote string values that contain special characters with double quotes
+- Use `true`/`false` for booleans, not `yes`/`no`
+- Use `[]` for empty lists and `{}` for empty objects
+- Do not wrap long lines (avoid `>` or `|` multiline syntax unless truly necessary)
 
 ---
 
-## 交叉引用规范
+## Cross-reference conventions
 
-### 相对路径规则
+### Relative path rules
 
-所有文档内引用使用**相对路径**，不使用绝对路径或 URL：
+All in-document references use **relative paths**, not absolute paths or URLs:
 
-- ✅ 相对路径写法（正确）：显示文字加相对路径，如 `[显示文字]` `(../overview.md)` — 路径相对于当前文件
-- ✅ 跨目录相对路径（正确）：`[显示文字]` `(../../infrastructure/mtls.md)`
-- ❌ 绝对路径（错误）：`/docs/zh-CN/user-guide/http-route/filters/overview.md`
+- ✅ Relative path (correct): display text plus a relative path, e.g. `[display text]` `(../overview.md)` — the path is relative to the current file
+- ✅ Cross-directory relative path (correct): `[display text]` `(../../infrastructure/mtls.md)`
+- ❌ Absolute path (incorrect): `/docs/zh-CN/user-guide/http-route/filters/overview.md`
 
-- 链接起点是当前文件所在目录
-- 跨语言目录时不要链接（en/ 中不链接到 zh-CN/）
-- 链接到目录入口时写 README.md，例如：`[后端配置]` `(../backends/README.md)`（路径需指向存在的文件）
+- The link starting point is the directory of the current file
+- Do not link across language directories (do not link from `en/` to `zh-CN/`)
+- When linking to a directory entry, write README.md, e.g.: `[Backend configuration]` `(../backends/README.md)` (the path must point to an existing file)
 
-### "相关文档"章节
+### "Related documents" section
 
-放在页面末尾，列出 3-6 个最相关的链接：
+Place at the end of the page; list 3–6 most relevant links:
 
 ```text
-## 相关文档
+## Related documents
 
-- HTTPS 监听器（相对路径，如 ../listeners/https.md）
-- EdgionTls 扩展（相对路径，如 ./edgion-tls.md）
-- mTLS 配置（相对路径，如 ../../infrastructure/mtls.md）
+- HTTPS listeners (relative path, e.g. ../listeners/https.md)
+- EdgionTls extension (relative path, e.g. ./edgion-tls.md)
+- mTLS configuration (relative path, e.g. ../../infrastructure/mtls.md)
 ```
 
-规则：按相关度排序；链接文字是目标文档标题；不写描述。
+Rules: order by relevance; the link text is the title of the target document; do not include a description.
 
-### 正文中的引用
+### References in body text
 
-首次提到其他功能时链接，后续出现不重复链接。章节末尾用"更多 X 见：..."引导到详细文档。
+Link the first time you mention another feature; do not repeat the link on subsequent mentions. At the end of a section, use "More on X: …" to direct readers to the detailed document.
 
-### 外部链接
+### External links
 
-推荐链接到权威来源（Gateway API 官方、MDN、K8s 官方、RFC）。不链接博客、商业页面、可能失效的文章。
+Prefer linking to authoritative sources (Gateway API official, MDN, K8s official, RFC). Do not link to blogs, commercial pages, or articles likely to break.
 
-### docs/ 与 skills/ 之间
+### Between docs/ and skills/
 
-docs/ 中**不要**链接到 skills/。需要架构信息时链接到 dev-guide/。
+`docs/` should **not** link to `skills/`. When you need architectural information, link to dev-guide/.
 
-### 链接维护
+### Link maintenance
 
-移动/重命名/删除文件时，搜索并更新所有引用。Review 检查清单包含链接有效性检查。
+When moving / renaming / deleting files, search for and update all references. The review checklist includes a link-validity check.

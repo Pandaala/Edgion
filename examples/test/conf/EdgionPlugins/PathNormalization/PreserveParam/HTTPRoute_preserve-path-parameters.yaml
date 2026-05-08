@@ -2,13 +2,13 @@
 # Hostname: path-norm-preserve.example.com
 # Gateway:  reuses edgion-plugins-gateway (edgion-test namespace)
 #
-# 此路由配合 02_EdgionPlugins_preserve-path-parameters.yaml 使用。
-# 网关需以 preserve_path_parameters = true 启动，否则 ;param 会被剥离。
+# This route is used together with 02_EdgionPlugins_preserve-path-parameters.yaml.
+# The gateway must start with preserve_path_parameters = true; otherwise ;param is stripped.
 #
-# 测试覆盖：
-#   /test/preserve/...  — 含 ;param 的请求（验证字面保留）
-#   /test/preserve/..;jsessionid=x/secret — 旁路验证（承诺退化场景，需 preserve 模式）
-#   /secret             — 敏感路径（被 RequestRestriction Path deny 保护）
+# Test coverage:
+#   /test/preserve/...  — requests containing ;param (verify literal preservation)
+#   /test/preserve/..;jsessionid=x/secret — bypass verification (commitment-degradation scenario, requires preserve mode)
+#   /secret             — sensitive path (protected by RequestRestriction Path deny)
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -21,9 +21,9 @@ spec:
   hostnames:
     - "path-norm-preserve.example.com"
   rules:
-    # Rule 1: preserve-param 测试端点（含 ;param 的请求）
-    # preserve_path_parameters = true 时：;v=1 字面保留，路由匹配 /test/preserve 前缀
-    # preserve_path_parameters = false 时：;v=1 被剥离，/test/preserve 前缀同样匹配
+    # Rule 1: preserve-param test endpoint (requests containing ;param)
+    # preserve_path_parameters = true: ;v=1 is preserved literally; route matches the /test/preserve prefix
+    # preserve_path_parameters = false: ;v=1 is stripped; the /test/preserve prefix still matches
     - matches:
         - path:
             type: PathPrefix
@@ -39,9 +39,9 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # Rule 2: /secret 端点 — 被 preserve-param 插件的 Path deny 保护
-    # 默认模式（strip）：/admin/..;jsessionid=x/secret 归一化为 /secret → 403
-    # opt-out 模式（preserve）：保留原样 → /secret deny 不命中 → 不进入此规则
+    # Rule 2: /secret endpoint — protected by the preserve-param plugin's Path deny
+    # Default mode (strip): /admin/..;jsessionid=x/secret normalizes to /secret -> 403
+    # Opt-out mode (preserve): kept as-is -> /secret deny does not match -> does not enter this rule
     - matches:
         - path:
             type: Exact

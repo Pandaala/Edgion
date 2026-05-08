@@ -108,12 +108,11 @@ Important rules:
 - If it tracks Service refs, Secret refs, or cross-namespace refs, follow the matching helper pattern used by similar handlers
 - If the resource needs no special logic, still add a minimal `ProcessorHandler<T>` so it participates in the normal processor lifecycle
 
-> **`on_change` 在 `save_to_cache` 之前执行**（这是有意的设计，见 `processor.rs` Step 10/11 注释）。
-> 在 `on_change` 内部查找"当前正在处理的资源本身"时，**必须使用 `RawStore`（`get_raw_any`）**，
-> 而不是 `ServerCache`——因为此时当前资源还没有写入缓存。
-> 在 `on_change` 里查其他资源（如 Gateway 查自己挂载的 Route）可以正常使用 `ServerCache`。
-> 错误地在 `on_change` 里用 `ServerCache` 查自身会在编译期通过但在运行时返回旧值，
-> 是一种**隐蔽的正确性问题**。
+> **`on_change` runs before `save_to_cache`** (this is intentional; see the Step 10/11 comments in `processor.rs`).
+> When `on_change` looks up "the resource currently being processed itself", it **must use `RawStore` (`get_raw_any`)**,
+> not `ServerCache` — at this point the current resource has not yet been written to the cache.
+> Looking up other resources from within `on_change` (for example, a Gateway looking up routes attached to it) is fine via `ServerCache`.
+> Mistakenly using `ServerCache` inside `on_change` to look up itself compiles but returns a stale value at runtime, which is a **subtle correctness bug**.
 
 ### 4. Decide Whether It Syncs To Gateway
 

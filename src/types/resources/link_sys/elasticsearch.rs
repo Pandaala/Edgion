@@ -384,28 +384,28 @@ compatibility:
     fn es_auth_rejects_inline_username() {
         let yaml = "type: basic\nsecretRef:\n  name: s\nusername: leaked";
         let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline username 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline username must be rejected by deny_unknown_fields");
     }
 
     #[test]
     fn es_auth_rejects_inline_password() {
         let yaml = "type: basic\nsecretRef:\n  name: s\npassword: leaked";
         let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline password 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline password must be rejected by deny_unknown_fields");
     }
 
     #[test]
     fn es_auth_rejects_inline_api_key() {
         let yaml = "type: apiKey\nsecretRef:\n  name: s\napiKeyId: leaked";
         let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline apiKeyId 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline apiKeyId must be rejected by deny_unknown_fields");
     }
 
     #[test]
     fn es_auth_rejects_inline_bearer_token() {
         let yaml = "type: bearer\nsecretRef:\n  name: s\nbearerToken: leaked";
         let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline bearerToken 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline bearerToken must be rejected by deny_unknown_fields");
     }
 
     #[test]

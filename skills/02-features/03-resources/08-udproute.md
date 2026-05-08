@@ -1,16 +1,16 @@
 ---
 name: udproute-features
-description: UDPRoute 完整 Schema：UDP 四层路由。
+description: Full UDPRoute schema: UDP layer-4 routing.
 ---
 
-# UDPRoute 资源
+# UDPRoute Resource
 
 > API: `gateway.networking.k8s.io/v1alpha2` | Scope: Namespaced
-> Gateway API v1.4.0 Experimental 资源
+> Gateway API v1.4.0 Experimental resource
 
-UDPRoute 定义 UDP 流量的路由规则。
+UDPRoute defines routing rules for UDP traffic.
 
-## 完整 Schema
+## Full Schema
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1alpha2
@@ -30,32 +30,32 @@ spec:
           weight: 100
 ```
 
-## spec 字段
+## spec Fields
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `parentRefs` | `Vec<ParentReference>` | 挂载到 UDP 类型 Listener |
-| `rules` | `Vec<UDPRouteRule>` | UDP 路由规则 |
+| Field | Type | Description |
+|-------|------|-------------|
+| `parentRefs` | `Vec<ParentReference>` | Attach to a UDP-type Listener |
+| `rules` | `Vec<UDPRouteRule>` | UDP routing rules |
 
 ### UDPRouteRule
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `backendRefs` | `Vec<UDPBackendRef>` | 后端引用 |
+| Field | Type | Description |
+|-------|------|-------------|
+| `backendRefs` | `Vec<UDPBackendRef>` | Backend references |
 
 ### UDPBackendRef
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `name` | `String` | 是 | Service 名称 |
-| `port` | `i32?` | 否 | 目标端口 |
-| `weight` | `i32?` | 否 | 流量权重 |
-| `namespace` | `String?` | 否 | 命名空间 |
-| `kind` | `String?` | 否 | 默认 `Service` |
-| `group` | `String?` | 否 | 默认 `""` |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | `String` | Yes | Service name |
+| `port` | `i32?` | No | Target port |
+| `weight` | `i32?` | No | Traffic weight |
+| `namespace` | `String?` | No | Namespace |
+| `kind` | `String?` | No | Default `Service` |
+| `group` | `String?` | No | Default `""` |
 
-## 特点
+## Characteristics
 
-- **无匹配条件**：UDP 路由仅按端口转发
-- **per-listener 隔离**：每个 Listener（按 `ListenerKey` 索引）独立路由
-- **无连接状态**：UDP 无连接概念，每个数据报独立路由
+- **No match conditions**: UDP routes forward by port only.
+- **Per-listener isolation**: each Listener (indexed by `ListenerKey`) routes independently.
+- **No connection state**: UDP is connectionless; each datagram is routed independently.

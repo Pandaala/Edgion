@@ -1,12 +1,12 @@
 # HTTP Plugin Development
 
-用于这些任务：
+Use this for tasks such as:
 
-- 新增或扩展 `EdgionPlugins` HTTP 层插件
-- 调整 `PluginRuntime`、`ExtensionRef`（route/backend filter list 引用）、`PluginSession`、条件执行或 PluginLog
-- 排查“插件配置有了，但路由没执行 / 执行顺序不对 / Secret 没解析 / access log 不对”
+- Adding or extending an HTTP-layer `EdgionPlugins` plugin.
+- Adjusting `PluginRuntime`, `ExtensionRef` (route/backend filter list reference), `PluginSession`, conditional execution, or PluginLog.
+- Troubleshooting "the plugin is configured but the route does not execute it / the execution order is wrong / the Secret is not resolved / the access log is wrong".
 
-## 先读这些真实入口
+## Read these real entry points first
 
 - [../../../src/types/resources/edgion_plugins/mod.rs](../../../src/types/resources/edgion_plugins/mod.rs)
 - [../../../src/types/resources/edgion_plugins/entry.rs](../../../src/types/resources/edgion_plugins/entry.rs)
@@ -21,75 +21,75 @@
 - [../../../src/core/gateway/plugins/http/plugin_store.rs](../../../src/core/gateway/plugins/http/plugin_store.rs)
 - [../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs](../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs)
 
-## 关键心智模型
+## Key mental model
 
-HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
+HTTP plugins now have two distinct runtime build paths. Identify which one you are touching first:
 
-### 1. `EdgionPlugins` 资源路径
+### 1. The `EdgionPlugins` resource path
 
-链路是：
+The chain is:
 
-1. Controller `EdgionPluginsHandler.preparse()` 调 `ep.preparse()`
-2. `EdgionPlugins::preparse()` 构建 `spec.plugin_runtime` 并收集 `preparse_errors`
-3. Gateway `PluginStore` 在 `full_set` / `partial_update` 时也会再次 `preparse()`
-4. 运行时通过 `PluginStore` 取到资源，再执行它自己的 `plugin_runtime`
+1. The Controller's `EdgionPluginsHandler.preparse()` calls `ep.preparse()`.
+2. `EdgionPlugins::preparse()` builds `spec.plugin_runtime` and collects `preparse_errors`.
+3. The Gateway's `PluginStore` also calls `preparse()` again on `full_set` / `partial_update`.
+4. At runtime, the resource is fetched through `PluginStore` and its own `plugin_runtime` is executed.
 
-这条路径主要服务：
+This path mainly serves:
 
-- `EdgionPlugins` 这种可复用插件资源
-- 依赖 Secret 解析的 HTTP 插件
+- Reusable plugin resources such as `EdgionPlugins`.
+- HTTP plugins that depend on Secret resolution.
 
-### 2. Route/Gateway API filter 路径
+### 2. The Route / Gateway API filter path
 
-链路是：
+The chain is:
 
-- `HTTPRoute` / `GRPCRoute` 预解析时按 scope 构建：rule 级用 `PluginRuntime::from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`，backend 级用 `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`。旧的 `from_httproute_filters()` / `from_grpcroute_filters()` 已 `#[deprecated]`，默认按 rule scope 转发到新入口
+- During `HTTPRoute` / `GRPCRoute` preparse, the runtime is built per scope: rule-level uses `PluginRuntime::from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`; backend-level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. The legacy `from_httproute_filters()` / `from_grpcroute_filters()` are `#[deprecated]` and forward to the new entry points with rule scope by default.
 
-这条路径主要服务：
+This path mainly serves:
 
 - `RequestHeaderModifier`
 - `ResponseHeaderModifier`
 - `RequestRedirect`
 - `URLRewrite`
 - `RequestMirror`
-- `ExtensionRef` wrapper 本身
+- The `ExtensionRef` wrapper itself.
 
-最容易踩坑的是把这两条路径混在一起：
+The most common pitfall is mixing the two paths:
 
-- 改了 `EdgionPlugin` enum，但没接 `PluginRuntime::create_*_from_edgion()`，`EdgionPlugins` 资源不会执行
-- 只看 route filter 预解析，忽略了 `PluginStore` 和 `ExtensionRef`
-- 只改 Gateway 侧，没让 controller `preparse()` / `update_status()` 暴露校验问题
+- Modifying the `EdgionPlugin` enum without wiring `PluginRuntime::create_*_from_edgion()` — the `EdgionPlugins` resource will not execute it.
+- Looking only at route filter preparse and ignoring `PluginStore` and `ExtensionRef`.
+- Changing only the Gateway side without letting the Controller's `preparse()` / `update_status()` surface validation issues.
 
-## 插件类型抉择
+## Plugin type decision
 
-| 场景 | 选 `EdgionPlugin` | 选 Gateway API filter |
-|------|-------------------|-----------------------|
-| 需要访问 Header / Cookie / Query / Path | 是 | 否 |
-| 认证、限流、重写、镜像等 HTTP 语义 | 是 | 否 |
-| 上游响应头 / 响应体 chunk | 是 | 否 |
-| 跨插件 `PluginSession` ctx 变量 | 是 | 否 |
-| 标准 Gateway API filter（HeaderModifier、Redirect、URLRewrite、Mirror） | 否 | 是，落 `gateway_api_filters/` |
-| 只依赖 IP / 监听端口 / SNI / mTLS | 否 | 否，转 Stream plugin |
+| Scenario | Choose `EdgionPlugin` | Choose Gateway API filter |
+|----------|------------------------|----------------------------|
+| Need Header / Cookie / Query / Path access | Yes | No |
+| HTTP semantics: auth, rate limit, rewrite, mirror | Yes | No |
+| Upstream response headers / response body chunks | Yes | No |
+| Cross-plugin `PluginSession` ctx variables | Yes | No |
+| Standard Gateway API filters (HeaderModifier, Redirect, URLRewrite, Mirror) | No | Yes — under `gateway_api_filters/` |
+| Only depends on IP / listener port / SNI / mTLS | No | No, switch to a Stream plugin |
 
-> 相关：[13-stream-plugin-dev.md](13-stream-plugin-dev.md)
+> Related: [13-stream-plugin-dev.md](13-stream-plugin-dev.md)
 
-## 选择插件阶段
+## Choose the plugin phase
 
-| 阶段 | trait | 何时运行 | 常见用途 |
-|------|-------|----------|----------|
-| 请求阶段 | `RequestFilter` | 发往上游前 | Auth、RateLimit、Rewrite、Mirror、直接拒绝 |
-| 响应头阶段 | `UpstreamResponseFilter` | 上游响应头到达时 | 改响应头、基于 header 快速判断 |
-| 响应体阶段 | `UpstreamResponseBodyFilter` | 每个 body chunk | 带宽限制、chunk 检查（**trait 签名故意无 `&mut PluginLog`**，per-chunk 路径必须 0 分配，详见 [05-plugin-system.md](05-plugin-system.md#关键约束body-阶段无-pluginlogper-chunk-路径必须-0-分配)） |
-| 响应结束阶段 | `UpstreamResponse` | 完整响应结束后 | 少数需要完整响应上下文的逻辑 |
+| Phase | trait | When it runs | Common uses |
+|-------|-------|--------------|-------------|
+| Request phase | `RequestFilter` | Before forwarding to upstream | Auth, RateLimit, Rewrite, Mirror, direct reject |
+| Response header phase | `UpstreamResponseFilter` | When upstream response headers arrive | Modify response headers, fast decision based on header |
+| Response body phase | `UpstreamResponseBodyFilter` | Each body chunk | Bandwidth limit, chunk inspection (**the trait signature deliberately omits `&mut PluginLog`**; the per-chunk path must allocate zero — see [05-plugin-system.md](05-plugin-system.md#-critical-constraint-no-pluginlog-in-body-phase-per-chunk-path-must-allocate-zero)) |
+| Response-end phase | `UpstreamResponse` | After the full response ends | Logic that needs the complete response context (rare) |
 
-默认优先选 `RequestFilter`。  
-如果不用上游响应信息，就不要把逻辑推到更晚的阶段。
+Default to `RequestFilter`.
+If you don't need upstream response info, don't push the logic into a later phase.
 
-## 最小改动清单
+## Minimum change checklist
 
-### 普通 HTTP 插件
+### A regular HTTP plugin
 
-通常至少会碰这些位置：
+You typically touch at least these locations:
 
 1. `src/types/resources/edgion_plugins/plugin_configs/<your_plugin>.rs`
 2. `src/types/resources/edgion_plugins/plugin_configs/mod.rs`
@@ -100,13 +100,13 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 7. `src/core/gateway/plugins/http/mod.rs`
 8. `src/core/gateway/plugins/runtime/plugin_runtime.rs`
 
-### 如果插件依赖 Secret
+### If the plugin depends on a Secret
 
-还要继续看：
+Continue with:
 
 - [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs)
 
-当前这个 handler 已经负责：
+This handler currently covers:
 
 - `BasicAuth`
 - `JwtAuth`
@@ -116,61 +116,61 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 - `KeyAuth`
 - `OpenidConnect`
 
-如果你的新插件也依赖 Secret，要把 Secret 解析和 `secret_ref_manager` 引用注册补进去。
+If your new plugin also depends on a Secret, add Secret resolution and `secret_ref_manager` reference registration.
 
-## 推荐开发顺序
+## Recommended development order
 
-### 1. 先决定插件类型（参见上方抉择表）
+### 1. Decide the plugin type first (see the decision table above)
 
-### 2. 定义配置结构
+### 2. Define the configuration struct
 
-位置通常在：
+Typically located in:
 
 - `src/types/resources/edgion_plugins/plugin_configs/`
 
-配置结构要注意：
+Notes for the configuration struct:
 
 - `#[serde(rename_all = "camelCase")]`
-- runtime 派生字段用 `#[serde(skip)]` 或 `#[schemars(skip)]`
-- 如果配置可能结构性无效，实现 `get_validation_error()`
+- Runtime-derived fields use `#[serde(skip)]` or `#[schemars(skip)]`.
+- If the configuration may be structurally invalid, implement `get_validation_error()`.
 
-如果能复用已有配置，不要复制近似 schema。
+If you can reuse an existing configuration, do not copy a near-duplicate schema.
 
-### 3. 接入 `EdgionPlugin` enum
+### 3. Wire it into the `EdgionPlugin` enum
 
-修改：
+Modify:
 
 - [../../../src/types/resources/edgion_plugins/edgion_plugin.rs](../../../src/types/resources/edgion_plugins/edgion_plugin.rs)
 
-至少补齐：
+At minimum, add:
 
-- enum variant
-- `type_name()`
-- 相关 re-export
+- The enum variant.
+- `type_name()`.
+- Related re-exports.
 
-### 4. 实现插件
+### 4. Implement the plugin
 
-位置通常是：
+Typically located in:
 
 - `src/core/gateway/plugins/http/<your_plugin>/mod.rs`
 - `src/core/gateway/plugins/http/<your_plugin>/plugin.rs`
 
-当前仓库里比较好的参考：
+Good references in the current repo:
 
-- 最简单 request 插件：`mock`
-- 依赖 ctx 变量：`real_ip`、`ctx_set`
-- 依赖 Secret 和复杂校验：`jwt_auth`、`openid_connect`、`key_auth`
-- body filter：`bandwidth_limit`
+- Simplest request plugin: `mock`.
+- Plugins that depend on ctx variables: `real_ip`, `ctx_set`.
+- Plugins that depend on Secrets and complex validation: `jwt_auth`, `openid_connect`, `key_auth`.
+- Body filter: `bandwidth_limit`.
 
-### 5. 在 `PluginRuntime` 注册构造逻辑
+### 5. Register the construction logic in `PluginRuntime`
 
-必须看：
+Must read:
 
 - [../../../src/core/gateway/plugins/runtime/plugin_runtime.rs](../../../src/core/gateway/plugins/runtime/plugin_runtime.rs)
 
-当前真实入口不是旧文档里的 `runtime.rs`，而是这个文件。
+The current real entry point is this file, not the old `runtime.rs` referenced by stale docs.
 
-常见需要改的函数：
+Functions you typically need to change:
 
 - `create_request_filter_from_edgion()`
 - `create_upstream_response_filter_from_edgion()`
@@ -179,62 +179,62 @@ HTTP 插件现在有两条不同的 runtime 构建路径，先分清再改：
 - `get_plugin_validation_error()`
 - `get_plugin_name()`
 
-只改 enum、不改这些构造函数，Gateway 不会执行你的插件。
+If you only modify the enum without modifying these constructors, the Gateway will not execute your plugin.
 
-### 6. 如果插件依赖 Secret，补 controller 解析链路
+### 6. If the plugin depends on Secrets, wire the Controller resolution chain
 
-当前 Secret 解析不是在 runtime 内部偷偷做的，而是在：
+Currently, Secret resolution is not silently done inside the runtime; it lives in:
 
 - `EdgionPluginsHandler.parse()`
 
-这里负责：
+This is responsible for:
 
-- 解析 Secret
-- 把结果写入 `resolved_*` runtime 字段
-- 向 `secret_ref_manager` 注册级联引用
-- 删除时通过 `on_delete()` 清理引用
+- Resolving Secrets.
+- Writing the result into `resolved_*` runtime fields.
+- Registering cascading references with `secret_ref_manager`.
+- Cleaning up references via `on_delete()` on deletion.
 
-如果你的插件依赖 Secret，但没接这条链路，通常会出现：
+If your plugin depends on Secrets but is not wired into this chain, you usually see:
 
-- YAML 能 apply
-- status 可能通过
-- 运行时却始终拿不到真实凭据
+- The YAML applies fine.
+- Status may even pass.
+- But the runtime never gets the actual credentials.
 
-### 7. 最后再补用户文档和测试
+### 7. Finally, add user docs and tests
 
-如果插件是用户可见能力，除了 skill / dev-guide，还要考虑 user-guide：
+If the plugin is a user-facing capability, in addition to skill / dev-guide, also consider user-guide:
 
 - `docs/zh-CN/user-guide/http-route/filters/edgion-plugins/`
 - `docs/en/user-guide/http-route/filters/edgion-plugins/`
 
-## 条件执行与 `ctx` 变量
+## Conditional execution and `ctx` variables
 
-当前 `RequestFilterEntry` / `UpstreamResponseFilterEntry` / 其他 entry 已经支持：
+`RequestFilterEntry` / `UpstreamResponseFilterEntry` / other entries already support:
 
 - `enable`
 - `conditions`
 
-条件执行的真实包装器在：
+The actual conditional-execution wrapper is in:
 
 - [../../../src/core/gateway/plugins/runtime/conditional_filter.rs](../../../src/core/gateway/plugins/runtime/conditional_filter.rs)
 
-重要区别：
+Important distinction:
 
-- `EdgionPlugins` 里的条目会自动包上 `Conditional*` wrapper
-- 通过 scope-explicit 入口（`from_httproute_filters_for_rule` / `from_httproute_filters_for_backend` 及 gRPC 同名变体）加进来的标准 Gateway API filters 当前不会自动套这个条件包装（内部由私有 `add_from_httproute_filters_inner` 添加）
+- Entries inside `EdgionPlugins` are automatically wrapped with a `Conditional*` wrapper.
+- Standard Gateway API filters added through the scope-explicit entries (`from_httproute_filters_for_rule` / `from_httproute_filters_for_backend` and the gRPC variants) currently are NOT auto-wrapped with this conditional wrapper (they are added through the private `add_from_httproute_filters_inner`).
 
-跨插件传值优先使用：
+For inter-plugin value passing, prefer:
 
 - `session.set_ctx_var()`
 - `session.get_ctx_var()`
 - `session.remove_ctx_var()`
 - `key_get()` / `key_set()`
 
-不要为了读前置插件结果，重复解析整份请求。
+Don't reparse the entire request just to read a previous plugin's result.
 
-## ExtensionRef 的唯一形态：HTTPRoute / GRPCRoute filter list
+## ExtensionRef has only one form: HTTPRoute / GRPCRoute filter list
 
-> **Note:** `EdgionPlugin::ExtensionRef`（嵌套形态，即在 `EdgionPlugins.spec.*Plugins` 里写 `type: ExtensionRef`）已移除（release `<version>`）——"插件引用插件"不再支持。Route 和 backend 级的 `ExtensionRef`（HTTPRoute / GRPCRoute / HTTPBackendRef 的 filter lists，Gateway API 标准）保留。详见 `docs/zh-CN/migrations/<version>-extension-ref.md`。
+> **Note:** `EdgionPlugin::ExtensionRef` (the nested form, i.e. writing `type: ExtensionRef` inside `EdgionPlugins.spec.*Plugins`) has been removed (release `<version>`) — "plugin referencing plugin" is no longer supported. Route- and backend-level `ExtensionRef` (HTTPRoute / GRPCRoute / HTTPBackendRef filter lists, the Gateway API standard) is retained. See `docs/zh-CN/migrations/<version>-extension-ref.md` for details.
 
 ```yaml
 HTTPRoute.rules[].filters:
@@ -242,16 +242,16 @@ HTTPRoute.rules[].filters:
     extensionRef: { kind: EdgionPlugins, name: B }
 ```
 
-- 一次声明 → 三个 stage 自动 fanout（request / upstream_response_filter / upstream_response_body_filter）
-- 每个 stage 自动从 B 拉同 stage 子集
-- 这是 Gateway API 标准约定，等价于"把 B 当 bundle 插入到这条路由"
-- 构建期 clone 到三个 Vec，详见 `plugin_runtime.rs::add_from_httproute_filters_inner` 的 `HTTPRouteFilterType::ExtensionRef` 分支
-- 已享受 per-request snapshot 优化（`ctx.resolved_route_ext_refs` index 化路径）
+- Single declaration → the three stages auto fan-out (request / upstream_response_filter / upstream_response_body_filter).
+- Each stage automatically pulls the same-stage subset from B.
+- This is the Gateway API standard convention, equivalent to "inserting B as a bundle into this route".
+- During build, the entries are cloned into three Vecs; see the `HTTPRouteFilterType::ExtensionRef` branch in `plugin_runtime.rs::add_from_httproute_filters_inner`.
+- Per-request snapshot optimization is already in place (the `ctx.resolved_route_ext_refs` index path).
 
-### 多插件复用的两种推荐模式
+### Two recommended patterns for multi-plugin reuse
 
-- **Aggregate 模式**：把多个插件合并到一个 `EdgionPlugins` 资源，路由只需一次 `ExtensionRef`。
-- **Side-by-side 模式**：在 `HTTPRoute.rules[].filters` 里并列写多个 `ExtensionRef`，分别指向不同的 `EdgionPlugins`。
+- **Aggregate pattern**: combine multiple plugins into one `EdgionPlugins` resource; the route only needs one `ExtensionRef`.
+- **Side-by-side pattern**: list multiple `ExtensionRef`s in `HTTPRoute.rules[].filters`, each pointing to a different `EdgionPlugins`.
 
 ```yaml
 HTTPRoute.rules[].filters:
@@ -261,100 +261,100 @@ HTTPRoute.rules[].filters:
     extensionRef: { kind: EdgionPlugins, name: shared-bundle-2 }
 ```
 
-复用通过"多 Route 引用同一资源"实现（对标 Envoy ECDS），不通过"插件引用插件"。
+Reuse is achieved by "multiple Routes referencing the same resource" (analogous to Envoy ECDS), not by "plugin referencing plugin".
 
-### 评估当前集群的嵌套用法（forensic 工具）
+### Auditing nested usage in the current cluster (forensic tool)
 
-Controller admin API 仍保留一个 diagnostic endpoint，用于盘点存量 yaml 里残留的嵌套 ExtensionRef（仅 forensic 用途，CRD schema 已不再接受嵌套形态）：
+The Controller admin API still keeps a diagnostic endpoint to enumerate residual nested ExtensionRef usage in stored YAML (forensic only; the CRD schema no longer accepts the nested form):
 
 ```
 GET /api/v1/diagnostics/nested_ext_ref_usage
 ```
 
-实现位置：`src/core/controller/api/diagnostics_handlers.rs`。
+Implementation: `src/core/controller/api/diagnostics_handlers.rs`.
 
-## `ExtensionRef` 执行链路
+## `ExtensionRef` execution chain
 
-如果插件是通过 `ExtensionRef` 被 route 引用，重点看：
+If the plugin is referenced by a route through `ExtensionRef`, focus on:
 
 - [../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs](../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs)
 
-当前行为是：
+Current behavior:
 
-- 运行时从 `PluginStore` 按 `namespace/name` 取 `EdgionPlugins`
-- 使用 `spec.plugin_runtime` 执行
-- 把插件日志压入 `edgion_plugins` 专用日志结构
+- At runtime, fetch the `EdgionPlugins` from `PluginStore` by `namespace/name`.
+- Execute using `spec.plugin_runtime`.
+- Push plugin logs into the dedicated `edgion_plugins` log structure.
 
-如果你在调试"ExtensionRef 没生效 / 插件日志不见了"，先从这里追。
+If you are debugging "ExtensionRef does not take effect / plugin logs are missing", start tracing from here.
 
-## 读取请求 Path
+## Reading the request path
 
-> 架构权威文档：[uri-normalization/SKILL.md](uri-normalization/SKILL.md)
+> Authoritative architecture doc: [uri-normalization/SKILL.md](uri-normalization/SKILL.md)
 
-path normalization 启用后，session trait 提供 5 个 path/uri 读方法。选错视图会导致 ACL 绕过或审计信息丢失。
+When path normalization is enabled, the session trait exposes 5 path/uri read methods. Choosing the wrong view leads to ACL bypass or audit info loss.
 
-| 方法 | 视图 | 返回类型 | 何时使用 |
-|------|------|----------|----------|
-| `session.get_path()` | current（规范化） | `&str` | ACL 决策、路由匹配（**首选**，零额外 alloc） |
-| `session.get_request_path()` | entry（冻结） | `&str` | 审计、安全调查、需要客户端原始 path 的场景 |
-| `session.get_uri()` | current（规范化） | `String` | 需要 path + query 的完整 URI（1 alloc） |
-| `session.get_request_uri()` | entry（冻结） | `String` | 审计完整 URI（入口 raw，含 query） |
-| `session.get_query()` | current | `Option<String>` | 取当前 query（不规范化） |
+| Method | View | Return type | When to use |
+|--------|------|-------------|-------------|
+| `session.get_path()` | current (normalized) | `&str` | ACL decisions, route matching (**preferred**, no extra alloc) |
+| `session.get_request_path()` | entry (frozen) | `&str` | Auditing, security investigation, scenarios needing the client's original path |
+| `session.get_uri()` | current (normalized) | `String` | Full URI of path + query (1 alloc) |
+| `session.get_request_uri()` | entry (frozen) | `String` | Full URI for auditing (entry raw, with query) |
+| `session.get_query()` | current | `Option<String>` | Get the current query (not normalized) |
 
-**默认选 `get_path()`**。只有明确需要客户端原始形态时才用 `get_request_path()` / `get_request_uri()`。
+**Default to `get_path()`**. Only use `get_request_path()` / `get_request_uri()` when you explicitly need the client's original form.
 
-## 修改请求 Path（Rewrite 插件）
+## Modifying the request path (Rewrite plugins)
 
-**唯一正确写法**：使用 trait 方法 `session.set_upstream_uri(&new_uri)`。
+**The only correct approach**: use the trait method `session.set_upstream_uri(&new_uri)`.
 
 ```rust
-// ✅ 正确：通过 trait 方法改写 path
+// Correct: rewrite path through the trait method
 let new_uri = format!("/v2{}", session.get_path());
 session.set_upstream_uri(&new_uri)?;
 
-// ❌ 严禁：直接操作 pingora 原始字段
-// session.req_header_mut().set_uri(parsed_uri);  // 不可用！
+// Forbidden: directly touching pingora raw fields
+// session.req_header_mut().set_uri(parsed_uri);  // Not allowed!
 ```
 
-**为什么禁止裸调 `req_header_mut().set_uri()`**：
+**Why directly calling `req_header_mut().set_uri()` is forbidden**:
 
-- ctx 缓存（`normalized_current_path`）不会自动刷新
-- 后续 `session.get_path()` 返回 **stale**（旧 path）
-- access_log `$uri` 记录旧 path
-- 路由决策、ACL 插件读到错误 path
-- **(v4)** `ctx.uri_finalized` flag 不会被置位，导致 `pg_upstream_peer::upstream_peer_http` 单点决策可能再次写入，覆盖 rewrite 结果
+- The ctx cache (`normalized_current_path`) is not refreshed automatically.
+- Subsequent `session.get_path()` returns **stale** (the old path).
+- The access_log `$uri` records the old path.
+- Route decisions and ACL plugins read the wrong path.
+- **(v4)** The `ctx.uri_finalized` flag isn't set, causing the `pg_upstream_peer::upstream_peer_http` single-point decision to potentially write again and overwrite the rewrite result.
 
-`session.set_upstream_uri()` 内部实现（`session_adapter::set_upstream_uri`）自动调用 `ctx.refresh_normalized_path()` **并置 `ctx.uri_finalized = true`**，保证缓存一致 + 单点决策跳过重写。所有 rewrite 插件（`proxy_rewrite`、`url_rewrite`、`request_redirect`、DSL `req.set_uri` 等）已走此路径，**插件层零改造**。
+The internal implementation of `session.set_upstream_uri()` (`session_adapter::set_upstream_uri`) automatically calls `ctx.refresh_normalized_path()` **and sets `ctx.uri_finalized = true`**, ensuring cache consistency and that the single-point decision skips rewriting. All rewrite plugins (`proxy_rewrite`, `url_rewrite`, `request_redirect`, DSL `req.set_uri`, etc.) already use this path; **the plugin layer needs no changes**.
 
-**(v4) `req_header_mut().set_uri()` 在整个 codebase 仅 2 处合法写入**（lint Rule 2）：
+**(v4) The only 2 legitimate `req_header_mut().set_uri()` write sites in the entire codebase** (lint Rule 2):
 
-1. `session_adapter::set_upstream_uri`（封装层，rewrite 插件入口）
-2. `pg_upstream_peer::upstream_peer_http` 单点决策块（spec §14，写 normalized 终态到 upstream）
+1. `session_adapter::set_upstream_uri` (the wrapper, the rewrite-plugin entry).
+2. The `pg_upstream_peer::upstream_peer_http` single-point decision block (spec §14, writes the normalized final state to upstream).
 
-两处都必须紧随 `ctx.uri_finalized = true`。任何第 3 处都是违规——审查时强报，详见 `skills/04-review/uri-normalization/SKILL.md` Rule 2。
+Both must immediately be followed by `ctx.uri_finalized = true`. Any third site is a violation — flag it during review; see `skills/04-review/uri-normalization/SKILL.md` Rule 2.
 
-**(v4) Path 转发到 upstream 的视图决策**（如果你的插件涉及上游路径选择）：
+**(v4) View decision for forwarding path to upstream** (relevant if your plugin influences upstream path selection):
 
-`upstream_peer_http` 入口处单点决定上游收到 raw 还是 normalized path，5 通道优先级：
+`upstream_peer_http` makes a single-point decision at entry whether the upstream receives the raw or normalized path; 5 channels by priority:
 
-1. `ctx.uri_finalized` 已 true（rewrite 插件已写）→ 不动
-2. HTTPRoute 注解 `edgion.io/forward-raw-path: "true"|"false"` → 强制
-3. `external_jump.preserve_raw_path = true`（region_route 类网关互转）→ raw
-4. 全局 `forward_normalized_path = false` → raw
-5. 默认 → 写 normalized
+1. `ctx.uri_finalized` already true (rewrite plugin already wrote) → no-op.
+2. HTTPRoute annotation `edgion.io/forward-raw-path: "true"|"false"` → forced.
+3. `external_jump.preserve_raw_path = true` (region_route-class gateway hop) → raw.
+4. Global `forward_normalized_path = false` → raw.
+5. Default → write normalized.
 
-**插件交互要点**：
-- 你的 rewrite-class 插件输出（`set_upstream_uri`）**最高优先级**——单点决策见 `uri_finalized = true` 即跳过
-- 设置 `external_jump`（如 region_route / dynamic_external_upstream 类）的插件需要明确选择 `preserve_raw_path`：网关互转选 `true`，普通外部 server 选 `false`
-- 详见 spec `docs/superpowers/specs/2026-04-26-uri-normalization-design.md` §14
+**Plugin interaction notes**:
+- Your rewrite-class plugin's output (`set_upstream_uri`) has the **highest priority** — the single-point decision sees `uri_finalized = true` and skips.
+- Plugins that set `external_jump` (such as region_route / dynamic_external_upstream) need to choose `preserve_raw_path` explicitly: `true` for gateway-to-gateway hops, `false` for ordinary external servers.
+- See spec `docs/superpowers/specs/2026-04-26-uri-normalization-design.md` §14 for details.
 
-## `PluginSession` 和常用 API
+## `PluginSession` and common APIs
 
-最常用的读写入口在：
+The most-used read/write entry points are at:
 
 - [../../../src/core/gateway/plugins/runtime/traits/session.rs](../../../src/core/gateway/plugins/runtime/traits/session.rs)
 
-高频 API：
+High-frequency APIs:
 
 - `header_value()` / `request_headers()`
 - `get_path()` / `get_request_path()` / `get_uri()` / `get_request_uri()` / `get_query()`
@@ -365,25 +365,25 @@ session.set_upstream_uri(&new_uri)?;
 - `set_ctx_var()` / `get_ctx_var()`
 - `key_get()` / `key_get_local()` / `key_set()`
 
-如果插件会调用外部 HTTP 服务，优先复用：
+If the plugin will call external HTTP services, prefer reusing:
 
 - `src/core/gateway/plugins/http/common/http_client.rs`
 - `src/core/gateway/plugins/http/common/auth_common.rs`
 - `src/core/gateway/plugins/http/common/jwt_common.rs`
 
-## `PluginLog` 规则
+## `PluginLog` rules
 
-入口在：
+Entry point:
 
 - [../../../src/core/gateway/plugins/runtime/log.rs](../../../src/core/gateway/plugins/runtime/log.rs)
 
-规则保持简单：
+Keep the rules simple:
 
-- 记录结果，不记录长篇内部过程
-- 用短语和分号结尾，例如 `OK u=jack; `
-- verbose 调试用 `tracing::debug!()`，不要把 access log 当调试 dump
-- 条件跳过 `cond_skip` 由 conditional wrapper 自动写，不要重复造自己的格式
-- **`UpstreamResponseBodyFilter` 阶段无 PluginLog**：trait 签名故意没有 log 参数，body 阶段每 chunk 调一次，per-chunk 写日志会爆。完整约束见 [05-plugin-system.md](05-plugin-system.md#关键约束body-阶段无-pluginlogper-chunk-路径必须-0-分配)
+- Record results, not lengthy internal traces.
+- Use short phrases ending with semicolons, e.g., `OK u=jack; `.
+- For verbose debugging, use `tracing::debug!()`; do not treat the access log as a debug dump.
+- Conditional skip (`cond_skip`) is written automatically by the conditional wrapper — do not invent your own format.
+- **No PluginLog in the `UpstreamResponseBodyFilter` phase**: the trait signature deliberately omits the log parameter; the body phase fires once per chunk, and per-chunk logging blows up. See the full constraint in [05-plugin-system.md](05-plugin-system.md#-critical-constraint-no-pluginlog-in-body-phase-per-chunk-path-must-allocate-zero).
 
 ## `ErrTerminateRequest` — write the response first
 
@@ -409,21 +409,21 @@ Bad Gateway fallback from the runtime, and `PluginTerminateWithoutResponse`
 appears in the access log `errors[]` field. Fix the plugin so it writes its
 own response and the marker disappears.
 
-## 项目特有规则
+## Project-specific rules
 
-### 没有 Consumer 模型
+### No Consumer model
 
-不要按 Kong / APISIX 的“Consumer -> Plugin”思路设计。
+Do not design with the Kong / APISIX "Consumer -> Plugin" mindset.
 
-当前仓库里：
+In this repo:
 
-- 凭据主要放在 Kubernetes Secret
-- 插件直接引用 Secret 或解析后的 runtime 字段
-- 上游身份通常通过请求头或 ctx 变量传递
+- Credentials live mainly in Kubernetes Secrets.
+- Plugins reference Secrets directly or use post-resolution runtime fields.
+- Upstream identity is usually conveyed via request headers or ctx variables.
 
-### 代码注释和日志用英文
+### Comments and logs in code use English
 
-这是当前仓库的通用约束，保持和现有插件一致。
+This is a general repo-wide convention; stay consistent with existing plugins.
 
 ## Validation
 
@@ -460,46 +460,44 @@ fn validation_error_returns_field_error_without_validate_call() {
 }
 ```
 
-## 测试建议
+## Testing recommendations
 
-优先补这四层：
+Cover these four layers in priority order:
 
-1. 配置与 `preparse()` 单测
-2. `MockPluginSession` 驱动的插件单测
-3. 如果有 Secret 解析，补 `EdgionPluginsHandler` 侧单测
-4. 通过 `ExtensionRef` 或真实路由命中的集成测试
+1. Unit tests for configuration and `preparse()`.
+2. Plugin unit tests driven by `MockPluginSession`.
+3. If Secret resolution is involved, add unit tests for `EdgionPluginsHandler`.
+4. Integration tests via `ExtensionRef` or actual route hits.
 
-当前 `PluginSession` 已带 `automock`，所以单测可以直接用：
+`PluginSession` already has `automock`, so unit tests can use `MockPluginSession` directly.
 
-- `MockPluginSession`
+### If the plugin supports hot reload (`partial_update` / `full_set`)
 
-### 如果插件支持热更新（`partial_update` / `full_set`）
+Verifying initial state is not enough — add a dynamic scenario that exercises the "YAML update → runtime behavior change" path. Templates: remove a credential (BasicAuth) or switch an enum field (RateLimit `onMissingKey`).
 
-光验初始状态不够——补一个 dynamic scenario 把"YAML 更新→ 运行时行为变"的链路也跑回归。模板：移除一条凭据（BasicAuth）、切换一个枚举字段（RateLimit `onMissingKey`）。
+- Look at existing scenarios to get started: `examples/code/client/dynamic/scenarios/basic_auth_dynamic.rs` / `rate_limit_dynamic.rs`.
+- conf directory convention: `examples/test/conf/EdgionPlugins/<Plugin>/DynamicTest/{initial,updates}/` (`load_conf.sh` automatically skips `updates/` and `delete/`).
+- For the detailed steps, CLI entry, and registration sites: [../../05-testing/01-integration-testing.md "Dynamic (hot reload) testing" section](../../05-testing/01-integration-testing.md).
 
-- 直接看现有 scenario 入门：`examples/code/client/dynamic/scenarios/basic_auth_dynamic.rs` / `rate_limit_dynamic.rs`
-- conf 目录约定：`examples/test/conf/EdgionPlugins/<Plugin>/DynamicTest/{initial,updates}/`（`load_conf.sh` 自动跳过 `updates/` 与 `delete/`）
-- 详细新增步骤、CLI 入口、注册位置：[../../05-testing/01-integration-testing.md「动态（热更新）测试」节](../../05-testing/01-integration-testing.md)
+> **Pitfalls**: BasicAuth bcrypt LRU, RateLimit sliding-window counters and other state-cached fields can false-pass on hot reload (the old cache hits). Prefer verifying **logic-branch** changes such as "the entire ref is removed" or "an enum field is toggled" — do not just verify "password content modified" or "a rate value changed".
 
-> **避坑**：BasicAuth bcrypt LRU、RateLimit sliding window counter 等带状态缓存的字段，热更新可能 false-pass（旧 cache 命中）。优先验"整条 ref 移除"或"枚举字段切换"这种**逻辑分支**变化，不要光验"修改密码内容"或"改 rate 数值"。
-
-另外可以参考：
+Other references:
 
 - `src/types/resources/edgion_plugins/tests.rs`
-- 各插件自身的 `plugin.rs` / `tests.rs`
+- Each plugin's own `plugin.rs` / `tests.rs`
 - [../../05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md)
 
-## 审查清单
+## Review checklist
 
-- 插件阶段选得是否正确
-- `EdgionPlugin` enum、runtime 构造、module export 是否都接齐
-- 是否误用了旧版 `runtime.rs` 文档路径，而没有落到当前的 `plugin_runtime.rs`
-- 如果依赖 Secret，`EdgionPluginsHandler.parse()` 和 `on_delete()` 是否补齐
-- 是否正确使用 `PluginSession` / `ctx` 变量，而不是绕过抽象
-- `PluginLog` 是否简洁，是否避免把大段调试信息写进 access log
-- 是否覆盖成功、失败、skip/run 条件和组合执行场景
+- Was the plugin phase chosen correctly?
+- Are the `EdgionPlugin` enum, runtime constructors, and module exports all wired up?
+- Was the obsolete `runtime.rs` doc path used by mistake instead of the current `plugin_runtime.rs`?
+- If a Secret is required, are `EdgionPluginsHandler.parse()` and `on_delete()` wired in?
+- Is `PluginSession` / `ctx` used correctly instead of bypassing the abstraction?
+- Is `PluginLog` concise — does it avoid stuffing large debug info into the access log?
+- Are success, failure, skip/run conditions, and combined execution all covered by tests?
 
-## 相关
+## Related
 
 - [docs/zh-CN/dev-guide/http-plugin-development.md](../../../docs/zh-CN/dev-guide/http-plugin-development.md)
 - [observability/00-access-log.md](../../03-coding/observability/00-access-log.md)

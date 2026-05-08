@@ -174,23 +174,29 @@ impl EdgionCenterCli {
         );
 
         // HTTP Admin API — unified auth supports both OIDC and local auth.
-        // Center 不走 Controller 的 Secret 自动生成路径，凭证只来自 operator 配置。
+        // Center does not use the Controller's auto-generated Secret path; credentials come only from operator configuration.
         let auth_config = config.auth.clone();
         let local_auth_config = config.local_auth.clone();
 
         let http_handle = tokio::spawn(async move {
             let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
             let oidc_intent = auth_config.as_ref().is_some_and(|c| c.enabled);
-            // Safe default：只要 operator 没有显式 opt out（enabled=false），就要求 auth。
-            // nothing_configured 场景下 require_auth=true 让 middleware 走 503 分支
-            // （而非 passthrough），防止"什么都不配"= 管理 API 裸奔。
+            // Safe default: as long as the operator has not explicitly opted
+            // out (enabled=false), require auth. In the nothing_configured
+            // case, require_auth=true makes the middleware take the 503
+            // branch (rather than passthrough), preventing "no configuration"
+            // from leaving the admin API exposed.
             let nothing_configured = local_auth_config.is_none() && auth_config.is_none();
             let require_auth = local_auth_intent || oidc_intent || nothing_configured;
 
-            // Defensive observability：两种"管理 API 没被 token 保护"的场景都要 WARN。
-            // 场景 1：什么都没配——middleware 走 503 fail-close 分支
-            // 场景 2：operator 显式 enabled=false 关掉了所有 provider——middleware 直通
-            //         （这是合法 no-auth 模式，但容易误操作，所以 WARN 不等于错误）
+            // Defensive observability: WARN on both scenarios where the
+            // admin API is not protected by a token.
+            // Scenario 1: nothing configured -- middleware takes the 503
+            //             fail-close branch.
+            // Scenario 2: operator explicitly set enabled=false on all
+            //             providers -- middleware passes through. (This is a
+            //             legitimate no-auth mode, but it is easy to do by
+            //             mistake, so WARN does not imply an error.)
             if nothing_configured {
                 tracing::warn!(
                     component = "center",
@@ -215,8 +221,8 @@ impl EdgionCenterCli {
             )
             .expect("center auth state build failed");
             let base_router = router(api_state);
-            // compose 内部固定装配顺序：业务路由 + auth 路由 + middleware + CORS。
-            // 返回的 app 视为终态，不可再 .route() / .layer()——见函数 doc。
+            // compose hard-codes the assembly order: business routes + auth routes + middleware + CORS.
+            // The returned app is final; do not call .route() / .layer() afterwards -- see the function doc.
             let app = crate::core::common::api::compose_admin_routes(base_router, auth_state, local_auth_intent);
             let listener = tokio::net::TcpListener::bind(http_addr).await.unwrap();
             axum::serve(listener, app).await.unwrap();
@@ -240,41 +246,42 @@ mod tests {
     use crate::core::center::config::CenterConfig;
     use crate::core::common::unified_auth::UnifiedAuthState;
 
-    /// Center 在 local_auth 和 auth 都为 None 时：
-    /// 1. 应能成功构造 UnifiedAuthState，不应 panic
-    /// 2. safe-default require_auth 推导结果应为 true
-    ///    （保证 middleware 走 503 分支而非 passthrough，防止"什么都不配 = admin API 裸奔"）
+    /// When both local_auth and auth are None on Center:
+    /// 1. UnifiedAuthState must be constructed successfully (must not panic).
+    /// 2. The safe-default derivation of require_auth must be true (so the
+    ///    middleware takes the 503 branch rather than passthrough,
+    ///    preventing "no configuration = admin API exposed").
     #[test]
     fn center_boot_with_no_auth_config_does_not_panic() {
         let auth_config: Option<&crate::core::common::auth::AdminAuthConfig> = None;
         let local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig> = None;
 
-        // Safe-default 公式（和 run() 里一致）
+        // Safe-default formula (matches the one in run())
         let local_intent = local_auth_config.is_some_and(|c| c.enabled);
         let oidc_intent = auth_config.is_some_and(|c| c.enabled);
         let nothing_configured = local_auth_config.is_none() && auth_config.is_none();
         let require_auth = local_intent || oidc_intent || nothing_configured;
 
-        // 两者都 None 时必为 true，否则 middleware 会 passthrough
+        // When both are None, this must be true; otherwise the middleware would passthrough
         assert!(
             require_auth,
             "require_auth must be true when nothing is configured (safe default)"
         );
 
-        // 且能成功构造 state（无 validate 路径，因为都是 None）
+        // And state must build successfully (no validate path since both are None)
         let state = UnifiedAuthState::from_configs(auth_config, local_auth_config, require_auth, "test")
             .expect("from_configs must succeed with no auth configs and require_auth=true");
         assert!(state.require_auth);
     }
 
-    /// HTTP 级回归：nothing_configured 场景下，业务路由应返回 503（不是 200 也不是 401）。
+    /// HTTP-level regression: in the nothing_configured case, business routes must return 503 (not 200 and not 401).
     #[tokio::test]
     async fn center_no_auth_config_admin_routes_return_503() {
         use axum::{body::Body, http::Request, routing::get, Router};
         use std::sync::Arc;
         use tower::ServiceExt;
 
-        // 模拟 Center 启动时的 require_auth 推导（nothing_configured → true）
+        // Simulate Center's require_auth derivation at startup (nothing_configured -> true)
         let auth_config: Option<&crate::core::common::auth::AdminAuthConfig> = None;
         let local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig> = None;
         let require_auth = true; // nothing_configured case
@@ -298,7 +305,7 @@ mod tests {
         );
     }
 
-    /// CenterConfig::default() 应该不带任何 admin 凭证（无 local_auth，无 OIDC）。
+    /// CenterConfig::default() must carry no admin credentials (no local_auth and no OIDC).
     #[test]
     fn center_default_config_yields_no_auth_config() {
         let config = CenterConfig::default();

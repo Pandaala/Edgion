@@ -1,28 +1,28 @@
 ---
 name: gateway-tcp-route
-description: TCP 路由：per-listener 路由表、TCP 代理实现、ConfHandler。
+description: TCP route — per-listener route table, TCP proxy implementation, ConfHandler.
 ---
 
-# TCP 路由
+# TCP route
 
-## 概述
+## Overview
 
-TCPRoute 实现了 Gateway API 的 L4 TCP 路由功能。TCP 路由的语义比 HTTP/gRPC 简单得多：没有基于主机名或路径的匹配维度，每个 listener 绑定一组路由，使用 first-match 语义选择后端。
+TCPRoute implements the L4 TCP routing capability of the Gateway API. TCP routing semantics are much simpler than HTTP/gRPC — there is no hostname or path matching dimension; each listener is bound to a set of routes and uses first-match semantics to select the backend.
 
-## 模块结构
+## Module structure
 
 ```
 src/core/gateway/routes/tcp/
-├── mod.rs                # 模块入口与类型导出
-├── conf_handler_impl.rs  # ConfHandler<TCPRoute> 实现
+├── mod.rs                # module entry and type exports
+├── conf_handler_impl.rs  # ConfHandler<TCPRoute> implementation
 ├── routes_mgr.rs         # TcpPortRouteManager / GlobalTcpRouteManagers
-├── tcp_route_table.rs    # TcpRouteTable：per-listener 不可变路由快照
-└── edgion_tcp.rs         # EdgionTcpProxy：TCP 代理实现
+├── tcp_route_table.rs    # TcpRouteTable: per-listener immutable route snapshot
+└── edgion_tcp.rs         # EdgionTcpProxy: TCP proxy implementation
 ```
 
-## Per-listener 路由表
+## Per-listener route table
 
-`TcpRouteTable` 是一个极简的不可变快照：
+`TcpRouteTable` is a minimal immutable snapshot:
 
 ```rust
 pub struct TcpRouteTable {
@@ -30,55 +30,55 @@ pub struct TcpRouteTable {
 }
 ```
 
-- **构建**：`from_routes` 从 `HashMap<String, Arc<TCPRoute>>` 收集所有路由到一个 Vec。
-- **匹配**：`match_route()` 使用 first-match 语义，直接返回 `routes.first()`。
-- TCP 没有主机名维度（不同于 TLS 的 SNI 匹配），因此不需要 `HashHost` 索引。
-- 按 Gateway API 规范，每个 TCP listener 通常至多绑定一个 TCPRoute。
+- **Build**: `from_routes` collects all routes from `HashMap<String, Arc<TCPRoute>>` into a Vec.
+- **Match**: `match_route()` uses first-match semantics — returns `routes.first()` directly.
+- TCP has no hostname dimension (unlike TLS's SNI matching), so no `HashHost` index is needed.
+- Per the Gateway API spec, each TCP listener is typically bound to at most one TCPRoute.
 
-## 路由管理
+## Route management
 
-`GlobalTcpRouteManagers` 管理全局 TCP 路由，结构遵循统一的 per-listener 模式：
+`GlobalTcpRouteManagers` manages global TCP routes following the unified per-listener pattern:
 
 ```
 GlobalTcpRouteManagers
-├── route_cache: DashMap<String, Arc<TCPRoute>>        # 全局路由缓存
+├── route_cache: DashMap<String, Arc<TCPRoute>>        # global route cache
 └── by_listener: DashMap<ListenerKey, Arc<TcpPortRouteManager>>
     └── TcpPortRouteManager
-        └── route_table: ArcSwap<TcpRouteTable>        # per-listener 快照
+        └── route_table: ArcSwap<TcpRouteTable>        # per-listener snapshot
 ```
 
-### Listener 分桶
+### Listener bucketing
 
-`bucket_routes_by_listener` 通过 `resolved_listeners`（Controller 预计算）将路由分配到对应 listener。若路由无 `resolved_listeners`，会打印警告并跳过（TCP 路由必须绑定到具体 listener）。
+`bucket_routes_by_listener` distributes routes to the matching listener via `resolved_listeners` (precomputed by the Controller). If a route has no `resolved_listeners`, a warning is logged and the route is skipped (TCP routes must bind to a specific listener).
 
-### 重建策略
+### Rebuild strategy
 
-- `rebuild_all_listener_managers`：全量重建所有 listener 路由表，清理无路由的过期 listener。
-- `rebuild_affected_listener_managers`：仅重建受影响 listener（增量更新时使用）。
+- `rebuild_all_listener_managers`: full rebuild of every listener route table; cleans up stale listeners with no routes.
+- `rebuild_affected_listener_managers`: rebuild only affected listeners (used by incremental updates).
 
-## TCP 代理
+## TCP proxy
 
-`EdgionTcpProxy` 是 TCP 代理的核心实现：
+`EdgionTcpProxy` is the core TCP proxy implementation:
 
-- 持有 `Arc<TcpPortRouteManager>`，通过 `load_route_table()` 获取当前路由快照。
-- 每个连接调用 `match_route()` 获取路由。
-- 从路由的 `backend_refs` 中选择后端，建立上游 TCP 连接。
-- 双向透明数据转发，不解析应用层协议。
+- Holds an `Arc<TcpPortRouteManager>` and gets the current snapshot via `load_route_table()`.
+- Calls `match_route()` once per connection to obtain the route.
+- Selects a backend from the route's `backend_refs` and establishes an upstream TCP connection.
+- Forwards data transparently in both directions, never parsing the application layer.
 
-## ConfHandler 处理
+## ConfHandler handling
 
-`ConfHandler<TCPRoute>` 实现：
+`ConfHandler<TCPRoute>` implementation:
 
-- `full_set`：清空 route_cache，全量替换，调用 `rebuild_all_listener_managers`。
-- `partial_update`：计算受影响 listener，更新 route_cache，调用 `rebuild_affected_listener_managers`。
+- `full_set`: clear route_cache, full replace, call `rebuild_all_listener_managers`.
+- `partial_update`: compute affected listeners, update route_cache, call `rebuild_affected_listener_managers`.
 
-路由的 `ArcSwap` 原子切换确保已有连接不受影响，新连接自动获取最新快照。
+The route's `ArcSwap` atomic swap ensures existing connections are unaffected and new connections automatically pick up the latest snapshot.
 
-## 关键源文件
+## Key source files
 
-| 文件 | 职责 |
-|------|------|
-| `src/core/gateway/routes/tcp/routes_mgr.rs` | GlobalTcpRouteManagers、TcpPortRouteManager |
+| File | Responsibility |
+|------|----------------|
+| `src/core/gateway/routes/tcp/routes_mgr.rs` | GlobalTcpRouteManagers, TcpPortRouteManager |
 | `src/core/gateway/routes/tcp/tcp_route_table.rs` | TcpRouteTable |
 | `src/core/gateway/routes/tcp/edgion_tcp.rs` | EdgionTcpProxy |
-| `src/core/gateway/routes/tcp/conf_handler_impl.rs` | ConfHandler<TCPRoute> 实现 |
+| `src/core/gateway/routes/tcp/conf_handler_impl.rs` | ConfHandler<TCPRoute> implementation |

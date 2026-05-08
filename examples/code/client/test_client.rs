@@ -1434,7 +1434,7 @@ async fn run_dynamic_scenario(cli: &Cli, sid: &str) -> Result<()> {
     let project_root = std::env::current_dir().context("Failed to get current directory")?;
     let conf_root = project_root.join("examples/test/conf");
 
-    // Gateway 模式下从 ports.json 拉默认 http 端口；否则用 CLI 默认。
+    // In Gateway mode, pull the default HTTP port from ports.json; otherwise use the CLI defaults.
     let (http_port, grpc_port, tcp_port, udp_port, https_port, grpc_https_port, http_host, grpc_host) = if cli.gateway {
         match port_config::PortConfig::load() {
             Ok(cfg) => {
@@ -1483,7 +1483,7 @@ async fn run_dynamic_scenario(cli: &Cli, sid: &str) -> Result<()> {
         grpc_port,
         cli.websocket_port,
         tcp_port,
-        cli.tcp_port + 1, // tcp_filtered_port 约定为 tcp+1
+        cli.tcp_port + 1, // tcp_filtered_port is by convention tcp+1
         udp_port,
         https_port,
         grpc_https_port,
@@ -1512,7 +1512,7 @@ async fn run_dynamic_scenario(cli: &Cli, sid: &str) -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    //  rustls（）
+    // Install the default rustls crypto provider (once).
     INIT.call_once(|| {
         rustls::crypto::ring::default_provider()
             .install_default()
@@ -1525,7 +1525,7 @@ async fn main() -> Result<()> {
         tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).init();
     }
 
-    // --list-dynamic-scenarios: 打印 id 列表后退出。
+    // --list-dynamic-scenarios: print the id list and exit.
     if cli.list_dynamic_scenarios {
         for s in dynamic::all() {
             println!("{}", s.id);
@@ -1533,7 +1533,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // --dynamic-scenario <id>: 执行单个 scenario 后退出。
+    // --dynamic-scenario <id>: run a single scenario and exit.
     if let Some(ref sid) = cli.dynamic_scenario {
         return run_dynamic_scenario(&cli, sid).await;
     }
