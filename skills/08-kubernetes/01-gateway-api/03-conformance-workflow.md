@@ -36,7 +36,7 @@ cd examples/gateway-api-conformance
 
 ### 2. 选择测试项
 
-查看进度 checklist：`tasks/todo/gateway-api-1.5-conformance-tests/09-checklist.md`
+进度 checklist 由用户/维护者按需自行维护（仓库内目前不放置常驻文件）。
 
 优先级顺序：
 1. HTTPRoute Core（未勾选项）
@@ -51,11 +51,7 @@ cd examples/gateway-api-conformance
 
 对选中的测试进行分析。读取：
 
-1. `tasks/todo/gateway-api-1.5-conformance-tests/` 下对应类别的测试描述文件
-   - HTTPRoute → `01-httproute-tests.md`
-   - Gateway → `02-gateway-tests.md`
-   - TLSRoute → `03-tlsroute-tests.md`
-   - GRPCRoute → `04-grpcroute-tests.md`
+1. 测试源代码 → `examples/gateway-api-conformance/conformance_test.go` 与上游 `sigs.k8s.io/gateway-api/conformance/tests/<test-name>.go`（按测试名直接 grep）
 2. 已知不支持项 → `skills/08-kubernetes/01-gateway-api/01-not-implemented.md`
 3. Controller 实现 → `skills/01-architecture/01-controller/`
 4. Gateway 数据面 → `skills/01-architecture/02-gateway/`
@@ -119,7 +115,7 @@ go test ./... -run "TestConformance/<TestName>" -v -timeout 10m -count=1 \
 ### 7. 记录结果
 
 测试通过后：
-1. 更新 `tasks/todo/gateway-api-1.5-conformance-tests/09-checklist.md`
+1. 在自己维护的进度 checklist 中勾选（仓库内不放置常驻文件）
 2. 如有重要发现，更新 `skills/08-kubernetes/01-gateway-api/` 相关文档
 
 ### 8. 扩展运行（可选）

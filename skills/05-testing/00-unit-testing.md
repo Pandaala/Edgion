@@ -127,6 +127,44 @@ fn test_reference_grant_matches_exact_namespace() { ... }
 - **不要** 依赖文件系统的绝对路径 — 用 `tempfile`
 - **不要** 写只验证 "不 panic" 的空测试
 
+## 删除 / 合并单测前必须读：判定规则
+
+精简 / 合并单测时（合并参数化、删除被集成等价覆盖的测试），**符合以下任一条的必须保留为单元测试**，不得删除、不得合并到失去粒度：
+
+1. **数据结构不变量** — LRU 计数器下溢、`hit_ratio` 分母为 0 的 NaN 防护
+2. **错误信息文本** — Condition 的 `reason` / `message` 到枚举的映射（集成测无法精确比对文本）
+3. **算法正确性** — IP CIDR 合法性、radix 树构建、hostname 通配符覆盖关系
+4. **spec 一致性** — Gateway API spec 要求的排序/过滤行为（如 regex 长度优先）
+5. **wire format / 序列化兼容** — serde `rename_all` 等属性（CLI / 跨进程硬解析的字段）
+6. **安全边界** — mTLS `verify_depth` 范围、cipher 白名单、SAN 覆盖逻辑
+7. **版本兼容** — v1alpha3→v1 等 CRD 版本转换（集成测通常只跑最新版本）
+8. **回归修复** — 有历史 bug 编号（如 P0-07 leastconn 计数）的测试
+9. **纯密码学 / JWT 签发校验** — 不能靠黑盒请求证明
+
+### 关键不可动清单（举例，非全量）
+
+| 位置 | 原因 |
+|---|---|
+| `src/core/gateway/lb/runtime_state/mod.rs` leastconn 计数 | P0-07 回归 |
+| `src/core/gateway/tls/validation/cert.rs` | mTLS verify_depth / SAN 通配符 |
+| `src/core/gateway/cache/lru.rs` 不变量测试 | LRU 下溢 / hit_ratio |
+| `src/core/gateway/routes/grpc/match_engine.rs` 排序测试 | spec conformance |
+| `src/core/gateway/runtime/matching/route.rs` allowed_routes | spec conformance |
+| `src/core/controller/conf_mgr/sync_runtime/resource_processor/status_utils.rs` Condition 映射 | reason/message 文本 |
+| `src/core/controller/conf_mgr/sync_runtime/resource_processor/listener_port_manager.rs` 端口冲突矩阵 | 协议混合规则 |
+| `src/core/controller/conf_mgr/conf_center/file_system/resource_controller.rs` v1alpha3→v1 | 版本兼容 |
+| `src/core/common/matcher/**` | IP / host 匹配算法 |
+| `src/core/common/utils/duration.rs` / `real_ip_extractor.rs` | 时间表达式 / 头优先级算法 |
+| `src/core/common/unified_auth/mod.rs` `from_configs` / `require_auth` | 多源认证装配 |
+| `src/core/common/local_auth/handlers.rs` `AuthStatus` JSON wire 格式 | CLI 硬解析依赖 |
+
+### Reviewer checklist（精简 PR 必看）
+
+PR 删除上表中任何测试，必须在描述里说明：
+- **原因** — 为什么觉得可以删
+- **替代覆盖** — 集成测哪个 suite / 哪条 case 等价覆盖了
+- **为什么集成能精确等价** — 集成测对错误文本、内部不变量、异常路径枚举系统性盲，必须证明这次不踩到
+
 ## CI 集成
 
 单元测试在 CI 中通过 `.github/workflows/ci.yml` 自动运行：

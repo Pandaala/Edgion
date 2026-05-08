@@ -55,7 +55,7 @@ from the control plane would be misleading.
 曾评估过 Controller → Gateway HTTP Pull 反查方案（设计完成到文件级实现计划），
 但引入全新通信路径、proto 改动、延时队列等，复杂度过高，决定不实施。
 
-- 方案设计保留备查：`tasks/todo/data-plane-status-feedback.md`（已归档，文件不再存在）
+- 该方案的设计文档已删除，未保留备查文件。
 - 不实现决策记录：[skills/08-kubernetes/01-gateway-api/01-not-implemented.md](../../../skills/08-kubernetes/01-gateway-api/01-not-implemented.md)
 
 ## 4. Resource Categories and Status Patterns

@@ -7,6 +7,19 @@ description: Gateway 可观测性：AccessLog 零拷贝 JSON、协议日志、Pr
 
 > 可观测性模块提供访问日志、协议日志、Prometheus 指标三个维度的运行时洞察。
 
+## 数据面可观测性铁律
+
+**数据面热路径（`pg_*` 回调、插件运行时、stream 路由、session_persistence、TLS 回调等）禁止使用任何 `tracing::` 宏（包括 `tracing::debug!`）。**
+
+允许且唯一的数据面观测渠道：
+
+1. AccessLog（HTTP/gRPC 请求级 JSON 日志，零拷贝）
+2. 协议日志（`ssl_log` / `tcp_log` / `tls_log` / `udp_log`）
+3. Prometheus 指标（`metrics::counter!` / `histogram!` / `gauge!`）
+4. 错误码累积（`EdgionStatus`，写入 `EdgionHttpContext.errors`，最终落入 AccessLog `errors` 字段）
+
+控制面与启动期日志走 `tracing` 不在此约束内。详见 [`../../03-coding/01-log-safety.md`](../../03-coding/01-log-safety.md) 铁律 3。
+
 ## Access Log
 
 ### AccessLogEntry

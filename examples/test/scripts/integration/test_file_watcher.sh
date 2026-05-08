@@ -79,11 +79,24 @@ trap cleanup EXIT
 # =============================================================================
 init_test_env() {
     log_section ""
-    
+
     mkdir -p "$CONFIG_DIR"
     mkdir -p "$LOG_DIR"
     mkdir -p "$PID_DIR"
-    
+
+    # Copy CRD schemas into the conf dir. Controller in non-K8s mode requires
+    # schemas under <conf-dir>/crd or it FATAL-exits with
+    # "No schemas loaded in non-K8s mode".
+    local crd_src="${PROJECT_ROOT}/config/crd"
+    if [ -d "$crd_src" ]; then
+        mkdir -p "${CONFIG_DIR}/crd"
+        cp -R "${crd_src}/." "${CONFIG_DIR}/crd/"
+        log_info "Copied CRD schemas from ${crd_src} to ${CONFIG_DIR}/crd"
+    else
+        log_error "CRD schema source not found: ${crd_src}"
+        exit 1
+    fi
+
     log_info ": $WORK_DIR"
     log_info ": $CONFIG_DIR"
     log_info ": $LOG_DIR"
@@ -136,6 +149,43 @@ start_controller() {
 }
 
 # =============================================================================
+# Auth helper — Controller in non-K8s mode auto-generates an admin Secret
+# under <conf-dir>; we read it once, login, cache the bearer token, and inject
+# it into every admin-API curl.
+# =============================================================================
+ADMIN_TOKEN=""
+ensure_admin_token() {
+    if [ -n "$ADMIN_TOKEN" ]; then
+        return 0
+    fi
+    local secret_file="${CONFIG_DIR}/Secret_edgion-system_edgion-admin-credentials.yaml"
+    local waited=0
+    while [ $waited -lt 10 ] && [ ! -f "$secret_file" ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if [ ! -f "$secret_file" ]; then
+        log_error "admin Secret not generated at $secret_file"
+        exit 1
+    fi
+    local pass
+    pass=$(awk '/^[[:space:]]+password:/ {print $2; exit}' "$secret_file" | tr -d '"')
+    ADMIN_TOKEN=$(curl -s -H "Content-Type: application/json" \
+        -d "{\"username\":\"admin\",\"password\":\"$pass\"}" \
+        "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/auth/login" \
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('token',''))")
+    if [ -z "$ADMIN_TOKEN" ]; then
+        log_error "login failed: could not obtain admin token"
+        exit 1
+    fi
+}
+
+curl_admin() {
+    ensure_admin_token
+    curl -s -H "Authorization: Bearer $ADMIN_TOKEN" "$@"
+}
+
+# =============================================================================
 # 
 # =============================================================================
 
@@ -158,7 +208,7 @@ EOF
     
     # 
     local response
-    response=$(curl -s "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/gatewayclass")
+    response=$(curl_admin "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/gatewayclass")
     
     if echo "$response" | grep -q "edgion"; then
         log_success "GatewayClass 'edgion' "
@@ -193,7 +243,7 @@ EOF
     
     # 
     local response
-    response=$(curl -s "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/gateway")
+    response=$(curl_admin "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/gateway")
     
     if echo "$response" | grep -q "test-gateway"; then
         log_success "Gateway 'test-gateway' "
@@ -228,7 +278,7 @@ EOF
     
     # 
     local response
-    response=$(curl -s "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/gateway")
+    response=$(curl_admin "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/gateway")
     
     if echo "$response" | grep -q "9090"; then
         log_success "Gateway  (port: 9090)"
@@ -268,7 +318,7 @@ EOF
     
     # 
     local response
-    response=$(curl -s "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/httproute")
+    response=$(curl_admin "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/httproute")
     
     if echo "$response" | grep -q "test-route"; then
         log_success "HTTPRoute 'test-route' "
@@ -307,7 +357,7 @@ EOF
     
     #  ( port: 9005)
     local response
-    response=$(curl -s "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/gateway")
+    response=$(curl_admin "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/gateway")
     
     if echo "$response" | grep -q "9005"; then
         log_success " ( port: 9005)"
@@ -349,7 +399,7 @@ EOF
     
     # ：
     local response
-    response=$(curl -s "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/service")
+    response=$(curl_admin "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/service")
     
     if echo "$response" | grep -q "backend-svc"; then
         log_success " (Service )"
@@ -395,7 +445,7 @@ EOF
     
     # 
     local response
-    response=$(curl -s "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/httproute")
+    response=$(curl_admin "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/httproute")
     
     if echo "$response" | grep -q "moved-route"; then
         log_success " (HTTPRoute 'moved-route' )"

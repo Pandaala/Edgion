@@ -15,10 +15,10 @@ description: 下游 TLS（客户端→网关）：Pingora Listener TLS 回调、
 
 | # | 阶段 | 触发位置（`tls_pingora.rs`） | 正常 / 失败路径 |
 |---|------|------|------|
-| 1 | `select_certificate_callback`（早期 cb） | `427-486`（closure 体） | 失败：`no SNI` / `min ver: ...` / `cert not found` 各 `log_ssl` 一次后返回 `Err(SelectCertError::ERROR)` 让 BoringSSL abort；`store_ssl_ctx` 失败时 fail-closed（store_ssl_ctx 内部已 log_ssl，select_cb 直接 return Err）；成功 `store_ssl_ctx` 快照后返回 `Ok(())` |
-| 2 | `certificate_callback`（cert_cb） | `272-317` | 失败（apply 写了 `err_log`）：当场 `log_ssl` 并跳过 `finalize_ssl_ctx`，ex_data 留 null，BoringSSL 因 cert 未装好自然 abort；成功 `finalize_ssl_ctx` 盖 `tls_id` + `store_ssl_ctx`，留给阶段 3 |
-| 3 | `handshake_complete_callback` | `319-362` | 握手成功 → `log_ssl` 一次；握手失败永远不调用本阶段 |
-| 4 | `free_ssl_ctx`（FFI 释放兜底） | `110-143` | 仅当 ex_data 非空（select_cb 已 store 快照）且 `tls_id.is_none()`（finalize 没跑）时补打 `log_ssl`，`err_log` 为空则置 `"early abort"`。覆盖"select_cb 命中后 BoringSSL 在版本协商阶段 alert 终止"这一种早期 abort 场景 |
+| 1 | `select_certificate_callback`（早期 cb） | `new_tls_settings_with_callback` 中的 `set_select_certificate_callback` closure | 失败：`no SNI` / `min ver: ...` / `cert not found` 各 `log_ssl` 一次后返回 `Err(SelectCertError::ERROR)` 让 BoringSSL abort；`store_ssl_ctx` 失败时 fail-closed（store_ssl_ctx 内部已 log_ssl，select_cb 直接 return Err）；成功 `store_ssl_ctx` 快照后返回 `Ok(())` |
+| 2 | `certificate_callback`（cert_cb） | `TlsAccept::certificate_callback` | 失败（apply 写了 `err_log`）：当场 `log_ssl` 并跳过 `finalize_ssl_ctx`，ex_data 留 null，BoringSSL 因 cert 未装好自然 abort；成功 `finalize_ssl_ctx` 盖 `tls_id` + `store_ssl_ctx`，留给阶段 3 |
+| 3 | `handshake_complete_callback` | `TlsAccept::handshake_complete_callback` | 握手成功 → `log_ssl` 一次；握手失败永远不调用本阶段 |
+| 4 | `free_ssl_ctx`（FFI 释放兜底） | `ssl_ctx_ex_data::free_ssl_ctx` | 仅当 ex_data 非空（select_cb 已 store 快照）且 `tls_id.is_none()`（finalize 没跑）时补打 `log_ssl`，`err_log` 为空则置 `"early abort"`。覆盖"select_cb 命中后 BoringSSL 在版本协商阶段 alert 终止"这一种早期 abort 场景 |
 
 **核心原则**：每阶段失败当场 `log_ssl` + abort（不再传递到后续阶段）；成功就不打，留给后续阶段（拥有更完整字段如 `tls_id`、`handshake_complete_time`、`client_cert_info`）输出。一条连接最多 1 条 ssl.log。
 

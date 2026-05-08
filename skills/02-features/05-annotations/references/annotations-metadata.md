@@ -27,6 +27,7 @@ These are read from `Gateway.metadata.annotations`, not per-listener metadata.
 | `edgion.io/metrics-test-key` | string | none | Test-only metrics correlation key. Consumed by Gateway runtime for integration metrics scenarios. |
 | `edgion.io/metrics-test-type` | `lb` / `retry` / `latency` | none | Test-only metrics mode selector. |
 | `edgion.io/edgion-stream-plugins` | `name` or `namespace/name` | none | Enables Gateway-level connection filtering before HTTP parsing or TLS handshake. Current verified runtime path is in `listener_builder.rs`. |
+| `edgion.io/require-sni-host-match` | `"true"` / `"false"` | inherits `EdgionGatewayConfig.spec.requireSniHostMatch` | When `true`, on HTTPS listeners the SNI must match the request `Host` header (otherwise the request is rejected). Read in `listener_gateway_info.rs`; falls back to the cluster-wide `EdgionGatewayConfig` setting when absent. |
 
 Important:
 

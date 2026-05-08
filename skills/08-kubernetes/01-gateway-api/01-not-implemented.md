@@ -13,13 +13,12 @@ description: Gateway API 规范中 Edgion 明确不实现的功能清单及原�
 
 Gateway API 规范将 `Programmed` 列为 Core 必需条件，要求确认配置已编程到数据面。Edgion 的 Controller-Gateway 架构使用异步 gRPC 配置同步（Gateway 主动 Watch/List 拉取），Controller 无法精确得知 Gateway 是否已加载某条具体配置。
 
-曾评估过 Controller → Gateway HTTP Pull 方案（详见 `tasks/todo/data-plane-status-feedback.md`，设计已完成到 Step 03），但引入了全新通信路径、proto 改动、延时队列等，复杂度过高。
+曾评估过 Controller → Gateway HTTP Pull 方案（设计完成到 Step 03），但引入了全新通信路径、proto 改动、延时队列等，复杂度过高，决定不实施。该方案的设计文档已删除，未保留备查文件。
 
 当前采用简化策略：Controller 处理资源后即设置 `Programmed=True`（因为配置会通过 gRPC 同步推送到数据面），当 listener 存在冲突、未解析引用、无效 TLS 配置等异常时设置 `Programmed=False`。这满足 conformance test 的要求，但不代表数据面已实际加载配置。
 
 - Gateway 级和 Listener 级均设置 `Programmed` 条件
 - 详细架构决策见 [skills/01-architecture/01-controller/10-status-management.md](../../01-architecture/01-controller/10-status-management.md)
-- 完整方案设计见 `tasks/todo/data-plane-status-feedback.md`（规划中，保留备查，不实施）
 
 ## Gateway addresses 实际绑定地址上报 / GatewayStaticAddresses / GatewayOptionalAddressValue
 
@@ -37,7 +36,7 @@ Gateway API 规范建议同一 Listener 上 GRPCRoute 和 HTTPRoute 的 hostname
 
 Edgion 当前架构中 gRPC 请求先匹配 GRPCRoute、不匹配再 fallback HTTPRoute，优先级逻辑合理。同一 hostname 上 GRPCRoute + HTTPRoute 共存是正常使用模式，主流实现（Envoy Gateway、Istio）也不做跨类型冲突检测。
 
-- 相关任务见 `tasks/todo/gateway-api-conformance/04-grpcroute-gaps.md`（规划中）
+- 相关跟踪条目尚未在 `tasks/` 中归档（如需推进请新建任务）
 
 ## Gateway infrastructure 字段
 
@@ -48,7 +47,7 @@ Gateway API Extended 功能，允许用户在 `GatewaySpec.infrastructure` 中�
 Edgion 是自部署网关，不负责创建云基础设施资源，当前无 cloud provider 集成需求。
 
 - 仅在有云厂商集成需求时考虑实现
-- 相关任务见 `tasks/todo/gateway-api-conformance/06-policy-and-experimental.md`（规划中）
+- 相关跟踪条目尚未在 `tasks/` 中归档（如需推进请新建任务）
 
 ## ListenerSet
 
@@ -156,7 +155,7 @@ Edgion 已通过 annotation 分散实现了这些功能（`edgion.io/circuit-bre
 
 - 等 BTP 从 Experimental 毕业到 Standard/GA 后再考虑统一到标准 CRD
 - 当前 annotation 方式对用户可用，不影响实际功能
-- 相关任务见 `tasks/todo/gateway-api-conformance/06-policy-and-experimental.md`（规划中）
+- 相关跟踪条目尚未在 `tasks/` 中归档（如需推进请新建任务）
 
 ## ~~frontendValidation 标准化~~ ✅ 已完成
 
@@ -189,4 +188,4 @@ TLS Passthrough 功能已实现；TLS Terminate 也已有数据面主路径，�
 - `TLSRouteModeTerminate` 可作为后续增强继续推进
 - `TLSRouteModeMixed` 明确不实现
 - MESH-HTTP / MESH-GRPC：Edgion 不是 service mesh，不适用
-- 相关任务见 `tasks/todo/gateway-api-conformance/06-policy-and-experimental.md`（规划中）
+- 相关跟踪条目尚未在 `tasks/` 中归档（如需推进请新建任务）

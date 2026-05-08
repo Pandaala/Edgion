@@ -1,6 +1,6 @@
 ---
 name: controller-resource-processor
-description: ResourceProcessor 流水线：ProcessorHandler trait、HandlerContext、11 步处理流程、21 种 Handler 实现、引用管理器。
+description: ResourceProcessor 流水线：ProcessorHandler trait、HandlerContext、11 步处理流程、20 种 Handler 实现、引用管理器。
 ---
 
 # ResourceProcessor 流水线
@@ -96,7 +96,7 @@ Handler 方法的上下文对象，提供以下共享资源：
 
 ## Handler 实现列表
 
-共 21 种 Handler 实现，覆盖所有资源类型：
+共 20 种 Handler 实现，覆盖所有资源类型：
 
 ### Gateway API 路由（5 种）
 
@@ -126,7 +126,7 @@ Handler 方法的上下文对象，提供以下共享资源：
 | `SecretHandler` | Secret | 变更时级联 requeue 依赖资源 |
 | `ConfigmapHandler` | ConfigMap | 直接存储，无 requeue 依赖 |
 
-### Edgion 自定义资源（6 种）
+### Edgion 自定义资源（7 种）
 
 | Handler | 资源 | 关键处理 |
 |---|---|---|

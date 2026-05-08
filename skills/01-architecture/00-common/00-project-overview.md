@@ -42,13 +42,14 @@ flowchart TD
 
 ## Crate 结构
 
-单 Crate（非 workspace），三个 `[[bin]]` 目标：
+单 Crate（非 workspace），四个 `[[bin]]` 目标：
 
 | Binary | 入口文件 | 运行时模型 | 角色 |
 |--------|---------|-----------|------|
 | `edgion-gateway` | `src/bin/edgion_gateway.rs` | 同步入口，内部自管理 Tokio + Pingora 主循环 | 数据面 |
 | `edgion-controller` | `src/bin/edgion_controller.rs` | `#[tokio::main(multi_thread)]` | 控制面 |
-| `edgion-cli` | `src/bin/edgion_cli.rs` | `#[tokio::main]` 单线程 | CLI 工具 |
+| `edgion-cli` | `src/bin/edgion_ctl.rs` | `#[tokio::main]` 单线程 | CLI 工具 |
+| `edgion-center` | `src/bin/edgion_center.rs` | `#[tokio::main(multi_thread)]` | 联邦中心 |
 
 示例二进制（测试用）：`test_server`、`test_client`、`test_client_direct`、`resource_diff`、`config_load_validator`。
 
@@ -61,7 +62,8 @@ src/
 ├── bin/                         # 薄入口包装（thin wrappers）
 │   ├── edgion_gateway.rs        #   → EdgionGatewayCli::run()
 │   ├── edgion_controller.rs     #   → EdgionControllerCli::run()
-│   └── edgion_cli.rs            #   → Cli::run()
+│   ├── edgion_ctl.rs            #   → Cli::run() (edgion-cli)
+│   └── edgion_center.rs         #   → EdgionCenterCli::run()
 ├── lib.rs                       # Crate root: pub mod core, pub mod types
 ├── core/                        # 所有业务逻辑
 │   ├── controller/              # edgion-controller 归属代码

@@ -17,17 +17,19 @@ description: 在仓库 tasks/ 目录下创建、更新或继续任务时使用�
 
 ## 目录规则
 
-- `tasks/working/` — 进行中的工作
-- `tasks/todo/` — 待办 / 想法
+- `tasks/pending/` — 进行中或待启动的工作
+- `tasks/review/` — 进入复审 / 验收阶段
+- `tasks/todo/` — 待办 / 想法（尚未启动）
+- `tasks/todo-test-cover/` — 测试覆盖治理专项（独立工作流，按编号顺序推进）
 - `tasks/done/` — 已完成归档
-- 每个活跃任务有独立目录，使用 kebab-case 命名（如 `log-tracing-optimization`）
+- 任务粒度灵活：单文件 `<task-name>.md` 或独立目录均可，命名使用 kebab-case（如 `log-tracing-optimization`）；复杂任务（多文档集）使用目录形式。
 
 ## 任务文档集
 
 每个任务目录包含以下文档，按需创建（仅主任务文件为必需）：
 
 ```text
-tasks/working/<task-name>/
+tasks/pending/<task-name>/
 ├── <task-name>.md              # [必需] 主任务文件：元信息、需求、范围、AI 引导摘要
 ├── 00-context.md               # [推荐] 关联 Skills 索引：本任务涉及的 skills 路径列表
 ├── 01-design.md                # [推荐] 总设计文档：架构方案、接口定义、数据流
@@ -162,11 +164,11 @@ tasks/working/<task-name>/
 
 ## 默认工作流
 
-1. 检查任务是否已存在于 `tasks/working/` 或 `tasks/todo/`
-2. 创建任务目录和主任务文件
+1. 检查任务是否已存在于 `tasks/pending/`、`tasks/todo/` 或 `tasks/review/`
+2. 创建任务目录或单文件，并写入主任务文件
 3. 创建 `00-context.md`，列出相关 skills 路径
 4. 新功能任务优先使用 [new_feature_work_flow.skill](new_feature_work_flow.skill) 作为执行模板
 5. 按生命周期阶段推进，按需创建对应文档
 6. 发现阻塞问题立即写入 `05-issues.md`
 7. 随工作推进更新主任务文件中的文档索引和状态
-8. 任务完成后执行完成检查清单，归档到 `tasks/done/`
+8. 进入验收阶段移到 `tasks/review/`；通过后归档到 `tasks/done/`

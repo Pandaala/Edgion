@@ -258,3 +258,12 @@ backendRefs:
     port: 8080
     weight: 10    # 10% 流量（金丝雀）
 ```
+
+## Edgion 扩展注解
+
+以下注解放在 `HTTPRoute.metadata.annotations`（GRPCRoute 同）。完整规范和解析细节见 [`skills/02-features/05-annotations/references/annotations-metadata.md`](../05-annotations/references/annotations-metadata.md) 的 "HTTPRoute / GRPCRoute" 节。
+
+| 注解 | 类型 | 默认 | 适用资源 | 说明 |
+|------|------|------|----------|------|
+| `edgion.io/forward-raw-path` | `"true"` \| `"false"` | 缺省（走全局开关） | HTTPRoute | 覆盖路径规范化行为。`"true"` 强制转发原始路径；`"false"` 强制规范化；缺省走全局 `forward_normalized_path`。非法值以 INFO 日志警告并按缺省处理。 |
+| `edgion.io/hostname-resolution` | controller 写入字符串 | system-managed | HTTPRoute, GRPCRoute | 控制器在解析阶段写入的诊断注解，描述生效的 hostname 解析结果。**不要手写此字段。** |

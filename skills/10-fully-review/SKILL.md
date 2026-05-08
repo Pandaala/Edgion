@@ -5,6 +5,8 @@ description: Edgion 全局代码 Review 指南。包含 AI 执行全量 review �
 
 # Edgion 全局 Review 指南
 
+> **何时使用**：当需要对整个代码库做系统性全局 review（安全、正确性、可观测性等维度），或评审 AI/外部提交的 review 报告、判定其中的误报时，使用本指南；日常单文件/单功能审查请用 `04-review/SKILL.md`。
+
 > **使用场景**：对 Edgion 代码库进行全局安全/质量 review，或评审新提交的 review 报告。
 > **执行顺序**：先读本文件 → 按需加载各维度 → 对照关闭条目跳过已知误报。
 
