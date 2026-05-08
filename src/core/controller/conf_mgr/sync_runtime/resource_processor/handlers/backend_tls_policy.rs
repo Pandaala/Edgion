@@ -591,12 +591,6 @@ impl BackendTlsPolicyHandler {
             .as_ref()
             .is_some_and(|d| d.contains_key(CERT) && d.contains_key(KEY))
     }
-
-    #[allow(dead_code)]
-    #[inline]
-    fn secret_has_ca_cert(secret: &k8s_openapi::api::core::v1::Secret) -> bool {
-        secret.data.as_ref().is_some_and(|d| d.contains_key(CA_CERT))
-    }
 }
 
 #[async_trait::async_trait]

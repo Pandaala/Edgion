@@ -242,16 +242,6 @@ impl TlsStore {
         Ok(())
     }
 
-    /// Rebuild the TLS certificate matcher
-    /// This method acquires a read lock and rebuilds the matcher
-    ///
-    /// Prefer `rebuild_matcher_from_data` when the caller already holds a lock.
-    #[allow(dead_code)]
-    fn rebuild_matcher(&self) -> anyhow::Result<()> {
-        let tls_data = self.tls_data.read();
-        self.rebuild_matcher_from_data(&tls_data)
-    }
-
     /// Get all TLS certificates (for debugging/monitoring)
     ///
     /// Returns a snapshot of all certificates currently in the store,

@@ -59,12 +59,3 @@ pub enum PluginRunningResult {
         message: Option<String>,
     },
 }
-
-/// Filter tags for categorization
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub enum PluginTags {
-    Auth,
-    Security,
-    Proxy,
-    Traffic,
-}

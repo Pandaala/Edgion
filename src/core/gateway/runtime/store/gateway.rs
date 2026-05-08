@@ -37,14 +37,6 @@ impl GatewayStore {
         Ok(())
     }
 
-    /// Get a gateway by key
-    #[allow(dead_code)]
-    pub fn get_gateway(&self, key: &str) -> Result<&Gateway> {
-        self.gateways
-            .get(key)
-            .ok_or_else(|| anyhow!("Gateway with key '{}' not found in store", key))
-    }
-
     /// Update an existing gateway or insert if not exists
     pub fn update_gateway(&mut self, gateway: Gateway) {
         let key = gateway.key_name();

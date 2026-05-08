@@ -62,15 +62,8 @@ impl SecretStore {
     }
 
     /// Number of secrets currently in the store.
-    #[allow(dead_code)] // Consumed by controller debug/store-stats handler in Task 12; allow until then.
     pub fn count(&self) -> usize {
         self.secrets.read().len()
-    }
-
-    /// Keys currently in the store (snapshot copy).
-    #[allow(dead_code)] // Consumed by controller debug/store-stats handler in Task 12; allow until then.
-    pub fn keys(&self) -> Vec<String> {
-        self.secrets.read().keys().cloned().collect()
     }
 
     /// Create a key from namespace and name
@@ -123,7 +116,6 @@ mod stats_tests {
     fn empty_store_reports_zero() {
         let store = SecretStore::new();
         assert_eq!(store.count(), 0);
-        assert!(store.keys().is_empty());
     }
 }
 

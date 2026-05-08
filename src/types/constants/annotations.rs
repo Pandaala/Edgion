@@ -55,9 +55,3 @@ pub mod edgion {
     /// to enable listener-level 421 detection for that Gateway's HTTPS listeners.
     pub const REQUIRE_SNI_HOST_MATCH: &str = "edgion.io/require-sni-host-match";
 }
-
-/// Standard Kubernetes annotations
-pub mod k8s {
-    /// Last applied configuration (used by kubectl apply)
-    pub const LAST_APPLIED_CONFIG: &str = "kubectl.kubernetes.io/last-applied-configuration";
-}

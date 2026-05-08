@@ -89,11 +89,6 @@ pub fn print_resource(data: &Value, format: OutputFormat) -> Result<()> {
     Ok(())
 }
 
-/// Print a simple message
-pub fn print_message(message: &str) {
-    println!("{}", message);
-}
-
 /// Print error message to stderr
 pub fn print_error(error: &str) {
     eprintln!("Error: {}", error);

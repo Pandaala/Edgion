@@ -83,14 +83,6 @@ impl HealthCheckConfigStore {
         self.service_configs.load().keys().cloned().collect()
     }
 
-    pub fn endpoint_slice_keys(&self) -> Vec<String> {
-        self.endpoint_slice_configs.load().keys().cloned().collect()
-    }
-
-    pub fn endpoint_keys(&self) -> Vec<String> {
-        self.endpoint_configs.load().keys().cloned().collect()
-    }
-
     pub fn set_service_config(&self, service_key: &str, config: Option<ActiveHealthCheckConfig>) {
         let mut new_map = (**self.service_configs.load()).clone();
         match config {

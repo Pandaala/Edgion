@@ -11,7 +11,7 @@ mod lit;
 mod stmt;
 
 use super::ast::*;
-use super::error::{ParseError, Span};
+use super::error::ParseError;
 
 /// Maximum source code length (64KB)
 const MAX_SOURCE_LEN: usize = 64 * 1024;
@@ -80,13 +80,6 @@ impl ParseCtx {
             )));
         }
         Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub(super) fn span_at(&self, input: &str) -> Span {
-        let offset = input.as_ptr() as usize - self._source_start;
-        // Simple line/col calculation would need source; use offset for now
-        Span::new(offset, 1, offset as u32 + 1)
     }
 }
 

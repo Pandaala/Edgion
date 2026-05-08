@@ -34,15 +34,13 @@ impl AdminState {
         self.conf_mgr.runtime()
     }
 
+    pub fn is_ready(&self) -> bool {
+        self.conf_mgr.is_ready()
+    }
+
     /// Check if running in Kubernetes mode
     pub fn is_k8s_mode(&self) -> bool {
         self.conf_mgr.is_k8s_mode()
-    }
-
-    /// Check if the system is ready (ConfigSyncServer exists)
-    #[allow(dead_code)]
-    pub fn is_ready(&self) -> bool {
-        self.conf_mgr.is_ready()
     }
 
     // ==================== ConfCenter Methods (Storage Layer) ====================

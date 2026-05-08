@@ -278,22 +278,6 @@ impl BackendTLSPolicyStore {
         self.reverse_index.store(Arc::new(new_index));
     }
 
-    /// Get all policies
-    pub fn get_all(&self) -> HashMap<String, Arc<BackendTLSPolicy>> {
-        self.policies.read().clone()
-    }
-
-    /// Get all policies in a specific namespace
-    pub fn get_by_namespace(&self, namespace: &str) -> Vec<Arc<BackendTLSPolicy>> {
-        let policies = self.policies.read();
-        let prefix = format!("{}/", namespace);
-        policies
-            .iter()
-            .filter(|(key, _)| key.starts_with(&prefix))
-            .map(|(_, policy)| policy.clone())
-            .collect()
-    }
-
     /// Get policies that apply to a given target (O(1) lookup using reverse index)
     ///
     /// Returns policies sorted by Gateway API precedence rules:

@@ -49,25 +49,6 @@ impl ConfigSyncGrpcServer {
         }
     }
 
-    /// Create a new gRPC server with a static ConfigSyncServer (for tests/debugging only).
-    ///
-    /// Uses an inert `CancellationToken` that is never cancelled — stream tasks will only
-    /// exit on client disconnect or runtime shutdown. For production, use `new()` with a
-    /// real token bridged to the shutdown signal.
-    #[allow(dead_code)]
-    pub fn with_static_server(server: Arc<ConfigSyncServer>) -> Self {
-        struct StaticProvider(Arc<ConfigSyncServer>);
-        impl ConfigSyncServerProvider for StaticProvider {
-            fn config_sync_server(&self) -> Option<Arc<ConfigSyncServer>> {
-                Some(self.0.clone())
-            }
-        }
-        Self {
-            provider: Arc::new(StaticProvider(server)),
-            shutdown_token: CancellationToken::new(),
-        }
-    }
-
     /// Get the current ConfigSyncServer, returns error if not available
     #[allow(clippy::result_large_err)]
     fn get_server(&self) -> Result<Arc<ConfigSyncServer>, Status> {
@@ -150,30 +131,6 @@ impl ConfigSyncGrpcServer {
             .await?;
 
         tracing::info!(component = "grpc_server", "gRPC server stopped");
-
-        Ok(())
-    }
-
-    /// Start the gRPC server with reflection support.
-    /// NOTE: This method does NOT support mTLS. Use `serve()` or `serve_with_shutdown()`
-    /// for production deployments that require TLS.
-    #[allow(dead_code)]
-    pub async fn serve_with_reflection(
-        self,
-        addr: std::net::SocketAddr,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let service = self.into_service();
-        let reflection_service = tonic_reflection::server::Builder::configure()
-            .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!("config_sync_descriptor"))
-            .build_v1()?;
-
-        tonic::transport::Server::builder()
-            .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
-            .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)))
-            .add_service(service)
-            .add_service(reflection_service)
-            .serve(addr)
-            .await?;
 
         Ok(())
     }

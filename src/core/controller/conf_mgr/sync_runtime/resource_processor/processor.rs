@@ -732,9 +732,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::handler::DefaultHandler;
     use kube::api::ObjectMeta;
     use serde::{Deserialize, Serialize};
+
+    struct TestHandler;
+
+    #[async_trait::async_trait]
+    impl<K> ProcessorHandler<K> for TestHandler where K: kube::Resource + Clone + Send + Sync + 'static {}
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestResource {
@@ -787,7 +791,7 @@ mod tests {
     #[tokio::test]
     async fn test_processor_basic() {
         let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let handler = Arc::new(DefaultHandler);
+        let handler = Arc::new(TestHandler);
 
         let processor = ResourceProcessor::<TestResource>::new(
             "TestResource",
@@ -807,7 +811,7 @@ mod tests {
     #[tokio::test]
     async fn test_processor_init_apply() {
         let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let handler = Arc::new(DefaultHandler);
+        let handler = Arc::new(TestHandler);
 
         let processor = ResourceProcessor::<TestResource>::new(
             "TestResource",

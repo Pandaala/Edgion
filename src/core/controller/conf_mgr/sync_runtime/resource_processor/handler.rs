@@ -138,17 +138,3 @@ where
     /// Default: no-op (for resources without status like Secret, Service)
     fn update_status(&self, _obj: &mut K, _ctx: &HandlerContext, _validation_errors: &[String]) {}
 }
-
-/// Default handler that passes through all resources unchanged
-///
-/// Useful for resources that don't need special processing.
-#[allow(dead_code)]
-pub struct DefaultHandler;
-
-#[async_trait::async_trait]
-impl<K> ProcessorHandler<K> for DefaultHandler
-where
-    K: Resource + Clone + Send + Sync + 'static,
-{
-    // All methods use default implementations
-}
