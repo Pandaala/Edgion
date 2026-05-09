@@ -119,6 +119,7 @@ pub struct GatewayBackendTLS {
     pub client_certificate_ref: Option<SecretObjectReference>,
     /// Resolved by Controller, not user-configured
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub resolved_client_certificate: Option<Secret>,
 }
 
@@ -154,12 +155,26 @@ pub struct GatewayFrontendTLSPerPort {
     pub tls: Option<GatewayFrontendTLSDefault>,
 }
 
+/// TLS behavior for a Gateway listener (Gateway API `TLSModeType`).
+///
+/// Stored as a typed enum so typos are rejected at deserialization rather
+/// than silently falling through to the default match arm. Mirrors the
+/// upstream CRD `enum: [Terminate, Passthrough]` constraint.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, JsonSchema, PartialEq, Eq, Default)]
+pub enum GatewayTlsMode {
+    /// TLS session terminates at the gateway. Requires `certificateRefs`.
+    #[default]
+    Terminate,
+    /// TLS session passes through; gateway only inspects the ClientHello.
+    Passthrough,
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayTLSConfig {
     /// Mode defines the TLS behavior for the TLS session
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
+    pub mode: Option<GatewayTlsMode>,
 
     /// CertificateRefs contains references to Kubernetes objects
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,6 +187,7 @@ pub struct GatewayTLSConfig {
     /// Resolved Secret data (filled by Controller, not user-configured)
     /// Contains the actual TLS certificates referenced by certificate_refs
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub secrets: Option<Vec<Secret>>,
 
     /// Frontend TLS validation for client certificates (Gateway API standard mTLS)
@@ -180,6 +196,7 @@ pub struct GatewayTLSConfig {
 
     /// Resolved CA Secret data for frontend validation (filled by Controller, not user-configured)
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub resolved_frontend_ca_secrets: Option<Vec<Secret>>,
 }
 

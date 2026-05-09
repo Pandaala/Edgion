@@ -48,15 +48,18 @@ pub struct BackendTLSPolicySpec {
 
     /// Resolved CA certificate Secrets (runtime only, filled by controller).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub resolved_ca_certificates: Option<Vec<Secret>>,
 
     /// Resolved client certificate Secret for upstream mTLS (runtime only, filled by controller).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub resolved_client_certificate: Option<Secret>,
 
     /// Whether to use system CA certificates for backend TLS verification (runtime only, filled by controller).
     /// Set to true when wellKnownCACertificates is "System".
     #[serde(default, skip_serializing_if = "crate::types::resources::common::is_false")]
+    #[schemars(skip)]
     pub use_system_ca: bool,
 }
 
@@ -86,14 +89,17 @@ pub struct BackendTLSPolicyAlpha3Spec {
 
     /// Resolved CA certificate Secrets (runtime only, filled by controller).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub resolved_ca_certificates: Option<Vec<Secret>>,
 
     /// Resolved client certificate Secret for upstream mTLS (runtime only, filled by controller).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub resolved_client_certificate: Option<Secret>,
 
     /// Whether to use system CA certificates for backend TLS verification (runtime only, filled by controller).
     #[serde(default, skip_serializing_if = "crate::types::resources::common::is_false")]
+    #[schemars(skip)]
     pub use_system_ca: bool,
 }
 

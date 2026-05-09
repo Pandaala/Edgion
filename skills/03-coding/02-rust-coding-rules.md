@@ -79,6 +79,20 @@ format!(
 format!("IO error: {}", e)
 ```
 
+## Rule 5: prefer canonical utilities over local copies
+
+Before writing a parsing / formatting / validation helper, search `src/core/common/utils/` and `src/types/common/` for an existing one. Re-using the canonical implementation keeps behavior consistent and lets future fixes propagate to all call sites.
+
+Known canonical helpers (non-exhaustive):
+
+| Helper | Location | Notes |
+|--------|----------|-------|
+| `parse_duration` | `src/core/common/utils/duration.rs` | Returns `Result<Duration, ParseDurationError>`; supports `ms/s/m/h/d` and combined forms like `"1h30m"`, `"2d12h"`; rejects negatives. **Do not** reimplement — RateLimit had its own copy that diverged in unit set, error type, and combined-format support, then had to be migrated back. |
+| `MetadataFilter` matching | `src/core/common/utils/metadata_filter.rs` | K8s label / namespace selector evaluation |
+| Real-IP extraction | `src/core/common/utils/real_ip_extractor.rs` | Trusted proxy / `X-Forwarded-For` parsing |
+
+If you genuinely need different behavior, **extend the canonical** (add a unit, a flag, a new variant) rather than forking. Layering note: `src/types/` may import from `src/core/common/utils/` — there is no cycle.
+
 ## Checklist
 
 Use during code review:
@@ -88,3 +102,4 @@ Use during code review:
 - [ ] Do `expect()` messages explain why panic is impossible?
 - [ ] Any unnecessary `.clone()`? Can a reference or `Arc` be used instead?
 - [ ] Do error messages carry enough context for troubleshooting?
+- [ ] New parsing/validation helper? Check `core::common::utils::` first — extend the canonical instead of forking

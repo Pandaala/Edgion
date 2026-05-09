@@ -75,6 +75,7 @@ Time window length, determines the CMS sliding window rotation period. Supported
 | `m` | `1m`, `5m` | Minutes |
 | `h` | `1h` | Hours |
 | `d` | `1d` | Days |
+| Combined | `1h30m`, `2d12h` | Concatenated units (sum of components) |
 
 #### key
 

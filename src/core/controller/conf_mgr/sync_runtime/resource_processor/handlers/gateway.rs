@@ -19,7 +19,7 @@ use crate::types::listener_key::resolve_listener_addr;
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::common::is_core_api_group;
 use crate::types::resources::gateway::{
-    FrontendValidationMode, GatewayAddress, GatewayStatus, GatewayStatusAddress, GatewayTLSConfig,
+    FrontendValidationMode, GatewayAddress, GatewayStatus, GatewayStatusAddress, GatewayTLSConfig, GatewayTlsMode,
     Listener as GatewayListener, ListenerStatus, RouteGroupKind,
 };
 use crate::types::ResourceKind;
@@ -291,10 +291,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     None => continue,
                 };
 
-                // Only Terminate mode needs certificate resolution;
-                // Passthrough proxies raw TLS and unsupported modes (e.g. Mixed) will be rejected later.
-                let mode = tls_config.mode.as_deref().unwrap_or("Terminate");
-                if mode != "Terminate" {
+                // Only Terminate mode needs certificate resolution; Passthrough proxies raw TLS.
+                if tls_config.mode.unwrap_or_default() != GatewayTlsMode::Terminate {
                     continue;
                 }
 
@@ -1446,18 +1444,13 @@ fn detect_mixed_tls_mode_listeners(
     addresses: Option<&Vec<GatewayAddress>>,
 ) -> std::collections::HashSet<String> {
     use std::collections::HashMap;
-    let mut port_modes: HashMap<u16, Vec<(String, String)>> = HashMap::new();
+    let mut port_modes: HashMap<u16, Vec<(String, GatewayTlsMode)>> = HashMap::new();
 
     for l in listeners {
         if !l.protocol.eq_ignore_ascii_case("TLS") {
             continue;
         }
-        let mode = l
-            .tls
-            .as_ref()
-            .and_then(|t| t.mode.as_deref())
-            .unwrap_or("Terminate")
-            .to_string();
+        let mode = l.tls.as_ref().and_then(|t| t.mode).unwrap_or_default();
         let addr = resolve_listener_addr(addresses, l.port);
         port_modes.entry(addr.port()).or_default().push((l.name.clone(), mode));
     }
@@ -1478,15 +1471,13 @@ fn detect_mixed_tls_mode_listeners(
 }
 
 fn listener_has_unsupported_tls_mode(listener: &GatewayListener) -> bool {
-    let Some(mode) = listener.tls.as_ref().and_then(|tls| tls.mode.as_deref()) else {
+    // The CRD enum + serde rejects values other than Terminate/Passthrough,
+    // so the only remaining semantic constraint is: HTTPS does not support
+    // Passthrough (the listener must terminate TLS to expose HTTP routes).
+    let Some(mode) = listener.tls.as_ref().and_then(|tls| tls.mode.as_ref()) else {
         return false;
     };
-
-    match listener.protocol.to_uppercase().as_str() {
-        "TLS" => mode != "Passthrough" && mode != "Terminate",
-        "HTTPS" => mode != "Terminate",
-        _ => false,
-    }
+    listener.protocol.eq_ignore_ascii_case("HTTPS") && *mode == GatewayTlsMode::Passthrough
 }
 
 /// Compute supported kinds for a listener, honoring allowedRoutes.kinds when provided.
@@ -1611,7 +1602,7 @@ mod tests {
     use crate::types::prelude_resources::Gateway;
     use crate::types::resources::common::SecretObjectReference;
     use crate::types::resources::gateway::{
-        FrontendTLSValidation, GatewaySpec, GatewayTLSConfig, Listener as GatewayListener,
+        FrontendTLSValidation, GatewaySpec, GatewayTLSConfig, GatewayTlsMode, Listener as GatewayListener,
     };
     use std::collections::BTreeMap;
 
@@ -1711,7 +1702,7 @@ mod tests {
             port: 443,
             protocol: "HTTPS".to_string(),
             tls: Some(GatewayTLSConfig {
-                mode: Some("Terminate".to_string()),
+                mode: Some(GatewayTlsMode::Terminate),
                 certificate_refs: None,
                 options: None,
                 secrets: None,

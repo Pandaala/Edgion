@@ -32,11 +32,14 @@ const MAX_BATCH_SIZE: usize = 5_000;
 const MAX_FLUSH_INTERVAL_MS: u64 = 60_000; // 1 minute
 const MAX_BULK_BODY_BYTES: usize = 50 * 1024 * 1024; // 50MB
 const MAX_BULK_RETRIES: u32 = 10;
+const MAX_CHANNEL_SIZE: usize = 100_000;
+const MIN_CHANNEL_SIZE: usize = 1;
 const DEFAULT_BATCH_SIZE: usize = 500;
 const DEFAULT_FLUSH_INTERVAL_MS: u64 = 5_000;
 const DEFAULT_BULK_BODY_BYTES: usize = 10 * 1024 * 1024; // 10MB
 const DEFAULT_BULK_RETRIES: u32 = 3;
 const DEFAULT_BACKOFF_MS: u64 = 1_000;
+const DEFAULT_CHANNEL_SIZE: usize = 10_000;
 const DEFAULT_INDEX_PREFIX: &str = "edgion-logs";
 const DEFAULT_DATE_PATTERN: &str = "%Y.%m.%d";
 
@@ -175,6 +178,10 @@ pub struct EsBulkConfig {
     pub max_retries: u32,
     pub backoff: Duration,
     pub max_body_bytes: usize,
+    /// Capacity of the producer→bulk-loop mpsc channel; clamped to
+    /// `[MIN_CHANNEL_SIZE, MAX_CHANNEL_SIZE]` so an operator-supplied 0 cannot
+    /// produce a rendezvous channel that would deadlock on every send.
+    pub channel_size: usize,
     pub index_prefix: String,
     pub date_pattern: String,
 }
@@ -204,6 +211,10 @@ impl EsBulkConfig {
                 .and_then(|b| b.max_body_bytes)
                 .map(|s| s.min(MAX_BULK_BODY_BYTES))
                 .unwrap_or(DEFAULT_BULK_BODY_BYTES),
+            channel_size: bulk
+                .and_then(|b| b.channel_size)
+                .map(|s| s.clamp(MIN_CHANNEL_SIZE, MAX_CHANNEL_SIZE))
+                .unwrap_or(DEFAULT_CHANNEL_SIZE),
             index_prefix: index
                 .and_then(|i| i.prefix.clone())
                 .unwrap_or_else(|| DEFAULT_INDEX_PREFIX.to_string()),
@@ -385,12 +396,41 @@ mod tests {
                 max_retries: Some(100), // Over max
                 backoff_ms: None,
                 max_body_bytes: None,
+                channel_size: Some(1_000_000), // Over max
             }),
             ..Default::default()
         };
         let config = EsBulkConfig::from_crd(&crd);
         assert_eq!(config.batch_size, MAX_BATCH_SIZE);
         assert_eq!(config.max_retries, MAX_BULK_RETRIES);
+        assert_eq!(config.channel_size, MAX_CHANNEL_SIZE);
+    }
+
+    /// Operator-supplied 0 must clamp up to `MIN_CHANNEL_SIZE`; tokio's
+    /// `mpsc::channel(0)` would otherwise create a rendezvous channel that
+    /// requires a paired receive call and stalls every producer.
+    #[test]
+    fn test_bulk_config_channel_size_clamped_to_min() {
+        let crd = ElasticsearchClientConfig {
+            bulk: Some(EsBulk {
+                batch_size: None,
+                flush_interval: None,
+                max_retries: None,
+                backoff_ms: None,
+                max_body_bytes: None,
+                channel_size: Some(0),
+            }),
+            ..Default::default()
+        };
+        let config = EsBulkConfig::from_crd(&crd);
+        assert_eq!(config.channel_size, MIN_CHANNEL_SIZE);
+    }
+
+    #[test]
+    fn test_bulk_config_channel_size_default() {
+        let crd = ElasticsearchClientConfig::default();
+        let config = EsBulkConfig::from_crd(&crd);
+        assert_eq!(config.channel_size, DEFAULT_CHANNEL_SIZE);
     }
 
     #[test]
@@ -401,6 +441,7 @@ mod tests {
             max_retries: 3,
             backoff: Duration::from_secs(1),
             max_body_bytes: 10 * 1024 * 1024,
+            channel_size: DEFAULT_CHANNEL_SIZE,
             index_prefix: "test-logs".to_string(),
             date_pattern: "%Y.%m.%d".to_string(),
         };

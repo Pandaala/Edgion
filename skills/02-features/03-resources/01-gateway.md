@@ -96,7 +96,7 @@ spec:
 
 ```yaml
 tls:
-  mode: String           # "Terminate" | "Passthrough"
+  mode: enum             # "Terminate" (default) | "Passthrough"; other values are rejected by the CRD
   certificateRefs:       # Certificate list when mode=Terminate
     - name: String       # Secret name (required)
       namespace: String? # Namespace (cross-namespace requires ReferenceGrant)

@@ -34,7 +34,8 @@ pub enum ParseDurationError {
 ///   - "s" or "sec" or "secs" for seconds: "30s"
 ///   - "m" or "min" or "mins" for minutes: "5m"
 ///   - "h" or "hour" or "hours" for hours: "1h"
-/// - Combined formats: "1h30m", "1m30s", "1h30m15s"
+///   - "d" or "day" or "days" for days: "1d"
+/// - Combined formats: "1h30m", "1m30s", "1h30m15s", "1d12h"
 ///
 /// # Examples
 ///
@@ -47,6 +48,7 @@ pub enum ParseDurationError {
 /// assert_eq!(parse_duration("500ms").unwrap(), Duration::from_millis(500));
 /// assert_eq!(parse_duration("5m").unwrap(), Duration::from_secs(300));
 /// assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
+/// assert_eq!(parse_duration("1d").unwrap(), Duration::from_secs(86400));
 /// ```
 pub fn parse_duration(s: &str) -> Result<Duration, ParseDurationError> {
     let s = s.trim();
@@ -106,6 +108,7 @@ fn parse_single_duration(s: &str) -> Result<Duration, ParseDurationError> {
         "s" | "sec" | "secs" | "second" | "seconds" => Duration::from_secs_f64(num),
         "m" | "min" | "mins" | "minute" | "minutes" => Duration::from_secs_f64(num * 60.0),
         "h" | "hr" | "hrs" | "hour" | "hours" => Duration::from_secs_f64(num * 3600.0),
+        "d" | "day" | "days" => Duration::from_secs_f64(num * 86400.0),
         _ => {
             return Err(ParseDurationError::UnknownUnit(unit.to_string()));
         }
@@ -264,7 +267,24 @@ mod tests {
     #[test]
     fn test_parse_unknown_unit() {
         assert!(matches!(parse_duration("30y"), Err(ParseDurationError::UnknownUnit(_))));
-        assert!(matches!(parse_duration("5d"), Err(ParseDurationError::UnknownUnit(_))));
+        assert!(matches!(parse_duration("5y"), Err(ParseDurationError::UnknownUnit(_))));
+    }
+
+    #[test]
+    fn test_parse_days() {
+        assert_eq!(parse_duration("1d").unwrap(), Duration::from_secs(86400));
+        assert_eq!(parse_duration("2days").unwrap(), Duration::from_secs(172800));
+        assert_eq!(parse_duration("7d").unwrap(), Duration::from_secs(604800));
+    }
+
+    #[test]
+    fn test_parse_combined_formats_with_days() {
+        // 1d12h = 36 hours = 129600 seconds
+        assert_eq!(parse_duration("1d12h").unwrap(), Duration::from_secs(129600));
+        // 2d6h = 54 hours = 194400 seconds
+        assert_eq!(parse_duration("2d6h").unwrap(), Duration::from_secs(194400));
+        // 2d12h = 60 hours = 216000 seconds (covers the example shown in user docs)
+        assert_eq!(parse_duration("2d12h").unwrap(), Duration::from_secs(216000));
     }
 
     #[test]

@@ -75,6 +75,7 @@ pub struct ClientAuthConfig {
     /// Note: This field is serialized for controller->gateway communication,
     /// but should be skipped when deserializing from YAML files
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[schemars(skip)]
     pub ca_secret: Option<Secret>,
 
     /// Optional Subject Alternative Names whitelist
@@ -158,12 +159,15 @@ pub struct EdgionTlsSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extend: Option<EdgionTlsExtend>,
 
+    /// Resolved cert Secret (filled by Controller from `secret_ref`, never from user YAML).
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[schemars(skip)]
     pub secret: Option<Secret>,
 
     /// Pre-computed listener keys from parentRef resolution (set by Controller).
     /// Used by Gateway to bind this route to per-listener route tables.
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[schemars(skip)]
     pub resolved_listeners: Option<Vec<ListenerKey>>,
 }
 

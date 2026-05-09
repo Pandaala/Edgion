@@ -29,7 +29,7 @@ listeners:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| mode | string | | Terminate（默认）或 Passthrough |
+| mode | enum | | `Terminate`（默认）或 `Passthrough`；其他取值会被 CRD 拒绝 |
 | certificateRefs | array | ✓ | 证书 Secret 引用 |
 | options | map | | TLS 选项 |
 

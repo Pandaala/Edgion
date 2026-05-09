@@ -81,6 +81,7 @@ pub enum WebhookTarget {
         kind: Option<String>,
         /// Pod IPs injected by the Controller. Format: "ip:port". Not set by users.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[schemars(skip)]
         endpoints: Vec<String>,
     },
 }

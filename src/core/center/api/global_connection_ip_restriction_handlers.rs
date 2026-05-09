@@ -218,6 +218,18 @@ fn partition(results: Vec<ControllerOpResult>) -> (Vec<ControllerOpResult>, Vec<
     (success, failed)
 }
 
+/// Map a fan-out outcome to an HTTP status. When every target failed (success
+/// empty, failed non-empty) we surface `502 Bad Gateway` so automated callers
+/// can gate retries on the status line without parsing the nested body. Any
+/// partial success — and the zero-target case — stays `200 OK`.
+fn fanout_status(success: &[ControllerOpResult], failed: &[ControllerOpResult]) -> StatusCode {
+    if success.is_empty() && !failed.is_empty() {
+        StatusCode::BAD_GATEWAY
+    } else {
+        StatusCode::OK
+    }
+}
+
 // =====================================================================
 // POST /api/v1/center/global-connection-ip-restrictions
 // =====================================================================
@@ -259,8 +271,9 @@ pub async fn create_global_ip_restriction(
     let path = format!("/api/v1/namespaced/pluginmetadata/{}", req.namespace);
     let results = fan_out_http(&state, targets, "POST", path, body).await;
     let (success, failed) = partition(results);
+    let status = fanout_status(&success, &failed);
     (
-        StatusCode::OK,
+        status,
         Json(ApiResponse::success(FanOutResponse {
             success,
             failed,
@@ -355,8 +368,9 @@ pub async fn update_global_ip_restriction(
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
     let results = fan_out_http(&state, targets, "PUT", path, body).await;
     let (success, failed) = partition(results);
+    let status = fanout_status(&success, &failed);
     (
-        StatusCode::OK,
+        status,
         Json(ApiResponse::success(FanOutResponse {
             success,
             failed,
@@ -380,16 +394,20 @@ pub async fn delete_global_ip_restriction(
     State(state): State<ApiState>,
     Path((ns, name)): Path<(String, String)>,
     Json(req): Json<DeleteRequest>,
-) -> Json<ApiResponse<FanOutResponse>> {
+) -> (StatusCode, Json<ApiResponse<FanOutResponse>>) {
     let (targets, warnings) = resolve_targets(&state, &req.controllers);
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
     let results = fan_out_http(&state, targets, "DELETE", path, vec![]).await;
     let (success, failed) = partition(results);
-    Json(ApiResponse::success(FanOutResponse {
-        success,
-        failed,
-        warnings,
-    }))
+    let status = fanout_status(&success, &failed);
+    (
+        status,
+        Json(ApiResponse::success(FanOutResponse {
+            success,
+            failed,
+            warnings,
+        })),
+    )
 }
 
 // =====================================================================
@@ -408,7 +426,7 @@ pub async fn patch_enable(
     State(state): State<ApiState>,
     Path((ns, name)): Path<(String, String)>,
     Json(req): Json<PatchEnableRequest>,
-) -> Json<ApiResponse<FanOutResponse>> {
+) -> (StatusCode, Json<ApiResponse<FanOutResponse>>) {
     let (targets, warnings) = resolve_targets(&state, &req.controllers);
 
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
@@ -472,11 +490,15 @@ pub async fn patch_enable(
         fed_metrics::labels::fanout_op::PATCH_ENABLE,
         fanout_result_label(success.len(), failed.len()),
     );
-    Json(ApiResponse::success(FanOutResponse {
-        success,
-        failed,
-        warnings,
-    }))
+    let status = fanout_status(&success, &failed);
+    (
+        status,
+        Json(ApiResponse::success(FanOutResponse {
+            success,
+            failed,
+            warnings,
+        })),
+    )
 }
 
 // =====================================================================
@@ -495,7 +517,7 @@ pub async fn patch_active_profile(
     State(state): State<ApiState>,
     Path((ns, name)): Path<(String, String)>,
     Json(req): Json<PatchActiveProfileRequest>,
-) -> Json<ApiResponse<FanOutResponse>> {
+) -> (StatusCode, Json<ApiResponse<FanOutResponse>>) {
     let (targets, warnings) = resolve_targets(&state, &req.controllers);
 
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
@@ -568,11 +590,15 @@ pub async fn patch_active_profile(
         fed_metrics::labels::fanout_op::PATCH_PROFILE,
         fanout_result_label(success.len(), failed.len()),
     );
-    Json(ApiResponse::success(FanOutResponse {
-        success,
-        failed,
-        warnings,
-    }))
+    let status = fanout_status(&success, &failed);
+    (
+        status,
+        Json(ApiResponse::success(FanOutResponse {
+            success,
+            failed,
+            warnings,
+        })),
+    )
 }
 
 // =====================================================================
@@ -594,35 +620,41 @@ pub async fn sync_global_ip_restriction(
     State(state): State<ApiState>,
     Path((ns, name)): Path<(String, String)>,
     Json(req): Json<SyncRequest>,
-) -> Json<ApiResponse<FanOutResponse>> {
+) -> (StatusCode, Json<ApiResponse<FanOutResponse>>) {
     let pm_key = format!("{}/{}", ns, name);
     let per_ctrl = match state.metadata_store.get_global_ip_restriction(&pm_key) {
         Some(m) => m,
         None => {
-            return Json(ApiResponse::success(FanOutResponse {
-                success: vec![],
-                failed: vec![ControllerOpResult {
-                    controller_id: "<lookup>".to_string(),
-                    detail: None,
-                    error: Some("PM not found".to_string()),
-                    status_code: Some(404),
-                }],
-                warnings: vec![],
-            }));
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(ApiResponse::success(FanOutResponse {
+                    success: vec![],
+                    failed: vec![ControllerOpResult {
+                        controller_id: "<lookup>".to_string(),
+                        detail: None,
+                        error: Some("PM not found".to_string()),
+                        status_code: Some(404),
+                    }],
+                    warnings: vec![],
+                })),
+            );
         }
     };
 
     let Some(source_entry) = per_ctrl.get(&req.source_controller) else {
-        return Json(ApiResponse::success(FanOutResponse {
-            success: vec![],
-            failed: vec![ControllerOpResult {
-                controller_id: req.source_controller.clone(),
-                detail: None,
-                error: Some("source controller does not have this PM".to_string()),
-                status_code: Some(404),
-            }],
-            warnings: vec![],
-        }));
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(ApiResponse::success(FanOutResponse {
+                success: vec![],
+                failed: vec![ControllerOpResult {
+                    controller_id: req.source_controller.clone(),
+                    detail: None,
+                    error: Some("source controller does not have this PM".to_string()),
+                    status_code: Some(404),
+                }],
+                warnings: vec![],
+            })),
+        );
     };
 
     // Resolve targets: "all" = all online except source.
@@ -645,11 +677,15 @@ pub async fn sync_global_ip_restriction(
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
     let results = fan_out_http(&state, targets, "PUT", path, body).await;
     let (success, failed) = partition(results);
-    Json(ApiResponse::success(FanOutResponse {
-        success,
-        failed,
-        warnings,
-    }))
+    let status = fanout_status(&success, &failed);
+    (
+        status,
+        Json(ApiResponse::success(FanOutResponse {
+            success,
+            failed,
+            warnings,
+        })),
+    )
 }
 
 #[cfg(test)]

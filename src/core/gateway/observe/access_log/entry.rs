@@ -108,35 +108,6 @@ impl<'a> AccessLogEntry<'a> {
             )
         })
     }
-
-    pub fn to_combined(&self, latency_ms: u64) -> String {
-        // Use the last upstream from backend_context for the combined log format
-        let upstream_peer = self
-            .backend_context
-            .and_then(|bc| bc.upstreams.last())
-            .map(|upstream| {
-                let ip = upstream.ip.as_deref().unwrap_or("-");
-                let port = upstream.port.map(|p| p.to_string()).unwrap_or_else(|| "-".to_string());
-                format!("{}:{}", ip, port)
-            })
-            .unwrap_or_else(|| "-".to_string());
-
-        format!(
-            r#"{} - - [{}] "{} {}" {} {} "{}""#,
-            upstream_peer,
-            chrono::DateTime::from_timestamp_millis(self.timestamp)
-                .map(|dt| dt.format("%d/%b/%Y:%H:%M:%S %z").to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            "GET",
-            self.request_info.normalized_current_path,
-            self.request_info
-                .status
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            latency_ms,
-            self.request_info.x_trace_id.as_deref().unwrap_or("-"),
-        )
-    }
 }
 
 #[cfg(test)]

@@ -15,6 +15,7 @@
 //! - RateLimit: in-process CMS, ~nanosecond, approximate, per-instance
 //! - RateLimitRedis: Redis-backed, ~0.1-1ms, precise, cluster-wide
 
+use crate::core::common::utils::parse_duration;
 use crate::types::common::KeyGet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -312,7 +313,7 @@ impl RateLimitRedisConfig {
             if policy.rate == 0 {
                 return Some(format!("policies[{}].rate must be > 0", i));
             }
-            match super::rate_limit::parse_duration(&policy.interval) {
+            match parse_duration(&policy.interval) {
                 Err(e) => return Some(format!("policies[{}].interval: {}", i, e)),
                 Ok(dur) if dur < Duration::from_millis(100) => {
                     return Some(format!(
@@ -371,8 +372,7 @@ impl RateLimitRedisConfig {
 
         // All field checks passed; do the compile-only side effects.
         for policy in self.policies.iter_mut() {
-            let dur =
-                super::rate_limit::parse_duration(&policy.interval).expect("interval pre-validated by check_fields");
+            let dur = parse_duration(&policy.interval).expect("interval pre-validated by check_fields");
             policy.interval_duration = Some(dur);
         }
 

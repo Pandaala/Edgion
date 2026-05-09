@@ -430,7 +430,9 @@ impl EtcdLinkClient {
     /// Unlike Redis locks (SET NX + Lua), etcd locks are based on
     /// Lease + MVCC revision and provide linearizable consistency.
     /// The lock blocks until acquired (or cancelled by the lease expiring).
-    pub async fn lock(&self, lock_name: &str, ttl_secs: i64) -> Result<EtcdLockGuard> {
+    ///
+    /// Crate-private: callers must go through `try_lock` so the wait is bounded.
+    async fn lock(&self, lock_name: &str, ttl_secs: i64) -> Result<EtcdLockGuard> {
         let mut client = self
             .get_client()
             .await

@@ -87,6 +87,7 @@ pub struct TlsCerts {
     /// Serialized to the Gateway via conf_sync. Not persisted back into the K8s
     /// `spec` (the controller only patches `status`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub secret: Option<Secret>,
 }
 

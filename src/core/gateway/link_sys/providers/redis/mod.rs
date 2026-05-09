@@ -19,10 +19,8 @@
 
 pub mod client;
 pub mod config_mapping;
-pub mod data_sender;
 pub mod ops;
 
 // Re-export key types for convenient access
 pub use client::RedisLinkClient;
-pub use data_sender::RedisDataSender;
 pub use ops::{LockOptions, RedisLockGuard};

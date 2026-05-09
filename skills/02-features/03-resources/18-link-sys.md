@@ -185,6 +185,7 @@ spec:
       maxRetries: 3
       backoffMs: 1000
       maxBodyBytes: 10485760      # 10 MiB
+      channelSize: 10000          # producer→bulk-loop mpsc capacity, ceiling 100000
     index:
       prefix: "edgion-logs"
       datePattern: "%Y.%m.%d"

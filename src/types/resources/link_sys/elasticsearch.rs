@@ -123,6 +123,13 @@ pub struct EsBulk {
     /// Maximum bulk request body size in bytes (default: 10MB)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_body_bytes: Option<usize>,
+
+    /// Capacity of the in-memory mpsc channel between log producers and the
+    /// bulk ingest task (default: 10000, ceiling: 100000). When the channel is
+    /// full, producers backpressure on the access-log path; raise this to
+    /// absorb bursts when ES is temporarily slow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_size: Option<usize>,
 }
 
 /// Elasticsearch index naming configuration
@@ -271,6 +278,7 @@ bulk:
   maxRetries: 3
   backoffMs: 1000
   maxBodyBytes: 10485760
+  channelSize: 20000
 index:
   prefix: "edgion-logs"
   datePattern: "%Y.%m.%d"
@@ -288,6 +296,7 @@ compatibility:
         assert!(config.tls.as_ref().unwrap().enabled);
         assert_eq!(config.timeout.as_ref().unwrap().connect, Some(5000));
         assert_eq!(config.bulk.as_ref().unwrap().batch_size, Some(500));
+        assert_eq!(config.bulk.as_ref().unwrap().channel_size, Some(20_000));
         assert_eq!(config.index.as_ref().unwrap().prefix.as_deref(), Some("edgion-logs"));
     }
 

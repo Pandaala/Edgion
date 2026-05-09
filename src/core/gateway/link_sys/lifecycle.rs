@@ -26,14 +26,6 @@ pub trait LinkSysLifecycle: Send + Sync + 'static {
         Ok(())
     }
 
-    /// Returns `false` when the client is in a degraded state and must retry `init`
-    /// even if the configuration has not changed.
-    /// Providers without an intrinsic health concept (e.g. Webhook) may use the
-    /// default `true`.
-    fn healthy(&self) -> bool {
-        true
-    }
-
     /// On update, whether the previous instance must be shut down explicitly.
     ///   - `true` (default): owns connections / background tasks (Redis/Etcd/ES)
     ///   - `false`: init has replace semantics built-in (Webhook upsert)

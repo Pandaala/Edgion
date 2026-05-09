@@ -43,16 +43,19 @@ pub struct HTTPRouteSpec {
     /// Controller-resolved effective hostnames (intersection of route hostnames and listener hostnames).
     /// Set by the controller ProcessorHandler; the data plane uses these directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub resolved_hostnames: Option<Vec<String>>,
 
     /// Pre-computed listener keys from parentRef resolution (set by Controller).
     /// Used by Gateway to bind this route to per-listener route tables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub resolved_listeners: Option<Vec<ListenerKey>>,
 
     /// Controller-identified invalid rule indices.
     /// Gateway skips these rules during route compilation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub invalid_rule_indices: Option<Vec<usize>>,
 
     /// Rules defines the HTTP routing rules
@@ -301,6 +304,7 @@ pub struct HTTPBackendRef {
     /// When present, Gateway will reject requests to this backend
     /// and log the denial details to access log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub ref_denied: Option<RefDenied>,
 }
 

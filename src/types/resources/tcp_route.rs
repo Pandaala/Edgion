@@ -42,6 +42,7 @@ pub struct TCPRouteSpec {
     /// Pre-computed listener keys from parentRef resolution (set by Controller).
     /// Used by Gateway to bind this route to per-listener route tables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub resolved_listeners: Option<Vec<ListenerKey>>,
 }
 
@@ -126,6 +127,7 @@ pub struct TCPBackendRef {
     /// Set by Controller when this backend's cross-namespace reference
     /// is not permitted (no matching ReferenceGrant).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub ref_denied: Option<RefDenied>,
 }
 

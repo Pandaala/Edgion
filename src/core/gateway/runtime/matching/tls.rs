@@ -296,7 +296,7 @@ pub fn rebuild_gateway_tls_matcher(gateways: &[Gateway]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::gateway::{GatewaySpec, GatewayTLSConfig, Listener};
+    use crate::types::resources::gateway::{GatewaySpec, GatewayTLSConfig, GatewayTlsMode, Listener};
     use kube::api::ObjectMeta;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -344,7 +344,7 @@ mod tests {
 
     fn make_tls_config(cert_name: &str, cert_ns: Option<&str>) -> GatewayTLSConfig {
         GatewayTLSConfig {
-            mode: Some("Terminate".to_string()),
+            mode: Some(GatewayTlsMode::Terminate),
             certificate_refs: Some(vec![SecretObjectReference {
                 name: cert_name.to_string(),
                 namespace: cert_ns.map(|s| s.to_string()),
@@ -403,7 +403,7 @@ mod tests {
         let key = test_listener_key(443);
 
         let tls_config = GatewayTLSConfig {
-            mode: Some("Terminate".to_string()),
+            mode: Some(GatewayTlsMode::Terminate),
             certificate_refs: Some(vec![SecretObjectReference {
                 name: "test-cert".to_string(),
                 namespace: None,
@@ -439,7 +439,7 @@ mod tests {
         let key = test_listener_key(443);
 
         let tls_config = GatewayTLSConfig {
-            mode: Some("Terminate".to_string()),
+            mode: Some(GatewayTlsMode::Terminate),
             certificate_refs: Some(vec![SecretObjectReference {
                 name: "wildcard-cert".to_string(),
                 namespace: Some("default".to_string()),
@@ -481,7 +481,7 @@ mod tests {
 
         // Gateway 1: api.example.com
         let tls_config1 = GatewayTLSConfig {
-            mode: Some("Terminate".to_string()),
+            mode: Some(GatewayTlsMode::Terminate),
             certificate_refs: Some(vec![SecretObjectReference {
                 name: "api-cert".to_string(),
                 namespace: Some("prod".to_string()),
@@ -498,7 +498,7 @@ mod tests {
 
         // Gateway 2: Multiple listeners (www and admin)
         let tls_config2 = GatewayTLSConfig {
-            mode: Some("Terminate".to_string()),
+            mode: Some(GatewayTlsMode::Terminate),
             certificate_refs: Some(vec![SecretObjectReference {
                 name: "www-cert".to_string(),
                 namespace: Some("prod".to_string()),
@@ -511,7 +511,7 @@ mod tests {
             resolved_frontend_ca_secrets: None,
         };
         let tls_config3 = GatewayTLSConfig {
-            mode: Some("Terminate".to_string()),
+            mode: Some(GatewayTlsMode::Terminate),
             certificate_refs: Some(vec![SecretObjectReference {
                 name: "admin-cert".to_string(),
                 namespace: Some("prod".to_string()),
@@ -564,7 +564,7 @@ mod tests {
 
         // Certificate ref without explicit namespace should use Gateway's namespace
         let tls_config = GatewayTLSConfig {
-            mode: Some("Terminate".to_string()),
+            mode: Some(GatewayTlsMode::Terminate),
             certificate_refs: Some(vec![SecretObjectReference {
                 name: "cert-without-ns".to_string(),
                 namespace: None, // No namespace specified
@@ -628,7 +628,7 @@ mod tests {
 
         // Add TLS config
         let tls_config = GatewayTLSConfig {
-            mode: Some("Terminate".to_string()),
+            mode: Some(GatewayTlsMode::Terminate),
             certificate_refs: Some(vec![SecretObjectReference {
                 name: "test-cert".to_string(),
                 namespace: Some("default".to_string()),
@@ -670,7 +670,7 @@ mod tests {
 
         // Same hostname on different ports with different certs
         let tls_config_443 = GatewayTLSConfig {
-            mode: Some("Terminate".to_string()),
+            mode: Some(GatewayTlsMode::Terminate),
             certificate_refs: Some(vec![SecretObjectReference {
                 name: "cert-443".to_string(),
                 namespace: Some("default".to_string()),
@@ -684,7 +684,7 @@ mod tests {
         };
 
         let tls_config_8443 = GatewayTLSConfig {
-            mode: Some("Terminate".to_string()),
+            mode: Some(GatewayTlsMode::Terminate),
             certificate_refs: Some(vec![SecretObjectReference {
                 name: "cert-8443".to_string(),
                 namespace: Some("default".to_string()),
@@ -732,7 +732,7 @@ mod tests {
         let key_8443 = test_listener_key(8443);
 
         let tls_config_api = GatewayTLSConfig {
-            mode: Some("Terminate".to_string()),
+            mode: Some(GatewayTlsMode::Terminate),
             certificate_refs: Some(vec![SecretObjectReference {
                 name: "api-cert".to_string(),
                 namespace: Some("default".to_string()),
@@ -746,7 +746,7 @@ mod tests {
         };
 
         let tls_config_admin = GatewayTLSConfig {
-            mode: Some("Terminate".to_string()),
+            mode: Some(GatewayTlsMode::Terminate),
             certificate_refs: Some(vec![SecretObjectReference {
                 name: "admin-cert".to_string(),
                 namespace: Some("default".to_string()),

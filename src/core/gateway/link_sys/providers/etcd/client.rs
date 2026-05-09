@@ -280,10 +280,6 @@ impl LinkSysLifecycle for EtcdLinkClient {
     async fn shutdown(&self) -> anyhow::Result<()> {
         EtcdLinkClient::shutdown(self).await
     }
-
-    fn healthy(&self) -> bool {
-        EtcdLinkClient::healthy(self)
-    }
 }
 
 // ============================================================================

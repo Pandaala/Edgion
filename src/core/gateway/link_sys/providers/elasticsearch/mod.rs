@@ -9,7 +9,6 @@
 //! Key components:
 //! - `EsLinkClient` — core client wrapper with init/shutdown/health
 //! - `EsBulkConfig` — resolved bulk ingest configuration
-//! - `EsDataSender` — `DataSender<String>` impl for log shipping
 //! - `ops` — high-level operations (cluster, index, document, search)
 //!
 //! # Usage
@@ -32,11 +31,9 @@
 pub mod bulk;
 pub mod client;
 pub mod config_mapping;
-pub mod data_sender;
 pub mod ops;
 
 // Re-export key types for convenient access
 pub use client::EsLinkClient;
 pub use config_mapping::EsBulkConfig;
-pub use data_sender::EsDataSender;
 pub use ops::{EsSearchHit, EsSearchResult};

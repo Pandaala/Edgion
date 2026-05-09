@@ -161,9 +161,5 @@ impl LinkSysLifecycle for RedisLinkClient {
         RedisLinkClient::shutdown(self).await
     }
 
-    fn healthy(&self) -> bool {
-        RedisLinkClient::healthy(self)
-    }
-
     // SHUTDOWN_ON_REPLACE uses the trait default value (true)
 }

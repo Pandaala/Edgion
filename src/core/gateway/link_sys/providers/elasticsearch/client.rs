@@ -101,8 +101,9 @@ impl EsLinkClient {
 
         self.healthy.store(health.is_ok(), Ordering::Relaxed);
 
-        // Spawn background bulk ingest task
-        let (tx, rx) = mpsc::channel::<String>(10_000); // Buffer up to 10k pending docs
+        // Spawn background bulk ingest task. Channel capacity is operator-tunable
+        // via `bulk.channelSize` (defaults to 10k, ceiling 100k); see EsBulkConfig.
+        let (tx, rx) = mpsc::channel::<String>(self.bulk_config.channel_size);
         let (shutdown_sender, shutdown_rx) = watch::channel(false);
 
         let client = self.client.clone();
@@ -155,18 +156,29 @@ impl EsLinkClient {
     }
 
     /// Send a document to the bulk ingest buffer.
-    /// Non-blocking: returns immediately, doc is batched in background.
+    ///
+    /// Tries a non-blocking send first; on `Full`, increments the
+    /// `link_sys_es_bulk_channel_full` counter and falls back to an awaiting
+    /// send so the producer backpressures rather than drops the document. On
+    /// `Closed` (receiver gone), returns a "bulk channel closed" error so the
+    /// caller can decide how to handle the drop.
     pub async fn send_bulk(&self, doc: String) -> Result<()> {
         let sender = self.bulk_sender.lock().clone();
-        if let Some(sender) = sender {
-            sender
-                .send(doc)
-                .await
-                .map_err(|_| anyhow::anyhow!("ES [{}] bulk channel closed", self.name))?;
-        } else {
+        let Some(sender) = sender else {
             anyhow::bail!("ES [{}] not initialized (bulk sender not ready)", self.name);
+        };
+        match sender.try_send(doc) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(doc)) => {
+                crate::core::gateway::observe::metrics::registry::record_link_sys_es_bulk_channel_full();
+                sender
+                    .send(doc)
+                    .await
+                    .map_err(|_| anyhow::anyhow!("ES [{}] bulk channel closed", self.name))?;
+                Ok(())
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(anyhow::anyhow!("ES [{}] bulk channel closed", self.name)),
         }
-        Ok(())
     }
 
     /// Graceful shutdown: signal background task and drop sender, then await drain.
@@ -234,9 +246,5 @@ impl LinkSysLifecycle for EsLinkClient {
 
     async fn shutdown(&self) -> anyhow::Result<()> {
         EsLinkClient::shutdown(self).await
-    }
-
-    fn healthy(&self) -> bool {
-        EsLinkClient::healthy(self)
     }
 }

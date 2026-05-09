@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 use crate::core::gateway::backends::service_kind::EdgionService;
 use crate::core::gateway::lb::WeightedRoundRobin;
 use crate::core::gateway::plugins::http::common::http_client::{build_webhook_client, get_http_client_arc};
-use crate::types::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
+use crate::types::resources::link_sys::webhook::{WebhookAuth, WebhookServiceConfig, WebhookTarget};
 
 use super::health::spawn_active_health_check;
 use super::runtime::{SlidingWindowCounter, WebhookResolvedTarget, WebhookRuntime};
@@ -86,6 +86,17 @@ impl WebhookManager {
         config: WebhookServiceConfig,
         linksys_ns: Option<&str>,
     ) -> anyhow::Result<()> {
+        // Reject auth shapes whose runtime injection is not yet implemented, so the
+        // failure surfaces at apply time instead of as a silent unauthenticated request.
+        if let Some(WebhookAuth::ApiKey { r#in, .. }) = config.auth.as_ref() {
+            if r#in == "query" {
+                return Err(anyhow::anyhow!(
+                    "webhook '{}': auth.apiKey.in='query' is not yet implemented; use 'header'",
+                    webhook_ref
+                ));
+            }
+        }
+
         let tls_on = config.tls.as_ref().is_some_and(|t| t.enabled);
         let scheme = if tls_on { "https" } else { "http" };
 

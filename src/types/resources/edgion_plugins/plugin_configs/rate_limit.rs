@@ -15,6 +15,7 @@
 //! - Dual-slot (red/blue) design for sliding window behavior
 //! - Lock-free atomic operations for high concurrency
 
+use crate::core::common::utils::parse_duration;
 use crate::types::common::KeyGet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -444,7 +445,7 @@ impl RateLimitConfig {
 
         // Validate interval can be parsed (do not store the result)
         if let Err(e) = parse_duration(&self.interval) {
-            return Some(e);
+            return Some(e.to_string());
         }
 
         None
@@ -473,7 +474,7 @@ impl RateLimitConfig {
         }
 
         // Parse interval and store
-        self.interval_duration = Some(parse_duration(&self.interval)?);
+        self.interval_duration = Some(parse_duration(&self.interval).map_err(|e| e.to_string())?);
 
         // Compute effective estimator slots
         // Plugin config is in K units, convert to actual slots
@@ -512,36 +513,6 @@ impl PluginValidation for RateLimitConfig {
     fn validation_error(&self) -> Option<String> {
         self.check_fields()
     }
-}
-
-/// Parse duration string (e.g., "500ms", "1s", "2m")
-pub fn parse_duration(s: &str) -> Result<Duration, String> {
-    let s = s.trim();
-    if s.is_empty() {
-        return Err("Duration string is empty".to_string());
-    }
-
-    // Find where the number ends and unit begins
-    let (num_str, unit) = s
-        .char_indices()
-        .find(|(_, c)| !c.is_ascii_digit() && *c != '.')
-        .map(|(i, _)| s.split_at(i))
-        .unwrap_or((s, "s")); // Default to seconds
-
-    let num: f64 = num_str
-        .parse()
-        .map_err(|_| format!("Invalid duration number: {}", num_str))?;
-
-    let multiplier = match unit.to_lowercase().as_str() {
-        "ms" | "millis" | "milliseconds" => 0.001,
-        "s" | "sec" | "seconds" | "" => 1.0,
-        "m" | "min" | "minutes" => 60.0,
-        "h" | "hour" | "hours" => 3600.0,
-        "d" | "day" | "days" => 86400.0,
-        _ => return Err(format!("Unknown duration unit: {}", unit)),
-    };
-
-    Ok(Duration::from_secs_f64(num * multiplier))
 }
 
 #[cfg(test)]

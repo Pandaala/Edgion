@@ -23,6 +23,7 @@ pub struct SecretSlot {
     /// Resolved Secret object (filled by Controller, never from user YAML).
     /// Serialized to the Gateway via conf_sync; not persisted into K8s `spec`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub secret: Option<Secret>,
 }
 

@@ -27,7 +27,7 @@ use crate::core::gateway::routes::udp::{get_global_udp_route_managers, get_udp_l
 use crate::core::gateway::tls::runtime::gateway::tls_pingora::TlsCallback;
 use crate::types::constants::annotations::edgion;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::types::resources::gateway::Listener;
+use crate::types::resources::gateway::{GatewayTlsMode, Listener};
 use crate::types::ListenerKey;
 use tokio_util::sync::CancellationToken;
 
@@ -428,27 +428,15 @@ pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()>
         "TCP" => add_tcp_listener(server, &context),
         "UDP" => add_udp_listener(server, &context),
         "TLS" => {
-            // Check listener TLS mode: Passthrough or Terminate (default)
-            let tls_mode = context
-                .listener
-                .tls
-                .as_ref()
-                .and_then(|t| t.mode.as_deref())
-                .unwrap_or("Terminate");
+            // Listener TLS mode: Passthrough or Terminate (default).
+            // CRD/serde already reject any other value; the controller filters
+            // unsupported combinations (e.g. mixed-mode listeners on the same
+            // port) before pushing config to the gateway.
+            let tls_mode = context.listener.tls.as_ref().and_then(|t| t.mode).unwrap_or_default();
 
             match tls_mode {
-                "Passthrough" => add_tls_passthrough_listener(server, &context),
-                "Mixed" => {
-                    // Mixed mode is not supported; the controller sets Accepted=False for
-                    // this listener. Skip silently so the gateway does not crash.
-                    tracing::warn!(
-                        gateway=%context.gateway_key,
-                        listener=%context.listener.name,
-                        "Skipping TLS listener with unsupported mode 'Mixed'"
-                    );
-                    Ok(())
-                }
-                _ => {
+                GatewayTlsMode::Passthrough => add_tls_passthrough_listener(server, &context),
+                GatewayTlsMode::Terminate => {
                     // Terminate mode — default to TCP backend (TLSRoute semantics).
                     // `protocol: TLS` + `mode: Terminate` inherently means TLS→TCP;
                     // HTTPS already covers TLS→HTTP. No annotation required.

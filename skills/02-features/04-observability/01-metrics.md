@@ -49,7 +49,7 @@ Edgion's Metrics design principles (strict for the Gateway data plane; looser fo
 | `edgion_gateway_request_duration_ms` | **Histogram (the only exception on the Gateway data plane)** | End-to-end request latency, core SLI. Disabled by default; once enabled, buckets are configured via `MetricsConfig::request_duration`. |
 | `edgion_mirror_requests_total{status}` | Counter | Result of each mirror by the request mirror plugin. `status` ∈ `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout` (**mirror latency no longer has a histogram — query the `et` field in mirror_log**). |
 | `edgion_rr_selector_truncated_total` | Counter | RoundRobin truncation events when backend count > `u16::MAX` (extremely rare, used to alert on configuration anomalies; no labels). |
-| `edgion_link_sys_es_send_total{result}` | Counter | Result of each Elasticsearch DataSender send. `result` ∈ `ok` / `failed_fallback` / `failed_no_cache`. |
+| `edgion_link_sys_es_bulk_channel_full_total` | Counter | Producer→bulk-loop mpsc channel was full at submit time (no labels). Non-zero values signal sustained backpressure on the access-log path; raise `bulk.channelSize` (default 10000, ceiling 100000) before it surfaces as request latency. |
 
 ### `backend_requests` Label Configuration
 
