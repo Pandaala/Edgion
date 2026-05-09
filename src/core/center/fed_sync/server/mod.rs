@@ -212,7 +212,7 @@ impl FederationSync for FederationGrpcServer {
             .send(CenterMessage {
                 payload: Some(CenterPayload::WatchRequest(FedWatchRequest {
                     request_id: watch_request_id.clone(),
-                    kind: "PluginMetaData".to_string(),
+                    kind: PLUGIN_METADATA_KIND.to_string(),
                     from_version,
                 })),
             })
@@ -489,7 +489,7 @@ impl FederationSync for FederationGrpcServer {
                                                 break;
                                             }
                                         }
-                                        let re_watch_msg = pm_watch.re_watch("PluginMetaData");
+                                        let re_watch_msg = pm_watch.re_watch(PLUGIN_METADATA_KIND);
                                         let _ = inner_tx.send(re_watch_msg).await;
                                         continue;
                                     }
@@ -508,7 +508,7 @@ impl FederationSync for FederationGrpcServer {
                                                 got_server_id = %resp.server_id,
                                                 "Controller server_id changed, re-watching from 0"
                                             );
-                                            let re_watch_msg = pm_watch.re_watch("PluginMetaData");
+                                            let re_watch_msg = pm_watch.re_watch(PLUGIN_METADATA_KIND);
                                             let _ = inner_tx.send(re_watch_msg).await;
                                             continue;
                                         }

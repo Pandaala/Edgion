@@ -134,13 +134,13 @@ macro_rules! get_client_resource {
             ResourceKind::Service => find_resource($client.services().list().data, ns_opt, name_str),
             ResourceKind::EndpointSlice => find_resource($client.endpoint_slices().list().data, ns_opt, name_str),
             ResourceKind::EdgionTls => find_resource($client.edgion_tls().list().data, ns_opt, name_str),
-            ResourceKind::EdgionPlugins => find_resource_alt($client.edgion_plugins().list().data, ns_opt, name_str),
+            ResourceKind::EdgionPlugins => find_resource($client.edgion_plugins().list().data, ns_opt, name_str),
             ResourceKind::EdgionStreamPlugins => {
-                find_resource_alt($client.edgion_stream_plugins().list().data, ns_opt, name_str)
+                find_resource($client.edgion_stream_plugins().list().data, ns_opt, name_str)
             }
             ResourceKind::ReferenceGrant => None, // ReferenceGrant not synced to Gateway
             ResourceKind::BackendTLSPolicy => {
-                find_resource_alt($client.backend_tls_policies().list().data, ns_opt, name_str)
+                find_resource($client.backend_tls_policies().list().data, ns_opt, name_str)
             }
             ResourceKind::PluginMetaData => find_resource($client.plugin_metadata().list().data, ns_opt, name_str),
             ResourceKind::LinkSys => find_resource($client.link_sys().list().data, ns_opt, name_str),
@@ -162,20 +162,8 @@ fn to_json_vec<T: serde::Serialize>(items: Vec<T>) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Find a namespaced resource by namespace and name (returns Option<&str> for namespace)
+/// Find a namespaced resource by namespace and name
 fn find_resource<T: ResourceExt + serde::Serialize>(
-    items: Vec<T>,
-    namespace: Option<&str>,
-    name: &str,
-) -> Option<serde_json::Value> {
-    items
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
-        .and_then(|r| serde_json::to_value(r).ok())
-}
-
-/// Find a namespaced resource (alternative namespace() return type - returns Option<String>)
-fn find_resource_alt<T: ResourceExt + serde::Serialize>(
     items: Vec<T>,
     namespace: Option<&str>,
     name: &str,

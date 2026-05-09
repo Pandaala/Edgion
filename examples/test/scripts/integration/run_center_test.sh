@@ -21,8 +21,9 @@
 #   5. consistency_detect          — consistency endpoint detects regions.length conflict
 #   6. svc_consistency_ok          — service-region-routes consistency is all consistent
 #
-# Test cases — GlobalConnectionIpRestriction (7):
+# Test cases — GlobalConnectionIpRestriction (8):
 #   7.  gcir_create_fanout         — POST creates GCIR PM on both controllers
+#   7b. gcir_create_validation_400 — POST with invalid body returns HTTP 400 + success=false
 #   8.  gcir_list_after_create     — GET list shows gcir-test with >= 2 controller entries
 #   9.  gcir_get_detail            — GET detail confirms fields on both controllers
 #   10. gcir_patch_enable          — PATCH /enable=false, verify all controllers disabled
@@ -658,6 +659,48 @@ else:
     pass "gcir_create_fanout"
   else
     fail "gcir_create_fanout" "expected success>=2 failed=0, got $result. Response: $out"
+  fi
+fi
+
+# ─── Test 7b: gcir_create_validation_400 ─────────────────────────────────────
+# POST with an invalid body (empty profiles) must return HTTP 400 with
+# {success:false, error:"..."} — locks in the cc-003 contract: pre-flight
+# validation failures surface as HTTP 4xx, not as success-wrapped FanOutResponse.
+INVALID_BODY='{
+  "namespace": "edgion-test",
+  "name": "gcir-invalid",
+  "controllers": ["all"],
+  "data": {
+    "enable": true,
+    "activeProfile": "strict",
+    "profiles": {}
+  }
+}'
+# Custom curl: capture body and HTTP code separately (auth_post uses -sf which
+# swallows 4xx responses).
+inv_resp=$(curl -s --max-time 10 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$INVALID_BODY" \
+  -w "\n__HTTP_CODE__%{http_code}" \
+  "$CENTER_HTTP/api/v1/center/global-connection-ip-restrictions" 2>/dev/null || true)
+inv_code=$(echo "$inv_resp" | sed -n 's/.*__HTTP_CODE__\([0-9]*\)$/\1/p' | tail -n1)
+inv_body=$(echo "$inv_resp" | sed 's/__HTTP_CODE__[0-9]*$//')
+if [[ "$inv_code" != "400" ]]; then
+  fail "gcir_create_validation_400" "expected HTTP 400, got $inv_code. Body: $inv_body"
+else
+  result=$(echo "$inv_body" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+if d.get('success') is False and 'error' in d and d.get('data') is None:
+    print('ok')
+else:
+    print(f'success={d.get(\"success\")} has_error={\"error\" in d} data={d.get(\"data\")}')
+" 2>/dev/null || echo "error")
+  if [[ "$result" == "ok" ]]; then
+    pass "gcir_create_validation_400"
+  else
+    fail "gcir_create_validation_400" "expected success=false + error, got $result. Body: $inv_body"
   fi
 fi
 

@@ -184,8 +184,12 @@ impl ConfigSyncServer {
         client_name: String,
         from_version: u64,
     ) -> Result<mpsc::Receiver<EventDataSimple>, String> {
-        let map = self.watch_objects.read();
-        let obj = map.get(kind).ok_or_else(|| format!("Unknown kind: {}", kind))?;
+        let obj = {
+            let map = self.watch_objects.read();
+            map.get(kind)
+                .cloned()
+                .ok_or_else(|| format!("Unknown kind: {}", kind))?
+        };
 
         tracing::info!(
             component = "config_sync_server",

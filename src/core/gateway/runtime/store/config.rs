@@ -194,10 +194,24 @@ impl GatewayListenerConfig {
         // If hostname exists, also add to host_map
         if let Some(hostname) = config.hostname.clone() {
             if hostname.starts_with("*.") {
-                // Wildcard hostname - add to wildcard_host_map
-                self.wildcard_host_map
+                // Wildcard hostname - add to wildcard_host_map.
+                // HashHost::insert rejects patterns whose stripped suffix is not a
+                // valid multi-label domain (e.g. "*.localhost"). Surface the rejection
+                // so operators can see why a listener never participates in
+                // hostname-based routing instead of failing silently.
+                let listener_name = config.name.clone();
+                let inserted = self
+                    .wildcard_host_map
                     .get_or_insert_with(HashHost::new)
                     .insert(&hostname, config);
+                if !inserted {
+                    tracing::warn!(
+                        component = "gateway_config_store",
+                        listener = %listener_name,
+                        hostname = %hostname,
+                        "Wildcard listener hostname rejected by matcher; listener will not match by hostname"
+                    );
+                }
             } else {
                 // Exact hostname - add to host_map
                 self.host_map.get_or_insert_with(HashMap::new).insert(hostname, config);
@@ -599,6 +613,30 @@ mod tests {
 
         // On port 443, *.example.com is the only listener, nothing blocks it
         assert!(!config.has_more_specific_listener("foo.example.com", Some("*.example.com"), 443));
+    }
+
+    #[test]
+    fn test_add_listener_silently_rejected_wildcard_still_in_listener_map() {
+        // HashHost rejects wildcards whose stripped suffix is not a multi-label
+        // domain (e.g. "*.localhost"). The listener must still appear in
+        // listener_map so that routes targeting it via sectionName keep working;
+        // only hostname-based lookups should miss.
+        let listeners = vec![
+            create_test_listener("internal", 80, Some("*.localhost")),
+            create_test_listener("public", 80, Some("*.example.com")),
+        ];
+        let gw = create_test_gateway("gw", "default", listeners);
+        let config = parse_gateway_to_config(&gw);
+
+        // sectionName route: both listeners reachable
+        assert!(config.has_listener("internal"));
+        assert!(config.has_listener("public"));
+
+        // Hostname-based: the rejected wildcard does NOT match
+        assert!(!config.has_host("foo.localhost"));
+        // The accepted wildcard still works (verifies the rejection didn't
+        // poison the shared HashHost state)
+        assert!(config.has_host("api.example.com"));
     }
 
     #[test]

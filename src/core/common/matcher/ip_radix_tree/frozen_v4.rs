@@ -133,6 +133,11 @@ impl FrozenIpV4RadixTree {
             // Traverse to child based on bit value
             let next_idx = if bit == 0 { node.left_index } else { node.right_index };
 
+            // INVARIANT: 0 is the root index AND the "no child" sentinel. This is sound
+            // only because `flatten_node` builds in DFS pre-order (parent before children),
+            // so every legitimate child index is >= 1. Any future change to build order
+            // (BFS, partial re-freeze, etc.) MUST preserve this contract or switch to a
+            // dedicated dummy node at index 0.
             if next_idx == 0 {
                 // No child, stop here
                 break;
@@ -203,6 +208,12 @@ impl FlatTreeBuilder {
 
     /// Recursively flattens a build node and its children
     /// Returns the index of the flattened node
+    ///
+    /// INVARIANT: must visit parent before children (DFS pre-order). The first call
+    /// pushes the root at index 0, and every recursive call pushes a child only after
+    /// its parent, so all non-root indices are >= 1. `match_ip` relies on this to use
+    /// `0` as the "no child" sentinel; reordering this traversal would silently corrupt
+    /// the tree (a missing left child would loop back to the root).
     fn flatten_node(&mut self, node: &IpV4BuildNode) -> Result<u32, IpRadixError> {
         // Check node index won't overflow
         if self.nodes.len() >= u32::MAX as usize {

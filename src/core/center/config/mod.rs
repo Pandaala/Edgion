@@ -10,8 +10,6 @@ pub struct DatabaseConfig {
     pub sqlite_path: String,
     /// Whether the SQLite database is enabled.
     pub enabled: bool,
-    /// How often (seconds) to sync RegionRoute snapshots from online controllers.
-    pub sync_interval_secs: u64,
 }
 
 impl Default for DatabaseConfig {
@@ -19,7 +17,6 @@ impl Default for DatabaseConfig {
         Self {
             sqlite_path: "data/center.db".to_string(),
             enabled: true,
-            sync_interval_secs: 60,
         }
     }
 }

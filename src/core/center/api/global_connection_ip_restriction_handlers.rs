@@ -237,22 +237,16 @@ pub struct CreateRequest {
 pub async fn create_global_ip_restriction(
     State(state): State<ApiState>,
     Json(req): Json<CreateRequest>,
-) -> Json<ApiResponse<FanOutResponse>> {
-    // Early validation: catch malformed data before fan-out.
+) -> (StatusCode, Json<ApiResponse<FanOutResponse>>) {
+    // Early validation: bad request body must surface as HTTP 400 so automated
+    // callers can rely on the status code instead of inspecting nested fields.
     {
         let mut cloned = req.data.clone();
         if let Err(e) = cloned.validate_and_init() {
-            let single = ControllerOpResult {
-                controller_id: "<validation>".to_string(),
-                detail: None,
-                error: Some(format!("invalid PM data: {}", e)),
-                status_code: Some(400),
-            };
-            return Json(ApiResponse::success(FanOutResponse {
-                success: vec![],
-                failed: vec![single],
-                warnings: vec![],
-            }));
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::error(format!("invalid PM data: {}", e))),
+            );
         }
     }
 
@@ -265,11 +259,14 @@ pub async fn create_global_ip_restriction(
     let path = format!("/api/v1/namespaced/pluginmetadata/{}", req.namespace);
     let results = fan_out_http(&state, targets, "POST", path, body).await;
     let (success, failed) = partition(results);
-    Json(ApiResponse::success(FanOutResponse {
-        success,
-        failed,
-        warnings,
-    }))
+    (
+        StatusCode::OK,
+        Json(ApiResponse::success(FanOutResponse {
+            success,
+            failed,
+            warnings,
+        })),
+    )
 }
 
 /// Extract [`GlobalConnectionIpRestrictionData`] from a Controller GET response body.
@@ -341,20 +338,16 @@ pub async fn update_global_ip_restriction(
     State(state): State<ApiState>,
     Path((ns, name)): Path<(String, String)>,
     Json(req): Json<UpdateRequest>,
-) -> Json<ApiResponse<FanOutResponse>> {
+) -> (StatusCode, Json<ApiResponse<FanOutResponse>>) {
+    // Early validation: bad request body must surface as HTTP 400 so automated
+    // callers can rely on the status code instead of inspecting nested fields.
     {
         let mut cloned = req.data.clone();
         if let Err(e) = cloned.validate_and_init() {
-            return Json(ApiResponse::success(FanOutResponse {
-                success: vec![],
-                failed: vec![ControllerOpResult {
-                    controller_id: "<validation>".to_string(),
-                    detail: None,
-                    error: Some(format!("invalid PM data: {}", e)),
-                    status_code: Some(400),
-                }],
-                warnings: vec![],
-            }));
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::error(format!("invalid PM data: {}", e))),
+            );
         }
     }
     let (targets, warnings) = resolve_targets(&state, &req.controllers);
@@ -362,11 +355,14 @@ pub async fn update_global_ip_restriction(
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
     let results = fan_out_http(&state, targets, "PUT", path, body).await;
     let (success, failed) = partition(results);
-    Json(ApiResponse::success(FanOutResponse {
-        success,
-        failed,
-        warnings,
-    }))
+    (
+        StatusCode::OK,
+        Json(ApiResponse::success(FanOutResponse {
+            success,
+            failed,
+            warnings,
+        })),
+    )
 }
 
 // =====================================================================

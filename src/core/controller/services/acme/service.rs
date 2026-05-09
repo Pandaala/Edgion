@@ -491,7 +491,7 @@ async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bo
 
     // 4. Store certificate in K8s Secret
     let secret_ns = acme.get_secret_namespace();
-    create_or_update_cert_secret(&client, &secret_ns, &acme.spec.storage.secret_name, &cert_result, &key).await?;
+    create_or_update_cert_secret(&client, &secret_ns, &acme.spec.storage.secret_name, &cert_result, name).await?;
 
     // 5. Create/update EdgionTls if enabled
     if acme.spec.auto_edgion_tls.enabled {
@@ -922,7 +922,7 @@ async fn create_or_update_cert_secret(
     namespace: &str,
     name: &str,
     cert: &AcmeCertificateResult,
-    acme_key: &str,
+    acme_resource_name: &str,
 ) -> Result<()> {
     let api: Api<Secret> = Api::namespaced(client.clone(), namespace);
 
@@ -937,7 +937,7 @@ async fn create_or_update_cert_secret(
             namespace: Some(namespace.to_string()),
             labels: Some(BTreeMap::from([
                 ("edgion.io/managed-by".to_string(), "acme".to_string()),
-                ("edgion.io/acme-resource".to_string(), acme_key.to_string()),
+                ("edgion.io/acme-resource".to_string(), acme_resource_name.to_string()),
             ])),
             ..Default::default()
         },

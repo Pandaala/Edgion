@@ -148,46 +148,51 @@ fn read_generated_credentials(config_content: &str, config_path: &Path) -> Optio
     parse_secret_credentials(&content)
 }
 
-/// Extract username and password from a K8s Secret YAML (stringData format).
+/// Minimal K8s Secret shape for credential extraction.
+///
+/// Mirrors `parse_secret_to_config` in `core::common::local_auth::secret` so
+/// the CLI and controller agree on how to read the admin Secret.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct SecretDoc {
+    #[serde(rename = "stringData")]
+    string_data: Option<std::collections::BTreeMap<String, String>>,
+    data: Option<std::collections::BTreeMap<String, String>>,
+}
+
+/// Extract username and password from a K8s Secret YAML.
+///
+/// Tries `stringData` (plaintext) first, then falls back to `data` (base64).
+/// Returns `None` if the YAML is malformed, the relevant fields are missing,
+/// or the password is empty.
 fn parse_secret_credentials(yaml: &str) -> Option<(String, Zeroizing<String>)> {
-    // Simple line-based parsing for stringData fields
-    // Format:
-    // stringData:
-    //   username: "admin"
-    //   password: "randomstring"
-    let mut username = None;
-    let mut password = None;
-    let mut in_string_data = false;
+    let doc: SecretDoc = serde_yaml::from_str(yaml).ok()?;
 
-    for line in yaml.lines() {
-        let trimmed = line.trim();
-        if trimmed == "stringData:" {
-            in_string_data = true;
-            continue;
+    // Mirror `parse_secret_to_config` in `core::common::local_auth::secret`:
+    // when `stringData` is present we commit to that branch — we do NOT fall
+    // back to `data` if the password is missing/empty inside `stringData`.
+    if let Some(string_data) = doc.string_data.as_ref() {
+        let username = string_data.get("username")?.clone();
+        let password = string_data.get("password")?.clone();
+        if password.is_empty() {
+            return None;
         }
-        if in_string_data {
-            if !trimmed.starts_with("username:")
-                && !trimmed.starts_with("password:")
-                && !trimmed.starts_with("jwt_secret:")
-            {
-                if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                    // We've left the stringData block
-                    break;
-                }
-                continue;
-            }
-            if let Some(val) = trimmed.strip_prefix("username:") {
-                username = Some(val.trim().trim_matches('"').to_string());
-            } else if let Some(val) = trimmed.strip_prefix("password:") {
-                password = Some(val.trim().trim_matches('"').to_string());
-            }
-        }
+        return Some((username, Zeroizing::new(password)));
     }
 
-    match (username, password) {
-        (Some(u), Some(p)) if !p.is_empty() => Some((u, Zeroizing::new(p))),
-        _ => None,
+    let data = doc.data.as_ref()?;
+    let username = decode_base64_field(data.get("username")?)?;
+    let password = decode_base64_field(data.get("password")?)?;
+    if password.is_empty() {
+        return None;
     }
+    Some((username, Zeroizing::new(password)))
+}
+
+fn decode_base64_field(encoded: &str) -> Option<String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
+    String::from_utf8(bytes).ok()
 }
 
 /// Resolve conf_dir from the parsed config file.
@@ -233,4 +238,167 @@ fn resolve_config_path(explicit: Option<&str>) -> Option<PathBuf> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn yaml_with_string_data(extra: &str) -> String {
+        format!(
+            r#"apiVersion: v1
+kind: Secret
+metadata:
+  name: edgion-admin-credentials
+  namespace: edgion-system
+type: Opaque
+stringData:
+  username: "admin"
+  password: "p@ssw0rd"
+  jwt_secret: "jwt"{}"#,
+            extra
+        )
+    }
+
+    #[test]
+    fn parses_normal_secret() {
+        let (u, p) = parse_secret_credentials(&yaml_with_string_data("")).unwrap();
+        assert_eq!(u, "admin");
+        assert_eq!(p.as_str(), "p@ssw0rd");
+    }
+
+    #[test]
+    fn tolerates_comment_inside_string_data() {
+        let yaml = yaml_with_string_data("\n  # operator-added comment");
+        let (u, p) = parse_secret_credentials(&yaml).unwrap();
+        assert_eq!(u, "admin");
+        assert_eq!(p.as_str(), "p@ssw0rd");
+    }
+
+    #[test]
+    fn tolerates_extra_field_inside_string_data() {
+        // The old line scanner would `break` on any unknown non-comment line in
+        // stringData and silently drop credentials that came after.
+        let yaml = format!(
+            r#"apiVersion: v1
+kind: Secret
+metadata:
+  name: edgion-admin-credentials
+  namespace: edgion-system
+type: Opaque
+stringData:
+  extra_key: "ignored"
+  username: "admin"
+  password: "p@ssw0rd"
+  jwt_secret: "jwt"
+"#
+        );
+        let (u, p) = parse_secret_credentials(&yaml).unwrap();
+        assert_eq!(u, "admin");
+        assert_eq!(p.as_str(), "p@ssw0rd");
+    }
+
+    #[test]
+    fn preserves_password_starting_with_quote() {
+        // The old parser called `trim_matches('"')` which would strip a real
+        // leading/trailing quote character from the password.
+        let yaml = r#"apiVersion: v1
+kind: Secret
+type: Opaque
+stringData:
+  username: "admin"
+  password: '"quoted"value'
+  jwt_secret: "jwt"
+"#;
+        let (_, p) = parse_secret_credentials(yaml).unwrap();
+        assert_eq!(p.as_str(), "\"quoted\"value");
+    }
+
+    #[test]
+    fn preserves_password_with_hash() {
+        let yaml = r#"apiVersion: v1
+kind: Secret
+type: Opaque
+stringData:
+  username: "admin"
+  password: "abc#def"
+  jwt_secret: "jwt"
+"#;
+        let (_, p) = parse_secret_credentials(yaml).unwrap();
+        assert_eq!(p.as_str(), "abc#def");
+    }
+
+    #[test]
+    fn falls_back_to_base64_data() {
+        // base64("admin") = YWRtaW4=, base64("s3cret") = czNjcmV0
+        let yaml = r#"apiVersion: v1
+kind: Secret
+type: Opaque
+data:
+  username: YWRtaW4=
+  password: czNjcmV0
+  jwt_secret: and0
+"#;
+        let (u, p) = parse_secret_credentials(yaml).unwrap();
+        assert_eq!(u, "admin");
+        assert_eq!(p.as_str(), "s3cret");
+    }
+
+    #[test]
+    fn returns_none_when_password_missing() {
+        let yaml = r#"apiVersion: v1
+kind: Secret
+type: Opaque
+stringData:
+  username: "admin"
+  jwt_secret: "jwt"
+"#;
+        assert!(parse_secret_credentials(yaml).is_none());
+    }
+
+    #[test]
+    fn returns_none_when_password_empty() {
+        let yaml = r#"apiVersion: v1
+kind: Secret
+type: Opaque
+stringData:
+  username: "admin"
+  password: ""
+  jwt_secret: "jwt"
+"#;
+        assert!(parse_secret_credentials(yaml).is_none());
+    }
+
+    #[test]
+    fn returns_none_on_malformed_yaml() {
+        assert!(parse_secret_credentials("::: not yaml :::").is_none());
+    }
+
+    #[test]
+    fn does_not_fall_back_when_string_data_present_without_password() {
+        // Locks in parity with `secret.rs::parse_secret_to_config`: once
+        // `stringData` is present we commit to that branch and never fall back
+        // to `data`, even if the password lives there.
+        let yaml = r#"apiVersion: v1
+kind: Secret
+type: Opaque
+stringData:
+  username: "admin"
+data:
+  password: czNjcmV0
+"#;
+        assert!(parse_secret_credentials(yaml).is_none());
+    }
+
+    #[test]
+    fn returns_none_on_malformed_base64_in_data() {
+        let yaml = r#"apiVersion: v1
+kind: Secret
+type: Opaque
+data:
+  username: YWRtaW4=
+  password: "!!!not-base64!!!"
+"#;
+        assert!(parse_secret_credentials(yaml).is_none());
+    }
 }

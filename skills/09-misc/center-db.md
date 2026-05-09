@@ -46,11 +46,9 @@ Design notes:
 database:
   enabled: true
   sqlite_path: data/center.db  # Relative path, based on work_dir
-  sync_interval_secs: 60       # Deprecated; kept for backward compatibility, no longer used
 ```
 
 - When `enabled: false`, all DB-dependent Admin APIs (such as `GET /admin/controllers`) return 503
-- `sync_interval_secs`: a **backward-compatibility field**; older versions used it to control HTTP polling intervals; the new architecture pushes in real time via reverse Watch, so this field is kept but has no effect
 
 ## PluginMetaData data flow: reverse-Watch architecture
 

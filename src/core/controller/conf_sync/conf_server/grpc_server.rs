@@ -415,6 +415,19 @@ impl ConfigSync for ConfigSyncGrpcServer {
                             break;
                         }
                     }
+                    // Detect client disconnect even when no count-change event fires.
+                    // Without this, a hard-killed gateway (no graceful FIN) would remain
+                    // registered until the next count-change event, inflating the divisor
+                    // used by cluster-scoped rate limits on the surviving gateways.
+                    _ = tx.closed() => {
+                        tracing::info!(
+                            component = "grpc_server",
+                            client_id = %client_id,
+                            "WatchServerMeta receiver closed, unregistering"
+                        );
+                        registry.unregister(&client_id);
+                        break;
+                    }
                     // Periodically check if server_id changed (controller reload / leader switch)
                     _ = check_interval.tick() => {
                         if let Some(new_server) = provider.config_sync_server() {
