@@ -226,53 +226,51 @@ impl CenterApi for FileSystemStorage {
     }
 
     async fn list_all(&self, _opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
-        // FileSystem mode: ignore pagination options, return all items
+        // FileSystem mode: ignore pagination options, return all items.
+        // Scan top-level only — matches the flat `Kind_ns_name.yaml` layout used by
+        // init_phase and the non-recursive watcher. Subdirectories are skipped to
+        // avoid drift between list_all and what the watcher actually observes.
         let mut resources = Vec::new();
-        let mut stack = vec![self.root.clone()];
+        let mut entries = fs::read_dir(&self.root)
+            .await
+            .map_err(|e| ConfWriterError::io("Failed to read dir", e))?;
 
-        while let Some(dir) = stack.pop() {
-            let mut entries = fs::read_dir(&dir)
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| ConfWriterError::io("Failed to read dir entry", e))?
+        {
+            let path = entry.path();
+
+            if path.is_dir() {
+                continue;
+            }
+
+            // Only process .yaml/.yml files
+            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+            if !matches!(ext, "yaml" | "yml") {
+                continue;
+            }
+
+            // Read and parse file
+            let content = fs::read_to_string(&path)
                 .await
-                .map_err(|e| ConfWriterError::io("Failed to read dir", e))?;
+                .map_err(|e| ConfWriterError::io(format!("Failed to read {:?}", path), e))?;
 
-            while let Some(entry) = entries
-                .next_entry()
-                .await
-                .map_err(|e| ConfWriterError::io("Failed to read dir entry", e))?
-            {
-                let path = entry.path();
-
-                if path.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-
-                // Only process .yaml/.yml files
-                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-                if !matches!(ext, "yaml" | "yml") {
-                    continue;
-                }
-
-                // Read and parse file
-                let content = fs::read_to_string(&path)
-                    .await
-                    .map_err(|e| ConfWriterError::io(format!("Failed to read {:?}", path), e))?;
-
-                // Extract metadata
-                if let Some(metadata) = extract_resource_metadata(&content) {
-                    resources.push(ConfEntry {
-                        kind: metadata.kind.unwrap_or_default(),
-                        namespace: metadata.namespace,
-                        name: metadata.name.unwrap_or_default(),
-                        content,
-                    });
-                } else {
-                    tracing::warn!(
-                        component = "file_system_writer",
-                        path = ?path,
-                        "Failed to extract metadata from file"
-                    );
-                }
+            // Extract metadata
+            if let Some(metadata) = extract_resource_metadata(&content) {
+                resources.push(ConfEntry {
+                    kind: metadata.kind.unwrap_or_default(),
+                    namespace: metadata.namespace,
+                    name: metadata.name.unwrap_or_default(),
+                    content,
+                });
+            } else {
+                tracing::warn!(
+                    component = "file_system_writer",
+                    path = ?path,
+                    "Failed to extract metadata from file"
+                );
             }
         }
 

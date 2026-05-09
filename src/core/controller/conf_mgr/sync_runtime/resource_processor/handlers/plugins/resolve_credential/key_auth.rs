@@ -58,61 +58,36 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                         }
                     };
 
-                    // Try to get keys.yaml from data (base64 decoded) or string_data (plain text)
-                    let keys_yaml_str: String = if let Some(data) = &secret.data {
-                        // Try data field first (K8s stores decoded bytes here)
-                        if let Some(keys_yaml_bytes) = data.get("keys.yaml") {
-                            match String::from_utf8(keys_yaml_bytes.0.clone()) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    tracing::warn!(
-                                        edgion_plugins = %resource_ref.key(),
-                                        secret_key = %secret_key,
-                                        error = %e,
-                                        "KeyAuth: Failed to decode keys.yaml as UTF-8"
-                                    );
-                                    continue;
-                                }
-                            }
-                        } else if let Some(string_data) = &secret.string_data {
-                            // Fallback to string_data if data doesn't have the key
-                            if let Some(s) = string_data.get("keys.yaml") {
-                                s.clone()
-                            } else {
-                                tracing::warn!(
-                                    edgion_plugins = %resource_ref.key(),
-                                    secret_key = %secret_key,
-                                    "KeyAuth: Secret missing 'keys.yaml' field in both data and string_data"
-                                );
-                                continue;
-                            }
-                        } else {
-                            tracing::warn!(
-                                edgion_plugins = %resource_ref.key(),
-                                secret_key = %secret_key,
-                                "KeyAuth: Secret missing 'keys.yaml' field"
-                            );
-                            continue;
-                        }
-                    } else if let Some(string_data) = &secret.string_data {
-                        // No data field, try string_data (used in local file testing)
-                        if let Some(s) = string_data.get("keys.yaml") {
-                            s.clone()
-                        } else {
-                            tracing::warn!(
-                                edgion_plugins = %resource_ref.key(),
-                                secret_key = %secret_key,
-                                "KeyAuth: Secret missing 'keys.yaml' field in string_data"
-                            );
-                            continue;
-                        }
-                    } else {
+                    // SecretHandler::parse normalizes stringData into data and clears
+                    // stringData, so Secrets in secret_store always expose keys.yaml
+                    // through `secret.data`.
+                    let Some(data) = &secret.data else {
                         tracing::warn!(
                             edgion_plugins = %resource_ref.key(),
                             secret_key = %secret_key,
-                            "KeyAuth: Secret has no data or string_data"
+                            "KeyAuth: Secret has no data"
                         );
                         continue;
+                    };
+                    let Some(keys_yaml_bytes) = data.get("keys.yaml") else {
+                        tracing::warn!(
+                            edgion_plugins = %resource_ref.key(),
+                            secret_key = %secret_key,
+                            "KeyAuth: Secret missing 'keys.yaml' field"
+                        );
+                        continue;
+                    };
+                    let keys_yaml_str = match String::from_utf8(keys_yaml_bytes.0.clone()) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::warn!(
+                                edgion_plugins = %resource_ref.key(),
+                                secret_key = %secret_key,
+                                error = %e,
+                                "KeyAuth: Failed to decode keys.yaml as UTF-8"
+                            );
+                            continue;
+                        }
                     };
 
                     // Parse YAML list of key entries

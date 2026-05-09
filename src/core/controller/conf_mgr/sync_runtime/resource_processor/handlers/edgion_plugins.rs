@@ -53,15 +53,21 @@ impl EdgionPluginsHandler {
         );
     }
 
-    /// Extract the `service_region_route_ref` name from the first RegionRoute plugin, if any.
-    fn get_service_region_route_ref(ep: &EdgionPlugins) -> Option<String> {
-        ep.spec.request_plugins.as_ref()?.iter().find_map(|e| {
-            if let EdgionPlugin::RegionRoute(ref config) = e.plugin {
-                config.service_region_route_ref.clone()
-            } else {
-                None
-            }
-        })
+    /// Extract all `service_region_route_ref` names from every RegionRoute plugin.
+    fn get_service_region_route_refs(ep: &EdgionPlugins) -> Vec<String> {
+        let Some(plugins) = &ep.spec.request_plugins else {
+            return vec![];
+        };
+        plugins
+            .iter()
+            .filter_map(|e| {
+                if let EdgionPlugin::RegionRoute(ref config) = e.plugin {
+                    config.service_region_route_ref.clone()
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
@@ -96,7 +102,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         let ep_key = format!("{}:{}/{}", ResourceKind::EdgionPlugins.as_str(), ns, ep_name);
 
         // Register PluginMetaData refs and service table entries for each RegionRoute plugin
-        if let Some(pm_name) = Self::get_service_region_route_ref(&ep) {
+        for pm_name in Self::get_service_region_route_refs(&ep) {
             let pm_key = format!("{}/{}", ns, pm_name);
             ctx.runtime()
                 .plugin_metadata_refs
@@ -204,7 +210,13 @@ impl EdgionPluginsHandler {
         );
 
         let mut errors = Vec::new();
-        for dep_key in ctx.secret_ref_manager().get_dependencies(&resource_ref.key()) {
+        // Sort dependency keys so the joined condition.message is deterministic
+        // across reconciles. get_dependencies' backing HashSet has non-deterministic
+        // iteration order; without sorting, status_diff::condition_fields_equal
+        // (which compares `message`) would trigger spurious K8s status writes.
+        let mut deps = ctx.secret_ref_manager().get_dependencies(&resource_ref.key());
+        deps.sort();
+        for dep_key in deps {
             // dep_key is "<ns>/<name>" (or just "<name>" if namespace-less, per format_secret_key).
             let (ns, name) = match dep_key.split_once('/') {
                 Some((ns, name)) => (ns.to_string(), name.to_string()),
@@ -646,6 +658,92 @@ mod tests {
             EdgionPlugin::RegionRoute(c) => c,
             _ => panic!("unexpected plugin type"),
         };
+    }
+
+    #[tokio::test]
+    async fn test_parse_registers_all_region_route_pm_refs() {
+        // Two RegionRoute plugins referencing different PluginMetaData resources.
+        // Both must be registered in plugin_metadata_refs so that an update to
+        // either one triggers a requeue of this EdgionPlugins.
+        let make_svc_pm = |name: &str| {
+            build_plugin_metadata(
+                "default",
+                name,
+                PluginMetaDataSpec {
+                    metadata: MetaDataEntry::ServiceRegionRoute(ServiceRegionRouteConfig {
+                        cluster_ref: None,
+                        regions: vec![],
+                    }),
+                },
+            )
+        };
+
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut pm_map = HashMap::new();
+        pm_map.insert("default/svc-a".to_string(), make_svc_pm("svc-a"));
+        pm_map.insert("default/svc-b".to_string(), make_svc_pm("svc-b"));
+        runtime.plugin_metadata_store.replace_all(pm_map);
+
+        let mut ep = EdgionPlugins::new("dual-rr-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![
+            RequestFilterEntry::new(EdgionPlugin::RegionRoute(RegionRouteConfig {
+                service_region_route_ref: Some("svc-a".to_string()),
+                ..Default::default()
+            })),
+            RequestFilterEntry::new(EdgionPlugin::RegionRoute(RegionRouteConfig {
+                service_region_route_ref: Some("svc-b".to_string()),
+                ..Default::default()
+            })),
+        ]);
+
+        let handler = EdgionPluginsHandler::new();
+        let _parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+
+        let ep_key = "EdgionPlugins:default/dual-rr-ep";
+        let svc_a_refs = runtime.plugin_metadata_refs.get_refs("default/svc-a");
+        let svc_b_refs = runtime.plugin_metadata_refs.get_refs("default/svc-b");
+        assert!(
+            svc_a_refs.contains(&ep_key.to_string()),
+            "svc-a must reference ep; got: {:?}",
+            svc_a_refs
+        );
+        assert!(
+            svc_b_refs.contains(&ep_key.to_string()),
+            "svc-b must reference ep; got: {:?}",
+            svc_b_refs
+        );
+
+        // Assert service_region_route_table.ref_plugins also got both EP entries.
+        // The fix loop touches both data structures together; divergence between them
+        // would silently regress, so both must be asserted.
+        use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_route_table::RefPluginEntry;
+        let expected = RefPluginEntry {
+            kind: "EdgionPlugins".to_string(),
+            namespace: "default".to_string(),
+            name: "dual-rr-ep".to_string(),
+        };
+        let svc_a_entry = runtime
+            .service_region_route_table
+            .get("default/svc-a")
+            .expect("svc-a entry must exist");
+        let svc_b_entry = runtime
+            .service_region_route_table
+            .get("default/svc-b")
+            .expect("svc-b entry must exist");
+        assert!(
+            svc_a_entry.ref_plugins.contains(&expected),
+            "svc-a service table must list ep as ref_plugin; got: {:?}",
+            svc_a_entry.ref_plugins
+        );
+        assert!(
+            svc_b_entry.ref_plugins.contains(&expected),
+            "svc-b service table must list ep as ref_plugin; got: {:?}",
+            svc_b_entry.ref_plugins
+        );
     }
 
     #[tokio::test]

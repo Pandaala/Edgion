@@ -459,32 +459,38 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         let current_hostnames: Vec<String> = listeners.iter().filter_map(|l| l.hostname.clone()).collect();
         let current_ports: Vec<i32> = listeners.iter().map(|l| l.port).collect();
 
-        let hostnames_changed = route_index.update_gateway_hostnames(&gateway_key, current_hostnames);
-        let ports_changed = route_index.update_gateway_ports(&gateway_key, current_ports);
-
         // CYCLE PREVENTION: Only requeue referencing routes when listener
         // hostnames or ports actually changed. All Route.on_change handlers
         // unconditionally requeue their parent Gateways, so removing this
         // condition would create Route→Gateway→Route infinite loops.
-        if hostnames_changed || ports_changed {
-            let referencing_routes = route_index.get_routes_for_gateway(&gateway_key);
-            if !referencing_routes.is_empty() {
+        //
+        // Atomicity: change detection and route collection share one write
+        // guard inside the index, so a concurrent `update_route` cannot insert
+        // a new route between the two steps and slip past requeue.
+        let listener_change =
+            route_index.update_listener_config_and_collect_routes(&gateway_key, current_hostnames, current_ports);
+        match listener_change {
+            Some(change) if !change.routes.is_empty() => {
                 tracing::info!(
                     gateway = %gateway_key,
-                    route_count = referencing_routes.len(),
-                    hostnames_changed,
-                    ports_changed,
+                    route_count = change.routes.len(),
+                    hostnames_changed = change.hostnames_changed,
+                    ports_changed = change.ports_changed,
                     "Gateway listener config changed, requeue referencing routes"
                 );
-                for (route_kind, route_key) in referencing_routes {
+                for (route_kind, route_key) in change.routes {
                     ctx.requeue(route_kind.as_str(), route_key).await;
                 }
             }
-        } else {
-            tracing::trace!(
-                gateway = %gateway_key,
-                "Gateway listener hostnames/ports unchanged, skip requeue referencing routes"
-            );
+            Some(_) => {
+                // Listener config changed but no routes reference this Gateway yet.
+            }
+            None => {
+                tracing::trace!(
+                    gateway = %gateway_key,
+                    "Gateway listener hostnames/ports unchanged, skip requeue referencing routes"
+                );
+            }
         }
     }
 
@@ -1087,9 +1093,15 @@ fn update_listener_conditions(
 }
 
 fn is_valid_pem(data: &[u8]) -> bool {
-    x509_parser::pem::Pem::iter_from_buffer(data)
-        .next()
-        .is_some_and(|r| r.is_ok())
+    let mut iter = x509_parser::pem::Pem::iter_from_buffer(data);
+    let mut any = false;
+    for r in iter.by_ref() {
+        any = true;
+        if r.is_err() {
+            return false;
+        }
+    }
+    any
 }
 
 fn pick_gateway_resolved_refs_reason(errors: &[GatewayResolvedRefsError]) -> &'static str {

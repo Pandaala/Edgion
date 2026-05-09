@@ -236,7 +236,6 @@ impl TcpStreamPluginsTestSuite {
             },
         )
     }
-}
 
     /// Test: TCPRoute referencing a non-existent EdgionStreamPlugins must
     /// fail-close (reject the connection) rather than silently admit traffic.

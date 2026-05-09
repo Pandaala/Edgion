@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use k8s_openapi::ByteString;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::backend_tls_policy_ref::make_target_conflict_key;
@@ -14,7 +15,8 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
 use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use crate::types::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3};
 use crate::types::resources::backend_tls_policy::{
-    BackendTLSPolicyCACertificateRef, BackendTLSPolicyStatus, PolicyAncestorStatus,
+    BackendTLSPolicyCACertificateRef, BackendTLSPolicyStatus, BackendTLSPolicyTargetRef, BtpSpecView,
+    PolicyAncestorStatus,
 };
 use crate::types::resources::common::{is_core_api_group, ParentReference};
 use crate::types::ResourceKind;
@@ -64,16 +66,15 @@ impl Default for BackendTlsPolicyHandler {
 }
 
 impl BackendTlsPolicyHandler {
-    fn validate_policy(&self, btp: &BackendTLSPolicy) -> Vec<String> {
+    fn validate_policy<S: BtpSpecView>(&self, spec: &S) -> Vec<String> {
         let mut errors = Vec::new();
 
-        let has_ca_refs = btp
-            .spec
-            .validation
+        let validation = spec.validation();
+        let has_ca_refs = validation
             .ca_certificate_refs
             .as_ref()
             .is_some_and(|refs| !refs.is_empty());
-        let has_well_known = btp.spec.validation.well_known_ca_certificates.is_some();
+        let has_well_known = validation.well_known_ca_certificates.is_some();
 
         if has_ca_refs && has_well_known {
             errors.push("caCertificateRefs and wellKnownCACertificates are mutually exclusive".to_string());
@@ -283,11 +284,11 @@ impl BackendTlsPolicyHandler {
         ProcessResult::Continue(btp)
     }
 
-    async fn on_delete_policy(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
+    async fn on_delete_policy(&self, meta: &ObjectMeta, ctx: &HandlerContext) {
         let resource_ref = ResourceRef::new(
             ResourceKind::BackendTLSPolicy,
-            btp.metadata.namespace.clone(),
-            btp.metadata.name.clone().unwrap_or_default(),
+            meta.namespace.clone(),
+            meta.name.clone().unwrap_or_default(),
         );
 
         // Find siblings BEFORE clearing (they may become Accepted after this delete).
@@ -317,19 +318,26 @@ impl BackendTlsPolicyHandler {
         }
     }
 
-    fn update_policy_status(&self, btp: &mut BackendTLSPolicy, _ctx: &HandlerContext, validation_errors: &[String]) {
-        let generation = btp.metadata.generation;
+    fn update_policy_status<S: BtpSpecView>(
+        &self,
+        meta: &ObjectMeta,
+        spec: &S,
+        status: &mut Option<BackendTLSPolicyStatus>,
+        _ctx: &HandlerContext,
+        validation_errors: &[String],
+    ) {
+        let generation = meta.generation;
 
         // --- Classify CA reference errors with precise reasons ---
         let mut kind_errors = Vec::new(); // → reason: InvalidKind
         let mut ref_errors = Vec::new(); // → reason: InvalidCACertificateRef
         let mut client_cert_errors = Vec::new();
 
-        if !btp.spec.use_system_ca {
-            if let Some(refs) = &btp.spec.validation.ca_certificate_refs {
+        if !spec.use_system_ca() {
+            if let Some(refs) = &spec.validation().ca_certificate_refs {
                 for ca_ref in refs {
                     if Self::is_secret_ref(ca_ref) || Self::is_configmap_ref(ca_ref) {
-                        if !Self::is_ca_resolved(btp, &ca_ref.name) {
+                        if !Self::is_ca_resolved(spec, &ca_ref.name) {
                             ref_errors.push(format!(
                                 "{} '{}' not found or missing '{}' key",
                                 ca_ref.kind, ca_ref.name, CA_CERT
@@ -345,11 +353,10 @@ impl BackendTlsPolicyHandler {
             }
         }
 
-        match btp.client_certificate_secret_ref() {
-            Ok(Some(client_ref)) => {
-                if btp.spec.resolved_client_certificate.is_none() {
-                    client_cert_errors.push(format!("Client certificate Secret '{}' not found", client_ref.name));
-                } else if let Some(secret) = &btp.spec.resolved_client_certificate {
+        match spec.client_certificate_secret_ref() {
+            Ok(Some(client_ref)) => match spec.resolved_client_certificate() {
+                None => client_cert_errors.push(format!("Client certificate Secret '{}' not found", client_ref.name)),
+                Some(secret) => {
                     if !Self::secret_has_client_cert_pair(secret) {
                         client_cert_errors.push(format!(
                             "Client certificate Secret '{}' must contain '{}' and '{}'",
@@ -357,7 +364,7 @@ impl BackendTlsPolicyHandler {
                         ));
                     }
                 }
-            }
+            },
             Ok(None) => {}
             Err(err) => client_cert_errors.push(err),
         }
@@ -365,10 +372,9 @@ impl BackendTlsPolicyHandler {
         // --- Check if ALL CA certificate refs are invalid (Gateway API v1.5 spec:
         // "If ALL CACertificateRefs are invalid, the implementation MUST also ensure
         //  the Accepted Condition is set to status: False, with Reason NoValidCACertificate.")
-        let all_ca_refs_invalid = if !btp.spec.use_system_ca {
-            let total_ca_refs = btp
-                .spec
-                .validation
+        let all_ca_refs_invalid = if !spec.use_system_ca() {
+            let total_ca_refs = spec
+                .validation()
                 .ca_certificate_refs
                 .as_ref()
                 .map_or(0, |refs| refs.len());
@@ -379,9 +385,9 @@ impl BackendTlsPolicyHandler {
 
         // --- Conflict detection ---
         let is_conflicted = if validation_errors.is_empty() {
-            let policy_ns = btp.metadata.namespace.as_deref().unwrap_or("default");
-            let policy_key = format!("{}/{}", policy_ns, btp.metadata.name.as_deref().unwrap_or(""));
-            btp.spec.target_refs.iter().any(|target_ref| {
+            let policy_ns = meta.namespace.as_deref().unwrap_or("default");
+            let policy_key = format!("{}/{}", policy_ns, meta.name.as_deref().unwrap_or(""));
+            spec.target_refs().iter().any(|target_ref| {
                 let target_key =
                     make_target_conflict_key(policy_ns, &target_ref.name, target_ref.section_name.as_deref());
                 !_ctx.runtime().backend_tls_policy.is_winner(&policy_key, &target_key)
@@ -391,11 +397,9 @@ impl BackendTlsPolicyHandler {
         };
 
         // --- Resolve ancestor Gateways ---
-        let ancestor_gateways = Self::resolve_ancestor_gateways(btp, _ctx);
+        let ancestor_gateways = Self::resolve_ancestor_gateways(meta, spec.target_refs(), _ctx);
 
-        let status = btp
-            .status
-            .get_or_insert_with(|| BackendTLSPolicyStatus { ancestors: vec![] });
+        let status = status.get_or_insert_with(|| BackendTLSPolicyStatus { ancestors: vec![] });
 
         // Build Gateway ParentReferences
         let gateway_refs: Vec<ParentReference> = ancestor_gateways
@@ -505,7 +509,7 @@ impl BackendTlsPolicyHandler {
         }
     }
 
-    async fn on_change_policy(&self, _btp: &BackendTLSPolicy, _ctx: &HandlerContext) {
+    async fn on_change_policy(&self, _ctx: &HandlerContext) {
         // Sibling requeue is handled in parse_policy() (only when targetRefs
         // actually change), so nothing to do here. Unconditionally requeuing
         // siblings in both parse and on_change was causing A→B→A→B ping-pong
@@ -518,17 +522,21 @@ impl BackendTlsPolicyHandler {
     ///
     /// Returns deduplicated, sorted list of (gateway_ns, gateway_name), capped at 16
     /// per Gateway API `+kubebuilder:validation:MaxItems=16` on `status.ancestors`.
-    fn resolve_ancestor_gateways(btp: &BackendTLSPolicy, ctx: &HandlerContext) -> Vec<(String, String)> {
+    fn resolve_ancestor_gateways(
+        meta: &ObjectMeta,
+        target_refs: &[BackendTLSPolicyTargetRef],
+        ctx: &HandlerContext,
+    ) -> Vec<(String, String)> {
         // Gateway API PolicyAncestorStatus maxItems=16.
         const MAX_POLICY_ANCESTORS: usize = 16;
 
-        let policy_ns = btp.metadata.namespace.as_deref().unwrap_or("default");
+        let policy_ns = meta.namespace.as_deref().unwrap_or("default");
         let service_ref_manager = &ctx.runtime().service_ref_mgr;
         let route_index = &ctx.runtime().gateway_route_index;
 
         let mut seen = std::collections::HashSet::new();
 
-        for target_ref in &btp.spec.target_refs {
+        for target_ref in target_refs {
             // Per Gateway API spec, targetRef can only reference resources in the same namespace.
             let service_key = format!("{}/{}", policy_ns, target_ref.name);
 
@@ -553,7 +561,7 @@ impl BackendTlsPolicyHandler {
 
         if keys.len() > MAX_POLICY_ANCESTORS {
             tracing::warn!(
-                policy = %format!("{}/{}", policy_ns, btp.metadata.name.as_deref().unwrap_or("")),
+                policy = %format!("{}/{}", policy_ns, meta.name.as_deref().unwrap_or("")),
                 total = keys.len(),
                 "BackendTLSPolicy ancestors truncated to {} per Gateway API limit",
                 MAX_POLICY_ANCESTORS,
@@ -577,10 +585,8 @@ impl BackendTlsPolicyHandler {
     }
 
     #[inline]
-    fn is_ca_resolved(btp: &BackendTLSPolicy, name: &str) -> bool {
-        btp.spec
-            .resolved_ca_certificates
-            .as_ref()
+    fn is_ca_resolved<S: BtpSpecView>(spec: &S, name: &str) -> bool {
+        spec.resolved_ca_certificates()
             .is_some_and(|secrets| secrets.iter().any(|s| s.metadata.name.as_deref() == Some(name)))
     }
 
@@ -596,23 +602,23 @@ impl BackendTlsPolicyHandler {
 #[async_trait::async_trait]
 impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
     fn validate(&self, btp: &BackendTLSPolicy, _ctx: &HandlerContext) -> Vec<String> {
-        self.validate_policy(btp)
+        self.validate_policy(&btp.spec)
     }
 
     async fn parse(&self, btp: BackendTLSPolicy, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicy> {
         self.parse_policy(btp, ctx).await
     }
 
-    async fn on_change(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
-        self.on_change_policy(btp, ctx).await;
+    async fn on_change(&self, _btp: &BackendTLSPolicy, ctx: &HandlerContext) {
+        self.on_change_policy(ctx).await;
     }
 
     async fn on_delete(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
-        self.on_delete_policy(btp, ctx).await;
+        self.on_delete_policy(&btp.metadata, ctx).await;
     }
 
     fn update_status(&self, btp: &mut BackendTLSPolicy, ctx: &HandlerContext, validation_errors: &[String]) {
-        self.update_policy_status(btp, ctx, validation_errors);
+        self.update_policy_status(&btp.metadata, &btp.spec, &mut btp.status, ctx, validation_errors);
     }
 }
 
@@ -641,7 +647,7 @@ impl Default for BackendTlsPolicyAlpha3Handler {
 #[async_trait::async_trait]
 impl ProcessorHandler<BackendTLSPolicyAlpha3> for BackendTlsPolicyAlpha3Handler {
     fn validate(&self, btp: &BackendTLSPolicyAlpha3, _ctx: &HandlerContext) -> Vec<String> {
-        self.inner.validate_policy(&btp.clone().into())
+        self.inner.validate_policy(&btp.spec)
     }
 
     async fn parse(&self, btp: BackendTLSPolicyAlpha3, ctx: &HandlerContext) -> ProcessResult<BackendTLSPolicyAlpha3> {
@@ -651,20 +657,17 @@ impl ProcessorHandler<BackendTLSPolicyAlpha3> for BackendTlsPolicyAlpha3Handler 
         }
     }
 
-    async fn on_change(&self, btp: &BackendTLSPolicyAlpha3, ctx: &HandlerContext) {
-        let v1: BackendTLSPolicy = btp.clone().into();
-        self.inner.on_change_policy(&v1, ctx).await;
+    async fn on_change(&self, _btp: &BackendTLSPolicyAlpha3, ctx: &HandlerContext) {
+        self.inner.on_change_policy(ctx).await;
     }
 
     async fn on_delete(&self, btp: &BackendTLSPolicyAlpha3, ctx: &HandlerContext) {
-        let v1: BackendTLSPolicy = btp.clone().into();
-        self.inner.on_delete_policy(&v1, ctx).await;
+        self.inner.on_delete_policy(&btp.metadata, ctx).await;
     }
 
     fn update_status(&self, btp: &mut BackendTLSPolicyAlpha3, ctx: &HandlerContext, validation_errors: &[String]) {
-        let mut v1: BackendTLSPolicy = btp.clone().into();
-        self.inner.update_policy_status(&mut v1, ctx, validation_errors);
-        *btp = v1.into();
+        self.inner
+            .update_policy_status(&btp.metadata, &btp.spec, &mut btp.status, ctx, validation_errors);
     }
 }
 

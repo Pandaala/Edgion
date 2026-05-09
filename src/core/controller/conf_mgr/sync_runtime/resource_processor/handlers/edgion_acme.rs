@@ -150,13 +150,9 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
             }
         };
 
-        // Move the validated Secret into the spec for AcmeService. When the
-        // outcome is anything other than `Ok`, this is a no-op. (When
-        // `account_corrupted` is true, outcome is `Invalid::DecodeError` /
-        // `Invalid::InvalidSecretType`.) The resolved Secret bytes are NOT
-        // attached to the in-memory resource; AcmeService re-fetches via
-        // the Kubernetes API.
-        let _ = outcome;
+        // `outcome` was already mapped to a condition above; the resolved
+        // Secret bytes are intentionally NOT attached to the in-memory
+        // resource — AcmeService re-fetches via the Kubernetes API.
 
         if account_corrupted {
             // Return Continue so `update_status` persists `ResolvedRefs=False`

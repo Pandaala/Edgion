@@ -123,7 +123,9 @@ impl EtcdWatcher {
             }
         }
 
-        let senders = self.senders.read().await;
+        // Clone the snapshot so we don't hold the read guard across `tx.send().await`.
+        // Holding it would block any future dynamic `subscribe()` (which takes the write lock).
+        let senders = self.senders.read().await.clone();
 
         // For each registered kind: Init → InitApply × N → InitDone
         for (kind, tx) in senders.iter() {
@@ -182,7 +184,9 @@ impl EtcdWatcher {
             }
         }
 
-        let senders = self.senders.read().await;
+        // Clone the snapshot so we don't hold the read guard across `tx.send().await`
+        // (same rationale as init_phase / runtime_phase).
+        let senders = self.senders.read().await.clone();
         // Take ownership of old keys — they'll be replaced by new_known below anyway.
         let old_known = std::mem::take(&mut *self.known_keys.write());
         let mut new_known: HashMap<&'static str, HashSet<String>> = HashMap::new();

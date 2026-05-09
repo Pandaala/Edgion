@@ -110,6 +110,7 @@ Steps 2/3/4 may run in parallel. If any step fails, report the error immediately
 - Log ID and observability conventions are in `skills/03-coding/`.
 - Do not introduce security vulnerabilities (injection, XSS, and other OWASP Top 10).
 - Keep changes minimal — do not refactor or add features that were not requested.
+- **Written content language**: everything written to disk must be English (code, comments, doc comments, TODO/FIXME, log/error literals, commit messages, `skills/` and `docs/en/` documentation). The only exception is Chinese user-facing documentation under `docs/zh/`.
 
 ## Git constraints
 

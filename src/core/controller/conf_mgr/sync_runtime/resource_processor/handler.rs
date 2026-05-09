@@ -98,16 +98,22 @@ where
 
     /// Cleanup on delete
     ///
-    /// Called when a resource is deleted.
-    /// Used to clean up SecretRefManager registrations, etc.
+    /// Called **before** the resource is removed from `ServerCache`. The cached
+    /// object is passed in for cleanup (e.g., SecretRefManager registrations).
+    /// Lookups via `ServerCache` at this point will still see the old value;
+    /// the entry is removed in the next step after this returns.
     ///
     /// Default: no-op
     async fn on_delete(&self, _obj: &K, _ctx: &HandlerContext) {}
 
     /// Post-change processing
     ///
-    /// Called after a resource is saved to cache.
+    /// Called **before** the processed resource is saved to `ServerCache`.
     /// Used for cascading operations (e.g., Secret change triggers Gateway requeue).
+    ///
+    /// Cross-resource lookups inside `on_change` MUST use `RawStore` (via
+    /// `ProcessorObj::get_raw_any`) rather than `ServerCache`, because the
+    /// current resource has not yet been written to cache at this point.
     ///
     /// Default: no-op
     async fn on_change(&self, _obj: &K, _ctx: &HandlerContext) {}

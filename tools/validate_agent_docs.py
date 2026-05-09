@@ -220,6 +220,8 @@ FORBIDDEN_PATTERNS = {
 }
 
 LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+FENCED_CODE_RE = re.compile(r"(?ms)^([ \t]*)(`{3,}|~{3,}).*?\n.*?^\1\2\s*$")
+INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 NAME_RE = re.compile(r"(?m)^name:\s*.+$")
 DESC_RE = re.compile(r"(?m)^description:\s*.+$")
 
@@ -284,7 +286,11 @@ def validate_markdown_links(files: list[Path]) -> list[str]:
         if not file.exists() or file.suffix not in {".md", ".mdc"}:
             continue
         text = file.read_text(encoding="utf-8")
-        for raw_target in LINK_RE.findall(text):
+        # Strip fenced and inline code so we don't flag rustdoc intra-doc
+        # links (e.g. `[Foo](crate::path::Foo)`) as broken filesystem links.
+        scan_text = FENCED_CODE_RE.sub("", text)
+        scan_text = INLINE_CODE_RE.sub("", scan_text)
+        for raw_target in LINK_RE.findall(scan_text):
             target = raw_target.strip()
             if (
                 target.startswith(("http://", "https://", "mailto:"))

@@ -132,6 +132,8 @@ pub mod condition_reasons {
 pub enum AcceptedError {
     /// Resource namespace not allowed by listener's allowedRoutes policy
     NotAllowedByListeners { resource_ns: String },
+    /// Route kind not allowed by listener's allowedRoutes.kinds policy
+    NotAllowedByListenerKind { resource_kind: String },
     /// Route hostnames don't intersect with any listener hostname
     NoMatchingListenerHostname { hostnames: Vec<String> },
     /// sectionName doesn't match any listener
@@ -144,6 +146,7 @@ impl AcceptedError {
     pub fn reason(&self) -> &'static str {
         match self {
             Self::NotAllowedByListeners { .. } => condition_reasons::NOT_ALLOWED_BY_LISTENERS,
+            Self::NotAllowedByListenerKind { .. } => condition_reasons::NOT_ALLOWED_BY_LISTENERS,
             Self::NoMatchingListenerHostname { .. } => condition_reasons::NO_MATCHING_LISTENER_HOSTNAME,
             Self::NoMatchingParent { .. } => condition_reasons::NO_MATCHING_PARENT,
             Self::Invalid { .. } => condition_reasons::INVALID,
@@ -154,6 +157,9 @@ impl AcceptedError {
         match self {
             Self::NotAllowedByListeners { resource_ns } => {
                 format!("Namespace '{}' not allowed by Gateway listeners", resource_ns)
+            }
+            Self::NotAllowedByListenerKind { resource_kind } => {
+                format!("Route kind '{}' not allowed by Gateway listeners", resource_kind)
             }
             Self::NoMatchingListenerHostname { hostnames } => {
                 format!("No matching hostname for route hostnames {:?}", hostnames)
@@ -538,6 +544,15 @@ mod tests {
         };
         assert_eq!(err.reason(), "NotAllowedByListeners");
         assert_eq!(err.message(), "Namespace 'test-ns' not allowed by Gateway listeners");
+    }
+
+    #[test]
+    fn test_accepted_error_not_allowed_by_listener_kind() {
+        let err = AcceptedError::NotAllowedByListenerKind {
+            resource_kind: "GRPCRoute".to_string(),
+        };
+        assert_eq!(err.reason(), "NotAllowedByListeners");
+        assert_eq!(err.message(), "Route kind 'GRPCRoute' not allowed by Gateway listeners");
     }
 
     #[test]

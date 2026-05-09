@@ -15,6 +15,15 @@
 //!
 //! Built from ALL parentRefs (not just accepted ones), because even pending
 //! routes need to be re-resolved when a Gateway changes.
+//!
+//! ## Concurrency
+//!
+//! All four maps (forward, reverse, gateway_hostnames, gateway_ports) live
+//! under a single `RwLock<Inner>` so that listener-config change detection
+//! and the subsequent route collection observe a consistent snapshot. This
+//! closes a race where a concurrent `update_route` could insert a new route
+//! into `forward` between the change-detection write and the route lookup,
+//! causing the new route to miss its requeue.
 
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -28,71 +37,28 @@ struct RouteEntry {
     key: String,
 }
 
-pub struct GatewayRouteIndex {
-    forward: RwLock<HashMap<String, HashSet<RouteEntry>>>,
-    reverse: RwLock<HashMap<RouteEntry, HashSet<String>>>,
+#[derive(Default)]
+struct Inner {
+    forward: HashMap<String, HashSet<RouteEntry>>,
+    reverse: HashMap<RouteEntry, HashSet<String>>,
     /// Cached sorted listener hostnames per gateway, used for change detection
     /// so that route requeue only fires when listener hostnames actually change.
-    gateway_hostnames: RwLock<HashMap<String, Vec<String>>>,
+    gateway_hostnames: HashMap<String, Vec<String>>,
     /// Cached sorted listener ports per gateway for change detection.
     /// Port changes must requeue TLSRoute/EdgionTls that reference sectionName.
-    gateway_ports: RwLock<HashMap<String, Vec<i32>>>,
+    gateway_ports: HashMap<String, Vec<i32>>,
 }
 
-impl GatewayRouteIndex {
-    pub fn new() -> Self {
-        Self {
-            forward: RwLock::new(HashMap::new()),
-            reverse: RwLock::new(HashMap::new()),
-            gateway_hostnames: RwLock::new(HashMap::new()),
-            gateway_ports: RwLock::new(HashMap::new()),
+impl Inner {
+    fn collect_routes_for_gateway(&self, gateway_key: &str) -> Vec<(ResourceKind, String)> {
+        match self.forward.get(gateway_key) {
+            Some(entries) => entries.iter().map(|e| (e.kind, e.key.clone())).collect(),
+            None => Vec::new(),
         }
     }
 
-    /// Update the cached listener hostnames for a Gateway.
-    /// Returns true if the hostnames actually changed (i.e., routes need requeue).
-    pub fn update_gateway_hostnames(&self, gateway_key: &str, mut hostnames: Vec<String>) -> bool {
-        hostnames.sort();
-        let mut cache = self.gateway_hostnames.write();
-        match cache.get(gateway_key) {
-            Some(old) if *old == hostnames => false,
-            _ => {
-                cache.insert(gateway_key.to_string(), hostnames);
-                true
-            }
-        }
-    }
-
-    /// Remove cached hostnames for a deleted Gateway.
-    pub fn remove_gateway_hostnames(&self, gateway_key: &str) {
-        self.gateway_hostnames.write().remove(gateway_key);
-    }
-
-    /// Update the cached listener ports for a Gateway.
-    /// Returns true if the ports actually changed (i.e., routes need requeue).
-    pub fn update_gateway_ports(&self, gateway_key: &str, mut ports: Vec<i32>) -> bool {
-        ports.sort();
-        let mut cache = self.gateway_ports.write();
-        match cache.get(gateway_key) {
-            Some(old) if *old == ports => false,
-            _ => {
-                cache.insert(gateway_key.to_string(), ports);
-                true
-            }
-        }
-    }
-
-    /// Remove cached ports for a deleted Gateway.
-    pub fn remove_gateway_ports(&self, gateway_key: &str) {
-        self.gateway_ports.write().remove(gateway_key);
-    }
-
-    /// Update the index for a route based on its parentRefs.
-    ///
-    /// Uses ALL parentRefs (not filtered by Accepted status) because
-    /// hostname resolution needs to happen for all referenced Gateways.
-    pub fn update_route(
-        &self,
+    fn update_route_inner(
+        &mut self,
         route_kind: ResourceKind,
         route_key: &str,
         parent_refs: &[ParentReference],
@@ -114,16 +80,13 @@ impl GatewayRouteIndex {
             gateway_keys.insert(gw_key);
         }
 
-        let mut fwd = self.forward.write();
-        let mut rev = self.reverse.write();
-
         // Remove old entries
-        if let Some(old_gw_keys) = rev.remove(&entry) {
+        if let Some(old_gw_keys) = self.reverse.remove(&entry) {
             for old_gw_key in &old_gw_keys {
-                if let Some(routes) = fwd.get_mut(old_gw_key) {
+                if let Some(routes) = self.forward.get_mut(old_gw_key) {
                     routes.remove(&entry);
                     if routes.is_empty() {
-                        fwd.remove(old_gw_key);
+                        self.forward.remove(old_gw_key);
                     }
                 }
             }
@@ -133,44 +96,172 @@ impl GatewayRouteIndex {
             return;
         }
 
-        // Insert new entries
         for gw_key in &gateway_keys {
-            fwd.entry(gw_key.clone()).or_default().insert(entry.clone());
+            self.forward.entry(gw_key.clone()).or_default().insert(entry.clone());
         }
-        rev.insert(entry, gateway_keys);
+        self.reverse.insert(entry, gateway_keys);
     }
 
-    /// Remove all entries for a deleted route.
-    pub fn remove_route(&self, route_kind: ResourceKind, route_key: &str) {
+    fn remove_route_inner(&mut self, route_kind: ResourceKind, route_key: &str) {
         let entry = RouteEntry {
             kind: route_kind,
             key: route_key.to_string(),
         };
 
-        let mut fwd = self.forward.write();
-        let mut rev = self.reverse.write();
-
-        if let Some(old_gw_keys) = rev.remove(&entry) {
+        if let Some(old_gw_keys) = self.reverse.remove(&entry) {
             for old_gw_key in &old_gw_keys {
-                if let Some(routes) = fwd.get_mut(old_gw_key) {
+                if let Some(routes) = self.forward.get_mut(old_gw_key) {
                     routes.remove(&entry);
                     if routes.is_empty() {
-                        fwd.remove(old_gw_key);
+                        self.forward.remove(old_gw_key);
                     }
                 }
             }
         }
+    }
+}
+
+/// Result of an atomic listener-config update returned by
+/// [`GatewayRouteIndex::update_listener_config_and_collect_routes`].
+///
+/// Only constructed when at least one of `hostnames_changed` / `ports_changed`
+/// is true; callers use the flags for telemetry and `routes` for the requeue
+/// fan-out.
+#[derive(Debug)]
+pub struct ListenerConfigChange {
+    pub hostnames_changed: bool,
+    pub ports_changed: bool,
+    pub routes: Vec<(ResourceKind, String)>,
+}
+
+pub struct GatewayRouteIndex {
+    inner: RwLock<Inner>,
+}
+
+impl GatewayRouteIndex {
+    pub fn new() -> Self {
+        Self {
+            inner: RwLock::new(Inner::default()),
+        }
+    }
+
+    /// Update the cached listener hostnames for a Gateway.
+    /// Returns true if the hostnames actually changed (i.e., routes need requeue).
+    pub fn update_gateway_hostnames(&self, gateway_key: &str, mut hostnames: Vec<String>) -> bool {
+        hostnames.sort();
+        let mut g = self.inner.write();
+        match g.gateway_hostnames.get(gateway_key) {
+            Some(old) if *old == hostnames => false,
+            _ => {
+                g.gateway_hostnames.insert(gateway_key.to_string(), hostnames);
+                true
+            }
+        }
+    }
+
+    /// Remove cached hostnames for a deleted Gateway.
+    pub fn remove_gateway_hostnames(&self, gateway_key: &str) {
+        self.inner.write().gateway_hostnames.remove(gateway_key);
+    }
+
+    /// Update the cached listener ports for a Gateway.
+    /// Returns true if the ports actually changed (i.e., routes need requeue).
+    pub fn update_gateway_ports(&self, gateway_key: &str, mut ports: Vec<i32>) -> bool {
+        ports.sort();
+        let mut g = self.inner.write();
+        match g.gateway_ports.get(gateway_key) {
+            Some(old) if *old == ports => false,
+            _ => {
+                g.gateway_ports.insert(gateway_key.to_string(), ports);
+                true
+            }
+        }
+    }
+
+    /// Remove cached ports for a deleted Gateway.
+    pub fn remove_gateway_ports(&self, gateway_key: &str) {
+        self.inner.write().gateway_ports.remove(gateway_key);
+    }
+
+    /// Atomically update both listener hostnames and ports for a Gateway, and
+    /// — if either changed — collect the routes that reference this Gateway
+    /// under the same write guard.
+    ///
+    /// Returns:
+    /// - `None` when neither hostnames nor ports changed (caller skips requeue).
+    /// - `Some(ListenerConfigChange { hostnames_changed, ports_changed, routes })`
+    ///   when at least one changed; `routes` is the snapshot of the forward
+    ///   index for this Gateway, observed atomically with the hostnames/ports
+    ///   write. `routes` may be empty if no route currently references the
+    ///   Gateway. The `*_changed` flags are exposed for telemetry so callers
+    ///   can log which axis triggered the requeue.
+    ///
+    /// This closes the race where a concurrent `update_route` could insert a
+    /// new route into `forward` between change detection and route lookup.
+    pub fn update_listener_config_and_collect_routes(
+        &self,
+        gateway_key: &str,
+        mut hostnames: Vec<String>,
+        mut ports: Vec<i32>,
+    ) -> Option<ListenerConfigChange> {
+        hostnames.sort();
+        ports.sort();
+
+        let mut g = self.inner.write();
+
+        let hostnames_changed = match g.gateway_hostnames.get(gateway_key) {
+            Some(old) if *old == hostnames => false,
+            _ => {
+                g.gateway_hostnames.insert(gateway_key.to_string(), hostnames);
+                true
+            }
+        };
+
+        let ports_changed = match g.gateway_ports.get(gateway_key) {
+            Some(old) if *old == ports => false,
+            _ => {
+                g.gateway_ports.insert(gateway_key.to_string(), ports);
+                true
+            }
+        };
+
+        if !hostnames_changed && !ports_changed {
+            return None;
+        }
+
+        Some(ListenerConfigChange {
+            hostnames_changed,
+            ports_changed,
+            routes: g.collect_routes_for_gateway(gateway_key),
+        })
+    }
+
+    /// Update the index for a route based on its parentRefs.
+    ///
+    /// Uses ALL parentRefs (not filtered by Accepted status) because
+    /// hostname resolution needs to happen for all referenced Gateways.
+    pub fn update_route(
+        &self,
+        route_kind: ResourceKind,
+        route_key: &str,
+        parent_refs: &[ParentReference],
+        route_ns: &str,
+    ) {
+        self.inner
+            .write()
+            .update_route_inner(route_kind, route_key, parent_refs, route_ns);
+    }
+
+    /// Remove all entries for a deleted route.
+    pub fn remove_route(&self, route_kind: ResourceKind, route_key: &str) {
+        self.inner.write().remove_route_inner(route_kind, route_key);
     }
 
     /// Get all routes that reference a given Gateway.
     ///
     /// Returns (ResourceKind, route_key) pairs for requeue.
     pub fn get_routes_for_gateway(&self, gateway_key: &str) -> Vec<(ResourceKind, String)> {
-        let fwd = self.forward.read();
-        match fwd.get(gateway_key) {
-            Some(entries) => entries.iter().map(|e| (e.kind, e.key.clone())).collect(),
-            None => Vec::new(),
-        }
+        self.inner.read().collect_routes_for_gateway(gateway_key)
     }
 
     /// Get all Gateways that a given route references via parentRefs.
@@ -183,8 +274,8 @@ impl GatewayRouteIndex {
             kind: route_kind,
             key: route_key.to_string(),
         };
-        let rev = self.reverse.read();
-        match rev.get(&entry) {
+        let g = self.inner.read();
+        match g.reverse.get(&entry) {
             Some(gw_keys) => gw_keys.iter().cloned().collect(),
             None => Vec::new(),
         }
@@ -194,10 +285,10 @@ impl GatewayRouteIndex {
     /// Used for post-init revalidation to ensure routes that registered
     /// after their parent Gateway's on_change are reprocessed.
     pub fn all_routes(&self) -> Vec<(ResourceKind, String)> {
-        let fwd = self.forward.read();
+        let g = self.inner.read();
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for entries in fwd.values() {
+        for entries in g.forward.values() {
             for e in entries {
                 if seen.insert((&e.kind, &e.key)) {
                     result.push((e.kind, e.key.clone()));
@@ -208,10 +299,11 @@ impl GatewayRouteIndex {
     }
 
     pub fn clear(&self) {
-        self.forward.write().clear();
-        self.reverse.write().clear();
-        self.gateway_hostnames.write().clear();
-        self.gateway_ports.write().clear();
+        let mut g = self.inner.write();
+        g.forward.clear();
+        g.reverse.clear();
+        g.gateway_hostnames.clear();
+        g.gateway_ports.clear();
     }
 }
 
@@ -348,5 +440,110 @@ mod tests {
         // Non-existent route returns empty
         let empty = idx.get_gateways_for_route(ResourceKind::HTTPRoute, "default/nonexistent");
         assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_atomic_listener_update_no_change() {
+        let idx = GatewayRouteIndex::new();
+        // Seed with current state
+        idx.update_gateway_hostnames("default/gw1", vec!["a.example.com".into()]);
+        idx.update_gateway_ports("default/gw1", vec![80]);
+
+        // Same values → None
+        let result =
+            idx.update_listener_config_and_collect_routes("default/gw1", vec!["a.example.com".into()], vec![80]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_atomic_listener_update_hostnames_changed() {
+        let idx = GatewayRouteIndex::new();
+        idx.update_route(
+            ResourceKind::HTTPRoute,
+            "default/r1",
+            &[pr("default", "gw1")],
+            "default",
+        );
+        idx.update_gateway_hostnames("default/gw1", vec!["old.example.com".into()]);
+        idx.update_gateway_ports("default/gw1", vec![80]);
+
+        let result =
+            idx.update_listener_config_and_collect_routes("default/gw1", vec!["new.example.com".into()], vec![80]);
+        let change = result.expect("hostnames changed → should return Some");
+        assert!(change.hostnames_changed);
+        assert!(!change.ports_changed);
+        assert_eq!(change.routes.len(), 1);
+        assert_eq!(change.routes[0], (ResourceKind::HTTPRoute, "default/r1".to_string()));
+    }
+
+    #[test]
+    fn test_atomic_listener_update_ports_changed() {
+        let idx = GatewayRouteIndex::new();
+        idx.update_route(ResourceKind::TLSRoute, "default/t1", &[pr("default", "gw1")], "default");
+        idx.update_gateway_hostnames("default/gw1", vec!["a.example.com".into()]);
+        idx.update_gateway_ports("default/gw1", vec![443]);
+
+        let result =
+            idx.update_listener_config_and_collect_routes("default/gw1", vec!["a.example.com".into()], vec![443, 8443]);
+        let change = result.expect("ports changed → should return Some");
+        assert!(!change.hostnames_changed);
+        assert!(change.ports_changed);
+        assert_eq!(change.routes.len(), 1);
+        assert_eq!(change.routes[0], (ResourceKind::TLSRoute, "default/t1".to_string()));
+    }
+
+    #[test]
+    fn test_atomic_listener_update_first_call_returns_some() {
+        // First call against a fresh index: both hostnames and ports go from
+        // absent to present → both "changed" → returns Some.
+        let idx = GatewayRouteIndex::new();
+        idx.update_route(
+            ResourceKind::HTTPRoute,
+            "default/r1",
+            &[pr("default", "gw1")],
+            "default",
+        );
+
+        let result =
+            idx.update_listener_config_and_collect_routes("default/gw1", vec!["a.example.com".into()], vec![80]);
+        let change = result.expect("first call should be Some");
+        assert!(change.hostnames_changed);
+        assert!(change.ports_changed);
+        assert_eq!(change.routes.len(), 1);
+
+        // Second call with same values → None
+        let result2 =
+            idx.update_listener_config_and_collect_routes("default/gw1", vec!["a.example.com".into()], vec![80]);
+        assert!(result2.is_none());
+    }
+
+    #[test]
+    fn test_atomic_listener_update_no_referencing_routes() {
+        let idx = GatewayRouteIndex::new();
+        // Gateway has no referencing routes yet
+        let result =
+            idx.update_listener_config_and_collect_routes("default/gw1", vec!["a.example.com".into()], vec![80]);
+        let change = result.expect("first call → Some");
+        assert!(change.hostnames_changed);
+        assert!(change.ports_changed);
+        assert!(change.routes.is_empty());
+    }
+
+    #[test]
+    fn test_atomic_listener_update_input_order_irrelevant() {
+        let idx = GatewayRouteIndex::new();
+        idx.update_listener_config_and_collect_routes(
+            "default/gw1",
+            vec!["b.example.com".into(), "a.example.com".into()],
+            vec![443, 80],
+        );
+
+        // Same set, different order → no change
+        let result = idx.update_listener_config_and_collect_routes(
+            "default/gw1",
+            vec!["a.example.com".into(), "b.example.com".into()],
+            vec![80, 443],
+        );
+        assert!(result.is_none());
     }
 }

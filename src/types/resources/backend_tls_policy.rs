@@ -195,40 +195,103 @@ pub enum WellKnownCACertificates {
     System,
 }
 
+/// Parse implementation-specific client certificate Secret reference from a BTP options map.
+///
+/// Supported value format:
+/// - `secret-name` (same namespace)
+///
+/// Returns an error message if the value is present but invalid.
+pub fn parse_client_certificate_option(
+    options: Option<&HashMap<String, String>>,
+) -> Result<Option<SecretObjectReference>, String> {
+    let raw = options
+        .and_then(|o| o.get(OPTION_CLIENT_CERTIFICATE_REF))
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+
+    if raw.contains('/') {
+        let msg = format!(
+            "Option {} must be a secret name in the same namespace, got '{}'",
+            OPTION_CLIENT_CERTIFICATE_REF, raw
+        );
+        return Err(msg);
+    }
+
+    Ok(Some(SecretObjectReference {
+        group: Some(String::new()),
+        kind: Some("Secret".to_string()),
+        name: raw.to_string(),
+        namespace: None,
+    }))
+}
+
+/// Read-only view over the fields shared by `BackendTLSPolicySpec` and
+/// `BackendTLSPolicyAlpha3Spec`. Lets handler code operate on either version
+/// via borrowed access, so the v1alpha3 compat path does not have to clone the
+/// whole spec (including resolved CA Secret PEM bundles) on every reconcile.
+pub trait BtpSpecView {
+    fn target_refs(&self) -> &[BackendTLSPolicyTargetRef];
+    fn validation(&self) -> &BackendTLSPolicyValidation;
+    fn options(&self) -> Option<&HashMap<String, String>>;
+    fn resolved_ca_certificates(&self) -> Option<&[Secret]>;
+    fn resolved_client_certificate(&self) -> Option<&Secret>;
+    fn use_system_ca(&self) -> bool;
+
+    fn client_certificate_secret_ref(&self) -> Result<Option<SecretObjectReference>, String> {
+        parse_client_certificate_option(self.options())
+    }
+}
+
+impl BtpSpecView for BackendTLSPolicySpec {
+    fn target_refs(&self) -> &[BackendTLSPolicyTargetRef] {
+        &self.target_refs
+    }
+    fn validation(&self) -> &BackendTLSPolicyValidation {
+        &self.validation
+    }
+    fn options(&self) -> Option<&HashMap<String, String>> {
+        self.options.as_ref()
+    }
+    fn resolved_ca_certificates(&self) -> Option<&[Secret]> {
+        self.resolved_ca_certificates.as_deref()
+    }
+    fn resolved_client_certificate(&self) -> Option<&Secret> {
+        self.resolved_client_certificate.as_ref()
+    }
+    fn use_system_ca(&self) -> bool {
+        self.use_system_ca
+    }
+}
+
+impl BtpSpecView for BackendTLSPolicyAlpha3Spec {
+    fn target_refs(&self) -> &[BackendTLSPolicyTargetRef] {
+        &self.target_refs
+    }
+    fn validation(&self) -> &BackendTLSPolicyValidation {
+        &self.validation
+    }
+    fn options(&self) -> Option<&HashMap<String, String>> {
+        self.options.as_ref()
+    }
+    fn resolved_ca_certificates(&self) -> Option<&[Secret]> {
+        self.resolved_ca_certificates.as_deref()
+    }
+    fn resolved_client_certificate(&self) -> Option<&Secret> {
+        self.resolved_client_certificate.as_ref()
+    }
+    fn use_system_ca(&self) -> bool {
+        self.use_system_ca
+    }
+}
+
 impl BackendTLSPolicy {
     /// Parse implementation-specific client certificate Secret reference from options.
-    ///
-    /// Supported value format:
-    /// - `secret-name` (same namespace)
-    ///
-    /// Returns an error message if the value is present but invalid.
     pub fn client_certificate_secret_ref(&self) -> Result<Option<SecretObjectReference>, String> {
-        let raw = self
-            .spec
-            .options
-            .as_ref()
-            .and_then(|o| o.get(OPTION_CLIENT_CERTIFICATE_REF))
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty());
-
-        let Some(raw) = raw else {
-            return Ok(None);
-        };
-
-        if raw.contains('/') {
-            let msg = format!(
-                "Option {} must be a secret name in the same namespace, got '{}'",
-                OPTION_CLIENT_CERTIFICATE_REF, raw
-            );
-            return Err(msg);
-        }
-
-        Ok(Some(SecretObjectReference {
-            group: Some(String::new()),
-            kind: Some("Secret".to_string()),
-            name: raw.to_string(),
-            namespace: None,
-        }))
+        parse_client_certificate_option(self.spec.options.as_ref())
     }
 
     /// Get the namespace of this resource

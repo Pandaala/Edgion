@@ -269,8 +269,6 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             Some(invalid_indices.clone())
         };
 
-        let _all_rules_invalid = total_rules > 0 && valid_rules == 0;
-
         let status = route.status.get_or_insert_with(|| HTTPRouteStatus { parents: vec![] });
         let route_hostnames = route.spec.hostnames.as_ref();
 

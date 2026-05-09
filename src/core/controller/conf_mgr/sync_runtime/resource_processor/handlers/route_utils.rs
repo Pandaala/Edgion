@@ -324,9 +324,8 @@ pub fn validate_parent_ref_accepted(
                 hostnames: route_hostnames.cloned().unwrap_or_default(),
             }]
         } else {
-            // Listeners match namespace+hostname but not route kind
-            vec![AcceptedError::NotAllowedByListeners {
-                resource_ns: route_ns.to_string(),
+            vec![AcceptedError::NotAllowedByListenerKind {
+                resource_kind: route_kind.to_string(),
             }]
         };
         return AcceptedResult {

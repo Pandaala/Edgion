@@ -24,26 +24,19 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
 pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::handlers) use key_auth::resolve as resolve_key_auth;
 pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::handlers) use openid_connect::resolve as resolve_openid_connect;
 
-/// Read a UTF-8 value from a Secret, checking `data` (base64-decoded bytes)
-/// first and falling back to `string_data`. Returns the first non-empty match
-/// across the provided keys.
+/// Read a UTF-8 value from a Secret's `data` map. Returns the first non-empty
+/// match across the provided keys.
+///
+/// `SecretHandler::parse` normalizes `stringData` into `data` and clears
+/// `stringData`, so Secrets coming from `secret_store` always have
+/// `string_data == None`; only the `data` map needs to be inspected.
 pub(super) fn read_secret_utf8(secret: &k8s_openapi::api::core::v1::Secret, keys: &[&str]) -> Option<String> {
-    if let Some(data) = &secret.data {
-        for key in keys {
-            if let Some(bytes) = data.get(*key) {
-                if let Ok(value) = String::from_utf8(bytes.0.clone()) {
-                    if !value.trim().is_empty() {
-                        return Some(value);
-                    }
-                }
-            }
-        }
-    }
-    if let Some(string_data) = &secret.string_data {
-        for key in keys {
-            if let Some(value) = string_data.get(*key) {
+    let data = secret.data.as_ref()?;
+    for key in keys {
+        if let Some(bytes) = data.get(*key) {
+            if let Ok(value) = String::from_utf8(bytes.0.clone()) {
                 if !value.trim().is_empty() {
-                    return Some(value.clone());
+                    return Some(value);
                 }
             }
         }

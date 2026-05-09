@@ -22,13 +22,13 @@ use super::SecretRefManager;
 /// - Processing configuration
 pub struct HandlerContext {
     /// Secret reference manager (tracks which resources depend on which secrets)
-    pub secret_ref_manager: Arc<SecretRefManager>,
+    secret_ref_manager: Arc<SecretRefManager>,
 
     /// Metadata filter configuration
-    pub metadata_filter: Option<Arc<MetadataFilterConfig>>,
+    metadata_filter: Option<Arc<MetadataFilterConfig>>,
 
     /// Namespace filter (if set, only process resources in these namespaces)
-    pub namespace_filter: Option<Arc<Vec<String>>>,
+    namespace_filter: Option<Arc<Vec<String>>>,
 
     /// Trigger chain up to and including the current resource being processed.
     /// Used for cycle detection when calling `requeue`.

@@ -90,8 +90,8 @@ impl EdgionClient {
             .get("data")
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("/auth/status missing `data` field"))?;
-        let status: AuthStatusResponse =
-            serde_json::from_value(data).context("/auth/status schema unrecognized -- CLI/controller version mismatch")?;
+        let status: AuthStatusResponse = serde_json::from_value(data)
+            .context("/auth/status schema unrecognized -- CLI/controller version mismatch")?;
 
         match status.status {
             AuthStatus::Disabled => return Ok(()),

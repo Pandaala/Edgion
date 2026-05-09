@@ -56,17 +56,11 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
 
                 let mut resolved = ResolvedJweCredential::default();
 
+                // SecretHandler::parse normalizes stringData into data, so the
+                // secret_store always exposes the value through `secret.data`.
                 if let Some(data) = &secret.data {
                     if let Some(secret_bytes) = data.get("secret") {
                         resolved.secret = Some(STANDARD.encode(&secret_bytes.0));
-                    }
-                }
-
-                if resolved.secret.is_none() {
-                    if let Some(string_data) = &secret.string_data {
-                        if let Some(secret_str) = string_data.get("secret") {
-                            resolved.secret = Some(STANDARD.encode(secret_str.as_bytes()));
-                        }
                     }
                 }
 

@@ -58,11 +58,9 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
                         }
                     };
 
-                    let has_ca = secret.data.as_ref().is_some_and(|data| data.contains_key("ca.crt"))
-                        || secret
-                            .string_data
-                            .as_ref()
-                            .is_some_and(|data| data.contains_key("ca.crt"));
+                    // SecretHandler::parse normalizes stringData into data, so only
+                    // `secret.data` needs to be inspected here.
+                    let has_ca = secret.data.as_ref().is_some_and(|data| data.contains_key("ca.crt"));
                     if !has_ca {
                         tracing::warn!(
                             edgion_plugins = %resource_ref.key(),
