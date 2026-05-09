@@ -11,11 +11,13 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
+use crate::core::gateway::backends::service_kind::EdgionService;
+use crate::core::gateway::lb::WeightedRoundRobin;
 use crate::core::gateway::plugins::http::common::http_client::{build_webhook_client, get_http_client_arc};
-use crate::types::resources::link_sys::webhook::WebhookServiceConfig;
+use crate::types::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
 
 use super::health::spawn_active_health_check;
-use super::runtime::{SlidingWindowCounter, WebhookRuntime};
+use super::runtime::{SlidingWindowCounter, WebhookResolvedTarget, WebhookRuntime};
 
 // ============================================================
 // Global Manager
@@ -67,6 +69,9 @@ impl WebhookManager {
 
     /// Register or update a webhook from a LinkSys resource change.
     ///
+    /// `linksys_ns` is the namespace of the LinkSys resource, used to resolve
+    /// a `WebhookTarget::Service` whose `namespace` field is absent.
+    ///
     /// Returns `Err` when `build_webhook_client` rejects the config — currently
     /// when `tls.insecure_skip_verify=true` is set with `EDGION_ENV=production`,
     /// or when the supplied PEM material is malformed. The webhook is **not**
@@ -75,7 +80,47 @@ impl WebhookManager {
     /// providers, which already propagate build-time errors). This avoids
     /// silently downgrading a misconfigured webhook to the default secure
     /// client (which has no private CA wired in and would fail every call).
-    pub async fn upsert(&self, webhook_ref: &str, config: WebhookServiceConfig) -> anyhow::Result<()> {
+    pub async fn upsert(
+        &self,
+        webhook_ref: &str,
+        config: WebhookServiceConfig,
+        linksys_ns: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let tls_on = config.tls.as_ref().is_some_and(|t| t.enabled);
+        let scheme = if tls_on { "https" } else { "http" };
+
+        let resolved_target = match &config.target {
+            WebhookTarget::Uri { uri } => WebhookResolvedTarget::Static(uri.clone()),
+
+            WebhookTarget::Service {
+                name,
+                namespace,
+                port,
+                kind,
+                endpoints,
+                ..
+            } => {
+                let ns = namespace.as_deref().or(linksys_ns).unwrap_or("default");
+                let port_suffix = port.map(|p| format!(":{p}")).unwrap_or_default();
+                match EdgionService::from_kind(kind.as_ref()) {
+                    EdgionService::ServiceClusterIp => {
+                        WebhookResolvedTarget::Static(format!("{scheme}://{name}.{ns}.svc.cluster.local{port_suffix}"))
+                    }
+                    EdgionService::Service | EdgionService::ServiceEndpointSlice => {
+                        if endpoints.is_empty() {
+                            WebhookResolvedTarget::Pending
+                        } else {
+                            let urls: Vec<String> = endpoints.iter().map(|ep| format!("{scheme}://{ep}")).collect();
+                            WebhookResolvedTarget::Endpoints(WeightedRoundRobin::with_equal_weights(urls))
+                        }
+                    }
+                    _ => {
+                        return Err(anyhow::anyhow!("unsupported service kind: {:?}", kind));
+                    }
+                }
+            }
+        };
+
         let rate_counter = config
             .rate_limit
             .as_ref()
@@ -97,6 +142,7 @@ impl WebhookManager {
         let runtime = Arc::new(WebhookRuntime {
             config,
             http_client,
+            resolved_target,
             healthy: AtomicBool::new(true),
             passive_failures: AtomicU32::new(0),
             last_halfopen: AtomicU64::new(0),
@@ -153,7 +199,7 @@ impl WebhookManager {
 /// global `get_webhook_manager()`. Tests provide their own implementor.
 #[async_trait]
 pub trait WebhookManagerOps: Send + Sync + 'static {
-    async fn upsert(&self, key: &str, config: WebhookServiceConfig) -> anyhow::Result<()>;
+    async fn upsert(&self, key: &str, config: WebhookServiceConfig, linksys_ns: Option<&str>) -> anyhow::Result<()>;
     async fn remove(&self, key: &str);
 }
 
@@ -164,8 +210,8 @@ pub struct StaticWebhookManagerAdapter;
 
 #[async_trait]
 impl WebhookManagerOps for StaticWebhookManagerAdapter {
-    async fn upsert(&self, key: &str, config: WebhookServiceConfig) -> anyhow::Result<()> {
-        get_webhook_manager().upsert(key, config).await
+    async fn upsert(&self, key: &str, config: WebhookServiceConfig, linksys_ns: Option<&str>) -> anyhow::Result<()> {
+        get_webhook_manager().upsert(key, config, linksys_ns).await
     }
 
     async fn remove(&self, key: &str) {
@@ -214,13 +260,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_upsert_and_get() {
+        use crate::types::resources::link_sys::webhook::WebhookTarget;
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
-            uri: "http://localhost:8080/resolve".to_string(),
+            target: WebhookTarget::Uri {
+                uri: "http://localhost:8080/resolve".to_string(),
+            },
             ..Default::default()
         };
         manager
-            .upsert("test/webhook", config)
+            .upsert("test/webhook", config, None)
             .await
             .expect("upsert should succeed without TLS config");
 
@@ -231,18 +280,171 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_remove() {
+        use crate::types::resources::link_sys::webhook::WebhookTarget;
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
-            uri: "http://localhost:8080/resolve".to_string(),
+            target: WebhookTarget::Uri {
+                uri: "http://localhost:8080/resolve".to_string(),
+            },
             ..Default::default()
         };
         manager
-            .upsert("test/webhook", config)
+            .upsert("test/webhook", config, None)
             .await
             .expect("upsert should succeed without TLS config");
         manager.remove("test/webhook").await;
 
         let runtime = manager.get("test/webhook").await;
         assert!(runtime.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_manager_service_cluster_ip_builds_dns_url() {
+        use crate::core::gateway::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
+        use crate::types::resources::link_sys::webhook::WebhookTarget;
+
+        let manager = WebhookManager::new();
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "auth-svc".to_string(),
+                namespace: Some("prod".to_string()),
+                port: Some(8080),
+                group: None,
+                kind: Some("ServiceClusterIp".to_string()),
+                endpoints: vec![],
+            },
+            ..Default::default()
+        };
+        manager
+            .upsert("prod/auth", config, None)
+            .await
+            .expect("upsert should succeed");
+
+        let runtime = manager.get("prod/auth").await.expect("runtime should exist");
+        match &runtime.resolved_target {
+            WebhookResolvedTarget::Static(url) => {
+                assert_eq!(url, "http://auth-svc.prod.svc.cluster.local:8080");
+            }
+            other => panic!("expected Static, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_manager_service_cluster_ip_uses_linksys_ns_fallback() {
+        use crate::core::gateway::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
+        use crate::types::resources::link_sys::webhook::WebhookTarget;
+
+        let manager = WebhookManager::new();
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "svc".to_string(),
+                namespace: None, // absent — should use linksys_ns
+                port: Some(9090),
+                group: None,
+                kind: Some("ServiceClusterIp".to_string()),
+                endpoints: vec![],
+            },
+            ..Default::default()
+        };
+        manager
+            .upsert("ns/wh", config, Some("my-ns"))
+            .await
+            .expect("upsert should succeed");
+
+        let runtime = manager.get("ns/wh").await.expect("runtime should exist");
+        match &runtime.resolved_target {
+            WebhookResolvedTarget::Static(url) => {
+                assert_eq!(url, "http://svc.my-ns.svc.cluster.local:9090");
+            }
+            other => panic!("expected Static, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_manager_service_with_endpoints_builds_wrr() {
+        use crate::core::gateway::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
+        use crate::types::resources::link_sys::webhook::WebhookTarget;
+
+        let manager = WebhookManager::new();
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "backend".to_string(),
+                namespace: Some("default".to_string()),
+                port: Some(8080),
+                group: None,
+                kind: None, // default → Service → WRR
+                endpoints: vec!["10.0.0.1:8080".to_string(), "10.0.0.2:8080".to_string()],
+            },
+            ..Default::default()
+        };
+        manager
+            .upsert("default/backend", config, None)
+            .await
+            .expect("upsert should succeed");
+
+        let runtime = manager.get("default/backend").await.expect("runtime should exist");
+        match &runtime.resolved_target {
+            WebhookResolvedTarget::Endpoints(rr) => {
+                let picked = rr.select().clone();
+                assert!(
+                    picked == "http://10.0.0.1:8080" || picked == "http://10.0.0.2:8080",
+                    "unexpected endpoint: {picked}"
+                );
+            }
+            other => panic!("expected Endpoints, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_manager_service_empty_endpoints_is_pending() {
+        use crate::core::gateway::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
+        use crate::types::resources::link_sys::webhook::WebhookTarget;
+
+        let manager = WebhookManager::new();
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "backend".to_string(),
+                namespace: Some("default".to_string()),
+                port: Some(8080),
+                group: None,
+                kind: None,
+                endpoints: vec![], // no endpoints yet
+            },
+            ..Default::default()
+        };
+        manager
+            .upsert("default/backend", config, None)
+            .await
+            .expect("upsert should succeed");
+
+        let runtime = manager.get("default/backend").await.expect("runtime should exist");
+        assert!(
+            matches!(runtime.resolved_target, WebhookResolvedTarget::Pending),
+            "expected Pending for empty endpoints"
+        );
+        assert!(
+            runtime.resolved_target.pick_url().is_none(),
+            "pick_url must return None for Pending"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_manager_unsupported_service_kind_returns_error() {
+        use crate::types::resources::link_sys::webhook::WebhookTarget;
+
+        let manager = WebhookManager::new();
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "svc".to_string(),
+                namespace: None,
+                port: Some(80),
+                group: None,
+                kind: Some("ServiceImport".to_string()),
+                endpoints: vec![],
+            },
+            ..Default::default()
+        };
+        let result = manager.upsert("ns/wh", config, None).await;
+        assert!(result.is_err(), "ServiceImport should be rejected by manager");
     }
 }

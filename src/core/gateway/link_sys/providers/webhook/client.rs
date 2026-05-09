@@ -21,16 +21,18 @@ use crate::types::resources::link_sys::webhook::WebhookServiceConfig;
 pub struct WebhookLinkClient {
     key: String,
     config: WebhookServiceConfig,
+    linksys_ns: Option<String>,
     manager: Arc<dyn WebhookManagerOps>,
 }
 
 impl WebhookLinkClient {
     /// Production constructor — wires to the global `WebhookManager` via
     /// the zero-sized `StaticWebhookManagerAdapter`.
-    pub fn new(key: impl Into<String>, config: WebhookServiceConfig) -> Self {
+    pub fn new(key: impl Into<String>, config: WebhookServiceConfig, linksys_ns: Option<String>) -> Self {
         Self::with_manager(
             key,
             config,
+            linksys_ns,
             Arc::new(StaticWebhookManagerAdapter) as Arc<dyn WebhookManagerOps>,
         )
     }
@@ -39,11 +41,13 @@ impl WebhookLinkClient {
     pub fn with_manager(
         key: impl Into<String>,
         config: WebhookServiceConfig,
+        linksys_ns: Option<String>,
         manager: Arc<dyn WebhookManagerOps>,
     ) -> Self {
         Self {
             key: key.into(),
             config,
+            linksys_ns,
             manager,
         }
     }
@@ -54,7 +58,9 @@ impl LinkSysLifecycle for WebhookLinkClient {
     const SHUTDOWN_ON_REPLACE: bool = false;
 
     async fn init(&self) -> anyhow::Result<()> {
-        self.manager.upsert(&self.key, self.config.clone()).await
+        self.manager
+            .upsert(&self.key, self.config.clone(), self.linksys_ns.as_deref())
+            .await
     }
 
     async fn shutdown(&self) -> anyhow::Result<()> {
@@ -80,7 +86,12 @@ mod tests {
 
     #[async_trait]
     impl WebhookManagerOps for FakeManager {
-        async fn upsert(&self, key: &str, _config: WebhookServiceConfig) -> anyhow::Result<()> {
+        async fn upsert(
+            &self,
+            key: &str,
+            _config: WebhookServiceConfig,
+            _linksys_ns: Option<&str>,
+        ) -> anyhow::Result<()> {
             self.calls.lock().push(("upsert".into(), key.into()));
             Ok(())
         }
@@ -91,8 +102,11 @@ mod tests {
     }
 
     fn config() -> WebhookServiceConfig {
+        use crate::types::resources::link_sys::webhook::WebhookTarget;
         WebhookServiceConfig {
-            uri: "http://example/x".into(),
+            target: WebhookTarget::Uri {
+                uri: "http://example/x".into(),
+            },
             ..Default::default()
         }
     }
@@ -100,7 +114,8 @@ mod tests {
     #[tokio::test]
     async fn init_calls_upsert_on_manager() {
         let mgr = Arc::new(FakeManager::default());
-        let client = WebhookLinkClient::with_manager("ns/wh", config(), mgr.clone() as Arc<dyn WebhookManagerOps>);
+        let client =
+            WebhookLinkClient::with_manager("ns/wh", config(), None, mgr.clone() as Arc<dyn WebhookManagerOps>);
 
         client.init().await.unwrap();
 
@@ -111,7 +126,8 @@ mod tests {
     #[tokio::test]
     async fn shutdown_calls_remove_on_manager() {
         let mgr = Arc::new(FakeManager::default());
-        let client = WebhookLinkClient::with_manager("ns/wh", config(), mgr.clone() as Arc<dyn WebhookManagerOps>);
+        let client =
+            WebhookLinkClient::with_manager("ns/wh", config(), None, mgr.clone() as Arc<dyn WebhookManagerOps>);
 
         client.shutdown().await.unwrap();
 

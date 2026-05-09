@@ -565,7 +565,13 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                 register_for_full_set(
                     key,
                     "Webhook",
-                    || Ok(WebhookLinkClient::new(key.clone(), config.clone())),
+                    || {
+                        Ok(WebhookLinkClient::new(
+                            key.clone(),
+                            config.clone(),
+                            ls.metadata.namespace.clone(),
+                        ))
+                    },
                     &mut new_webhook_map,
                 );
             }
@@ -675,7 +681,13 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                 spawn_and_swap_partial(
                     key,
                     "Webhook",
-                    || Ok(WebhookLinkClient::new(key.clone(), config.clone())),
+                    || {
+                        Ok(WebhookLinkClient::new(
+                            key.clone(),
+                            config.clone(),
+                            ls.metadata.namespace.clone(),
+                        ))
+                    },
                     webhook_runtime_insert,
                     &WEBHOOK_RUNTIME,
                 );
@@ -764,7 +776,7 @@ mod tests {
     use super::*;
 
     fn create_test_webhook_linksys(namespace: &str, name: &str) -> LinkSys {
-        use crate::types::resources::link_sys::webhook::WebhookServiceConfig;
+        use crate::types::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
         use crate::types::resources::link_sys::{LinkSysSpec, SystemConfig};
 
         LinkSys {
@@ -775,7 +787,9 @@ mod tests {
             },
             spec: LinkSysSpec {
                 config: SystemConfig::Webhook(WebhookServiceConfig {
-                    uri: "http://localhost:8080/resolve".to_string(),
+                    target: WebhookTarget::Uri {
+                        uri: "http://localhost:8080/resolve".to_string(),
+                    },
                     ..Default::default()
                 }),
             },
@@ -1094,19 +1108,22 @@ mod tests {
         // Use a unique key to also avoid interference with other tests' add/remove paths.
         let key = "t13-ns/wh-arc-swap".to_string();
 
-        let make_ls = |uri: &str| LinkSys {
-            metadata: kube::core::ObjectMeta {
-                namespace: Some("t13-ns".into()),
-                name: Some("wh-arc-swap".into()),
-                ..Default::default()
-            },
-            spec: LinkSysSpec {
-                config: SystemConfig::Webhook(WebhookServiceConfig {
-                    uri: uri.into(),
+        let make_ls = |uri: &str| {
+            use crate::types::resources::link_sys::webhook::WebhookTarget;
+            LinkSys {
+                metadata: kube::core::ObjectMeta {
+                    namespace: Some("t13-ns".into()),
+                    name: Some("wh-arc-swap".into()),
                     ..Default::default()
-                }),
-            },
-            status: None,
+                },
+                spec: LinkSysSpec {
+                    config: SystemConfig::Webhook(WebhookServiceConfig {
+                        target: WebhookTarget::Uri { uri: uri.into() },
+                        ..Default::default()
+                    }),
+                },
+                status: None,
+            }
         };
 
         // Add

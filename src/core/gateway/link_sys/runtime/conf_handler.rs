@@ -47,7 +47,7 @@ impl ConfHandler<LinkSys> for LinkSysStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::link_sys::webhook::WebhookServiceConfig;
+    use crate::types::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
     use crate::types::resources::link_sys::{LinkSysSpec, SystemConfig};
 
     fn create_test_linksys(namespace: &str, name: &str) -> LinkSys {
@@ -59,7 +59,9 @@ mod tests {
             },
             spec: LinkSysSpec {
                 config: SystemConfig::Webhook(WebhookServiceConfig {
-                    uri: "http://localhost:8080/resolve".to_string(),
+                    target: WebhookTarget::Uri {
+                        uri: "http://localhost:8080/resolve".to_string(),
+                    },
                     ..Default::default()
                 }),
             },

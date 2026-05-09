@@ -17,14 +17,17 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_types, resolved_refs_condition, update_condition, HandlerContext,
     ProcessResult, ProcessorHandler, ResolvedRefsError, ResourceRef,
 };
+use crate::core::gateway::backends::service_kind::EdgionService;
 use crate::types::credentials::SecretMaterialResolver;
 use crate::types::prelude_resources::LinkSys;
 use crate::types::resources::common::SecretObjectReference;
+use crate::types::resources::link_sys::webhook::WebhookTarget;
 use crate::types::resources::link_sys::{LinkSysStatus, SystemConfig};
 
 use super::auth_spec::{AuthSpec, TlsSpec};
 use crate::types::ResourceKind;
 use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::api::discovery::v1::EndpointSlice;
 
 /// LinkSys handler
 pub struct LinkSysHandler;
@@ -122,8 +125,11 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
             ls.metadata.name.clone().unwrap_or_default(),
         );
 
-        // Clear old references first (for update scenario)
+        // Clear old references first (for update scenario).
+        // Both managers must be cleared so that changing target type (e.g. Service → Uri)
+        // does not leave stale registrations that trigger spurious requeues.
         ctx.secret_ref_manager().clear_resource_refs(&owner);
+        ctx.runtime().service_ref_mgr.clear_resource_refs(&owner);
 
         let errors = resolve_for_spec(ctx, &owner, &mut ls.spec.config).await;
         let generation = ls.metadata.generation;
@@ -164,9 +170,10 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
             ls.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&owner);
+        ctx.runtime().service_ref_mgr.clear_resource_refs(&owner);
         tracing::debug!(
             link_sys = %owner.key(),
-            "Cleared SecretRefManager references on LinkSys delete"
+            "Cleared SecretRefManager and ServiceRefManager references on LinkSys delete"
         );
     }
 
@@ -242,9 +249,93 @@ async fn resolve_for_spec(
         SystemConfig::Redis(r) => drive_standard(ctx, owner, r.auth.as_mut(), r.tls.as_mut()).await,
         SystemConfig::Etcd(e) => drive_standard(ctx, owner, e.auth.as_mut(), e.tls.as_mut()).await,
         SystemConfig::Elasticsearch(es) => drive_standard(ctx, owner, es.auth.as_mut(), es.tls.as_mut()).await,
-        SystemConfig::Webhook(w) => drive_standard(ctx, owner, w.auth.as_mut(), w.tls.as_mut()).await,
+        SystemConfig::Webhook(w) => {
+            let errors = drive_standard(ctx, owner, w.auth.as_mut(), w.tls.as_mut()).await;
+
+            if let WebhookTarget::Service {
+                name,
+                namespace,
+                port,
+                kind,
+                endpoints,
+                ..
+            } = &mut w.target
+            {
+                if matches!(
+                    EdgionService::from_kind(kind.as_ref()),
+                    EdgionService::Service | EdgionService::ServiceEndpointSlice
+                ) {
+                    let ns = namespace.as_deref().or(owner.namespace.as_deref()).unwrap_or("default");
+                    let svc_key = format!("{ns}/{name}");
+
+                    ctx.runtime().service_ref_mgr.add_ref(svc_key.clone(), owner.clone());
+
+                    *endpoints = resolve_endpoints(ctx, ns, name, *port);
+
+                    if endpoints.is_empty() {
+                        tracing::debug!(
+                            link_sys = %owner.key(),
+                            service = %svc_key,
+                            "Webhook service endpoints not yet available (EndpointSlice pending)"
+                        );
+                    }
+                }
+            }
+            errors
+        }
         SystemConfig::Kafka(_) => Vec::new(),
     }
+}
+
+/// Collect ready pod IP:port strings for a Service from cached EndpointSlice objects.
+fn resolve_endpoints(ctx: &HandlerContext, namespace: &str, svc_name: &str, port: Option<i32>) -> Vec<String> {
+    let Some(proc) = ctx.runtime().processor_registry.get("EndpointSlice") else {
+        return vec![];
+    };
+    proc.list_keys()
+        .into_iter()
+        .filter_map(|key| {
+            let any = proc.get_raw_any(&key)?;
+            any.downcast::<EndpointSlice>().ok()
+        })
+        .filter(|eps| {
+            eps.metadata.namespace.as_deref() == Some(namespace)
+                && eps
+                    .metadata
+                    .labels
+                    .as_ref()
+                    .and_then(|l| l.get("kubernetes.io/service-name"))
+                    .map(|s| s == svc_name)
+                    .unwrap_or(false)
+        })
+        .flat_map(|eps| extract_ready_ips(&eps, port))
+        .collect()
+}
+
+/// Extract `"ip:port"` strings for ready endpoints from a single EndpointSlice.
+fn extract_ready_ips(eps: &EndpointSlice, port: Option<i32>) -> Vec<String> {
+    let target_port = port;
+    let ports = eps.ports.as_deref().unwrap_or(&[]);
+    if target_port.is_none() && ports.len() > 1 {
+        tracing::debug!(
+            eps = eps.metadata.name.as_deref().unwrap_or(""),
+            port_count = ports.len(),
+            "Webhook service target has no port specified; selecting first available EndpointSlice port"
+        );
+    }
+    let ep_port = ports
+        .iter()
+        .find(|p| target_port.is_none() || p.port == target_port)
+        .and_then(|p| p.port);
+    let Some(ep_port) = ep_port else {
+        return vec![];
+    };
+
+    eps.endpoints
+        .iter()
+        .filter(|ep| ep.conditions.as_ref().and_then(|c| c.ready).unwrap_or(false))
+        .flat_map(|ep| ep.addresses.iter().map(move |ip| format!("{ip}:{ep_port}")))
+        .collect()
 }
 
 pub(super) async fn resolve_one<R: SecretMaterialResolver>(
@@ -1017,5 +1108,109 @@ mod tests {
         assert_eq!(m.password, "s3cr3t");
         let rr = find_cond(&ls, condition_types::RESOLVED_REFS).expect("ResolvedRefs");
         assert_eq!(rr.status, "True");
+    }
+
+    fn make_webhook_link_sys(ns: &str, name: &str, svc_name: &str, svc_ns: Option<&str>) -> LinkSys {
+        use crate::types::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
+        LinkSys {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(ns.to_string()),
+                generation: Some(1),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                config: SystemConfig::Webhook(WebhookServiceConfig {
+                    target: WebhookTarget::Service {
+                        name: svc_name.to_string(),
+                        namespace: svc_ns.map(str::to_string),
+                        port: Some(8080),
+                        group: None,
+                        kind: None,
+                        endpoints: vec![],
+                    },
+                    ..Default::default()
+                }),
+            },
+            status: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_webhook_service_target_registers_service_ref() {
+        let (ctx, runtime) = make_ctx(HashMap::new());
+        let handler = LinkSysHandler::new();
+        let ls = make_webhook_link_sys("default", "my-wh", "auth-svc", None);
+
+        let result = handler.parse(ls, &ctx).await;
+        assert!(matches!(result, ProcessResult::Continue(_)));
+
+        // "default/auth-svc" should now be registered in service_ref_mgr.
+        let refs = runtime.service_ref_mgr.get_refs("default/auth-svc");
+        let owner = ResourceRef::new(ResourceKind::LinkSys, Some("default".to_string()), "my-wh".to_string());
+        assert!(refs.contains(&owner), "service_ref_mgr must contain owner after parse");
+    }
+
+    #[tokio::test]
+    async fn test_webhook_service_target_clears_stale_ref_on_target_change() {
+        let (ctx, runtime) = make_ctx(HashMap::new());
+        let handler = LinkSysHandler::new();
+
+        // First parse: Service target.
+        let ls_svc = make_webhook_link_sys("default", "my-wh", "auth-svc", None);
+        handler.parse(ls_svc, &ctx).await;
+
+        let refs = runtime.service_ref_mgr.get_refs("default/auth-svc");
+        let owner = ResourceRef::new(ResourceKind::LinkSys, Some("default".to_string()), "my-wh".to_string());
+        assert!(refs.contains(&owner), "should be registered after first parse");
+
+        // Second parse: Uri target (user switched webhook type).
+        let ls_uri = LinkSys {
+            metadata: ObjectMeta {
+                name: Some("my-wh".to_string()),
+                namespace: Some("default".to_string()),
+                generation: Some(2),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                config: SystemConfig::Webhook(crate::types::resources::link_sys::webhook::WebhookServiceConfig {
+                    target: crate::types::resources::link_sys::webhook::WebhookTarget::Uri {
+                        uri: "http://external.example.com/hook".to_string(),
+                    },
+                    ..Default::default()
+                }),
+            },
+            status: None,
+        };
+        handler.parse(ls_uri, &ctx).await;
+
+        // Stale registration must be gone after switching to Uri target.
+        let refs = runtime.service_ref_mgr.get_refs("default/auth-svc");
+        assert!(
+            !refs.contains(&owner),
+            "stale service_ref_mgr registration must be cleared when target changes to Uri"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_on_delete_clears_service_ref_manager() {
+        let (ctx, runtime) = make_ctx(HashMap::new());
+        let handler = LinkSysHandler::new();
+        let ls = make_webhook_link_sys("default", "my-wh", "auth-svc", None);
+
+        handler.parse(ls.clone(), &ctx).await;
+
+        let owner = ResourceRef::new(ResourceKind::LinkSys, Some("default".to_string()), "my-wh".to_string());
+        assert!(
+            runtime.service_ref_mgr.get_refs("default/auth-svc").contains(&owner),
+            "should be registered before delete"
+        );
+
+        handler.on_delete(&ls, &ctx).await;
+
+        assert!(
+            !runtime.service_ref_mgr.get_refs("default/auth-svc").contains(&owner),
+            "service_ref_mgr should be cleared on delete"
+        );
     }
 }

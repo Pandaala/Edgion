@@ -28,6 +28,7 @@ pub struct WebhookCallRequest {
 }
 
 /// Successful webhook call result.
+#[derive(Debug)]
 pub struct WebhookCallResult {
     pub status: u16,
     pub headers: reqwest::header::HeaderMap,
@@ -79,7 +80,8 @@ pub async fn webhook_call(
     }
 
     // 3. Build URL
-    let url = build_url(&runtime.config.uri, &req.path);
+    let base = runtime.resolved_target.pick_url().ok_or(WebhookCallError::Unhealthy)?;
+    let url = build_url(&base, &req.path);
 
     // 4. Merge headers: default_headers < req.headers
     let merged = merge_default_headers(runtime.config.default_headers.clone().unwrap_or_default(), req.headers);
@@ -320,21 +322,24 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
     use std::sync::Arc;
 
-    use crate::types::resources::link_sys::webhook::{WebhookRetry, WebhookServiceConfig};
+    use crate::core::gateway::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
+    use crate::types::resources::link_sys::webhook::{WebhookRetry, WebhookServiceConfig, WebhookTarget};
 
     // ============================================================
     // Test helpers
     // ============================================================
 
     fn make_runtime(uri: String, config_overrides: impl FnOnce(&mut WebhookServiceConfig)) -> WebhookRuntime {
+        let resolved_target = WebhookResolvedTarget::Static(uri.clone());
         let mut config = WebhookServiceConfig {
-            uri,
+            target: WebhookTarget::Uri { uri },
             ..Default::default()
         };
         config_overrides(&mut config);
         WebhookRuntime {
             config,
             http_client: Arc::new(reqwest::Client::new()),
+            resolved_target,
             healthy: AtomicBool::new(true),
             passive_failures: AtomicU32::new(0),
             last_halfopen: AtomicU64::new(0),
@@ -697,5 +702,37 @@ mod tests {
         let result = webhook_call(&runtime, req, 65536).await;
         assert!(result.is_ok(), "defaultHeaders merge call failed");
         assert_eq!(result.unwrap().status, 200);
+    }
+
+    #[tokio::test]
+    async fn pending_target_returns_unhealthy() {
+        // WebhookResolvedTarget::Pending means endpoints haven't been injected yet.
+        // The call must fail immediately with Unhealthy so that callers can surface
+        // a meaningful error rather than panicking or hanging.
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Uri { uri: String::new() },
+            ..Default::default()
+        };
+        let runtime = WebhookRuntime {
+            config,
+            http_client: Arc::new(reqwest::Client::new()),
+            resolved_target: WebhookResolvedTarget::Pending,
+            healthy: AtomicBool::new(true),
+            passive_failures: AtomicU32::new(0),
+            last_halfopen: AtomicU64::new(0),
+            backoff_sec: AtomicU64::new(0),
+            rate_counter: None,
+        };
+        let req = WebhookCallRequest {
+            method: "GET".to_string(),
+            path: String::new(),
+            headers: Default::default(),
+            body: None,
+        };
+        let result = webhook_call(&runtime, req, 65536).await;
+        assert!(
+            matches!(result, Err(WebhookCallError::Unhealthy)),
+            "expected Unhealthy for Pending target, got {result:?}"
+        );
     }
 }

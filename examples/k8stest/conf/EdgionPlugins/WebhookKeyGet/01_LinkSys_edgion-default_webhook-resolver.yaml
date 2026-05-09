@@ -8,7 +8,9 @@ metadata:
 spec:
   type: webhook
   config:
-    uri: "http://edgion-test-server.edgion-test.svc.cluster.local:30001/webhook/resolve"
+    target:
+      type: uri
+      uri: "http://edgion-test-server.edgion-test.svc.cluster.local:30001/webhook/resolve"
     requestMethod: GET
     timeoutMs: 5000
     successStatusCodes: [200]

@@ -24,10 +24,6 @@ pub async fn spawn_active_health_check(webhook_ref: String, runtime: Arc<Webhook
         .is_some();
 
     let client = runtime.http_client.as_ref();
-    let check_url = match &active.path {
-        Some(path) => format!("{}{}", runtime.config.uri.trim_end_matches('/'), path),
-        None => runtime.config.uri.clone(),
-    };
     let interval = Duration::from_secs(active.interval_sec.max(1));
     let timeout = Duration::from_millis(active.timeout_ms.max(100));
 
@@ -36,6 +32,17 @@ pub async fn spawn_active_health_check(webhook_ref: String, runtime: Arc<Webhook
 
     loop {
         tokio::time::sleep(interval).await;
+
+        // Re-evaluate on every tick so that endpoint injection (Pending → Endpoints)
+        // is picked up without restarting the health task.
+        let Some(base) = runtime.resolved_target.pick_url() else {
+            tracing::debug!(webhook = %webhook_ref, "Active health check skipped: target still Pending");
+            continue;
+        };
+        let check_url = match &active.path {
+            Some(path) => format!("{}{}", base.trim_end_matches('/'), path),
+            None => base,
+        };
 
         let result = client.get(&check_url).timeout(timeout).send().await;
 
@@ -154,12 +161,17 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 
-    use crate::types::resources::link_sys::webhook::{PassiveHealthCheck, WebhookHealthCheck, WebhookServiceConfig};
+    use crate::core::gateway::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
+    use crate::types::resources::link_sys::webhook::{
+        PassiveHealthCheck, WebhookHealthCheck, WebhookServiceConfig, WebhookTarget,
+    };
 
     #[test]
     fn test_passive_health_check_marks_unhealthy() {
         let config = WebhookServiceConfig {
-            uri: "http://localhost:8080".to_string(),
+            target: WebhookTarget::Uri {
+                uri: "http://localhost:8080".to_string(),
+            },
             health_check: Some(WebhookHealthCheck {
                 active: None,
                 passive: Some(PassiveHealthCheck {
@@ -175,6 +187,7 @@ mod tests {
         let runtime = WebhookRuntime {
             config,
             http_client: std::sync::Arc::new(reqwest::Client::builder().build().expect("test client")),
+            resolved_target: WebhookResolvedTarget::Static("http://localhost:8080".to_string()),
             healthy: AtomicBool::new(true),
             passive_failures: AtomicU32::new(0),
             last_halfopen: AtomicU64::new(0),
@@ -194,7 +207,9 @@ mod tests {
     #[test]
     fn test_passive_health_check_resets_on_success() {
         let config = WebhookServiceConfig {
-            uri: "http://localhost:8080".to_string(),
+            target: WebhookTarget::Uri {
+                uri: "http://localhost:8080".to_string(),
+            },
             health_check: Some(WebhookHealthCheck {
                 active: None,
                 passive: Some(PassiveHealthCheck {
@@ -210,6 +225,7 @@ mod tests {
         let runtime = WebhookRuntime {
             config,
             http_client: std::sync::Arc::new(reqwest::Client::builder().build().expect("test client")),
+            resolved_target: WebhookResolvedTarget::Static("http://localhost:8080".to_string()),
             healthy: AtomicBool::new(true),
             passive_failures: AtomicU32::new(0),
             last_halfopen: AtomicU64::new(0),
