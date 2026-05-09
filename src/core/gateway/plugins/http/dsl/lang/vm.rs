@@ -17,6 +17,7 @@ use smallvec::SmallVec;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession};
 use crate::types::filters::PluginRunningResult;
 
+use super::super::runtime::DslRuntime;
 use super::bytecode::*;
 use super::error::RuntimeError;
 use super::value::Value;
@@ -200,10 +201,11 @@ impl Vm {
     }
 
     /// Execute script with a PluginSession. Returns Ok(result) or Err(runtime error).
-    pub fn execute(
+    pub async fn execute(
         &self,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
+        runtime: &DslRuntime,
     ) -> Result<PluginRunningResult, RuntimeError> {
         let mut state = VmState::new(self.script.local_count, &self.limits);
 
@@ -639,10 +641,10 @@ impl Vm {
                     };
                     state.push(Value::Int(len), self.limits.max_stack_depth)?;
                 }
-                OpCode::ListGet => {
+                OpCode::IndexGet => {
                     let idx = state.pop()?;
-                    let list = state.pop()?;
-                    let val = match (&list, &idx) {
+                    let container = state.pop()?;
+                    let val = match (&container, &idx) {
                         (Value::List(l), Value::Int(i)) => {
                             if *i < 0 {
                                 Value::Nil
@@ -650,15 +652,38 @@ impl Vm {
                                 l.get(*i as usize).cloned().map(Value::Str).unwrap_or(Value::Nil)
                             }
                         }
+                        (Value::Map(m), Value::Str(k)) => m.get(k.as_str()).cloned().unwrap_or(Value::Nil),
                         _ => Value::Nil,
                     };
                     state.push(val, self.limits.max_stack_depth)?;
                 }
 
+                // ===== Map Operations =====
+                OpCode::MakeMap(n) => {
+                    use indexmap::IndexMap;
+                    let count = n as usize;
+                    let mut map: IndexMap<String, Value> = IndexMap::with_capacity(count);
+                    let mut pairs: Vec<(Value, Value)> = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        let val = state.pop()?;
+                        let key = state.pop()?;
+                        pairs.push((key, val));
+                    }
+                    for (k, v) in pairs.into_iter().rev() {
+                        let key_str = k.into_string();
+                        map.insert(key_str, v);
+                    }
+                    state.push(Value::Map(map), self.limits.max_stack_depth)?;
+                }
+
                 // ===== Builtin Calls =====
                 OpCode::CallBuiltin(id, argc) => {
                     state.tick_call()?;
-                    let result = self.call_builtin(id, argc, &mut state, session, log)?;
+                    let result = if id == BuiltinId::HttpCall {
+                        self.call_builtin_http(argc, &mut state, runtime).await?
+                    } else {
+                        self.call_builtin(id, argc, &mut state, session, log)?
+                    };
                     state.push(result, self.limits.max_stack_depth)?;
                 }
 
@@ -727,13 +752,17 @@ impl Vm {
 ///
 /// Any error (runtime error, panic, etc.) is handled according to
 /// the configured error policy.
-pub fn execute_safe(
+pub async fn execute_safe(
     vm: &Vm,
     session: &mut dyn PluginSession,
     log: &mut PluginLog,
     error_policy: &DslErrorPolicy,
+    runtime: &DslRuntime,
 ) -> PluginRunningResult {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| vm.execute(session, log)));
+    use futures::FutureExt;
+    let result = std::panic::AssertUnwindSafe(vm.execute(session, log, runtime))
+        .catch_unwind()
+        .await;
 
     match result {
         Ok(Ok(running_result)) => {

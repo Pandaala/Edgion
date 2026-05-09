@@ -63,4 +63,18 @@ pub struct DslConfig {
     /// Error handling policy (default: ignore = fail-open)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_policy: Option<DslErrorPolicy>,
+
+    /// Max timeout for http.call in milliseconds (default: 5000, hard ceiling)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_max_timeout_ms: Option<u64>,
+
+    /// Max response body size for http.call in bytes (default: 1048576 = 1 MB)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_max_response_body_bytes: Option<usize>,
+
+    /// When true, http.call rejects URLs whose host is a private/loopback IP literal
+    /// (covers 127.x, 10.x, 172.16-31.x, 192.168.x, 169.254.x, ::1, fc00::/7, fe80::/10).
+    /// Hostname-based SSRF still requires network-level egress controls. (default: false)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_block_private_ips: Option<bool>,
 }

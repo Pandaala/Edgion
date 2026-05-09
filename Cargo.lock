@@ -1335,6 +1335,7 @@ dependencies = [
  "hmac",
  "http",
  "hyper-util",
+ "indexmap 2.13.1",
  "instant-acme",
  "jsonschema",
  "jsonwebtoken",

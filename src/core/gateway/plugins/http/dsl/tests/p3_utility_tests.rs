@@ -302,11 +302,8 @@ fn test_log_warn() {
         log_warn("something suspicious")
         return next()
     "#;
-    let session = MockPluginSession::new();
     let vm = make_vm(source);
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
         log.contains("something suspicious"),
@@ -322,11 +319,8 @@ fn test_log_error() {
         log_error("critical failure")
         return next()
     "#;
-    let session = MockPluginSession::new();
     let vm = make_vm(source);
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
         log.contains("err: critical failure; "),
@@ -342,11 +336,8 @@ fn test_log_warn_replace_mode() {
         log_warn("super-secret-value")
         return next()
     "#;
-    let session = MockPluginSession::new();
     let vm = make_vm(source);
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(log.contains("***"), "expected masked output: {:?}", log.log);
     assert!(
@@ -362,11 +353,8 @@ fn test_log_warn_wrap_mode() {
         log_warn("super-secret-value")
         return next()
     "#;
-    let session = MockPluginSession::new();
     let vm = make_vm(source);
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
         log.contains("<E>super-secret-value</E>"),
@@ -382,11 +370,8 @@ fn test_log_error_replace_mode() {
         log_error("super-secret-value")
         return next()
     "#;
-    let session = MockPluginSession::new();
     let vm = make_vm(source);
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
         log.contains("err: ***; "),
@@ -406,11 +391,8 @@ fn test_log_error_wrap_mode() {
         log_error("super-secret-value")
         return next()
     "#;
-    let session = MockPluginSession::new();
     let vm = make_vm(source);
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
         log.contains("err: <E>super-secret-value</E>; "),
@@ -426,11 +408,8 @@ fn test_log_fmt_off_mode() {
         log_fmt("secret: {}", "abc-token")
         return next()
     "#;
-    let session = MockPluginSession::new();
     let vm = make_vm(source);
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
         log.contains("secret: abc-token"),
@@ -446,11 +425,8 @@ fn test_log_fmt_replace_mode_keeps_template() {
         log_fmt("secret: {}", "abc-token")
         return next()
     "#;
-    let session = MockPluginSession::new();
     let vm = make_vm(source);
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
         log.contains("secret: ***"),
@@ -470,11 +446,8 @@ fn test_log_fmt_wrap_mode() {
         log_fmt("secret: {}", "abc-token")
         return next()
     "#;
-    let session = MockPluginSession::new();
     let vm = make_vm(source);
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
         log.contains("secret: <E>abc-token</E>"),
@@ -490,11 +463,8 @@ fn test_log_fmt_multiple_args_replace_mode() {
         log_fmt("user {} ip {}", "alice", "1.2.3.4")
         return next()
     "#;
-    let session = MockPluginSession::new();
     let vm = make_vm(source);
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
         log.contains("user *** ip ***"),
@@ -511,11 +481,8 @@ fn test_log_fmt_multiple_args_off_mode_order() {
         log_fmt("first={} second={}", "A", "B")
         return next()
     "#;
-    let session = MockPluginSession::new();
     let vm = make_vm(source);
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
         log.contains("first=A second=B"),
@@ -527,18 +494,14 @@ fn test_log_fmt_multiple_args_off_mode_order() {
 #[test]
 fn test_log_fmt_zero_args() {
     // `log_fmt("no placeholders")` with zero values is permitted and degenerates
-    // to a plain log entry — useful for static strings without crafting a separate
-    // builtin.
+    // to a plain log entry.
     let _g = set_mode(0);
     let source = r#"
         log_fmt("a static event")
         return next()
     "#;
-    let session = MockPluginSession::new();
     let vm = make_vm(source);
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(log.contains("a static event"), "expected static output: {:?}", log.log);
 }

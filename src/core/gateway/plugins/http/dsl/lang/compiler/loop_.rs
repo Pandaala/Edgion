@@ -137,7 +137,7 @@ impl Compiler {
         // var = list[idx]
         self.emit(OpCode::GetLocal(list_slot));
         self.emit(OpCode::GetLocal(idx_slot));
-        self.emit(OpCode::ListGet);
+        self.emit(OpCode::IndexGet);
         let var_slot = self.declare_local(var_name, false)?;
         self.emit(OpCode::SetLocal(var_slot));
 

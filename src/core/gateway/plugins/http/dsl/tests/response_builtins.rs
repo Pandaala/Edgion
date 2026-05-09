@@ -141,8 +141,8 @@ fn test_resp_remove_header() {
     assert_eq!(result, good_next());
 }
 
-#[test]
-fn test_upstream_response_filter_phase() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_upstream_response_filter_phase() {
     use crate::core::gateway::plugins::http::dsl::config::DslConfig;
     use crate::core::gateway::plugins::http::dsl::plugin::DslPlugin;
     let mut session = MockPluginSession::new();
@@ -160,6 +160,7 @@ fn test_upstream_response_filter_phase() {
     let plugin = DslPlugin::from_config_response(&config).expect("from_config_response failed");
     let mut log = PluginLog::new("test");
     let mut s = session;
+    // run_upstream_response_filter uses block_in_place — requires multi-thread Tokio runtime
     let result = plugin.run_upstream_response_filter(&mut s as &mut dyn PluginSession, &mut log);
     assert_eq!(result, good_next());
 }

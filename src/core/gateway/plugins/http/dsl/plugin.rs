@@ -14,12 +14,14 @@ use super::config::DslConfig;
 use super::lang::bytecode::CompiledScript;
 use super::lang::validator::{compile_dsl_source, ValidationLimits, Validator};
 use super::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
+use super::runtime::DslRuntime;
 
 /// DslPlugin — runs a pre-compiled DSL script per request
 pub struct DslPlugin {
     name: String,
     vm: Vm,
     error_policy: DslErrorPolicy,
+    runtime: DslRuntime,
 }
 
 impl DslPlugin {
@@ -29,9 +31,15 @@ impl DslPlugin {
         script: CompiledScript,
         limits: VmLimits,
         error_policy: DslErrorPolicy,
+        runtime: DslRuntime,
     ) -> Result<Self, String> {
         let vm = Vm::new(script, limits).map_err(|e| format!("VM creation error: {}", e))?;
-        Ok(Self { name, vm, error_policy })
+        Ok(Self {
+            name,
+            vm,
+            error_policy,
+            runtime,
+        })
     }
 
     /// Compile source code to CompiledScript, or deserialize from pre-compiled bytecode.
@@ -67,8 +75,8 @@ impl DslPlugin {
         Err("either source or bytecode must be provided".to_string())
     }
 
-    /// Extract script, limits, and error policy from DslConfig (shared by factory methods)
-    fn resolve_parts(config: &DslConfig) -> Option<(CompiledScript, VmLimits, DslErrorPolicy)> {
+    /// Extract script, limits, error policy, and runtime from DslConfig
+    fn resolve_parts(config: &DslConfig) -> Option<(CompiledScript, VmLimits, DslErrorPolicy, DslRuntime)> {
         let script = match Self::resolve_script(config) {
             Ok(s) => s,
             Err(e) => {
@@ -84,13 +92,18 @@ impl DslPlugin {
             max_string_len: config.max_string_len.unwrap_or(8192),
         };
         let policy = config.error_policy.clone().unwrap_or_default();
-        Some((script, limits, policy))
+        let runtime = DslRuntime {
+            max_timeout_ms: config.http_max_timeout_ms.unwrap_or(5_000),
+            max_response_body_bytes: config.http_max_response_body_bytes.unwrap_or(1024 * 1024),
+            block_private_ips: config.http_block_private_ips.unwrap_or(false),
+        };
+        Some((script, limits, policy, runtime))
     }
 
     /// Create from DslConfig (used by PluginRuntime factory for request stage)
     pub fn from_config(config: &DslConfig) -> Option<Box<dyn RequestFilter>> {
-        let (script, limits, policy) = Self::resolve_parts(config)?;
-        match DslPlugin::new(config.name.clone(), script, limits, policy) {
+        let (script, limits, policy, runtime) = Self::resolve_parts(config)?;
+        match DslPlugin::new(config.name.clone(), script, limits, policy, runtime) {
             Ok(p) => Some(Box::new(p)),
             Err(e) => {
                 tracing::error!("DSL plugin '{}' VM init failed: {}", config.name, e);
@@ -101,8 +114,8 @@ impl DslPlugin {
 
     /// Create from DslConfig (used by PluginRuntime factory for upstream response filter stage)
     pub fn from_config_response(config: &DslConfig) -> Option<Box<dyn UpstreamResponseFilter>> {
-        let (script, limits, policy) = Self::resolve_parts(config)?;
-        match DslPlugin::new(config.name.clone(), script, limits, policy) {
+        let (script, limits, policy, runtime) = Self::resolve_parts(config)?;
+        match DslPlugin::new(config.name.clone(), script, limits, policy, runtime) {
             Ok(p) => Some(Box::new(p)),
             Err(e) => {
                 tracing::error!("DSL plugin '{}' VM init failed: {}", config.name, e);
@@ -119,7 +132,7 @@ impl RequestFilter for DslPlugin {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        execute_safe(&self.vm, session, log, &self.error_policy)
+        execute_safe(&self.vm, session, log, &self.error_policy, &self.runtime).await
     }
 }
 
@@ -133,6 +146,14 @@ impl UpstreamResponseFilter for DslPlugin {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        execute_safe(&self.vm, session, log, &self.error_policy)
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(execute_safe(
+                &self.vm,
+                session,
+                log,
+                &self.error_policy,
+                &self.runtime,
+            ))
+        })
     }
 }

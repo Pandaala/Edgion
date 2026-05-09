@@ -51,11 +51,21 @@ fn test_return_terminate_with_log() {
         log("terminating request")
         return terminate()
     "#;
-    let session = MockPluginSession::new();
     let vm = make_vm(source);
     let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    let mut s = MockPluginSession::new();
+    let rt_ctx = DslRuntime::default();
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(execute_safe(
+            &vm,
+            &mut s as &mut dyn PluginSession,
+            &mut log,
+            &DslErrorPolicy::Deny,
+            &rt_ctx,
+        ));
     assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
     assert!(log.log.as_ref().unwrap().contains("terminating request"));
 }

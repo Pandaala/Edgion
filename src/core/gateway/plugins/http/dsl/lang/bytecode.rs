@@ -85,11 +85,15 @@ pub enum OpCode {
     /// Clean up loop counter at end of loop
     LoopEnd,
 
-    // ===== List Operations (internal, for for-in) =====
-    /// Pop (list, index), push list[index]
-    ListGet,
+    // ===== Index Operations (for-in iteration + expr[key] access) =====
+    /// Pop (container, index), push container[index]; List (Int key) or Map (Str key)
+    IndexGet,
     /// Pop list, push len
     ListLen,
+
+    // ===== Map Operations =====
+    /// Pop 2n values (interleaved key:Str, val:Value pairs deepest-first), push Value::Map
+    MakeMap(u16),
 
     // ===== Built-in Calls =====
     /// Call builtin function with arg count
@@ -202,6 +206,10 @@ pub enum BuiltinId {
     /// `log_fmt(template_literal, sensitive_arg1, sensitive_arg2, ...)` — variadic.
     /// Argument count is carried by the `CallBuiltin(_, argc)` opcode itself.
     LogFmt,
+
+    // External capabilities
+    /// `http.call(method, url, body [, timeout_ms [, headers_map]])` → Map
+    HttpCall,
 }
 
 /// Constant pool entry

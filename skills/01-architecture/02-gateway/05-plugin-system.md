@@ -188,7 +188,7 @@ source / YAML → Parser(nom) → AST → Compiler → Bytecode (JSON/base64) �
 - **Parser**: nom combinators, parse budget of 50k calls.
 - **AST**: up to 2000 nodes, nesting depth ≤ 64.
 - **Compiler**: type checks, function-signature validation, compile-time regex validation; emits bytecode (≤ 256 KB).
-- **VM**: synchronous stack VM, panics isolated via `catch_unwind`.
+- **VM**: async stack VM (post external-call feature), panics isolated via `futures::FutureExt::catch_unwind`.
 
 ### Implemented capabilities (39 builtins)
 
@@ -210,12 +210,41 @@ Language features: variables (let / let mut), if/else, while, for-range, for-in,
 | Compilation | instructions ≤ 1000, locals ≤ 64, constants ≤ 256, regex syntax check |
 | Runtime | steps ≤ 10k, loop ≤ 100, calls ≤ 500, stack ≤ 128, string ≤ 8 KB (all per-plugin configurable) |
 
+### External call design principles
+
+EdgionDSL is designed as a general-purpose extensible language. External capabilities (HTTP, Redis, etc.) are **language-level builtins**, not runtime-registered plugins. Key principles:
+
+1. **No explicit `enabled` flag**: capabilities are always available; operators control behavior via limits (timeout cap, body size cap), not on/off switches.
+2. **`DslRuntime` is a lightweight call-time struct** (not stored in `DslPlugin`): constructed in `run_request` from the plugin's config values, holds per-call limits and a reference to the global HTTP client.
+3. **Global static `reqwest::Client`** (`OnceLock`): shared across all DSL plugin instances for connection pool reuse. Per-plugin limits are passed separately.
+4. **`DslCapability` trait for code organization**: each external capability (HTTP, future Redis) lives in its own module and is invoked via `DslRuntime`. No HashMap registry — dispatch goes through static `match` in VM builtins.
+5. **`Value::Map`** (`Arc<IndexMap<String, Value>>`): structured return type for `http.call` responses; also enables Map literals `{"k": v}` in DSL source. Index access `container[key]` works uniformly for both List (Int index) and Map (Str key).
+6. **`http.call` error convention**: always returns a Map; `status == 0` means network/timeout failure (not HTTP error). Body is truncated to `maxResponseBodyBytes`. Response header keys are lowercased.
+
+```
+// DslRuntime (constructed at run_request time, not stored)
+pub struct DslRuntime {
+    pub max_timeout_ms: u64,            // hard cap; default 30_000
+    pub max_response_body_bytes: usize, // hard cap; default 1_048_576
+}
+```
+
+```yaml
+# DslConfig additions (all optional, sensible defaults)
+httpCall:
+  maxTimeoutMs: 30000
+  maxResponseBodyBytes: 1048576
+```
+
+> **TODO (Redis)**: after HTTP stabilizes, add `redis.get(addr, key)` / `redis.set(addr, key, val, ttl)` / `redis.del(addr, key)` builtins. addr format: `redis://host:port/db`. Connection management TBD (self-managed `fred` pool vs. reference existing LinkSys Redis connection).
+
 ### Pending enhancements (design completed)
 
-Three steps (see the design doc for details):
-1. **Step-1 (P0)**: implement 5 stub functions (sha256 / md5 / regex_find / regex_replace / range-as-expr); only `builtins.rs` is touched.
+Four steps (see design docs for details):
+1. **Step-1 (P0)**: implement 5 stub functions (sha256 / md5 / regex_find / regex_replace / range-as-expr); only `builtins.rs` is touched. Design: `docs/superpowers/specs/2026-03-22-dsl-plugin-enhancement-design.md`.
 2. **Step-2 (P1)**: resp reads (resp.status / resp.header / resp.has_header) + break / continue.
 3. **Step-3 (P2)**: implement the UpstreamResponseFilter trait so the response phase can execute scripts.
+4. **Step-4 (P2)**: external HTTP call (`http.call`), async VM, `Value::Map`. Design: `docs/superpowers/specs/2026-05-09-dsl-external-call-design.md`.
 
 ### Configuration
 

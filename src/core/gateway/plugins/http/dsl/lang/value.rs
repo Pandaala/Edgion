@@ -1,9 +1,11 @@
 //! Runtime value types for EdgionDSL
 //!
-//! Only 4 user-visible types: Str, Int, Bool, Nil — matching the HTTP domain.
-//! Plus an internal List type for iteration (not user-constructable).
+//! User-visible types: Str, Int, Bool, Nil, Map.
+//! Plus an internal List type for iteration (not user-constructable directly).
 
 use std::fmt;
+
+use indexmap::IndexMap;
 
 /// Runtime value — the types of EdgionDSL
 #[derive(Debug, Clone)]
@@ -16,8 +18,10 @@ pub enum Value {
     Bool(bool),
     /// Nil — missing/absent value (maps to Option::None)
     Nil,
-    /// Internal: list of strings for iteration (not user-constructable)
+    /// Internal: list of strings for iteration (not user-constructable directly)
     List(Vec<String>),
+    /// Structured map — returned by http.call and constructable via map literals
+    Map(IndexMap<String, Value>),
 }
 
 impl Value {
@@ -48,6 +52,11 @@ impl Value {
         matches!(self, Value::List(_))
     }
 
+    #[inline]
+    pub fn is_map(&self) -> bool {
+        matches!(self, Value::Map(_))
+    }
+
     // ========== Type coercion ==========
 
     /// Get string ref; returns empty string for non-Str types.
@@ -74,6 +83,7 @@ impl Value {
             }
             Value::Nil => "nil".to_string(),
             Value::List(_) => "[list]".to_string(),
+            Value::Map(m) => format!("[map:{}]", m.len()),
         }
     }
 
@@ -123,6 +133,7 @@ impl Value {
             Value::Bool(_) => "Bool",
             Value::Nil => "Nil",
             Value::List(_) => "List",
+            Value::Map(_) => "Map",
         }
     }
 }
@@ -135,6 +146,7 @@ impl fmt::Display for Value {
             Value::Bool(b) => write!(f, "{}", b),
             Value::Nil => write!(f, "nil"),
             Value::List(l) => write!(f, "[list:{}]", l.len()),
+            Value::Map(m) => write!(f, "[map:{}]", m.len()),
         }
     }
 }
@@ -147,6 +159,7 @@ impl PartialEq for Value {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Nil, Value::Nil) => true,
             (Value::List(a), Value::List(b)) => a == b,
+            (Value::Map(a), Value::Map(b)) => a == b,
             _ => false, // different types are never equal
         }
     }
@@ -218,6 +231,36 @@ mod tests {
         assert_eq!(v, Value::Str("hello".to_string()));
         let v: Value = None::<String>.into();
         assert_eq!(v, Value::Nil);
+    }
+
+    #[test]
+    fn test_map_basic() {
+        let mut m = IndexMap::new();
+        m.insert("status".to_string(), Value::Int(200));
+        m.insert("body".to_string(), Value::Str("ok".to_string()));
+        let v = Value::Map(m);
+        assert!(v.is_truthy());
+        assert!(v.is_map());
+        assert_eq!(v.type_name(), "Map");
+        assert_eq!(format!("{}", v), "[map:2]");
+    }
+
+    #[test]
+    fn test_map_equality() {
+        let mut a = IndexMap::new();
+        a.insert("k".to_string(), Value::Int(1));
+        let mut b = IndexMap::new();
+        b.insert("k".to_string(), Value::Int(1));
+        assert_eq!(Value::Map(a), Value::Map(b));
+    }
+
+    #[test]
+    fn test_map_clone() {
+        let mut m = IndexMap::new();
+        m.insert("x".to_string(), Value::Bool(true));
+        let v = Value::Map(m);
+        let v2 = v.clone();
+        assert_eq!(v, v2);
     }
 
     #[test]

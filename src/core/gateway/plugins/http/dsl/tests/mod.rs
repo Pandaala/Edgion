@@ -6,6 +6,7 @@
 pub(super) use super::lang::bytecode::CompiledScript;
 pub(super) use super::lang::validator::{compile_dsl_source, ValidationLimits};
 pub(super) use super::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
+pub(super) use super::runtime::DslRuntime;
 pub(super) use crate::core::gateway::plugins::runtime::traits::session::{MockPluginSession, PluginSession};
 pub(super) use crate::core::gateway::plugins::runtime::PluginLog;
 pub(super) use crate::types::filters::PluginRunningResult;
@@ -14,6 +15,7 @@ mod compile_errors;
 mod control_flow;
 mod error_policy;
 mod grpc_error_tests;
+mod http_call_tests;
 mod p3_utility_tests;
 mod range_and_string_ops;
 mod req_metadata_tests;
@@ -48,14 +50,86 @@ pub(super) fn run(source: &str, session: MockPluginSession) -> PluginRunningResu
     let vm = make_vm(source);
     let mut log = PluginLog::new("test");
     let mut s = session;
-    execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny)
+    let rt = DslRuntime::default();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(execute_safe(
+            &vm,
+            &mut s as &mut dyn PluginSession,
+            &mut log,
+            &DslErrorPolicy::Deny,
+            &rt,
+        ))
 }
 
 pub(super) fn run_with_limits(source: &str, session: MockPluginSession, limits: VmLimits) -> PluginRunningResult {
     let vm = make_vm_with_limits(source, limits);
     let mut log = PluginLog::new("test");
     let mut s = session;
-    execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny)
+    let rt = DslRuntime::default();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(execute_safe(
+            &vm,
+            &mut s as &mut dyn PluginSession,
+            &mut log,
+            &DslErrorPolicy::Deny,
+            &rt,
+        ))
+}
+
+pub(super) fn run_with_runtime(source: &str, session: MockPluginSession, runtime: DslRuntime) -> PluginRunningResult {
+    let vm = make_vm(source);
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny, &runtime))
+}
+
+/// Synchronous wrapper for execute_safe — for #[test] (non-async) contexts.
+pub(super) fn run_vm_policy(vm: &Vm, mut session: MockPluginSession, policy: &DslErrorPolicy) -> PluginRunningResult {
+    let mut log = PluginLog::new("test");
+    let rt_ctx = DslRuntime::default();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(execute_safe(
+            vm,
+            &mut session as &mut dyn PluginSession,
+            &mut log,
+            policy,
+            &rt_ctx,
+        ))
+}
+
+/// Like run_vm_policy but also returns the log for assertions on log content.
+pub(super) fn run_vm_policy_log(
+    vm: &Vm,
+    mut session: MockPluginSession,
+    policy: &DslErrorPolicy,
+) -> (PluginRunningResult, PluginLog) {
+    let mut log = PluginLog::new("test");
+    let rt_ctx = DslRuntime::default();
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(execute_safe(
+            vm,
+            &mut session as &mut dyn PluginSession,
+            &mut log,
+            policy,
+            &rt_ctx,
+        ));
+    (result, log)
 }
 
 pub(super) fn good_next() -> PluginRunningResult {

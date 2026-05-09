@@ -3,8 +3,11 @@
 //! Arguments are popped from the VM stack, results pushed back.
 //! Each builtin maps to exactly one PluginSession API call.
 
+use indexmap::IndexMap;
+
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession};
 
+use super::super::runtime::{dsl_http_client, DslRuntime};
 use super::bytecode::BuiltinId;
 use super::error::RuntimeError;
 use super::value::Value;
@@ -284,6 +287,7 @@ impl Vm {
                     Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
                     Value::Nil => Ok(Value::Int(0)),
                     Value::List(l) => Ok(Value::Int(l.len() as i64)),
+                    Value::Map(m) => Ok(Value::Int(m.len() as i64)),
                     _ => Err(RuntimeError::TypeError {
                         expected: "Str",
                         got: v.type_name(),
@@ -753,6 +757,267 @@ impl Vm {
                 log.push_fmt(&template, &log_args);
                 Ok(Value::Nil)
             }
+
+            // http.call is dispatched asynchronously by the VM before reaching call_builtin
+            BuiltinId::HttpCall => Err(RuntimeError::Internal {
+                message: "HttpCall must be dispatched via call_builtin_http, not call_builtin".into(),
+            }),
         }
+    }
+
+    /// Async handler for http.call(method, url, body [, timeout_ms [, headers_map]]) → Map
+    pub(crate) async fn call_builtin_http(
+        &self,
+        argc: u8,
+        state: &mut VmState,
+        runtime: &DslRuntime,
+    ) -> Result<Value, RuntimeError> {
+        if !(3..=5).contains(&(argc as usize)) {
+            return Err(RuntimeError::ApiError {
+                function: "http.call".into(),
+                message: format!("http.call requires 3-5 arguments, got {}", argc),
+            });
+        }
+
+        // Pop in reverse order (last arg pushed is on top of stack)
+        let headers_val = if argc >= 5 { Some(state.pop()?) } else { None };
+        let timeout_val = if argc >= 4 { Some(state.pop()?) } else { None };
+        let body_val = state.pop()?;
+        let url_val = state.pop()?;
+        let method_val = state.pop()?;
+
+        let method_str = method_val.into_string();
+        let url_str = url_val.into_string();
+
+        // Reject non-http/https schemes to prevent file://, ftp://, etc.
+        let parsed_url = match reqwest::Url::parse(&url_str) {
+            Ok(u) => u,
+            Err(_) => {
+                return Err(RuntimeError::ApiError {
+                    function: "http.call".into(),
+                    message: format!("invalid URL: {}", url_str),
+                });
+            }
+        };
+        if !matches!(parsed_url.scheme(), "http" | "https") {
+            return Err(RuntimeError::ApiError {
+                function: "http.call".into(),
+                message: format!("http.call only supports http/https schemes, got: {}", parsed_url.scheme()),
+            });
+        }
+
+        if runtime.block_private_ips {
+            let raw = parsed_url.host_str().unwrap_or("");
+            // url crate serializes IPv6 hosts with brackets (e.g. "[::1]") — strip them
+            let host = raw.trim_matches(|c: char| c == '[' || c == ']');
+            if is_private_ip_host(host) {
+                return Err(RuntimeError::ApiError {
+                    function: "http.call".into(),
+                    message: format!("http.call blocked: private/loopback IP not allowed: {}", host),
+                });
+            }
+        }
+
+        let body_str = match body_val {
+            Value::Nil => String::new(),
+            other => other.into_string(),
+        };
+
+        let timeout_ms = match timeout_val {
+            None | Some(Value::Nil) => runtime.max_timeout_ms,
+            Some(Value::Int(n)) => (n as u64).min(runtime.max_timeout_ms),
+            Some(other) => {
+                return Err(RuntimeError::TypeError {
+                    expected: "Int or Nil",
+                    got: other.type_name(),
+                    operation: "http.call timeout_ms",
+                });
+            }
+        };
+
+        let method = match method_str.to_uppercase().as_str() {
+            "GET" => reqwest::Method::GET,
+            "POST" => reqwest::Method::POST,
+            "PUT" => reqwest::Method::PUT,
+            "DELETE" => reqwest::Method::DELETE,
+            "PATCH" => reqwest::Method::PATCH,
+            "HEAD" => reqwest::Method::HEAD,
+            "OPTIONS" => reqwest::Method::OPTIONS,
+            _ => {
+                return Err(RuntimeError::ApiError {
+                    function: "http.call".into(),
+                    message: format!("unsupported HTTP method: {}", method_str),
+                });
+            }
+        };
+
+        let client = dsl_http_client();
+        let mut builder = client
+            .request(method, &url_str)
+            .timeout(std::time::Duration::from_millis(timeout_ms));
+
+        if !body_str.is_empty() {
+            builder = builder.body(body_str);
+        }
+
+        if let Some(hv) = headers_val {
+            match hv {
+                Value::Map(m) => {
+                    for (k, v) in &m {
+                        builder = builder.header(k.as_str(), v.as_str());
+                    }
+                }
+                Value::Nil => {}
+                other => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "Map or Nil",
+                        got: other.type_name(),
+                        operation: "http.call headers_map",
+                    });
+                }
+            }
+        }
+
+        let failure_map = || {
+            let mut m = IndexMap::new();
+            m.insert("status".to_string(), Value::Int(0));
+            m.insert("body".to_string(), Value::Str(String::new()));
+            m.insert("headers".to_string(), Value::Map(IndexMap::new()));
+            Value::Map(m)
+        };
+
+        let resp = match builder.send().await {
+            Ok(r) => r,
+            Err(_) => return Ok(failure_map()),
+        };
+
+        let status = resp.status().as_u16() as i64;
+
+        let mut resp_headers: IndexMap<String, Value> = IndexMap::new();
+        for (k, v) in resp.headers() {
+            if let Ok(val) = v.to_str() {
+                resp_headers.insert(k.as_str().to_lowercase(), Value::Str(val.to_string()));
+            }
+        }
+
+        let body_bytes = match resp.bytes().await {
+            Ok(b) => b,
+            Err(_) => return Ok(failure_map()),
+        };
+
+        let body_text = if body_bytes.len() > runtime.max_response_body_bytes {
+            String::from_utf8_lossy(&body_bytes[..runtime.max_response_body_bytes]).to_string()
+        } else {
+            String::from_utf8_lossy(&body_bytes).to_string()
+        };
+
+        let mut result = IndexMap::new();
+        result.insert("status".to_string(), Value::Int(status));
+        result.insert("body".to_string(), Value::Str(body_text));
+        result.insert("headers".to_string(), Value::Map(resp_headers));
+
+        Ok(Value::Map(result))
+    }
+}
+
+/// Returns true if `host` is a private, loopback, or link-local IP address literal.
+/// Hostnames are not resolved — returns false, relying on network-level egress controls.
+/// Also strips IPv6 zone IDs (e.g. `fe80::1%eth0`) before parsing.
+fn is_private_ip_host(host: &str) -> bool {
+    use std::net::IpAddr;
+    // Strip IPv6 zone IDs (RFC 6874: "::1%eth0")
+    let host = host.split('%').next().unwrap_or(host);
+    let ip: IpAddr = match host.parse() {
+        Ok(ip) => ip,
+        Err(_) => return false, // hostname, not an IP literal
+    };
+    match ip {
+        IpAddr::V4(v4) => is_private_v4(v4),
+        IpAddr::V6(v6) => {
+            if v6.is_loopback() || v6.is_unspecified() {
+                return true;
+            }
+            // IPv4-mapped IPv6 (::ffff:a.b.c.d) — check the embedded IPv4
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_private_v4(v4);
+            }
+            let s = v6.segments();
+            // fc00::/7 (unique local) or fe80::/10 (link-local)
+            (s[0] & 0xfe00) == 0xfc00 || (s[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+#[inline]
+fn is_private_v4(v4: std::net::Ipv4Addr) -> bool {
+    v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+}
+
+#[cfg(test)]
+mod ip_tests {
+    use super::is_private_ip_host;
+
+    #[test]
+    fn test_ipv4_private_ranges() {
+        assert!(is_private_ip_host("127.0.0.1"));
+        assert!(is_private_ip_host("10.0.0.1"));
+        assert!(is_private_ip_host("172.16.0.1"));
+        assert!(is_private_ip_host("172.31.255.255"));
+        assert!(is_private_ip_host("192.168.1.1"));
+        assert!(is_private_ip_host("169.254.1.1")); // link-local
+        assert!(is_private_ip_host("0.0.0.0"));     // unspecified
+    }
+
+    #[test]
+    fn test_ipv4_public() {
+        assert!(!is_private_ip_host("8.8.8.8"));
+        assert!(!is_private_ip_host("1.1.1.1"));
+        assert!(!is_private_ip_host("203.0.113.1"));
+    }
+
+    #[test]
+    fn test_ipv6_private() {
+        assert!(is_private_ip_host("::1"));           // loopback
+        assert!(is_private_ip_host("fc00::1"));       // unique local
+        assert!(is_private_ip_host("fd12:3456::1"));  // unique local
+        assert!(is_private_ip_host("fe80::1"));       // link-local
+    }
+
+    #[test]
+    fn test_ipv4_mapped_ipv6() {
+        assert!(is_private_ip_host("::ffff:192.168.1.1"));
+        assert!(is_private_ip_host("::ffff:127.0.0.1"));
+        assert!(is_private_ip_host("::ffff:10.0.0.1"));
+        assert!(!is_private_ip_host("::ffff:8.8.8.8")); // public
+    }
+
+    #[test]
+    fn test_ipv6_zone_id_stripped() {
+        assert!(is_private_ip_host("fe80::1%eth0")); // link-local with zone ID
+        assert!(is_private_ip_host("::1%lo"));       // loopback with zone ID
+    }
+
+    #[test]
+    fn test_ipv6_public() {
+        assert!(!is_private_ip_host("2001:db8::1"));
+        assert!(!is_private_ip_host("2606:4700::1111"));
+    }
+
+    #[test]
+    fn test_hostnames_not_blocked() {
+        // Hostnames are not resolved — always returns false
+        assert!(!is_private_ip_host("localhost"));
+        assert!(!is_private_ip_host("example.com"));
+        assert!(!is_private_ip_host("internal.corp"));
+    }
+
+    #[test]
+    fn test_reqwest_url_host_str_brackets_stripped() {
+        // url crate returns "[::ffff:c0a8:101]" (with brackets) for IPv6 hosts;
+        // the call site strips brackets before calling is_private_ip_host.
+        let url = reqwest::Url::parse("http://[::ffff:192.168.1.1]:80").unwrap();
+        let raw = url.host_str().unwrap_or("");
+        let host = raw.trim_matches(|c: char| c == '[' || c == ']');
+        assert!(is_private_ip_host(host), "IPv4-mapped IPv6 not detected as private: {:?}", host);
     }
 }

@@ -111,6 +111,10 @@ pub enum ExprKind {
     FnCall { name: String, args: Vec<Expr> },
     /// Field access: `req.path` (sugar for 0-arg method call)
     FieldAccess { object: Box<Expr>, field: String },
+    /// Map literal: `{"key": expr, ...}` — keys must be string literals
+    MapLiteral(Vec<(Expr, Expr)>),
+    /// Index access: `container[key]` — List (Int) or Map (Str); returns Nil if missing
+    Index { object: Box<Expr>, key: Box<Expr> },
 }
 
 // ==================== Operators ====================

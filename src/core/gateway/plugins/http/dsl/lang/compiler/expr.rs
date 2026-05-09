@@ -115,6 +115,25 @@ impl Compiler {
                 // Field access is sugar for 0-arg method call
                 self.compile_method_call(object, field, &[])?;
             }
+
+            ExprKind::MapLiteral(pairs) => {
+                let n = pairs.len();
+                if n > u16::MAX as usize {
+                    return Err(CompileError::new("map literal exceeds maximum key count (65535)"));
+                }
+                // Push key/value pairs interleaved: key0, val0, key1, val1, ...
+                for (key, val) in pairs {
+                    self.compile_expr(key)?;
+                    self.compile_expr(val)?;
+                }
+                self.emit(OpCode::MakeMap(n as u16));
+            }
+
+            ExprKind::Index { object, key } => {
+                self.compile_expr(object)?;
+                self.compile_expr(key)?;
+                self.emit(OpCode::IndexGet);
+            }
         }
         Ok(())
     }

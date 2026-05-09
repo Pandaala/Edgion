@@ -1,9 +1,6 @@
 //! Tests for DslErrorPolicy variants: Ignore, Deny, DenyWith.
 
 use super::*;
-use crate::core::gateway::plugins::http::dsl::lang::bytecode::CompiledScript;
-use crate::core::gateway::plugins::http::dsl::lang::validator::{compile_dsl_source, ValidationLimits};
-use crate::core::gateway::plugins::http::dsl::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
 
 fn limited_vm() -> Vm {
     let b64 = compile_dsl_source(
@@ -25,33 +22,24 @@ fn limited_vm() -> Vm {
 #[test]
 fn test_policy_ignore() {
     let vm = limited_vm();
-    let session = MockPluginSession::new();
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Ignore);
+    let result = run_vm_policy(&vm, MockPluginSession::new(), &DslErrorPolicy::Ignore);
     assert_eq!(result, good_next());
 }
 
 #[test]
 fn test_policy_deny() {
     let vm = limited_vm();
-    let session = MockPluginSession::new();
-    let mut log = PluginLog::new("test");
-    let mut s = session;
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny);
+    let result = run_vm_policy(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, err_response_body(500, "DSL execution error"));
 }
 
 #[test]
 fn test_policy_deny_with() {
     let vm = limited_vm();
-    let session = MockPluginSession::new();
-    let mut log = PluginLog::new("test");
-    let mut s = session;
     let policy = DslErrorPolicy::DenyWith {
         status: 418,
         body: Some("teapot".to_string()),
     };
-    let result = execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &policy);
+    let result = run_vm_policy(&vm, MockPluginSession::new(), &policy);
     assert_eq!(result, err_response_body(418, "teapot"));
 }

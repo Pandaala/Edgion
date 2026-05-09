@@ -62,6 +62,9 @@ pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<
         ("ctx", "set") => Some(BuiltinId::CtxSet),
         ("ctx", "remove") => Some(BuiltinId::CtxRemove),
 
+        // http.*
+        ("http", "call") => Some(BuiltinId::HttpCall),
+
         _ => None,
     }
 }
@@ -148,5 +151,8 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> Option<usize> {
 
         // Variadic: argc carried by the opcode itself.
         BuiltinId::LogFmt => None,
+
+        // http.call: 3-5 args — variadic, runtime validates
+        BuiltinId::HttpCall => None,
     }
 }

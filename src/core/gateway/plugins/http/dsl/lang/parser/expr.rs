@@ -31,6 +31,24 @@ fn parse_expr_bp<'a>(input: &'a str, ctx: &mut ParseCtx, min_bp: u8) -> IResult<
             continue;
         }
 
+        // Index access: container[key]
+        if input.starts_with('[') {
+            ctx.tick().map_err(nom::Err::Failure)?;
+            ctx.add_node().map_err(nom::Err::Failure)?;
+            let rest = ws(&input[1..]);
+            let (rest, key) = parse_expr(rest, ctx)?;
+            let rest = ws(rest);
+            if !rest.starts_with(']') {
+                return Err(nom::Err::Failure(ParseError::new("expected ']' after index key")));
+            }
+            lhs = Expr::new(ExprKind::Index {
+                object: Box::new(lhs),
+                key: Box::new(key),
+            });
+            input = &rest[1..];
+            continue;
+        }
+
         // Check for binary operator
         if let Some((op, op_len)) = peek_binop(input) {
             let bp = op.precedence();
@@ -150,6 +168,50 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, 
                 }
             }
         };
+    }
+
+    // Map literal: {"key": expr, ...}
+    if input.starts_with('{') {
+        ctx.enter_nesting().map_err(nom::Err::Failure)?;
+        let mut input = ws(&input[1..]);
+        let mut pairs: Vec<(Expr, Expr)> = Vec::new();
+
+        if input.starts_with('}') {
+            ctx.leave_nesting();
+            ctx.add_node().map_err(nom::Err::Failure)?;
+            return Ok((&input[1..], Expr::new(ExprKind::MapLiteral(pairs))));
+        }
+
+        loop {
+            ctx.tick().map_err(nom::Err::Failure)?;
+            if !input.starts_with('"') {
+                ctx.leave_nesting();
+                return Err(nom::Err::Failure(ParseError::new("map key must be a string literal")));
+            }
+            let (rest, key_expr) = lit::parse_string_literal(input, ctx)?;
+            let rest = ws(rest);
+            if !rest.starts_with(':') {
+                ctx.leave_nesting();
+                return Err(nom::Err::Failure(ParseError::new("expected ':' after map key")));
+            }
+            let rest = ws(&rest[1..]);
+            let (rest, val_expr) = parse_expr(rest, ctx)?;
+            pairs.push((key_expr, val_expr));
+            let rest = ws(rest);
+            if rest.starts_with('}') {
+                ctx.leave_nesting();
+                input = &rest[1..];
+                break;
+            }
+            if rest.starts_with(',') {
+                input = ws(&rest[1..]);
+            } else {
+                ctx.leave_nesting();
+                return Err(nom::Err::Failure(ParseError::new("expected ',' or '}' in map literal")));
+            }
+        }
+        ctx.add_node().map_err(nom::Err::Failure)?;
+        return Ok((input, Expr::new(ExprKind::MapLiteral(pairs))));
     }
 
     Err(nom::Err::Failure(ParseError::new(format!(
@@ -338,6 +400,57 @@ mod tests {
                 _ => panic!("expected FnCall"),
             },
             _ => panic!("expected ExprStmt"),
+        }
+    }
+
+    #[test]
+    fn test_parse_map_literal() {
+        let prog = parse_program(r#"let m = {"a": "1", "b": "2"}"#).unwrap();
+        match &prog.stmts[0].kind {
+            StmtKind::Let { value, .. } => match &value.kind {
+                ExprKind::MapLiteral(pairs) => assert_eq!(pairs.len(), 2),
+                _ => panic!("expected MapLiteral"),
+            },
+            _ => panic!("expected Let"),
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_map() {
+        let prog = parse_program(r#"let m = {}"#).unwrap();
+        match &prog.stmts[0].kind {
+            StmtKind::Let { value, .. } => match &value.kind {
+                ExprKind::MapLiteral(pairs) => assert_eq!(pairs.len(), 0),
+                _ => panic!("expected MapLiteral"),
+            },
+            _ => panic!("expected Let"),
+        }
+    }
+
+    #[test]
+    fn test_parse_index_access() {
+        let prog = parse_program(r#"let v = m["key"]"#).unwrap();
+        match &prog.stmts[0].kind {
+            StmtKind::Let { value, .. } => match &value.kind {
+                ExprKind::Index { .. } => {}
+                _ => panic!("expected Index"),
+            },
+            _ => panic!("expected Let"),
+        }
+    }
+
+    #[test]
+    fn test_parse_chained_index() {
+        let prog = parse_program(r#"let v = resp["headers"]["x-token"]"#).unwrap();
+        match &prog.stmts[0].kind {
+            StmtKind::Let { value, .. } => match &value.kind {
+                ExprKind::Index { object, .. } => match &object.kind {
+                    ExprKind::Index { .. } => {}
+                    _ => panic!("expected nested Index"),
+                },
+                _ => panic!("expected Index"),
+            },
+            _ => panic!("expected Let"),
         }
     }
 }

@@ -1581,6 +1581,57 @@ impl DslTestSuite {
         )
     }
 
+    // ==================== Scenario 24: http.call ====================
+    // DSL source:
+    //   let http_resp = http.call("GET", "http://127.0.0.1:30001/health", nil, 2000)
+    //   if http_resp["status"] == 200 {
+    //     resp.set_header("X-Call-Result", "ok")
+    //   } else {
+    //     resp.set_header("X-Call-Result", "fail")
+    //   }
+
+    /// Test: DSL calls backend /health, status 200 → X-Call-Result: ok in response headers
+    fn test_http_call_success() -> TestCase {
+        TestCase::new(
+            "dsl_http_call_success",
+            "DSL http.call: backend /health returns 200 → X-Call-Result: ok in response header",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-http-call/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-http-call.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let call_result = resp
+                                .headers()
+                                .get("x-call-result")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 200 && call_result == "ok" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "X-Call-Result: ok in response header".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} X-Call-Result='{}'", status, call_result),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     // ==================== Test 22: HMAC Verify ====================
 
     /// Test: no X-Signature → 401 missing signature
@@ -1792,6 +1843,8 @@ impl TestSuite for DslTestSuite {
             Self::test_hmac_verify_missing_sig(),
             Self::test_hmac_verify_invalid_sig(),
             Self::test_hmac_verify_valid_sig(),
+            // Scenario 24: http.call — real external HTTP call from DSL script
+            Self::test_http_call_success(),
         ]
     }
 }
