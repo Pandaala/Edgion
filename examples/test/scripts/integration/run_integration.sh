@@ -1106,6 +1106,26 @@ main() {
     
     cd "$PROJECT_ROOT"
 
+    # =============================================================================
+    # Pre-flight Check 0: Only English letter scripts allowed outside docs/ and tasks/
+    # =============================================================================
+    log_section "Pre-flight Check: English-Only Lint"
+    if ! "${PROJECT_ROOT}/scripts/check_english_only.sh"; then
+        log_error "English-only check failed — translate offending text to English before running integration tests"
+        exit 1
+    fi
+    log_success "English-only check passed"
+
+    # =============================================================================
+    # Pre-flight Check 1: Agent-doc validation (links, frontmatter, indexes, ...)
+    # =============================================================================
+    log_section "Pre-flight Check: Agent-doc Validation"
+    if ! python3 "${PROJECT_ROOT}/tools/validate_agent_docs.py"; then
+        log_error "Agent-doc validation failed — fix doc consistency issues before running integration tests"
+        exit 1
+    fi
+    log_success "Agent-doc validation passed"
+
     if ! ensure_nofile_limit "$REQUIRED_NOFILE"; then
         log_error "File descriptor limit check failed"
         exit 1

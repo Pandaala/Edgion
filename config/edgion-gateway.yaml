@@ -47,7 +47,7 @@ gateway:
 
   # Admin HTTP server listen address (optional)
   #
-  # 当前实现里 Gateway Admin API 仍固定监听 5900，这个字段暂未接线
+  # In the current implementation the Gateway Admin API is still hard-coded to listen on 5900; this field is not yet wired up
   # admin_listen: "0.0.0.0:8081"
 
 logging:

@@ -140,7 +140,7 @@ FORBIDDEN_PATTERNS = {
     ],
     "docs/README.md": [
         "[English Documentation](./en/README.md) *(Coming soon)*",
-        "[日本語ドキュメント (Japanese)](./ja/README.md) *(Coming soon)*",
+        "[Japanese Documentation](./ja/README.md) *(Coming soon)*",
     ],
     "docs/en/getting-started/README.md": [
         "Installation and Deployment (coming soon)",
@@ -148,29 +148,29 @@ FORBIDDEN_PATTERNS = {
         "Core Concepts (coming soon)",
     ],
     "docs/zh-CN/getting-started/README.md": [
-        "安装部署（即将推出）",
-        "第一个 Gateway（即将推出）",
-        "核心概念（即将推出）",
+        "Installation and Deployment (coming soon)",
+        "First Gateway (coming soon)",
+        "Core Concepts (coming soon)",
     ],
     "docs/en/user-guide/http-route/filters/overview.md": [
         "| RequestMirror | Request mirroring | Coming soon |",
     ],
     "docs/zh-CN/user-guide/http-route/filters/overview.md": [
-        "| RequestMirror | 请求镜像 | 即将推出 |",
+        "| RequestMirror | Request mirroring | Coming soon |",
     ],
     "docs/en/user-guide/README.md": [
         "Canary Release (coming soon)",
         "Blue-Green Deployment (coming soon)",
     ],
     "docs/zh-CN/user-guide/README.md": [
-        "灰度发布（即将推出）",
-        "蓝绿部署（即将推出）",
+        "Canary Release (coming soon)",
+        "Blue-Green Deployment (coming soon)",
     ],
     "docs/en/user-guide/http-route/backends/weight.md": [
         "Canary Release (coming soon)",
     ],
     "docs/zh-CN/user-guide/http-route/backends/weight.md": [
-        "灰度发布（即将推出）",
+        "Canary Release (coming soon)",
     ],
     "examples/test/scripts/utils/start_all_with_conf.sh": [
         'EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log"',
@@ -193,7 +193,7 @@ FORBIDDEN_PATTERNS = {
         "Default path**: `logs/access.log`",
     ],
     "docs/zh-CN/ops-guide/observability/access-log.md": [
-        "默认路径**: `logs/access.log`",
+        "Default path**: `logs/access.log`",
     ],
     "docs/en/dev-guide/work-directory.md": [
         'work_dir().resolve("logs/access.log")',
@@ -215,7 +215,7 @@ FORBIDDEN_PATTERNS = {
         'Only link to existing documents; mark planned content as "(coming soon)".',
     ],
     "docs/zh-CN/dev-guide/README.md": [
-        "只链接已存在文档；规划中内容标注为“（即将推出）”。",
+        "Only link to existing documents; mark planned content as \"(coming soon)\".",
     ],
 }
 

@@ -276,6 +276,6 @@ coverage-clean: ## Remove llvm-cov profraw and coverage reports
 # =============================================================================
 # De-sinicization guard
 # =============================================================================
-.PHONY: check-no-chinese
-check-no-chinese: ## Fail if Chinese characters appear under src/ or examples/
-	./scripts/check_no_chinese.sh
+.PHONY: check-english-only
+check-english-only: ## Fail if non-English letter characters appear outside docs/ and tasks/
+	./scripts/check_english_only.sh

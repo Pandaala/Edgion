@@ -1,4 +1,4 @@
-name: check-no-chinese
+name: check-english-only
 on:
   pull_request:
   push:
@@ -11,4 +11,4 @@ jobs:
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
       - name: Run check
-        run: make check-no-chinese
+        run: make check-english-only

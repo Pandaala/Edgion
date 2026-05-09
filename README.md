@@ -1,6 +1,6 @@
 # Edgion
 
-[中文](docs/zh-CN/README.md) | English
+[Chinese](docs/zh-CN/README.md) | English
 
 ## What is Edgion?
 
@@ -29,7 +29,7 @@ A high-performance API Gateway built on [Pingora](https://github.com/cloudflare/
   - Flexible output: local file or remote Kafka / Elasticsearch
 - **Kubernetes-free deployment** — Runs standalone on bare-metal or VMs. Local file or etcd as the config backend — no Kubernetes required.
 - **Federated cluster design** — A stateless Center connects multiple Controllers across regions, enabling cluster-wide and region-level advanced routing control.
-- For full documentation, see [English Docs](docs/en/README.md) · [中文文档](docs/zh-CN/README.md).
+- For full documentation, see [English Docs](docs/en/README.md) · [Chinese Docs](docs/zh-CN/README.md).
 
 ## Architecture
 
