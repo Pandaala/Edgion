@@ -266,6 +266,12 @@ impl FileSystemWatcher {
                         match event.kind {
                             EventKind::Access(_) => {} // Ignore read-only access
                             _ => {
+                                tracing::info!(
+                                    component = "fs_watcher",
+                                    event_kind = ?event.kind,
+                                    paths = ?event.paths,
+                                    "Notify backend emitted event"
+                                );
                                 let _ = tx_clone.send(event);
                             }
                         }
@@ -368,10 +374,11 @@ impl FileSystemWatcher {
                         path: path.to_path_buf(),
                         content,
                     });
-                    tracing::debug!(
+                    tracing::info!(
                         component = "fs_watcher",
                         kind = %info.kind,
                         key = %info.key,
+                        last_kind = ?last_kind,
                         "Dispatched Apply event"
                     );
                 }
@@ -387,10 +394,11 @@ impl FileSystemWatcher {
             DispatchAction::Delete => {
                 let delete_info = format!("__DELETE__:{}:{}", info.kind, info.key);
                 let _ = sender.send(FileSystemEvent::Delete(delete_info));
-                tracing::debug!(
+                tracing::info!(
                     component = "fs_watcher",
                     kind = %info.kind,
                     key = %info.key,
+                    last_kind = ?last_kind,
                     "Dispatched Delete event"
                 );
             }

@@ -309,6 +309,13 @@ where
                                 match parse_resource_content::<K>(&content) {
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
+                                        tracing::info!(
+                                            component = "fs_resource_controller",
+                                            kind = kind,
+                                            key = %key,
+                                            path = %path.display(),
+                                            "Received runtime Apply event, enqueuing"
+                                        );
                                         self.fs_raw_store.upsert(key, Arc::new(obj.clone()));
                                         self.processor.on_apply(&obj).await;
                                     }

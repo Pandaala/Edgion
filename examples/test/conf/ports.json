@@ -121,7 +121,8 @@
     },
     "TCPRoute/StreamPlugins": {
       "tcp": 31274,
-      "tcp_filtered": 31275
+      "tcp_filtered": 31275,
+      "tcp_fail_close": 31273
     },
     "Gateway/AllowedRoutes/Selector": {
       "http": 31276

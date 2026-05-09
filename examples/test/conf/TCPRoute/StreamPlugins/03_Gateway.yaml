@@ -1,5 +1,5 @@
 # Gateway for TCPRoute StreamPlugins testing
-# 2 listeners: allow-localhost filter, deny-all filter
+# 3 listeners: allow-localhost filter, deny-all filter, missing-ESP fail-close
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -14,3 +14,6 @@ spec:
     - name: tcp-deny-all
       protocol: TCP
       port: 31275
+    - name: tcp-fail-close
+      protocol: TCP
+      port: 31273

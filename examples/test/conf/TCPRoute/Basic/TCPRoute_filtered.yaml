@@ -3,9 +3,6 @@ kind: TCPRoute
 metadata:
   name: test-tcp-filtered
   namespace: edgion-test
-  annotations:
-    # Reference EdgionStreamPlugins using annotation
-    edgion.io/edgion-stream-plugins: test-ip-filter
 spec:
   parentRefs:
     - name: tcp-test-gateway

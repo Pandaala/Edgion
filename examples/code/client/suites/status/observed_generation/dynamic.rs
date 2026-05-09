@@ -20,10 +20,31 @@ const GW: &str = "observed-gen-highfreq-gateway";
 /// and every status.listeners[*].conditions[*].observedGeneration equals
 /// metadata.generation. Returns Ok on success, Err with a diagnostic string on
 /// failure (suitable for returning from a TestCase closure).
-async fn assert_generation_converged(ctx: &TestContext) -> Result<String, String> {
+///
+/// `min_generation` guards against a false-pass where the controller cache
+/// still holds an early version (e.g. gen=1, og=1) — both fields would match
+/// and the convergence check alone would succeed before any of the rapid
+/// writes have actually been processed. Callers pass the lowest generation
+/// they require the cache to have observed (e.g. 11 after 10 iter applies).
+async fn assert_generation_converged(ctx: &TestContext, min_generation: i64) -> Result<String, String> {
     let gateway = helpers::fetch_resource_status(ctx, "Gateway", NS, GW).await?;
 
     let metadata_gen = gateway["metadata"]["generation"].as_i64();
+    match metadata_gen {
+        Some(g) if g >= min_generation => {}
+        Some(g) => {
+            return Err(format!(
+                "metadata.generation={} has not reached expected minimum {} (controller cache lagging behind file)",
+                g, min_generation
+            ));
+        }
+        None => {
+            return Err(format!(
+                "metadata.generation missing on Gateway; expected >= {}",
+                min_generation
+            ));
+        }
+    }
 
     // Top-level conditions
     let conditions = match gateway["status"]["conditions"].as_array() {
@@ -93,7 +114,9 @@ impl HighFreqInitialTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    match assert_generation_converged(&ctx).await {
+                    // Initial phase only requires the gateway exists with generation>=1
+                    // and og caught up to it.
+                    match assert_generation_converged(&ctx, 1).await {
                         Ok(msg) => TestResult::passed_with_message(start.elapsed(), msg),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
@@ -124,6 +147,11 @@ impl TestSuite for HighFreqInitialTestSuite {
 
 pub struct HighFreqFinalTestSuite;
 
+/// Final generation expected after the scenario applies iter1..=iter10.
+/// initial gen=1, each iter bumps by 1 → final gen=11. Keep in sync with the
+/// scenario loop in `dynamic/scenarios/observed_gen_high_freq.rs`.
+const FINAL_GEN: i64 = 11;
+
 impl HighFreqFinalTestSuite {
     fn test_final_generation_converged() -> TestCase {
         TestCase::new(
@@ -132,7 +160,7 @@ impl HighFreqFinalTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    match assert_generation_converged(&ctx).await {
+                    match assert_generation_converged(&ctx, FINAL_GEN).await {
                         Ok(msg) => TestResult::passed_with_message(start.elapsed(), msg),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
