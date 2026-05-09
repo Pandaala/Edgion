@@ -23,6 +23,7 @@ This document lists all built-in functions in EdgionDSL, organized by category. 
 - [Time](#time)
 - [JSON](#json)
 - [Network](#network)
+- [Redis (redis.*)](#redis-redis)
 - [Control Flow Functions](#control-flow-functions)
 - [Other Utilities](#other-utilities)
 
@@ -1443,6 +1444,239 @@ if remaining != nil {
   resp.set_header("X-Quota-Remaining", remaining)
 }
 ```
+
+---
+
+## Redis (redis.*)
+
+All `redis.*` functions are backed by a pre-configured LinkSys Redis connection pool. The connection pool is resolved at request time via the `linkSysRefs` config field. Each `redis.*` call takes a `link` (the alias name) as its first argument to identify which connection to use.
+
+**Error contract**: Every `redis.*` function returns a `Map { ok: Bool, value: <type>, error: Str | Nil }`. The function **never raises a runtime error** and **never panics**. Script authors decide how to handle failures (fail-open, fail-close, or graceful degradation).
+
+- `ok: true` — The operation succeeded; `value` holds the result; `error` is `nil`.
+- `ok: false` — A Redis connection or operation error occurred; `value` is `nil`; `error` holds the error message.
+- When the `link` parameter does not match any alias in `linkSysRefs`, returns `ok: false, error: "link 'x' not found in linkSysRefs"`.
+- When the specified link exists but is not yet ready, returns `ok: false, error: "link 'x' not ready"`.
+
+**Configuration field** (inside `config`):
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `linkSysRefs` | Vec<{namespace, name}> | Required when `redis.*` is used | List of LinkSys Redis resource references. Each element has `namespace` and `name` fields; the `name` is the alias used in `redis.*` calls. Configuring this field is mandatory if any `redis.*` builtin appears in the script; a missing `linkSysRefs` causes the plugin to fail at load time. |
+
+### redis.get
+
+**Signature**: `redis.get(link, key)` → `Map { ok: Bool, value: Str | Nil, error: Str | Nil }`
+
+Reads the value of a string key. Returns `value: nil` when the key does not exist.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+
+**Example — fail-close**:
+```
+let r = redis.get("cache", "feature:dark-mode")
+if !r["ok"] {
+  log_warn("redis error: " + r["error"])
+  return deny(503, "service unavailable")
+}
+if r["value"] == "on" {
+  req.set_header("X-Feature-Dark-Mode", "true")
+}
+```
+
+---
+
+### redis.set
+
+**Signature**: `redis.set(link, key, value)` or `redis.set(link, key, value, ttl_ms)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+Sets a string key. Optionally sets a TTL in milliseconds.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+- `value` (Str) — Value to store
+- `ttl_ms` (Int, optional) — Time-to-live in milliseconds; `nil` or `0` means no expiry
+
+**Example**:
+```
+let r = redis.set("cache", "session:" + req.header("X-Session-Id"), "active", 300000)
+if !r["ok"] {
+  log_warn("redis set failed: " + r["error"])
+}
+```
+
+---
+
+### redis.del
+
+**Signature**: `redis.del(link, key)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+Deletes a key. Returns `value: true` if the key was deleted, `value: false` if the key did not exist.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+
+---
+
+### redis.exists
+
+**Signature**: `redis.exists(link, key)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+Checks whether a key exists. Returns `value: true` if the key exists, `value: false` otherwise.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+
+---
+
+### redis.ttl
+
+**Signature**: `redis.ttl(link, key)` → `Map { ok: Bool, value: Int, error: Str | Nil }`
+
+Returns the remaining time-to-live of a key in seconds.
+
+| `value` | Meaning |
+|---------|---------|
+| `>= 0` | Remaining TTL in seconds |
+| `-1` | Key exists but has no expiry |
+| `-2` | Key does not exist |
+
+`ok: false` is returned only on a connection error.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+
+---
+
+### redis.expire
+
+**Signature**: `redis.expire(link, key, seconds)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+Sets a TTL on an existing key. Returns `value: true` if the timeout was set, `value: false` if the key does not exist.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+- `seconds` (Int) — TTL in seconds
+
+---
+
+### redis.incr
+
+**Signature**: `redis.incr(link, key)` → `Map { ok: Bool, value: Int, error: Str | Nil }`
+
+Atomically increments the integer value of a key by 1. Creates the key with value `1` if it does not exist.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+
+**Example — simple rate limiting**:
+```
+let r = redis.incr("cache", "rate:" + req.client_ip)
+if !r["ok"] {
+  log_warn("redis error: " + r["error"])
+  return deny(503, "service unavailable")
+}
+if r["value"] > 100 {
+  return deny(429, "rate limit exceeded")
+}
+```
+
+---
+
+### redis.incr_by
+
+**Signature**: `redis.incr_by(link, key, delta)` → `Map { ok: Bool, value: Int, error: Str | Nil }`
+
+Atomically increments the integer value of a key by `delta`. `delta` may be negative (acts as DECRBY).
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+- `delta` (Int) — Amount to add (may be negative)
+
+---
+
+### redis.hget
+
+**Signature**: `redis.hget(link, key, field)` → `Map { ok: Bool, value: Str | Nil, error: Str | Nil }`
+
+Gets the value of a hash field. Returns `value: nil` when the key or field does not exist.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Hash key name
+- `field` (Str) — Field name
+
+---
+
+### redis.hset
+
+**Signature**: `redis.hset(link, key, field, value)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+Sets a field in a hash. Returns `value: true` on success.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Hash key name
+- `field` (Str) — Field name
+- `value` (Str) — Field value
+
+---
+
+### redis.hdel
+
+**Signature**: `redis.hdel(link, key, field)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+Deletes a field from a hash. Returns `value: true` if the field existed and was deleted, `value: false` otherwise.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Hash key name
+- `field` (Str) — Field name
+
+---
+
+### redis.hgetall
+
+**Signature**: `redis.hgetall(link, key)` → `Map { ok: Bool, value: Map, error: Str | Nil }`
+
+Gets all fields and values of a hash. Returns an empty `Map` when the key does not exist. `ok: false` is returned only on a connection error.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Hash key name
+
+**Example**:
+```
+let r = redis.hgetall("cache", "user:config:1234")
+if r["ok"] {
+  let theme = r["value"]["theme"]
+  if theme != nil {
+    resp.set_header("X-User-Theme", theme)
+  }
+}
+```
+
+---
+
+### redis.hexists
+
+**Signature**: `redis.hexists(link, key, field)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+Checks whether a field exists in a hash. Returns `value: true` if the field exists, `value: false` otherwise.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Hash key name
+- `field` (Str) — Field name
 
 ---
 

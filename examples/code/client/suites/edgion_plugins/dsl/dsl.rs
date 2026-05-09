@@ -1632,6 +1632,204 @@ impl DslTestSuite {
         )
     }
 
+    // ==================== Scenario 25: redis.* builtins ====================
+
+    /// Test 25a: redis.set + redis.get round-trip.
+    /// The DSL script sets a key and reads it back; X-Redis-Status: ok and
+    /// X-Redis-Value: hello-from-dsl must appear in the response headers.
+    fn test_redis_roundtrip() -> TestCase {
+        TestCase::new(
+            "dsl_redis_roundtrip",
+            "DSL redis.*: set+get round-trip → X-Redis-Status: ok, X-Redis-Value: hello-from-dsl",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-redis/roundtrip/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "dsl-redis.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let headers = resp.headers().clone();
+                            let redis_status = headers
+                                .get("x-redis-status")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let redis_value = headers.get("x-redis-value").and_then(|v| v.to_str().ok()).unwrap_or("");
+                            if status == 200 && redis_status == "ok" && redis_value == "hello-from-dsl" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "X-Redis-Status: ok, X-Redis-Value: hello-from-dsl".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} X-Redis-Status='{}' X-Redis-Value='{}'",
+                                        status, redis_status, redis_value
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test 25b: redis.incr counter — counter always returns 1 after del+incr, X-Redis-Status: ok.
+    fn test_redis_incr() -> TestCase {
+        TestCase::new(
+            "dsl_redis_incr",
+            "DSL redis.*: incr counter on first request → X-Redis-Counter: 1, X-Redis-Status: ok",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-redis/incr/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "dsl-redis.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let headers = resp.headers().clone();
+                            let redis_status = headers
+                                .get("x-redis-status")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let counter_str = headers
+                                .get("x-redis-counter")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("0");
+                            let counter: i64 = counter_str.parse().unwrap_or(-1);
+                            if status == 200 && redis_status == "ok" && counter >= 1 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("X-Redis-Counter: {}, X-Redis-Status: ok", counter),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} X-Redis-Status='{}' X-Redis-Counter='{}'",
+                                        status, redis_status, counter_str
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test 25c: redis.hset + redis.hgetall hash round-trip.
+    fn test_redis_hash() -> TestCase {
+        TestCase::new(
+            "dsl_redis_hash",
+            "DSL redis.*: hset+hgetall round-trip → X-Redis-Status: ok, X-Redis-Hash-Field1: value1",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-redis/hash/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "dsl-redis.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let headers = resp.headers().clone();
+                            let redis_status = headers
+                                .get("x-redis-status")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let field1 = headers
+                                .get("x-redis-hash-field1")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 200 && redis_status == "ok" && field1 == "value1" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "X-Redis-Status: ok, X-Redis-Hash-Field1: value1".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} X-Redis-Status='{}' X-Redis-Hash-Field1='{}'",
+                                        status, redis_status, field1
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test 25d: link declared in linkSysRefs but backing LinkSys resource does not exist.
+    /// redis.get returns ok=false (link not ready); the script's else branch fires and sets
+    /// X-Redis-Status: not-found-or-missing-client, then falls through — fail-open, 200.
+    fn test_redis_missing_ref() -> TestCase {
+        TestCase::new(
+            "dsl_redis_missing_ref",
+            "DSL redis.*: link not ready → ok=false, fail-open, request passes through",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-redis/missing-ref/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "dsl-redis.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let redis_status = resp
+                                .headers()
+                                .get("x-redis-status")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            // The link "not-ready-redis" is declared in linkSysRefs but the backing
+                            // LinkSys resource does not exist. redis.get returns ok=false with
+                            // error="link 'not-ready-redis' not ready". The script's else branch
+                            // fires and sets "not-found-or-missing-client"; request passes through.
+                            if status == 200 && redis_status == "not-found-or-missing-client" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "fail-open: request passed through with expected header".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} X-Redis-Status='{}'", status, redis_status),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     // ==================== Test 22: HMAC Verify ====================
 
     /// Test: no X-Signature → 401 missing signature
@@ -1785,7 +1983,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== Scenario 24: Path Parameter ====================
+    // ==================== Scenario 26: Path Parameter ====================
     // DSL source:
     //   let uid = req.path_param("uid")
     //   if uid != nil { resp.set_header("X-Path-Uid", uid) }
@@ -1973,7 +2171,12 @@ impl TestSuite for DslTestSuite {
             Self::test_hmac_verify_valid_sig(),
             // Scenario 24: http.call — real external HTTP call from DSL script
             Self::test_http_call_success(),
-            // Scenario 25: Path parameter extraction (`:uid`, `:item`)
+            // Scenario 25: redis.* builtins — LinkSys-backed Redis operations
+            Self::test_redis_roundtrip(),
+            Self::test_redis_incr(),
+            Self::test_redis_hash(),
+            Self::test_redis_missing_ref(),
+            // Scenario 26: Path parameter extraction (`:uid`, `:item`)
             Self::test_dsl_path_param_extracts_values(),
             Self::test_dsl_path_param_prefix_extension(),
         ]

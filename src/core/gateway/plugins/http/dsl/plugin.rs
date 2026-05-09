@@ -4,6 +4,8 @@
 //! then instantiating a sandboxed VM. Execution is wrapped via execute_safe()
 //! with catch_unwind for fault isolation.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 
 use crate::core::gateway::plugins::runtime::traits::UpstreamResponseFilter;
@@ -11,10 +13,29 @@ use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFi
 use crate::types::filters::PluginRunningResult;
 
 use super::config::DslConfig;
-use super::lang::bytecode::CompiledScript;
+use super::lang::bytecode::{BuiltinId, CompiledScript, OpCode};
 use super::lang::validator::{compile_dsl_source, ValidationLimits, Validator};
 use super::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
 use super::runtime::DslRuntime;
+
+fn is_redis_builtin_id(id: BuiltinId) -> bool {
+    matches!(
+        id,
+        BuiltinId::RedisGet
+            | BuiltinId::RedisSet
+            | BuiltinId::RedisDel
+            | BuiltinId::RedisExists
+            | BuiltinId::RedisTtl
+            | BuiltinId::RedisExpire
+            | BuiltinId::RedisIncr
+            | BuiltinId::RedisIncrBy
+            | BuiltinId::RedisHGet
+            | BuiltinId::RedisHSet
+            | BuiltinId::RedisHDel
+            | BuiltinId::RedisHGetAll
+            | BuiltinId::RedisHExists
+    )
+}
 
 /// DslPlugin — runs a pre-compiled DSL script per request
 pub struct DslPlugin {
@@ -84,6 +105,55 @@ impl DslPlugin {
                 return None;
             }
         };
+        // Validate linkSysRefs config
+        if let Err(e) = config.validate() {
+            tracing::error!("DSL plugin '{}' config error: {}", config.name, e);
+            return None;
+        }
+
+        // Compile-time link-name check (best-effort heuristic):
+        // Scan bytecode for redis.* CallBuiltin at index i. The first argument
+        // (link name) is pushed deepest, at index i-argc — but only when every
+        // argument is a single-instruction push (LoadConst, GetLocal, etc.).
+        //
+        // Known limitations:
+        //   False negative: if any argument is a multi-instruction sub-expression,
+        //     i-argc lands mid-expression and the LoadConst match fails silently.
+        //     The check is skipped; runtime ok=false is the fallback.
+        //   False positive: a multi-instruction argument can shift i-argc onto an
+        //     unrelated LoadConst, causing a valid plugin to be incorrectly rejected.
+        //
+        // For a precise check, move this logic to the compiler (AST layer).
+        // For now, it catches the common case of literal link names and typos.
+        {
+            use super::lang::bytecode::Constant;
+            let valid_names: std::collections::HashSet<&str> =
+                config.linksys_refs.iter().map(|r| r.name.as_str()).collect();
+            for (i, op) in script.code.iter().enumerate() {
+                if let OpCode::CallBuiltin(id, argc) = op {
+                    if is_redis_builtin_id(*id) && *argc >= 1 {
+                        // First arg is deepest on stack; pushed argc instructions before the call
+                        // (works when all args are single-instruction pushes)
+                        let first_arg_pos = i.wrapping_sub(*argc as usize);
+                        if first_arg_pos < i {
+                            if let Some(OpCode::LoadConst(k)) = script.code.get(first_arg_pos) {
+                                if let Some(Constant::Str(link_name)) = script.constants.get(*k as usize) {
+                                    if !valid_names.contains(link_name.as_str()) {
+                                        tracing::error!(
+                                            "DSL plugin '{}': redis.* uses link '{}' which is not in linkSysRefs",
+                                            config.name,
+                                            link_name
+                                        );
+                                        return None;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let limits = VmLimits {
             max_steps: config.max_steps.unwrap_or(10_000),
             max_loop_iterations: config.max_loop_iterations.unwrap_or(100),
@@ -92,10 +162,16 @@ impl DslPlugin {
             max_string_len: config.max_string_len.unwrap_or(8192),
         };
         let policy = config.error_policy.clone().unwrap_or_default();
+        let redis_links: HashMap<String, String> = config
+            .linksys_refs
+            .iter()
+            .map(|r| (r.name.clone(), format!("{}/{}", r.namespace, r.name)))
+            .collect();
         let runtime = DslRuntime {
             max_timeout_ms: config.http_max_timeout_ms.unwrap_or(5_000),
             max_response_body_bytes: config.http_max_response_body_bytes.unwrap_or(1024 * 1024),
             block_private_ips: config.http_block_private_ips.unwrap_or(false),
+            redis_links,
         };
         Some((script, limits, policy, runtime))
     }

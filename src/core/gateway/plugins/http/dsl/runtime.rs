@@ -1,5 +1,6 @@
 //! DslRuntime — per-request execution context for external capabilities
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// Per-execution limits for external calls, constructed at request time from DslConfig.
@@ -11,6 +12,10 @@ pub struct DslRuntime {
     /// When true, http.call rejects URLs whose host resolves to a private/loopback IP.
     /// Covers direct IP literals; hostname-based SSRF requires network-level egress controls.
     pub block_private_ips: bool,
+    /// Maps script alias → "namespace/name" key for get_redis_client() lookups.
+    /// Built once from linkSysRefs at plugin load time.
+    /// Client is resolved per-call (ArcSwap read) — matches rate_limit_redis pattern.
+    pub redis_links: HashMap<String, String>,
 }
 
 impl Default for DslRuntime {
@@ -19,6 +24,7 @@ impl Default for DslRuntime {
             max_timeout_ms: 5_000,
             max_response_body_bytes: 1024 * 1024, // 1 MB
             block_private_ips: false,
+            redis_links: HashMap::new(),
         }
     }
 }

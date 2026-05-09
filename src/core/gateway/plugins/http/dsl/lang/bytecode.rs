@@ -210,6 +210,34 @@ pub enum BuiltinId {
     // External capabilities
     /// `http.call(method, url, body [, timeout_ms [, headers_map]])` → Map
     HttpCall,
+
+    // Redis builtins — backed by LinkSys Redis connection pool
+    /// `redis.get(link, key)` → Map { ok: Bool, value: Str|Nil, error: Str|Nil }
+    RedisGet,
+    /// `redis.set(link, key, value)` or `redis.set(link, key, value, ttl_ms)` → Map { ok: Bool, value: Bool, error: Str|Nil }
+    RedisSet,
+    /// `redis.del(link, key)` → Map { ok: Bool, value: Bool, error: Str|Nil }
+    RedisDel,
+    /// `redis.exists(link, key)` → Map { ok: Bool, value: Bool, error: Str|Nil }
+    RedisExists,
+    /// `redis.ttl(link, key)` → Map { ok: Bool, value: Int, error: Str|Nil }. Returns -1 if key has no expiry, -2 if key does not exist.
+    RedisTtl,
+    /// `redis.expire(link, key, seconds)` → Map { ok: Bool, value: Bool, error: Str|Nil }
+    RedisExpire,
+    /// `redis.incr(link, key)` → Map { ok: Bool, value: Int, error: Str|Nil }
+    RedisIncr,
+    /// `redis.incr_by(link, key, delta)` → Map { ok: Bool, value: Int, error: Str|Nil }
+    RedisIncrBy,
+    /// `redis.hget(link, key, field)` → Map { ok: Bool, value: Str|Nil, error: Str|Nil }
+    RedisHGet,
+    /// `redis.hset(link, key, field, value)` → Map { ok: Bool, value: Bool, error: Str|Nil }
+    RedisHSet,
+    /// `redis.hdel(link, key, field)` → Map { ok: Bool, value: Bool, error: Str|Nil }
+    RedisHDel,
+    /// `redis.hgetall(link, key)` → Map { ok: Bool, value: Map, error: Str|Nil }
+    RedisHGetAll,
+    /// `redis.hexists(link, key, field)` → Map { ok: Bool, value: Bool, error: Str|Nil }
+    RedisHExists,
 }
 
 /// Constant pool entry

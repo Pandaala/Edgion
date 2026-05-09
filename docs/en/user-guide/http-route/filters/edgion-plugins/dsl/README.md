@@ -56,8 +56,10 @@ spec:
 | `httpMaxTimeoutMs` | Integer | ❌ | `5000` | Hard cap on `http.call()` timeout per request (ms) |
 | `httpMaxResponseBodyBytes` | Integer | ❌ | `1048576` | Maximum `http.call()` response body size (bytes) |
 | `httpBlockPrivateIps` | Boolean | ❌ | `false` | Block `http.call()` to private/loopback/link-local IPs |
+| `linkSysRefs` | Vec<{namespace, name}> | ❌† | `[]` | List of LinkSys Redis resources. Each `name` is the alias used as the first arg to `redis.*` calls |
 
 \* `source` and `bytecode` are mutually exclusive; at least one must be provided.
+† `linkSysRefs` is required if any `redis.*` builtin appears in the script; the plugin fails at load time if absent.
 
 ## Error Policies
 

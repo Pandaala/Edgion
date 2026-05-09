@@ -3,6 +3,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::types::resources::edgion_plugins::plugin_configs::LinkSysRef;
+
 use super::lang::vm::DslErrorPolicy;
 
 /// DSL plugin configuration — stored in EdgionPlugin enum
@@ -77,4 +79,33 @@ pub struct DslConfig {
     /// Hostname-based SSRF still requires network-level egress controls. (default: false)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_block_private_ips: Option<bool>,
+
+    /// LinkSys resources accessible to `redis.*` builtins in this script.
+    /// Each entry's `name` is the alias used as the first argument to redis.* calls.
+    /// Names must be unique within this list; allowed chars: a-z 0-9 - _
+    #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "linkSysRefs")]
+    pub linksys_refs: Vec<LinkSysRef>,
+}
+
+impl DslConfig {
+    /// Validate linkSysRefs: names must be unique and contain only [a-z0-9_-].
+    pub fn validate(&self) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        for r in &self.linksys_refs {
+            if r.name.is_empty() {
+                return Err("linkSysRefs: name must not be empty".to_string());
+            }
+            if !r
+                .name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+            {
+                return Err(format!("linkSysRefs: invalid name '{}' (allowed: a-z 0-9 - _)", r.name));
+            }
+            if !seen.insert(r.name.as_str()) {
+                return Err(format!("linkSysRefs: duplicate name '{}'", r.name));
+            }
+        }
+        Ok(())
+    }
 }

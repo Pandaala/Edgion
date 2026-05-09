@@ -65,6 +65,21 @@ pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<
         // http.*
         ("http", "call") => Some(BuiltinId::HttpCall),
 
+        // redis.*
+        ("redis", "get") => Some(BuiltinId::RedisGet),
+        ("redis", "set") => Some(BuiltinId::RedisSet),
+        ("redis", "del") => Some(BuiltinId::RedisDel),
+        ("redis", "exists") => Some(BuiltinId::RedisExists),
+        ("redis", "ttl") => Some(BuiltinId::RedisTtl),
+        ("redis", "expire") => Some(BuiltinId::RedisExpire),
+        ("redis", "incr") => Some(BuiltinId::RedisIncr),
+        ("redis", "incr_by") => Some(BuiltinId::RedisIncrBy),
+        ("redis", "hget") => Some(BuiltinId::RedisHGet),
+        ("redis", "hset") => Some(BuiltinId::RedisHSet),
+        ("redis", "hdel") => Some(BuiltinId::RedisHDel),
+        ("redis", "hgetall") => Some(BuiltinId::RedisHGetAll),
+        ("redis", "hexists") => Some(BuiltinId::RedisHExists),
+
         _ => None,
     }
 }
@@ -154,5 +169,21 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> Option<usize> {
 
         // http.call: 3-5 args — variadic, runtime validates
         BuiltinId::HttpCall => None,
+
+        // redis.*: fixed-arity per function (each takes link alias as first argument)
+        BuiltinId::RedisGet => Some(2),
+        BuiltinId::RedisDel => Some(2),
+        BuiltinId::RedisExists => Some(2),
+        BuiltinId::RedisTtl => Some(2),
+        BuiltinId::RedisIncr => Some(2),
+        BuiltinId::RedisHGetAll => Some(2),
+        BuiltinId::RedisExpire => Some(3),
+        BuiltinId::RedisIncrBy => Some(3),
+        BuiltinId::RedisHGet => Some(3),
+        BuiltinId::RedisHDel => Some(3),
+        BuiltinId::RedisHExists => Some(3),
+        BuiltinId::RedisHSet => Some(4),
+        // redis.set: 3 or 4 args (link, key, value [, ttl_ms]) — variadic, runtime validates
+        BuiltinId::RedisSet => None,
     }
 }

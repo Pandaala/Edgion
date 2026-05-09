@@ -4,7 +4,10 @@
 //! Each builtin maps to exactly one PluginSession API call.
 
 use indexmap::IndexMap;
+use std::sync::Arc;
 
+use crate::core::gateway::link_sys::providers::redis::RedisLinkClient;
+use crate::core::gateway::link_sys::runtime::store::get_redis_client;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession};
 
 use super::super::runtime::{dsl_http_client, DslRuntime};
@@ -12,6 +15,24 @@ use super::bytecode::BuiltinId;
 use super::error::RuntimeError;
 use super::value::Value;
 use super::vm::{Vm, VmState};
+
+/// Build a `Map { ok: true, value: <val>, error: nil }` success response for redis.* builtins.
+fn redis_ok(value: Value) -> Value {
+    let mut m = IndexMap::new();
+    m.insert("ok".to_string(), Value::Bool(true));
+    m.insert("value".to_string(), value);
+    m.insert("error".to_string(), Value::Nil);
+    Value::Map(m)
+}
+
+/// Build a `Map { ok: false, value: nil, error: <msg> }` error response for redis.* builtins.
+fn redis_err(msg: String) -> Value {
+    let mut m = IndexMap::new();
+    m.insert("ok".to_string(), Value::Bool(false));
+    m.insert("value".to_string(), Value::Nil);
+    m.insert("error".to_string(), Value::Str(msg));
+    Value::Map(m)
+}
 
 /// Check that a string result doesn't exceed the VM's max_string_len limit.
 fn check_string_len(s: &str, limit: usize) -> Result<(), RuntimeError> {
@@ -762,6 +783,23 @@ impl Vm {
             BuiltinId::HttpCall => Err(RuntimeError::Internal {
                 message: "HttpCall must be dispatched via call_builtin_http, not call_builtin".into(),
             }),
+
+            // redis.* builtins are dispatched asynchronously by the VM before reaching call_builtin
+            BuiltinId::RedisGet
+            | BuiltinId::RedisSet
+            | BuiltinId::RedisDel
+            | BuiltinId::RedisExists
+            | BuiltinId::RedisTtl
+            | BuiltinId::RedisExpire
+            | BuiltinId::RedisIncr
+            | BuiltinId::RedisIncrBy
+            | BuiltinId::RedisHGet
+            | BuiltinId::RedisHSet
+            | BuiltinId::RedisHDel
+            | BuiltinId::RedisHGetAll
+            | BuiltinId::RedisHExists => Err(RuntimeError::Internal {
+                message: format!("{:?} must be dispatched via call_builtin_redis, not call_builtin", id),
+            }),
         }
     }
 
@@ -920,6 +958,271 @@ impl Vm {
         result.insert("headers".to_string(), Value::Map(resp_headers));
 
         Ok(Value::Map(result))
+    }
+}
+
+/// Resolve a Redis client from the runtime store using the link alias.
+///
+/// Looks up the alias in `runtime.redis_links` to get the "namespace/name" key,
+/// then calls `get_redis_client` to retrieve the live client from the ArcSwap store.
+/// Returns `Err(redis_err(...))` — i.e. `Ok(redis_err(...))` at the call site — on failure.
+fn resolve_redis_client(link_name: &str, runtime: &DslRuntime) -> Result<Arc<RedisLinkClient>, Value> {
+    let ns_name = match runtime.redis_links.get(link_name) {
+        Some(k) => k.clone(),
+        None => return Err(redis_err(format!("link '{}' not found in linkSysRefs", link_name))),
+    };
+    match get_redis_client(&ns_name) {
+        Some(c) => Ok(c),
+        None => Err(redis_err(format!("link '{}' not ready", link_name))),
+    }
+}
+
+/// Async handler for all `redis.*` builtins.
+///
+/// Never panics, never raises a runtime error. Every call returns
+/// `Map { ok: Bool, value: <type>, error: Str|Nil }` so script authors decide
+/// how to handle failures (fail-open, fail-close, or graceful degradation).
+///
+/// Each builtin takes a link alias as its first argument. The client is resolved
+/// per-call via `resolve_redis_client` which looks up the alias in `runtime.redis_links`.
+impl Vm {
+    pub(crate) async fn call_builtin_redis(
+        &self,
+        id: BuiltinId,
+        argc: u8,
+        state: &mut VmState,
+        runtime: &DslRuntime,
+    ) -> Result<Value, RuntimeError> {
+        match id {
+            // ===== Basic KV =====
+            BuiltinId::RedisGet => {
+                // redis.get(link, key)
+                let key = state.pop()?.into_string();
+                let link = state.pop()?.into_string();
+                let client = match resolve_redis_client(&link, runtime) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(e),
+                };
+                match client.get(&key).await {
+                    Ok(Some(v)) => Ok(redis_ok(Value::Str(v))),
+                    Ok(None) => Ok(redis_ok(Value::Nil)),
+                    Err(e) => Ok(redis_err(e.to_string())),
+                }
+            }
+            BuiltinId::RedisSet => {
+                // redis.set(link, key, value) or redis.set(link, key, value, ttl_ms)
+                if !(3..=4).contains(&(argc as usize)) {
+                    return Ok(redis_err(format!("redis.set requires 3 or 4 arguments, got {}", argc)));
+                }
+                let ttl_ms_val = if argc == 4 { Some(state.pop()?) } else { None };
+                let value = state.pop()?.into_string();
+                let key = state.pop()?.into_string();
+                let link = state.pop()?.into_string();
+                let client = match resolve_redis_client(&link, runtime) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(e),
+                };
+                let result = match ttl_ms_val {
+                    None => client.set(&key, &value, None).await,
+                    Some(Value::Nil) => client.set(&key, &value, None).await,
+                    Some(Value::Int(ms)) if ms > 0 => client.set_px(&key, &value, ms as u64).await,
+                    Some(Value::Int(_)) => client.set(&key, &value, None).await,
+                    Some(other) => {
+                        return Ok(redis_err(format!(
+                            "redis.set ttl_ms must be Int or Nil, got {}",
+                            other.type_name()
+                        )));
+                    }
+                };
+                match result {
+                    Ok(()) => Ok(redis_ok(Value::Bool(true))),
+                    Err(e) => Ok(redis_err(e.to_string())),
+                }
+            }
+            BuiltinId::RedisDel => {
+                // redis.del(link, key)
+                let key = state.pop()?.into_string();
+                let link = state.pop()?.into_string();
+                let client = match resolve_redis_client(&link, runtime) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(e),
+                };
+                match client.del(&[key.as_str()]).await {
+                    Ok(count) => Ok(redis_ok(Value::Bool(count > 0))),
+                    Err(e) => Ok(redis_err(e.to_string())),
+                }
+            }
+            BuiltinId::RedisExists => {
+                // redis.exists(link, key)
+                let key = state.pop()?.into_string();
+                let link = state.pop()?.into_string();
+                let client = match resolve_redis_client(&link, runtime) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(e),
+                };
+                match client.exists(&key).await {
+                    Ok(b) => Ok(redis_ok(Value::Bool(b))),
+                    Err(e) => Ok(redis_err(e.to_string())),
+                }
+            }
+            BuiltinId::RedisTtl => {
+                // redis.ttl(link, key)
+                let key = state.pop()?.into_string();
+                let link = state.pop()?.into_string();
+                let client = match resolve_redis_client(&link, runtime) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(e),
+                };
+                // TTL: -1 = no expiry, -2 = key not found; ok=false only on connection error
+                match client.ttl(&key).await {
+                    Ok(v) => Ok(redis_ok(Value::Int(v))),
+                    Err(e) => Ok(redis_err(e.to_string())),
+                }
+            }
+            BuiltinId::RedisExpire => {
+                // redis.expire(link, key, seconds)
+                let seconds_val = state.pop()?;
+                let key = state.pop()?.into_string();
+                let link = state.pop()?.into_string();
+                let seconds = match &seconds_val {
+                    Value::Int(n) => *n,
+                    other => {
+                        return Ok(redis_err(format!(
+                            "redis.expire seconds must be Int, got {}",
+                            other.type_name()
+                        )));
+                    }
+                };
+                let client = match resolve_redis_client(&link, runtime) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(e),
+                };
+                match client.expire(&key, seconds).await {
+                    Ok(b) => Ok(redis_ok(Value::Bool(b))),
+                    Err(e) => Ok(redis_err(e.to_string())),
+                }
+            }
+            BuiltinId::RedisIncr => {
+                // redis.incr(link, key)
+                let key = state.pop()?.into_string();
+                let link = state.pop()?.into_string();
+                let client = match resolve_redis_client(&link, runtime) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(e),
+                };
+                match client.incr(&key).await {
+                    Ok(v) => Ok(redis_ok(Value::Int(v))),
+                    Err(e) => Ok(redis_err(e.to_string())),
+                }
+            }
+            BuiltinId::RedisIncrBy => {
+                // redis.incr_by(link, key, delta)
+                let delta_val = state.pop()?;
+                let key = state.pop()?.into_string();
+                let link = state.pop()?.into_string();
+                let delta = match &delta_val {
+                    Value::Int(n) => *n,
+                    other => {
+                        return Ok(redis_err(format!(
+                            "redis.incr_by delta must be Int, got {}",
+                            other.type_name()
+                        )));
+                    }
+                };
+                let client = match resolve_redis_client(&link, runtime) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(e),
+                };
+                match client.incr_by(&key, delta).await {
+                    Ok(v) => Ok(redis_ok(Value::Int(v))),
+                    Err(e) => Ok(redis_err(e.to_string())),
+                }
+            }
+
+            // ===== Hash =====
+            BuiltinId::RedisHGet => {
+                // redis.hget(link, key, field)
+                let field = state.pop()?.into_string();
+                let key = state.pop()?.into_string();
+                let link = state.pop()?.into_string();
+                let client = match resolve_redis_client(&link, runtime) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(e),
+                };
+                match client.hget(&key, &field).await {
+                    Ok(Some(v)) => Ok(redis_ok(Value::Str(v))),
+                    Ok(None) => Ok(redis_ok(Value::Nil)),
+                    Err(e) => Ok(redis_err(e.to_string())),
+                }
+            }
+            BuiltinId::RedisHSet => {
+                // redis.hset(link, key, field, value)
+                let val = state.pop()?.into_string();
+                let field = state.pop()?.into_string();
+                let key = state.pop()?.into_string();
+                let link = state.pop()?.into_string();
+                let client = match resolve_redis_client(&link, runtime) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(e),
+                };
+                match client.hset(&key, &field, &val).await {
+                    Ok(_count) => Ok(redis_ok(Value::Bool(true))),
+                    Err(e) => Ok(redis_err(e.to_string())),
+                }
+            }
+            BuiltinId::RedisHDel => {
+                // redis.hdel(link, key, field)
+                let field = state.pop()?.into_string();
+                let key = state.pop()?.into_string();
+                let link = state.pop()?.into_string();
+                let client = match resolve_redis_client(&link, runtime) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(e),
+                };
+                match client.hdel(&key, &[field.as_str()]).await {
+                    Ok(count) => Ok(redis_ok(Value::Bool(count > 0))),
+                    Err(e) => Ok(redis_err(e.to_string())),
+                }
+            }
+            BuiltinId::RedisHGetAll => {
+                // redis.hgetall(link, key)
+                let key = state.pop()?.into_string();
+                let link = state.pop()?.into_string();
+                let client = match resolve_redis_client(&link, runtime) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(e),
+                };
+                match client.hgetall(&key).await {
+                    Ok(map) => {
+                        let mut result: IndexMap<String, Value> = IndexMap::new();
+                        for (k, v) in map {
+                            result.insert(k, Value::Str(v));
+                        }
+                        Ok(redis_ok(Value::Map(result)))
+                    }
+                    Err(e) => Ok(redis_err(e.to_string())),
+                }
+            }
+            BuiltinId::RedisHExists => {
+                // redis.hexists(link, key, field)
+                let field = state.pop()?.into_string();
+                let key = state.pop()?.into_string();
+                let link = state.pop()?.into_string();
+                let client = match resolve_redis_client(&link, runtime) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(e),
+                };
+                match client.hexists(&key, &field).await {
+                    Ok(b) => Ok(redis_ok(Value::Bool(b))),
+                    Err(e) => Ok(redis_err(e.to_string())),
+                }
+            }
+
+            // All other builtins are not Redis builtins and should not reach here
+            _ => Err(RuntimeError::Internal {
+                message: format!("{:?} must not be dispatched via call_builtin_redis", id),
+            }),
+        }
     }
 }
 

@@ -56,8 +56,10 @@ spec:
 | `httpMaxTimeoutMs` | Integer | ❌ | `5000` | `http.call()` 单次调用超时上限（毫秒） |
 | `httpMaxResponseBodyBytes` | Integer | ❌ | `1048576` | `http.call()` 响应体最大字节数 |
 | `httpBlockPrivateIps` | Boolean | ❌ | `false` | 拦截 `http.call()` 对私有/回环/链路本地 IP 的调用 |
+| `linkSysRefs` | Vec<{namespace, name}> | ❌† | `[]` | LinkSys Redis 资源列表。每个 `name` 是作为 `redis.*` 调用第一个参数的别名 |
 
 \* `source` 和 `bytecode` 二选一，至少提供一个。
+† `linkSysRefs` 在脚本中使用了任何 `redis.*` 函数时为必填项；若缺失，插件在加载时会失败。
 
 ## 错误策略
 

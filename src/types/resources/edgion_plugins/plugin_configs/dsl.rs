@@ -46,6 +46,9 @@ impl PluginValidation for DslConfig {
                 return Some("errorPolicy denyWith status must be between 100 and 599".to_string());
             }
         }
+        if let Err(e) = self.validate() {
+            return Some(e);
+        }
         None
     }
 }
