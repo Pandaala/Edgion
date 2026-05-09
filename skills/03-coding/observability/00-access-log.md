@@ -193,6 +193,16 @@ log.push(&format!("OIDC token refresh failed: {}", jwt_err));
 log.push(&format!("Auth failed for user {}", username));
 ```
 
+### Optional `alias` field
+
+Each `PluginLog` may carry an optional operator-defined `alias` (echoed verbatim from the corresponding `EdgionPlugins` entry's `alias` field). When present, it serializes as a sibling field to `name`:
+
+```json
+{ "name": "KeyAuth", "alias": "auth-internal", "time_cost": 42, "log": "OK u=jack; " }
+```
+
+Use it to distinguish multiple entries of the same plugin type. The alias is stored independently of the 100-byte LogBuffer used by `push` / `push_err`, so adding an alias does **not** reduce buffer space available for plugin log entries. Allowed character set: `[a-zA-Z0-9._-]`, length 1–32.
+
 ### Buffer limit
 
 `PluginLog` has a fixed-size buffer (default 100 bytes). Each entry should stay within **20~40 bytes** to leave room for multiple plugins to write together. Anything beyond the buffer is truncated.

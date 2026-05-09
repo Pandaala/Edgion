@@ -8,12 +8,14 @@
 //   02_EdgionPlugins_ep-validation-cors-invalid.yaml            — Cors: allowCredentials=true + wildcard origin
 //   03_EdgionPlugins_ep-validation-direct-endpoint-invalid.yaml — DirectEndpoint: invalid extract regex
 //   04_EdgionPlugins_ep-validation-rate-limit-invalid.yaml      — RateLimit: rate=0
+//   05_EdgionPlugins_ep-validation-alias-invalid.yaml           — Cors entry with alias containing a space
 //
 // Scenarios:
 //   1. jwt_auth_invalid   → Accepted=False/Invalid, message contains "secretRef"
-//   2. cors_invalid       → Accepted=False/Invalid, message contains "allowCredentials"
+//   2. cors_invalid       → Accepted=False/Invalid, message contains "allow_credentials"
 //   3. direct_ep_invalid  → Accepted=False/Invalid, message contains "regex"
 //   4. rate_limit_invalid → Accepted=False/Invalid, message contains "rate"
+//   5. alias_invalid      → Accepted=False/Invalid, message contains "alias"
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -143,9 +145,10 @@ impl PluginValidationStatusTestSuite {
             "cors_invalid",
             "Cors 'ep-validation-cors-invalid': credentials + wildcard → Accepted=False/Invalid",
             |ctx: TestContext| {
-                Box::pin(
-                    async move { assert_accepted_false(&ctx, "ep-validation-cors-invalid", "allowCredentials").await },
-                )
+                Box::pin(async move {
+                    // Runtime error message uses snake_case "allow_credentials".
+                    assert_accepted_false(&ctx, "ep-validation-cors-invalid", "allow_credentials").await
+                })
             },
         )
     }
@@ -179,6 +182,21 @@ impl PluginValidationStatusTestSuite {
             },
         )
     }
+
+    // =========================================================================
+    // Scenario 5: Plugin entry with invalid alias (contains space)
+    //             → Accepted=False/Invalid
+    // =========================================================================
+
+    fn alias_invalid() -> TestCase {
+        TestCase::new(
+            "alias_invalid",
+            "Entry 'ep-validation-alias-invalid': alias has a space → Accepted=False/Invalid",
+            |ctx: TestContext| {
+                Box::pin(async move { assert_accepted_false(&ctx, "ep-validation-alias-invalid", "alias").await })
+            },
+        )
+    }
 }
 
 impl TestSuite for PluginValidationStatusTestSuite {
@@ -192,6 +210,7 @@ impl TestSuite for PluginValidationStatusTestSuite {
             Self::cors_invalid(),
             Self::direct_endpoint_invalid(),
             Self::rate_limit_invalid(),
+            Self::alias_invalid(),
         ]
     }
 }

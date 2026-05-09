@@ -871,13 +871,21 @@ async fn catch_all_handler(
     Extension(server_addr): Extension<String>,
     req: AxumRequest<Body>,
 ) -> impl IntoResponse {
-    format!(
+    let mut resp = format!(
         "Server: {}\nClient: {}\nMethod: {}\nPath: {}\n",
         server_addr,
         addr,
         req.method(),
         req.uri().path()
-    )
+    );
+    // Echo headers in the same format as `echo_handler` so plugin tests that
+    // rewrite the URI to an unmapped path can still verify header rewrites.
+    resp.push_str("\nHeaders:\n");
+    for (key, value) in req.headers() {
+        let display = display_header_name(key.as_str());
+        resp.push_str(&format!("  {}: {}\n", display, value.to_str().unwrap_or("<invalid>")));
+    }
+    resp
 }
 
 // ============================================================================

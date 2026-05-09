@@ -133,7 +133,10 @@ fn test_http_call_block_private_ips_rejects_loopback() {
         let http_resp = http.call("GET", "http://127.0.0.1:1", nil)
         return next()
     "#;
-    let runtime = DslRuntime { block_private_ips: true, ..DslRuntime::default() };
+    let runtime = DslRuntime {
+        block_private_ips: true,
+        ..DslRuntime::default()
+    };
     let result = run_with_runtime(source, MockPluginSession::new(), runtime);
     assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
 }
@@ -144,7 +147,10 @@ fn test_http_call_block_private_ips_rejects_ipv4_mapped_ipv6() {
         let http_resp = http.call("GET", "http://[::ffff:192.168.1.1]:80", nil)
         return next()
     "#;
-    let runtime = DslRuntime { block_private_ips: true, ..DslRuntime::default() };
+    let runtime = DslRuntime {
+        block_private_ips: true,
+        ..DslRuntime::default()
+    };
     let result = run_with_runtime(source, MockPluginSession::new(), runtime);
     assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
 }

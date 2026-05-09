@@ -90,7 +90,13 @@ pub(super) fn run_with_runtime(source: &str, session: MockPluginSession, runtime
         .enable_all()
         .build()
         .unwrap()
-        .block_on(execute_safe(&vm, &mut s as &mut dyn PluginSession, &mut log, &DslErrorPolicy::Deny, &runtime))
+        .block_on(execute_safe(
+            &vm,
+            &mut s as &mut dyn PluginSession,
+            &mut log,
+            &DslErrorPolicy::Deny,
+            &runtime,
+        ))
 }
 
 /// Synchronous wrapper for execute_safe — for #[test] (non-async) contexts.

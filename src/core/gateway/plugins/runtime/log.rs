@@ -84,6 +84,13 @@ pub struct PluginLog {
     /// Plugin name (pre-allocated with capacity 36)
     pub name: String,
 
+    /// Operator-defined label propagated from the EdgionPlugins entry's
+    /// `alias` field. Independent of `name`. Stored separately from the
+    /// 100-byte LogBuffer so it never reduces buffer space available to
+    /// `push` / `push_err`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+
     /// Time cost in microseconds (us), None if not measured
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_cost: Option<u64>,
@@ -118,6 +125,7 @@ impl PluginLog {
 
         Self {
             name: n,
+            alias: None,
             time_cost: None,
             cond_skip: None,
             log: None,
@@ -125,6 +133,15 @@ impl PluginLog {
             log_full: None,
             refer_to: None,
         }
+    }
+
+    /// Construct a PluginLog carrying both the type-name and an optional
+    /// operator-defined alias. `alias = None` is equivalent to `new(name)`.
+    #[inline]
+    pub fn with_alias(name: &str, alias: Option<&str>) -> Self {
+        let mut log = Self::new(name);
+        log.alias = alias.map(|s| s.to_owned());
+        log
     }
 
     /// Push to fixed buffer (recommended for non-error paths).
@@ -707,6 +724,31 @@ mod tests {
 
         let json = serde_json::to_string(&logs).unwrap();
         assert_eq!(json, "[]");
+    }
+
+    #[test]
+    fn plugin_log_alias_field_serializes_only_when_set() {
+        // alias unset -> field omitted
+        let log_no_alias = PluginLog::new("KeyAuth");
+        let json = serde_json::to_string(&log_no_alias).unwrap();
+        assert!(!json.contains("alias"), "alias must be omitted when None: {json}");
+
+        // alias set via with_alias -> field present and verbatim
+        let log_with_alias = PluginLog::with_alias("KeyAuth", Some("auth-internal"));
+        let json = serde_json::to_string(&log_with_alias).unwrap();
+        assert!(
+            json.contains(r#""alias":"auth-internal""#),
+            "alias must serialize verbatim: {json}"
+        );
+        assert_eq!(log_with_alias.name, "KeyAuth");
+
+        // with_alias(name, None) is equivalent to new(name)
+        let log_none = PluginLog::with_alias("KeyAuth", None);
+        let json = serde_json::to_string(&log_none).unwrap();
+        assert!(
+            !json.contains("alias"),
+            "alias must be omitted when with_alias passed None: {json}"
+        );
     }
 
     #[test]

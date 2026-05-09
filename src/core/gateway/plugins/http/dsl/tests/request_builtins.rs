@@ -279,3 +279,36 @@ fn req_request_uri_returns_entry_raw() {
     let result = run(r#"req.set_header("X-RU", req.request_uri)"#, session);
     assert_eq!(result, good_next());
 }
+
+#[test]
+fn test_req_path_param_present() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_get_path_param()
+        .withf(|k| k == "uid")
+        .returning(|_| Some("789".to_string()));
+    session
+        .expect_set_request_header()
+        .withf(|h, v| h == "X-Uid" && v == "789")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run(
+        "let u = req.path_param(\"uid\")\nif u != nil { req.set_header(\"X-Uid\", u) }",
+        session,
+    );
+    assert_eq!(result, good_next());
+}
+
+#[test]
+fn test_req_path_param_absent() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_get_path_param()
+        .withf(|k| k == "missing")
+        .returning(|_| None);
+    let result = run(
+        "let u = req.path_param(\"missing\")\nif u != nil { req.set_header(\"X-Uid\", u) }",
+        session,
+    );
+    assert_eq!(result, good_next());
+}

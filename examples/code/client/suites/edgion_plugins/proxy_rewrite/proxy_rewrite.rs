@@ -398,9 +398,11 @@ impl TestSuite for ProxyRewriteTestSuite {
             Self::test_uri_var(),
             Self::test_uri_arg(),
             Self::test_regex_uri(),
-            // combined  path_param ：
-            // - combined: test_server  Headers， Headers
-            // - path_param: （:uid ）
+            // Path parameter extraction via `:uid` route syntax.
+            // The matched HTTPRoute uses `value: /params/:uid/info` so the radix
+            // matcher records `uid` in `ctx.path_params`, which ProxyRewrite then
+            // substitutes into URI / header templates as `$uid`.
+            Self::test_path_param(),
         ]
     }
 }

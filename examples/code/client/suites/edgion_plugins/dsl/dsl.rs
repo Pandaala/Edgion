@@ -1784,6 +1784,134 @@ impl DslTestSuite {
             },
         )
     }
+
+    // ==================== Scenario 24: Path Parameter ====================
+    // DSL source:
+    //   let uid = req.path_param("uid")
+    //   if uid != nil { resp.set_header("X-Path-Uid", uid) }
+    //   let item = req.path_param("item")
+    //   if item != nil { resp.set_header("X-Path-Item", item) }
+    //   let missing = req.path_param("missing")
+    //   if missing == nil { resp.set_header("X-Path-Missing", "nil") }
+    //
+    // Route: /test/dsl-path-param/users/:uid/items/:item (PathPrefix)
+    // Request: /test/dsl-path-param/users/42/items/book-7
+    // Expected: X-Path-Uid=42, X-Path-Item=book-7, X-Path-Missing=nil
+
+    fn test_dsl_path_param_extracts_values() -> TestCase {
+        TestCase::new(
+            "dsl_path_param_extracts_values",
+            "DSL: req.path_param(\"uid\")/path_param(\"item\") returns extracted values",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!(
+                        "http://{}:31180/test/dsl-path-param/users/42/items/book-7",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-path-param.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let uid = resp
+                                .headers()
+                                .get("x-path-uid")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            let item = resp
+                                .headers()
+                                .get("x-path-item")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            let missing = resp
+                                .headers()
+                                .get("x-path-missing")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            if status == 200 && uid == "42" && item == "book-7" && missing == "nil" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("uid={} item={} missing={}", uid, item, missing),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} uid='{}' item='{}' missing='{}'", status, uid, item, missing),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// PathPrefix segment-boundary regression guard.
+    ///
+    /// Route is `PathPrefix /test/dsl-path-param/users/:uid/items/:item` and
+    /// the request appends `/extra` after the matched prefix. The radix
+    /// matcher must still bind `:item=book-7` (not `book-7/extra`), and the
+    /// route must still match (i.e. PathPrefix allows further suffix segments
+    /// beyond the template).
+    fn test_dsl_path_param_prefix_extension() -> TestCase {
+        TestCase::new(
+            "dsl_path_param_prefix_extension",
+            "DSL: PathPrefix `:item` binds the segment, not the trailing suffix",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!(
+                        "http://{}:31180/test/dsl-path-param/users/42/items/book-7/extra",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-path-param.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let uid = resp
+                                .headers()
+                                .get("x-path-uid")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            let item = resp
+                                .headers()
+                                .get("x-path-item")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            if status == 200 && uid == "42" && item == "book-7" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("uid={} item={} (suffix /extra ignored)", uid, item),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} uid='{}' item='{}'", status, uid, item),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for DslTestSuite {
@@ -1845,6 +1973,9 @@ impl TestSuite for DslTestSuite {
             Self::test_hmac_verify_valid_sig(),
             // Scenario 24: http.call — real external HTTP call from DSL script
             Self::test_http_call_success(),
+            // Scenario 25: Path parameter extraction (`:uid`, `:item`)
+            Self::test_dsl_path_param_extracts_values(),
+            Self::test_dsl_path_param_prefix_extension(),
         ]
     }
 }

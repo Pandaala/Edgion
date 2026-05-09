@@ -32,6 +32,16 @@ pub trait UpstreamResponseBodyFilter: Send + Sync {
     /// Get the filter name
     fn name(&self) -> &str;
 
+    /// Optional operator-defined alias.
+    ///
+    /// Default returns `None`; the conditional wrappers in
+    /// `conditional_filter.rs` are the only impls that override this to
+    /// surface the value supplied via the EdgionPlugins entry's `alias`
+    /// field. Plain plugin impls do not need to implement this.
+    fn alias(&self) -> Option<&str> {
+        None
+    }
+
     /// Run the upstream response body filter (sync)
     ///
     /// Called for each body chunk received from upstream.

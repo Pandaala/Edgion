@@ -1441,6 +1441,52 @@ main() {
     if $test_failed; then
         log_error "Some tests failed"
         log_info "View detailed logs: ${TEST_LOG_DIR}"
+        # Enumerate failures: each *.log under TEST_LOG_DIR, scan for "✗" lines
+        # plus the next non-blank line (typically the failure detail).
+        if [ -d "${TEST_LOG_DIR}" ]; then
+            local found_any=false
+            for log_file in "${TEST_LOG_DIR}"/*.log; do
+                [ -f "$log_file" ] || continue
+                # Capture failure markers from BOTH suite tests (✗ <name>) and
+                # dynamic scenarios (Error: ...). For ✗ lines also pick up the
+                # immediately following indented detail line.
+                local extracted
+                extracted=$(awk '
+                    /✗ / {
+                        print "    " $0
+                        getline next_line
+                        if (next_line ~ /^[[:space:]]+[^[:space:]]/) print "      " next_line
+                        next
+                    }
+                    /^Error:/ {
+                        # Dynamic-scenario failure: print the line, capped to keep
+                        # the summary readable. Full detail still in the log file.
+                        line = $0
+                        if (length(line) > 600) line = substr(line, 1, 600) "..."
+                        print "    " line
+                        next
+                    }
+                ' "$log_file" 2>/dev/null)
+                if [ -n "$extracted" ]; then
+                    if ! $found_any; then
+                        log_error "Failed tests:"
+                        found_any=true
+                    fi
+                    echo "  --- $(basename "${log_file%.log}") ---"
+                    echo "$extracted"
+                fi
+            done
+            # Also surface YAML load failures (config rejected before tests ran).
+            local load_log="${WORK_DIR}/logs/load_config.log"
+            if [ -f "$load_log" ]; then
+                local load_failures
+                load_failures=$(grep -E "(Loadfailed|Load failed|partialconfigLoadfailed)" "$load_log" 2>/dev/null | head -10)
+                if [ -n "$load_failures" ]; then
+                    log_error "Config load failures (see ${load_log}):"
+                    echo "$load_failures" | sed 's/^/  /'
+                fi
+            fi
+        fi
         exit 1
     fi
 

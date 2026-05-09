@@ -1,0 +1,33 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-path-param
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "path-param"
+        # Reads `uid` and `item` path parameters populated by the radix matcher
+        # and echoes them back via response headers so the integration test can
+        # assert multi-parameter end-to-end extraction.
+        source: |
+          let uid = req.path_param("uid")
+          if uid != nil {
+              resp.set_header("X-Path-Uid", uid)
+              req.set_header("X-Path-Uid", uid)
+          } else {
+              resp.set_header("X-Path-Uid", "absent")
+          }
+          let item = req.path_param("item")
+          if item != nil {
+              resp.set_header("X-Path-Item", item)
+          } else {
+              resp.set_header("X-Path-Item", "absent")
+          }
+          let missing = req.path_param("missing")
+          if missing == nil {
+              resp.set_header("X-Path-Missing", "nil")
+          }
+        errorPolicy: deny

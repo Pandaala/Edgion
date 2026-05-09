@@ -197,7 +197,24 @@ pub struct HTTPPathMatch {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub match_type: Option<String>,
 
-    /// Value of the HTTP path to match_engine against
+    /// Value of the HTTP path to match against.
+    ///
+    /// For `Exact` and `PathPrefix` types the value may also contain named
+    /// path parameters using the `:name` syntax (Edgion extension to the
+    /// Gateway API spec). Examples:
+    ///   - `/users/:id` — captures `id` for the second segment
+    ///   - `/api/:version/users/:uid/posts/:postId` — captures multiple
+    ///   - `::literal` — escape: literal `:literal` segment, not a parameter
+    ///
+    /// Captured values are exposed at runtime through the DSL builtin
+    /// `req.path_param("name")` and via `$name` template substitution in the
+    /// `ProxyRewrite` plugin (URI and header values). They are not consumed
+    /// by Gateway API standard filters (`URLRewrite`, `RequestRedirect`,
+    /// `RequestHeaderModifier`, ...), which keep their literal-string
+    /// semantics defined by the spec.
+    ///
+    /// `RegularExpression` paths do not participate in `:name` extraction;
+    /// use regex capture groups (`$1`-`$9`) in `ProxyRewrite` for that case.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
 }

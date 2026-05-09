@@ -1,16 +1,18 @@
 // Key Auth Plugin Test Suite
 //
 // Required config files (in examples/test/conf/EdgionPlugins/KeyAuth/):
-// - 01_Secret_default_api-keys.yaml                    # API keys with metadata
-// - EdgionPlugins_default_key-auth.yaml                # KeyAuth plugin with header/query/cookie
-// - HTTPRoute_default_key-auth-test.yaml               # Route with host: key-auth-test.example.com
-// - 02_EdgionPlugins_default_key-auth-anonymous.yaml   # KeyAuth with anonymous access
-// - 03_HTTPRoute_default_key-auth-anonymous.yaml       # Route for anonymous test
-// - 04_EdgionPlugins_default_key-auth-hide-creds.yaml  # KeyAuth with hideCredentials
-// - 05_HTTPRoute_default_key-auth-hide-creds.yaml      # Route for hideCredentials test
+// - 01_Secret_default_api-keys.yaml                       # API keys with metadata
+// - EdgionPlugins_default_key-auth.yaml                   # KeyAuth plugin with header/query/cookie
+// - HTTPRoute_default_key-auth-test.yaml                  # Route with host: key-auth-test.example.com
+// - 02_EdgionPlugins_default_key-auth-anonymous.yaml      # KeyAuth with anonymous access
+// - 03_HTTPRoute_default_key-auth-anonymous.yaml          # Route for anonymous test
+// - 04_EdgionPlugins_default_key-auth-hide-creds.yaml     # KeyAuth with hideCredentials
+// - 05_HTTPRoute_default_key-auth-hide-creds.yaml         # Route for hideCredentials test
+// - 08_EdgionPlugins_default_key-auth-dual-alias.yaml     # Two KeyAuth entries with distinct aliases
+// - 09_HTTPRoute_default_key-auth-dual-alias.yaml         # Route for dual-alias test
 //
 // Also requires base config (in examples/test/conf/EdgionPlugins/base/):
-// - Gateway.yaml                                       # Gateway for EdgionPlugins tests
+// - Gateway.yaml                                          # Gateway for EdgionPlugins tests
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -27,6 +29,7 @@ const TEST_HOST: &str = "key-auth-test.example.com";
 const ANONYMOUS_HOST: &str = "key-auth-anonymous.example.com";
 const HIDE_CREDS_HOST: &str = "key-auth-hide-creds.example.com";
 const DELAY_HOST: &str = "key-auth-delay.example.com";
+const DUAL_ALIAS_HOST: &str = "key-auth-dual-alias.example.com";
 
 /// authFailureDelayMs configured in 06_EdgionPlugins_default_key-auth-delay.yaml
 const CONFIGURED_DELAY_MS: u64 = 300;
@@ -768,6 +771,120 @@ impl KeyAuthTestSuite {
             },
         )
     }
+
+    // ==========================================
+    // Dual-alias Access Log Tests
+    // ==========================================
+
+    /// Test: Two KeyAuth entries with distinct aliases both appear in access log stage_logs.
+    ///
+    /// Requires:
+    ///  - 08_EdgionPlugins_default_key-auth-dual-alias.yaml  (two KeyAuth entries with aliases)
+    ///  - 09_HTTPRoute_default_key-auth-dual-alias.yaml       (host: key-auth-dual-alias.example.com)
+    ///  - Gateway started with --integration-testing-mode
+    fn test_dual_alias_in_access_log() -> TestCase {
+        TestCase::new(
+            "dual_alias_in_access_log",
+            "Two same-type KeyAuth entries with distinct aliases both appear in access log",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let trace_id = format!("ka-dual-alias-{}", uuid::Uuid::new_v4());
+                    let url = format!("{}/health", ctx.http_url());
+
+                    // Send a request that satisfies both KeyAuth entries (valid key in X-API-Key).
+                    // Also include access_log: test_store to ensure the entry is stored.
+                    let resp = match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", DUAL_ALIAS_HOST)
+                        .header("X-API-Key", VALID_KEY_JACK)
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let status = resp.status().as_u16();
+                    // Consume body to ensure the request is fully flushed
+                    let _ = resp.text().await;
+
+                    if status != 200 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 200 (valid key, dual-alias route), got {}", status),
+                        );
+                    }
+
+                    // Fetch the access log from the store with retry
+                    let al_client = ctx.access_log_client();
+                    let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                        Ok(e) => e,
+                        Err(e) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Failed to fetch access log for trace_id {}: {}", trace_id, e),
+                            )
+                        }
+                    };
+
+                    // Walk stage_logs[].edgion_plugins[].logs[] looking for two KeyAuth entries
+                    // with distinct alias values
+                    let mut found_aliases: Vec<String> = Vec::new();
+                    if let Some(stages) = entry.data["stage_logs"].as_array() {
+                        for stage in stages {
+                            if let Some(eps) = stage["edgion_plugins"].as_array() {
+                                for ep in eps {
+                                    if let Some(logs) = ep["logs"].as_array() {
+                                        for log in logs {
+                                            if log["name"].as_str() == Some("KeyAuth") {
+                                                if let Some(alias) = log["alias"].as_str() {
+                                                    found_aliases.push(alias.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if found_aliases.len() != 2 {
+                        let raw = serde_json::to_string_pretty(&entry.data).unwrap_or_default();
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected exactly 2 KeyAuth entries with alias in stage_logs[].edgion_plugins[].logs[], got {}. Found aliases: {:?}. Raw access log: {}",
+                                found_aliases.len(),
+                                found_aliases,
+                                &raw[..raw.len().min(1500)]
+                            ),
+                        );
+                    }
+
+                    let has_primary = found_aliases.iter().any(|a| a == "auth-primary");
+                    let has_secondary = found_aliases.iter().any(|a| a == "auth-secondary");
+                    if !has_primary || !has_secondary {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected aliases auth-primary and auth-secondary; found: {:?}",
+                                found_aliases
+                            ),
+                        );
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "Both KeyAuth aliases (auth-primary, auth-secondary) found in access log".to_string(),
+                    )
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for KeyAuthTestSuite {
@@ -801,6 +918,8 @@ impl TestSuite for KeyAuthTestSuite {
             Self::test_failure_delay_on_missing_key(),
             Self::test_failure_delay_on_invalid_key(),
             Self::test_no_delay_on_valid_key(),
+            // Dual-alias access log test
+            Self::test_dual_alias_in_access_log(),
         ]
     }
 }

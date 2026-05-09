@@ -161,7 +161,7 @@ impl ExtensionRefFilter {
         match stage {
             PluginRunningStage::UpstreamResponseFilter => {
                 for plugin in plugin_runtime.upstream_response_plugins_iter() {
-                    let mut inner_log = PluginLog::new(plugin.name());
+                    let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
                     let result = plugin.run_upstream_response_filter(session, &mut inner_log);
                     session.push_to_edgion_plugins_log(&log_token, inner_log);
 
@@ -201,7 +201,7 @@ impl ExtensionRefFilter {
         match stage {
             PluginRunningStage::Request => {
                 for plugin in plugin_runtime.request_plugins_iter() {
-                    let mut inner_log = PluginLog::new(plugin.name());
+                    let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
                     let result = plugin.run_request(session, &mut inner_log).await;
                     session.push_to_edgion_plugins_log(&log_token, inner_log);
 
@@ -213,7 +213,7 @@ impl ExtensionRefFilter {
             }
             PluginRunningStage::UpstreamResponse => {
                 for plugin in plugin_runtime.upstream_response_async_plugins_iter() {
-                    let mut inner_log = PluginLog::new(plugin.name());
+                    let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
                     let result = plugin.run_upstream_response(session, &mut inner_log).await;
                     session.push_to_edgion_plugins_log(&log_token, inner_log);
 
@@ -225,7 +225,7 @@ impl ExtensionRefFilter {
             }
             PluginRunningStage::UpstreamResponseFilter => {
                 for plugin in plugin_runtime.upstream_response_plugins_iter() {
-                    let mut inner_log = PluginLog::new(plugin.name());
+                    let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
                     let result = plugin.run_upstream_response_filter(session, &mut inner_log);
                     session.push_to_edgion_plugins_log(&log_token, inner_log);
 

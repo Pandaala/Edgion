@@ -318,10 +318,23 @@ impl PluginRuntime {
                     errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
                 }
 
+                // Validate optional entry-level alias. On failure, surface
+                // the error and drop the alias so an unvalidated value never
+                // reaches the access log.
+                let entry_alias = match entry.validate_alias() {
+                    None => entry.alias.clone(),
+                    Some(err) => {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, err));
+                        None
+                    }
+                };
+
                 match Self::create_request_filter_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
                         // Wrap with ConditionalRequestFilter to support condition evaluation
-                        let conditional_filter = ConditionalRequestFilter::new(filter, entry.conditions.clone());
+                        let conditional_filter =
+                            ConditionalRequestFilter::with_alias(filter, entry.conditions.clone(), entry_alias);
                         self.add_request_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
@@ -365,11 +378,29 @@ impl PluginRuntime {
                     ));
                 }
 
+                // Validate optional entry-level alias. On failure, surface
+                // the error and drop the alias so an unvalidated value never
+                // reaches the access log.
+                let entry_alias = match entry.validate_alias() {
+                    None => entry.alias.clone(),
+                    Some(err) => {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponseFilterPlugins[{}] ({}): {}",
+                            index, plugin_name, err
+                        ));
+                        None
+                    }
+                };
+
                 match Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
                         // Wrap with ConditionalUpstreamResponseFilter to support condition evaluation
-                        let conditional_filter =
-                            ConditionalUpstreamResponseFilter::new(filter, entry.conditions.clone());
+                        let conditional_filter = ConditionalUpstreamResponseFilter::with_alias(
+                            filter,
+                            entry.conditions.clone(),
+                            entry_alias,
+                        );
                         self.add_upstream_response_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
@@ -409,10 +440,23 @@ impl PluginRuntime {
                     ));
                 }
 
+                // Validate optional entry-level alias. On failure, surface
+                // the error and drop the alias so an unvalidated value never
+                // reaches the access log.
+                let entry_alias = match entry.validate_alias() {
+                    None => entry.alias.clone(),
+                    Some(err) => {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!("upstreamResponsePlugins[{}] ({}): {}", index, plugin_name, err));
+                        None
+                    }
+                };
+
                 match Self::create_upstream_response_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
                         // Wrap with ConditionalUpstreamResponse to support condition evaluation
-                        let conditional_filter = ConditionalUpstreamResponse::new(filter, entry.conditions.clone());
+                        let conditional_filter =
+                            ConditionalUpstreamResponse::with_alias(filter, entry.conditions.clone(), entry_alias);
                         self.add_upstream_response(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
@@ -456,11 +500,29 @@ impl PluginRuntime {
                     ));
                 }
 
+                // Validate optional entry-level alias. On failure, surface
+                // the error and drop the alias so an unvalidated value never
+                // reaches the access log.
+                let entry_alias = match entry.validate_alias() {
+                    None => entry.alias.clone(),
+                    Some(err) => {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
+                            index, plugin_name, err
+                        ));
+                        None
+                    }
+                };
+
                 match Self::create_upstream_response_body_filter_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
                         // Wrap with ConditionalUpstreamResponseBodyFilter to support condition evaluation
-                        let conditional_filter =
-                            ConditionalUpstreamResponseBodyFilter::new(filter, entry.conditions.clone());
+                        let conditional_filter = ConditionalUpstreamResponseBodyFilter::with_alias(
+                            filter,
+                            entry.conditions.clone(),
+                            entry_alias,
+                        );
                         self.add_upstream_response_body_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
@@ -761,7 +823,7 @@ impl PluginRuntime {
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
         for filter in &self.request_plugins {
-            let mut plugin_log = PluginLog::new(filter.name());
+            let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
             let start = std::time::Instant::now();
 
             let result = filter.run_request(&mut session_adapter, &mut plugin_log).await;
@@ -836,7 +898,7 @@ impl PluginRuntime {
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
         for filter in &self.upstream_response_plugins {
-            let mut plugin_log = PluginLog::new(filter.name());
+            let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
             let start = std::time::Instant::now();
 
             let result = filter.run_upstream_response_filter(&mut session_adapter, &mut plugin_log);
@@ -923,7 +985,7 @@ impl PluginRuntime {
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
         for filter in &self.upstream_response_async_plugins {
-            let mut plugin_log = PluginLog::new(filter.name());
+            let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
             let start = std::time::Instant::now();
 
             let result = filter
@@ -969,6 +1031,43 @@ fn check_response_stage_terminate(result: &PluginRunningResult, plugin_log: &mut
             true
         }
         PluginRunningResult::Nothing | PluginRunningResult::GoodNext => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::resources::{EdgionPlugin, KeyAuthConfig, RequestFilterEntry};
+
+    #[test]
+    fn add_from_request_filters_reports_alias_validation_error_and_threads_alias() {
+        let mut runtime = PluginRuntime::new();
+
+        let mut bad_entry = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
+        bad_entry.alias = Some("with space".to_string());
+
+        let mut good_entry = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
+        good_entry.alias = Some("auth-internal".to_string());
+
+        let entries = vec![bad_entry, good_entry];
+        let errors = runtime.add_from_request_filters(&entries, "default");
+
+        // The bad alias surfaces as a validation error referencing the index and the alias rule.
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("requestPlugins[0]") && e.contains("alias")),
+            "expected alias error for index 0, got: {:?}",
+            errors
+        );
+
+        // Both entries are still wrapped (we surface errors but don't drop the entry).
+        let mut iter = runtime.request_plugins_iter();
+        let first = iter.next().expect("first wrapper");
+        // Bad alias is dropped on validation failure so an unvalidated value never reaches the access log.
+        assert_eq!(first.alias(), None, "bad alias must be dropped (validation refused)");
+        let second = iter.next().expect("second wrapper");
+        assert_eq!(second.alias(), Some("auth-internal"));
     }
 }
 

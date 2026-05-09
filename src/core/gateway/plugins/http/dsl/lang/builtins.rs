@@ -802,7 +802,10 @@ impl Vm {
         if !matches!(parsed_url.scheme(), "http" | "https") {
             return Err(RuntimeError::ApiError {
                 function: "http.call".into(),
-                message: format!("http.call only supports http/https schemes, got: {}", parsed_url.scheme()),
+                message: format!(
+                    "http.call only supports http/https schemes, got: {}",
+                    parsed_url.scheme()
+                ),
             });
         }
 
@@ -965,7 +968,7 @@ mod ip_tests {
         assert!(is_private_ip_host("172.31.255.255"));
         assert!(is_private_ip_host("192.168.1.1"));
         assert!(is_private_ip_host("169.254.1.1")); // link-local
-        assert!(is_private_ip_host("0.0.0.0"));     // unspecified
+        assert!(is_private_ip_host("0.0.0.0")); // unspecified
     }
 
     #[test]
@@ -977,10 +980,10 @@ mod ip_tests {
 
     #[test]
     fn test_ipv6_private() {
-        assert!(is_private_ip_host("::1"));           // loopback
-        assert!(is_private_ip_host("fc00::1"));       // unique local
-        assert!(is_private_ip_host("fd12:3456::1"));  // unique local
-        assert!(is_private_ip_host("fe80::1"));       // link-local
+        assert!(is_private_ip_host("::1")); // loopback
+        assert!(is_private_ip_host("fc00::1")); // unique local
+        assert!(is_private_ip_host("fd12:3456::1")); // unique local
+        assert!(is_private_ip_host("fe80::1")); // link-local
     }
 
     #[test]
@@ -994,7 +997,7 @@ mod ip_tests {
     #[test]
     fn test_ipv6_zone_id_stripped() {
         assert!(is_private_ip_host("fe80::1%eth0")); // link-local with zone ID
-        assert!(is_private_ip_host("::1%lo"));       // loopback with zone ID
+        assert!(is_private_ip_host("::1%lo")); // loopback with zone ID
     }
 
     #[test]
@@ -1018,6 +1021,10 @@ mod ip_tests {
         let url = reqwest::Url::parse("http://[::ffff:192.168.1.1]:80").unwrap();
         let raw = url.host_str().unwrap_or("");
         let host = raw.trim_matches(|c: char| c == '[' || c == ']');
-        assert!(is_private_ip_host(host), "IPv4-mapped IPv6 not detected as private: {:?}", host);
+        assert!(
+            is_private_ip_host(host),
+            "IPv4-mapped IPv6 not detected as private: {:?}",
+            host
+        );
     }
 }

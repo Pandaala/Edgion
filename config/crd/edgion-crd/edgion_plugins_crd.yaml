@@ -37,6 +37,19 @@ spec:
                         type: boolean
                         description: "Whether this plugin is enabled (default: true)"
                         default: true
+                      alias: &aliasSchema
+                        # Charset (^[a-zA-Z0-9._-]{1,32}$) is enforced by the
+                        # runtime preparse validator and surfaced as
+                        # Accepted=False/Invalid on the resource status.
+                        # The CRD only enforces length so that semantic alias
+                        # errors flow through the same operator-feedback path
+                        # as other plugin-config errors (rate=0, bad regex,
+                        # allowCredentials+wildcard, etc.) instead of being
+                        # rejected at apply-time without status visibility.
+                        type: string
+                        description: "Optional operator-defined label echoed into PluginLog.alias for distinguishing multiple entries of the same plugin type in the access log (charset ^[a-zA-Z0-9._-]{1,32}$ enforced at preparse)"
+                        maxLength: 32
+                        minLength: 1
                       # --- conditionEnable: define anchor here, reuse below ---
                       conditionEnable: &conditionEnableSchema
                         type: object
@@ -171,6 +184,7 @@ spec:
                       enable:
                         type: boolean
                         default: true
+                      alias: *aliasSchema
                       conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
                       type:
@@ -197,6 +211,7 @@ spec:
                       enable:
                         type: boolean
                         default: true
+                      alias: *aliasSchema
                       conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
                       type:
@@ -220,6 +235,7 @@ spec:
                       enable:
                         type: boolean
                         default: true
+                      alias: *aliasSchema
                       conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
                       type:

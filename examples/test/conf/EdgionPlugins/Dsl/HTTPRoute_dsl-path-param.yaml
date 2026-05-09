@@ -1,0 +1,29 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsl-path-param-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dsl-path-param.example.com"
+  rules:
+    # Two path-parameter segments (`:uid` and `:item`) verify multi-param
+    # extraction; PathPrefix lets the request optionally extend with /detail
+    # while still matching the same template.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/dsl-path-param/users/:uid/items/:item
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-path-param
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

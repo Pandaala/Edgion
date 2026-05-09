@@ -1,0 +1,38 @@
+# Two KeyAuth entries with distinct aliases on the same route.
+# Used by test_dual_alias_in_access_log to verify that both aliases
+# appear in stage_logs[].filters[] when a valid key is provided.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: key-auth-dual-alias
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - alias: auth-primary
+      enable: true
+      type: KeyAuth
+      config:
+        keySources:
+          - type: header
+            name: "X-API-Key"
+        realm: "Test API"
+        keyField: "key"
+        secretRefs:
+          - name: api-keys
+            namespace: edgion-default
+        upstreamHeaderFields:
+          - "X-Consumer-Username"
+    - alias: auth-secondary
+      enable: true
+      type: KeyAuth
+      config:
+        keySources:
+          - type: header
+            name: "X-API-Key"
+        realm: "Test API"
+        keyField: "key"
+        secretRefs:
+          - name: api-keys
+            namespace: edgion-default
+        upstreamHeaderFields:
+          - "X-Consumer-Username"

@@ -15,6 +15,25 @@ pub(super) fn is_true(v: &bool) -> bool {
     *v
 }
 
+/// Validate a plugin entry alias.
+///
+/// Rule: must match `^[a-zA-Z0-9._-]{1,32}$`. Returns the human-readable
+/// error string if invalid, or `None` if valid. The error format is
+/// suitable for inclusion in the `EdgionPlugins` validation_error vector.
+pub(super) fn validate_alias_str(alias: &str) -> Option<String> {
+    let len = alias.len();
+    if !(1..=32).contains(&len) {
+        return Some(format!("alias must match [a-zA-Z0-9._-]{{1,32}} (got {len} bytes)"));
+    }
+    let ok = alias
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-');
+    if !ok {
+        return Some("alias must match [a-zA-Z0-9._-]{1,32} (contains disallowed character)".to_string());
+    }
+    None
+}
+
 /// Plugin entry with enable switch
 ///
 /// YAML format:
@@ -57,6 +76,13 @@ pub struct PluginEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conditions: Option<PluginConditions>,
 
+    /// Operator-defined label echoed verbatim into PluginLog.alias.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
+    /// Lets multiple entries of the same plugin type be distinguished
+    /// in the access log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+
     /// The actual plugin configuration
     #[serde(flatten)]
     pub plugin: EdgionPlugin,
@@ -68,6 +94,7 @@ impl PluginEntry {
         Self {
             enable: true,
             conditions: None,
+            alias: None,
             plugin,
         }
     }
@@ -77,6 +104,7 @@ impl PluginEntry {
         Self {
             enable,
             conditions: None,
+            alias: None,
             plugin,
         }
     }
@@ -86,8 +114,15 @@ impl PluginEntry {
         Self {
             enable: true,
             conditions: Some(conditions),
+            alias: None,
             plugin,
         }
+    }
+
+    /// Validate the optional alias against the entry-level rule.
+    /// Returns `Some(error)` if alias is set and invalid; `None` otherwise.
+    pub fn validate_alias(&self) -> Option<String> {
+        self.alias.as_deref().and_then(validate_alias_str)
     }
 
     /// Check if this plugin is enabled
@@ -129,6 +164,13 @@ pub struct RequestFilterEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conditions: Option<PluginConditions>,
 
+    /// Operator-defined label echoed verbatim into PluginLog.alias.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
+    /// Lets multiple entries of the same plugin type be distinguished
+    /// in the access log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+
     /// The actual plugin configuration
     #[serde(flatten)]
     pub plugin: EdgionPlugin,
@@ -140,6 +182,7 @@ impl RequestFilterEntry {
         Self {
             enable: true,
             conditions: None,
+            alias: None,
             plugin,
         }
     }
@@ -149,6 +192,7 @@ impl RequestFilterEntry {
         Self {
             enable,
             conditions: None,
+            alias: None,
             plugin,
         }
     }
@@ -158,8 +202,15 @@ impl RequestFilterEntry {
         Self {
             enable: true,
             conditions: Some(conditions),
+            alias: None,
             plugin,
         }
+    }
+
+    /// Validate the optional alias against the entry-level rule.
+    /// Returns `Some(error)` if alias is set and invalid; `None` otherwise.
+    pub fn validate_alias(&self) -> Option<String> {
+        self.alias.as_deref().and_then(validate_alias_str)
     }
 
     /// Check if this plugin is enabled
@@ -198,6 +249,13 @@ pub struct UpstreamResponseFilterEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conditions: Option<PluginConditions>,
 
+    /// Operator-defined label echoed verbatim into PluginLog.alias.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
+    /// Lets multiple entries of the same plugin type be distinguished
+    /// in the access log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+
     /// The actual plugin configuration
     #[serde(flatten)]
     pub plugin: EdgionPlugin,
@@ -209,6 +267,7 @@ impl UpstreamResponseFilterEntry {
         Self {
             enable: true,
             conditions: None,
+            alias: None,
             plugin,
         }
     }
@@ -218,6 +277,7 @@ impl UpstreamResponseFilterEntry {
         Self {
             enable,
             conditions: None,
+            alias: None,
             plugin,
         }
     }
@@ -227,8 +287,15 @@ impl UpstreamResponseFilterEntry {
         Self {
             enable: true,
             conditions: Some(conditions),
+            alias: None,
             plugin,
         }
+    }
+
+    /// Validate the optional alias against the entry-level rule.
+    /// Returns `Some(error)` if alias is set and invalid; `None` otherwise.
+    pub fn validate_alias(&self) -> Option<String> {
+        self.alias.as_deref().and_then(validate_alias_str)
     }
 
     /// Check if this plugin is enabled
@@ -270,6 +337,13 @@ pub struct UpstreamResponseBodyFilterEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conditions: Option<PluginConditions>,
 
+    /// Operator-defined label echoed verbatim into PluginLog.alias.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
+    /// Lets multiple entries of the same plugin type be distinguished
+    /// in the access log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+
     /// The actual plugin configuration
     #[serde(flatten)]
     pub plugin: EdgionPlugin,
@@ -281,6 +355,7 @@ impl UpstreamResponseBodyFilterEntry {
         Self {
             enable: true,
             conditions: None,
+            alias: None,
             plugin,
         }
     }
@@ -290,6 +365,7 @@ impl UpstreamResponseBodyFilterEntry {
         Self {
             enable,
             conditions: None,
+            alias: None,
             plugin,
         }
     }
@@ -299,8 +375,15 @@ impl UpstreamResponseBodyFilterEntry {
         Self {
             enable: true,
             conditions: Some(conditions),
+            alias: None,
             plugin,
         }
+    }
+
+    /// Validate the optional alias against the entry-level rule.
+    /// Returns `Some(error)` if alias is set and invalid; `None` otherwise.
+    pub fn validate_alias(&self) -> Option<String> {
+        self.alias.as_deref().and_then(validate_alias_str)
     }
 
     /// Check if this plugin is enabled
@@ -338,6 +421,13 @@ pub struct UpstreamResponseEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conditions: Option<PluginConditions>,
 
+    /// Operator-defined label echoed verbatim into PluginLog.alias.
+    /// Optional; when set, must match `^[a-zA-Z0-9._-]{1,32}$`.
+    /// Lets multiple entries of the same plugin type be distinguished
+    /// in the access log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+
     /// The actual plugin configuration
     #[serde(flatten)]
     pub plugin: EdgionPlugin,
@@ -349,6 +439,7 @@ impl UpstreamResponseEntry {
         Self {
             enable: true,
             conditions: None,
+            alias: None,
             plugin,
         }
     }
@@ -358,6 +449,7 @@ impl UpstreamResponseEntry {
         Self {
             enable,
             conditions: None,
+            alias: None,
             plugin,
         }
     }
@@ -367,8 +459,15 @@ impl UpstreamResponseEntry {
         Self {
             enable: true,
             conditions: Some(conditions),
+            alias: None,
             plugin,
         }
+    }
+
+    /// Validate the optional alias against the entry-level rule.
+    /// Returns `Some(error)` if alias is set and invalid; `None` otherwise.
+    pub fn validate_alias(&self) -> Option<String> {
+        self.alias.as_deref().and_then(validate_alias_str)
     }
 
     /// Check if this plugin is enabled
@@ -389,5 +488,90 @@ impl UpstreamResponseEntry {
     /// Get the plugin type name
     pub fn type_name(&self) -> &'static str {
         self.plugin.type_name()
+    }
+}
+
+#[cfg(test)]
+mod alias_validation_tests {
+    use super::*;
+
+    fn check(s: &str) -> Option<String> {
+        validate_alias_str(s)
+    }
+
+    #[test]
+    fn accepts_letters_digits_dot_dash_underscore_within_32_bytes() {
+        assert!(check("a").is_none());
+        assert!(check("auth-internal").is_none());
+        assert!(check("auth_v2.1").is_none());
+        assert!(check("ABC.def-ghi_123").is_none());
+        assert!(check(&"a".repeat(32)).is_none());
+    }
+
+    #[test]
+    fn rejects_empty_string() {
+        let err = check("").expect("empty alias must be rejected");
+        assert!(err.contains("[a-zA-Z0-9._-]"), "{err}");
+    }
+
+    #[test]
+    fn rejects_over_32_bytes() {
+        let err = check(&"a".repeat(33)).expect("33-char alias must be rejected");
+        assert!(err.contains("[a-zA-Z0-9._-]"), "{err}");
+    }
+
+    #[test]
+    fn rejects_disallowed_chars() {
+        for bad in [
+            "space here",
+            "slash/here",
+            // Multi-byte UTF-8 must be rejected (validator allows ASCII alphanumerics + . _ - only)
+            "caf\u{e9}",
+            "with\nnewline",
+            "quote\"here",
+            "/leading",
+        ] {
+            assert!(check(bad).is_some(), "must reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn entry_with_alias_serde_roundtrip() {
+        use crate::types::resources::edgion_plugins::EdgionPlugin;
+        use crate::types::resources::plugin_configs::CorsConfig;
+
+        let yaml = r#"
+alias: auth-internal
+type: Cors
+config: {}
+"#;
+        let entry: PluginEntry = serde_yaml::from_str(yaml).expect("yaml parse");
+        assert_eq!(entry.alias.as_deref(), Some("auth-internal"));
+        assert!(matches!(entry.plugin, EdgionPlugin::Cors(_)));
+
+        // Round-trip retains the field
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(json["alias"], serde_json::json!("auth-internal"));
+
+        // No alias -> field absent in serialized form
+        let entry_no_alias = PluginEntry::new(EdgionPlugin::Cors(CorsConfig::default()));
+        let json = serde_json::to_value(&entry_no_alias).unwrap();
+        assert!(json.get("alias").is_none(), "alias must be omitted when None: {json}");
+    }
+
+    #[test]
+    fn entry_validate_alias_returns_error_for_invalid() {
+        use crate::types::resources::edgion_plugins::EdgionPlugin;
+        use crate::types::resources::plugin_configs::CorsConfig;
+
+        let mut entry = PluginEntry::new(EdgionPlugin::Cors(CorsConfig::default()));
+        assert_eq!(entry.validate_alias(), None);
+
+        entry.alias = Some("bad/alias".to_string());
+        let err = entry.validate_alias().expect("must reject");
+        assert!(err.contains("[a-zA-Z0-9._-]"), "{err}");
+
+        entry.alias = Some("ok-name_v1.2".to_string());
+        assert_eq!(entry.validate_alias(), None);
     }
 }

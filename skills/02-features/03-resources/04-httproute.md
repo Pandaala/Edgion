@@ -146,7 +146,53 @@ Multiple matches have an **OR** relationship; the path/headers/queryParams/metho
 | Field | Type | Description |
 |-------|------|-------------|
 | `type` | `String` | `Exact` / `PathPrefix` / `RegularExpression` |
-| `value` | `String` | Match value (PathPrefix defaults to `/`) |
+| `value` | `String` | Match value (PathPrefix defaults to `/`); for `Exact` / `PathPrefix` may contain `:name` path-parameter segments — see below |
+
+##### Path parameters (`:name` syntax)
+
+For `Exact` and `PathPrefix` matches, `value` may include **named path parameters**:
+
+| Pattern | Behavior |
+|---------|----------|
+| `/users/:id` | `id` segment is a wildcard; the actual value is captured |
+| `/api/:ver/users/:uid` | Multiple captures in one route |
+| `/data/::literal` | `::` escapes to a literal `:`; the segment is `:literal`, not a parameter |
+
+Where the captured values are usable at runtime:
+
+| Consumer | How to read |
+|----------|-------------|
+| **DSL plugin** (`type: Dsl`) | Builtin `req.path_param("name")` — returns `String?` (nil when absent) |
+| **ProxyRewrite plugin** | `$name` substitution inside `uri` / `headers.set[*].value` (alongside `$uri`, `$arg_xxx`, `$1-$9`) |
+
+Not supported by path-parameter substitution (deliberately, to stay aligned with Gateway API semantics):
+
+- `URLRewrite`, `RequestRedirect`, `RequestHeaderModifier`, `ResponseHeaderModifier` — these treat their value strings as literals; use `ProxyRewrite` if you need template variables.
+- `RegularExpression` path matches — use regex capture groups (`$1`-`$9` in `ProxyRewrite`) instead.
+
+Example (HTTPRoute + ProxyRewrite):
+
+```yaml
+- matches:
+    - path:
+        type: PathPrefix
+        value: /params/:uid/info
+  filters:
+    - type: ExtensionRef
+      extensionRef: { group: edgion.io, kind: EdgionPlugins, name: rewrite-with-uid }
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata: { name: rewrite-with-uid, namespace: edgion-default }
+spec:
+  requestPlugins:
+    - type: ProxyRewrite
+      config:
+        uri: "/user-service/$uid/profile"
+        headers:
+          set:
+            - { name: X-User-Id, value: "$uid" }
+```
 
 #### headers
 

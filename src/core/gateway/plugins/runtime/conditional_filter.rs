@@ -31,12 +31,30 @@ use crate::types::filters::PluginRunningResult;
 pub struct ConditionalRequestFilter {
     inner: Box<dyn RequestFilter>,
     conditions: Option<PluginConditions>,
+    alias: Option<String>,
 }
 
 impl ConditionalRequestFilter {
     /// Create a new conditional request filter
     pub fn new(inner: Box<dyn RequestFilter>, conditions: Option<PluginConditions>) -> Self {
-        Self { inner, conditions }
+        Self {
+            inner,
+            conditions,
+            alias: None,
+        }
+    }
+
+    /// Create a wrapper that also carries an operator-defined alias.
+    pub fn with_alias(
+        inner: Box<dyn RequestFilter>,
+        conditions: Option<PluginConditions>,
+        alias: Option<String>,
+    ) -> Self {
+        Self {
+            inner,
+            conditions,
+            alias,
+        }
     }
 
     /// Create a wrapper without conditions (always runs)
@@ -50,6 +68,10 @@ impl ConditionalRequestFilter {
 impl RequestFilter for ConditionalRequestFilter {
     fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    fn alias(&self) -> Option<&str> {
+        self.alias.as_deref()
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
@@ -77,12 +99,30 @@ impl RequestFilter for ConditionalRequestFilter {
 pub struct ConditionalUpstreamResponseFilter {
     inner: Box<dyn UpstreamResponseFilter>,
     conditions: Option<PluginConditions>,
+    alias: Option<String>,
 }
 
 impl ConditionalUpstreamResponseFilter {
     /// Create a new conditional upstream response filter
     pub fn new(inner: Box<dyn UpstreamResponseFilter>, conditions: Option<PluginConditions>) -> Self {
-        Self { inner, conditions }
+        Self {
+            inner,
+            conditions,
+            alias: None,
+        }
+    }
+
+    /// Create a wrapper that also carries an operator-defined alias.
+    pub fn with_alias(
+        inner: Box<dyn UpstreamResponseFilter>,
+        conditions: Option<PluginConditions>,
+        alias: Option<String>,
+    ) -> Self {
+        Self {
+            inner,
+            conditions,
+            alias,
+        }
     }
 
     /// Create a wrapper without conditions (always runs)
@@ -95,6 +135,10 @@ impl ConditionalUpstreamResponseFilter {
 impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
     fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    fn alias(&self) -> Option<&str> {
+        self.alias.as_deref()
     }
 
     fn run_upstream_response_filter(
@@ -131,12 +175,30 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
 pub struct ConditionalUpstreamResponseBodyFilter {
     inner: Box<dyn UpstreamResponseBodyFilter>,
     conditions: Option<PluginConditions>,
+    alias: Option<String>,
 }
 
 impl ConditionalUpstreamResponseBodyFilter {
     /// Create a new conditional upstream response body filter
     pub fn new(inner: Box<dyn UpstreamResponseBodyFilter>, conditions: Option<PluginConditions>) -> Self {
-        Self { inner, conditions }
+        Self {
+            inner,
+            conditions,
+            alias: None,
+        }
+    }
+
+    /// Create a wrapper that also carries an operator-defined alias.
+    pub fn with_alias(
+        inner: Box<dyn UpstreamResponseBodyFilter>,
+        conditions: Option<PluginConditions>,
+        alias: Option<String>,
+    ) -> Self {
+        Self {
+            inner,
+            conditions,
+            alias,
+        }
     }
 
     /// Create a wrapper without conditions (always runs)
@@ -149,6 +211,10 @@ impl ConditionalUpstreamResponseBodyFilter {
 impl UpstreamResponseBodyFilter for ConditionalUpstreamResponseBodyFilter {
     fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    fn alias(&self) -> Option<&str> {
+        self.alias.as_deref()
     }
 
     fn run_upstream_response_body_filter(
@@ -177,12 +243,30 @@ impl UpstreamResponseBodyFilter for ConditionalUpstreamResponseBodyFilter {
 pub struct ConditionalUpstreamResponse {
     inner: Box<dyn UpstreamResponse>,
     conditions: Option<PluginConditions>,
+    alias: Option<String>,
 }
 
 impl ConditionalUpstreamResponse {
     /// Create a new conditional upstream response handler
     pub fn new(inner: Box<dyn UpstreamResponse>, conditions: Option<PluginConditions>) -> Self {
-        Self { inner, conditions }
+        Self {
+            inner,
+            conditions,
+            alias: None,
+        }
+    }
+
+    /// Create a wrapper that also carries an operator-defined alias.
+    pub fn with_alias(
+        inner: Box<dyn UpstreamResponse>,
+        conditions: Option<PluginConditions>,
+        alias: Option<String>,
+    ) -> Self {
+        Self {
+            inner,
+            conditions,
+            alias,
+        }
     }
 
     /// Create a wrapper without conditions (always runs)
@@ -196,6 +280,10 @@ impl ConditionalUpstreamResponse {
 impl UpstreamResponse for ConditionalUpstreamResponse {
     fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    fn alias(&self) -> Option<&str> {
+        self.alias.as_deref()
     }
 
     async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
@@ -518,5 +606,17 @@ mod tests {
         );
         assert_eq!(c3.cond_type(), "prob");
         assert_eq!(c3.cond_detail(), "10%");
+    }
+
+    #[test]
+    fn conditional_request_filter_returns_alias_when_set() {
+        let inner = MockRequestFilter::new("KeyAuth");
+        let with_alias = ConditionalRequestFilter::with_alias(Box::new(inner), None, Some("auth-internal".to_string()));
+        assert_eq!(with_alias.alias(), Some("auth-internal"));
+        assert_eq!(with_alias.name(), "KeyAuth");
+
+        let inner2 = MockRequestFilter::new("KeyAuth");
+        let no_alias = ConditionalRequestFilter::new(Box::new(inner2), None);
+        assert_eq!(no_alias.alias(), None);
     }
 }
