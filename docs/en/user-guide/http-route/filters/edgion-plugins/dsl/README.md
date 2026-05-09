@@ -12,7 +12,8 @@ DSL is well-suited for scenarios such as pre-authorization checks, dynamic heade
 
 ## Features at a Glance
 
-- **Sandboxed execution**: Scripts have no access to the file system or network; the runtime environment is fully controlled.
+- **Sandboxed execution**: Scripts cannot access the file system or environment variables; the runtime environment is fully controlled.
+- **Outbound HTTP calls**: Scripts can call external HTTP/HTTPS services via `http.call()`, with configurable timeouts, response size limits, and optional SSRF protection (`httpBlockPrivateIps`).
 - **Bytecode pre-compilation**: Supports both `source` (runtime compilation) and `bytecode` (pre-compiled Base64) loading modes. Bytecode mode skips compilation overhead.
 - **Configurable resource limits**: Independently limit execution steps, loop iterations, call depth, and string length.
 - **Configurable error policies**: Three policies — `Ignore` / `Deny` / `DenyWith` — to suit different fault-tolerance requirements.
@@ -52,6 +53,9 @@ spec:
 | `maxStackDepth` | Integer | ❌ | `128` | Maximum stack depth |
 | `maxStringLen` | Integer | ❌ | `8192` | Maximum string length |
 | `errorPolicy` | String | ❌ | `Ignore` | Error policy: `Ignore` / `Deny` / `DenyWith` |
+| `httpMaxTimeoutMs` | Integer | ❌ | `5000` | Hard cap on `http.call()` timeout per request (ms) |
+| `httpMaxResponseBodyBytes` | Integer | ❌ | `1048576` | Maximum `http.call()` response body size (bytes) |
+| `httpBlockPrivateIps` | Boolean | ❌ | `false` | Block `http.call()` to private/loopback/link-local IPs |
 
 \* `source` and `bytecode` are mutually exclusive; at least one must be provided.
 

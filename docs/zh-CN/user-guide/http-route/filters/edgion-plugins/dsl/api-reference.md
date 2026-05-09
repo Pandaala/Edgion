@@ -2,7 +2,7 @@
 
 本文档列出 EdgionDSL 所有内置函数，按功能分类组织。每个函数均给出完整签名、参数说明、返回值、限制条件和使用示例。
 
-**类型说明**：EdgionDSL 有 5 种运行时类型：`Str`（字符串）、`Int`（64 位整数）、`Bool`（布尔值）、`Nil`（空值/缺失）、`List`（字符串列表，不可由用户直接构造）。
+**类型说明**：EdgionDSL 有 6 种运行时类型：`Str`（字符串）、`Int`（64 位整数）、`Bool`（布尔值）、`Nil`（空值/缺失）、`List`（字符串列表，不可由用户直接构造）、`Map`（有序字符串键映射表；由 `http.call()` 返回，也可通过 `{key: expr}` 字面量构造）。
 
 **阶段说明**：部分函数仅在特定执行阶段有效。`req.*` 写操作和 `grpc_error()` 仅在请求阶段有意义；`resp.*` 读写操作仅在响应阶段有效。
 
@@ -1378,6 +1378,74 @@ if payload != nil {
 
 ## 网络
 
+### http.call
+
+**签名**：`http.call(method, url, body [, timeout_ms [, headers]])` → `Map`
+
+从网关向任意 HTTP/HTTPS 端点发起出站请求。从脚本角度看，该调用是同步的，收到响应或超时后返回。
+
+**参数**：
+- `method`（Str）— HTTP 方法，如 `"GET"`、`"POST"`、`"PUT"`
+- `url`（Str）— 包含协议和主机名的完整 URL，如 `"https://api.example.com/v1/check"`
+- `body`（Str | Nil）— 请求体；不需要请求体时传 `nil`
+- `timeout_ms`（Int，可选）— 单次调用超时（毫秒）；上限为 `httpMaxTimeoutMs`（默认 5000）
+- `headers`（Map，可选）— 附加请求头，以字符串键值对 `Map` 表示
+
+**返回值**：包含以下字段的 `Map`：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `status` | Int | HTTP 响应状态码；调用失败（超时、连接错误、SSRF 拦截等）时为 `0` |
+| `body` | Str | UTF-8 响应体；失败或响应体为空时为空字符串 |
+| `headers` | Map | 响应头；键为小写头名称，值为该头名称对应的最后一个值 |
+
+**此函数永远不会抛出运行时错误。** 网络故障、超时、SSRF 拦截均返回 `status = 0` 和空 body。
+
+**限制**：
+- 仅接受 `http` 和 `https` 协议；其他协议（如 `file://`、`ftp://`）返回 `status = 0`。
+- 当 `httpBlockPrivateIps: true` 时，目标为回环、私有、链路本地地址的请求返回 `status = 0`。
+- 响应体超过 `httpMaxResponseBodyBytes`（默认 1 MiB）时会被截断。
+- 实际超时为 `min(timeout_ms, httpMaxTimeoutMs)`。
+- 全局客户端最多跟随 10 次重定向。
+
+**配置字段**（位于插件 `config` 块内）：
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `httpMaxTimeoutMs` | Integer | `5000` | 单次调用超时上限（毫秒） |
+| `httpMaxResponseBodyBytes` | Integer | `1048576` | 响应体最大字节数；超出时截断 |
+| `httpBlockPrivateIps` | Boolean | `false` | 拦截对私有/回环/链路本地 IP 的出站调用（SSRF 防护） |
+
+**示例 — 调用健康检查端点并根据状态分支**：
+```
+let r = http.call("GET", "http://internal-service/health", nil, 1000)
+if r["status"] == 200 {
+  req.set_header("X-Backend-Healthy", "true")
+} else {
+  return deny(503, "backend unavailable")
+}
+```
+
+**示例 — POST JSON 并携带自定义请求头**：
+```
+let hdrs = {"Content-Type": "application/json", "X-Api-Key": req.header("X-Api-Key")}
+let r = http.call("POST", "https://auth.example.com/verify", "{\"token\":\"abc\"}", 2000, hdrs)
+if r["status"] != 200 {
+  return deny(401, "auth check failed")
+}
+```
+
+**示例 — 读取响应头**：
+```
+let r = http.call("GET", "https://api.example.com/quota", nil, 2000)
+let remaining = r["headers"]["x-ratelimit-remaining"]
+if remaining != nil {
+  resp.set_header("X-Quota-Remaining", remaining)
+}
+```
+
+---
+
 ### ip_in_cidr
 
 **签名**：`ip_in_cidr(ip, cidr)` → `Bool`
@@ -1646,6 +1714,7 @@ if sig == nil {
 | `time_now()` | 时间 | `Int` | 0 |
 | `time_format(timestamp, format)` | 时间 | `Str` | 2 |
 | `json_get(json_str, path)` | JSON | `Str\|Int\|Bool\|Nil` | 2 |
+| `http.call(method, url, body [, timeout_ms [, headers]])` | 网络 | `Map` | 2–5 |
 | `ip_in_cidr(ip, cidr)` | 网络 | `Bool` | 2 |
 | `uuid()` | 工具 | `Str` | 0 |
 | `range(start, end)` | 工具 | `List` | 2 |

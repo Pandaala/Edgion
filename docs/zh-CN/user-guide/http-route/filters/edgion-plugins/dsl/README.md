@@ -12,7 +12,8 @@ DSL 适合以下场景：权限前置检查、动态 Header 注入、协议级�
 
 ## 特性一览
 
-- **沙箱隔离执行**：脚本无法访问文件系统或网络，运行环境完全受控
+- **沙箱隔离执行**：脚本无法访问文件系统或环境变量，运行环境完全受控
+- **出站 HTTP 调用**：脚本可通过 `http.call()` 调用外部 HTTP/HTTPS 服务，支持可配置超时、响应体大小限制，以及可选的 SSRF 防护（`httpBlockPrivateIps`）
 - **字节码预编译**：支持 `source`（运行时编译）和 `bytecode`（预编译 Base64）两种加载方式，字节码模式可跳过编译开销
 - **资源限制可配置**：可独立限制执行步数、循环次数、调用深度、字符串长度
 - **错误策略可选**：`Ignore` / `Deny` / `DenyWith` 三种策略，适应不同容错需求
@@ -52,6 +53,9 @@ spec:
 | `maxStackDepth` | Integer | ❌ | `128` | 最大栈深度 |
 | `maxStringLen` | Integer | ❌ | `8192` | 最大字符串长度 |
 | `errorPolicy` | String | ❌ | `Ignore` | 错误策略：`Ignore` / `Deny` / `DenyWith` |
+| `httpMaxTimeoutMs` | Integer | ❌ | `5000` | `http.call()` 单次调用超时上限（毫秒） |
+| `httpMaxResponseBodyBytes` | Integer | ❌ | `1048576` | `http.call()` 响应体最大字节数 |
+| `httpBlockPrivateIps` | Boolean | ❌ | `false` | 拦截 `http.call()` 对私有/回环/链路本地 IP 的调用 |
 
 \* `source` 和 `bytecode` 二选一，至少提供一个。
 

@@ -6,7 +6,7 @@ This document describes the security mechanisms of the EdgionDSL script executio
 
 The EdgionDSL sandbox is built on the following core principles:
 
-**Zero-capability by default**: Scripts start with no external interaction capabilities whatsoever. There is no filesystem access, no network calls, no environment variable reads, and no process management. All interactions with the gateway context (reading request headers, rejecting requests, etc.) must go through audited built-in functions whose behavior is well-defined and bounded.
+**Minimal-capability by default**: Scripts start with no filesystem access, no environment variable reads, and no process management. All interactions with the gateway context (reading request headers, rejecting requests, etc.) must go through audited built-in functions whose behavior is well-defined and bounded. Outbound network access is available exclusively through the `http.call()` built-in, which enforces strict timeouts, response size limits, and an optional SSRF guard (`httpBlockPrivateIps`).
 
 **Defense in depth**: Security is enforced at two layers. Compile-time validation statically checks structural constraints — instruction count, variable count, constant pool size, and so on — when a script is loaded, rejecting scripts that are overly complex or maliciously crafted. Runtime limits dynamically track execution steps, loop iterations, and function call counts on every request, preventing scripts from exceeding expected resource consumption at runtime. The two layers are complementary; a failure in one does not compromise the other.
 
@@ -136,6 +136,7 @@ The following error types are raised by the VM at runtime. When triggered, they 
 | `StackOverflow` | Stack depth limit exceeded | Expression nesting is too deep |
 | `StringTooLong` | String length limit exceeded | Concatenation result exceeds `maxStringLen` |
 | `RegexError` | Regex failure | Regex parsing or execution failed |
+| `HttpCallError` | `http.call()` argument validation failed | Invalid URL scheme or SSRF-blocked address; the call returns `status = 0` and does **not** raise an error |
 | `ApiError` | API call failure | An exception occurred in the PluginSession interface |
 
 `TypeError` is the most common runtime error, typically arising when a script operates on a value that may be `nil` — for example, performing string operations on a request header that does not exist. It is recommended to perform `nil` checks on values read from external sources (such as `req.header()` and `ctx.get()`) within the script.
@@ -189,6 +190,7 @@ Some built-in functions have their own parameter or result limits in addition to
 | `req.header_names` / `resp.header_names` | Returns at most 256 header names | Guards against memory issues from requests with many headers |
 | `resp.set_status` | Status code must be in range 100–599 | Returns `ApiError` if out of range |
 | `range` | Generates at most 1,000 elements | Guards against large lists consuming excessive memory |
+| `http.call` | Timeout capped at `httpMaxTimeoutMs` (default 5,000 ms); response body capped at `httpMaxResponseBodyBytes` (default 1 MiB); only `http`/`https` schemes; private IPs blocked when `httpBlockPrivateIps: true` | Prevents gateway resource exhaustion and SSRF attacks |
 
 The path segment limit for `json_get` (32 segments) refers to the number of levels in the path expression — for example, `"a.b.c.d"` has 4 segments. Paths deeper than 32 levels are extremely rare in real-world use cases, and this limit will not impact normal usage.
 

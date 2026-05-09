@@ -2,7 +2,7 @@
 
 This document lists all built-in functions in EdgionDSL, organized by category. Each function includes its full signature, parameter descriptions, return values, constraints, and usage examples.
 
-**Type overview**: EdgionDSL has 5 runtime types: `Str` (string), `Int` (64-bit integer), `Bool` (boolean), `Nil` (null/missing), and `List` (a list of strings; cannot be constructed directly by user code).
+**Type overview**: EdgionDSL has 6 runtime types: `Str` (string), `Int` (64-bit integer), `Bool` (boolean), `Nil` (null/missing), `List` (a list of strings; cannot be constructed directly by user code), and `Map` (an ordered string-keyed map; returned by `http.call()` and constructible via `{key: expr}` literals).
 
 **Phase overview**: Some functions are only valid in specific execution phases. `req.*` write operations and `grpc_error()` are only meaningful in the request phase; `resp.*` read and write operations are only valid in the response phase.
 
@@ -1378,6 +1378,74 @@ if payload != nil {
 
 ## Network
 
+### http.call
+
+**Signature**: `http.call(method, url, body [, timeout_ms [, headers]])` → `Map`
+
+Sends an outbound HTTP request from the gateway to an arbitrary HTTP/HTTPS endpoint. The call is synchronous from the script's perspective and returns when a response is received or the timeout expires.
+
+**Parameters**:
+- `method` (Str) — HTTP method, e.g. `"GET"`, `"POST"`, `"PUT"`
+- `url` (Str) — Full URL including scheme and host, e.g. `"https://api.example.com/v1/check"`
+- `body` (Str | Nil) — Request body; pass `nil` for no body
+- `timeout_ms` (Int, optional) — Per-request timeout in milliseconds; capped to `httpMaxTimeoutMs` (default 5000)
+- `headers` (Map, optional) — Additional request headers as a `Map` of string key-value pairs
+
+**Return value**: A `Map` with the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | Int | HTTP response status code; `0` if the request failed (timeout, connection error, SSRF block, etc.) |
+| `body` | Str | Response body as UTF-8 text; empty string if the call failed or the body is empty |
+| `headers` | Map | Response headers; each key is the lowercase header name, each value is the last header value for that name |
+
+**This function never raises a runtime error.** Network failures, timeouts, and SSRF blocks all return `status = 0` with an empty body.
+
+**Constraints**:
+- Only `http` and `https` URL schemes are accepted; other schemes (e.g. `file://`, `ftp://`) return `status = 0`.
+- When `httpBlockPrivateIps: true`, requests to loopback, private, and link-local addresses return `status = 0`.
+- The response body is truncated at `httpMaxResponseBodyBytes` (default 1 MiB).
+- The actual timeout applied is `min(timeout_ms, httpMaxTimeoutMs)`.
+- At most 10 redirects are followed (global client setting).
+
+**Configuration fields** (inside `config`):
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `httpMaxTimeoutMs` | Integer | `5000` | Hard cap on per-call timeout (ms) |
+| `httpMaxResponseBodyBytes` | Integer | `1048576` | Maximum response body size (bytes); body is truncated if exceeded |
+| `httpBlockPrivateIps` | Boolean | `false` | Block outbound calls to private/loopback/link-local IP addresses (SSRF guard) |
+
+**Example — call a health endpoint and branch on status**:
+```
+let r = http.call("GET", "http://internal-service/health", nil, 1000)
+if r["status"] == 200 {
+  req.set_header("X-Backend-Healthy", "true")
+} else {
+  return deny(503, "backend unavailable")
+}
+```
+
+**Example — POST JSON with custom headers**:
+```
+let hdrs = {"Content-Type": "application/json", "X-Api-Key": req.header("X-Api-Key")}
+let r = http.call("POST", "https://auth.example.com/verify", "{\"token\":\"abc\"}", 2000, hdrs)
+if r["status"] != 200 {
+  return deny(401, "auth check failed")
+}
+```
+
+**Example — read a response header**:
+```
+let r = http.call("GET", "https://api.example.com/quota", nil, 2000)
+let remaining = r["headers"]["x-ratelimit-remaining"]
+if remaining != nil {
+  resp.set_header("X-Quota-Remaining", remaining)
+}
+```
+
+---
+
 ### ip_in_cidr
 
 **Signature**: `ip_in_cidr(ip, cidr)` → `Bool`
@@ -1646,6 +1714,7 @@ if sig == nil {
 | `time_now()` | Time | `Int` | 0 |
 | `time_format(timestamp, format)` | Time | `Str` | 2 |
 | `json_get(json_str, path)` | JSON | `Str\|Int\|Bool\|Nil` | 2 |
+| `http.call(method, url, body [, timeout_ms [, headers]])` | Network | `Map` | 2–5 |
 | `ip_in_cidr(ip, cidr)` | Network | `Bool` | 2 |
 | `uuid()` | Utility | `Str` | 0 |
 | `range(start, end)` | Utility | `List` | 2 |

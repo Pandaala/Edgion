@@ -76,6 +76,13 @@ description: Coding standards skill for Edgion. Use when reviewing or writing co
 - [ ] Do new keys added to `ctx_map` potentially contain sensitive information? If so, filter them
 - [ ] Do plugin stage_logs record full username / token? Record only a prefix
 
+### DSL plugin implementation — [dsl/](dsl/)
+
+| File | Topic |
+|------|------|
+| [dsl/builtins-path.md](dsl/builtins-path.md) | DSL path/URI variable reference: `req.path`, `req.uri`, `req.query`, and the difference between them |
+| [dsl/http-call.md](dsl/http-call.md) | `http.call()` builtin: async outbound HTTP, `Value::Map`, SSRF guard, config fields, test patterns |
+
 ## Relation to other Skills
 
 - **review/** — Review uses these standards as the criteria, including the observability review checklist
