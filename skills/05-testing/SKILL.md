@@ -35,7 +35,15 @@ cargo test --all
 
 ### Run integration tests
 ```bash
+# Main runner — every suite that shares the single controller/gateway topology
+# (HTTPRoute, GRPCRoute, EdgionPlugins, EdgionTls, Status, LinkSys/Status,
+# LinkSys/Redis, dynamic scenarios, …)
 ./examples/test/scripts/integration/run_integration.sh
+
+# Top-level orchestrator — main runner PLUS every standalone integration script
+# (Etcd / Elasticsearch LinkSys, ACME, Center watch-sync, edgion-cli E2E,
+# FileWatcher). Sequential; continues on failure; unified report at the end.
+./examples/test/scripts/integration/run_all_integration.sh
 ```
 
 ### Run dynamic (hot reload) tests

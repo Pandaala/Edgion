@@ -251,6 +251,15 @@ impl FileSystemWatcher {
             // real-time delivery for reliability: fixed poll_interval latency
             // (1 s) but never loses an event because diff is computed by
             // walking the directory and comparing to its last snapshot.
+            //
+            // `with_compare_contents(true)` is required: atomic writes via
+            // tmp + rename (FileSystemStorage::set_one) can land two
+            // back-to-back updates within a single poll cycle.  When the
+            // resulting files have the same length and mtime granularity is
+            // coarse, the default size+mtime diff misses the second update
+            // and the controller never re-applies it.  Hashing each file's
+            // contents per cycle is O(KB·N) per second on a normal conf dir
+            // and closes that window.
             let mut watcher = PollWatcher::new(
                 move |res: Result<Event, notify::Error>| {
                     if let Ok(event) = res {
@@ -277,7 +286,9 @@ impl FileSystemWatcher {
                         }
                     }
                 },
-                Config::default().with_poll_interval(Duration::from_secs(1)),
+                Config::default()
+                    .with_poll_interval(Duration::from_secs(1))
+                    .with_compare_contents(true),
             )
             .context("Failed to create file watcher")?;
 
