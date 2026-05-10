@@ -86,6 +86,7 @@ impl JwtAuth {
             "Unauthorized - Invalid or missing JWT",
         )
         .await
+        .map_err(|_| ())
     }
 
     /// Delay before returning auth failure (timing attack protection).

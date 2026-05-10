@@ -692,24 +692,24 @@ pub struct EdgionHttpContext {
 
     /// Response-header mutations queued by plugins running before the real
     /// `ResponseHeader` is available (typically request stage). Drained onto
-    /// the real `ResponseHeader` at three sites:
+    /// the real `ResponseHeader` at four sites:
     ///   1. `run_upstream_response_plugins_sync` — applied before any
     ///      response-stage plugin runs, so they can further mutate the
     ///      already-merged headers.
-    ///   2. `ErrResponse` request-stage termination handler — applied after
-    ///      runtime defaults (`content-type: text/plain`, `content-length`),
-    ///      so plugin Set ops override defaults.
+    ///   2. `ErrResponse` request-stage termination handler (HTTP route) —
+    ///      applied after runtime defaults (`content-type: text/plain`,
+    ///      `content-length`) so plugin Set ops override defaults. The gRPC
+    ///      branch dispatches to `send_grpc_error_direct` instead and lets
+    ///      that site handle the drain; on that branch the user-provided
+    ///      `body` is forwarded as the `grpc-message` trailer (with the
+    ///      `http_to_grpc_status` default message as fallback when `body`
+    ///      is `None`).
     ///   3. `send_grpc_error_direct` — applied before re-asserting
     ///      `content-type: application/grpc` so the gRPC contract value
     ///      cannot be overwritten by a queued Set.
-    ///
-    /// **Known gap (tracked as P2-g2-011 follow-up):** the
-    /// `send_grpc_error_three_frame` path in `session_adapter` does **not**
-    /// currently drain this queue. Plugins that queue `Set-Cookie` /
-    /// `X-Trace-Id` and then terminate a gRPC request with a non-200 status in
-    /// the request stage will see those queued ops silently dropped. This is
-    /// pre-existing behaviour from before the queue was tagged; left out of
-    /// the g2-002 fix scope to keep the change surface small.
+    ///   4. `send_grpc_error_three_frame` — same pattern as (3), reached when
+    ///      a plugin calls `write_response_header` directly with a non-200
+    ///      status on a gRPC route.
     ///
     /// Each entry carries an explicit op (Set/Append/Remove) so semantics
     /// are preserved across the deferral — without this tag, an `Append`

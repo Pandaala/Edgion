@@ -1,12 +1,11 @@
 //! JWT verification main flow + decode error classification.
 
-use anyhow::anyhow;
 use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::credentials::Credentials;
-use super::{is_symmetric, to_jwt_algorithm, JwtAuth, JwtAuthError, JwtAuthResult};
+use super::{is_symmetric, to_jwt_algorithm, JwtAuth, JwtAuthResult};
 use crate::core::gateway::plugins::http::common::auth_common::Claims;
 use crate::core::gateway::plugins::runtime::PluginLog;
 
@@ -52,17 +51,12 @@ impl JwtAuth {
 
         // Always verify algorithm from JWT header matches configured algorithm.
         // This prevents algorithm confusion attacks (e.g., "alg": "none").
-        let header = decode_header(token).map_err(|e| {
+        let header = decode_header(token).map_err(|_| {
             plugin_log.push("Deny malformed token");
-            format!("Invalid JWT header: {}", e)
         })?;
         if header.alg != expected_alg {
             plugin_log.push("Deny bad algorithm");
-            return Err(format!(
-                "Algorithm mismatch: expected {:?}, got {:?}",
-                self.config.algorithm, header.alg
-            )
-            .into());
+            return Err(());
         }
 
         // Build validation
@@ -99,9 +93,8 @@ impl JwtAuth {
                 no_verify.validate_aud = false;
                 no_verify.set_required_spec_claims::<&str>(&[]);
 
-                let token_data = decode::<Claims>(token, &DecodingKey::from_secret(&[]), &no_verify).map_err(|e| {
+                let token_data = decode::<Claims>(token, &DecodingKey::from_secret(&[]), &no_verify).map_err(|_| {
                     plugin_log.push("Deny malformed token");
-                    format!("Failed to decode JWT payload: {}", e)
                 })?;
                 let claims_value = token_data.claims.to_value();
 
@@ -110,17 +103,12 @@ impl JwtAuth {
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
                         plugin_log.push("Deny missing claim");
-                        format!(
-                            "JWT payload missing '{}' claim for key lookup",
-                            self.config.key_claim_name
-                        )
                     })?;
 
                 let cred = map.get(key_value).ok_or_else(|| {
                     // Use a generic failure tag so external observers cannot distinguish
                     // "key not found" from "key found but signature invalid" (key enumeration).
                     plugin_log.push("Deny invalid credentials");
-                    format!("Unknown key '{}' in JWT", key_value)
                 })?;
                 // §3: key resolved from multi-key map
                 plugin_log.push("multi key resolved");
@@ -131,14 +119,13 @@ impl JwtAuth {
             }
             Credentials::None => {
                 plugin_log.push_err("no credentials configured");
-                return Err("No credentials configured (secret_ref or secret_refs required)".into());
+                return Err(());
             }
         };
 
         // Verify signature and claims
         let token_data = decode::<Claims>(token, &decoding_key, &validation).map_err(|e| {
             plugin_log.push(classify_jwt_decode_error(&e));
-            JwtAuthError::from(anyhow!("Invalid token"))
         })?;
         let claims_value = token_data.claims.to_value();
 
@@ -152,11 +139,7 @@ impl JwtAuth {
                 let max_allowed_exp = now + self.config.maximum_expiration;
                 if exp > max_allowed_exp {
                     plugin_log.push("Deny exp too far");
-                    return Err(format!(
-                        "Token expiration too far in future: {} > {} (max {}s)",
-                        exp, max_allowed_exp, self.config.maximum_expiration
-                    )
-                    .into());
+                    return Err(());
                 }
             }
         }

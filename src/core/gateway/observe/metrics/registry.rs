@@ -54,8 +54,6 @@ pub mod names {
     pub const LINK_SYS_ES_BULK_CHANNEL_FULL_TOTAL: &str = "edgion_link_sys_es_bulk_channel_full_total";
     // LDAP auth plugin: error counter by kind (unreachable / timeout / bind_fail)
     pub const LDAP_AUTH_ERRORS_TOTAL: &str = "edgion_ldap_auth_errors_total";
-    // LDAP auth plugin: cache hit ratio gauge (0.0–1.0), updated every 30 s
-    pub const LDAP_CACHE_HIT_RATE: &str = "edgion_ldap_cache_hit_rate";
     // Webhook key resolver: per-resolve failure counter by reason
     pub const WEBHOOK_RESOLVE_ERRORS_TOTAL: &str = "edgion_webhook_resolve_errors_total";
 }
@@ -486,17 +484,6 @@ pub fn record_rr_selector_truncated() {
 /// Fixed cardinality — safe as a label.
 pub fn record_ldap_auth_error(kind: &'static str) {
     counter!(names::LDAP_AUTH_ERRORS_TOTAL, "kind" => kind).increment(1);
-}
-
-/// Set the LDAP auth cache hit rate gauge (0.0–1.0).
-///
-/// Called from a per-plugin background task every 30 s; not on the hot path.
-///
-/// Note: this gauge has no instance label. When multiple LDAP plugin instances are
-/// active, each background task writes to the same gauge and the last writer wins.
-/// The metric is only interpretable when a single LDAP plugin instance is running.
-pub fn set_ldap_cache_hit_rate(ratio: f64) {
-    gauge!(names::LDAP_CACHE_HIT_RATE).set(ratio);
 }
 
 /// Record a webhook key-resolver failure.

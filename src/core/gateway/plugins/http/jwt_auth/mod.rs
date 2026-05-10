@@ -16,8 +16,12 @@ pub use plugin::JwtAuth;
 use crate::types::resources::edgion_plugins::JwtAlgorithm;
 use jsonwebtoken::Algorithm;
 
-pub(crate) type JwtAuthError = Box<dyn std::error::Error + Send + Sync>;
-pub(crate) type JwtAuthResult<T> = Result<T, JwtAuthError>;
+/// Unit error: failure kind already lives in the `PluginLog` tag pushed at the
+/// failure site (e.g. `Deny token expired`, `Deny bad algorithm`). The caller
+/// always discards the error value, so carrying token / claim content in a
+/// `Box<dyn Error>` would only risk a future leak (see
+/// `skills/03-coding/01-log-safety.md`, Iron rule 1).
+pub(crate) type JwtAuthResult<T> = Result<T, ()>;
 
 /// Convert JwtAlgorithm domain type to jsonwebtoken::Algorithm.
 pub(crate) fn to_jwt_algorithm(alg: JwtAlgorithm) -> Algorithm {

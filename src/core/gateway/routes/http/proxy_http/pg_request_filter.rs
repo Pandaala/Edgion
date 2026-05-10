@@ -16,7 +16,7 @@ use crate::core::gateway::{
 };
 use crate::types::ctx::NormalizedHostname;
 use crate::types::filters::PluginRunningResult;
-use crate::types::resources::{CorsConfig, EdgionPlugin, HTTPRouteFilter, HTTPRouteFilterType};
+use crate::types::resources::{CorsConfig, HTTPRouteFilter, HTTPRouteFilterType};
 use crate::types::{EdgionHttpContext, EdgionStatus, TlsConnId, TlsConnMeta};
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::Session;
@@ -277,19 +277,19 @@ async fn build_request_metadata(
         }
     }
 
-    // Extract client_addr and client_port (TCP connection address)
-    let client_addr_str = session.client_addr().map(|addr| addr.to_string()).unwrap_or_default();
-    let parsed_addr = client_addr_str.parse::<std::net::SocketAddr>().ok();
-    ctx.request_info.client_addr = parsed_addr
-        .map(|a| a.ip().to_string())
-        .unwrap_or_else(|| client_addr_str.clone());
-    ctx.request_info.client_port = parsed_addr.map(|a| a.port()).unwrap_or(0);
+    // Extract client_addr and client_port (TCP connection address).
+    // as_inet() avoids the to_string() -> parse() round trip; UDS downstream
+    // is not a real scenario for the HTTP gateway, so falling back to empty
+    // string for non-inet addresses is acceptable.
+    let inet = session.client_addr().and_then(|a| a.as_inet());
+    ctx.request_info.client_addr = inet.map(|s| s.ip().to_string()).unwrap_or_default();
+    ctx.request_info.client_port = inet.map(|s| s.port()).unwrap_or(0);
 
-    // Extract remote_addr (real client IP, considering trusted proxies)
+    // Extract remote_addr (real client IP, considering trusted proxies).
+    // extract_real_ip accepts a bare IP string as well as "ip:port".
     ctx.request_info.remote_addr = if let Some(extractor) = &edgion_http.real_ip_extractor {
-        extractor.extract_real_ip(&client_addr_str, req_header)
+        extractor.extract_real_ip(&ctx.request_info.client_addr, req_header)
     } else {
-        // No extractor configured, use client_addr (already IP only)
         ctx.request_info.client_addr.clone()
     };
 
@@ -480,7 +480,10 @@ fn append_x_forwarded_for(session: &mut Session, ctx: &EdgionHttpContext) {
     let req_header_mut = session.req_header_mut();
     if let Some(ref existing_xff) = ctx.request_info.x_forwarded_for {
         // X-Forwarded-For exists, append client IP
-        let new_xff = format!("{}, {}", existing_xff, client_ip);
+        let mut new_xff = String::with_capacity(existing_xff.len() + 2 + client_ip.len());
+        new_xff.push_str(existing_xff);
+        new_xff.push_str(", ");
+        new_xff.push_str(client_ip);
         let _ = req_header_mut.insert_header("X-Forwarded-For", &new_xff);
     } else {
         // X-Forwarded-For doesn't exist, create new
@@ -551,9 +554,11 @@ mod tests {
 
 /// Extract CORS configuration dynamically from route filters
 ///
-/// This function searches through route filters to find EdgionPlugins references
-/// and extracts the CORS configuration from the global plugin store.
-/// This ensures we always get the latest CORS config even if EdgionPlugin is updated.
+/// Walks the route's `ExtensionRef` filters that point at `EdgionPlugins`
+/// resources and returns the first pre-resolved `Arc<CorsConfig>` cached on
+/// the matched `PluginRuntime`. The cache is rebuilt on every `EdgionPlugins`
+/// preparse, so hot-reload semantics are preserved while the preflight hot
+/// path avoids deep-cloning the full `CorsConfig` per request.
 fn extract_cors_config_from_route_filters(
     filters: &Option<Vec<HTTPRouteFilter>>,
     namespace: &str,
@@ -574,16 +579,7 @@ fn extract_cors_config_from_route_filters(
 
         let key = format!("{}/{}", namespace, ext_ref.name);
         let cors = get_global_plugin_store()
-            .with_plugin(&key, |p| {
-                p.spec.request_plugins.as_ref()?.iter().find_map(|entry| {
-                    if let EdgionPlugin::Cors(cfg) = &entry.plugin {
-                        if entry.is_enabled() {
-                            return Some(Arc::new(cfg.clone()));
-                        }
-                    }
-                    None
-                })
-            })
+            .with_plugin(&key, |p| p.spec.plugin_runtime.cors_config_arc())
             .flatten();
         if cors.is_some() {
             return cors;

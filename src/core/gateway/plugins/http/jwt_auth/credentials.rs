@@ -50,11 +50,10 @@ impl JwtAuth {
     /// Decode secret bytes if base64_secret is enabled.
     fn decode_secret_if_needed(&self, secret_bytes: Vec<u8>) -> JwtAuthResult<Vec<u8>> {
         if self.config.base64_secret {
-            let secret_str =
-                String::from_utf8(secret_bytes).map_err(|e| format!("Invalid UTF-8 in base64 secret: {}", e))?;
+            let secret_str = String::from_utf8(secret_bytes).map_err(|_| ())?;
             let decoded = base64::engine::general_purpose::STANDARD
                 .decode(secret_str.trim())
-                .map_err(|e| format!("Failed to decode base64 secret: {}", e))?;
+                .map_err(|_| ())?;
             Ok(decoded)
         } else {
             Ok(secret_bytes)
@@ -69,17 +68,14 @@ impl JwtAuth {
         // Try pre-resolved single credential first
         if let Some(ref resolved) = self.config.resolved_credential {
             let cred = if symmetric {
-                let secret_b64 = resolved.secret.as_ref().ok_or("Resolved credential missing 'secret'")?;
+                let secret_b64 = resolved.secret.as_ref().ok_or(())?;
                 let secret_bytes = base64::engine::general_purpose::STANDARD
                     .decode(secret_b64)
-                    .map_err(|e| format!("Invalid base64 secret: {}", e))?;
+                    .map_err(|_| ())?;
                 let final_secret = self.decode_secret_if_needed(secret_bytes)?;
                 Credential::Symmetric(final_secret)
             } else {
-                let pem = resolved
-                    .public_key
-                    .as_ref()
-                    .ok_or("Resolved credential missing 'publicKey'")?;
+                let pem = resolved.public_key.as_ref().ok_or(())?;
                 Credential::Asymmetric(pem.clone())
             };
             return Ok(Credentials::Single(cred));
@@ -90,20 +86,14 @@ impl JwtAuth {
             let mut map = HashMap::new();
             for (key, resolved) in resolved_map {
                 let cred = if symmetric {
-                    let secret_b64 = resolved
-                        .secret
-                        .as_ref()
-                        .ok_or_else(|| format!("Resolved credential '{}' missing 'secret'", key))?;
+                    let secret_b64 = resolved.secret.as_ref().ok_or(())?;
                     let secret_bytes = base64::engine::general_purpose::STANDARD
                         .decode(secret_b64)
-                        .map_err(|e| format!("Invalid base64 secret for '{}': {}", key, e))?;
+                        .map_err(|_| ())?;
                     let final_secret = self.decode_secret_if_needed(secret_bytes)?;
                     Credential::Symmetric(final_secret)
                 } else {
-                    let pem = resolved
-                        .public_key
-                        .as_ref()
-                        .ok_or_else(|| format!("Resolved credential '{}' missing 'publicKey'", key))?;
+                    let pem = resolved.public_key.as_ref().ok_or(())?;
                     Credential::Asymmetric(pem.clone())
                 };
                 map.insert(key.clone(), cred);
@@ -116,26 +106,17 @@ impl JwtAuth {
         // Fallback to get_secret (for controller-side or backward compatibility)
         if let Some(ref secret_ref) = self.config.secret_ref {
             let ns = secret_ref.namespace.as_deref().unwrap_or(&self.plugin_namespace);
-            let secret = get_secret(Some(ns), &secret_ref.name)
-                .ok_or_else(|| format!("Secret {}/{} not found", ns, secret_ref.name))?;
+            let secret = get_secret(Some(ns), &secret_ref.name).ok_or(())?;
 
-            let data = secret
-                .data
-                .as_ref()
-                .ok_or_else(|| format!("Secret {}/{} has no data", ns, secret_ref.name))?;
+            let data = secret.data.as_ref().ok_or(())?;
 
             let cred = if symmetric {
-                let secret_bytes = data
-                    .get("secret")
-                    .ok_or_else(|| format!("Secret {}/{} missing 'secret' key", ns, secret_ref.name))?;
+                let secret_bytes = data.get("secret").ok_or(())?;
                 let final_secret = self.decode_secret_if_needed(secret_bytes.0.clone())?;
                 Credential::Symmetric(final_secret)
             } else {
-                let public_key_bytes = data
-                    .get("publicKey")
-                    .ok_or_else(|| format!("Secret {}/{} missing 'publicKey' key", ns, secret_ref.name))?;
-                let pem = String::from_utf8(public_key_bytes.0.clone())
-                    .map_err(|e| format!("Invalid publicKey encoding: {}", e))?;
+                let public_key_bytes = data.get("publicKey").ok_or(())?;
+                let pem = String::from_utf8(public_key_bytes.0.clone()).map_err(|_| ())?;
                 Credential::Asymmetric(pem)
             };
 
@@ -147,32 +128,20 @@ impl JwtAuth {
 
             for secret_ref in secret_refs {
                 let ns = secret_ref.namespace.as_deref().unwrap_or(&self.plugin_namespace);
-                let secret = get_secret(Some(ns), &secret_ref.name)
-                    .ok_or_else(|| format!("Secret {}/{} not found", ns, secret_ref.name))?;
+                let secret = get_secret(Some(ns), &secret_ref.name).ok_or(())?;
 
-                let data = secret
-                    .data
-                    .as_ref()
-                    .ok_or_else(|| format!("Secret {}/{} has no data", ns, secret_ref.name))?;
+                let data = secret.data.as_ref().ok_or(())?;
 
-                let key_bytes = data
-                    .get("key")
-                    .ok_or_else(|| format!("Secret {}/{} missing 'key' field", ns, secret_ref.name))?;
-                let key_str =
-                    String::from_utf8(key_bytes.0.clone()).map_err(|e| format!("Invalid key encoding: {}", e))?;
+                let key_bytes = data.get("key").ok_or(())?;
+                let key_str = String::from_utf8(key_bytes.0.clone()).map_err(|_| ())?;
 
                 let cred = if symmetric {
-                    let secret_bytes = data
-                        .get("secret")
-                        .ok_or_else(|| format!("Secret {}/{} missing 'secret' key", ns, secret_ref.name))?;
+                    let secret_bytes = data.get("secret").ok_or(())?;
                     let final_secret = self.decode_secret_if_needed(secret_bytes.0.clone())?;
                     Credential::Symmetric(final_secret)
                 } else {
-                    let public_key_bytes = data
-                        .get("publicKey")
-                        .ok_or_else(|| format!("Secret {}/{} missing 'publicKey' key", ns, secret_ref.name))?;
-                    let pem = String::from_utf8(public_key_bytes.0.clone())
-                        .map_err(|e| format!("Invalid publicKey encoding: {}", e))?;
+                    let public_key_bytes = data.get("publicKey").ok_or(())?;
+                    let pem = String::from_utf8(public_key_bytes.0.clone()).map_err(|_| ())?;
                     Credential::Asymmetric(pem)
                 };
 
@@ -196,7 +165,7 @@ impl JwtAuth {
                 if let Ok(key) = DecodingKey::from_ec_pem(pem.as_bytes()) {
                     return Ok(key);
                 }
-                Err("Invalid public key PEM (not RSA or EC)".into())
+                Err(())
             }
         }
     }

@@ -186,6 +186,12 @@ impl<'a> PingoraSessionAdapter<'a> {
         ctx.request_info.response_committed = true;
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
+        // Drain queued response-header ops (e.g. X-Trace-Id, Set-Cookie set
+        // by an earlier request-stage plugin) before re-asserting
+        // content-type. Mirrors `send_grpc_error_direct`: write content-type
+        // LAST so a queued Set on "content-type" cannot break the gRPC
+        // contract.
+        ctx.drain_pending_response_header_ops(&mut resp);
         resp.insert_header("content-type", "application/grpc")
             .map_err(|e| Box::new(e) as PluginSessionError)?;
         inner

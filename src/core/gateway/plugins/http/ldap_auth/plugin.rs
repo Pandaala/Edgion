@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
-use crate::core::gateway::observe::metrics::registry::{record_ldap_auth_error, set_ldap_cache_hit_rate};
+use crate::core::gateway::observe::metrics::registry::record_ldap_auth_error;
 use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
@@ -63,38 +63,6 @@ impl LdapAuth {
             get_default_lru_cache_shards()
         };
         let auth_cache = Arc::new(ShardedLruCache::new(capacity, shards));
-
-        // Background hit-ratio monitor: runs every 30 s, logs only on transitions.
-        // Uses a Weak reference so the task exits automatically when the plugin is dropped.
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let cache_monitor = Arc::downgrade(&auth_cache);
-            handle.spawn(async move {
-                const LOW_RATIO: f64 = 0.5;
-                const MIN_SAMPLES: u64 = 100;
-                let mut was_low = false;
-                loop {
-                    tokio::time::sleep(Duration::from_secs(30)).await;
-                    let Some(cache) = cache_monitor.upgrade() else {
-                        break;
-                    };
-                    let stats = cache.stats();
-                    let total = stats.hits + stats.misses + stats.expirations;
-                    if total < MIN_SAMPLES {
-                        continue;
-                    }
-                    let ratio = stats.hit_ratio();
-                    set_ldap_cache_hit_rate(ratio);
-                    let is_low = ratio < LOW_RATIO;
-                    if is_low && !was_low {
-                        tracing::info!(hit_ratio = ratio, "LDAP cache hit ratio low; possible brute-force");
-                        was_low = true;
-                    } else if !is_low && was_low {
-                        tracing::info!(hit_ratio = ratio, "LDAP cache hit ratio recovered");
-                        was_low = false;
-                    }
-                }
-            });
-        }
 
         Self {
             name: "LdapAuth".to_string(),

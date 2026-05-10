@@ -1,13 +1,16 @@
 //! Plugin runtime - manages plugin execution across different stages
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
 use crate::core::gateway::plugins::runtime::log::la;
+use crate::core::gateway::runtime::server::http_to_grpc_status;
 use crate::types::filters::PluginRunningResult;
 use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
+use crate::types::resources::edgion_plugins::CorsConfig;
 use crate::types::resources::{
     EdgionPlugin, GRPCRouteFilter, GRPCRouteFilterType, HTTPRouteFilter, HTTPRouteFilterType,
 };
@@ -74,6 +77,14 @@ pub struct PluginRuntime {
     /// because backend-scope ExtensionRefFilters keep `index = None` and use
     /// the legacy direct-store-lookup path.
     ext_ref_keys: Vec<(String, String)>,
+    /// Pre-resolved Arc to the first enabled `EdgionPlugin::Cors` config in
+    /// `request_plugins`. Built once at preparse so the global CORS preflight
+    /// handler (`pg_request_filter::extract_cors_config_from_route_filters`)
+    /// can return an Arc clone instead of deep-cloning the full `CorsConfig`
+    /// per OPTIONS preflight. Hot-reload semantics are preserved: every
+    /// `EdgionPlugins` update rebuilds this runtime, producing a new Arc that
+    /// the plugin store swaps in atomically.
+    cors_config: Option<Arc<CorsConfig>>,
 }
 
 /// Result of attempting to build a stage-specific filter from an EdgionPlugin.
@@ -128,6 +139,7 @@ impl PluginRuntime {
             upstream_response_body_plugins: vec![],
             upstream_response_async_plugins: vec![],
             ext_ref_keys: Vec::new(),
+            cors_config: None,
         }
     }
 
@@ -137,6 +149,16 @@ impl PluginRuntime {
     /// `from_grpcroute_filters_for_rule`. Returns an empty slice for backend-scope.
     pub fn ext_ref_keys(&self) -> &[(String, String)] {
         &self.ext_ref_keys
+    }
+
+    /// Pre-resolved CORS config for the global preflight handler hot path.
+    ///
+    /// Returns `Some(Arc::clone)` of the first enabled `EdgionPlugin::Cors`
+    /// entry in `request_plugins` if any, populated at preparse via
+    /// `add_from_request_filters`. Cloning the returned `Arc` is cheap; the
+    /// underlying `CorsConfig` is not deep-cloned per call.
+    pub fn cors_config_arc(&self) -> Option<Arc<CorsConfig>> {
+        self.cors_config.clone()
     }
 
     /// Build a runtime for a route rule. Assigns ExtensionRef indices for the
@@ -201,14 +223,15 @@ impl PluginRuntime {
                 }
                 HTTPRouteFilterType::CORS => {
                     if let Some(config) = &filter.cors {
-                        match GapiCorsFilter::try_new(config.clone()) {
-                            Ok(cors_filter) => {
-                                self.add_request_filter(Box::new(cors_filter.clone()));
-                                self.add_upstream_response_filter(Box::new(cors_filter));
-                            }
-                            Err(e) => {
-                                tracing::error!("CORS filter config rejected: {}", e);
-                            }
+                        // try_new validation failures are reported via the controller:
+                        // bad configs flag the rule in HTTPRoute.spec.invalid_rule_indices
+                        // and surface as PartiallyInvalid status (see http_route handler's
+                        // find_invalid_rule_details). Silently drop here — the affected
+                        // rule is excluded from the data-plane route table so this filter
+                        // would never be invoked anyway.
+                        if let Ok(cors_filter) = GapiCorsFilter::try_new(config.clone()) {
+                            self.add_request_filter(Box::new(cors_filter.clone()));
+                            self.add_upstream_response_filter(Box::new(cors_filter));
                         }
                     }
                 }
@@ -316,6 +339,16 @@ impl PluginRuntime {
                 if let Some(error) = entry.plugin.validation_error() {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
+                }
+
+                // Cache the first enabled CORS config so the global preflight
+                // handler can fetch it without deep-cloning per request. Mirrors
+                // the `find_map` semantics previously used in
+                // `pg_request_filter::extract_cors_config_from_route_filters`.
+                if self.cors_config.is_none() {
+                    if let EdgionPlugin::Cors(cfg) = &entry.plugin {
+                        self.cors_config = Some(Arc::new(cfg.clone()));
+                    }
                 }
 
                 // Validate optional entry-level alias. On failure, surface
@@ -819,6 +852,9 @@ impl PluginRuntime {
             return;
         }
 
+        // Snapshot before `ctx` is borrowed by `session_adapter`. Set in
+        // `pg_request_filter` and not mutated during plugin execution.
+        let is_grpc_request = ctx.request_info.is_grpc_request;
         let mut filter_logs = Vec::with_capacity(self.request_plugins.len());
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
@@ -838,7 +874,18 @@ impl PluginRuntime {
                 session_adapter.set_terminate();
                 break;
             } else if let PluginRunningResult::ErrResponse { status, body } = result {
-                if let Ok(status_code) = http::StatusCode::from_u16(status) {
+                if is_grpc_request {
+                    // gRPC route: route to the gRPC-native error path. The
+                    // HTTP-style resp built below would otherwise be discarded
+                    // by `write_response_header`'s gRPC re-route (see
+                    // `send_grpc_error_three_frame`), losing any queued
+                    // response-header ops. `send_grpc_error_direct` drains
+                    // those ops itself and re-asserts the gRPC content-type
+                    // contract.
+                    let (grpc_status, default_msg) = http_to_grpc_status(status);
+                    let message = body.as_deref().or(Some(default_msg));
+                    let _ = session_adapter.send_grpc_error_direct(grpc_status, message).await;
+                } else if let Ok(status_code) = http::StatusCode::from_u16(status) {
                     if let Ok(mut resp) = ResponseHeader::build(status_code, Some(2)) {
                         let _ = resp.insert_header("content-type", "text/plain");
                         let body_bytes = body.map(bytes::Bytes::from);

@@ -52,14 +52,10 @@ use bytes::Bytes;
 use futures::StreamExt;
 use pingora_http::ResponseHeader;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use sha2::{Digest, Sha256};
-use std::sync::Arc;
 use std::time::Duration;
 
 const MAX_ERROR_BODY_BYTES: usize = 4096;
 
-use crate::core::gateway::cache::ShardedLruCache;
-use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::apply_auth_failure_delay;
 use crate::core::gateway::plugins::http::common::http_client::{get_http_client, is_hop_by_hop};
 use crate::core::gateway::plugins::runtime::log::la;
@@ -70,53 +66,14 @@ use crate::types::resources::edgion_plugins::ForwardAuthConfig;
 pub struct ForwardAuth {
     name: String,
     config: ForwardAuthConfig,
-    auth_cache: Option<Arc<ShardedLruCache<String, u16>>>,
 }
 
 impl ForwardAuth {
     pub fn new(config: &ForwardAuthConfig) -> Self {
-        let auth_cache = if config.cache_ttl > 0 {
-            let capacity = if config.lru_cache.capacity == 0 {
-                get_default_lru_cache_capacity()
-            } else {
-                config.lru_cache.capacity
-            };
-            let shards = if config.lru_cache.shards > 0 {
-                config.lru_cache.shards
-            } else {
-                get_default_lru_cache_shards()
-            };
-            Some(Arc::new(ShardedLruCache::new(capacity, shards)))
-        } else {
-            None
-        };
         ForwardAuth {
             name: "ForwardAuth".to_string(),
             config: config.clone(),
-            auth_cache,
         }
-    }
-
-    /// Compute a stable SHA256 cache key from the configured request headers.
-    /// When request_headers is None or empty, uses "authorization" only as a safe default.
-    fn cache_key(session: &dyn PluginSession, request_headers: &Option<Vec<String>>) -> String {
-        let default_headers = vec!["authorization".to_string()];
-        let headers_to_hash: Vec<&str> = match request_headers {
-            Some(list) if !list.is_empty() => list.iter().map(|h| h.as_str()).collect(),
-            _ => default_headers.iter().map(|h| h.as_str()).collect(),
-        };
-        let mut sorted = headers_to_hash;
-        sorted.sort_unstable();
-
-        let mut h = Sha256::new();
-        for header_name in &sorted {
-            let value = session.header_value(header_name).unwrap_or_default();
-            h.update(header_name.as_bytes());
-            h.update(b"=");
-            h.update(value.as_bytes());
-            h.update(b"\0");
-        }
-        format!("{:x}", h.finalize())
     }
 
     /// Build the header map to send to the auth service.
@@ -251,21 +208,6 @@ impl RequestFilter for ForwardAuth {
                 .await;
         }
 
-        // Cache lookup — only when upstream_headers is empty (no response headers to propagate)
-        // and cache is enabled. Conservative: if upstream_headers are needed, always call upstream.
-        if let Some(ref cache) = self.auth_cache {
-            if self.config.upstream_headers.is_empty() {
-                let key = Self::cache_key(session, &self.config.request_headers);
-                if let Some(cached_status) = cache.get(&key) {
-                    plugin_log.push_fmt("auth cached {}", la![cached_status.to_string().as_str()]);
-                    if self.config.hide_credentials {
-                        let _ = session.remove_request_header("authorization");
-                    }
-                    return PluginRunningResult::GoodNext;
-                }
-            }
-        }
-
         let client = get_http_client();
 
         // Build auth request
@@ -319,13 +261,6 @@ impl RequestFilter for ForwardAuth {
             // Hide credentials if configured
             if self.config.hide_credentials {
                 let _ = session.remove_request_header("authorization");
-            }
-            // Store successful result in cache (only when upstream_headers is empty)
-            if let Some(ref cache) = self.auth_cache {
-                if self.config.upstream_headers.is_empty() {
-                    let key = Self::cache_key(session, &self.config.request_headers);
-                    cache.insert(key, status, Some(Duration::from_secs(self.config.cache_ttl)));
-                }
             }
             plugin_log.push_fmt("auth pass {}", la![status.to_string().as_str()]);
             PluginRunningResult::GoodNext

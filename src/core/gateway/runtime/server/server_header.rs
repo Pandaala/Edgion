@@ -1,40 +1,59 @@
+use bytes::Bytes;
+use http::{HeaderName, HeaderValue};
 use pingora_http::ResponseHeader;
-use std::collections::HashMap;
+
+/// One pre-parsed header entry.
+///
+/// `name` is used for case-insensitive `remove_header` lookup; `case_name`
+/// preserves the original casing for the wire (pingora's titled-name
+/// fast-list only covers ~12 common headers, so anything else — e.g. HSTS —
+/// would otherwise round-trip through `HeaderName::as_str()` and get
+/// lowercased).
+#[derive(Clone, Debug)]
+struct Entry {
+    name: HeaderName,
+    case_name: Bytes,
+    value: HeaderValue,
+}
 
 #[derive(Clone, Debug)]
 pub struct ServerHeaderOpts {
-    headers: HashMap<String, String>,
+    headers: Vec<Entry>,
     enable: bool,
 }
 
 const HSTS_KEY: &str = "Strict-Transport-Security";
+
 impl Default for ServerHeaderOpts {
     fn default() -> Self {
-        let mut headers = HashMap::new();
-        headers.insert("Server".to_owned(), "Edgion".to_owned());
-        headers.insert(
-            HSTS_KEY.to_owned(),
-            "max-age=63072000; includeSubDomains; preload".to_owned(),
-        );
-        Self { headers, enable: true }
+        let mut opts = Self {
+            headers: Vec::new(),
+            enable: true,
+        };
+        opts.upsert("Server", "Edgion");
+        opts.upsert(HSTS_KEY, "max-age=63072000; includeSubDomains; preload");
+        opts
     }
 }
+
 impl ServerHeaderOpts {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn add_header<S: Into<String>>(mut self, key: S, value: S) -> Self {
-        self.headers.insert(key.into(), value.into());
+        self.upsert(&key.into(), &value.into());
         self
     }
 
     pub fn set_strict_transport_security(&mut self, value: impl Into<String>) {
-        self.headers.insert(HSTS_KEY.to_owned(), value.into());
+        self.upsert(HSTS_KEY, &value.into());
     }
 
     pub fn has_headers(&self, h: &str) -> bool {
-        self.headers.contains_key(h)
+        HeaderName::try_from(h)
+            .map(|name| self.headers.iter().any(|e| e.name == name))
+            .unwrap_or(false)
     }
 
     pub fn enable(&mut self, enable: bool) {
@@ -42,18 +61,50 @@ impl ServerHeaderOpts {
     }
 
     pub fn remove_hsts(&mut self) {
-        self.headers.remove(HSTS_KEY);
+        self.remove(HSTS_KEY);
     }
 
-    /// Apply configured headers to response
+    /// Apply configured headers to response.
+    ///
+    /// `Bytes` and `HeaderValue` clones here are refcount bumps. Pingora's
+    /// `insert_header` still re-derives an internal `HeaderName` from the
+    /// bytes — cheap enum dispatch for standard headers, one small
+    /// `Bytes::copy_from_slice` for `HeaderName::Custom` entries (e.g.
+    /// HSTS) — unavoidable at this layer.
     pub fn apply_to_response(&self, response: &mut ResponseHeader) {
         if self.enable {
-            for (key, value) in &self.headers {
-                // Remove existing header first to avoid duplicates
-                response.remove_header(key);
-                // Insert custom header (clone strings to satisfy 'static lifetime requirement)
-                let _ = response.insert_header(key.clone(), value.clone());
+            for entry in &self.headers {
+                response.remove_header(&entry.name);
+                let _ = response.insert_header(entry.case_name.clone(), entry.value.clone());
             }
+        }
+    }
+
+    fn upsert(&mut self, key: &str, value: &str) {
+        let Ok(name) = HeaderName::try_from(key) else {
+            return;
+        };
+        let Ok(val) = HeaderValue::try_from(value) else {
+            return;
+        };
+        match self.headers.iter_mut().find(|e| e.name == name) {
+            // Match `HashMap::insert` semantics: existing key (and its case)
+            // is preserved; only the value is replaced.
+            Some(slot) => slot.value = val,
+            None => {
+                let case_name = Bytes::copy_from_slice(key.as_bytes());
+                self.headers.push(Entry {
+                    name,
+                    case_name,
+                    value: val,
+                });
+            }
+        }
+    }
+
+    fn remove(&mut self, key: &str) {
+        if let Ok(name) = HeaderName::try_from(key) {
+            self.headers.retain(|e| e.name != name);
         }
     }
 }

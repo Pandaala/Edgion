@@ -100,8 +100,8 @@ impl Default for HttpRouteHandler {
 impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     fn validate(&self, route: &HTTPRoute, _ctx: &HandlerContext) -> Vec<String> {
         let errors = validate_http_route_if_enabled(route);
-        // Note: per-rule validation (backend refs, filter conflicts) is handled by
-        // find_invalid_rule_indices() in update_status(), which marks individual rules
+        // Note: per-rule validation (filter conflicts, malformed CORS) is handled by
+        // find_invalid_rule_details() in update_status(), which marks individual rules
         // as invalid via PartiallyInvalid condition rather than rejecting the entire route.
         errors
     }
@@ -259,7 +259,8 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         ));
 
         // Per-rule validation: find rules where ALL backend refs are invalid
-        let invalid_indices = find_invalid_rule_indices(route, route_ns);
+        let invalid_details = find_invalid_rule_details(route, route_ns);
+        let invalid_indices: Vec<usize> = invalid_details.iter().map(|(i, _)| *i).collect();
         let total_rules = route.spec.rules.as_ref().map_or(0, |r| r.len());
         let valid_rules = total_rules - invalid_indices.len();
 
@@ -284,11 +285,12 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 let mut accepted_errors = accepted_result.errors;
                 accepted_errors.extend(validation_accepted_errors.clone());
 
-                // Note: all_rules_invalid due to backend ref issues (InvalidKind,
-                // BackendNotFound) should NOT affect Accepted status. Per Gateway API
-                // spec, Accepted reflects whether the Gateway accepts the route, not
-                // whether backends are valid. Backend issues only affect ResolvedRefs.
-                // Only filter conflicts (rewrite+redirect) make a route un-accepted.
+                // Note: per-rule problems (rewrite/redirect conflict, malformed CORS,
+                // unreachable backendRefs) do NOT flip Accepted to False — they are
+                // surfaced via PartiallyInvalid (or ResolvedRefs for backend issues).
+                // Per Gateway API spec, Accepted reflects whether the Gateway accepts
+                // the route at all; flipping it to False would drop the entire route
+                // from the data-plane route table.
 
                 let conditions = if let Some(ps) = status.parents.iter_mut().find(|ps| {
                     ps.parent_ref.name == parent_ref.name
@@ -311,15 +313,17 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
 
                 // Set PartiallyInvalid condition
                 if !invalid_indices.is_empty() && valid_rules > 0 {
+                    let reasons = invalid_details
+                        .iter()
+                        .map(|(i, r)| format!("rules[{i}]: {r}"))
+                        .collect::<Vec<_>>()
+                        .join("; ");
                     update_condition(
                         conditions,
                         condition_true(
                             condition_types::PARTIALLY_INVALID,
                             condition_reasons::RULE_INVALID,
-                            format!(
-                                "Rules at indices {:?} are invalid; {} of {} rules are active",
-                                invalid_indices, valid_rules, total_rules
-                            ),
+                            format!("{reasons} ({valid_rules} of {total_rules} rules active)"),
                             generation,
                         ),
                     );
@@ -400,57 +404,388 @@ fn has_rewrite_redirect_conflict(filters: Option<&Vec<crate::types::resources::h
     has_rewrite && has_redirect
 }
 
-/// Find rule indices where the rule is invalid.
+/// Return `Some(reason)` if any `type: CORS` filter on the rule (rule-level or
+/// per-backendRef) is malformed: either `cors:` config is absent, or
+/// `HTTPCORSFilter::validate()` rejects the origin format. Reason text is
+/// operator-readable and lands in the `PartiallyInvalid` condition message.
 ///
-/// A rule is invalid if:
-/// - It has backend refs and every one is unreachable (wrong kind, missing service, or cross-namespace ref denied)
-/// - It has conflicting URLRewrite + RequestRedirect filters
-fn find_invalid_rule_indices(route: &HTTPRoute, _route_ns: &str) -> Vec<usize> {
-    let mut invalid_indices = Vec::new();
-    if let Some(rules) = &route.spec.rules {
-        for (idx, rule) in rules.iter().enumerate() {
-            // Filter conflict makes the entire rule invalid:
-            // - Rule-level conflict (both URLRewrite and RequestRedirect on the rule)
-            // - Per-backend conflict (both on a single backend ref)
-            // - Cross-level conflict (URLRewrite on rule + RequestRedirect on backend, or vice versa)
-            if has_rewrite_redirect_conflict(rule.filters.as_ref()) {
-                invalid_indices.push(idx);
-                continue;
+/// Rules flagged here go into `invalid_rule_indices` → `PartiallyInvalid=True`
+/// while the route stays `Accepted=True`. This matches the rewrite/redirect
+/// filter-conflict precedent and avoids dropping the entire route from the
+/// data-plane route table on misconfiguration.
+fn invalid_cors_reason(rule: &crate::types::resources::http_route::HTTPRouteRule) -> Option<String> {
+    let filter_reason = |f: &crate::types::resources::http_route::HTTPRouteFilter| -> Option<String> {
+        if f.filter_type != HTTPRouteFilterType::CORS {
+            return None;
+        }
+        match f.cors.as_ref() {
+            None => Some("CORS filter missing 'cors' configuration block".to_string()),
+            Some(cfg) => cfg.validate().err().map(|errs| format!("CORS {}", errs.join("; "))),
+        }
+    };
+    if let Some(filters) = rule.filters.as_ref() {
+        for f in filters {
+            if let Some(reason) = filter_reason(f) {
+                return Some(reason);
             }
-            if let Some(backend_refs) = &rule.backend_refs {
-                let backend_conflict = backend_refs.iter().any(|br| {
-                    // Check backend ref's own filters
-                    if has_rewrite_redirect_conflict(br.filters.as_ref()) {
-                        return true;
-                    }
-                    // Check cross-level: rule filters + backend filters combined
-                    if let (Some(rule_filters), Some(br_filters)) = (rule.filters.as_ref(), br.filters.as_ref()) {
-                        let combined_has_rewrite = rule_filters
-                            .iter()
-                            .chain(br_filters.iter())
-                            .any(|f| f.filter_type == HTTPRouteFilterType::URLRewrite);
-                        let combined_has_redirect = rule_filters
-                            .iter()
-                            .chain(br_filters.iter())
-                            .any(|f| f.filter_type == HTTPRouteFilterType::RequestRedirect);
-                        if combined_has_rewrite && combined_has_redirect {
-                            return true;
-                        }
-                    }
-                    false
-                });
-                if backend_conflict {
-                    invalid_indices.push(idx);
-                    continue;
-                }
-            }
-
-            // Note: rules where all backends are invalid (non-Service kind or
-            // non-existent) are NOT marked as invalid indices. The Gateway should
-            // still register these rules so requests match and get a 500 response
-            // (per Gateway API spec). Only filter conflicts above truly invalidate
-            // a rule.
         }
     }
-    invalid_indices
+    if let Some(backend_refs) = rule.backend_refs.as_ref() {
+        for (br_idx, br) in backend_refs.iter().enumerate() {
+            if let Some(br_filters) = br.filters.as_ref() {
+                for f in br_filters {
+                    if let Some(reason) = filter_reason(f) {
+                        return Some(format!("backendRefs[{br_idx}] {reason}"));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Find rules that are invalid, returning `(index, reason)` for each.
+///
+/// A rule is invalid if:
+/// - It has conflicting URLRewrite + RequestRedirect filters (rule-level, per-backendRef, or cross-level)
+/// - It has a malformed CORS filter (missing `cors:` block, or origin fails Gateway API v1.5 validation)
+///
+/// The reason string is rendered into the `PartiallyInvalid` condition message
+/// so operators can see *why* a rule was rejected without grepping gateway logs.
+///
+/// Note: rules whose backend refs are all unreachable (non-Service kind or
+/// non-existent) are NOT flagged here — the Gateway still registers them so
+/// requests match and get a 500 response (per Gateway API spec).
+fn find_invalid_rule_details(route: &HTTPRoute, _route_ns: &str) -> Vec<(usize, String)> {
+    let mut details = Vec::new();
+    let Some(rules) = &route.spec.rules else {
+        return details;
+    };
+    for (idx, rule) in rules.iter().enumerate() {
+        if has_rewrite_redirect_conflict(rule.filters.as_ref()) {
+            details.push((idx, "filter conflict: URLRewrite + RequestRedirect".to_string()));
+            continue;
+        }
+        if let Some(reason) = invalid_cors_reason(rule) {
+            details.push((idx, reason));
+            continue;
+        }
+        if let Some(backend_refs) = &rule.backend_refs {
+            let backend_conflict = backend_refs.iter().any(|br| {
+                if has_rewrite_redirect_conflict(br.filters.as_ref()) {
+                    return true;
+                }
+                // Cross-level: rule filters + backend filters combined.
+                if let (Some(rule_filters), Some(br_filters)) = (rule.filters.as_ref(), br.filters.as_ref()) {
+                    let combined_has_rewrite = rule_filters
+                        .iter()
+                        .chain(br_filters.iter())
+                        .any(|f| f.filter_type == HTTPRouteFilterType::URLRewrite);
+                    let combined_has_redirect = rule_filters
+                        .iter()
+                        .chain(br_filters.iter())
+                        .any(|f| f.filter_type == HTTPRouteFilterType::RequestRedirect);
+                    if combined_has_rewrite && combined_has_redirect {
+                        return true;
+                    }
+                }
+                false
+            });
+            if backend_conflict {
+                details.push((
+                    idx,
+                    "filter conflict: URLRewrite + RequestRedirect on backendRef".to_string(),
+                ));
+                continue;
+            }
+        }
+    }
+    details
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::SecretRefManager;
+    use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
+    use crate::core::controller::conf_mgr::ControllerRuntime;
+    use std::sync::Arc;
+
+    fn make_ctx() -> HandlerContext {
+        HandlerContext::new(
+            Arc::new(SecretRefManager::new()),
+            None,
+            None,
+            TriggerChain::default(),
+            3,
+            20,
+            Arc::new(ControllerRuntime::default()),
+        )
+    }
+
+    fn route_with_one_cors_rule(origins: &[&str]) -> HTTPRoute {
+        let origins_yaml = origins
+            .iter()
+            .map(|o| format!("            - \"{o}\""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let yaml = format!(
+            r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+spec:
+  rules:
+    - filters:
+        - type: CORS
+          cors:
+            allowOrigins:
+{origins_yaml}
+"#
+        );
+        serde_yaml::from_str(&yaml).expect("HTTPRoute yaml must parse")
+    }
+
+    fn indices_only(details: Vec<(usize, String)>) -> Vec<usize> {
+        details.into_iter().map(|(i, _)| i).collect()
+    }
+
+    #[test]
+    fn invalid_cors_origin_flags_rule_with_reason() {
+        let route = route_with_one_cors_rule(&["evil.com"]);
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(indices_only(details.clone()), vec![0]);
+        let (_, reason) = &details[0];
+        assert!(
+            reason.contains("CORS") && reason.contains("evil.com"),
+            "reason: {reason}"
+        );
+    }
+
+    #[test]
+    fn cors_origin_with_path_flags_rule_with_reason() {
+        let route = route_with_one_cors_rule(&["https://example.com/path"]);
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(indices_only(details.clone()), vec![0]);
+        let (_, reason) = &details[0];
+        assert!(
+            reason.contains("CORS") && reason.contains("https://example.com/path"),
+            "reason: {reason}"
+        );
+    }
+
+    #[test]
+    fn cors_filter_without_cors_block_flags_rule_with_reason() {
+        // `type: CORS` with no `cors:` config — gateway-side silently drops the
+        // filter and CORS protection is off. Must be flagged.
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+spec:
+  rules:
+    - filters:
+        - type: CORS
+"#;
+        let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(indices_only(details.clone()), vec![0]);
+        assert!(
+            details[0].1.contains("missing 'cors' configuration block"),
+            "reason: {}",
+            details[0].1
+        );
+    }
+
+    #[test]
+    fn valid_cors_does_not_flag_rule() {
+        let route = route_with_one_cors_rule(&["https://good.example.com", "https://*.foo.com:8443"]);
+        assert!(find_invalid_rule_details(&route, "default").is_empty());
+    }
+
+    #[test]
+    fn no_cors_filter_does_not_flag_rule() {
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+spec:
+  rules:
+    - filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-test
+                value: "1"
+"#;
+        let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        assert!(find_invalid_rule_details(&route, "default").is_empty());
+    }
+
+    #[test]
+    fn invalid_cors_on_backend_ref_flags_rule_with_backendref_prefix() {
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+spec:
+  rules:
+    - backendRefs:
+        - name: svc
+          port: 80
+          filters:
+            - type: CORS
+              cors:
+                allowOrigins:
+                  - "no-scheme.example.com"
+"#;
+        let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(indices_only(details.clone()), vec![0]);
+        assert!(
+            details[0].1.starts_with("backendRefs[0] CORS"),
+            "expected backendRef-prefixed reason; got: {}",
+            details[0].1
+        );
+    }
+
+    #[test]
+    fn invalid_cors_only_flags_the_offending_rule() {
+        // Two rules: rule[0] has bad CORS, rule[1] has valid CORS. Only rule[0]
+        // should be flagged so the route stays partially active.
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+spec:
+  rules:
+    - filters:
+        - type: CORS
+          cors:
+            allowOrigins: ["bad.example.com"]
+    - filters:
+        - type: CORS
+          cors:
+            allowOrigins: ["https://good.example.com"]
+"#;
+        let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(indices_only(find_invalid_rule_details(&route, "default")), vec![0]);
+    }
+
+    #[test]
+    fn invalid_cors_results_in_partially_invalid_not_accepted_false() {
+        // End-to-end: handler.update_status on a route with bad CORS must produce
+        // PartiallyInvalid=True, Accepted=True. This is the contract that protects
+        // against the upgrade-time outage risk: bad CORS must not nuke the whole
+        // route from the gateway route table.
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+  generation: 7
+spec:
+  parentRefs:
+    - name: gw
+      namespace: default
+  rules:
+    - filters:
+        - type: CORS
+          cors:
+            allowOrigins: ["bad.example.com"]
+    - filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-test
+                value: "1"
+"#;
+        let handler = HttpRouteHandler::default();
+        let mut route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        handler.update_status(&mut route, &make_ctx(), &[]);
+
+        let parents = &route.status.as_ref().expect("status").parents;
+        assert_eq!(parents.len(), 1);
+        let conds = &parents[0].conditions;
+        let accepted = conds.iter().find(|c| c.type_ == "Accepted").expect("Accepted set");
+        let partial = conds
+            .iter()
+            .find(|c| c.type_ == "PartiallyInvalid")
+            .expect("PartiallyInvalid set");
+        // Note: Accepted may be False here because the parent Gateway 'gw' doesn't
+        // exist in the test runtime (NoMatchingParent). What matters for this fix
+        // is that the bad-CORS rule did NOT push the route into Accepted=False
+        // via reason=Invalid — it should be marked as a rule-level problem.
+        assert_ne!(
+            accepted.reason, "Invalid",
+            "bad CORS must not produce Accepted=False with reason=Invalid (would drop whole route); got: {accepted:?}"
+        );
+        assert_eq!(
+            partial.status, "True",
+            "PartiallyInvalid must be True; got: {partial:?}"
+        );
+        assert_eq!(partial.reason, "RuleInvalid");
+        assert_eq!(
+            route.spec.invalid_rule_indices.as_deref(),
+            Some(&[0usize][..]),
+            "invalid_rule_indices must contain the bad-CORS rule index"
+        );
+        // Operator-debuggability: the PartiallyInvalid message must carry both
+        // the rule index and the CORS reason so operators don't have to grep
+        // gateway logs to find out which origin was rejected.
+        assert!(
+            partial.message.contains("rules[0]") && partial.message.contains("CORS"),
+            "PartiallyInvalid message must include rule index + CORS reason; got: {}",
+            partial.message
+        );
+        assert!(
+            partial.message.contains("1 of 2 rules active"),
+            "PartiallyInvalid message must include valid/total rule count; got: {}",
+            partial.message
+        );
+    }
+
+    #[test]
+    fn rewrite_redirect_conflict_still_flags_with_reason() {
+        // Regression: existing rewrite/redirect-conflict precedent still flags
+        // the rule, now also carrying a reason string in the PartiallyInvalid
+        // message rather than just an index list.
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+spec:
+  rules:
+    - filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /a
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+"#;
+        let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(indices_only(details.clone()), vec![0]);
+        assert!(
+            details[0].1.contains("URLRewrite") && details[0].1.contains("RequestRedirect"),
+            "rewrite/redirect reason text must mention both filters; got: {}",
+            details[0].1
+        );
+    }
 }

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
+use std::sync::Arc;
 
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -12,14 +13,21 @@ type CorsResult<T> = Result<T, CorsError>;
 /// CORS (Cross-Origin Resource Sharing) plugin
 pub struct Cors {
     name: String,
-    config: CorsConfig,
+    config: Arc<CorsConfig>,
 }
 
 impl Cors {
-    /// Create from CorsConfig (for EdgionPlugin system)
+    /// Create from a `CorsConfig` reference. Wraps the config in an `Arc` —
+    /// callers that already hold an `Arc<CorsConfig>` should use
+    /// [`Cors::from_arc`] instead to avoid a deep clone.
     pub fn new(config: &CorsConfig) -> Self {
-        let config = config.clone();
+        Self::from_arc(Arc::new(config.clone()))
+    }
 
+    /// Create from a shared `Arc<CorsConfig>` without cloning the underlying
+    /// config. Used by the preflight hot path to construct an ad-hoc `Cors`
+    /// per request without re-cloning the config.
+    pub fn from_arc(config: Arc<CorsConfig>) -> Self {
         // Log warnings for force wildcard usage
         if config.allow_origins == "**" {
             tracing::warn!(
