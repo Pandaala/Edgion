@@ -114,6 +114,10 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "lb-lc-rs" | "lblcrs" | "lb-leastconn-retry-on-status" => {
                 "HTTPRoute/Backend/LBLeastConnRetryOnStatus".to_string()
             }
+            "lb-ewma" | "lbewma" | "lb-ewma-test" => "HTTPRoute/Backend/LBEwma".to_string(),
+            "lb-ewma-rs" | "lbewmars" | "lb-ewma-retry-on-status" => {
+                "HTTPRoute/Backend/LBEwmaRetryOnStatus".to_string()
+            }
             "weighted-backend" | "weightedbackend" => "HTTPRoute/Backend/WeightedBackend".to_string(),
             "timeout" => "HTTPRoute/Backend/Timeout".to_string(),
             "retry-on-status" | "retryonstatus" => "HTTPRoute/Backend/RetryOnStatus".to_string(),
@@ -209,6 +213,8 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Backend/LBConsistentHash" => "HTTPRoute/Backend/LBConsistentHash",
         "HTTPRoute/Backend/LBLeastConn" => "HTTPRoute/Backend/LBLeastConn",
         "HTTPRoute/Backend/LBLeastConnRetryOnStatus" => "HTTPRoute/Backend/LBLeastConnRetryOnStatus",
+        "HTTPRoute/Backend/LBEwma" => "HTTPRoute/Backend/LBEwma",
+        "HTTPRoute/Backend/LBEwmaRetryOnStatus" => "HTTPRoute/Backend/LBEwmaRetryOnStatus",
         "HTTPRoute/Backend/WeightedBackend" => "HTTPRoute/Backend/WeightedBackend",
         "HTTPRoute/Backend/Timeout" => "HTTPRoute/Backend/Timeout",
         "HTTPRoute/Backend/RetryOnStatus" => "HTTPRoute/Backend/RetryOnStatus",
@@ -348,6 +354,8 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::LBConsistentHashTestSuite));
             runner.add_suite(Box::new(suites::LBLeastConnTestSuite));
             runner.add_suite(Box::new(suites::LBLeastConnRetryOnStatusTestSuite));
+            runner.add_suite(Box::new(suites::LBEwmaTestSuite));
+            runner.add_suite(Box::new(suites::LBEwmaRetryOnStatusTestSuite));
             runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
             runner.add_suite(Box::new(suites::TimeoutTestSuite));
             runner.add_suite(Box::new(suites::HealthCheckTestSuite));
@@ -383,6 +391,20 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::LBLeastConnRetryOnStatusTestSuite));
+        }
+        "HTTPRoute/Backend/LBEwma" => {
+            if !gateway {
+                eprintln!("Error: LB EWMA tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::LBEwmaTestSuite));
+        }
+        "HTTPRoute/Backend/LBEwmaRetryOnStatus" => {
+            if !gateway {
+                eprintln!("Error: LB EWMA RetryOnStatus tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::LBEwmaRetryOnStatusTestSuite));
         }
         "HTTPRoute/Backend/WeightedBackend" => {
             if !gateway {
@@ -1409,6 +1431,8 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 runner.add_suite(Box::new(suites::LBConsistentHashTestSuite));
                 runner.add_suite(Box::new(suites::LBLeastConnTestSuite));
                 runner.add_suite(Box::new(suites::LBLeastConnRetryOnStatusTestSuite));
+                runner.add_suite(Box::new(suites::LBEwmaTestSuite));
+                runner.add_suite(Box::new(suites::LBEwmaRetryOnStatusTestSuite));
                 runner.add_suite(Box::new(suites::WeightedBackendTestSuite));
                 runner.add_suite(Box::new(suites::TimeoutTestSuite));
                 runner.add_suite(Box::new(suites::HealthCheckTestSuite));

@@ -393,6 +393,15 @@ pub struct UpstreamInfo {
     /// Backend TLS connection information
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls: Option<BackendTlsInfo>,
+    /// LB per-attempt commit state. `Some` only when this attempt reached
+    /// `connected_to_upstream` AND its policy needs per-attempt accounting
+    /// (LeastConn / EWMA). Consumed by `finalize_attempt`:
+    ///   - `pg_upstream_peer::begin_upstream_attempt` on retry → FinalizeMode::Discard
+    ///   - `pg_logging::lb_runtime_cleanup` at request end    → FinalizeMode::Settle
+    /// Backend reference is read from `lb_edgion_backend` on this same entry;
+    /// do NOT duplicate the Arc here.
+    #[serde(skip)]
+    pub lb_committed: Option<crate::core::gateway::lb::LbCommit>,
 }
 
 impl UpstreamInfo {
@@ -764,22 +773,6 @@ pub struct EdgionHttpContext {
     /// Link-local / metadata ranges are never allowed by this switch.
     pub allow_loopback_upstream: bool,
 
-    /// P0-07: the live `EdgionBackend` whose `conn_count` was incremented by
-    /// `connected_to_upstream`. Taken by `begin_upstream_attempt` (decrement
-    /// on retry) and by `pg_logging` (decrement at request end), keeping the
-    /// LeastConn ledger balanced across retries and avoiding decrement on
-    /// attempts that never reached `connected_to_upstream`.
-    pub leastconn_incremented_backend: Option<Arc<EdgionBackend>>,
-
-    /// g1-007: the live `EdgionBackend` that actually finished connect, plus
-    /// the attempt start time for EWMA latency calculation.
-    /// Written by `connected_to_upstream` when the LB policy is EWMA.
-    /// Cleared by `begin_upstream_attempt` on retry (so a failed retry's
-    /// elapsed time cannot pollute the previous backend's EWMA sample).
-    /// Consumed by `pg_logging` at request end, which computes latency from
-    /// `attempt_start` rather than the request start.
-    pub last_ewma_backend: Option<(Arc<EdgionBackend>, Instant)>,
-
     /// Snapshot of resolved global plugin runtimes for this request, taken at
     /// `request_filter` entry. Each entry is one EdgionPlugins resource;
     /// per-stage bucketing is handled by `PluginRuntime`'s internal stage Vecs.
@@ -863,8 +856,6 @@ impl EdgionHttpContext {
             sp_state: SessionPersistenceState::Inactive,
             sp_target_addr: None,
             allow_loopback_upstream: false,
-            leastconn_incremented_backend: None,
-            last_ewma_backend: None,
             resolved_global_plugins: None,
             resolved_route_ext_refs: None,
         }
@@ -998,6 +989,7 @@ impl EdgionHttpContext {
                 service_key: None,
                 lb_policy: None,
                 tls: None,
+                lb_committed: None,
             });
             bc.current_upstream_id = Some(bc.upstreams.len() - 1);
         }

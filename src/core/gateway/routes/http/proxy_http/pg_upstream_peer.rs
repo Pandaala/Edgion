@@ -434,25 +434,22 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
     peer.options.idle_timeout = Some(backend_timeout.idle_timeout);
 }
 
-/// Begin a new upstream attempt: push a placeholder upstream entry so subsequent
-/// calls to `ctx.get_current_upstream_mut()` (inside try_get_peer / build_peer_from_lb_selection
-/// / record_tls_to_upstream / record_unsafe_*_attempt) actually land on a valid entry.
+/// Push a new upstream connection placeholder so that subsequent
+/// calls to `ctx.get_current_upstream_mut()` (inside try_get_peer /
+/// build_peer_from_lb_selection / record_tls_to_upstream /
+/// record_unsafe_*_attempt) actually land on a valid entry.
 /// ip/port are filled in later by [`backfill_upstream_addr`] once the peer is known.
 ///
 /// Must be called after `init_backend_context_if_needed` and before any peer construction.
-/// On retries this also decrements LeastConn for the previous (now-completed) attempt;
-/// `leastconn_incremented_backend` is keyed independently of `current_upstream_id`, so this
-/// cleanup is safe to run before pushing the new placeholder.
+/// On retries this also finalizes (Discard) the previous attempt's LB commit:
+/// `get_current_upstream_mut()` still points at the prior entry at this moment, so
+/// this cleanup MUST run before `push_upstream` advances `current_upstream_id`.
 #[inline]
 pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
-    // P0-07: on retry, decrement the LeastConn count for the previous attempt's backend
-    // (which had connected successfully but is now being abandoned).
-    if let Some(backend) = ctx.leastconn_incremented_backend.take() {
-        backend.dec_conn();
+    // On retry, discard the previous attempt's LB commit (dec LeastConn, drop EWMA sample).
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        crate::core::gateway::lb::finalize_attempt(upstream, crate::core::gateway::lb::FinalizeMode::Discard);
     }
-    // g1-007: on retry, drop the previous attempt's EWMA record so the upcoming retry's
-    // elapsed time does not pollute the previous backend's EWMA sample.
-    ctx.last_ewma_backend = None;
 
     ctx.try_cnt += 1;
     ctx.push_upstream(None, None);

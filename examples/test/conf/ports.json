@@ -217,6 +217,12 @@
     "HTTPRoute/Backend/LBLeastConnRetryOnStatus": {
       "http": 31124
     },
+    "HTTPRoute/Backend/LBEwma": {
+      "http": 31125
+    },
+    "HTTPRoute/Backend/LBEwmaRetryOnStatus": {
+      "http": 31126
+    },
     "HTTPRoute/Backend/H2BackendMtlsPersistence": {
       "http": 31384
     },

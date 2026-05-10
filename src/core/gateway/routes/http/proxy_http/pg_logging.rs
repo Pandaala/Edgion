@@ -171,29 +171,14 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
     );
 }
 
-/// g1-007: balance the LB runtime ledger at request end.
-///
-/// Reads only the explicit fields written by `connected_to_upstream`; does not
-/// fall back on `current_upstream.lb_backend_addr` (that path drifts the ledger
-/// on attempts where peer was selected but connect failed).
-/// - `leastconn_incremented_backend` is set only when this attempt actually
-///   called `backend.inc_conn()`; the take-then-decrement here pairs with that
-///   increment so the ledger stays balanced.
-/// - `last_ewma_backend` is the same shape: only attempts that connected
-///   contribute an EWMA sample, computed from the attempt's own start so
-///   retries do not pollute the previous backend's sample with the retry's
-///   elapsed time.
-///
-/// Idempotent: a second call sees `None` from both `take()` calls and does
-/// not double-decrement.
+/// Settle the final attempt's LB commit at request end.
+/// Earlier attempts' commits were discarded by `begin_upstream_attempt` on each retry,
+/// so only the last upstream entry can still hold a pending commit here.
+/// Idempotent: a second call sees `None` from `take()` inside `finalize_attempt`.
 #[inline]
 fn lb_runtime_cleanup(ctx: &mut EdgionHttpContext) {
-    if let Some(backend) = ctx.leastconn_incremented_backend.take() {
-        backend.dec_conn();
-    }
-    if let Some((backend, attempt_start)) = ctx.last_ewma_backend.take() {
-        let latency_us = attempt_start.elapsed().as_micros() as u64;
-        backend.update_ewma(latency_us);
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        crate::core::gateway::lb::finalize_attempt(upstream, crate::core::gateway::lb::FinalizeMode::Settle);
     }
 }
 
@@ -247,41 +232,85 @@ mod tests {
     //! stage sequence that the proxy would emit.
     use super::*;
     use crate::core::gateway::lb::edgion_backend::EdgionBackend;
+    use crate::core::gateway::lb::LbCommit;
+    use crate::types::BackendContext;
     use pingora_core::protocols::l4::socket::SocketAddr;
     use pingora_load_balancing::Backend;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    fn make_backend(ip4: [u8; 4], port: u16) -> Arc<EdgionBackend> {
+    fn make_backend(ip: [u8; 4], port: u16) -> Arc<EdgionBackend> {
         Arc::new(EdgionBackend::new(Backend {
-            addr: SocketAddr::Inet(std::net::SocketAddr::from((ip4, port))),
+            addr: SocketAddr::Inet(std::net::SocketAddr::from((ip, port))),
             weight: 1,
             ext: Default::default(),
         }))
     }
 
-    /// Key regression: when a backend already has an in-flight count,
-    /// cleanup of an attempt that never called `inc_conn` must not
-    /// erroneously decrement that other in-flight count.
+    /// Push a new upstream entry with lb_edgion_backend and lb_committed pre-set,
+    /// simulating the state that `connected_to_upstream` / `commit_attempt` would
+    /// produce. Does NOT call inc_conn/update_ewma — callers do that explicitly
+    /// so tests remain clear about which side-effects they are exercising.
+    fn setup_committed_attempt(ctx: &mut EdgionHttpContext, backend: Arc<EdgionBackend>, commit: LbCommit) {
+        if ctx.backend_context.is_none() {
+            ctx.backend_context = Some(BackendContext {
+                source: None,
+                rsc: None,
+                service_key: None,
+                service_kind: None,
+                upstreams: Vec::new(),
+                current_upstream_id: None,
+            });
+        }
+        let bc = ctx.backend_context.as_mut().unwrap();
+        bc.upstreams.push(crate::types::UpstreamInfo {
+            ip: None,
+            port: None,
+            status: None,
+            ct: None,
+            ht: None,
+            bt: None,
+            et: None,
+            wpt: None,
+            response_body_size: None,
+            start_time: Instant::now(),
+            err: Vec::new(),
+            lb_backend_addr: None,
+            lb_edgion_backend: Some(backend),
+            service_key: None,
+            lb_policy: None,
+            tls: None,
+            lb_committed: Some(commit),
+        });
+        bc.current_upstream_id = Some(bc.upstreams.len() - 1);
+    }
+
     #[test]
     fn cleanup_no_increment_does_not_touch_other_inflight() {
         let a = make_backend([127, 0, 0, 1], 30001);
-        // Simulate an in-flight on A: connected, not yet finished.
+        // Another request has an in-flight on A.
         a.inc_conn();
         assert_eq!(a.conn(), 1);
 
-        // A separate attempt picked A but connect failed; `inc_conn` was never
-        // called, so `ctx.leastconn_incremented_backend` stays None.
+        // This request: an upstream entry exists but connect failed — lb_committed never set.
         let mut ctx = EdgionHttpContext::new();
-        assert!(ctx.leastconn_incremented_backend.is_none());
+        ctx.backend_context = Some(BackendContext {
+            source: None,
+            rsc: None,
+            service_key: None,
+            service_kind: None,
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+        });
+        ctx.push_upstream(None, None);
+        // lb_committed stays None (default from push_upstream)
 
         lb_runtime_cleanup(&mut ctx);
 
-        // Critical: A's in-flight count must still be 1, not erroneously decremented.
         assert_eq!(
             a.conn(),
             1,
-            "cleanup of an attempt that never incremented must not decrement another in-flight backend"
+            "cleanup with lb_committed=None must not touch another in-flight count"
         );
     }
 
@@ -289,22 +318,21 @@ mod tests {
     fn cleanup_after_connected_balances_to_zero() {
         let a = make_backend([127, 0, 0, 2], 30001);
 
-        // Simulate `connected_to_upstream`: inc_conn + set the ledger field.
+        // Simulate connected_to_upstream: inc_conn then record commit.
         a.inc_conn();
         let mut ctx = EdgionHttpContext::new();
-        ctx.leastconn_incremented_backend = Some(a.clone());
+        setup_committed_attempt(&mut ctx, a.clone(), LbCommit::LeastConn);
         assert_eq!(a.conn(), 1);
 
         lb_runtime_cleanup(&mut ctx);
 
         assert_eq!(a.conn(), 0);
         assert!(
-            ctx.leastconn_incremented_backend.is_none(),
-            "cleanup must take the field"
+            ctx.get_current_upstream().unwrap().lb_committed.is_none(),
+            "lb_committed must be taken by cleanup"
         );
     }
 
-    /// Full retry path: A connects → `begin_upstream_attempt` decrements A → B connects → logging decrements B.
     #[test]
     fn retry_then_connected_then_logging_balances_both() {
         use crate::core::gateway::routes::http::proxy_http::pg_upstream_peer::begin_upstream_attempt;
@@ -314,22 +342,31 @@ mod tests {
 
         let mut ctx = EdgionHttpContext::new();
 
-        // attempt 1 connects to A.
+        // Attempt 1: connected to A.
         a.inc_conn();
-        ctx.leastconn_incremented_backend = Some(a.clone());
+        setup_committed_attempt(&mut ctx, a.clone(), LbCommit::LeastConn);
         assert_eq!(a.conn(), 1);
 
-        // retry triggers begin_upstream_attempt: take + decrement A.
+        // Retry: begin_upstream_attempt finalizes attempt 1 with Discard (dec A),
+        // then pushes an empty slot for attempt 2.
         begin_upstream_attempt(&mut ctx);
         assert_eq!(a.conn(), 0);
-        assert!(ctx.leastconn_incremented_backend.is_none());
+        assert!(
+            ctx.backend_context.as_ref().unwrap().upstreams[0]
+                .lb_committed
+                .is_none(),
+            "begin_upstream_attempt must consume upstream 0's lb_committed"
+        );
 
-        // attempt 2 connects to B.
+        // Attempt 2: connected to B.
         b.inc_conn();
-        ctx.leastconn_incremented_backend = Some(b.clone());
+        if let Some(up) = ctx.get_current_upstream_mut() {
+            up.lb_edgion_backend = Some(b.clone());
+            up.lb_committed = Some(LbCommit::LeastConn);
+        }
         assert_eq!(b.conn(), 1);
 
-        // logging cleanup.
+        // Logging cleanup: settles attempt 2 (dec B).
         lb_runtime_cleanup(&mut ctx);
 
         assert_eq!(a.conn(), 0);
@@ -341,27 +378,35 @@ mod tests {
         use crate::core::gateway::routes::http::proxy_http::pg_upstream_peer::begin_upstream_attempt;
 
         let a = make_backend([127, 0, 0, 5], 30001);
-
-        // Default initial EWMA value.
         let initial = a.ewma();
 
         let mut ctx = EdgionHttpContext::new();
 
-        // attempt 1 connects to A, records the EWMA backend.
-        ctx.last_ewma_backend = Some((a.clone(), Instant::now()));
+        // Attempt 1: connected to A — EWMA commit recorded.
+        setup_committed_attempt(
+            &mut ctx,
+            a.clone(),
+            LbCommit::Ewma {
+                started: Instant::now(),
+            },
+        );
 
-        // retry → begin_upstream_attempt clears the EWMA record.
+        // Retry: Discard-mode finalize drops the EWMA sample (no update_ewma).
         begin_upstream_attempt(&mut ctx);
-        assert!(ctx.last_ewma_backend.is_none(), "retry must clear last_ewma_backend");
+        assert!(
+            ctx.backend_context.as_ref().unwrap().upstreams[0]
+                .lb_committed
+                .is_none(),
+            "retry must discard upstream 0's EWMA commit"
+        );
 
-        // attempt 2 fails to connect, so connected_to_upstream never runs and
-        // last_ewma_backend stays None. Logging cleanup must not call update_ewma.
+        // Attempt 2: connect failed — lb_committed on upstream 1 stays None.
         lb_runtime_cleanup(&mut ctx);
 
         assert_eq!(
             a.ewma(),
             initial,
-            "an attempt that never connected must not pollute A's EWMA sample"
+            "neither Discard-mode finalize nor a None-commit must update A's EWMA"
         );
     }
 
@@ -369,16 +414,25 @@ mod tests {
     fn ewma_uses_attempt_start_not_request_start() {
         let a = make_backend([127, 0, 0, 6], 30001);
 
-        // Set attempt_start ~50ms in the past so update_ewma sees a measurable sample.
+        // Upstream entry whose start_time (= attempt start) is ~50ms in the past.
         let attempt_start = Instant::now() - Duration::from_millis(50);
         let mut ctx = EdgionHttpContext::new();
-        ctx.last_ewma_backend = Some((a.clone(), attempt_start));
+        ctx.backend_context = Some(BackendContext {
+            source: None,
+            rsc: None,
+            service_key: None,
+            service_kind: None,
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+        });
+        ctx.push_upstream(None, None);
+        if let Some(up) = ctx.get_current_upstream_mut() {
+            up.lb_edgion_backend = Some(a.clone());
+            up.lb_committed = Some(LbCommit::Ewma { started: attempt_start });
+        }
 
         lb_runtime_cleanup(&mut ctx);
 
-        // update_ewma is alpha-smoothed: new = alpha*sample + (1-alpha)*current.
-        // Without depending on the specific alpha, just assert the EWMA moved
-        // away from INITIAL_EWMA_US (1_000us == 1ms).
         let after = a.ewma();
         assert!(
             after > 1_000,
@@ -393,23 +447,18 @@ mod tests {
 
         a.inc_conn();
         let mut ctx = EdgionHttpContext::new();
-        ctx.leastconn_incremented_backend = Some(a.clone());
+        setup_committed_attempt(&mut ctx, a.clone(), LbCommit::LeastConn);
         assert_eq!(a.conn(), 1);
 
         lb_runtime_cleanup(&mut ctx);
         assert_eq!(a.conn(), 0);
 
-        // Manually re-increment to simulate a separate concurrent in-flight,
-        // then call cleanup again — second call must take None and not double-decrement.
+        // Simulate a separate concurrent in-flight on A.
         a.inc_conn();
         assert_eq!(a.conn(), 1);
 
+        // Second cleanup: lb_committed was taken; must be a no-op.
         lb_runtime_cleanup(&mut ctx);
-
-        assert_eq!(
-            a.conn(),
-            1,
-            "cleanup must be idempotent; the second call must not decrement again"
-        );
+        assert_eq!(a.conn(), 1, "second cleanup must not decrement again");
     }
 }

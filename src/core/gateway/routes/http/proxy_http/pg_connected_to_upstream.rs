@@ -34,41 +34,12 @@ pub async fn connected_to_upstream(
         }
     }
 
-    // Record connection time (time from start_time to connection established).
-    // P0-07: upstream borrow ends at block exit so we can write ctx fields after.
-    // g1-007: also record the EWMA backend + attempt start so logging only
-    // updates EWMA for attempts that actually completed `connected_to_upstream`.
-    use std::sync::Arc;
-    enum LbCleanup {
-        LeastConn(Arc<crate::core::gateway::lb::EdgionBackend>),
-        Ewma(Arc<crate::core::gateway::lb::EdgionBackend>, std::time::Instant),
-    }
-    let lb_cleanup = if let Some(upstream) = ctx.get_current_upstream_mut() {
+    // Record connection time and commit LB per-attempt state.
+    // Both read and write are on the same upstream entry — no borrow escape needed.
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
         let ct = upstream.start_time.elapsed().as_millis() as u64;
         upstream.ct = Some(ct);
-
-        match (&upstream.lb_edgion_backend, &upstream.lb_policy) {
-            (Some(backend), Some(crate::types::ParsedLBPolicy::LeastConn)) => {
-                backend.inc_conn();
-                Some(LbCleanup::LeastConn(backend.clone()))
-            }
-            (Some(backend), Some(crate::types::ParsedLBPolicy::Ewma)) => {
-                Some(LbCleanup::Ewma(backend.clone(), upstream.start_time))
-            }
-            _ => None,
-        }
-    } else {
-        None
-    };
-    // upstream borrow dropped here — safe to write ctx
-    match lb_cleanup {
-        Some(LbCleanup::LeastConn(backend)) => {
-            ctx.leastconn_incremented_backend = Some(backend);
-        }
-        Some(LbCleanup::Ewma(backend, start)) => {
-            ctx.last_ewma_backend = Some((backend, start));
-        }
-        None => {}
+        crate::core::gateway::lb::commit_attempt(upstream);
     }
 
     // For gRPC-Web or WebSocket, log connection establishment immediately

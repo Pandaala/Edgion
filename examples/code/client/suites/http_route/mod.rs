@@ -21,9 +21,10 @@ pub use multi_port::MultiPortTestSuite;
 pub use backend::{
     BackendTlsSniHostOverrideTestSuite, CircuitBreakerTestSuite, DnsResolutionFailureTestSuite,
     GrpcHealthCheckTestSuite, H2MtlsPersistenceTestSuite, HealthCheckTestSuite, HealthCheckTransitionTestSuite,
-    LBConsistentHashTestSuite, LBLeastConnRetryOnStatusTestSuite, LBLeastConnTestSuite, LBRoundRobinTestSuite,
-    PartiallyInvalidTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite, SpChangeFinalTestSuite,
-    SpChangeInitialTestSuite, TimeoutTestSuite, WeightedBackendTestSuite,
+    LBConsistentHashTestSuite, LBEwmaRetryOnStatusTestSuite, LBEwmaTestSuite, LBLeastConnRetryOnStatusTestSuite,
+    LBLeastConnTestSuite, LBRoundRobinTestSuite, PartiallyInvalidTestSuite, RetryOnStatusTestSuite,
+    SessionPersistenceTestSuite, SpChangeFinalTestSuite, SpChangeInitialTestSuite, TimeoutTestSuite,
+    WeightedBackendTestSuite,
 };
 pub use filters::{
     FilterConflictTestSuite, HeaderModifierTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite,

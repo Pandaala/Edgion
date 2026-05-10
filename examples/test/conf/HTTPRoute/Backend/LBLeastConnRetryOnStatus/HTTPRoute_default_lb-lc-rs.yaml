@@ -1,8 +1,8 @@
 # g1-007 regression: LeastConn + retry-on-503 + 2 endpoints.
-# Exercises begin_upstream_attempt cleanup (take leastconn_incremented_backend)
-# AND the final logging cleanup. After the fix, neither cleanup path uses
-# current_upstream.lb_backend_addr, and the retry intermediate state neither
-# over- nor under-decrements the LeastConn count.
+# Exercises begin_upstream_attempt cleanup (finalize_attempt Discard on lb_committed)
+# AND the final logging cleanup (finalize_attempt Settle on lb_committed).
+# After the refactor, both cleanup paths go through lb::finalize_attempt;
+# the retry intermediate state neither over- nor under-decrements the LeastConn count.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
