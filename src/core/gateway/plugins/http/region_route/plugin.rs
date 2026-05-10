@@ -218,7 +218,7 @@ impl RegionRoute {
             // its own path normalization, so forward raw to avoid double work.
             preserve_raw_path: true,
         })) {
-            SetJumpOutcome::Set => { /* "proxy pass" already logged at line 206 */ }
+            SetJumpOutcome::Set => { /* "proxy pass" already logged above */ }
             SetJumpOutcome::Rejected => {
                 log.push("jump locked, rejected");
             }

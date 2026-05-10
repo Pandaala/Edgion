@@ -354,11 +354,7 @@ fn pick_backend_ref(
     route_ns: &str,
     jump: Option<&crate::types::UpstreamJumpTarget>,
 ) -> Result<crate::types::HTTPBackendRef, EdError> {
-    let internal = match jump {
-        Some(crate::types::UpstreamJumpTarget::Internal(p)) => Some(p),
-        _ => None,
-    };
-    if let Some(j) = internal {
+    if let Some(crate::types::UpstreamJumpTarget::Internal(j)) = jump {
         if let Ok(b) =
             RouteRules::find_backend_by_name(rule, &j.backend_ref_name, j.backend_ref_namespace.as_deref(), route_ns)
         {

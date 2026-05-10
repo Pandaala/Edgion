@@ -528,9 +528,11 @@ pub struct DirectEndpointPreset {
 
 /// Mutually-exclusive upstream-jump slot — exactly one variant lives per request.
 ///
-/// - `Direct`: bypass LB, peer built from a static IP. Carries `backend_ref` so the
-///   setter can co-write `selected_backend` (peer-construction reads service
-///   metadata from `selected_backend`; see `try_direct_endpoint_peer`).
+/// - `Direct`: bypass LB, peer built from a static IP. Carries `backend_ref`
+///   (boxed to keep the enum's stack footprint small — `HTTPBackendRef` is the
+///   heaviest variant by far) so the setter can co-write `selected_backend`
+///   (peer-construction reads service metadata from `selected_backend`; see
+///   `try_direct_endpoint_peer`).
 /// - `Internal`: LB-input modifier. Dispatch falls through to `select_http_backend`,
 ///   which uses the carried preset to look up a named `BackendRef` before LB.
 /// - `External`: bypass LB, peer built from a domain (DNS-resolved at runtime).
@@ -538,7 +540,7 @@ pub struct DirectEndpointPreset {
 pub enum UpstreamJumpTarget {
     Direct {
         preset: DirectEndpointPreset,
-        backend_ref: HTTPBackendRef,
+        backend_ref: Box<HTTPBackendRef>,
     },
     Internal(InternalJumpPreset),
     External(ExternalJumpPreset),
@@ -1065,7 +1067,7 @@ impl EdgionHttpContext {
             return SetJumpOutcome::Rejected;
         }
         if let UpstreamJumpTarget::Direct { backend_ref, .. } = &target {
-            self.selected_backend = Some(backend_ref.clone());
+            self.selected_backend = Some(backend_ref.as_ref().clone());
         }
         self.jump = Some(target);
         SetJumpOutcome::Set
@@ -1250,7 +1252,7 @@ mod jump_tests {
         }
     }
 
-    fn sample_direct() -> (DirectEndpointPreset, HTTPBackendRef) {
+    fn sample_direct() -> (DirectEndpointPreset, Box<HTTPBackendRef>) {
         use crate::types::resources::http_route_preparse::BackendExtensionInfo;
         let preset = DirectEndpointPreset {
             addr: "10.0.0.1:8080".parse().unwrap(),
@@ -1271,7 +1273,7 @@ mod jump_tests {
             backend_tls_policy: None,
             ref_denied: None,
         };
-        (preset, backend_ref)
+        (preset, Box::new(backend_ref))
     }
 
     #[test]

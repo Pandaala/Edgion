@@ -153,7 +153,7 @@ impl RequestFilter for DirectEndpoint {
                 let backend_ref = backend_refs[info.backend_ref_idx].clone();
                 match session.set_upstream_jump(UpstreamJumpTarget::Direct {
                     preset: info,
-                    backend_ref,
+                    backend_ref: Box::new(backend_ref),
                 }) {
                     SetJumpOutcome::Set => {
                         // fall through to existing log/header writes below
