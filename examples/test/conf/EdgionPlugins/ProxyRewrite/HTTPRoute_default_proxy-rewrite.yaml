@@ -122,3 +122,19 @@ spec:
         - name: test-http
           namespace: edgion-test
           port: 30001
+
+    # 8. Regex capture in header value — always url-encoded (mirrors rule 7's $arg_ rule)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /capture-header
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: proxy-rewrite-capture-header
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

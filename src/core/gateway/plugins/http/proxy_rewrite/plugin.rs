@@ -28,6 +28,16 @@ static PATH_PARAM_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$([a
 /// Unreserved: A-Z a-z 0-9 - . _ ~
 const QUERY_VALUE_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
 
+/// Substitution context for `resolve_variables`.
+///
+/// Naming the call site's intent (URI vs HTTP header) instead of an opaque bool
+/// makes future divergence explicit at the match site.
+#[derive(Clone, Copy, Debug)]
+enum TemplateContext {
+    Uri,
+    Header,
+}
+
 /// Proxy Rewrite plugin
 ///
 /// Rewrites requests before forwarding to upstream services.
@@ -78,24 +88,33 @@ impl ProxyRewrite {
         value.replace("\x00$", "$")
     }
 
-    /// Resolve variable substitution in a template string
+    /// Resolve variable substitution in a template string.
     ///
     /// Supports:
-    /// - `$uri` - original request path
-    /// - `$arg_<name>` - query parameter value (URL encoded in URI context)
-    /// - `$1-$9` - regex capture group references (only when captures is provided)
-    /// - `$<name>` - path parameter from route pattern (e.g., `$uid` for route `/api/:uid`)
+    /// - `$uri` - original request path; never encoded (already a valid path).
+    /// - `$arg_<name>` - query parameter value; always URL-encoded.
+    /// - `$1-$9` - regex capture group references; always URL-encoded.
+    /// - `$<name>` - path parameter from the route pattern (e.g., `$uid` for
+    ///   route `/api/:uid`); always URL-encoded.
     ///
-    /// Each injected value has its `$` signs escaped before insertion so that it cannot
-    /// be re-interpreted as a variable reference by a later substitution step (cross-
-    /// contamination prevention).
+    /// All three substitutable branches produce ASCII-safe output regardless of
+    /// `TemplateContext`. This guarantees that values are valid both as URI
+    /// components and as HTTP header bytes (avoiding `HeaderValue::try_from`
+    /// silent rejections and strict upstream rejection of non-ASCII header
+    /// values). The `context` parameter is retained as the explicit declaration
+    /// site for any future context-specific divergence; today both arms encode.
+    ///
+    /// Each injected value has its `$` signs escaped before insertion so it
+    /// cannot be re-interpreted as a variable reference by a later substitution
+    /// step (cross-contamination prevention). The escape sentinel is restored
+    /// in the final step.
     fn resolve_variables(
         &self,
         template: &str,
         original_path: &str,
         session: &mut dyn PluginSession,
         captures: Option<&regex::Captures>,
-        encode_values: bool,
+        context: TemplateContext,
     ) -> String {
         let mut result = template.to_string();
 
@@ -107,9 +126,9 @@ impl ProxyRewrite {
         //    `get_query_param` returns the percent-decoded value, but `$arg_<name>`
         //    must always be safe to embed in either a URI or an HTTP header value.
         //    Always re-encoding produces:
-        //      - URI context (encode_values=true): correct percent-encoding without
+        //      - URI context (TemplateContext::Uri): correct percent-encoding without
         //        the prior double-encoding bug for raw `%XX` inputs;
-        //      - Header context (encode_values=false): ASCII-safe bytes that survive
+        //      - Header context (TemplateContext::Header): ASCII-safe bytes that survive
         //        `HeaderValue::try_from` even when the query value contains control
         //        bytes (e.g. `%0A`) or non-ASCII (e.g. UTF-8). For ordinary ASCII
         //        values this is identity, so the header rewrite UX is unchanged.
@@ -131,10 +150,10 @@ impl ProxyRewrite {
                 .replace_all(&result, |c: &regex::Captures| {
                     let idx: usize = c[1].parse().unwrap_or(0);
                     let value = caps.get(idx).map(|m| m.as_str()).unwrap_or("");
-                    let encoded = if encode_values {
-                        Self::url_encode(value)
-                    } else {
-                        value.to_string()
+                    let encoded = match context {
+                        // Both contexts encode today. Keeping the match form makes a future
+                        // context-specific divergence touch exactly this site.
+                        TemplateContext::Uri | TemplateContext::Header => Self::url_encode(value),
                     };
                     Self::escape_dollar(&encoded)
                 })
@@ -161,7 +180,9 @@ impl ProxyRewrite {
 
             for (full_match, param_name) in matches {
                 if let Some(value) = session.get_path_param(&param_name) {
-                    let replacement = if encode_values { Self::url_encode(&value) } else { value };
+                    let replacement = match context {
+                        TemplateContext::Uri | TemplateContext::Header => Self::url_encode(&value),
+                    };
                     // Path params are the last substitution step; no need to escape.
                     result = result.replace(&full_match, &replacement);
                 }
@@ -199,7 +220,7 @@ impl ProxyRewrite {
         // uri takes priority over regex_uri
         if let Some(ref new_uri) = self.config.uri {
             // Resolve variables in URI template (encode values for safety)
-            let resolved = self.resolve_variables(new_uri, original_path, session, captures, true);
+            let resolved = self.resolve_variables(new_uri, original_path, session, captures, TemplateContext::Uri);
             // Preserve original query string
             let final_uri = self.build_uri_with_query(&resolved, original_query);
 
@@ -220,7 +241,7 @@ impl ProxyRewrite {
                     }
                 }
                 // Resolve remaining variables ($uri, $arg_name, etc.) with proper encoding
-                let result = self.resolve_variables(&result, original_path, session, None, true);
+                let result = self.resolve_variables(&result, original_path, session, None, TemplateContext::Uri);
                 // Preserve original query string
                 let final_uri = self.build_uri_with_query(&result, original_query);
 
@@ -277,8 +298,10 @@ impl ProxyRewrite {
             // 1. Add headers (append) - process in order
             if let Some(ref add_headers) = headers.add {
                 for entry in add_headers {
-                    // Don't encode header values
-                    let resolved = self.resolve_variables(&entry.value, original_path, session, captures, false);
+                    // Header values: TemplateContext::Header guarantees ASCII-safe output for
+                    // $arg_<name>, $1..$9, and $<name>. See resolve_variables doc.
+                    let resolved =
+                        self.resolve_variables(&entry.value, original_path, session, captures, TemplateContext::Header);
                     if let Err(_e) = session.append_request_header(&entry.name, &resolved) {
                         plugin_log.push_err("header add fail");
                     } else {
@@ -290,8 +313,10 @@ impl ProxyRewrite {
             // 2. Set headers (overwrite) - process in order
             if let Some(ref set_headers) = headers.set {
                 for entry in set_headers {
-                    // Don't encode header values
-                    let resolved = self.resolve_variables(&entry.value, original_path, session, captures, false);
+                    // Header values: TemplateContext::Header guarantees ASCII-safe output for
+                    // $arg_<name>, $1..$9, and $<name>. See resolve_variables doc.
+                    let resolved =
+                        self.resolve_variables(&entry.value, original_path, session, captures, TemplateContext::Header);
                     if let Err(_e) = session.set_request_header(&entry.name, &resolved) {
                         plugin_log.push_err("header set fail");
                     } else {
@@ -443,32 +468,116 @@ mod tests {
             _ => None,
         });
 
-        // Header context (encode_values = false).
+        // Header context (TemplateContext::Header).
         let header_out = plugin.resolve_variables(
             "user=$arg_user;token=$arg_token;id=$arg_id;raw=$arg_raw",
             "/orig",
             &mut mock_session,
             None,
-            false,
+            TemplateContext::Header,
         );
         assert_eq!(
             header_out, "user=user-123;token=hello%0Aworld;id=caf%C3%A9;raw=foo%2Bbar%3Dbaz",
-            "header context: $arg_<name> must url-encode regardless of encode_values=false"
+            "header context: $arg_<name> must url-encode"
         );
 
-        // URI context (encode_values = true) — same outcome for $arg_ since we
+        // URI context (TemplateContext::Uri) — same outcome for $arg_ since we
         // always encode now. Other branches (capture groups, path params) still
-        // honour encode_values; this test only pins down $arg_.
+        // honour the context; this test only pins down $arg_.
         let uri_out = plugin.resolve_variables(
             "/p?user=$arg_user&token=$arg_token&id=$arg_id&raw=$arg_raw",
             "/orig",
             &mut mock_session,
             None,
-            true,
+            TemplateContext::Uri,
         );
         assert_eq!(
             uri_out, "/p?user=user-123&token=hello%0Aworld&id=caf%C3%A9&raw=foo%2Bbar%3Dbaz",
             "URI context: $arg_<name> stays url-encoded"
         );
+    }
+
+    /// `$1..$9` (regex captures) must url-encode in Header context, mirroring
+    /// the `$arg_<name>` rule. Without encoding, control bytes and non-ASCII
+    /// values cause `HeaderValue::try_from` to silently drop the header.
+    #[test]
+    fn test_capture_substitution_url_encodes_in_header_context() {
+        let plugin = ProxyRewrite::new(&ProxyRewriteConfig::default());
+        let mut mock_session = MockPluginSession::new();
+        // Captures don't need session lookups, but resolve_variables takes one.
+        mock_session.expect_get_query_param().returning(|_| None);
+        // Inert: result contains no `$` after capture substitution, so path-param
+        // branch is short-circuited by `if result.contains('$')`.
+        mock_session.expect_get_path_param().returning(|_| None);
+
+        // Build a fake regex::Captures by matching against a constructed string.
+        // The captured text contains: a control byte, a non-ASCII (Latin-1)
+        // character, a literal '%', and a reserved char.
+        // Use (?s) flag so '.' matches '\n' (the control byte under test).
+        let re = regex::Regex::new(r"(?s)^/(.+)$").unwrap();
+        // Adversarial input pins the encoder for this function in isolation.
+        // Production paths cannot contain a raw \n byte (pingora rejects request-line
+        // CTL bytes upstream), so this exercises resolve_variables itself, not an
+        // HTTP-realistic capture; the integration test covers the realistic case.
+        let probe = "/hello\nworld-é-100%-foo&bar";
+        let caps = re.captures(probe).unwrap();
+
+        let out = plugin.resolve_variables(
+            "X-Trace=$1",
+            "/orig",
+            &mut mock_session,
+            Some(&caps),
+            TemplateContext::Header,
+        );
+        assert_eq!(
+            out, "X-Trace=hello%0Aworld-%C3%A9-100%25-foo%26bar",
+            "header context: $1 must url-encode control bytes, non-ASCII, % and reserved chars"
+        );
+    }
+
+    /// `$<name>` (path parameters) must url-encode in Header context for the
+    /// same reason as captures.
+    #[test]
+    fn test_path_param_substitution_url_encodes_in_header_context() {
+        let plugin = ProxyRewrite::new(&ProxyRewriteConfig::default());
+        let mut mock_session = MockPluginSession::new();
+        mock_session.expect_get_query_param().returning(|_| None);
+        // Decoded path-param value: contains non-ASCII, control byte, reserved char.
+        mock_session.expect_get_path_param().returning(|name| match name {
+            "uid" => Some("café-foo&bar\nbaz".to_string()),
+            _ => None,
+        });
+
+        let out = plugin.resolve_variables("X-User=$uid", "/orig", &mut mock_session, None, TemplateContext::Header);
+        assert_eq!(
+            out, "X-User=caf%C3%A9-foo%26bar%0Abaz",
+            "header context: $<name> must url-encode the decoded path-param value"
+        );
+    }
+
+    /// Pin URI-context behavior: `$1..$9` and `$<name>` continue to url-encode
+    /// (no behavior change in this context — guards against accidental regression
+    /// while we touch resolve_variables).
+    #[test]
+    fn test_capture_and_path_param_url_encode_in_uri_context() {
+        let plugin = ProxyRewrite::new(&ProxyRewriteConfig::default());
+        let mut mock_session = MockPluginSession::new();
+        mock_session.expect_get_query_param().returning(|_| None);
+        mock_session.expect_get_path_param().returning(|name| match name {
+            "uid" => Some("café".to_string()),
+            _ => None,
+        });
+
+        // Capture path
+        // Use (?s) flag so '.' matches '\n' for consistency with other capture tests.
+        let re = regex::Regex::new(r"(?s)^/(.+)$").unwrap();
+        let probe = "/foo&bar";
+        let caps = re.captures(probe).unwrap();
+        let cap_out = plugin.resolve_variables("/x/$1", "/orig", &mut mock_session, Some(&caps), TemplateContext::Uri);
+        assert_eq!(cap_out, "/x/foo%26bar", "URI context: $1 stays url-encoded");
+
+        // Path-param path
+        let pp_out = plugin.resolve_variables("/u/$uid", "/orig", &mut mock_session, None, TemplateContext::Uri);
+        assert_eq!(pp_out, "/u/caf%C3%A9", "URI context: $<name> stays url-encoded");
     }
 }

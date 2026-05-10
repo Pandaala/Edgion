@@ -390,6 +390,68 @@ impl ProxyRewriteTestSuite {
         })
     }
 
+    // ==================== 6b. Path-param × Header — always url-encoded (this PR) ====================
+
+    /// ProxyRewrite path-param ($<name>) header rewrite always url-encodes the
+    /// decoded path-param value in Header context, mirroring $arg_<name>'s rule.
+    /// /params/foo+bar/info -> URI=/user-service/foo%2Bbar/profile, X-User-Id=foo%2Bbar.
+    fn test_path_param_header_url_encoded() -> TestCase {
+        TestCase::new(
+            "path_param_header_url_encoded",
+            "ProxyRewrite path-param header: $<name> always url-encoded (this PR)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = &ctx.http_client;
+                    let url = format!("{}/params/foo+bar/info", ctx.http_url());
+                    let request = client.get(&url).header("host", "proxy-rewrite.example.com");
+
+                    match request.send().await {
+                        Ok(response) => {
+                            if !response.status().is_success() {
+                                return TestResult::failed(start.elapsed(), format!("HTTP {}", response.status()));
+                            }
+                            match response.text().await {
+                                Ok(text) => {
+                                    let echo = parse_echo_response(&text);
+                                    let mut errors = Vec::new();
+
+                                    // URI context: $uid was already url-encoded before this PR;
+                                    // regression-pin only.
+                                    if echo.path != "/user-service/foo%2Bbar/profile" {
+                                        errors.push(format!(
+                                            "URI: expected /user-service/foo%2Bbar/profile, got {}",
+                                            echo.path
+                                        ));
+                                    }
+                                    // Header context: THIS PR's behavior fix — $<name> must
+                                    // url-encode the decoded path-param value, same as $arg_<name>.
+                                    if echo.headers.get("x-user-id") != Some(&"foo%2Bbar".to_string()) {
+                                        errors.push(format!(
+                                            "X-User-Id: expected foo%2Bbar, got {:?}",
+                                            echo.headers.get("x-user-id")
+                                        ));
+                                    }
+
+                                    if errors.is_empty() {
+                                        TestResult::passed_with_message(
+                                            start.elapsed(),
+                                            format!("URI={}, X-User-Id={:?}", echo.path, echo.headers.get("x-user-id")),
+                                        )
+                                    } else {
+                                        TestResult::failed(start.elapsed(), errors.join("; "))
+                                    }
+                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Read error: {}", e)),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     // ==================== 7. Header + $arg_<name> always url-encoded ====================
 
     /// ProxyRewrite header: $arg_<name> always url-encodes the decoded query value.
@@ -451,6 +513,75 @@ impl ProxyRewriteTestSuite {
                         TestResult::failed(
                             start.elapsed(),
                             format!("Expected `X-Arg-Id: user-123` (identity); body=\n{}", body2),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 8. Header + $1 (capture) always url-encoded ====================
+
+    /// ProxyRewrite header: $1 (regex capture) always url-encodes, mirroring $arg_<name>.
+    /// /capture-header/foo+bar:    captured bytes "foo+bar" → X-Trace: foo%2Bbar
+    /// /capture-header/abc-xyz:    ASCII identity            → X-Trace: abc-xyz
+    fn test_header_capture_always_encoded() -> TestCase {
+        TestCase::new(
+            "header_capture_always_encoded",
+            "ProxyRewrite header: $1 (regex capture) always url-encoded",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = &ctx.http_client;
+
+                    // Case 1: '+' in the path segment is captured as a literal '+'
+                    // (paths don't decode '+' as space) and must be re-encoded as %2B.
+                    let resp = client
+                        .get(format!("{}/capture-header/foo+bar", ctx.http_url()))
+                        .header("host", "proxy-rewrite.example.com")
+                        .send()
+                        .await;
+                    let body = match resp {
+                        Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
+                        Ok(r) => {
+                            return TestResult::failed(start.elapsed(), format!("Expected 2xx, got {}", r.status()))
+                        }
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+                    if !body.contains("X-Trace: foo%2Bbar") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected `X-Trace: foo%2Bbar` in echoed headers; body=\n{}", body),
+                        );
+                    }
+
+                    // Case 2: ASCII-safe capture — identity output.
+                    let resp2 = client
+                        .get(format!("{}/capture-header/abc-xyz", ctx.http_url()))
+                        .header("host", "proxy-rewrite.example.com")
+                        .send()
+                        .await;
+                    let body2 = match resp2 {
+                        Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
+                        Ok(r) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Expected 2xx (identity), got {}", r.status()),
+                            )
+                        }
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Identity request failed: {}", e))
+                        }
+                    };
+                    if body2.contains("X-Trace: abc-xyz") {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "$1 url-encoded for `+`->%2B and identity for ASCII".to_string(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected `X-Trace: abc-xyz` (identity); body=\n{}", body2),
                         )
                     }
                 })
@@ -536,8 +667,15 @@ impl TestSuite for ProxyRewriteTestSuite {
             // matcher records `uid` in `ctx.path_params`, which ProxyRewrite then
             // substitutes into URI / header templates as `$uid`.
             Self::test_path_param(),
+            // Same fixture/route as test_path_param, but with a non-ASCII-identity
+            // input (`foo+bar`) to verify that $<name> in Header context is
+            // url-encoded (this PR's behavior fix). URI context is also regression-pinned.
+            Self::test_path_param_header_url_encoded(),
             // Header $arg_<name> always url-encoded (unified-query-string-cache Fix 3)
             Self::test_header_arg_always_encoded(),
+            // Header $1 (regex capture) always url-encoded
+            // (proxy-rewrite-header-encode-capture-pathparam follow-up).
+            Self::test_header_capture_always_encoded(),
         ]
     }
 }
