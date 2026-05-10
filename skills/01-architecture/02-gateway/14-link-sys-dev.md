@@ -226,11 +226,11 @@ They are mounted onto the gateway admin API only under `--integration-testing-mo
 
 ### 5. Finally, add tests and compose
 
-Existing scripts that actually exist:
+Existing scripts and drivers:
 
-- `examples/test/scripts/integration/link_sys/run_redis_test.sh`
-- `examples/test/scripts/integration/link_sys/run_etcd_test.sh`
-- `examples/test/scripts/integration/link_sys/run_es_test.sh`
+- `examples/test/scripts/integration/run_integration.sh -r LinkSys -i Redis` (Redis is integrated into the main runner; the assertions live in `link_sys/redis_assertions.sh` and Redis docker is auto-started via the runner's `start_redis_service_if_needed` precondition)
+- `examples/test/scripts/integration/link_sys/run_etcd_test.sh` (standalone)
+- `examples/test/scripts/integration/link_sys/run_es_test.sh` (standalone)
 
 Configurations and dependencies are also layered:
 
@@ -267,10 +267,13 @@ Run the smallest static check first:
 cargo check
 ```
 
-If you modified an existing system, run the corresponding script first:
+If you modified an existing system, run the corresponding entry point first:
 
 ```bash
-./examples/test/scripts/integration/link_sys/run_redis_test.sh
+# Redis: now part of the main runner
+./examples/test/scripts/integration/run_integration.sh --no-prepare -r LinkSys -i Redis
+
+# Etcd / Elasticsearch: standalone
 ./examples/test/scripts/integration/link_sys/run_etcd_test.sh
 ./examples/test/scripts/integration/link_sys/run_es_test.sh
 ```

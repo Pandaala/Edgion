@@ -1,7 +1,10 @@
 # LinkSys Integration Testing Guide
 
-> How to add, run, and debug integration tests for LinkSys connectors (Redis, future Etcd, Kafka, etc.).
-> Each LinkSys type has its **own standalone test script** (`run_<type>_test.sh`) that manages the full lifecycle: external service → Edgion → test → cleanup.
+> How to add, run, and debug integration tests for LinkSys connectors (Redis, Etcd, Elasticsearch, future Kafka, etc.).
+>
+> **Redis** is integrated into the main runner (`run_integration.sh`) — invoked as the `LinkSys/Redis` suite, with assertions in `link_sys/redis_assertions.sh`. The runner auto-starts the Redis docker container as a precondition.
+>
+> **Etcd / Elasticsearch / future types** still ship as standalone scripts (`run_<type>_test.sh`) that manage their own lifecycle. New LinkSys types should follow the standalone-script pattern first; once stable, consider merging into the main runner the same way Redis was (assertions extracted into a `<type>_assertions.sh` driver, suite auto-discovered, runner adds a precondition + run_test invocation).
 
 ## Architecture Overview
 
@@ -49,18 +52,30 @@ Step 7: Cleanup     →  kill processes, docker compose down
 
 ### Running Tests
 
+**Redis (merged into the main runner):**
+
 ```bash
-# Full test (build + start + test + cleanup)
-./examples/test/scripts/integration/link_sys/run_redis_test.sh
+# Targeted: run only the LinkSys/Redis suite (auto-starts Redis docker)
+./examples/test/scripts/integration/run_integration.sh --no-prepare -r LinkSys -i Redis
 
-# Skip build (reuse existing binaries)
-./examples/test/scripts/integration/link_sys/run_redis_test.sh --no-build
+# Default fast sweep (also runs LinkSys/Redis with the lifecycle delete
+# assertion; --full-test only adds slow suites like LdapAuth and HealthCheckTransition)
+./examples/test/scripts/integration/run_integration.sh --no-prepare
 
-# Keep services alive after test (for manual debugging)
-./examples/test/scripts/integration/link_sys/run_redis_test.sh --no-cleanup
+# Run the assertions directly against an already-running stack (build skipped,
+# services up, LinkSys/Redis CRDs applied)
+bash ./examples/test/scripts/integration/link_sys/redis_assertions.sh
+bash ./examples/test/scripts/integration/link_sys/redis_assertions.sh --include-lifecycle
+```
 
-# Alias for --no-cleanup
-./examples/test/scripts/integration/link_sys/run_redis_test.sh --keep-alive
+**Etcd / Elasticsearch (still standalone):**
+
+```bash
+./examples/test/scripts/integration/link_sys/run_etcd_test.sh           # full lifecycle
+./examples/test/scripts/integration/link_sys/run_etcd_test.sh --no-build
+./examples/test/scripts/integration/link_sys/run_etcd_test.sh --keep-alive
+
+./examples/test/scripts/integration/link_sys/run_es_test.sh
 ```
 
 ## Directory Structure
@@ -86,10 +101,14 @@ examples/test/
 │           └── *.yaml
 ├── scripts/
 │   └── integration/
-│       └── link_sys/                      # ← All LinkSys standalone scripts
-│           ├── run_redis_test.sh
-│           ├── run_etcd_test.sh
-│           ├── run_es_test.sh
+│       ├── run_integration.sh             # ← Main runner; auto-starts Redis,
+│       │                                  #   runs LinkSys/Redis assertions
+│       └── link_sys/
+│           ├── redis_assertions.sh        # ← Redis driver (invoked by the
+│           │                              #   main runner; can also be run
+│           │                              #   directly against a live stack)
+│           ├── run_etcd_test.sh           # ← Standalone (own lifecycle)
+│           ├── run_es_test.sh             # ← Standalone (own lifecycle)
 │           └── run_<future>_test.sh       # ← Future: Kafka, etc.
 └── ...
 
@@ -239,7 +258,7 @@ Add testing endpoints to `src/core/gateway/api/mod.rs` inside the `create_testin
 
 ### Step 4: Write Test Script
 
-Create `examples/test/scripts/integration/link_sys/run_<type>_test.sh`. Use `run_redis_test.sh` as a template.
+Create `examples/test/scripts/integration/link_sys/run_<type>_test.sh`. Use `run_etcd_test.sh` or `run_es_test.sh` as a template (the previous Redis standalone has been merged into the main runner; if you ever want to merge a new type the same way, see `redis_assertions.sh` + the `is_redis_service_required` / `start_redis_service_if_needed` plumbing in `run_integration.sh` for the wiring pattern).
 
 **Script structure:**
 
@@ -255,7 +274,7 @@ Create `examples/test/scripts/integration/link_sys/run_<type>_test.sh`. Use `run
 # 8. Report results
 ```
 
-**Test assertion helpers (copy from run_redis_test.sh):**
+**Test assertion helpers (copy from `redis_assertions.sh` / `run_etcd_test.sh`):**
 
 ```bash
 assert_eq()       # Exact string match
@@ -278,7 +297,7 @@ assert_failure()  # JSON .success == false
 ### Step 5: Build & Test
 
 ```bash
-# Full run
+# Full standalone run
 ./examples/test/scripts/integration/link_sys/run_<type>_test.sh
 
 # Iterating (skip build)
@@ -287,6 +306,14 @@ assert_failure()  # JSON .success == false
 # Debug (keep alive)
 ./examples/test/scripts/integration/link_sys/run_<type>_test.sh --keep-alive
 ```
+
+**Optional: merge into the main runner** (Redis pattern). Once the standalone script is stable, you can fold its assertions into `run_integration.sh` so contributors get one entry point:
+
+1. Extract the post-startup assertions into `link_sys/<type>_assertions.sh` (assumes services and CRDs are already up — no docker/cli plumbing in the driver).
+2. Add a `Services/<type>/docker-compose.yaml` precondition to `run_integration.sh` (mirror `start_redis_service_if_needed` and `is_redis_service_required`).
+3. Add `LinkSys/<Type>` to the `-r LinkSys` switch and the default sweep, with a small helper that formats the driver invocation and threads `--full-test` into the lifecycle flag if the type has destructive teardown assertions.
+4. Update auto-loaded suites: when `-r LinkSys -i <Type>` is targeted, the runner should add `EdgionPlugins/base` (and any plugin suite the assertions exercise) so the right Gateway and routes exist.
+5. Delete the original `run_<type>_test.sh` and update doc references.
 
 ### Step 6: Update This Document
 
@@ -388,11 +415,12 @@ integration_testing/redis_testing_YYYYMMDD_HHMMSS/
 
 | Item | Details |
 |------|---------|
-| **Script** | `examples/test/scripts/integration/link_sys/run_redis_test.sh` |
+| **Runner integration** | Merged into `run_integration.sh` as the `LinkSys/Redis` suite (auto-discovered). Redis docker is auto-started via `start_redis_service_if_needed`. |
+| **Assertions driver** | `examples/test/scripts/integration/link_sys/redis_assertions.sh` (`--include-lifecycle` is always passed by the runner, so the lifecycle delete assertion runs in both fast and `--full-test` mode; the flag stays opt-in for direct invocations) |
 | **Docker** | `examples/test/conf/Services/redis/docker-compose.yaml` |
 | **Config** | `examples/test/conf/LinkSys/Redis/01_LinkSys_default_redis-test.yaml` |
 | **Docker port** | `16379:6379` |
 | **Password** | `edgion-test-pwd` (hardcoded for testing only) |
 | **Client name** | `default/redis-test` (URL: `default_redis-test`) |
-| **Test count** | ~30 assertions covering health, KV, hash, list, lock, lifecycle |
+| **Test count** | 62 assertions across 10 sections (resource sync, client registration, health/PING, KV, hash, list, distributed lock, error handling, RateLimitRedis plugin, lifecycle delete) |
 | **API base** | `/api/v1/testing/link-sys/redis/` |

@@ -40,6 +40,21 @@ LDAP_COMPOSE_DIR=""
 LDAP_COMPOSE_FILE=""
 LDAP_SERVICE_REQUIRED=false
 LDAP_SERVICE_STARTED=false
+
+# Redis integration dependency (used by EdgionPlugins/Dsl, EdgionPlugins/RateLimitRedis,
+# and any LinkSys Redis test driven by the main runner). The bundled docker-compose
+# matches examples/test/conf/LinkSys/Redis (host 127.0.0.1, port 16379, password
+# edgion-test-pwd). When the runner starts Redis itself, cleanup() stops it; an
+# externally-managed Redis is left untouched.
+REDIS_COMPOSE_DIR=""
+REDIS_COMPOSE_FILE=""
+REDIS_SERVICE_REQUIRED=false
+REDIS_SERVICE_STARTED=false
+REDIS_HOST="127.0.0.1"
+REDIS_PORT=16379
+REDIS_PASSWORD="edgion-test-pwd"
+REDIS_CONTAINER_NAME="edgion-test-redis"
+
 CONTROLLER_GRPC_PORT=50051
 
 # Whether to skip cache residue detection after tests
@@ -344,10 +359,17 @@ cleanup() {
             log_info "Stopping OpenLDAP test service..."
             docker compose -f "${LDAP_COMPOSE_FILE}" down --timeout 5 >/dev/null 2>&1 || true
         fi
+        if $REDIS_SERVICE_STARTED; then
+            log_info "Stopping Redis test service..."
+            docker compose -f "${REDIS_COMPOSE_FILE}" down --timeout 5 >/dev/null 2>&1 || true
+        fi
         "${UTILS_DIR}/kill_all.sh" 2>&1 || true
     else
         if $LDAP_SERVICE_STARTED; then
             log_info "OpenLDAP test service still running (keep-alive mode): ${LDAP_COMPOSE_FILE}"
+        fi
+        if $REDIS_SERVICE_STARTED; then
+            log_info "Redis test service still running (keep-alive mode): ${REDIS_COMPOSE_FILE}"
         fi
     fi
 }
@@ -471,6 +493,177 @@ start_ldap_service_if_needed() {
 
     log_success "OpenLDAP test data seeded"
     return 0
+}
+
+# =============================================================================
+# Redis integration dependency
+# =============================================================================
+# Triggered by EdgionPlugins/Dsl, EdgionPlugins/RateLimitRedis, or the default
+# full sweep. The runner first probes whether Redis is already reachable on
+# 127.0.0.1:16379; if not, it tries to start the bundled docker-compose
+# stack (matches examples/test/conf/LinkSys/Redis); if Docker is unavailable
+# the runner aborts with platform-specific install hints.
+is_redis_service_required() {
+    local explicit_suites="$1"
+
+    # Default full sweep (no -r/-i) covers DSL + RateLimitRedis + LinkSys/Redis.
+    if [ -z "$G_RESOURCE" ]; then
+        return 0
+    fi
+
+    if [ "$G_RESOURCE" = "EdgionPlugins" ]; then
+        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Dsl" ] || [ "$G_ITEM" = "RateLimitRedis" ]; then
+            return 0
+        fi
+    fi
+
+    if [ "$G_RESOURCE" = "LinkSys" ]; then
+        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Redis" ]; then
+            return 0
+        fi
+    fi
+
+    case ",${explicit_suites}," in
+        *,EdgionPlugins/Dsl,*|*,EdgionPlugins/RateLimitRedis,*|*,LinkSys/Redis,*)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+# Probe whether Redis is reachable. Order of attempts:
+#   1) host redis-cli (most accurate — verifies AUTH);
+#   2) running edgion-test-redis container with `docker exec`;
+#   3) bare TCP connect to host:port (port-open is treated as good enough —
+#      a wrong-password Redis at this port would still produce non-PONG and
+#      surface as a normal test failure, which is the same signal the operator
+#      would have seen pre-change).
+probe_redis_ready() {
+    local host=$1 port=$2 password=$3
+
+    if command -v redis-cli >/dev/null 2>&1; then
+        if redis-cli -h "$host" -p "$port" -a "$password" --no-auth-warning ping 2>/dev/null \
+            | grep -q '^PONG$'; then
+            return 0
+        fi
+    fi
+
+    if command -v docker >/dev/null 2>&1; then
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$REDIS_CONTAINER_NAME"; then
+            if docker exec "$REDIS_CONTAINER_NAME" \
+                redis-cli -a "$password" ping 2>/dev/null | grep -q '^PONG$'; then
+                return 0
+            fi
+        fi
+    fi
+
+    if (exec 3<>"/dev/tcp/${host}/${port}") 2>/dev/null; then
+        exec 3<&- 3>&- 2>/dev/null || true
+        return 0
+    fi
+
+    return 1
+}
+
+print_redis_install_hints() {
+    cat <<EOF
+
+Edgion integration tests require a Redis instance reachable at
+  ${REDIS_HOST}:${REDIS_PORT}  (password: ${REDIS_PASSWORD})
+
+This matches the LinkSys fixture in examples/test/conf/LinkSys/Redis
+(consumed by EdgionPlugins/Dsl, EdgionPlugins/RateLimitRedis, and the
+LinkSys Redis suite).
+
+Recommended (any platform with Docker):
+  cd ${REDIS_COMPOSE_DIR}
+  docker compose up -d
+  # the runner will detect and reuse it on the next invocation
+
+Manual install:
+  macOS (Homebrew):
+    brew install redis
+    redis-server --port ${REDIS_PORT} --requirepass ${REDIS_PASSWORD} --daemonize yes
+  Debian / Ubuntu:
+    sudo apt-get install -y redis-server
+    redis-server --port ${REDIS_PORT} --requirepass ${REDIS_PASSWORD} --daemonize yes
+  RHEL / CentOS / Fedora:
+    sudo dnf install -y redis      # or: sudo yum install -y redis
+    redis-server --port ${REDIS_PORT} --requirepass ${REDIS_PASSWORD} --daemonize yes
+  Windows (WSL2):
+    use the Linux instructions inside your WSL distro, or run Docker Desktop:
+    docker run -d --name ${REDIS_CONTAINER_NAME} -p ${REDIS_PORT}:6379 \\
+        redis:7-alpine redis-server --requirepass ${REDIS_PASSWORD}
+
+After Redis is reachable, re-run the same integration test command.
+
+EOF
+}
+
+# Build the command line for the LinkSys/Redis assertions driver.
+# Lifecycle deletion (test 10 — delete the redis-test LinkSys CRD and verify
+# the runtime client is removed) is included by default. It is safe in the
+# normal test order: LinkSys_Redis runs after every EdgionPlugins/Status/
+# LinkSys_Status suite that depends on default/redis-test, and the driver
+# re-applies the CRD at the end as a safety net.
+linksys_redis_cmd() {
+    echo "bash ${SCRIPT_DIR}/link_sys/redis_assertions.sh --include-lifecycle"
+}
+
+start_redis_service_if_needed() {
+    if ! $REDIS_SERVICE_REQUIRED; then
+        return 0
+    fi
+
+    REDIS_COMPOSE_DIR="${PROJECT_ROOT}/examples/test/conf/Services/redis"
+    REDIS_COMPOSE_FILE="${REDIS_COMPOSE_DIR}/docker-compose.yaml"
+
+    log_section "Redis dependency: ensure Redis is available"
+
+    if probe_redis_ready "$REDIS_HOST" "$REDIS_PORT" "$REDIS_PASSWORD"; then
+        log_success "Redis already reachable at ${REDIS_HOST}:${REDIS_PORT} (reusing it)"
+        return 0
+    fi
+
+    log_info "Redis not reachable at ${REDIS_HOST}:${REDIS_PORT} — attempting to start it"
+
+    if ! command -v docker >/dev/null 2>&1 \
+        || ! docker info >/dev/null 2>&1 \
+        || ! docker compose version >/dev/null 2>&1; then
+        log_error "Redis is required but not running, and Docker is unavailable on this host."
+        print_redis_install_hints
+        return 1
+    fi
+
+    if [ ! -f "${REDIS_COMPOSE_FILE}" ]; then
+        log_error "Redis compose file not found: ${REDIS_COMPOSE_FILE}"
+        return 1
+    fi
+
+    local compose_output=""
+    compose_output=$(docker compose -f "${REDIS_COMPOSE_FILE}" up -d 2>&1) || {
+        log_error "Failed to start Redis via docker compose"
+        echo "$compose_output"
+        print_redis_install_hints
+        return 1
+    }
+
+    local elapsed=0
+    local timeout=30
+    while [ $elapsed -lt $timeout ]; do
+        if probe_redis_ready "$REDIS_HOST" "$REDIS_PORT" "$REDIS_PASSWORD"; then
+            REDIS_SERVICE_STARTED=true
+            log_success "Redis is ready (started via docker, waited ${elapsed}s)"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    log_error "Redis container did not become ready within ${timeout}s"
+    docker compose -f "${REDIS_COMPOSE_FILE}" logs --no-color --tail=80 || true
+    return 1
 }
 
 # =============================================================================
@@ -783,6 +976,9 @@ run_all_tests() {
             "LinkSys")
                 if [ -z "$G_ITEM" ]; then
                     run_test "LinkSys_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i Status" || test_failed=true
+                    run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
+                elif [ "$G_ITEM" = "Redis" ]; then
+                    run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "LinkSys_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i ${G_ITEM}" || test_failed=true
@@ -940,6 +1136,7 @@ run_all_tests() {
         run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSListenerMode" || test_failed=true
         run_test "Status_TLSRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSRoute" || test_failed=true
         run_test "LinkSys_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i Status" || test_failed=true
+        run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
 
         # Controller Resource-Abnormal Metric (standalone shell test; slow, runs its own controller with tick_secs=30)
         if $FULL_TEST; then
@@ -1061,6 +1258,19 @@ main() {
             else
                 suites="${base_suites},Status/RefGrant,Status/BackendTLSPolicy,Status/GatewayFrontendValidation,Status/TLSListenerMode,Status/TLSRoute"
             fi
+        elif [ "$G_RESOURCE" = "LinkSys" ]; then
+            # LinkSys/Redis assertions hit /api/v1/testing/link-sys/redis/* on the
+            # Gateway admin port (covered by base) AND drive real proxy traffic
+            # through edgion-plugins-gateway against the rate-limit-redis-* plugins
+            # — load EdgionPlugins/base + RateLimitRedis so test 9 has its plugins.
+            local linksys_extras="EdgionPlugins/base,EdgionPlugins/RateLimitRedis"
+            if [ -z "$G_ITEM" ]; then
+                suites="${base_suites},LinkSys/Status,LinkSys/Redis,${linksys_extras}"
+            elif [ "$G_ITEM" = "Redis" ]; then
+                suites="${base_suites},LinkSys/Redis,${linksys_extras}"
+            else
+                suites="${base_suites},LinkSys/${G_ITEM}"
+            fi
         elif [ -n "$G_ITEM" ]; then
             if [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "TLS/BackendTLS" ]; then
                 suites="${base_suites},HTTPRoute/Backend/BackendTLS"
@@ -1082,7 +1292,11 @@ main() {
     if is_ldap_service_required "$suites"; then
         LDAP_SERVICE_REQUIRED=true
     fi
-    
+
+    if is_redis_service_required "$suites"; then
+        REDIS_SERVICE_REQUIRED=true
+    fi
+
     echo ""
     echo -e "${BLUE}========================================${NC}"
     echo -e "${BLUE}Edgion Integration Test${NC}"
@@ -1144,6 +1358,11 @@ main() {
     # Step 0: Start external dependencies when needed
     if ! start_ldap_service_if_needed; then
         log_error "Failed to start external LDAP dependency"
+        exit 1
+    fi
+
+    if ! start_redis_service_if_needed; then
+        log_error "Failed to start external Redis dependency"
         exit 1
     fi
 
