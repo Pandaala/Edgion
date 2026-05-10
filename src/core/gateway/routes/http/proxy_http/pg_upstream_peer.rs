@@ -12,7 +12,7 @@ use crate::core::gateway::{
 use crate::types::ctx::BackendSource;
 use crate::types::err::EdError;
 use crate::types::filters::PluginRunningResult;
-use crate::types::{EdgionHttpContext, EdgionStatus, SessionPersistenceState};
+use crate::types::{EdgionHttpContext, EdgionStatus, SessionPersistenceState, UpstreamJumpTarget};
 use pingora_core::modules::http::grpc_web::GrpcWebBridge;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
@@ -134,20 +134,21 @@ pub async fn upstream_peer_http(
 ) -> pingora_core::Result<Box<HttpPeer>> {
     finalize_request_uri(session, ctx)?;
 
-    // 0. DirectEndpoint (highest priority, bypass LB)
+    // 0/1. Upstream-jump slot (Direct/External bypass; Internal falls through to LB).
     // INVARIANT: this check MUST come before the `selected_backend.is_none()` check below.
-    // `set_direct_endpoint` (plugin API) writes BOTH `ctx.direct_endpoint` AND
-    // `ctx.selected_backend` simultaneously so that `init_backend_context_if_needed` inside
-    // the bypass path has a backend_ref to derive service metadata from. If the order were
-    // swapped, a non-None `selected_backend` would suppress `select_http_backend` and the
-    // request would reach `try_get_peer` with the direct-endpoint backend_ref — incorrect.
-    if ctx.direct_endpoint.is_some() {
-        return try_direct_endpoint_peer(edgion_http, ctx);
-    }
-
-    // 1. ExternalJump (external domain, second priority)
-    if ctx.external_jump.is_some() {
-        return try_external_jump_peer(edgion_http, ctx).await;
+    // `set_upstream_jump` (via ctx.try_set_jump) co-writes `selected_backend` on a
+    // successful Direct write so `init_backend_context_if_needed` inside the bypass
+    // path has a backend_ref. If the order were swapped, a non-None
+    // `selected_backend` would suppress `select_http_backend` and the request would
+    // reach `try_get_peer` with the direct-endpoint backend_ref — incorrect.
+    if let Some(jump) = &ctx.jump {
+        match jump {
+            UpstreamJumpTarget::Direct { .. } => return try_direct_endpoint_peer(edgion_http, ctx),
+            UpstreamJumpTarget::External(_) => return try_external_jump_peer(edgion_http, ctx).await,
+            UpstreamJumpTarget::Internal(_) => {
+                // fall through — Internal stays in ctx.jump, consumed by pick_backend_ref
+            }
+        }
     }
 
     // 2. Select HTTP backend if not already selected (may include InternalJump inside)
@@ -200,11 +201,7 @@ pub async fn select_http_backend(
 
     // Pick backend_ref: InternalJump (plugin-injected) tries by name first and falls back to
     // weighted round-robin on miss; without InternalJump, plain weighted round-robin.
-    let mut backend_ref = match pick_backend_ref(
-        &route_unit.rule,
-        &route_unit.matched_info.rsc.ns,
-        ctx.internal_jump.as_ref(),
-    ) {
+    let mut backend_ref = match pick_backend_ref(&route_unit.rule, &route_unit.matched_info.rsc.ns, ctx.jump.as_ref()) {
         Ok(b) => b,
         Err(e) => {
             ctx.add_error(backend_select_status(&e));
@@ -347,30 +344,24 @@ async fn get_peer_with_sp_fallback(
     }
 }
 
-/// Pick the HTTP backend_ref for this request.
-///
-/// With `InternalJump` (set by the dynamic_internal_upstream plugin), try the named
-/// backend_ref first; on miss, fall through to weighted round-robin so the request
-/// still gets served (graceful degradation rather than failing the request).
-///
-/// Without `InternalJump`, plain weighted round-robin selection.
-///
-/// Pure: no `&mut ctx` borrow, so the caller can keep its `&route_unit.rule` borrow
-/// alive across the call. Takes `&Arc<HTTPRouteRule>` (rather than `&HTTPRouteRule`)
-/// because that's what `RouteRules::find_backend_by_name` and `select_backend` require.
+/// Pick the `HTTPBackendRef` for an LB-bound request. When `ctx.jump` carries an
+/// `Internal` variant, named lookup is tried first and falls back to weighted
+/// round-robin on miss; when `ctx.jump` is None or carries a non-Internal variant,
+/// plain weighted round-robin.
 #[inline]
 fn pick_backend_ref(
     rule: &std::sync::Arc<crate::types::HTTPRouteRule>,
     route_ns: &str,
-    internal_jump: Option<&crate::types::InternalJumpPreset>,
+    jump: Option<&crate::types::UpstreamJumpTarget>,
 ) -> Result<crate::types::HTTPBackendRef, EdError> {
-    if let Some(jump) = internal_jump {
-        if let Ok(b) = RouteRules::find_backend_by_name(
-            rule,
-            &jump.backend_ref_name,
-            jump.backend_ref_namespace.as_deref(),
-            route_ns,
-        ) {
+    let internal = match jump {
+        Some(crate::types::UpstreamJumpTarget::Internal(p)) => Some(p),
+        _ => None,
+    };
+    if let Some(j) = internal {
+        if let Ok(b) =
+            RouteRules::find_backend_by_name(rule, &j.backend_ref_name, j.backend_ref_namespace.as_deref(), route_ns)
+        {
             return Ok(b);
         }
         // Named lookup missed → fall through to weighted RR.
@@ -497,11 +488,11 @@ fn finish_static_peer(
 
 /// DirectEndpoint bypass path (exact IP set by a plugin, e.g. dynamic_endpoint).
 ///
-/// Caller must have already checked `ctx.direct_endpoint.is_some()` — this is the
-/// cold path, so it's not `#[inline]` and the existence check stays at the call
-/// site to keep the hot path branch-only.
+/// Caller (the dispatch cascade) has already matched `ctx.jump` against
+/// `UpstreamJumpTarget::Direct` — this is the cold path, so it's not `#[inline]`
+/// and the variant check stays at the call site to keep the hot path branch-only.
 ///
-/// `selected_backend` was already populated by `set_direct_endpoint` on the plugin
+/// `selected_backend` was already populated by `set_upstream_jump` on the plugin
 /// side (paired with the matched backend_ref), so `finish_static_peer`'s call to
 /// `init_backend_context_if_needed` derives rsc / service_key / service_kind for
 /// free. We only need to retag `source` afterward to record the staging path.
@@ -509,10 +500,10 @@ fn try_direct_endpoint_peer(
     edgion_http: &EdgionHttpProxy,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
-    let direct = ctx
-        .direct_endpoint
-        .as_ref()
-        .expect("caller must check direct_endpoint.is_some()");
+    let direct = match ctx.jump.as_ref() {
+        Some(UpstreamJumpTarget::Direct { preset, .. }) => preset,
+        _ => unreachable!("caller must dispatch only on ctx.jump == Some(Direct)"),
+    };
     let (addr, use_tls, sni) = (direct.addr, direct.use_tls, direct.sni.clone());
 
     let peer = Box::new(HttpPeer::new(addr, use_tls, sni));
@@ -529,17 +520,18 @@ fn try_direct_endpoint_peer(
 
 /// ExternalJump bypass path (external domain set by a plugin, e.g. region_route).
 ///
-/// Caller must have already checked `ctx.external_jump.is_some()` — cold path,
-/// not `#[inline]`. Resolves the domain via async DNS, validates against SSRF
-/// defenses, then constructs the peer (or returns the rejection error).
+/// Caller (the dispatch cascade) has already matched `ctx.jump` against
+/// `UpstreamJumpTarget::External` — cold path, not `#[inline]`. Resolves the
+/// domain via async DNS, validates against SSRF defenses, then constructs the
+/// peer (or returns the rejection error).
 async fn try_external_jump_peer(
     edgion_http: &EdgionHttpProxy,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
-    let external = ctx
-        .external_jump
-        .as_ref()
-        .expect("caller must check external_jump.is_some()");
+    let external = match ctx.jump.as_ref() {
+        Some(UpstreamJumpTarget::External(p)) => p,
+        _ => unreachable!("caller must dispatch only on ctx.jump == Some(External)"),
+    };
     let domain = external.domain.clone();
     let port = external.port;
     let use_tls = external.use_tls;
@@ -679,11 +671,10 @@ fn finalize_request_uri(session: &mut Session, ctx: &mut EdgionHttpContext) -> p
 
     let cfg = get_path_normalization_config();
     let annotation = ctx.route_unit.as_ref().and_then(|ru| ru.rule.parsed_forward_raw_path);
-    let external_jump_preserve_raw = ctx
-        .external_jump
-        .as_ref()
-        .map(|ej| ej.preserve_raw_path)
-        .unwrap_or(false);
+    let external_jump_preserve_raw = match &ctx.jump {
+        Some(UpstreamJumpTarget::External(p)) => p.preserve_raw_path,
+        _ => false,
+    };
     let want_raw = decide_want_raw(annotation, external_jump_preserve_raw, cfg.forward_normalized_path);
 
     if !want_raw {

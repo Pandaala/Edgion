@@ -5,7 +5,7 @@ use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{
     DynamicExternalUpstreamConfig, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch,
 };
-use crate::types::ExternalJumpPreset;
+use crate::types::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 
 pub struct DynamicExternalUpstream {
     name: String,
@@ -128,9 +128,15 @@ impl RequestFilter for DynamicExternalUpstream {
             // `forward_normalized_path` / per-route annotation policy decide.
             preserve_raw_path: false,
         };
-        session.set_external_jump(info);
-
-        log.push("upstream selected");
+        match session.set_upstream_jump(UpstreamJumpTarget::External(info)) {
+            SetJumpOutcome::Set => {
+                log.push("upstream selected");
+            }
+            SetJumpOutcome::Rejected => {
+                log.push("jump locked, rejected");
+                return PluginRunningResult::GoodNext;
+            }
+        }
 
         // 7. Optionally set debug request header (sent to upstream for tracing)
         if self.config.debug_header {

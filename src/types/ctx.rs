@@ -689,22 +689,6 @@ pub struct EdgionHttpContext {
     /// - Some(HashMap): already extracted (may be empty if no params or no match)
     pub path_params: Option<HashMap<String, String>>,
 
-    /// Direct endpoint set by DirectEndpoint plugin in request_filter stage.
-    pub direct_endpoint: Option<DirectEndpointPreset>,
-
-    /// Internal jump target set by DynamicInternalUpstream plugin in request_filter stage.
-    /// When present, select_http_backend() finds the matching BackendRef by name
-    /// instead of using weighted round-robin selection.
-    /// Normal LB within the selected service's endpoints still applies.
-    pub internal_jump: Option<InternalJumpPreset>,
-
-    /// External jump target set by DynamicExternalUpstream plugin in request_filter stage.
-    /// When present, upstream_peer_http() resolves the domain and builds
-    /// HttpPeer from this info, bypassing normal select_http_backend().
-    /// Host header override is applied separately via set_upstream_host()
-    /// during request_filter.
-    pub external_jump: Option<ExternalJumpPreset>,
-
     /// Unified upstream-jump slot. Set by request-stage plugins via
     /// `PluginSession::set_upstream_jump`. First-write-wins; subsequent setter
     /// calls are rejected (see `SetJumpOutcome`). Replaces the legacy
@@ -857,9 +841,6 @@ impl EdgionHttpContext {
             hash_key: None,
             ctx_map: HashMap::new(),
             path_params: None,
-            direct_endpoint: None,
-            internal_jump: None,
-            external_jump: None,
             jump: None,
             uri_finalized: false,
             pending_response_header_ops: Vec::new(),

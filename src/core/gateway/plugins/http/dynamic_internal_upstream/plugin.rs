@@ -5,7 +5,7 @@ use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{
     DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch, DynamicInternalUpstreamConfig,
 };
-use crate::types::InternalJumpPreset;
+use crate::types::{InternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 
 pub struct DynamicInternalUpstream {
     name: String,
@@ -159,9 +159,15 @@ impl RequestFilter for DynamicInternalUpstream {
             backend_ref_name: target_name.clone(),
             backend_ref_namespace: target_namespace.clone(),
         };
-        session.set_internal_jump(info);
-
-        log.push("upstream selected");
+        match session.set_upstream_jump(UpstreamJumpTarget::Internal(info)) {
+            SetJumpOutcome::Set => {
+                log.push("upstream selected");
+            }
+            SetJumpOutcome::Rejected => {
+                log.push("jump locked, rejected");
+                return PluginRunningResult::GoodNext;
+            }
+        }
 
         // 7. Optionally set debug request header (sent to upstream for tracing)
         if self.config.debug_header {

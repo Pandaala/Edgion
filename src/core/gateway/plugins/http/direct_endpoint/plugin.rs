@@ -6,7 +6,7 @@ use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing};
-use crate::types::{DirectEndpointPreset, HTTPBackendRef};
+use crate::types::{DirectEndpointPreset, HTTPBackendRef, SetJumpOutcome, UpstreamJumpTarget};
 
 pub struct DirectEndpoint {
     name: String,
@@ -151,7 +151,18 @@ impl RequestFilter for DirectEndpoint {
                 // peer-construction path uses it via ctx.selected_backend to fill
                 // rsc / service_key / service_kind without re-deriving them.
                 let backend_ref = backend_refs[info.backend_ref_idx].clone();
-                session.set_direct_endpoint(info, backend_ref);
+                match session.set_upstream_jump(UpstreamJumpTarget::Direct {
+                    preset: info,
+                    backend_ref,
+                }) {
+                    SetJumpOutcome::Set => {
+                        // fall through to existing log/header writes below
+                    }
+                    SetJumpOutcome::Rejected => {
+                        log.push("jump locked, rejected");
+                        return PluginRunningResult::GoodNext;
+                    }
+                }
 
                 if self.config.debug_header {
                     let _ = session.set_response_header("X-Direct-Endpoint", &addr_str);

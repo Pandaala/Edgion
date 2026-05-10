@@ -4,10 +4,7 @@ use crate::core::gateway::plugins::runtime::log::{EdgionPluginsLog, EdgionPlugin
 use crate::types::common::{KeyGet, KeySet};
 use crate::types::ctx::ClientCertInfo;
 use crate::types::EdgionStatus;
-use crate::types::{
-    DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, HTTPBackendRef, InternalJumpPreset, MirrorState,
-    SetJumpOutcome, UpstreamJumpTarget,
-};
+use crate::types::{EdgionHttpContext, MirrorState, SetJumpOutcome, UpstreamJumpTarget};
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
@@ -248,33 +245,11 @@ pub trait PluginSession: Send + Sync {
     fn key_set(&mut self, key: &KeySet, value: Option<String>) -> PluginSessionResult<()>;
 
     /// Set the unified upstream-jump slot. First-write-wins (see `SetJumpOutcome`).
-    /// Replaces `set_direct_endpoint` / `set_internal_jump` / `set_external_jump`.
     /// Plugins should match on the returned outcome to log the rejection on
     /// their own `PluginLog` line:
     ///   `Set` -> existing per-plugin status string
     ///   `Rejected` -> `log.push("jump locked, rejected")`
     fn set_upstream_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome;
-
-    /// Set direct endpoint info for upstream routing.
-    /// Called by DirectEndpoint plugin to bypass normal LB.
-    /// The info persists across retries (Clone, not consumed).
-    ///
-    /// Also stores the matched `backend_ref` on `ctx.selected_backend` so the resource-
-    /// selection path in `init_backend_context_if_needed` can derive name/namespace/kind
-    /// without re-deriving them from `backend_ref_idx`. The plugin already has the
-    /// backend_ref in hand when it calls this — passing it through avoids a second
-    /// lookup at peer-construction time.
-    fn set_direct_endpoint(&mut self, info: DirectEndpointPreset, backend_ref: HTTPBackendRef);
-
-    /// Set internal jump target for backend selection.
-    /// Called by DynamicInternalUpstream plugin to target a specific BackendRef.
-    /// The info persists in ctx and is consumed by select_http_backend().
-    fn set_internal_jump(&mut self, info: InternalJumpPreset);
-
-    /// Set external jump target for domain-based routing.
-    /// Called by DynamicExternalUpstream plugin to route to an external domain.
-    /// DNS resolution happens later in upstream_peer phase.
-    fn set_external_jump(&mut self, info: ExternalJumpPreset);
 
     /// Set request mirror state used by request_body_filter tee.
     fn set_mirror_state(&mut self, state: MirrorState);

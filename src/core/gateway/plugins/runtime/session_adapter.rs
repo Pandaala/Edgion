@@ -10,10 +10,7 @@ use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
 use crate::core::gateway::runtime::server::http_to_grpc_status;
 use crate::types::common::{KeyGet, KeySet, WebhookExtract};
 use crate::types::filters::PluginRunningResult;
-use crate::types::{
-    DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, HTTPBackendRef, InternalJumpPreset, MirrorState,
-    PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget,
-};
+use crate::types::{EdgionHttpContext, MirrorState, PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget};
 
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
@@ -699,19 +696,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn set_upstream_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome {
         self.ctx.try_set_jump(target)
-    }
-
-    fn set_direct_endpoint(&mut self, info: DirectEndpointPreset, backend_ref: HTTPBackendRef) {
-        self.ctx.direct_endpoint = Some(info);
-        self.ctx.selected_backend = Some(backend_ref);
-    }
-
-    fn set_internal_jump(&mut self, info: InternalJumpPreset) {
-        self.ctx.internal_jump = Some(info);
-    }
-
-    fn set_external_jump(&mut self, info: ExternalJumpPreset) {
-        self.ctx.external_jump = Some(info);
     }
 
     fn set_mirror_state(&mut self, state: MirrorState) {

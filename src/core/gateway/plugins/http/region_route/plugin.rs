@@ -22,7 +22,7 @@ use crate::types::common::KeyGet;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{HashAlgorithm, RegionDef, RegionRouteConfig, RouteRule};
 use crate::types::resources::plugin_metadata::{ClusterRegionRouteConfig, ServiceRegionRouteConfig};
-use crate::types::ExternalJumpPreset;
+use crate::types::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 
 // Hash function
 fn compute_hash(key: &str, algorithm: &HashAlgorithm, modulo: u16) -> u16 {
@@ -209,7 +209,7 @@ impl RegionRoute {
             la![sensitive(&region.name), sensitive(host), sensitive(&port.to_string())],
         );
 
-        session.set_external_jump(ExternalJumpPreset {
+        match session.set_upstream_jump(UpstreamJumpTarget::External(ExternalJumpPreset {
             domain: host.to_string(),
             port,
             use_tls: region.tls,
@@ -217,7 +217,12 @@ impl RegionRoute {
             // Cross-region gateway-to-gateway forwarding: the peer gateway runs
             // its own path normalization, so forward raw to avoid double work.
             preserve_raw_path: true,
-        });
+        })) {
+            SetJumpOutcome::Set => { /* "proxy pass" already logged at line 206 */ }
+            SetJumpOutcome::Rejected => {
+                log.push("jump locked, rejected");
+            }
+        }
 
         PluginRunningResult::GoodNext
     }
