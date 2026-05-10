@@ -656,7 +656,7 @@ fn record_unsafe_resolved_upstream_attempt(
 /// Priority:
 ///   0. ctx.uri_finalized already true   → skip (rewrite final form / already decided)
 ///   1. annotation forward-raw-path      → Some(true)/Some(false) forces
-///   2. external_jump.preserve_raw_path  → gateway-to-gateway default raw
+///   2. ctx.jump == External(preserve_raw_path: true) → gateway-to-gateway default raw
 ///   3. global forward_normalized_path   → false means raw (v3.1 compat / rollback)
 ///   Default                              → write normalized
 #[inline]
