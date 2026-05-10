@@ -29,13 +29,14 @@ operator perspective: $path / $uri / $query           (current view)
 
 session trait:        get_path() -> &str              get_request_path() -> &str
                       get_uri() -> String             get_request_uri() -> String
-                      get_query() -> Option<String>
-                       ↑ plugin interface
+                      get_query() -> Option<String>   get_query_param(name) -> Option<String>
+                       ↑ plugin interface              (single-key, decoded, frozen)
 
 EdgionHttpContext canonical API:
                       ctx.path()                     (current view, read from cache)
                       ctx.request_path()             (entry view, frozen)
-                      ctx.query(req)                 (current view, passthrough)
+                      ctx.query(req)                 (current view, whole-string passthrough)
+                      ctx.cached_query(raw_query)    (entry view, single-key decoded, init-once)
                       ctx.uri(req)                   (current path + current query)
                       ctx.request_uri()              (entry path + entry query)
                       ctx.refresh_normalized_path(req)(refresh current cache;
@@ -54,29 +55,43 @@ pingora field:        req_header().uri
 |-------|--------------|----------------------|
 | **EdgionHttpContext methods** (canonical) | `ctx.path() -> &str` | `ctx.request_path() -> &str` |
 | | `ctx.uri(req) -> String` | `ctx.request_uri() -> String` |
-| | `ctx.query(req) -> Option<&str>` | (single, passthrough) |
+| | `ctx.query(req) -> Option<&str>` (whole, raw, passthrough) | `ctx.cached_query(entry_raw_query) -> &HashMap<String,String>` (single-key, decoded, frozen) |
 | **EdgionHttpContext write methods** (only used by the adapter) | `ctx.refresh_normalized_path(req)` | — |
 | **pingora raw fields** (business code MUST NOT read directly; allowlist below) | — | `req_header().uri` |
 | **session trait** | `get_path() -> &str` | `get_request_path() -> &str` |
 | | `get_uri() -> String` | `get_request_uri() -> String` |
-| | `get_query() -> Option<String>` (kept for compatibility) | (single) |
+| | `get_query() -> Option<String>` (whole, raw) | `get_query_param(name) -> Option<String>` (single-key, decoded, frozen) |
 | **DSL builtin** | `req.path` | `req.request_path` |
 | | `req.uri` | `req.request_uri` |
-| | `req.query` | (single) |
+| | `req.query_string` (whole, raw) | `req.query("name")` (single-key, decoded, frozen) |
 | **ctx_set template variable** | `$path` | `$request_path` |
 | | `$uri` | `$request_uri` |
-| | `$query` | (single) |
+| | (whole-query template var not supported) | `TemplateVarType::Query` with `var_name` (single-key, decoded, frozen) |
 | **`request_restriction` source** | `Path` | `RequestPath` |
+| | (whole-query source not supported) | `Query` with `key` (single-key, decoded, frozen) |
 
 ### Naming rules
 
 - Default name (`path` / `uri`) = the current normalized view (cached, reflects rewrite).
 - `request_` prefix = entry raw view (frozen, unaffected by rewrite).
-- query is not normalized; single name (`query`).
+- query is not normalized; whole-query access uses a single name (`query`).
 
-### query view asymmetry (known audit gap)
+### query view: whole-string vs single-key
 
-`$request_query` / `req.request_query` does not exist. The entry query is only available indirectly via `$request_uri` — split it from there. The ROI of adding such a variable is low (most audits care about the full URI). YAGNI.
+The query string has two access shapes that follow different views:
+
+| Access shape | View | Encoding | Source |
+|--------------|------|----------|--------|
+| Whole string (`session.get_query()` / `req.query_string`) | current | raw (no decode) | `req_header().uri.query()` (live) |
+| Single key (`session.get_query_param(name)` / `req.query("name")` / `ctx_set TemplateVarType::Query` / `request_restriction` Query source) | **entry (frozen)** | **percent-decoded** (`+` → space) | `entry_raw_query` via `EdgionHttpContext::cached_query` |
+
+Single-key accessors share one per-request `OnceLock<HashMap>` cache (`EdgionHttpContext::cached_query_cell`) seeded from `entry_raw_query`. Result: the route matcher and every plugin reading by key see the same decoded value, regardless of read order or any in-request `set_upstream_uri` rewrite.
+
+### query view asymmetry (whole-string only — partially closed)
+
+`$request_query` / `req.request_query_string` (a whole-string entry view) still does not exist. The entry whole query is only available indirectly via `$request_uri` — split it from there. ROI of adding such a variable is low (most audits care about the full URI). YAGNI.
+
+Single-key entry-view access **does** exist (`get_query_param(name)` / `req.query("name")`); it has been entry-frozen and decoded since the unified-query-string-cache landing (2026-05-10).
 
 ---
 
