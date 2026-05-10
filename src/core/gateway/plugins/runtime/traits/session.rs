@@ -6,6 +6,7 @@ use crate::types::ctx::ClientCertInfo;
 use crate::types::EdgionStatus;
 use crate::types::{
     DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, HTTPBackendRef, InternalJumpPreset, MirrorState,
+    SetJumpOutcome, UpstreamJumpTarget,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -245,6 +246,14 @@ pub trait PluginSession: Send + Sync {
     /// * `key` - The KeySet specifying where to write
     /// * `value` - The value to set, or None to remove
     fn key_set(&mut self, key: &KeySet, value: Option<String>) -> PluginSessionResult<()>;
+
+    /// Set the unified upstream-jump slot. First-write-wins (see `SetJumpOutcome`).
+    /// Replaces `set_direct_endpoint` / `set_internal_jump` / `set_external_jump`.
+    /// Plugins should match on the returned outcome to log the rejection on
+    /// their own `PluginLog` line:
+    ///   `Set` -> existing per-plugin status string
+    ///   `Rejected` -> `log.push("jump locked, rejected")`
+    fn set_upstream_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome;
 
     /// Set direct endpoint info for upstream routing.
     /// Called by DirectEndpoint plugin to bypass normal LB.

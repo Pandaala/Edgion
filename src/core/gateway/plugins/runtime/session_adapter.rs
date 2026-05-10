@@ -12,7 +12,7 @@ use crate::types::common::{KeyGet, KeySet, WebhookExtract};
 use crate::types::filters::PluginRunningResult;
 use crate::types::{
     DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, HTTPBackendRef, InternalJumpPreset, MirrorState,
-    PendingHeaderOp,
+    PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget,
 };
 
 pub struct PingoraSessionAdapter<'a> {
@@ -695,6 +695,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             (KeySet::Ctx { name }, Some(v)) => self.set_ctx_var(name, &v),
             (KeySet::Ctx { name }, None) => self.remove_ctx_var(name),
         }
+    }
+
+    fn set_upstream_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome {
+        self.ctx.try_set_jump(target)
     }
 
     fn set_direct_endpoint(&mut self, info: DirectEndpointPreset, backend_ref: HTTPBackendRef) {

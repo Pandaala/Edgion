@@ -1073,6 +1073,22 @@ impl EdgionHttpContext {
                 None => raw.to_string(),
             };
     }
+
+    /// First-write-wins setter for the unified upstream-jump slot. Returns
+    /// `Set` on the first successful write, `Rejected` on every subsequent
+    /// call. On `Direct` success, co-writes `selected_backend` so the
+    /// peer-construction path can derive service metadata; on `Rejected`,
+    /// `selected_backend` is NOT touched (see Risk #1 in the spec).
+    pub fn try_set_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome {
+        if self.jump.is_some() {
+            return SetJumpOutcome::Rejected;
+        }
+        if let UpstreamJumpTarget::Direct { backend_ref, .. } = &target {
+            self.selected_backend = Some(backend_ref.clone());
+        }
+        self.jump = Some(target);
+        SetJumpOutcome::Set
+    }
 }
 
 fn compose_uri(path: &str, query: Option<&str>) -> String {
@@ -1225,5 +1241,130 @@ mod path_view_tests {
         ctx.refresh_normalized_path(&req, &path_cfg);
         assert_eq!(ctx.path(), "/api/new");
         assert_eq!(ctx.request_path(), "/api/old");
+    }
+}
+
+#[cfg(test)]
+mod jump_tests {
+    use super::*;
+
+    fn fresh_ctx() -> EdgionHttpContext {
+        EdgionHttpContext::new()
+    }
+
+    fn sample_internal() -> InternalJumpPreset {
+        InternalJumpPreset {
+            backend_ref_name: "svc-a".to_string(),
+            backend_ref_namespace: None,
+        }
+    }
+
+    fn sample_external() -> ExternalJumpPreset {
+        ExternalJumpPreset {
+            domain: "api.example.com".to_string(),
+            port: 443,
+            use_tls: true,
+            sni: "api.example.com".to_string(),
+            preserve_raw_path: false,
+        }
+    }
+
+    fn sample_direct() -> (DirectEndpointPreset, HTTPBackendRef) {
+        use crate::types::resources::http_route_preparse::BackendExtensionInfo;
+        let preset = DirectEndpointPreset {
+            addr: "10.0.0.1:8080".parse().unwrap(),
+            use_tls: false,
+            sni: String::new(),
+            backend_ref_idx: 0,
+        };
+        let backend_ref = HTTPBackendRef {
+            name: "direct-svc".to_string(),
+            namespace: None,
+            port: Some(8080),
+            weight: Some(1),
+            group: None,
+            kind: None,
+            filters: None,
+            extension_info: BackendExtensionInfo::default(),
+            plugin_runtime: Arc::new(PluginRuntime::new()),
+            backend_tls_policy: None,
+            ref_denied: None,
+        };
+        (preset, backend_ref)
+    }
+
+    #[test]
+    fn first_internal_write_returns_set() {
+        let mut ctx = fresh_ctx();
+        let outcome = ctx.try_set_jump(UpstreamJumpTarget::Internal(sample_internal()));
+        assert_eq!(outcome, SetJumpOutcome::Set);
+        assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::Internal(_))));
+        assert!(
+            ctx.selected_backend.is_none(),
+            "Internal must NOT co-write selected_backend"
+        );
+    }
+
+    #[test]
+    fn first_external_write_returns_set() {
+        let mut ctx = fresh_ctx();
+        let outcome = ctx.try_set_jump(UpstreamJumpTarget::External(sample_external()));
+        assert_eq!(outcome, SetJumpOutcome::Set);
+        assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::External(_))));
+        assert!(
+            ctx.selected_backend.is_none(),
+            "External must NOT co-write selected_backend"
+        );
+    }
+
+    #[test]
+    fn first_direct_write_co_writes_selected_backend() {
+        let mut ctx = fresh_ctx();
+        let (preset, backend_ref) = sample_direct();
+        let outcome = ctx.try_set_jump(UpstreamJumpTarget::Direct {
+            preset,
+            backend_ref: backend_ref.clone(),
+        });
+        assert_eq!(outcome, SetJumpOutcome::Set);
+        assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::Direct { .. })));
+        assert_eq!(
+            ctx.selected_backend.as_ref().map(|b| b.name.as_str()),
+            Some("direct-svc"),
+            "Direct success must co-write selected_backend"
+        );
+    }
+
+    #[test]
+    fn second_write_returns_rejected_and_does_not_mutate_ctx() {
+        let mut ctx = fresh_ctx();
+        let first = ctx.try_set_jump(UpstreamJumpTarget::External(sample_external()));
+        assert_eq!(first, SetJumpOutcome::Set);
+        let selected_before_name = ctx.selected_backend.as_ref().map(|b| b.name.clone());
+
+        let (preset, backend_ref) = sample_direct();
+        let second = ctx.try_set_jump(UpstreamJumpTarget::Direct { preset, backend_ref });
+        assert_eq!(second, SetJumpOutcome::Rejected);
+
+        assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::External(_))));
+        assert_eq!(
+            ctx.selected_backend.as_ref().map(|b| b.name.as_str()),
+            selected_before_name.as_deref(),
+            "selected_backend must not change on rejected second write"
+        );
+    }
+
+    #[test]
+    fn second_direct_write_after_internal_does_not_leak_backend() {
+        let mut ctx = fresh_ctx();
+        ctx.try_set_jump(UpstreamJumpTarget::Internal(sample_internal()));
+        assert!(ctx.selected_backend.is_none());
+
+        let (preset, backend_ref) = sample_direct();
+        let outcome = ctx.try_set_jump(UpstreamJumpTarget::Direct { preset, backend_ref });
+        assert_eq!(outcome, SetJumpOutcome::Rejected);
+        assert!(
+            ctx.selected_backend.is_none(),
+            "Rejected Direct must NOT touch selected_backend"
+        );
     }
 }
