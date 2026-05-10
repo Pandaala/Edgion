@@ -526,6 +526,35 @@ pub struct DirectEndpointPreset {
     pub backend_ref_idx: usize,
 }
 
+/// Mutually-exclusive upstream-jump slot — exactly one variant lives per request.
+///
+/// - `Direct`: bypass LB, peer built from a static IP. Carries `backend_ref` so the
+///   setter can co-write `selected_backend` (peer-construction reads service
+///   metadata from `selected_backend`; see `try_direct_endpoint_peer`).
+/// - `Internal`: LB-input modifier. Dispatch falls through to `select_http_backend`,
+///   which uses the carried preset to look up a named `BackendRef` before LB.
+/// - `External`: bypass LB, peer built from a domain (DNS-resolved at runtime).
+#[derive(Debug, Clone)]
+pub enum UpstreamJumpTarget {
+    Direct {
+        preset: DirectEndpointPreset,
+        backend_ref: HTTPBackendRef,
+    },
+    Internal(InternalJumpPreset),
+    External(ExternalJumpPreset),
+}
+
+/// Outcome of `EdgionHttpContext::try_set_jump` / `PluginSession::set_upstream_jump`.
+///
+/// First-write-wins: once the slot is set, subsequent calls return `Rejected` and
+/// the context is left untouched. Plugin call sites switch on this to log the
+/// rejection on their own `PluginLog` line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetJumpOutcome {
+    Set,
+    Rejected,
+}
+
 /// Snapshot of mirror config for request runtime.
 /// Note: max_concurrent is managed by the Semaphore in RequestMirrorPlugin and
 /// is NOT included here — the spawned task does not need it.
@@ -676,6 +705,12 @@ pub struct EdgionHttpContext {
     /// during request_filter.
     pub external_jump: Option<ExternalJumpPreset>,
 
+    /// Unified upstream-jump slot. Set by request-stage plugins via
+    /// `PluginSession::set_upstream_jump`. First-write-wins; subsequent setter
+    /// calls are rejected (see `SetJumpOutcome`). Replaces the legacy
+    /// `direct_endpoint` / `internal_jump` / `external_jump` triplet.
+    pub jump: Option<UpstreamJumpTarget>,
+
     /// True when `req_header.uri` is already in its upstream-forwarded final form;
     /// further writes are forbidden.
     ///
@@ -825,6 +860,7 @@ impl EdgionHttpContext {
             direct_endpoint: None,
             internal_jump: None,
             external_jump: None,
+            jump: None,
             uri_finalized: false,
             pending_response_header_ops: Vec::new(),
             mirror_state: None,
