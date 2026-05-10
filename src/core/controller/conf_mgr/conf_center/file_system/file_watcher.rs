@@ -230,6 +230,34 @@ impl FileSystemWatcher {
             "Starting runtime phase"
         );
 
+        // Decide poll_interval up front based on the conf directory size.
+        // PollWatcher reads + hashes every watched file each cycle (see
+        // `with_compare_contents(true)` below), so a busy directory should
+        // poll less often or it eats CPU/IO for no real benefit. Counting
+        // is one read_dir syscall (+ stat per entry) so it's cheap even at
+        // tens of thousands of files. We do this once per controller
+        // lifetime — conf size doesn't change in bursts in practice, and
+        // operators can restart to retune; see tasks/todo/multi-conf-dir.md
+        // for the recursive variant when nested directories are supported.
+        let conf_file_count = count_yaml_files(&self.conf_dir).await;
+        let poll_interval = poll_interval_for(conf_file_count);
+        if conf_file_count > 10_000 {
+            tracing::warn!(
+                component = "fs_watcher",
+                conf_file_count,
+                interval_secs = poll_interval.as_secs(),
+                "Conf directory has unusually many YAML files; consider partitioning the deployment \
+                 or moving the controller to the K8s backend",
+            );
+        } else {
+            tracing::info!(
+                component = "fs_watcher",
+                conf_file_count,
+                interval_secs = poll_interval.as_secs(),
+                "Selected PollWatcher interval based on conf size",
+            );
+        }
+
         // Unbounded channel for raw file events.  The producer is the notify
         // PollWatcher callback (runs on a non-tokio thread).  An unbounded
         // sender means the callback never blocks; each `Event` is small and
@@ -287,7 +315,7 @@ impl FileSystemWatcher {
                     }
                 },
                 Config::default()
-                    .with_poll_interval(Duration::from_secs(1))
+                    .with_poll_interval(poll_interval)
                     .with_compare_contents(true),
             )
             .context("Failed to create file watcher")?;
@@ -459,6 +487,52 @@ pub(crate) fn infer_dispatch_action(last_kind: &EventKind, path_exists: bool) ->
 // Helper functions
 // ============================================================================
 
+/// Count YAML files (excluding `.status`) directly under `dir`.
+///
+/// One `read_dir` + per-entry stat — cheap even for tens of thousands of
+/// files. Errors and non-yaml entries are silently skipped; this counter
+/// only feeds `poll_interval_for` and a failure to count just means we fall
+/// back to a 1 s interval, which is the conservative default.
+///
+/// NOTE: this walks only the top level. When/if the FileSystem backend gains
+/// recursive directory support (see `tasks/todo/multi-conf-dir.md`), switch
+/// this to a recursive walk so the count still reflects the watch set.
+async fn count_yaml_files(dir: &Path) -> usize {
+    let mut count = 0usize;
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if is_yaml_file(&entry.path()) {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Pick a PollWatcher poll interval based on the conf directory size.
+///
+/// PollWatcher with `with_compare_contents(true)` reads + hashes every watched
+/// file each cycle, so cost scales with file count. Larger conf trees should
+/// poll less often; tiny ones stay at 1 s for snappy reaction. The mapping is:
+///
+/// |    files    | interval |
+/// |-------------|----------|
+/// |   0 –  2000 |     1 s  |
+/// |   ≤  4000   |     2 s  |
+/// |   ≤  6000   |     3 s  |
+/// |   ≤  8000   |     4 s  |
+/// |   > 8000    |     5 s  |
+///
+/// 5 s is the upper bound — beyond ~10 000 files PollWatcher is no longer the
+/// right tool, and we log a WARN instead of pushing the interval higher.
+fn poll_interval_for(file_count: usize) -> Duration {
+    let bucket = (file_count as f64 / 2000.0).ceil() as u64;
+    let secs = bucket.clamp(1, 5);
+    Duration::from_secs(secs)
+}
+
 /// Check if a path is a YAML file (excluding .status files)
 fn is_yaml_file(path: &Path) -> bool {
     // Skip .status files
@@ -504,6 +578,31 @@ fn parse_resource_filename(path: &Path) -> Option<ParsedFileInfo> {
 mod tests {
     use super::*;
     use notify::event::{CreateKind, DataChange, ModifyKind, RemoveKind, RenameMode};
+
+    #[test]
+    fn poll_interval_clamps_at_min_for_empty_or_small_conf() {
+        assert_eq!(poll_interval_for(0), Duration::from_secs(1));
+        assert_eq!(poll_interval_for(1), Duration::from_secs(1));
+        assert_eq!(poll_interval_for(2_000), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn poll_interval_steps_every_2000_files() {
+        assert_eq!(poll_interval_for(2_001), Duration::from_secs(2));
+        assert_eq!(poll_interval_for(4_000), Duration::from_secs(2));
+        assert_eq!(poll_interval_for(4_001), Duration::from_secs(3));
+        assert_eq!(poll_interval_for(6_000), Duration::from_secs(3));
+        assert_eq!(poll_interval_for(6_001), Duration::from_secs(4));
+        assert_eq!(poll_interval_for(8_000), Duration::from_secs(4));
+    }
+
+    #[test]
+    fn poll_interval_clamps_at_max_for_large_conf() {
+        assert_eq!(poll_interval_for(8_001), Duration::from_secs(5));
+        assert_eq!(poll_interval_for(10_000), Duration::from_secs(5));
+        assert_eq!(poll_interval_for(50_000), Duration::from_secs(5));
+        assert_eq!(poll_interval_for(usize::MAX), Duration::from_secs(5));
+    }
 
     #[test]
     fn remove_file_event_triggers_delete() {
