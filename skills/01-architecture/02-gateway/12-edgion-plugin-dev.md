@@ -293,6 +293,9 @@ If you are debugging "ExtensionRef does not take effect / plugin logs are missin
 
 When path normalization is enabled, the session trait exposes 5 path/uri read methods. Choosing the wrong view leads to ACL bypass or audit info loss.
 
+> `get_query()` returns the **raw, current** query string verbatim — reflects any in-request URI rewrite (`set_upstream_uri`).
+> `get_query_param(name)` returns the **decoded, entry-frozen** value of a single key — sourced from the request as the client sent it, immune to in-request URI rewrites, and consistent with what HTTPRoute `queryParams` matchers see.
+
 | Method | View | Return type | When to use |
 |--------|------|-------------|-------------|
 | `session.get_path()` | current (normalized) | `&str` | ACL decisions, route matching (**preferred**, no extra alloc) |
@@ -300,6 +303,7 @@ When path normalization is enabled, the session trait exposes 5 path/uri read me
 | `session.get_uri()` | current (normalized) | `String` | Full URI of path + query (1 alloc) |
 | `session.get_request_uri()` | entry (frozen) | `String` | Full URI for auditing (entry raw, with query) |
 | `session.get_query()` | current | `Option<String>` | Get the current query (not normalized) |
+| `session.get_query_param(name)` | entry (frozen) | `Option<String>` | Get one query parameter (**percent-decoded**, `+` → space). Backed by per-request `EdgionHttpContext::cached_query`, sourced from `entry_raw_query` — shared with route matcher; safe to call from many plugins; immune to mid-request URI rewrites. |
 
 **Default to `get_path()`**. Only use `get_request_path()` / `get_request_uri()` when you explicitly need the client's original form.
 
@@ -479,7 +483,7 @@ Verifying initial state is not enough — add a dynamic scenario that exercises 
 - conf directory convention: `examples/test/conf/EdgionPlugins/<Plugin>/DynamicTest/{initial,updates}/` (`load_conf.sh` automatically skips `updates/` and `delete/`).
 - For the detailed steps, CLI entry, and registration sites: [../../05-testing/01-integration-testing.md "Dynamic (hot reload) testing" section](../../05-testing/01-integration-testing.md).
 
-> **Pitfalls**: BasicAuth bcrypt LRU, RateLimit sliding-window counters and other state-cached fields can false-pass on hot reload (the old cache hits). Prefer verifying **logic-branch** changes such as "the entire ref is removed" or "an enum field is toggled" — do not just verify "password content modified" or "a rate value changed".
+> **Pitfalls**: state-cached fields such as RateLimit sliding-window counters can false-pass on hot reload (the old cache hits). Prefer verifying **logic-branch** changes such as "the entire ref is removed" or "an enum field is toggled" — do not just verify "password content modified" or "a rate value changed". (BasicAuth no longer keeps a result cache after bcrypt was dropped, so the structural-reload pattern is now mostly a regression-safety template for it rather than a cache-bypass workaround.)
 
 Other references:
 

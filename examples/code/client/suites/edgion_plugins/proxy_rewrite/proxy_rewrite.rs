@@ -202,6 +202,69 @@ impl ProxyRewriteTestSuite {
         )
     }
 
+    // ==================== 3b. URI + $arg_xxx (percent-encoded input) ====================
+
+    /// Verify that $arg_keyword with a percent-encoded value produces a
+    /// single-encoded upstream URL, not double-encoded. Input keyword is
+    /// `hello%20world` (decoded: "hello world").
+    ///
+    /// `req.uri().path()` on the upstream side returns the path as-received
+    /// (percent-encoded form preserved), so:
+    ///   - Correct (single-encode): plugin decodes `?keyword=hello%20world`
+    ///     to "hello world", re-encodes once when substituting `$arg_keyword`,
+    ///     upstream Path is `/search/hello%20world/en`.
+    ///   - Regression (double-encode): plugin re-encodes the already-encoded
+    ///     value, emitting `%2520` (the `%` itself encoded), so upstream Path
+    ///     would be `/search/hello%2520world/en`.
+    fn test_uri_arg_percent_encoded() -> TestCase {
+        TestCase::new(
+            "uri_arg_percent_encoded",
+            "URI $arg with percent-encoded input: no double-encoding (Fix 1)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = &ctx.http_client;
+                    // %20 is the percent-encoding of a space; the decoded keyword is "hello world".
+                    let url = format!("{}/uri/arg/test?keyword=hello%20world&lang=en", ctx.http_url());
+
+                    let request = client.get(&url).header("host", "proxy-rewrite.example.com");
+
+                    match request.send().await {
+                        Ok(response) => {
+                            if !response.status().is_success() {
+                                return TestResult::failed(start.elapsed(), format!("HTTP {}", response.status()));
+                            }
+
+                            match response.text().await {
+                                Ok(text) => {
+                                    let echo = parse_echo_response(&text);
+                                    // Correct single-encode: upstream sees the value encoded exactly once.
+                                    if echo.path == "/search/hello%20world/en" {
+                                        TestResult::passed_with_message(
+                                            start.elapsed(),
+                                            format!("No double-encoding: Path={}", echo.path),
+                                        )
+                                    } else if echo.path.contains("%25") {
+                                        // Any `%25` proves the `%` itself was encoded — i.e.
+                                        // the substitution step encoded an already-encoded value.
+                                        TestResult::failed(
+                                            start.elapsed(),
+                                            format!("REGRESSION double-encoding detected: Path={}", echo.path),
+                                        )
+                                    } else {
+                                        TestResult::failed(start.elapsed(), format!("Unexpected path: {}", echo.path))
+                                    }
+                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Read error: {}", e)),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     // ==================== 4. Regex URI  ====================
     fn test_regex_uri() -> TestCase {
         TestCase::new(
@@ -327,6 +390,74 @@ impl ProxyRewriteTestSuite {
         })
     }
 
+    // ==================== 7. Header + $arg_<name> always url-encoded ====================
+
+    /// ProxyRewrite header: $arg_<name> always url-encodes the decoded query value.
+    /// ?id=a+b: '+' decodes to space, re-encoded as %20 → X-Arg-Id: a%20b.
+    /// ?id=user-123: ASCII identity → X-Arg-Id: user-123.
+    fn test_header_arg_always_encoded() -> TestCase {
+        TestCase::new(
+            "header_arg_always_encoded",
+            "ProxyRewrite header: $arg_<name> always url-encoded (Fix 3)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = &ctx.http_client;
+
+                    // Case 1: ?id=a+b  →  decoded "a b"  →  url-encoded "a%20b"
+                    let resp = client
+                        .get(format!("{}/request-header-test?id=a+b", ctx.http_url()))
+                        .header("host", "proxy-rewrite.example.com")
+                        .send()
+                        .await;
+                    let body = match resp {
+                        Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
+                        Ok(r) => {
+                            return TestResult::failed(start.elapsed(), format!("Expected 2xx, got {}", r.status()))
+                        }
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+                    if !body.contains("X-Arg-Id: a%20b") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected `X-Arg-Id: a%20b` in echoed headers; body=\n{}", body),
+                        );
+                    }
+
+                    // Case 2: ?id=user-123  →  ASCII identity  →  X-Arg-Id: user-123
+                    let resp2 = client
+                        .get(format!("{}/request-header-test?id=user-123", ctx.http_url()))
+                        .header("host", "proxy-rewrite.example.com")
+                        .send()
+                        .await;
+                    let body2 = match resp2 {
+                        Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
+                        Ok(r) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Expected 2xx (identity), got {}", r.status()),
+                            )
+                        }
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Identity request failed: {}", e))
+                        }
+                    };
+                    if body2.contains("X-Arg-Id: user-123") {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "$arg_id url-encoded for `+`->space and identity for ASCII".to_string(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected `X-Arg-Id: user-123` (identity); body=\n{}", body2),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
     // ==================== 6. Path  ====================
     fn test_path_param() -> TestCase {
         TestCase::new(
@@ -397,12 +528,16 @@ impl TestSuite for ProxyRewriteTestSuite {
             Self::test_uri_simple(),
             Self::test_uri_var(),
             Self::test_uri_arg(),
+            // Percent-encoded $arg: verify no double-encoding (unified-query-string-cache Fix 1)
+            Self::test_uri_arg_percent_encoded(),
             Self::test_regex_uri(),
             // Path parameter extraction via `:uid` route syntax.
             // The matched HTTPRoute uses `value: /params/:uid/info` so the radix
             // matcher records `uid` in `ctx.path_params`, which ProxyRewrite then
             // substitutes into URI / header templates as `$uid`.
             Self::test_path_param(),
+            // Header $arg_<name> always url-encoded (unified-query-string-cache Fix 3)
+            Self::test_header_arg_always_encoded(),
         ]
     }
 }

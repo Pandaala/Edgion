@@ -152,5 +152,5 @@ Created in `new_ctx()` and consumed in `logging()`. Plugins interact with it thr
 | **Serialization** | `serde`, `serde_json`, `serde_yaml`, `toml` | Configuration parsing |
 | **TLS** | `rustls`, `tokio-rustls`, `boring-sys` | TLS termination (rustls or BoringSSL) |
 | **Observability** | `tracing`, `metrics` | Logging + metrics |
-| **Security** | `jsonwebtoken`, `bcrypt`, `base64` | Authentication plugin |
+| **Security** | `jsonwebtoken`, `bcrypt`, `base64`, `sha1` | `bcrypt` is used by Controller `local_auth` only; gateway plugins use `jsonwebtoken` (jwt_auth), `sha1`/`md5` (basic_auth htpasswd), `base64` (everywhere) |
 | **Performance** | `tikv-jemallocator`, `dashmap`, `arc-swap`, `smallvec` | Memory allocator, concurrent map, lock-free reads, stack buffers |

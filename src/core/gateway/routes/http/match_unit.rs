@@ -364,13 +364,17 @@ impl HttpRouteRuleUnit {
             }
         }
 
-        // 3. Check Query Parameters — lazy parse: only when this route has query matchers
+        // 3. Check Query Parameters — lazy parse: only when this route has query matchers.
+        // ctx.cached_query() ensures the query string is parsed at most once per request
+        // across all route candidates, sharing the result with PluginSession::get_query_param.
+        // Use entry_raw_query (frozen at request entry) so route matching observes the
+        // client-sent query, not any rewritten upstream URI.
         if has_query_matchers {
             if let Some(query_param_matches) = &match_item.query_params {
-                let query_params = req_header.uri.query().map(Self::parse_query_string).unwrap_or_default();
+                let query_params = ctx.cached_query(ctx.request_info.entry_raw_query.as_deref());
                 for (idx, query_param_match) in query_param_matches.iter().enumerate() {
                     let pre = compiled_query_regexes.get(idx).and_then(|r| r.as_ref());
-                    if !Self::match_query_param(&query_params, query_param_match, pre)? {
+                    if !Self::match_query_param(query_params, query_param_match, pre)? {
                         return Ok(None);
                     }
                 }
@@ -452,15 +456,16 @@ mod tests {
 
     #[test]
     fn test_url_decode_multibyte_utf8() {
-        // CJK character U+4F60 = E4 BD A0
-        assert_eq!(HttpRouteRuleUnit::url_decode("%E4%BD%A0"), "\u{4F60}");
-        // Euro sign U+20AC = E2 82 AC
-        assert_eq!(HttpRouteRuleUnit::url_decode("%E2%82%AC"), "\u{20AC}");
-        // Mixed: ASCII + multi-byte + ASCII
-        assert_eq!(
-            HttpRouteRuleUnit::url_decode("key%3D%E4%BD%A0%E5%A5%BD"),
-            "key=\u{4F60}\u{597D}"
-        );
+        // 2-byte UTF-8: e-acute (U+00E9 = C3 A9), the typical loanword case.
+        assert_eq!(HttpRouteRuleUnit::url_decode("%C3%A9"), "é");
+        // 3-byte UTF-8: euro sign (U+20AC = E2 82 AC), a currency symbol.
+        assert_eq!(HttpRouteRuleUnit::url_decode("%E2%82%AC"), "€");
+        // Mixed: ASCII + multi-byte + ASCII (`price=€100`).
+        assert_eq!(HttpRouteRuleUnit::url_decode("price%3D%E2%82%AC100"), "price=€100");
+        // Two adjacent multi-byte runs back-to-back: 2-byte then 3-byte
+        // (`é€` = C3 A9 E2 82 AC). Guards against decoder state bugs at
+        // multi-byte boundaries.
+        assert_eq!(HttpRouteRuleUnit::url_decode("%C3%A9%E2%82%AC"), "é€");
     }
 
     #[test]

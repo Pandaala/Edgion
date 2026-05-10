@@ -190,7 +190,6 @@ instant-acme = "0.8.4"
 rcgen = { version = "0.14.7", features = ["x509-parser"] }
 time = { version = "0.3", features = ["std"] }
 sha1 = "0.10.6"
-async_singleflight = "0.6"
 # Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 pingora-ketama = "0.8.0"

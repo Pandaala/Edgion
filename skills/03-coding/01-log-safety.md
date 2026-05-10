@@ -194,7 +194,6 @@ Includes `certificate_callback` / `handshake_complete_callback`.
 | `catch_unwind` panic-capture branch in `mtls_verify_callback.rs` | `tracing::error!` | A Rust panic inside a C callback is UB and must be visible immediately |
 | `proxy_http/parse_timeout.rs` (`ParsedTimeouts::from_config`) | `tracing::warn!` | Only invoked while parsing the `EdgionGatewayConfig.httpTimeout` string at listener build time; once per reload. The file is under `proxy_http/` but is not on the request path |
 | `plugins/http/basic_auth/plugin.rs` (`load_users` warn + constructor Loaded info) | `tracing::warn!` / `tracing::info!` | htpasswd parsing / duplicate-username deduplication / Loaded summary called by `BasicAuth::new`; only triggered during config loading |
-| `plugins/http/basic_auth/plugin.rs` (bcrypt `spawn_blocking` panic-capture branch) | `tracing::warn!` | tokio JoinError is extremely rare; analogous to the panic capture in `mtls_verify_callback`; not on the per-request hot path |
 | `plugins/http/header_cert_auth/plugin.rs` (drop expired / unparseable CA in `load_ca_certs`) | `tracing::warn!` | The CA trust pool is assembled only at plugin construction; the drop decision does not participate in per-request validation |
 
 ### Code examples

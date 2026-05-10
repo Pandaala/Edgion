@@ -1,9 +1,9 @@
 ---
 name: dsl-builtins-path
-description: DSL builtin path/uri variable reference — views, behavior, and usage guidance for req.path / req.uri / req.request_path / req.request_uri / req.query.
+description: DSL builtin path/uri/query variable reference — views, behavior, and usage guidance for req.path / req.uri / req.request_path / req.request_uri / req.query / req.query_string.
 ---
 
-# DSL builtins: path / uri variables
+# DSL builtins: path / uri / query variables
 
 > Full architectural context: [../../01-architecture/02-gateway/uri-normalization/SKILL.md](../../01-architecture/02-gateway/uri-normalization/SKILL.md)
 
@@ -15,9 +15,12 @@ description: DSL builtin path/uri variable reference — views, behavior, and us
 |------|------|------|----------------|-----------|
 | `req.path` | current (normalized) | Current path, post-rewrite | Yes | 1 (DSL `Value::Str`) |
 | `req.uri` | current (normalized) | Current path + current query | Yes | 1 (format + Value) |
-| `req.query` | current | Current query (not normalized) | Yes | 1 |
+| `req.query_string` | current | Whole current query string, raw (not decoded, not normalized) | Yes | 1 |
+| `req.query("name")` | entry (frozen) | Single query parameter, **percent-decoded** (`+` → space) | No | 1 |
 | `req.request_path` | entry (frozen) | Raw client-entry path | No | 1 |
 | `req.request_uri` | entry (frozen) | Raw client-entry path + raw query | No | 1 (format) |
+
+`req.query("name")` is sourced from `EdgionHttpContext::cached_query` — a per-request decoded HashMap shared with the route matcher and `PluginSession::get_query_param`. Built once at the first reader, then reused; later `req.set_uri(...)` rewrites do **not** change what `req.query("name")` returns within the same request.
 
 ### Behavior changes (migration note)
 
@@ -25,6 +28,7 @@ description: DSL builtin path/uri variable reference — views, behavior, and us
   - Values are unchanged for already-normalized requests
   - For requests containing `%XX` encoding (except unreserved characters) / double slashes / dot-segments / path parameters, the normalized form is returned
 - **`req.request_path` / `req.request_uri`** are newly added variables that reflect the raw entry form
+- **`req.query("name")`** returns the **percent-decoded** value sourced from the entry-frozen query string (was previously returned raw and lived URI). Callers comparing literals must use the decoded form (e.g. compare against `"a b"`, not `"a%20b"`)
 
 ---
 

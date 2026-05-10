@@ -272,6 +272,57 @@ impl RequestRestrictionTestSuite {
         })
     }
 
+    // ==================== 5. Query source (unified-query-string-cache) ====================
+    /// Query source decoded semantics: deny rule key "name" deny "hello world"
+    /// must match the percent-encoded query "?name=hello%20world" because
+    /// PluginSession::get_query_param returns the decoded value.
+    fn test_query_deny_decoded() -> TestCase {
+        TestCase::new(
+            "query_deny_decoded",
+            "Query source: percent-encoded query matches decoded deny value",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    // Positive: hello%20world decodes to "hello world" — must be denied.
+                    let denied = ctx
+                        .http_client
+                        .get(format!("{}/test/query-deny?name=hello%20world", ctx.http_url()))
+                        .header("Host", "request-restriction.example.com")
+                        .send()
+                        .await;
+                    match denied {
+                        Ok(r) if r.status() == 403 => {}
+                        Ok(r) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Expected 403 for decoded match, got {}", r.status()),
+                            )
+                        }
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Denied request failed: {}", e)),
+                    }
+                    // Negative: different value — must pass.
+                    let allowed = ctx
+                        .http_client
+                        .get(format!("{}/test/query-deny?name=foo", ctx.http_url()))
+                        .header("Host", "request-restriction.example.com")
+                        .send()
+                        .await;
+                    match allowed {
+                        Ok(r) if r.status().is_success() => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Query source decoded matching: denied 'hello world', allowed foo".to_string(),
+                        ),
+                        Ok(r) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 2xx for non-match, got {}", r.status()),
+                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Allowed request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     fn test_combined_admin_blocked() -> TestCase {
         TestCase::new("combined_admin_blocked", ": Admin  (403)", |ctx: TestContext| {
             Box::pin(async move {
@@ -323,6 +374,8 @@ impl TestSuite for RequestRestrictionTestSuite {
             Self::test_combined_normal(),
             Self::test_combined_bot_blocked(),
             Self::test_combined_admin_blocked(),
+            // Query source decoded semantics (unified-query-string-cache)
+            Self::test_query_deny_decoded(),
         ]
     }
 }

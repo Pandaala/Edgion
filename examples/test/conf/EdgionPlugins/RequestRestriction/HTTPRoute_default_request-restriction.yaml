@@ -75,7 +75,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 5. 
+    # 5.
     - matches:
         - path:
             type: PathPrefix
@@ -86,6 +86,22 @@ spec:
             group: edgion.io
             kind: EdgionPlugins
             name: request-restriction-combined
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 6. Query source: decoded deny (unified-query-string-cache)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/query-deny
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-query-deny
       backendRefs:
         - name: test-http
           namespace: edgion-test

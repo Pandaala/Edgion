@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn base_config() -> OpenidConnectConfig {
     OpenidConnectConfig {
@@ -1010,7 +1010,7 @@ async fn test_refresh_singleflight_wait_timeout_uses_recent_cached_result() {
 }
 
 #[tokio::test]
-async fn test_try_get_recent_refresh_result_prunes_expired() {
+async fn test_try_get_recent_refresh_result_returns_none_after_ttl() {
     let cfg = base_config();
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
     let lock_key = "refresh-cache-key";
@@ -1024,18 +1024,15 @@ async fn test_try_get_recent_refresh_result_prunes_expired() {
         id_token: None,
         refresh_token: Some("refresh-token".to_string()),
     };
-    plugin.put_refresh_result(lock_key, payload).await;
-
-    {
-        let mut map = plugin.refresh_singleflight_results.lock().await;
-        if let Some(entry) = map.get_mut(lock_key) {
-            entry.at = Instant::now() - Duration::from_secs(6);
-        }
-    }
+    // Force a short TTL so the entry expires before we read it back; LRU lazy-expiry
+    // is what `try_get_recent_refresh_result` now relies on for the freshness window.
+    // 100ms gives plenty of margin on a loaded CI runner without dragging out the suite.
+    plugin
+        .refresh_singleflight_results
+        .insert(lock_key.to_string(), payload, Some(Duration::from_millis(10)));
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     assert!(plugin.try_get_recent_refresh_result(lock_key).await.is_none());
-    let map = plugin.refresh_singleflight_results.lock().await;
-    assert!(!map.contains_key(lock_key));
 }
 
 #[test]

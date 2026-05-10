@@ -286,6 +286,73 @@ impl HttpMatchTestSuite {
         })
     }
 
+    /// Percent-encoded query parameter consistency:
+    /// route matcher sees the decoded `hello world`, request must succeed.
+    fn test_percent_encoded_query_param() -> TestCase {
+        TestCase::new(
+            "percent_encoded_query_param",
+            "Percent-encoded query value matches decoded HTTPRoute queryParams",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    // Positive: `hello%20world` decodes to `hello world`.
+                    // HTTPRoute Rule 9 declares queryParams.name = "hello world"
+                    // (decoded form) — request matches only if the matcher
+                    // percent-decodes before comparing.
+                    let mut request = ctx
+                        .http_client
+                        .get(format!("{}/percent-query?name=hello%20world", ctx.http_url()));
+                    request = request.header("Host", "match-test.example.com");
+
+                    match request.send().await {
+                        Ok(response) => {
+                            if !response.status().is_success() {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Positive case: expected 2xx, got {}", response.status()),
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Positive request failed: {}", e));
+                        }
+                    }
+
+                    // Negative: a different value must NOT match Rule 9, which
+                    // expects the decoded `hello world`. Guards against a
+                    // regression where the matcher accepts any /percent-query
+                    // request regardless of the queryParams comparison.
+                    let mut request = ctx
+                        .http_client
+                        .get(format!("{}/percent-query?name=foo", ctx.http_url()));
+                    request = request.header("Host", "match-test.example.com");
+
+                    match request.send().await {
+                        Ok(response) => {
+                            if response.status() == 404 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Percent-encoded query consistency holds (positive matched, negative rejected)"
+                                        .to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Negative case: expected 404 for unmatched query, got {}",
+                                        response.status()
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Negative request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     /// Test HTTP Method match
     fn test_method_match() -> TestCase {
         TestCase::new("method_match", "Test HTTP Method match", |ctx: TestContext| {
@@ -517,6 +584,7 @@ impl TestSuite for HttpMatchTestSuite {
             Self::test_header_exact_match(),
             Self::test_header_regex_match(),
             Self::test_query_param_match(),
+            Self::test_percent_encoded_query_param(),
             Self::test_method_match(),
             Self::test_combined_match(),
             Self::test_section_name_match(),

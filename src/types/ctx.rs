@@ -691,6 +691,18 @@ pub struct EdgionHttpContext {
     /// - Some(HashMap): already extracted (may be empty if no params or no match)
     pub path_params: Option<HashMap<String, String>>,
 
+    /// Lazily-built per-request decoded query parameter map.
+    /// Initialized on first access via `cached_query()`. Shared between
+    /// route deep-match and `PluginSession::get_query_param` so the same
+    /// query string is parsed (and url-decoded) at most once per request.
+    /// `std::sync::OnceLock` is used (not `OnceCell`) because Pingora requires
+    /// the per-request CTX type to be `Send + Sync`; per-request access is
+    /// still single-threaded so `&self` init-once is sufficient.
+    /// Field is named `_cell` to disambiguate from the `cached_query()` method
+    /// and prevent accidental in-crate access that would bypass the helper's
+    /// entry-snapshot semantics.
+    pub(crate) cached_query_cell: std::sync::OnceLock<HashMap<String, String>>,
+
     /// Unified upstream-jump slot. Set by request-stage plugins via
     /// `PluginSession::set_upstream_jump`. First-write-wins; subsequent setter
     /// calls are rejected (see `SetJumpOutcome`). Replaces the legacy
@@ -843,6 +855,7 @@ impl EdgionHttpContext {
             hash_key: None,
             ctx_map: HashMap::new(),
             path_params: None,
+            cached_query_cell: std::sync::OnceLock::new(),
             jump: None,
             uri_finalized: false,
             pending_response_header_ops: Vec::new(),
@@ -865,6 +878,25 @@ impl EdgionHttpContext {
     /// Add an informational status to the context
     pub fn add_info(&mut self, info_code: EdgionStatus) {
         self.info.push(info_code);
+    }
+
+    /// Get (and lazily build) the per-request decoded query parameter map.
+    ///
+    /// Callers should pass `self.request_info.entry_raw_query.as_deref()` —
+    /// the entry-time frozen query — so the cache is order-independent: any
+    /// reader (route matcher or plugin) sees the same client-sent query
+    /// regardless of whether an earlier plugin called `set_upstream_uri` and
+    /// rewrote the live URI.
+    ///
+    /// `raw_query` is consulted only on first access. Subsequent calls return
+    /// the already-cached map regardless of the argument.
+    ///
+    /// Decoding follows `HttpRouteRuleUnit::parse_query_string` — `%XX`
+    /// percent-decoded and `+` translated to space, matching what the route
+    /// matcher sees in `queryParams`.
+    pub fn cached_query(&self, raw_query: Option<&str>) -> &HashMap<String, String> {
+        self.cached_query_cell
+            .get_or_init(|| raw_query.map(HttpRouteRuleUnit::parse_query_string).unwrap_or_default())
     }
 
     /// Resolve the route-level `request_timeout`, preferring HTTP `route_unit`
@@ -1349,5 +1381,37 @@ mod jump_tests {
             ctx.selected_backend.is_none(),
             "Rejected Direct must NOT touch selected_backend"
         );
+    }
+}
+
+#[cfg(test)]
+mod cached_query_tests {
+    use super::*;
+
+    #[test]
+    fn cached_query_initializes_lazily_and_caches() {
+        let ctx = EdgionHttpContext::new();
+        // First access triggers parse. The space in `hello world` is percent-
+        // encoded as `%20`, so the decoded value exercises url-decode.
+        let first = ctx.cached_query(Some("name=hello%20world&n=1")) as *const _;
+        // Second access with a *different* raw_query must still return the
+        // already-cached HashMap — init-once semantics, not "re-parse".
+        let second = ctx.cached_query(Some("name=changed&n=2")) as *const _;
+        assert_eq!(first, second, "cached_query must be init-once per request");
+
+        // Verify decoded values (route-matcher-compatible).
+        let map = ctx.cached_query(Some("ignored=value"));
+        assert_eq!(map.get("name"), Some(&"hello world".to_string()));
+        assert_eq!(map.get("n"), Some(&"1".to_string()));
+    }
+
+    #[test]
+    fn cached_query_handles_none_raw() {
+        let ctx = EdgionHttpContext::new();
+        let map = ctx.cached_query(None);
+        assert!(map.is_empty(), "None raw_query yields empty cache");
+        // Subsequent call with Some(...) must NOT replace the cached empty map.
+        let map2 = ctx.cached_query(Some("a=1"));
+        assert!(map2.is_empty(), "OnceLock already initialized to empty");
     }
 }

@@ -103,13 +103,23 @@ impl ProxyRewrite {
         //    Escape $ in the injected path so later steps cannot treat it as a variable.
         result = result.replace("$uri", &Self::escape_dollar(original_path));
 
-        // 2. Replace $arg_<name> (optionally URL encoded).
-        //    Escape $ in each query param value for the same reason.
+        // 2. Replace $arg_<name> — always URL-encoded.
+        //    `get_query_param` returns the percent-decoded value, but `$arg_<name>`
+        //    must always be safe to embed in either a URI or an HTTP header value.
+        //    Always re-encoding produces:
+        //      - URI context (encode_values=true): correct percent-encoding without
+        //        the prior double-encoding bug for raw `%XX` inputs;
+        //      - Header context (encode_values=false): ASCII-safe bytes that survive
+        //        `HeaderValue::try_from` even when the query value contains control
+        //        bytes (e.g. `%0A`) or non-ASCII (e.g. UTF-8). For ordinary ASCII
+        //        values this is identity, so the header rewrite UX is unchanged.
+        //    Escape $ in each query param value so step 4 does not re-interpret
+        //    them as variable references.
         result = ARG_PATTERN
             .replace_all(&result, |caps: &regex::Captures| {
                 let param_name = &caps[1];
                 let value = session.get_query_param(param_name).unwrap_or_default();
-                let encoded = if encode_values { Self::url_encode(&value) } else { value };
+                let encoded = Self::url_encode(&value);
                 Self::escape_dollar(&encoded)
             })
             .to_string();
@@ -412,5 +422,53 @@ mod tests {
         assert_eq!(ProxyRewrite::url_encode("100%"), "100%25");
         assert_eq!(ProxyRewrite::url_encode("a+b"), "a%2Bb");
         assert_eq!(ProxyRewrite::url_encode("normal"), "normal");
+    }
+
+    /// `$arg_<name>` must always url-encode the (decoded) query value, in both
+    /// URI and header contexts. This protects header rewrite from
+    /// `HeaderValue::try_from` rejecting control bytes and shields downstream
+    /// strict HTTP parsers from non-ASCII bytes, while remaining identity for
+    /// ordinary ASCII values (so the common `$arg_x = user-123` UX is unchanged).
+    #[test]
+    fn test_arg_substitution_always_url_encodes() {
+        let plugin = ProxyRewrite::new(&ProxyRewriteConfig::default());
+
+        // Mock returns decoded values (matches the new PluginSession contract).
+        let mut mock_session = MockPluginSession::new();
+        mock_session.expect_get_query_param().returning(|name| match name {
+            "user" => Some("user-123".to_string()),      // ordinary ASCII
+            "token" => Some("hello\nworld".to_string()), // decoded control byte
+            "id" => Some("café".to_string()),            // decoded non-ASCII byte (é = C3 A9) — must be url-encoded
+            "raw" => Some("foo+bar=baz".to_string()),    // decoded reserved chars
+            _ => None,
+        });
+
+        // Header context (encode_values = false).
+        let header_out = plugin.resolve_variables(
+            "user=$arg_user;token=$arg_token;id=$arg_id;raw=$arg_raw",
+            "/orig",
+            &mut mock_session,
+            None,
+            false,
+        );
+        assert_eq!(
+            header_out, "user=user-123;token=hello%0Aworld;id=caf%C3%A9;raw=foo%2Bbar%3Dbaz",
+            "header context: $arg_<name> must url-encode regardless of encode_values=false"
+        );
+
+        // URI context (encode_values = true) — same outcome for $arg_ since we
+        // always encode now. Other branches (capture groups, path params) still
+        // honour encode_values; this test only pins down $arg_.
+        let uri_out = plugin.resolve_variables(
+            "/p?user=$arg_user&token=$arg_token&id=$arg_id&raw=$arg_raw",
+            "/orig",
+            &mut mock_session,
+            None,
+            true,
+        );
+        assert_eq!(
+            uri_out, "/p?user=user-123&token=hello%0Aworld&id=caf%C3%A9&raw=foo%2Bbar%3Dbaz",
+            "URI context: $arg_<name> stays url-encoded"
+        );
     }
 }

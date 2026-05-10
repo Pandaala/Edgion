@@ -367,38 +367,30 @@ impl OpenidConnect {
     }
 
     pub(super) async fn get_or_create_refresh_lock(&self, lock_key: &str) -> Arc<Mutex<()>> {
-        let mut locks = self.refresh_singleflight_locks.lock().await;
-        if locks.len() > 4096 {
-            locks.retain(|_, v| Arc::strong_count(v) > 1);
+        // ShardedLruCache has no entry/get_or_insert_with API, so this is best-effort
+        // get-or-insert: under a true concurrent miss two callers can each insert their
+        // own lock and the last writer wins. The leader's lock is then orphaned and the
+        // two refreshes proceed in parallel — the second waiter's `try_get_recent_refresh_result`
+        // double-check after acquiring its own lock still de-dupes via the results cache,
+        // and worst case is one extra refresh round-trip for that key.
+        if let Some(existing) = self.refresh_singleflight_locks.get(&lock_key.to_string()) {
+            return existing;
         }
-        locks
-            .entry(lock_key.to_string())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
+        let new_lock = Arc::new(Mutex::new(()));
+        self.refresh_singleflight_locks
+            .insert(lock_key.to_string(), new_lock.clone(), None);
+        new_lock
     }
 
     pub(super) async fn try_get_recent_refresh_result(&self, lock_key: &str) -> Option<OidcSessionCookie> {
-        let mut results = self.refresh_singleflight_results.lock().await;
-        let entry = results.get(lock_key)?.clone();
-        if entry.at.elapsed() > Duration::from_secs(5) {
-            results.remove(lock_key);
-            return None;
-        }
-        Some(entry.payload.clone())
+        // Freshness window is owned by the cache TTL (see `put_refresh_result`); LRU
+        // lazy-expires entries past the window on read, no manual elapsed-check needed.
+        self.refresh_singleflight_results.get(&lock_key.to_string())
     }
 
     pub(super) async fn put_refresh_result(&self, lock_key: &str, payload: OidcSessionCookie) {
-        let mut results = self.refresh_singleflight_results.lock().await;
-        if results.len() > 4096 {
-            results.retain(|_, v| v.at.elapsed() <= Duration::from_secs(10));
-        }
-        results.insert(
-            lock_key.to_string(),
-            RefreshSingleflightResult {
-                payload,
-                at: Instant::now(),
-            },
-        );
+        self.refresh_singleflight_results
+            .insert(lock_key.to_string(), payload, Some(Duration::from_secs(5)));
     }
 
     pub(super) async fn try_refresh_session_token_singleflight(

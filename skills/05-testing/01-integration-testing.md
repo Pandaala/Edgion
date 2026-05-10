@@ -37,13 +37,35 @@ Read this page first to get the main workflow; for specific mappings read these 
 ./examples/test/scripts/integration/run_integration.sh --no-prepare --keep-alive -r Gateway -i StreamPlugins
 ```
 
+### Run every integration test in one shot
+
+`run_integration.sh` only covers the suites that share its single controller/gateway topology. Several other tests live in standalone scripts (Etcd / Elasticsearch LinkSys, ACME, Center watch-sync, edgion-cli E2E, FileWatcher) — each with its own service lifecycle and port layout. To exercise *everything* end-to-end use the sequential orchestrator:
+
+```bash
+# Run every job in fast mode, continue on failure, unified report at the end
+./examples/test/scripts/integration/run_all_integration.sh
+
+# Skip the top-level cargo build (children may still rebuild incrementally)
+./examples/test/scripts/integration/run_all_integration.sh --no-prepare
+
+# Propagate --full-test to the main runner (LdapAuth, slow timeouts, etc.)
+./examples/test/scripts/integration/run_all_integration.sh --full-test
+
+# Limit the run
+./examples/test/scripts/integration/run_all_integration.sh --only main,linksys_etcd
+./examples/test/scripts/integration/run_all_integration.sh --skip acme,center
+```
+
+Each job's stdout/stderr is captured to `integration_testing/run_all_<timestamp>/<job>.log` plus a machine-readable `summary.txt`. Job names: `main`, `linksys_etcd`, `linksys_es`, `acme`, `center`, `cli`, `file_watcher`. All children share controller/gateway ports (5800/5900) so they run sequentially even when their topologies differ.
+
 ## Memorize the actual directory layout
 
 - `examples/test/conf/`: test YAML, organized by resource/item
 - `examples/code/client/`: Rust test client and suite implementations
 - `examples/code/server/test_server.rs`: local HTTP/gRPC/WebSocket/TCP/UDP test backend
 - `examples/code/validator/`: `resource_diff`, `config_load_validator`
-- `examples/test/scripts/integration/run_integration.sh`: main entry
+- `examples/test/scripts/integration/run_integration.sh`: main entry (shared controller/gateway suites)
+- `examples/test/scripts/integration/run_all_integration.sh`: top-level orchestrator that sequences `run_integration.sh` plus every standalone integration script (Etcd / ES LinkSys, ACME, Center, CLI, FileWatcher) and emits a unified report
 - `examples/test/scripts/utils/`: `prepare.sh`, `start_all_with_conf.sh`, `load_conf.sh`, `kill_all.sh`
 - `examples/test/scripts/gen_certs/`: test certificate generation scripts
 - `integration_testing/testing_<timestamp>/`: this run's logs, PIDs, generated Secrets, and report directory
