@@ -275,19 +275,16 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn get_query_param(&self, name: &str) -> Option<String> {
-        self.inner.req_header().uri.query().and_then(|query| {
-            // Parse query string manually: "key1=value1&key2=value2"
-            // Case-sensitive key matching per RFC 3986
-            query.split('&').find_map(|pair| {
-                let mut parts = pair.splitn(2, '=');
-                let key = parts.next()?;
-                if key == name {
-                    parts.next().map(|v| v.to_string())
-                } else {
-                    None
-                }
-            })
-        })
+        // Decoded values (percent-decoded, '+' → ' ') shared with the route
+        // matcher via EdgionHttpContext::cached_query. Parsed at most once
+        // per request regardless of how many plugins call this method.
+        // Use entry_raw_query (frozen at request entry) so plugins observe
+        // the client-sent query, not any rewritten upstream URI — keeps the
+        // cache order-independent across plugin reads.
+        self.ctx
+            .cached_query(self.ctx.request_info.entry_raw_query.as_deref())
+            .get(name)
+            .cloned()
     }
 
     fn get_cookie(&self, name: &str) -> Option<String> {

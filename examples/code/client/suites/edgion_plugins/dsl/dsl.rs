@@ -2060,6 +2060,63 @@ impl DslTestSuite {
     /// matcher must still bind `:item=book-7` (not `book-7/extra`), and the
     /// route must still match (i.e. PathPrefix allows further suffix segments
     /// beyond the template).
+    // ==================== Scenario 27: cached_query freeze (unified-query-string-cache) ====================
+
+    /// Verify cached_query is frozen at entry: even if a DSL set_uri rewrites
+    /// the URI to a different query, req.query("name") read afterwards must
+    /// still return the entry-time value. test_server's /request-header-test
+    /// echoes incoming request headers in the response body, so we look for
+    /// "X-Captured-Name: BEFORE_REWRITE".
+    fn test_freeze_query_param() -> TestCase {
+        TestCase::new(
+            "dsl_freeze_query_param",
+            "DSL: cached_query stays at entry value after req.set_uri",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!(
+                        "http://{}:31180/test/dsl-freeze-query?name=BEFORE_REWRITE",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-freeze-query.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+                            let body = resp.text().await.unwrap_or_default();
+                            // header_echo_handler renders headers as "  Name: value\n" lines
+                            if body.contains("X-Captured-Name: BEFORE_REWRITE") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "cached_query frozen to entry value after set_uri".to_string(),
+                                )
+                            } else if body.contains("X-Captured-Name: AFTER_REWRITE") {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    "REGRESSION: cached_query read live URI after set_uri (entry freeze broken)"
+                                        .to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("X-Captured-Name not in echoed headers; body=\n{}", body),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     fn test_dsl_path_param_prefix_extension() -> TestCase {
         TestCase::new(
             "dsl_path_param_prefix_extension",
@@ -2179,6 +2236,8 @@ impl TestSuite for DslTestSuite {
             // Scenario 26: Path parameter extraction (`:uid`, `:item`)
             Self::test_dsl_path_param_extracts_values(),
             Self::test_dsl_path_param_prefix_extension(),
+            // Scenario 27: cached_query freeze (unified-query-string-cache)
+            Self::test_freeze_query_param(),
         ]
     }
 }

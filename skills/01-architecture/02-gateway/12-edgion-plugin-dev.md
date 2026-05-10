@@ -293,6 +293,9 @@ If you are debugging "ExtensionRef does not take effect / plugin logs are missin
 
 When path normalization is enabled, the session trait exposes 5 path/uri read methods. Choosing the wrong view leads to ACL bypass or audit info loss.
 
+> `get_query()` returns the **raw, current** query string verbatim — reflects any in-request URI rewrite (`set_upstream_uri`).
+> `get_query_param(name)` returns the **decoded, entry-frozen** value of a single key — sourced from the request as the client sent it, immune to in-request URI rewrites, and consistent with what HTTPRoute `queryParams` matchers see.
+
 | Method | View | Return type | When to use |
 |--------|------|-------------|-------------|
 | `session.get_path()` | current (normalized) | `&str` | ACL decisions, route matching (**preferred**, no extra alloc) |
@@ -300,6 +303,7 @@ When path normalization is enabled, the session trait exposes 5 path/uri read me
 | `session.get_uri()` | current (normalized) | `String` | Full URI of path + query (1 alloc) |
 | `session.get_request_uri()` | entry (frozen) | `String` | Full URI for auditing (entry raw, with query) |
 | `session.get_query()` | current | `Option<String>` | Get the current query (not normalized) |
+| `session.get_query_param(name)` | entry (frozen) | `Option<String>` | Get one query parameter (**percent-decoded**, `+` → space). Backed by per-request `EdgionHttpContext::cached_query`, sourced from `entry_raw_query` — shared with route matcher; safe to call from many plugins; immune to mid-request URI rewrites. |
 
 **Default to `get_path()`**. Only use `get_request_path()` / `get_request_uri()` when you explicitly need the client's original form.
 
