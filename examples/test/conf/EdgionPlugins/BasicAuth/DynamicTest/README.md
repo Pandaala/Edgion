@@ -16,5 +16,8 @@ Relies on existing secrets from `examples/test/conf/EdgionPlugins/BasicAuth/`:
 - `Secret/edgion-default/basic-auth-bob` (01b_Secret_default_basic-auth-bob.yaml)
 
 Why removing the entire `secretRef` rather than changing the secret content:
-BasicAuth uses a bcrypt LRU cache keyed by `secretRef` path. Modifying secret content risks
-stale LRU hits masking bugs. Removing the whole ref makes the query path disappear entirely.
+Removing the whole ref exercises a structural reload (the plugin's user table must be
+rebuilt), so a bug in the hot-reload path is much more likely to surface here than under
+"same ref, password value changed". This pattern remains a useful template for other
+plugins that may carry caches in the future, even though BasicAuth itself no longer keeps
+a result cache.

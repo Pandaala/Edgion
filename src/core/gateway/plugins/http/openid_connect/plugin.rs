@@ -14,9 +14,9 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 
 use super::error::{map_jwt_decode_error_typed, OidcVerifyError};
@@ -142,12 +142,6 @@ struct TokenEndpointResponse {
 }
 
 #[derive(Debug, Clone)]
-struct RefreshSingleflightResult {
-    payload: OidcSessionCookie,
-    at: Instant,
-}
-
-#[derive(Debug, Clone)]
 struct IntrospectionCacheEntry {
     claims: Value,
     // expires_at removed — TTL owned by LocalLruCache
@@ -168,8 +162,17 @@ pub struct OpenidConnect {
     pub(super) jwks_provider: Arc<JwksProvider<DiscoveryDocument>>,
     introspection_cache: Arc<ShardedLruCache<String, IntrospectionCacheEntry>>,
     access_token_cache: Arc<ShardedLruCache<String, AccessTokenCacheEntry>>,
-    refresh_singleflight_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
-    refresh_singleflight_results: Arc<Mutex<HashMap<String, RefreshSingleflightResult>>>,
+    // Per-key async mutex for the refresh singleflight critical section. Held across `await`,
+    // so the value type must be `tokio::sync::Mutex`. LRU semantics give bounded memory and
+    // age-based eviction. Two non-fatal degradations vs. an atomic `entry().or_insert_with()`:
+    // (1) a TOCTOU between get/insert can briefly produce two locks for the same key, and
+    // (2) LRU eviction can orphan a lock while a waiter is still parked on it. Both collapse
+    // to at most one extra refresh round-trip for that key — the post-lock
+    // `try_get_recent_refresh_result` check still de-dupes whenever the leader's result has
+    // landed before the racing waiter finishes its lock acquire; the worst case is leader
+    // and racing task both completing a refresh in parallel. No session-state corruption.
+    refresh_singleflight_locks: Arc<ShardedLruCache<String, Arc<Mutex<()>>>>,
+    refresh_singleflight_results: Arc<ShardedLruCache<String, OidcSessionCookie>>,
 }
 
 impl OpenidConnect {
@@ -225,6 +228,28 @@ impl OpenidConnect {
             JwksProvider::new(provider_config, client, build_discovery_validator(&config))
         };
 
+        // Pre-warm discovery cache in the background. The gateway logout path reads
+        // cached discovery only (no fetch on the request) and silently degrades RP-
+        // Initiated Logout / token revocation when the cache is cold. Pre-warming on
+        // construction closes the "first request after gateway restart is /logout"
+        // gap without adding an HTTP RTT to the request path. (g3-007)
+        //
+        // Gated out under `cfg(test)` so unit tests do not fan out real DNS/HTTPS
+        // probes against placeholder discovery URLs. Skipped when the config is
+        // already known-invalid (the request filter rejects the request anyway, and
+        // a misconfigured discovery URL would just burn ~5 min of background retries
+        // per resync). The task uses a Weak ref so it self-exits as soon as the
+        // plugin instance is dropped (e.g., on EdgionPlugins resync), bounding
+        // worst-case task fan-out under repeated reconstruction.
+        #[cfg(not(test))]
+        if config.get_validation_error().is_none() {
+            spawn_discovery_prewarm(
+                Arc::downgrade(&jwks_provider),
+                plugin_namespace.clone(),
+                config.discovery.clone(),
+            );
+        }
+
         Self {
             name: "OpenidConnect".to_string(),
             config,
@@ -232,10 +257,62 @@ impl OpenidConnect {
             jwks_provider,
             introspection_cache: Arc::new(ShardedLruCache::new(introspection_capacity, introspection_shards)),
             access_token_cache: Arc::new(ShardedLruCache::new(access_token_capacity, access_token_shards)),
-            refresh_singleflight_locks: Arc::new(Mutex::new(HashMap::new())),
-            refresh_singleflight_results: Arc::new(Mutex::new(HashMap::new())),
+            refresh_singleflight_locks: Arc::new(ShardedLruCache::new(
+                get_default_lru_cache_capacity(),
+                get_default_lru_cache_shards(),
+            )),
+            refresh_singleflight_results: Arc::new(ShardedLruCache::new(
+                get_default_lru_cache_capacity(),
+                get_default_lru_cache_shards(),
+            )),
         }
     }
+}
+
+/// Background discovery cache pre-warm. Bounded retries (immediate + ~5 min of
+/// exponential backoff) so a slow-starting IdP eventually populates the cache.
+/// The Weak ref drops with the plugin: once the owning OpenidConnect is gone
+/// (config resync, plugin removal), the next upgrade fails and the task exits.
+#[cfg(not(test))]
+fn spawn_discovery_prewarm(
+    jwks_provider: std::sync::Weak<JwksProvider<DiscoveryDocument>>,
+    plugin_namespace: String,
+    discovery_url: String,
+) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    tokio::spawn(async move {
+        // Cumulative wall time after each delay: 1, 3, 7, 15, 31, 63, 123, 183, 243, 303 s.
+        const RETRY_DELAYS_SECS: [u64; 10] = [1, 2, 4, 8, 16, 32, 60, 60, 60, 60];
+        let Some(provider) = jwks_provider.upgrade() else {
+            return;
+        };
+        if provider.get_or_fetch_discovery().await.is_ok() {
+            return;
+        }
+        // Release the strong ref before sleeping so the plugin Arc can drop
+        // (e.g., on EdgionPlugins resync) and the next upgrade short-circuits.
+        drop(provider);
+        for delay_secs in RETRY_DELAYS_SECS {
+            tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+            let Some(provider) = jwks_provider.upgrade() else {
+                return;
+            };
+            if provider.get_or_fetch_discovery().await.is_ok() {
+                return;
+            }
+        }
+        // All retries exhausted: surface a single signal so operators can spot a
+        // misconfigured discovery URL or a long-down IdP. After this point the
+        // first real request still triggers a lazy fetch via get_or_fetch_discovery.
+        tracing::warn!(
+            component = "openid_connect",
+            plugin_namespace = %plugin_namespace,
+            discovery_url = %discovery_url,
+            "OIDC discovery prewarm exhausted retries; cache remains cold until first request triggers lazy fetch"
+        );
+    });
 }
 
 #[path = "callback.rs"]

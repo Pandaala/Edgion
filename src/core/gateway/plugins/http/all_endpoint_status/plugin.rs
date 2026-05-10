@@ -388,7 +388,7 @@ impl AllEndpointStatus {
 
                     // Forward original headers, filtering hop-by-hop
                     for (name, value) in &headers {
-                        if !is_hop_by_hop(name) && name.to_lowercase() != "host" {
+                        if !is_hop_by_hop(name) && !name.eq_ignore_ascii_case("host") {
                             req = req.header(name.as_str(), value.as_str());
                         }
                     }

@@ -27,13 +27,14 @@ impl JwtAuth {
     /// Extract token from request (priority: Header > Query > Cookie).
     pub(super) fn extract_token(&self, session: &dyn PluginSession) -> Option<(String, TokenSource)> {
         if let Some(v) = session.header_value(&self.config.header) {
-            let token = if v.to_lowercase().starts_with("bearer ") {
-                v[7..].trim().to_string()
+            let trimmed = v.trim();
+            let token = if trimmed.len() >= 7 && trimmed.as_bytes()[..7].eq_ignore_ascii_case(b"bearer ") {
+                trimmed[7..].trim_start()
             } else {
-                v.trim().to_string()
+                trimmed
             };
             if !token.is_empty() {
-                return Some((token, TokenSource::Header));
+                return Some((token.to_string(), TokenSource::Header));
             }
         }
         if let Some(t) = session.get_query_param(&self.config.query) {

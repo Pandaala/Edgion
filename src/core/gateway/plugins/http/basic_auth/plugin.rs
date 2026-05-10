@@ -2,21 +2,17 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
-use crate::core::gateway::cache::ShardedLruCache;
-use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::BasicAuthConfig;
 
-use async_singleflight::DefaultGroup;
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
-use sha2::{Digest, Sha256};
+use sha1::Digest;
 
 type BasicAuthError = Box<dyn std::error::Error + Send + Sync>;
 type BasicAuthResult<T> = Result<T, BasicAuthError>;
@@ -31,13 +27,11 @@ enum AuthFailure {
 /// Basic Authentication plugin
 pub struct BasicAuth {
     name: String,
-    // Simple username -> password_hash mapping
-    // We store whatever is verified: either a bcrypt hash (generated locally)
-    // or a pre-supplied hash (from htpasswd).
+    // Simple username -> password_hash mapping.
+    // Stored values are htpasswd-style hashes ({SHA} / $apr1$ / $1$).
+    // Plaintext passwords from Secrets are auto-hashed as {SHA}<base64(sha1(password))>
+    // on load, matching what verify() expects.
     user_passwords: Arc<HashMap<String, String>>,
-    /// LRU cache: auth header value -> username (TTL-based, managed by LocalLruCache)
-    auth_cache: Arc<ShardedLruCache<String, String>>,
-    sf_group: Arc<DefaultGroup<bool>>,
     plugin_namespace: String,
     config: BasicAuthConfig,
 }
@@ -45,21 +39,9 @@ pub struct BasicAuth {
 impl BasicAuth {
     /// Create a new BasicAuth plugin from configuration
     pub fn new(config: &BasicAuthConfig, plugin_namespace: String) -> Self {
-        let capacity = if config.lru_cache.capacity == 0 {
-            get_default_lru_cache_capacity()
-        } else {
-            config.lru_cache.capacity
-        };
-        let shards = if config.lru_cache.shards > 0 {
-            config.lru_cache.shards
-        } else {
-            get_default_lru_cache_shards()
-        };
         let mut plugin = BasicAuth {
             name: "BasicAuth".to_string(),
             user_passwords: Arc::new(HashMap::new()),
-            auth_cache: Arc::new(ShardedLruCache::new(capacity, shards)),
-            sf_group: Arc::new(DefaultGroup::new()),
             plugin_namespace,
             config: config.clone(),
         };
@@ -123,46 +105,26 @@ impl BasicAuth {
         None
     }
 
-    /// Load users from resolved Secret data
+    /// Load users from resolved Secret data.
     ///
-    /// Supports adaptive behavior:
-    /// - If password looks like a hash (bcrypt, md5, sha1, etc.), store as-is.
-    /// - If password looks like plaintext, hash it using Bcrypt (default security).
+    /// - If the password looks like a supported htpasswd hash, store as-is.
+    /// - Otherwise treat it as plaintext and hash as `{SHA}<base64(sha1(password))>`,
+    ///   which matches what `htpasswd.rs::verify` recognises and aligns with the
+    ///   `{SHA}` htpasswd format.
     pub fn load_users(&mut self, users: HashMap<String, String>) -> Result<(), String> {
         let mut new_map = HashMap::new();
         for (username, password) in users {
             if self.is_pre_hashed(&password) {
-                // Warn (once per load) when a weak htpasswd hash format is encountered.
-                // SHA-1 ({SHA}) is unsalted and APR1 ($apr1$) / MD5-crypt ($1$) only run 1000
-                // rounds. Operators should migrate to bcrypt.
-                let weak_fmt = if password.starts_with("{SHA}") {
-                    Some("{SHA}")
-                } else if password.starts_with("$apr1$") {
-                    Some("$apr1$")
-                } else if password.starts_with("$1$") {
-                    Some("$1$")
-                } else {
-                    None
-                };
-                if let Some(fmt) = weak_fmt {
-                    tracing::warn!(
-                        component = "basic_auth",
-                        "htpasswd entry uses weak hash format ({}), consider upgrading to bcrypt",
-                        fmt
-                    );
-                }
                 // Store pre-hashed password directly
                 new_map.insert(username, password);
             } else {
-                // Hash plaintext password with bcrypt (cost 10) for storage
-                let hash = bcrypt::hash(&password, bcrypt::DEFAULT_COST)
-                    .map_err(|e| format!("Failed to hash password for {}: {}", username, e))?;
-                new_map.insert(username, hash);
+                // Plaintext password -> store as {SHA}<base64(sha1(password))>.
+                let digest = sha1::Sha1::digest(password.as_bytes());
+                let stored = format!("{{SHA}}{}", general_purpose::STANDARD.encode(digest));
+                new_map.insert(username, stored);
             }
         }
         self.user_passwords = Arc::new(new_map);
-        // Clear cache on user reload to ensure revoked passwords take effect immediately
-        self.auth_cache.clear();
 
         tracing::info!(
             "BasicAuth: Loaded {} users (mixed hashed/plaintext source)",
@@ -171,12 +133,8 @@ impl BasicAuth {
         Ok(())
     }
 
-    /// Check if a password string looks like a supported hash
+    /// Check if a password string looks like a supported htpasswd hash.
     fn is_pre_hashed(&self, s: &str) -> bool {
-        // Bcrypt
-        if s.starts_with("$2a$") || s.starts_with("$2b$") || s.starts_with("$2y$") {
-            return true;
-        }
         // Apache MD5 ($apr1$)
         if s.starts_with("$apr1$") {
             return true;
@@ -198,13 +156,6 @@ impl BasicAuth {
             None => return Err(AuthFailure::MissingHeader),
         };
 
-        // Fast path: cache lookup (skipped entirely when cache_ttl == 0)
-        if self.config.cache_ttl > 0 {
-            if let Some(username) = self.auth_cache.get(&auth_header_value) {
-                return Ok(username);
-            }
-        }
-
         // Decode credentials
         let (username, password) = self
             .extract_credentials(&auth_header_value)
@@ -217,50 +168,15 @@ impl BasicAuth {
             .ok_or(AuthFailure::BadCredentials)?
             .clone();
 
-        // Bcrypt hashes start with "$2" — only these are expensive enough to warrant singleflight
-        let is_bcrypt = stored_hash.starts_with("$2");
-        let is_valid: bool = if is_bcrypt && self.config.singleflight {
-            // singleflight key: SHA256(password_bytes || stored_hash_bytes)
-            // Never stores plaintext password in the map key.
-            let sf_key = {
-                let mut h = Sha256::new();
-                h.update(password.as_bytes());
-                h.update(stored_hash.as_bytes());
-                format!("{:x}", h.finalize())
-            };
-            let ph = stored_hash.clone();
-            let pw = password.clone();
-            // work() returns Result<bool, Option<()>> — unwrap_or(false) on error
-            let result = self
-                .sf_group
-                .work(&sf_key, async move {
-                    let verified = tokio::task::spawn_blocking(move || super::htpasswd::verify(&pw, &ph))
-                        .await
-                        .unwrap_or(false);
-                    Ok::<bool, ()>(verified)
-                })
-                .await;
-            result.unwrap_or(false)
-        } else {
-            // Non-bcrypt (SHA1/MD5/APR-MD5) or singleflight disabled
-            let ph = stored_hash.clone();
-            let pw = password.clone();
-            tokio::task::spawn_blocking(move || super::htpasswd::verify(&pw, &ph))
-                .await
-                .map_err(|_| AuthFailure::BadCredentials)?
-        };
+        // All supported hashes (SHA-1 / MD5-crypt / APR-MD5) are cheap to verify.
+        let ph = stored_hash.clone();
+        let pw = password.clone();
+        let is_valid = tokio::task::spawn_blocking(move || super::htpasswd::verify(&pw, &ph))
+            .await
+            .map_err(|_| AuthFailure::BadCredentials)?;
 
         if !is_valid {
             return Err(AuthFailure::BadCredentials);
-        }
-
-        // Cache success only — failures are never stored
-        if self.config.cache_ttl > 0 {
-            self.auth_cache.insert(
-                auth_header_value.to_string(),
-                username.clone(),
-                Some(Duration::from_secs(self.config.cache_ttl)),
-            );
         }
 
         Ok(username)
@@ -285,20 +201,13 @@ impl BasicAuth {
 
         let decoded_str = String::from_utf8(decoded).map_err(|_| "Invalid UTF-8 in decoded authorization")?;
 
-        // Split username:password
-        let parts: Vec<&str> = decoded_str.splitn(2, ':').collect();
-        if parts.len() != 2 {
-            return Err("Invalid decoded data format".into());
-        }
-
-        let username = parts[0].to_string();
-        let password = parts[1].to_string();
+        let (username, password) = decoded_str.split_once(':').ok_or("Invalid decoded data format")?;
 
         if username.is_empty() || password.is_empty() {
             return Err("Empty username or password".into());
         }
 
-        Ok((username, password))
+        Ok((username.to_string(), password.to_string()))
     }
 
     fn set_consumer_headers(&self, session: &mut dyn PluginSession, username: &str) -> BasicAuthResult<()> {
@@ -350,9 +259,9 @@ impl RequestFilter for BasicAuth {
             Err(AuthFailure::BadCredentials) => {
                 // Unified PluginLog tag blocks log-grep-based enumeration (unknown user vs
                 // wrong password look identical in access log). Timing-side enumeration is
-                // a separate concern — bcrypt verify only runs when the user exists, so a
-                // sub-ms fast path still reveals user existence. Mitigate via
-                // `auth_failure_delay_ms` at the deployment layer.
+                // a separate concern — verify only runs when the user exists, so a fast
+                // path still reveals user existence. Mitigate via `auth_failure_delay_ms`
+                // at the deployment layer.
                 plugin_log.push("Deny bad credential");
                 // Credentials present but invalid — always reject, never anonymous
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
@@ -378,18 +287,11 @@ impl RequestFilter for BasicAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::edgion_plugins::LruCacheConfig;
     use base64::engine::general_purpose;
 
     fn create_basic_auth_with_users() -> BasicAuth {
         let config = BasicAuthConfig {
             realm: "Test Realm".to_string(),
-            cache_ttl: 300,
-            lru_cache: LruCacheConfig {
-                capacity: 10,
-                ..Default::default()
-            },
-            singleflight: false, // disable for deterministic tests
             ..Default::default()
         };
         let mut auth = BasicAuth::new(&config, "default".to_string());
@@ -418,21 +320,5 @@ mod tests {
         let (username, password) = auth.extract_credentials(&header).expect("should parse");
         assert_eq!(username, " user ");
         assert_eq!(password, " pass ");
-    }
-
-    #[test]
-    fn test_basic_auth_cache_is_lru() {
-        let config = BasicAuthConfig {
-            cache_ttl: 60,
-            lru_cache: LruCacheConfig {
-                capacity: 10,
-                ..Default::default()
-            },
-            singleflight: false,
-            resolved_users: Some(std::collections::HashMap::from([("u".to_string(), "p".to_string())])),
-            ..Default::default()
-        };
-        let auth = BasicAuth::new(&config, "default".to_string());
-        assert_eq!(auth.auth_cache.len(), 0);
     }
 }

@@ -51,7 +51,7 @@ The root cause of weak hashes (SHA-1, MD5) is the **lack of key-stretching**; ad
 
 - The real threat for weak formats is offline brute-force, not timing side channels
 - Constant-time fixes provide very little benefit for already-weak hashes; priority should be lowered
-- Correct action: explicitly recommend bcrypt in documentation, and migrate at the operations layer; emit weak-format warnings in the control plane (when the Controller loads config), not on the data-plane hot path
+- Correct action: where stronger schemes are needed, point operators to an external auth (`ForwardAuth` / `ExtAuthz`) — the gateway data plane intentionally does not embed bcrypt-class verification (would force a result cache); emit weak-format warnings in the control plane (when the Controller loads config), not on the data-plane hot path
 
 ### Password / key cache keys
 
@@ -111,6 +111,4 @@ The table below records items confirmed not to need fixing after deep analysis. 
 |----|--------|-------------|------------|--------------------|
 | P0-04 | `csrf/token.rs` | `self.sign != expected_sign` is non-constant-time comparison; `SHA-256(expires+random+key)` is not HMAC | **Closed** | The token contains a 256-bit CSPRNG random; a timing oracle cannot pair with the random for exploitation; length extension has no exploitable path because validation is exact-match |
 | P0-04b | `csrf/token.rs` | Key mixing uses SHA-256 instead of HMAC | **Closed** | Same as above; verification is exact-match, and length-extension-constructed variants cannot pass `gen_sign` format validation |
-| P0-05a | `basic_auth/htpasswd.rs` | SHA-1 / MD5-crypt comparison is non-constant-time | **Closed** | The root cause is the algorithm being weak (no key-stretching); constant-time fixes have very low return; network jitter is far larger than the comparison time difference; the real action is migration to bcrypt |
-| P0-05b | `basic_auth/plugin.rs` | LRU cache key stores `base64(user:pass)` | **Closed** | A hashed-key scheme introduces collision → auth-misattribution risk; memory safety is not a current compliance requirement; if support is needed in the future, add an optional config item and use ahash (not CRC32) for the key hash |
 | P0-09 | `csrf/token.rs` | `SystemTime::now().duration_since(UNIX_EPOCH).unwrap()` on the hot path (DoS risk) | **Closed** | The trigger requires the system clock to be earlier than 1970, which is unreachable in practice (NTP step-back / VM drift will not roll back 56 years; `SystemTime` returns UTC and is not affected by time zone). **The proposed fix `unwrap_or(Duration::from_secs(0))` actually has a security side effect**: during verify, `now=0`, and `0 - expires` (positive) is negative, always less than max_expires, so the expiration check is silently bypassed and CSRF protection fails. Panicking exposes the issue, which is safer than silently degrading security. |

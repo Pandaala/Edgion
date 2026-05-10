@@ -2,11 +2,12 @@ use crate::core::common::matcher::HashHost;
 use crate::core::gateway::tls::validation::cert::{validate_cert, CertValidationResult};
 use crate::types::listener_key::ListenerKey;
 use crate::types::EdgionTls;
-use parking_lot::RwLock;
+use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 /// Internal entry for TLS certificate with validation status
+#[derive(Clone)]
 struct TlsEntry {
     tls: Arc<EdgionTls>,
     validation: CertValidationResult,
@@ -14,14 +15,15 @@ struct TlsEntry {
 
 /// TlsStore manages all TLS certificates and builds the TLS matcher
 pub struct TlsStore {
-    // Key: namespace/name (or name for cluster-scoped)
-    tls_data: RwLock<HashMap<String, TlsEntry>>,
+    // Key: namespace/name (or name for cluster-scoped).
+    // Single writer (config-sync). Readers are lock-free.
+    tls_data: ArcSwap<HashMap<String, TlsEntry>>,
 }
 
 impl TlsStore {
     pub fn new() -> Self {
         Self {
-            tls_data: RwLock::new(HashMap::new()),
+            tls_data: ArcSwap::from_pointee(HashMap::new()),
         }
     }
 
@@ -36,8 +38,7 @@ impl TlsStore {
             "Full set of TLS certificates"
         );
 
-        let mut tls_data = self.tls_data.write();
-        tls_data.clear();
+        let mut new_map: HashMap<String, TlsEntry> = HashMap::with_capacity(cert_count);
 
         for (key, tls) in data {
             // Validate certificate
@@ -52,7 +53,7 @@ impl TlsStore {
                 );
             }
 
-            tls_data.insert(
+            new_map.insert(
                 key,
                 TlsEntry {
                     tls: Arc::new(tls),
@@ -61,9 +62,7 @@ impl TlsStore {
             );
         }
 
-        // Rebuild matcher BEFORE releasing write lock to prevent race condition
-        // This ensures store and matcher are always consistent
-        if let Err(e) = self.rebuild_matcher_from_data(&tls_data) {
+        if let Err(e) = self.rebuild_matcher_from_data(&new_map) {
             // This is a critical error - store updated but matcher not synced
             tracing::error!(
                 component = "tls_store",
@@ -76,7 +75,7 @@ impl TlsStore {
             // to propagate this error to callers for retry logic
         }
 
-        // Lock is automatically released here
+        self.tls_data.store(Arc::new(new_map));
     }
 
     /// Partially update TLS certificates
@@ -99,7 +98,8 @@ impl TlsStore {
             "Partial update of TLS certificates"
         );
 
-        let mut tls_data = self.tls_data.write();
+        let current = self.tls_data.load_full();
+        let mut new_map = (*current).clone();
 
         // Add new certificates
         for (key, tls) in add {
@@ -114,7 +114,7 @@ impl TlsStore {
                 );
             }
 
-            tls_data.insert(
+            new_map.insert(
                 key,
                 TlsEntry {
                     tls: Arc::new(tls),
@@ -136,7 +136,7 @@ impl TlsStore {
                 );
             }
 
-            tls_data.insert(
+            new_map.insert(
                 key,
                 TlsEntry {
                     tls: Arc::new(tls),
@@ -147,12 +147,10 @@ impl TlsStore {
 
         // Remove certificates
         for key in remove {
-            tls_data.remove(key);
+            new_map.remove(key);
         }
 
-        // Rebuild matcher BEFORE releasing write lock to prevent race condition
-        // This ensures store and matcher are always consistent
-        if let Err(e) = self.rebuild_matcher_from_data(&tls_data) {
+        if let Err(e) = self.rebuild_matcher_from_data(&new_map) {
             // This is a critical error - store updated but matcher not synced
             tracing::error!(
                 component = "tls_store",
@@ -167,14 +165,14 @@ impl TlsStore {
             // to propagate this error to callers for retry logic
         }
 
-        // Lock is automatically released here
+        self.tls_data.store(Arc::new(new_map));
     }
 
     /// Rebuild the TLS certificate matcher from provided data.
     /// Only listener-resolved certs are admitted into the matcher.
     ///
     /// # Arguments
-    /// * `tls_data` - Reference to the TLS data map (already locked)
+    /// * `tls_data` - Reference to the TLS data map
     fn rebuild_matcher_from_data(&self, tls_data: &HashMap<String, TlsEntry>) -> anyhow::Result<()> {
         let mut listener_host_map: HashMap<ListenerKey, HashMap<String, Vec<Arc<EdgionTls>>>> = HashMap::new();
         let mut total_hosts = 0;
@@ -248,14 +246,10 @@ impl TlsStore {
     /// including both valid and invalid ones.
     ///
     /// # Performance
-    /// This method acquires a read lock and clones all Arc pointers.
-    /// It's safe to call concurrently from multiple threads.
-    ///
-    /// # Thread Safety
-    /// Thread-safe: acquires RwLock read lock
+    /// Lock-free: clones Arc pointers from the current snapshot.
     pub fn list_all(&self) -> Vec<Arc<EdgionTls>> {
-        let tls_data = self.tls_data.read();
-        tls_data.values().map(|entry| entry.tls.clone()).collect()
+        let snapshot = self.tls_data.load();
+        snapshot.values().map(|entry| entry.tls.clone()).collect()
     }
 
     /// Check if a specific TLS certificate exists in the store
@@ -267,13 +261,10 @@ impl TlsStore {
     /// `true` if certificate exists (regardless of validity), `false` otherwise
     ///
     /// # Performance
-    /// O(1) hash lookup with read lock
-    ///
-    /// # Thread Safety
-    /// Thread-safe: acquires RwLock read lock
+    /// Lock-free: O(1) hash lookup on the current snapshot.
     pub fn contains(&self, key: &str) -> bool {
-        let tls_data = self.tls_data.read();
-        tls_data.contains_key(key)
+        let snapshot = self.tls_data.load();
+        snapshot.contains_key(key)
     }
 
     /// Get validation status for a specific certificate
@@ -285,13 +276,10 @@ impl TlsStore {
     /// `Some(CertValidationResult)` if certificate exists, `None` otherwise
     ///
     /// # Performance
-    /// O(1) hash lookup with read lock. Result is cloned.
-    ///
-    /// # Thread Safety
-    /// Thread-safe: acquires RwLock read lock
+    /// Lock-free: O(1) hash lookup on the current snapshot. Result is cloned.
     pub fn get_validation_status(&self, key: &str) -> Option<CertValidationResult> {
-        let tls_data = self.tls_data.read();
-        tls_data.get(key).map(|entry| entry.validation.clone())
+        let snapshot = self.tls_data.load();
+        snapshot.get(key).map(|entry| entry.validation.clone())
     }
 
     /// Get all invalid certificates with their validation errors
@@ -303,14 +291,10 @@ impl TlsStore {
     /// Vector of (certificate_key, validation_result) tuples
     ///
     /// # Performance
-    /// O(n) iteration over all certificates with read lock.
-    /// Results are cloned.
-    ///
-    /// # Thread Safety
-    /// Thread-safe: acquires RwLock read lock
+    /// Lock-free: O(n) iteration over the current snapshot. Results are cloned.
     pub fn get_invalid_certs(&self) -> Vec<(String, CertValidationResult)> {
-        let tls_data = self.tls_data.read();
-        tls_data
+        let snapshot = self.tls_data.load();
+        snapshot
             .iter()
             .filter(|(_, entry)| !entry.validation.is_valid)
             .map(|(key, entry)| (key.clone(), entry.validation.clone()))
@@ -323,10 +307,7 @@ impl TlsStore {
     /// Tuple of (valid_count, invalid_count)
     ///
     /// # Performance
-    /// O(n) iteration over all certificates with read lock
-    ///
-    /// # Thread Safety
-    /// Thread-safe: acquires RwLock read lock
+    /// Lock-free: O(n) iteration over the current snapshot.
     ///
     /// # Example
     /// ```ignore
@@ -334,9 +315,9 @@ impl TlsStore {
     /// println!("Valid: {}, Invalid: {}", valid, invalid);
     /// ```
     pub fn get_cert_stats(&self) -> (usize, usize) {
-        let tls_data = self.tls_data.read();
-        let total = tls_data.len();
-        let invalid = tls_data.values().filter(|entry| !entry.validation.is_valid).count();
+        let snapshot = self.tls_data.load();
+        let total = snapshot.len();
+        let invalid = snapshot.values().filter(|entry| !entry.validation.is_valid).count();
         (total - invalid, invalid)
     }
 
@@ -352,15 +333,11 @@ impl TlsStore {
     /// `Some(Arc<EdgionTls>)` if a valid matching certificate is found, `None` otherwise
     ///
     /// # Performance
-    /// O(n) iteration over all certificates with read lock.
-    /// Early return on first match.
-    ///
-    /// # Thread Safety
-    /// Thread-safe: acquires RwLock read lock
+    /// Lock-free: O(n) iteration over the current snapshot. Early return on first match.
     pub fn get_tls_by_host(&self, hostname: &str) -> Option<Arc<EdgionTls>> {
-        let tls_data = self.tls_data.read();
+        let snapshot = self.tls_data.load();
 
-        for entry in tls_data.values() {
+        for entry in snapshot.values() {
             // Only return valid certificates
             if !entry.validation.is_valid {
                 continue;
@@ -379,7 +356,7 @@ impl TlsStore {
 impl TlsStore {
     /// Total number of TLS entries (valid + invalid).
     pub fn entry_count(&self) -> usize {
-        self.tls_data.read().len()
+        self.tls_data.load().len()
     }
 }
 
