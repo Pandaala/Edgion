@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
-"""Validate AGENTS/skills/dev-guide knowledge docs.
+"""Validate the agent-facing markdown layer.
 
-This script intentionally focuses on the repository's agent-facing entry files
-and the developer-guide documents that describe the same architecture, so the
-AI collaboration layer does not silently drift over time.
+Two checks, run over every markdown file at the repo root, under ``docs/``,
+``skills/``, and ``examples/README.md``:
+
+1. Relative markdown links resolve to a real file on disk.
+2. Every file named ``SKILL.md`` has YAML frontmatter with ``name:`` and
+   ``description:`` fields (so the agent skill index stays usable).
+
+Everything else (migration-era forbidden-pattern guards, hardcoded entry-file
+and dev-guide-index lists, GitHub Actions path checks, etc.) used to live in
+this script and was trimmed — those checks went stale faster than they caught
+real defects.
 """
 
 from __future__ import annotations
@@ -15,206 +23,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-ENTRY_FILES = [
-    REPO_ROOT / "README.md",
-    REPO_ROOT / "CONTRIBUTING.md",
-    REPO_ROOT / "AGENTS.md",
-    REPO_ROOT / "CLAUDE.md",
-    REPO_ROOT / "examples/README.md",
-    REPO_ROOT / ".cursor/rules/00-edgion-entry.mdc",
-    REPO_ROOT / "docs/DIRECTORY.md",
-    REPO_ROOT / "skills/01-architecture/00-common/03-resource-system.md",
-    REPO_ROOT / "skills/01-architecture/01-controller/06-requeue-mechanism.md",
-    REPO_ROOT / "skills/05-testing/01-integration-testing.md",
-    REPO_ROOT / "skills/06-tracing/00-debugging.md",
-    REPO_ROOT / "skills/09-misc/cicd/00-local-build.md",
-    REPO_ROOT / "skills/09-misc/cicd/01-docker-build.md",
-    REPO_ROOT / "skills/09-misc/cicd/02-github-workflow.md",
-    REPO_ROOT / "skills/09-misc/debugging-tls-gateway.md",
-    REPO_ROOT / "docs/en/dev-guide/README.md",
-    REPO_ROOT / "docs/en/dev-guide/ai-agent-collaboration.md",
-    REPO_ROOT / "docs/en/dev-guide/knowledge-source-map.md",
-    REPO_ROOT / "docs/en/dev-guide/architecture-overview.md",
-    REPO_ROOT / "docs/en/dev-guide/resource-architecture-overview.md",
-    REPO_ROOT / "docs/en/dev-guide/resource-registry-guide.md",
-    REPO_ROOT / "docs/en/dev-guide/add-new-resource-guide.md",
-    REPO_ROOT / "docs/en/dev-guide/annotations-guide.md",
-    REPO_ROOT / "docs/en/dev-guide/http-plugin-development.md",
-    REPO_ROOT / "docs/en/dev-guide/stream-plugin-development.md",
-    REPO_ROOT / "docs/en/dev-guide/ci-release-workflow.md",
-    REPO_ROOT / "docs/zh-CN/dev-guide/README.md",
-    REPO_ROOT / "docs/zh-CN/dev-guide/ai-agent-collaboration.md",
-    REPO_ROOT / "docs/zh-CN/dev-guide/knowledge-source-map.md",
-    REPO_ROOT / "docs/zh-CN/dev-guide/architecture-overview.md",
-    REPO_ROOT / "docs/zh-CN/dev-guide/resource-architecture-overview.md",
-    REPO_ROOT / "docs/zh-CN/dev-guide/resource-registry-guide.md",
-    REPO_ROOT / "docs/zh-CN/dev-guide/add-new-resource-guide.md",
-    REPO_ROOT / "docs/zh-CN/dev-guide/annotations-guide.md",
-    REPO_ROOT / "docs/zh-CN/dev-guide/http-plugin-development.md",
-    REPO_ROOT / "docs/zh-CN/dev-guide/stream-plugin-development.md",
-    REPO_ROOT / "docs/zh-CN/dev-guide/ci-release-workflow.md",
-]
-
-SKILL_REFERENCE_GLOBS = [
+TARGET_GLOBS = [
+    "*.md",
+    "examples/README.md",
     "docs/**/*.md",
-    "skills/**/SKILL.md",
     "skills/**/*.md",
-    "skills/**/references/*.md",
-    "skills/**/references/**/*.md",
-    ".cursor/**/*.mdc",
 ]
-
-FORBIDDEN_PATTERNS = {
-    "README.md": [
-        "cd examples/testing",
-        "./run_integration_test.sh",
-        "gRPC :5810",
-    ],
-    "CONTRIBUTING.md": [
-        "cd examples/testing",
-        "./run_integration_test.sh",
-        "Integration tests go in `examples/testing/`",
-    ],
-    "examples/README.md": [
-        "cd examples/testing",
-        "./run_integration_test.sh",
-    ],
-    "skills/01-architecture/00-common/00-project-overview.md": [
-        "ConfigSyncServer (gRPC :5810)",
-    ],
-    "skills/01-architecture/SKILL.md": [
-        "ConfigSyncServer (gRPC :5810)",
-    ],
-    "examples/test/conf/EdgionPlugins/ResponseRewrite/README.md": [
-        "./run_integration_test.sh ResponseRewrite",
-    ],
-    "docs/en/dev-guide/architecture-overview.md": [
-        "src/types/resource_kind.rs",
-        "src/types/resource_meta_traits/",
-        "src/core/conf_mgr/",
-        "src/core/conf_sync/",
-    ],
-    "docs/zh-CN/dev-guide/architecture-overview.md": [
-        "src/types/resource_kind.rs",
-        "src/types/resource_meta_traits/",
-        "src/core/conf_mgr/",
-        "src/core/conf_sync/",
-    ],
-    "docs/en/dev-guide/resource-architecture-overview.md": [
-        "src/types/resource_registry.rs",
-        "src/types/resource_meta_traits/",
-        "src/core/conf_sync/conf_client",
-        "src/core/conf_sync/conf_server",
-    ],
-    "docs/zh-CN/dev-guide/resource-architecture-overview.md": [
-        "src/types/resource_registry.rs",
-        "src/types/resource_meta_traits/",
-        "src/core/conf_sync/conf_client",
-        "src/core/conf_sync/conf_server",
-    ],
-    "docs/en/dev-guide/resource-registry-guide.md": [
-        "src/types/resource_registry.rs",
-        "src/types/resource_meta_traits/",
-    ],
-    "docs/zh-CN/dev-guide/resource-registry-guide.md": [
-        "src/types/resource_registry.rs",
-        "src/types/resource_meta_traits/",
-    ],
-    "docs/en/dev-guide/annotations-guide.md": [
-        "edgion.com/enable-http2",
-    ],
-    "docs/zh-CN/dev-guide/annotations-guide.md": [
-        "edgion.com/enable-http2",
-    ],
-    "docs/en/dev-guide/stream-plugin-development.md": [
-        ".github/workflows/actions/setup-rust",
-    ],
-    "docs/zh-CN/dev-guide/stream-plugin-development.md": [
-        ".github/workflows/actions/setup-rust",
-    ],
-    "docs/en/dev-guide/ci-release-workflow.md": [
-        ".github/workflows/actions/setup-rust",
-    ],
-    "docs/zh-CN/dev-guide/ci-release-workflow.md": [
-        ".github/workflows/actions/setup-rust",
-    ],
-    "docs/README.md": [
-        "[English Documentation](./en/README.md) *(Coming soon)*",
-        "[Japanese Documentation](./ja/README.md) *(Coming soon)*",
-    ],
-    "docs/en/getting-started/README.md": [
-        "Installation and Deployment (coming soon)",
-        "Your First Gateway (coming soon)",
-        "Core Concepts (coming soon)",
-    ],
-    "docs/zh-CN/getting-started/README.md": [
-        "Installation and Deployment (coming soon)",
-        "First Gateway (coming soon)",
-        "Core Concepts (coming soon)",
-    ],
-    "docs/en/user-guide/http-route/filters/overview.md": [
-        "| RequestMirror | Request mirroring | Coming soon |",
-    ],
-    "docs/zh-CN/user-guide/http-route/filters/overview.md": [
-        "| RequestMirror | Request mirroring | Coming soon |",
-    ],
-    "docs/en/user-guide/README.md": [
-        "Canary Release (coming soon)",
-        "Blue-Green Deployment (coming soon)",
-    ],
-    "docs/zh-CN/user-guide/README.md": [
-        "Canary Release (coming soon)",
-        "Blue-Green Deployment (coming soon)",
-    ],
-    "docs/en/user-guide/http-route/backends/weight.md": [
-        "Canary Release (coming soon)",
-    ],
-    "docs/zh-CN/user-guide/http-route/backends/weight.md": [
-        "Canary Release (coming soon)",
-    ],
-    "examples/test/scripts/utils/start_all_with_conf.sh": [
-        'EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log"',
-        "  - ${LOG_DIR}/access.log",
-    ],
-    "examples/test/scripts/utils/start_all.sh": [
-        'EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log"',
-        "  - ${LOG_DIR}/access.log",
-    ],
-    "examples/test/scripts/integration/link_sys/run_etcd_test.sh": [
-        'EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log"',
-    ],
-    "examples/test/scripts/integration/link_sys/run_es_test.sh": [
-        'EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/access.log"',
-    ],
-    "docs/en/ops-guide/observability/access-log.md": [
-        "Default path**: `logs/access.log`",
-    ],
-    "docs/zh-CN/ops-guide/observability/access-log.md": [
-        "Default path**: `logs/access.log`",
-    ],
-    "docs/en/dev-guide/work-directory.md": [
-        'work_dir().resolve("logs/access.log")',
-        'path = "logs/access.log"',
-    ],
-    "docs/zh-CN/dev-guide/work-directory.md": [
-        'work_dir().resolve("logs/access.log")',
-        'path = "logs/access.log"',
-    ],
-    "skills/05-testing/01-integration-testing.md": [
-        "TODO (2026-02-25): Small Improvement",
-        "examples/test/code/",
-        "scripts/certs/",
-    ],
-    "skills/05-testing/SKILL.md": [
-        "examples/test/code/",
-    ],
-    "docs/en/dev-guide/README.md": [
-        'Only link to existing documents; mark planned content as "(coming soon)".',
-    ],
-    "docs/zh-CN/dev-guide/README.md": [
-        "Only link to existing documents; mark planned content as \"(coming soon)\".",
-    ],
-}
 
 LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 FENCED_CODE_RE = re.compile(r"(?ms)^([ \t]*)(`{3,}|~{3,}).*?\n.*?^\1\2\s*$")
@@ -222,69 +36,21 @@ INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 NAME_RE = re.compile(r"(?m)^name:\s*.+$")
 DESC_RE = re.compile(r"(?m)^description:\s*.+$")
 
-DEV_GUIDE_INDEXES = {
-    "docs/zh-CN/dev-guide/README.md": [
-        "architecture-overview.md",
-        "resource-architecture-overview.md",
-        "resource-registry-guide.md",
-        "add-new-resource-guide.md",
-        "annotations-guide.md",
-        "http-plugin-development.md",
-        "stream-plugin-development.md",
-        "work-directory.md",
-        "logging-system.md",
-        "ci-release-workflow.md",
-        "ai-agent-collaboration.md",
-        "knowledge-source-map.md",
-    ],
-    "docs/en/dev-guide/README.md": [
-        "architecture-overview.md",
-        "resource-architecture-overview.md",
-        "resource-registry-guide.md",
-        "add-new-resource-guide.md",
-        "annotations-guide.md",
-        "http-plugin-development.md",
-        "stream-plugin-development.md",
-        "work-directory.md",
-        "logging-system.md",
-        "ci-release-workflow.md",
-        "ai-agent-collaboration.md",
-        "knowledge-source-map.md",
-    ],
-}
-
-DIRECTORY_REQUIRED_SNIPPETS = [
-    "ai-agent-collaboration.md",
-    "knowledge-source-map.md",
-    "http-plugin-development.md",
-    "stream-plugin-development.md",
-    "ci-release-workflow.md",
-]
-
 
 def iter_target_files() -> list[Path]:
-    files = set(ENTRY_FILES)
-    for pattern in SKILL_REFERENCE_GLOBS:
+    files: set[Path] = set()
+    for pattern in TARGET_GLOBS:
         files.update(REPO_ROOT.glob(pattern))
-    return sorted(files)
-
-
-def validate_exists(files: list[Path]) -> list[str]:
-    errors: list[str] = []
-    for file in files:
-        if not file.exists():
-            errors.append(f"missing file: {file.relative_to(REPO_ROOT)}")
-    return errors
+    return sorted(f for f in files if f.is_file())
 
 
 def validate_markdown_links(files: list[Path]) -> list[str]:
     errors: list[str] = []
     for file in files:
-        if not file.exists() or file.suffix not in {".md", ".mdc"}:
-            continue
         text = file.read_text(encoding="utf-8")
-        # Strip fenced and inline code so we don't flag rustdoc intra-doc
-        # links (e.g. `[Foo](crate::path::Foo)`) as broken filesystem links.
+        # Strip fenced and inline code so rustdoc intra-doc links
+        # (e.g. ``[Foo](crate::path::Foo)``) are not flagged as broken
+        # filesystem links.
         scan_text = FENCED_CODE_RE.sub("", text)
         scan_text = INLINE_CODE_RE.sub("", scan_text)
         for raw_target in LINK_RE.findall(scan_text):
@@ -310,7 +76,7 @@ def validate_markdown_links(files: list[Path]) -> list[str]:
 def validate_skill_frontmatter(files: list[Path]) -> list[str]:
     errors: list[str] = []
     for file in files:
-        if file.name != "SKILL.md" or not file.exists():
+        if file.name != "SKILL.md":
             continue
         text = file.read_text(encoding="utf-8")
         if not text.startswith("---\n"):
@@ -330,90 +96,11 @@ def validate_skill_frontmatter(files: list[Path]) -> list[str]:
     return errors
 
 
-def validate_forbidden_patterns() -> list[str]:
-    errors: list[str] = []
-    for relative, patterns in FORBIDDEN_PATTERNS.items():
-        file = REPO_ROOT / relative
-        if not file.exists():
-            errors.append(f"guarded file missing: {relative}")
-            continue
-        text = file.read_text(encoding="utf-8")
-        for pattern in patterns:
-            if pattern in text:
-                errors.append(f"stale pattern '{pattern}' found in {relative}")
-    return errors
-
-
-def validate_wrappers() -> list[str]:
-    errors: list[str] = []
-
-    claude = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
-    if "AGENTS.md" not in claude or "skills/SKILL.md" not in claude:
-        errors.append("CLAUDE.md should point back to AGENTS.md and skills/SKILL.md")
-
-    cursor = (REPO_ROOT / ".cursor/rules/00-edgion-entry.mdc").read_text(
-        encoding="utf-8"
-    )
-    if "AGENTS.md" not in cursor or "skills/SKILL.md" not in cursor:
-        errors.append(
-            ".cursor/rules/00-edgion-entry.mdc should point back to "
-            "AGENTS.md and skills/SKILL.md"
-        )
-
-    return errors
-
-
-def validate_indexes() -> list[str]:
-    errors: list[str] = []
-
-    for relative, required_names in DEV_GUIDE_INDEXES.items():
-        file = REPO_ROOT / relative
-        if not file.exists():
-            errors.append(f"index file missing: {relative}")
-            continue
-        text = file.read_text(encoding="utf-8")
-        for name in required_names:
-            if name not in text:
-                errors.append(f"dev-guide README missing '{name}': {relative}")
-
-    directory = REPO_ROOT / "docs/DIRECTORY.md"
-    if not directory.exists():
-        errors.append("index file missing: docs/DIRECTORY.md")
-    else:
-        text = directory.read_text(encoding="utf-8")
-        for snippet in DIRECTORY_REQUIRED_SNIPPETS:
-            if snippet not in text:
-                errors.append(f"docs/DIRECTORY.md missing '{snippet}'")
-
-    return errors
-
-
-def validate_local_actions() -> list[str]:
-    errors: list[str] = []
-
-    setup_rust = REPO_ROOT / ".github/actions/setup-rust/action.yml"
-    if not setup_rust.exists():
-        errors.append("missing local action: .github/actions/setup-rust/action.yml")
-
-    stale_placeholder = REPO_ROOT / ".github/workflows/actions/setup-rust"
-    if stale_placeholder.exists():
-        errors.append(
-            "stale placeholder should be removed: .github/workflows/actions/setup-rust"
-        )
-
-    return errors
-
-
 def main() -> int:
     files = iter_target_files()
     errors: list[str] = []
-    errors.extend(validate_exists(files))
     errors.extend(validate_markdown_links(files))
     errors.extend(validate_skill_frontmatter(files))
-    errors.extend(validate_forbidden_patterns())
-    errors.extend(validate_wrappers())
-    errors.extend(validate_indexes())
-    errors.extend(validate_local_actions())
 
     if errors:
         print("Agent-doc validation failed:")
@@ -421,9 +108,10 @@ def main() -> int:
             print(f"- {err}")
         return 1
 
+    skill_count = sum(1 for f in files if f.name == "SKILL.md")
     print(
         f"Agent-doc validation passed: checked {len(files)} files, "
-        f"{sum(1 for f in files if f.name == 'SKILL.md')} skill entry files."
+        f"{skill_count} skill entry files."
     )
     return 0
 
