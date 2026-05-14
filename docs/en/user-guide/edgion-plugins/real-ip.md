@@ -33,9 +33,11 @@ spec:
     - type: RealIp
       config:
         trustedIps:
-          - "10.0.0.0/8"
-          - "172.16.0.0/12"
-          - "192.168.0.0/16"
+          - name: private-ranges
+            cidrs:
+              - "10.0.0.0/8"
+              - "172.16.0.0/12"
+              - "192.168.0.0/16"
         realIpHeader: "X-Forwarded-For"
         recursive: true
 ```
@@ -44,18 +46,28 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `trustedIps` | Array\<String\> | — (required) | List of trusted proxy IP addresses or CIDR ranges |
+| `trustedIps` | Array\<IpGroup\> | — (required) | List of trusted proxy IP groups |
 | `realIpHeader` | String | `"X-Forwarded-For"` | Header name to extract the real IP from |
 | `recursive` | Boolean | `true` | Whether to enable recursive lookup (Nginx-style) |
 | `maxTrustedHops` | Integer | none (unlimited) | Cap on trusted-hop traversal when `recursive=true`. See [Security Trade-offs](#security-trade-offs-trustedips-and-maxtrustedhops) |
 
 #### trustedIps
 
-List of trusted proxy IP addresses or CIDR ranges. Corresponds to Nginx's `set_real_ip_from` directive.
+List of trusted proxy IP groups. Corresponds to Nginx's `set_real_ip_from` directive.
 
-- Supports single IP addresses: `"192.168.1.1"`
-- Supports CIDR ranges: `"10.0.0.0/8"`
-- Supports IPv6: `"2001:db8::/32"`
+Each entry is an `IpGroup` object:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | String | yes | Group name; ≤63 chars, charset `[a-zA-Z0-9._-]`, must start/end alphanumeric, unique within the list |
+| `description` | String | no | Optional human-readable description of the group |
+| `cidrs` | Array\<String\> | yes | Non-empty list of IP addresses or CIDR ranges |
+
+Each `cidrs` entry supports:
+
+- Single IP addresses: `"192.168.1.1"`
+- CIDR ranges: `"10.0.0.0/8"`
+- IPv6: `"2001:db8::/32"`
 
 #### realIpHeader
 
@@ -118,14 +130,21 @@ The attacker can then:
 ```yaml
 # ❌ Bad: too broad — any internal request is treated as a trusted proxy
 trustedIps:
-  - "10.0.0.0/8"
+  - name: internal
+    cidrs:
+      - "10.0.0.0/8"
 
 # ✅ Good: only the actual proxies (Cloudflare origin ranges, specific internal LB)
 trustedIps:
-  - "103.21.244.0/22"     # Cloudflare
-  - "103.22.200.0/22"
-  - "173.245.48.0/20"
-  - "10.1.0.10"           # Internal LB egress (single address)
+  - name: cloudflare
+    cidrs:
+      - "103.21.244.0/22"
+      - "103.22.200.0/22"
+      - "173.245.48.0/20"
+  - name: internal-lb
+    description: Internal LB egress (single address)
+    cidrs:
+      - "10.1.0.10"
 ```
 
 **Layer 2 (secondary): Set `maxTrustedHops` as a hard ceiling**
@@ -134,8 +153,12 @@ Even if Layer 1 is misconfigured, set `maxTrustedHops = actual proxy-chain depth
 
 ```yaml
 trustedIps:
-  - "103.21.244.0/22"     # Cloudflare (1 hop)
-  - "10.1.0.10"           # Internal LB (1 hop)
+  - name: cloudflare
+    cidrs:
+      - "103.21.244.0/22"   # Cloudflare (1 hop)
+  - name: internal-lb
+    cidrs:
+      - "10.1.0.10"         # Internal LB (1 hop)
 maxTrustedHops: 2         # Only trust 2 hops; attacker cannot push result leftward
                           # by padding more "trusted" IPs
 ```
@@ -194,8 +217,12 @@ Edgion Gateway (client_addr: 192.168.1.1)
 **Configuration:**
 ```yaml
 trustedIps:
-  - "192.168.0.0/16"  # Load balancer
-  - "198.51.100.0/24" # CDN
+  - name: load-balancer
+    cidrs:
+      - "192.168.0.0/16"
+  - name: cdn
+    cidrs:
+      - "198.51.100.0/24"
 realIpHeader: "X-Forwarded-For"
 recursive: true
 ```
@@ -206,10 +233,12 @@ recursive: true
 
 ```yaml
 trustedIps:
-  - "173.245.48.0/20"
-  - "103.21.244.0/22"
-  - "103.22.200.0/22"
-  # ... more Cloudflare IP ranges
+  - name: cloudflare
+    cidrs:
+      - "173.245.48.0/20"
+      - "103.21.244.0/22"
+      - "103.22.200.0/22"
+      # ... more Cloudflare IP ranges
 realIpHeader: "CF-Connecting-IP"
 recursive: false
 ```
@@ -229,9 +258,11 @@ spec:
     - type: RealIp
       config:
         trustedIps:
-          - "10.0.0.0/8"
-          - "172.16.0.0/12"
-          - "192.168.0.0/16"
+          - name: private-ranges
+            cidrs:
+              - "10.0.0.0/8"
+              - "172.16.0.0/12"
+              - "192.168.0.0/16"
 ```
 
 ### Example 2: Cloudflare Configuration
@@ -247,16 +278,18 @@ spec:
     - type: RealIp
       config:
         trustedIps:
-          - "173.245.48.0/20"
-          - "103.21.244.0/22"
-          - "103.22.200.0/22"
-          - "103.31.4.0/22"
-          - "141.101.64.0/18"
-          - "108.162.192.0/18"
-          - "190.93.240.0/20"
-          - "188.114.96.0/20"
-          - "197.234.240.0/22"
-          - "198.41.128.0/17"
+          - name: cloudflare
+            cidrs:
+              - "173.245.48.0/20"
+              - "103.21.244.0/22"
+              - "103.22.200.0/22"
+              - "103.31.4.0/22"
+              - "141.101.64.0/18"
+              - "108.162.192.0/18"
+              - "190.93.240.0/20"
+              - "188.114.96.0/20"
+              - "197.234.240.0/22"
+              - "198.41.128.0/17"
         realIpHeader: "CF-Connecting-IP"
         recursive: false
 ```
@@ -274,10 +307,15 @@ spec:
     - type: RealIp
       config:
         trustedIps:
-          - "10.0.0.0/8"       # Internal proxy
-          - "172.16.0.0/12"    # Private network
-          - "192.168.0.0/16"   # Local network
-          - "198.51.100.0/24"  # CDN
+          - name: internal
+            description: Internal proxy and private networks
+            cidrs:
+              - "10.0.0.0/8"
+              - "172.16.0.0/12"
+              - "192.168.0.0/16"
+          - name: cdn
+            cidrs:
+              - "198.51.100.0/24"
         realIpHeader: "X-Forwarded-For"
         recursive: true
 ```
@@ -313,7 +351,7 @@ A: Check the `remote_addr` field in request logs, or check the `X-Real-IP` Heade
 
 ### Q: Can I trust multiple CDNs simultaneously?
 
-A: Yes, add all CDN IP ranges to the `trustedIps` list.
+A: Yes, add each CDN as its own group under `trustedIps` (one `IpGroup` per CDN, with its ranges in `cidrs`).
 
 ### Q: Does it support dynamic updates?
 

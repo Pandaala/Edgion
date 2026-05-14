@@ -8,10 +8,12 @@ This test suite validates the RealIp plugin functionality for extracting real cl
 
 ```yaml
 trustedIps:
-  - "10.0.0.0/8"
-  - "172.16.0.0/12"
-  - "192.168.0.0/16"
-  - "127.0.0.1/32"
+  - name: private-ranges
+    cidrs:
+      - "10.0.0.0/8"
+      - "172.16.0.0/12"
+      - "192.168.0.0/16"
+      - "127.0.0.1/32"
 realIpHeader: "X-Forwarded-For"
 recursive: true
 ```

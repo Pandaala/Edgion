@@ -6,42 +6,21 @@ use super::builder_v4::IpV4BuildNode;
 use super::error::IpRadixError;
 use std::net::Ipv4Addr;
 
-/// A flattened node optimized for cache performance
+/// A flattened node optimized for cache performance.
 ///
-/// Binary radix tree node with two children (left=0, right=1).
-/// Fields are carefully ordered to minimize padding while maintaining alignment.
+/// Total size: 16 bytes (verified via size_of::<FlatIpV4Node>() in tests).
 #[repr(C, align(8))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FlatIpV4Node {
-    /// Index of left child in nodes array (0 if none)
+    /// Index of left child (0 if none).
     pub(crate) left_index: u32,
-
-    /// Index of right child in nodes array (0 if none)
+    /// Index of right child (0 if none).
     pub(crate) right_index: u32,
-
-    /// Prefix length at this node (0 if not a terminal)
+    /// Prefix length at this node (0 if not a terminal).
     pub(crate) prefix_len: u8,
-
-    /// Flags: bit 0 = has_value, bit 1 = value (0=deny, 1=allow)
-    pub(crate) flags: u8,
-
-    /// Padding for alignment
-    _padding: [u8; 2],
-}
-
-impl FlatIpV4Node {
-    /// Check if this node has a value
-    #[inline]
-    fn has_value(&self) -> bool {
-        (self.flags & 0x01) != 0
-    }
-
-    /// Get the value (true=allow, false=deny)
-    /// Only valid if has_value() returns true
-    #[inline]
-    fn get_value(&self) -> bool {
-        (self.flags & 0x02) != 0
-    }
+    /// Interned group label ID. 0 = no rule terminates here.
+    pub(crate) label_id: u16,
+    _padding: [u8; 1],
 }
 
 /// A cache-friendly, immutable IPv4 radix tree for fast IP matching
@@ -73,7 +52,7 @@ impl FrozenIpV4RadixTree {
         Ok(builder.build())
     }
 
-    /// Matches an IPv4 address and returns the matching rule (if any)
+    /// Matches an IPv4 address and returns the matching label ID (if any).
     ///
     /// Uses longest prefix matching: returns the most specific rule that matches.
     ///
@@ -81,8 +60,7 @@ impl FrozenIpV4RadixTree {
     /// * `ip` - IPv4 address as u32 (network byte order)
     ///
     /// # Returns
-    /// * `Some(true)` - IP is explicitly allowed
-    /// * `Some(false)` - IP is explicitly denied
+    /// * `Some(label_id)` - IP matched a rule with the given interned label ID
     /// * `None` - No matching rule
     ///
     /// # Examples
@@ -91,35 +69,35 @@ impl FrozenIpV4RadixTree {
     /// use std::net::Ipv4Addr;
     ///
     /// let mut builder = IpV4RadixBuilder::new();
-    /// builder.insert("192.168.0.0/16", true).unwrap();
-    /// builder.insert("192.168.1.100/32", false).unwrap();
+    /// builder.insert("192.168.0.0/16", 1).unwrap();
+    /// builder.insert("192.168.1.100/32", 2).unwrap();
     ///
     /// let tree = builder.freeze().unwrap();
     ///
     /// let ip1: u32 = Ipv4Addr::new(192, 168, 1, 50).into();
-    /// assert_eq!(tree.match_ip(ip1), Some(true));  // Matched by /16
+    /// assert_eq!(tree.match_ip(ip1), Some(1));  // Matched by /16
     ///
     /// let ip2: u32 = Ipv4Addr::new(192, 168, 1, 100).into();
-    /// assert_eq!(tree.match_ip(ip2), Some(false)); // Matched by /32 (more specific)
+    /// assert_eq!(tree.match_ip(ip2), Some(2)); // Matched by /32 (more specific)
     ///
     /// let ip3: u32 = Ipv4Addr::new(10, 0, 0, 1).into();
-    /// assert_eq!(tree.match_ip(ip3), None);        // No match
+    /// assert_eq!(tree.match_ip(ip3), None);    // No match
     /// ```
-    pub fn match_ip(&self, ip: u32) -> Option<bool> {
+    pub fn match_ip(&self, ip: u32) -> Option<u16> {
         if self.nodes.is_empty() {
             return None;
         }
 
         let mut node_idx = 0; // Start at root
-        let mut last_match: Option<bool> = None;
+        let mut last_match: Option<u16> = None;
         let mut current_bit = 0;
 
         loop {
             let node = &self.nodes[node_idx];
 
-            // If this node has a value, record it (longest prefix so far)
-            if node.has_value() {
-                last_match = Some(node.get_value());
+            // If this node has a label, record it (longest prefix so far)
+            if node.label_id != 0 {
+                last_match = Some(node.label_id);
             }
 
             // Check if we've consumed all 32 bits
@@ -151,7 +129,7 @@ impl FrozenIpV4RadixTree {
     }
 
     /// Convenience method to match an Ipv4Addr
-    pub fn match_ipv4(&self, ip: Ipv4Addr) -> Option<bool> {
+    pub fn match_ipv4(&self, ip: Ipv4Addr) -> Option<u16> {
         self.match_ip(u32::from(ip))
     }
 
@@ -231,8 +209,8 @@ impl FlatTreeBuilder {
             left_index: 0,
             right_index: 0,
             prefix_len: node.prefix_len,
-            flags: encode_flags(node.value),
-            _padding: [0; 2],
+            label_id: node.label_id,
+            _padding: [0; 1],
         });
 
         // Recursively flatten children
@@ -260,61 +238,49 @@ impl FlatTreeBuilder {
     }
 }
 
-/// Encode value into flags byte
-/// Bit 0: has_value (1 if Some, 0 if None)
-/// Bit 1: value (1 if true/allow, 0 if false/deny)
-fn encode_flags(value: Option<bool>) -> u8 {
-    match value {
-        Some(true) => 0x03,  // has_value=1, value=1
-        Some(false) => 0x01, // has_value=1, value=0
-        None => 0x00,        // has_value=0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::common::matcher::ip_radix_tree::builder_v4::IpV4RadixBuilder;
 
     #[test]
-    fn test_encode_flags() {
-        assert_eq!(encode_flags(Some(true)), 0x03);
-        assert_eq!(encode_flags(Some(false)), 0x01);
-        assert_eq!(encode_flags(None), 0x00);
+    fn flat_node_is_16_bytes() {
+        assert_eq!(std::mem::size_of::<FlatIpV4Node>(), 16);
+        assert_eq!(std::mem::align_of::<FlatIpV4Node>(), 8);
     }
 
     #[test]
     fn test_basic_match() {
         let mut builder = IpV4RadixBuilder::new();
-        builder.insert("192.168.1.0/24", true).unwrap();
+        builder.insert("192.168.1.0/24", 1).unwrap();
         let tree = builder.freeze().unwrap();
 
         let ip_match: u32 = Ipv4Addr::new(192, 168, 1, 50).into();
         let ip_no_match: u32 = Ipv4Addr::new(192, 168, 2, 1).into();
 
-        assert_eq!(tree.match_ip(ip_match), Some(true));
+        assert_eq!(tree.match_ip(ip_match), Some(1));
         assert_eq!(tree.match_ip(ip_no_match), None);
     }
 
     #[test]
     fn test_longest_prefix_match() {
         let mut builder = IpV4RadixBuilder::new();
-        builder.insert("10.0.0.0/8", true).unwrap();
-        builder.insert("10.1.0.0/16", false).unwrap();
-        builder.insert("10.1.1.0/24", true).unwrap();
+        builder.insert("10.0.0.0/8", 1).unwrap();
+        builder.insert("10.1.0.0/16", 2).unwrap();
+        builder.insert("10.1.1.0/24", 1).unwrap();
         let tree = builder.freeze().unwrap();
 
         // Should match /24 (most specific)
         let ip1: u32 = Ipv4Addr::new(10, 1, 1, 50).into();
-        assert_eq!(tree.match_ip(ip1), Some(true));
+        assert_eq!(tree.match_ip(ip1), Some(1));
 
         // Should match /16
         let ip2: u32 = Ipv4Addr::new(10, 1, 2, 50).into();
-        assert_eq!(tree.match_ip(ip2), Some(false));
+        assert_eq!(tree.match_ip(ip2), Some(2));
 
         // Should match /8
         let ip3: u32 = Ipv4Addr::new(10, 2, 1, 50).into();
-        assert_eq!(tree.match_ip(ip3), Some(true));
+        assert_eq!(tree.match_ip(ip3), Some(1));
 
         // No match
         let ip4: u32 = Ipv4Addr::new(11, 0, 0, 1).into();
@@ -324,27 +290,27 @@ mod tests {
     #[test]
     fn test_host_route() {
         let mut builder = IpV4RadixBuilder::new();
-        builder.insert("192.168.1.100/32", false).unwrap();
+        builder.insert("192.168.1.100/32", 2).unwrap();
         let tree = builder.freeze().unwrap();
 
         let ip_exact: u32 = Ipv4Addr::new(192, 168, 1, 100).into();
         let ip_neighbor: u32 = Ipv4Addr::new(192, 168, 1, 101).into();
 
-        assert_eq!(tree.match_ip(ip_exact), Some(false));
+        assert_eq!(tree.match_ip(ip_exact), Some(2));
         assert_eq!(tree.match_ip(ip_neighbor), None);
     }
 
     #[test]
     fn test_default_route() {
         let mut builder = IpV4RadixBuilder::new();
-        builder.insert("0.0.0.0/0", true).unwrap();
+        builder.insert("0.0.0.0/0", 1).unwrap();
         let tree = builder.freeze().unwrap();
 
         // Should match any IP
         let ip1: u32 = Ipv4Addr::new(1, 2, 3, 4).into();
         let ip2: u32 = Ipv4Addr::new(255, 255, 255, 255).into();
 
-        assert_eq!(tree.match_ip(ip1), Some(true));
-        assert_eq!(tree.match_ip(ip2), Some(true));
+        assert_eq!(tree.match_ip(ip1), Some(1));
+        assert_eq!(tree.match_ip(ip2), Some(1));
     }
 }

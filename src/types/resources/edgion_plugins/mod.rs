@@ -15,6 +15,7 @@ pub mod custom_plugins;
 pub mod edgion_plugin;
 pub mod entry;
 
+pub mod access_decision;
 pub mod plugin_configs;
 pub mod plugin_validation;
 
@@ -22,6 +23,7 @@ pub mod plugin_validation;
 mod tests;
 
 // Re-exports
+pub use access_decision::AccessDecision;
 pub use edgion_plugin::EdgionPlugin;
 pub use entry::{
     PluginEntry, RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,

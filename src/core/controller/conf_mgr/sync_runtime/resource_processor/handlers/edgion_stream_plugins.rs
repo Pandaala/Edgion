@@ -245,7 +245,9 @@ spec:
   plugins:
     - type: IpRestriction
       config:
-        allow: ["10.0.0.0/8"]
+        allow:
+          - name: default
+            cidrs: ["10.0.0.0/8"]
         ipSource: RemoteAddr
         message: blocked
         status: 403
@@ -264,7 +266,9 @@ spec:
   plugins:
     - type: IpRestriction
       config:
-        allow: ["10.0.0.0/8"]
+        allow:
+          - name: default
+            cidrs: ["10.0.0.0/8"]
         defaultAction: deny
 "#;
         serde_yaml::from_str(yaml).unwrap()

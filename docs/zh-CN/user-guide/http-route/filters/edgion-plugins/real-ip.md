@@ -44,7 +44,9 @@ spec:
     - type: RealIp
       config:
         trustedIps:
-          - "10.0.0.0/8"
+          - name: private-ranges
+            cidrs:
+              - "10.0.0.0/8"
 ```
 
 ## 相关文档

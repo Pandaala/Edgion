@@ -418,7 +418,10 @@ data:
             let config_path = dir.join("controller.yaml");
             std::fs::write(
                 &config_path,
-                format!("conf_center:\n  type: file_system\n  conf_dir: {}\n", dir.join("config").display()),
+                format!(
+                    "conf_center:\n  type: file_system\n  conf_dir: {}\n",
+                    dir.join("config").display()
+                ),
             )
             .unwrap();
             std::fs::create_dir_all(dir.join("config")).unwrap();
@@ -462,7 +465,10 @@ data:
             std::env::remove_var("POD_NAMESPACE");
             let config_content = std::fs::read_to_string(&config_path).unwrap();
             let creds = read_generated_credentials(&config_content, &config_path);
-            assert!(creds.is_some(), "should fall back to flat layout for legacy deployments");
+            assert!(
+                creds.is_some(),
+                "should fall back to flat layout for legacy deployments"
+            );
             let (_, p) = creds.unwrap();
             assert_eq!(p.as_str(), "secret-pw");
         }

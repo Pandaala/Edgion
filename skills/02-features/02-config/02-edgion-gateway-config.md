@@ -73,7 +73,11 @@ spec:
 
   # ─── Real IP extraction ───
   realIp:
-    trustedIps: []                          # Vec<String>, list of trusted proxy IPs/CIDRs
+    trustedIps:                             # Vec<IpGroup>, list of trusted proxy IP groups
+      - name: private-ranges                # string, required; <=63 chars, charset [a-zA-Z0-9._-], starts/ends alphanumeric, unique within the list
+        description: ""                     # string, optional
+        cidrs:                              # Vec<String>, required; non-empty list of IPs/CIDRs
+          - "10.0.0.0/8"
     realIpHeader: "X-Forwarded-For"         # string, header used to extract the real IP
     recursive: true                         # bool, traverse the header right-to-left, skip trustedIps, take the first untrusted IP
 
@@ -142,11 +146,13 @@ spec:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `trustedIps` | `Vec<String>` | `[]` | List of trusted proxy IPs/CIDRs |
+| `trustedIps` | `Vec<IpGroup>` | `[]` | List of trusted proxy IP groups |
 | `realIpHeader` | `String` | `X-Forwarded-For` | Header name from which the real IP is extracted |
 | `recursive` | `bool` | `true` | Whether to skip trusted proxies right-to-left in nginx style |
 
-Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed in `trustedIps`, and take the first untrusted IP.
+Each `trustedIps` entry is an `IpGroup`: `name` (required; ≤63 chars, charset `[a-zA-Z0-9._-]`, starts/ends alphanumeric, unique within the list), `description` (optional), `cidrs` (required; non-empty list of IP/CIDR strings).
+
+Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed in any `trustedIps` group, and take the first untrusted IP.
 
 ### spec.securityProtect
 

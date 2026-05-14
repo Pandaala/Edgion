@@ -38,6 +38,8 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
     }
 
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult {
+        use crate::types::resources::edgion_plugins::{AccessDecision, DefaultAction};
+
         let store = get_global_plugin_metadata_store();
         // Getter signature: (namespace, name)
         let Some(pm) = store.get_global_connection_ip_restriction(self.ref_namespace(), &self.plugin_metadata_ref.name)
@@ -55,11 +57,21 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
             return StreamPluginResult::Allow;
         };
 
-        if profile.check_ip(&ctx.client_ip) {
-            StreamPluginResult::Allow
-        } else {
-            record_conn_ip_restriction_event("denied");
-            StreamPluginResult::Deny("blocked by global connection ip restriction".to_string())
+        match profile.check_ip(&ctx.client_ip) {
+            AccessDecision::AllowByGroup(_) => StreamPluginResult::Allow,
+            AccessDecision::DenyByGroup(g) => {
+                record_conn_ip_restriction_event("denied");
+                StreamPluginResult::Deny(format!("ip:deny:group={}", g))
+            }
+            AccessDecision::DenyByWhitelistMiss => {
+                record_conn_ip_restriction_event("denied");
+                StreamPluginResult::Deny("ip:deny:not-in-allow".to_string())
+            }
+            AccessDecision::Default(DefaultAction::Allow) => StreamPluginResult::Allow,
+            AccessDecision::Default(DefaultAction::Deny) => {
+                record_conn_ip_restriction_event("denied");
+                StreamPluginResult::Deny("ip:deny:default".to_string())
+            }
         }
     }
 }

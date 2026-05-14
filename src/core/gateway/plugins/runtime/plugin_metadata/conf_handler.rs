@@ -290,7 +290,7 @@ impl ConfHandler<PluginMetaData> for PluginMetaDataGatewayStore {
 #[cfg(test)]
 mod stats_tests {
     use super::*;
-    use crate::types::resources::plugin_metadata::PluginMetaDataSpec;
+    use crate::types::resources::plugin_metadata::{IpGroup, PluginMetaDataSpec};
 
     #[test]
     fn count_returns_zero_initially() {
@@ -309,7 +309,11 @@ mod stats_tests {
         let ip_pm = {
             let spec = PluginMetaDataSpec {
                 metadata: MetaDataEntry::IpList(IpListData {
-                    items: vec!["10.0.0.0/8".to_string()],
+                    items: vec![IpGroup {
+                        name: "default".into(),
+                        description: None,
+                        cidrs: vec!["10.0.0.0/8".into()],
+                    }],
                 }),
             };
             let mut pm = PluginMetaData::new("ip-allow", spec);

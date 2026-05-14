@@ -11,4 +11,6 @@ spec:
       config:
         defaultAction: deny
         allow:
-          - "127.0.0.0/8"
+          - name: localhost
+            cidrs:
+              - "127.0.0.0/8"

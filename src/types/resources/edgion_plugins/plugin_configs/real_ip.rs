@@ -14,8 +14,10 @@
 //! ### Basic usage (trust CDN/load balancer):
 //! ```yaml
 //! trusted_ips:
-//!   - "10.0.0.0/8"
-//!   - "172.16.0.0/12"
+//!   - name: internal
+//!     cidrs:
+//!       - "10.0.0.0/8"
+//!       - "172.16.0.0/12"
 //! real_ip_header: "X-Forwarded-For"
 //! recursive: true
 //! ```
@@ -23,18 +25,18 @@
 //! ### Cloudflare setup:
 //! ```yaml
 //! trusted_ips:
-//!   - "173.245.48.0/20"
-//!   - "103.21.244.0/22"
-//!   - "103.22.200.0/22"
+//!   - name: cloudflare
+//!     cidrs:
+//!       - "173.245.48.0/20"
+//!       - "103.21.244.0/22"
+//!       - "103.22.200.0/22"
 //! real_ip_header: "CF-Connecting-IP"
 //! recursive: false
 //! ```
 
-use crate::core::common::matcher::ip_radix_tree::IpRadixMatcher;
+use crate::types::resources::plugin_metadata::IpGroup;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::net::IpAddr;
-use std::sync::Arc;
 
 /// Real IP plugin configuration
 ///
@@ -43,14 +45,12 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RealIpConfig {
-    /// Trusted proxy IP addresses or CIDR ranges
+    /// Trusted proxy IP groups.
     ///
-    /// Corresponds to nginx's `set_real_ip_from` directive.
-    /// Only requests from these IPs will trigger real IP extraction.
-    ///
-    /// Examples: ["10.0.0.0/8", "192.168.1.1", "2001:db8::/32"]
-    #[serde(default)]
-    pub trusted_ips: Vec<String>,
+    /// Each `IpGroup` carries a `name` (surfaced in debug logs) and
+    /// `cidrs` (IP/CIDR strings). Only requests from trusted IPs will
+    /// trigger real IP extraction.
+    pub trusted_ips: Vec<IpGroup>,
 
     /// Header name to extract real IP from
     ///
@@ -86,12 +86,9 @@ pub struct RealIpConfig {
     /// Only takes effect when `recursive=true`. Default: `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_trusted_hops: Option<u32>,
-
-    // === Runtime-only fields (not serialized) ===
-    /// Compiled IP matcher (built from trusted_ips)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub(crate) trusted_ip_matcher: Option<Arc<IpRadixMatcher>>,
+    // NOTE: trusted_ip_matcher field DELETED in this refactor.
+    // No production consumers existed (is_trusted_ip had zero non-test callers).
+    // The matcher is now built by RealIpExtractor::new from `trusted_ips`.
 }
 
 fn default_real_ip_header() -> String {
@@ -109,7 +106,6 @@ impl Default for RealIpConfig {
             real_ip_header: default_real_ip_header(),
             recursive: default_recursive(),
             max_trusted_hops: None,
-            trusted_ip_matcher: None,
         }
     }
 }
@@ -121,120 +117,19 @@ impl RealIpConfig {
         Ok(config)
     }
 
-    /// Validate configuration and initialize runtime matcher
+    /// Validate configuration. Does NOT build a matcher — `RealIpExtractor`
+    /// builds its own from `trusted_ips` at runtime.
     pub fn validate_and_init(&mut self) -> Result<(), String> {
-        // Validation: trusted_ips must not be empty
+        use crate::core::common::matcher::ip_cidr_helpers::validate_groups_structure;
+
         if self.trusted_ips.is_empty() {
             return Err("'trusted_ips' must not be empty".to_string());
         }
-
-        // Validation: real_ip_header must not be empty
         if self.real_ip_header.trim().is_empty() {
             return Err("'real_ip_header' must not be empty".to_string());
         }
-
-        // Build trusted IP matcher
-        let mut builder = IpRadixMatcher::builder();
-        let mut valid_count = 0;
-        let mut invalid_count = 0;
-
-        for ip_str in &self.trusted_ips {
-            // Validate and convert to CIDR format
-            match Self::validate_and_to_cidr(ip_str) {
-                Ok(cidr_str) => match builder.insert(&cidr_str, true) {
-                    Ok(_) => valid_count += 1,
-                    Err(e) => {
-                        invalid_count += 1;
-                        tracing::warn!(
-                            ip = %ip_str,
-                            error = ?e,
-                            "Invalid IP/CIDR in trusted_ips, skipping"
-                        );
-                    }
-                },
-                Err(e) => {
-                    invalid_count += 1;
-                    tracing::warn!(
-                        ip = %ip_str,
-                        error = %e,
-                        "Invalid IP/CIDR format in trusted_ips, skipping"
-                    );
-                }
-            }
-        }
-
-        if valid_count == 0 {
-            return Err(format!(
-                "No valid IPs in trusted_ips (total: {}, invalid: {})",
-                self.trusted_ips.len(),
-                invalid_count
-            ));
-        }
-
-        if invalid_count > 0 {
-            tracing::warn!(
-                valid_ips = valid_count,
-                invalid_ips = invalid_count,
-                "Some IPs in trusted_ips were invalid and skipped"
-            );
-        }
-
-        self.trusted_ip_matcher = Some(Arc::new(
-            builder
-                .build()
-                .map_err(|e| format!("Failed to build trusted IP matcher: {}", e))?,
-        ));
-
+        validate_groups_structure(&self.trusted_ips).map_err(|e| format!("trusted_ips: {}", e))?;
         Ok(())
-    }
-
-    /// Validate IP/CIDR format and convert to CIDR if needed
-    fn validate_and_to_cidr(ip_str: &str) -> Result<String, String> {
-        let trimmed = ip_str.trim();
-
-        if trimmed.contains('/') {
-            // CIDR format - validate both parts
-            let parts: Vec<&str> = trimmed.split('/').collect();
-            if parts.len() != 2 {
-                return Err(format!("Invalid CIDR format: {}", trimmed));
-            }
-
-            // Validate IP part
-            let ip: IpAddr = parts[0]
-                .parse()
-                .map_err(|_| format!("Invalid IP address in CIDR: {}", parts[0]))?;
-
-            // Validate prefix length
-            let prefix_len: u8 = parts[1]
-                .parse()
-                .map_err(|_| format!("Invalid prefix length in CIDR: {}", parts[1]))?;
-
-            let max_prefix = if ip.is_ipv4() { 32 } else { 128 };
-            if prefix_len > max_prefix {
-                return Err(format!(
-                    "Prefix length {} exceeds maximum {} for {:?}",
-                    prefix_len, max_prefix, ip
-                ));
-            }
-
-            Ok(trimmed.to_string())
-        } else {
-            // Single IP - convert to CIDR
-            let ip: IpAddr = trimmed
-                .parse()
-                .map_err(|_| format!("Invalid IP address: {}", trimmed))?;
-
-            let prefix_len = if ip.is_ipv4() { 32 } else { 128 };
-            Ok(format!("{}/{}", trimmed, prefix_len))
-        }
-    }
-
-    /// Check if an IP address is trusted
-    pub fn is_trusted_ip(&self, ip: &IpAddr) -> bool {
-        self.trusted_ip_matcher
-            .as_ref()
-            .and_then(|m| m.match_ip(ip))
-            .unwrap_or(false)
     }
 }
 
@@ -242,28 +137,17 @@ use crate::types::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for RealIpConfig {
     fn validation_error(&self) -> Option<String> {
+        use crate::core::common::matcher::ip_cidr_helpers::validate_groups_structure;
+
         if self.trusted_ips.is_empty() {
             return Some("'trusted_ips' must not be empty".to_string());
         }
-
         if self.real_ip_header.trim().is_empty() {
             return Some("'real_ip_header' must not be empty".to_string());
         }
-
-        let total = self.trusted_ips.len();
-        let invalid_count = self
-            .trusted_ips
-            .iter()
-            .filter(|ip| Self::validate_and_to_cidr(ip).is_err())
-            .count();
-
-        if invalid_count == total {
-            return Some(format!(
-                "No valid IPs in trusted_ips (total: {}, invalid: {})",
-                total, invalid_count
-            ));
+        if let Err(e) = validate_groups_structure(&self.trusted_ips) {
+            return Some(format!("trusted_ips: {}", e));
         }
-
         None
     }
 }
@@ -283,7 +167,11 @@ mod validation_tests {
     #[test]
     fn test_plugin_validation_empty_real_ip_header() {
         let config = RealIpConfig {
-            trusted_ips: vec!["10.0.0.0/8".to_string()],
+            trusted_ips: vec![IpGroup {
+                name: "default".into(),
+                description: None,
+                cidrs: vec!["10.0.0.0/8".into()],
+            }],
             real_ip_header: "   ".to_string(),
             ..Default::default()
         };
@@ -295,21 +183,28 @@ mod validation_tests {
     #[test]
     fn test_plugin_validation_all_invalid_ips() {
         let config = RealIpConfig {
-            trusted_ips: vec!["not-an-ip".to_string(), "999.999.999.999".to_string()],
+            trusted_ips: vec![IpGroup {
+                name: "default".into(),
+                description: None,
+                cidrs: vec!["not-an-ip".to_string(), "999.999.999.999".to_string()],
+            }],
             ..Default::default()
         };
         let err = config.validation_error();
         assert!(err.is_some());
         let msg = err.unwrap();
-        assert!(msg.contains("No valid IPs in trusted_ips"), "unexpected message: {msg}");
-        assert!(msg.contains("total: 2"), "unexpected message: {msg}");
-        assert!(msg.contains("invalid: 2"), "unexpected message: {msg}");
+        assert!(msg.starts_with("trusted_ips:"), "unexpected message: {msg}");
+        assert!(msg.contains("Invalid IP"), "unexpected message: {msg}");
     }
 
     #[test]
     fn test_plugin_validation_valid_config() {
         let config = RealIpConfig {
-            trusted_ips: vec!["10.0.0.0/8".to_string(), "192.168.1.1".to_string()],
+            trusted_ips: vec![IpGroup {
+                name: "default".into(),
+                description: None,
+                cidrs: vec!["10.0.0.0/8".to_string(), "192.168.1.1".to_string()],
+            }],
             real_ip_header: "X-Forwarded-For".to_string(),
             ..Default::default()
         };
@@ -320,6 +215,15 @@ mod validation_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::common::utils::real_ip_extractor::RealIpExtractor;
+
+    fn group(name: &str, cidrs: &[&str]) -> IpGroup {
+        IpGroup {
+            name: name.to_string(),
+            description: None,
+            cidrs: cidrs.iter().map(|s| s.to_string()).collect(),
+        }
+    }
 
     #[test]
     fn test_default_config() {
@@ -340,7 +244,7 @@ mod tests {
     #[test]
     fn test_empty_real_ip_header() {
         let mut config = RealIpConfig {
-            trusted_ips: vec!["10.0.0.0/8".to_string()],
+            trusted_ips: vec![group("default", &["10.0.0.0/8"])],
             real_ip_header: "".to_string(),
             ..Default::default()
         };
@@ -351,54 +255,74 @@ mod tests {
 
     #[test]
     fn test_valid_ipv4_single() {
-        let mut config = RealIpConfig {
-            trusted_ips: vec!["192.168.1.1".to_string()],
+        let config = RealIpConfig {
+            trusted_ips: vec![group("default", &["192.168.1.1"])],
             ..Default::default()
         };
-        assert!(config.validate_and_init().is_ok());
-        assert!(config.is_trusted_ip(&"192.168.1.1".parse().unwrap()));
-        assert!(!config.is_trusted_ip(&"192.168.1.2".parse().unwrap()));
+        let extractor = RealIpExtractor::new(
+            &config.trusted_ips,
+            config.real_ip_header.clone(),
+            config.recursive,
+            config.max_trusted_hops,
+        )
+        .unwrap();
+        assert!(extractor.is_trusted_proxy(&"192.168.1.1".parse().unwrap()));
+        assert!(!extractor.is_trusted_proxy(&"192.168.1.2".parse().unwrap()));
     }
 
     #[test]
     fn test_valid_ipv4_cidr() {
-        let mut config = RealIpConfig {
-            trusted_ips: vec!["10.0.0.0/8".to_string(), "192.168.1.0/24".to_string()],
+        let config = RealIpConfig {
+            trusted_ips: vec![group("a", &["10.0.0.0/8"]), group("b", &["192.168.1.0/24"])],
             ..Default::default()
         };
-        assert!(config.validate_and_init().is_ok());
-        assert!(config.is_trusted_ip(&"10.0.0.1".parse().unwrap()));
-        assert!(config.is_trusted_ip(&"192.168.1.50".parse().unwrap()));
-        assert!(!config.is_trusted_ip(&"172.16.0.1".parse().unwrap()));
+        let extractor = RealIpExtractor::new(
+            &config.trusted_ips,
+            config.real_ip_header.clone(),
+            config.recursive,
+            config.max_trusted_hops,
+        )
+        .unwrap();
+        assert!(extractor.is_trusted_proxy(&"10.0.0.1".parse().unwrap()));
+        assert!(extractor.is_trusted_proxy(&"192.168.1.50".parse().unwrap()));
+        assert!(!extractor.is_trusted_proxy(&"172.16.0.1".parse().unwrap()));
     }
 
     #[test]
     fn test_valid_ipv6() {
-        let mut config = RealIpConfig {
-            trusted_ips: vec!["::1".to_string(), "2001:db8::/32".to_string()],
+        let config = RealIpConfig {
+            trusted_ips: vec![group("a", &["::1"]), group("b", &["2001:db8::/32"])],
             ..Default::default()
         };
-        assert!(config.validate_and_init().is_ok());
-        assert!(config.is_trusted_ip(&"::1".parse().unwrap()));
-        assert!(config.is_trusted_ip(&"2001:db8::1".parse().unwrap()));
-        assert!(!config.is_trusted_ip(&"2001:db9::1".parse().unwrap()));
+        let extractor = RealIpExtractor::new(
+            &config.trusted_ips,
+            config.real_ip_header.clone(),
+            config.recursive,
+            config.max_trusted_hops,
+        )
+        .unwrap();
+        assert!(extractor.is_trusted_proxy(&"::1".parse().unwrap()));
+        assert!(extractor.is_trusted_proxy(&"2001:db8::1".parse().unwrap()));
+        assert!(!extractor.is_trusted_proxy(&"2001:db9::1".parse().unwrap()));
     }
 
     #[test]
     fn test_invalid_ip() {
         let mut config = RealIpConfig {
-            trusted_ips: vec!["192.168.1.256".to_string()],
+            trusted_ips: vec![group("default", &["192.168.1.256"])],
             ..Default::default()
         };
         let result = config.validate_and_init();
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("No valid IPs"));
+        // New error path: validation surfaces the parse error via validate_groups_structure.
+        let msg = result.unwrap_err();
+        assert!(msg.contains("Invalid IP"), "unexpected message: {msg}");
     }
 
     #[test]
     fn test_invalid_cidr_prefix() {
         let mut config = RealIpConfig {
-            trusted_ips: vec!["192.168.1.0/33".to_string()],
+            trusted_ips: vec![group("default", &["192.168.1.0/33"])],
             ..Default::default()
         };
         let result = config.validate_and_init();
@@ -407,24 +331,28 @@ mod tests {
 
     #[test]
     fn test_mixed_valid_invalid() {
-        let mut config = RealIpConfig {
-            trusted_ips: vec![
-                "10.0.0.0/8".to_string(),    // valid
-                "192.168.1.256".to_string(), // invalid
-                "172.16.0.0/12".to_string(), // valid
-            ],
+        // Strict structural validation rejects any invalid CIDR — so a group
+        // mixing valid and invalid CIDRs is now a hard error at validate
+        // time. Use only valid CIDRs and verify membership via extractor.
+        let config = RealIpConfig {
+            trusted_ips: vec![group("a", &["10.0.0.0/8"]), group("b", &["172.16.0.0/12"])],
             ..Default::default()
         };
-        // Should succeed with warnings (valid IPs used)
-        assert!(config.validate_and_init().is_ok());
-        assert!(config.is_trusted_ip(&"10.0.0.1".parse().unwrap()));
-        assert!(config.is_trusted_ip(&"172.16.0.1".parse().unwrap()));
+        let extractor = RealIpExtractor::new(
+            &config.trusted_ips,
+            config.real_ip_header.clone(),
+            config.recursive,
+            config.max_trusted_hops,
+        )
+        .unwrap();
+        assert!(extractor.is_trusted_proxy(&"10.0.0.1".parse().unwrap()));
+        assert!(extractor.is_trusted_proxy(&"172.16.0.1".parse().unwrap()));
     }
 
     #[test]
     fn test_custom_header() {
         let mut config = RealIpConfig {
-            trusted_ips: vec!["10.0.0.0/8".to_string()],
+            trusted_ips: vec![group("default", &["10.0.0.0/8"])],
             real_ip_header: "CF-Connecting-IP".to_string(),
             recursive: false,
             ..Default::default()
@@ -437,7 +365,7 @@ mod tests {
     #[test]
     fn test_serialization() {
         let config = RealIpConfig {
-            trusted_ips: vec!["10.0.0.0/8".to_string(), "192.168.1.1".to_string()],
+            trusted_ips: vec![group("default", &["10.0.0.0/8", "192.168.1.1"])],
             real_ip_header: "X-Real-IP".to_string(),
             recursive: false,
             ..Default::default()
@@ -446,26 +374,13 @@ mod tests {
         let json = serde_json::to_value(&config).unwrap();
         let deserialized: RealIpConfig = serde_json::from_value(json).unwrap();
 
-        assert_eq!(deserialized.trusted_ips, config.trusted_ips);
+        assert_eq!(deserialized.trusted_ips.len(), 1);
+        assert_eq!(deserialized.trusted_ips[0].name, "default");
+        assert_eq!(
+            deserialized.trusted_ips[0].cidrs,
+            vec!["10.0.0.0/8".to_string(), "192.168.1.1".to_string()]
+        );
         assert_eq!(deserialized.real_ip_header, "X-Real-IP");
         assert!(!deserialized.recursive);
-    }
-
-    #[test]
-    fn test_validate_and_to_cidr() {
-        assert_eq!(
-            RealIpConfig::validate_and_to_cidr("192.168.1.1").unwrap(),
-            "192.168.1.1/32"
-        );
-        assert_eq!(RealIpConfig::validate_and_to_cidr("10.0.0.0/8").unwrap(), "10.0.0.0/8");
-        assert_eq!(RealIpConfig::validate_and_to_cidr("::1").unwrap(), "::1/128");
-        assert_eq!(
-            RealIpConfig::validate_and_to_cidr("2001:db8::/32").unwrap(),
-            "2001:db8::/32"
-        );
-
-        assert!(RealIpConfig::validate_and_to_cidr("192.168.1.256").is_err());
-        assert!(RealIpConfig::validate_and_to_cidr("192.168.1.0/33").is_err());
-        assert!(RealIpConfig::validate_and_to_cidr("invalid").is_err());
     }
 }

@@ -85,6 +85,12 @@ impl RequestFilter for RealIp {
 
         if extractor.is_trusted_proxy(&client_ip) {
             plugin_log.push("trusted proxy:match");
+            // Cold path: emit at most once per request when the client IP itself
+            // is a trusted proxy. Surfaces which named group matched, for ops
+            // debugging without touching the per-XFF-hop hot path.
+            if let Some(group) = extractor.matched_trusted_group(&client_ip) {
+                tracing::debug!(group = %group, ip = %client_ip, "trusted_proxy_match");
+            }
         } else {
             plugin_log.push("trusted proxy:miss");
         }
@@ -120,12 +126,16 @@ mod tests {
     use super::*;
 
     fn create_test_config() -> RealIpConfig {
+        use crate::types::resources::plugin_metadata::IpGroup;
         RealIpConfig {
-            trusted_ips: vec!["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
+            trusted_ips: vec![IpGroup {
+                name: "private".to_string(),
+                description: None,
+                cidrs: vec!["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
+            }],
             real_ip_header: "X-Forwarded-For".to_string(),
             recursive: true,
             max_trusted_hops: None,
-            trusted_ip_matcher: None, // Will be initialized by RealIp::create
         }
     }
 

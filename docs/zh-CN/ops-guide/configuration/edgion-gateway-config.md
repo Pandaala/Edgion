@@ -58,7 +58,9 @@ spec:
   maxRetries: 3
 
   realIp:
-    trustedIps: ["10.0.0.0/8", "172.16.0.0/12"]
+    trustedIps:
+      - name: private-ranges
+        cidrs: ["10.0.0.0/8", "172.16.0.0/12"]
     realIpHeader: "X-Forwarded-For"
     recursive: true
 
@@ -120,11 +122,13 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `trustedIps` | `Array<String>` | `[]` | 可信代理 IP 或 CIDR 列表 |
+| `trustedIps` | `Array<IpGroup>` | `[]` | 可信代理 IP 分组列表 |
 | `realIpHeader` | `String` | `X-Forwarded-For` | 从哪个请求头提取真实 IP |
 | `recursive` | `Boolean` | `true` | 是否从右向左遍历 header，跳过可信代理，取第一个非信任 IP |
 
-提取逻辑：从右向左遍历 `realIpHeader`，跳过 `trustedIps` 中的地址，取第一个非信任 IP。
+`trustedIps` 中每一项都是一个 `IpGroup` 对象：`name`（必填；≤63 字符，字符集 `[a-zA-Z0-9._-]`，首尾必须是字母或数字，在列表内唯一）、`description`（可选）、`cidrs`（必填；非空的 IP 或 CIDR 字符串列表）。
+
+提取逻辑：从右向左遍历 `realIpHeader`，跳过任一 `trustedIps` 分组中的地址，取第一个非信任 IP。
 
 ### spec.securityProtect
 
@@ -169,9 +173,11 @@ globalPluginsRef:
 spec:
   realIp:
     trustedIps:
-      - "10.0.0.0/8"
-      - "172.16.0.0/12"
-      - "192.168.0.0/16"
+      - name: private-ranges
+        cidrs:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
     realIpHeader: "X-Forwarded-For"
     recursive: true
 ```

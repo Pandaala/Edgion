@@ -34,30 +34,17 @@ pub(crate) fn check_ip_access(
     init_failed: bool,
     ip: &IpAddr,
 ) -> StreamPluginResult {
+    use crate::types::resources::edgion_plugins::{AccessDecision, DefaultAction};
+
     if init_failed {
         return StreamPluginResult::Deny("ip init fail".to_string());
     }
-    // Priority: deny list > allow list > default action (mirrors ConnectionIpRestrictionRules::check_ip).
-    if let Some(deny) = &rules.deny_matcher {
-        if deny.match_ip(ip).is_some() {
-            return StreamPluginResult::Deny("ip match:deny".to_string());
-        }
-    }
-    if let Some(allow) = &rules.allow_matcher {
-        return if allow.match_ip(ip).is_some() {
-            StreamPluginResult::Allow // ip match:allow
-        } else {
-            StreamPluginResult::Deny("ip deny".to_string())
-        };
-    }
-    // No allow list: default action decides.
-    if matches!(
-        rules.default_action,
-        crate::types::resources::edgion_plugins::DefaultAction::Allow
-    ) {
-        StreamPluginResult::Allow // ip allow
-    } else {
-        StreamPluginResult::Deny("ip deny".to_string())
+    match rules.check_ip(ip) {
+        AccessDecision::AllowByGroup(_) => StreamPluginResult::Allow,
+        AccessDecision::DenyByGroup(g) => StreamPluginResult::Deny(format!("ip:deny:group={}", g)),
+        AccessDecision::DenyByWhitelistMiss => StreamPluginResult::Deny("ip:deny:not-in-allow".to_string()),
+        AccessDecision::Default(DefaultAction::Allow) => StreamPluginResult::Allow,
+        AccessDecision::Default(DefaultAction::Deny) => StreamPluginResult::Deny("ip:deny:default".to_string()),
     }
 }
 

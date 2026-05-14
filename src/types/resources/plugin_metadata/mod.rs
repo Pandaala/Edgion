@@ -114,13 +114,9 @@ impl PluginMetaData {
         let mut errors = Vec::new();
         match &self.spec.metadata {
             MetaDataEntry::IpList(ip_list) => {
-                for cidr in &ip_list.items {
-                    if !cidr.contains('/')
-                        && !cidr.contains(':')
-                        && !cidr.chars().all(|c| c.is_ascii_digit() || c == '.')
-                    {
-                        errors.push(format!("Invalid IP/CIDR format: {}", cidr));
-                    }
+                if let Err(e) = crate::core::common::matcher::ip_cidr_helpers::validate_groups_structure(&ip_list.items)
+                {
+                    errors.push(format!("IpList invalid: {}", e));
                 }
             }
             MetaDataEntry::KeyList(key_list) => {

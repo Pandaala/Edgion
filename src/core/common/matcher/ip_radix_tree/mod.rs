@@ -10,7 +10,7 @@
 //! - Bit-level binary radix tree (2 branches per node)
 //! - Longest prefix matching for CIDR rules
 //! - Separate trees for IPv4 and IPv6
-//! - Simple API focused on allow/deny decisions
+//! - Group-name labels per CIDR (interned to compact `u16` IDs internally)
 //! - Unified matcher that auto-detects IP version
 //!
 //! # Quick Start
@@ -23,51 +23,56 @@
 //!
 //! let mut builder = IpRadixMatcher::builder();
 //!
-//! // Add IPv4 rules
-//! builder.insert("192.168.0.0/16", true).unwrap();      // Allow private network
-//! builder.insert("192.168.1.100/32", false).unwrap();   // Deny specific IP
+//! // Add IPv4 rules tagged with group names
+//! builder.insert("192.168.0.0/16", "office").unwrap();
+//! builder.insert("192.168.1.100/32", "blocklist").unwrap();
 //!
 //! // Add IPv6 rules
-//! builder.insert("2001:db8::/32", true).unwrap();       // Allow
-//! builder.insert("fe80::/10", false).unwrap();          // Deny link-local
+//! builder.insert("2001:db8::/32", "office").unwrap();
+//! builder.insert("fe80::/10", "blocklist").unwrap();
 //!
 //! let matcher = builder.build().unwrap();
 //!
-//! // Match any IP address
+//! // Match any IP address; returns the group name of the longest-prefix match.
 //! let ipv4: IpAddr = "192.168.1.50".parse().unwrap();
-//! assert_eq!(matcher.match_ip(&ipv4), Some(true));
+//! assert_eq!(matcher.matched_group(&ipv4), Some("office"));
 //!
 //! let ipv6: IpAddr = "2001:db8::1".parse().unwrap();
-//! assert_eq!(matcher.match_ip(&ipv6), Some(true));
+//! assert_eq!(matcher.matched_group(&ipv6), Some("office"));
 //! ```
 //!
 //! # IPv4 Only Example
 //!
-//! For IPv4-only matching:
+//! For IPv4-only matching, the low-level `IpV4RadixBuilder` carries interned
+//! `u16` label IDs rather than group-name strings. Callers using the raw
+//! builder are expected to maintain their own ID -> name table (the unified
+//! `IpRadixMatcher` does this for you).
 //!
 //! ```
 //! use edgion::core::common::matcher::ip_radix_tree::IpV4RadixBuilder;
 //! use std::net::Ipv4Addr;
 //!
 //! let mut builder = IpV4RadixBuilder::new();
-//! builder.insert("192.168.0.0/16", true).unwrap();      // Allow
-//! builder.insert("192.168.1.100/32", false).unwrap();   // Deny specific IP
+//! builder.insert("192.168.0.0/16", 1).unwrap();      // group #1
+//! builder.insert("192.168.1.100/32", 2).unwrap();    // group #2
 //!
 //! let tree = builder.freeze().unwrap();
 //!
 //! let ip1: u32 = Ipv4Addr::new(192, 168, 1, 50).into();
-//! assert_eq!(tree.match_ip(ip1), Some(true));
+//! assert_eq!(tree.match_ip(ip1), Some(1));
 //!
 //! let ip2: u32 = Ipv4Addr::new(192, 168, 1, 100).into();
-//! assert_eq!(tree.match_ip(ip2), Some(false)); // More specific rule wins
+//! assert_eq!(tree.match_ip(ip2), Some(2)); // More specific rule wins
 //! ```
 //!
 //! # Return Values
 //!
-//! All match functions return `Option<bool>`:
-//! - `Some(true)` - IP is explicitly allowed by a matching rule
-//! - `Some(false)` - IP is explicitly denied by a matching rule
-//! - `None` - No rule matches this IP
+//! - `IpRadixMatcher::matched_group(&ip)` returns `Option<&str>` — the group
+//!   name of the longest-prefix-matching rule, or `None` if no rule covers the
+//!   address.
+//! - The low-level `FrozenIpV4RadixTree::match_ip` / `FrozenIpV6RadixTree::match_ip`
+//!   return `Option<u16>` — the interned label ID (`0` is reserved as the
+//!   "no label" sentinel and is never returned).
 //!
 //! # Longest Prefix Matching
 //!
@@ -78,20 +83,20 @@
 //! use std::net::Ipv4Addr;
 //!
 //! let mut builder = IpV4RadixBuilder::new();
-//! builder.insert("10.0.0.0/8", true).unwrap();       // Broad allow
-//! builder.insert("10.1.0.0/16", false).unwrap();     // Specific deny
-//! builder.insert("10.1.1.0/24", true).unwrap();      // Even more specific allow
+//! builder.insert("10.0.0.0/8", 1).unwrap();          // Broad: group #1
+//! builder.insert("10.1.0.0/16", 2).unwrap();         // Specific: group #2
+//! builder.insert("10.1.1.0/24", 3).unwrap();         // Most specific: group #3
 //!
 //! let tree = builder.freeze().unwrap();
 //!
 //! let ip1: u32 = Ipv4Addr::new(10, 1, 1, 50).into();
-//! assert_eq!(tree.match_ip(ip1), Some(true));  // Matches /24 (most specific)
+//! assert_eq!(tree.match_ip(ip1), Some(3));  // Matches /24 (most specific)
 //!
 //! let ip2: u32 = Ipv4Addr::new(10, 1, 2, 50).into();
-//! assert_eq!(tree.match_ip(ip2), Some(false)); // Matches /16
+//! assert_eq!(tree.match_ip(ip2), Some(2)); // Matches /16
 //!
 //! let ip3: u32 = Ipv4Addr::new(10, 2, 1, 50).into();
-//! assert_eq!(tree.match_ip(ip3), Some(true));  // Matches /8
+//! assert_eq!(tree.match_ip(ip3), Some(1));  // Matches /8
 //! ```
 
 pub mod builder_v4;

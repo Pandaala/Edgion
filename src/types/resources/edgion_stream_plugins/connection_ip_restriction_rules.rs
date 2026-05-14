@@ -8,9 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 
-use crate::core::common::matcher::ip_cidr_helpers::build_radix_matcher;
+use crate::core::common::matcher::ip_cidr_helpers::build_grouped_matcher;
 use crate::core::common::matcher::ip_radix_tree::IpRadixMatcher;
-use crate::types::resources::edgion_plugins::DefaultAction;
+use crate::types::resources::edgion_plugins::{AccessDecision, DefaultAction};
+use crate::types::resources::plugin_metadata::IpGroup;
 
 /// Legacy HTTP-layer field names that must be flagged when found on L4 configs.
 ///
@@ -24,10 +25,10 @@ const LEGACY_HTTP_FIELDS: &[&str] = &["ipSource", "message", "status"];
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionIpRestrictionRules {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow: Option<Vec<String>>,
+    pub allow: Option<Vec<IpGroup>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub deny: Option<Vec<String>>,
+    pub deny: Option<Vec<IpGroup>>,
 
     #[serde(default)]
     pub default_action: DefaultAction,
@@ -74,45 +75,63 @@ impl ConnectionIpRestrictionRules {
     }
 
     pub fn validate_and_init(&mut self) -> Result<(), String> {
-        if self.allow.is_none() && self.deny.is_none() {
-            return Err("At least one of 'allow' or 'deny' must be specified".to_string());
+        let allow_nonempty = self.allow.as_ref().is_some_and(|v| !v.is_empty());
+        let deny_nonempty = self.deny.as_ref().is_some_and(|v| !v.is_empty());
+        if !allow_nonempty && !deny_nonempty {
+            return Err("At least one of 'allow' or 'deny' must be non-empty".to_string());
         }
-        if let Some(allow) = &self.allow {
-            if allow.is_empty() {
-                return Err("'allow' list cannot be empty".to_string());
+        if let Some(groups) = &self.allow {
+            if !groups.is_empty() {
+                self.allow_matcher = Some(build_grouped_matcher(groups)?);
             }
-            self.allow_matcher = Some(build_radix_matcher(allow)?);
         }
-        if let Some(deny) = &self.deny {
-            if deny.is_empty() {
-                return Err("'deny' list cannot be empty".to_string());
+        if let Some(groups) = &self.deny {
+            if !groups.is_empty() {
+                self.deny_matcher = Some(build_grouped_matcher(groups)?);
             }
-            self.deny_matcher = Some(build_radix_matcher(deny)?);
         }
         Ok(())
     }
 
-    /// Priority: deny > allow > default_action.
+    /// Returns the full access decision (group name included).
     ///
-    /// `match_ip().is_some()` means "IP is covered by some CIDR in the matcher".
-    /// build_radix_matcher inserts all CIDRs with a sentinel `true` value; the
-    /// stored value is not semantically meaningful (we only care if any CIDR matched).
-    pub fn check_ip(&self, ip: &IpAddr) -> bool {
+    /// Priority: deny > allow > default_action. See spec §4.6.
+    pub fn check_ip(&self, ip: &IpAddr) -> AccessDecision {
         if let Some(deny) = &self.deny_matcher {
-            if deny.match_ip(ip).is_some() {
-                return false;
+            if let Some(g) = deny.matched_group_arc(ip) {
+                return AccessDecision::DenyByGroup(g);
             }
         }
         if let Some(allow) = &self.allow_matcher {
-            return allow.match_ip(ip).is_some();
+            if let Some(g) = allow.matched_group_arc(ip) {
+                return AccessDecision::AllowByGroup(g);
+            }
+            return AccessDecision::DenyByWhitelistMiss;
         }
-        matches!(self.default_action, DefaultAction::Allow)
+        AccessDecision::Default(self.default_action.clone())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn group(name: &str, cidrs: &[&str]) -> IpGroup {
+        IpGroup {
+            name: name.to_string(),
+            description: None,
+            cidrs: cidrs.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// Convenience: `check_ip` returns an `AccessDecision`; the legacy
+    /// tests were boolean. This helper preserves their semantic intent.
+    fn is_allowed(decision: AccessDecision) -> bool {
+        matches!(
+            decision,
+            AccessDecision::AllowByGroup(_) | AccessDecision::Default(DefaultAction::Allow)
+        )
+    }
 
     #[test]
     fn must_have_allow_or_deny() {
@@ -123,24 +142,30 @@ mod tests {
     #[test]
     fn allow_whitelist_ok() {
         let mut r = ConnectionIpRestrictionRules {
-            allow: Some(vec!["192.168.1.0/24".to_string()]),
+            allow: Some(vec![group("office", &["192.168.1.0/24"])]),
             ..Default::default()
         };
         r.validate_and_init().unwrap();
-        assert!(r.check_ip(&"192.168.1.50".parse().unwrap()));
-        assert!(!r.check_ip(&"8.8.8.8".parse().unwrap()));
+        assert!(is_allowed(r.check_ip(&"192.168.1.50".parse().unwrap())));
+        assert!(matches!(
+            r.check_ip(&"8.8.8.8".parse().unwrap()),
+            AccessDecision::DenyByWhitelistMiss
+        ));
     }
 
     #[test]
     fn deny_wins_over_allow() {
         let mut r = ConnectionIpRestrictionRules {
-            allow: Some(vec!["10.0.0.0/8".to_string()]),
-            deny: Some(vec!["10.0.0.100".to_string()]),
+            allow: Some(vec![group("internal", &["10.0.0.0/8"])]),
+            deny: Some(vec![group("blocked", &["10.0.0.100"])]),
             ..Default::default()
         };
         r.validate_and_init().unwrap();
-        assert!(r.check_ip(&"10.0.0.1".parse().unwrap()));
-        assert!(!r.check_ip(&"10.0.0.100".parse().unwrap()));
+        assert!(is_allowed(r.check_ip(&"10.0.0.1".parse().unwrap())));
+        match r.check_ip(&"10.0.0.100".parse().unwrap()) {
+            AccessDecision::DenyByGroup(g) => assert_eq!(&*g, "blocked"),
+            other => panic!("expected DenyByGroup, got {:?}", other),
+        }
     }
 
     #[test]
@@ -149,7 +174,7 @@ mod tests {
         // so the Controller's preparse step can emit a `LegacySchemaDeprecated` condition
         // rather than failing the whole CR decode upstream at the watcher.
         let json = r#"{
-            "allow": ["192.168.1.0/24"],
+            "allow": [{"name":"office","cidrs":["192.168.1.0/24"]}],
             "ipSource": "RemoteAddr",
             "message": "blocked",
             "status": 403
@@ -164,7 +189,7 @@ mod tests {
     #[test]
     fn clean_config_has_no_unknown_fields() {
         let json = r#"{
-            "allow": ["192.168.1.0/24"],
+            "allow": [{"name":"office","cidrs":["192.168.1.0/24"]}],
             "defaultAction": "deny"
         }"#;
         let rules: ConnectionIpRestrictionRules = serde_json::from_str(json).unwrap();
@@ -177,7 +202,7 @@ mod tests {
         // A stray (non-legacy) field must not masquerade as a legacy-schema violation;
         // preparse only cares about the three HTTP fields from the pre-ec4e000 schema.
         let json = r#"{
-            "allow": ["192.168.1.0/24"],
+            "allow": [{"name":"office","cidrs":["192.168.1.0/24"]}],
             "typoedField": "oops"
         }"#;
         let rules: ConnectionIpRestrictionRules = serde_json::from_str(json).unwrap();
@@ -188,25 +213,65 @@ mod tests {
     #[test]
     fn deny_only_default_deny_blocks_all_unmatched() {
         let mut r = ConnectionIpRestrictionRules {
-            deny: Some(vec!["1.2.3.4".to_string()]),
+            deny: Some(vec![group("blocked", &["1.2.3.4"])]),
             default_action: DefaultAction::Deny,
             ..Default::default()
         };
         r.validate_and_init().unwrap();
-        assert!(!r.check_ip(&"1.2.3.4".parse().unwrap())); // in deny list
-        assert!(!r.check_ip(&"8.8.8.8".parse().unwrap())); // not in deny, default Deny
+        // In deny list -> DenyByGroup.
+        assert!(matches!(
+            r.check_ip(&"1.2.3.4".parse().unwrap()),
+            AccessDecision::DenyByGroup(_)
+        ));
+        // Not in deny, default Deny -> Default(Deny).
+        assert!(matches!(
+            r.check_ip(&"8.8.8.8".parse().unwrap()),
+            AccessDecision::Default(DefaultAction::Deny)
+        ));
     }
 
     #[test]
     fn ipv6_allow_and_deny_work() {
         let mut r = ConnectionIpRestrictionRules {
-            allow: Some(vec!["2001:db8::/32".to_string()]),
-            deny: Some(vec!["2001:db8:dead::/48".to_string()]),
+            allow: Some(vec![group("v6-net", &["2001:db8::/32"])]),
+            deny: Some(vec![group("v6-bad", &["2001:db8:dead::/48"])]),
             ..Default::default()
         };
         r.validate_and_init().unwrap();
-        assert!(r.check_ip(&"2001:db8::1".parse().unwrap())); // in allow
-        assert!(!r.check_ip(&"2001:db8:dead::1".parse().unwrap())); // in deny (wins)
-        assert!(!r.check_ip(&"2001:db9::1".parse().unwrap())); // outside allow
+        assert!(is_allowed(r.check_ip(&"2001:db8::1".parse().unwrap()))); // in allow
+        assert!(matches!(
+            r.check_ip(&"2001:db8:dead::1".parse().unwrap()),
+            AccessDecision::DenyByGroup(_)
+        )); // in deny (wins)
+        assert!(matches!(
+            r.check_ip(&"2001:db9::1".parse().unwrap()),
+            AccessDecision::DenyByWhitelistMiss
+        )); // outside allow
+    }
+
+    #[test]
+    fn whitelist_miss_returns_specific_variant() {
+        let mut r = ConnectionIpRestrictionRules {
+            allow: Some(vec![group("office", &["192.168.0.0/16"])]),
+            ..Default::default()
+        };
+        r.validate_and_init().unwrap();
+        let outside: IpAddr = "10.0.0.1".parse().unwrap();
+        assert!(matches!(r.check_ip(&outside), AccessDecision::DenyByWhitelistMiss));
+    }
+
+    #[test]
+    fn deny_priority_returns_deny_group() {
+        let mut r = ConnectionIpRestrictionRules {
+            allow: Some(vec![group("allow_all", &["10.0.0.0/8"])]),
+            deny: Some(vec![group("blocked", &["10.0.0.100/32"])]),
+            ..Default::default()
+        };
+        r.validate_and_init().unwrap();
+        let blocked: IpAddr = "10.0.0.100".parse().unwrap();
+        match r.check_ip(&blocked) {
+            AccessDecision::DenyByGroup(g) => assert_eq!(&*g, "blocked"),
+            other => panic!("expected DenyByGroup, got {:?}", other),
+        }
     }
 }

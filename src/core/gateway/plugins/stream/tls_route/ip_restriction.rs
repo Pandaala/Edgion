@@ -8,7 +8,7 @@ use async_trait::async_trait;
 
 use super::tls_route_plugin_trait::{TlsRouteContext, TlsRoutePlugin};
 use crate::core::gateway::plugins::stream::StreamPluginResult;
-use crate::types::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig};
+use crate::types::resources::edgion_plugins::{AccessDecision, DefaultAction, IpRestrictionConfig};
 
 const PLUGIN_NAME: &str = "TlsRouteIpRestriction";
 
@@ -44,24 +44,12 @@ impl TlsRoutePlugin for TlsRouteIpRestriction {
         if self.init_failed {
             return StreamPluginResult::Deny("ip init fail".to_string());
         }
-        // Priority: deny list > allow list > default action.
-        if let Some(deny) = &self.config.deny_matcher {
-            if deny.match_ip(&ctx.client_ip) == Some(true) {
-                return StreamPluginResult::Deny("ip match:deny".to_string());
-            }
-        }
-        if let Some(allow) = &self.config.allow_matcher {
-            return if allow.match_ip(&ctx.client_ip) == Some(true) {
-                StreamPluginResult::Allow // ip match:allow
-            } else {
-                StreamPluginResult::Deny("ip deny".to_string())
-            };
-        }
-        // No allow list: default action decides.
-        if matches!(self.config.default_action, DefaultAction::Allow) {
-            StreamPluginResult::Allow // ip allow
-        } else {
-            StreamPluginResult::Deny("ip deny".to_string())
+        match self.config.check_ip_access(&ctx.client_ip) {
+            AccessDecision::AllowByGroup(_) => StreamPluginResult::Allow,
+            AccessDecision::DenyByGroup(g) => StreamPluginResult::Deny(format!("ip:deny:group={}", g)),
+            AccessDecision::DenyByWhitelistMiss => StreamPluginResult::Deny("ip:deny:not-in-allow".to_string()),
+            AccessDecision::Default(DefaultAction::Allow) => StreamPluginResult::Allow,
+            AccessDecision::Default(DefaultAction::Deny) => StreamPluginResult::Deny("ip:deny:default".to_string()),
         }
     }
 }
