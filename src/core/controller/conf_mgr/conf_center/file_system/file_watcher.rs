@@ -51,15 +51,20 @@ pub struct FileSystemWatcher {
     /// Event senders per resource kind
     /// Key is kind name (e.g., "HTTPRoute", "Gateway")
     senders: Arc<RwLock<HashMap<&'static str, KindEventSender>>>,
+
+    /// Optional override for the PollWatcher poll interval.
+    /// When `Some`, skips the file-count heuristic and uses this duration directly.
+    poll_interval_override: Option<Duration>,
 }
 
 impl FileSystemWatcher {
     /// Create a new FileSystemWatcher
-    pub fn new(conf_dir: PathBuf, registry: Arc<PathRegistry>) -> Self {
+    pub fn new(conf_dir: PathBuf, registry: Arc<PathRegistry>, poll_interval_override: Option<Duration>) -> Self {
         Self {
             conf_dir,
             registry,
             senders: Arc::new(RwLock::new(HashMap::new())),
+            poll_interval_override,
         }
     }
 
@@ -278,24 +283,37 @@ impl FileSystemWatcher {
         // lifetime — conf size doesn't change in bursts in practice, and
         // operators can restart to retune; see tasks/todo/multi-conf-dir.md
         // for the recursive variant when nested directories are supported.
-        let conf_file_count = count_yaml_files(&self.conf_dir).await;
-        let poll_interval = poll_interval_for(conf_file_count);
-        if conf_file_count > 10_000 {
-            tracing::warn!(
-                component = "fs_watcher",
-                conf_file_count,
-                interval_secs = poll_interval.as_secs(),
-                "Conf directory has unusually many YAML files; consider partitioning the deployment \
-                 or moving the controller to the K8s backend",
-            );
-        } else {
-            tracing::info!(
-                component = "fs_watcher",
-                conf_file_count,
-                interval_secs = poll_interval.as_secs(),
-                "Selected PollWatcher interval based on conf size",
-            );
-        }
+        let poll_interval = match self.poll_interval_override {
+            Some(d) => {
+                tracing::info!(
+                    component = "fs_watcher",
+                    interval_ms = d.as_millis(),
+                    "Using overridden PollWatcher interval"
+                );
+                d
+            }
+            None => {
+                let conf_file_count = count_yaml_files(&self.conf_dir).await;
+                let interval = poll_interval_for(conf_file_count);
+                if conf_file_count > 10_000 {
+                    tracing::warn!(
+                        component = "fs_watcher",
+                        conf_file_count,
+                        interval_secs = interval.as_secs(),
+                        "Conf directory has unusually many YAML files; consider partitioning the deployment \
+                         or moving the controller to the K8s backend",
+                    );
+                } else {
+                    tracing::info!(
+                        component = "fs_watcher",
+                        conf_file_count,
+                        interval_secs = interval.as_secs(),
+                        "Selected PollWatcher interval based on conf size",
+                    );
+                }
+                interval
+            }
+        };
 
         // Unbounded channel for raw file events.  The producer is the notify
         // PollWatcher callback (runs on a non-tokio thread).  An unbounded
@@ -854,7 +872,7 @@ mod tests {
         std::fs::write(b.join("HTTPRoute_default_r1.yaml"), yaml).unwrap();
 
         let registry = Arc::new(PathRegistry::new());
-        let watcher = FileSystemWatcher::new(root, registry.clone());
+        let watcher = FileSystemWatcher::new(root, registry.clone(), None);
         watcher.init_phase().await.unwrap();
 
         let key = ResourceKey::new("HTTPRoute".to_string(), "default/r1".to_string());

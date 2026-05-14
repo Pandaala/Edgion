@@ -123,6 +123,7 @@ start_controller() {
         --log-dir "$LOG_DIR" \
         --conf-dir "$CONFIG_DIR" \
         --admin-listen "0.0.0.0:${CONTROLLER_ADMIN_PORT}" \
+        --fs-poll-interval-ms 500 \
         > "$LOG_DIR/controller.log" 2>&1 &
 
     CONTROLLER_PID=$!

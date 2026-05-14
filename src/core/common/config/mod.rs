@@ -131,6 +131,12 @@ pub struct EdgionControllerConfig {
     #[serde(skip)]
     pub conf_dir: Option<PathBuf>,
 
+    /// PollWatcher poll interval override in milliseconds (file-system mode only).
+    /// Skips automatic file-count-based calculation. Min: 100 ms. For integration testing.
+    #[arg(long, value_name = "MS")]
+    #[serde(skip)]
+    pub fs_poll_interval_ms: Option<u64>,
+
     /// Enable test mode for integration testing
     /// When enabled:
     /// - metrics test_key/test_type Gateway annotations are processed
@@ -612,6 +618,13 @@ impl EdgionControllerConfig {
                 );
             }
         }
+        if let ConfCenterConfig::FileSystem(fs_cfg) = &self.conf_center {
+            if let Some(ms) = fs_cfg.poll_interval_ms {
+                if ms < 100 {
+                    anyhow::bail!("conf_center.poll_interval_ms must be >= 100 ms, got {}", ms);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -623,8 +636,17 @@ impl EdgionControllerConfig {
         }
 
         // Configuration directory: CLI --conf-dir overrides conf_center.conf_dir
+        // Case A: --conf-dir provided — build a new FileSystemConfig and apply poll interval override
         if let Some(conf_dir) = &cli.conf_dir {
-            base.conf_center = ConfCenterConfig::FileSystem(FileSystemConfig::new(conf_dir.clone()));
+            let mut fs_cfg = FileSystemConfig::new(conf_dir.clone());
+            fs_cfg.poll_interval_ms = cli.fs_poll_interval_ms;
+            base.conf_center = ConfCenterConfig::FileSystem(fs_cfg);
+        }
+        // Case B: conf_center already set from config file — still apply the CLI poll interval override
+        if let Some(ms) = cli.fs_poll_interval_ms {
+            if let ConfCenterConfig::FileSystem(fs_cfg) = &mut base.conf_center {
+                fs_cfg.poll_interval_ms = Some(ms);
+            }
         }
 
         // Server config

@@ -238,12 +238,13 @@ start_test_server() {
 # =============================================================================
 start_controller() {
     log_section "Start edgion-controller"
-    
+
     "${BIN_DIR}/edgion-controller" \
         -c "$CONTROLLER_CONFIG" \
         --work-dir "$PROJECT_ROOT" \
         --conf-dir "$CONFIG_DIR" \
         --admin-listen "0.0.0.0:${CONTROLLER_ADMIN_PORT}" \
+        --fs-poll-interval-ms 500 \
         --test-mode \
         > "${LOG_DIR}/controller.log" 2>&1 &
     

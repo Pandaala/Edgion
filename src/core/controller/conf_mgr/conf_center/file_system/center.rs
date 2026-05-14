@@ -7,6 +7,7 @@
 //! The only FileSystem-specific work is creating `FileSystemController` per iteration.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -105,13 +106,14 @@ impl CenterLifeCycle for FileSystemCenter {
 
         let conf_dir = self.config.conf_dir().clone();
         let registry = self.registry.clone();
+        let poll_interval_override = self.config.poll_interval_ms.map(Duration::from_millis);
 
         self.base
             .run_lifecycle(
                 shutdown_handle,
                 "file_system_center",
                 move |shutdown, runtime, error_tx| {
-                    let ctrl = FileSystemController::new(conf_dir.clone(), registry.clone());
+                    let ctrl = FileSystemController::new(conf_dir.clone(), registry.clone(), poll_interval_override);
                     tokio::spawn(async move {
                         if let Err(e) = ctrl.run(shutdown, runtime).await {
                             tracing::error!(

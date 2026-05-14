@@ -16,18 +16,24 @@ use std::path::PathBuf;
 /// ```yaml
 /// type: file_system
 /// conf_dir: /etc/edgion/conf
+/// poll_interval_ms: 500
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileSystemConfig {
     /// Directory containing configuration YAML files
     pub conf_dir: PathBuf,
+    /// Polling interval in milliseconds for the file watcher.
+    /// When absent the watcher uses its built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_interval_ms: Option<u64>,
 }
 
 impl Default for FileSystemConfig {
     fn default() -> Self {
         Self {
             conf_dir: PathBuf::from("conf"),
+            poll_interval_ms: None,
         }
     }
 }
@@ -35,7 +41,10 @@ impl Default for FileSystemConfig {
 impl FileSystemConfig {
     /// Create a new FileSystemConfig with the given directory
     pub fn new(conf_dir: PathBuf) -> Self {
-        Self { conf_dir }
+        Self {
+            conf_dir,
+            poll_interval_ms: None,
+        }
     }
 
     /// Get the configuration directory
@@ -52,6 +61,7 @@ mod tests {
     fn test_file_system_config_default() {
         let config = FileSystemConfig::default();
         assert_eq!(config.conf_dir, PathBuf::from("conf"));
+        assert_eq!(config.poll_interval_ms, None);
     }
 
     #[test]
@@ -64,6 +74,7 @@ mod tests {
     fn test_file_system_config_serialize() {
         let config = FileSystemConfig {
             conf_dir: PathBuf::from("/etc/edgion/conf"),
+            poll_interval_ms: None,
         };
 
         let yaml = serde_yaml::to_string(&config).unwrap();
@@ -88,5 +99,25 @@ endpoint_mode: endpoint_slice
 "#;
         let result: Result<FileSystemConfig, _> = serde_yaml::from_str(yaml);
         assert!(result.is_err(), "endpoint_mode is a removed field and must be rejected");
+    }
+
+    #[test]
+    fn test_file_system_config_poll_interval_ms_roundtrip() {
+        let yaml = "conf_dir: /tmp/conf\npoll_interval_ms: 500\n";
+        let config: FileSystemConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.poll_interval_ms, Some(500));
+
+        let serialized = serde_yaml::to_string(&config).unwrap();
+        assert!(serialized.contains("poll_interval_ms: 500"));
+    }
+
+    #[test]
+    fn test_file_system_config_poll_interval_ms_absent() {
+        let yaml = "conf_dir: /tmp/conf\n";
+        let config: FileSystemConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.poll_interval_ms, None);
+
+        let serialized = serde_yaml::to_string(&config).unwrap();
+        assert!(!serialized.contains("poll_interval_ms"));
     }
 }

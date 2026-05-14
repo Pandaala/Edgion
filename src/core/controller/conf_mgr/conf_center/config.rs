@@ -126,6 +126,7 @@ mod tests {
     fn test_file_system_config() {
         let config = ConfCenterConfig::FileSystem(FileSystemConfig {
             conf_dir: PathBuf::from("/etc/edgion/conf"),
+            poll_interval_ms: None,
         });
 
         assert!(!config.is_k8s_mode());

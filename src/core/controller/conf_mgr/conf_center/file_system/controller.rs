@@ -14,6 +14,7 @@
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -69,18 +70,23 @@ impl LocalControllerBackend for FileSystemControllerBackend {
 pub struct FileSystemController {
     conf_dir: PathBuf,
     registry: Arc<PathRegistry>,
+    poll_interval_override: Option<Duration>,
 }
 
 impl FileSystemController {
     /// Create a new FileSystemController
-    pub fn new(conf_dir: PathBuf, registry: Arc<PathRegistry>) -> Self {
+    pub fn new(conf_dir: PathBuf, registry: Arc<PathRegistry>, poll_interval_override: Option<Duration>) -> Self {
         tracing::info!(
             component = "fs_controller",
             conf_dir = %conf_dir.display(),
             "Creating FileSystemController"
         );
 
-        Self { conf_dir, registry }
+        Self {
+            conf_dir,
+            registry,
+            poll_interval_override,
+        }
     }
 
     /// Run the controller
@@ -115,7 +121,11 @@ impl FileSystemController {
 
         // Create shared components
         let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let watcher = Arc::new(FileSystemWatcher::new(self.conf_dir.clone(), self.registry.clone()));
+        let watcher = Arc::new(FileSystemWatcher::new(
+            self.conf_dir.clone(),
+            self.registry.clone(),
+            self.poll_interval_override,
+        ));
 
         let backend = FileSystemControllerBackend {
             watcher: watcher.clone(),
