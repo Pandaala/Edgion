@@ -35,7 +35,10 @@ pub struct LdapAuthConfig {
     /// LDAP attribute for username binding (for example: uid, cn)
     pub attribute: String,
 
-    /// Custom bind DN template, must contain {username}
+    /// Custom bind DN template, must contain `{username}`.
+    /// The `{username}` placeholder is escaped per RFC 4514 (DN context)
+    /// before substitution, so the template itself supplies the DN structure
+    /// and the user-supplied value cannot inject DN metacharacters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bind_dn_template: Option<String>,
 

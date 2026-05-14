@@ -337,6 +337,13 @@ impl GlobalHttpRouteManagers {
     pub fn rebuild_all_listener_managers(&self) {
         // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
         let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
+        // Physical listener keys the request path reads from; routes whose
+        // resolved_listeners are not among these are unreachable.
+        tracing::debug!(
+            component = "global_http_route_managers",
+            listener_keys = ?pgis.all_listener_keys(),
+            "Per-listener route manager rebuild: known listener keys"
+        );
         for key in pgis.all_listener_keys() {
             self.get_or_create_listener_manager(&key);
         }
@@ -457,6 +464,15 @@ impl GlobalHttpRouteManagers {
             let route_key = entry.key().clone();
             let route = entry.value().clone();
             let listeners = resolved_listeners_for_route(&route);
+
+            // Listener keys this route is bucketed under, from the
+            // controller-computed spec.resolved_listeners.
+            tracing::debug!(
+                component = "global_http_route_managers",
+                route = %route_key,
+                resolved_listeners = ?listeners,
+                "Bucketing HTTPRoute by resolved_listeners"
+            );
 
             if listeners.is_empty() {
                 tracing::warn!(route = %route_key, "HTTPRoute has no resolved_listeners, skipping");

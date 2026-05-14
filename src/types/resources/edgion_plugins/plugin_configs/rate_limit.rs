@@ -86,7 +86,12 @@ pub struct LimitHeaderNames {
     pub remaining: Option<String>,
 
     /// Header name for reset timestamp
-    /// Only shown if explicitly configured
+    /// Only shown if explicitly configured.
+    ///
+    /// Note: behavior differs by plugin. `RateLimit` (in-process CMS) emits this
+    /// on both allowed and rejected responses. `RateLimitRedis` only emits it on
+    /// rejection (429) responses — the Redis Lua scripts do not return a
+    /// window-reset timestamp for allowed requests.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reset: Option<String>,
 

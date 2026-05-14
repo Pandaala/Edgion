@@ -200,14 +200,6 @@ impl RequestFilter for ForwardAuth {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        // Validate configuration
-        if let Some(_error) = self.config.get_validation_error() {
-            plugin_log.push_err("cfg invalid");
-            return self
-                .send_error_response(session, 500, r#"{"message":"ForwardAuth configuration error"}"#, None)
-                .await;
-        }
-
         let client = get_http_client();
 
         // Build auth request
@@ -365,27 +357,5 @@ mod tests {
         );
         assert_eq!(headers.get("X-Forwarded-Uri").unwrap().to_str().unwrap(), "/api/data");
         assert_eq!(headers.get("X-Forwarded-Method").unwrap().to_str().unwrap(), "GET");
-    }
-
-    #[tokio::test]
-    async fn test_config_validation_error_returns_500() {
-        let config = ForwardAuthConfig {
-            uri: String::new(), // Invalid: empty
-            ..Default::default()
-        };
-        let plugin = ForwardAuth::new(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        // Mock write_response_header/body/shutdown for error response path
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-        mock_session.expect_shutdown().returning(|| {});
-
-        let mut plugin_log = PluginLog::new("ForwardAuth");
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("cfg invalid"));
     }
 }

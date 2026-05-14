@@ -225,6 +225,12 @@ impl EdgionPlugins {
             errors.extend(response_errors);
         }
 
+        // Fail closed: if any plugin (any stage) had an invalid config, prepend a
+        // request-stage RejectFilter so every request through this EdgionPlugins
+        // is rejected with 500 before reaching upstream, rather than silently
+        // running with the misconfigured plugin absent from the chain.
+        runtime.seal_fail_closed();
+
         self.spec.plugin_runtime = Arc::new(runtime);
         self.spec.preparse_errors = errors;
     }

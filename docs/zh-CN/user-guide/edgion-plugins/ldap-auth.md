@@ -31,6 +31,9 @@ LDAP Auth 插件用于将网关认证委托给企业 LDAP/AD 目录服务。插�
 4. 构建 Bind DN：
    - 默认：`{attribute}={username},{baseDn}`
    - 模板：`bindDnTemplate` 替换 `{username}`
+   - `{username}` 作为 DN 属性值，按 RFC 4514 转义（`, + " \ < > ; =` 等
+     特殊字符、开头的 `#`、首尾空格都会被转成 `\HH` 十六进制形式）。因此该
+     模板只能描述 DN，不能用作 search filter 模板。
 5. LDAP Simple Bind 校验
 6. 成功后注入上游头并继续转发
 

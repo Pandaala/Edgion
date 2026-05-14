@@ -13,6 +13,7 @@ pub(super) use crate::types::filters::PluginRunningResult;
 
 mod compile_errors;
 mod control_flow;
+mod decision_log_tests;
 mod error_policy;
 mod grpc_error_tests;
 mod http_call_tests;

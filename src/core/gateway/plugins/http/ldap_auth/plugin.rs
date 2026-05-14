@@ -141,24 +141,20 @@ impl LdapAuth {
     }
 
     fn build_bind_dn(&self, username: &str) -> Result<String, &'static str> {
-        // Allowlist: only permit characters safe in LDAP DN attribute values.
-        // This prevents LDAP injection via DN special chars (RFC 4514).
-        if username.is_empty()
-            || !username
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '@' | '-' | '_'))
-        {
-            return Err("invalid username characters");
+        // Escape per RFC 4514 (DN attribute value) instead of rejecting characters.
+        // The previous allowlist was safer than required for injection prevention but
+        // broke legitimate enterprise LDAP usernames (spaces in AD sAMAccountName,
+        // unicode CN values, '+' in gmail-style aliases, etc.).
+        if username.is_empty() {
+            return Err("empty username");
         }
+        let escaped = ldap3::dn_escape(username);
 
         if let Some(template) = &self.config.bind_dn_template {
-            return Ok(template.replace("{username}", username));
+            return Ok(template.replace("{username}", escaped.as_ref()));
         }
 
-        Ok(format!(
-            "{}={},{}",
-            self.config.attribute, username, self.config.base_dn
-        ))
+        Ok(format!("{}={},{}", self.config.attribute, escaped, self.config.base_dn))
     }
 
     async fn ldap_bind(&self, bind_dn: &str, password: &str) -> Result<(), LdapAuthError> {
@@ -341,10 +337,79 @@ mod tests {
     }
 
     #[test]
-    fn test_build_bind_dn_injection_rejected() {
+    fn test_build_bind_dn_injection_escaped() {
         let auth = ldap_auth_default();
-        assert!(auth.build_bind_dn("alice,admin").is_err());
-        assert!(auth.build_bind_dn("alice+admin").is_err());
+
+        // RFC 4514 metacharacters must be escaped so injection becomes a
+        // literal value inside the RDN. ldap3::dn_escape uses the hex form
+        // (\HH); both forms are RFC-equivalent for any compliant server.
+        let dn = auth.build_bind_dn("alice,admin").unwrap();
+        assert_eq!(dn, r"uid=alice\2cadmin,dc=example,dc=com");
+
+        let dn = auth.build_bind_dn("alice+admin").unwrap();
+        assert_eq!(dn, r"uid=alice\2badmin,dc=example,dc=com");
+
+        // Leading '#' and trailing ' ' are also escaped per RFC 4514.
+        let dn = auth.build_bind_dn("#bob ").unwrap();
+        assert_eq!(dn, r"uid=\23bob\20,dc=example,dc=com");
+
+        // Sanity check: no bare injection-relevant metachar remains inside the
+        // attribute value. (`\` is the escape leader produced by dn_escape and
+        // is expected to appear; the metachars below would terminate the RDN
+        // or change its semantics if they leaked through unescaped.)
+        let dn = auth.build_bind_dn(r#"x"y\z<a>b;c=d"#).unwrap();
+        let value = dn
+            .strip_prefix("uid=")
+            .and_then(|s| s.strip_suffix(",dc=example,dc=com"))
+            .unwrap();
+        for ch in ['"', '<', '>', ';', '=', ',', '+'] {
+            assert!(
+                !value.contains(ch),
+                "bare metachar {:?} leaked into RDN value {:?}",
+                ch,
+                value
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_bind_dn_accepts_spaces() {
+        // AD sAMAccountName may contain spaces. Interior spaces are not RFC 4514
+        // metacharacters and must pass through unescaped.
+        let auth = ldap_auth_default();
+        let dn = auth.build_bind_dn("John Smith").unwrap();
+        assert_eq!(dn, "uid=John Smith,dc=example,dc=com");
+    }
+
+    #[test]
+    fn test_build_bind_dn_accepts_unicode() {
+        // Multi-byte UTF-8 in CN/uid values (e.g. accented Latin) is valid in
+        // RFC 4514 attribute values and must not be rejected or escaped.
+        let auth = ldap_auth_default();
+        let dn = auth.build_bind_dn("José").unwrap();
+        assert_eq!(dn, "uid=José,dc=example,dc=com");
+    }
+
+    #[test]
+    fn test_build_bind_dn_rejects_empty() {
+        let auth = ldap_auth_default();
+        assert!(auth.build_bind_dn("").is_err());
+    }
+
+    #[test]
+    fn test_build_bind_dn_template_escapes_username() {
+        // The {username} placeholder must be escaped before substitution so a
+        // template-based deployment is equally injection-safe.
+        let config = LdapAuthConfig {
+            ldap_host: "ldap.example.com".to_string(),
+            base_dn: "dc=example,dc=com".to_string(),
+            attribute: "uid".to_string(),
+            bind_dn_template: Some("uid={username},ou=people,dc=example,dc=com".to_string()),
+            ..Default::default()
+        };
+        let auth = LdapAuth::new(&config);
+        let dn = auth.build_bind_dn("alice,admin").unwrap();
+        assert_eq!(dn, r"uid=alice\2cadmin,ou=people,dc=example,dc=com");
     }
 
     #[test]

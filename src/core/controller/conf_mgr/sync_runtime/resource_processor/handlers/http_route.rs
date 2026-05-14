@@ -205,6 +205,23 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             }
         }
 
+        // Per-route listener/hostname resolution result. parentRefs are
+        // resolved against the current Gateway listener config; an empty
+        // resolved_listeners means no parent Gateway matched at this point
+        // (e.g. the route was processed before its parent Gateway).
+        tracing::info!(
+            component = "http_route_handler",
+            route = %format!(
+                "{}/{}",
+                route.metadata.namespace.as_deref().unwrap_or("default"),
+                route.metadata.name.as_deref().unwrap_or("")
+            ),
+            parent_refs = ?route.spec.parent_refs,
+            resolved_listeners = ?route.spec.resolved_listeners,
+            resolved_hostnames = ?route.spec.resolved_hostnames,
+            "HTTPRoute parentRef listener resolution complete"
+        );
+
         ProcessResult::Continue(route)
     }
 

@@ -15,3 +15,20 @@ cn: Bob
 sn: User
 uid: bob
 userPassword: password456
+
+dn: uid=John Smith,ou=people,dc=example,dc=org
+objectClass: inetOrgPerson
+cn: John Smith
+sn: Smith
+uid: John Smith
+userPassword: spaceuser-pw
+
+# Username contains a RFC 4514 metacharacter ('+'). The DN escapes it in LDIF
+# (\+) but OpenLDAP normalizes it identically to the hex form (\2b) that the
+# Gateway emits via ldap3::dn_escape — this entry proves the escape round-trip.
+dn: uid=alice\+work,ou=people,dc=example,dc=org
+objectClass: inetOrgPerson
+cn: Alice Plus
+sn: Plus
+uid: alice+work
+userPassword: plususer-pw

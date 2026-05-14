@@ -31,6 +31,10 @@ Use cases:
 4. Build Bind DN:
    - Default: `{attribute}={username},{baseDn}`
    - Template: `bindDnTemplate` replaces `{username}`
+   - `{username}` is treated as a DN attribute value and escaped per RFC 4514
+     (special characters like `, + " \ < > ; =` and leading `#` / surrounding spaces
+     are escaped to their `\HH` hex form). The template must therefore describe a
+     DN; using it as a search-filter template is not supported.
 5. LDAP Simple Bind verification
 6. On success, inject upstream headers and continue forwarding
 

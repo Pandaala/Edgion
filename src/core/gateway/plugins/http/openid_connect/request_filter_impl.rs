@@ -7,14 +7,6 @@ impl RequestFilter for OpenidConnect {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        if self.config.get_validation_error().is_some() {
-            plugin_log.push_err("cfg invalid");
-            let _ = self
-                .send_unauthorized(session, "Unauthorized - Invalid OpenID Connect configuration")
-                .await;
-            return PluginRunningResult::ErrTerminateRequest;
-        }
-
         if session.get_path() == self.config.logout_path {
             let fallback_redirect_target = self.logout_redirect_target();
             let post_logout_redirect_uri = self.resolve_post_logout_redirect_uri_for_idp(session);

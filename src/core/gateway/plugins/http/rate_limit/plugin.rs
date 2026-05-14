@@ -41,6 +41,7 @@ use pingora_limits::rate::Rate;
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::core::gateway::plugins::http::common::format_duration;
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 
@@ -200,16 +201,6 @@ impl RateLimit {
     }
 }
 
-/// Format duration in human-readable format (e.g., "1.5s", "500ms")
-fn format_duration(d: Duration) -> String {
-    let secs = d.as_secs_f64();
-    if secs >= 1.0 {
-        format!("{:.1}s", secs)
-    } else {
-        format!("{}ms", d.as_millis())
-    }
-}
-
 #[async_trait]
 impl RequestFilter for RateLimit {
     fn name(&self) -> &str {
@@ -223,8 +214,16 @@ impl RequestFilter for RateLimit {
         // Check for configuration errors
         if self.config.validation_error().is_some() {
             plugin_log.push_err("cfg load fail");
-            // Allow request to proceed on config error (fail-open)
-            return PluginRunningResult::GoodNext;
+            // Fail-close on config error: a misconfigured rate limiter must fail
+            // loudly so the operator notices, not silently pass all traffic.
+            let mut resp = Box::new(ResponseHeader::build(500, None).expect("500 is a valid status code"));
+            resp.insert_header("Content-Type", "application/json").ok();
+            let body = Bytes::from(r#"{"message":"Internal rate limiter error"}"#);
+            if session.write_response_header(resp, false).await.is_err() {
+                return PluginRunningResult::ErrTerminateRequest;
+            }
+            let _ = session.write_response_body(Some(body), true).await;
+            return PluginRunningResult::ErrTerminateRequest;
         }
 
         // Get the rate limiting key using session.key_get()
@@ -319,10 +318,12 @@ mod tests {
         let plugin = RateLimit::create(&config);
 
         let mut mock_session = MockPluginSession::new();
+        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
         let mut plugin_log = PluginLog::new("RateLimit");
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(plugin_log.contains("cfg load fail"));
     }
 

@@ -21,6 +21,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::core::gateway::link_sys::get_redis_client;
 use crate::core::gateway::link_sys::providers::redis::RedisLinkClient;
+use crate::core::gateway::plugins::http::common::format_duration;
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -98,16 +99,6 @@ fn build_redis_key(prefix: &str, algo: &str, policy_idx: usize, limit_key: &str,
         format!("{prefix}{algo}:{policy_idx}:{limit_key}")
     } else {
         format!("{prefix}{algo}:{policy_idx}:{limit_key}:{suffix}")
-    }
-}
-
-/// Format duration in human-readable format (e.g., "1.5s", "500ms")
-fn format_duration(d: Duration) -> String {
-    let secs = d.as_secs_f64();
-    if secs >= 1.0 {
-        format!("{:.1}s", secs)
-    } else {
-        format!("{}ms", d.as_millis())
     }
 }
 
@@ -385,6 +376,11 @@ impl RateLimitRedis {
 
         let remaining = remaining.max(0) as u64;
 
+        // Note: the success path does not emit a reset header. The Lua scripts
+        // return only {allowed, current, remaining, retry_ms}, so there is no
+        // precise window-reset timestamp available for an allowed request.
+        // A reset header is only emitted on the rejection path, where
+        // `retry_after` gives a meaningful value.
         if let Some(headers) = self.config.get_header_names() {
             // Custom headers: only show what's explicitly configured
             if let Some(limit_header) = headers.limit_header() {
@@ -392,15 +388,6 @@ impl RateLimitRedis {
             }
             if let Some(remaining_header) = headers.remaining_header() {
                 let _ = session.set_response_header(remaining_header, &remaining.to_string());
-            }
-            if let Some(reset_header) = headers.reset_header() {
-                // For Redis-based rate limiting, we don't have a precise reset timestamp
-                // Use current time + retry estimate (0 for allowed requests)
-                let reset_timestamp = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let _ = session.set_response_header(reset_header, &reset_timestamp.to_string());
             }
         } else {
             // Default: use X-RateLimit-* style
@@ -492,23 +479,19 @@ impl RequestFilter for RateLimitRedis {
         // PluginLog must stay short (≤40B) and must never contain the resolved
         // limit_key, the redis_ref config value, or raw Redis error text — they
         // can carry user-identifying values or deployment details. Detailed
-        // diagnostics go to tracing / metrics instead.
+        // diagnostics go to metrics instead.
 
         // 1. Validate config
         use crate::types::resources::edgion_plugins::PluginValidation;
         if self.config.validation_error().is_some() {
             plugin_log.push_err("cfg load fail");
-            let resp = Box::new(
-                ResponseHeader::build(500, None)
-                    .unwrap_or_else(|_| ResponseHeader::build(429, None).expect("429 is valid")),
-            );
-            let _ = session.write_response_header(resp, false).await;
-            let _ = session
-                .write_response_body(
-                    Some(bytes::Bytes::from(r#"{"message":"Internal rate limiter error"}"#)),
-                    true,
-                )
-                .await;
+            let mut resp = Box::new(ResponseHeader::build(500, None).expect("500 is a valid status code"));
+            resp.insert_header("Content-Type", "application/json").ok();
+            let body = Bytes::from(r#"{"message":"Internal rate limiter error"}"#);
+            if session.write_response_header(resp, false).await.is_err() {
+                return PluginRunningResult::ErrTerminateRequest;
+            }
+            let _ = session.write_response_body(Some(body), true).await;
             return PluginRunningResult::ErrTerminateRequest;
         }
 
@@ -641,5 +624,26 @@ mod tests {
     fn test_format_duration_milliseconds() {
         assert_eq!(format_duration(Duration::from_millis(500)), "500ms");
         assert_eq!(format_duration(Duration::from_millis(50)), "50ms");
+    }
+
+    #[tokio::test]
+    async fn test_config_validation_error() {
+        use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
+
+        // Invalid redis_ref (missing namespace slash) makes the config invalid.
+        let config = RateLimitRedisConfig {
+            redis_ref: "invalid".to_string(),
+            ..Default::default()
+        };
+        let plugin = RateLimitRedis::create(&config);
+
+        let mut mock_session = MockPluginSession::new();
+        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
+        let mut plugin_log = PluginLog::new("RateLimitRedis");
+
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(plugin_log.contains("cfg load fail"));
     }
 }

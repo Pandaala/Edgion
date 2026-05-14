@@ -518,12 +518,34 @@ fn resolve_listeners_inner(
             .unwrap_or("default");
 
         let Some(gateway) = lookup_gateway(gw_ns, &parent_ref.name, runtime) else {
+            // Parent Gateway not in the store at compute time (e.g. the route
+            // was processed before its parent Gateway). The route gets no
+            // resolved listeners for this parentRef until the Gateway is
+            // processed and requeues the route.
+            tracing::info!(
+                component = "resolve_listener_keys",
+                gateway = %format!("{}/{}", gw_ns, parent_ref.name),
+                "parentRef parent Gateway not found in store; route gets no resolved listeners for this parentRef"
+            );
             continue;
         };
         let gw_addresses = gateway.spec.addresses.as_ref();
         let Some(listeners) = &gateway.spec.listeners else {
+            tracing::info!(
+                component = "resolve_listener_keys",
+                gateway = %format!("{}/{}", gw_ns, parent_ref.name),
+                "parentRef parent Gateway found but has no listeners; route gets no resolved listeners for this parentRef"
+            );
             continue;
         };
+        tracing::debug!(
+            component = "resolve_listener_keys",
+            gateway = %format!("{}/{}", gw_ns, parent_ref.name),
+            listeners = ?listeners.iter().map(|l| (l.name.clone(), l.port)).collect::<Vec<_>>(),
+            section_name = ?parent_ref.section_name,
+            parent_port = ?parent_ref.port,
+            "parentRef parent Gateway found; resolving matching listeners"
+        );
 
         let mut collect = |l: &crate::types::resources::gateway::Listener| {
             if listener_allows_route_namespace(&l.allowed_routes, route_namespace, gw_ns, runtime) {

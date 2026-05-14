@@ -24,6 +24,7 @@ use super::conditional_filter::{
     ConditionalUpstreamResponseFilter,
 };
 use super::log::{PluginLog, StageLogs};
+use super::reject_filter::RejectFilter;
 use super::session_adapter::PingoraSessionAdapter;
 use super::traits::{
     PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
@@ -85,6 +86,12 @@ pub struct PluginRuntime {
     /// `EdgionPlugins` update rebuilds this runtime, producing a new Arc that
     /// the plugin store swaps in atomically.
     cors_config: Option<Arc<CorsConfig>>,
+    /// Names of plugins whose config failed `validation_error()` while building
+    /// this runtime. Such plugins are NOT constructed (an invalid config must
+    /// never run in the request path). `seal_fail_closed` consumes this list to
+    /// prepend a single request-stage `RejectFilter`, so the whole route fails
+    /// closed with 500 instead of silently dropping the misconfigured plugin.
+    invalid_plugins: Vec<&'static str>,
 }
 
 /// Result of attempting to build a stage-specific filter from an EdgionPlugin.
@@ -121,6 +128,7 @@ impl std::fmt::Debug for PluginRuntime {
                 "upstream_response_async_plugins_count",
                 &self.upstream_response_async_plugins.len(),
             )
+            .field("invalid_plugins", &self.invalid_plugins)
             .finish()
     }
 }
@@ -140,7 +148,27 @@ impl PluginRuntime {
             upstream_response_async_plugins: vec![],
             ext_ref_keys: Vec::new(),
             cors_config: None,
+            invalid_plugins: Vec::new(),
         }
+    }
+
+    /// Prepend a fail-closed `RejectFilter` to the request stage when any plugin
+    /// in this runtime had an invalid config (recorded in `invalid_plugins`).
+    ///
+    /// Called once by `EdgionPlugins::preparse` after all four `add_from_*`
+    /// builders have run. A single request-stage gate covers invalid plugins
+    /// from *every* stage: the request stage always runs before upstream is
+    /// contacted, so rejecting there also pre-empts a broken response/body-stage
+    /// plugin. An in-slot reject per stage is not viable — the response/body
+    /// stages cannot emit a clean 500 (see `check_response_stage_terminate`).
+    /// The reject runs before any other plugin, so a request through a
+    /// misconfigured EdgionPlugins is rejected with 500 before reaching upstream.
+    pub fn seal_fail_closed(&mut self) {
+        if self.invalid_plugins.is_empty() {
+            return;
+        }
+        let reject = RejectFilter::new(std::mem::take(&mut self.invalid_plugins));
+        self.request_plugins.insert(0, Box::new(reject));
     }
 
     /// Static list of (namespace, name) for every ExtensionRef in this runtime,
@@ -335,10 +363,15 @@ impl PluginRuntime {
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
-                // Collect validation errors from plugin configs
+                // Reject plugins whose config fails validation: record the name,
+                // surface the error, and skip construction so an invalid config
+                // can never run in the request path. `seal_fail_closed` later
+                // turns a non-empty `invalid_plugins` into a fail-closed 500.
                 if let Some(error) = entry.plugin.validation_error() {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
+                    self.invalid_plugins.push(plugin_name);
+                    continue;
                 }
 
                 // Cache the first enabled CORS config so the global preflight
@@ -374,11 +407,15 @@ impl PluginRuntime {
                         // Applicable stage but constructor declined — already reported via plugin.validation_error().
                     }
                     CreateResult::WrongStage => {
+                        // A plugin placed in the wrong stage array is a misconfiguration:
+                        // fail closed alongside validation_error failures rather than
+                        // silently no-op'ing.
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
                             "requestPlugins[{}] ({}): plugin is not valid for request stage",
                             index, plugin_name
                         ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                 }
             }
@@ -402,13 +439,18 @@ impl PluginRuntime {
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
-                // Collect validation errors from plugin configs
+                // Reject plugins whose config fails validation: record the name,
+                // surface the error, and skip construction so an invalid config
+                // can never run in the request path. `seal_fail_closed` later
+                // turns a non-empty `invalid_plugins` into a fail-closed 500.
                 if let Some(error) = entry.plugin.validation_error() {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!(
                         "upstreamResponseFilterPlugins[{}] ({}): {}",
                         index, plugin_name, error
                     ));
+                    self.invalid_plugins.push(plugin_name);
+                    continue;
                 }
 
                 // Validate optional entry-level alias. On failure, surface
@@ -440,11 +482,15 @@ impl PluginRuntime {
                         // Applicable stage but constructor declined — already reported via plugin.validation_error().
                     }
                     CreateResult::WrongStage => {
+                        // A plugin placed in the wrong stage array is a misconfiguration:
+                        // fail closed alongside validation_error failures rather than
+                        // silently no-op'ing.
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
                             "upstreamResponseFilterPlugins[{}] ({}): plugin is not valid for upstream response filter stage",
                             index, plugin_name
                         ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                 }
             }
@@ -464,13 +510,18 @@ impl PluginRuntime {
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
-                // Collect validation errors from plugin configs
+                // Reject plugins whose config fails validation: record the name,
+                // surface the error, and skip construction so an invalid config
+                // can never run in the request path. `seal_fail_closed` later
+                // turns a non-empty `invalid_plugins` into a fail-closed 500.
                 if let Some(error) = entry.plugin.validation_error() {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!(
                         "upstreamResponsePlugins[{}] ({}): {}",
                         index, plugin_name, error
                     ));
+                    self.invalid_plugins.push(plugin_name);
+                    continue;
                 }
 
                 // Validate optional entry-level alias. On failure, surface
@@ -496,11 +547,15 @@ impl PluginRuntime {
                         // Applicable stage but constructor declined — already reported via plugin.validation_error().
                     }
                     CreateResult::WrongStage => {
+                        // A plugin placed in the wrong stage array is a misconfiguration:
+                        // fail closed alongside validation_error failures rather than
+                        // silently no-op'ing.
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
                             "upstreamResponsePlugins[{}] ({}): plugin is not valid for upstream response stage",
                             index, plugin_name
                         ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                 }
             }
@@ -524,13 +579,18 @@ impl PluginRuntime {
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
-                // Collect validation errors from plugin configs
+                // Reject plugins whose config fails validation: record the name,
+                // surface the error, and skip construction so an invalid config
+                // can never run in the request path. `seal_fail_closed` later
+                // turns a non-empty `invalid_plugins` into a fail-closed 500.
                 if let Some(error) = entry.plugin.validation_error() {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!(
                         "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
                         index, plugin_name, error
                     ));
+                    self.invalid_plugins.push(plugin_name);
+                    continue;
                 }
 
                 // Validate optional entry-level alias. On failure, surface
@@ -562,11 +622,15 @@ impl PluginRuntime {
                         // Applicable stage but constructor declined — already reported via plugin.validation_error().
                     }
                     CreateResult::WrongStage => {
+                        // A plugin placed in the wrong stage array is a misconfiguration:
+                        // fail closed alongside validation_error failures rather than
+                        // silently no-op'ing.
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
                             "upstreamResponseBodyFilterPlugins[{}] ({}): plugin is not valid for upstream response body filter stage",
                             index, plugin_name
                         ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                 }
             }
@@ -1115,6 +1179,97 @@ mod tests {
         assert_eq!(first.alias(), None, "bad alias must be dropped (validation refused)");
         let second = iter.next().expect("second wrapper");
         assert_eq!(second.alias(), Some("auth-internal"));
+    }
+
+    #[test]
+    fn invalid_plugin_config_is_skipped_and_sealed_fail_closed() {
+        use crate::types::resources::edgion_plugins::ForwardAuthConfig;
+
+        let mut runtime = PluginRuntime::new();
+
+        // Entry 0: invalid config (empty uri fails ForwardAuthConfig validation).
+        let invalid = RequestFilterEntry::new(EdgionPlugin::ForwardAuth(ForwardAuthConfig {
+            uri: String::new(),
+            ..Default::default()
+        }));
+        // Entry 1: valid config.
+        let valid = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
+
+        let entries = vec![invalid, valid];
+        let errors = runtime.add_from_request_filters(&entries, "default");
+
+        // The invalid plugin is reported against its index.
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("requestPlugins[0]") && e.contains("ForwardAuth")),
+            "expected ForwardAuth validation error for index 0, got: {:?}",
+            errors
+        );
+
+        // The invalid plugin is NOT constructed: only the valid entry is in the chain.
+        assert_eq!(
+            runtime.request_plugins_count(),
+            1,
+            "invalid plugin must be skipped, not constructed"
+        );
+
+        // Sealing prepends a fail-closed RejectFilter so the route returns 500.
+        runtime.seal_fail_closed();
+        assert_eq!(runtime.request_plugins_count(), 2, "RejectFilter must be prepended");
+        let first = runtime.request_plugins_iter().next().expect("reject filter");
+        assert_eq!(first.name(), "RejectInvalidConfig");
+    }
+
+    #[test]
+    fn seal_fail_closed_is_noop_when_all_plugins_valid() {
+        let mut runtime = PluginRuntime::new();
+        let entries = vec![RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()))];
+        runtime.add_from_request_filters(&entries, "default");
+
+        runtime.seal_fail_closed();
+        assert_eq!(
+            runtime.request_plugins_count(),
+            1,
+            "no RejectFilter when every plugin config is valid"
+        );
+    }
+
+    #[test]
+    fn invalid_response_stage_plugin_seals_request_stage_fail_closed() {
+        use crate::types::resources::edgion_plugins::{BandwidthLimitConfig, UpstreamResponseBodyFilterEntry};
+
+        let mut runtime = PluginRuntime::new();
+
+        // BandwidthLimit is a body-stage plugin; an empty rate fails its validation.
+        let invalid = UpstreamResponseBodyFilterEntry::new(EdgionPlugin::BandwidthLimit(BandwidthLimitConfig {
+            rate: String::new(),
+            rate_bytes_per_second: None,
+        }));
+        let errors = runtime.add_from_upstream_response_body_filters(&[invalid], "default");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("upstreamResponseBodyFilterPlugins[0]") && e.contains("BandwidthLimit")),
+            "expected BandwidthLimit validation error, got: {:?}",
+            errors
+        );
+
+        // The invalid body-stage plugin is skipped, and nothing is in the request stage yet.
+        assert_eq!(runtime.upstream_response_body_plugins_count(), 0);
+        assert_eq!(runtime.request_plugins_count(), 0);
+
+        // Sealing puts the RejectFilter on the REQUEST stage even though the
+        // invalid plugin was a body-stage plugin: the request stage runs before
+        // upstream is contacted, so this is the only gate that guarantees a 500.
+        runtime.seal_fail_closed();
+        assert_eq!(
+            runtime.request_plugins_count(),
+            1,
+            "request-stage RejectFilter must cover body-stage invalid configs"
+        );
+        let first = runtime.request_plugins_iter().next().expect("reject filter");
+        assert_eq!(first.name(), "RejectInvalidConfig");
     }
 }
 

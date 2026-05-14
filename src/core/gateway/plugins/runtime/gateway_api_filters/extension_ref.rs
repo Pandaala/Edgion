@@ -20,7 +20,7 @@ use crate::types::resources::LocalObjectReference;
 
 /// Error response body written when an ExtensionRef cannot be resolved
 /// (cycle, depth exceeded, referenced EdgionPlugins not found).
-const EXTENSION_REF_ERROR_BODY: &[u8] = br#"{"message":"plugin reference error"}"#;
+const EXTENSION_REF_ERROR_BODY: &str = r#"{"message":"plugin reference error"}"#;
 
 /// Write a 500 response with a diagnostic JSON body for an async stage that
 /// hit a prepare-execution error. Called from `run_extension_async`'s `Err`
@@ -31,7 +31,7 @@ async fn write_extension_ref_error_response(session: &mut dyn PluginSession) {
             let _ = hdr.insert_header("Content-Type", "application/json");
             if session.write_response_header(Box::new(hdr), false).await.is_ok() {
                 let _ = session
-                    .write_response_body(Some(Bytes::from_static(EXTENSION_REF_ERROR_BODY)), true)
+                    .write_response_body(Some(Bytes::from_static(EXTENSION_REF_ERROR_BODY.as_bytes())), true)
                     .await;
             }
         }
@@ -155,7 +155,22 @@ impl ExtensionRefFilter {
         let (plugin_runtime, log_token) = match self.prepare_execution(session, log) {
             Ok(Some(res)) => res,
             Ok(None) => return PluginRunningResult::GoodNext,
-            Err(_) => return PluginRunningResult::ErrTerminateRequest,
+            Err(_) => {
+                // Sync stage: no `await`, so we cannot write a response body
+                // here. Signal the status via `ErrResponse` instead — the
+                // response runner records "deny response 500" and terminates
+                // (see `check_response_stage_terminate`). A bare
+                // `ErrTerminateRequest` would instead trip the runtime's 502
+                // fail-safe, masking that this is a plugin-reference error.
+                // `body` is `None`: `check_response_stage_terminate` only reads
+                // `status`, so a body would be allocated and dropped. The
+                // request-stage `run_extension_async` path is the one that
+                // writes the JSON body to the client.
+                return PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None,
+                };
+            }
         };
 
         match stage {
@@ -414,10 +429,12 @@ mod tests {
 
     /// Rule-scope filter with index pointing to a None slot (dangling at resolve
     /// time). prepare_execution must push "extension ref not found" log error
-    /// and return ErrTerminateRequest. The global store is NOT consulted
-    /// (verified by the absence of any global store setup in this test).
+    /// and return a 500 ErrResponse (sync stage cannot write a body itself, so
+    /// it signals the status for the response runner to surface). The global
+    /// store is NOT consulted (verified by the absence of any global store
+    /// setup in this test).
     #[test]
-    fn index_miss_terminates_request() {
+    fn index_miss_returns_500() {
         let mut session = MockPluginSession::new();
         session
             .expect_resolved_route_ext_ref()
@@ -437,6 +454,12 @@ mod tests {
 
         let mut log = PluginLog::new("test");
         let result = filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log);
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            }
+        );
     }
 }

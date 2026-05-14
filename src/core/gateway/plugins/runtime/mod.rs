@@ -6,6 +6,7 @@ pub mod gateway_api_filters;
 pub mod log;
 pub mod plugin_metadata;
 mod plugin_runtime;
+mod reject_filter;
 pub mod session_adapter;
 pub mod traits;
 

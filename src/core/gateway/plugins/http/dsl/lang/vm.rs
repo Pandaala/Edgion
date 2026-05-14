@@ -717,7 +717,6 @@ impl Vm {
                     });
                 }
                 OpCode::ReturnTerminate => {
-                    log.push("Deny dsl terminate");
                     return Ok(PluginRunningResult::ErrTerminateRequest);
                 }
                 OpCode::ReturnGrpcError => {
@@ -789,7 +788,17 @@ pub async fn execute_safe(
 
     match result {
         Ok(Ok(running_result)) => {
-            log.push("dsl match");
+            match &running_result {
+                // `Nothing` is unreachable for DSL scripts (the VM only ever
+                // returns GoodNext / ErrResponse / ErrTerminateRequest /
+                // ErrGrpcError); folded into the allow case for completeness.
+                PluginRunningResult::GoodNext | PluginRunningResult::Nothing => log.push("OK; "),
+                PluginRunningResult::ErrResponse { status, .. } => log.push(&format!("Deny {status}; ")),
+                PluginRunningResult::ErrTerminateRequest => log.push("Deny terminate; "),
+                PluginRunningResult::ErrGrpcError { grpc_status, .. } => {
+                    log.push(&format!("Deny grpc {grpc_status}; "))
+                }
+            };
             running_result
         }
         Ok(Err(runtime_err)) => {
