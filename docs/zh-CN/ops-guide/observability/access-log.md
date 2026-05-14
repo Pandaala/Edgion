@@ -175,12 +175,12 @@ Edgion Gateway 为每个请求生成详细的访问日志（access log），记�
       {
         "name": "BasicAuth",
         "time_cost": 5,
-        "log": ["Auth success; "]
+        "log": ["Auth success"]
       },
       {
         "name": "Cors",
         "time_cost": 2,
-        "log": ["CORS resp set; "]
+        "log": ["CORS resp set"]
       }
     ]
   },
@@ -190,7 +190,7 @@ Edgion Gateway 为每个请求生成详细的访问日志（access log），记�
       {
         "name": "ResponseHeaderModifier",
         "time_cost": 1,
-        "log": ["Header modified; "]
+        "log": ["Header modified"]
       }
     ]
   }
@@ -204,7 +204,7 @@ Edgion Gateway 为每个请求生成详细的访问日志（access log），记�
 | `stage` | 执行阶段 | `"request_filters"`, `"upstream_response_filters"` |
 | `name` | 插件名称 | `"BasicAuth"`, `"Cors"` |
 | `time_cost` | 执行耗时（微秒） | `5` |
-| `log` | 日志内容数组 | `["Auth success; "]` |
+| `log` | 日志内容数组 | `["Auth success"]` |
 | `log_full` | 日志缓冲区是否已满 | `true` (仅在已满时出现) |
 
 **常见插件日志内容**:
@@ -219,13 +219,13 @@ Edgion Gateway 为每个请求生成详细的访问日志（access log），记�
 
 **`log_full` 说明**:
 
-插件日志使用固定大小的缓冲区（100 字节），当插件输出的日志超过此限制时，会截断并设置 `log_full: true`：
+插件日志内部使用两级缓冲区——固定 128 字节的 tier-1 栈缓冲区，溢出后写入 512 字节的 tier-2 堆缓冲区——但始终序列化为一个合并的 `log` 数组。当 tier-2 缓冲区也写满时，后续条目会被丢弃并设置 `log_full: true`：
 
 ```json
 {
   "name": "CustomPlugin",
   "time_cost": 10,
-  "log": ["Entry 1; ", "Entry 2; ", "..."],
+  "log": ["Entry 1", "Entry 2", "Entry 3", "Entry 4"],
   "log_full": true
 }
 ```
@@ -329,12 +329,12 @@ Edgion Gateway 为每个请求生成详细的访问日志（access log），记�
         {
           "name": "BasicAuth",
           "time_cost": 8,
-          "log": ["Auth success; "]
+          "log": ["Auth success"]
         },
         {
           "name": "Cors",
           "time_cost": 2,
-          "log": ["CORS resp set; "]
+          "log": ["CORS resp set"]
         }
       ]
     }

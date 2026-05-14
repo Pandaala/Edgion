@@ -175,12 +175,12 @@ Records detailed plugin execution logs, grouped by execution stage:
       {
         "name": "BasicAuth",
         "time_cost": 5,
-        "log": ["Auth success; "]
+        "log": ["Auth success"]
       },
       {
         "name": "Cors",
         "time_cost": 2,
-        "log": ["CORS resp set; "]
+        "log": ["CORS resp set"]
       }
     ]
   },
@@ -190,7 +190,7 @@ Records detailed plugin execution logs, grouped by execution stage:
       {
         "name": "ResponseHeaderModifier",
         "time_cost": 1,
-        "log": ["Header modified; "]
+        "log": ["Header modified"]
       }
     ]
   }
@@ -204,7 +204,7 @@ Records detailed plugin execution logs, grouped by execution stage:
 | `stage` | Execution stage | `"request_filters"`, `"upstream_response_filters"` |
 | `name` | Plugin name | `"BasicAuth"`, `"Cors"` |
 | `time_cost` | Execution time (microseconds) | `5` |
-| `log` | Log content array | `["Auth success; "]` |
+| `log` | Log content array | `["Auth success"]` |
 | `log_full` | Whether the log buffer is full | `true` (only appears when full) |
 
 **Common plugin log content**:
@@ -219,13 +219,13 @@ Records detailed plugin execution logs, grouped by execution stage:
 
 **`log_full` explanation**:
 
-Plugin logs use a fixed-size buffer (100 bytes). When a plugin's log output exceeds this limit, it is truncated and `log_full: true` is set:
+Plugin logs use a two-tier buffer internally — a fixed 128-byte tier-1 stack buffer overflowing into a 512-byte tier-2 heap buffer — but it always serializes as one merged `log` array. When even the tier-2 buffer is full, further entries are dropped and `log_full: true` is set:
 
 ```json
 {
   "name": "CustomPlugin",
   "time_cost": 10,
-  "log": ["Entry 1; ", "Entry 2; ", "..."],
+  "log": ["Entry 1", "Entry 2", "Entry 3", "Entry 4"],
   "log_full": true
 }
 ```
@@ -329,12 +329,12 @@ Records errors during request processing:
         {
           "name": "BasicAuth",
           "time_cost": 8,
-          "log": ["Auth success; "]
+          "log": ["Auth success"]
         },
         {
           "name": "Cors",
           "time_cost": 2,
-          "log": ["CORS resp set; "]
+          "log": ["CORS resp set"]
         }
       ]
     }

@@ -323,8 +323,8 @@ fn test_log_error() {
     let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
-        log.contains("err: critical failure; "),
-        "log_error must emit unified `err: <value>; ` entry: {:?}",
+        log.contains("err: critical failure"),
+        "log_error must emit unified `err: <value>` entry: {:?}",
         log.log
     );
 }
@@ -374,7 +374,7 @@ fn test_log_error_replace_mode() {
     let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
-        log.contains("err: ***; "),
+        log.contains("err: ***"),
         "expected `err:` prefix wrapping masked value: {:?}",
         log.log
     );
@@ -395,7 +395,7 @@ fn test_log_error_wrap_mode() {
     let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
     assert!(
-        log.contains("err: <E>super-secret-value</E>; "),
+        log.contains("err: <E>super-secret-value</E>"),
         "expected `err:` prefix wrapping wrapped value: {:?}",
         log.log
     );

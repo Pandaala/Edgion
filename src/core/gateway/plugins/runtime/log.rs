@@ -40,7 +40,7 @@ pub fn sensitive(s: &str) -> LogArg<'_> {
     LogArg::Sensitive(s)
 }
 
-/// Build a `&[LogArg]` slice for [`PluginLog::push_fmt`] / [`PluginLog::u_push_fmt`].
+/// Build a `&[LogArg]` slice for [`PluginLog::push_fmt`].
 ///
 /// Plain `&str` values need no wrapper; only sensitive values use [`sensitive()`].
 ///
@@ -77,44 +77,111 @@ fn format_into<A: smallvec::Array<Item = u8>>(buf: &mut SmallVec<A>, fmt: &str, 
     buf.extend_from_slice(rest.as_bytes());
 }
 
-/// Plugin log entry
-/// Fixed structure for plugin execution logging
-#[derive(Debug, Clone, Serialize)]
+/// Plugin log entry — fixed structure for plugin execution logging.
+///
+/// Serialization is custom (see `impl Serialize` below): the two physical
+/// buffers `log` and `ulog` are flattened into a single `"log"` JSON array,
+/// and every `Option` field is omitted when `None`.
+#[derive(Debug, Clone)]
 pub struct PluginLog {
     /// Plugin name (pre-allocated with capacity 36)
     pub name: String,
 
     /// Operator-defined label propagated from the EdgionPlugins entry's
     /// `alias` field. Independent of `name`. Stored separately from the
-    /// 100-byte LogBuffer so it never reduces buffer space available to
+    /// 128-byte LogBuffer so it never reduces buffer space available to
     /// `push` / `push_err`.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 
     /// Time cost in microseconds (us), None if not measured
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub time_cost: Option<u64>,
 
     /// Condition skip reason, None if not skipped
     /// e.g., "skip:keyExist,hdr:X-Internal"
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub cond_skip: Option<String>,
 
-    /// Fixed-size log buffer (recommended for most plugins)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Tier-1 fixed 128-byte stack buffer — the common, zero-heap path.
+    /// Serialized merged into the `"log"` array, not as its own field.
     pub log: Option<LogBuffer>,
 
-    /// Unlimited log buffer (for debug/trace plugins)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Tier-2 heap overflow buffer, lazily created only when tier-1 fills.
+    /// Serialized merged into the `"log"` array after the tier-1 entries —
+    /// the stack/heap tier split is an internal implementation detail.
     pub ulog: Option<ULogBuffer>,
 
-    /// Indicates if fixed buffer was truncated (only serialized when true)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Set when an entry was dropped because even the tier-2 `ulog` overflow
+    /// buffer was full (only serialized when true).
     pub log_full: Option<bool>,
 
     /// ExtensionRef reference name (for ExtensionRef filter only)
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub refer_to: Option<String>,
+}
+
+impl Serialize for PluginLog {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        // Tier-1 `log` and tier-2 `ulog` serialize as ONE merged `"log"` array
+        // in push order; `ulog` is never emitted as its own field.
+        let has_log = self.log.is_some() || self.ulog.is_some();
+        let len = 1
+            + usize::from(self.alias.is_some())
+            + usize::from(self.time_cost.is_some())
+            + usize::from(self.cond_skip.is_some())
+            + usize::from(has_log)
+            + usize::from(self.log_full.is_some())
+            + usize::from(self.refer_to.is_some());
+
+        let mut st = serializer.serialize_struct("PluginLog", len)?;
+        st.serialize_field("name", &self.name)?;
+        if let Some(ref alias) = self.alias {
+            st.serialize_field("alias", alias)?;
+        }
+        if let Some(time_cost) = self.time_cost {
+            st.serialize_field("time_cost", &time_cost)?;
+        }
+        if let Some(ref cond_skip) = self.cond_skip {
+            st.serialize_field("cond_skip", cond_skip)?;
+        }
+        if has_log {
+            st.serialize_field(
+                "log",
+                &MergedLog {
+                    log: self.log.as_ref(),
+                    ulog: self.ulog.as_ref(),
+                },
+            )?;
+        }
+        if let Some(log_full) = self.log_full {
+            st.serialize_field("log_full", &log_full)?;
+        }
+        if let Some(ref refer_to) = self.refer_to {
+            st.serialize_field("refer_to", refer_to)?;
+        }
+        st.end()
+    }
+}
+
+/// Serializes a `PluginLog`'s two physical buffers as one flat JSON array of
+/// entries — tier-1 `log` entries followed by tier-2 `ulog` overflow entries,
+/// preserving global push order.
+struct MergedLog<'a> {
+    log: Option<&'a LogBuffer>,
+    ulog: Option<&'a ULogBuffer>,
+}
+
+impl Serialize for MergedLog<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let log = self.log.into_iter().flat_map(|b| b.entries());
+        let ulog = self.ulog.into_iter().flat_map(|b| b.entries());
+        serializer.collect_seq(log.chain(ulog))
+    }
 }
 
 impl PluginLog {
@@ -144,6 +211,39 @@ impl PluginLog {
         log
     }
 
+    /// Route one entry through the two-tier buffer.
+    ///
+    /// Tries tier-1 `log` first. On overflow it lazily opens tier-2 `ulog` and
+    /// writes the entry there instead. Once `ulog` exists every subsequent entry
+    /// goes straight to `ulog`, so global push order is always preserved. When
+    /// even `ulog` is full the entry is dropped and `log_full` is set.
+    ///
+    /// The stack/heap tier split is internal: both buffers serialize merged into
+    /// one `"log"` array (see `impl Serialize for PluginLog`).
+    ///
+    /// `to_log` / `to_ulog` are the same logical write expressed against each
+    /// buffer type (e.g. `push` vs `push`, or `push_err` vs `push_err`), so the
+    /// zero-allocation `LogBuffer::push_err` fast path is preserved on tier 1.
+    #[inline]
+    fn push_via(
+        &mut self,
+        to_log: impl FnOnce(&mut LogBuffer) -> bool,
+        to_ulog: impl FnOnce(&mut ULogBuffer) -> bool,
+    ) -> bool {
+        if self.ulog.is_none() {
+            if to_log(self.log.get_or_insert_with(LogBuffer::new)) {
+                return true;
+            }
+            // Tier-1 full: lazily open the tier-2 overflow buffer.
+            self.ulog.get_or_insert_with(ULogBuffer::new);
+        }
+        let ok = to_ulog(self.ulog.as_mut().expect("ulog created above or pre-existing"));
+        if !ok {
+            self.log_full = Some(true);
+        }
+        ok
+    }
+
     /// Push to fixed buffer (recommended for non-error paths).
     ///
     /// For error entries, use [`PluginLog::push_err`] — it enforces a
@@ -151,12 +251,7 @@ impl PluginLog {
     /// accidental token/claim leakage via `format!` or error `Display`.
     #[inline]
     pub fn push(&mut self, log: &str) -> bool {
-        let result = self.log.get_or_insert_with(LogBuffer::new).push(log);
-        if !result {
-            // Fixed buffer is full, mark as truncated
-            self.log_full = Some(true);
-        }
-        result
+        self.push_via(|b| b.push(log), |u| u.push(log))
     }
 
     /// Push an error entry with unified `"err: "` prefix.
@@ -167,7 +262,7 @@ impl PluginLog {
     /// plugin error logging; `push(&format!("...: {}", err))` is forbidden for error
     /// paths because error `Display` may carry tokens, claims, or raw user input.
     ///
-    /// Serialized entry: `"err: <kind>; "`. Plugin identity comes from
+    /// Serialized entry: `"err: <kind>"`. Plugin identity comes from
     /// [`PluginLog::name`], so `kind` should be the event only (e.g.
     /// `"token refresh fail"`), not `"<plugin>:<event>"`.
     ///
@@ -175,88 +270,52 @@ impl PluginLog {
     /// (section "Error entry API constraints"). Safety rationale: `skills/03-coding/01-log-safety.md`.
     #[inline]
     pub fn push_err(&mut self, kind: &'static str) -> bool {
-        let result = self.log.get_or_insert_with(LogBuffer::new).push_err(kind);
-        if !result {
-            self.log_full = Some(true);
-        }
-        result
-    }
-
-    /// Push to unbounded buffer (for debug/trace plugins). Returns false if buffer limit reached.
-    ///
-    /// For error entries, use [`PluginLog::u_push_err`] — see [`PluginLog::push_err`] for rationale.
-    #[inline]
-    pub fn u_push(&mut self, log: &str) -> bool {
-        self.ulog.get_or_insert_with(ULogBuffer::new).push(log)
-    }
-
-    /// Unbounded-buffer counterpart of [`PluginLog::push_err`].
-    #[inline]
-    pub fn u_push_err(&mut self, kind: &'static str) -> bool {
-        self.ulog.get_or_insert_with(ULogBuffer::new).push_err(kind)
+        self.push_via(|b| b.push_err(kind), |u| u.push_err(kind))
     }
 
     /// Push a user-controlled dynamic value through the active masking mode.
     ///
     /// Truncates to the last UTF-8 char boundary at or before 64 bytes to respect
-    /// LogBuffer's 100-byte limit after any wrapper overhead.
+    /// the tier-1 LogBuffer's 128-byte limit after any wrapper overhead.
     /// Use this for DSL/plugin content that may contain credentials or PII.
     /// For static event labels, use [`push_err`] instead.
     #[inline]
     pub fn push_sensitive(&mut self, value: &str) -> bool {
-        // Reserve bytes for wrap prefix+suffix so the final entry fits LogBuffer's 100-byte limit.
-        // Default wrap overhead is 7 bytes ("<E>" + "</E>"); operators can configure longer strings.
+        // Reserve bytes for wrap prefix+suffix so the final entry fits the tier-1
+        // 128-byte LogBuffer. Default wrap overhead is 7 bytes ("<E>" + "</E>");
+        // operators can configure longer strings.
         let overhead = crate::types::sensitive::wrap_overhead();
-        let max_value_bytes = (100usize.saturating_sub(overhead)).min(64);
+        let max_value_bytes = (128usize.saturating_sub(overhead)).min(64);
         let end = (0..=value.len().min(max_value_bytes))
             .rev()
             .find(|&i| value.is_char_boundary(i))
             .unwrap_or(0);
         let truncated = &value[..end];
-        crate::types::sensitive::apply_sensitive(truncated, |w| {
-            let result = self.log.get_or_insert_with(LogBuffer::new).push(w);
-            if !result {
-                self.log_full = Some(true);
-            }
-            result
-        })
-    }
-
-    /// Unbounded-buffer counterpart of [`push_sensitive`]. No truncation —
-    /// ULogBuffer handles its own 512-byte limit.
-    #[inline]
-    pub fn u_push_sensitive(&mut self, value: &str) -> bool {
-        crate::types::sensitive::apply_sensitive(value, |w| self.ulog.get_or_insert_with(ULogBuffer::new).push(w))
+        crate::types::sensitive::apply_sensitive(truncated, |w| self.push_via(|b| b.push(w), |u| u.push(w)))
     }
 
     /// Push an error entry whose value is dynamic — atomically writes
-    /// `"err: <masked-value>; "` as a single buffer entry.
+    /// `"err: <masked-value>"` as a single buffer entry.
     ///
     /// The dynamic counterpart of [`push_err`] for callers that cannot supply a
     /// `&'static str` (notably the DSL `log_error()` builtin). Output format
     /// matches [`push_err`] so downstream parsers grepping for `err:` see both.
     /// The value is masked through the active sensitive mode and truncated to
-    /// fit inside the 100-byte LogBuffer entry after accounting for prefix,
-    /// suffix, and any wrap overhead.
+    /// fit inside the LogBuffer entry after accounting for the prefix and any
+    /// wrap overhead.
     pub fn push_err_sensitive(&mut self, value: &str) -> bool {
         const PREFIX: &str = "err: ";
-        const SUFFIX: &str = "; ";
         let overhead = crate::types::sensitive::wrap_overhead();
-        let max_value_bytes = (100usize.saturating_sub(PREFIX.len() + SUFFIX.len() + overhead)).min(64);
+        let max_value_bytes = (128usize.saturating_sub(PREFIX.len() + overhead)).min(64);
         let end = (0..=value.len().min(max_value_bytes))
             .rev()
             .find(|&i| value.is_char_boundary(i))
             .unwrap_or(0);
         let truncated = &value[..end];
-        let mut entry = String::with_capacity(PREFIX.len() + SUFFIX.len() + max_value_bytes + overhead);
+        let mut entry = String::with_capacity(PREFIX.len() + max_value_bytes + overhead);
         entry.push_str(PREFIX);
         crate::types::sensitive::apply_sensitive(truncated, |w| entry.push_str(w));
-        entry.push_str(SUFFIX);
-        let result = self.log.get_or_insert_with(LogBuffer::new).push(&entry);
-        if !result {
-            self.log_full = Some(true);
-        }
-        result
+        self.push_via(|b| b.push(&entry), |u| u.push(&entry))
     }
 
     /// Push a format-string log entry where only explicitly marked args are masked.
@@ -271,26 +330,12 @@ impl PluginLog {
     /// log.push_fmt("user {} from {}", la!["admin", sensitive(&client_ip)]);
     /// ```
     pub fn push_fmt(&mut self, fmt: &str, args: &[LogArg<'_>]) -> bool {
-        // Stack-inlined scratch buffer: LogBuffer caps each entry at 100 bytes,
-        // so 128 bytes inline always avoids heap allocation here.
+        // 128-byte inline scratch matches the tier-1 LogBuffer budget, so a
+        // tier-1-sized entry never heap-allocates here.
         let mut buf: SmallVec<[u8; 128]> = SmallVec::new();
         format_into(&mut buf, fmt, args);
         let s = std::str::from_utf8(&buf).unwrap_or("");
-        let ok = self.log.get_or_insert_with(LogBuffer::new).push(s);
-        if !ok {
-            self.log_full = Some(true);
-        }
-        ok
-    }
-
-    /// Unbounded-buffer counterpart of [`push_fmt`].
-    pub fn u_push_fmt(&mut self, fmt: &str, args: &[LogArg<'_>]) -> bool {
-        // 256 bytes inline covers typical entries without heap; oversize entries
-        // spill once via SmallVec growth, still better than always-heap String.
-        let mut buf: SmallVec<[u8; 256]> = SmallVec::new();
-        format_into(&mut buf, fmt, args);
-        let s = std::str::from_utf8(&buf).unwrap_or("");
-        self.ulog.get_or_insert_with(ULogBuffer::new).push(s)
+        self.push_via(|b| b.push(s), |u| u.push(s))
     }
 
     /// Helper method for tests: checks if log buffer contains a substring
@@ -490,14 +535,6 @@ mod tests {
     }
 
     #[test]
-    fn test_u_push_sensitive_wrap() {
-        let _g = set_mode(2);
-        let mut log = PluginLog::new("test");
-        log.u_push_sensitive("dynamic-debug-value");
-        assert!(log.ulog.as_ref().unwrap().contains("<E>dynamic-debug-value</E>"));
-    }
-
-    #[test]
     fn test_fixed_buffer() {
         let mut log = PluginLog::new("test");
         assert!(log.push("aaa; "));
@@ -514,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn test_push_err_prefix_and_suffix() {
+    fn test_push_err_prefix() {
         let mut log = PluginLog::new("openid_connect");
         assert!(log.push_err("token refresh fail"));
         assert!(log.push_err("jwt expired"));
@@ -525,33 +562,8 @@ mod tests {
         assert_eq!(parsed["name"], "openid_connect");
         let entries = parsed["log"].as_array().unwrap();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0], "err: token refresh fail; ");
-        assert_eq!(entries[1], "err: jwt expired; ");
-    }
-
-    #[test]
-    fn test_push_err_capacity_limit_marks_truncated() {
-        let mut log = PluginLog::new("t");
-        // 100B buffer; each "err: xx; " = ~10B. Push until rejection.
-        let mut ok_count = 0;
-        for _ in 0..30 {
-            if log.push_err("xx") {
-                ok_count += 1;
-            }
-        }
-        assert!(ok_count < 30);
-        let json = serde_json::to_string(&log).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(parsed["log_full"].as_bool().unwrap());
-    }
-
-    #[test]
-    fn test_u_push_err_format() {
-        let mut log = PluginLog::new("dbg");
-        assert!(log.u_push_err("discovery fail"));
-        let json = serde_json::to_string(&log).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["ulog"][0], "err: discovery fail; ");
+        assert_eq!(entries[0], "err: token refresh fail");
+        assert_eq!(entries[1], "err: jwt expired");
     }
 
     #[test]
@@ -567,79 +579,8 @@ mod tests {
         let entries = parsed["log"].as_array().unwrap();
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0], "OK u=alice; ");
-        assert_eq!(entries[1], "err: token refresh fail; ");
+        assert_eq!(entries[1], "err: token refresh fail");
         assert_eq!(entries[2], "retry scheduled; ");
-    }
-
-    #[test]
-    fn test_push_err_exact_byte_cap_boundary() {
-        // 100B buffer, "err: xx; " = 9B each. 11 entries = 99B fits,
-        // 12th (+9B => 108B) must fail and mark log_full.
-        let mut log = PluginLog::new("b");
-        for i in 0..11 {
-            assert!(log.push_err("xx"), "entry {} should fit", i);
-        }
-        assert!(!log.push_err("xx"));
-        assert_eq!(log.log_full, Some(true));
-        // Further pushes (err or plain) also rejected.
-        assert!(!log.push_err("x"));
-        assert!(!log.push("y; "));
-    }
-
-    #[test]
-    fn test_unlimited_buffer() {
-        let mut log = PluginLog::new("debug");
-        let mut accepted = 0usize;
-
-        for i in 0..100 {
-            if log.u_push(&format!("entry {}; ", i)) {
-                accepted += 1;
-            }
-        }
-
-        let json = serde_json::to_string(&log).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-
-        let entries = parsed["ulog"].as_array().unwrap();
-        assert_eq!(entries.len(), accepted);
-        assert!(accepted > 0);
-        assert!(accepted < 100, "ULogBuffer now has a byte limit and should truncate");
-        assert!(parsed.get("log").is_none());
-        assert!(!log.u_push(&"x".repeat(1024)));
-    }
-
-    #[test]
-    fn test_both_buffers() {
-        let mut log = PluginLog::new("mixed");
-        log.push("quick; ");
-        log.u_push("detailed info; ");
-
-        let json = serde_json::to_string(&log).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(parsed["log"].as_array().unwrap().len(), 1);
-        assert_eq!(parsed["ulog"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn test_fixed_capacity_limit() {
-        let mut log = PluginLog::new("test");
-
-        // Fill buffer
-        for i in 0..30 {
-            let result = log.push(&format!("entry {}; ", i));
-            if i >= 20 {
-                assert!(!result); // Should fail after 20 entries
-            }
-        }
-
-        let json = serde_json::to_string(&log).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-
-        // Max 20 entries
-        assert!(parsed["log"].as_array().unwrap().len() <= 20);
-        // Should be marked as truncated
-        assert!(parsed["log_full"].as_bool().unwrap());
     }
 
     #[test]
@@ -724,6 +665,94 @@ mod tests {
 
         let json = serde_json::to_string(&logs).unwrap();
         assert_eq!(json, "[]");
+    }
+
+    #[test]
+    fn test_overflow_appends_to_merged_log() {
+        let mut log = PluginLog::new("ovf");
+        // 16-byte entries: 8 fill tier-1 (128 bytes) exactly; the 9th overflows.
+        for i in 0..8 {
+            assert!(log.push("0123456789abcdef"), "entry {i} fits tier-1");
+        }
+        assert!(log.push("overflow-entry-1"), "9th entry overflows into tier-2");
+
+        let json = serde_json::to_string(&log).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        // Tier-1 and tier-2 serialize as ONE merged array, in push order.
+        let entries = parsed["log"].as_array().unwrap();
+        assert_eq!(entries.len(), 9, "8 tier-1 + 1 overflow entry, merged");
+        assert_eq!(entries[8], "overflow-entry-1");
+        assert!(parsed.get("ulog").is_none(), "ulog is never serialized as its own field");
+    }
+
+    #[test]
+    fn test_overflow_preserves_order_for_later_small_entries() {
+        let mut log = PluginLog::new("ord");
+        for _ in 0..8 {
+            log.push("0123456789abcdef"); // fill tier-1
+        }
+        log.push("big-overflow-entry"); // opens tier-2
+        log.push("x"); // small, but must still land after the overflow entry
+
+        let json = serde_json::to_string(&log).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let entries = parsed["log"].as_array().unwrap();
+        assert_eq!(entries.len(), 10, "8 tier-1 + 2 overflow entries, merged");
+        assert_eq!(entries[8], "big-overflow-entry");
+        assert_eq!(entries[9], "x");
+        assert!(parsed.get("ulog").is_none());
+    }
+
+    #[test]
+    fn test_single_oversize_entry_overflows_directly() {
+        let mut log = PluginLog::new("huge");
+        let big = "z".repeat(200); // larger than the 128-byte tier-1 budget
+        assert!(log.push(&big), "an oversize entry overflows straight into tier-2");
+
+        let json = serde_json::to_string(&log).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let entries = parsed["log"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].as_str().unwrap().len(), 200);
+        assert!(parsed.get("ulog").is_none());
+    }
+
+    #[test]
+    fn test_ulog_full_drops_entry_and_marks_log_full() {
+        let mut log = PluginLog::new("full");
+        for _ in 0..8 {
+            log.push("0123456789abcdef"); // fill tier-1
+        }
+        // Tier-2 cap is 512B. 64-byte entries: 8 fit exactly (8 * 64 = 512),
+        // the 9th (576B) is rejected.
+        let chunk = "a".repeat(64);
+        let mut accepted = 0;
+        for _ in 0..20 {
+            if log.push(&chunk) {
+                accepted += 1;
+            }
+        }
+        assert_eq!(
+            accepted, 8,
+            "8 * 64B = 512B fills tier-2 exactly; the 9th chunk (576B) overflows"
+        );
+        assert_eq!(log.log_full, Some(true), "log_full is set when even tier-2 is full");
+    }
+
+    #[test]
+    fn test_push_err_overflows_with_prefix_into_merged_log() {
+        let mut log = PluginLog::new("e");
+        for _ in 0..8 {
+            log.push("0123456789abcdef"); // fill tier-1
+        }
+        assert!(log.push_err("token refresh fail"));
+
+        let json = serde_json::to_string(&log).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let entries = parsed["log"].as_array().unwrap();
+        assert_eq!(entries.len(), 9);
+        assert_eq!(entries[8], "err: token refresh fail");
+        assert!(parsed.get("ulog").is_none());
     }
 
     #[test]

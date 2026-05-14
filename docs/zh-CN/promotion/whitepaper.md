@@ -485,7 +485,7 @@ Edgion 为每种协议 Listener 维护独立的日志通道和日志文件：
 | TLS | `tls_log` | `init_tls_logger` | `edgion_tls_log_dropped_total` |
 | UDP | `udp_log` | `init_udp_logger` | `edgion_udp_log_dropped_total` |
 
-这种隔离设计确保了：一个协议的日志写入瓶颈不会连锁影响其他协议。TCP 日志写入慢不会导致 HTTP 访问日志丢失。每个日志通道拥有独立的缓冲区（`LogBuffer`/`ULogBuffer`），使用 `SmallVec` 实现栈上分配，减少堆内存压力。
+这种隔离设计确保了：一个协议的日志写入瓶颈不会连锁影响其他协议。TCP 日志写入慢不会导致 HTTP 访问日志丢失。每个日志通道拥有独立的缓冲区，使用 `SmallVec` 实现栈上分配，减少堆内存压力。
 
 ### 6.4 异步 Channel 派发
 

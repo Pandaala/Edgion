@@ -28,19 +28,19 @@
 ```rust
 // Safe
 tracing::info!(kind = "Secret", name = %name, "Secret loaded successfully");
-log.push(&format!("OK k={}***; ", &api_key[..api_key.len().min(8)]));
+log.push(&format!("OK k={}***", &api_key[..api_key.len().min(8)]));
 
 // Dangerous
 tracing::info!(secret_data = %secret.data, "Secret content");
 tracing::info!(token = %full_token, "ACME challenge token");
-log.push(&format!("OK token={}; ", full_jwt_token));
+log.push(&format!("OK token={}", full_jwt_token));
 ```
 
 ### PluginLog error entries: must use `push_err`
 
 > **API spec + examples** are in the "Error-entry API constraints" subsection of [`observability/00-access-log.md`](observability/00-access-log.md) (authoritative source). This section explains **why** the constraint exists.
 
-**Mandatory rule**: plugin error paths must always go through `plugin_log.push_err(kind: &'static str)` or `u_push_err`. **Forbidden**: `plugin_log.push(&format!("...", err))` / `push(&err.to_string())` / `push(any_dynamic_string)`.
+**Mandatory rule**: plugin error paths must always go through `plugin_log.push_err(kind: &'static str)`. **Forbidden**: `plugin_log.push(&format!("...", err))` / `push(&err.to_string())` / `push(any_dynamic_string)`.
 
 **Why the `&'static str` signature**:
 
@@ -50,7 +50,7 @@ log.push(&format!("OK token={}; ", full_jwt_token));
 
 3. **Forces developers to `match` first, then write the label**: `jwt_err.kind()` → a fixed set of static strings. The classification step is moved into the code, ensuring kind is a bounded set at the source and making downstream access-log aggregation by kind easier.
 
-4. **Zero heap allocation**: LogBuffer is a 100B SmallVec; `push_err` writes via three `extend_from_slice(&'static [u8])` calls with no intermediate String allocation — usable on the data-plane hot path.
+4. **No intermediate String allocation**: `push_err` writes via `extend_from_slice(&'static [u8])` calls — no `format!`-induced heap allocation for the entry content, even when tier-2 is in use — so it stays usable on the data-plane hot path.
 
 **No double-write**: for the same error, write either `push_err` (classification) or `ctx.err_log` (masked detail) — pick one. Writing both means duplicating sensitive content twice.
 
@@ -102,7 +102,7 @@ The data plane (request/connection processing path) produces logs only through t
 |------|------|------|
 | **access log** | Request-level result records | `AccessLogEntry` / `log_tls()` |
 | **ctx.err_log / ctx.log** | Connection-level error/event | TLS proxy's `ctx.err_log = Some(...)` |
-| **PluginLog** | Plugin execution summary | `log.push("OK u=alice; ")` |
+| **PluginLog** | Plugin execution summary | `log.push("OK u=alice")` |
 | **Metrics** | Aggregated counters | `global_metrics().request_success()` |
 
 **Any `tracing::` macro is forbidden on the request/connection processing hot path**, including `debug!`.
@@ -206,7 +206,7 @@ ctx.err_log = Some(format!("No matching TLSRoute for SNI={sni}"));
 ctx.add_error(EdgionStatus::NoRoute);
 
 // Plugin: via PluginLog
-log.push("Deny rate-limited; ");
+log.push("Deny rate-limited");
 
 // Data-plane hot path: do not use tracing
 tracing::warn!("No route found for {}", host);  // Logged per request — log explosion

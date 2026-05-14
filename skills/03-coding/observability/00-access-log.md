@@ -73,22 +73,21 @@ Each plugin writes a compact execution summary to the access log via `log: &mut 
 ### Format
 
 ```
-<result-prefix>[:<key parameters>]; 
+<result-prefix>[:<key parameters>]
 ```
 
-- Ends with `; ` (eases grep / concatenation)
 - **Result prefixes are uniformly defined**:
 
 | Prefix | Meaning | Write API | Example |
 |------|------|---------|------|
-| `OK` | Allowed normally | `plugin_log.push("OK ...; ")` | `OK u=jack; ` |
-| `Deny` | Business-level reject (auth fail, rate limit, etc.) | `plugin_log.push("Deny ...; ")` | `Deny no-key; ` |
-| `Skip` | Condition not met, skipped | `plugin_log.push("Skip; ")` or `set_cond_skip` | `Skip; ` |
-| `Rate` | Rate-limit triggered | `plugin_log.push("Rate ...; ")` | `Rate 429; ` |
-| **`err: `** | **Exception / config degradation** — replaces data-plane `tracing::warn!`; separated by space-colon | **`plugin_log.push_err("...")`** (see below) | `err: token refresh fail; ` |
+| `OK` | Allowed normally | `plugin_log.push("OK ...")` | `OK u=jack` |
+| `Deny` | Business-level reject (auth fail, rate limit, etc.) | `plugin_log.push("Deny ...")` | `Deny no-key` |
+| `Skip` | Condition not met, skipped | `plugin_log.push("Skip")` or `set_cond_skip` | `Skip` |
+| `Rate` | Rate-limit triggered | `plugin_log.push("Rate ...")` | `Rate 429` |
+| **`err: `** | **Exception / config degradation** — replaces data-plane `tracing::warn!` | **`plugin_log.push_err("...")`** (see below) | `err: token refresh fail` |
 
 - Key parameters use the `k=v` format; multiple parameters are space-separated
-- Some legacy code uses no-space old forms `"err:failoverTo invalid; "` / `"rl:err:cfg; "` (6 sites total in region_route + rate_limit). These are **legacy** and are migrated to `push_err` by the corresponding wave tickets; new code always uses `push_err`
+- New code always uses `push_err` for error entries
 
 ### Error-entry API constraint: must use `push_err`
 
@@ -99,8 +98,7 @@ Each plugin writes a compact execution summary to the access log via `log: &mut 
 ```rust
 // Defined at: src/core/gateway/plugins/runtime/log.rs
 impl PluginLog {
-    pub fn push_err(&mut self, kind: &'static str) -> bool;   // Fixed buffer
-    pub fn u_push_err(&mut self, kind: &'static str) -> bool; // Debug buffer
+    pub fn push_err(&mut self, kind: &'static str) -> bool;   // Routes through the dual-tier buffer
 }
 ```
 
@@ -108,9 +106,9 @@ impl PluginLog {
 
 ```rust
 // Correct — kind is a literal, no plugin prefix (plugin identity is in PluginLog.name)
-plugin_log.push_err("token refresh fail");    // → "err: token refresh fail; "
-plugin_log.push_err("jwks fetch timeout");    // → "err: jwks fetch timeout; "
-plugin_log.push_err("cfg invalid");           // → "err: cfg invalid; "
+plugin_log.push_err("token refresh fail");    // → "err: token refresh fail"
+plugin_log.push_err("jwks fetch timeout");    // → "err: jwks fetch timeout"
+plugin_log.push_err("cfg invalid");           // → "err: cfg invalid"
 
 // Bounded enum errors — manually map to a static label
 match jwt_err.kind() {
@@ -125,7 +123,7 @@ plugin_log.push_err(&err.to_string());
 plugin_log.push_err(dynamic_kind.as_str());
 
 // Even if it compiled, bypassing push_err via push to write errors is forbidden (leak risk)
-plugin_log.push(&format!("Config error: {}; ", err));       // Display may contain token / claim
+plugin_log.push(&format!("Config error: {}", err));       // Display may contain token / claim
 plugin_log.push(&format!("Auth failed for user {}", name)); // PII into PluginLog
 ```
 
@@ -144,34 +142,31 @@ plugin_log.push(&format!("Auth failed for user {}", name)); // PII into PluginLo
 
 ```rust
 // KeyAuth — auth passed
-log.push("OK u=jack; ");
+log.push("OK u=jack");
 
 // KeyAuth — key not found
-log.push("Deny no-key; ");
+log.push("Deny no-key");
 
 // RateLimit — limit triggered
-log.push(&format!("Rate 429 k=user:{}; ", user_id));
+log.push(&format!("Rate 429 k=user:{}", user_id));
 
 // RateLimit — not triggered
-log.push("OK; ");
+log.push("OK");
 
 // BasicAuth — auth failed
-log.push("Deny bad-cred; ");
+log.push("Deny bad-cred");
 
 // Redirect — performed a redirect
-log.push(&format!("-> {} {}; ", code, location));
+log.push(&format!("-> {} {}", code, location));
 
 // DirectEndpoint — endpoint forced
-log.push(&format!("Direct {}:{}; ", ip, port));
+log.push(&format!("Direct {}:{}", ip, port));
 
 // OIDC — token refresh failure (error classification, replacing tracing::warn!)
 log.push_err("token refresh fail");
 
 // RegionRoute — failoverTo config invalid (plugin degradation, region skips redirect)
-//   New code:
 log.push_err("failover to invalid");
-//   Legacy form (not yet migrated in `region_route/plugin.rs`):
-//   log.push("err:failoverTo invalid; ");
 ```
 
 ### Bad PluginLog examples
@@ -198,16 +193,27 @@ log.push(&format!("Auth failed for user {}", username));
 Each `PluginLog` may carry an optional operator-defined `alias` (echoed verbatim from the corresponding `EdgionPlugins` entry's `alias` field). When present, it serializes as a sibling field to `name`:
 
 ```json
-{ "name": "KeyAuth", "alias": "auth-internal", "time_cost": 42, "log": "OK u=jack; " }
+{ "name": "KeyAuth", "alias": "auth-internal", "time_cost": 42, "log": ["OK u=jack"] }
 ```
 
-Use it to distinguish multiple entries of the same plugin type. The alias is stored independently of the 100-byte LogBuffer used by `push` / `push_err`, so adding an alias does **not** reduce buffer space available for plugin log entries. Allowed character set: `[a-zA-Z0-9._-]`, length 1–32.
+Use it to distinguish multiple entries of the same plugin type. The alias is stored independently of the LogBuffer used by `push` / `push_err`, so adding an alias does **not** reduce buffer space available for plugin log entries. Allowed character set: `[a-zA-Z0-9._-]`, length 1–32.
 
 ### Buffer limit
 
-`PluginLog` has a fixed-size buffer (default 100 bytes). Each entry should stay within **20~40 bytes** to leave room for multiple plugins to write together. Anything beyond the buffer is truncated.
+`PluginLog` has a two-tier buffer, but the tiers are an **internal** detail —
+they serialize as **one merged `"log"` array** in push order:
 
-For detailed debug info, use `tracing::debug!`.
+- **Tier 1** — a fixed 128-byte stack buffer (zero heap allocation). Most
+  plugins only ever touch this tier. Keep each entry within **20~40 bytes** so
+  several plugins can write together.
+- **Tier 2** — a 512-byte heap buffer, created lazily only when tier 1
+  overflows. Overflow entries are appended after the tier-1 entries; once tier 2
+  is in use every subsequent entry goes there, so global push order is preserved.
+
+The JSON output is always a single `"log"` array — there is no separate `ulog`
+field and no in-band overflow marker. When even tier 2 is full, further entries
+are dropped and `log_full: true` is set. For detailed debug info, use
+`tracing::debug!` instead of relying on tier 2.
 
 ---
 
@@ -215,14 +221,14 @@ For detailed debug info, use `tracing::debug!`.
 
 ### Scenario 1: plugin made an auth decision
 ```rust
-log.push("OK u=alice; ");          // allowed
-log.push("Deny missing-token; ");  // rejected, with reason
+log.push("OK u=alice");          // allowed
+log.push("Deny missing-token");  // rejected, with reason
 ```
 No metric needed (the auth result already shows up in the status of `requests_failed` and `backend_requests_total`).
 
 ### Scenario 2: plugin rewrote the request
 ```rust
-log.push(&format!("Rewrite -> {}; ", new_path));
+log.push(&format!("Rewrite -> {}", new_path));
 ```
 
 ### Scenario 4: upstream connection failure
@@ -341,7 +347,7 @@ Field semantics:
 - `src/core/gateway/observe/access_log/entry.rs` — `AccessLogEntry`
 - `src/core/gateway/observe/access_log/logger.rs` — `AccessLogger`
 - `src/core/gateway/observe/logs/logger_factory.rs` — `create_async_logger()`
-- `src/core/gateway/plugins/runtime/log.rs` — `PluginLog`, `LogBuffer` (100-byte SmallVec)
+- `src/core/gateway/plugins/runtime/log.rs` — `PluginLog`, `LogBuffer` (128-byte SmallVec, tier 1) + `ULogBuffer` (512-byte overflow, tier 2)
 
 ---
 
@@ -370,10 +376,7 @@ Field semantics:
    to splice error info — Display may leak token/claim.
 7. Plugin name is not written into the entry (already in the PluginLog.name field). Fix example:
    "rl:nok:a" → "key miss:allow"
-8. **Trailing "; " is not required**: push entries do not need a manual trailing "; " (during JSON-array serialization each entry is already a separate element).
-   The runtime of push_err still automatically prepends `"err: <kind>; "` (built-in behavior of buffer.rs); that part is unchanged.
-   Suggested examples: `log.push("OK user jack")`, `log.push(&format!("Direct {}:{}", ip, port))`.
-   (Legacy "; " entries can be kept for now; cleanup will follow in a later review.)
+8. **Trailing `"; "` is removed entirely**: `push` entries never carry a trailing `"; "`. `push_err` output is `"err: <kind>"` (no suffix). Suggested examples: `log.push("OK user jack")`, `log.push(&format!("Direct {}:{}", ip, port))`.
 
 ### 2. push vs push_err
 
@@ -382,10 +385,10 @@ Field semantics:
 - push_err: per-request exceptions (config not readable, remote call failure, decoding failure, internal
   unreachable branch)
   Examples: `"token refresh fail"` / `"cache load fail"` / `"jwks fetch:timeout"`
-  (push_err's kind has **no** "; "; the runtime auto-completes `"err: <kind>; "`)
+  (push_err's kind has no prefix/suffix; the runtime auto-completes `"err: <kind>"`)
 kind takes the form `"<action> fail"` or `"<action>:<reason>"`. Both can be called multiple times within the same plugin;
 the log is finally serialized as an array:
-`log: ["OK user jack", "err: jwks fetch:timeout; ", "OK fallback"]`.
+`log: ["OK user jack", "err: jwks fetch:timeout", "OK fallback"]`.
 
 ### 3. Key-checkpoint selection
 

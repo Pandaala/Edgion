@@ -482,7 +482,7 @@ Edgion maintains independent log channels and log files for each protocol Listen
 | TLS | `tls_log` | `init_tls_logger` | `edgion_tls_log_dropped_total` |
 | UDP | `udp_log` | `init_udp_logger` | `edgion_udp_log_dropped_total` |
 
-This isolation design ensures that a write bottleneck in one protocol's log channel does not cascade and affect other protocols. Slow TCP log writes will not cause HTTP access log drops. Each log channel has an independent buffer (`LogBuffer`/`ULogBuffer`) using `SmallVec` for stack allocation, reducing heap memory pressure.
+This isolation design ensures that a write bottleneck in one protocol's log channel does not cascade and affect other protocols. Slow TCP log writes will not cause HTTP access log drops. Each log channel has an independent buffer using `SmallVec` for stack allocation, reducing heap memory pressure.
 
 ### 6.4 Async Channel Dispatch
 

@@ -218,21 +218,21 @@ region_hash = zlib.crc32(account_id.encode()) % 1000  # modulo must match config
 
 ## Access Log
 
-The plugin writes entries to the request's plugin log (100-byte limit — entries are short):
+The plugin writes entries to the request's plugin log (128-byte tier-1 limit — entries are short):
 
 | Entry | Meaning |
 |-------|---------|
-| `direct=ohio(from:hdr:X-Direct-Region);` | Routed via direct override |
-| `direct unknown 'foo', fallthrough;` | Unknown region name, fell through to next rule |
-| `match=hdr:X-Account-Id→virginia;` | Key matched in matchMap, routed to virginia |
-| `match=hdr:X-Account-Id no conf;` | Key not in matchMap, fell through |
-| `hash_pass=342 from:cookie:x_region_hash;` | Used pre-computed hash from cookie |
-| `key=hdr:X-Account-Id hash=342;` | Computed hash from header key |
-| `redirect ohio→virginia;` | Static failoverTo redirect applied |
-| `local, pass;` | Target equals myRegion — passed through locally |
-| `err:failoverTo invalid;` | failoverTo target is misconfigured (not found/self-ref/cycle) |
-| `→virginia 127.0.0.1:30001;` | Jump target (region, host:port) |
-| `key missing, pass;` | No key found, passed through |
+| `direct=ohio(from:hdr:X-Direct-Region)` | Routed via direct override |
+| `direct unknown 'foo', fallthrough` | Unknown region name, fell through to next rule |
+| `match=hdr:X-Account-Id→virginia` | Key matched in matchMap, routed to virginia |
+| `match=hdr:X-Account-Id no conf` | Key not in matchMap, fell through |
+| `hash_pass=342 from:cookie:x_region_hash` | Used pre-computed hash from cookie |
+| `key=hdr:X-Account-Id hash=342` | Computed hash from header key |
+| `redirect ohio→virginia` | Static failoverTo redirect applied |
+| `local, pass` | Target equals myRegion — passed through locally |
+| `err: failover to invalid` | failoverTo target is misconfigured (not found/self-ref/cycle) |
+| `→virginia 127.0.0.1:30001` | Jump target (region, host:port) |
+| `key missing, pass` | No key found, passed through |
 
 ## myRegion and failoverTo
 
@@ -255,9 +255,9 @@ Typical use cases:
 - **Combined with myRegion**: if the redirect target equals `myRegion`, redirected traffic also passes through locally.
 
 Constraints:
-- Target must be a valid region name (or the redirect is silently ignored — `err:failoverTo invalid;` in access log).
+- Target must be a valid region name (or the redirect is silently ignored — `err: failover to invalid` in access log).
 - No chaining: only one level of redirect is applied.
-- No self-reference or cycles (silently ignored at runtime with `err:failoverTo invalid;` logged).
+- No self-reference or cycles (silently ignored at runtime with `err: failover to invalid` logged).
 
 ## Notes
 
