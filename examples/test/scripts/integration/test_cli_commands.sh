@@ -244,12 +244,28 @@ wait_for_controller() {
 ADMIN_USER="admin"
 ADMIN_PASS=""
 
+# Locate the auto-generated admin Secret under a controller conf dir, tolerating
+# both layouts: pre-Path-A flat (`<conf>/Secret_..yaml`) and Path A nested
+# (`<conf>/edgion-system/Secret_..yaml`).
+_find_admin_secret_file() {
+    local conf_dir="$1"
+    local name="Secret_edgion-system_edgion-admin-credentials.yaml"
+    if [ -f "${conf_dir}/edgion-system/${name}" ]; then
+        echo "${conf_dir}/edgion-system/${name}"
+        return 0
+    fi
+    if [ -f "${conf_dir}/${name}" ]; then
+        echo "${conf_dir}/${name}"
+        return 0
+    fi
+    return 1
+}
+
 detect_admin_credentials() {
     local secret_file
     # Try EDGION_WORK_DIR first (set by test environment)
     if [ -n "${EDGION_WORK_DIR:-}" ]; then
-        secret_file="${EDGION_WORK_DIR}/config/Secret_edgion-system_edgion-admin-credentials.yaml"
-        if [ -f "$secret_file" ]; then
+        if secret_file=$(_find_admin_secret_file "${EDGION_WORK_DIR}/config"); then
             ADMIN_PASS="$(grep '^\s*password:' "$secret_file" | head -1 | sed 's/.*password:[[:space:]]*//' | tr -d '"' | tr -d "'")"
             ADMIN_USER="$(grep '^\s*username:' "$secret_file" | head -1 | sed 's/.*username:[[:space:]]*//' | tr -d '"' | tr -d "'")"
             if [ -n "$ADMIN_PASS" ]; then
@@ -264,8 +280,7 @@ detect_admin_credentials() {
     if [ -f "$current_file" ]; then
         local work_dir
         work_dir="$(cat "$current_file")"
-        secret_file="${work_dir}/config/Secret_edgion-system_edgion-admin-credentials.yaml"
-        if [ -f "$secret_file" ]; then
+        if secret_file=$(_find_admin_secret_file "${work_dir}/config"); then
             ADMIN_PASS="$(grep '^\s*password:' "$secret_file" | head -1 | sed 's/.*password:[[:space:]]*//' | tr -d '"' | tr -d "'")"
             ADMIN_USER="$(grep '^\s*username:' "$secret_file" | head -1 | sed 's/.*username:[[:space:]]*//' | tr -d '"' | tr -d "'")"
             if [ -n "$ADMIN_PASS" ]; then
@@ -277,7 +292,7 @@ detect_admin_credentials() {
     fi
 
     echo "ERROR: could not detect admin credentials — Secret file not found" >&2
-    echo "  Tried: \${EDGION_WORK_DIR}/config/Secret_edgion-system_edgion-admin-credentials.yaml" >&2
+    echo "  Tried (nested then flat): \${EDGION_WORK_DIR}/config/{edgion-system/,}Secret_edgion-system_edgion-admin-credentials.yaml" >&2
     exit 1
 }
 

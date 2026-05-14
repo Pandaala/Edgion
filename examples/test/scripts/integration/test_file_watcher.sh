@@ -155,14 +155,21 @@ ensure_admin_token() {
     if [ -n "$ADMIN_TOKEN" ]; then
         return 0
     fi
-    local secret_file="${CONFIG_DIR}/Secret_edgion-system_edgion-admin-credentials.yaml"
+    # Path A: new resources land at <conf>/<ns>/Kind_ns_name.yaml; the auto-generated
+    # admin Secret lives under edgion-system/. Pre-Path-A flat layouts also still
+    # work (left where the watcher first saw them). Search recursively for either.
+    local secret_file=""
     local waited=0
-    while [ $waited -lt 10 ] && [ ! -f "$secret_file" ]; do
+    while [ $waited -lt 10 ]; do
+        secret_file=$(find "$CONFIG_DIR" -name 'Secret_edgion-system_edgion-admin-credentials.yaml' -type f 2>/dev/null | head -1)
+        if [ -n "$secret_file" ]; then
+            break
+        fi
         sleep 1
         waited=$((waited + 1))
     done
-    if [ ! -f "$secret_file" ]; then
-        log_error "Admin Secret was not generated at $secret_file"
+    if [ -z "$secret_file" ]; then
+        log_error "Admin Secret was not generated under $CONFIG_DIR"
         exit 1
     fi
     local pass
@@ -426,6 +433,201 @@ test_delete_file() {
     fi
 }
 
+# Test 9: Nested directory — recursive load
+test_nested_dir_load() {
+    log_section "Test 9: Load YAML from nested subdirectory"
+
+    mkdir -p "$CONFIG_DIR/gateways"
+    cat > "$CONFIG_DIR/gateways/Gateway_default_nested-gw.yaml" << 'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: nested-gw
+  namespace: default
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: http
+      port: 7070
+      protocol: HTTP
+EOF
+
+    log_info "Wrote gateways/Gateway_default_nested-gw.yaml; waiting ${WAIT_SECS}s..."
+    sleep $WAIT_SECS
+
+    local response
+    response=$(curl_admin "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/gateway")
+    if echo "$response" | grep -q "nested-gw"; then
+        log_success "Gateway 'nested-gw' loaded from gateways/ subdirectory"
+    else
+        log_error "nested Gateway not loaded from subdirectory"
+        echo "Response: $response"
+        return 1
+    fi
+}
+
+# Test 10: Nested directory — status sidecar follows spec into subdir
+test_nested_status_follows_spec() {
+    log_section "Test 10: Status sidecar follows spec into subdir"
+
+    local status_file="$CONFIG_DIR/gateways/Gateway_default_nested-gw.yaml.status"
+    local waited=0
+    while [ $waited -lt 6 ]; do
+        if [ -f "$status_file" ]; then
+            log_success "Status sidecar at expected nested path: $status_file"
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    log_error "Status sidecar did not appear at $status_file"
+    log_info "Status files seen under config dir:"
+    find "$CONFIG_DIR" -name '*.yaml.status' || true
+    return 1
+}
+
+# Test 11: Same (kind, key) in two subdirs — diagnostics endpoint surfaces conflict
+test_collision_diagnostics() {
+    log_section "Test 11: Cross-subdir collision exposed via /diagnostics/conf-conflicts"
+
+    mkdir -p "$CONFIG_DIR/a" "$CONFIG_DIR/b"
+    cat > "$CONFIG_DIR/a/HTTPRoute_default_dup.yaml" << 'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dup
+  namespace: default
+spec:
+  parentRefs:
+    - name: test-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /a
+EOF
+    cat > "$CONFIG_DIR/b/HTTPRoute_default_dup.yaml" << 'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dup
+  namespace: default
+spec:
+  parentRefs:
+    - name: test-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /b
+EOF
+
+    log_info "Wrote a/HTTPRoute_default_dup.yaml and b/HTTPRoute_default_dup.yaml; waiting ${WAIT_SECS}s..."
+    sleep $WAIT_SECS
+
+    local response
+    response=$(curl_admin "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/diagnostics/conf-conflicts")
+    if echo "$response" | grep -q "\"key\":\"default/dup\""; then
+        log_success "Conflict for HTTPRoute default/dup surfaced via diagnostics endpoint"
+    else
+        log_error "Diagnostics did not list the expected conflict"
+        echo "Response: $response"
+        return 1
+    fi
+
+    if echo "$response" | grep -q "/a/HTTPRoute_default_dup.yaml"; then
+        log_success "Winner path is from a/ (lex-smallest)"
+    else
+        log_error "Expected winner from a/ subdirectory"
+        echo "Response: $response"
+        return 1
+    fi
+}
+
+# Test 12: API POST creates new resource at <conf>/<ns>/Kind_ns_name.yaml
+test_api_create_namespace_subdir() {
+    log_section "Test 12: API POST lands new spec at namespace subdir"
+
+    local body='{"apiVersion":"v1","kind":"Service","metadata":{"name":"api-svc","namespace":"default"},"spec":{"ports":[{"port":8081,"targetPort":8081}],"selector":{"app":"backend"}}}'
+    local response
+    response=$(curl_admin -X POST -H "Content-Type: application/json" \
+        -d "$body" \
+        "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/service/default")
+    log_info "POST response: $response"
+
+    sleep 2  # allow PollWatcher to observe + storage to write
+
+    local expected="$CONFIG_DIR/default/Service_default_api-svc.yaml"
+    if [ -f "$expected" ]; then
+        log_success "API-created Service spec landed at $expected"
+    else
+        log_error "Expected $expected to exist"
+        log_info "Files matching api-svc:"
+        find "$CONFIG_DIR" -name 'Service_default_api-svc*' || true
+        return 1
+    fi
+}
+
+# Test 13: POST against an existing legacy-flat resource returns 409 (no cross-subdir clone)
+# Guards storage::create_one's registry-aware AlreadyExists path. Without it, POST would
+# silently write a second copy at <conf>/<ns>/Kind_ns_name.yaml next to the legacy flat
+# file, surfacing as a /diagnostics/conf-conflicts entry instead of a clean 409.
+test_api_create_returns_conflict_for_legacy_flat() {
+    log_section "Test 13: POST returns 409 when a legacy flat-layout resource already exists"
+
+    # Pre-place an HTTPRoute at the legacy flat path (operator from pre-Path-A deployment).
+    cat > "$CONFIG_DIR/HTTPRoute_default_legacyx.yaml" << 'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: legacyx
+  namespace: default
+spec:
+  parentRefs:
+    - name: test-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /legacy
+EOF
+    log_info "Pre-placed flat <conf>/HTTPRoute_default_legacyx.yaml; waiting ${WAIT_SECS}s for watcher to record..."
+    sleep $WAIT_SECS
+
+    # POST a new HTTPRoute with the same (kind, ns, name). storage::create_one must
+    # see the registry winner and reject with AlreadyExists → HTTP 409.
+    ensure_admin_token
+    local body='{"apiVersion":"gateway.networking.k8s.io/v1","kind":"HTTPRoute","metadata":{"name":"legacyx","namespace":"default"},"spec":{"parentRefs":[{"name":"test-gateway"}],"rules":[{"matches":[{"path":{"type":"PathPrefix","value":"/new"}}]}]}}'
+    local code
+    code=$(curl -s -o /tmp/edgion_fw_post_body -w '%{http_code}' \
+        -H "Authorization: Bearer $ADMIN_TOKEN" \
+        -X POST -H "Content-Type: application/json" \
+        -d "$body" \
+        "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/namespaced/httproute/default")
+    log_info "POST status=$code; body=$(cat /tmp/edgion_fw_post_body 2>/dev/null)"
+
+    if [ "$code" != "409" ]; then
+        log_error "Expected HTTP 409 Conflict, got $code"
+        return 1
+    fi
+    log_success "POST returned 409 Conflict as expected"
+
+    # Belt and suspenders: no nested duplicate should have been written.
+    local nested_dup="$CONFIG_DIR/default/HTTPRoute_default_legacyx.yaml"
+    if [ -f "$nested_dup" ]; then
+        log_error "Unexpected duplicate created at $nested_dup (storage::create_one bypassed registry)"
+        return 1
+    fi
+    log_success "No nested duplicate created — legacy flat layout preserved"
+
+    # And the legacy file itself is untouched.
+    if ! grep -q "/legacy" "$CONFIG_DIR/HTTPRoute_default_legacyx.yaml"; then
+        log_error "Legacy flat file's content changed unexpectedly"
+        return 1
+    fi
+    log_success "Legacy flat file content preserved"
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -445,7 +647,12 @@ main() {
     test_rapid_modifications  || failed=1
     test_move_file_in         || failed=1
     test_move_file_out        || failed=1
-    test_delete_file          || failed=1
+    test_delete_file                 || failed=1
+    test_nested_dir_load                       || failed=1
+    test_nested_status_follows_spec            || failed=1
+    test_collision_diagnostics                 || failed=1
+    test_api_create_namespace_subdir           || failed=1
+    test_api_create_returns_conflict_for_legacy_flat || failed=1
 
     log_section "Summary"
     if [ $failed -eq 0 ]; then

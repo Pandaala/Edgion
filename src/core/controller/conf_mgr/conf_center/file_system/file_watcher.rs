@@ -12,6 +12,7 @@
 //! but never loses an event.
 
 use super::event::{FileSystemEvent, ParsedFileInfo};
+use super::path_registry::{ForgetOutcome, PathRegistry, RecordOutcome, ResourceKey};
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::types::ResourceKind;
 use anyhow::{Context, Result};
@@ -22,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, RwLock};
+use walkdir::WalkDir;
 
 /// Sender type for parsed resource events per kind
 pub type KindEventSender = broadcast::Sender<FileSystemEvent<String>>;
@@ -43,6 +45,9 @@ pub struct FileSystemWatcher {
     /// Configuration directory to watch
     conf_dir: PathBuf,
 
+    /// Shared path registry (written by the watcher, read by status/storage)
+    registry: Arc<PathRegistry>,
+
     /// Event senders per resource kind
     /// Key is kind name (e.g., "HTTPRoute", "Gateway")
     senders: Arc<RwLock<HashMap<&'static str, KindEventSender>>>,
@@ -50,11 +55,17 @@ pub struct FileSystemWatcher {
 
 impl FileSystemWatcher {
     /// Create a new FileSystemWatcher
-    pub fn new(conf_dir: PathBuf) -> Self {
+    pub fn new(conf_dir: PathBuf, registry: Arc<PathRegistry>) -> Self {
         Self {
             conf_dir,
+            registry,
             senders: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Get the shared path registry
+    pub fn registry(&self) -> &Arc<PathRegistry> {
+        &self.registry
     }
 
     /// Register a kind and get its event receiver
@@ -107,76 +118,109 @@ impl FileSystemWatcher {
         Ok(())
     }
 
-    /// Init phase: scan directory and dispatch Init/InitApply/InitDone events per kind
+    /// Init phase: recursively scan the conf dir and dispatch Init/InitApply/InitDone
+    /// events per kind. Files are sorted lexicographically before processing so the
+    /// lex-smallest path always wins any same-key collision.
     pub async fn init_phase(&self) -> Result<()> {
         tracing::info!(
             component = "fs_watcher",
             conf_dir = %self.conf_dir.display(),
-            "Starting init phase"
+            "Starting init phase (recursive)"
         );
 
-        // Collect files grouped by kind
-        let mut files_by_kind: HashMap<&'static str, Vec<(PathBuf, String)>> = HashMap::new();
-
-        // Scan directory
-        let mut entries = tokio::fs::read_dir(&self.conf_dir)
-            .await
-            .with_context(|| format!("Failed to read directory: {}", self.conf_dir.display()))?;
-
-        loop {
-            let entry = match entries.next_entry().await {
-                Ok(Some(entry)) => entry,
-                Ok(None) => break,
-                Err(e) => {
-                    return Err(e)
-                        .with_context(|| format!("Failed to read directory entry: {}", self.conf_dir.display()));
-                }
-            };
-            let path = entry.path();
-
-            // Skip non-YAML files
-            if !is_yaml_file(&path) {
-                continue;
-            }
-
-            // Read file content
-            let content = match tokio::fs::read_to_string(&path).await {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!(
-                        component = "fs_watcher",
-                        path = %path.display(),
-                        error = %e,
-                        "Failed to read file during init"
-                    );
+        let conf_dir = self.conf_dir.clone();
+        let scan: Vec<(PathBuf, String)> = tokio::task::spawn_blocking(move || -> Vec<(PathBuf, String)> {
+            let mut out = Vec::new();
+            for entry in WalkDir::new(&conf_dir).follow_links(false) {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::warn!(
+                            component = "fs_watcher",
+                            path = ?e.path(),
+                            error = %e,
+                            "Skipping unreadable subtree during init"
+                        );
+                        continue;
+                    }
+                };
+                if !entry.file_type().is_file() {
                     continue;
                 }
-            };
+                let path = entry.path().to_path_buf();
+                if !is_yaml_file(&path) {
+                    continue;
+                }
+                let content = match std::fs::read_to_string(&path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(
+                            component = "fs_watcher",
+                            path = %path.display(),
+                            error = %e,
+                            "Failed to read file during init"
+                        );
+                        continue;
+                    }
+                };
+                out.push((path, content));
+            }
+            out.sort_by(|a, b| a.0.cmp(&b.0));
+            out
+        })
+        .await
+        .context("init scan join failed")?;
 
-            // Determine kind from content
-            if let Some(kind) = ResourceKind::from_content(&content) {
-                let kind_str = kind.as_str();
-                files_by_kind.entry(kind_str).or_default().push((path, content));
+        let mut files_by_kind: HashMap<&'static str, Vec<(PathBuf, String)>> = HashMap::new();
+
+        for (path, content) in scan {
+            let Some(kind) = ResourceKind::from_content(&content) else {
+                continue;
+            };
+            let kind_str = kind.as_str();
+            let Some(info) = parse_resource_filename(&path) else {
+                tracing::trace!(
+                    component = "fs_watcher",
+                    path = %path.display(),
+                    "Skipping init file: filename does not match Kind_*.yaml"
+                );
+                continue;
+            };
+            let rkey = ResourceKey::new(info.kind.clone(), info.key.clone());
+            match self.registry.record(rkey, path.clone()) {
+                RecordOutcome::NewWinner { .. } => {
+                    files_by_kind.entry(kind_str).or_default().push((path, content));
+                }
+                RecordOutcome::ConflictAdded { winner, .. } => {
+                    tracing::info!(
+                        component = "fs_watcher",
+                        kind = %info.kind,
+                        key = %info.key,
+                        winner = %winner.display(),
+                        conflict = %path.display(),
+                        "init: collision detected, keeping first scan as winner"
+                    );
+                }
+                RecordOutcome::AlreadyKnown { .. } => {
+                    tracing::trace!(
+                        component = "fs_watcher",
+                        path = %path.display(),
+                        "init: walkdir yielded duplicate path (defensive)"
+                    );
+                }
             }
         }
 
-        // Dispatch events per kind
         let senders = self.senders.read().await;
 
         for (kind, files) in &files_by_kind {
             if let Some(sender) = senders.get(kind) {
-                // Send Init
                 let _ = sender.send(FileSystemEvent::Init);
-
-                // Send InitApply for each file
                 for (path, content) in files {
-                    // The content is sent as the event payload with file path
-                    // ResourceController will parse it to the actual type
                     let _ = sender.send(FileSystemEvent::InitApply {
                         path: path.clone(),
                         content: content.clone(),
                     });
-
                     tracing::trace!(
                         component = "fs_watcher",
                         kind = kind,
@@ -184,10 +228,7 @@ impl FileSystemWatcher {
                         "Dispatched InitApply event"
                     );
                 }
-
-                // Send InitDone
                 let _ = sender.send(FileSystemEvent::InitDone);
-
                 tracing::debug!(
                     component = "fs_watcher",
                     kind = kind,
@@ -197,12 +238,10 @@ impl FileSystemWatcher {
             }
         }
 
-        // Send Init/InitDone for kinds that have subscribers but no files
         for (kind, sender) in senders.iter() {
             if !files_by_kind.contains_key(kind) {
                 let _ = sender.send(FileSystemEvent::Init);
                 let _ = sender.send(FileSystemEvent::InitDone);
-
                 tracing::debug!(
                     component = "fs_watcher",
                     kind = kind,
@@ -316,12 +355,13 @@ impl FileSystemWatcher {
                 },
                 Config::default()
                     .with_poll_interval(poll_interval)
-                    .with_compare_contents(true),
+                    .with_compare_contents(true)
+                    .with_follow_symlinks(false),
             )
             .context("Failed to create file watcher")?;
 
             watcher
-                .watch(&conf_dir, RecursiveMode::NonRecursive)
+                .watch(&conf_dir, RecursiveMode::Recursive)
                 .context("Failed to start watching directory")?;
 
             Ok(watcher)
@@ -367,6 +407,12 @@ impl FileSystemWatcher {
     /// Modify / Remove with no ambiguity, so the `Recheck` branch is dormant;
     /// it remains as defense-in-depth in case we ever route ambiguous kinds
     /// (e.g. a future inotify-based fallback) through this code path.
+    ///
+    /// The registry is consulted for every event so that conflict-resolution
+    /// rules are enforced at runtime:
+    /// - Apply: only dispatched when the path is (or becomes) the winner.
+    /// - Delete: if a conflict exists, the first conflict is promoted to winner
+    ///   and a synthetic Apply is dispatched instead of a Delete.
     async fn dispatch_file_event(&self, path: &Path, last_kind: EventKind) {
         let Some(info) = parse_resource_filename(path) else {
             tracing::trace!(
@@ -406,21 +452,44 @@ impl FileSystemWatcher {
             };
         }
 
+        let rkey = ResourceKey::new(info.kind.clone(), info.key.clone());
+
         match action {
             DispatchAction::Apply => match tokio::fs::read_to_string(path).await {
-                Ok(content) => {
-                    let _ = sender.send(FileSystemEvent::Apply {
-                        path: path.to_path_buf(),
-                        content,
-                    });
-                    tracing::info!(
-                        component = "fs_watcher",
-                        kind = %info.kind,
-                        key = %info.key,
-                        last_kind = ?last_kind,
-                        "Dispatched Apply event"
-                    );
-                }
+                Ok(content) => match self.registry.record(rkey, path.to_path_buf()) {
+                    RecordOutcome::NewWinner { .. } | RecordOutcome::AlreadyKnown { is_winner: true } => {
+                        let _ = sender.send(FileSystemEvent::Apply {
+                            path: path.to_path_buf(),
+                            content,
+                        });
+                        tracing::info!(
+                            component = "fs_watcher",
+                            kind = %info.kind,
+                            key = %info.key,
+                            last_kind = ?last_kind,
+                            "Dispatched Apply event"
+                        );
+                    }
+                    RecordOutcome::ConflictAdded { winner, .. } => {
+                        tracing::info!(
+                            component = "fs_watcher",
+                            kind = %info.kind,
+                            key = %info.key,
+                            winner = %winner.display(),
+                            conflict = %path.display(),
+                            "Apply ignored: path is a non-winner conflict"
+                        );
+                    }
+                    RecordOutcome::AlreadyKnown { is_winner: false } => {
+                        tracing::info!(
+                            component = "fs_watcher",
+                            kind = %info.kind,
+                            key = %info.key,
+                            path = %path.display(),
+                            "Apply ignored: modify on non-winner conflict path"
+                        );
+                    }
+                },
                 Err(e) => {
                     tracing::warn!(
                         component = "fs_watcher",
@@ -430,17 +499,54 @@ impl FileSystemWatcher {
                     );
                 }
             },
-            DispatchAction::Delete => {
-                let delete_info = format!("__DELETE__:{}:{}", info.kind, info.key);
-                let _ = sender.send(FileSystemEvent::Delete(delete_info));
-                tracing::info!(
-                    component = "fs_watcher",
-                    kind = %info.kind,
-                    key = %info.key,
-                    last_kind = ?last_kind,
-                    "Dispatched Delete event"
-                );
-            }
+            DispatchAction::Delete => match self.registry.forget(path) {
+                ForgetOutcome::Removed { .. } => {
+                    let delete_info = format!("__DELETE__:{}:{}", info.kind, info.key);
+                    let _ = sender.send(FileSystemEvent::Delete(delete_info));
+                    tracing::info!(
+                        component = "fs_watcher",
+                        kind = %info.kind,
+                        key = %info.key,
+                        last_kind = ?last_kind,
+                        "Dispatched Delete event"
+                    );
+                }
+                ForgetOutcome::Promoted { new_winner, .. } => match tokio::fs::read_to_string(&new_winner).await {
+                    Ok(content) => {
+                        let _ = sender.send(FileSystemEvent::Apply {
+                            path: new_winner.clone(),
+                            content,
+                        });
+                        tracing::info!(
+                            component = "fs_watcher",
+                            kind = %info.kind,
+                            key = %info.key,
+                            promoted_to = %new_winner.display(),
+                            "Promoted conflict path to winner; dispatched Apply"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            component = "fs_watcher",
+                            path = %new_winner.display(),
+                            error = %e,
+                            "Failed to read promoted winner content"
+                        );
+                    }
+                },
+                ForgetOutcome::ConflictRemoved { .. } => {
+                    tracing::info!(
+                        component = "fs_watcher",
+                        kind = %info.kind,
+                        key = %info.key,
+                        path = %path.display(),
+                        "Removed non-winner conflict; no dispatch"
+                    );
+                }
+                ForgetOutcome::Unknown => {
+                    // Common: a deleted file we never tracked (status sidecars, tmp files).
+                }
+            },
             DispatchAction::Recheck => unreachable!(),
         }
     }
@@ -487,28 +593,29 @@ pub(crate) fn infer_dispatch_action(last_kind: &EventKind, path_exists: bool) ->
 // Helper functions
 // ============================================================================
 
-/// Count YAML files (excluding `.status`) directly under `dir`.
+/// Count YAML files (excluding `.status`) recursively under `dir`.
 ///
-/// One `read_dir` + per-entry stat — cheap even for tens of thousands of
-/// files. Errors and non-yaml entries are silently skipped; this counter
-/// only feeds `poll_interval_for` and a failure to count just means we fall
-/// back to a 1 s interval, which is the conservative default.
-///
-/// NOTE: this walks only the top level. When/if the FileSystem backend gains
-/// recursive directory support (see `tasks/todo/multi-conf-dir.md`), switch
-/// this to a recursive walk so the count still reflects the watch set.
+/// Walks the tree off the async runtime via `spawn_blocking`. Errors and
+/// non-yaml entries are silently skipped; this counter only feeds
+/// `poll_interval_for` and a failure to count just means we fall back to
+/// a 1 s interval, which is the conservative default.
 async fn count_yaml_files(dir: &Path) -> usize {
-    let mut count = 0usize;
-    let mut entries = match tokio::fs::read_dir(dir).await {
-        Ok(e) => e,
-        Err(_) => return 0,
-    };
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        if is_yaml_file(&entry.path()) {
-            count += 1;
+    let dir = dir.to_path_buf();
+    tokio::task::spawn_blocking(move || -> usize {
+        let mut count = 0usize;
+        for entry in walkdir::WalkDir::new(&dir).follow_links(false) {
+            let Ok(entry) = entry else { continue };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if is_yaml_file(entry.path()) {
+                count += 1;
+            }
         }
-    }
-    count
+        count
+    })
+    .await
+    .unwrap_or(0)
 }
 
 /// Pick a PollWatcher poll interval based on the conf directory size.
@@ -727,6 +834,39 @@ mod tests {
             infer_dispatch_action(&EventKind::Modify(ModifyKind::Name(RenameMode::Both)), false),
             DispatchAction::Recheck
         );
+    }
+
+    #[tokio::test]
+    async fn init_phase_lex_winner_for_collision() {
+        use crate::core::controller::conf_mgr::conf_center::file_system::path_registry::{PathRegistry, ResourceKey};
+        use std::sync::Arc;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let a = root.join("a");
+        let b = root.join("b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let yaml =
+            "apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: r1\n  namespace: default\n";
+        std::fs::write(a.join("HTTPRoute_default_r1.yaml"), yaml).unwrap();
+        std::fs::write(b.join("HTTPRoute_default_r1.yaml"), yaml).unwrap();
+
+        let registry = Arc::new(PathRegistry::new());
+        let watcher = FileSystemWatcher::new(root, registry.clone());
+        watcher.init_phase().await.unwrap();
+
+        let key = ResourceKey::new("HTTPRoute".to_string(), "default/r1".to_string());
+        let winner = registry.winner_of(&key).expect("winner exists");
+        assert!(
+            winner.to_string_lossy().contains("/a/"),
+            "expected lex-smallest path to win, got {:?}",
+            winner
+        );
+        let conflicts = registry.snapshot_conflicts();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].losers.len(), 1);
     }
 }
 

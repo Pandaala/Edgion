@@ -10,7 +10,10 @@ use crate::core::controller::conf_mgr::conf_center::traits::{
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::fs;
+
+use super::path_registry::PathRegistry;
 
 static CREATE_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -34,6 +37,7 @@ fn format_yaml_pretty(content: &str) -> String {
 /// or Kind__name.yaml for cluster-scoped resources.
 pub struct FileSystemStorage {
     root: PathBuf,
+    registry: Option<Arc<PathRegistry>>,
 }
 
 impl FileSystemStorage {
@@ -55,12 +59,41 @@ impl FileSystemStorage {
             "Initialized FileSystemStorage"
         );
 
-        Self { root: root_abs }
+        Self {
+            root: root_abs,
+            registry: None,
+        }
+    }
+
+    /// Attach a shared path registry (optional; used by future conflict-aware CRUD)
+    pub fn with_registry(mut self, registry: Arc<PathRegistry>) -> Self {
+        self.registry = Some(registry);
+        self
     }
 
     /// Get the root directory path
     pub fn root(&self) -> &PathBuf {
         &self.root
+    }
+
+    /// Resolve the file-system path for an existing resource.
+    ///
+    /// If a `PathRegistry` is attached and has a recorded winner for the
+    /// given (kind, namespace/name) key, that winner path is returned.
+    /// Otherwise falls back to the default landing path produced by
+    /// `build_resource_path`.
+    fn resolve_path(&self, kind: &str, namespace: Option<&str>, name: &str) -> PathBuf {
+        if let Some(reg) = &self.registry {
+            let key = match namespace {
+                Some(ns) if !ns.is_empty() => format!("{}/{}", ns, name),
+                _ => name.to_string(),
+            };
+            let rkey = super::path_registry::ResourceKey::new(kind.to_string(), key);
+            if let Some(p) = reg.winner_of(&rkey) {
+                return p;
+            }
+        }
+        build_resource_path(&self.root, kind, namespace, name)
     }
 }
 
@@ -73,7 +106,7 @@ impl CenterApi for FileSystemStorage {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
-        let path = build_resource_path(&self.root, kind, namespace, name);
+        let path = self.resolve_path(kind, namespace, name);
 
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
@@ -118,6 +151,27 @@ impl CenterApi for FileSystemStorage {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
+        // Check the registry first: if a winner already exists for this key (e.g. a
+        // legacy flat-layout file at root, or a previously-recorded nested file),
+        // refuse the create rather than writing a new file at the default nested
+        // landing path — that would create a cross-subdir collision and surface as
+        // a /diagnostics/conf-conflicts entry instead of a clean AlreadyExists.
+        if let Some(reg) = &self.registry {
+            let key = match namespace {
+                Some(ns) if !ns.is_empty() => format!("{}/{}", ns, name),
+                _ => name.to_string(),
+            };
+            let rkey = super::path_registry::ResourceKey::new(kind.to_string(), key);
+            if reg.winner_of(&rkey).is_some() {
+                return Err(ConfWriterError::AlreadyExists(format!(
+                    "{}/{}/{}",
+                    kind,
+                    namespace.unwrap_or("_"),
+                    name
+                )));
+            }
+        }
+
         let path = build_resource_path(&self.root, kind, namespace, name);
 
         if let Some(parent) = path.parent() {
@@ -178,7 +232,7 @@ impl CenterApi for FileSystemStorage {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
-        let path = build_resource_path(&self.root, kind, namespace, name);
+        let path = self.resolve_path(kind, namespace, name);
 
         // Check if file exists
         if !path.exists() {
@@ -207,7 +261,7 @@ impl CenterApi for FileSystemStorage {
     }
 
     async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
-        let path = build_resource_path(&self.root, kind, namespace, name);
+        let path = self.resolve_path(kind, namespace, name);
 
         if !path.exists() {
             return Err(ConfWriterError::NotFound(format!(
@@ -226,38 +280,36 @@ impl CenterApi for FileSystemStorage {
     }
 
     async fn list_all(&self, _opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
-        // FileSystem mode: ignore pagination options, return all items.
-        // Scan top-level only — matches the flat `Kind_ns_name.yaml` layout used by
-        // init_phase and the non-recursive watcher. Subdirectories are skipped to
-        // avoid drift between list_all and what the watcher actually observes.
-        let mut resources = Vec::new();
-        let mut entries = fs::read_dir(&self.root)
-            .await
-            .map_err(|e| ConfWriterError::io("Failed to read dir", e))?;
-
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| ConfWriterError::io("Failed to read dir entry", e))?
-        {
-            let path = entry.path();
-
-            if path.is_dir() {
-                continue;
+        let root = self.root.clone();
+        let entries: Vec<(PathBuf, String)> = tokio::task::spawn_blocking(move || -> Vec<(PathBuf, String)> {
+            use walkdir::WalkDir;
+            let mut out = Vec::new();
+            for entry in WalkDir::new(&root).follow_links(false) {
+                let Ok(entry) = entry else { continue };
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                let path = entry.path().to_path_buf();
+                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                if !matches!(ext, "yaml" | "yml") {
+                    continue;
+                }
+                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                    if name.ends_with(".status") || name.ends_with(".tmp") {
+                        continue;
+                    }
+                }
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    out.push((path, content));
+                }
             }
+            out
+        })
+        .await
+        .map_err(|e| ConfWriterError::io("list_all join failed", std::io::Error::other(e)))?;
 
-            // Only process .yaml/.yml files
-            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-            if !matches!(ext, "yaml" | "yml") {
-                continue;
-            }
-
-            // Read and parse file
-            let content = fs::read_to_string(&path)
-                .await
-                .map_err(|e| ConfWriterError::io(format!("Failed to read {:?}", path), e))?;
-
-            // Extract metadata
+        let mut resources = Vec::with_capacity(entries.len());
+        for (path, content) in entries {
             if let Some(metadata) = extract_resource_metadata(&content) {
                 resources.push(ConfEntry {
                     kind: metadata.kind.unwrap_or_default(),
@@ -277,17 +329,17 @@ impl CenterApi for FileSystemStorage {
         tracing::info!(
             component = "file_system_writer",
             count = resources.len(),
-            "Loaded all resources from file system"
+            "Loaded all resources from file system (recursive)"
         );
 
         Ok(ListResult {
             items: resources,
-            continue_token: None, // FileSystem does not support pagination
+            continue_token: None,
         })
     }
 
     async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
-        let path = build_resource_path(&self.root, kind, namespace, name);
+        let path = self.resolve_path(kind, namespace, name);
 
         if !path.exists() {
             return Err(ConfWriterError::NotFound(format!(
@@ -334,52 +386,49 @@ impl CenterApi for FileSystemStorage {
     }
 
     async fn get_list_by_kind(&self, kind: &str, _opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
-        // FileSystem mode: ignore pagination options, return all items
-        let mut resources = Vec::new();
+        let root = self.root.clone();
         let prefix = format!("{}_", kind);
-
-        let mut entries = fs::read_dir(&self.root)
-            .await
-            .map_err(|e| ConfWriterError::io("Failed to read dir", e))?;
-
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| ConfWriterError::io("Failed to read dir entry", e))?
-        {
-            let path = entry.path();
-
-            // Skip directories
-            if path.is_dir() {
-                continue;
-            }
-
-            // Only process .yaml/.yml files with matching kind prefix
-            if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                if !filename.starts_with(&prefix) {
+        let entries: Vec<(PathBuf, String)> = tokio::task::spawn_blocking(move || -> Vec<(PathBuf, String)> {
+            use walkdir::WalkDir;
+            let mut out = Vec::new();
+            for entry in WalkDir::new(&root).follow_links(false) {
+                let Ok(entry) = entry else { continue };
+                if !entry.file_type().is_file() {
                     continue;
                 }
-
+                let path = entry.path().to_path_buf();
                 let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
                 if !matches!(ext, "yaml" | "yml") {
                     continue;
                 }
+                let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if name.ends_with(".status") || name.ends_with(".tmp") {
+                    continue;
+                }
+                if !name.starts_with(&prefix) {
+                    continue;
+                }
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    out.push((path, content));
+                }
+            }
+            out
+        })
+        .await
+        .map_err(|e| ConfWriterError::io("list_by_kind join failed", std::io::Error::other(e)))?;
 
-                // Read and parse file
-                let content = fs::read_to_string(&path)
-                    .await
-                    .map_err(|e| ConfWriterError::io(format!("Failed to read {:?}", path), e))?;
-
-                // Extract metadata to verify
-                if let Some(metadata) = extract_resource_metadata(&content) {
-                    if metadata.kind.as_deref() == Some(kind) {
-                        resources.push(ConfEntry {
-                            kind: kind.to_string(),
-                            namespace: metadata.namespace,
-                            name: metadata.name.unwrap_or_default(),
-                            content,
-                        });
-                    }
+        let mut resources = Vec::with_capacity(entries.len());
+        for (_path, content) in entries {
+            if let Some(metadata) = extract_resource_metadata(&content) {
+                if metadata.kind.as_deref() == Some(kind) {
+                    resources.push(ConfEntry {
+                        kind: kind.to_string(),
+                        namespace: metadata.namespace,
+                        name: metadata.name.unwrap_or_default(),
+                        content,
+                    });
                 }
             }
         }
@@ -388,12 +437,12 @@ impl CenterApi for FileSystemStorage {
             component = "file_system_writer",
             kind = kind,
             count = resources.len(),
-            "Loaded resources by kind"
+            "Loaded resources by kind (recursive)"
         );
 
         Ok(ListResult {
             items: resources,
-            continue_token: None, // FileSystem does not support pagination
+            continue_token: None,
         })
     }
 
@@ -403,52 +452,49 @@ impl CenterApi for FileSystemStorage {
         namespace: &str,
         _opts: Option<ListOptions>,
     ) -> Result<ListResult, ConfWriterError> {
-        // FileSystem mode: ignore pagination options, return all items
-        let mut resources = Vec::new();
+        let root = self.root.clone();
         let prefix = format!("{}_{}_", kind, namespace);
-
-        let mut entries = fs::read_dir(&self.root)
-            .await
-            .map_err(|e| ConfWriterError::io("Failed to read dir", e))?;
-
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| ConfWriterError::io("Failed to read dir entry", e))?
-        {
-            let path = entry.path();
-
-            // Skip directories
-            if path.is_dir() {
-                continue;
-            }
-
-            // Only process .yaml/.yml files with matching kind_ns prefix
-            if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                if !filename.starts_with(&prefix) {
+        let entries: Vec<(PathBuf, String)> = tokio::task::spawn_blocking(move || -> Vec<(PathBuf, String)> {
+            use walkdir::WalkDir;
+            let mut out = Vec::new();
+            for entry in WalkDir::new(&root).follow_links(false) {
+                let Ok(entry) = entry else { continue };
+                if !entry.file_type().is_file() {
                     continue;
                 }
-
+                let path = entry.path().to_path_buf();
                 let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
                 if !matches!(ext, "yaml" | "yml") {
                     continue;
                 }
+                let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if name.ends_with(".status") || name.ends_with(".tmp") {
+                    continue;
+                }
+                if !name.starts_with(&prefix) {
+                    continue;
+                }
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    out.push((path, content));
+                }
+            }
+            out
+        })
+        .await
+        .map_err(|e| ConfWriterError::io("list_by_kind_ns join failed", std::io::Error::other(e)))?;
 
-                // Read and parse file
-                let content = fs::read_to_string(&path)
-                    .await
-                    .map_err(|e| ConfWriterError::io(format!("Failed to read {:?}", path), e))?;
-
-                // Extract metadata to verify
-                if let Some(metadata) = extract_resource_metadata(&content) {
-                    if metadata.kind.as_deref() == Some(kind) && metadata.namespace.as_deref() == Some(namespace) {
-                        resources.push(ConfEntry {
-                            kind: kind.to_string(),
-                            namespace: Some(namespace.to_string()),
-                            name: metadata.name.unwrap_or_default(),
-                            content,
-                        });
-                    }
+        let mut resources = Vec::with_capacity(entries.len());
+        for (_path, content) in entries {
+            if let Some(metadata) = extract_resource_metadata(&content) {
+                if metadata.kind.as_deref() == Some(kind) && metadata.namespace.as_deref() == Some(namespace) {
+                    resources.push(ConfEntry {
+                        kind: kind.to_string(),
+                        namespace: Some(namespace.to_string()),
+                        name: metadata.name.unwrap_or_default(),
+                        content,
+                    });
                 }
             }
         }
@@ -458,22 +504,64 @@ impl CenterApi for FileSystemStorage {
             kind = kind,
             namespace = namespace,
             count = resources.len(),
-            "Loaded resources by kind and namespace"
+            "Loaded resources by kind and namespace (recursive)"
         );
 
         Ok(ListResult {
             items: resources,
-            continue_token: None, // FileSystem does not support pagination
+            continue_token: None,
         })
     }
 }
 
-/// Build resource file path: Kind_namespace_name.yaml or Kind__name.yaml
-fn build_resource_path(root: &Path, kind: &str, namespace: Option<&str>, name: &str) -> PathBuf {
-    let filename = if let Some(ns) = namespace {
-        format!("{}_{}_{}.yaml", kind, ns, name)
-    } else {
-        format!("{}__{}.yaml", kind, name)
+/// Build resource file path:
+///   namespace-scoped: `<root>/<ns>/Kind_ns_name.yaml`
+///   cluster-scoped:   `<root>/cluster/Kind__name.yaml`
+pub(super) fn build_resource_path(root: &Path, kind: &str, namespace: Option<&str>, name: &str) -> PathBuf {
+    let (subdir, filename) = match namespace {
+        Some(ns) if !ns.is_empty() => (ns.to_string(), format!("{}_{}_{}.yaml", kind, ns, name)),
+        _ => ("cluster".to_string(), format!("{}__{}.yaml", kind, name)),
     };
-    root.join(filename)
+    root.join(subdir).join(filename)
+}
+
+/// Compute the canonical resource path from a (kind, key) pair under the
+/// nested namespace-subdir layout. `key` is `"namespace/name"` for
+/// namespace-scoped resources and just `"name"` for cluster-scoped.
+///
+/// Mirrors `build_resource_path` but accepts the canonical key form used by
+/// the registry, watcher, and status handler.
+pub(super) fn build_resource_path_from_key(root: &Path, kind: &str, key: &str) -> PathBuf {
+    let (namespace, name) = match key.split_once('/') {
+        Some((ns, n)) => (Some(ns), n),
+        None => (None, key),
+    };
+    build_resource_path(root, kind, namespace, name)
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn build_resource_path_namespace_scoped_uses_ns_subdir() {
+        let root = Path::new("/conf");
+        assert_eq!(
+            build_resource_path(root, "Service", Some("default"), "x"),
+            Path::new("/conf/default/Service_default_x.yaml")
+        );
+    }
+
+    #[test]
+    fn build_resource_path_cluster_scoped_uses_cluster_subdir() {
+        let root = Path::new("/conf");
+        assert_eq!(
+            build_resource_path(root, "GatewayClass", None, "edgion"),
+            Path::new("/conf/cluster/GatewayClass__edgion.yaml")
+        );
+        assert_eq!(
+            build_resource_path(root, "GatewayClass", Some(""), "edgion"),
+            Path::new("/conf/cluster/GatewayClass__edgion.yaml")
+        );
+    }
 }

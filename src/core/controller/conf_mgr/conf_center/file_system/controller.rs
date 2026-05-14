@@ -23,6 +23,7 @@ use serde::Serialize;
 use tokio::task::JoinHandle;
 
 use super::file_watcher::{FileSystemWatcher, KindEventReceiver};
+use super::path_registry::PathRegistry;
 use super::resource_controller::FileSystemResourceController;
 use super::status::FileSystemStatusHandler;
 use crate::core::controller::conf_mgr::conf_center::non_kube_common::{spawn_all_controllers, LocalControllerBackend};
@@ -36,6 +37,7 @@ use crate::types::ResourceMeta;
 /// interface.
 struct FileSystemControllerBackend {
     watcher: Arc<FileSystemWatcher>,
+    registry: Arc<PathRegistry>,
 }
 
 #[async_trait]
@@ -57,8 +59,8 @@ impl LocalControllerBackend for FileSystemControllerBackend {
         K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
     {
         let conf_dir = self.watcher.conf_dir().to_path_buf();
-        let ctrl =
-            FileSystemResourceController::new(kind, processor, conf_dir, event_rx).with_shutdown(shutdown_signal);
+        let ctrl = FileSystemResourceController::new(kind, processor, conf_dir, self.registry.clone(), event_rx)
+            .with_shutdown(shutdown_signal);
         tokio::spawn(async move { ctrl.run().await })
     }
 }
@@ -66,18 +68,19 @@ impl LocalControllerBackend for FileSystemControllerBackend {
 /// FileSystemController - Top-level controller for FileSystem mode
 pub struct FileSystemController {
     conf_dir: PathBuf,
+    registry: Arc<PathRegistry>,
 }
 
 impl FileSystemController {
     /// Create a new FileSystemController
-    pub fn new(conf_dir: PathBuf) -> Self {
+    pub fn new(conf_dir: PathBuf, registry: Arc<PathRegistry>) -> Self {
         tracing::info!(
             component = "fs_controller",
             conf_dir = %conf_dir.display(),
             "Creating FileSystemController"
         );
 
-        Self { conf_dir }
+        Self { conf_dir, registry }
     }
 
     /// Run the controller
@@ -88,8 +91,10 @@ impl FileSystemController {
             "Starting FileSystemController"
         );
 
-        // Cleanup orphan .status files at startup
-        let status_handler = FileSystemStatusHandler::new(self.conf_dir.clone());
+        // Cleanup orphan .status files at startup. The handler is short-lived but
+        // we still feed it the registry so any code path through `build_status_path`
+        // (none today, but defense in depth) goes through the canonical lookup.
+        let status_handler = FileSystemStatusHandler::new(self.conf_dir.clone()).with_registry(self.registry.clone());
         match status_handler.cleanup_orphans().await {
             Ok(count) if count > 0 => {
                 tracing::warn!(
@@ -110,10 +115,11 @@ impl FileSystemController {
 
         // Create shared components
         let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let watcher = Arc::new(FileSystemWatcher::new(self.conf_dir.clone()));
+        let watcher = Arc::new(FileSystemWatcher::new(self.conf_dir.clone(), self.registry.clone()));
 
         let backend = FileSystemControllerBackend {
             watcher: watcher.clone(),
+            registry: self.registry.clone(),
         };
 
         // Spawn all resource controllers

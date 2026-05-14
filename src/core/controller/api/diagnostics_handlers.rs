@@ -122,6 +122,42 @@ fn extract_identity(item: &serde_json::Value) -> (String, String) {
     (namespace, name)
 }
 
+#[derive(Serialize)]
+pub struct ConfConflictItem {
+    pub kind: String,
+    pub key: String,
+    pub winner: String,
+    pub losers: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct ConfConflictsResponse {
+    pub conflicts: Vec<ConfConflictItem>,
+}
+
+/// `GET /api/v1/diagnostics/conf-conflicts`.
+///
+/// Surfaces `(kind, key)` collisions where the same logical resource is
+/// recorded at more than one path under `--conf-dir` after the FileSystem
+/// backend's recursive scan. Returns an empty list when no conflicts exist
+/// or when running in a non-FileSystem mode.
+pub async fn conf_conflicts(State(state): State<Arc<AdminState>>) -> Json<ApiResponse<ConfConflictsResponse>> {
+    let conflicts = match state.conf_dir_registry() {
+        Some(reg) => reg
+            .snapshot_conflicts()
+            .into_iter()
+            .map(|c| ConfConflictItem {
+                kind: c.key.kind,
+                key: c.key.key,
+                winner: c.winner.display().to_string(),
+                losers: c.losers.into_iter().map(|p| p.display().to_string()).collect(),
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    Json(ApiResponse::success(ConfConflictsResponse { conflicts }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

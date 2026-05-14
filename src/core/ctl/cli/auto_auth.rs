@@ -132,19 +132,21 @@ fn read_generated_credentials(config_content: &str, config_path: &Path) -> Optio
     // Resolve namespace (same as controller: POD_NAMESPACE or "edgion-system")
     let namespace = std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "edgion-system".to_string());
 
-    // Secret file path: Secret_{namespace}_{name}.yaml
-    let secret_file = conf_dir.join(format!(
+    let filename = format!(
         "Secret_{}_{}.yaml",
         namespace,
         crate::core::common::local_auth::secret::ADMIN_SECRET_NAME
-    ));
+    );
 
-    if !secret_file.exists() {
-        return None;
-    }
+    // After Path A (nested namespace subdir), the controller writes new resources
+    // to `<conf_dir>/<namespace>/<filename>`. Legacy flat deployments still keep
+    // the Secret at `<conf_dir>/<filename>`. Try nested first, fall back to flat.
+    let candidates = [conf_dir.join(&namespace).join(&filename), conf_dir.join(&filename)];
+
+    let secret_file = candidates.iter().find(|p| p.exists())?;
 
     // Parse the Secret YAML to extract username and password
-    let content = std::fs::read_to_string(&secret_file).ok()?;
+    let content = std::fs::read_to_string(secret_file).ok()?;
     parse_secret_credentials(&content)
 }
 
@@ -400,5 +402,69 @@ data:
   password: "!!!not-base64!!!"
 "#;
         assert!(parse_secret_credentials(yaml).is_none());
+    }
+
+    /// Locks the dual-layout lookup added when the controller switched to the
+    /// nested namespace-subdir layout for new resources. Pre-existing flat
+    /// deployments and freshly-bootstrapped nested ones must both authenticate
+    /// without operator intervention.
+    #[test]
+    fn read_generated_credentials_finds_secret_under_both_layouts() {
+        use tempfile::TempDir;
+
+        const SECRET_YAML: &str = "apiVersion: v1\nkind: Secret\ntype: Opaque\nstringData:\n  username: admin\n  password: secret-pw\n  jwt_secret: jwt\n";
+
+        let make_config = |dir: &std::path::Path| -> std::path::PathBuf {
+            let config_path = dir.join("controller.yaml");
+            std::fs::write(
+                &config_path,
+                format!("conf_center:\n  type: file_system\n  conf_dir: {}\n", dir.join("config").display()),
+            )
+            .unwrap();
+            std::fs::create_dir_all(dir.join("config")).unwrap();
+            config_path
+        };
+
+        // Nested layout (Path A default for new resources).
+        {
+            let tmp = TempDir::new().unwrap();
+            let config_path = make_config(tmp.path());
+            let conf_dir = tmp.path().join("config");
+            let ns_dir = conf_dir.join("edgion-system");
+            std::fs::create_dir_all(&ns_dir).unwrap();
+            std::fs::write(
+                ns_dir.join("Secret_edgion-system_edgion-admin-credentials.yaml"),
+                SECRET_YAML,
+            )
+            .unwrap();
+            // Avoid stale EDGION_WORK_DIR from a parent test run.
+            let _guard = std::env::remove_var("EDGION_WORK_DIR");
+            let _guard2 = std::env::remove_var("POD_NAMESPACE");
+            let config_content = std::fs::read_to_string(&config_path).unwrap();
+            let creds = read_generated_credentials(&config_content, &config_path);
+            assert!(creds.is_some(), "should find Secret at nested namespace subdir");
+            let (u, p) = creds.unwrap();
+            assert_eq!(u, "admin");
+            assert_eq!(p.as_str(), "secret-pw");
+        }
+
+        // Legacy flat layout (pre-Path-A deployments still on disk).
+        {
+            let tmp = TempDir::new().unwrap();
+            let config_path = make_config(tmp.path());
+            let conf_dir = tmp.path().join("config");
+            std::fs::write(
+                conf_dir.join("Secret_edgion-system_edgion-admin-credentials.yaml"),
+                SECRET_YAML,
+            )
+            .unwrap();
+            std::env::remove_var("EDGION_WORK_DIR");
+            std::env::remove_var("POD_NAMESPACE");
+            let config_content = std::fs::read_to_string(&config_path).unwrap();
+            let creds = read_generated_credentials(&config_content, &config_path);
+            assert!(creds.is_some(), "should fall back to flat layout for legacy deployments");
+            let (_, p) = creds.unwrap();
+            assert_eq!(p.as_str(), "secret-pw");
+        }
     }
 }

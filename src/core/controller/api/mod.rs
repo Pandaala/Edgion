@@ -215,6 +215,10 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
             "/api/v1/diagnostics/nested_ext_ref_usage",
             get(diagnostics_handlers::nested_ext_ref_usage),
         )
+        .route(
+            "/api/v1/diagnostics/conf-conflicts",
+            get(diagnostics_handlers::conf_conflicts),
+        )
         // ConfigServer endpoints (for edgion-cli --target server)
         .route("/configserver/{kind}/list", get(configserver_handlers::list_resources))
         .route("/configserver/{kind}", get(configserver_handlers::get_resource))

@@ -1382,6 +1382,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
+ "walkdir",
  "wiremock",
  "x509-parser 0.18.1",
  "zeroize",

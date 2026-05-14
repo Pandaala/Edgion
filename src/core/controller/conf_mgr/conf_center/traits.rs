@@ -245,6 +245,14 @@ pub trait CenterLifeCycle: Send + Sync {
 
     /// Get the ControllerRuntime for this center
     fn runtime(&self) -> Arc<ControllerRuntime>;
+
+    /// Return the FileSystem ConfCenter's PathRegistry, if applicable.
+    /// Default `None` for backends that don't track on-disk paths.
+    fn conf_dir_registry(
+        &self,
+    ) -> Option<Arc<crate::core::controller::conf_mgr::conf_center::file_system::PathRegistry>> {
+        None
+    }
 }
 
 // ============================================================================

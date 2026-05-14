@@ -11,8 +11,10 @@
 //! - Delete(info) -> processor.on_delete(&obj)
 
 use super::event::FileSystemEvent;
-use super::file_watcher::{build_path_from_key, KindEventReceiver};
+use super::file_watcher::KindEventReceiver;
+use super::path_registry::{PathRegistry, ResourceKey};
 use super::status::FileSystemStatusHandler;
+use super::storage::build_resource_path_from_key;
 use crate::core::controller::conf_mgr::conf_center::common::parse_resource_content;
 use crate::core::controller::conf_mgr::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
@@ -38,6 +40,11 @@ where
     kind: &'static str,
     processor: Arc<ResourceProcessor<K>>,
     conf_dir: PathBuf,
+    /// Shared with watcher / status handler / storage — single source of truth
+    /// for `(kind, key) → on-disk path`. Used here to resolve the spec path
+    /// the worker re-reads (may be nested) and to feed the status handler so
+    /// `.yaml.status` lands beside its spec.
+    registry: Arc<PathRegistry>,
     event_rx: KindEventReceiver,
     shutdown_signal: Option<ShutdownSignal>,
     /// Raw store shared with processor for cross-resource key lookups.
@@ -53,6 +60,7 @@ where
         kind: &'static str,
         processor: Arc<ResourceProcessor<K>>,
         conf_dir: PathBuf,
+        registry: Arc<PathRegistry>,
         event_rx: KindEventReceiver,
     ) -> Self {
         let fs_raw_store = Arc::new(LocalRawStore::new());
@@ -65,6 +73,7 @@ where
             kind,
             processor,
             conf_dir,
+            registry,
             event_rx,
             shutdown_signal: None,
             fs_raw_store,
@@ -94,8 +103,9 @@ where
         let mut worker_handle: Option<JoinHandle<()>> = None;
         let mut shutdown = self.shutdown_signal.clone();
 
-        // Status handler for init phase (also used by worker)
-        let status_handler = FileSystemStatusHandler::new(self.conf_dir.clone());
+        // Status handler for init phase. Registry-aware so `.yaml.status` writes
+        // land beside the spec (which may be nested under a namespace subdir).
+        let status_handler = FileSystemStatusHandler::new(self.conf_dir.clone()).with_registry(self.registry.clone());
 
         loop {
             let event = if let Some(ref mut signal) = shutdown {
@@ -241,6 +251,7 @@ where
                             worker_handle = Some(spawn_worker(
                                 self.processor.clone(),
                                 self.conf_dir.clone(),
+                                self.registry.clone(),
                                 kind,
                                 self.shutdown_signal.clone(),
                                 self.fs_raw_store.clone(),
@@ -442,6 +453,7 @@ use tokio::sync::broadcast;
 fn spawn_worker<K>(
     processor: Arc<ResourceProcessor<K>>,
     conf_dir: PathBuf,
+    registry: Arc<PathRegistry>,
     kind: &'static str,
     shutdown_signal: Option<ShutdownSignal>,
     fs_raw_store: Arc<LocalRawStore<K>>,
@@ -450,7 +462,7 @@ where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
 {
     let workqueue = processor.workqueue();
-    let status_handler = FileSystemStatusHandler::new(conf_dir.clone());
+    let status_handler = FileSystemStatusHandler::new(conf_dir.clone()).with_registry(registry.clone());
 
     tokio::spawn(async move {
         // Clone shutdown_signal once outside the loop
@@ -476,8 +488,16 @@ where
 
             match item {
                 Some(work_item) => {
-                    // For FileSystem mode, we read from file instead of K8s store
-                    let path = build_path_from_key(&conf_dir, kind, &work_item.key);
+                    // For FileSystem mode we re-read the spec from disk. The
+                    // canonical path lives in `PathRegistry` (winner of this
+                    // (kind, key)); we fall back to the default nested layout
+                    // only when the registry has no record — which mainly
+                    // happens for keys that were enqueued but whose Create
+                    // event the watcher hasn't yet observed.
+                    let rkey = ResourceKey::new(kind.to_string(), work_item.key.clone());
+                    let path = registry
+                        .winner_of(&rkey)
+                        .unwrap_or_else(|| build_resource_path_from_key(&conf_dir, kind, &work_item.key));
 
                     let (store_obj, parse_error) = if path.exists() {
                         match tokio::fs::read_to_string(&path).await {

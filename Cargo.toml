@@ -115,6 +115,7 @@ prost = "0.13"
 
 # File system monitoring
 notify = "8.2"
+walkdir = "2"
 futures = "0.3.31"
 
 # HTTP server

@@ -29,6 +29,14 @@ impl AdminState {
         self.conf_mgr.conf_center()
     }
 
+    /// Return the FileSystem PathRegistry, if this controller runs in FileSystem mode.
+    /// Returns `None` in Kubernetes mode.
+    pub fn conf_dir_registry(
+        &self,
+    ) -> Option<Arc<crate::core::controller::conf_mgr::conf_center::file_system::PathRegistry>> {
+        self.conf_center().conf_dir_registry()
+    }
+
     /// Get the ControllerRuntime for direct table access
     pub fn runtime(&self) -> Arc<ControllerRuntime> {
         self.conf_mgr.runtime()
