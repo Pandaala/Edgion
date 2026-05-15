@@ -708,7 +708,7 @@ impl Vm {
                         let key_str = k.into_string();
                         map.insert(key_str, v);
                     }
-                    state.push(Value::Map(map), self.limits.max_stack_depth)?;
+                    state.push(Value::Map(Box::new(map)), self.limits.max_stack_depth)?;
                 }
 
                 // ===== Builtin Calls =====

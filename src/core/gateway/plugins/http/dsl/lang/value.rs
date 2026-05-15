@@ -21,8 +21,10 @@ pub enum Value {
     Nil,
     /// Internal: list of strings for iteration (not user-constructable directly)
     List(Vec<Arc<str>>),
-    /// Structured map — returned by http.call and constructable via map literals
-    Map(IndexMap<String, Value>),
+    /// Structured map — returned by http.call and constructable via map literals.
+    /// Boxed to keep `size_of::<Value>()` at 24 B; otherwise the inline IndexMap
+    /// (~72 B) would dominate VmState's stack/locals SmallVec inline capacity.
+    Map(Box<IndexMap<String, Value>>),
 }
 
 impl Value {
@@ -239,7 +241,7 @@ mod tests {
         let mut m = IndexMap::new();
         m.insert("status".to_string(), Value::Int(200));
         m.insert("body".to_string(), Value::Str(Arc::from("ok")));
-        let v = Value::Map(m);
+        let v = Value::Map(Box::new(m));
         assert!(v.is_truthy());
         assert!(v.is_map());
         assert_eq!(v.type_name(), "Map");
@@ -252,14 +254,14 @@ mod tests {
         a.insert("k".to_string(), Value::Int(1));
         let mut b = IndexMap::new();
         b.insert("k".to_string(), Value::Int(1));
-        assert_eq!(Value::Map(a), Value::Map(b));
+        assert_eq!(Value::Map(Box::new(a)), Value::Map(Box::new(b)));
     }
 
     #[test]
     fn test_map_clone() {
         let mut m = IndexMap::new();
         m.insert("x".to_string(), Value::Bool(true));
-        let v = Value::Map(m);
+        let v = Value::Map(Box::new(m));
         let v2 = v.clone();
         assert_eq!(v, v2);
     }
@@ -270,6 +272,15 @@ mod tests {
         assert_eq!(format!("{}", Value::Int(42)), "42");
         assert_eq!(format!("{}", Value::Bool(true)), "true");
         assert_eq!(format!("{}", Value::Nil), "nil");
+    }
+
+    /// Lock the layout: any change pushing `Value` past 24 B blows up
+    /// VmState's SmallVec inline capacity. If this fails, evaluate boxing
+    /// the new variant rather than relaxing the bound.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn assert_value_size_invariant() {
+        assert_eq!(std::mem::size_of::<Value>(), 24);
     }
 
     #[test]

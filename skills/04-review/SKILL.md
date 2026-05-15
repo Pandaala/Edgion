@@ -65,6 +65,10 @@ Load on demand:
 
 - When reviewing path-based ACL safety (misuse of `req.request_path`, direct read of `req_header().uri.path()`, raw write of `req_header_mut().set_uri()`, `RegularExpression` containing `%XX` literals, attacks beyond the commitment scope), first read [uri-normalization/SKILL.md](uri-normalization/SKILL.md)
 
+- When reviewing proposals to migrate DSL `Value::Str(Arc<str>)` to a SSO / `try_unwrap`-capable string type (`Arc<SmartString>`, `Arc<CompactString>`, `KString`, `EcoString`, etc.) for performance, first read [dsl-value-str/sso-migration-not-worth-it.md](dsl-value-str/sso-migration-not-worth-it.md)
+
+- When reviewing findings of the form "`Value::Map` has an unnecessary `Box`, remove it" / "Box adds an extra heap allocation per Map construction" / "why is only `Map` Boxed but not `List`/`Str`", first read [dsl-value-str/map-variant-is-boxed.md](dsl-value-str/map-variant-is-boxed.md) — `Map(Box<IndexMap<String, Value>>)` is intentional: it shrinks `size_of::<Value>()` from 72 → 24 B and per-request `VmState` stack frame from ~2.3 KB → ~0.83 KB; the `assert_value_size_invariant` test in `value.rs` locks the size at 24 B; do not propose unboxing — investigated 2026-05-15 across four candidate crates; outer-`Arc` defeats SSO for `SmartString`/`CompactString`; `kstring` 2.0.2 source review confirmed `KString::into_string` is NOT zero-copy (the `HeapStr` trait exposes no consuming method to extract inner `Arc<str>` for `try_unwrap`); only realized benefit is SSO on short-string construction (~5–15 alloc/request out of several hundred), insufficient to justify a new dependency + MSRV 1.95.0 lift + ~98 call-site diff. Defer until profiling shows DSL string allocation as a real bottleneck. Bespoke options (`Arc<Box<str>>` for zero-copy `into_string`, custom inline+arc enum) are catalogued in the memo with their trade-offs.
+
 Usage principles:
 
 - Only write here after the conclusion has been verified against the current code and design semantics

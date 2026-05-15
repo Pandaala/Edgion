@@ -22,7 +22,7 @@ fn redis_ok(value: Value) -> Value {
     m.insert("ok".to_string(), Value::Bool(true));
     m.insert("value".to_string(), value);
     m.insert("error".to_string(), Value::Nil);
-    Value::Map(m)
+    Value::Map(Box::new(m))
 }
 
 /// Build a `Map { ok: false, value: nil, error: <msg> }` error response for redis.* builtins.
@@ -31,7 +31,7 @@ fn redis_err(msg: String) -> Value {
     m.insert("ok".to_string(), Value::Bool(false));
     m.insert("value".to_string(), Value::Nil);
     m.insert("error".to_string(), Value::Str(msg.into()));
-    Value::Map(m)
+    Value::Map(Box::new(m))
 }
 
 /// Check that a string result doesn't exceed the VM's max_string_len limit.
@@ -911,7 +911,7 @@ impl Vm {
         if let Some(hv) = headers_val {
             match hv {
                 Value::Map(m) => {
-                    for (k, v) in &m {
+                    for (k, v) in m.iter() {
                         builder = builder.header(k.as_str(), v.as_str());
                     }
                 }
@@ -930,8 +930,8 @@ impl Vm {
             let mut m = IndexMap::new();
             m.insert("status".to_string(), Value::Int(0));
             m.insert("body".to_string(), Value::Str(Arc::from("")));
-            m.insert("headers".to_string(), Value::Map(IndexMap::new()));
-            Value::Map(m)
+            m.insert("headers".to_string(), Value::Map(Box::new(IndexMap::new())));
+            Value::Map(Box::new(m))
         };
 
         let resp = match builder.send().await {
@@ -962,9 +962,9 @@ impl Vm {
         let mut result = IndexMap::new();
         result.insert("status".to_string(), Value::Int(status));
         result.insert("body".to_string(), Value::Str(body_text.into()));
-        result.insert("headers".to_string(), Value::Map(resp_headers));
+        result.insert("headers".to_string(), Value::Map(Box::new(resp_headers)));
 
-        Ok(Value::Map(result))
+        Ok(Value::Map(Box::new(result)))
     }
 }
 
@@ -1205,7 +1205,7 @@ impl Vm {
                         for (k, v) in map {
                             result.insert(k, Value::Str(v.into()));
                         }
-                        Ok(redis_ok(Value::Map(result)))
+                        Ok(redis_ok(Value::Map(Box::new(result))))
                     }
                     Err(e) => Ok(redis_err(e.to_string())),
                 }
