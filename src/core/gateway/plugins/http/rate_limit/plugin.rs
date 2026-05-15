@@ -208,24 +208,8 @@ impl RequestFilter for RateLimit {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        use crate::types::resources::edgion_plugins::PluginValidation;
         // PluginLog must stay short (≤40B) and must never contain the resolved
         // limit_key — it can be a user-identifying value (API key, user_id).
-        // Check for configuration errors
-        if self.config.validation_error().is_some() {
-            plugin_log.push_err("cfg load fail");
-            // Fail-close on config error: a misconfigured rate limiter must fail
-            // loudly so the operator notices, not silently pass all traffic.
-            let mut resp = Box::new(ResponseHeader::build(500, None).expect("500 is a valid status code"));
-            resp.insert_header("Content-Type", "application/json").ok();
-            let body = Bytes::from(r#"{"message":"Internal rate limiter error"}"#);
-            if session.write_response_header(resp, false).await.is_err() {
-                return PluginRunningResult::ErrTerminateRequest;
-            }
-            let _ = session.write_response_body(Some(body), true).await;
-            return PluginRunningResult::ErrTerminateRequest;
-        }
-
         // Get the rate limiting key using session.key_get()
         // Multiple keys are combined with "_" separator
         let limit_key = {
@@ -305,26 +289,6 @@ mod tests {
         };
         let _ = config.validate();
         config
-    }
-
-    #[tokio::test]
-    async fn test_config_validation_error() {
-        let mut config = RateLimitConfig {
-            rate: 0, // Invalid rate
-            ..Default::default()
-        };
-        let _ = config.validate();
-
-        let plugin = RateLimit::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-        let mut plugin_log = PluginLog::new("RateLimit");
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("cfg load fail"));
     }
 
     #[tokio::test]

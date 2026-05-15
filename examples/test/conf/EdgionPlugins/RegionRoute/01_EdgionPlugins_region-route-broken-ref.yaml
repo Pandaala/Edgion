@@ -1,0 +1,19 @@
+# RegionRoute - broken serviceRegionRouteRef
+#
+# The RegionRoute requestPlugin's serviceRegionRouteRef points at a
+# ServiceRegionRoute PluginMetaData named "no-such-service-region-route",
+# which is intentionally NOT created.
+#
+# region_route's resolve_config now returns BrokenRef when the
+# serviceRegionRouteRef does not resolve, which the data plane surfaces as
+# an HTTP 500 instead of silently passing through.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: region-route-broken-ref
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RegionRoute
+      config:
+        serviceRegionRouteRef: "no-such-service-region-route"

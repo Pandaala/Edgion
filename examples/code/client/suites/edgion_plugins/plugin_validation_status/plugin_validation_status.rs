@@ -9,6 +9,7 @@
 //   03_EdgionPlugins_ep-validation-direct-endpoint-invalid.yaml — DirectEndpoint: invalid extract regex
 //   04_EdgionPlugins_ep-validation-rate-limit-invalid.yaml      — RateLimit: rate=0
 //   05_EdgionPlugins_ep-validation-alias-invalid.yaml           — Cors entry with alias containing a space
+//   06_EdgionPlugins_ep-validation-dsl-invalid.yaml             — Dsl: uncompilable inline source
 //
 // Scenarios:
 //   1. jwt_auth_invalid   → Accepted=False/Invalid, message contains "secretRef"
@@ -16,6 +17,7 @@
 //   3. direct_ep_invalid  → Accepted=False/Invalid, message contains "regex"
 //   4. rate_limit_invalid → Accepted=False/Invalid, message contains "rate"
 //   5. alias_invalid      → Accepted=False/Invalid, message contains "alias"
+//   6. dsl_invalid        → Accepted=False/Invalid, message contains "DSL compile errors"
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -197,6 +199,27 @@ impl PluginValidationStatusTestSuite {
             },
         )
     }
+
+    // =========================================================================
+    // Scenario 6: Dsl with an uncompilable inline source → Accepted=False/Invalid
+    //
+    // DslConfig::validation_error() runs the full data-plane validation path
+    // (DslPlugin::validate_config → resolve_script → compile_dsl_source). An
+    // uncompilable `source` is reported as "DSL compile errors: ..." which the
+    // controller joins verbatim into the Accepted condition message.
+    // =========================================================================
+
+    fn dsl_invalid() -> TestCase {
+        TestCase::new(
+            "dsl_invalid",
+            "Dsl 'ep-validation-dsl-invalid': uncompilable source → Accepted=False/Invalid",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    assert_accepted_false(&ctx, "ep-validation-dsl-invalid", "DSL compile errors").await
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for PluginValidationStatusTestSuite {
@@ -211,6 +234,7 @@ impl TestSuite for PluginValidationStatusTestSuite {
             Self::direct_endpoint_invalid(),
             Self::rate_limit_invalid(),
             Self::alias_invalid(),
+            Self::dsl_invalid(),
         ]
     }
 }

@@ -106,16 +106,20 @@ impl ExtensionRefFilter {
     /// Helper to prepare plugin execution: validation, lookup, logging setup
     /// Returns:
     /// - Ok(Some((plugin, token))): Success
-    /// - Ok(None): Skip (not EdgionPlugins)
-    /// - Err(()): Error (referenced EdgionPlugins not found), logged
+    /// - Ok(None): no longer produced; the `Option` layer is retained to keep this change's diff narrow
+    /// - Err(()): Error — unsupported kind, or referenced EdgionPlugins not found; logged
     fn prepare_execution(
         &self,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> Result<Option<(Arc<PluginRuntime>, EdgionPluginsLogToken)>, ()> {
         if !self.is_edgion_plugins() {
+            // An unsupported ExtensionRef kind is a static config error caught
+            // at preparse time (`find_invalid_rule_details` /
+            // `find_invalid_rule_indices`). This is the runtime backstop — fail
+            // closed via `Err(())`, which both callers map to HTTP 500.
             log.push_err("extension ref kind not supported");
-            return Ok(None);
+            return Err(());
         }
 
         log.set_refer_to(self.ext_ref.name.clone());
@@ -154,6 +158,7 @@ impl ExtensionRefFilter {
     ) -> PluginRunningResult {
         let (plugin_runtime, log_token) = match self.prepare_execution(session, log) {
             Ok(Some(res)) => res,
+            // Unreachable: prepare_execution never returns Ok(None); see its doc comment.
             Ok(None) => return PluginRunningResult::GoodNext,
             Err(_) => {
                 // Sync stage: no `await`, so we cannot write a response body
@@ -202,6 +207,7 @@ impl ExtensionRefFilter {
     ) -> PluginRunningResult {
         let (plugin_runtime, log_token) = match self.prepare_execution(session, log) {
             Ok(Some(res)) => res,
+            // Unreachable: prepare_execution never returns Ok(None); see its doc comment.
             Ok(None) => return PluginRunningResult::GoodNext,
             Err(_) => {
                 // Without writing a response here, ErrTerminateRequest would surface
@@ -460,6 +466,46 @@ mod tests {
                 status: 500,
                 body: None
             }
+        );
+    }
+
+    /// Runtime backstop (Task 9): an ExtensionRef whose `kind` is not
+    /// `EdgionPlugins` must fail closed. `prepare_execution` returns `Err(())`,
+    /// which `run_extension_async` (the request stage) maps to a 500 response +
+    /// JSON body followed by `ErrTerminateRequest` — NOT `GoodNext`.
+    ///
+    /// Note: the request-stage path returns `ErrTerminateRequest` (after
+    /// writing a 500 + body itself) rather than `ErrResponse { status: 500 }`.
+    /// The draft test in the plan asserted `ErrResponse { status: 500, .. }`,
+    /// but that is what the *sync* `run_extension` `Err` arm returns;
+    /// `run_request` -> `run_extension_async` returns `ErrTerminateRequest`.
+    /// We assert that, plus verify the mock session received the 500 header
+    /// write, so the test genuinely proves fail-closed behavior.
+    #[tokio::test]
+    async fn unsupported_kind_fails_closed() {
+        let mut session = MockPluginSession::new();
+        session.expect_write_response_header().times(1).returning(|hdr, _eos| {
+            assert_eq!(hdr.status.as_u16(), 500);
+            Ok(())
+        });
+        session
+            .expect_write_response_body()
+            .times(1)
+            .returning(|_body, _eos| Ok(()));
+
+        let filter = ExtensionRefFilter::new(
+            "default".to_string(),
+            LocalObjectReference {
+                group: "edgion.io".into(),
+                kind: "NotAPlugin".into(),
+                name: "x".into(),
+            },
+        );
+        let mut log = PluginLog::with_alias("ExtensionRef", None);
+        let result = filter.run_request(&mut session, &mut log).await;
+        assert!(
+            matches!(result, PluginRunningResult::ErrTerminateRequest),
+            "unsupported ExtensionRef kind must fail closed (500 written + ErrTerminateRequest), got {result:?}"
         );
     }
 }

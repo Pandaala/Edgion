@@ -244,7 +244,6 @@ start_controller() {
         --work-dir "$PROJECT_ROOT" \
         --conf-dir "$CONFIG_DIR" \
         --admin-listen "0.0.0.0:${CONTROLLER_ADMIN_PORT}" \
-        --fs-poll-interval-ms 500 \
         --test-mode \
         > "${LOG_DIR}/controller.log" 2>&1 &
     

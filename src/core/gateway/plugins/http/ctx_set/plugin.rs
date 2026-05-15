@@ -209,14 +209,6 @@ impl RequestFilter for CtxSet {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        use crate::types::resources::edgion_plugins::PluginValidation;
-        // Check for configuration errors
-        if self.config.validation_error().is_some() {
-            plugin_log.push_err("config validation fail");
-            // Fail-open: allow request to proceed on config error
-            return PluginRunningResult::GoodNext;
-        }
-
         for (idx, rule) in self.config.vars.iter().enumerate() {
             let value = self.process_rule(rule, idx, session, plugin_log).await;
 
@@ -244,24 +236,6 @@ impl RequestFilter for CtxSet {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-
-    #[tokio::test]
-    async fn test_config_error_fail_open() {
-        // An empty vars list is invalid; the trait validator surfaces the error,
-        // and the plugin fails open.
-        let config = CtxSetConfig::default();
-        let plugin = CtxSet {
-            name: "CtxSet".to_string(),
-            config,
-        };
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSet");
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("config validation fail"));
-    }
 
     #[tokio::test]
     async fn test_template_injection_prevention() {

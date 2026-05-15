@@ -15,6 +15,7 @@ use crate::types::prelude_resources::GRPCRoute;
 use crate::types::resources::common::RefDenied;
 use crate::types::resources::grpc_route::{GRPCRouteFilter, GRPCRouteFilterType, GRPCRouteStatus};
 use crate::types::resources::http_route::RouteParentStatus;
+use crate::types::resources::http_route_preparse::is_lb_policy_kind;
 use crate::types::ResourceKind;
 
 /// GRPCRoute handler
@@ -458,17 +459,89 @@ mod tests {
     #[test]
     fn repeated_request_mirror_and_extension_ref_are_allowed() {
         // RequestMirror and ExtensionRef are explicitly allowed to appear multiple times.
+        // ExtensionRef filters must point at a supported kind (EdgionPlugins) to be valid.
         let route = route_with_rules(json!([
             {
                 "filters": [
                     { "type": "RequestMirror", "requestMirror": { "backendRef": { "name": "mirror-a" } } },
                     { "type": "RequestMirror", "requestMirror": { "backendRef": { "name": "mirror-b" } } },
-                    { "type": "ExtensionRef", "extensionRef": { "group": "g", "kind": "k", "name": "a" } },
-                    { "type": "ExtensionRef", "extensionRef": { "group": "g", "kind": "k", "name": "b" } }
+                    { "type": "ExtensionRef", "extensionRef": { "group": "edgion.io", "kind": "EdgionPlugins", "name": "a" } },
+                    { "type": "ExtensionRef", "extensionRef": { "kind": "EdgionPlugins", "name": "b" } }
                 ]
             }
         ]));
         assert!(super::find_invalid_rule_indices(&route, "default").is_empty());
+    }
+
+    #[test]
+    fn extension_ref_unsupported_kind_marks_rule_invalid() {
+        let route: GRPCRoute = serde_json::from_value(json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": { "name": "r", "namespace": "default" },
+            "spec": {
+                "rules": [{
+                    "filters": [{
+                        "type": "ExtensionRef",
+                        "extensionRef": { "group": "edgion.io", "kind": "NotAPlugin", "name": "x" }
+                    }]
+                }]
+            }
+        }))
+        .expect("route should deserialize");
+        assert_eq!(super::find_invalid_rule_indices(&route, "default"), vec![0]);
+    }
+
+    #[test]
+    fn extension_ref_unsupported_kind_on_backend_ref_marks_rule_invalid() {
+        // The backendRef-level ExtensionRef check must also flag the rule invalid.
+        let route: GRPCRoute = serde_json::from_value(json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": { "name": "r", "namespace": "default" },
+            "spec": {
+                "rules": [{
+                    "backendRefs": [{
+                        "name": "svc-a",
+                        "filters": [{
+                            "type": "ExtensionRef",
+                            "extensionRef": { "group": "edgion.io", "kind": "NotAPlugin", "name": "x" }
+                        }]
+                    }]
+                }]
+            }
+        }))
+        .expect("route should deserialize");
+        assert_eq!(super::find_invalid_rule_indices(&route, "default"), vec![0]);
+    }
+
+    #[test]
+    fn extension_ref_lb_policy_on_backend_ref_not_flagged() {
+        // An LBPolicy ExtensionRef on a backendRef is a recognized second use of
+        // the ExtensionRef filter type (load-balancing policy, consumed by
+        // BackendExtensionInfo). It must NOT be flagged by the unsupported-kind
+        // gate.
+        let route: GRPCRoute = serde_json::from_value(json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": { "name": "r", "namespace": "default" },
+            "spec": {
+                "rules": [{
+                    "backendRefs": [{
+                        "name": "svc-a",
+                        "filters": [{
+                            "type": "ExtensionRef",
+                            "extensionRef": { "group": "edgion.io", "kind": "LBPolicyConsistentHash", "name": "header.x-user-id" }
+                        }]
+                    }]
+                }]
+            }
+        }))
+        .expect("route should deserialize");
+        assert!(
+            super::find_invalid_rule_indices(&route, "default").is_empty(),
+            "LBPolicy backendRef ExtensionRef must not be flagged invalid"
+        );
     }
 
     #[test]
@@ -560,6 +633,36 @@ fn has_duplicate_filter_conflict(filters: Option<&Vec<GRPCRouteFilter>>) -> bool
     false
 }
 
+/// True if any `ExtensionRef` filter in the list points at a kind that is not
+/// recognized.
+///
+/// `ExtensionRef` has two recognized uses:
+/// - `EdgionPlugins` (group empty or `edgion.io`) — a plugin reference.
+/// - The LBPolicy kinds (`LBPolicyConsistentHash` / `LBPolicyLeastConn` /
+///   `LBPolicyEwma`) — a load-balancing-policy reference on `backendRefs[].filters`,
+///   consumed by `BackendExtensionInfo` / `parse_lb_policy`. These are exempt
+///   from this gate (an LBPolicy ExtensionRef placed at rule-level is a silent
+///   no-op).
+///
+/// Anything else is a static config error; the gRPC side has no reason-string
+/// plumbing, so this only contributes the rule index to `invalid_rule_indices`.
+fn has_unsupported_extension_ref(filters: Option<&Vec<GRPCRouteFilter>>) -> bool {
+    let Some(filters) = filters else { return false };
+    for f in filters {
+        if f.filter_type != GRPCRouteFilterType::ExtensionRef {
+            continue;
+        }
+        if let Some(ext) = f.extension_ref.as_ref() {
+            let group_ok = ext.group.is_empty() || ext.group == "edgion.io";
+            let recognized = (group_ok && ext.kind == "EdgionPlugins") || is_lb_policy_kind(&ext.kind);
+            if !recognized {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Find rule indices where the rule is invalid.
 ///
 /// A rule is invalid if it (or any of its backend refs) has a duplicate single-instance
@@ -580,10 +683,15 @@ fn find_invalid_rule_indices(route: &GRPCRoute, _route_ns: &str) -> Vec<usize> {
                 invalid_indices.push(idx);
                 continue;
             }
+            if has_unsupported_extension_ref(rule.filters.as_ref()) {
+                invalid_indices.push(idx);
+                continue;
+            }
             if let Some(backend_refs) = &rule.backend_refs {
-                let backend_conflict = backend_refs
-                    .iter()
-                    .any(|br| has_duplicate_filter_conflict(br.filters.as_ref()));
+                let backend_conflict = backend_refs.iter().any(|br| {
+                    has_duplicate_filter_conflict(br.filters.as_ref())
+                        || has_unsupported_extension_ref(br.filters.as_ref())
+                });
                 if backend_conflict {
                     invalid_indices.push(idx);
                 }

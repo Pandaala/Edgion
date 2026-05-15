@@ -68,7 +68,7 @@ impl DslPlugin {
     /// Priority: bytecode (pre-compiled) > source (compile on-the-fly).
     /// This allows YAML users to write inline `source` code directly, while
     /// the controller can also pre-compile to `bytecode` for production use.
-    fn resolve_script(config: &DslConfig) -> Result<CompiledScript, String> {
+    pub(crate) fn resolve_script(config: &DslConfig) -> Result<CompiledScript, String> {
         // 1. Pre-compiled bytecode takes priority
         if let Some(bytecode_str) = &config.bytecode {
             let script = CompiledScript::deserialize_base64(bytecode_str)
@@ -96,21 +96,10 @@ impl DslPlugin {
         Err("either source or bytecode must be provided".to_string())
     }
 
-    /// Extract script, limits, error policy, and runtime from DslConfig
-    fn resolve_parts(config: &DslConfig) -> Option<(CompiledScript, VmLimits, DslErrorPolicy, DslRuntime)> {
-        let script = match Self::resolve_script(config) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("DSL plugin '{}' failed to load: {}", config.name, e);
-                return None;
-            }
-        };
-        // Validate linkSysRefs config
-        if let Err(e) = config.validate() {
-            tracing::error!("DSL plugin '{}' config error: {}", config.name, e);
-            return None;
-        }
-
+    /// Best-effort compile-time check that every `redis.*` builtin's link name
+    /// appears in `linksys_refs`. See the inline notes for the heuristic's
+    /// known false-positive/negative limitations.
+    fn check_redis_link_names(config: &DslConfig, script: &CompiledScript) -> Result<(), String> {
         // Compile-time link-name check (best-effort heuristic):
         // Scan bytecode for redis.* CallBuiltin at index i. The first argument
         // (link name) is pushed deepest, at index i-argc — but only when every
@@ -125,27 +114,23 @@ impl DslPlugin {
         //
         // For a precise check, move this logic to the compiler (AST layer).
         // For now, it catches the common case of literal link names and typos.
-        {
-            use super::lang::bytecode::Constant;
-            let valid_names: std::collections::HashSet<&str> =
-                config.linksys_refs.iter().map(|r| r.name.as_str()).collect();
-            for (i, op) in script.code.iter().enumerate() {
-                if let OpCode::CallBuiltin(id, argc) = op {
-                    if is_redis_builtin_id(*id) && *argc >= 1 {
-                        // First arg is deepest on stack; pushed argc instructions before the call
-                        // (works when all args are single-instruction pushes)
-                        let first_arg_pos = i.wrapping_sub(*argc as usize);
-                        if first_arg_pos < i {
-                            if let Some(OpCode::LoadConst(k)) = script.code.get(first_arg_pos) {
-                                if let Some(Constant::Str(link_name)) = script.constants.get(*k as usize) {
-                                    if !valid_names.contains(link_name.as_str()) {
-                                        tracing::error!(
-                                            "DSL plugin '{}': redis.* uses link '{}' which is not in linkSysRefs",
-                                            config.name,
-                                            link_name
-                                        );
-                                        return None;
-                                    }
+        use super::lang::bytecode::Constant;
+        let valid_names: std::collections::HashSet<&str> =
+            config.linksys_refs.iter().map(|r| r.name.as_str()).collect();
+        for (i, op) in script.code.iter().enumerate() {
+            if let OpCode::CallBuiltin(id, argc) = op {
+                if is_redis_builtin_id(*id) && *argc >= 1 {
+                    // First arg is deepest on stack; pushed argc instructions before the call
+                    // (works when all args are single-instruction pushes)
+                    let first_arg_pos = i.wrapping_sub(*argc as usize);
+                    if first_arg_pos < i {
+                        if let Some(OpCode::LoadConst(k)) = script.code.get(first_arg_pos) {
+                            if let Some(Constant::Str(link_name)) = script.constants.get(*k as usize) {
+                                if !valid_names.contains(link_name.as_str()) {
+                                    return Err(format!(
+                                        "redis.* uses link '{}' which is not in linkSysRefs",
+                                        link_name
+                                    ));
                                 }
                             }
                         }
@@ -153,6 +138,31 @@ impl DslPlugin {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Validate a `DslConfig` exactly as far as construction would: resolve the
+    /// script (compile `source` / deserialize+validate `bytecode`), check the
+    /// `linksys_refs` config, and run the redis link-name scan. Returns the
+    /// first error string, or `Ok(())`. This is intended to be used as the
+    /// single validation entry point by `DslConfig::validation_error()` so the
+    /// control plane sees the same failures the data-plane constructor would hit.
+    ///
+    /// Note: VM init (`Vm::new`) is intentionally NOT run here — it is the one
+    /// failure that cannot be predicted statically and is covered by the
+    /// data-plane seal backstop instead.
+    pub(crate) fn validate_config(config: &DslConfig) -> Result<(), String> {
+        let script = Self::resolve_script(config)?;
+        config.validate()?;
+        Self::check_redis_link_names(config, &script)?;
+        Ok(())
+    }
+
+    /// Extract script, limits, error policy, and runtime from DslConfig
+    fn resolve_parts(config: &DslConfig) -> Result<(CompiledScript, VmLimits, DslErrorPolicy, DslRuntime), String> {
+        let script = Self::resolve_script(config)?;
+        config.validate()?;
+        Self::check_redis_link_names(config, &script)?;
 
         let limits = VmLimits {
             max_steps: config.max_steps.unwrap_or(10_000),
@@ -173,12 +183,18 @@ impl DslPlugin {
             block_private_ips: config.http_block_private_ips.unwrap_or(false),
             redis_links,
         };
-        Some((script, limits, policy, runtime))
+        Ok((script, limits, policy, runtime))
     }
 
     /// Create from DslConfig (used by PluginRuntime factory for request stage)
     pub fn from_config(config: &DslConfig) -> Option<Box<dyn RequestFilter>> {
-        let (script, limits, policy, runtime) = Self::resolve_parts(config)?;
+        let (script, limits, policy, runtime) = match Self::resolve_parts(config) {
+            Ok(parts) => parts,
+            Err(e) => {
+                tracing::error!("DSL plugin '{}' failed to load: {}", config.name, e);
+                return None;
+            }
+        };
         match DslPlugin::new(config.name.clone(), script, limits, policy, runtime) {
             Ok(p) => Some(Box::new(p)),
             Err(e) => {
@@ -190,7 +206,13 @@ impl DslPlugin {
 
     /// Create from DslConfig (used by PluginRuntime factory for upstream response filter stage)
     pub fn from_config_response(config: &DslConfig) -> Option<Box<dyn UpstreamResponseFilter>> {
-        let (script, limits, policy, runtime) = Self::resolve_parts(config)?;
+        let (script, limits, policy, runtime) = match Self::resolve_parts(config) {
+            Ok(parts) => parts,
+            Err(e) => {
+                tracing::error!("DSL plugin '{}' failed to load: {}", config.name, e);
+                return None;
+            }
+        };
         match DslPlugin::new(config.name.clone(), script, limits, policy, runtime) {
             Ok(p) => Some(Box::new(p)),
             Err(e) => {
@@ -231,5 +253,58 @@ impl UpstreamResponseFilter for DslPlugin {
                 &self.runtime,
             ))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_config_rejects_uncompilable_source() {
+        use super::super::config::DslConfig;
+        let config = DslConfig {
+            name: "bad".to_string(),
+            source: Some("this is not valid dsl @@@".to_string()),
+            bytecode: None,
+            ..Default::default()
+        };
+        let err = DslPlugin::validate_config(&config).expect_err("uncompilable source must fail");
+        assert!(!err.is_empty(), "error string must be non-empty: {err}");
+    }
+
+    #[test]
+    fn validate_config_accepts_valid_source() {
+        use super::super::config::DslConfig;
+        let config = DslConfig {
+            name: "ok".to_string(),
+            source: Some("let a = 1".to_string()),
+            bytecode: None,
+            ..Default::default()
+        };
+        assert!(
+            DslPlugin::validate_config(&config).is_ok(),
+            "a trivial valid script must pass validation"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_unknown_redis_link() {
+        use super::super::config::DslConfig;
+        // The script is syntactically valid DSL: `redis.get` takes a link alias
+        // as its first (string-literal) argument. `linksys_refs` is empty, so
+        // the link "mylink" is undeclared and the redis link-name scan must
+        // reject the config after `resolve_script` succeeds.
+        let config = DslConfig {
+            name: "unknown-link".to_string(),
+            source: Some("let r = redis.get(\"mylink\", \"mykey\")".to_string()),
+            bytecode: None,
+            ..Default::default()
+        };
+        let err = DslPlugin::validate_config(&config).expect_err("redis call referencing an undeclared link must fail");
+        assert!(
+            err.contains("linkSysRefs"),
+            "error message must mention linkSysRefs, got: {err}"
+        );
     }
 }

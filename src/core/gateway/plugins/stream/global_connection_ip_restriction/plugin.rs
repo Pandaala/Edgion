@@ -44,8 +44,11 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
         // Getter signature: (namespace, name)
         let Some(pm) = store.get_global_connection_ip_restriction(self.ref_namespace(), &self.plugin_metadata_ref.name)
         else {
-            record_conn_ip_restriction_event("fail_open_pm_missing");
-            return StreamPluginResult::Allow;
+            // A configured PM reference that does not resolve is a real
+            // misconfiguration (sync is gated by ConfigClient::is_ready before
+            // listeners bind) — fail closed, consistent with the L4 ESP paths.
+            record_conn_ip_restriction_event("fail_closed_pm_missing");
+            return StreamPluginResult::Deny("ip:deny:pm-missing".to_string());
         };
 
         if !pm.enable {
@@ -53,8 +56,10 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
         }
 
         let Some(profile) = pm.profiles.get(&pm.active_profile) else {
-            record_conn_ip_restriction_event("fail_open_profile_missing");
-            return StreamPluginResult::Allow;
+            // active_profile not present in the PM is an internal integrity
+            // error — always fail closed.
+            record_conn_ip_restriction_event("fail_closed_profile_missing");
+            return StreamPluginResult::Deny("ip:deny:profile-missing".to_string());
         };
 
         match profile.check_ip(&ctx.client_ip) {
@@ -73,5 +78,28 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
                 StreamPluginResult::Deny("ip:deny:default".to_string())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn missing_pm_denies_connection() {
+        // The global PM store is process-wide and shared across tests, so use a
+        // collision-proof name that nothing else registers.
+        let plugin = GlobalConnectionIpRestrictionPlugin::new(
+            PluginReference {
+                name: "gcir-unit-test-missing-pm-do-not-register".to_string(),
+                namespace: Some("default".to_string()),
+            },
+            "default".to_string(),
+        );
+        let ctx = StreamContext::new("10.0.0.1".parse().unwrap(), 8080);
+        assert!(
+            matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)),
+            "a missing referenced PluginMetaData must deny the connection"
+        );
     }
 }

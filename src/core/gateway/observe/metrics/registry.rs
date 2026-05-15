@@ -448,8 +448,8 @@ pub fn record_acme_challenge_lookup(result: &'static str) {
 /// Record a `GlobalConnectionIpRestriction` stream plugin decision event.
 ///
 /// `result` must be one of:
-/// - `"fail_open_pm_missing"` — referenced PluginMetadata not found; connection allowed
-/// - `"fail_open_profile_missing"` — active profile not present in PM; connection allowed
+/// - `"fail_closed_pm_missing"` — referenced PluginMetadata not found; connection denied
+/// - `"fail_closed_profile_missing"` — active profile not present in PM; connection denied
 /// - `"denied"` — client IP blocked by active profile rules
 ///
 /// Low, fixed cardinality — safe as a label.

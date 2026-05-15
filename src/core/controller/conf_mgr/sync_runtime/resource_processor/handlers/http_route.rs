@@ -14,6 +14,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
 use crate::types::prelude_resources::HTTPRoute;
 use crate::types::resources::common::RefDenied;
 use crate::types::resources::http_route::{HTTPRouteFilterType, HTTPRouteStatus, RouteParentStatus};
+use crate::types::resources::http_route_preparse::is_lb_policy_kind;
 use crate::types::ResourceKind;
 
 /// HTTPRoute handler
@@ -461,11 +462,67 @@ fn invalid_cors_reason(rule: &crate::types::resources::http_route::HTTPRouteRule
     None
 }
 
+/// Returns a reason string if a rule has an `ExtensionRef` filter whose `kind`
+/// is not a recognized Edgion extension kind.
+///
+/// `ExtensionRef` has two recognized uses:
+/// - `EdgionPlugins` (group empty or `edgion.io`) — a plugin reference.
+/// - The LBPolicy kinds (`LBPolicyConsistentHash` / `LBPolicyLeastConn` /
+///   `LBPolicyEwma`) — a load-balancing-policy reference on `backendRefs[].filters`,
+///   consumed by `BackendExtensionInfo` / `parse_lb_policy`. These are exempt
+///   from this gate (an LBPolicy ExtensionRef placed at rule-level is a silent
+///   no-op, matching pre-gate behavior).
+///
+/// Anything else is a static config error knowable without the runtime store;
+/// flagging it here excludes the rule from the data-plane route table instead
+/// of leaving it to a silent runtime `GoodNext`.
+fn invalid_extension_ref_reason(rule: &crate::types::resources::http_route::HTTPRouteRule) -> Option<String> {
+    let filter_reason = |f: &crate::types::resources::http_route::HTTPRouteFilter| -> Option<String> {
+        if f.filter_type != HTTPRouteFilterType::ExtensionRef {
+            return None;
+        }
+        let ext = f.extension_ref.as_ref()?;
+        let group_ok = ext.group.is_empty() || ext.group == "edgion.io";
+        if group_ok && ext.kind == "EdgionPlugins" {
+            return None;
+        }
+        // LBPolicy ExtensionRefs are a recognized second use of this filter type
+        // (load-balancing policy on backendRefs); they must not be flagged.
+        if is_lb_policy_kind(&ext.kind) {
+            return None;
+        }
+        Some(format!(
+            "ExtensionRef kind '{}' (group '{}') is not supported; only EdgionPlugins is",
+            ext.kind, ext.group
+        ))
+    };
+    if let Some(filters) = rule.filters.as_ref() {
+        for f in filters {
+            if let Some(reason) = filter_reason(f) {
+                return Some(reason);
+            }
+        }
+    }
+    if let Some(backend_refs) = rule.backend_refs.as_ref() {
+        for (br_idx, br) in backend_refs.iter().enumerate() {
+            if let Some(br_filters) = br.filters.as_ref() {
+                for f in br_filters {
+                    if let Some(reason) = filter_reason(f) {
+                        return Some(format!("backendRefs[{br_idx}] {reason}"));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Find rules that are invalid, returning `(index, reason)` for each.
 ///
 /// A rule is invalid if:
 /// - It has conflicting URLRewrite + RequestRedirect filters (rule-level, per-backendRef, or cross-level)
 /// - It has a malformed CORS filter (missing `cors:` block, or origin fails Gateway API v1.5 validation)
+/// - It has an ExtensionRef filter targeting an unsupported kind (only EdgionPlugins is supported)
 ///
 /// The reason string is rendered into the `PartiallyInvalid` condition message
 /// so operators can see *why* a rule was rejected without grepping gateway logs.
@@ -484,6 +541,10 @@ fn find_invalid_rule_details(route: &HTTPRoute, _route_ns: &str) -> Vec<(usize, 
             continue;
         }
         if let Some(reason) = invalid_cors_reason(rule) {
+            details.push((idx, reason));
+            continue;
+        }
+        if let Some(reason) = invalid_extension_ref_reason(rule) {
             details.push((idx, reason));
             continue;
         }
@@ -770,6 +831,193 @@ spec:
             partial.message.contains("1 of 2 rules active"),
             "PartiallyInvalid message must include valid/total rule count; got: {}",
             partial.message
+        );
+    }
+
+    #[test]
+    fn extension_ref_unsupported_kind_marks_rule_invalid() {
+        // A rule with an ExtensionRef filter pointing at a non-EdgionPlugins
+        // kind must be flagged invalid.
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r
+  namespace: default
+spec:
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: NotAPlugin
+            name: x
+"#;
+        let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(
+            indices_only(details.clone()),
+            vec![0],
+            "rule 0 must be flagged: {details:?}"
+        );
+        assert!(
+            details[0].1.contains("ExtensionRef") && details[0].1.contains("NotAPlugin"),
+            "reason must name the unsupported kind: {}",
+            details[0].1
+        );
+    }
+
+    #[test]
+    fn extension_ref_edgion_plugins_does_not_flag_rule() {
+        // A valid EdgionPlugins ExtensionRef (group empty or edgion.io) must not be flagged.
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r
+  namespace: default
+spec:
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: my-plugins
+"#;
+        let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        assert!(find_invalid_rule_details(&route, "default").is_empty());
+    }
+
+    #[test]
+    fn extension_ref_unsupported_kind_on_backend_ref_marks_rule_invalid() {
+        // An ExtensionRef filter with an unsupported kind on a backendRef must be
+        // flagged, and the reason must carry the per-backendRef prefix.
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r
+  namespace: default
+spec:
+  rules:
+    - backendRefs:
+        - name: svc
+          port: 80
+          filters:
+            - type: ExtensionRef
+              extensionRef:
+                group: edgion.io
+                kind: NotAPlugin
+                name: x
+"#;
+        let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(
+            indices_only(details.clone()),
+            vec![0],
+            "rule 0 must be flagged: {details:?}"
+        );
+        assert!(
+            details[0].1.contains("backendRefs["),
+            "reason must carry the per-backendRef prefix: {}",
+            details[0].1
+        );
+    }
+
+    #[test]
+    fn extension_ref_wrong_group_with_edgion_plugins_kind_marks_rule_invalid() {
+        // kind is EdgionPlugins but the group is wrong — must still be flagged,
+        // proving the group_ok condition is actually ANDed in, not dead code.
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r
+  namespace: default
+spec:
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: example.com
+            kind: EdgionPlugins
+            name: my-plugins
+"#;
+        let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(
+            indices_only(details.clone()),
+            vec![0],
+            "rule 0 must be flagged: {details:?}"
+        );
+        assert!(
+            details[0].1.contains("ExtensionRef") && details[0].1.contains("example.com"),
+            "reason must name the wrong group: {}",
+            details[0].1
+        );
+    }
+
+    #[test]
+    fn extension_ref_lb_policy_on_backend_ref_not_flagged() {
+        // An LBPolicy ExtensionRef on a backendRef is a recognized second use of
+        // the ExtensionRef filter type (load-balancing policy, consumed by
+        // BackendExtensionInfo). It must NOT be flagged by the unsupported-kind
+        // gate — otherwise the rule is excluded from the route table and LB
+        // routes 404.
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r
+  namespace: default
+spec:
+  rules:
+    - backendRefs:
+        - name: svc
+          port: 80
+          filters:
+            - type: ExtensionRef
+              extensionRef:
+                group: edgion.io
+                kind: LBPolicyConsistentHash
+                name: header.x-user-id
+"#;
+        let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        assert!(
+            find_invalid_rule_details(&route, "default").is_empty(),
+            "LBPolicy backendRef ExtensionRef must not be flagged invalid"
+        );
+    }
+
+    #[test]
+    fn extension_ref_lb_policy_at_rule_level_not_flagged() {
+        // A rule-level (filters[]) LBPolicy ExtensionRef — as opposed to a
+        // backendRef-level one — is not a meaningful placement (LBPolicy is
+        // consumed per-backendRef), but it is a tolerated silent no-op rather
+        // than an unsupported kind. It must NOT flag the rule invalid.
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r
+  namespace: default
+spec:
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: LBPolicyConsistentHash
+            name: header.x-user-id
+      backendRefs:
+        - name: svc
+          port: 80
+"#;
+        let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        assert!(
+            find_invalid_rule_details(&route, "default").is_empty(),
+            "rule-level LBPolicy ExtensionRef must not be flagged invalid"
         );
     }
 

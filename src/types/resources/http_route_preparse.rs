@@ -58,6 +58,13 @@ impl BackendExtensionInfo {
             return None;
         }
 
+        // `is_lb_policy_kind` is the single source of truth for which kinds are
+        // LBPolicy kinds. Bail out early for any non-LBPolicy kind so the kind
+        // list never needs to be duplicated here.
+        if !is_lb_policy_kind(&ext_ref.kind) {
+            return None;
+        }
+
         match ext_ref.kind.as_str() {
             "LBPolicyConsistentHash" => {
                 Self::parse_consistent_hash_name(&ext_ref.name).map(ParsedLBPolicy::ConsistentHash)
@@ -79,6 +86,15 @@ impl BackendExtensionInfo {
             _ => None,
         }
     }
+}
+
+/// True if `kind` names a load-balancing-policy ExtensionRef (as opposed to a
+/// plugin reference). LBPolicy ExtensionRefs live on `backendRefs[].filters` and
+/// are consumed by `BackendExtensionInfo` / `parse_lb_policy`, not the plugin
+/// runtime — callers that gate "is this a supported ExtensionRef kind" must
+/// treat these as recognized, not unsupported.
+pub(crate) fn is_lb_policy_kind(kind: &str) -> bool {
+    matches!(kind, "LBPolicyConsistentHash" | "LBPolicyLeastConn" | "LBPolicyEwma")
 }
 
 /// Extension trait for HTTPRoute to parse hidden logic

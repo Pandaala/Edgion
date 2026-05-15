@@ -11,6 +11,7 @@ use crate::core::gateway::runtime::server::http_to_grpc_status;
 use crate::types::filters::PluginRunningResult;
 use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
 use crate::types::resources::edgion_plugins::CorsConfig;
+use crate::types::resources::http_route_preparse::is_lb_policy_kind;
 use crate::types::resources::{
     EdgionPlugin, GRPCRouteFilter, GRPCRouteFilterType, HTTPRouteFilter, HTTPRouteFilterType,
 };
@@ -97,12 +98,16 @@ pub struct PluginRuntime {
 /// Result of attempting to build a stage-specific filter from an EdgionPlugin.
 ///
 /// Distinguishes "plugin variant does not belong to this stage" (a configuration
-/// error surfaced to status.conditions) from "plugin is applicable but construction
-/// declined" (already captured by `EdgionPlugin::validation_error`).
+/// error surfaced to status.conditions) from "plugin is applicable but the
+/// constructor declined to build it". The declined case is NOT assumed to be
+/// covered by `EdgionPlugin::validation_error` — the builders record it
+/// independently so the route still seals fail-closed.
 enum CreateResult<T> {
     /// Plugin variant is applicable to this stage. `Some` on success, `None` if
-    /// the inner constructor returned None (e.g. DSL compile failure — already
-    /// reported through `EdgionPlugin::validation_error`).
+    /// the inner constructor declined to build a filter (e.g. DSL VM init
+    /// failure). The builders treat `None` as fail-closed and record the plugin
+    /// in `invalid_plugins` regardless of whether `EdgionPlugin::validation_error`
+    /// also caught the same config.
     Ok(Option<T>),
     /// Plugin variant does not belong to this stage (config error).
     WrongStage,
@@ -270,6 +275,14 @@ impl PluginRuntime {
                 }
                 HTTPRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
+                        // LBPolicy ExtensionRefs are not plugins; they are consumed by
+                        // `BackendExtensionInfo` / `parse_lb_policy`. Do not build an
+                        // ExtensionRefFilter for them — skipping here means
+                        // `ExtensionRefFilter::prepare_execution`'s `Err(())` only ever
+                        // sees genuinely-unsupported kinds.
+                        if is_lb_policy_kind(&ext_ref.kind) {
+                            continue;
+                        }
                         let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
                         if assign_indices {
                             let idx = self.ext_ref_keys.len();
@@ -330,6 +343,14 @@ impl PluginRuntime {
                 }
                 GRPCRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
+                        // LBPolicy ExtensionRefs are not plugins; they are consumed by
+                        // `BackendExtensionInfo` / `parse_lb_policy`. Do not build an
+                        // ExtensionRefFilter for them — skipping here means
+                        // `ExtensionRefFilter::prepare_execution`'s `Err(())` only ever
+                        // sees genuinely-unsupported kinds.
+                        if is_lb_policy_kind(&ext_ref.kind) {
+                            continue;
+                        }
                         let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
                         if assign_indices {
                             let idx = self.ext_ref_keys.len();
@@ -404,7 +425,16 @@ impl PluginRuntime {
                         self.add_request_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
-                        // Applicable stage but constructor declined — already reported via plugin.validation_error().
+                        // Applicable stage but the constructor declined to build the
+                        // plugin (e.g. DSL VM init failure). `Ok(None)` means
+                        // "should have run but did not" — always fail-closed.
+                        // Record it so `seal_fail_closed` fires.
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "requestPlugins[{}] ({}): plugin construction failed",
+                            index, plugin_name
+                        ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                     CreateResult::WrongStage => {
                         // A plugin placed in the wrong stage array is a misconfiguration:
@@ -479,7 +509,16 @@ impl PluginRuntime {
                         self.add_upstream_response_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
-                        // Applicable stage but constructor declined — already reported via plugin.validation_error().
+                        // Applicable stage but the constructor declined to build the
+                        // plugin (e.g. DSL VM init failure). `Ok(None)` means
+                        // "should have run but did not" — always fail-closed.
+                        // Record it so `seal_fail_closed` fires.
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponseFilterPlugins[{}] ({}): plugin construction failed",
+                            index, plugin_name
+                        ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                     CreateResult::WrongStage => {
                         // A plugin placed in the wrong stage array is a misconfiguration:
@@ -544,7 +583,16 @@ impl PluginRuntime {
                         self.add_upstream_response(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
-                        // Applicable stage but constructor declined — already reported via plugin.validation_error().
+                        // Applicable stage but the constructor declined to build the
+                        // plugin (e.g. DSL VM init failure). `Ok(None)` means
+                        // "should have run but did not" — always fail-closed.
+                        // Record it so `seal_fail_closed` fires.
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponsePlugins[{}] ({}): plugin construction failed",
+                            index, plugin_name
+                        ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                     CreateResult::WrongStage => {
                         // A plugin placed in the wrong stage array is a misconfiguration:
@@ -619,7 +667,16 @@ impl PluginRuntime {
                         self.add_upstream_response_body_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
-                        // Applicable stage but constructor declined — already reported via plugin.validation_error().
+                        // Applicable stage but the constructor declined to build the
+                        // plugin (e.g. DSL VM init failure). `Ok(None)` means
+                        // "should have run but did not" — always fail-closed.
+                        // Record it so `seal_fail_closed` fires.
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponseBodyFilterPlugins[{}] ({}): plugin construction failed",
+                            index, plugin_name
+                        ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                     CreateResult::WrongStage => {
                         // A plugin placed in the wrong stage array is a misconfiguration:
@@ -1271,6 +1328,35 @@ mod tests {
         let first = runtime.request_plugins_iter().next().expect("reject filter");
         assert_eq!(first.name(), "RejectInvalidConfig");
     }
+
+    #[test]
+    fn dsl_construction_failure_seals_fail_closed() {
+        use crate::types::resources::edgion_plugins::DslConfig;
+
+        let mut runtime = PluginRuntime::new();
+
+        // A DSL config whose source fails to build.
+        let bad_dsl = RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+            name: "bad".to_string(),
+            source: Some("this is not valid dsl @@@".to_string()),
+            bytecode: None,
+            ..Default::default()
+        }));
+
+        runtime.add_from_request_filters(&[bad_dsl], "default");
+
+        // A DSL config that fails to build (whether caught by `validation_error()`
+        // or by the `Ok(None)` constructor-declined arm) must leave the route
+        // sealed fail-closed — assert the end state: a RejectFilter is prepended.
+        runtime.seal_fail_closed();
+        assert_eq!(
+            runtime.request_plugins_count(),
+            1,
+            "DSL construction failure must seal fail-closed: a RejectFilter must be prepended"
+        );
+        let first = runtime.request_plugins_iter().next().expect("reject filter");
+        assert_eq!(first.name(), "RejectInvalidConfig");
+    }
 }
 
 #[cfg(test)]
@@ -1279,6 +1365,10 @@ mod ext_ref_index_tests {
     use crate::types::resources::LocalObjectReference;
 
     fn make_ext_ref_filter(name: &str) -> HTTPRouteFilter {
+        make_ext_ref_filter_with_kind("EdgionPlugins", name)
+    }
+
+    fn make_ext_ref_filter_with_kind(kind: &str, name: &str) -> HTTPRouteFilter {
         HTTPRouteFilter {
             filter_type: HTTPRouteFilterType::ExtensionRef,
             request_header_modifier: None,
@@ -1290,7 +1380,7 @@ mod ext_ref_index_tests {
             external_auth: None,
             extension_ref: Some(LocalObjectReference {
                 group: "edgion.io".into(),
-                kind: "EdgionPlugins".into(),
+                kind: kind.into(),
                 name: name.into(),
             }),
         }
@@ -1311,5 +1401,23 @@ mod ext_ref_index_tests {
         let filters = vec![make_ext_ref_filter("p1")];
         let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1");
         assert!(rt.ext_ref_keys().is_empty());
+    }
+
+    #[test]
+    fn lb_policy_extension_ref_does_not_build_a_filter() {
+        // An LBPolicy ExtensionRef is not a plugin reference — it is consumed by
+        // BackendExtensionInfo / parse_lb_policy. The plugin runtime must NOT
+        // build an ExtensionRefFilter for it; otherwise every request through
+        // the backend hits prepare_execution's `Err(())` and 500s.
+        let filters = vec![make_ext_ref_filter_with_kind(
+            "LBPolicyConsistentHash",
+            "header.x-user-id",
+        )];
+        let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1");
+        assert_eq!(
+            rt.request_plugins_count(),
+            0,
+            "LBPolicy ExtensionRef must not build an ExtensionRefFilter"
+        );
     }
 }

@@ -6,6 +6,7 @@
 pub use crate::core::gateway::plugins::http::dsl::config::DslConfig;
 
 use crate::core::gateway::plugins::http::dsl::lang::vm::DslErrorPolicy;
+use crate::core::gateway::plugins::http::dsl::plugin::DslPlugin;
 use crate::types::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for DslConfig {
@@ -46,9 +47,31 @@ impl PluginValidation for DslConfig {
                 return Some("errorPolicy denyWith status must be between 100 and 599".to_string());
             }
         }
-        if let Err(e) = self.validate() {
+        // Run the full data-plane validation path (compile source / deserialize
+        // bytecode / linksys_refs / redis link names) so the control plane
+        // surfaces the same failures the constructor would hit.
+        if let Err(e) = DslPlugin::validate_config(self) {
             return Some(e);
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validation_error_catches_uncompilable_source() {
+        let config = DslConfig {
+            name: "bad".to_string(),
+            source: Some("this is not valid dsl @@@".to_string()),
+            bytecode: None,
+            ..Default::default()
+        };
+        let err = config
+            .validation_error()
+            .expect("uncompilable source must surface an error");
+        assert!(!err.is_empty(), "error must be non-empty: {err}");
     }
 }

@@ -36,14 +36,7 @@ impl RequestFilter for DynamicExternalUpstream {
             return PluginRunningResult::GoodNext;
         }
 
-        // 1. Check config validation
-        use crate::types::resources::edgion_plugins::PluginValidation;
-        if self.config.validation_error().is_some() {
-            log.push("config error");
-            return PluginRunningResult::GoodNext; // Fail-open on config error
-        }
-
-        // 2. Extract raw routing key via KeyGet
+        // 1. Extract raw routing key via KeyGet
         let raw_value = match session.key_get(&self.config.from).await {
             Some(v) if !v.is_empty() => v,
             _ => {
@@ -63,7 +56,7 @@ impl RequestFilter for DynamicExternalUpstream {
             }
         };
 
-        // 3. Apply regex extraction if configured
+        // 2. Apply regex extraction if configured
         let routing_key = if let Some(ref extract) = self.config.extract {
             if let Some(ref regex) = self.config.compiled_regex {
                 match regex.captures(&raw_value).and_then(|c| c.get(extract.group)) {
@@ -91,7 +84,7 @@ impl RequestFilter for DynamicExternalUpstream {
             raw_value
         };
 
-        // 4. Look up domain in domainMap
+        // 3. Look up domain in domainMap
         let target = match self.config.lookup_domain(&routing_key) {
             Some(t) => t,
             None => {
@@ -111,14 +104,14 @@ impl RequestFilter for DynamicExternalUpstream {
             }
         };
 
-        // 5. Apply Host header override if configured
+        // 4. Apply Host header override if configured
         //    This is done in request_filter stage via set_upstream_host(),
         //    so it persists across retries.
         if let Some(ref host) = target.override_host {
             let _ = session.set_upstream_host(host);
         }
 
-        // 6. Build ExternalJumpPreset and set in context
+        // 5. Build ExternalJumpPreset and set in context
         let info = ExternalJumpPreset {
             domain: target.domain.clone(),
             port: target.effective_port(),
@@ -138,7 +131,7 @@ impl RequestFilter for DynamicExternalUpstream {
             }
         }
 
-        // 7. Optionally set debug request header (sent to upstream for tracing)
+        // 6. Optionally set debug request header (sent to upstream for tracing)
         if self.config.debug_header {
             let header_value = format!("{}:{}", target.domain, target.effective_port());
             let _ = session.set_request_header("X-Dynamic-External-Upstream", &header_value);

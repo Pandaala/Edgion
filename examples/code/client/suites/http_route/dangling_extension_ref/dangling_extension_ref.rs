@@ -21,6 +21,11 @@ use std::time::Instant;
 
 const HOST: &str = "dangling-extension-ref.example.com";
 
+// The HTTPRoutes in this scenario are stored under the `edgion-default`
+// namespace (see the conf YAMLs' metadata.namespace). The configserver
+// admin API query must use the same namespace.
+const ROUTE_NS: &str = "edgion-default";
+
 pub struct DanglingExtensionRefTestSuite;
 
 impl DanglingExtensionRefTestSuite {
@@ -65,6 +70,105 @@ impl DanglingExtensionRefTestSuite {
             },
         )
     }
+
+    // An ExtensionRef filter whose `kind` is neither `EdgionPlugins` nor a
+    // recognized LBPolicy kind is flagged at the controller's preparse step:
+    // the rule index goes into `invalid_rule_indices` and the HTTPRoute gets a
+    // `PartiallyInvalid=True` condition. This polls the configserver admin API
+    // for that condition.
+    fn unsupported_extension_ref_kind_marks_route_partially_invalid() -> TestCase {
+        TestCase::new(
+            "unsupported_extension_ref_kind_marks_route_partially_invalid",
+            "HTTPRoute with an unsupported ExtensionRef kind gets PartiallyInvalid=True",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let name = "unsupported-extension-ref-kind-route";
+                    let url = format!(
+                        "{}/configserver/HTTPRoute?namespace={}&name={}",
+                        ctx.admin_api_url(),
+                        ROUTE_NS,
+                        name
+                    );
+
+                    let mut last_err = String::from("no response");
+
+                    for _ in 0..20 {
+                        let mut req = ctx.http_client.get(&url);
+                        if let Some(ref token) = ctx.admin_token {
+                            req = req.header("Authorization", format!("Bearer {}", token));
+                        }
+
+                        match req.send().await {
+                            Ok(resp) if resp.status().is_success() => {
+                                match resp.json::<serde_json::Value>().await {
+                                    Ok(body) if body["success"].as_bool().unwrap_or(false) => {
+                                        if let Some(conditions) =
+                                            body["data"]["status"]["conditions"].as_array()
+                                        {
+                                            if let Some(cond) = conditions
+                                                .iter()
+                                                .find(|c| c["type"].as_str() == Some("PartiallyInvalid"))
+                                            {
+                                                if cond["status"].as_str() == Some("True") {
+                                                    // Best-effort: the preparse reason names the
+                                                    // unsupported kind. Don't fail if absent.
+                                                    let msg = cond["message"].as_str().unwrap_or("");
+                                                    let note = if msg.contains("NotAPlugin") {
+                                                        "message names the unsupported kind"
+                                                    } else {
+                                                        "PartiallyInvalid=True (message did not name the kind)"
+                                                    };
+                                                    return TestResult::passed_with_message(
+                                                        start.elapsed(),
+                                                        note.to_string(),
+                                                    );
+                                                }
+                                                last_err = format!(
+                                                    "PartiallyInvalid present but status != True: {:?}",
+                                                    cond
+                                                );
+                                            } else {
+                                                last_err =
+                                                    "status.conditions lacks PartiallyInvalid".to_string();
+                                            }
+                                        } else {
+                                            last_err = "status.conditions not present".to_string();
+                                        }
+                                    }
+                                    Ok(body) => {
+                                        last_err = format!(
+                                            "API error: {}",
+                                            body["error"].as_str().unwrap_or("unknown")
+                                        );
+                                    }
+                                    Err(e) => {
+                                        last_err = format!("JSON parse error: {}", e);
+                                    }
+                                }
+                            }
+                            Ok(resp) => {
+                                last_err = format!("HTTP {}", resp.status());
+                            }
+                            Err(e) => {
+                                last_err = format!("Request error: {}", e);
+                            }
+                        }
+
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+
+                    TestResult::failed(
+                        start.elapsed(),
+                        format!(
+                            "Expected PartiallyInvalid=True for '{}'. Last: {}",
+                            name, last_err
+                        ),
+                    )
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for DanglingExtensionRefTestSuite {
@@ -73,6 +177,9 @@ impl TestSuite for DanglingExtensionRefTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::test_dangling_extension_ref_returns_500()]
+        vec![
+            Self::test_dangling_extension_ref_returns_500(),
+            Self::unsupported_extension_ref_kind_marks_route_partially_invalid(),
+        ]
     }
 }

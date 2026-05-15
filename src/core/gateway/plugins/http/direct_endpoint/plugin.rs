@@ -104,14 +104,7 @@ impl RequestFilter for DirectEndpoint {
             return PluginRunningResult::GoodNext;
         }
 
-        // 1. Check config validation
-        use crate::types::resources::edgion_plugins::PluginValidation;
-        if self.config.validation_error().is_some() {
-            log.push("config invalid");
-            return PluginRunningResult::GoodNext; // Fail-open on config error
-        }
-
-        // 2. Extract raw endpoint value via KeyGet
+        // 1. Extract raw endpoint value via KeyGet
         let raw_value = match session.key_get(&self.config.from).await {
             Some(v) if !v.is_empty() => v,
             _ => match self.config.on_missing {
@@ -129,7 +122,7 @@ impl RequestFilter for DirectEndpoint {
             },
         };
 
-        // 3. Get route context
+        // 2. Get route context
         let ctx = session.ctx();
         let (backend_refs, route_ns) = match ctx.route_unit.as_ref() {
             Some(unit) if unit.rule.backend_refs.as_ref().is_some_and(|r| !r.is_empty()) => (
@@ -142,7 +135,7 @@ impl RequestFilter for DirectEndpoint {
             }
         };
 
-        // 4. Resolve endpoint info
+        // 3. Resolve endpoint info
         match self.resolve(raw_value, backend_refs, route_ns, session.ctx().allow_loopback_upstream) {
             Ok(info) => {
                 let addr_str = format!("{}", info.addr);

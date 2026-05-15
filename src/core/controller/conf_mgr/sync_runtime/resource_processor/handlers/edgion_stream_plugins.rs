@@ -9,7 +9,9 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_types, HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
 };
 use crate::types::prelude_resources::{EdgionStreamPlugins, PluginMetaData};
-use crate::types::resources::edgion_stream_plugins::{EdgionStreamPlugin, EdgionStreamPluginsStatus};
+use crate::types::resources::edgion_stream_plugins::{
+    EdgionStreamPlugin, EdgionStreamPluginsStatus, TlsRouteStreamPlugin,
+};
 use crate::types::resources::plugin_metadata::MetaDataEntry;
 
 const SELF_KIND: &str = "EdgionStreamPlugins";
@@ -72,23 +74,54 @@ impl Default for EdgionStreamPluginsHandler {
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
     fn preparse(&self, esp: &mut EdgionStreamPlugins, _ctx: &HandlerContext) -> Vec<String> {
-        let Some(plugins) = esp.spec.plugins.as_ref() else {
-            return Vec::new();
-        };
-
         let mut errors = Vec::new();
-        for (idx, entry) in plugins.iter().enumerate() {
+
+        // Both stages validate disabled entries with `is_enabled()` skipped, mirroring the
+        // runtime builders (`from_stream_plugins` / `from_entries`) which never construct a
+        // disabled plugin — a parked broken config must not flip `Accepted` to False.
+        //
+        // The structural `validate_and_init()` call reruns exactly what the data-plane plugin
+        // does at construction. Both stage plugins (`StreamIpRestriction::new`,
+        // `TlsRouteIpRestriction::new`) fail closed on an invalid config — every connection
+        // denied — but without surfacing the error here the CR keeps a healthy-looking
+        // `Accepted=True`, i.e. a silent blackhole. Emitting a non-legacy error makes
+        // `update_status` set `Accepted=False` with the `Invalid` reason.
+
+        // Stage 1: ConnectionFilter plugins (pre-TLS, inline L4 `ConnectionIpRestrictionRules`).
+        for (idx, entry) in esp.spec.plugins.iter().flatten().enumerate() {
+            if !entry.is_enabled() {
+                continue;
+            }
             if let EdgionStreamPlugin::IpRestriction(rules) = &entry.plugin {
                 let legacy = rules.legacy_http_fields();
                 if !legacy.is_empty() {
                     errors.push(format!(
-                        "{}IpRestriction[{}]: legacy HTTP fields {:?} detected on L4 config; \
+                        "{}plugins[{}] (IpRestriction): legacy HTTP fields {:?} detected on L4 config; \
                          remove them and use only allow/deny/defaultAction (see {})",
                         LEGACY_SCHEMA_MARKER, idx, legacy, MIGRATION_DOC_PATH
                     ));
+                    continue;
+                }
+                if let Err(e) = rules.clone().validate_and_init() {
+                    errors.push(format!("plugins[{idx}] (IpRestriction): {e}"));
                 }
             }
         }
+
+        // Stage 2: TlsRoute plugins (post-handshake, HTTP-layer `IpRestrictionConfig`).
+        for (idx, entry) in esp.spec.tls_route_plugins.iter().flatten().enumerate() {
+            if !entry.is_enabled() {
+                continue;
+            }
+            match &entry.plugin {
+                TlsRouteStreamPlugin::IpRestriction(config) => {
+                    if let Err(e) = config.clone().validate_and_init() {
+                        errors.push(format!("tlsRoutePlugins[{idx}] (IpRestriction): {e}"));
+                    }
+                }
+            }
+        }
+
         errors
     }
 
@@ -289,6 +322,116 @@ spec:
         assert!(e.contains("message"));
         assert!(e.contains("status"));
         assert!(e.contains(MIGRATION_DOC_PATH));
+    }
+
+    fn invalid_esp() -> EdgionStreamPlugins {
+        // Structurally invalid: IpRestriction with neither `allow` nor `deny`.
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: invalid
+  namespace: default
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        defaultAction: deny
+"#;
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn preparse_rejects_structurally_invalid_config() {
+        let handler = EdgionStreamPluginsHandler::new();
+        let mut esp = invalid_esp();
+        let errors = handler.preparse(&mut esp, &make_ctx());
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected one structural validation error; got: {errors:?}"
+        );
+        let e = &errors[0];
+        assert!(
+            !e.starts_with(LEGACY_SCHEMA_MARKER),
+            "structural error must not carry the legacy marker so update_status uses the Invalid reason; got: {e}"
+        );
+        assert!(e.contains("plugins[0] (IpRestriction)"));
+        assert!(e.contains("allow") && e.contains("deny"));
+    }
+
+    #[test]
+    fn preparse_rejects_invalid_tls_route_plugin() {
+        // Stage 2 has the same silent-blackhole risk as Stage 1: an invalid
+        // tlsRoutePlugins config fails closed at L4 but must surface as Accepted=False.
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: invalid-tls
+  namespace: default
+spec:
+  tlsRoutePlugins:
+    - type: IpRestriction
+      config:
+        defaultAction: deny
+"#;
+        let mut esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let handler = EdgionStreamPluginsHandler::new();
+        let errors = handler.preparse(&mut esp, &make_ctx());
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected one Stage 2 validation error; got: {errors:?}"
+        );
+        let e = &errors[0];
+        assert!(!e.starts_with(LEGACY_SCHEMA_MARKER));
+        assert!(e.contains("tlsRoutePlugins[0] (IpRestriction)"), "got: {e}");
+    }
+
+    #[test]
+    fn preparse_skips_disabled_plugins() {
+        // A parked (disabled) broken config must not flip Accepted to False, matching the
+        // runtime builders which never construct a disabled plugin.
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: disabled
+  namespace: default
+spec:
+  plugins:
+    - enable: false
+      type: IpRestriction
+      config:
+        defaultAction: deny
+  tlsRoutePlugins:
+    - enable: false
+      type: IpRestriction
+      config:
+        defaultAction: deny
+"#;
+        let mut esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let handler = EdgionStreamPluginsHandler::new();
+        let errors = handler.preparse(&mut esp, &make_ctx());
+        assert!(errors.is_empty(), "disabled plugins must be skipped; got: {errors:?}");
+    }
+
+    #[test]
+    fn update_status_maps_structural_error_to_invalid_reason() {
+        let handler = EdgionStreamPluginsHandler::new();
+        let mut esp = invalid_esp();
+        let errors = handler.preparse(&mut esp, &make_ctx());
+        handler.update_status(&mut esp, &make_ctx(), &errors);
+
+        let status = esp.status.as_ref().expect("status populated");
+        let accepted = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Accepted")
+            .expect("Accepted condition present");
+        assert_eq!(accepted.status, "False");
+        assert_eq!(accepted.reason, "Invalid");
     }
 
     #[test]
