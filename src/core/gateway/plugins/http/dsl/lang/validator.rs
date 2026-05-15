@@ -139,8 +139,8 @@ impl Validator {
                         )));
                     } else if matches!(script.constants[*idx as usize], Constant::Regex(_)) {
                         errors.push(ValidationError::new(format!(
-                            "LoadConst at instruction {} references a Regex constant which cannot be used as a value",
-                            i
+                            "LoadConst at instruction {} references constant {} (Regex) which cannot be used as a value",
+                            i, idx
                         )));
                     }
                 }
@@ -431,8 +431,82 @@ mod tests {
         let errors = Validator::new(ValidationLimits::default()).validate(&script);
         let joined = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("|");
         assert!(
-            joined.contains("Regex constant which cannot be used as a value"),
+            joined.contains("(Regex) which cannot be used as a value"),
             "expected LoadConst-Regex error, got: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_regex_opcode_oob_index() {
+        // All three regex opcodes must reject an out-of-bounds constant index.
+        for code in [
+            vec![OpCode::Matches(5), OpCode::ReturnNext],
+            vec![OpCode::RegexFind(5), OpCode::ReturnNext],
+            vec![OpCode::RegexReplace(5), OpCode::ReturnNext],
+        ] {
+            let script = CompiledScript {
+                version: BYTECODE_VERSION,
+                code,
+                constants: vec![Constant::Regex("\\d+".to_string())],
+                local_count: 0,
+                max_loop_depth: 0,
+                source: None,
+            };
+            let errors = Validator::new(ValidationLimits::default()).validate(&script);
+            let joined = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("|");
+            assert!(
+                joined.contains("but pool size is"),
+                "expected out-of-bounds error, got: {}",
+                joined
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_rejects_regex_opcode_non_regex_constant() {
+        // All three regex opcodes must reject a valid index that points to a non-Regex constant.
+        for code in [
+            vec![OpCode::Matches(0), OpCode::ReturnNext],
+            vec![OpCode::RegexFind(0), OpCode::ReturnNext],
+            vec![OpCode::RegexReplace(0), OpCode::ReturnNext],
+        ] {
+            let script = CompiledScript {
+                version: BYTECODE_VERSION,
+                code,
+                constants: vec![Constant::Str("not-a-regex".to_string())],
+                local_count: 0,
+                max_loop_depth: 0,
+                source: None,
+            };
+            let errors = Validator::new(ValidationLimits::default()).validate(&script);
+            let joined = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("|");
+            assert!(
+                joined.contains("which is not a Regex"),
+                "expected non-Regex error, got: {}",
+                joined
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_rejects_loadconst_regex_non_zero_index() {
+        // Regex at index 1 in a mixed pool — verifies the type-check branch fires
+        // independently of the bounds-check branch (which only triggers when idx >= pool_size).
+        // Guards against an accidental idx == 0 short-circuit regression.
+        let script = CompiledScript {
+            version: BYTECODE_VERSION,
+            code: vec![OpCode::LoadConst(1), OpCode::ReturnNext],
+            constants: vec![Constant::Str("normal".to_string()), Constant::Regex("\\w+".to_string())],
+            local_count: 0,
+            max_loop_depth: 0,
+            source: None,
+        };
+        let errors = Validator::new(ValidationLimits::default()).validate(&script);
+        let joined = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("|");
+        assert!(
+            joined.contains("references constant 1 (Regex) which cannot be used as a value"),
+            "expected LoadConst-Regex error at non-zero index, got: {}",
             joined
         );
     }

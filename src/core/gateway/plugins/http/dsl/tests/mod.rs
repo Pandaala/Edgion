@@ -28,6 +28,7 @@ mod response_builtins;
 mod sandbox;
 mod terminate_tests;
 mod utility_functions;
+mod vm_defensive_tests;
 
 // ---------------------------------------------------------------------------
 // Helpers

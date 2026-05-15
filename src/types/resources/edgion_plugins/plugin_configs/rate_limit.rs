@@ -85,12 +85,20 @@ pub enum RateLimitScope {
 pub struct LimitHeaderNames {
     /// Header name for rate limit value
     /// Only shown if explicitly configured
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_non_empty_string")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
     pub limit: Option<String>,
 
     /// Header name for remaining quota
     /// Only shown if explicitly configured
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_non_empty_string")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
     pub remaining: Option<String>,
 
     /// Header name for reset timestamp
@@ -100,12 +108,20 @@ pub struct LimitHeaderNames {
     /// on both allowed and rejected responses. `RateLimitRedis` only emits it on
     /// rejection (429) responses — the Redis Lua scripts do not return a
     /// window-reset timestamp for allowed requests.
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_non_empty_string")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
     pub reset: Option<String>,
 
     /// Header name for human-readable retry time (e.g., "1.5s", "500ms")
     /// Only shown if explicitly configured
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_non_empty_string")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
     pub retry_in: Option<String>,
 }
 

@@ -38,7 +38,7 @@ pub(super) struct Local {
 pub struct Compiler {
     pub(super) code: Vec<OpCode>,
     pub(super) constants: Vec<Constant>,
-    /// Maps from constant value to pool index for O(1) deduplication
+    /// Secondary indices for O(1) constant deduplication (map value → pool index).
     pub(super) const_str_map: HashMap<String, u16>,
     pub(super) const_int_map: HashMap<i64, u16>,
     pub(super) const_regex_map: HashMap<String, u16>,

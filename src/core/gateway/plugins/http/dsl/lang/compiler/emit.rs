@@ -56,8 +56,8 @@ impl Compiler {
             return Ok(idx);
         }
         let idx = self.check_const_limit()?;
-        self.constants.push(Constant::Int(n));
         self.const_int_map.insert(n, idx);
+        self.constants.push(Constant::Int(n));
         Ok(idx)
     }
 

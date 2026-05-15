@@ -255,11 +255,11 @@ impl Vm {
                         Constant::Regex(_) => {
                             return Err(RuntimeError::Internal {
                                 message: format!(
-                                    "LoadConst at pc {} references a Regex constant which cannot be used as a value",
-                                    state.pc - 1
+                                    "LoadConst at pc {} references constant {} (Regex) which cannot be used as a value",
+                                    state.pc - 1,
+                                    idx
                                 ),
-                            }
-                            .into());
+                            });
                         }
                     };
                     state.push(value, self.limits.max_stack_depth)?;
