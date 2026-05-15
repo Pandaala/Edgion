@@ -173,14 +173,14 @@ impl<T: ResourceMeta> CacheData<T> {
 
                 if is_add {
                     add.insert(key.clone(), resource);
-                    tracing::info!(key = %key, "Processed compressed event: add");
+                    tracing::debug!(key = %key, "Processed compressed event: add");
                 } else {
                     update.insert(key.clone(), resource);
-                    tracing::info!(key = %key, "Processed compressed event: update");
+                    tracing::debug!(key = %key, "Processed compressed event: update");
                 }
             } else {
                 remove.insert(key.clone());
-                tracing::info!(key = %key, "Processed compressed event: remove");
+                tracing::debug!(key = %key, "Processed compressed event: remove");
             }
         }
 

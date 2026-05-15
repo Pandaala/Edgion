@@ -50,7 +50,7 @@ impl<T: ResourceMeta + Resource + Clone + Send + 'static> CacheEventDispatch<T> 
             }
         }
 
-        tracing::info!(component = "cache_client", event = "apply_change", change = ?change, kind = kind, name = ?name, namespace = ?namespace, version = version, "Applying change to cache");
+        tracing::debug!(component = "cache_client", event = "apply_change", change = ?change, kind = kind, name = ?name, namespace = ?namespace, version = version, "Applying change to cache");
     }
 
     fn set_ready(&self) {
@@ -321,7 +321,7 @@ where
                                                         event_sv,
                                                     );
 
-                                                    tracing::info!(kind = T::kind_name(), name = ?resource.name_any(), namespace = ?resource.namespace(), rv = resource.get_version(), sv = event_sv, "Received resource from watch event");
+                                                    tracing::debug!(kind = T::kind_name(), name = ?resource.name_any(), namespace = ?resource.namespace(), rv = resource.get_version(), sv = event_sv, "Received resource from watch event");
                                                     let change = match event_type {
                                                         "add" => ResourceChange::EventAdd,
                                                         "update" => ResourceChange::EventUpdate,

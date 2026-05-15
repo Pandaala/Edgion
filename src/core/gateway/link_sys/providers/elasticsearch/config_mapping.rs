@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use reqwest::{Certificate, Client, ClientBuilder, Identity};
+use reqwest::{Client, ClientBuilder};
 use std::time::Duration;
 
 use crate::core::gateway::link_sys::credential::{CredentialState, ResolvedCredential};
@@ -151,16 +151,7 @@ fn apply_tls(builder: ClientBuilder, crd: &ElasticsearchClientConfig) -> Result<
     if let Some(tls) = &crd.tls {
         if tls.enabled {
             builder = tls_helper::apply_insecure_skip_verify(builder, tls, "Elasticsearch")?;
-            if let Some(material) = tls_helper::build_material(tls) {
-                if let Some(ca_pem) = &material.ca_pem {
-                    let cert = Certificate::from_pem(ca_pem).context("invalid ES CA certificate PEM")?;
-                    builder = builder.add_root_certificate(cert);
-                }
-                if let Some(combined) = tls_helper::combined_identity_pem(&material) {
-                    let identity = Identity::from_pem(combined.as_slice()).context("invalid ES client identity PEM")?;
-                    builder = builder.identity(identity);
-                }
-            }
+            builder = tls_helper::apply_to_reqwest_builder(builder, tls, "Elasticsearch")?;
         }
     }
     Ok(builder)

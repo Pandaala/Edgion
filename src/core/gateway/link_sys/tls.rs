@@ -4,7 +4,9 @@
 //! TLS config from the per-resource `*Tls` struct. After R1 these are all
 //! unified behind [`crate::types::resources::common::TlsConfig`]; this module
 //! centralizes the lookup / merge logic so every provider consumes the same
-//! [`TlsMaterial`] shape.
+//! [`TlsMaterial`] shape. It also houses the reqwest-specific helpers
+//! ([`apply_insecure_skip_verify`], [`apply_to_reqwest_builder`]) so all
+//! reqwest-based providers (ES, webhook) share one wiring path.
 //!
 //! Precedence for each field:
 //! - `ca_pem` / `client_cert_pem`: **inline PEM** on the CRD wins if set, else
@@ -158,6 +160,44 @@ pub fn combined_identity_pem(m: &TlsMaterial) -> Option<Zeroizing<Vec<u8>>> {
     out.push(b'\n');
     out.extend_from_slice(key);
     Some(Zeroizing::new(out))
+}
+
+/// Apply CA root and mTLS identity from a [`TlsConfig`] to a reqwest client builder.
+///
+/// Factored out of the ES and webhook providers so all reqwest-based providers
+/// share the same wiring and error messages. Call this **after**
+/// [`apply_insecure_skip_verify`]. Whether to guard on `tls.enabled` is the
+/// caller's responsibility — ES gates this inside `if tls.enabled { … }`;
+/// webhook enters the TLS branch whenever `config.tls` is `Some(_)`.
+///
+/// `provider` is a short display name (e.g. `"Elasticsearch"`, `"Webhook"`)
+/// embedded in error messages so operators can identify which provider produced
+/// the invalid PEM.
+///
+/// Returns the builder unchanged when [`build_material`] yields `None` (no
+/// certs configured).
+pub fn apply_to_reqwest_builder(
+    builder: reqwest::ClientBuilder,
+    tls: &TlsConfig,
+    provider: &str,
+) -> Result<reqwest::ClientBuilder> {
+    let Some(material) = build_material(tls) else {
+        return Ok(builder);
+    };
+    let mut builder = builder;
+    if let Some(ca) = &material.ca_pem {
+        builder = builder.add_root_certificate(
+            reqwest::Certificate::from_pem(ca)
+                .with_context(|| format!("{provider} TLS: invalid CA certificate PEM"))?,
+        );
+    }
+    if let Some(combined) = combined_identity_pem(&material) {
+        builder = builder.identity(
+            reqwest::Identity::from_pem(combined.as_slice())
+                .with_context(|| format!("{provider} TLS: invalid client identity PEM"))?,
+        );
+    }
+    Ok(builder)
 }
 
 /// Cross-test mutex for any test that reads/writes `EDGION_ENV`. `cargo test`
@@ -581,5 +621,82 @@ mod tests {
             ),
             Ok(None) => panic!("expected Some(config) or Err, got Ok(None)"),
         }
+    }
+
+    // ------------------------------------------------------------------
+    // apply_to_reqwest_builder
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn apply_to_reqwest_builder_passthrough_when_no_material() {
+        let tls = TlsConfig {
+            enabled: true,
+            certs: None,
+            insecure_skip_verify: None,
+        };
+        assert!(
+            apply_to_reqwest_builder(reqwest::Client::builder(), &tls, "Test").is_ok(),
+            "should return Ok when build_material yields None"
+        );
+    }
+
+    #[test]
+    fn apply_to_reqwest_builder_valid_ca_only() {
+        let (ca_pem, _cert_pem, _key_pem) = gen_ca_and_leaf();
+        let tls = TlsConfig {
+            enabled: true,
+            certs: Some(TlsCerts {
+                ca_cert: Some(ca_pem),
+                client_cert: None,
+                secret_ref: None,
+                secret: None,
+            }),
+            insecure_skip_verify: None,
+        };
+        assert!(
+            apply_to_reqwest_builder(reqwest::Client::builder(), &tls, "Test").is_ok(),
+            "valid CA PEM should not produce an error"
+        );
+    }
+
+    #[test]
+    fn apply_to_reqwest_builder_valid_mtls() {
+        let (ca_pem, cert_pem, key_pem) = gen_ca_and_leaf();
+        let tls = TlsConfig {
+            enabled: true,
+            certs: Some(TlsCerts {
+                ca_cert: Some(ca_pem),
+                client_cert: Some(cert_pem),
+                secret_ref: None,
+                secret: Some(secret_with(&[("tls.key", key_pem.as_bytes())])),
+            }),
+            insecure_skip_verify: None,
+        };
+        assert!(
+            apply_to_reqwest_builder(reqwest::Client::builder(), &tls, "Test").is_ok(),
+            "valid CA + mTLS identity should not produce an error"
+        );
+    }
+
+    #[test]
+    fn apply_to_reqwest_builder_invalid_identity_errors() {
+        let (ca_pem, _cert_pem, _key_pem) = gen_ca_and_leaf();
+        let tls = TlsConfig {
+            enabled: true,
+            certs: Some(TlsCerts {
+                ca_cert: Some(ca_pem),
+                client_cert: Some("bad-cert".into()),
+                secret_ref: None,
+                secret: Some(secret_with(&[("tls.key", b"bad-key")])),
+            }),
+            insecure_skip_verify: None,
+        };
+        let err = apply_to_reqwest_builder(reqwest::Client::builder(), &tls, "TestProvider")
+            .expect_err("invalid identity PEM must return Err");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("TestProvider TLS:"),
+            "error must carry provider prefix, got: {msg}"
+        );
     }
 }

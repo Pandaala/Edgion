@@ -25,7 +25,7 @@
 //! - **Default timeouts**: Prevent external services from hanging the gateway.
 //!   Individual plugins can override per-request timeouts.
 
-use reqwest::{Certificate, Client, Identity};
+use reqwest::Client;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -117,35 +117,10 @@ pub fn build_webhook_client(
         Err(e) => return Some(Err(e)),
     };
 
-    // Resolve CA / mTLS from inline PEM + embedded Secret (private key is
-    // secret-only; inline is rejected by `TlsCerts::deny_unknown_fields`).
-    if let Some(material) = crate::core::gateway::link_sys::tls::build_material(tls) {
-        if let Some(ca_pem) = &material.ca_pem {
-            match Certificate::from_pem(ca_pem) {
-                Ok(cert) => {
-                    builder = builder.add_root_certificate(cert);
-                }
-                Err(e) => {
-                    return Some(Err(
-                        anyhow::Error::from(e).context("Webhook TLS: invalid CA certificate PEM")
-                    ));
-                }
-            }
-        }
-
-        if let Some(combined) = crate::core::gateway::link_sys::tls::combined_identity_pem(&material) {
-            match Identity::from_pem(combined.as_slice()) {
-                Ok(identity) => {
-                    builder = builder.identity(identity);
-                }
-                Err(e) => {
-                    return Some(Err(
-                        anyhow::Error::from(e).context("Webhook TLS: invalid client certificate PEM")
-                    ));
-                }
-            }
-        }
-    }
+    builder = match crate::core::gateway::link_sys::tls::apply_to_reqwest_builder(builder, tls, "Webhook") {
+        Ok(b) => b,
+        Err(e) => return Some(Err(e)),
+    };
 
     Some(builder.build().map_err(anyhow::Error::from))
 }

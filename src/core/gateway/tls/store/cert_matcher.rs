@@ -72,13 +72,6 @@ pub fn get_tls_cert_matcher() -> &'static TlsCertMatcher {
     &TLS_CERT_MATCHER
 }
 
-pub fn set_tls_cert_matcher(
-    listener_matcher: HashMap<ListenerKey, HashHost<Vec<Arc<EdgionTls>>>>,
-) -> anyhow::Result<()> {
-    get_tls_cert_matcher().set(listener_matcher);
-    Ok(())
-}
-
 pub fn match_sni(key: &ListenerKey, sni: &str) -> Option<Arc<EdgionTls>> {
     get_tls_cert_matcher().match_sni(key, sni)
 }

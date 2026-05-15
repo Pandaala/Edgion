@@ -62,18 +62,7 @@ impl TlsStore {
             );
         }
 
-        if let Err(e) = self.rebuild_matcher_from_data(&new_map) {
-            // This is a critical error - store updated but matcher not synced
-            tracing::error!(
-                component = "tls_store",
-                error = %e,
-                cert_count = cert_count,
-                "CRITICAL: Failed to rebuild TLS matcher after full set. \
-                 Store and matcher are now inconsistent!"
-            );
-            // TODO(error-handling): Consider returning Result from full_set
-            // to propagate this error to callers for retry logic
-        }
+        self.rebuild_matcher_from_data(&new_map);
 
         self.tls_data.store(Arc::new(new_map));
     }
@@ -150,20 +139,7 @@ impl TlsStore {
             new_map.remove(key);
         }
 
-        if let Err(e) = self.rebuild_matcher_from_data(&new_map) {
-            // This is a critical error - store updated but matcher not synced
-            tracing::error!(
-                component = "tls_store",
-                error = %e,
-                added = add_count,
-                updated = update_count,
-                removed = remove_count,
-                "CRITICAL: Failed to rebuild TLS matcher after partial update. \
-                 Store and matcher are now inconsistent!"
-            );
-            // TODO(error-handling): Consider returning Result from partial_update
-            // to propagate this error to callers for retry logic
-        }
+        self.rebuild_matcher_from_data(&new_map);
 
         self.tls_data.store(Arc::new(new_map));
     }
@@ -173,7 +149,7 @@ impl TlsStore {
     ///
     /// # Arguments
     /// * `tls_data` - Reference to the TLS data map
-    fn rebuild_matcher_from_data(&self, tls_data: &HashMap<String, TlsEntry>) -> anyhow::Result<()> {
+    fn rebuild_matcher_from_data(&self, tls_data: &HashMap<String, TlsEntry>) {
         let mut listener_host_map: HashMap<ListenerKey, HashMap<String, Vec<Arc<EdgionTls>>>> = HashMap::new();
         let mut total_hosts = 0;
         let mut valid_certs = 0;
@@ -226,7 +202,7 @@ impl TlsStore {
             listener_matcher.insert(listener_key, matcher);
         }
 
-        super::cert_matcher::set_tls_cert_matcher(listener_matcher)?;
+        super::cert_matcher::get_tls_cert_matcher().set(listener_matcher);
 
         tracing::info!(
             component = "tls_store",
@@ -236,8 +212,6 @@ impl TlsStore {
             total_hosts = total_hosts,
             "TLS matcher rebuilt successfully"
         );
-
-        Ok(())
     }
 
     /// Get all TLS certificates (for debugging/monitoring)
