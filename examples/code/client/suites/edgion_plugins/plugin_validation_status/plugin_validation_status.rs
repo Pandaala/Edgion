@@ -214,9 +214,9 @@ impl PluginValidationStatusTestSuite {
             "dsl_invalid",
             "Dsl 'ep-validation-dsl-invalid': uncompilable source → Accepted=False/Invalid",
             |ctx: TestContext| {
-                Box::pin(async move {
-                    assert_accepted_false(&ctx, "ep-validation-dsl-invalid", "DSL compile errors").await
-                })
+                Box::pin(
+                    async move { assert_accepted_false(&ctx, "ep-validation-dsl-invalid", "DSL compile errors").await },
+                )
             },
         )
     }

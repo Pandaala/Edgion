@@ -682,7 +682,10 @@ mod tests {
         let entries = parsed["log"].as_array().unwrap();
         assert_eq!(entries.len(), 9, "8 tier-1 + 1 overflow entry, merged");
         assert_eq!(entries[8], "overflow-entry-1");
-        assert!(parsed.get("ulog").is_none(), "ulog is never serialized as its own field");
+        assert!(
+            parsed.get("ulog").is_none(),
+            "ulog is never serialized as its own field"
+        );
     }
 
     #[test]

@@ -40,7 +40,7 @@ define_resources! {
     EdgionGatewayConfig {
         enum_value: 2,
         kind_name: "edgiongatewayconfig",
-        kind_aliases: ["edgiongwconfig", "ztracegatewayconfig"],
+        kind_aliases: ["edgiongwconfig"],
         cache_field: edgion_gateway_configs,
         capacity_field: edgion_gateway_configs_capacity,
         default_capacity: small,
@@ -120,7 +120,7 @@ define_resources! {
     EdgionTls {
         enum_value: 7,
         kind_name: "edgiontls",
-        kind_aliases: ["ztracetls"],
+        kind_aliases: [],
         cache_field: edgion_tls,
         capacity_field: edgion_tls_capacity,
         default_capacity: normal,
@@ -341,7 +341,6 @@ mod tests {
             "service",
             "endpointslice",
             "edgiontls",
-            "ztracetls", // alias
             "secret",
             "edgionplugins",
             "grpcroute",

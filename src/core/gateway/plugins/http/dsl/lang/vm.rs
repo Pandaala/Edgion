@@ -9,6 +9,7 @@
 //!   - catch_unwind for fault isolation
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -172,7 +173,10 @@ impl VmState {
 /// VM instance — created per-script, reused across requests
 pub struct Vm {
     script: CompiledScript,
+    // Parallel to script.constants: Some for pre-compiled Regex entries, None for others.
     regex_cache: Vec<Option<regex::Regex>>,
+    // Parallel to script.constants: Some for Str entries, None for Int/Regex.
+    const_str_cache: Vec<Option<Arc<str>>>,
     pub(crate) limits: VmLimits,
 }
 
@@ -180,6 +184,7 @@ impl Vm {
     /// Create a new VM with pre-compiled regex cache
     pub fn new(script: CompiledScript, limits: VmLimits) -> Result<Self, RuntimeError> {
         let mut regex_cache = Vec::with_capacity(script.constants.len());
+        let mut const_str_cache = Vec::with_capacity(script.constants.len());
         for constant in &script.constants {
             match constant {
                 Constant::Regex(pattern) => {
@@ -187,15 +192,22 @@ impl Vm {
                         message: format!("failed to compile regex '{}': {}", pattern, e),
                     })?;
                     regex_cache.push(Some(re));
+                    const_str_cache.push(None);
                 }
-                _ => {
+                Constant::Str(s) => {
                     regex_cache.push(None);
+                    const_str_cache.push(Some(Arc::from(s.as_str())));
+                }
+                Constant::Int(_) => {
+                    regex_cache.push(None);
+                    const_str_cache.push(None);
                 }
             }
         }
         Ok(Self {
             script,
             regex_cache,
+            const_str_cache,
             limits,
         })
     }
@@ -234,7 +246,11 @@ impl Vm {
                             ),
                         })?;
                     let value = match constant {
-                        Constant::Str(s) => Value::Str(s.clone()),
+                        Constant::Str(_) => Value::Str(Arc::clone(
+                            self.const_str_cache[idx as usize]
+                                .as_ref()
+                                .expect("const_str_cache entry missing for Str constant"),
+                        )),
                         Constant::Int(n) => Value::Int(*n),
                         Constant::Regex(_) => Value::Nil, // regex itself is not a value
                     };
@@ -284,7 +300,10 @@ impl Vm {
                                     limit: self.limits.max_string_len,
                                 });
                             }
-                            Value::Str(format!("{}{}", a, b))
+                            let mut result = String::with_capacity(new_len);
+                            result.push_str(a);
+                            result.push_str(b);
+                            Value::Str(result.into())
                         }
                         (Value::Str(a), _) => {
                             let b_str = b.into_string();
@@ -295,7 +314,10 @@ impl Vm {
                                     limit: self.limits.max_string_len,
                                 });
                             }
-                            Value::Str(format!("{}{}", a, b_str))
+                            let mut result = String::with_capacity(new_len);
+                            result.push_str(a);
+                            result.push_str(&b_str);
+                            Value::Str(result.into())
                         }
                         (_, Value::Str(b)) => {
                             let a_str = a.into_string();
@@ -306,7 +328,10 @@ impl Vm {
                                     limit: self.limits.max_string_len,
                                 });
                             }
-                            Value::Str(format!("{}{}", a_str, b))
+                            let mut result = String::with_capacity(new_len);
+                            result.push_str(&a_str);
+                            result.push_str(b);
+                            Value::Str(result.into())
                         }
                         _ => {
                             return Err(RuntimeError::TypeError {
@@ -485,7 +510,7 @@ impl Vm {
                     let prefix = state.pop()?;
                     let s = state.pop()?;
                     let result = match (&s, &prefix) {
-                        (Value::Str(s), Value::Str(p)) => s.starts_with(p.as_str()),
+                        (Value::Str(s), Value::Str(p)) => s.starts_with(p.as_ref()),
                         _ => false, // Nil-friendly: returns false
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
@@ -494,7 +519,7 @@ impl Vm {
                     let suffix = state.pop()?;
                     let s = state.pop()?;
                     let result = match (&s, &suffix) {
-                        (Value::Str(s), Value::Str(p)) => s.ends_with(p.as_str()),
+                        (Value::Str(s), Value::Str(p)) => s.ends_with(p.as_ref()),
                         _ => false,
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
@@ -503,7 +528,7 @@ impl Vm {
                     let substr = state.pop()?;
                     let s = state.pop()?;
                     let result = match (&s, &substr) {
-                        (Value::Str(s), Value::Str(p)) => s.contains(p.as_str()),
+                        (Value::Str(s), Value::Str(p)) => s.contains(p.as_ref()),
                         _ => false,
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
@@ -536,7 +561,7 @@ impl Vm {
                                             limit: self.limits.max_string_len,
                                         });
                                     }
-                                    Value::Str(found.to_string())
+                                    Value::Str(Arc::from(found))
                                 } else {
                                     Value::Nil
                                 }
@@ -566,7 +591,7 @@ impl Vm {
                             limit: self.limits.max_string_len,
                         });
                     }
-                    state.push(Value::Str(result), self.limits.max_stack_depth)?;
+                    state.push(Value::Str(result.into()), self.limits.max_stack_depth)?;
                 }
 
                 // ===== Control Flow =====
@@ -649,10 +674,12 @@ impl Vm {
                             if *i < 0 {
                                 Value::Nil
                             } else {
-                                l.get(*i as usize).cloned().map(Value::Str).unwrap_or(Value::Nil)
+                                l.get(*i as usize)
+                                    .map(|s| Value::Str(Arc::clone(s)))
+                                    .unwrap_or(Value::Nil)
                             }
                         }
-                        (Value::Map(m), Value::Str(k)) => m.get(k.as_str()).cloned().unwrap_or(Value::Nil),
+                        (Value::Map(m), Value::Str(k)) => m.get(k.as_ref()).cloned().unwrap_or(Value::Nil),
                         _ => Value::Nil,
                     };
                     state.push(val, self.limits.max_stack_depth)?;
@@ -837,5 +864,161 @@ fn apply_error_policy(policy: &DslErrorPolicy) -> PluginRunningResult {
             status: *status,
             body: body.clone(),
         },
+    }
+}
+
+// ==================== Test helpers (cfg(test) only) ====================
+
+#[cfg(test)]
+impl Vm {
+    /// Expose the internal const_str_cache for alignment invariant tests.
+    pub(crate) fn const_str_cache_ref(&self) -> &[Option<Arc<str>>] {
+        &self.const_str_cache
+    }
+}
+
+// ==================== VM unit tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a minimal CompiledScript with the given constants and no real code.
+    fn script_with_constants(constants: Vec<Constant>) -> CompiledScript {
+        CompiledScript {
+            version: super::super::bytecode::BYTECODE_VERSION,
+            code: vec![OpCode::ReturnNext],
+            constants,
+            local_count: 0,
+            max_loop_depth: 0,
+            source: None,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Group C — const_str_cache alignment invariant
+    // -----------------------------------------------------------------------
+
+    /// Empty constant pool: cache length is 0, no panics.
+    #[test]
+    fn test_const_str_cache_empty_pool() {
+        let script = script_with_constants(vec![]);
+        let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
+        assert_eq!(vm.const_str_cache_ref().len(), 0);
+    }
+
+    /// Mixed pool: cache is parallel to constants; only Str slots are Some.
+    #[test]
+    fn test_const_str_cache_alignment() {
+        let constants = vec![
+            Constant::Str("hello".to_string()),
+            Constant::Int(42),
+            Constant::Str("world".to_string()),
+        ];
+        let script = script_with_constants(constants.clone());
+        let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
+        let cache = vm.const_str_cache_ref();
+
+        // Length must match the constant pool exactly.
+        assert_eq!(
+            cache.len(),
+            constants.len(),
+            "cache length must equal constant pool size"
+        );
+
+        // Index 0: Str("hello") → Some("hello")
+        assert!(cache[0].is_some(), "Str constant at index 0 should be Some");
+        assert_eq!(
+            cache[0].as_deref(),
+            Some("hello"),
+            "Str constant content mismatch at index 0"
+        );
+
+        // Index 1: Int(42) → None
+        assert!(cache[1].is_none(), "Int constant at index 1 should be None");
+
+        // Index 2: Str("world") → Some("world")
+        assert!(cache[2].is_some(), "Str constant at index 2 should be Some");
+        assert_eq!(
+            cache[2].as_deref(),
+            Some("world"),
+            "Str constant content mismatch at index 2"
+        );
+    }
+
+    /// Regex constants must produce None in the str cache and Some in regex_cache.
+    #[test]
+    fn test_const_str_cache_regex_is_none() {
+        let constants = vec![
+            Constant::Str("prefix".to_string()),
+            Constant::Regex("\\d+".to_string()),
+            Constant::Int(0),
+            Constant::Str("suffix".to_string()),
+        ];
+        let script = script_with_constants(constants.clone());
+        let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
+        let cache = vm.const_str_cache_ref();
+
+        assert_eq!(cache.len(), constants.len());
+
+        // Str slots
+        assert!(cache[0].is_some());
+        assert_eq!(cache[0].as_deref(), Some("prefix"));
+        assert!(cache[3].is_some());
+        assert_eq!(cache[3].as_deref(), Some("suffix"));
+
+        // Regex slot → None in str cache
+        assert!(cache[1].is_none(), "Regex constant should be None in const_str_cache");
+
+        // Int slot → None
+        assert!(cache[2].is_none(), "Int constant should be None in const_str_cache");
+    }
+
+    /// All-Str pool: every slot is Some with the correct content.
+    #[test]
+    fn test_const_str_cache_all_str() {
+        let strings = ["alpha", "beta", "gamma", "delta"];
+        let constants: Vec<Constant> = strings.iter().map(|s| Constant::Str(s.to_string())).collect();
+        let script = script_with_constants(constants);
+        let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
+        let cache = vm.const_str_cache_ref();
+
+        assert_eq!(cache.len(), strings.len());
+        for (i, expected) in strings.iter().enumerate() {
+            assert!(cache[i].is_some(), "index {} should be Some", i);
+            assert_eq!(cache[i].as_deref(), Some(*expected), "content mismatch at index {}", i);
+        }
+    }
+
+    /// All-Int pool: every slot is None.
+    #[test]
+    fn test_const_str_cache_all_int() {
+        let constants = vec![Constant::Int(1), Constant::Int(2), Constant::Int(3)];
+        let script = script_with_constants(constants.clone());
+        let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
+        let cache = vm.const_str_cache_ref();
+
+        assert_eq!(cache.len(), constants.len());
+        for (i, entry) in cache.iter().enumerate() {
+            assert!(entry.is_none(), "Int constant at index {} should be None", i);
+        }
+    }
+
+    /// Arc content equality: two Vm instances built from the same script
+    /// must produce independently-owned but content-equal Arcs.
+    #[test]
+    fn test_const_str_cache_arc_content_equality() {
+        let constants = vec![Constant::Str("shared".to_string())];
+        let script1 = script_with_constants(constants.clone());
+        let script2 = script_with_constants(constants);
+        let vm1 = Vm::new(script1, VmLimits::default()).expect("vm1 creation failed");
+        let vm2 = Vm::new(script2, VmLimits::default()).expect("vm2 creation failed");
+
+        let arc1 = vm1.const_str_cache_ref()[0].as_ref().unwrap();
+        let arc2 = vm2.const_str_cache_ref()[0].as_ref().unwrap();
+
+        // Content must match even though the Arcs are independent allocations.
+        assert_eq!(arc1.as_ref(), arc2.as_ref(), "Arc content should be equal");
+        // Pointer identity is NOT asserted — they are independent Vms.
     }
 }

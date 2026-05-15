@@ -133,10 +133,19 @@ pub(crate) fn apply_sensitive<T>(v: &str, f: impl FnOnce(&str) -> T) -> T {
                 buf.push_str(&s.wrap_prefix);
                 buf.push_str(v);
                 buf.push_str(&s.wrap_suffix);
-                f(&buf)
+                let result = f(&buf);
+                buf.clear();
+                result
             })
         }
     }
+}
+
+// ---- test-only helpers ----
+
+#[cfg(test)]
+pub(crate) fn mask_buf_len_after_call() -> usize {
+    MASK_BUF.with(|buf| buf.borrow().len())
 }
 
 // ---- serde helper modules ----
@@ -246,4 +255,18 @@ mod tests {
         let out = apply_sensitive("/api/users/123", |w| w.to_string());
         assert_eq!(out, "/api/users/123");
     }
+
+    // Verify the wrap-mode buffer is cleared immediately after f returns, so
+    // sensitive content does not linger in the thread-local until the next call.
+    #[test]
+    fn test_wrap_clears_buffer_after_call() {
+        let _g = set_mode(2);
+        let _ = apply_sensitive("top_secret_value", |s| s.to_string());
+        assert_eq!(
+            mask_buf_len_after_call(),
+            0,
+            "wrap-mode buffer must be empty after apply_sensitive returns"
+        );
+    }
+
 }

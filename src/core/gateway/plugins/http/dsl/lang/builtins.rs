@@ -30,7 +30,7 @@ fn redis_err(msg: String) -> Value {
     let mut m = IndexMap::new();
     m.insert("ok".to_string(), Value::Bool(false));
     m.insert("value".to_string(), Value::Nil);
-    m.insert("error".to_string(), Value::Str(msg));
+    m.insert("error".to_string(), Value::Str(msg.into()));
     Value::Map(m)
 }
 
@@ -45,7 +45,7 @@ fn check_string_len(s: &str, limit: usize) -> Result<(), RuntimeError> {
 
 fn checked_value_str(s: String, limit: usize) -> Result<Value, RuntimeError> {
     check_string_len(&s, limit)?;
-    Ok(Value::Str(s))
+    Ok(Value::Str(s.into()))
 }
 
 fn checked_value_opt_str(s: Option<String>, limit: usize) -> Result<Value, RuntimeError> {
@@ -55,10 +55,10 @@ fn checked_value_opt_str(s: Option<String>, limit: usize) -> Result<Value, Runti
     }
 }
 
-fn api_error(function: &'static str, _err: impl std::fmt::Display) -> RuntimeError {
+fn api_error(function: &'static str, err: impl std::fmt::Display) -> RuntimeError {
     RuntimeError::ApiError {
         function: function.into(),
-        message: "plugin session operation failed".into(),
+        message: format!("plugin session operation failed: {err}").into(),
     }
 }
 
@@ -97,10 +97,10 @@ impl Vm {
             BuiltinId::ReqHeaderNames => {
                 let headers = session.request_headers();
                 const MAX_HEADER_NAMES: usize = 256;
-                let mut names: Vec<String> = Vec::new();
+                let mut names: Vec<Arc<str>> = Vec::new();
                 for (k, _) in headers.into_iter().take(MAX_HEADER_NAMES) {
                     check_string_len(&k, self.limits.max_string_len)?;
-                    names.push(k);
+                    names.push(Arc::from(k.as_str()));
                 }
                 Ok(Value::List(names))
             }
@@ -215,10 +215,10 @@ impl Vm {
                 // For now, return empty list if response headers are not accessible.
                 let names = session.response_header_names();
                 const MAX_HEADER_NAMES: usize = 256;
-                let mut result: Vec<String> = Vec::new();
+                let mut result: Vec<Arc<str>> = Vec::new();
                 for name in names.into_iter().take(MAX_HEADER_NAMES) {
                     check_string_len(&name, self.limits.max_string_len)?;
-                    result.push(name);
+                    result.push(Arc::from(name.as_str()));
                 }
                 Ok(Value::List(result))
             }
@@ -353,12 +353,12 @@ impl Vm {
                             let byte_end = s.char_indices().nth(end).map(|(i, _)| i).unwrap_or(s.len());
                             let out = s[byte_start..byte_end].to_string();
                             check_string_len(&out, self.limits.max_string_len)?;
-                            Ok(Value::Str(out))
+                            Ok(Value::Str(out.into()))
                         } else {
-                            Ok(Value::Str(String::new()))
+                            Ok(Value::Str(Arc::from("")))
                         }
                     }
-                    Value::Nil => Ok(Value::Str(String::new())),
+                    Value::Nil => Ok(Value::Str(Arc::from(""))),
                     _ => Err(RuntimeError::TypeError {
                         expected: "Str",
                         got: s.type_name(),
@@ -370,7 +370,7 @@ impl Vm {
                 let v = state.pop()?;
                 let s = v.into_string();
                 check_string_len(&s, self.limits.max_string_len)?;
-                Ok(Value::Str(s))
+                Ok(Value::Str(s.into()))
             }
             BuiltinId::ToInt => {
                 let v = state.pop()?;
@@ -384,20 +384,20 @@ impl Vm {
                 let s = state.pop()?.into_string();
                 let result = s.to_uppercase();
                 check_string_len(&result, self.limits.max_string_len)?;
-                Ok(Value::Str(result))
+                Ok(Value::Str(result.into()))
             }
             BuiltinId::ToLower => {
                 let s = state.pop()?.into_string();
                 let result = s.to_lowercase();
                 check_string_len(&result, self.limits.max_string_len)?;
-                Ok(Value::Str(result))
+                Ok(Value::Str(result.into()))
             }
             BuiltinId::Base64Encode => {
                 use base64::Engine;
                 let s = state.pop()?.into_string();
                 let encoded = base64::engine::general_purpose::STANDARD.encode(s.as_bytes());
                 check_string_len(&encoded, self.limits.max_string_len)?;
-                Ok(Value::Str(encoded))
+                Ok(Value::Str(encoded.into()))
             }
             BuiltinId::Base64Decode => {
                 use base64::Engine;
@@ -406,7 +406,7 @@ impl Vm {
                     Ok(bytes) => {
                         let decoded = String::from_utf8_lossy(&bytes).to_string();
                         check_string_len(&decoded, self.limits.max_string_len)?;
-                        Ok(Value::Str(decoded))
+                        Ok(Value::Str(decoded.into()))
                     }
                     Err(_) => Ok(Value::Nil),
                 }
@@ -433,7 +433,7 @@ impl Vm {
                     })
                     .collect();
                 check_string_len(&encoded, self.limits.max_string_len)?;
-                Ok(Value::Str(encoded))
+                Ok(Value::Str(encoded.into()))
             }
             BuiltinId::UrlDecode => {
                 let s = state.pop()?.into_string();
@@ -466,19 +466,19 @@ impl Vm {
                 }
                 let decoded = String::from_utf8_lossy(&result).to_string();
                 check_string_len(&decoded, self.limits.max_string_len)?;
-                Ok(Value::Str(decoded))
+                Ok(Value::Str(decoded.into()))
             }
             BuiltinId::Sha256 => {
                 use sha2::Digest;
                 let s = state.pop()?.into_string();
                 let hash = sha2::Sha256::digest(s.as_bytes());
-                Ok(Value::Str(hex::encode(hash)))
+                Ok(Value::Str(hex::encode(hash).into()))
             }
             BuiltinId::Md5 => {
                 use md5::Digest;
                 let s = state.pop()?.into_string();
                 let hash = md5::Md5::digest(s.as_bytes());
-                Ok(Value::Str(hex::encode(hash)))
+                Ok(Value::Str(hex::encode(hash).into()))
             }
             BuiltinId::RegexFind => {
                 let pattern = state.pop()?.into_string();
@@ -494,7 +494,7 @@ impl Vm {
                     Some(m) => {
                         let found = m.as_str().to_string();
                         check_string_len(&found, self.limits.max_string_len)?;
-                        Ok(Value::Str(found))
+                        Ok(Value::Str(found.into()))
                     }
                     None => Ok(Value::Nil),
                 }
@@ -512,16 +512,21 @@ impl Vm {
                     regex::Regex::new(&pattern).map_err(|e| RuntimeError::RegexError { message: e.to_string() })?;
                 let result = re.replace_all(&s, replacement.as_str()).into_owned();
                 check_string_len(&result, self.limits.max_string_len)?;
-                Ok(Value::Str(result))
+                Ok(Value::Str(result.into()))
             }
             BuiltinId::Trim => {
                 let s = state.pop()?.into_string();
-                Ok(Value::Str(s.trim().to_string()))
+                let trimmed = s.trim();
+                if trimmed.len() == s.len() {
+                    Ok(Value::Str(s.into()))
+                } else {
+                    Ok(Value::Str(Arc::from(trimmed)))
+                }
             }
             BuiltinId::Split => {
                 let delim = state.pop()?.into_string();
                 let s = state.pop()?.into_string();
-                let parts: Vec<String> = s.split(&*delim).map(|p| p.to_string()).collect();
+                let parts: Vec<Arc<str>> = s.split(&*delim).map(Arc::from).collect();
                 Ok(Value::List(parts))
             }
             BuiltinId::Range => {
@@ -550,7 +555,9 @@ impl Vm {
                     }
                 };
                 let count = (end - start).max(0).min(1000) as usize;
-                let list: Vec<String> = (start..start + count as i64).map(|i| i.to_string()).collect();
+                let list: Vec<Arc<str>> = (start..start + count as i64)
+                    .map(|i| Arc::from(i.to_string().as_str()))
+                    .collect();
                 Ok(Value::List(list))
             }
 
@@ -567,7 +574,7 @@ impl Vm {
                 })?;
                 mac.update(data.as_bytes());
                 let result = hex::encode(mac.finalize().into_bytes());
-                Ok(Value::Str(result))
+                Ok(Value::Str(result.into()))
             }
             BuiltinId::JsonGet => {
                 let path = state.pop()?.into_string();
@@ -617,7 +624,7 @@ impl Vm {
                                 if let Some(i) = n.as_i64() {
                                     Ok(Value::Int(i))
                                 } else {
-                                    Ok(Value::Str(n.to_string()))
+                                    Ok(Value::Str(n.to_string().into()))
                                 }
                             }
                             serde_json::Value::Bool(b) => Ok(Value::Bool(*b)),
@@ -625,7 +632,7 @@ impl Vm {
                             other => {
                                 let s = other.to_string();
                                 check_string_len(&s, self.limits.max_string_len)?;
-                                Ok(Value::Str(s))
+                                Ok(Value::Str(s.into()))
                             }
                         }
                     }
@@ -634,13 +641,13 @@ impl Vm {
             }
             BuiltinId::Uuid => {
                 let id = uuid::Uuid::new_v4().to_string();
-                Ok(Value::Str(id))
+                Ok(Value::Str(id.into()))
             }
             BuiltinId::HexEncode => {
                 let s = state.pop()?.into_string();
                 let encoded = hex::encode(s.as_bytes());
                 check_string_len(&encoded, self.limits.max_string_len)?;
-                Ok(Value::Str(encoded))
+                Ok(Value::Str(encoded.into()))
             }
             BuiltinId::HexDecode => {
                 let s = state.pop()?.into_string();
@@ -648,7 +655,7 @@ impl Vm {
                     Ok(bytes) => {
                         let decoded = String::from_utf8_lossy(&bytes).to_string();
                         check_string_len(&decoded, self.limits.max_string_len)?;
-                        Ok(Value::Str(decoded))
+                        Ok(Value::Str(decoded.into()))
                     }
                     Err(_) => Ok(Value::Nil),
                 }
@@ -678,7 +685,7 @@ impl Vm {
                     Some(dt) => {
                         let formatted = dt.format(&format).to_string();
                         check_string_len(&formatted, self.limits.max_string_len)?;
-                        Ok(Value::Str(formatted))
+                        Ok(Value::Str(formatted.into()))
                     }
                     None => Ok(Value::Nil),
                 }
@@ -735,7 +742,7 @@ impl Vm {
                     Value::List(items) => {
                         let joined = items.join(&delim);
                         check_string_len(&joined, self.limits.max_string_len)?;
-                        Ok(Value::Str(joined))
+                        Ok(Value::Str(joined.into()))
                     }
                     _ => Err(RuntimeError::TypeError {
                         expected: "List",
@@ -922,7 +929,7 @@ impl Vm {
         let failure_map = || {
             let mut m = IndexMap::new();
             m.insert("status".to_string(), Value::Int(0));
-            m.insert("body".to_string(), Value::Str(String::new()));
+            m.insert("body".to_string(), Value::Str(Arc::from("")));
             m.insert("headers".to_string(), Value::Map(IndexMap::new()));
             Value::Map(m)
         };
@@ -937,7 +944,7 @@ impl Vm {
         let mut resp_headers: IndexMap<String, Value> = IndexMap::new();
         for (k, v) in resp.headers() {
             if let Ok(val) = v.to_str() {
-                resp_headers.insert(k.as_str().to_lowercase(), Value::Str(val.to_string()));
+                resp_headers.insert(k.as_str().to_lowercase(), Value::Str(Arc::from(val)));
             }
         }
 
@@ -954,7 +961,7 @@ impl Vm {
 
         let mut result = IndexMap::new();
         result.insert("status".to_string(), Value::Int(status));
-        result.insert("body".to_string(), Value::Str(body_text));
+        result.insert("body".to_string(), Value::Str(body_text.into()));
         result.insert("headers".to_string(), Value::Map(resp_headers));
 
         Ok(Value::Map(result))
@@ -1004,7 +1011,7 @@ impl Vm {
                     Err(e) => return Ok(e),
                 };
                 match client.get(&key).await {
-                    Ok(Some(v)) => Ok(redis_ok(Value::Str(v))),
+                    Ok(Some(v)) => Ok(redis_ok(Value::Str(v.into()))),
                     Ok(None) => Ok(redis_ok(Value::Nil)),
                     Err(e) => Ok(redis_err(e.to_string())),
                 }
@@ -1150,7 +1157,7 @@ impl Vm {
                     Err(e) => return Ok(e),
                 };
                 match client.hget(&key, &field).await {
-                    Ok(Some(v)) => Ok(redis_ok(Value::Str(v))),
+                    Ok(Some(v)) => Ok(redis_ok(Value::Str(v.into()))),
                     Ok(None) => Ok(redis_ok(Value::Nil)),
                     Err(e) => Ok(redis_err(e.to_string())),
                 }
@@ -1196,7 +1203,7 @@ impl Vm {
                     Ok(map) => {
                         let mut result: IndexMap<String, Value> = IndexMap::new();
                         for (k, v) in map {
-                            result.insert(k, Value::Str(v));
+                            result.insert(k, Value::Str(v.into()));
                         }
                         Ok(redis_ok(Value::Map(result)))
                     }

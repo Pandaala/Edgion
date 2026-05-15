@@ -103,9 +103,7 @@ impl DanglingExtensionRefTestSuite {
                             Ok(resp) if resp.status().is_success() => {
                                 match resp.json::<serde_json::Value>().await {
                                     Ok(body) if body["success"].as_bool().unwrap_or(false) => {
-                                        if let Some(conditions) =
-                                            body["data"]["status"]["conditions"].as_array()
-                                        {
+                                        if let Some(conditions) = body["data"]["status"]["conditions"].as_array() {
                                             if let Some(cond) = conditions
                                                 .iter()
                                                 .find(|c| c["type"].as_str() == Some("PartiallyInvalid"))
@@ -124,23 +122,18 @@ impl DanglingExtensionRefTestSuite {
                                                         note.to_string(),
                                                     );
                                                 }
-                                                last_err = format!(
-                                                    "PartiallyInvalid present but status != True: {:?}",
-                                                    cond
-                                                );
-                                            } else {
                                                 last_err =
-                                                    "status.conditions lacks PartiallyInvalid".to_string();
+                                                    format!("PartiallyInvalid present but status != True: {:?}", cond);
+                                            } else {
+                                                last_err = "status.conditions lacks PartiallyInvalid".to_string();
                                             }
                                         } else {
                                             last_err = "status.conditions not present".to_string();
                                         }
                                     }
                                     Ok(body) => {
-                                        last_err = format!(
-                                            "API error: {}",
-                                            body["error"].as_str().unwrap_or("unknown")
-                                        );
+                                        last_err =
+                                            format!("API error: {}", body["error"].as_str().unwrap_or("unknown"));
                                     }
                                     Err(e) => {
                                         last_err = format!("JSON parse error: {}", e);
@@ -160,10 +153,7 @@ impl DanglingExtensionRefTestSuite {
 
                     TestResult::failed(
                         start.elapsed(),
-                        format!(
-                            "Expected PartiallyInvalid=True for '{}'. Last: {}",
-                            name, last_err
-                        ),
+                        format!("Expected PartiallyInvalid=True for '{}'. Last: {}", name, last_err),
                     )
                 })
             },

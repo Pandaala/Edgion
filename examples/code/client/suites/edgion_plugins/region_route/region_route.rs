@@ -93,22 +93,13 @@ impl RegionRouteTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("{}/echo", ctx.edgion_plugins_url());
-                    match ctx
-                        .http_client
-                        .get(&url)
-                        .header("host", BROKEN_REF_HOST)
-                        .send()
-                        .await
-                    {
+                    match ctx.http_client.get(&url).header("host", BROKEN_REF_HOST).send().await {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
                             if status == 500 {
                                 TestResult::passed(start.elapsed())
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 500 (BrokenRef), got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected 500 (BrokenRef), got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
