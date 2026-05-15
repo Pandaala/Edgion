@@ -138,6 +138,8 @@ pub enum AcceptedError {
     NoMatchingListenerHostname { hostnames: Vec<String> },
     /// sectionName doesn't match any listener
     NoMatchingParent { section_name: String },
+    /// Referenced parent Gateway not yet present in the store (init window)
+    ParentNotFound { parent_name: String },
     /// Resource failed validation or preparse (generic validation error)
     Invalid { message: String },
 }
@@ -149,6 +151,7 @@ impl AcceptedError {
             Self::NotAllowedByListenerKind { .. } => condition_reasons::NOT_ALLOWED_BY_LISTENERS,
             Self::NoMatchingListenerHostname { .. } => condition_reasons::NO_MATCHING_LISTENER_HOSTNAME,
             Self::NoMatchingParent { .. } => condition_reasons::NO_MATCHING_PARENT,
+            Self::ParentNotFound { .. } => condition_reasons::NO_MATCHING_PARENT,
             Self::Invalid { .. } => condition_reasons::INVALID,
         }
     }
@@ -166,6 +169,9 @@ impl AcceptedError {
             }
             Self::NoMatchingParent { section_name } => {
                 format!("No matching listener for sectionName '{}'", section_name)
+            }
+            Self::ParentNotFound { parent_name } => {
+                format!("Parent Gateway '{}' not found", parent_name)
             }
             Self::Invalid { message } => message.clone(),
         }
@@ -572,6 +578,15 @@ mod tests {
         };
         assert_eq!(err.reason(), "NoMatchingParent");
         assert_eq!(err.message(), "No matching listener for sectionName 'https'");
+    }
+
+    #[test]
+    fn test_accepted_error_parent_not_found() {
+        let err = AcceptedError::ParentNotFound {
+            parent_name: "default/my-gateway".to_string(),
+        };
+        assert_eq!(err.reason(), "NoMatchingParent");
+        assert_eq!(err.message(), "Parent Gateway 'default/my-gateway' not found");
     }
 
     #[test]

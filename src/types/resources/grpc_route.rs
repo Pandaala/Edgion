@@ -388,10 +388,27 @@ pub struct GRPCRouteRetry {
 
 /// Extension trait for GRPCRoute to parse hidden logic
 impl GRPCRoute {
-    /// Parse all extension_ref in backend_refs and populate extension_info fields
+    /// Parse all extension_ref in backend_refs and populate extension_info fields.
     ///
     /// This method should be called after deserializing GRPCRoute from YAML/JSON
     /// to populate the runtime-only extension_info fields.
+    ///
+    /// # Incomplete by itself
+    ///
+    /// `preparse()` only covers plugin runtimes. It does **not** parse timeouts
+    /// or retry configurations. A fully pre-processed `GRPCRoute` requires all
+    /// three calls:
+    ///
+    /// ```ignore
+    /// route.preparse();
+    /// route.parse_timeouts();
+    /// route.parse_retry();
+    /// ```
+    ///
+    /// Production code paths go through `ResourceMeta::pre_parse()` (implemented
+    /// via `impl_resource_meta!` in `types/resource/meta/impls.rs`), which chains
+    /// all three. Prefer `pre_parse()` over calling `preparse()` directly unless
+    /// you intentionally want only the subset above.
     pub fn preparse(&mut self) {
         let Some(rules) = self.spec.rules.as_mut() else {
             return;

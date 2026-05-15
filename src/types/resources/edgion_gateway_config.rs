@@ -137,18 +137,21 @@ pub struct ClientTimeout {
     /// Format: Duration string (e.g., "60s", "1m", "500ms")
     /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_client_read_timeout")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub read_timeout: String,
 
     /// Timeout for writing response to client
     /// Format: Duration string (e.g., "60s", "1m", "500ms")
     /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_client_write_timeout")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub write_timeout: String,
 
     /// HTTP keepalive timeout
     /// Format: Duration string (e.g., "75s", "1m", "500ms")
     /// Without unit defaults to seconds (e.g., "75" = "75s")
     #[serde(default = "default_client_keepalive_timeout")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub keepalive_timeout: String,
 }
 
@@ -159,18 +162,21 @@ pub struct BackendTimeout {
     /// Format: Duration string (e.g., "5s", "1m", "500ms")
     /// Without unit defaults to seconds (e.g., "5" = "5s")
     #[serde(default = "default_backend_connect_timeout")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub default_connect_timeout: String,
 
     /// Total request timeout including retries
     /// Format: Duration string (e.g., "60s", "1m", "500ms")
     /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_backend_request_timeout")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub default_request_timeout: String,
 
     /// Idle timeout for backend connection pool
     /// Format: Duration string (e.g., "300s", "5m", "500ms")
     /// Without unit defaults to seconds (e.g., "300" = "300s")
     #[serde(default = "default_backend_idle_timeout")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub default_idle_timeout: String,
 
     /// **DEPRECATED**: Use top-level `maxRetries` in EdgionGatewayConfigSpec instead.

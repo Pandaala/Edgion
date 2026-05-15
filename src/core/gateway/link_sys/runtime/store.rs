@@ -81,6 +81,15 @@ impl LinkSysStore {
             handle.spawn(async move {
                 dispatch_full_set(&data_for_dispatch).await;
             });
+        } else {
+            // Reachable only outside a tokio runtime (currently: the four sync
+            // unit tests that exercise the resource map only). Production
+            // callers all run inside tokio; if this fires there, provider
+            // clients were never built and `get_*_client` will look like
+            // "config not synced yet" — surface it instead of failing silently.
+            tracing::error!(
+                "LinkSysStore::replace_all called outside a tokio runtime — dispatch skipped"
+            );
         }
 
         self.resources.store(data);
@@ -111,6 +120,13 @@ impl LinkSysStore {
             handle.spawn(async move {
                 dispatch_partial_update(&dispatch_data, &remove_set).await;
             });
+        } else {
+            // See `replace_all` for the rationale — this branch is only hit by
+            // sync unit tests today; logging makes any future outside-runtime
+            // regression visible rather than presenting as "config not synced".
+            tracing::error!(
+                "LinkSysStore::update called outside a tokio runtime — dispatch skipped"
+            );
         }
 
         self.resources.store(Arc::new(new_map));

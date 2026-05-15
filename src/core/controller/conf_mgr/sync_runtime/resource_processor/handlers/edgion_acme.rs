@@ -115,6 +115,23 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         // Clear old references first (for update scenario)
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
 
+        // Snapshot pre-parse state for change-gated notification (see notify guard below).
+        // `prev_controller_gen` is the generation last written by `update_status`; it differs
+        // from the current generation only when the spec changed. `prev_resolved_refs` captures
+        // the credential state so a Secret add/remove/corrupt triggers a notify even when
+        // generation is identical.
+        let current_generation = acme.metadata.generation;
+        let prev_controller_gen = acme
+            .status
+            .as_ref()
+            .and_then(|s| s.conditions.iter().find(|c| c.type_ == condition_types::ACCEPTED))
+            .and_then(|c| c.observed_generation);
+        let prev_resolved_refs = acme
+            .status
+            .as_ref()
+            .and_then(|s| s.conditions.iter().find(|c| c.type_ == condition_types::RESOLVED_REFS))
+            .map(|c| (c.status.clone(), c.reason.clone()));
+
         // ── Resolve ACME account credential via pipeline ────────────────────
         let outcome = resolve_secret(
             ctx,
@@ -256,10 +273,27 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
             }
         }
 
-        // Notify ACME service about the resource change (for certificate issuance/renewal)
-        let ns = acme.metadata.namespace.as_deref().unwrap_or("default");
-        let name = acme.metadata.name.as_deref().unwrap_or_default();
-        notify_resource_changed(format!("{}/{}", ns, name));
+        // Notify AcmeService only when something meaningful changed:
+        //   spec_changed  — generation advanced (user edited spec) or first create (no prev gen)
+        //   creds_changed — ResolvedRefs status/reason flipped (Secret added/deleted/corrupted)
+        //
+        // AcmeService status writes (phase, certificate fields) trigger a reconcile with the same
+        // generation and unchanged credentials. Without this guard those writes caused an infinite
+        // notify→re-check→status-write→reconcile→notify loop. Restart safety is handled by
+        // `scan_all_acme_resources`, which fires `notify_resource_changed` for every resource
+        // ~10 s after `start_acme_service`.
+        let new_resolved_refs = acme
+            .status
+            .as_ref()
+            .and_then(|s| s.conditions.iter().find(|c| c.type_ == condition_types::RESOLVED_REFS))
+            .map(|c| (c.status.clone(), c.reason.clone()));
+        let spec_changed = current_generation != prev_controller_gen || prev_controller_gen.is_none();
+        let creds_changed = prev_resolved_refs != new_resolved_refs;
+        if spec_changed || creds_changed {
+            let ns = acme.metadata.namespace.as_deref().unwrap_or("default");
+            let name = acme.metadata.name.as_deref().unwrap_or_default();
+            notify_resource_changed(format!("{}/{}", ns, name));
+        }
 
         ProcessResult::Continue(acme)
     }

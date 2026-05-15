@@ -731,6 +731,7 @@ pub struct HTTPRouteTimeouts {
     /// Gateway API v1.4 standard field
     /// Format: Duration (e.g., "10s", "1m", "500ms")
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub request: Option<String>,
 
     /// BackendRequest specifies a timeout for an individual request from the gateway
@@ -738,6 +739,7 @@ pub struct HTTPRouteTimeouts {
     /// sent from the gateway to when the full response has been received from the backend.
     /// Format: Duration (e.g., "10s", "1m", "500ms")
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub backend_request: Option<String>,
 }
 
@@ -755,6 +757,7 @@ pub struct HTTPRouteRetry {
     /// retry attempts and is represented in Gateway API Duration formatting.
     /// Format: Duration (e.g., "10ms", "1s")
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub backoff: Option<String>,
 
     /// Codes specifies the HTTP response status codes that a Gateway should
@@ -778,6 +781,7 @@ pub struct SessionPersistence {
     /// session, regardless of activity.
     /// Format: Duration (e.g., "1h", "24h")
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub absolute_timeout: Option<String>,
 
     /// IdleTimeout defines the idle timeout of the persistent session.
@@ -785,6 +789,7 @@ pub struct SessionPersistence {
     /// IdleTimeout, the session becomes invalid.
     /// Format: Duration (e.g., "30m", "1h")
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub idle_timeout: Option<String>,
 
     /// Type defines the type of session persistence such as through

@@ -128,7 +128,9 @@ pub(crate) fn apply_sensitive<T>(v: &str, f: impl FnOnce(&str) -> T) -> T {
         _ => {
             let s = get_strings();
             MASK_BUF.with(|buf| {
-                let mut buf = buf.borrow_mut();
+                let mut buf = buf
+                    .try_borrow_mut()
+                    .expect("apply_sensitive is not re-entrant in Wrap mode");
                 buf.clear();
                 buf.push_str(&s.wrap_prefix);
                 buf.push_str(v);

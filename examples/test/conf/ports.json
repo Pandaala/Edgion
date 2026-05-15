@@ -1,5 +1,5 @@
 {
-  "current_max": 31385,
+  "current_max": 31386,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -204,6 +204,9 @@
     },
     "Status/RefGrant/TLSRouteCrossNsSvc": {
       "tls": 31342
+    },
+    "Status/RefGrant": {
+      "http": 31386
     },
     "Status/ObservedGeneration/HighFrequency": {
       "http": 31381

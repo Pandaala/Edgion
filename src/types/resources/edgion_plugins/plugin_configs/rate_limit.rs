@@ -18,9 +18,17 @@
 use crate::core::common::utils::parse_duration;
 use crate::types::common::KeyGet;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::time::Duration;
 use tracing;
+
+fn deserialize_non_empty_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    Ok(opt.filter(|s| !s.is_empty()))
+}
 
 // ========== Rate Limit Scope ==========
 
@@ -77,12 +85,12 @@ pub enum RateLimitScope {
 pub struct LimitHeaderNames {
     /// Header name for rate limit value
     /// Only shown if explicitly configured
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_non_empty_string")]
     pub limit: Option<String>,
 
     /// Header name for remaining quota
     /// Only shown if explicitly configured
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_non_empty_string")]
     pub remaining: Option<String>,
 
     /// Header name for reset timestamp
@@ -92,12 +100,12 @@ pub struct LimitHeaderNames {
     /// on both allowed and rejected responses. `RateLimitRedis` only emits it on
     /// rejection (429) responses — the Redis Lua scripts do not return a
     /// window-reset timestamp for allowed requests.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_non_empty_string")]
     pub reset: Option<String>,
 
     /// Header name for human-readable retry time (e.g., "1.5s", "500ms")
     /// Only shown if explicitly configured
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_non_empty_string")]
     pub retry_in: Option<String>,
 }
 
@@ -602,15 +610,27 @@ mod tests {
     fn test_limit_header_names() {
         let headers = LimitHeaderNames {
             limit: Some("X-Limit".to_string()),
-            remaining: Some("".to_string()), // Empty string should return None
+            remaining: Some("".to_string()),
             reset: None,
             retry_in: Some("Retry-After".to_string()),
         };
 
         assert_eq!(headers.limit_header(), Some("X-Limit"));
-        assert_eq!(headers.remaining_header(), None); // Empty string filtered
+        assert_eq!(headers.remaining_header(), None);
         assert_eq!(headers.reset_header(), None);
         assert_eq!(headers.retry_in_header(), Some("Retry-After"));
+    }
+
+    #[test]
+    fn test_limit_header_names_empty_string_normalized_on_deserialize() {
+        // Empty strings must be normalized to None at deserialization time,
+        // eliminating the dual representation of "not configured".
+        let json = r#"{"limit":"X-Limit","remaining":"","reset":null}"#;
+        let headers: LimitHeaderNames = serde_json::from_str(json).unwrap();
+        assert_eq!(headers.limit, Some("X-Limit".to_string()));
+        assert_eq!(headers.remaining, None);
+        assert_eq!(headers.reset, None);
+        assert_eq!(headers.retry_in, None);
     }
 
     #[test]

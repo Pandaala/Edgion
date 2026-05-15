@@ -246,7 +246,9 @@ pub fn validate_parent_ref_accepted(
 
     let Some(gateway) = lookup_gateway(parent_ns, parent_name, runtime) else {
         return AcceptedResult {
-            errors: Vec::new(),
+            errors: vec![AcceptedError::ParentNotFound {
+                parent_name: format!("{}/{}", parent_ns, parent_name),
+            }],
             matched_listeners: Vec::new(),
             matched_listener_protocols: Vec::new(),
         };

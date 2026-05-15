@@ -99,16 +99,27 @@ pub(crate) fn is_lb_policy_kind(kind: &str) -> bool {
 
 /// Extension trait for HTTPRoute to parse hidden logic
 impl HTTPRoute {
-    /// Parse all extension_ref in backend_refs and populate extension_info fields
+    /// Parse all extension_ref in backend_refs and populate extension_info fields.
     ///
     /// This method should be called after deserializing HTTPRoute from YAML/JSON
     /// to populate the runtime-only extension_info fields.
     ///
-    /// # Example
+    /// # Incomplete by itself
+    ///
+    /// `preparse()` only covers plugin runtimes, path-matcher normalization, and
+    /// the `forward-raw-path` annotation. It does **not** parse timeouts or retry
+    /// configurations. A fully pre-processed `HTTPRoute` requires all three calls:
+    ///
     /// ```ignore
-    /// let mut route: HTTPRoute = serde_yaml::from_str(yaml_str)?;
-    /// route.parse_hidden_logic();
+    /// route.preparse();
+    /// route.parse_timeouts();
+    /// route.parse_retry();
     /// ```
+    ///
+    /// Production code paths go through `ResourceMeta::pre_parse()` (implemented
+    /// via `impl_resource_meta!` in `types/resource/meta/impls.rs`), which chains
+    /// all three. Prefer `pre_parse()` over calling `preparse()` directly unless
+    /// you intentionally want only the subset above.
     pub fn preparse(&mut self) {
         // Normalize path matcher values before any other processing so downstream
         // logic always sees the canonical path representation.

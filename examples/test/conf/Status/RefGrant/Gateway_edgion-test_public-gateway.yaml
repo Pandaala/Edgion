@@ -1,0 +1,17 @@
+# Parent Gateway referenced by RefGrant HTTPRoute fixtures.
+# Lives in edgion-test so the HTTPRoutes (in edgion-default) exercise cross-namespace
+# parent attachment; listener accepts routes from any namespace.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: public-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31386
+      allowedRoutes:
+        namespaces:
+          from: All

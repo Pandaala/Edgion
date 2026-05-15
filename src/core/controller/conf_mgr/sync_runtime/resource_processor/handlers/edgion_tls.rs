@@ -249,22 +249,17 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 
         let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
 
-        // Check Secret resolution for ResolvedRefs condition
-        let secret_ns = tls
-            .spec
-            .secret_ref
-            .namespace
-            .as_ref()
-            .or(tls.metadata.namespace.as_ref());
-        let secret_resolved = ctx
-            .runtime()
-            .secret_store
-            .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
-            .is_some();
-
-        let resolved_refs_errors: Vec<ResolvedRefsError> = if secret_resolved {
+        // parse() already resolved secret_ref -> spec.secret; reuse that result
+        // instead of querying secret_store a second time.
+        let resolved_refs_errors: Vec<ResolvedRefsError> = if tls.spec.secret.is_some() {
             vec![]
         } else {
+            let secret_ns = tls
+                .spec
+                .secret_ref
+                .namespace
+                .as_ref()
+                .or(tls.metadata.namespace.as_ref());
             vec![ResolvedRefsError::SecretNotFound {
                 namespace: secret_ns.map(|s| s.as_str()).unwrap_or("default").to_string(),
                 name: tls.spec.secret_ref.name.clone(),

@@ -127,7 +127,9 @@ impl WorkDir {
                 e
             )
         })?;
-        let _ = std::fs::remove_file(&test_file);
+        if let Err(e) = std::fs::remove_file(&test_file) {
+            tracing::warn!(path = %test_file.display(), error = %e, "Failed to remove write-test file");
+        }
 
         // 3. Check/create subdirectories
         for (name, dir) in [
