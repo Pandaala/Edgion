@@ -38,9 +38,10 @@ pub(super) struct Local {
 pub struct Compiler {
     pub(super) code: Vec<OpCode>,
     pub(super) constants: Vec<Constant>,
-    /// Map from constant value to index for deduplication
+    /// Maps from constant value to pool index for O(1) deduplication
     pub(super) const_str_map: HashMap<String, u16>,
     pub(super) const_int_map: HashMap<i64, u16>,
+    pub(super) const_regex_map: HashMap<String, u16>,
     pub(super) locals: Vec<Local>,
     pub(super) next_slot: u16,
     pub(super) scope_depth: u16,
@@ -65,6 +66,7 @@ impl Compiler {
             constants: Vec::new(),
             const_str_map: HashMap::new(),
             const_int_map: HashMap::new(),
+            const_regex_map: HashMap::new(),
             locals: Vec::new(),
             next_slot: 0,
             scope_depth: 0,

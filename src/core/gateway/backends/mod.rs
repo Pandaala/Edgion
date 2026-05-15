@@ -30,6 +30,7 @@ pub use selector::{get_backends_for_service_key, select_roundrobin_backend_key};
 pub use service_kind::EdgionService;
 pub use validation::validate_endpoint_in_route;
 
+use crate::core::common::utils::net::resolve_domain;
 use crate::core::gateway::{end_response_500, end_response_503};
 use crate::types::edgion_status::EdgionStatus;
 use crate::types::{EdgionHttpContext, ParsedLBPolicy};
@@ -46,7 +47,7 @@ use std::sync::Arc;
 use selector::{extract_hash_key, is_backend_healthy, select_backend_by_policy, select_from_endpoint_slice};
 
 /// Internal: try to get peer, returns Result with EdgionStatus on error
-pub(crate) fn try_get_peer(
+pub(crate) async fn try_get_peer(
     ctx: &mut EdgionHttpContext,
     session: &Session,
     is_grpc: bool,
@@ -189,10 +190,22 @@ pub(crate) fn try_get_peer(
                     .ok_or(EdgionStatus::BackendPortResolutionFailed)?,
             };
 
-            let addr_str = format!("{}:{}", external_name, port);
-            let addr = addr_str
-                .parse::<SocketAddr>()
-                .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
+            // Resolve the external name asynchronously. IP literals are parsed without
+            // a network round-trip; FQDNs use tokio::net::lookup_host (non-blocking).
+            // Only the first resolved address is used; multi-A DNS round-robin is not
+            // applied at this layer. DNS is re-resolved on every request — there is no
+            // TTL-aware cache.
+            let std_addr = match resolve_domain(external_name, port).await {
+                Ok(addr) => addr,
+                Err(e) => {
+                    if let Some(upstream) = ctx.get_current_upstream_mut() {
+                        upstream.port = Some(port);
+                        upstream.err.push(format!("dns resolution failed: {}", e));
+                    }
+                    return Err(EdgionStatus::BackendDnsResolutionFailed);
+                }
+            };
+            let addr = SocketAddr::Inet(std_addr);
 
             // Security check: reject loopback / link-local / metadata (SSRF defense)
             if let Err(status) = validate_backend_addr(&addr, ctx.allow_loopback_upstream) {
@@ -200,7 +213,11 @@ pub(crate) fn try_get_peer(
                 return Err(status);
             }
 
-            // Extract TLS configuration and record to upstream
+            // Extract TLS configuration and record to upstream. TLS is disabled when no
+            // BackendTLSPolicy is attached — operators must create one explicitly for FQDN
+            // ExternalName backends that serve TLS (e.g. port 443). Without it the gateway
+            // sends plaintext HTTP to the resolved IP, which produces a connection error
+            // indistinguishable from DNS failure.
             let (use_tls, sni) = extract_tls_config(&backend_tls_policy);
             record_tls_to_upstream(ctx, use_tls, &sni);
 
@@ -380,7 +397,7 @@ pub async fn get_peer(
     ctx: &mut EdgionHttpContext,
     is_grpc: bool,
 ) -> pingora_core::Result<Box<HttpPeer>> {
-    match try_get_peer(ctx, session, is_grpc) {
+    match try_get_peer(ctx, session, is_grpc).await {
         Ok(peer) => Ok(peer),
         Err(status) => {
             ctx.add_error(status);

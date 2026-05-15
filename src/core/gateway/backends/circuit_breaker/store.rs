@@ -27,6 +27,10 @@ impl Default for EndpointState {
 struct ServiceCbState {
     config: CircuitBreakerConfig,
     endpoints: DashMap<u64, EndpointState>,
+    /// Serializes the percent-check + ejection steps in `record_failure` to prevent
+    /// concurrent calls for distinct backends from both passing the max-ejection-percent
+    /// guard simultaneously and over-ejecting beyond the configured limit.
+    eject_lock: std::sync::Mutex<()>,
 }
 
 pub struct CircuitBreakerStore {
@@ -68,6 +72,7 @@ impl CircuitBreakerStore {
                             Arc::new(ServiceCbState {
                                 config: cfg,
                                 endpoints: DashMap::new(),
+                                eject_lock: std::sync::Mutex::new(()),
                             }),
                         );
                     }
@@ -77,6 +82,7 @@ impl CircuitBreakerStore {
                         Arc::new(ServiceCbState {
                             config: cfg,
                             endpoints: DashMap::new(),
+                            eject_lock: std::sync::Mutex::new(()),
                         }),
                     );
                 }
@@ -135,7 +141,12 @@ impl CircuitBreakerStore {
             return;
         }
 
-        // Step 2: check max_ejection_percent (no entry lock held, safe to iterate)
+        // Steps 2+3: held together under eject_lock so that concurrent record_failure
+        // calls for *different* backends cannot both pass the percent-check simultaneously
+        // and exceed max_ejection_percent.
+        let _eject_guard = svc.eject_lock.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Step 2: check max_ejection_percent
         if svc.config.max_ejection_percent > 0 && total_endpoints > 0 {
             let currently_ejected = svc.endpoints.iter().filter(|e| e.value().ejected_at.is_some()).count();
             let max_ejectable = (total_endpoints as u64 * svc.config.max_ejection_percent as u64 / 100) as usize;
@@ -144,7 +155,10 @@ impl CircuitBreakerStore {
             }
         }
 
-        // Step 3: actually eject (re-acquire lock)
+        // Step 3: actually eject (re-acquire DashMap shard lock).
+        // Trailing `;` is required: without it the Option<RefMut> temporary is a
+        // trailing expression whose lifetime extends to the enclosing block end,
+        // overlapping _eject_guard's borrow of the same Arc — the compiler rejects it.
         if let Some(mut ep) = svc.endpoints.get_mut(&backend_hash) {
             ep.ejected_at = Some(Instant::now());
             crate::core::gateway::observe::metrics::record_cb_ejection(service_key);
@@ -299,6 +313,41 @@ mod tests {
 
         store.record_failure("default/svc1", 222, 2);
         assert!(!store.is_ejected("default/svc1", 222));
+    }
+
+    #[test]
+    fn test_max_ejection_percent_concurrent_no_over_eject() {
+        use std::sync::{Arc, Barrier};
+
+        // 4 backends, 50% limit → at most 2 may be ejected regardless of concurrency.
+        let store = Arc::new(CircuitBreakerStore::new());
+        store.set_service_config("default/svc1", Some(make_config(1, 30, 50)));
+
+        let barrier = Arc::new(Barrier::new(4));
+        let hashes = [100u64, 200, 300, 400];
+
+        let handles: Vec<_> = hashes
+            .iter()
+            .copied()
+            .map(|hash| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store.record_failure("default/svc1", hash, 4);
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let ejected = hashes.iter().filter(|&&h| store.is_ejected("default/svc1", h)).count();
+        assert!(
+            ejected <= 2,
+            "over-ejected: {ejected} backends ejected, limit is 2 (50% of 4)"
+        );
     }
 
     #[test]

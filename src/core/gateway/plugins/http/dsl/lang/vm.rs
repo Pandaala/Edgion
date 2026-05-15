@@ -252,7 +252,15 @@ impl Vm {
                                 .expect("const_str_cache entry missing for Str constant"),
                         )),
                         Constant::Int(n) => Value::Int(*n),
-                        Constant::Regex(_) => Value::Nil, // regex itself is not a value
+                        Constant::Regex(_) => {
+                            return Err(RuntimeError::Internal {
+                                message: format!(
+                                    "LoadConst at pc {} references a Regex constant which cannot be used as a value",
+                                    state.pc - 1
+                                ),
+                            }
+                            .into());
+                        }
                     };
                     state.push(value, self.limits.max_stack_depth)?;
                 }

@@ -101,6 +101,9 @@ pub enum EdgionStatus {
     /// Link-local / cloud-metadata backend rejected (SSRF defense: `169.254.0.0/16`, `fe80::/10`)
     BackendAddrLinkLocalNotAllowed = 503_13,
 
+    /// DNS resolution failed for ExternalName service hostname
+    BackendDnsResolutionFailed = 503_15,
+
     /// Backend kind not supported (Gateway API conformance: return 500)
     BackendUnsupportedKind = 500_15,
 
@@ -189,6 +192,7 @@ mod tests {
             EdgionStatus::GrpcUpstreamNotBackendRefs => Some(503),
             EdgionStatus::RefDenied => Some(503),
             EdgionStatus::BackendAddrLinkLocalNotAllowed => Some(503),
+            EdgionStatus::BackendDnsResolutionFailed => Some(503),
             EdgionStatus::BackendUnsupportedKind => Some(500),
             EdgionStatus::StickyBackendUnhealthy => Some(500),
             EdgionStatus::BackendTlsSanValidationFailed => Some(502),
@@ -233,6 +237,7 @@ mod tests {
             EdgionStatus::GrpcUpstreamNotBackendRefs,
             EdgionStatus::RefDenied,
             EdgionStatus::BackendAddrLinkLocalNotAllowed,
+            EdgionStatus::BackendDnsResolutionFailed,
             EdgionStatus::BackendUnsupportedKind,
             EdgionStatus::StickyBackendUnhealthy,
             EdgionStatus::BackendTlsSanValidationFailed,

@@ -303,8 +303,8 @@ fn sp_resolve_target(
 /// SP-affinity branch and only routes its three outcomes:
 ///
 /// - `try_get_peer` succeeds → use the sticky target.
-/// - `try_get_peer` rejects with SSRF (loopback / link-local) → write 503 and abort;
-///   never fall back, since the rejection is a security signal, not unhealthiness.
+/// - `try_get_peer` rejects with SSRF (loopback / link-local) or DNS resolution failure
+///   → write 503 and abort; never fall back, since retrying would hit the same error.
 /// - `try_get_peer` fails for any other reason → fall back to normal LB unless the route
 ///   declared `session_persistence.strict = true`. On fallback, mark `sp_state` as
 ///   `InjectUpdate` so the response refreshes the cookie/header pointing at the new pick.
@@ -324,9 +324,13 @@ async fn get_peer_with_sp_fallback(
         .and_then(|sp| sp.strict)
         .unwrap_or(false);
 
-    match try_get_peer(ctx, session, false) {
+    match try_get_peer(ctx, session, false).await {
         Ok(peer) => Ok(peer),
-        Err(status @ (EdgionStatus::BackendLocalhostNotAllowed | EdgionStatus::BackendAddrLinkLocalNotAllowed)) => {
+        Err(
+            status @ (EdgionStatus::BackendLocalhostNotAllowed
+            | EdgionStatus::BackendAddrLinkLocalNotAllowed
+            | EdgionStatus::BackendDnsResolutionFailed),
+        ) => {
             ctx.add_error(status);
             end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
             Err(PingoraError::new(ErrorType::InternalError))

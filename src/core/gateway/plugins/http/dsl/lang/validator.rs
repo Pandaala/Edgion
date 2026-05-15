@@ -137,6 +137,11 @@ impl Validator {
                             "LoadConst at instruction {} references constant {} but pool size is {}",
                             i, idx, const_count
                         )));
+                    } else if matches!(script.constants[*idx as usize], Constant::Regex(_)) {
+                        errors.push(ValidationError::new(format!(
+                            "LoadConst at instruction {} references a Regex constant which cannot be used as a value",
+                            i
+                        )));
                     }
                 }
                 OpCode::Matches(idx) => {
@@ -409,6 +414,27 @@ mod tests {
         };
         let errors = Validator::new(limits).validate(&script);
         assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+    }
+
+    #[test]
+    fn test_validate_rejects_loadconst_regex() {
+        // Hand-crafted bytecode: LoadConst(0) where constants[0] is a Regex.
+        // The validator must reject this because Regex constants cannot be used as values.
+        let script = CompiledScript {
+            version: BYTECODE_VERSION,
+            code: vec![OpCode::LoadConst(0), OpCode::ReturnNext],
+            constants: vec![Constant::Regex("\\d+".to_string())],
+            local_count: 0,
+            max_loop_depth: 0,
+            source: None,
+        };
+        let errors = Validator::new(ValidationLimits::default()).validate(&script);
+        let joined = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("|");
+        assert!(
+            joined.contains("Regex constant which cannot be used as a value"),
+            "expected LoadConst-Regex error, got: {}",
+            joined
+        );
     }
 
     #[test]

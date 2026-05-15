@@ -268,5 +268,4 @@ mod tests {
             "wrap-mode buffer must be empty after apply_sensitive returns"
         );
     }
-
 }

@@ -45,8 +45,9 @@ impl Compiler {
             return Ok(idx);
         }
         let idx = self.check_const_limit()?;
-        self.constants.push(Constant::Str(s.to_string()));
-        self.const_str_map.insert(s.to_string(), idx);
+        let owned = s.to_string();
+        self.const_str_map.insert(owned.clone(), idx);
+        self.constants.push(Constant::Str(owned));
         Ok(idx)
     }
 
@@ -68,18 +69,15 @@ impl Compiler {
                 MAX_REGEX_PATTERN_LEN
             )));
         }
-        // Deduplicate: check if this regex pattern already exists
-        for (i, c) in self.constants.iter().enumerate() {
-            if let Constant::Regex(existing) = c {
-                if existing == pattern {
-                    return Ok(i as u16);
-                }
-            }
+        if let Some(&idx) = self.const_regex_map.get(pattern) {
+            return Ok(idx);
         }
         // Validate regex at compile time
         regex::Regex::new(pattern).map_err(|e| CompileError::new(format!("invalid regex '{}': {}", pattern, e)))?;
         let idx = self.check_const_limit()?;
-        self.constants.push(Constant::Regex(pattern.to_string()));
+        let owned = pattern.to_string();
+        self.const_regex_map.insert(owned.clone(), idx);
+        self.constants.push(Constant::Regex(owned));
         Ok(idx)
     }
 
