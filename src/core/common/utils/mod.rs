@@ -32,7 +32,7 @@ static LAST_VERSION: AtomicU64 = AtomicU64::new(0);
 ///
 /// Safe to call concurrently across threads.
 pub fn next_resource_version() -> u64 {
-    LAST_VERSION.fetch_add(1, Ordering::AcqRel) + 1
+    LAST_VERSION.fetch_add(1, Ordering::Relaxed) + 1
 }
 
 /// Raise the `next_resource_version()` floor to at least `rv`.
@@ -48,7 +48,10 @@ pub fn next_resource_version() -> u64 {
 /// against external allocation.
 pub fn bump_resource_version_floor(rv: u64) {
     if rv > 0 {
-        LAST_VERSION.fetch_max(rv, Ordering::AcqRel);
+        // Relaxed is sufficient: `LAST_VERSION` is self-contained and the
+        // init-before-external-write happens-before is provided by the
+        // readiness gate, not by this counter.
+        LAST_VERSION.fetch_max(rv, Ordering::Relaxed);
     }
 }
 
