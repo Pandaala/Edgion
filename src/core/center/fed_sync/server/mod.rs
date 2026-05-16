@@ -24,6 +24,7 @@ use crate::core::common::conf_sync::types::EventType;
 use crate::core::common::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
     federation_sync_server::FederationSync, CenterMessage, ControllerMessage, FedWatchRequest, Ping, RegisterAck,
+    RegisterRequest,
 };
 use crate::core::common::observe::fed_metrics;
 use crate::types::resource::meta::ResourceMeta;
@@ -34,6 +35,93 @@ use crate::types::resources::plugin_metadata::PluginMetaData;
 /// today; when new kinds are added, each call site should pass its own
 /// kind instead of this constant.
 const PLUGIN_METADATA_KIND: &str = "PluginMetaData";
+
+// Boundary caps on RegisterRequest fields. The federation gRPC server is
+// reachable in plaintext on default deployments; any peer that completes a
+// TCP connect can submit a RegisterRequest, so each field that becomes a
+// HashMap key, an SQLite row, or an Admin API payload must be bounded
+// here. Caps follow K8s label-value conventions (63 bytes per token, 253
+// bytes for full DNS-style identifiers) so legitimate controllers built
+// from `cluster + name` are well below the limit.
+const MAX_CONTROLLER_ID_LEN: usize = 253;
+const MAX_CLUSTER_LEN: usize = 63;
+const MAX_TAG_LEN: usize = 63;
+const MAX_LIST_ITEMS: usize = 32;
+
+// Upper bound on total registered controllers (online + offline). Once
+// this is reached, registration of a *new* controller_id is refused;
+// reconnects from already-known ids still go through. Default is sized
+// well above realistic enterprise federation deployments (typically tens
+// to a few hundred controllers) but below the point where an attacker can
+// inflate registry / aggregator / SQLite to dangerous sizes.
+const MAX_REGISTRY_ENTRIES: usize = 10_000;
+
+/// Reject a `RegisterRequest` whose fields are empty, oversized, or
+/// contain control characters.
+///
+/// Returning a static `&'static str` keeps the rejection reason out of
+/// the response body — the caller emits the reason via `tracing::warn!`
+/// for ops, and surfaces a fixed `Status::invalid_argument` message to
+/// the peer so we never echo attacker-controlled bytes back.
+fn validate_register_req(req: &RegisterRequest) -> Result<(), &'static str> {
+    if req.controller_id.is_empty() {
+        return Err("controller_id is empty");
+    }
+    if req.controller_id.len() > MAX_CONTROLLER_ID_LEN {
+        return Err("controller_id exceeds max length");
+    }
+    if req.controller_id.chars().any(|c| c.is_control()) {
+        return Err("controller_id contains control characters");
+    }
+    if req.cluster.len() > MAX_CLUSTER_LEN {
+        return Err("cluster exceeds max length");
+    }
+    if req.cluster.chars().any(|c| c.is_control()) {
+        return Err("cluster contains control characters");
+    }
+    validate_string_list(&req.env, "env")?;
+    validate_string_list(&req.tag, "tag")?;
+    validate_string_list(&req.supported_kinds, "supported_kinds")?;
+    Ok(())
+}
+
+fn validate_string_list(items: &[String], field: &'static str) -> Result<(), &'static str> {
+    if items.len() > MAX_LIST_ITEMS {
+        return Err(match field {
+            "env" => "env list exceeds max items",
+            "tag" => "tag list exceeds max items",
+            "supported_kinds" => "supported_kinds list exceeds max items",
+            _ => "list exceeds max items",
+        });
+    }
+    for item in items {
+        if item.len() > MAX_TAG_LEN {
+            return Err(match field {
+                "env" => "env item exceeds max length",
+                "tag" => "tag item exceeds max length",
+                "supported_kinds" => "supported_kinds item exceeds max length",
+                _ => "list item exceeds max length",
+            });
+        }
+        if item.chars().any(|c| c.is_control()) {
+            return Err(match field {
+                "env" => "env item contains control characters",
+                "tag" => "tag item contains control characters",
+                "supported_kinds" => "supported_kinds item contains control characters",
+                _ => "list item contains control characters",
+            });
+        }
+    }
+    Ok(())
+}
+
+/// True when the registry is at capacity *and* the incoming id is not
+/// already known. Reconnect of a known controller is always allowed —
+/// only inflation by new ids is refused, which preserves operator
+/// recovery during a flood while still blocking unbounded growth.
+fn registry_capacity_exceeded(registry: &ControllerRegistry, incoming_id: &str, cap: usize) -> bool {
+    registry.len() >= cap && registry.get_session(incoming_id).is_none()
+}
 
 /// Typed representation of a single watch event from the controller.
 ///
@@ -143,6 +231,33 @@ impl FederationSync for FederationGrpcServer {
             Some(CtrlPayload::Register(r)) => r,
             _ => return Err(Status::invalid_argument("First message must be RegisterRequest")),
         };
+
+        // Boundary checks must run before any state mutation (registry,
+        // aggregator, watch_cache, SQLite) so that a rejected request
+        // leaves zero residue. Reasons are logged at warn level but the
+        // peer-facing message is fixed to avoid echoing attacker input.
+        if let Err(reason) = validate_register_req(&register_req) {
+            tracing::warn!(
+                component = "fed_server",
+                reason = reason,
+                controller_id_len = register_req.controller_id.len(),
+                cluster_len = register_req.cluster.len(),
+                env_len = register_req.env.len(),
+                tag_len = register_req.tag.len(),
+                supported_kinds_len = register_req.supported_kinds.len(),
+                "Rejected RegisterRequest: shape validation failed"
+            );
+            return Err(Status::invalid_argument("RegisterRequest validation failed"));
+        }
+        if registry_capacity_exceeded(&self.registry, &register_req.controller_id, MAX_REGISTRY_ENTRIES) {
+            tracing::warn!(
+                component = "fed_server",
+                registry_len = self.registry.len(),
+                cap = MAX_REGISTRY_ENTRIES,
+                "Rejected RegisterRequest: registry at capacity"
+            );
+            return Err(Status::resource_exhausted("Federation registry is at capacity"));
+        }
 
         let controller_id = register_req.controller_id.clone();
         let session_id = Uuid::new_v4().to_string();
@@ -591,5 +706,131 @@ impl FederationSync for FederationGrpcServer {
         });
 
         Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(out_rx)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ok_req() -> RegisterRequest {
+        RegisterRequest {
+            controller_id: "cluster-a/ctrl-01".to_string(),
+            cluster: "cluster-a".to_string(),
+            env: vec!["prod".to_string()],
+            tag: vec!["region:us".to_string()],
+            supported_kinds: vec!["PluginMetaData".to_string()],
+        }
+    }
+
+    #[test]
+    fn validate_accepts_well_formed_request() {
+        assert!(validate_register_req(&ok_req()).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_empty_controller_id() {
+        let mut r = ok_req();
+        r.controller_id = String::new();
+        assert!(validate_register_req(&r).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_overlong_controller_id() {
+        let mut r = ok_req();
+        r.controller_id = "x".repeat(MAX_CONTROLLER_ID_LEN + 1);
+        assert!(validate_register_req(&r).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_controller_id_with_control_char() {
+        let mut r = ok_req();
+        r.controller_id = "ctrl\n01".to_string();
+        assert!(validate_register_req(&r).is_err());
+    }
+
+    #[test]
+    fn validate_allows_empty_cluster() {
+        // Aggregator already normalises empty cluster to "unknown"; do not
+        // tighten this without auditing aggregator gauge semantics.
+        let mut r = ok_req();
+        r.cluster = String::new();
+        assert!(validate_register_req(&r).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_overlong_cluster() {
+        let mut r = ok_req();
+        r.cluster = "y".repeat(MAX_CLUSTER_LEN + 1);
+        assert!(validate_register_req(&r).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_cluster_with_control_char() {
+        let mut r = ok_req();
+        r.cluster = "cluster\u{0}a".to_string();
+        assert!(validate_register_req(&r).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_too_many_env_items() {
+        let mut r = ok_req();
+        r.env = (0..(MAX_LIST_ITEMS + 1)).map(|i| format!("e{i}")).collect();
+        assert!(validate_register_req(&r).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_overlong_env_item() {
+        let mut r = ok_req();
+        r.env = vec!["z".repeat(MAX_TAG_LEN + 1)];
+        assert!(validate_register_req(&r).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_env_item_with_control_char() {
+        let mut r = ok_req();
+        r.env = vec!["prod\tprime".to_string()];
+        assert!(validate_register_req(&r).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_overlong_tag_item() {
+        let mut r = ok_req();
+        r.tag = vec!["t".repeat(MAX_TAG_LEN + 1)];
+        assert!(validate_register_req(&r).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_too_many_supported_kinds() {
+        let mut r = ok_req();
+        r.supported_kinds = (0..(MAX_LIST_ITEMS + 1)).map(|i| format!("K{i}")).collect();
+        assert!(validate_register_req(&r).is_err());
+    }
+
+    #[test]
+    fn capacity_gate_allows_under_cap() {
+        let reg = ControllerRegistry::new();
+        assert!(!registry_capacity_exceeded(&reg, "new-id", 4));
+    }
+
+    #[test]
+    fn capacity_gate_refuses_new_id_at_cap() {
+        let reg = ControllerRegistry::new();
+        for i in 0..4 {
+            let (tx, _rx) = tokio::sync::mpsc::channel(1);
+            reg.register(format!("c{i}"), ok_req(), tx, format!("s{i}"));
+        }
+        assert!(registry_capacity_exceeded(&reg, "brand-new", 4));
+    }
+
+    #[test]
+    fn capacity_gate_allows_known_id_at_cap() {
+        // Reconnects must continue to work even when the registry is full.
+        let reg = ControllerRegistry::new();
+        for i in 0..4 {
+            let (tx, _rx) = tokio::sync::mpsc::channel(1);
+            reg.register(format!("c{i}"), ok_req(), tx, format!("s{i}"));
+        }
+        assert!(!registry_capacity_exceeded(&reg, "c0", 4));
     }
 }
