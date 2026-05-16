@@ -5,8 +5,8 @@
 
 use crate::core::common::api::ApiResponse;
 use crate::core::controller::api::types::AdminState;
-use crate::core::controller::conf_mgr::CenterLifeCycle;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ref_manager::RefManagerStats;
+use crate::core::controller::conf_mgr::CenterLifeCycle;
 use axum::{extract::State, response::Json};
 use serde::Serialize;
 use std::collections::BTreeMap;

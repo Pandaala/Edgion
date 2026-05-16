@@ -577,14 +577,7 @@ mod tests {
         secrets.insert("test-ns/test-secret".to_string(), secret);
         runtime.secret_store.replace_all(secrets);
 
-        HandlerContext::new(
-            None,
-            None,
-            TriggerChain::default(),
-            3,
-            20,
-            runtime,
-        )
+        HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime)
     }
 
     #[test]

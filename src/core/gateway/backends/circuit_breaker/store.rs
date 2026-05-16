@@ -146,10 +146,19 @@ impl CircuitBreakerStore {
         // and exceed max_ejection_percent.
         let _eject_guard = svc.eject_lock.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Step 2: check max_ejection_percent
-        if svc.config.max_ejection_percent > 0 && total_endpoints > 0 {
+        // Step 2: check max_ejection_percent.
+        // Fall back to the observed endpoint count when the caller-provided total is 0
+        // (e.g., selector snapshot momentarily empty during scale-down). Without this
+        // fallback the entire percent cap would be skipped and concurrent failures could
+        // eject every tracked backend regardless of `maxEjectionPercent`.
+        if svc.config.max_ejection_percent > 0 {
+            let effective_total = if total_endpoints > 0 {
+                total_endpoints
+            } else {
+                svc.endpoints.len().max(1)
+            };
             let currently_ejected = svc.endpoints.iter().filter(|e| e.value().ejected_at.is_some()).count();
-            let max_ejectable = (total_endpoints as u64 * svc.config.max_ejection_percent as u64 / 100) as usize;
+            let max_ejectable = (effective_total as u64 * svc.config.max_ejection_percent as u64 / 100) as usize;
             if currently_ejected >= max_ejectable.max(1) {
                 return;
             }
@@ -171,10 +180,15 @@ impl CircuitBreakerStore {
             None => return,
         };
 
-        // Success → remove entry entirely to avoid memory growth from stale endpoints.
-        // Only healthy endpoints with prior failures have entries; removing returns them
-        // to the default state (no entry = healthy).
-        svc.endpoints.remove(&backend_hash);
+        // Remove the entry on success: a healthy backend goes back to the default
+        // "no entry = no tracked failures" state. If the removed entry happened to be
+        // ejected (an in-flight request completing after ejection took effect), pair the
+        // removal with `record_cb_recovery` so the gauge stays balanced.
+        if let Some((_, ep)) = svc.endpoints.remove(&backend_hash) {
+            if ep.ejected_at.is_some() {
+                crate::core::gateway::observe::metrics::record_cb_recovery(service_key);
+            }
+        }
     }
 
     #[inline]
@@ -359,6 +373,86 @@ mod tests {
 
         store.remove_service("default/svc1");
         assert!(!store.is_ejected("default/svc1", 111));
+    }
+
+    #[test]
+    fn test_record_success_on_ejected_does_not_leak_gauge() {
+        // Regression for g7-006 Issue A: record_success removing an ejected entry must
+        // fire record_cb_recovery so the CB_EJECTED_ENDPOINTS gauge stays balanced.
+        let store = CircuitBreakerStore::new();
+        store.set_service_config("default/svc1", Some(make_config(1, 30, 0)));
+
+        store.record_failure("default/svc1", 111, 2);
+        assert!(store.is_ejected("default/svc1", 111));
+
+        // record_success on an ejected backend should remove the entry. After removal,
+        // is_ejected returns false (no entry = healthy). The +1/-1 gauge symmetry is
+        // verified by inspection of the removal branch in record_success itself.
+        store.record_success("default/svc1", 111);
+        assert!(!store.is_ejected("default/svc1", 111));
+    }
+
+    #[test]
+    fn test_percent_cap_applies_concurrently_when_total_endpoints_is_zero() {
+        // Regression for g7-006 Issue B under concurrency: 4 backends report failures
+        // simultaneously while the selector snapshot is empty (total_endpoints == 0).
+        // With the fallback to observed endpoint count, the percent cap must still
+        // bound the number of ejected backends.
+        use std::sync::{Arc, Barrier};
+
+        let store = Arc::new(CircuitBreakerStore::new());
+        // 50% cap. Once endpoints.len() reaches 4, max_ejectable = 2.
+        store.set_service_config("default/svc1", Some(make_config(1, 30, 50)));
+
+        let barrier = Arc::new(Barrier::new(4));
+        let hashes = [100u64, 200, 300, 400];
+
+        let handles: Vec<_> = hashes
+            .iter()
+            .copied()
+            .map(|hash| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    // total=0 simulates the empty-selector-snapshot scale-down race.
+                    store.record_failure("default/svc1", hash, 0);
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let ejected = hashes.iter().filter(|&&h| store.is_ejected("default/svc1", h)).count();
+        // The first thread observes endpoints.len()=1 (cap=1, ejects), the second sees
+        // endpoints.len()=2 (cap=1, currently_ejected=1, rejects). After that, each new
+        // thread inserts its entry first then enters the lock — endpoints.len() grows
+        // monotonically inside the lock, so the cap rises but currently_ejected catches
+        // up. Upper bound is 50% of 4 = 2.
+        assert!(
+            ejected <= 2,
+            "over-ejected under total=0 race: {ejected} backends ejected, 50% cap of 4 is 2"
+        );
+    }
+
+    #[test]
+    fn test_percent_cap_applies_when_total_endpoints_is_zero() {
+        // Regression for g7-006 Issue B: when the selector snapshot is momentarily empty
+        // (total_endpoints == 0), the percent guard must still apply using the observed
+        // endpoint count as a fallback, otherwise concurrent failures would over-eject.
+        let store = CircuitBreakerStore::new();
+        store.set_service_config("default/svc1", Some(make_config(1, 30, 50)));
+
+        // First failure with total=0 establishes the endpoint and ejects (max(1) of 50% of 1).
+        store.record_failure("default/svc1", 111, 0);
+        assert!(store.is_ejected("default/svc1", 111));
+
+        // Second backend tries to eject with total=0 — observed endpoints are now 2, the
+        // 50% cap is 1, and 1 backend is already ejected, so this must be rejected.
+        store.record_failure("default/svc1", 222, 0);
+        assert!(!store.is_ejected("default/svc1", 222));
     }
 
     #[test]

@@ -205,6 +205,20 @@ fn test_range_iterate() {
     assert_eq!(result, good_next());
 }
 
+// Adversarial inputs that would overflow i64 on `end - start` must surface as
+// RuntimeError::IntegerOverflow (handled by error_policy), not panic in debug
+// nor silently wrap in release. Mirrors the discipline of Add/Sub/Mul/Div in vm.rs.
+#[test]
+fn test_range_diff_overflow_returns_error() {
+    let source = r#"
+        let r = range(-1, 9223372036854775807)
+        req.set_header("X-Len", to_str(len(r)))
+    "#;
+    let session = MockPluginSession::new();
+    let result = run(source, session);
+    assert_eq!(result, err_response_body(500, "DSL execution error"));
+}
+
 #[test]
 fn test_trim() {
     let source = r#"

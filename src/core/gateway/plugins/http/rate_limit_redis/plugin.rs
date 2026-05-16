@@ -415,8 +415,7 @@ impl RateLimitRedis {
         // pressure. Omit the header for Duration::ZERO (Redis-failure Deny and
         // OnMissingKey::Deny paths) and ceil any positive sub-second value to 1.
         if !retry_after.is_zero() {
-            let secs = retry_after.as_secs()
-                + u64::from(retry_after.subsec_nanos() > 0);
+            let secs = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
             resp.insert_header("Retry-After", secs.to_string()).ok();
         }
 

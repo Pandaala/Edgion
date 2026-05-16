@@ -742,14 +742,7 @@ mod tests {
 
     fn make_ctx() -> (HandlerContext, Arc<ControllerRuntime>) {
         let runtime = Arc::new(ControllerRuntime::default());
-        let ctx = HandlerContext::new(
-            None,
-            None,
-            TriggerChain::default(),
-            5,
-            20,
-            runtime.clone(),
-        );
+        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
         (ctx, runtime)
     }
 

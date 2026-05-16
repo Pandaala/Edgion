@@ -376,14 +376,7 @@ mod tests {
     fn make_ctx(secrets: HashMap<String, Secret>) -> (HandlerContext, Arc<ControllerRuntime>) {
         let runtime = Arc::new(ControllerRuntime::default());
         runtime.secret_store.replace_all(secrets);
-        let ctx = HandlerContext::new(
-            None,
-            None,
-            TriggerChain::default(),
-            5,
-            20,
-            runtime.clone(),
-        );
+        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
         (ctx, runtime)
     }
 

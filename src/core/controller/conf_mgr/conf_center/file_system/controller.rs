@@ -132,13 +132,7 @@ impl FileSystemController {
         };
 
         // Spawn all resource controllers
-        let handles = spawn_all_controllers(
-            &backend,
-            shutdown_signal.clone(),
-            runtime,
-            "fs_controller",
-        )
-        .await?;
+        let handles = spawn_all_controllers(&backend, shutdown_signal.clone(), runtime, "fs_controller").await?;
 
         tracing::info!(
             component = "fs_controller",

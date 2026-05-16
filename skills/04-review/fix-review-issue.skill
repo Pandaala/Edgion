@@ -1,11 +1,37 @@
 ---
 name: fix-review-issue
-description: Generic workflow for processing a single review issue from any tasks/review-*/ directory. Validates the finding, presents a clear analysis, assesses fix impact, implements the fix (with or without a subagent), runs a mandatory subagent review, then closes the issue by deleting the source file.
+description: Use when the user says "review issue", "handle issue", "next issue", "close issue", or invokes /fix-issue — to process a single finding from any tasks/review-*/ directory. Equivalent phrases in other languages also trigger this skill.
 ---
 
 # Review Issue Fix Workflow
 
-Use when the user says "review issue", "handle issue", "next issue", or invokes `/fix-issue [args]`. Equivalent phrases in other languages (e.g. Chinese) trigger this skill as well.
+## Iron Law
+
+```
+NO FIX WITHOUT VERDICT + SCOPE CONFIRMED FIRST
+NO CLOSE WITHOUT A STEP 5 SUBAGENT REVIEW
+```
+
+Violating the letter of these gates is violating the spirit of the workflow. The gates exist because review-issue fixes are the highest-volume code-change surface in this project and the easiest place for scope creep, missed regressions, and "I'm sure it's fine" shortcuts to leak in.
+
+**Hard gates** (each one MUST be reached, presented to the user, and confirmed before proceeding past it):
+
+1. Step 1 — Verdict + Value verdict, presented in the template, waiting for user confirmation
+2. Step 1 — Scope gate (✅ verdicts only), if any wide-impact condition triggers
+3. Step 2 — Fix Impact panel, with a pause if complexity is `complex` or new-issue risk is `medium`
+4. Step 5 — Mandatory subagent review (no exceptions, including for `trivial` and `📝` verdicts)
+
+## Red Flags — STOP if you catch yourself thinking any of these
+
+- "This issue is trivial, I can skip the Step 1 presentation"
+- "I already understand it, no need to wait for user confirmation on the Verdict"
+- "While I'm in this file I'll also clean up the nearby thing"
+- "Step 5 review is overkill for a 1-line change / a comment-only change"
+- "cargo check passed, that's good enough — skipping clippy"
+- "The Suggested fix in the issue file is obviously right, no need for impact analysis"
+- "Scope gate is paranoid here, I'll just proceed"
+
+All of these mean: **return to the gate you skipped and run it properly.**
 
 ## Communication rules (enforced throughout)
 
@@ -136,12 +162,13 @@ If **none** of the above conditions apply, continue to Step 2 without pausing.
 
 Before writing any code:
 
-1. Search callers / usages of the affected symbol across the codebase.
-2. Identify:
+1. **Root-cause check**: is the location named in the issue the actual origin of the defect, or just where the symptom surfaces? If symptom-only, trace upstream (callers, the value's source, the lifecycle that produces it) until you reach the real origin. Decide the fix location based on the origin, not the symptom — fixing at the symptom hides the bug for the next caller. If the issue file's `Suggested fix` targets a symptom, note this in the panel below and propose the upstream fix instead.
+2. Search callers / usages of the affected symbol across the codebase.
+3. Identify:
    - **Blast radius**: how many files are touched? Is any on the data-plane hot path?
    - **Behavior change**: does the fix change observable behavior (API, logs, metrics, semantics)?
    - **New issue risk**: can the fix introduce lock ordering issues, API contract breaks, or regressions?
-3. Classify complexity:
+4. Classify complexity:
    - **Trivial** — 1–5 lines, 1 file, no API change, no behavior change → main agent implements directly.
    - **Moderate** — multi-file or minor behavior change → main agent implements carefully with search-before-edit.
    - **Complex** — cross-module, public API change, hot-path touch, or high regression risk → spawn an implementation subagent.
@@ -150,14 +177,15 @@ Before writing any code:
 
 ```
 ### Fix Impact
-Blast radius : <N file(s)> — <hot-path | controller-plane | init-only | test-only>
+Root cause     : <symptom-only | origin-confirmed> — <where the origin is, if different from issue location>
+Blast radius   : <N file(s)> — <hot-path | controller-plane | init-only | test-only>
 Behavior change: <yes / no> — <brief reason>
 New issue risk : <none | low | medium> — <brief reason>
 Complexity     : trivial | moderate | complex
 Implementation : main agent | subagent
 ```
 
-Pause here if complexity is **complex** or new issue risk is **medium** — confirm with the user before proceeding.
+Pause here if complexity is **complex**, new issue risk is **medium**, or root cause is `symptom-only` — confirm with the user before proceeding.
 
 ---
 
@@ -328,6 +356,27 @@ If both pass:
 - Do NOT run `git commit` — wait for the user's explicit instruction.
 
 If checks fail: fix the errors and re-run checks before deleting the file.
+
+---
+
+## Common Rationalizations
+
+When tempted to skip a step, check this table first:
+
+| Excuse | Reality |
+|---|---|
+| "This issue is trivial, skip Step 1 presentation" | Even 1-line fixes can have a 🔴 Value verdict (cost > benefit). The template is 30 seconds. |
+| "I already know the verdict, no need to wait for user" | The user owns the disposition. Your draft is input, not the decision. |
+| "Suggested fix in the issue file is obviously right" | Suggested fixes are reviewer guesses, often symptom-level. Run the Step 2 root-cause check anyway. |
+| "Scope gate is paranoid for this one" | If you spent ≥3 seconds wondering whether to trigger it, trigger it and let the user choose A/B/C. |
+| "While I'm in this file I'll fix the nearby thing too" | Out-of-scope edits are the #1 source of regressions in this project. Record it as a new todo, don't bundle. |
+| "Step 5 review is overkill for a 1-line / comment-only change" | Step 5 is mandatory. No exceptions for trivial or 📝 verdicts. The Iron Law says so. |
+| "Subagent review just said LGTM, I can skip the cargo checks" | Step 6 cargo check + clippy run on real compiler output. Subagents read code, they don't compile it. |
+| "cargo check passed, clippy is probably fine" | Step 6 requires both. Clippy catches a different class of defect. |
+| "Reverting subagent's out-of-scope change is wasteful, I'll keep it since it's already done" | Keeping out-of-scope work means the diff no longer matches what the user approved in Step 2. Revert. |
+| "User said 'go ahead' once, I can skip future confirmation prompts" | Approval is per-gate, not blanket. Each presented panel needs its own confirmation. |
+
+If your reasoning matches any row: **stop, return to the skipped gate, run it properly.**
 
 ---
 

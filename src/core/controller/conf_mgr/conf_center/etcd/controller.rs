@@ -89,13 +89,7 @@ impl EtcdController {
         };
 
         // Spawn all resource controllers
-        let handles = spawn_all_controllers(
-            &backend,
-            shutdown_signal.clone(),
-            runtime,
-            "etcd_controller",
-        )
-        .await?;
+        let handles = spawn_all_controllers(&backend, shutdown_signal.clone(), runtime, "etcd_controller").await?;
 
         tracing::info!(
             component = "etcd_controller",

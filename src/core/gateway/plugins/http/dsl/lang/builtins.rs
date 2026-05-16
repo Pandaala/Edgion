@@ -344,13 +344,22 @@ impl Vm {
                 let s = state.pop()?;
                 match &s {
                     Value::Str(s) => {
-                        // Use char_indices for UTF-8 safe slicing
-                        let char_count = s.chars().count();
-                        let start = start.min(char_count);
-                        let end = end.min(char_count);
-                        if start <= end {
-                            let byte_start = s.char_indices().nth(start).map(|(i, _)| i).unwrap_or(s.len());
-                            let byte_end = s.char_indices().nth(end).map(|(i, _)| i).unwrap_or(s.len());
+                        // Single char_indices pass resolves both UTF-8 boundaries,
+                        // avoiding three separate O(n) scans. Defaults of s.len() cover
+                        // the "index >= char_count" case (matches the previous
+                        // nth(...).unwrap_or(s.len()) fallback).
+                        let mut byte_start = s.len();
+                        let mut byte_end = s.len();
+                        for (i, (byte_pos, _)) in s.char_indices().enumerate() {
+                            if i == start {
+                                byte_start = byte_pos;
+                            }
+                            if i == end {
+                                byte_end = byte_pos;
+                                break;
+                            }
+                        }
+                        if byte_start <= byte_end {
                             let out = s[byte_start..byte_end].to_string();
                             check_string_len(&out, self.limits.max_string_len)?;
                             Ok(Value::Str(out.into()))
@@ -520,8 +529,14 @@ impl Vm {
                         })
                     }
                 };
-                let count = (end - start).max(0).min(1000) as usize;
-                let list: Vec<Arc<str>> = (start..start + count as i64)
+                let diff = end
+                    .checked_sub(start)
+                    .ok_or(RuntimeError::IntegerOverflow { operation: "range" })?;
+                let count = diff.max(0).min(1000) as usize;
+                let end_bound = start
+                    .checked_add(count as i64)
+                    .ok_or(RuntimeError::IntegerOverflow { operation: "range" })?;
+                let list: Vec<Arc<str>> = (start..end_bound)
                     .map(|i| Arc::from(i.to_string().as_str()))
                     .collect();
                 Ok(Value::List(list))

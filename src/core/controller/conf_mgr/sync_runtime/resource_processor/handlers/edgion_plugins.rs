@@ -287,14 +287,7 @@ mod tests {
     fn make_ctx_with_secrets(secrets: HashMap<String, Secret>) -> (HandlerContext, Arc<ControllerRuntime>) {
         let runtime = Arc::new(ControllerRuntime::default());
         runtime.secret_store.replace_all(secrets);
-        let ctx = HandlerContext::new(
-            None,
-            None,
-            Default::default(),
-            5,
-            20,
-            runtime.clone(),
-        );
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
         (ctx, runtime)
     }
 

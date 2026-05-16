@@ -46,8 +46,8 @@ use crate::types::ResourceMeta;
 
 use super::context::HandlerContext;
 use super::handler::{ProcessResult, ProcessorHandler};
-use super::raw_store::RawStore;
 use super::make_resource_key;
+use super::raw_store::RawStore;
 use crate::core::controller::conf_mgr::sync_runtime::workqueue::{TriggerChain, Workqueue, WorkqueueConfig};
 
 /// Result of status extraction
