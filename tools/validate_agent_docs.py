@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Validate the agent-facing markdown layer.
 
-Two checks, run over every markdown file at the repo root, under ``docs/``,
+Three checks, run over every markdown file at the repo root, under ``docs/``,
 ``skills/``, and ``examples/README.md``:
 
 1. Relative markdown links resolve to a real file on disk.
 2. Every file named ``SKILL.md`` has YAML frontmatter with ``name:`` and
    ``description:`` fields (so the agent skill index stays usable).
+3. Every ``src/<path>.rs`` reference inside ``skills/`` (``.md`` + ``.skill``)
+   resolves on disk. Catches skill text drifting out of sync with the source
+   tree when files are renamed or removed.
 
 Everything else (migration-era forbidden-pattern guards, hardcoded entry-file
 and dev-guide-index lists, GitHub Actions path checks, etc.) used to live in
@@ -35,6 +38,7 @@ FENCED_CODE_RE = re.compile(r"(?ms)^([ \t]*)(`{3,}|~{3,}).*?\n.*?^\1\2\s*$")
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 NAME_RE = re.compile(r"(?m)^name:\s*.+$")
 DESC_RE = re.compile(r"(?m)^description:\s*.+$")
+SOURCE_PATH_RE = re.compile(r"\bsrc/[a-zA-Z0-9_/]+\.rs\b")
 
 
 def iter_target_files() -> list[Path]:
@@ -73,6 +77,55 @@ def validate_markdown_links(files: list[Path]) -> list[str]:
     return errors
 
 
+def iter_skill_content_files() -> list[Path]:
+    """All skill content under ``skills/`` — both ``*.md`` and ``*.skill``."""
+    skills_root = REPO_ROOT / "skills"
+    files: set[Path] = set()
+    files.update(skills_root.rglob("*.md"))
+    files.update(skills_root.rglob("*.skill"))
+    return sorted(f for f in files if f.is_file())
+
+
+def _edgion_src_tops() -> set[str]:
+    """Top-level entries under ``src/`` — used to distinguish Edgion source
+    paths from external-crate paths (e.g. ``src/string.rs`` mentioned when
+    citing the ``kstring`` crate's internals)."""
+    src_root = REPO_ROOT / "src"
+    if not src_root.is_dir():
+        return set()
+    return {entry.name for entry in src_root.iterdir()}
+
+
+def validate_source_paths(files: list[Path]) -> list[str]:
+    """Check that every ``src/<path>.rs`` reference resolves on disk.
+
+    Filters out paths whose first segment after ``src/`` is not a real
+    Edgion top-level entry, so external-crate citations like
+    ``src/string.rs`` (kstring internals) don't false-positive.
+    """
+    errors: list[str] = []
+    seen: set[tuple[Path, str]] = set()
+    valid_tops = _edgion_src_tops()
+    for file in files:
+        for line_no, line in enumerate(
+            file.read_text(encoding="utf-8").splitlines(), 1
+        ):
+            for match in SOURCE_PATH_RE.finditer(line):
+                path_part = match.group()
+                first_seg = path_part[len("src/"):].split("/", 1)[0]
+                if first_seg not in valid_tops:
+                    continue
+                key = (file, path_part)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if not (REPO_ROOT / path_part).is_file():
+                    errors.append(
+                        f"stale src/ ref in {file.relative_to(REPO_ROOT)}:{line_no} -> {path_part}"
+                    )
+    return errors
+
+
 def validate_skill_frontmatter(files: list[Path]) -> list[str]:
     errors: list[str] = []
     for file in files:
@@ -98,9 +151,11 @@ def validate_skill_frontmatter(files: list[Path]) -> list[str]:
 
 def main() -> int:
     files = iter_target_files()
+    skill_content_files = iter_skill_content_files()
     errors: list[str] = []
     errors.extend(validate_markdown_links(files))
     errors.extend(validate_skill_frontmatter(files))
+    errors.extend(validate_source_paths(skill_content_files))
 
     if errors:
         print("Agent-doc validation failed:")
@@ -111,7 +166,8 @@ def main() -> int:
     skill_count = sum(1 for f in files if f.name == "SKILL.md")
     print(
         f"Agent-doc validation passed: checked {len(files)} files, "
-        f"{skill_count} skill entry files."
+        f"{skill_count} skill entry files, "
+        f"{len(skill_content_files)} skill source-path scopes."
     )
     return 0
 
