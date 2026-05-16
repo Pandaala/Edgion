@@ -1406,6 +1406,7 @@ if payload != nil {
 - 仅接受 `http` 和 `https` 协议；其他协议（如 `file://`、`ftp://`）返回 `status = 0`。
 - 当 `httpBlockPrivateIps: true` 时，目标为回环、私有、链路本地地址的请求返回 `status = 0`。
 - 响应体超过 `httpMaxResponseBodyBytes`（默认 1 MiB）时会被截断。
+- 响应 `headers` Map 超过 `max_map_size` 时静默截断为前 `max_map_size` 项（SSRF / 大响应头防护）；调用仍返回成功。
 - 实际超时为 `min(timeout_ms, httpMaxTimeoutMs)`。
 - 全局客户端最多跟随 10 次重定向。
 
@@ -1639,7 +1640,7 @@ if r["value"] > 100 {
 
 **签名**：`redis.hgetall(link, key)` → `Map { ok: Bool, value: Map, error: Str | Nil }`
 
-获取哈希的所有字段和值。键不存在时返回空 `Map`。仅在连接错误时才返回 `ok: false`。
+获取哈希的所有字段和值。键不存在时返回空 `Map`。在连接错误,或哈希条目数超过 `max_map_size` 限制时返回 `ok: false`(后者不会构造超大 `Map`,`error` 会描述实际大小与上限)。
 
 **参数**：
 - `link`（Str）— 来自 `linkSysRefs[].name` 的别名

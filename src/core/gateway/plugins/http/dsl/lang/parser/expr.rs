@@ -8,13 +8,13 @@ use super::{lit, ws, ParseCtx};
 
 // ==================== Expression Parsing (Pratt / Precedence Climbing) ====================
 
-pub(super) fn parse_expr<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, ParseError> {
+pub(super) fn parse_expr<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Expr, ParseError> {
     ctx.tick().map_err(nom::Err::Failure)?;
     parse_expr_bp(input, ctx, 0)
 }
 
 /// Pratt parser: parse expression with minimum binding power
-fn parse_expr_bp<'a>(input: &'a str, ctx: &mut ParseCtx, min_bp: u8) -> IResult<&'a str, Expr, ParseError> {
+fn parse_expr_bp<'a>(input: &'a str, ctx: &mut ParseCtx<'a>, min_bp: u8) -> IResult<&'a str, Expr, ParseError> {
     ctx.tick().map_err(nom::Err::Failure)?;
 
     // Parse prefix / atom
@@ -35,16 +35,20 @@ fn parse_expr_bp<'a>(input: &'a str, ctx: &mut ParseCtx, min_bp: u8) -> IResult<
         if input.starts_with('[') {
             ctx.tick().map_err(nom::Err::Failure)?;
             ctx.add_node().map_err(nom::Err::Failure)?;
+            let span = ctx.current_span(input);
             let rest = ws(&input[1..]);
             let (rest, key) = parse_expr(rest, ctx)?;
             let rest = ws(rest);
             if !rest.starts_with(']') {
                 return Err(nom::Err::Failure(ParseError::new("expected ']' after index key")));
             }
-            lhs = Expr::new(ExprKind::Index {
-                object: Box::new(lhs),
-                key: Box::new(key),
-            });
+            lhs = Expr::with_span(
+                ExprKind::Index {
+                    object: Box::new(lhs),
+                    key: Box::new(key),
+                },
+                span,
+            );
             input = &rest[1..];
             continue;
         }
@@ -56,17 +60,21 @@ fn parse_expr_bp<'a>(input: &'a str, ctx: &mut ParseCtx, min_bp: u8) -> IResult<
                 break;
             }
 
+            let span = ctx.current_span(input); // span at the operator token
             input = ws(&input[op_len..]);
 
             // Short-circuit for && and ||
             let (rest, rhs) = parse_expr_bp(input, ctx, bp)?;
 
             ctx.add_node().map_err(nom::Err::Failure)?;
-            lhs = Expr::new(ExprKind::BinaryOp {
-                op,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            });
+            lhs = Expr::with_span(
+                ExprKind::BinaryOp {
+                    op,
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
+                },
+                span,
+            );
             input = rest;
             continue;
         }
@@ -77,20 +85,24 @@ fn parse_expr_bp<'a>(input: &'a str, ctx: &mut ParseCtx, min_bp: u8) -> IResult<
     Ok((input, lhs))
 }
 
-fn parse_unary_or_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, ParseError> {
+fn parse_unary_or_atom<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Expr, ParseError> {
     ctx.tick().map_err(nom::Err::Failure)?;
     let input = ws(input);
 
     // Unary !
     if let Some(stripped) = input.strip_prefix('!') {
+        let span = ctx.current_span(input);
         ctx.add_node().map_err(nom::Err::Failure)?;
         let (rest, operand) = parse_unary_or_atom(stripped, ctx)?;
         return Ok((
             rest,
-            Expr::new(ExprKind::UnaryOp {
-                op: UnaryOp::Not,
-                operand: Box::new(operand),
-            }),
+            Expr::with_span(
+                ExprKind::UnaryOp {
+                    op: UnaryOp::Not,
+                    operand: Box::new(operand),
+                },
+                span,
+            ),
         ));
     }
 
@@ -99,14 +111,18 @@ fn parse_unary_or_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a st
         let next = input.as_bytes()[1];
         // Accept digits, '(', identifiers (alpha/underscore)
         if next.is_ascii_digit() || next == b'(' || next.is_ascii_alphabetic() || next == b'_' {
+            let span = ctx.current_span(input);
             ctx.add_node().map_err(nom::Err::Failure)?;
             let (rest, operand) = parse_unary_or_atom(&input[1..], ctx)?;
             return Ok((
                 rest,
-                Expr::new(ExprKind::UnaryOp {
-                    op: UnaryOp::Neg,
-                    operand: Box::new(operand),
-                }),
+                Expr::with_span(
+                    ExprKind::UnaryOp {
+                        op: UnaryOp::Neg,
+                        operand: Box::new(operand),
+                    },
+                    span,
+                ),
             ));
         }
     }
@@ -127,19 +143,24 @@ fn parse_unary_or_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a st
     parse_atom(input, ctx)
 }
 
-fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, ParseError> {
+fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Expr, ParseError> {
     ctx.tick().map_err(nom::Err::Failure)?;
     ctx.add_node().map_err(nom::Err::Failure)?;
     let input = ws(input);
+    let span = ctx.current_span(input);
 
     // String literal
     if input.starts_with('"') {
-        return lit::parse_string_literal(input, ctx);
+        let (rest, mut e) = lit::parse_string_literal(input, ctx)?;
+        e.span = Some(span);
+        return Ok((rest, e));
     }
 
     // Integer literal
     if input.starts_with(|c: char| c.is_ascii_digit()) {
-        return lit::parse_int_literal(input);
+        let (rest, mut e) = lit::parse_int_literal(input)?;
+        e.span = Some(span);
+        return Ok((rest, e));
     }
 
     // Keywords and identifiers
@@ -148,9 +169,9 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, 
             lit::parse_identifier(input).map_err(|_| nom::Err::Failure(ParseError::new("expected identifier")))?;
 
         return match ident {
-            "true" => Ok((rest, Expr::bool_val(true))),
-            "false" => Ok((rest, Expr::bool_val(false))),
-            "nil" => Ok((rest, Expr::nil())),
+            "true" => Ok((rest, Expr::with_span(ExprKind::BoolLit(true), span))),
+            "false" => Ok((rest, Expr::with_span(ExprKind::BoolLit(false), span))),
+            "nil" => Ok((rest, Expr::with_span(ExprKind::NilLit, span))),
             _ => {
                 // Check for function call: ident(...)
                 let rest_ws = ws(rest);
@@ -158,13 +179,16 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, 
                     let (rest, args) = parse_call_args(stripped, ctx)?;
                     Ok((
                         rest,
-                        Expr::new(ExprKind::FnCall {
-                            name: ident.to_string(),
-                            args,
-                        }),
+                        Expr::with_span(
+                            ExprKind::FnCall {
+                                name: ident.to_string(),
+                                args,
+                            },
+                            span,
+                        ),
                     ))
                 } else {
-                    Ok((rest, Expr::ident(ident)))
+                    Ok((rest, Expr::with_span(ExprKind::Ident(ident.to_string()), span)))
                 }
             }
         };
@@ -179,7 +203,7 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, 
         if input.starts_with('}') {
             ctx.leave_nesting();
             ctx.add_node().map_err(nom::Err::Failure)?;
-            return Ok((&input[1..], Expr::new(ExprKind::MapLiteral(pairs))));
+            return Ok((&input[1..], Expr::with_span(ExprKind::MapLiteral(pairs), span)));
         }
 
         loop {
@@ -188,7 +212,9 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, 
                 ctx.leave_nesting();
                 return Err(nom::Err::Failure(ParseError::new("map key must be a string literal")));
             }
-            let (rest, key_expr) = lit::parse_string_literal(input, ctx)?;
+            let key_span = ctx.current_span(input);
+            let (rest, mut key_expr) = lit::parse_string_literal(input, ctx)?;
+            key_expr.span = Some(key_span);
             let rest = ws(rest);
             if !rest.starts_with(':') {
                 ctx.leave_nesting();
@@ -211,7 +237,7 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, 
             }
         }
         ctx.add_node().map_err(nom::Err::Failure)?;
-        return Ok((input, Expr::new(ExprKind::MapLiteral(pairs))));
+        return Ok((input, Expr::with_span(ExprKind::MapLiteral(pairs), span)));
     }
 
     let end = (0..=input.len().min(20))
@@ -226,9 +252,10 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, 
 
 // ==================== Dot Access (Method Call / Field Access) ====================
 
-fn parse_dot_access<'a>(input: &'a str, object: Expr, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, ParseError> {
+fn parse_dot_access<'a>(input: &'a str, object: Expr, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Expr, ParseError> {
     ctx.tick().map_err(nom::Err::Failure)?;
     ctx.add_node().map_err(nom::Err::Failure)?;
+    let span = ctx.current_span(input); // span at '.'
 
     let input = &input[1..]; // skip '.'
     let (input, method) = lit::parse_identifier(input)
@@ -240,26 +267,32 @@ fn parse_dot_access<'a>(input: &'a str, object: Expr, ctx: &mut ParseCtx) -> IRe
         let (rest, args) = parse_call_args(stripped, ctx)?;
         Ok((
             rest,
-            Expr::new(ExprKind::MethodCall {
-                object: Box::new(object),
-                method: method.to_string(),
-                args,
-            }),
+            Expr::with_span(
+                ExprKind::MethodCall {
+                    object: Box::new(object),
+                    method: method.to_string(),
+                    args,
+                },
+                span,
+            ),
         ))
     } else {
         // Field access: obj.field
         Ok((
             input,
-            Expr::new(ExprKind::FieldAccess {
-                object: Box::new(object),
-                field: method.to_string(),
-            }),
+            Expr::with_span(
+                ExprKind::FieldAccess {
+                    object: Box::new(object),
+                    field: method.to_string(),
+                },
+                span,
+            ),
         ))
     }
 }
 
 /// Parse comma-separated arguments inside parentheses. Input starts AFTER '('
-fn parse_call_args<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Vec<Expr>, ParseError> {
+fn parse_call_args<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Vec<Expr>, ParseError> {
     let mut args = Vec::new();
     let mut input = ws(input);
 

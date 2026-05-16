@@ -16,6 +16,7 @@ fn test_vm_loadconst_regex_returns_internal_error() {
         local_count: 0,
         max_loop_depth: 0,
         source: None,
+        source_map: None,
     };
     let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
     let mut session = MockPluginSession::new();
@@ -48,6 +49,7 @@ fn test_vm_matches_bad_idx_returns_internal_error() {
         local_count: 0,
         max_loop_depth: 0,
         source: None,
+        source_map: None,
     };
     let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
     let mut session = MockPluginSession::new();
@@ -75,6 +77,7 @@ fn test_vm_regex_find_bad_idx_returns_internal_error() {
         local_count: 0,
         max_loop_depth: 0,
         source: None,
+        source_map: None,
     };
     let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
     let mut session = MockPluginSession::new();
@@ -108,6 +111,7 @@ fn test_vm_regex_replace_bad_idx_returns_internal_error() {
         local_count: 0,
         max_loop_depth: 0,
         source: None,
+        source_map: None,
     };
     let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
     let mut session = MockPluginSession::new();
@@ -138,6 +142,7 @@ fn test_vm_loadconst_out_of_bounds_returns_internal_error() {
         local_count: 0,
         max_loop_depth: 0,
         source: None,
+        source_map: None,
     };
     let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
     let mut session = MockPluginSession::new();

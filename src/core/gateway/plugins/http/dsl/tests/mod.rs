@@ -3,7 +3,8 @@
 //! Uses MockPluginSession to validate behaviour without real HTTP connections.
 //! MockPluginSession is not Send — all tests use #[test], not #[tokio::test].
 
-pub(super) use super::lang::bytecode::CompiledScript;
+pub(super) use super::lang::bytecode::{CompiledScript, OpCode};
+pub(super) use super::lang::error::RuntimeError;
 pub(super) use super::lang::validator::{compile_dsl_source, ValidationLimits};
 pub(super) use super::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
 pub(super) use super::runtime::DslRuntime;
@@ -13,6 +14,7 @@ pub(super) use crate::types::filters::PluginRunningResult;
 
 mod compile_errors;
 mod control_flow;
+mod ctx_builtins;
 mod decision_log_tests;
 mod error_policy;
 mod grpc_error_tests;
@@ -25,6 +27,7 @@ mod request_mutation;
 mod resp_p2_tests;
 mod resp_set_status_tests;
 mod response_builtins;
+mod runtime_errors;
 mod sandbox;
 mod terminate_tests;
 mod utility_functions;
@@ -138,6 +141,57 @@ pub(super) fn run_vm_policy_log(
             &rt_ctx,
         ));
     (result, log)
+}
+
+/// Run source and expect a RuntimeError — bypasses execute_safe + DslErrorPolicy so
+/// callers can assert the exact variant via `matches!`.
+pub(super) fn run_expect_runtime_err(source: &str, session: MockPluginSession) -> RuntimeError {
+    let vm = make_vm(source);
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    let rt = DslRuntime::default();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(vm.execute(&mut s as &mut dyn PluginSession, &mut log, &rt))
+        .expect_err("expected RuntimeError, got Ok")
+}
+
+pub(super) fn run_expect_runtime_err_with_limits(
+    source: &str,
+    session: MockPluginSession,
+    limits: VmLimits,
+) -> RuntimeError {
+    let vm = make_vm_with_limits(source, limits);
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    let rt = DslRuntime::default();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(vm.execute(&mut s as &mut dyn PluginSession, &mut log, &rt))
+        .expect_err("expected RuntimeError, got Ok")
+}
+
+/// Run a hand-crafted CompiledScript and expect a RuntimeError.
+/// Use this when the normal compiler cannot produce bytecode that triggers the variant.
+pub(super) fn run_expect_runtime_err_on_script(
+    script: CompiledScript,
+    session: MockPluginSession,
+    limits: VmLimits,
+) -> RuntimeError {
+    let vm = Vm::new(script, limits).expect("vm creation failed");
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    let rt = DslRuntime::default();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(vm.execute(&mut s as &mut dyn PluginSession, &mut log, &rt))
+        .expect_err("expected RuntimeError, got Ok")
 }
 
 pub(super) fn good_next() -> PluginRunningResult {

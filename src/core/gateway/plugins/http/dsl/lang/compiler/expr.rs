@@ -8,6 +8,9 @@ use super::Compiler;
 
 impl Compiler {
     pub(super) fn compile_expr(&mut self, expr: &Expr) -> Result<(), CompileError> {
+        if let Some(span) = expr.span {
+            self.current_line = span.line;
+        }
         match &expr.kind {
             ExprKind::StringLit(s) => {
                 let idx = self.add_str_const(s)?;

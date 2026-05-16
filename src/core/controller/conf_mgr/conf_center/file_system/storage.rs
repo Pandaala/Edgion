@@ -354,6 +354,15 @@ impl CenterApi for FileSystemStorage {
             .await
             .map_err(|e| ConfWriterError::io("Failed to delete file", e))?;
 
+        // Immediately hide this path from winner_of() so that a create_one() issued
+        // before the fs_watcher fires its Remove event does not see a stale
+        // AlreadyExists.  We intentionally do NOT call forget() here: the path stays
+        // in by_path / by_key so the watcher can deliver the correct ForgetOutcome
+        // (Removed / Promoted) and dispatch the Delete event through the normal pipeline.
+        if let Some(reg) = &self.registry {
+            reg.mark_api_deleted(&path);
+        }
+
         // Best-effort cleanup of the sidecar `<file>.yaml.status` so it doesn't
         // outlive its config file.  The resource_controller also deletes status
         // files when it processes a Delete event, but that path depends on the

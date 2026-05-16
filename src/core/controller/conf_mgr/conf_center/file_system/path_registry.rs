@@ -4,7 +4,7 @@
 //! diagnostics endpoint snapshots conflicts. See
 //! `docs/superpowers/specs/2026-05-10-multi-conf-dir-design.md` §4.1.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use parking_lot::RwLock;
@@ -65,6 +65,12 @@ pub struct ConflictReport {
 struct RegistryInner {
     by_key: HashMap<ResourceKey, Vec<PathBuf>>,
     by_path: HashMap<PathBuf, ResourceKey>,
+    // Paths removed by the storage DELETE API before the fs_watcher has fired
+    // the corresponding Remove event.  Entries here are invisible to winner_of()
+    // so create_one() does not see a stale AlreadyExists, but they remain in
+    // by_path / by_key so that forget() still returns the correct ForgetOutcome
+    // (Removed / Promoted) and the watcher can dispatch the Delete event normally.
+    pending_api_delete: HashSet<PathBuf>,
 }
 
 #[derive(Default)]
@@ -101,8 +107,24 @@ impl PathRegistry {
         }
     }
 
+    /// Mark a path as deleted by the storage API before the fs_watcher has
+    /// confirmed the removal.  After this call winner_of() will skip this path,
+    /// but by_path / by_key are unchanged so that forget() still delivers the
+    /// correct ForgetOutcome when the watcher fires the Remove event.
+    ///
+    /// Only has effect if the path is currently tracked; silently ignored otherwise.
+    pub fn mark_api_deleted(&self, path: &Path) {
+        let mut inner = self.inner.write();
+        if inner.by_path.contains_key(path) {
+            inner.pending_api_delete.insert(path.to_path_buf());
+        }
+    }
+
     pub fn forget(&self, path: &Path) -> ForgetOutcome {
         let mut inner = self.inner.write();
+        // Clear the pending-delete marker unconditionally; forget() is the
+        // authoritative removal driven by the fs_watcher.
+        inner.pending_api_delete.remove(path);
         let Some(key) = inner.by_path.remove(path) else {
             return ForgetOutcome::Unknown;
         };
@@ -135,18 +157,24 @@ impl PathRegistry {
 
     pub fn winner_of(&self, key: &ResourceKey) -> Option<PathBuf> {
         let inner = self.inner.read();
-        inner.by_key.get(key).and_then(|v| v.first().cloned())
+        inner.by_key.get(key).and_then(|v| {
+            // Skip paths that have been API-deleted but not yet confirmed by the
+            // watcher; they are still live in by_path / by_key so forget() works
+            // correctly, but they must not block create_one() with AlreadyExists.
+            v.iter().find(|p| !inner.pending_api_delete.contains(*p)).cloned()
+        })
     }
 
     pub fn snapshot_conflicts(&self) -> Vec<ConflictReport> {
         let inner = self.inner.read();
         let mut out = Vec::new();
         for (k, v) in inner.by_key.iter() {
-            if v.len() > 1 {
+            let live: Vec<&PathBuf> = v.iter().filter(|p| !inner.pending_api_delete.contains(*p)).collect();
+            if live.len() > 1 {
                 out.push(ConflictReport {
                     key: k.clone(),
-                    winner: v[0].clone(),
-                    losers: v[1..].to_vec(),
+                    winner: live[0].clone(),
+                    losers: live[1..].iter().map(|p| (*p).clone()).collect(),
                 });
             }
         }
@@ -158,7 +186,9 @@ impl PathRegistry {
         inner
             .by_key
             .iter()
-            .filter_map(|(k, v)| v.first().map(|p| (k.clone(), p.clone())))
+            .filter_map(|(k, v)| {
+                v.iter().find(|p| !inner.pending_api_delete.contains(*p)).map(|p| (k.clone(), p.clone()))
+            })
             .collect()
     }
 }
@@ -266,6 +296,61 @@ mod tests {
     }
 
     #[test]
+    fn mark_api_deleted_hides_winner_from_winner_of() {
+        let r = PathRegistry::new();
+        r.record(k("Gateway", "ns/gw"), p("/conf/gw.yaml"));
+        r.mark_api_deleted(&p("/conf/gw.yaml"));
+        assert_eq!(r.winner_of(&k("Gateway", "ns/gw")), None);
+    }
+
+    #[test]
+    fn forget_after_mark_api_deleted_returns_removed_and_clears_marker() {
+        let r = PathRegistry::new();
+        r.record(k("Gateway", "ns/gw"), p("/conf/gw.yaml"));
+        r.mark_api_deleted(&p("/conf/gw.yaml"));
+        // watcher fires Remove — must still get Removed so Delete event is dispatched
+        assert_eq!(
+            r.forget(&p("/conf/gw.yaml")),
+            ForgetOutcome::Removed { key: k("Gateway", "ns/gw") }
+        );
+        // pending marker gone, winner_of is also gone
+        assert_eq!(r.winner_of(&k("Gateway", "ns/gw")), None);
+    }
+
+    #[test]
+    fn mark_api_deleted_winner_with_conflict_hides_winner_but_exposes_conflict() {
+        let r = PathRegistry::new();
+        r.record(k("S", "ns/x"), p("/a.yaml")); // winner
+        r.record(k("S", "ns/x"), p("/b.yaml")); // conflict
+        r.mark_api_deleted(&p("/a.yaml"));
+        // conflict file is still live — winner_of must surface it
+        assert_eq!(r.winner_of(&k("S", "ns/x")), Some(p("/b.yaml")));
+    }
+
+    #[test]
+    fn forget_after_mark_api_deleted_winner_with_conflict_promotes() {
+        let r = PathRegistry::new();
+        r.record(k("S", "ns/x"), p("/a.yaml"));
+        r.record(k("S", "ns/x"), p("/b.yaml"));
+        r.mark_api_deleted(&p("/a.yaml"));
+        // watcher fires Remove for /a.yaml — must still return Promoted
+        assert_eq!(
+            r.forget(&p("/a.yaml")),
+            ForgetOutcome::Promoted {
+                new_winner: p("/b.yaml"),
+                remaining_conflicts: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn mark_api_deleted_unknown_path_is_noop() {
+        let r = PathRegistry::new();
+        r.mark_api_deleted(&p("/nonexistent.yaml")); // must not panic
+        assert_eq!(r.winner_of(&k("S", "ns/x")), None);
+    }
+
+    #[test]
     fn snapshot_conflicts_only_lists_keys_with_more_than_one_path() {
         let r = PathRegistry::new();
         r.record(k("S", "ns/x"), p("/conf/a.yaml"));
@@ -287,5 +372,70 @@ mod tests {
         let mut snap = r.snapshot_winners();
         snap.sort_by(|a, b| a.0.key.cmp(&b.0.key));
         assert_eq!(snap.len(), 2);
+    }
+
+    // --- snapshot_conflicts pending-aware tests ---
+
+    #[test]
+    fn snapshot_conflicts_pending_winner_with_one_live_conflict_not_reported() {
+        // winner pending + 1 live conflict → live.len() == 1 → not a conflict
+        let r = PathRegistry::new();
+        r.record(k("S", "ns/x"), p("/a.yaml")); // winner
+        r.record(k("S", "ns/x"), p("/b.yaml")); // conflict
+        r.mark_api_deleted(&p("/a.yaml"));
+        let snap = r.snapshot_conflicts();
+        assert!(snap.is_empty(), "one live path remaining is not a conflict");
+    }
+
+    #[test]
+    fn snapshot_conflicts_pending_winner_with_two_live_conflicts_reports_correctly() {
+        // winner pending + 2 live conflicts → live winner = first live conflict
+        let r = PathRegistry::new();
+        r.record(k("S", "ns/x"), p("/a.yaml")); // winner
+        r.record(k("S", "ns/x"), p("/b.yaml")); // conflict 1
+        r.record(k("S", "ns/x"), p("/c.yaml")); // conflict 2
+        r.mark_api_deleted(&p("/a.yaml"));
+        let snap = r.snapshot_conflicts();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].winner, p("/b.yaml"));
+        assert_eq!(snap[0].losers, vec![p("/c.yaml")]);
+    }
+
+    // --- snapshot_winners pending-aware tests ---
+
+    #[test]
+    fn snapshot_winners_excludes_key_when_all_paths_pending() {
+        let r = PathRegistry::new();
+        r.record(k("Gateway", "ns/gw"), p("/gw.yaml"));
+        r.record(k("S", "ns/x"), p("/x.yaml"));
+        r.mark_api_deleted(&p("/gw.yaml")); // only path for ns/gw is pending
+        let snap = r.snapshot_winners();
+        // ns/gw has no live winner — must not appear
+        assert!(
+            snap.iter().all(|(rk, _)| rk != &k("Gateway", "ns/gw")),
+            "pending-only key must be excluded from snapshot_winners"
+        );
+        // ns/x is untouched — must still appear
+        assert!(snap.iter().any(|(rk, _)| rk == &k("S", "ns/x")));
+    }
+
+    #[test]
+    fn snapshot_winners_consistent_with_winner_of_under_pending() {
+        // For every key, snapshot_winners and winner_of must agree
+        let r = PathRegistry::new();
+        r.record(k("S", "ns/x"), p("/a.yaml")); // winner
+        r.record(k("S", "ns/x"), p("/b.yaml")); // conflict
+        r.record(k("S", "ns/y"), p("/y.yaml"));
+        r.mark_api_deleted(&p("/a.yaml")); // ns/x winner is pending
+
+        let snap: std::collections::HashMap<_, _> = r.snapshot_winners().into_iter().collect();
+
+        // ns/x: snapshot_winners and winner_of must both return /b.yaml
+        assert_eq!(snap.get(&k("S", "ns/x")), Some(&p("/b.yaml")));
+        assert_eq!(r.winner_of(&k("S", "ns/x")), Some(p("/b.yaml")));
+
+        // ns/y: unaffected — both return /y.yaml
+        assert_eq!(snap.get(&k("S", "ns/y")), Some(&p("/y.yaml")));
+        assert_eq!(r.winner_of(&k("S", "ns/y")), Some(p("/y.yaml")));
     }
 }

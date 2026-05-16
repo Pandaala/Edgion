@@ -8,7 +8,21 @@ impl Compiler {
     pub(super) fn emit(&mut self, op: OpCode) -> usize {
         let idx = self.code.len();
         self.code.push(op);
+        self.record_line();
         idx
+    }
+
+    /// Append the current source line to `line_runs` using run-length encoding.
+    /// Extends the trailing run when the line matches and the count hasn't saturated;
+    /// otherwise starts a new run. Keeps the map's PC coverage in lock-step with `code`.
+    fn record_line(&mut self) {
+        let line = self.current_line;
+        match self.line_runs.last_mut() {
+            Some((count, last_line)) if *last_line == line && *count < u16::MAX => {
+                *count += 1;
+            }
+            _ => self.line_runs.push((1, line)),
+        }
     }
 
     pub(super) fn current_offset(&self) -> usize {
@@ -120,5 +134,27 @@ impl Compiler {
             self.locals.pop();
         }
         self.scope_depth = self.scope_depth.saturating_sub(1);
+    }
+}
+
+#[cfg(test)]
+mod record_line_tests {
+    use super::super::Compiler;
+    use super::*;
+
+    #[test]
+    fn test_record_line_saturates_at_u16_max() {
+        // A real-world parser cannot drive line_runs past u16::MAX (max_ast_nodes = 2000),
+        // so exercise the boundary by emitting through the public emit() path with current_line
+        // pinned. After emitting u16::MAX + 1 opcodes on a single line we expect exactly two runs:
+        // (u16::MAX, 1) followed by (1, 1).
+        let mut c = Compiler::new();
+        c.current_line = 1;
+        for _ in 0..(u16::MAX as u32 + 1) {
+            c.emit(OpCode::LoadNil);
+        }
+        assert_eq!(c.line_runs.len(), 2);
+        assert_eq!(c.line_runs[0], (u16::MAX, 1));
+        assert_eq!(c.line_runs[1], (1, 1));
     }
 }

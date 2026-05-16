@@ -78,6 +78,8 @@ description: Coding standards skill for Edgion. Use when reviewing or writing co
 
 ### DSL plugin implementation — [dsl/](dsl/)
 
+> See [dsl/SKILL.md](dsl/SKILL.md) for the sub-directory index and cross-links to the DSL engine architecture, URI normalization, and the Value-type design memo.
+
 | File | Topic |
 |------|------|
 | [dsl/builtins-path.md](dsl/builtins-path.md) | DSL path/URI variable reference: `req.path`, `req.uri`, `req.query`, and the difference between them |

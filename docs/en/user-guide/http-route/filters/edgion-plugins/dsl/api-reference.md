@@ -1406,6 +1406,7 @@ Sends an outbound HTTP request from the gateway to an arbitrary HTTP/HTTPS endpo
 - Only `http` and `https` URL schemes are accepted; other schemes (e.g. `file://`, `ftp://`) return `status = 0`.
 - When `httpBlockPrivateIps: true`, requests to loopback, private, and link-local addresses return `status = 0`.
 - The response body is truncated at `httpMaxResponseBodyBytes` (default 1 MiB).
+- The response `headers` Map is silently truncated to the first `max_map_size` entries (SSRF / large-response-header guard); the call still succeeds.
 - The actual timeout applied is `min(timeout_ms, httpMaxTimeoutMs)`.
 - At most 10 redirects are followed (global client setting).
 
@@ -1648,7 +1649,7 @@ Deletes a field from a hash. Returns `value: true` if the field existed and was 
 
 **Signature**: `redis.hgetall(link, key)` → `Map { ok: Bool, value: Map, error: Str | Nil }`
 
-Gets all fields and values of a hash. Returns an empty `Map` when the key does not exist. `ok: false` is returned only on a connection error.
+Gets all fields and values of a hash. Returns an empty `Map` when the key does not exist. `ok: false` is returned on a connection error, or when the hash contains more entries than the `max_map_size` limit (in which case the oversize `Map` is not constructed and `error` describes the actual size and limit).
 
 **Parameters**:
 - `link` (Str) — Alias name from `linkSysRefs[].name`

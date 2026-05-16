@@ -727,6 +727,14 @@ impl Vm {
                 OpCode::MakeMap(n) => {
                     use indexmap::IndexMap;
                     let count = n as usize;
+                    // Defense-in-depth: the validator already rejects oversized MakeMap at
+                    // compile time, but injected or hand-crafted bytecode bypasses that path.
+                    if count > self.limits.max_map_size {
+                        return Err(RuntimeError::MapTooLarge {
+                            size: count,
+                            limit: self.limits.max_map_size,
+                        });
+                    }
                     let mut map: IndexMap<String, Value> = IndexMap::with_capacity(count);
                     let mut pairs: Vec<(Value, Value)> = Vec::with_capacity(count);
                     for _ in 0..count {
@@ -932,6 +940,7 @@ mod tests {
             local_count: 0,
             max_loop_depth: 0,
             source: None,
+            source_map: None,
         }
     }
 

@@ -8,7 +8,7 @@ use super::ParseCtx;
 
 // ==================== Literals ====================
 
-pub(super) fn parse_string_literal<'a>(input: &'a str, _ctx: &mut ParseCtx) -> IResult<&'a str, Expr, ParseError> {
+pub(super) fn parse_string_literal<'a>(input: &'a str, _ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Expr, ParseError> {
     let input = &input[1..]; // skip opening "
     let mut result = String::new();
     let mut chars = input.chars();

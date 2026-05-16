@@ -11,7 +11,7 @@ mod lit;
 mod stmt;
 
 use super::ast::*;
-use super::error::ParseError;
+use super::error::{ParseError, Span};
 
 /// Maximum source code length (64KB)
 const MAX_SOURCE_LEN: usize = 64 * 1024;
@@ -19,7 +19,9 @@ const MAX_SOURCE_LEN: usize = 64 * 1024;
 // ==================== Parse Context (Safety) ====================
 
 /// Parser safety context — threaded through all parser functions.
-pub(super) struct ParseCtx {
+pub(super) struct ParseCtx<'a> {
+    /// Original source string — used to compute byte offset and line number for spans
+    pub(super) source: &'a str,
     /// Global parse budget — decremented on every combinator entry
     pub(super) parse_budget: u32,
     /// Current nesting depth
@@ -30,24 +32,27 @@ pub(super) struct ParseCtx {
     pub(super) ast_node_count: u32,
     /// Max allowed AST nodes
     pub(super) max_ast_nodes: u32,
-    /// Original source (for span calculation)
-    pub(super) _source_start: usize,
 }
 
-impl Default for ParseCtx {
-    fn default() -> Self {
+impl<'a> ParseCtx<'a> {
+    pub(super) fn new(source: &'a str) -> Self {
         Self {
+            source,
             parse_budget: 50_000,
             nesting_depth: 0,
             max_nesting_depth: 64,
             ast_node_count: 0,
             max_ast_nodes: 2_000,
-            _source_start: 0,
         }
     }
-}
 
-impl ParseCtx {
+    /// Compute the source position of `remaining`, which must be a suffix of `self.source`.
+    pub(super) fn current_span(&self, remaining: &str) -> Span {
+        let offset = self.source.len() - remaining.len();
+        let line = (self.source[..offset].bytes().filter(|&b| b == b'\n').count() as u32) + 1;
+        Span { offset, line, col: 1 }
+    }
+
     pub(super) fn tick(&mut self) -> Result<(), ParseError> {
         if self.parse_budget == 0 {
             return Err(ParseError::new("parse budget exceeded"));
@@ -96,10 +101,7 @@ pub fn parse_program(source: &str) -> Result<Program, ParseError> {
         )));
     }
 
-    let mut ctx = ParseCtx {
-        _source_start: source.as_ptr() as usize,
-        ..Default::default()
-    };
+    let mut ctx = ParseCtx::new(source);
 
     let mut input = source;
     let mut stmts = Vec::new();
@@ -170,6 +172,7 @@ pub(super) fn ws(input: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use super::super::ast::*;
     use super::parse_program;
 
     #[test]
@@ -190,5 +193,28 @@ mod tests {
     fn test_source_too_large() {
         let source = "a".repeat(super::MAX_SOURCE_LEN + 1);
         assert!(parse_program(&source).is_err());
+    }
+
+    #[test]
+    fn test_span_line_numbers() {
+        let prog = parse_program("let x = 1\nlet y = 2\n").unwrap();
+        assert_eq!(prog.stmts[0].span.unwrap().line, 1);
+        assert_eq!(prog.stmts[1].span.unwrap().line, 2);
+    }
+
+    #[test]
+    fn test_span_binary_op_position() {
+        // The BinaryOp span should point to the operator token.
+        let prog = parse_program("2 / 0").unwrap();
+        match &prog.stmts[0].kind {
+            StmtKind::ExprStmt { expr } => match &expr.kind {
+                ExprKind::BinaryOp { op: BinOp::Div, .. } => {
+                    assert_eq!(expr.span.unwrap().line, 1);
+                    assert_eq!(expr.span.unwrap().offset, 2); // '/' is at byte offset 2
+                }
+                _ => panic!("expected BinaryOp Div"),
+            },
+            _ => panic!("expected ExprStmt"),
+        }
     }
 }

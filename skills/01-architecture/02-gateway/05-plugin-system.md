@@ -164,7 +164,7 @@ resource.pre_parse()                        # event_dispatch.rs
 | Plugin | Module | Description |
 |--------|--------|-------------|
 | Mock | `mock` | Return a mocked response (no upstream forwarding) |
-| DslPlugin | `dsl` | DSL script engine (Parser→AST→Compiler→Bytecode→VM, ~4700 lines; see the DSL engine section below) |
+| DslPlugin | `dsl` | DSL script engine (Parser→AST→Compiler→Bytecode→VM, ~4700 lines; see [`dsl-engine.md`](dsl-engine.md) for the architecture) |
 | CtxSet | `ctx_set` | Set request context variables |
 | JweDecrypt | `jwe_decrypt` | Decrypt JWE-encrypted tokens |
 | RequestMirrorPlugin | `request_mirror` | Request mirroring (clone the request to another backend) |
@@ -174,93 +174,9 @@ resource.pre_parse()                        # event_dispatch.rs
 
 ## DSL script engine (DslPlugin)
 
-> Source: `src/core/gateway/plugins/http/dsl/` (~4700 lines, including the `lang/` subdirectory).
-> Enhancement design doc: `docs/superpowers/specs/2026-03-22-dsl-plugin-enhancement-design.md`.
+EdgionDSL is a lightweight request/response rule engine built on a custom bytecode VM (`src/core/gateway/plugins/http/dsl/`, ~4700 lines). It implements both `RequestFilter` and `UpstreamResponseFilter`; the UpstreamResponseFilter path bridges the sync trait into the `async fn execute` VM via `tokio::task::block_in_place`. Panics are isolated by `vm::execute_safe` (`AssertUnwindSafe + catch_unwind`), and a layered sandbox caps source size (≤64 KB), AST nodes (≤2000), bytecode size (≤256 KB), and runtime budgets (steps / loop / call / stack / string / list / map).
 
-EdgionDSL is a lightweight request/response rule engine built on a custom bytecode VM, positioned for "zero runtime dependency, compile-time safety, sub-millisecond execution".
-
-### Architecture
-
-```
-source / YAML → Parser(nom) → AST → Compiler → Bytecode (JSON/base64) → VM execution
-```
-
-- **Parser**: nom combinators, parse budget of 50k calls.
-- **AST**: up to 2000 nodes, nesting depth ≤ 64.
-- **Compiler**: type checks, function-signature validation, compile-time regex validation; emits bytecode (≤ 256 KB).
-- **VM**: async stack VM (post external-call feature), panics isolated via `futures::FutureExt::catch_unwind`.
-
-### Implemented capabilities (39 builtins)
-
-| Category | API |
-|----------|-----|
-| Request read (15) | `req.header`/`method`/`path`/`query`/`query_string`/`cookie`/`client_ip`/`remote_ip`/`path_param`/`header_names`/`scheme`/`host`/`uri`/`content_type`/`has_header` |
-| Request modify (6) | `req.set_header`/`append_header`/`remove_header`/`set_uri`/`set_host`/`set_method` |
-| Response modify (3) | `resp.set_header`/`append_header`/`remove_header` |
-| Context KV (3) | `ctx.get`/`set`/`remove` |
-| Utility functions (12) | `log`/`len`/`substr`/`to_int`/`to_str`/`to_upper`/`to_lower`/`base64_encode`/`base64_decode`/`url_encode`/`url_decode`/`time_now` |
-
-Language features: variables (let / let mut), if/else, while, for-range, for-in, logical / comparison / arithmetic operators, string methods (starts_with / ends_with / contains / matches), `return deny(status, body)` / `return next()`.
-
-### Sandbox security model
-
-| Layer | Limits |
-|-------|--------|
-| Parsing | source ≤ 64 KB, parse budget 50k, AST ≤ 2000 nodes, nesting ≤ 64 |
-| Compilation | instructions ≤ 1000, locals ≤ 64, constants ≤ 256, regex syntax check |
-| Runtime | steps ≤ 10k, loop ≤ 100, calls ≤ 500, stack ≤ 128, string ≤ 8 KB (all per-plugin configurable) |
-
-### External call design principles
-
-EdgionDSL is designed as a general-purpose extensible language. External capabilities (HTTP, Redis, etc.) are **language-level builtins**, not runtime-registered plugins. Key principles:
-
-1. **No explicit `enabled` flag**: capabilities are always available; operators control behavior via limits (timeout cap, body size cap), not on/off switches.
-2. **`DslRuntime` is a lightweight call-time struct** (not stored in `DslPlugin`): constructed in `run_request` from the plugin's config values, holds per-call limits and a reference to the global HTTP client.
-3. **Global static `reqwest::Client`** (`OnceLock`): shared across all DSL plugin instances for connection pool reuse. Per-plugin limits are passed separately.
-4. **`DslCapability` trait for code organization**: each external capability (HTTP, future Redis) lives in its own module and is invoked via `DslRuntime`. No HashMap registry — dispatch goes through static `match` in VM builtins.
-5. **`Value::Map`** (`Arc<IndexMap<String, Value>>`): structured return type for `http.call` responses; also enables Map literals `{"k": v}` in DSL source. Index access `container[key]` works uniformly for both List (Int index) and Map (Str key).
-6. **`http.call` error convention**: always returns a Map; `status == 0` means network/timeout failure (not HTTP error). Body is truncated to `maxResponseBodyBytes`. Response header keys are lowercased.
-
-```
-// DslRuntime (constructed at run_request time, not stored)
-pub struct DslRuntime {
-    pub max_timeout_ms: u64,            // hard cap; default 30_000
-    pub max_response_body_bytes: usize, // hard cap; default 1_048_576
-}
-```
-
-```yaml
-# DslConfig additions (all optional, sensible defaults)
-httpCall:
-  maxTimeoutMs: 30000
-  maxResponseBodyBytes: 1048576
-```
-
-> **TODO (Redis)**: after HTTP stabilizes, add `redis.get(addr, key)` / `redis.set(addr, key, val, ttl)` / `redis.del(addr, key)` builtins. addr format: `redis://host:port/db`. Connection management TBD (self-managed `fred` pool vs. reference existing LinkSys Redis connection).
-
-### Pending enhancements (design completed)
-
-Four steps (see design docs for details):
-1. **Step-1 (P0)**: implement 5 stub functions (sha256 / md5 / regex_find / regex_replace / range-as-expr); only `builtins.rs` is touched. Design: `docs/superpowers/specs/2026-03-22-dsl-plugin-enhancement-design.md`.
-2. **Step-2 (P1)**: resp reads (resp.status / resp.header / resp.has_header) + break / continue.
-3. **Step-3 (P2)**: implement the UpstreamResponseFilter trait so the response phase can execute scripts.
-4. **Step-4 (P2)**: external HTTP call (`http.call`), async VM, `Value::Map`. Design: `docs/superpowers/specs/2026-05-09-dsl-external-call-design.md`.
-
-### Configuration
-
-```yaml
-type: Dsl
-config:
-  name: "my-script"
-  source: |          # inline source (or use bytecode: precompiled)
-    let auth = req.header("Authorization")
-    if auth == nil {
-      return deny(401, "Unauthorized")
-    }
-  errorPolicy: deny  # ignore | deny | denyWith
-  vmLimits:          # optional, override defaults
-    maxSteps: 50000
-```
+The full architecture — data flow, source layout, plugin entry points, async/sync bridging, panic isolation, and `DslRuntime` lifecycle — lives in [`dsl-engine.md`](dsl-engine.md). User-facing syntax / builtin signatures / runtime tuning are documented in `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/`.
 
 ## Stream plugins
 

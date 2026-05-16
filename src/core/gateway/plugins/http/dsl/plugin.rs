@@ -69,13 +69,18 @@ impl DslPlugin {
     /// This allows YAML users to write inline `source` code directly, while
     /// the controller can also pre-compile to `bytecode` for production use.
     pub(crate) fn resolve_script(config: &DslConfig) -> Result<CompiledScript, String> {
+        let val_limits = ValidationLimits {
+            max_map_size: config.max_map_size.unwrap_or(512),
+            ..ValidationLimits::default()
+        };
+
         // 1. Pre-compiled bytecode takes priority
         if let Some(bytecode_str) = &config.bytecode {
             let script = CompiledScript::deserialize_base64(bytecode_str)
                 .map_err(|e| format!("bytecode deserialization failed: {}", e))?;
 
             // Validate pre-compiled bytecode to prevent malicious payloads
-            let validator = Validator::new(ValidationLimits::default());
+            let validator = Validator::new(val_limits);
             let errors = validator.validate(&script);
             if !errors.is_empty() {
                 let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
@@ -87,7 +92,7 @@ impl DslPlugin {
 
         // 2. Compile from source code
         if let Some(source) = &config.source {
-            let bytecode_b64 = compile_dsl_source(source, &ValidationLimits::default())
+            let bytecode_b64 = compile_dsl_source(source, &val_limits)
                 .map_err(|errs| format!("DSL compile errors: {}", errs.join("; ")))?;
             return CompiledScript::deserialize_base64(&bytecode_b64)
                 .map_err(|e| format!("compiled bytecode deserialization failed: {}", e));

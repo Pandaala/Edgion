@@ -7,6 +7,9 @@ use super::Compiler;
 
 impl Compiler {
     pub(super) fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), CompileError> {
+        if let Some(span) = stmt.span {
+            self.current_line = span.line;
+        }
         match &stmt.kind {
             StmtKind::Let { name, mutable, value } => {
                 // Prevent shadowing built-in namespaces

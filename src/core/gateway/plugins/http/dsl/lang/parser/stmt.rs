@@ -8,7 +8,7 @@ use super::{expr, is_reserved_keyword, lit, starts_with_keyword, ws, ParseCtx};
 
 // ==================== Statement Parsing ====================
 
-pub(super) fn parse_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
+pub(super) fn parse_stmt<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Stmt, ParseError> {
     ctx.tick().map_err(nom::Err::Failure)?;
 
     let input = ws(input);
@@ -22,11 +22,13 @@ pub(super) fn parse_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a 
     } else if starts_with_keyword(input, "while") || input.starts_with("while(") {
         parse_while_stmt(input, ctx)
     } else if starts_with_keyword(input, "break") {
+        let span = ctx.current_span(input);
         ctx.add_node().map_err(nom::Err::Failure)?;
-        Ok((&input[5..], Stmt::new(StmtKind::Break)))
+        Ok((&input[5..], Stmt::with_span(StmtKind::Break, span)))
     } else if starts_with_keyword(input, "continue") {
+        let span = ctx.current_span(input);
         ctx.add_node().map_err(nom::Err::Failure)?;
-        Ok((&input[8..], Stmt::new(StmtKind::Continue)))
+        Ok((&input[8..], Stmt::with_span(StmtKind::Continue, span)))
     } else if starts_with_keyword(input, "return") {
         parse_return_stmt(input, ctx)
     } else {
@@ -35,8 +37,9 @@ pub(super) fn parse_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a 
     }
 }
 
-fn parse_let_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
+fn parse_let_stmt<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Stmt, ParseError> {
     ctx.add_node().map_err(nom::Err::Failure)?;
+    let span = ctx.current_span(input);
 
     let input = ws(&input[3..]); // skip "let" + whitespace
 
@@ -72,17 +75,21 @@ fn parse_let_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, St
 
     Ok((
         input,
-        Stmt::new(StmtKind::Let {
-            name: name.to_string(),
-            mutable,
-            value,
-        }),
+        Stmt::with_span(
+            StmtKind::Let {
+                name: name.to_string(),
+                mutable,
+                value,
+            },
+            span,
+        ),
     ))
 }
 
-fn parse_if_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
+fn parse_if_stmt<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Stmt, ParseError> {
     ctx.add_node().map_err(nom::Err::Failure)?;
     ctx.enter_nesting().map_err(nom::Err::Failure)?;
+    let span = ctx.current_span(input);
 
     let mut branches = Vec::new();
     let mut current_input = input;
@@ -138,12 +145,13 @@ fn parse_if_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stm
     }
 
     ctx.leave_nesting();
-    Ok((current_input, Stmt::new(StmtKind::If { branches, else_body })))
+    Ok((current_input, Stmt::with_span(StmtKind::If { branches, else_body }, span)))
 }
 
-fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
+fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Stmt, ParseError> {
     ctx.add_node().map_err(nom::Err::Failure)?;
     ctx.enter_nesting().map_err(nom::Err::Failure)?;
+    let span = ctx.current_span(input);
 
     let input = ws(&input[3..]); // skip "for" + whitespace
 
@@ -195,12 +203,15 @@ fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, St
         ctx.leave_nesting();
         return Ok((
             input,
-            Stmt::new(StmtKind::ForRange {
-                var_name: var_name.to_string(),
-                start,
-                end,
-                body,
-            }),
+            Stmt::with_span(
+                StmtKind::ForRange {
+                    var_name: var_name.to_string(),
+                    start,
+                    end,
+                    body,
+                },
+                span,
+            ),
         ));
     }
 
@@ -215,17 +226,21 @@ fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, St
     ctx.leave_nesting();
     Ok((
         input,
-        Stmt::new(StmtKind::ForIn {
-            var_name: var_name.to_string(),
-            iterable,
-            body,
-        }),
+        Stmt::with_span(
+            StmtKind::ForIn {
+                var_name: var_name.to_string(),
+                iterable,
+                body,
+            },
+            span,
+        ),
     ))
 }
 
-fn parse_while_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
+fn parse_while_stmt<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Stmt, ParseError> {
     ctx.add_node().map_err(nom::Err::Failure)?;
     ctx.enter_nesting().map_err(nom::Err::Failure)?;
+    let span = ctx.current_span(input);
 
     let input = ws(&input[5..]); // skip "while" + whitespace
 
@@ -237,22 +252,23 @@ fn parse_while_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, 
     }
     let (input, body) = parse_block(&input[1..], ctx)?;
     ctx.leave_nesting();
-    Ok((input, Stmt::new(StmtKind::While { condition, body })))
+    Ok((input, Stmt::with_span(StmtKind::While { condition, body }, span)))
 }
 
-fn parse_return_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
+fn parse_return_stmt<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Stmt, ParseError> {
     ctx.add_node().map_err(nom::Err::Failure)?;
+    let span = ctx.current_span(input);
 
     let input = ws(&input[6..]); // skip "return" + whitespace
 
     if input.starts_with("next()") || input.starts_with("next ()") {
         let skip = if input.starts_with("next()") { 6 } else { 7 };
-        return Ok((&input[skip..], Stmt::new(StmtKind::ReturnNext)));
+        return Ok((&input[skip..], Stmt::with_span(StmtKind::ReturnNext, span)));
     }
 
     if input.starts_with("terminate()") || input.starts_with("terminate ()") {
         let skip = if input.starts_with("terminate()") { 11 } else { 12 };
-        return Ok((&input[skip..], Stmt::new(StmtKind::ReturnTerminate)));
+        return Ok((&input[skip..], Stmt::with_span(StmtKind::ReturnTerminate, span)));
     }
 
     if input.starts_with("grpc_error(") || input.starts_with("grpc_error (") {
@@ -276,7 +292,7 @@ fn parse_return_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str,
                 "expected ')' after grpc_error arguments",
             )));
         }
-        return Ok((&input[1..], Stmt::new(StmtKind::ReturnGrpcError { code, message })));
+        return Ok((&input[1..], Stmt::with_span(StmtKind::ReturnGrpcError { code, message }, span)));
     }
 
     if input.starts_with("deny(") || input.starts_with("deny (") {
@@ -296,7 +312,7 @@ fn parse_return_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str,
         if !input.starts_with(')') {
             return Err(nom::Err::Failure(ParseError::new("expected ')' after deny arguments")));
         }
-        return Ok((&input[1..], Stmt::new(StmtKind::ReturnDeny { status, body })));
+        return Ok((&input[1..], Stmt::with_span(StmtKind::ReturnDeny { status, body }, span)));
     }
 
     Err(nom::Err::Failure(ParseError::new(
@@ -304,8 +320,9 @@ fn parse_return_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str,
     )))
 }
 
-fn parse_assign_or_expr_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Stmt, ParseError> {
+fn parse_assign_or_expr_stmt<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Stmt, ParseError> {
     ctx.add_node().map_err(nom::Err::Failure)?;
+    let span = ctx.current_span(input);
 
     // Try to parse an expression first
     let (rest, expr) = expr::parse_expr(input, ctx)?;
@@ -318,10 +335,13 @@ fn parse_assign_or_expr_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<
             let (rest_ws, value) = expr::parse_expr(rest_ws, ctx)?;
             return Ok((
                 rest_ws,
-                Stmt::new(StmtKind::Assign {
-                    name: name.clone(),
-                    value,
-                }),
+                Stmt::with_span(
+                    StmtKind::Assign {
+                        name: name.clone(),
+                        value,
+                    },
+                    span,
+                ),
             ));
         }
         // Non-identifier left-hand side in assignment
@@ -330,13 +350,13 @@ fn parse_assign_or_expr_stmt<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<
         )));
     }
 
-    Ok((rest, Stmt::new(StmtKind::ExprStmt { expr })))
+    Ok((rest, Stmt::with_span(StmtKind::ExprStmt { expr }, span)))
 }
 
 // ==================== Block Parsing ====================
 
 /// Parse statements until '}'. Input should start AFTER the opening '{'
-pub(super) fn parse_block<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Vec<Stmt>, ParseError> {
+pub(super) fn parse_block<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Vec<Stmt>, ParseError> {
     let mut stmts = Vec::new();
     let mut input = ws(input);
 

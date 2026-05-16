@@ -932,8 +932,14 @@ impl Vm {
 
         let status = resp.status().as_u16() as i64;
 
+        // Silently truncate at max_map_size — response header count is controlled by the
+        // upstream server (SSRF + large-response amplification vector), so cap rather than
+        // raise. Matches the take(256) pattern used for ReqHeaderNames / RespHeaderNames.
         let mut resp_headers: IndexMap<String, Value> = IndexMap::new();
         for (k, v) in resp.headers() {
+            if resp_headers.len() >= self.limits.max_map_size {
+                break;
+            }
             if let Ok(val) = v.to_str() {
                 resp_headers.insert(k.as_str().to_lowercase(), Value::Str(Arc::from(val)));
             }
@@ -1192,6 +1198,13 @@ impl Vm {
                 };
                 match client.hgetall(&key).await {
                     Ok(map) => {
+                        if map.len() > self.limits.max_map_size {
+                            return Ok(redis_err(format!(
+                                "hgetall result too large: {} entries (limit {})",
+                                map.len(),
+                                self.limits.max_map_size
+                            )));
+                        }
                         let mut result: IndexMap<String, Value> = IndexMap::new();
                         for (k, v) in map {
                             result.insert(k, Value::Str(v.into()));
@@ -1216,8 +1229,79 @@ impl Vm {
                 }
             }
 
-            // All other builtins are not Redis builtins and should not reach here
-            _ => Err(RuntimeError::Internal {
+            // All non-Redis builtins are dispatched via call_builtin / call_builtin_http and
+            // must not reach here. Listed explicitly (no `_ =>` catch-all) so adding a new
+            // BuiltinId variant fails to compile until it is routed to the right dispatcher.
+            BuiltinId::ReqHeader
+            | BuiltinId::ReqMethod
+            | BuiltinId::ReqPath
+            | BuiltinId::ReqQuery
+            | BuiltinId::ReqQueryString
+            | BuiltinId::ReqCookie
+            | BuiltinId::ReqClientIp
+            | BuiltinId::ReqRemoteIp
+            | BuiltinId::ReqPathParam
+            | BuiltinId::ReqHeaderNames
+            | BuiltinId::ReqScheme
+            | BuiltinId::ReqHost
+            | BuiltinId::ReqUri
+            | BuiltinId::ReqRequestPath
+            | BuiltinId::ReqRequestUri
+            | BuiltinId::ReqContentType
+            | BuiltinId::ReqHasHeader
+            | BuiltinId::ReqSetHeader
+            | BuiltinId::ReqAppendHeader
+            | BuiltinId::ReqRemoveHeader
+            | BuiltinId::ReqSetUri
+            | BuiltinId::ReqSetHost
+            | BuiltinId::ReqSetMethod
+            | BuiltinId::RespSetHeader
+            | BuiltinId::RespAppendHeader
+            | BuiltinId::RespRemoveHeader
+            | BuiltinId::RespStatus
+            | BuiltinId::RespHeader
+            | BuiltinId::RespHasHeader
+            | BuiltinId::ReqProtocol
+            | BuiltinId::ReqGrpcService
+            | BuiltinId::ReqGrpcMethod
+            | BuiltinId::ReqContentLength
+            | BuiltinId::ReqClientCertCn
+            | BuiltinId::ReqClientCertFingerprint
+            | BuiltinId::RespHeaderNames
+            | BuiltinId::RespContentType
+            | BuiltinId::RespSetStatus
+            | BuiltinId::CtxGet
+            | BuiltinId::CtxSet
+            | BuiltinId::CtxRemove
+            | BuiltinId::Log
+            | BuiltinId::Len
+            | BuiltinId::Substr
+            | BuiltinId::ToInt
+            | BuiltinId::ToStr
+            | BuiltinId::ToUpper
+            | BuiltinId::ToLower
+            | BuiltinId::Base64Encode
+            | BuiltinId::Base64Decode
+            | BuiltinId::UrlEncode
+            | BuiltinId::UrlDecode
+            | BuiltinId::Sha256
+            | BuiltinId::Md5
+            | BuiltinId::TimeNow
+            | BuiltinId::Range
+            | BuiltinId::Trim
+            | BuiltinId::Split
+            | BuiltinId::HmacSha256
+            | BuiltinId::JsonGet
+            | BuiltinId::Uuid
+            | BuiltinId::HexEncode
+            | BuiltinId::HexDecode
+            | BuiltinId::TimeFormat
+            | BuiltinId::IpInCidr
+            | BuiltinId::Join
+            | BuiltinId::LogWarn
+            | BuiltinId::LogError
+            | BuiltinId::LogFmt
+            | BuiltinId::HttpCall => Err(RuntimeError::Internal {
                 message: format!("{:?} must not be dispatched via call_builtin_redis", id),
             }),
         }
