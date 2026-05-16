@@ -785,7 +785,7 @@ mod perf_tests {
 
         let t = Instant::now();
         snapshot_once();
-        let elapsed = t.elapsed();
+        let elapsed = Instant::now().saturating_duration_since(t);
         assert!(
             elapsed.as_millis() < 500,
             "snapshot_once with 1000 routes took {}ms (limit 500ms) — scan_conditions may have regressed",

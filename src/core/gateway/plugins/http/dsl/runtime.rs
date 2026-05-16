@@ -41,6 +41,6 @@ pub(crate) fn dsl_http_client() -> &'static reqwest::Client {
             .redirect(reqwest::redirect::Policy::limited(DSL_MAX_REDIRECTS))
             .pool_max_idle_per_host(4)
             .build()
-            .expect("failed to build DSL HTTP client")
+            .expect("hardcoded builder options (no custom resolver, no proxy config, no explicit cert store path) always build successfully")
     })
 }

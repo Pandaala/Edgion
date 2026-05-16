@@ -255,7 +255,7 @@ impl Vm {
                         Constant::Str(_) => Value::Str(Arc::clone(
                             self.const_str_cache[idx as usize]
                                 .as_ref()
-                                .expect("const_str_cache entry missing for Str constant"),
+                                .expect("Vm::new fills const_str_cache for every Constant::Str index; outer bounds guard at ok_or_else validated idx"),
                         )),
                         Constant::Int(n) => Value::Int(*n),
                         Constant::Regex(_) => {

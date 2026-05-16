@@ -7,6 +7,7 @@ use crate::core::gateway::observe::AccessLogEntry;
 use crate::types::EdgionHttpContext;
 use pingora_core::Error as PingoraError;
 use pingora_proxy::Session;
+use std::time::Instant;
 
 #[inline]
 pub async fn logging(
@@ -157,7 +158,7 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
     );
 
     // Record request duration histogram
-    let duration_ms = ctx.start_time.elapsed().as_secs_f64() * 1000.0;
+    let duration_ms = Instant::now().saturating_duration_since(ctx.start_time).as_secs_f64() * 1000.0;
     record_request_duration(
         get_request_duration_config(),
         gateway_ns,
@@ -212,7 +213,7 @@ fn build_test_data(ctx: &EdgionHttpContext, error: Option<&PingoraError>) -> Str
         TestType::Latency => {
             // Latency test: collect upstream latency
             if let Some(start) = ctx.upstream_start_time {
-                test_data.latency_ms = Some(start.elapsed().as_millis() as u64);
+                test_data.latency_ms = Some(Instant::now().saturating_duration_since(start).as_millis() as u64);
             }
         }
         TestType::None => {

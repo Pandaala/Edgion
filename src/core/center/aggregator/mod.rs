@@ -92,7 +92,11 @@ impl ResourceAggregator {
                         };
                         c == cluster
                     });
-                    if still_present { None } else { Some(cluster) }
+                    if still_present {
+                        None
+                    } else {
+                        Some(cluster)
+                    }
                 });
                 Some((snapshot, zero_cluster))
             }

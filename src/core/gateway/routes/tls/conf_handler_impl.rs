@@ -42,7 +42,7 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
         self.rebuild_all_listener_managers();
         tracing::info!(
             component = "global_tls_route_managers",
-            ms = start_time.elapsed().as_millis(),
+            ms = Instant::now().saturating_duration_since(start_time).as_millis(),
             "full set done"
         );
     }

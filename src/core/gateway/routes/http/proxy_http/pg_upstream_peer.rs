@@ -31,7 +31,7 @@ pub async fn upstream_peer(
     let request_timeout = ctx.request_timeout();
 
     if let Some(timeout) = request_timeout {
-        let elapsed = ctx.start_time.elapsed();
+        let elapsed = std::time::Instant::now().saturating_duration_since(ctx.start_time);
         if elapsed >= timeout {
             ctx.add_error(EdgionStatus::RequestTimeoutExceeded);
             if let Some(upstream) = ctx.get_current_upstream_mut() {
@@ -53,7 +53,8 @@ pub async fn upstream_peer(
 
             // TODO: abort this sleep early when the client disconnects
             if let Some(timeout) = request_timeout {
-                let remaining = timeout.saturating_sub(ctx.start_time.elapsed());
+                let remaining =
+                    timeout.saturating_sub(std::time::Instant::now().saturating_duration_since(ctx.start_time));
                 if delay < remaining {
                     tokio::time::sleep(delay).await;
                 }
@@ -419,7 +420,7 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
     // Filter out zero remaining time to avoid setting Duration::ZERO on the peer (undefined behaviour).
     let request_remaining = route_timeouts
         .and_then(|rt| rt.request_timeout.as_duration())
-        .map(|req| req.saturating_sub(ctx.start_time.elapsed()))
+        .map(|req| req.saturating_sub(std::time::Instant::now().saturating_duration_since(ctx.start_time)))
         .filter(|r| !r.is_zero());
 
     let effective_read_write_timeout = match (effective_backend_timeout, request_remaining) {
@@ -499,6 +500,8 @@ fn try_direct_endpoint_peer(
 ) -> pingora_core::Result<Box<HttpPeer>> {
     let direct = match ctx.jump.as_ref() {
         Some(UpstreamJumpTarget::Direct { preset, .. }) => preset,
+        // invariant: caller (line 146) only reaches this helper after matching Direct{..};
+        //   other variants are dispatched to sibling helpers
         _ => unreachable!("caller must dispatch only on ctx.jump == Some(Direct)"),
     };
     let (addr, use_tls, sni) = (direct.addr, direct.use_tls, direct.sni.clone());
@@ -527,6 +530,8 @@ async fn try_external_jump_peer(
 ) -> pingora_core::Result<Box<HttpPeer>> {
     let external = match ctx.jump.as_ref() {
         Some(UpstreamJumpTarget::External(p)) => p,
+        // invariant: caller (line 147) only reaches this helper after matching External(..);
+        //   other variants are dispatched to sibling helpers
         _ => unreachable!("caller must dispatch only on ctx.jump == Some(External)"),
     };
     let domain = external.domain.clone();

@@ -5,6 +5,7 @@ use crate::types::EdgionHttpContext;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::Digest;
 use pingora_proxy::Session;
+use std::time::Instant;
 
 #[inline]
 pub async fn connected_to_upstream(
@@ -37,7 +38,9 @@ pub async fn connected_to_upstream(
     // Record connection time and commit LB per-attempt state.
     // Both read and write are on the same upstream entry — no borrow escape needed.
     if let Some(upstream) = ctx.get_current_upstream_mut() {
-        let ct = upstream.start_time.elapsed().as_millis() as u64;
+        let ct = Instant::now()
+            .saturating_duration_since(upstream.start_time)
+            .as_millis() as u64;
         upstream.ct = Some(ct);
         crate::core::gateway::lb::commit_attempt(upstream);
     }

@@ -414,7 +414,10 @@ impl Workqueue {
                         None => break, // channel closed, exit
                     }
                 } else {
-                    let next_ready = heap.peek().unwrap().ready_at;
+                    let next_ready = heap
+                        .peek()
+                        .expect("heap is non-empty: guarded by !heap.is_empty() in enclosing else branch")
+                        .ready_at;
                     let sleep_dur = next_ready.saturating_duration_since(Instant::now());
 
                     tokio::select! {
@@ -422,7 +425,7 @@ impl Workqueue {
                             let now = Instant::now();
                             while let Some(top) = heap.peek() {
                                 if top.ready_at <= now {
-                                    let item = heap.pop().unwrap();
+                                    let item = heap.pop().expect("heap has item: peek() just returned Some in while let");
                                     scheduled.remove(&item.key);
 
                                     promote_delayed_item(&name, capacity, item, &pending, &ready_tx, &metrics).await;

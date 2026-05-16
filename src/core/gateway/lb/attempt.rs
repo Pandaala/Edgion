@@ -61,7 +61,7 @@ pub fn finalize_attempt(upstream: &mut crate::types::UpstreamInfo, mode: Finaliz
         LbCommit::LeastConn => backend.dec_conn(),
         LbCommit::Ewma { started } => {
             if let FinalizeMode::Settle = mode {
-                let latency_us = started.elapsed().as_micros() as u64;
+                let latency_us = Instant::now().saturating_duration_since(started).as_micros() as u64;
                 backend.update_ewma(latency_us);
             }
             // FinalizeMode::Discard: drop the sample — retry elapsed time must

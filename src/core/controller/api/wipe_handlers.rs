@@ -72,7 +72,7 @@ pub async fn wipe_all(State(state): State<Arc<AdminState>>) -> Json<ApiResponse<
     }
 
     let total: usize = deleted.values().map(|v| v.len()).sum();
-    let duration_ms = start.elapsed().as_millis();
+    let duration_ms = Instant::now().saturating_duration_since(start).as_millis();
     tracing::info!(
         component = "wipe_all",
         total = total,

@@ -565,6 +565,8 @@ impl FileSystemWatcher {
                     // Common: a deleted file we never tracked (status sidecars, tmp files).
                 }
             },
+            // invariant: Recheck is resolved to Apply or Delete in the block above (lines 461-471);
+            //   this arm is structurally unreachable
             DispatchAction::Recheck => unreachable!(),
         }
     }

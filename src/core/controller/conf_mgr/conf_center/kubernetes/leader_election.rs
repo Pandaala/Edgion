@@ -321,8 +321,10 @@ impl LeaderElection {
                     }
 
                     let was_leader = self.is_leader.load(Ordering::Acquire);
-                    let within_deadline =
-                        was_leader && last_renewed.map(|t| t.elapsed() < renew_deadline).unwrap_or(false);
+                    let within_deadline = was_leader
+                        && last_renewed
+                            .map(|t| Instant::now().saturating_duration_since(t) < renew_deadline)
+                            .unwrap_or(false);
 
                     if within_deadline {
                         // Lease is still valid on the apiserver (renew_time +
@@ -330,11 +332,9 @@ impl LeaderElection {
                         // take over. Retain leadership and retry — this
                         // absorbs apiserver flakes (5xx, network) without
                         // flapping pod label / metrics / reconcile.
-                        let remaining = renew_deadline.saturating_sub(
-                            last_renewed
-                                .expect("within_deadline implies last_renewed is Some")
-                                .elapsed(),
-                        );
+                        let remaining = renew_deadline.saturating_sub(Instant::now().saturating_duration_since(
+                            last_renewed.expect("within_deadline implies last_renewed is Some"),
+                        ));
                         tracing::warn!(
                             component = "leader_election",
                             identity = %self.config.identity,

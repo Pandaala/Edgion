@@ -27,7 +27,9 @@ pub struct TcpLogEntry {
 
 impl TcpLogEntry {
     pub fn from_context(ctx: &TcpContext) -> Self {
-        let duration_ms = ctx.start_time.elapsed().as_millis() as u64;
+        let duration_ms = std::time::Instant::now()
+            .saturating_duration_since(ctx.start_time)
+            .as_millis() as u64;
         let status = format!("{:?}", ctx.status);
 
         Self {

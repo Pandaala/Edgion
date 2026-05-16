@@ -104,7 +104,10 @@ impl<T: Clone> BackendSelector<T> {
 
         // If only one valid item, return Single
         if valid_items.len() == 1 {
-            let (item, _) = valid_items.into_iter().next().unwrap();
+            let (item, _) = valid_items
+                .into_iter()
+                .next()
+                .expect("valid_items.len() == 1 checked above");
             return SelectorState::Single(item);
         }
 

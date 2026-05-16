@@ -314,7 +314,11 @@ impl TlsAccept for TlsCallback {
                 ssl_ctx.meta.client_cert_info = extract_client_cert_info(ssl);
             }
 
-            ssl_ctx.meta.handshake_complete_time = Some(ssl_ctx.meta.start_at.elapsed().as_millis() as u64);
+            ssl_ctx.meta.handshake_complete_time = Some(
+                Instant::now()
+                    .saturating_duration_since(ssl_ctx.meta.start_at)
+                    .as_millis() as u64,
+            );
             log_ssl(&ssl_ctx.meta);
 
             return Some(Arc::new(ssl_ctx.meta));

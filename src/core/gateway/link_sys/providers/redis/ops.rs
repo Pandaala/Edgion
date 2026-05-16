@@ -387,7 +387,7 @@ impl RedisLinkClient {
             .ping::<String>(None)
             .await
             .map_err(|e| anyhow::anyhow!("Redis PING failed: {:?}", e))?;
-        Ok(start.elapsed().as_millis() as u64)
+        Ok(std::time::Instant::now().saturating_duration_since(start).as_millis() as u64)
     }
 
     /// Get detailed health status for admin API exposure.

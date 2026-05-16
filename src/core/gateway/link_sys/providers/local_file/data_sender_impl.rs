@@ -91,7 +91,7 @@ impl DataSender<String> for LocalFileWriter {
             // Block on receiving first message, then batch process remaining
             while let Ok(first_line) = rx.recv() {
                 // Check rotation at configured interval (most cases skip this block)
-                if last_rotation_check.elapsed() >= rotation_check_interval {
+                if Instant::now().saturating_duration_since(last_rotation_check) >= rotation_check_interval {
                     last_rotation_check = Instant::now();
 
                     match &strategy {

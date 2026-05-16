@@ -395,7 +395,7 @@ impl EdgionUdpProxy {
 
         for entry in self.client_sessions.iter() {
             let last_activity = *entry.value().last_activity.lock();
-            if now.duration_since(last_activity) > SESSION_TIMEOUT {
+            if now.saturating_duration_since(last_activity) > SESSION_TIMEOUT {
                 to_remove.push((*entry.key(), entry.value().clone()));
             }
         }

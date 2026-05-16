@@ -30,7 +30,7 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
 
         tracing::info!(
             component = "grpc_route_manager",
-            ms = start_time.elapsed().as_millis(),
+            ms = Instant::now().saturating_duration_since(start_time).as_millis(),
             "full set done"
         );
     }
@@ -98,7 +98,7 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
 
         tracing::info!(
             component = "grpc_route_manager",
-            ms = start_time.elapsed().as_millis(),
+            ms = Instant::now().saturating_duration_since(start_time).as_millis(),
             "partial update done"
         );
     }

@@ -103,9 +103,10 @@ TransformType::Replace { with, .. } => match compiled_replace {
 // Wrong: panic on the data plane — a misconfig kills every in-flight request
 None => panic!("compiled_transform_regex missing"),
 
-// Wrong: debug_assert!(false, ...) — not the project idiom, only 3 sites in src/,
-// none in gateway/plugins/; in dev/CI it crashes the test, in release it is a no-op
-// that adds nothing the existing graceful branch doesn't already have
+// Wrong: debug_assert!(false, ...) — not the project idiom, zero sites in src/
+// after the graceful-degrade audit cleanup; in dev/CI it crashes the test (kube-rs
+// reconcile has no catch_unwind, so the controller pod dies), in release it is a
+// no-op that adds nothing the existing graceful branch doesn't already have
 None => {
     debug_assert!(false, "compiled_transform_regex missing");
     None
@@ -119,6 +120,8 @@ None => {
 - **Test code** (`#[cfg(test)]`) — not constrained.
 
 When in doubt, prefer graceful-degrade — Edgion is a gateway, a panicked request path is a 5xx for the user. Cross-codebase audit follow-up is tracked in `tasks/todo/graceful-degrade-audit.md`.
+
+**Related time-delta idiom**: in long-running paths, never use `prior.elapsed()` or `now.duration_since(prior)` on an `Instant` — both can panic on non-monotonic clock skew (AMD EPYC TSC, linkerd2-proxy #7748). Use `Instant::now().saturating_duration_since(prior)` (or `now.saturating_duration_since(prior)` if `now` is already bound). Returns `Duration::ZERO` instead of panicking and is identical on well-behaved clocks. See [04-review/SKILL.md](../04-review/SKILL.md) for the closed audit (57 sites).
 
 ## Rule 6: prefer canonical utilities over local copies
 

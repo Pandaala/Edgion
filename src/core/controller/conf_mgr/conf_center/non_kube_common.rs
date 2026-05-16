@@ -98,7 +98,7 @@ impl CenterBase {
 
         // Phase A: wait for all processors to be registered (Phase 1 + Phase 2).
         while !registry.is_registration_complete() {
-            let elapsed = start.elapsed();
+            let elapsed = Instant::now().saturating_duration_since(start);
             if elapsed >= timeout {
                 tracing::warn!(
                     component = component,
@@ -112,7 +112,7 @@ impl CenterBase {
         }
 
         // Phase B: wait for all registered processors to become ready.
-        let remaining = timeout.saturating_sub(start.elapsed());
+        let remaining = timeout.saturating_sub(Instant::now().saturating_duration_since(start));
         let all_kinds = registry.all_kinds();
         let ready = registry.wait_kinds_ready(&all_kinds, remaining).await;
         if !ready {
@@ -176,7 +176,7 @@ impl CenterBase {
         loop {
             // Record reload completion metrics for non-first iterations.
             if let Some(start_time) = reload_start_time.take() {
-                let duration = start_time.elapsed().as_secs_f64();
+                let duration = Instant::now().saturating_duration_since(start_time).as_secs_f64();
                 reload_metrics().reload_completed(duration);
                 tracing::info!(component = component, duration_secs = duration, "Reload completed");
             }

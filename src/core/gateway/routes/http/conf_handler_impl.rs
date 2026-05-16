@@ -68,7 +68,7 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         // Step 3: Rebuild all per-listener managers
         self.rebuild_all_listener_managers();
 
-        let elapsed = start_time.elapsed();
+        let elapsed = Instant::now().saturating_duration_since(start_time);
         tracing::info!(
             component = "http_route_manager",
             ms = elapsed.as_millis(),
@@ -140,7 +140,7 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
 
         tracing::info!(
             component = "http_route_manager",
-            ms = start_time.elapsed().as_millis(),
+            ms = Instant::now().saturating_duration_since(start_time).as_millis(),
             "partial update done"
         );
     }

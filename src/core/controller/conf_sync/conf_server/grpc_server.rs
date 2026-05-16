@@ -274,7 +274,15 @@ impl ConfigSync for ConfigSyncGrpcServer {
                                     break;
                                 }
                             }
-                            None => break, // Stream ended
+                            None => {
+                                tracing::warn!(
+                                    component = "grpc_server",
+                                    kind = %shutdown_kind,
+                                    client_id = %shutdown_client_id,
+                                    "watch event receiver closed unexpectedly — upstream channel dropped"
+                                );
+                                break;
+                            }
                         }
                     }
                     // Periodically check if server_id changed (reload completed)

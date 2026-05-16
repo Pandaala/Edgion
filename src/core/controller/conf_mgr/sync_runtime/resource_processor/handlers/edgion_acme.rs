@@ -250,12 +250,16 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                         AcmeResolveAction::Abort(cond) => {
                             // Today `role=Dns` never returns `Abort`, but if a
                             // future refactor introduces a Dns-corrupted path
-                            // we must NOT silently drop the condition in
-                            // release builds. Write it (graceful degrade) and
-                            // raise a debug-only assertion so the unintentional
-                            // contract change surfaces in dev/CI.
+                            // we must NOT silently drop the condition. Write
+                            // it (graceful degrade) and emit a structured
+                            // warn so the unintentional contract change is
+                            // visible to operators in both debug and release.
                             update_condition(&mut status.conditions, cond);
-                            debug_assert!(false, "Dns role unexpectedly returned Abort");
+                            tracing::warn!(
+                                edgion_acme = %resource_ref.key(),
+                                provider = %provider,
+                                "Dns role unexpectedly returned Abort — condition written, continuing"
+                            );
                         }
                     }
                 }

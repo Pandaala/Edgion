@@ -121,7 +121,7 @@ impl CtxSet {
         // Apply extract (regex capture)
         if let Some(ref _extract) = rule.extract {
             if let Some(regex) = self.config.get_compiled_regex(rule_idx) {
-                value = match self.apply_extract(&value, regex, rule.extract.as_ref().unwrap().group) {
+                value = match self.apply_extract(&value, regex, _extract.group) {
                     Some(extracted) => extracted,
                     None => {
                         return rule.default.clone();

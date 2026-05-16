@@ -488,7 +488,7 @@ impl EtcdLinkClient {
             .status()
             .await
             .map_err(|e| anyhow::anyhow!("Etcd STATUS: {:?}", e))?;
-        Ok(start.elapsed().as_millis() as u64)
+        Ok(std::time::Instant::now().saturating_duration_since(start).as_millis() as u64)
     }
 
     /// Get detailed health status for admin API exposure.

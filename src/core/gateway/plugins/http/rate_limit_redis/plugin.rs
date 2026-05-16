@@ -364,8 +364,9 @@ impl RateLimitRedis {
             most_restrictive = Some(Self::merge_result(most_restrictive, result));
         }
 
-        // At least one policy is guaranteed by validation
-        Ok(most_restrictive.unwrap())
+        most_restrictive.ok_or_else(|| {
+            anyhow::anyhow!("rate_limit_redis: no policy after iteration — validation invariant violated")
+        })
     }
 
     /// Add rate limit headers to response.
@@ -405,6 +406,7 @@ impl RateLimitRedis {
     ) -> PluginRunningResult {
         let message = self.config.reject_message.as_deref().unwrap_or("Rate limit exceeded");
 
+        // invariant: 429 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
         let mut resp = Box::new(
             ResponseHeader::build(self.config.reject_status, None)
                 .unwrap_or_else(|_| ResponseHeader::build(429, None).expect("429 is valid")),
@@ -491,6 +493,7 @@ impl RequestFilter for RateLimitRedis {
         use crate::types::resources::edgion_plugins::PluginValidation;
         if self.config.validation_error().is_some() {
             plugin_log.push_err("cfg load fail");
+            // invariant: 500 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
             let mut resp = Box::new(ResponseHeader::build(500, None).expect("500 is a valid status code"));
             resp.insert_header("Content-Type", "application/json").ok();
             let body = Bytes::from(r#"{"message":"Internal rate limiter error"}"#);

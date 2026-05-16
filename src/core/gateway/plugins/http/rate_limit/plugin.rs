@@ -144,6 +144,7 @@ impl RateLimit {
     async fn reject_request(&self, session: &mut dyn PluginSession, retry_after: Duration) -> PluginRunningResult {
         let message = self.config.reject_message.as_deref().unwrap_or("Rate limit exceeded");
 
+        // invariant: 429 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
         let mut resp = Box::new(
             ResponseHeader::build(self.config.reject_status, None)
                 .unwrap_or_else(|_| ResponseHeader::build(429, None).expect("429 is valid")),

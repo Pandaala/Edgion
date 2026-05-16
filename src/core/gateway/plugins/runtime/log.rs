@@ -237,7 +237,9 @@ impl PluginLog {
             // Tier-1 full: lazily open the tier-2 overflow buffer.
             self.ulog.get_or_insert_with(ULogBuffer::new);
         }
-        let ok = to_ulog(self.ulog.as_mut().expect("ulog created above or pre-existing"));
+        let ok = to_ulog(self.ulog.as_mut().expect(
+            "ulog is Some: either pre-existing (if branch skipped) or initialized by get_or_insert_with above",
+        ));
         if !ok {
             self.log_full = Some(true);
         }

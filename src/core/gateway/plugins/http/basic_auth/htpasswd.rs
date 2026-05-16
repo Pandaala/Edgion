@@ -166,7 +166,7 @@ fn compute_md5_crypt(password: &[u8], salt: &[u8], magic: &[u8]) -> String {
     );
     to64(&mut out, result[11] as u32, 2);
 
-    String::from_utf8(out).expect("base64 output is always valid UTF-8")
+    String::from_utf8(out).expect("ITOA64 alphabet is 7-bit ASCII; to64() emits only those bytes")
 }
 
 #[cfg(test)]

@@ -82,7 +82,9 @@ pub async fn run(
     let ready_wait_start = std::time::Instant::now();
     loop {
         if conf_mgr.is_ready() {
-            let elapsed = ready_wait_start.elapsed().as_secs_f64();
+            let elapsed = std::time::Instant::now()
+                .saturating_duration_since(ready_wait_start)
+                .as_secs_f64();
             fed_metrics::record_ready_gate_wait(elapsed);
             tracing::info!(
                 component = "fed_client",
@@ -116,7 +118,7 @@ pub async fn run(
                         // Prevents rapid reconnection when Center crash-loops
                         // (connects briefly then dies), which would cause repeated
                         // TLS handshakes + full resource serialization.
-                        if connect_start.elapsed() > Duration::from_secs(MIN_STABLE_CONNECTION_SECS) {
+                        if std::time::Instant::now().saturating_duration_since(connect_start) > Duration::from_secs(MIN_STABLE_CONNECTION_SECS) {
                             backoff.reset();
                         }
                         tracing::info!(component = "fed_client", "Stream ended cleanly, reconnecting");
@@ -273,7 +275,9 @@ async fn connect_and_run(
     );
     fed_metrics::record_connection_duration(
         fed_metrics::labels::role::CONTROLLER,
-        session_started_at.elapsed().as_secs_f64(),
+        std::time::Instant::now()
+            .saturating_duration_since(session_started_at)
+            .as_secs_f64(),
     );
     fed_metrics::set_connections_active(fed_metrics::labels::role::CONTROLLER, 0);
 

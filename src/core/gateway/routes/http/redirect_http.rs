@@ -153,7 +153,7 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
     where
         Self::CTX: Send + Sync,
     {
-        let latency_ms = ctx.start_time.elapsed().as_millis() as u64;
+        let latency_ms = Instant::now().saturating_duration_since(ctx.start_time).as_millis() as u64;
         let error_msg = e.map(|err| err.to_string());
 
         let entry = RedirectLogEntry {

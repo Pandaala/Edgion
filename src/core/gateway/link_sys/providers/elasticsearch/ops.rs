@@ -371,7 +371,7 @@ impl EsLinkClient {
     pub async fn ping(&self) -> Result<u64> {
         let start = std::time::Instant::now();
         let status = self.cluster_health().await?;
-        let latency = start.elapsed().as_millis() as u64;
+        let latency = std::time::Instant::now().saturating_duration_since(start).as_millis() as u64;
         self.set_healthy(true);
         tracing::debug!("ES [{}] ping: status={}, latency={}ms", self.name(), status, latency);
         Ok(latency)

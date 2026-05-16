@@ -124,7 +124,7 @@ impl InitSyncTimer {
 
     /// Complete and record duration, also set resources watched count
     pub fn complete(self, resources_count: usize) -> f64 {
-        let duration = self.start.elapsed().as_secs_f64();
+        let duration = Instant::now().saturating_duration_since(self.start).as_secs_f64();
         self.metrics.init_sync_complete(duration);
         self.metrics.set_resources_watched(resources_count);
         duration
@@ -193,7 +193,7 @@ impl ReloadTimer {
 
     /// Complete and record duration
     pub fn complete(self) -> f64 {
-        let duration = self.start.elapsed().as_secs_f64();
+        let duration = Instant::now().saturating_duration_since(self.start).as_secs_f64();
         reload_metrics().reload_completed(duration);
         duration
     }

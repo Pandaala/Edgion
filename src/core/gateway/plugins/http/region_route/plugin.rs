@@ -36,7 +36,11 @@ fn compute_hash(key: &str, algorithm: &HashAlgorithm, modulo: u16) -> u16 {
             let mut h = Sha256::new();
             h.update(key.as_bytes());
             let d = h.finalize();
-            let n = u64::from_be_bytes(d[..8].try_into().expect("sha256>=8"));
+            let n = u64::from_be_bytes(
+                d[..8]
+                    .try_into()
+                    .expect("SHA-256 output is always 32 bytes; d[..8] is exactly 8"),
+            );
             (n % modulo as u64) as u16
         }
     }

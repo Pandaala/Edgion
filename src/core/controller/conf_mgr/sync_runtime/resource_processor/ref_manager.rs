@@ -586,7 +586,7 @@ mod tests {
         let start = std::time::Instant::now();
         let mut finished = 0;
         while finished < 4 {
-            let remaining = deadline.saturating_sub(start.elapsed());
+            let remaining = deadline.saturating_sub(std::time::Instant::now().saturating_duration_since(start));
             match rx.recv_timeout(remaining) {
                 Ok(()) => finished += 1,
                 Err(_) => panic!(

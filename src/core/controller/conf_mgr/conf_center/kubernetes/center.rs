@@ -241,7 +241,7 @@ impl KubernetesCenter {
         loop {
             // Record reload completion time if this is a reload iteration
             if let Some(start_time) = reload_start_time.take() {
-                let duration = start_time.elapsed().as_secs_f64();
+                let duration = Instant::now().saturating_duration_since(start_time).as_secs_f64();
                 reload_metrics().reload_completed(duration);
                 tracing::info!(
                     component = "kubernetes_center",
@@ -406,7 +406,7 @@ impl KubernetesCenter {
                     );
 
                     // Reset failure counter if ran stably for long enough
-                    if iteration_start.elapsed() >= STABLE_RUN_DURATION {
+                    if Instant::now().saturating_duration_since(iteration_start) >= STABLE_RUN_DURATION {
                         consecutive_failures = 0;
                     }
 
@@ -634,7 +634,7 @@ impl KubernetesCenter {
             };
 
             let mut pending = pending_sync_kinds();
-            while !pending.is_empty() && start.elapsed() < timeout {
+            while !pending.is_empty() && Instant::now().saturating_duration_since(start) < timeout {
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 pending = pending_sync_kinds();
             }

@@ -130,7 +130,8 @@ impl RequestFilter for IpRestriction {
                 .as_deref()
                 .unwrap_or("Your IP address is not allowed to access this resource");
 
-            // Build error response
+            // Build error response.
+            // invariant: 403 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
             let mut resp = Box::new(
                 ResponseHeader::build(self.config.status, None)
                     .unwrap_or_else(|_| ResponseHeader::build(403, None).expect("403 is valid")),

@@ -437,7 +437,9 @@ impl FederationSync for FederationGrpcServer {
                         );
                         fed_metrics::record_connection_duration(
                             fed_metrics::labels::role::CENTER,
-                            session_started_at.elapsed().as_secs_f64(),
+                            std::time::Instant::now()
+                                .saturating_duration_since(session_started_at)
+                                .as_secs_f64(),
                         );
                         fed_metrics::set_connections_active(
                             fed_metrics::labels::role::CENTER,

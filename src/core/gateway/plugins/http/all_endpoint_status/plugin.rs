@@ -103,7 +103,7 @@ static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 /// Get elapsed milliseconds since process start (monotonic).
 fn elapsed_ms() -> u64 {
-    PROCESS_START.elapsed().as_millis() as u64
+    Instant::now().saturating_duration_since(*PROCESS_START).as_millis() as u64
 }
 
 // ============================================================
@@ -373,7 +373,10 @@ impl AllEndpointStatus {
                 let headers: Vec<(String, String)> = original_headers.to_vec();
 
                 async move {
-                    let _permit = sem.acquire().await.unwrap();
+                    let _permit = sem
+                        .acquire()
+                        .await
+                        .expect("Semaphore never closed (created per fan_out_requests call)");
                     let start = Instant::now();
 
                     let scheme = if use_tls { "https" } else { "http" };
@@ -415,7 +418,7 @@ impl AllEndpointStatus {
                             EndpointResult {
                                 address: addr,
                                 status: Some(status),
-                                latency_ms: start.elapsed().as_millis() as u64,
+                                latency_ms: Instant::now().saturating_duration_since(start).as_millis() as u64,
                                 body: Some(body),
                                 body_truncated: truncated,
                                 headers: resp_headers,
@@ -434,7 +437,7 @@ impl AllEndpointStatus {
                             EndpointResult {
                                 address: addr,
                                 status: None,
-                                latency_ms: start.elapsed().as_millis() as u64,
+                                latency_ms: Instant::now().saturating_duration_since(start).as_millis() as u64,
                                 body: None,
                                 body_truncated: false,
                                 headers: None,
@@ -620,7 +623,7 @@ impl RequestFilter for AllEndpointStatus {
                     truncated: false,
                     timeout_ms: self.config.effective_timeout_ms(),
                     wall_timeout_ms: self.config.effective_wall_timeout_ms(),
-                    total_latency_ms: start.elapsed().as_millis() as u64,
+                    total_latency_ms: Instant::now().saturating_duration_since(start).as_millis() as u64,
                     total_response_bytes: 0,
                     wall_timeout_hit: false,
                 },
@@ -694,7 +697,7 @@ impl RequestFilter for AllEndpointStatus {
         // Update last execution timestamp
         LAST_EXECUTION_MS.store(elapsed_ms(), Ordering::Relaxed);
 
-        let total_latency = start.elapsed().as_millis() as u64;
+        let total_latency = Instant::now().saturating_duration_since(start).as_millis() as u64;
 
         // 5. Build aggregated response
         let response = AggregatedResponse {

@@ -742,7 +742,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                         conditions: Vec::new(),
                     };
                     listener_statuses.push(new_ls);
-                    listener_statuses.last_mut().unwrap()
+                    listener_statuses.last_mut().expect("just pushed; Vec is non-empty")
                 };
 
                 ls.supported_kinds = supported_kinds;
@@ -1199,8 +1199,10 @@ fn validate_listener_resolved_refs(
                                 reason: "empty certificate or key data".to_string(),
                             });
                         } else {
-                            let cert_data = cert_bytes.unwrap();
-                            let key_data = key_bytes.unwrap();
+                            let cert_data =
+                                cert_bytes.expect("cert_bytes is Some: contains_key and non-empty verified above");
+                            let key_data =
+                                key_bytes.expect("key_bytes is Some: contains_key and non-empty verified above");
                             let cert_pem_valid = is_valid_pem(cert_data);
                             let key_pem_valid = is_valid_pem(key_data);
 

@@ -164,6 +164,7 @@ impl RequestFilter for RequestRestriction {
         // Check for configuration errors
         if self.config.validation_error().is_some() {
             plugin_log.push_err("restriction config invalid");
+            // invariant: 500 and 403 are compile-time-literal HTTP status codes; ResponseHeader::build cannot fail.
             let resp = Box::new(
                 ResponseHeader::build(500, None)
                     .unwrap_or_else(|_| ResponseHeader::build(403, None).expect("403 is valid")),
@@ -200,7 +201,8 @@ impl RequestFilter for RequestRestriction {
                 .as_deref()
                 .unwrap_or("Access denied by restriction policy");
 
-            // Build error response
+            // Build error response.
+            // invariant: 403 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
             let mut resp = Box::new(
                 ResponseHeader::build(self.config.status, None)
                     .unwrap_or_else(|_| ResponseHeader::build(403, None).expect("403 is valid")),

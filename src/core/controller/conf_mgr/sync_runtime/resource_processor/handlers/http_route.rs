@@ -326,7 +326,11 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                         controller_name: self.controller_name.clone(),
                         conditions,
                     });
-                    &mut status.parents.last_mut().unwrap().conditions
+                    &mut status
+                        .parents
+                        .last_mut()
+                        .expect("just pushed; Vec is non-empty")
+                        .conditions
                 };
 
                 // Set PartiallyInvalid condition

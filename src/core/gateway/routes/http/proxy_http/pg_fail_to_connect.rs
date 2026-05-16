@@ -3,6 +3,7 @@ use crate::types::EdgionHttpContext;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error, ErrorType};
 use pingora_proxy::Session;
+use std::time::Instant;
 
 /// fail_to_connect - called when connection to upstream fails
 #[inline]
@@ -27,7 +28,11 @@ pub fn fail_to_connect(
         if status_code != 504 {
             upstream.err.push(e.etype().as_str().to_string());
         }
-        upstream.et = Some(upstream.start_time.elapsed().as_millis() as u64);
+        upstream.et = Some(
+            Instant::now()
+                .saturating_duration_since(upstream.start_time)
+                .as_millis() as u64,
+        );
     }
 
     // Record circuit breaker failure

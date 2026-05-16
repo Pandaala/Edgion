@@ -987,7 +987,8 @@ impl PluginRuntime {
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
             if plugin_log.refer_to.is_none() {
-                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+                plugin_log.time_cost =
+                    Some(std::time::Instant::now().saturating_duration_since(start).as_micros() as u64);
             }
             filter_logs.push(plugin_log);
 
@@ -1073,7 +1074,8 @@ impl PluginRuntime {
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
             if plugin_log.refer_to.is_none() {
-                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+                plugin_log.time_cost =
+                    Some(std::time::Instant::now().saturating_duration_since(start).as_micros() as u64);
             }
 
             let should_terminate = check_response_stage_terminate(&result, &mut plugin_log);
@@ -1162,7 +1164,8 @@ impl PluginRuntime {
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
             if plugin_log.refer_to.is_none() {
-                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+                plugin_log.time_cost =
+                    Some(std::time::Instant::now().saturating_duration_since(start).as_micros() as u64);
             }
 
             let should_terminate = check_response_stage_terminate(&result, &mut plugin_log);

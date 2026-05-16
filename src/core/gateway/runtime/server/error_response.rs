@@ -65,7 +65,8 @@ pub(crate) async fn send_grpc_trailers_only(
     // Instead, use: HEADERS (no END_STREAM) → empty DATA → TRAILERS (with grpc-status).
     let mut resp = ResponseHeader::build(200, None)?;
     server_header_opts.apply_to_response(&mut resp);
-    resp.insert_header("content-type", "application/grpc").unwrap();
+    resp.insert_header("content-type", "application/grpc")
+        .expect("static ASCII header literal, cannot fail");
     session.write_response_header(Box::new(resp), false).await?;
 
     // Send empty body frame to transition the H2 stream to a state where trailers
@@ -76,7 +77,7 @@ pub(crate) async fn send_grpc_trailers_only(
     let mut trailers = HeaderMap::new();
     trailers.insert(
         http::header::HeaderName::from_static("grpc-status"),
-        HeaderValue::from_str(&grpc_status.to_string()).unwrap(),
+        HeaderValue::from_str(&grpc_status.to_string()).expect("u16 decimal string is always a valid HeaderValue"),
     );
     trailers.insert(
         http::header::HeaderName::from_static("grpc-message"),
@@ -126,7 +127,8 @@ pub async fn end_response_400(
 
     let mut resp = ResponseHeader::build(400, None)?;
     server_header_opts.apply_to_response(&mut resp);
-    resp.insert_header("Content-Type", "text/html").unwrap();
+    resp.insert_header("Content-Type", "text/html")
+        .expect("static ASCII header literal, cannot fail");
 
     let body = r#"<html>
 <head><title>400 Bad Request</title></head>
@@ -164,7 +166,8 @@ pub async fn end_response_421(
 
     let mut resp = ResponseHeader::build(421, None)?;
     server_header_opts.apply_to_response(&mut resp);
-    resp.insert_header("Content-Type", "text/html").unwrap();
+    resp.insert_header("Content-Type", "text/html")
+        .expect("static ASCII header literal, cannot fail");
 
     let body = r#"<html>
 <head><title>421 Misdirected Request</title></head>
@@ -201,7 +204,8 @@ pub async fn end_response_404(
 
     let mut resp = ResponseHeader::build(404, None)?;
     server_header_opts.apply_to_response(&mut resp);
-    resp.insert_header("Content-Type", "text/html").unwrap();
+    resp.insert_header("Content-Type", "text/html")
+        .expect("static ASCII header literal, cannot fail");
 
     let body = r#"<html>
 <head><title>404 Not Found</title></head>
@@ -262,7 +266,8 @@ pub async fn end_response_500(
 
     let mut resp = ResponseHeader::build(500, None)?;
     server_header_opts.apply_to_response(&mut resp);
-    resp.insert_header("Content-Type", "text/html").unwrap();
+    resp.insert_header("Content-Type", "text/html")
+        .expect("static ASCII header literal, cannot fail");
 
     let body = r#"<html>
 <head><title>500 Internal Server Error</title></head>
@@ -300,7 +305,8 @@ pub async fn end_response_502(
 
     let mut resp = ResponseHeader::build(502, None)?;
     server_header_opts.apply_to_response(&mut resp);
-    resp.insert_header("Content-Type", "text/html").unwrap();
+    resp.insert_header("Content-Type", "text/html")
+        .expect("static ASCII header literal, cannot fail");
 
     let body = r#"<html>
 <head><title>502 Bad Gateway</title></head>
@@ -360,7 +366,8 @@ pub async fn end_response_503(
 
     let mut resp = ResponseHeader::build(503, None)?;
     server_header_opts.apply_to_response(&mut resp);
-    resp.insert_header("Content-Type", "text/html").unwrap();
+    resp.insert_header("Content-Type", "text/html")
+        .expect("static ASCII header literal, cannot fail");
 
     let body = r#"<html>
 <head><title>503 Service Temporarily Unavailable</title></head>

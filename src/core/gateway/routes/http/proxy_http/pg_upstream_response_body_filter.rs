@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::EdgionHttpProxy;
 use crate::types::EdgionHttpContext;
@@ -22,7 +22,9 @@ pub fn upstream_response_body_filter(
     // Only set once when bt is None (first chunk)
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         if upstream.bt.is_none() {
-            let bt = upstream.start_time.elapsed().as_millis() as u64;
+            let bt = Instant::now()
+                .saturating_duration_since(upstream.start_time)
+                .as_millis() as u64;
             upstream.bt = Some(bt);
         }
     }

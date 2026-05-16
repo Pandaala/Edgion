@@ -46,7 +46,10 @@ pub fn resolve_target_port_key(addr: &mut SocketAddr, br_port: Option<i32>, serv
     }
 
     // SAFETY: the early-return at the single-port branch ensures `name` is Some and non-empty here.
-    let port_name = svc_port_entry.name.as_deref().unwrap();
+    let port_name = svc_port_entry
+        .name
+        .as_deref()
+        .expect("name is Some and non-empty: single-port and empty-name branches returned early");
 
     let resolved = get_roundrobin_store()
         .get_slices_for_service(service_key)

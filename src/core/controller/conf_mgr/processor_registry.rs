@@ -207,14 +207,14 @@ impl ProcessorRegistry {
             if pending.is_empty() {
                 tracing::info!(
                     component = "processor_registry",
-                    elapsed_ms = start.elapsed().as_millis(),
+                    elapsed_ms = std::time::Instant::now().saturating_duration_since(start).as_millis(),
                     kinds = ?kinds,
                     "All specified resource kinds are ready"
                 );
                 return true;
             }
 
-            let elapsed = start.elapsed();
+            let elapsed = std::time::Instant::now().saturating_duration_since(start);
             if elapsed >= timeout {
                 tracing::warn!(
                     component = "processor_registry",

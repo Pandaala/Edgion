@@ -38,7 +38,7 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
         self.rebuild_all_listener_managers();
         tracing::info!(
             component = "tcp_route_manager",
-            ms = start_time.elapsed().as_millis(),
+            ms = Instant::now().saturating_duration_since(start_time).as_millis(),
             "full set done"
         );
     }

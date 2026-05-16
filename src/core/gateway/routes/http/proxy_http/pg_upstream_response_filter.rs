@@ -4,6 +4,7 @@ use crate::types::resources::http_route::SessionPersistenceType;
 use crate::types::{EdgionHttpContext, SessionPersistenceState};
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
+use std::time::Instant;
 
 #[inline]
 pub fn upstream_response_filter(
@@ -60,7 +61,9 @@ pub fn upstream_response_filter(
 
     // Record header time (time from this upstream's start_time to receiving response header)
     if let Some(upstream) = ctx.get_current_upstream_mut() {
-        let ht = upstream.start_time.elapsed().as_millis() as u64;
+        let ht = Instant::now()
+            .saturating_duration_since(upstream.start_time)
+            .as_millis() as u64;
         upstream.ht = Some(ht);
         upstream.status = Some(status_code);
     }
@@ -81,7 +84,7 @@ pub fn upstream_response_filter(
                         .parsed_timeouts
                         .as_ref()
                         .and_then(|t| t.request_timeout.as_duration())
-                        .map(|timeout| ctx.start_time.elapsed() >= timeout)
+                        .map(|timeout| Instant::now().saturating_duration_since(ctx.start_time) >= timeout)
                         .unwrap_or(false);
 
                     let buffer_ok = !session.as_ref().retry_buffer_truncated();

@@ -110,7 +110,7 @@ impl CircuitBreakerStore {
             return false;
         };
 
-        if ejected_at.elapsed() >= svc.config.ejection_duration() {
+        if Instant::now().saturating_duration_since(ejected_at) >= svc.config.ejection_duration() {
             drop(ep);
             if svc.endpoints.remove(&backend_hash).is_some() {
                 crate::core::gateway::observe::metrics::record_cb_recovery(service_key);

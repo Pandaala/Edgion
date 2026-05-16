@@ -946,7 +946,7 @@ async fn redis_lock(
     let start = std::time::Instant::now();
     match client.lock(&body.key, opts).await {
         Ok(guard) => {
-            let acquire_ms = start.elapsed().as_millis() as u64;
+            let acquire_ms = std::time::Instant::now().saturating_duration_since(start).as_millis() as u64;
             // Explicitly release
             let released = guard.unlock().await.unwrap_or(false);
             Json(ApiResponse::success(serde_json::json!({
@@ -1203,7 +1203,7 @@ async fn etcd_lock(
 
     match client.try_lock(&body.name, ttl, timeout).await {
         Ok(Some(guard)) => {
-            let acquire_ms = start.elapsed().as_millis() as u64;
+            let acquire_ms = std::time::Instant::now().saturating_duration_since(start).as_millis() as u64;
             let released = guard.unlock().await.is_ok();
             Json(ApiResponse::success(serde_json::json!({
                 "name": body.name,

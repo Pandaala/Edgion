@@ -918,7 +918,8 @@ impl EdgionHttpContext {
     /// has already exceeded it. Returns `false` when no timeout is configured.
     #[inline]
     pub fn request_timeout_exceeded(&self) -> bool {
-        self.request_timeout().is_some_and(|t| self.start_time.elapsed() >= t)
+        self.request_timeout()
+            .is_some_and(|t| Instant::now().saturating_duration_since(self.start_time) >= t)
     }
 
     /// Resolve the retry `attempts` cap with field-level fallback between

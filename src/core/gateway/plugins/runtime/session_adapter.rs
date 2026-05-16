@@ -92,7 +92,8 @@ impl<'a> PingoraSessionAdapter<'a> {
         let mut trailers = HeaderMap::new();
         trailers.insert(
             http::header::HeaderName::from_static("grpc-status"),
-            HeaderValue::from_str(&grpc_status.to_string()).unwrap(),
+            HeaderValue::from_str(&grpc_status.to_string())
+                .expect("u16 decimal string is always a valid HeaderValue (ASCII digits only)"),
         );
         if let Some(msg) = message {
             // Per gRPC spec, grpc-message must be percent-encoded for non-ASCII chars
@@ -203,7 +204,8 @@ impl<'a> PingoraSessionAdapter<'a> {
         let mut trailers = HeaderMap::new();
         trailers.insert(
             http::header::HeaderName::from_static("grpc-status"),
-            HeaderValue::from_str(&grpc_status.to_string()).unwrap(),
+            HeaderValue::from_str(&grpc_status.to_string())
+                .expect("u16 decimal string is always a valid HeaderValue (ASCII digits only)"),
         );
         trailers.insert(
             http::header::HeaderName::from_static("grpc-message"),

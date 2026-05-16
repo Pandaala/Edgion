@@ -61,7 +61,12 @@ pub(in crate::core::gateway::backends::discovery) fn cleanup_removed_backends(
             let in_flight = live.map_or(0, |b| b.conn());
             if in_flight > 0 {
                 // live.is_some() is guaranteed here: in_flight = live.map_or(0, ...) > 0
-                runtime_state::begin_draining(service_key, addr, live.unwrap().clone());
+                runtime_state::begin_draining(
+                    service_key,
+                    addr,
+                    live.expect("live is Some when in_flight > 0 (guarded by map_or above)")
+                        .clone(),
+                );
             } else {
                 runtime_state::remove_backend(service_key, addr);
             }

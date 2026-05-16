@@ -73,7 +73,7 @@ impl ConfigSyncServer {
     fn generate_server_id() -> String {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as u64;
 
         let mut last = LAST_SERVER_ID_MS.load(Ordering::SeqCst);
@@ -225,7 +225,14 @@ impl ConfigSyncServer {
                                     break;
                                 }
                             }
-                            None => break, // Upstream closed
+                            None => {
+                                tracing::warn!(
+                                    component = "config_sync_server",
+                                    server_id = %server_id,
+                                    "watch upstream channel closed unexpectedly — WatchObj sender dropped"
+                                );
+                                break;
+                            }
                         }
                     }
                     // Exit when downstream receiver is dropped

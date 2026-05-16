@@ -292,7 +292,7 @@ impl RequestFilter for RequestMirrorPlugin {
                     x_trace_id,
                     target,
                     status,
-                    begin.elapsed().as_millis() as u64,
+                    Instant::now().saturating_duration_since(begin).as_millis() as u64,
                     bytes_sent.load(Ordering::Relaxed),
                     chunks_sent.load(Ordering::Relaxed),
                     error,
