@@ -21,6 +21,64 @@ fn assert_output(source: &str, expected: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// split() list-length limit enforcement
+// ---------------------------------------------------------------------------
+
+// split("a,b,c", ",") produces 3 parts — passes when max_list_len = 3.
+#[test]
+fn test_split_within_list_limit() {
+    let source = r#"req.set_header("X-Out", to_str(len(split("a,b,c", ","))))"#;
+    let limits = VmLimits { max_list_len: 3, ..VmLimits::default() };
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_request_header()
+        .withf(|h, v| h == "X-Out" && v == "3")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    assert_eq!(run_with_limits(source, session, limits), good_next());
+}
+
+// split("a,b,c", ",") produces estimated 3 — rejected when max_list_len = 2.
+#[test]
+fn test_split_exceeds_list_limit() {
+    let source = r#"split("a,b,c", ",")"#;
+    let limits = VmLimits { max_list_len: 2, ..VmLimits::default() };
+    let session = MockPluginSession::new();
+    let result = run_with_limits(source, session, limits);
+    assert_eq!(
+        result,
+        PluginRunningResult::ErrResponse { status: 500, body: Some("DSL execution error".to_string()) },
+    );
+}
+
+// split("abcdef", "") estimates 6+2=8 parts — rejected when max_list_len = 5.
+#[test]
+fn test_split_empty_delim_exceeds_limit() {
+    let source = r#"split("abcdef", "")"#;
+    let limits = VmLimits { max_list_len: 5, ..VmLimits::default() };
+    let session = MockPluginSession::new();
+    let result = run_with_limits(source, session, limits);
+    assert_eq!(
+        result,
+        PluginRunningResult::ErrResponse { status: 500, body: Some("DSL execution error".to_string()) },
+    );
+}
+
+// split("abc", "") produces 3+2=5 actual parts; old estimate was 3 (bypass).
+// With the correct estimate of 5, max_list_len=4 must reject it.
+#[test]
+fn test_split_empty_delim_bypass_is_closed() {
+    let source = r#"split("abc", "")"#;
+    let limits = VmLimits { max_list_len: 4, ..VmLimits::default() };
+    let session = MockPluginSession::new();
+    let result = run_with_limits(source, session, limits);
+    assert_eq!(
+        result,
+        PluginRunningResult::ErrResponse { status: 500, body: Some("DSL execution error".to_string()) },
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Group A — Add opcode: mixed-type string concatenation branches
 // ---------------------------------------------------------------------------
 

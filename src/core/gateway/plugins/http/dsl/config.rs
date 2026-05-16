@@ -62,6 +62,14 @@ pub struct DslConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_string_len: Option<usize>,
 
+    /// Max number of elements in a List value (default: 1024)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_list_len: Option<usize>,
+
+    /// Max number of entries in a Map value (default: 512)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_map_size: Option<usize>,
+
     /// Error handling policy (default: ignore = fail-open)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_policy: Option<DslErrorPolicy>,

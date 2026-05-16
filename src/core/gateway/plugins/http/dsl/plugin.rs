@@ -170,6 +170,8 @@ impl DslPlugin {
             max_call_count: config.max_call_count.unwrap_or(500),
             max_stack_depth: config.max_stack_depth.unwrap_or(128),
             max_string_len: config.max_string_len.unwrap_or(8192),
+            max_list_len: config.max_list_len.unwrap_or(1024),
+            max_map_size: config.max_map_size.unwrap_or(512),
         };
         let policy = config.error_policy.clone().unwrap_or_default();
         let redis_links: HashMap<String, String> = config

@@ -501,6 +501,18 @@ impl Vm {
             BuiltinId::Split => {
                 let delim = state.pop()?.into_string();
                 let s = state.pop()?.into_string();
+                let estimated = if delim.is_empty() {
+                    // split("") inserts "" at both ends: N chars → N+2 parts
+                    s.chars().count() + 2
+                } else {
+                    s.matches(&*delim).count() + 1
+                };
+                if estimated > self.limits.max_list_len {
+                    return Err(RuntimeError::ListTooLong {
+                        len: estimated,
+                        limit: self.limits.max_list_len,
+                    });
+                }
                 let parts: Vec<Arc<str>> = s.split(&*delim).map(Arc::from).collect();
                 Ok(Value::List(parts))
             }

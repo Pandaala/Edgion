@@ -51,6 +51,14 @@ pub struct VmLimits {
     /// Max string length from concatenation (default: 8192)
     #[serde(default = "default_max_string_len")]
     pub max_string_len: usize,
+
+    /// Max number of elements in a List value (default: 1024)
+    #[serde(default = "default_max_list_len")]
+    pub max_list_len: usize,
+
+    /// Max number of entries in a Map value (default: 512)
+    #[serde(default = "default_max_map_size")]
+    pub max_map_size: usize,
 }
 
 fn default_max_steps() -> u32 {
@@ -68,6 +76,12 @@ fn default_max_stack_depth() -> usize {
 fn default_max_string_len() -> usize {
     8192
 }
+fn default_max_list_len() -> usize {
+    1024
+}
+fn default_max_map_size() -> usize {
+    512
+}
 
 impl Default for VmLimits {
     fn default() -> Self {
@@ -77,6 +91,8 @@ impl Default for VmLimits {
             max_call_count: 500,
             max_stack_depth: 128,
             max_string_len: 8192,
+            max_list_len: 1024,
+            max_map_size: 512,
         }
     }
 }
@@ -860,6 +876,8 @@ pub async fn execute_safe(
                 RuntimeError::CallLimitExceeded { .. } => "call limit exceeded",
                 RuntimeError::StackOverflow { .. } => "stack overflow",
                 RuntimeError::StringTooLong { .. } => "string too long",
+                RuntimeError::ListTooLong { .. } => "list too long",
+                RuntimeError::MapTooLarge { .. } => "map too large",
                 RuntimeError::UndefinedLocal { .. } => "undefined local",
                 RuntimeError::ApiError { .. } => "api error",
                 RuntimeError::RegexError { .. } => "regex error",

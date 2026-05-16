@@ -152,6 +152,10 @@ pub enum RuntimeError {
     StackOverflow { limit: usize },
     /// String concatenation result too long
     StringTooLong { len: usize, limit: usize },
+    /// List exceeded element-count limit
+    ListTooLong { len: usize, limit: usize },
+    /// Map exceeded entry-count limit
+    MapTooLarge { size: usize, limit: usize },
     /// Access to uninitialized local variable slot
     UndefinedLocal { slot: u16 },
     /// PluginSession API returned error
@@ -180,6 +184,12 @@ impl fmt::Display for RuntimeError {
             Self::StackOverflow { limit } => write!(f, "stack overflow (depth {})", limit),
             Self::StringTooLong { len, limit } => {
                 write!(f, "string too long ({} > {})", len, limit)
+            }
+            Self::ListTooLong { len, limit } => {
+                write!(f, "list too long ({} > {})", len, limit)
+            }
+            Self::MapTooLarge { size, limit } => {
+                write!(f, "map too large ({} > {})", size, limit)
             }
             Self::UndefinedLocal { slot } => write!(f, "undefined local (slot {})", slot),
             Self::ApiError { function, message } => {
