@@ -70,7 +70,7 @@ pub enum OpCode {
     /// Stack: [s] → [match_str | Nil]
     RegexFind(u16),
     /// regex_replace(s, literal_pattern, replacement) — pattern pre-compiled
-    /// Stack: [s, replacement] → [result_str]
+    /// Stack: [s, replacement] → [result_str | Nil]  (Nil when s is not a Str)
     RegexReplace(u16),
 
     // ===== Control Flow =====
@@ -186,8 +186,6 @@ pub enum BuiltinId {
     Sha256,
     Md5,
     TimeNow,
-    RegexFind,
-    RegexReplace,
     Range,
     Trim,
     Split,

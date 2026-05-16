@@ -160,16 +160,14 @@ impl BackendTLSPolicyStore {
     /// Replace all backend TLS policies atomically
     pub fn replace_all(&self, new_policies: HashMap<String, Arc<BackendTLSPolicy>>) {
         // Update policies map and build reverse_index under write lock to prevent race conditions
-        let reverse_index = {
+        {
             let mut policies_write = self.policies.write();
             *policies_write = new_policies;
 
             // Build reverse_index while holding write lock to ensure consistency
-            Self::build_reverse_index(&policies_write)
-        }; // Write lock released here
-
-        // Atomic swap of reverse index
-        self.reverse_index.store(Arc::new(reverse_index));
+            let reverse_index = Self::build_reverse_index(&policies_write);
+            self.reverse_index.store(Arc::new(reverse_index));
+        } // Write lock released; both structures updated atomically
     }
 
     /// Update backend TLS policies with intelligent index rebuild strategy
@@ -182,7 +180,7 @@ impl BackendTLSPolicyStore {
         }
 
         // Perform all operations under a single write lock to prevent race conditions
-        let new_index = {
+        {
             let mut policies_write = self.policies.write();
 
             // Step 1: Collect affected target keys (under write lock protection)
@@ -228,7 +226,7 @@ impl BackendTLSPolicyStore {
             // Use incremental when n < m/10
             let use_incremental = affected_count < total_policies.max(10) / 10;
 
-            if use_incremental {
+            let new_index = if use_incremental {
                 // Incremental update: only rebuild affected targets
                 let current_index = self.reverse_index.load();
                 let mut new_index = (**current_index).clone();
@@ -271,11 +269,9 @@ impl BackendTLSPolicyStore {
                 );
 
                 Self::build_reverse_index(&policies_write)
-            }
-        }; // Write lock released here
-
-        // Atomic swap of reverse index (after releasing write lock)
-        self.reverse_index.store(Arc::new(new_index));
+            };
+            self.reverse_index.store(Arc::new(new_index));
+        } // Write lock released; both structures updated atomically
     }
 
     /// Get policies that apply to a given target (O(1) lookup using reverse index)

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::core::common::matcher::HashHost;
 use crate::types::listener_key::ListenerKey;
 use crate::types::EdgionTls;

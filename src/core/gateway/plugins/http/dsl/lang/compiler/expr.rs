@@ -212,21 +212,40 @@ impl Compiler {
     }
 
     fn compile_fn_call(&mut self, name: &str, args: &[Expr]) -> Result<(), CompileError> {
-        // Literal pattern: emit pre-compiled opcode; dynamic patterns fall through to CallBuiltin.
-        if name == "regex_find" && args.len() == 2 {
-            if let ExprKind::StringLit(pattern) = &args[1].kind {
-                let idx = self.add_regex_const(pattern)?;
-                self.compile_expr(&args[0])?;
-                self.emit(OpCode::RegexFind(idx));
-                return Ok(());
+        // regex_find / regex_replace require a string literal pattern — consistent with matches().
+        // Dynamic patterns are rejected at compile time to avoid per-request regex compilation.
+        if name == "regex_find" {
+            if args.len() != 2 {
+                return Err(CompileError::new(format!(
+                    "regex_find() requires 2 arguments, got {}",
+                    args.len()
+                )));
             }
-        } else if name == "regex_replace" && args.len() == 3 {
-            if let ExprKind::StringLit(pattern) = &args[1].kind {
-                let idx = self.add_regex_const(pattern)?;
-                self.compile_expr(&args[0])?;
-                self.compile_expr(&args[2])?;
-                self.emit(OpCode::RegexReplace(idx));
-                return Ok(());
+            match &args[1].kind {
+                ExprKind::StringLit(pattern) => {
+                    let idx = self.add_regex_const(pattern)?;
+                    self.compile_expr(&args[0])?;
+                    self.emit(OpCode::RegexFind(idx));
+                    return Ok(());
+                }
+                _ => return Err(CompileError::new("regex_find() pattern must be a string literal")),
+            }
+        } else if name == "regex_replace" {
+            if args.len() != 3 {
+                return Err(CompileError::new(format!(
+                    "regex_replace() requires 3 arguments, got {}",
+                    args.len()
+                )));
+            }
+            match &args[1].kind {
+                ExprKind::StringLit(pattern) => {
+                    let idx = self.add_regex_const(pattern)?;
+                    self.compile_expr(&args[0])?;
+                    self.compile_expr(&args[2])?;
+                    self.emit(OpCode::RegexReplace(idx));
+                    return Ok(());
+                }
+                _ => return Err(CompileError::new("regex_replace() pattern must be a string literal")),
             }
         } else if name == "log_fmt" {
             // log_fmt(template_literal, sensitive_arg1, sensitive_arg2, ...)
@@ -278,8 +297,6 @@ impl Compiler {
             "sha256" => (BuiltinId::Sha256, Some(1)),
             "md5" => (BuiltinId::Md5, Some(1)),
             "time_now" => (BuiltinId::TimeNow, Some(0)),
-            "regex_find" => (BuiltinId::RegexFind, Some(2)),
-            "regex_replace" => (BuiltinId::RegexReplace, Some(3)),
             "trim" => (BuiltinId::Trim, Some(1)),
             "split" => (BuiltinId::Split, Some(2)),
             "range" => (BuiltinId::Range, Some(2)),

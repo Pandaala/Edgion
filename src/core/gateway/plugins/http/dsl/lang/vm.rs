@@ -545,11 +545,12 @@ impl Vm {
                     let s = state.pop()?;
                     let result = match &s {
                         Value::Str(s) => {
-                            if let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) {
-                                re.is_match(s)
-                            } else {
-                                false
-                            }
+                            let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) else {
+                                return Err(RuntimeError::Internal {
+                                    message: format!("regex_cache[{}] missing or invalid", regex_idx),
+                                });
+                            };
+                            re.is_match(s)
                         }
                         _ => false,
                     };
@@ -560,19 +561,20 @@ impl Vm {
                     // Nil-friendly: non-Str input returns Nil, consistent with Matches.
                     let result = match s {
                         Value::Str(s) => {
-                            if let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) {
-                                if let Some(m) = re.find(&s) {
-                                    let found = m.as_str();
-                                    if found.len() > self.limits.max_string_len {
-                                        return Err(RuntimeError::StringTooLong {
-                                            len: found.len(),
-                                            limit: self.limits.max_string_len,
-                                        });
-                                    }
-                                    Value::Str(Arc::from(found))
-                                } else {
-                                    Value::Nil
+                            let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) else {
+                                return Err(RuntimeError::Internal {
+                                    message: format!("regex_cache[{}] missing or invalid", regex_idx),
+                                });
+                            };
+                            if let Some(m) = re.find(&s) {
+                                let found = m.as_str();
+                                if found.len() > self.limits.max_string_len {
+                                    return Err(RuntimeError::StringTooLong {
+                                        len: found.len(),
+                                        limit: self.limits.max_string_len,
+                                    });
                                 }
+                                Value::Str(Arc::from(found))
                             } else {
                                 Value::Nil
                             }
@@ -583,15 +585,21 @@ impl Vm {
                 }
                 OpCode::RegexReplace(regex_idx) => {
                     let replacement = state.pop()?.into_string();
-                    let s = state.pop()?.into_string();
-                    let result = if let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) {
-                        // Cow::Borrowed means nothing matched — reuse the already-owned String.
-                        match re.replace_all(&s, replacement.as_str()) {
-                            Cow::Borrowed(_) => s,
-                            Cow::Owned(o) => o,
-                        }
-                    } else {
-                        s
+                    let s = state.pop()?;
+                    // Nil-friendly: non-Str input returns Nil, consistent with RegexFind.
+                    let Value::Str(s) = s else {
+                        state.push(Value::Nil, self.limits.max_stack_depth)?;
+                        continue;
+                    };
+                    let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) else {
+                        return Err(RuntimeError::Internal {
+                            message: format!("regex_cache[{}] missing or invalid", regex_idx),
+                        });
+                    };
+                    // Cow::Borrowed means nothing matched — clone the Arc to avoid allocation.
+                    let result: Arc<str> = match re.replace_all(&s, replacement.as_str()) {
+                        Cow::Borrowed(_) => Arc::clone(&s),
+                        Cow::Owned(o) => Arc::from(o.as_str()),
                     };
                     if result.len() > self.limits.max_string_len {
                         return Err(RuntimeError::StringTooLong {
@@ -599,7 +607,7 @@ impl Vm {
                             limit: self.limits.max_string_len,
                         });
                     }
-                    state.push(Value::Str(result.into()), self.limits.max_stack_depth)?;
+                    state.push(Value::Str(result), self.limits.max_stack_depth)?;
                 }
 
                 // ===== Control Flow =====

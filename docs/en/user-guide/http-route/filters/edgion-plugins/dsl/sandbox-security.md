@@ -85,7 +85,7 @@ When a script is loaded — compiled on first request in `source` mode, or valid
 
 Compile-time validation is a one-time cost. Once a script passes validation, the compiled result is cached and reused for subsequent requests without recompilation.
 
-Regex patterns are not only checked for length at compile time — their syntax is also validated. An invalid regex causes a compile-time error when the script is loaded, rather than failing silently at runtime. Patterns used with the `.matches()` method are pre-compiled and cached at compile time, eliminating per-request regex compilation overhead.
+Regex patterns are not only checked for length at compile time — their syntax is also validated. An invalid regex causes a compile-time error when the script is loaded, rather than failing silently at runtime. All regex functions (`.matches()`, `regex_find()`, and `regex_replace()`) require string literal patterns; dynamic (variable) patterns are rejected at compile time. Patterns are pre-compiled and cached at compile time, eliminating per-request regex compilation overhead.
 
 ## Error Policy (errorPolicy)
 

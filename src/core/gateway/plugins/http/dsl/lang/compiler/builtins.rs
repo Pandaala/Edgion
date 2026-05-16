@@ -153,10 +153,9 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> Option<usize> {
         | BuiltinId::HexDecode
         | BuiltinId::LogWarn
         | BuiltinId::LogError => Some(1),
-        BuiltinId::Substr | BuiltinId::RegexReplace => Some(3),
+        BuiltinId::Substr => Some(3),
         BuiltinId::TimeNow | BuiltinId::Uuid => Some(0),
-        BuiltinId::RegexFind
-        | BuiltinId::Split
+        BuiltinId::Split
         | BuiltinId::HmacSha256
         | BuiltinId::JsonGet
         | BuiltinId::TimeFormat

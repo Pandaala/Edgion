@@ -480,40 +480,6 @@ impl Vm {
                 let hash = md5::Md5::digest(s.as_bytes());
                 Ok(Value::Str(hex::encode(hash).into()))
             }
-            BuiltinId::RegexFind => {
-                let pattern = state.pop()?.into_string();
-                let s = state.pop()?.into_string();
-                if pattern.len() > 1024 {
-                    return Err(RuntimeError::RegexError {
-                        message: "pattern too long (max 1024 bytes)".into(),
-                    });
-                }
-                let re =
-                    regex::Regex::new(&pattern).map_err(|e| RuntimeError::RegexError { message: e.to_string() })?;
-                match re.find(&s) {
-                    Some(m) => {
-                        let found = m.as_str().to_string();
-                        check_string_len(&found, self.limits.max_string_len)?;
-                        Ok(Value::Str(found.into()))
-                    }
-                    None => Ok(Value::Nil),
-                }
-            }
-            BuiltinId::RegexReplace => {
-                let replacement = state.pop()?.into_string();
-                let pattern = state.pop()?.into_string();
-                let s = state.pop()?.into_string();
-                if pattern.len() > 1024 {
-                    return Err(RuntimeError::RegexError {
-                        message: "pattern too long (max 1024 bytes)".into(),
-                    });
-                }
-                let re =
-                    regex::Regex::new(&pattern).map_err(|e| RuntimeError::RegexError { message: e.to_string() })?;
-                let result = re.replace_all(&s, replacement.as_str()).into_owned();
-                check_string_len(&result, self.limits.max_string_len)?;
-                Ok(Value::Str(result.into()))
-            }
             BuiltinId::Trim => {
                 let s = state.pop()?.into_string();
                 let trimmed = s.trim();

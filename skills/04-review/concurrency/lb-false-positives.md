@@ -4,6 +4,18 @@
 
 ---
 
+## Cross-Structure RwLock+ArcSwap Consistency Gap IS a Real Issue
+
+**Distinction from the ArcSwap single-structure TOCTOU false positives below**: when `policies` (RwLock) and `reverse_index` (ArcSwap) are two *separate* fields that must stay in sync, releasing the write lock on one before storing to the other creates a real inconsistency window — not a benign TOCTOU.
+
+**Fixed pattern** (g7-005, `BackendTLSPolicyStore::update`): `self.reverse_index.store(Arc::new(new_index))` was called *after* the `policies` write lock was released. Fixed by moving the store call inside the write lock scope, so both fields update atomically from any reader's perspective.
+
+**Rule**: If a reviewer finds `rwlock.write()` scope drops before `arc_swap.store()` where the two structures are semantically linked (e.g., a forward map and its reverse index), treat it as a real confirmed bug. The `ArcSwap::store` is lock-free and safe to call inside any RwLock write scope.
+
+**Contrast with single-structure ArcSwap TOCTOU** (e.g., `BackendSelector::init`): those are false positives because all concurrent writers produce identical results and the extra store is harmless. Cross-structure races are different — readers can observe the new state of one field but the old state of the other.
+
+---
+
 ## BackendSelector ArcSwap Initialization TOCTOU is Not a Real Issue
 
 **False-positive scenario**: `BackendSelector::init` uses `load` to check then `store`; combined with the caller's `is_initialized()` + `init()` it forms a TOCTOU; multiple threads may execute `create_state` repeatedly and overwrite the result.

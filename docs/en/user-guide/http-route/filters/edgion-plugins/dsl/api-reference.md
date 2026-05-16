@@ -1250,7 +1250,7 @@ Finds the first match of a regular expression in a string and returns the matche
 
 **Return value**: First matched substring, or `nil`
 
-**Constraints**: The regular expression string must be at most 1024 bytes; an invalid regular expression triggers a runtime error.
+**Constraints**: The pattern must be a string literal. Both the 1024-byte length limit and regex syntax are validated at compile time.
 
 **Example**:
 ```
@@ -1278,7 +1278,7 @@ Replaces all occurrences of the regular expression match in a string with the sp
 
 **Return value**: Replaced string
 
-**Constraints**: The regular expression string must be at most 1024 bytes; an invalid regular expression triggers a runtime error.
+**Constraints**: The pattern must be a string literal. Both the 1024-byte length limit and regex syntax are validated at compile time.
 
 **Example**:
 ```
