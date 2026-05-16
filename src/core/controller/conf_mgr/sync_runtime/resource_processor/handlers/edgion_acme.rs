@@ -656,7 +656,6 @@ fn outcome_to_resolved_refs_action<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::SecretRefManager;
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
     use crate::types::resources::common::ParentReference;
@@ -675,9 +674,7 @@ mod tests {
     fn make_ctx(secrets: HashMap<String, Secret>) -> (HandlerContext, Arc<ControllerRuntime>) {
         let runtime = Arc::new(ControllerRuntime::default());
         runtime.secret_store.replace_all(secrets);
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
         let ctx = HandlerContext::new(
-            secret_ref_manager,
             None,
             None,
             TriggerChain::default(),

@@ -266,7 +266,7 @@ fn resolve_pm_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefs
 mod tests {
     use super::EdgionPluginsHandler;
     use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-        HandlerContext, ProcessResult, ProcessorHandler, SecretRefManager,
+        HandlerContext, ProcessResult, ProcessorHandler,
     };
     use crate::core::controller::conf_mgr::ControllerRuntime;
     use crate::types::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
@@ -287,9 +287,7 @@ mod tests {
     fn make_ctx_with_secrets(secrets: HashMap<String, Secret>) -> (HandlerContext, Arc<ControllerRuntime>) {
         let runtime = Arc::new(ControllerRuntime::default());
         runtime.secret_store.replace_all(secrets);
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
         let ctx = HandlerContext::new(
-            secret_ref_manager,
             None,
             None,
             Default::default(),

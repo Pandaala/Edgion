@@ -300,12 +300,17 @@ spec:
     name: wildcard-tls
 ```
 
-**Coverage**:
+**Covered** (RFC 6125 §6.4.3 — single-label wildcard only):
 - `v1.api.example.com`
 - `v2.api.example.com`
 - `dashboard.admin.example.com`
 - `example.com`
-- `api.example.com` (wildcard does not cover the base domain)
+
+**Not covered**:
+- `api.example.com` — wildcard does not cover the base domain itself
+- `deep.sub.api.example.com` — multi-level subdomains exceed the RFC 6125 single-label
+  limit; Gateway API route matching accepts this hostname, but RFC 6125-compliant client
+  TLS libraries reject the handshake because `*.api.example.com` only covers one label
 
 ---
 

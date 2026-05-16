@@ -26,7 +26,7 @@ use super::sync_runtime::resource_processor::{
         ReferenceGrantStore,
     },
     region_route_table::{RegionRouteClusterTable, RegionRouteServiceTable},
-    secret_utils::SecretStore,
+    secret_utils::{new_secret_ref_manager, SecretRefManager, SecretStore},
     service_ref::{new_service_ref_manager, ServiceRefManager},
     BidirectionalRefManager, ResourceRef,
 };
@@ -42,6 +42,7 @@ pub struct ControllerRuntime {
     pub(crate) ref_grant_store: ReferenceGrantStore,
     pub(crate) cross_ns_ref_mgr: CrossNamespaceRefManager,
     pub(crate) service_ref_mgr: ServiceRefManager,
+    pub(crate) secret_ref_manager: SecretRefManager,
     pub(crate) secret_store: SecretStore,
     pub(crate) gateway_route_index: GatewayRouteIndex,
     pub(crate) attached_route_tracker: AttachedRouteTracker,
@@ -78,6 +79,7 @@ impl ControllerRuntime {
             ref_grant_store: ReferenceGrantStore::new(),
             cross_ns_ref_mgr: new_cross_ns_ref_manager(),
             service_ref_mgr: new_service_ref_manager(),
+            secret_ref_manager: new_secret_ref_manager(),
             secret_store: SecretStore::new(),
             gateway_route_index: GatewayRouteIndex::new(),
             attached_route_tracker: AttachedRouteTracker::new(),
@@ -126,6 +128,9 @@ impl ControllerRuntime {
 
         self.service_ref_mgr.clear();
         tracing::info!(component = "controller_runtime", "Cleared ServiceRefManager");
+
+        self.secret_ref_manager.clear();
+        tracing::info!(component = "controller_runtime", "Cleared SecretRefManager");
 
         self.ref_grant_store.replace_all(HashMap::new());
         tracing::info!(component = "controller_runtime", "Cleared ReferenceGrantStore");

@@ -18,7 +18,7 @@ use super::resource_controller::EtcdResourceController;
 use super::status::EtcdStatusHandler;
 use super::watcher::{EtcdWatcher, KindEventReceiver};
 use crate::core::controller::conf_mgr::conf_center::non_kube_common::{spawn_all_controllers, LocalControllerBackend};
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{ResourceProcessor, SecretRefManager};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::gateway::link_sys::providers::etcd::EtcdLinkClient;
@@ -80,7 +80,6 @@ impl EtcdController {
         );
 
         // Create shared components
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
         let watcher = Arc::new(EtcdWatcher::new(self.client.clone(), &self.key_prefix));
         let status_handler = Arc::new(EtcdStatusHandler::new(self.client.clone(), self.key_prefix.clone()));
 
@@ -92,7 +91,6 @@ impl EtcdController {
         // Spawn all resource controllers
         let handles = spawn_all_controllers(
             &backend,
-            &secret_ref_manager,
             shutdown_signal.clone(),
             runtime,
             "etcd_controller",

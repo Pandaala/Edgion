@@ -2,6 +2,7 @@
 //!
 //! Handles GatewayClass resources.
 
+use crate::core::controller::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_true, condition_types, update_condition, HandlerContext, ProcessResult, ProcessorHandler,
 };
@@ -21,7 +22,7 @@ impl GatewayClassHandler {
 
 impl Default for GatewayClassHandler {
     fn default() -> Self {
-        Self::new("edgion.io/gateway-controller".to_string())
+        Self::new(DEFAULT_CONTROLLER_NAME.to_string())
     }
 }
 

@@ -28,7 +28,7 @@ use super::path_registry::PathRegistry;
 use super::resource_controller::FileSystemResourceController;
 use super::status::FileSystemStatusHandler;
 use crate::core::controller::conf_mgr::conf_center::non_kube_common::{spawn_all_controllers, LocalControllerBackend};
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{ResourceProcessor, SecretRefManager};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::types::ResourceMeta;
@@ -120,7 +120,6 @@ impl FileSystemController {
         }
 
         // Create shared components
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
         let watcher = Arc::new(FileSystemWatcher::new(
             self.conf_dir.clone(),
             self.registry.clone(),
@@ -135,7 +134,6 @@ impl FileSystemController {
         // Spawn all resource controllers
         let handles = spawn_all_controllers(
             &backend,
-            &secret_ref_manager,
             shutdown_signal.clone(),
             runtime,
             "fs_controller",

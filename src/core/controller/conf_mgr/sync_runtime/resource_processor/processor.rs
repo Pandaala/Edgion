@@ -47,7 +47,7 @@ use crate::types::ResourceMeta;
 use super::context::HandlerContext;
 use super::handler::{ProcessResult, ProcessorHandler};
 use super::raw_store::RawStore;
-use super::{make_resource_key, SecretRefManager};
+use super::make_resource_key;
 use crate::core::controller::conf_mgr::sync_runtime::workqueue::{TriggerChain, Workqueue, WorkqueueConfig};
 
 /// Result of status extraction
@@ -59,6 +59,18 @@ enum StatusExtractResult {
     Empty,
     /// Serialization failed
     SerializationError,
+}
+
+impl StatusExtractResult {
+    /// Short tag for debug logging that avoids printing the full status JSON
+    /// (which may contain resource names in condition messages).
+    fn digest_for_log(&self) -> String {
+        match self {
+            StatusExtractResult::Present(s) => format!("present({} bytes)", s.len()),
+            StatusExtractResult::Empty => "empty".to_string(),
+            StatusExtractResult::SerializationError => "error".to_string(),
+        }
+    }
 }
 
 /// Extract status field from a resource as JSON string for comparison
@@ -197,9 +209,6 @@ where
     /// Work queue for runtime event processing
     workqueue: Arc<Workqueue>,
 
-    /// Secret reference manager (shared across all processors)
-    secret_ref_manager: Arc<SecretRefManager>,
-
     /// Processing handler (resource-specific logic)
     handler: Arc<dyn ProcessorHandler<K>>,
 
@@ -227,7 +236,6 @@ where
         kind: &'static str,
         capacity: usize,
         handler: Arc<dyn ProcessorHandler<K>>,
-        secret_ref_manager: Arc<SecretRefManager>,
         runtime: Arc<ControllerRuntime>,
     ) -> Self {
         let cache = Arc::new(ServerCache::new(capacity as u32));
@@ -244,7 +252,6 @@ where
             kind,
             cache,
             workqueue,
-            secret_ref_manager,
             handler,
             metadata_filter: RwLock::new(None),
             namespace_filter: RwLock::new(None),
@@ -258,7 +265,6 @@ where
         kind: &'static str,
         capacity: usize,
         handler: Arc<dyn ProcessorHandler<K>>,
-        secret_ref_manager: Arc<SecretRefManager>,
         workqueue_config: WorkqueueConfig,
         runtime: Arc<ControllerRuntime>,
     ) -> Self {
@@ -269,7 +275,6 @@ where
             kind,
             cache,
             workqueue,
-            secret_ref_manager,
             handler,
             metadata_filter: RwLock::new(None),
             namespace_filter: RwLock::new(None),
@@ -436,7 +441,6 @@ where
     /// Create handler context with trigger chain for cascade tracking
     fn create_context(&self, trigger_chain: TriggerChain) -> HandlerContext {
         HandlerContext::new(
-            self.secret_ref_manager.clone(),
             self.metadata_filter.read().clone(),
             self.namespace_filter.read().clone(),
             trigger_chain,
@@ -565,8 +569,8 @@ where
                 if status_changed {
                     tracing::debug!(
                         kind = self.kind,
-                        old = ?old_status,
-                        new = ?new_status,
+                        old = %old_status.digest_for_log(),
+                        new = %new_status.digest_for_log(),
                         "Status semantically changed, will persist"
                     );
                 } else {
@@ -578,8 +582,8 @@ where
                     }
                     tracing::debug!(
                         kind = self.kind,
-                        old = ?old_status,
-                        new = ?new_status,
+                        old = %old_status.digest_for_log(),
+                        new = %new_status.digest_for_log(),
                         "Status unchanged by semantic diff, skipping persist"
                     );
                 }
@@ -790,14 +794,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_processor_basic() {
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
         let handler = Arc::new(TestHandler);
 
         let processor = ResourceProcessor::<TestResource>::new(
             "TestResource",
             100,
             handler,
-            secret_ref_manager,
             Arc::new(ControllerRuntime::default()),
         );
 
@@ -810,14 +812,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_processor_init_apply() {
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
         let handler = Arc::new(TestHandler);
 
         let processor = ResourceProcessor::<TestResource>::new(
             "TestResource",
             100,
             handler,
-            secret_ref_manager,
             Arc::new(ControllerRuntime::default()),
         );
 

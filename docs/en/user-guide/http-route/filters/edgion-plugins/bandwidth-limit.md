@@ -72,7 +72,15 @@ upstreamResponseBodyFilterPlugins:
 
 1. This plugin only limits downstream (client-direction) response bandwidth, not upstream request bandwidth
 2. Must be placed in `upstreamResponseBodyFilterPlugins`; placing it in `requestPlugins` has no effect
-3. Rate limiting is per-connection, not global
+3. **Scope: the rate cap is applied per response stream (per HTTP request), not per connection and not globally.**
+   The plugin is stateless across chunks — each upstream body chunk yields a delay of `chunk_size / rate`,
+   which Pingora applies before sending the next chunk on the same response. As a result:
+   - Each in-flight response gets approximately `rate` bytes/second of throughput on its own.
+   - HTTP/2 multiplexing: N concurrent streams on the same connection each get the full `rate`, so the
+     aggregate connection bandwidth can reach N × `rate`.
+   - HTTP/1.1 keep-alive: sequential responses on the same connection each get the full `rate` in turn.
+   - There is no shared token bucket across routes, connections, or pods. For aggregate caps you need
+     an external mechanism (LB-level QoS, kernel `tc`, or a service-mesh policy).
 
 ---
 

@@ -91,11 +91,17 @@ impl BackendTLSPolicyState {
             return true;
         }
 
+        // Snapshot timestamps once so the refs list and the timestamp lookups
+        // come from a single consistent view of the map. Without this, the
+        // per-entry `get_timestamp` calls would each re-acquire the read lock
+        // and could observe partial writes interleaved with `get_refs`.
+        let ts_snapshot = self.timestamps.read().clone();
+
         let mut entries: Vec<(String, Option<String>)> = refs
             .iter()
             .map(|r| {
                 let key = r.resource_key();
-                let ts = self.get_timestamp(&key);
+                let ts = ts_snapshot.get(&key).cloned();
                 (key, ts)
             })
             .collect();

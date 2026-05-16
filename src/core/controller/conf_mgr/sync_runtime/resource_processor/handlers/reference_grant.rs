@@ -272,7 +272,6 @@ mod tests {
     use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ref_grant::events::{
         ReferenceGrantChangedEvent, RevalidationListener,
     };
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::SecretRefManager;
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
     use crate::types::resources::{
@@ -357,7 +356,6 @@ mod tests {
 
     fn make_ctx(runtime: Arc<ControllerRuntime>) -> HandlerContext {
         HandlerContext::new(
-            Arc::new(SecretRefManager::new()),
             None,
             None,
             TriggerChain::default(),

@@ -70,3 +70,14 @@ Otherwise, **close new findings directly**, citing this document.
 - Move `get_plugin_validation_error` into the trait `PluginConfig::validation_error` (**reduces 1** central match, but each config must implement it).
 
 These two changes do not break the centralization semantic; evaluate separately.
+
+## Related: `PluginRuntime` deliberately does NOT implement `Clone` (g2-011 fix)
+
+**Audit date**: 2026-05-15
+**Linked issue**: g2-011 (closed, fixed)
+
+If a finding suggests `PluginRuntime` should `#[derive(Clone)]` or "implement Clone properly," **close it**. The previous empty `impl Clone` (`fn clone(&self) -> Self { Self::new() }`) was a footgun: any misuse like `runtime_arc.as_ref().clone()` would silently strip the entire plugin chain from the request path with no compile-time or runtime signal. It was removed; sharing is done exclusively via `Arc<PluginRuntime>`, and rebuilds go through the `from_*` constructors at preparse.
+
+A real `Clone` impl is also not feasible without forcing a `Clone` bound onto every `dyn RequestFilter` / `dyn UpstreamResponse*` trait object in the four stage `Vec`s — an unwanted constraint on every plugin implementation.
+
+Sibling types `StreamPluginRuntime` and `TlsRoutePluginRuntime` already follow the same "no Clone" pattern; uniform treatment.

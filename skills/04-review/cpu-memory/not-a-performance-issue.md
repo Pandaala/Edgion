@@ -319,13 +319,16 @@ The only visible micro-optimization: when `set_userinfo_header && userinfo_json.
 
 4. **Watch missed events have a backstop**: Kubernetes informer has built-in periodic resync; watch reconnection replays missed delete events as DELETED; the handler runs clear again.
 
-5. **Leader switchover / Controller restart fully resets**: `runtime.rs:123 reset()` explicitly does `service_ref_mgr.clear()` + `cross_ns_ref_mgr.clear()` + `processor_registry.clear_processors()`; init full-sync rebuilds the index from K8s. Any "long-term accumulated residue" goes to zero on restart.
+5. **Leader switchover / Controller restart fully resets**: `runtime.rs reset()` explicitly does `secret_ref_manager.clear()` + `service_ref_mgr.clear()` + `cross_ns_ref_mgr.clear()` + `processor_registry.clear_processors()`; init full-sync rebuilds the index from K8s. Any "long-term accumulated residue" goes to zero on restart.
 
 6. **Memory is bounded**: total reference count = Σ(refs held by each K8s resource); directly bounded by resource graph size. `Set<V>` has built-in dedup (`add_ref` is idempotent); `remove_ref` / `clear_value_refs` also `HashMap::remove`s the bucket after the set is empty (`ref_manager.rs:216-218,222-224,268-271`) — no unbounded growth path.
 
 7. **The suggested `gc(existing_values)` periodic task has side effects**: reconcile is two-phase clear-then-readd; when GC is concurrent with reconcile, it might delete a "currently exists but temporarily not in the index" value in the window between clear and add, instead introducing a bug. Even adding sync primitives is paying lock overhead and reconcile coordination complexity for a non-existent problem.
 
-**Verdict**: not a memory issue. Any "`BidirectionalRefManager` / `SecretRefManager` / `ServiceRefManager` / `CrossNamespaceRefManager` should add GC / expiry / periodic check" finding is closed per this entry, unless it is proved that (a) some handler is missing the `clear_resource_refs` call on the delete path (a per-case bug; fix that location rather than add GC), or (b) under a long stable state, `stats().total_references` measurably grows monotonically and is significantly out of sync with the actual K8s resource count.
+**Verdict**: not a memory issue. Any "`BidirectionalRefManager` / `SecretRefManager` / `ServiceRefManager` / `CrossNamespaceRefManager` should add GC / expiry / periodic check" finding is closed per this entry, unless it is proved that (a) some handler is missing the `clear_source_refs` / `clear_resource_refs` call on the delete path (a per-case bug; fix that location rather than add GC), or (b) under a long stable state, `stats().total_references` measurably grows monotonically and is significantly out of sync with the actual K8s resource count.
+
+**Known fixed cases under (a)**:
+- **c2a-007 (fixed)**: `SecretHandler::on_delete` did not purge the forward `secret_key → refs` entries in `SecretRefManager`. Fixed by adding `BidirectionalRefManager::clear_source_refs` and calling it in `on_delete` after the cascading requeue. `SecretRefManager` was also moved from per-processor `Arc` into `ControllerRuntime` (consistent with `service_ref_mgr` / `cross_ns_ref_mgr`) so that (i) `reset()` now correctly clears it, and (ii) its stats are visible in `/api/v1/debug/store-stats` for `cache_residue` leak detection.
 
 ---
 
@@ -383,3 +386,21 @@ The only visible micro-optimization: when `set_userinfo_header && userinfo_json.
 6. **Worst-case bound is controllable**: per-watcher all three layers full = 3 × 100 batches × ≤capacity events/batch × per-event a few KB ≈ tens of MB; requires that watcher's downstream connection to be completely stuck. N watchers all stuck simultaneously is a network/cluster-level failure scenario, not a channel capacity design defect; when it happens it is also auto-healed by `WATCH_ERR_TOO_OLD_VERSION` + relist.
 
 **Verdict**: not a memory issue. Any "conf_sync watcher channel(100) chain causes backlog of N tens of thousands of events / should reduce capacity / should switch to lock-free structure" finding is closed per this entry, unless it is proved that (a) `try_send` or unbounded buffer bypasses backpressure, or (b) the EventStore circular queue's `WATCH_ERR_TOO_OLD_VERSION` relist path is broken, or (c) profile measurement shows that under normal network conditions the channel stays close to full at 100 for a long time.
+
+---
+
+## `status_diff::conditions_equal` O(n²) Linear Scan on Bounded Condition Arrays is Not an Issue
+
+**False-positive scenario**: `conditions_equal` in `src/core/controller/conf_mgr/sync_runtime/resource_processor/status_diff.rs` uses an O(n)-find inside an O(n) loop when matching new conditions against old conditions by `type`; flagged as "O(n²), should switch to `HashMap<&str, &Value>` for O(1) lookup". Same shape applies to the parent / ancestor / listener matchers in the same file (they all match by an identity field via `iter().find(...)`).
+
+**Reality**:
+
+1. **Cold path**: called from `processor.rs::status_has_changed` → `status_semantically_changed` → `conditions_equal`. Triggered only on Controller status reconcile (per resource update), never per request.
+
+2. **n is hard-bounded and tiny**: per Gateway API / Edgion conventions, condition counts are ≤ 5 for Gateway-level status and ≤ 10 across all resource kinds. Worst case ~100 `Value` field comparisons of 5 short keys each, all in-memory, no allocations. Total cost is sub-microsecond.
+
+3. **HashMap "optimization" can regress on small n**: the suggested `HashMap<&str, &Value>` fix incurs one heap allocation for the map plus a string hash per insert/lookup. For n ≤ 10 the constant overhead is comparable to or larger than the linear scan it replaces; the change trades easily-auditable code for a likely-neutral or slower path.
+
+4. **The module's real concern is correctness, not throughput**: `status_diff` exists to ignore `lastTransitionTime` and similar non-semantic fields so we don't issue spurious K8s API writes. The linear-scan-by-type form makes it obvious to a reviewer that the matcher key is `type` and the compared fields are `status / reason / message / observedGeneration` (see `condition_fields_equal`). A HashMap-based version moves that logic two function calls away.
+
+**Verdict**: not a performance issue. Code-clarity rewrite suggestions are not accepted unless (a) profile data shows status diff dominating Controller CPU, or (b) the condition count bound is broken by a new resource kind that produces dozens of conditions per status. Same reasoning applies to `parents_status_equal`, `ancestors_status_equal`, and the listener loop in `gateway_status_equal` — all match by identity (parentRef / ancestorRef / listener name) on the same bounded-cardinality input.

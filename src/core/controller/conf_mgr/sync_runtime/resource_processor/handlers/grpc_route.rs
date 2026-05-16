@@ -352,7 +352,6 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::SecretRefManager;
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
     use serde_json::json;
@@ -360,7 +359,6 @@ mod tests {
 
     fn make_ctx() -> HandlerContext {
         HandlerContext::new(
-            Arc::new(SecretRefManager::new()),
             None,
             None,
             TriggerChain::default(),

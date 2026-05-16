@@ -584,14 +584,12 @@ fn find_invalid_rule_details(route: &HTTPRoute, _route_ns: &str) -> Vec<(usize, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::SecretRefManager;
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
     use std::sync::Arc;
 
     fn make_ctx() -> HandlerContext {
         HandlerContext::new(
-            Arc::new(SecretRefManager::new()),
             None,
             None,
             TriggerChain::default(),

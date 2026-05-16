@@ -114,6 +114,18 @@ assert_non_empty() {
     fi
 }
 
+assert_ne() {
+    local test_name="$1" forbidden="$2" actual="$3"
+    TESTS_TOTAL=$((TESTS_TOTAL + 1))
+    if [ "$actual" != "$forbidden" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        log_success "$test_name"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        log_error "$test_name (value '$actual' equals forbidden '$forbidden')"
+    fi
+}
+
 assert_json_success() {
     local test_name="$1" json_resp="$2"
     TESTS_TOTAL=$((TESTS_TOTAL + 1))
@@ -365,7 +377,9 @@ gateway_http_request "/test/rate-limit-redis/allow/echo?req=4" \
 assert_eq "RateLimitRedis over-limit request returns 429" "429" "$HTTP_STATUS"
 assert_contains "RateLimitRedis over-limit body message" "$HTTP_BODY" "Redis rate limit exceeded"
 assert_eq "RateLimitRedis over-limit remaining=0" "0" "$(get_resp_header "X-RateLimit-Remaining")"
-assert_non_empty "RateLimitRedis over-limit Retry-After present" "$(get_resp_header "Retry-After")"
+RLR_OVERLIMIT_RETRY_AFTER="$(get_resp_header "Retry-After")"
+assert_non_empty "RateLimitRedis over-limit Retry-After present" "$RLR_OVERLIMIT_RETRY_AFTER"
+assert_ne "RateLimitRedis over-limit Retry-After is not zero" "0" "$RLR_OVERLIMIT_RETRY_AFTER"
 
 RATE_KEY_A="rlr-a-$(date +%s%N)"
 RATE_KEY_B="rlr-b-$(date +%s%N)"
@@ -387,6 +401,7 @@ assert_eq "RateLimitRedis missing key allow policy" "200" "$HTTP_STATUS"
 gateway_http_request "/test/rate-limit-redis/missing-deny/no-key"
 assert_eq "RateLimitRedis missing key deny policy" "429" "$HTTP_STATUS"
 assert_contains "RateLimitRedis missing key deny body message" "$HTTP_BODY" "Missing key denied"
+assert_eq "RateLimitRedis missing-key deny omits Retry-After (no zero header)" "" "$(get_resp_header "Retry-After")"
 
 gateway_http_request "/test/rate-limit-redis/redis-fail-open/check" \
     -H "X-Rate-Key: rlr-fail-open"
@@ -396,6 +411,7 @@ gateway_http_request "/test/rate-limit-redis/redis-fail-close/check" \
     -H "X-Rate-Key: rlr-fail-close"
 assert_eq "RateLimitRedis onRedisFailure=Deny rejects request" "429" "$HTTP_STATUS"
 assert_contains "RateLimitRedis fail-close body message" "$HTTP_BODY" "Redis unavailable (deny)"
+assert_eq "RateLimitRedis fail-close omits Retry-After (no zero header)" "" "$(get_resp_header "Retry-After")"
 
 # ── 10. Lifecycle: delete LinkSys → client removed (opt-in) ────────────────
 if $INCLUDE_LIFECYCLE; then

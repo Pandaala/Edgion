@@ -205,6 +205,14 @@ impl ProcessorHandler<Secret> for SecretHandler {
 
         // 2. Trigger cascading requeue (so dependent resources know Secret is deleted)
         self.trigger_cascading_requeue(&secret_key, "deleted", ctx).await;
+
+        // 3. Purge the forward SecretRefManager entry for this secret key.
+        // Dependent resources clean up their own reverse entries when they
+        // reconcile (clear_resource_refs), but the source-side forward entry
+        // would otherwise linger until every dependent reconciles. Clearing it
+        // here closes the gap when a dependent is also deleted before it
+        // reprocesses (missed-event or simultaneous-delete scenario).
+        ctx.secret_ref_manager().clear_source_refs(&secret_key);
     }
 }
 

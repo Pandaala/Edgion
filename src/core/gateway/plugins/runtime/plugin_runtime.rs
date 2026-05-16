@@ -113,13 +113,13 @@ enum CreateResult<T> {
     WrongStage,
 }
 
-impl Clone for PluginRuntime {
-    fn clone(&self) -> Self {
-        // PluginRuntime is rebuilt from edgion_plugins during pre_parse, so clone creates empty runtime on purpose.
-        Self::new()
-    }
-}
-
+// Intentionally no `impl Clone for PluginRuntime`: a Clone impl would have to
+// either deep-clone trait-object plugin chains (impossible without a per-plugin
+// Clone bound) or silently return an empty runtime — the latter is a footgun
+// that a misuse like `runtime_arc.as_ref().clone()` would silently strip the
+// entire plugin chain from the request path with no compile-time or runtime
+// signal. Sharing is done via `Arc<PluginRuntime>`; rebuild via the `from_*`
+// constructors.
 impl std::fmt::Debug for PluginRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PluginRuntime")

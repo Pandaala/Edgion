@@ -54,9 +54,7 @@ use super::namespace::NamespaceWatchMode;
 use super::resource_controller::{ApiScope, RelinkReason, RelinkSignalSender, ResourceController};
 use super::ShutdownSignal;
 use crate::core::controller::conf_mgr::conf_center::MetadataFilterConfig;
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-    ProcessorHandler, ResourceProcessor, SecretRefManager,
-};
+use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor};
 use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::types::prelude_resources::*;
 use crate::types::ResourceMeta;
@@ -75,7 +73,6 @@ struct SpawnContext {
     watcher_config: watcher::Config,
     shutdown: ShutdownSignal,
     relink_tx: RelinkSignalSender,
-    secret_ref_manager: Arc<SecretRefManager>,
     metadata_filter: Option<MetadataFilterConfig>,
     leader_handle: Option<super::leader_election::LeaderHandle>,
     runtime: Arc<ControllerRuntime>,
@@ -107,7 +104,6 @@ where
         kind,
         capacity,
         Arc::new(handler),
-        ctx.secret_ref_manager.clone(),
         ctx.runtime.clone(),
     ));
 
@@ -163,7 +159,6 @@ where
         kind,
         capacity,
         Arc::new(handler),
-        ctx.secret_ref_manager.clone(),
         ctx.runtime.clone(),
     ));
 
@@ -518,15 +513,11 @@ impl KubernetesController {
         // Create relink signal channel
         let (relink_tx, mut relink_rx) = mpsc::channel::<RelinkReason>(10);
 
-        // Create global SecretRefManager (shared by all ResourceControllers)
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
-
         // Create SpawnContext
         let ctx = SpawnContext {
             watcher_config: self.watcher_config(),
             shutdown: shutdown_signal.clone(),
             relink_tx: relink_tx.clone(),
-            secret_ref_manager: secret_ref_manager.clone(),
             metadata_filter: self.metadata_filter.clone(),
             leader_handle: self.leader_handle.clone(),
             runtime: runtime.clone(),

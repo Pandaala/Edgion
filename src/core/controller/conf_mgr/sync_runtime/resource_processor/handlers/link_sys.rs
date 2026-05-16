@@ -355,7 +355,7 @@ pub(super) async fn resolve_one<R: SecretMaterialResolver>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{condition_reasons, SecretRefManager};
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::condition_reasons;
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
     use crate::types::credentials::resolvers::{BasicAuthResolver, EsApiKeyResolver};
@@ -376,9 +376,7 @@ mod tests {
     fn make_ctx(secrets: HashMap<String, Secret>) -> (HandlerContext, Arc<ControllerRuntime>) {
         let runtime = Arc::new(ControllerRuntime::default());
         runtime.secret_store.replace_all(secrets);
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
         let ctx = HandlerContext::new(
-            secret_ref_manager,
             None,
             None,
             TriggerChain::default(),

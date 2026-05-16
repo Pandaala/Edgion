@@ -77,7 +77,6 @@ impl ProcessorHandler<EndpointSlice> for EndpointSliceHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::SecretRefManager;
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
     use crate::types::ResourceKind;
@@ -88,9 +87,7 @@ mod tests {
 
     fn make_ctx() -> (HandlerContext, Arc<ControllerRuntime>) {
         let runtime = Arc::new(ControllerRuntime::default());
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
         let ctx = HandlerContext::new(
-            secret_ref_manager,
             None,
             None,
             TriggerChain::default(),

@@ -57,9 +57,10 @@ impl ConfHandler<Gateway> for GatewayHandler {
 
                 update_gateway_backend_tls_store(key, gateway);
 
-                if let Err(e) = store.add_gateway((**gateway).clone()) {
-                    tracing::warn!(key = %key, error = %e, "Failed to add gateway to store");
-                }
+                // store was just cleared and `data` keys are unique by HashMap construction,
+                // so a duplicate-key error from add_gateway is unreachable here. Use the
+                // idempotent update_gateway to avoid carrying a dead warn branch.
+                store.update_gateway((**gateway).clone());
             }
 
             store.list_gateways()

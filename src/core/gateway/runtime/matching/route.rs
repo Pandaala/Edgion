@@ -8,12 +8,19 @@ use crate::core::gateway::runtime::store::listener_gateway_info::{format_gateway
 use crate::types::resources::common::ParentReference;
 use crate::types::resources::gateway::AllowedRoutes;
 
-/// Check if request hostname matches listener hostname constraint
+/// Check if request hostname matches listener hostname constraint.
 ///
 /// Supports:
 /// - Exact match (case-insensitive): "example.com" matches "example.com"
 /// - Wildcard suffix match: "*.example.com" matches "api.example.com"
-///   and "a.b.example.com" (per Gateway API spec, any number of labels)
+///   and "a.b.example.com" (per the Gateway API spec, any number of labels)
+///
+/// # TLS divergence
+/// The Gateway API allows multi-level wildcard matching here, but TLS certificates follow
+/// RFC 6125 §6.4.3 (single-label only). A cert with SAN `*.example.com` covers
+/// `api.example.com`, but RFC 6125-compliant client TLS libraries reject the handshake
+/// for `a.b.example.com` even when this function returns `true`. Use explicit SAN entries
+/// for deep subdomains.
 #[inline]
 pub fn hostname_matches_listener(request_host: &str, listener_hostname: &str) -> bool {
     if listener_hostname.starts_with("*.") {

@@ -175,13 +175,14 @@ impl ProcessorHandler<PluginMetaData> for PluginMetadataHandler {
         );
         ctx.runtime()
             .plugin_metadata_store
-            .update(Default::default(), &[key].into_iter().collect());
+            .update(Default::default(), &[key.clone()].into_iter().collect());
 
         remove_from_region_route_tables(pm, ctx);
         ctx.runtime()
             .plugin_metadata_refs
             .clear_refs_from(&Self::self_ref_key(pm));
         requeue_pm_referrers(pm, ctx).await;
+        ctx.runtime().plugin_metadata_refs.remove_pm(&key);
     }
 
     fn update_status(&self, pm: &mut PluginMetaData, ctx: &HandlerContext, validation_errors: &[String]) {

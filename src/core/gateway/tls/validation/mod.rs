@@ -8,6 +8,12 @@ pub use mtls::{validate_cn_whitelist, validate_san_whitelist};
 
 /// Match a value against a pattern, supporting exact match and single-level wildcard (`*.example.com`).
 /// Case-insensitive per RFC 6125 §6.4.1.
+///
+/// Uses RFC 6125 §6.4.3 semantics: `*.example.com` matches `api.example.com` but NOT
+/// `a.b.example.com` (single-label only). This is intentionally stricter than Gateway API
+/// route listener matching, which accepts any subdomain depth per the spec. Used for TLS
+/// certificate SAN validation at config load time; BoringSSL applies the same single-label
+/// rule during the TLS handshake.
 pub(crate) fn matches_host_pattern(value: &str, pattern: &str) -> bool {
     if value.eq_ignore_ascii_case(pattern) {
         return true;

@@ -289,6 +289,41 @@ impl<V: RefValue> BidirectionalRefManager<V> {
         self.clear_value_refs(value)
     }
 
+    /// Remove all references for a source key (e.g., when the source itself is
+    /// deleted). Symmetric to [`clear_value_refs`]: removes the forward entry
+    /// and scrubs the source key from every affected value's reverse entry.
+    ///
+    /// Returns the list of values that referenced this source.
+    pub fn clear_source_refs(&self, source_key: &str) -> Vec<V> {
+        let values: Vec<V> = {
+            let mut maps = self.inner.write();
+            let values: Vec<V> = maps
+                .refs
+                .remove(source_key)
+                .map(|s| s.into_iter().collect())
+                .unwrap_or_default();
+            for value in &values {
+                let value_key = value.ref_key();
+                if let Some(source_set) = maps.dependencies.get_mut(&value_key) {
+                    source_set.remove(source_key);
+                    if source_set.is_empty() {
+                        maps.dependencies.remove(&value_key);
+                    }
+                }
+            }
+            values
+        };
+        if !values.is_empty() {
+            tracing::info!(
+                component = self.component,
+                source_key = %source_key,
+                value_count = values.len(),
+                "Cleared all references for source"
+            );
+        }
+        values
+    }
+
     /// Return all source keys present in the forward index.
     pub fn all_source_keys(&self) -> Vec<String> {
         let maps = self.inner.read();
@@ -411,6 +446,35 @@ mod tests {
 
         assert!(mgr.get_refs("default/cert1").is_empty());
         assert!(mgr.get_refs("default/cert2").is_empty());
+    }
+
+    #[test]
+    fn test_clear_source_refs() {
+        let mgr = BidirectionalRefManager::<ResourceRef>::with_component("test");
+        let r1 = make_ref(ResourceKind::EdgionTls, "default", "tls1");
+        let r2 = make_ref(ResourceKind::EdgionTls, "default", "tls2");
+
+        mgr.add_ref("default/my-cert".to_string(), r1.clone());
+        mgr.add_ref("default/my-cert".to_string(), r2.clone());
+        // r1 also depends on a second cert; its reverse entry must be partially trimmed
+        mgr.add_ref("default/other-cert".to_string(), r1.clone());
+
+        let cleared = mgr.clear_source_refs("default/my-cert");
+        assert_eq!(cleared.len(), 2);
+        assert!(cleared.contains(&r1));
+        assert!(cleared.contains(&r2));
+
+        // forward entry removed
+        assert!(mgr.get_refs("default/my-cert").is_empty());
+
+        // r1's reverse entry still has "other-cert"; r2's reverse entry gone
+        let r1_deps = mgr.get_dependencies(&r1.ref_key());
+        assert_eq!(r1_deps, vec!["default/other-cert".to_string()]);
+        assert!(mgr.get_dependencies(&r2.ref_key()).is_empty());
+
+        // idempotent
+        let again = mgr.clear_source_refs("default/my-cert");
+        assert!(again.is_empty());
     }
 
     #[test]

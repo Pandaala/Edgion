@@ -43,6 +43,11 @@ impl TlsCertMatcher {
     }
 
     /// Match SNI against certificates for a specific listener.
+    ///
+    /// Certificate selection uses multi-level suffix matching (`HashHost`), so a cert
+    /// registered for `*.example.com` is found for `a.b.example.com`. However, RFC 6125
+    /// §6.4.3 restricts wildcard certs to a single label — RFC 6125-compliant client TLS
+    /// libraries reject the handshake for `a.b.example.com` even when a cert is selected here.
     pub fn match_sni(&self, key: &ListenerKey, sni: &str) -> Option<Arc<EdgionTls>> {
         let snapshot = self.data.load();
 

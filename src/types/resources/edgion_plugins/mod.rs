@@ -243,7 +243,9 @@ impl EdgionPlugins {
                     for (i, entry) in entries.iter_mut().enumerate() {
                         if let Some(conds) = entry.conditions.as_mut() {
                             if let Err(e) = conds.compile() {
-                                errors.push(format!("{}[{}] conditions regex: {}", $label, i, e));
+                                let msg = format!("{}[{}] conditions regex: {}", $label, i, e);
+                                tracing::warn!("{}", msg);
+                                errors.push(msg);
                             }
                         }
                     }

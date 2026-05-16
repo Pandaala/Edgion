@@ -31,8 +31,8 @@ pub enum LbPolicy {
 }
 ```
 
-- `LbPolicy::parse()` parses string configuration.
-- `LbPolicy::parse_from_string()` supports comma-separated multi-policy strings.
+- The variant for a given backend is produced inside `lb_policy_sync.rs` by mapping
+  `ParsedLBPolicy` (the typed extension) onto `LbPolicy` — no string parsing on this path.
 - When not configured, RoundRobin is used by default.
 
 ## EWMA and LeastConn selection algorithm

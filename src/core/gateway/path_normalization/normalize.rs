@@ -239,65 +239,77 @@ fn merge_slashes(path: &str) -> String {
 /// `merge_slashes` collapses to `/admin/`) would lose its trailing slash and
 /// fail to match an operator's `Exact: /admin/` route.
 fn remove_dot_segments(path: &str) -> String {
-    let mut input = path.to_string();
-    let mut output = String::with_capacity(path.len());
+    let bytes = path.as_bytes();
+    let n = bytes.len();
+    let mut out: Vec<u8> = Vec::with_capacity(n);
+    let mut i = 0usize;
 
     // Tracks whether the algorithm consumed a terminal `/.` or `/..` rule.
-    // Only set by the B' (`input == "/."`) and C' (`input == "/.."`) branches.
+    // Only set by the B' (`rest == b"/."`) and C' (`rest == b"/.."`) branches.
     // Once set, stays set for the remainder of processing.
     let mut terminal_dot_segment_consumed = false;
 
-    while !input.is_empty() {
-        // A: remove leading `../` or `./`
-        if input.starts_with("../") {
-            input.replace_range(..3, "");
-        } else if input.starts_with("./") {
-            input.replace_range(..2, "");
-        // B: `/./` → `/`  (mid-string; trailing `/` belongs to legitimate input)
-        } else if input.starts_with("/./") {
-            input.replace_range(..3, "/");
-        // B': trailing `/.` → `/`  (terminal — produces a trailing `/` we want to strip)
-        } else if input == "/." {
-            input.replace_range(.., "/");
+    while i < n {
+        let rest = &bytes[i..];
+
+        if rest.starts_with(b"../") {
+            // A: strip leading `../`
+            i += 3;
+        } else if rest.starts_with(b"./") {
+            // A: strip leading `./`
+            i += 2;
+        } else if rest.starts_with(b"/./") {
+            // B: `/./` → `/`; advance past `/.`, leaving the trailing `/` as new head
+            i += 2;
+        } else if rest == b"/." {
+            // B': terminal `/.` → push `/` and stop (trailing `/` stripped below if needed)
+            out.push(b'/');
+            i = n;
             terminal_dot_segment_consumed = true;
-        // C: `/../` → `/` + pop last output segment  (mid-string)
-        } else if input.starts_with("/../") {
-            input.replace_range(..4, "/");
-            pop_last_segment(&mut output);
-        // C': trailing `/..` → `/` + pop last output segment  (terminal)
-        } else if input == "/.." {
-            input.replace_range(.., "/");
-            pop_last_segment(&mut output);
+        } else if rest.starts_with(b"/../") {
+            // C: `/../` → `/` + pop; advance past `/..`, leaving trailing `/` as new head
+            i += 3;
+            pop_last_segment_bytes(&mut out);
+        } else if rest == b"/.." {
+            // C': terminal `/..` → pop last segment, push `/`, stop
+            pop_last_segment_bytes(&mut out);
+            out.push(b'/');
+            i = n;
             terminal_dot_segment_consumed = true;
-        // D: lone `.` or `..`
-        } else if input == "." || input == ".." {
-            input.clear();
-        // E: move first path segment (including leading `/` if present) to output
+        } else if rest == b"." || rest == b".." {
+            // D: lone `.` or `..` → discard
+            i = n;
         } else {
-            // Find the end of the first segment: search for `/` starting at index 1
-            // (skip the leading `/` or first char)
-            let next_slash = input[1..].find('/').map(|i| i + 1).unwrap_or(input.len());
-            output.push_str(&input[..next_slash]);
-            input.replace_range(..next_slash, "");
+            // E: copy first path segment (including leading `/` if present) to output
+            let skip = usize::from(bytes[i] == b'/');
+            let end = bytes[i + skip..]
+                .iter()
+                .position(|&b| b == b'/')
+                .map(|p| i + skip + p)
+                .unwrap_or(n);
+            out.extend_from_slice(&bytes[i..end]);
+            i = end;
         }
     }
 
     // Strip a trailing slash ONLY when produced by terminal dot-segment resolution.
     // Preserves trailing slashes that belong to the input (e.g. after `merge_slashes`
     // collapses `/admin//` to `/admin/`, the trailing `/` is part of operator semantics).
-    if terminal_dot_segment_consumed && output.len() > 1 && output.ends_with('/') {
-        output.pop();
+    if terminal_dot_segment_consumed && out.len() > 1 && out.last() == Some(&b'/') {
+        out.pop();
     }
 
-    output
+    // SAFETY: `out` is built by copying byte slices from `path` (valid UTF-8) plus
+    // ASCII b'/'; slash-bounded copies preserve UTF-8 character boundaries.
+    unsafe { String::from_utf8_unchecked(out) }
 }
 
-/// Remove the last segment from `output` (everything from the last `/` onward).
-fn pop_last_segment(output: &mut String) {
-    if let Some(idx) = output.rfind('/') {
-        output.truncate(idx);
+/// Remove the last segment from `out` (everything from the last `b'/'` onward).
+fn pop_last_segment_bytes(out: &mut Vec<u8>) {
+    if let Some(idx) = out.iter().rposition(|&b| b == b'/') {
+        out.truncate(idx);
     } else {
-        output.clear();
+        out.clear();
     }
 }
 

@@ -324,7 +324,6 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::SecretRefManager;
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::types::resources::common::ParentReference;
     use crate::types::resources::gateway::SecretObjectReference;
@@ -334,7 +333,6 @@ mod tests {
     fn make_ctx() -> HandlerContext {
         use crate::core::controller::conf_mgr::ControllerRuntime;
         HandlerContext::new(
-            Arc::new(SecretRefManager::new()),
             None,
             None,
             TriggerChain::default(),
@@ -580,7 +578,6 @@ mod tests {
         runtime.secret_store.replace_all(secrets);
 
         HandlerContext::new(
-            Arc::new(SecretRefManager::new()),
             None,
             None,
             TriggerChain::default(),

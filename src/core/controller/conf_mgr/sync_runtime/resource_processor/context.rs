@@ -12,18 +12,13 @@ use crate::core::controller::conf_mgr::conf_center::MetadataFilterConfig;
 use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
 use crate::core::controller::conf_mgr::ControllerRuntime;
 
-use super::SecretRefManager;
-
 /// Context for handler methods
 ///
 /// This struct provides handlers with access to:
-/// - Secret management utilities
+/// - Secret management utilities (via runtime.secret_ref_manager)
 /// - Cross-resource requeue mechanism (with cycle detection)
 /// - Processing configuration
 pub struct HandlerContext {
-    /// Secret reference manager (tracks which resources depend on which secrets)
-    secret_ref_manager: Arc<SecretRefManager>,
-
     /// Metadata filter configuration
     metadata_filter: Option<Arc<MetadataFilterConfig>>,
 
@@ -47,7 +42,6 @@ pub struct HandlerContext {
 impl HandlerContext {
     /// Create a new HandlerContext
     pub fn new(
-        secret_ref_manager: Arc<SecretRefManager>,
         metadata_filter: Option<Arc<MetadataFilterConfig>>,
         namespace_filter: Option<Arc<Vec<String>>>,
         trigger_chain: TriggerChain,
@@ -56,7 +50,6 @@ impl HandlerContext {
         runtime: Arc<ControllerRuntime>,
     ) -> Self {
         Self {
-            secret_ref_manager,
             metadata_filter,
             namespace_filter,
             trigger_chain,
@@ -67,8 +60,8 @@ impl HandlerContext {
     }
 
     /// Get SecretRefManager reference
-    pub fn secret_ref_manager(&self) -> &SecretRefManager {
-        &self.secret_ref_manager
+    pub fn secret_ref_manager(&self) -> &super::SecretRefManager {
+        &self.runtime.secret_ref_manager
     }
 
     /// Get metadata filter configuration

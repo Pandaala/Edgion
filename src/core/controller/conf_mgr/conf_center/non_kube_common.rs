@@ -21,8 +21,8 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     run_post_cache_ready_revalidations, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
     EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler, EdgionTlsHandler,
     EndpointSliceHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler,
-    PluginMetadataHandler, ProcessorHandler, ReferenceGrantHandler, ResourceProcessor, SecretHandler, SecretRefManager,
-    ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
+    PluginMetadataHandler, ProcessorHandler, ReferenceGrantHandler, ResourceProcessor, SecretHandler, ServiceHandler,
+    TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 use crate::core::controller::conf_mgr::sync_runtime::{ShutdownHandle, ShutdownSignal};
 use crate::core::controller::conf_mgr::ControllerRuntime;
@@ -332,7 +332,6 @@ pub async fn spawn<K, H, B>(
     kind: &'static str,
     handler: H,
     backend: &B,
-    secret_ref_manager: &Arc<SecretRefManager>,
     shutdown_signal: ShutdownSignal,
     runtime: Arc<ControllerRuntime>,
 ) -> JoinHandle<Result<()>>
@@ -346,7 +345,6 @@ where
         kind,
         capacity,
         Arc::new(handler),
-        secret_ref_manager.clone(),
         runtime.clone(),
     ));
 
@@ -373,7 +371,6 @@ where
 ///   resource types that depend on Phase-1 data being available.
 pub async fn spawn_all_controllers<B: LocalControllerBackend>(
     backend: &B,
-    secret_ref_manager: &Arc<SecretRefManager>,
     shutdown_signal: ShutdownSignal,
     runtime: Arc<ControllerRuntime>,
     component: &'static str,
@@ -390,7 +387,6 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
                     stringify!($K),
                     $handler,
                     backend,
-                    secret_ref_manager,
                     shutdown_signal.clone(),
                     runtime.clone(),
                 )
