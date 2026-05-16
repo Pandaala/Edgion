@@ -1,3 +1,8 @@
+---
+name: map-variant-is-boxed
+description: Use when reviewing DSL Value enum size or Map variant findings; documents that Value::Map is intentionally Box-wrapped to enforce the size invariant and unboxing is not accepted.
+---
+
 # DSL `Value::Map` is intentionally Boxed — do not unbox
 
 **Date applied**: 2026-05-15

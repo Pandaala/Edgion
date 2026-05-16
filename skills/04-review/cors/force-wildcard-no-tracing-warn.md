@@ -1,3 +1,8 @@
+---
+name: force-wildcard-no-tracing-warn
+description: Use when reviewing CORS plugin findings that request `tracing::warn!` on `allow_origins='**'` / `allow_methods='**'` / `allow_headers='**'`; explains why warns were removed from the request hot path and validate/preparse paths.
+---
+
 # CORS Force-Wildcard (`**`) Does Not Emit `tracing::warn!` (Fixed)
 
 ## Conclusion

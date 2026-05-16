@@ -21,11 +21,18 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
    - [02-features/03-resources/](02-features/03-resources/SKILL.md) — **external contract**: YAML Schema, field types and default values, configuration examples
    - When changing code you typically need both: check 02 to confirm field definitions in the Schema, check 01 to confirm processing logic in the implementation
 
+## File extensions
+
+- `*.skill` — invokable workflow with a step-numbered structure. Must carry YAML frontmatter (`name:`, `description:`). Loaded as a slash command or by name (see `~/.claude/commands/fix-issue.md` for a working example).
+- `SKILL.md` — directory entry point. Routes to sub-files; not invoked directly.
+- `*.md` — reference or decision-rule document. Loaded on demand by an upstream skill via "first read X" hints.
+- Workflow appendix files use the `<workflow>_<role>.md` shape (e.g., `new_feature_work_flow_templates.md`); they are referenced from the parent `.skill` and not loaded independently.
+
 ## Quick locator
 
 | What you want to learn | Direct entry |
 |-----------|---------|
-| **System architecture** — relationship between the three Controller/Gateway/Ctl bins, internal modules, development guides | [01-architecture/SKILL.md](01-architecture/SKILL.md) |
+| **System architecture** — relationship between the four Controller/Gateway/Center/Ctl binaries, internal modules, development guides | [01-architecture/SKILL.md](01-architecture/SKILL.md) |
 | **Binary startup and deployment** — CLI arguments, deployment modes | [02-features/01-binary-and-deployment/](02-features/01-binary-and-deployment/SKILL.md) |
 | **TOML config Schema** — Controller/Gateway configuration | [02-features/02-config/](02-features/02-config/SKILL.md) |
 | **Resource feature Schema** — Gateway/Route/TLS/Plugin/Backend/LinkSys | [02-features/03-resources/](02-features/03-resources/SKILL.md) |
@@ -35,12 +42,35 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **Integration testing** — architecture, running, adding test cases | [05-testing/01-integration-testing.md](05-testing/01-integration-testing.md) |
 | **Global review** — security/correctness/observability checklists + closed false-positive entries | [10-fully-review/SKILL.md](10-fully-review/SKILL.md) |
 | **User documentation conventions** — writing conventions for authoring/reviewing docs/ documentation | [11-doc/SKILL.md](11-doc/SKILL.md) |
-| **CI / release automation** — GitHub Release, tag pushes, Docker images, location of release-notes files | [09-misc/cicd/02-github-workflow.md](09-misc/cicd/02-github-workflow.md) |
-| **Center federation persistence** — SQLite `controllers` table, CenterDb, database configuration (PM data has switched to reverse Watch and no longer uses SQLite cache) | [09-misc/center-db.md](09-misc/center-db.md) |
-| **Center reverse Watch architecture** — CenterWatchCache, CenterMetaDataStore, federation gRPC bidirectional stream PM data flow | [09-misc/center-db.md](09-misc/center-db.md) |
+| **Pre-commit / local checks** (fmt + check + clippy + check-agent-docs) | [09-misc/SKILL.md](09-misc/SKILL.md) |
+| **GitHub Actions / Docker / Release** — tag pushes, Docker images, release-notes files | [09-misc/cicd/02-github-workflow.md](09-misc/cicd/02-github-workflow.md) |
+| **Center architecture** — federation gRPC, reverse Watch, CenterWatchCache, CenterMetaDataStore, SQLite persistence | [01-architecture/06-center/SKILL.md](01-architecture/06-center/SKILL.md) |
 | **Dev-deployment hot-swap** — native image + shell loop + cross-compilation + kubectl cp | [09-misc/03-dev-deploy-hot-replace.md](09-misc/03-dev-deploy-hot-replace.md) |
 
 > For finer-grained locators inside the architecture (Controller/Gateway/Link/resources/plugin development/route matching, etc.) see [01-architecture/SKILL.md](01-architecture/SKILL.md).
+
+## Task locator (what do you want to do?)
+
+Verbed entries for the most common developer workflows. The Quick locator above answers "where is X documented?"; this table answers "I want to do Y, where do I start?".
+
+| Task | Entry point |
+|------|-------------|
+| Add a new resource type | [01-architecture/01-controller/09-add-new-resource/00-guide.md](01-architecture/01-controller/09-add-new-resource/00-guide.md) |
+| Develop a new HTTP plugin | [01-architecture/02-gateway/12-edgion-plugin-dev.md](01-architecture/02-gateway/12-edgion-plugin-dev.md) |
+| Develop a new Stream plugin | [01-architecture/02-gateway/13-stream-plugin-dev.md](01-architecture/02-gateway/13-stream-plugin-dev.md) |
+| Debug a runtime issue (404 / 421 / 502 / 503 / Unknown kind) | [06-tracing/00-debugging.md](06-tracing/00-debugging.md) |
+| Debug a Controller → Gateway sync issue | [01-architecture/03-controller-gateway-link/SKILL.md](01-architecture/03-controller-gateway-link/SKILL.md) |
+| Add a new edgion.io/* annotation | [02-features/05-annotations/00-annotations-overview.md](02-features/05-annotations/00-annotations-overview.md) |
+| Run pre-commit / local checks (fmt + check + clippy + check-agent-docs) | [09-misc/SKILL.md](09-misc/SKILL.md) |
+| Review a PR (per-feature) | [04-review/SKILL.md](04-review/SKILL.md) |
+| Run a global codebase review | [10-fully-review/SKILL.md](10-fully-review/SKILL.md) |
+
+## Symptom locator
+
+| Symptom | Where |
+|---------|-------|
+| Gateway logs `Unknown kind` after Controller restart | [01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md](01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md) |
+| Routing returns 404 / 421 / 502 / 503 | [06-tracing/00-debugging.md](06-tracing/00-debugging.md) |
 
 ## Key constraints (must read; violations introduce runtime bugs)
 
@@ -52,6 +82,8 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **gRPC H2 grpc-status must be placed in trailers** | Pingora H2 response path | Placing it in response headers causes tonic to return Internal(13); it must go in trailers. |
 | **Tracing is forbidden on the data-plane request/connection hot path** | `skills/03-coding/01-log-safety.md` iron rule 3 | The request/connection processing path may only use access log / `PluginLog` / `ctx.err_log` / Metrics; any `tracing::` macro (including `debug!`) is forbidden. Exceptions: configuration loading paths, process startup/shutdown, and access-log send failures in `pg_logging.rs`. Applies to plugin `run_request` / `run_upstream_response` / TLS proxy / stream proxy across the board. |
 | **No PluginLog in the `UpstreamResponseBodyFilter` body phase** | `traits/upstream_response_body_filter.rs`, `conditions/evaluator.rs` | The trait signature deliberately omits `&mut PluginLog`; the body phase is invoked once per chunk, and any heap allocation per chunk (PluginLog / String / Vec) accumulates as O(chunks×plugins). When adding a new body-phase filter / wrapper, do not write logs; condition evaluation should use the `evaluate_sync_silent` chain rather than `evaluate_detail_sync`, and ExtensionRef should go through `resolve_runtime_silent`. A long-stream memory leak (issue g2-001) was once introduced because ExtensionRef accidentally called `start_edgion_plugins_log`. See [05-plugin-system.md §No PluginLog in body phase](01-architecture/02-gateway/05-plugin-system.md) for details. |
+| **`ConfHandler.partial_update` MUST produce a real incremental diff, never merge-into-full-then-full-set** | [`01-architecture/02-gateway/11-conf-handler-guidelines.md:30`](01-architecture/02-gateway/11-conf-handler-guidelines.md) | The trait signature compiles a "merge + full rebuild" body, but doing so loses updates. If incremental is not yet implemented, mark with `// TODO: incremental rebuild` rather than emulating via full_set. |
+| **ConfHandler logs MUST NOT contain Secret / TLS resource bodies** | [`01-architecture/02-gateway/11-conf-handler-guidelines.md:52-54`](01-architecture/02-gateway/11-conf-handler-guidelines.md) | Logs may record metadata (key name, counts, affected scope) and error messages only. The full spec must never appear in any log line. |
 
 ## Common practice notes
 
@@ -68,24 +100,16 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | 03 | [coding/](03-coding/SKILL.md) | Coding conventions: log IDs, log safety, observability (Access Log / Metrics / Tracing) |
 | 04 | [review/](04-review/SKILL.md) | Review notes: false-positive determinations, observability audits |
 | 05 | [testing/](05-testing/SKILL.md) | Testing: unit tests, integration tests, K8s tests, special-purpose tests |
-| 06 | [tracing/](06-tracing/SKILL.md) | Debugging: Admin API, edgion-cli, common issues |
+| 06 | [tracing/](06-tracing/SKILL.md) | Debugging — symptom-to-tool guide: Admin API, edgion-cli, common runtime issues (not distributed tracing) |
 | 07 | [tasks/](07-tasks/SKILL.md) | Task management: directory rules, templates, lifecycle phases, completion checklists |
 | 08 | [kubernetes/](08-kubernetes/SKILL.md) | Kubernetes-related: Gateway API compatibility, API version upgrade strategy |
-| 09 | [misc/](09-misc/) | Miscellaneous (TLS troubleshooting, etc.) |
+| 09 | [misc/](09-misc/SKILL.md) | Miscellaneous (TLS troubleshooting, etc.) |
 | 10 | [fully-review/](10-fully-review/SKILL.md) | Global review guide: per-dimension checklists, security misjudgement rules, closed entries |
 | 11 | [11-doc/](11-doc/SKILL.md) | User documentation conventions: directory layout, writing style, page templates, multilingual, version management, review checklist |
 
-## Development lifecycle quick reference
+## Development lifecycle
 
-Tasks progress phase by phase, with the corresponding skills loaded at each phase (see [07-tasks/SKILL.md](07-tasks/SKILL.md) for details):
-
-| Phase | What to do | Load |
-|-------|--------|------|
-| 1 Analysis | Requirements analysis, impact assessment | `01-architecture/` |
-| 2 Design | Solution design, Schema confirmation | `01-architecture/`, `02-features/` |
-| 3 Implementation | Coding | `01-architecture/` (development guide), `02-features/` (config Schema), `03-coding/` |
-| 4 Testing | Test verification | `05-testing/` |
-| 5 Review | Code review | `04-review/`, `10-fully-review/` (global review or when reviewing AI reports) |
+See [`07-tasks/SKILL.md`](07-tasks/SKILL.md) for the full lifecycle phase table (Analysis → Design → Implementation → Test → Review).
 
 ## User documentation
 

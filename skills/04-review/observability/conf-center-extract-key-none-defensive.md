@@ -1,3 +1,8 @@
+---
+name: conf-center-extract-key-none-defensive
+description: Use when reviewing findings that request log/metric instrumentation on the `None` branch of `extract_key_from_path` / `extract_key_from_etcd_key`; explains the upstream watcher pre-filter that makes those branches unreachable in production.
+---
+
 # `extract_key_from_path` / `extract_key_from_etcd_key` None Branches Are Defensive Fallbacks
 
 ## Conclusion

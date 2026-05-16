@@ -1,3 +1,8 @@
+---
+name: not-a-memory-leak
+description: Use when reviewing a flagged memory leak in long-running code paths; lists patterns (lazy cleanup, intentional caches, capped buffers) that are accepted tradeoffs rather than bugs.
+---
+
 # Non-Memory-Leak Scenarios
 
 ## Stale Entries After Lazy Creation in Auxiliary LB Stores

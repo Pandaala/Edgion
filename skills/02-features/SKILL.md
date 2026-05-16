@@ -1,6 +1,6 @@
 ---
 name: features
-description: Feature deep-reference skill. Written from a user/operations perspective, covering binary startup and deployment, configuration schemas, resource feature schemas, observability, and full annotation documentation.
+description: Use when looking up configuration schemas, resource field definitions, binary deployment options, observability settings, or edgion.io/* annotation references.
 ---
 
 # 02 Features and Configuration Reference
@@ -19,7 +19,7 @@ description: Feature deep-reference skill. Written from a user/operations perspe
 
 | # | Directory | Purpose |
 |---|-----------|---------|
-| 01 | [binary-and-deployment/](01-binary-and-deployment/SKILL.md) | Startup of the three binaries, CLI arguments, deployment patterns, Feature Flags |
+| 01 | [binary-and-deployment/](01-binary-and-deployment/SKILL.md) | Startup of the four binaries, CLI arguments, deployment patterns, Feature Flags |
 | 02 | [config/](02-config/SKILL.md) | Controller/Gateway TOML configuration schemas, EdgionGatewayConfig CRD schema |
 | 03 | [resources/](03-resources/SKILL.md) | **All resource feature schemas**: Gateway, Route, TLS, Plugin, Backend, LinkSys |
 | 04 | [observability/](04-observability/SKILL.md) | Observability features: Access Log configuration, Metrics endpoints, protocol logs |

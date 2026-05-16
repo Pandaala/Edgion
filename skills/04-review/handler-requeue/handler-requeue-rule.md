@@ -1,3 +1,8 @@
+---
+name: handler-requeue-rule
+description: Use when reviewing ProcessorHandler implementations; enforces that any handler calling lookup_gateway() in parse() must also implement on_change() with update_gateway_route_index() and on_delete() cleanup.
+---
+
 # Handler Requeue Rule
 
 > Confirmed 2026-03-17 based on actual bug fix in `edgion_tls.rs`.

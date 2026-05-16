@@ -1,0 +1,29 @@
+---
+name: closed-findings
+description: Use when researching whether a flagged review finding has been previously closed and why; chronological log of closed P-level findings keyed by issue ID.
+---
+
+# Closed Findings Log
+
+This table records findings that have been confirmed closed — either fixed in code or accepted as a known design tradeoff. When a finding matches an entry here, reference the row and close without re-escalation.
+
+| Issue ID | Fix commit / date | Topic | Summary | Linked rule |
+|----------|-------------------|-------|---------|-------------|
+| P3-g4-006 | — | Plugin runtime | `ctx_set::apply_transform` `Replace` arm `None` fallback: graceful-degrade is the project idiom; `debug_assert!` / `unreachable!()` is not accepted | [architecture/plugin-runtime-god-match.md](architecture/plugin-runtime-god-match.md), [03-coding/02-rust-coding-rules.md §Rule 5](../03-coding/02-rust-coding-rules.md) |
+| g2-011 | — | Plugin runtime | `PluginRuntime` empty `impl Clone` removed; sharing is exclusively via `Arc<PluginRuntime>`; re-implementation not accepted | [architecture/plugin-runtime-god-match.md](architecture/plugin-runtime-god-match.md) |
+| c1-013 | — | ACME | `EdgionAcmeHandler::parse` now gates `notify_resource_changed` on `spec_changed \|\| creds_changed`; restart resilience via `scan_all_acme_resources` | — |
+| c2b-011 | — | Concurrency | `BackendTLSPolicyState::is_winner` takes a single `timestamps.read().clone()` snapshot; TOCTOU resolved | — |
+| P3-g4-008 | 2026-05-16 | Observability | `Cors::from_arc` `tracing::warn!` for `**` removed; `from_arc` is on the per-request preflight hot path; data-plane tracing prohibition applies | [cors/force-wildcard-no-tracing-warn.md](cors/force-wildcard-no-tracing-warn.md) |
+| g4-005 | — | Rate limiting | `RateLimitRedis::reject_request` omits `Retry-After` when `retry_after == ZERO`; sub-second values ceiled to 1 s; integration assertions cover all three cases | [rate-limit/](rate-limit/) |
+| t1-010 | — | Config / schema | `ClientTimeout`, `BackendTimeout`, `HTTPRouteTimeouts`, `HTTPRouteRetry.backoff`, `SessionPersistence` fields carry `#[schemars(pattern(...))]`; malformed values caught at admission time | — |
+| g8-008 | — | Gateway handler | `GatewayHandler::full_set` dead `tracing::warn!` on `add_gateway` Err branch removed; `full_set` now calls `store.update_gateway` directly after `store.clear()` | — |
+| g7-006 Issue A | — | Circuit breaker | `record_success` gauge leak fixed: removed entry with `ejected_at.is_some()` now calls `record_cb_recovery`; unit regression `test_record_success_on_ejected_does_not_leak_gauge` | — |
+| g7-006 Issue B | — | Circuit breaker | `record_failure` `total_endpoints == 0` bypass fixed: falls back to `svc.endpoints.len().max(1)` when caller total is 0; unit regression `test_percent_cap_applies_when_total_endpoints_is_zero` | — |
+| g8-005 | — | URI normalization | `remove_dot_segments` rewritten to O(n) with read-head index + `Vec<u8>` output; `replace_range` loop eliminated | [uri-normalization/SKILL.md](uri-normalization/SKILL.md) |
+| g9a-007 | — | LinkSys / TLS | `link_sys::tls::apply_to_reqwest_builder` centralises CA root + mTLS identity loading for all reqwest-based providers (ES / webhook / new providers); call sequence is `apply_insecure_skip_verify` → `apply_to_reqwest_builder`; duplication-across-providers findings closed | — |
+| P3-g3-016 | — | Forward auth | `forward_auth::send_error_response` now takes `plugin_log` and emits `push_err` when `extra_headers` insert fails; static inserts and `write_response_*` retain `let _ = ...` intentionally | [forward-auth/](forward-auth/) |
+| common-center-03 | 2026-05-16 | Federation | `fed_sync::server::sync` runs `validate_register_req` + `registry_capacity_exceeded` before any state mutation; caps: 10 000 controllers, ID ≤ 253 B, cluster ≤ 63 B, etc. | [cpu-memory/not-a-performance-issue.md](cpu-memory/not-a-performance-issue.md) |
+| P3-g5-015 | — | DSL | `Constant::Regex` compilation: all three sites (`Vm::new`, `Validator::validate`, `Compiler::add_regex_const`) use `RegexBuilder` with `size_limit(1<<20)` + `dfa_size_limit(1<<20)` | [dsl-regex/dfa-size-limit.md](dsl-regex/dfa-size-limit.md) |
+| P0-04 | — | Security / CSRF | `csrf/token.rs` non-constant-time `sign` comparison: token contains 256-bit CSPRNG random; timing oracle cannot pair with random; closed | — |
+| P0-04b | — | Security / CSRF | `csrf/token.rs` SHA-256 key mixing instead of HMAC: exact-match validation blocks length-extension exploitation; closed | — |
+| P0-09 | — | Security / CSRF | `csrf/token.rs` `SystemTime::now().duration_since(UNIX_EPOCH).unwrap()`: requires clock to pre-date 1970 (unreachable); `unwrap_or(0)` would silently bypass expiry check — panic is safer; closed | — |

@@ -15,8 +15,8 @@ description: edgion-gateway data plane architecture — Pingora integration, rou
 | [00-overview.md](00-overview.md) | Gateway overall architecture | First-time understanding of Gateway design |
 | [01-startup-shutdown.md](01-startup-shutdown.md) | Startup / shutdown + Pingora integration | Debug startup issues, understand initialization order |
 | [02-pingora-lifecycle.md](02-pingora-lifecycle.md) | ProxyHttp callbacks, ConnectionFilter | Modify request handling flow, understand proxy lifecycle |
-| [03-routes/](03-routes/) | Route subsystem | Modify route logic, troubleshoot route mismatches |
-| [04-tls/](04-tls/) | TLS subsystem | TLS certificate management, mTLS configuration |
+| [03-routes/SKILL.md](03-routes/SKILL.md) | Route subsystem | Modify route logic, troubleshoot route mismatches |
+| [04-tls/SKILL.md](04-tls/SKILL.md) | TLS subsystem | TLS certificate management, mTLS configuration |
 | [05-plugin-system.md](05-plugin-system.md) | Plugin system (4-phase execution model) | Understand plugin execution flow, develop new plugins, modify conditional execution logic |
 | [06-load-balancing.md](06-load-balancing.md) | Load balancing strategies | Modify LB strategies, understand RoundRobin/EWMA/LeastConn/ConsistentHash selection algorithms |
 | [07-backends.md](07-backends.md) | Backend discovery + health check | Modify Endpoint/EndpointSlice discovery, health check configuration, BackendTLSPolicy |

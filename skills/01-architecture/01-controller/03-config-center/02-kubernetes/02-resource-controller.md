@@ -267,4 +267,4 @@ avoiding the risk of partial cache being out of sync with the K8s API.
 - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handler.rs` — `ProcessorHandler<K>` trait
 - `src/core/controller/conf_mgr/sync_runtime/workqueue.rs` — `Workqueue`, `WorkItem`, `WorkqueueConfig`
 - `src/core/controller/conf_mgr/processor_registry.rs` — `PROCESSOR_REGISTRY`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/status.rs` — `persist_k8s_status`
+- `src/core/controller/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `persist_k8s_status` (inlined; `status.rs` was removed)

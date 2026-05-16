@@ -1,3 +1,8 @@
+---
+name: key-auth-hashmap-not-ct
+description: Use when reviewing key_auth constant-time comparison findings; explains why HashMap SHA-256 lookup is not a real timing attack surface and why a subtle::ConstantTimeEq switch is not accepted.
+---
+
 # Key Auth HashMap Lookup is Not Constant-Time: Not a Real Attack Surface
 
 ## Conclusion

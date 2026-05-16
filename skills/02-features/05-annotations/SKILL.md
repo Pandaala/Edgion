@@ -12,6 +12,7 @@ description: Full reference for Edgion annotations and Options keys: metadata.an
 | File | Topic |
 |------|-------|
 | [00-annotations-overview.md](00-annotations-overview.md) | Annotations overview and quick lookup |
+| [add-new-annotation.md](add-new-annotation.md) | Developer checklist for adding a new `edgion.io/*` annotation |
 | [references/annotations-metadata.md](references/annotations-metadata.md) | Detailed reference for `metadata.annotations` |
 | [references/annotations-options-and-labels.md](references/annotations-options-and-labels.md) | Reference for `options` keys and Labels |
 | [references/annotations-system-and-test-keys.md](references/annotations-system-and-test-keys.md) | System reserved keys and test keys |

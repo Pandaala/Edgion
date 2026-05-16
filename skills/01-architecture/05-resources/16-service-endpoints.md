@@ -3,6 +3,8 @@ name: resource-service-endpoints
 description: Service + EndpointSlice + Endpoint resources — backend discovery, cascading requeue, two endpoint modes.
 ---
 
+> **Status: partially removed**. The `Endpoints` resource handler was removed in commit `43acc97` (2026-05-06); backend discovery now uses EndpointSlice/Service exclusively. The Endpoints-related content below is preserved for historical context.
+
 # Service + EndpointSlice + Endpoint resources
 
 > **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
@@ -14,11 +16,11 @@ These three Kubernetes core resources together form the backend service-discover
 - Controller Handlers:
   - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/service.rs`
   - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/endpoint_slice.rs`
-  - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/endpoints.rs`
+  - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/endpoints.rs` (removed in commit `43acc97`, 2026-05-06)
 - Gateway ConfHandlers:
   - `src/core/gateway/backends/discovery/services/conf_handler_impl.rs`
   - `src/core/gateway/backends/discovery/endpoint_slice/conf_handler_impl.rs`
-  - `src/core/gateway/backends/discovery/endpoint/conf_handler_impl.rs`
+  - `src/core/gateway/backends/discovery/endpoint/conf_handler_impl.rs` (removed in commit `43acc97`, 2026-05-06)
 
 ## Service
 

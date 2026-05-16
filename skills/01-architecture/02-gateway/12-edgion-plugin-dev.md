@@ -373,7 +373,6 @@ If the plugin will call external HTTP services, prefer reusing:
 
 - `src/core/gateway/plugins/http/common/http_client.rs`
 - `src/core/gateway/plugins/http/common/auth_common.rs`
-- `src/core/gateway/plugins/http/common/jwt_common.rs`
 
 ## `PluginLog` rules
 

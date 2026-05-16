@@ -1,12 +1,12 @@
 ---
 name: 09-misc
-description: Miscellaneous skill for Edgion. Includes CI/CD (compiling binaries, feature flags, Docker builds, release workflows) and TLS debugging.
+description: Use for pre-commit/local checks, CI/CD workflows, Docker builds, release automation, Center hot-replace deployment, or TLS troubleshooting.
 ---
 
 # 09 Miscellaneous
 
 > Edgion build and release workflow. Rust 1.75+ single-crate project, default features: `allocator-jemalloc` + `boringssl`.
-> Three binaries: `edgion-gateway` (data plane), `edgion-controller` (control plane), `edgion-cli` (CLI).
+> Four binaries: `edgion-gateway` (data plane), `edgion-controller` (control plane), `edgion-cli` (CLI), `edgion-center` (federation center).
 
 ## File list
 

@@ -1,3 +1,8 @@
+---
+name: replay-protection-timestamp-only
+description: Use when reviewing hmac_auth replay-protection findings; documents why timestamp-window-only (no nonce dedup) is the correct layering and why gateway-layer nonce storage is not accepted.
+---
+
 # HMAC Auth Replay Protection: Timestamp Window + HTTPS + Business-Layer Idempotency is the Correct Layering
 
 ## Conclusion

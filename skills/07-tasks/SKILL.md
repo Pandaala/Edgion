@@ -17,14 +17,35 @@ Use this skill when work needs to be recorded under `tasks/`.
 
 ## Directory rules
 
+The `tasks/` layout has two independent axes:
+
+**Lifecycle axis** — tracks active work:
+- `tasks/todo/` — ideas / not yet started
 - `tasks/pending/` — work in progress or pending start
-- `tasks/review/` — entered review / acceptance phase
-- `tasks/todo/` — to-do / ideas (not yet started)
-- `tasks/todo-test-cover/` — test-coverage governance (independent workflow, advanced in numerical order)
-- `tasks/done/` — completed and archived
-- Task granularity is flexible: a single file `<task-name>.md` or a separate directory works. Use kebab-case for names (e.g., `log-tracing-optimization`); for complex tasks (multi-document set), use a directory.
+- Acceptance happens via a GitHub PR. There is no separate `done/` directory; completed work is archived by git history once the branch is merged.
+
+**Review-batch axis** — global review passes:
+- `tasks/review-N-<slug>/` (e.g., `review-2/`, `review-dead-code/`) — one file per finding from a global review pass; consumed by `04-review/fix-review-issue.skill`; finding files are deleted as each issue is closed.
+
+Task granularity is flexible: a single file `<task-name>.md` or a separate directory works. Use kebab-case for names (e.g., `log-tracing-optimization`); for complex tasks (multi-document set), use a directory.
+
+## Task profiles
+
+Real tasks come in four shapes. Pick the closest profile when creating a new task folder; the prescribed-document set below applies only to `feature` tasks.
+
+| Profile | Required files | Optional files | When to use | Example |
+|---------|----------------|----------------|-------------|---------|
+| `feature` | `<name>.md` (Meta + scope) | Full 7-doc set: `00-context.md` ... `07-changelog.md` | Multi-module changes, new features, design needed | `tasks/todo/doc-standards-alignment/` |
+| `investigation` | `README.md` | `01-...07-` numbered reports; optional `issues/` pool | Pure research, competitor analysis, scoping work | `tasks/todo/dsl-vm-rhai-research/` |
+| `review-batch` | `INDEX.md` | One file per finding: `<area>-NN-<slug>.md` | Output of a global review pass; consumed by `04-review/fix-review-issue.skill` | `tasks/review-2/`, `tasks/review-dead-code/` |
+| `docs` / `single-file` | `<name>.md` | none | Small docs alignment, single-feature TODO, hotfix tracking | `tasks/pending/cel-validation-rules.md` |
+
+The phase pruning table below applies primarily to `feature` profile. For `investigation`, skip phases 4 (Test) and 5 (Review) — the deliverable is the report, not code. For `review-batch`, the entire batch is itself a workflow output; no per-finding phases.
 
 ## Task document set
+
+> The document set below describes the **feature** profile's recommended files. Other profiles use fewer documents — see Task profiles above.
+
 
 Each task directory contains the following documents, created on demand (only the main task file is required):
 
@@ -116,18 +137,20 @@ tasks/pending/<task-name>/
 | 1 Analysis | Understand requirements, identify affected modules | `01-architecture/SKILL.md` | `00-context.md` |
 | 2 Design | Define interfaces, data flow, config changes | `01-architecture/`, `02-features/SKILL.md` | `01-design.md` |
 | 3 Implementation | Code per the design | `01-architecture/` (dev guide), `02-features/` (config schema), `03-coding/SKILL.md` | `02-implementation.md`, `03-subtasks.md` |
-| 4 Review | Code review | `04-review/SKILL.md` | `06-decisions.md` |
-| 5 Test | Verify correctness | `05-testing/SKILL.md` | Update test coverage in `02-implementation.md` |
+| 4 Test | Verify correctness | `05-testing/SKILL.md` | Update test coverage in `02-implementation.md` |
+| 5 Review | Code review | `04-review/SKILL.md` | `06-decisions.md` |
 
 ### Phase pruning
 
 | Task type | Required phases | May skip |
 |-----------|----------------|----------|
 | New feature | All | — |
-| Bug fix | 1, 3, 5 | 2 (if the fix is obvious), 4 |
-| Refactor | 1, 2, 3, 4 | 5 (if no external change) |
+| Bug fix | 1, 3, 4 | 2 (if the fix is obvious), 5 |
+| Refactor | 1, 2, 3, 5 | 4 (if no external change) |
 | Docs only | 3 | 1, 2, 4, 5 |
-| Config change | 1, 3, 5 | 2, 4 |
+| Config change | 1, 3, 4 | 2, 5 |
+| Investigation-only | 1, 2 | 3 (Implementation), 4 (Test) ✗, 5 (Review) ✗ — deliverable is the report |
+| Hotfix | 1, 3, 4, 5 | 2 may collapse into 1 if the fix is self-contained |
 
 ## Document creation rules
 
@@ -164,11 +187,11 @@ tasks/pending/<task-name>/
 
 ## Default workflow
 
-1. Check whether the task already exists under `tasks/pending/`, `tasks/todo/`, or `tasks/review/`
+1. Check whether the task already exists under `tasks/pending/` or `tasks/todo/`
 2. Create the task directory or single file and write the main task file
 3. Create `00-context.md` listing related skill paths
 4. For new-feature tasks, prefer [new_feature_work_flow.skill](new_feature_work_flow.skill) as the execution template
 5. Advance through the lifecycle phases, creating documents on demand
 6. Write blockers into `05-issues.md` as soon as they appear
 7. Update the document index and status in the main task file as work progresses
-8. Move to `tasks/review/` when entering acceptance; archive to `tasks/done/` after pass
+8. Open a GitHub PR for acceptance when the implementation is ready; the branch is archived in git history once merged

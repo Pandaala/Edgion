@@ -1,6 +1,6 @@
 ---
 name: observability-features
-description: Observability features: Access Log configuration, Metrics endpoints, protocol log output.
+description: Use when looking up how to configure Access Logs, Metrics endpoints, or protocol log output for Edgion Gateway.
 ---
 
 # 04 Observability Features

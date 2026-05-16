@@ -1,6 +1,6 @@
 ---
 name: project-overview
-description: Edgion project high-level architecture diagram, Crate structure, three bin definitions, code organization, EdgionHttpContext, testing infrastructure, key dependencies.
+description: Edgion project high-level architecture diagram, Crate structure, four binary definitions, code organization, EdgionHttpContext, testing infrastructure, key dependencies.
 ---
 
 # Project overview

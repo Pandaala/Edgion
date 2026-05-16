@@ -1,3 +1,8 @@
+---
+name: subdomain-wildcard-https-only
+description: Use when reviewing CORS allow_origins wildcard shorthand findings; documents that *.domain matches HTTPS only (by design) and why reverting to https?:// is not accepted.
+---
+
 # CORS `*.domain` Shorthand Matches HTTPS Only (Fixed)
 
 ## Conclusion

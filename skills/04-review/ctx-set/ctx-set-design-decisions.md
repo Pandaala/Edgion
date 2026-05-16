@@ -1,3 +1,8 @@
+---
+name: ctx-set-design-decisions
+description: Use when reviewing ctx_set plugin findings; covers cross-rule ctx variable reads, template injection scope, and other design decisions that are intentional and not accepted as bugs.
+---
+
 # ctx_set Plugin Review Decision Rules
 
 > Source: 2026-04 plugin security audit; conclusions verified one-by-one against source code.

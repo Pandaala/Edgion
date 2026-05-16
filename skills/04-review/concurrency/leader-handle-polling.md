@@ -1,3 +1,8 @@
+---
+name: leader-handle-polling
+description: Use when reviewing findings that propose replacing the `LeaderHandle` 100-200ms `AtomicBool` polling loop with `watch::channel` or `tokio::sync::Notify`; documents why the polling pattern is accepted given lease cadence and atomic load cost.
+---
+
 # `LeaderHandle` 100–200ms Polling is Not Worth Replacing With watch::channel
 
 **Finding pattern**: `LeaderHandle` exposes only `Arc<AtomicBool>`; three sites poll it on `tokio::time::sleep(100ms|200ms)` loops (`center.rs::run_main_flow` 200ms, `center.rs::run_all_serve_lifecycle` 100ms, `leader_election.rs::wait_until_leader*` 100ms). Reviewer proposes adding a `watch::Sender` to `LeaderElection` and a receiver to `LeaderHandle` so listeners can await transitions.

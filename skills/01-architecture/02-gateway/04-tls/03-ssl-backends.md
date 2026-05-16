@@ -111,6 +111,6 @@ This ensures backend-related code is not compiled when no SSL backend is enabled
 |------|----------------|
 | `src/core/gateway/tls/mod.rs` | Module entry, feature-flag conditional compilation |
 | `src/core/gateway/tls/boringssl/mtls_verify_callback.rs` | BoringSSL mTLS verify callback |
-| `src/core/gateway/tls/openssl/mod.rs` | OpenSSL placeholder module |
+| `src/core/gateway/tls/boringssl/mod.rs` | BoringSSL backend module (primary production backend) |
 | `src/core/gateway/tls/runtime/backend/backend_api.rs` | Unified backend API |
 | `src/core/gateway/tls/runtime/gateway/tls_pingora.rs` | Conditionally compiled SSL ex_data operations |

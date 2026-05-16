@@ -1,3 +1,8 @@
+---
+name: tls-version-operator-choice
+description: Use when reviewing EdgionTls min_tls_version findings; documents why TLS1_0/TLS1_1 are deliberate operator opt-ins and why adding a validator rejection or cfg-guard is not accepted.
+---
+
 # `EdgionTls.min_tls_version` Allowing `TLS1_0` / `TLS1_1`: Deliberate Opt-In, Not Rejected
 
 ## Conclusion

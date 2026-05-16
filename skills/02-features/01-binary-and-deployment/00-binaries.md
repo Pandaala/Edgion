@@ -1,6 +1,6 @@
 ---
 name: binaries
-description: Entry points of the three binaries, full CLI argument reference, work_dir priority rules.
+description: Entry points of the four binaries, full CLI argument reference, work_dir priority rules.
 ---
 
 # Binary Entry Points and CLI Arguments
@@ -11,9 +11,10 @@ description: Entry points of the three binaries, full CLI argument reference, wo
 |--------|---------|---------------|-------|
 | `edgion-controller` | Control plane: resource ingestion/validation/processing/distribution | gRPC `:50051`, Admin `:5800` | `src/bin/edgion_controller.rs` |
 | `edgion-gateway` | Data plane: high-performance proxy (based on Pingora) | Admin `:5900`, Metrics `:5901` | `src/bin/edgion_gateway.rs` |
-| `edgion-cli` | CLI tool: resource CRUD and operations | — | `src/bin/edgion_cli.rs` |
+| `edgion-cli` | CLI tool: resource CRUD and operations | — | `src/bin/edgion_ctl.rs` |
+| `edgion-center` | Federation center: aggregates resources across federated controllers, serves Center API | — | `src/bin/edgion_center.rs` |
 
-All three binaries follow the **thin entry point** pattern — `src/bin/*.rs` does the minimum amount of work: install the rustls crypto provider → parse arguments → `run()`.
+All four binaries follow the **thin entry point** pattern — `src/bin/*.rs` does the minimum amount of work: install the rustls crypto provider → parse arguments → `run()`.
 
 ## work_dir Priority
 

@@ -11,7 +11,7 @@ description: Full Cargo Feature Flags reference: allocator, TLS backend, mutual-
 - `src/lib.rs` (global allocator installation)
 - `src/core/gateway/runtime/server/listener_builder.rs` (TLS listener guards)
 - `src/core/gateway/tls/runtime/` (TLS runtime guards)
-- `src/bin/edgion_gateway.rs`, `src/bin/edgion_controller.rs`, `src/bin/edgion_cli.rs` (rustls crypto provider initialization)
+- `src/bin/edgion_gateway.rs`, `src/bin/edgion_controller.rs`, `src/bin/edgion_ctl.rs`, `src/bin/edgion_center.rs` (rustls crypto provider initialization)
 
 ## Default Build
 
@@ -62,11 +62,12 @@ On Windows/MSVC, even if `allocator-jemalloc` is specified, it is not actually i
 
 ## Binary Startup Notes
 
-All three binaries install the rustls crypto provider on startup:
+All four binaries install the rustls crypto provider on startup:
 
 - `src/bin/edgion_gateway.rs`
 - `src/bin/edgion_controller.rs`
-- `src/bin/edgion_cli.rs`
+- `src/bin/edgion_ctl.rs` (binary name `edgion-cli`)
+- `src/bin/edgion_center.rs`
 
 This supports libraries in the repo that depend on rustls and **does not** override the Cargo feature matrix's choice of Gateway data-plane TLS backend.
 

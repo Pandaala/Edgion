@@ -1,7 +1,10 @@
 ---
 name: center-db
-description: Center federated persistence — SQLite controllers table, CenterDb struct, database configuration. The new PluginMetaData federation data flow synchronizes via a reverse Watch (CenterWatchCache → CenterMetaDataStore); there is no SQLite cache layer.
+description: Moved to skills/01-architecture/06-center/03-persistence.md. This file is kept as a redirect stub.
 ---
+
+> **This file has moved.**
+> Canonical location: [`skills/01-architecture/06-center/03-persistence.md`](../01-architecture/06-center/03-persistence.md)
 
 # Center Federated Persistence (SQLite)
 
@@ -115,10 +118,10 @@ The only impact is that the first full compile takes ~30 seconds longer (compili
 | Module | Path |
 |--------|------|
 | DB initialization & connection management | `src/core/center/db/mod.rs` |
-| Schema CREATE TABLE SQL | `src/core/center/db/schema.rs` (or inlined in `mod.rs`) |
+| Schema CREATE TABLE SQL | `src/core/center/db/mod.rs` (schema inlined) |
 | CenterDb (controller upsert/delete) | `src/core/center/db/mod.rs` |
-| Admin API handlers | `src/core/center/api/admin_handlers.rs` |
-| Center configuration struct | `src/core/center/config.rs` (`DatabaseConfig` field) |
+| Admin API handlers | `src/core/center/api/` (`region_route_handlers.rs`, `consistency_handlers.rs`, `global_connection_ip_restriction_handlers.rs`) |
+| Center configuration struct | `src/core/center/config/mod.rs` (`DatabaseConfig` field) |
 | **Reverse-Watch cache layer** | `src/core/center/watch_cache/` (CenterWatchCache, CenterWatchCacheRegistry, CenterSyncClient, CenterConfHandler) |
 | **PM aggregated view** | `src/core/center/metadata_store/` (CenterMetaDataStore) |
 | **Shared parsing utilities** | `src/core/common/metadata_conf_handler.rs` (parse_region_route(), etc.) |

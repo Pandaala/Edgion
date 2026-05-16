@@ -1,6 +1,6 @@
 ---
 name: architecture
-description: Architecture navigation skill. Organized by bin type (Controller/Gateway/Ctl) and resource type, covering common conventions, the architecture of each bin, gRPC sync, and resource processing.
+description: Use when understanding how Edgion works internally — Controller/Gateway/Center/Ctl architecture, gRPC sync, resource processing flow, or adding a new plugin/resource/connector.
 ---
 
 # 01 Architecture and core features
@@ -9,7 +9,7 @@ description: Architecture navigation skill. Organized by bin type (Controller/Ga
 
 ## Overall architecture
 
-Edgion is a single-Crate, three-bin project. **Controller decides, Gateway executes, Ctl operates.**
+Edgion is a single-Crate, four-binary project. **Controller decides, Gateway executes, Ctl operates, Center federates.**
 
 ```mermaid
 flowchart TD
@@ -43,6 +43,10 @@ flowchart TD
         CliOps["apply/delete/get/reload\n3 targets: center/server/client"]
     end
 
+    subgraph Center["edgion-center (federation center)"]
+        CenterNode["Aggregates resources across federated controllers\nServes Center API"]
+    end
+
     CLI -- "HTTP API" --> Controller
 ```
 
@@ -50,12 +54,13 @@ flowchart TD
 
 | What you want to learn | Start here |
 |-----------|-----------|
-| Project at a glance, code organization, conventions shared by the three bins | [00-common/](00-common/SKILL.md) |
+| Project at a glance, code organization, conventions shared by the four binaries | [00-common/](00-common/SKILL.md) |
 | How the Controller processes resources internally | [01-controller/](01-controller/SKILL.md) |
 | How the Gateway processes requests | [02-gateway/](02-gateway/SKILL.md) |
 | How Controller and Gateway sync | [03-controller-gateway-link/](03-controller-gateway-link/SKILL.md) |
 | edgion-cli commands and target modes | [04-ctl/](04-ctl/SKILL.md) |
 | The full processing chain for a specific resource | [05-resources/](05-resources/SKILL.md) |
+| How edgion-center federates multi-cluster Controllers | [06-center/](06-center/SKILL.md) |
 | Troubleshoot route mismatch | [02-gateway/03-routes/](02-gateway/03-routes/SKILL.md) |
 | Troubleshoot TLS certificate issues | [02-gateway/04-tls/](02-gateway/04-tls/SKILL.md) |
 | Troubleshoot gRPC sync issues | [03-controller-gateway-link/00-overview.md](03-controller-gateway-link/00-overview.md) |
@@ -72,7 +77,7 @@ flowchart TD
 
 ### [00-common/](00-common/SKILL.md) — Common conventions
 
-Foundational conventions shared by all three bins: project overview, command line / directory / config-path conventions, Core module layering, and the resource system (`define_resources!` macro).
+Foundational conventions shared by all four binaries: project overview, command line / directory / config-path conventions, Core module layering, and the resource system (`define_resources!` macro).
 
 ### [01-controller/](01-controller/SKILL.md) — edgion-controller architecture
 
@@ -136,6 +141,19 @@ For resource Schema (field definitions, default values) see [02-features/03-reso
 | Backends / services | Service, EndpointSlice, Endpoint |
 | Automation | EdgionAcme |
 | Infrastructure | LinkSys |
+
+### [06-center/](06-center/SKILL.md) — edgion-center architecture
+
+Federation center: accepts gRPC streams from multiple Controllers, reverse-Watch
+aggregates PluginMetaData, persists controller registry to SQLite, and exposes an
+HTTP Admin API.
+
+| Module | Keywords |
+|--------|---------|
+| Overview | Deployment shape, ports, TLS posture, startup lifecycle, failure modes |
+| Federation gRPC server | `RegisterRequest` validation caps, bidirectional stream protocol, error handling |
+| Aggregator / watch cache | `ResourceAggregator`, `CenterWatchCache`, `CenterMetaDataStore`, reverse-Watch data flow |
+| Persistence | SQLite `controllers` table, `CenterDb`, Admin API, Docker build notes |
 
 ### [06-gateway-api.md](06-gateway-api.md) — Gateway API conformance
 

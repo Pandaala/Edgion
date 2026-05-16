@@ -1,3 +1,8 @@
+---
+name: admin-cors-same-origin-rule
+description: Use when reviewing Admin API CORS findings; documents why no CORS layer is attached and why "allow_origin(Any) is too open" reports are not accepted.
+---
+
 # Admin API CORS: Same-Origin Deployment, No CORS Layer
 
 ## Conclusion

@@ -1,3 +1,8 @@
+---
+name: response-signature-not-needed
+description: Use when reviewing webhook resolver response-signature findings; documents why relying on TLS without HMAC response verification is the correct industry pattern for active-call webhooks.
+---
+
 # Webhook Key Resolver Has No Response Signature Verification: Relying on TLS is the Industry Pattern
 
 ## Conclusion

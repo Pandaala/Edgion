@@ -1,6 +1,6 @@
 ---
 name: new-feature-workflow
-description: End-to-end new-feature delivery workflow. Use after receiving a requirement to advance through analysis, design, design review, implementation, code review, test reinforcement, full validation, and summary in order.
+description: Use when starting a new feature that needs cross-module impact assessment, design review, and test reinforcement. Triggers on: new feature delivery, design + implement combined tasks, multi-module changes requiring a wrap-up retrospective.
 ---
 
 # New Feature Work Flow

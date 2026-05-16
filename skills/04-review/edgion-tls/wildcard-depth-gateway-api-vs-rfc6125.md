@@ -1,3 +1,8 @@
+---
+name: wildcard-depth-gateway-api-vs-rfc6125
+description: Use when reviewing wildcard hostname matching depth findings; explains why hostname_matches_listener (multi-level) and matches_host_pattern (single-level) intentionally follow different standards.
+---
+
 # Wildcard Depth: Gateway API vs. RFC 6125 — Not a Code Bug
 
 ## Conclusion

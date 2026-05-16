@@ -1,3 +1,8 @@
+---
+name: performance-review-methodology
+description: Use when evaluating CPU or memory audit findings; provides the general decision methodology (trace call chain, distinguish phases, verify mechanism) to avoid common false positives.
+---
+
 # CPU/Memory Performance Audit Methodology
 
 > Source: post-mortem of the high false-positive rate (49%) in the 2026-04 CPU/Memory review. This document provides **general decision methodology** to avoid common false positives.

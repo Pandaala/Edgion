@@ -1,3 +1,8 @@
+---
+name: dfa-size-limit
+description: Use when reviewing DSL `Constant::Regex` compilation paths for DFA memory DoS; documents the 1MB `size_limit` / `dfa_size_limit` cap applied at compiler/validator/VM sites and why bare `Regex::new` is not accepted.
+---
+
 # DSL regex constants: DFA size_limit / dfa_size_limit are capped at 1MB
 
 ## Conclusion

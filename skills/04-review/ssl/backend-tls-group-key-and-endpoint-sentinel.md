@@ -1,3 +1,8 @@
+---
+name: backend-tls-group-key-and-endpoint-sentinel
+description: Use when reviewing backend TLS peer group_key hash or endpoint port-sentinel findings; documents that DefaultHasher is acceptable here and that legacy port-80/port-mismatch sentinels were already removed.
+---
+
 # Backend TLS Peer `group_key` Uses `DefaultHasher`, and Legacy Endpoint Port Sentinels Are Already Gone
 
 > Source: 2026-05 backend / peer-builder review (g7-006). Three sub-findings clustered around `discovery/` and `peer_builder.rs`; all three are non-issues against current code.

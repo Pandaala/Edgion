@@ -1,3 +1,8 @@
+---
+name: conf-center-etcd-abstraction
+description: Use when reviewing ConfCenter etcd abstraction boundary findings; documents why leaking etcd client config into to_client_config is an accepted tradeoff and will not be fixed.
+---
+
 # ConfCenter etcd Abstraction Boundary — Audited Design Tradeoff
 
 **Audit date**: 2026-04-26

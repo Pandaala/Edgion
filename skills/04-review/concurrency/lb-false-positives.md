@@ -1,3 +1,8 @@
+---
+name: lb-false-positives
+description: Use when reviewing load-balancer module concurrency findings; distinguishes real RwLock+ArcSwap consistency gaps from false-positive TOCTOU reports on single-structure ArcSwap usage.
+---
+
 # Common LB Module False-Positive Scenarios
 
 > Source: 2026-04 LB module review; conclusions verified one-by-one against source code.

@@ -1,3 +1,8 @@
+---
+name: basic-auth-no-bcrypt
+description: Use when reviewing basic_auth plugin password-format findings; explains why bcrypt is deliberately unsupported and which formats ({SHA}, $apr1$, $1$) are accepted.
+---
+
 # Basic Auth: bcrypt is not supported (by design)
 
 The Edgion `basic_auth` gateway plugin **does not support bcrypt** (`$2a$` / `$2b$` / `$2y$`). This is a deliberate design choice, aligning with Envoy and Kong.

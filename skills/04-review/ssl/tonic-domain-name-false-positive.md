@@ -1,3 +1,8 @@
+---
+name: tonic-domain-name-false-positive
+description: Use when reviewing tonic ClientTlsConfig domain_name() findings; explains why omitting the explicit .domain_name() call does not create MITM risk given tonic's URI-based SNI extraction.
+---
+
 # tonic ClientTlsConfig Not Calling domain_name() is Not a Vulnerability
 
 ## Conclusion

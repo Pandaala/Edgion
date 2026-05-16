@@ -1,3 +1,8 @@
+---
+name: max-trusted-hops-opt-in
+description: Use when reviewing RealIp maxTrustedHops findings; documents why the field is opt-in with None default and why making it required or setting a conservative default is not accepted.
+---
+
 # RealIp `maxTrustedHops` opt-in: Design Decision
 
 ## Conclusion

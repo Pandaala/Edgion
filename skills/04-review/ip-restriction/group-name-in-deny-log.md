@@ -1,3 +1,8 @@
+---
+name: group-name-in-deny-log
+description: Use when reviewing IpRestriction deny log findings; documents the group-name log format (deny:group=, deny:not-in-allow, deny:default) introduced in the 2026-05-14 refactor.
+---
+
 # IpRestriction — group name appears in deny logs
 
 After the 2026-05-14 IP-list group refactor, IpRestriction deny logs

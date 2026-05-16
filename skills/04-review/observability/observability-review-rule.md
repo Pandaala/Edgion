@@ -1,3 +1,8 @@
+---
+name: observability-review-rule
+description: Use when reviewing observability code changes; provides the checklist covering secrets-in-logs prohibition, label cardinality, metric naming, and log level conventions.
+---
+
 # Observability Review Rules
 
 > When reviewing code changes, use this checklist to ensure observability design is sound and does not introduce performance issues or information explosion.

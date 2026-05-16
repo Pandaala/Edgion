@@ -1,3 +1,8 @@
+---
+name: lock-around-atomic-metrics
+description: Use when reviewing findings about holding `RwLock` / `Mutex` write locks across `metrics` crate gauge/counter calls; gives the hot-path-vs-control-plane decision rule and the snapshot-then-emit refactor when warranted.
+---
+
 # Holding a Write Lock Across `metrics` Calls — Style Concern, Not a Latency Bug
 
 **Finding pattern**: a function holds a `parking_lot::RwLock` (or `Mutex`) write lock across a call that emits `gauge!(...).set(...)` / `counter!(...).increment(...)` / similar `metrics`-crate operations. Reviewer flags it as "lock held during I/O / lock contention risk" and proposes splitting into snapshot-inside-lock + emit-outside-lock.

@@ -179,6 +179,14 @@ Match failures are handled in select_cb only (`"cert not found"`); cert_cb perfo
 | EdgionTls | `edgion.io/EdgionTls` | TlsCertMatcher | Edgion-specific TLS resource, supports advanced configuration: mTLS, minimum version, cipher suites, etc. |
 | Gateway Listener | `gateway.networking.k8s.io/Gateway` | GatewayTlsMatcher | Standard Gateway API TLS configuration; references Kubernetes Secrets via `certificateRefs` |
 
+## File list
+
+| File | Topic |
+|------|-------|
+| [01-downstream-tls.md](01-downstream-tls.md) | Downstream TLS (client→gateway) — Pingora Listener callbacks, certificate selection, client cert verification |
+| [02-upstream-tls.md](02-upstream-tls.md) | Upstream TLS (gateway→backend) — mTLS configuration, BackendTLSPolicy, certificate extraction |
+| [03-ssl-backends.md](03-ssl-backends.md) | SSL backend implementations — BoringSSL/OpenSSL feature flags, interface abstraction, recommendations |
+
 ## Key source files
 
 | File | Responsibility |

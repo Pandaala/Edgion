@@ -1,3 +1,8 @@
+---
+name: system-error-state-metric
+description: Use when reviewing findings about unsafe modes (skip_tls, AllowInsecureFallback, etc.); documents when to close a report by reusing the edgion_system_error_state gauge rather than adding a hard constraint.
+---
+
 # `edgion_system_error_state` Gauge: Registry of System-Level Degraded States
 
 ## Conclusion

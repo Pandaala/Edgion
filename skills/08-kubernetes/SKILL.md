@@ -1,6 +1,6 @@
 ---
 name: kubernetes
-description: Kubernetes-related knowledge — Gateway API compatibility, API version upgrade strategy, and similar topics.
+description: Use when working with Gateway API compatibility, planning a Kubernetes API version upgrade, or verifying K8s resource behavior specific to Edgion.
 ---
 
 # Kubernetes

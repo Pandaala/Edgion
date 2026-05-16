@@ -72,10 +72,11 @@ When changing it, treat it as "shared infrastructure", not as a private script f
 2. `build-binaries`
    - `amd64` / `arm64` matrix
    - arm64 additionally installs `gcc-aarch64-linux-gnu` / `g++-aarch64-linux-gnu`
-   - Builds three binaries:
+   - Builds four binaries:
      - `edgion-gateway`
      - `edgion-controller`
      - `edgion-cli`
+     - `edgion-center`
    - Uploads the artifact `edgion-binaries-<arch>`
 
 3. `build-and-push-images`

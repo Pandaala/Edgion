@@ -1,3 +1,8 @@
+---
+name: jwt-revocation-stateless-tradeoff
+description: Use when reviewing local_auth JWT revocation findings; documents why stateless tokens with no server-side blacklist are an accepted tradeoff and how OIDC serves as the revocation path.
+---
+
 # Local Admin JWT Has No Server-Side Revocation: Stateless Tradeoff + OIDC as Revocation Path
 
 ## Conclusion

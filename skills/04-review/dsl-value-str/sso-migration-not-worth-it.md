@@ -1,3 +1,8 @@
+---
+name: sso-migration-not-worth-it
+description: Use when evaluating proposals to migrate DSL Value::Str to a SSO or zero-copy string type; documents the full candidate evaluation and why the migration is deferred indefinitely.
+---
+
 # DSL `Value::Str` SSO / try_unwrap migration — investigated and deferred
 
 **Date investigated**: 2026-05-15

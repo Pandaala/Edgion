@@ -1,3 +1,8 @@
+---
+name: basic-auth-username-enumeration
+description: Use when reviewing basic_auth timing-side-channel or username-enumeration findings; explains why no dummy-hash verify is added and how the risk is mitigated via documentation.
+---
+
 # Basic Auth Username-Existence Timing Difference: No Code-Layer Dummy Verify
 
 ## Conclusion

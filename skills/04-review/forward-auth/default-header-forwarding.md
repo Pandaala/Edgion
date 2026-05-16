@@ -1,3 +1,8 @@
+---
+name: default-header-forwarding
+description: Use when reviewing forward_auth header-forwarding findings; documents why forwarding all non-hop-by-hop headers by default is an accepted industry-standard tradeoff and not a vulnerability.
+---
+
 # ForwardAuth Default Forwards All Request Headers: Design Tradeoff, Not Vulnerability
 
 ## Conclusion

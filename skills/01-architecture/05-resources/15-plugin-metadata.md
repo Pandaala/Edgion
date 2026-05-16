@@ -27,7 +27,7 @@ PluginMetaData is Edgion's custom-extension resource that carries one `MetaDataE
 - Center API (consistency): `src/core/center/api/consistency_handlers.rs`
 - Center metadata store: `src/core/center/metadata_store/` (CenterMetaDataStore, in-memory strongly typed, aggregated by Controller)
 - Center Watch cache: `src/core/center/watch_cache/` (reverse list/watch, receives Controller gRPC pushes)
-- Center ConfHandler: `src/core/center/api/metadata_conf_handler.rs`
+- Center ConfHandler: `src/core/common/metadata_conf_handler.rs` (shared parsing utilities)
 
 ## Plugin system
 

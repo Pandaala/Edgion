@@ -22,6 +22,7 @@ description: Configuration schema reference: complete field definitions for Cont
 | [00-controller-config.md](00-controller-config.md) | Full Controller TOML schema |
 | [01-gateway-config.md](01-gateway-config.md) | Full Gateway TOML schema |
 | [02-edgion-gateway-config.md](02-edgion-gateway-config.md) | EdgionGatewayConfig CRD schema |
+| [03-auth-bootstrap.md](03-auth-bootstrap.md) | Admin credential bootstrap — Controller auto-generation, Center fail-close behavior, operator config paths |
 
 ## Quick Decision: Which Layer to Change?
 

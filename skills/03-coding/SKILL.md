@@ -82,6 +82,7 @@ description: Coding standards skill for Edgion. Use when reviewing or writing co
 |------|------|
 | [dsl/builtins-path.md](dsl/builtins-path.md) | DSL path/URI variable reference: `req.path`, `req.uri`, `req.query`, and the difference between them |
 | [dsl/http-call.md](dsl/http-call.md) | `http.call()` builtin: async outbound HTTP, `Value::Map`, SSRF guard, config fields, test patterns |
+| [dsl/redis-builtin.md](dsl/redis-builtin.md) | `redis.*` builtins: async LinkSys Redis interaction, named alias lookup, return `Map {ok, value, error}` |
 
 ## Relation to other Skills
 

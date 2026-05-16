@@ -1,3 +1,8 @@
+---
+name: route-architecture-consistency
+description: Use when reviewing route implementation changes across TCP, UDP, TLS, HTTP, and gRPC; provides the cross-type consistency checklist and architecture comparison matrix.
+---
+
 # Route Architecture Consistency Review
 
 Cross-route consistency checklist and reference for TCP, UDP, TLS, HTTP, and gRPC

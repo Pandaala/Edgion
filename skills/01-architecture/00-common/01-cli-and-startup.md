@@ -1,13 +1,13 @@
 ---
 name: cli-and-startup
-description: Command-line conventions, working-directory layout, config-file path conventions, log initialization, and signal handling shared by all three bins.
+description: Command-line conventions, working-directory layout, config-file path conventions, log initialization, and signal handling shared by all four binaries.
 ---
 
 # Unified command-line and configuration conventions
 
 ## Entry-point pattern
 
-All three bins follow the **thin entry point** pattern — `src/bin/*.rs` does the minimum amount of work:
+All four binaries follow the **thin entry point** pattern — `src/bin/*.rs` does the minimum amount of work:
 
 | bin | Entry logic |
 |-----|---------|
