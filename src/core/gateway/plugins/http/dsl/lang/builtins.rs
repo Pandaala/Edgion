@@ -548,9 +548,7 @@ impl Vm {
                 let end_bound = start
                     .checked_add(count as i64)
                     .ok_or(RuntimeError::IntegerOverflow { operation: "range" })?;
-                let list: Vec<Arc<str>> = (start..end_bound)
-                    .map(|i| Arc::from(i.to_string().as_str()))
-                    .collect();
+                let list: Vec<Arc<str>> = (start..end_bound).map(|i| Arc::from(i.to_string().as_str())).collect();
                 Ok(Value::List(list))
             }
 

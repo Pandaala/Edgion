@@ -11,15 +11,30 @@ mod wipe_handlers;
 use crate::core::common::api::{self, ApiResponse};
 use crate::core::controller::conf_mgr::{ConfMgr, SchemaValidator};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Request, State},
     http::StatusCode,
-    response::Json,
+    middleware::Next,
+    response::{Json, Response},
     routing::{delete, get, post, put},
     Router,
 };
 use serde::Serialize;
 use std::sync::Arc;
 use types::AdminState;
+
+/// Reject admin write requests with `503 Service Unavailable` while the
+/// controller is still in init / reload. Mounted on the write subset of
+/// `create_admin_router` (POST/PUT/DELETE on `/api/v1/cluster/...` and
+/// `/api/v1/namespaced/...`). Read endpoints, health, and auth routes are
+/// intentionally not gated.
+async fn require_ready_middleware(
+    State(state): State<Arc<AdminState>>,
+    request: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    state.require_ready()?;
+    Ok(next.run(request).await)
+}
 
 // ============= Legacy Endpoints =============
 
@@ -142,6 +157,33 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
         schema_validator,
     });
 
+    // Write routes — gated by readiness middleware so requests arriving during
+    // controller init / reload are rejected with 503 instead of racing the
+    // processor LIST + cache build.
+    let write_routes = Router::new()
+        .route("/api/v1/cluster/{kind}", post(cluster_handlers::create_cluster))
+        .route("/api/v1/cluster/{kind}/{name}", put(cluster_handlers::update_cluster))
+        .route(
+            "/api/v1/cluster/{kind}/{name}",
+            delete(cluster_handlers::delete_cluster),
+        )
+        .route(
+            "/api/v1/namespaced/{kind}/{namespace}",
+            post(namespaced_handlers::create_namespaced),
+        )
+        .route(
+            "/api/v1/namespaced/{kind}/{namespace}/{name}",
+            put(namespaced_handlers::update_namespaced),
+        )
+        .route(
+            "/api/v1/namespaced/{kind}/{namespace}/{name}",
+            delete(namespaced_handlers::delete_namespaced),
+        )
+        .route_layer(axum::middleware::from_fn_with_state(
+            admin_state.clone(),
+            require_ready_middleware,
+        ));
+
     let mut router = Router::new()
         // Health check (liveness)
         .route("/health", get(health_check))
@@ -157,36 +199,19 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
             "/api/v1/namespaced/{kind}",
             get(namespaced_handlers::list_all_namespaces),
         )
-        // Cluster-scoped resources
+        // Cluster-scoped read routes (writes live in `write_routes` below)
         .route("/api/v1/cluster/{kind}", get(cluster_handlers::list_cluster))
-        .route("/api/v1/cluster/{kind}", post(cluster_handlers::create_cluster))
         .route("/api/v1/cluster/{kind}/{name}", get(cluster_handlers::get_cluster))
-        .route("/api/v1/cluster/{kind}/{name}", put(cluster_handlers::update_cluster))
-        .route(
-            "/api/v1/cluster/{kind}/{name}",
-            delete(cluster_handlers::delete_cluster),
-        )
-        // Namespace-scoped resources
+        // Namespace-scoped read routes (writes live in `write_routes` below)
         .route(
             "/api/v1/namespaced/{kind}/{namespace}",
             get(namespaced_handlers::list_namespaced),
         )
         .route(
-            "/api/v1/namespaced/{kind}/{namespace}",
-            post(namespaced_handlers::create_namespaced),
-        )
-        .route(
             "/api/v1/namespaced/{kind}/{namespace}/{name}",
             get(namespaced_handlers::get_namespaced),
         )
-        .route(
-            "/api/v1/namespaced/{kind}/{namespace}/{name}",
-            put(namespaced_handlers::update_namespaced),
-        )
-        .route(
-            "/api/v1/namespaced/{kind}/{namespace}/{name}",
-            delete(namespaced_handlers::delete_namespaced),
-        )
+        .merge(write_routes)
         // Special operations
         .route("/api/v1/server-info", get(get_server_info))
         .route("/api/v1/reload", post(reload_all_resources))

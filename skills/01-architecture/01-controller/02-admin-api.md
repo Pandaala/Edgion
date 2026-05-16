@@ -46,6 +46,7 @@ Helper methods:
 
 - `config_sync_server()` — get an `Arc<ConfigSyncServer>`; returns `503` if not ready
 - `is_ready()` — check whether ConfigSyncServer exists
+- `require_ready()` — `Ok(())` if ready, `Err(503)` otherwise; used by the write-path readiness middleware (see "Write-path readiness gate" below)
 - `is_k8s_mode()` — whether the mode is Kubernetes (in K8s mode local schema validation is skipped)
 
 ## Full Endpoint List
@@ -131,6 +132,29 @@ Response format examples:
 | Readiness | `/ready` | Returns 200 after ConfigSyncServer initialization is complete and all Processors are ready | `readinessProbe` — when not ready, the pod is removed from the Service endpoints |
 
 Readiness is determined via `AdminState::is_ready()` -> `ConfMgr::is_ready()` -> `ConfCenter::is_ready()`, ultimately checking whether ConfigSyncServer has been created.
+
+## Write-path readiness gate
+
+The router applies `require_ready_middleware` (in `src/core/controller/api/mod.rs`) as a `route_layer` over the resource-CRUD write endpoints:
+
+- `POST /api/v1/cluster/{kind}` / `PUT /api/v1/cluster/{kind}/{name}` / `DELETE /api/v1/cluster/{kind}/{name}`
+- `POST /api/v1/namespaced/{kind}/{namespace}` / `PUT /api/v1/namespaced/{kind}/{namespace}/{name}` / `DELETE /api/v1/namespaced/{kind}/{namespace}/{name}`
+
+While the controller is in init or reload (`is_ready() == false`), these endpoints respond with `503 Service Unavailable` instead of entering `parse_resource_and_update_version` and `ConfCenter::create_one / update_one / delete_one`. Without this gate, writes accepted during the LIST + cache-build window bypass cache consistency and (in non-K8s mode) race `update_resource_version` against the init flow's `resourceVersion` sequencing.
+
+Endpoints intentionally not gated:
+
+- `GET` endpoints on `/api/v1/...` (reads may return partial data during init — explicit operator/debug choice).
+- `/health`, `/ready`, `/metrics`, `/api/v1/auth/*` — probes and auth must stay reachable.
+- `/api/v1/reload` — `request_reload` itself returns an error when the center is not started, and reload is the mechanism for recovering from a stuck init.
+- `/api/v1/services/acme/.../trigger` — notify-only, does not touch the storage layer.
+- `/api/v1/diagnostics/...` and `/api/v1/server-info` — read-only diagnostic surface.
+- `/configserver/...` — read-only cache surface; already returns 503 via `config_sync_server()` when not ready.
+
+**Known gaps** (write paths that touch `ConfCenter` but are not yet covered by this gate, tracked separately):
+
+- `POST /api/v1/cluster-region-routes/failover` and `POST /api/v1/service-region-routes/failover` — `region_route_handlers::patch_plugin_metadata_failover` calls `ConfCenter::update_one` on `PluginMetaData` but does not flow through `parse_resource_and_update_version`. Shares the same init-race risk; out of scope for the initial fix.
+- `POST /api/v1/admin/wipe-all` — test-mode-only (gated by `is_test_mode()`), calls `delete_one` per kind. No production exposure.
 
 ## Interaction with edgion-cli
 

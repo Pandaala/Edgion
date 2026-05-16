@@ -34,9 +34,7 @@ static LAST_VERSION: AtomicU64 = AtomicU64::new(0);
 /// returned value to preserve ordering.
 pub fn next_resource_version() -> u64 {
     loop {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after UNIX_EPOCH");
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
         let timestamp = now.as_nanos() as u64;
 
         let current = LAST_VERSION.load(Ordering::Relaxed);

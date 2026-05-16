@@ -46,6 +46,18 @@ impl AdminState {
         self.conf_mgr.is_ready()
     }
 
+    /// Gate for admin write paths: returns `503 Service Unavailable` until the
+    /// configuration center finishes its init / reload (LIST + cache build).
+    /// Without this, writes accepted during init bypass cache consistency and
+    /// can race resource-version sequencing in non-K8s mode.
+    pub fn require_ready(&self) -> Result<(), StatusCode> {
+        if self.is_ready() {
+            Ok(())
+        } else {
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        }
+    }
+
     /// Check if running in Kubernetes mode
     pub fn is_k8s_mode(&self) -> bool {
         self.conf_mgr.is_k8s_mode()
