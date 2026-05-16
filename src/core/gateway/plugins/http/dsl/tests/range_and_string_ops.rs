@@ -28,7 +28,10 @@ fn assert_output(source: &str, expected: &str) {
 #[test]
 fn test_split_within_list_limit() {
     let source = r#"req.set_header("X-Out", to_str(len(split("a,b,c", ","))))"#;
-    let limits = VmLimits { max_list_len: 3, ..VmLimits::default() };
+    let limits = VmLimits {
+        max_list_len: 3,
+        ..VmLimits::default()
+    };
     let mut session = MockPluginSession::new();
     session
         .expect_set_request_header()
@@ -42,12 +45,18 @@ fn test_split_within_list_limit() {
 #[test]
 fn test_split_exceeds_list_limit() {
     let source = r#"split("a,b,c", ",")"#;
-    let limits = VmLimits { max_list_len: 2, ..VmLimits::default() };
+    let limits = VmLimits {
+        max_list_len: 2,
+        ..VmLimits::default()
+    };
     let session = MockPluginSession::new();
     let result = run_with_limits(source, session, limits);
     assert_eq!(
         result,
-        PluginRunningResult::ErrResponse { status: 500, body: Some("DSL execution error".to_string()) },
+        PluginRunningResult::ErrResponse {
+            status: 500,
+            body: Some("DSL execution error".to_string())
+        },
     );
 }
 
@@ -55,12 +64,18 @@ fn test_split_exceeds_list_limit() {
 #[test]
 fn test_split_empty_delim_exceeds_limit() {
     let source = r#"split("abcdef", "")"#;
-    let limits = VmLimits { max_list_len: 5, ..VmLimits::default() };
+    let limits = VmLimits {
+        max_list_len: 5,
+        ..VmLimits::default()
+    };
     let session = MockPluginSession::new();
     let result = run_with_limits(source, session, limits);
     assert_eq!(
         result,
-        PluginRunningResult::ErrResponse { status: 500, body: Some("DSL execution error".to_string()) },
+        PluginRunningResult::ErrResponse {
+            status: 500,
+            body: Some("DSL execution error".to_string())
+        },
     );
 }
 
@@ -69,12 +84,18 @@ fn test_split_empty_delim_exceeds_limit() {
 #[test]
 fn test_split_empty_delim_bypass_is_closed() {
     let source = r#"split("abc", "")"#;
-    let limits = VmLimits { max_list_len: 4, ..VmLimits::default() };
+    let limits = VmLimits {
+        max_list_len: 4,
+        ..VmLimits::default()
+    };
     let session = MockPluginSession::new();
     let result = run_with_limits(source, session, limits);
     assert_eq!(
         result,
-        PluginRunningResult::ErrResponse { status: 500, body: Some("DSL execution error".to_string()) },
+        PluginRunningResult::ErrResponse {
+            status: 500,
+            body: Some("DSL execution error".to_string())
+        },
     );
 }
 

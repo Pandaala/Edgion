@@ -332,6 +332,10 @@ where
     ///
     /// Returns WorkItemResult for status persistence handling by caller.
     pub async fn on_init_apply(&self, obj: K, existing_status_json: Option<String>) -> WorkItemResult<K> {
+        // Reconstruct the resource_version floor from persisted rv before init proceeds.
+        let rv = crate::types::resource::meta::extract_version(obj.meta());
+        crate::core::common::utils::bump_resource_version_floor(rv);
+
         let ctx = self.create_context(TriggerChain::default());
         self.process_resource(obj, &ctx, true, existing_status_json).await
     }
@@ -843,6 +847,45 @@ mod tests {
         let cached = processor.get("default/test");
         assert!(cached.is_some());
         assert_eq!(cached.unwrap().spec, "test spec");
+    }
+
+    #[tokio::test]
+    async fn test_processor_init_apply_bumps_resource_version_floor() {
+        use crate::core::common::utils::next_resource_version;
+
+        let handler = Arc::new(TestHandler);
+        let processor = ResourceProcessor::<TestResource>::new(
+            "TestResource",
+            100,
+            handler,
+            Arc::new(ControllerRuntime::default()),
+        );
+
+        // Pick an rv that is guaranteed higher than the current process-wide floor.
+        let baseline = next_resource_version();
+        let high_rv = baseline + 1_000_000;
+
+        let resource = TestResource {
+            metadata: ObjectMeta {
+                name: Some("test".to_string()),
+                namespace: Some("default".to_string()),
+                resource_version: Some(high_rv.to_string()),
+                ..Default::default()
+            },
+            spec: "test spec".to_string(),
+        };
+
+        processor.on_init();
+        let result = processor.on_init_apply(resource, None).await;
+        assert!(matches!(result, WorkItemResult::Processed { .. }));
+
+        let after = next_resource_version();
+        assert!(
+            after > high_rv,
+            "on_init_apply should bump the floor above the resource's rv (after={}, high_rv={})",
+            after,
+            high_rv
+        );
     }
 
     #[test]

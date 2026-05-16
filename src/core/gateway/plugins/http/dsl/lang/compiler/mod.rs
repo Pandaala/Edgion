@@ -96,19 +96,11 @@ impl Compiler {
     ///
     /// The embedded source enables PC → source correlation in runtime error
     /// debug logs and offline disassembly tools.
-    pub fn compile_with_source(
-        self,
-        program: &Program,
-        source: &str,
-    ) -> Result<CompiledScript, CompileError> {
+    pub fn compile_with_source(self, program: &Program, source: &str) -> Result<CompiledScript, CompileError> {
         self.compile_inner(program, Some(source.to_string()))
     }
 
-    fn compile_inner(
-        mut self,
-        program: &Program,
-        source: Option<String>,
-    ) -> Result<CompiledScript, CompileError> {
+    fn compile_inner(mut self, program: &Program, source: Option<String>) -> Result<CompiledScript, CompileError> {
         for stmt in &program.stmts {
             self.compile_stmt(stmt)?;
         }
@@ -190,7 +182,12 @@ mod source_map_tests {
         let prog = parse_program("let x = 1 + 2 + 3 + 4 + 5\n").expect("parse");
         let script = Compiler::new().compile(&prog).expect("compile");
         let runs = script.source_map.as_ref().expect("source_map present");
-        assert_eq!(runs.len(), 1, "single-line script should collapse to 1 run, got {:?}", runs);
+        assert_eq!(
+            runs.len(),
+            1,
+            "single-line script should collapse to 1 run, got {:?}",
+            runs
+        );
         assert_eq!(runs[0].1, 1);
         assert_eq!(runs[0].0 as usize, script.code.len());
     }

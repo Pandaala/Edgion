@@ -145,7 +145,10 @@ fn parse_if_stmt<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str,
     }
 
     ctx.leave_nesting();
-    Ok((current_input, Stmt::with_span(StmtKind::If { branches, else_body }, span)))
+    Ok((
+        current_input,
+        Stmt::with_span(StmtKind::If { branches, else_body }, span),
+    ))
 }
 
 fn parse_for_stmt<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Stmt, ParseError> {
@@ -292,7 +295,10 @@ fn parse_return_stmt<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a 
                 "expected ')' after grpc_error arguments",
             )));
         }
-        return Ok((&input[1..], Stmt::with_span(StmtKind::ReturnGrpcError { code, message }, span)));
+        return Ok((
+            &input[1..],
+            Stmt::with_span(StmtKind::ReturnGrpcError { code, message }, span),
+        ));
     }
 
     if input.starts_with("deny(") || input.starts_with("deny (") {
@@ -312,7 +318,10 @@ fn parse_return_stmt<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a 
         if !input.starts_with(')') {
             return Err(nom::Err::Failure(ParseError::new("expected ')' after deny arguments")));
         }
-        return Ok((&input[1..], Stmt::with_span(StmtKind::ReturnDeny { status, body }, span)));
+        return Ok((
+            &input[1..],
+            Stmt::with_span(StmtKind::ReturnDeny { status, body }, span),
+        ));
     }
 
     Err(nom::Err::Failure(ParseError::new(

@@ -17,29 +17,20 @@ fn test_division_by_zero() {
 
 #[test]
 fn test_integer_overflow_add() {
-    let err = run_expect_runtime_err(
-        "let x = 9223372036854775807 + 1",
-        MockPluginSession::new(),
-    );
+    let err = run_expect_runtime_err("let x = 9223372036854775807 + 1", MockPluginSession::new());
     assert!(matches!(err, RuntimeError::IntegerOverflow { operation } if operation == "+"));
 }
 
 #[test]
 fn test_integer_overflow_sub() {
     // -9223372036854775807 - 2  =  -9223372036854775809  < i64::MIN  → overflow
-    let err = run_expect_runtime_err(
-        "let x = -9223372036854775807 - 2",
-        MockPluginSession::new(),
-    );
+    let err = run_expect_runtime_err("let x = -9223372036854775807 - 2", MockPluginSession::new());
     assert!(matches!(err, RuntimeError::IntegerOverflow { operation } if operation == "-"));
 }
 
 #[test]
 fn test_integer_overflow_mul() {
-    let err = run_expect_runtime_err(
-        "let x = 9223372036854775807 * 2",
-        MockPluginSession::new(),
-    );
+    let err = run_expect_runtime_err("let x = 9223372036854775807 * 2", MockPluginSession::new());
     assert!(matches!(err, RuntimeError::IntegerOverflow { operation } if operation == "*"));
 }
 
@@ -76,11 +67,7 @@ fn test_call_limit_exceeded() {
         max_call_count: 0,
         ..Default::default()
     };
-    let err = run_expect_runtime_err_with_limits(
-        r#"req.set_header("x", "y")"#,
-        MockPluginSession::new(),
-        limits,
-    );
+    let err = run_expect_runtime_err_with_limits(r#"req.set_header("x", "y")"#, MockPluginSession::new(), limits);
     assert!(matches!(err, RuntimeError::CallLimitExceeded { limit: 0 }));
 }
 

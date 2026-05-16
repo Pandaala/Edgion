@@ -187,7 +187,9 @@ impl PathRegistry {
             .by_key
             .iter()
             .filter_map(|(k, v)| {
-                v.iter().find(|p| !inner.pending_api_delete.contains(*p)).map(|p| (k.clone(), p.clone()))
+                v.iter()
+                    .find(|p| !inner.pending_api_delete.contains(*p))
+                    .map(|p| (k.clone(), p.clone()))
             })
             .collect()
     }
@@ -311,7 +313,9 @@ mod tests {
         // watcher fires Remove — must still get Removed so Delete event is dispatched
         assert_eq!(
             r.forget(&p("/conf/gw.yaml")),
-            ForgetOutcome::Removed { key: k("Gateway", "ns/gw") }
+            ForgetOutcome::Removed {
+                key: k("Gateway", "ns/gw")
+            }
         );
         // pending marker gone, winner_of is also gone
         assert_eq!(r.winner_of(&k("Gateway", "ns/gw")), None);

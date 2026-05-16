@@ -1,5 +1,4 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod net;
 pub use net::*;
@@ -27,53 +26,39 @@ static LAST_VERSION: AtomicU64 = AtomicU64::new(0);
 
 /// Generate a unique `resource_version` as a monotonically increasing `u64`.
 ///
-/// The function is safe to call concurrently across threads. Values are
-/// primarily derived from the current Unix timestamp in nanoseconds; if
-/// multiple invocations occur within the same nanosecond (or the system clock
-/// moves backwards), the generator falls back to incrementing the previously
-/// returned value to preserve ordering.
+/// The counter is purely in-process and is bumped via `bump_resource_version_floor`
+/// during init so that, after restart, the first value returned by this function
+/// is strictly greater than any `resource_version` already persisted on disk.
+///
+/// Safe to call concurrently across threads.
 pub fn next_resource_version() -> u64 {
-    loop {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-        let timestamp = now.as_nanos() as u64;
+    LAST_VERSION.fetch_add(1, Ordering::AcqRel) + 1
+}
 
-        let current = LAST_VERSION.load(Ordering::Relaxed);
-        let candidate = if timestamp > current {
-            timestamp
-        } else {
-            current.saturating_add(1)
-        };
-
-        if LAST_VERSION
-            .compare_exchange(current, candidate, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
-        {
-            return candidate;
-        }
+/// Raise the `next_resource_version()` floor to at least `rv`.
+///
+/// Idempotent and concurrent-safe; `rv == 0` is a no-op. Intended to be called
+/// once per persisted resource during init, before any external writer is
+/// allowed to allocate a new `resource_version`. The admin API enforces this
+/// ordering via `require_ready_middleware` (see `controller::api::mod`), which
+/// returns 503 until every processor has finished `on_init_done`.
+///
+/// New write routes that allocate `resource_version` MUST be mounted behind
+/// `require_ready_middleware`; otherwise the floor reconstruction can race
+/// against external allocation.
+pub fn bump_resource_version_floor(rv: u64) {
+    if rv > 0 {
+        LAST_VERSION.fetch_max(rv, Ordering::AcqRel);
     }
 }
 
-/// Peek at the last-generated `resource_version` without incrementing it.
+/// Peek at the last-issued `resource_version` without incrementing it.
 ///
-/// Returns 0 if `next_resource_version()` has never been called.
-/// Intended for diagnostic/stats use only — not for assigning versions to resources.
+/// Returns 0 if `next_resource_version()` has never been called. The value is
+/// a process-local sequence number (not a wall-clock timestamp). Intended for
+/// diagnostic/stats use only — not for assigning versions to resources.
 pub fn current_resource_version() -> u64 {
     LAST_VERSION.load(Ordering::Relaxed)
-}
-
-/// Inspect a raw YAML/JSON document to determine whether a Kubernetes
-/// `resource_version` is already present. If missing, generate one using
-/// `next_resource_version()`.
-///
-/// The function looks for the key `resource_version` (case-insensitive) and
-/// also supports the canonical snake-case `resourceVersion` spelling. It
-/// performs a lightweight text scan without fully parsing the resource.
-pub fn check_need_version(input: &str) -> Option<u64> {
-    if input.contains("resourceVersion:") {
-        None
-    } else {
-        Some(next_resource_version())
-    }
 }
 
 /// Resource metadata extracted from YAML/JSON content
@@ -119,7 +104,7 @@ pub fn extract_resource_metadata(content: &str) -> Option<ResourceMetadata> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_need_version, extract_resource_metadata, next_resource_version};
+    use super::{extract_resource_metadata, next_resource_version};
     use std::thread;
 
     #[test]
@@ -148,28 +133,35 @@ mod tests {
     }
 
     #[test]
-    fn check_need_version_detects_existing_field() {
-        let sample = r#"
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: demo
-  resourceVersion: "123"
-"#;
-
-        assert!(check_need_version(sample).is_none());
+    fn bump_resource_version_floor_raises_floor() {
+        use super::{bump_resource_version_floor, next_resource_version};
+        let baseline = next_resource_version();
+        let target = baseline + 1_000_000;
+        bump_resource_version_floor(target);
+        let next = next_resource_version();
+        assert!(
+            next > target,
+            "next_resource_version() should be strictly greater than the bumped floor (next={}, target={})",
+            next,
+            target
+        );
     }
 
     #[test]
-    fn check_need_version_generates_when_missing() {
-        let sample = r#"
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: demo
-"#;
-
-        assert!(check_need_version(sample).is_some());
+    fn bump_resource_version_floor_no_regression() {
+        use super::{bump_resource_version_floor, next_resource_version};
+        let baseline = next_resource_version();
+        let high = baseline + 2_000_000;
+        let low = baseline + 1_000_000;
+        bump_resource_version_floor(high);
+        bump_resource_version_floor(low);
+        let next = next_resource_version();
+        assert!(
+            next > high,
+            "a lower bump must not roll the floor back (next={}, high={})",
+            next,
+            high
+        );
     }
 
     #[test]
