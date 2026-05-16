@@ -13,7 +13,7 @@ const LEGACY_BYTECODE_VERSION: u16 = 0;
 const MAX_DECODED_BYTECODE_LEN: usize = 256 * 1024;
 
 /// Single VM instruction
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum OpCode {
     // ===== Stack Operations =====
     /// Push constant from pool by index

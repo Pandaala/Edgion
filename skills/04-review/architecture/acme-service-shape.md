@@ -38,6 +38,15 @@ Only newly emerging cases of these two categories (swallowed error / non-UTF-8 s
 - The change cascades to HandlerContext + all handler signatures; benefit is illusory.
 - **Verdict**: DI refactoring not accepted. If in the future ACME really needs unit tests or multi-tenant splitting, file a new targeted issue.
 
+### 4. "`update_acme_status` / `patch_active_challenges` use `PatchParams::apply(...).force()` unconditionally; should drop `.force()` or implement try-then-force-on-409"
+
+- `EdgionAcme` is an Edgion-owned CRD; the realistic field-manager population is exactly two — `edgion-acme-controller` (status fields) and `edgion-acme-challenges` (active challenges only).
+- The two managers do not overlap on any field: `EdgionAcmeStatus.conditions` and `active_challenges` both carry `#[serde(skip_serializing_if = "Vec::is_empty")]`, so `update_acme_status`'s `Default`-built status omits `active_challenges` from the patch entirely. SSA only manages fields explicitly present in the patch, so the `edgion-acme-controller` writer never touches `activeChallenges` in practice.
+- The Controller is a leader-elected single-active model — a second instance of the same manager is structurally impossible.
+- The unconditional `.force()` is the project-wide convention for SSA writes against Edgion-owned resources (see `conf_center/kubernetes/storage.rs:325` for the same pattern with `edgion-controller`); changing it only here would diverge from that convention.
+- "Drop `.force()`" introduces an unhandled 409 path on the critical status write-back route. "Try-then-force-on-409" introduces a retry/state-machine layer to all 5 call sites for a hypothetical future risk that requires a third-party field manager to ever land on `EdgionAcme/status`.
+- **Verdict**: SSA `.force()` fix suggestions on `update_acme_status` / `patch_active_challenges` are not accepted. Re-evaluate only if a third-party controller is actually introduced that writes the same status fields.
+
 ## When to Re-Evaluate
 
 - ACME service really needs multi-instance support (e.g., multi-tenant isolation) → re-evaluate #3.

@@ -40,62 +40,79 @@ impl ResourceAggregator {
 
     /// Called when controller registers (or reconnects).
     pub fn set_controller_info(&self, controller_id: &str, info: RegisterRequest) {
-        let mut map = self.inner.write();
-        let snap = map
-            .entry(controller_id.to_string())
-            .or_insert_with(|| ControllerSnapshot::new(info.clone()));
-        snap.info = info;
-        snap.offline_since = None;
-        Self::refresh_controller_gauges(&map);
+        let snapshot = {
+            let mut map = self.inner.write();
+            let snap = map
+                .entry(controller_id.to_string())
+                .or_insert_with(|| ControllerSnapshot::new(info.clone()));
+            snap.info = info;
+            snap.offline_since = None;
+            Self::compute_gauge_snapshot(&map)
+        };
+        Self::emit_gauges(&snapshot);
     }
 
     pub fn mark_offline(&self, controller_id: &str) {
-        let mut map = self.inner.write();
-        if let Some(snap) = map.get_mut(controller_id) {
-            if snap.offline_since.is_none() {
-                snap.offline_since = Some(std::time::Instant::now());
+        let snapshot = {
+            let mut map = self.inner.write();
+            if let Some(snap) = map.get_mut(controller_id) {
+                if snap.offline_since.is_none() {
+                    snap.offline_since = Some(std::time::Instant::now());
+                }
             }
-        }
-        Self::refresh_controller_gauges(&map);
+            Self::compute_gauge_snapshot(&map)
+        };
+        Self::emit_gauges(&snapshot);
     }
 
     /// Remove a controller's snapshot entirely. Used by Admin DELETE cascade.
     pub fn remove(&self, controller_id: &str) -> bool {
-        let mut map = self.inner.write();
-        // Capture the cluster before removal so we can zero the gauge if it disappears.
-        let removed_cluster = map.get(controller_id).map(|s| {
-            if s.info.cluster.is_empty() {
-                "unknown".to_string()
-            } else {
-                s.info.cluster.clone()
-            }
-        });
-        let removed = map.remove(controller_id).is_some();
-        if removed {
-            fed_metrics::record_evict_stale(fed_metrics::labels::evict_source::AGGREGATOR);
-            Self::refresh_controller_gauges(&map);
-            // Pre-seeding cannot see a fully-removed entry; emit zero explicitly when the
-            // last controller for this cluster is gone.
-            if let Some(cluster) = removed_cluster {
-                let still_present = map.values().any(|s| {
-                    let c = if s.info.cluster.is_empty() {
-                        "unknown"
-                    } else {
-                        s.info.cluster.as_str()
-                    };
-                    c == cluster
-                });
-                if !still_present {
-                    fed_metrics::set_aggregator_controllers(&cluster, 0);
+        let outcome = {
+            let mut map = self.inner.write();
+            // Capture the cluster before removal so we can zero the gauge if it disappears.
+            let removed_cluster = map.get(controller_id).map(|s| {
+                if s.info.cluster.is_empty() {
+                    "unknown".to_string()
+                } else {
+                    s.info.cluster.clone()
                 }
+            });
+            if map.remove(controller_id).is_none() {
+                None
+            } else {
+                let snapshot = Self::compute_gauge_snapshot(&map);
+                // Pre-seeding cannot see a fully-removed entry; emit zero explicitly when
+                // the last controller for this cluster is gone.
+                let zero_cluster = removed_cluster.and_then(|cluster| {
+                    let still_present = map.values().any(|s| {
+                        let c = if s.info.cluster.is_empty() {
+                            "unknown"
+                        } else {
+                            s.info.cluster.as_str()
+                        };
+                        c == cluster
+                    });
+                    if still_present { None } else { Some(cluster) }
+                });
+                Some((snapshot, zero_cluster))
             }
+        };
+        let Some((snapshot, zero_cluster)) = outcome else {
+            return false;
+        };
+        fed_metrics::record_evict_stale(fed_metrics::labels::evict_source::AGGREGATOR);
+        Self::emit_gauges(&snapshot);
+        if let Some(cluster) = zero_cluster {
+            fed_metrics::set_aggregator_controllers(&cluster, 0);
         }
-        removed
+        true
     }
 
-    /// Recompute the `edgion_fed_aggregator_controllers{cluster}` gauge.
-    /// Caller must hold the write lock.
-    fn refresh_controller_gauges(map: &HashMap<String, ControllerSnapshot>) {
+    /// Compute the per-cluster online-controller counts. Pure function — must
+    /// be called inside the lock so the snapshot is consistent with the map
+    /// state at that instant. The returned map is then emitted by
+    /// [`Self::emit_gauges`] outside the lock.
+    fn compute_gauge_snapshot(map: &HashMap<String, ControllerSnapshot>) -> HashMap<String, u64> {
         let mut by_cluster: HashMap<String, u64> = HashMap::new();
         // Pre-seed all known clusters with 0 so disappeared clusters are zeroed out.
         for snap in map.values() {
@@ -114,7 +131,14 @@ impl ResourceAggregator {
             };
             *by_cluster.entry(cluster).or_default() += 1;
         }
-        for (cluster, count) in &by_cluster {
+        by_cluster
+    }
+
+    /// Emit the gauge snapshot to the `metrics` backend. Must be called
+    /// OUTSIDE the write lock so a future metrics backend with non-trivial
+    /// emit cost cannot stall registration / disconnect handling.
+    fn emit_gauges(snapshot: &HashMap<String, u64>) {
+        for (cluster, count) in snapshot {
             fed_metrics::set_aggregator_controllers(cluster, *count);
         }
     }

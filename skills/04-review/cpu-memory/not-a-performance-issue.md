@@ -14,6 +14,24 @@
 
 ---
 
+## Control-Plane Status-Write Counter Handle Pre-Caching is Not Worth It
+
+**False-positive scenario**: criticizing `record_status_write` / `record_status_write_error` / `record_status_write_skipped` in `src/core/controller/conf_mgr/sync_runtime/metrics.rs` for calling the `counter!` macro per invocation (two `String` allocations + registry hash lookup per call). Suggested fix is to mirror the sibling `ResourceMetrics` struct and pre-cache `Counter` handles per `(kind, backend, result)`.
+
+**Reality**:
+- These helpers are **controller-plane**, fired on reconcile events that produce a status change — not per request. Even under mass-reconcile the ceiling is ~10–100/sec, dwarfed by the K8s API PATCH (ms-scale) that immediately follows.
+- The per-call cost is sub-microsecond (two short strings ≤ ~12 B + one registry hash); the surrounding write is 3–4 orders of magnitude slower.
+- The existing `ResourceMetrics` pre-caches *gauges* per kind because gauges are written every init / resync and need a stable handle anyway; status-write counters are event-driven and don't share that motivation.
+- Implementing the suggested fix is multi-file (new struct in `metrics.rs` + wire through 4 call sites in `processor.rs`, `conf_center/file_system/resource_controller.rs`, `conf_center/etcd/resource_controller.rs`, `conf_center/kubernetes/resource_controller.rs`). The kubernetes path is a free function with a runtime-built `kind_str` (from `K::kind(&dt).to_string()`), so caching there would require a global `LazyLock<DashMap<...>>` keyed by 3-tuple, adding code surface for no measurable benefit.
+
+**Decision criteria**:
+- "`record_status_write*` allocates two `String`s per call" → expected; the `metrics::counter!` API requires `Cow<'static, str>`, the alloc is the minimal form (same logic as the `.to_string()` entry above).
+- "Should pre-cache `Counter` handles like `ResourceMetrics` does for gauges" → asymmetry is intentional; gauges and event-driven counters have different access patterns.
+
+**Verdict**: not a performance issue on the controller plane; accepted tradeoff; fix suggestions are not accepted unless paired with a profiler-confirmed hot-spot.
+
+---
+
 ## `get_raw_any` / `lookup_gateway` is Not JSON Serialization
 
 **False-positive scenario**: thinking that `lookup_gateway()`, `lookup_service_cluster_ip()` call `list_json()` to fully serialize all entries to JSON and then linearly scan.
@@ -404,3 +422,23 @@ The only visible micro-optimization: when `set_userinfo_header && userinfo_json.
 4. **The module's real concern is correctness, not throughput**: `status_diff` exists to ignore `lastTransitionTime` and similar non-semantic fields so we don't issue spurious K8s API writes. The linear-scan-by-type form makes it obvious to a reviewer that the matcher key is `type` and the compared fields are `status / reason / message / observedGeneration` (see `condition_fields_equal`). A HashMap-based version moves that logic two function calls away.
 
 **Verdict**: not a performance issue. Code-clarity rewrite suggestions are not accepted unless (a) profile data shows status diff dominating Controller CPU, or (b) the condition count bound is broken by a new resource kind that produces dozens of conditions per status. Same reasoning applies to `parents_status_equal`, `ancestors_status_equal`, and the listener loop in `gateway_status_equal` — all match by identity (parentRef / ancestorRef / listener name) on the same bounded-cardinality input.
+
+---
+
+## `AdminState::cache_get_resource` Full-List + Linear-Scan is Not a Performance Issue
+
+**False-positive scenario**: `cache_get_resource` / `cache_get_cluster_resource` in `src/core/controller/api/types.rs` delegate to `cache_list_resources(kind)` (full serialize + parse of the whole `ServerCache<T>` snapshot to `Vec<serde_json::Value>`) and then linearly scan to find one entry; flagged as "O(N) allocations per single-resource lookup, should expose a `get_by_key` path through `WatchObj` / `ConfigSyncServer`".
+
+**Reality**:
+
+1. **Cold admin path, not data plane**: the only callers are `configserver_handlers.rs::get_resource` (the `GET /configserver/{kind}?namespace=…&name=…` admin endpoint) and the `edgion-cli --target server` debug flow. No per-request, per-connection, or per-reconcile traffic touches this code. Trigger frequency is manual ops/diagnostics — bounded by human keypresses.
+
+2. **Response size is hard-capped**: `ConfigSyncServer::list` already enforces `MAX_LIST_BYTES = 64 MB` (`config_sync_server.rs:149`) and returns an error if the serialized kind exceeds that. So worst-case allocation per call is bounded; there is no unbounded-N risk.
+
+3. **The "proper fix" expands a cross-cutting trait surface for no measurable benefit**: `ServerCache<T>::get_by_key` (`cache.rs:99`) exists and is O(1), but it is intentionally not on the `WatchObj` trait (`conf_server/traits.rs`). Adding `get_json` to `WatchObj` would require implementing it on every cache type and plumbing through `ConfigSyncServer::get`, all to save microseconds on a path nobody hot-loops. The trait deliberately exposes only `list_json` + `watch_json` because that's all the gRPC sync protocol needs.
+
+**Decision criteria during review**:
+- "`cache_get_resource` does full list + linear scan, should use `get_by_key`" → check the call site: is it admin/CLI? If yes, this entry applies.
+- The two functions carry doc comments (since P3-c3b-006) explicitly stating the O(N) cost is intentional on this admin/diagnostic path.
+
+**Verdict**: not a performance issue. Tracked as P3-c3b-006 with `confirmed-downgraded` disposition; closed with explanatory doc comments. Trait-surface-expansion fix suggestions are not accepted unless paired with profile evidence that this admin path dominates Controller CPU.

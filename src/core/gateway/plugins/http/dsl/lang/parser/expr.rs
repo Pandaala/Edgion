@@ -214,9 +214,13 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx) -> IResult<&'a str, Expr, 
         return Ok((input, Expr::new(ExprKind::MapLiteral(pairs))));
     }
 
+    let end = (0..=input.len().min(20))
+        .rev()
+        .find(|&i| input.is_char_boundary(i))
+        .unwrap_or(0);
     Err(nom::Err::Failure(ParseError::new(format!(
         "unexpected token: '{}'",
-        &input[..input.len().min(20)]
+        &input[..end]
     ))))
 }
 

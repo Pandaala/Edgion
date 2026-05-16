@@ -240,6 +240,12 @@ impl AdminState {
     }
 
     /// Get a specific resource by namespace and name from cache (via ConfigSyncServer)
+    ///
+    /// Cost: O(N) full serialize-then-parse via `cache_list_resources` plus a linear scan.
+    /// This is intentional: the only callers are `edgion-cli --target server` and the
+    /// `/configserver/{kind}` admin endpoint — manual diagnostic paths, not the data plane.
+    /// Bypassing the list by exposing `ServerCache::get_by_key` through `WatchObj` would
+    /// expand a cross-cutting trait surface for no measurable benefit on this cold path.
     pub fn cache_get_resource(
         &self,
         kind: ResourceKind,
@@ -259,6 +265,9 @@ impl AdminState {
     }
 
     /// Get a cluster-scoped resource by name from cache (via ConfigSyncServer)
+    ///
+    /// Cost: same O(N) full serialize-then-parse pattern as `cache_get_resource`, retained
+    /// for the same reason — admin/diagnostic path only.
     pub fn cache_get_cluster_resource(
         &self,
         kind: ResourceKind,

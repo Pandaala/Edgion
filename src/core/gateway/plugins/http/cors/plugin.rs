@@ -28,26 +28,6 @@ impl Cors {
     /// config. Used by the preflight hot path to construct an ad-hoc `Cors`
     /// per request without re-cloning the config.
     pub fn from_arc(config: Arc<CorsConfig>) -> Self {
-        // Log warnings for force wildcard usage
-        if config.allow_origins == "**" {
-            tracing::warn!(
-                component = "cors",
-                "Using '**' for allow_origins bypasses security checks"
-            );
-        }
-        if config.allow_methods == "**" {
-            tracing::warn!(
-                component = "cors",
-                "Using '**' for allow_methods bypasses security checks"
-            );
-        }
-        if config.allow_headers == "**" {
-            tracing::warn!(
-                component = "cors",
-                "Using '**' for allow_headers will reflect client headers"
-            );
-        }
-
         Cors {
             name: "Cors".to_string(),
             config,

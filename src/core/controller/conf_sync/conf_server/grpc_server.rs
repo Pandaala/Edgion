@@ -62,9 +62,8 @@ impl ConfigSyncGrpcServer {
         ConfigSyncService::new(self)
     }
 
-    /// Start the gRPC server on the given address
-    pub async fn serve(self, addr: std::net::SocketAddr, security: &ConfSyncSecurityConfig) -> anyhow::Result<()> {
-        let service = self.into_service();
+    /// Build a tonic Server with shared HTTP/2 keepalive and conf_sync mTLS settings applied.
+    async fn build_server(security: &ConfSyncSecurityConfig) -> anyhow::Result<tonic::transport::Server> {
         let mut builder = tonic::transport::Server::builder()
             .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
             .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)));
@@ -86,7 +85,13 @@ impl ConfigSyncGrpcServer {
             }
         }
 
-        builder.add_service(service).serve(addr).await?;
+        Ok(builder)
+    }
+
+    /// Start the gRPC server on the given address
+    pub async fn serve(self, addr: std::net::SocketAddr, security: &ConfSyncSecurityConfig) -> anyhow::Result<()> {
+        let mut builder = Self::build_server(security).await?;
+        builder.add_service(self.into_service()).serve(addr).await?;
         Ok(())
     }
 
@@ -97,27 +102,7 @@ impl ConfigSyncGrpcServer {
         security: &ConfSyncSecurityConfig,
         shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> anyhow::Result<()> {
-        let service = self.into_service();
-        let mut builder = tonic::transport::Server::builder()
-            .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
-            .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)));
-
-        if let Some(tls) = security.resolve_active_tls() {
-            if tls.skip_tls {
-                tracing::error!(
-                    component = "grpc_server",
-                    "conf_sync mTLS skip_tls=true: starting WITHOUT TLS. INSECURE, emergency use only!"
-                );
-                crate::core::common::observe::system_metrics::mark_system_error(
-                    crate::core::common::observe::system_metrics::components::CONF_SYNC_SERVER,
-                    crate::core::common::observe::system_metrics::reasons::SKIP_TLS,
-                );
-            } else {
-                let server_tls = crate::core::common::grpc_tls::load_server_tls(tls).await?;
-                builder = builder.tls_config(server_tls)?;
-                tracing::info!(component = "grpc_server", "conf_sync mTLS enabled for gRPC server");
-            }
-        }
+        let mut builder = Self::build_server(security).await?;
 
         tracing::info!(
             component = "grpc_server",
@@ -126,7 +111,7 @@ impl ConfigSyncGrpcServer {
         );
 
         builder
-            .add_service(service)
+            .add_service(self.into_service())
             .serve_with_shutdown(addr, shutdown_signal)
             .await?;
 

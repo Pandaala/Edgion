@@ -108,8 +108,13 @@ impl Validator {
                             MAX_REGEX_PATTERN_LEN
                         )));
                     }
-                    // 5. Regex syntax validation
-                    if let Err(e) = regex::Regex::new(pattern) {
+                    // 5. Regex syntax validation — bound DFA memory so a malicious
+                    // bytecode payload cannot exhaust memory at validation time.
+                    if let Err(e) = regex::RegexBuilder::new(pattern)
+                        .size_limit(1 << 20)
+                        .dfa_size_limit(1 << 20)
+                        .build()
+                    {
                         errors.push(ValidationError::new(format!(
                             "invalid regex constant[{}] '{}': {}",
                             i, pattern, e

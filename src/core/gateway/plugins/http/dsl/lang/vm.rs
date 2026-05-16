@@ -188,9 +188,15 @@ impl Vm {
         for constant in &script.constants {
             match constant {
                 Constant::Regex(pattern) => {
-                    let re = regex::Regex::new(pattern).map_err(|e| RuntimeError::RegexError {
-                        message: format!("failed to compile regex '{}': {}", pattern, e),
-                    })?;
+                    // Cap DFA memory per pattern to bound worst-case allocation when
+                    // loading bytecode with up to max_constants regex entries.
+                    let re = regex::RegexBuilder::new(pattern)
+                        .size_limit(1 << 20)
+                        .dfa_size_limit(1 << 20)
+                        .build()
+                        .map_err(|e| RuntimeError::RegexError {
+                            message: format!("failed to compile regex '{}': {}", pattern, e),
+                        })?;
                     regex_cache.push(Some(re));
                     const_str_cache.push(None);
                 }
@@ -228,7 +234,7 @@ impl Vm {
                 return Ok(PluginRunningResult::GoodNext);
             }
 
-            let opcode = self.script.code[state.pc].clone();
+            let opcode = self.script.code[state.pc];
             state.pc += 1;
 
             match opcode {

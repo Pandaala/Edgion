@@ -53,6 +53,12 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **Tracing is forbidden on the data-plane request/connection hot path** | `skills/03-coding/01-log-safety.md` iron rule 3 | The request/connection processing path may only use access log / `PluginLog` / `ctx.err_log` / Metrics; any `tracing::` macro (including `debug!`) is forbidden. Exceptions: configuration loading paths, process startup/shutdown, and access-log send failures in `pg_logging.rs`. Applies to plugin `run_request` / `run_upstream_response` / TLS proxy / stream proxy across the board. |
 | **No PluginLog in the `UpstreamResponseBodyFilter` body phase** | `traits/upstream_response_body_filter.rs`, `conditions/evaluator.rs` | The trait signature deliberately omits `&mut PluginLog`; the body phase is invoked once per chunk, and any heap allocation per chunk (PluginLog / String / Vec) accumulates as O(chunks×plugins). When adding a new body-phase filter / wrapper, do not write logs; condition evaluation should use the `evaluate_sync_silent` chain rather than `evaluate_detail_sync`, and ExtensionRef should go through `resolve_runtime_silent`. A long-stream memory leak (issue g2-001) was once introduced because ExtensionRef accidentally called `start_edgion_plugins_log`. See [05-plugin-system.md §No PluginLog in body phase](01-architecture/02-gateway/05-plugin-system.md) for details. |
 
+## Common practice notes
+
+> Project-wide norms — not hard rules like the table above. Prefer these defaults; deviate with reason and document it.
+
+- **Graceful degrade over panic in long-running paths** — in data-plane filters and control-plane reconcile loops, an unreachable "should-not-happen" branch should normally return a safe default and leave an observability trail (`plugin_log.push_err(...)` on the data plane, `tracing::warn!`/`error!` on the control plane), not `panic!` / `debug_assert!(false, ...)` / `unreachable!()`. Exceptions: startup/init, exhaustive-match dead arms, data-corruption fail-fast. See [03-coding/02-rust-coding-rules.md §Rule 5](03-coding/02-rust-coding-rules.md). Cross-codebase audit: `tasks/todo/graceful-degrade-audit.md`.
+
 ## Directory overview
 
 | # | Directory | Purpose |

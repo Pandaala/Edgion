@@ -268,13 +268,7 @@ impl AcmeServiceWorker {
         }
 
         // Parse key into namespace/name
-        let (namespace, name) = match parse_resource_key(key) {
-            Some(v) => v,
-            None => {
-                tracing::error!(component = "acme_service", key = %key, "Invalid resource key");
-                return;
-            }
-        };
+        let (namespace, name) = parse_resource_key(key);
 
         // Fetch current resource from K8s
         let api: Api<EdgionAcme> = Api::namespaced(self.client.clone(), &namespace);
@@ -390,23 +384,22 @@ impl AcmeServiceWorker {
                     );
 
                     // Update status to Failed
-                    if let Some((ns, name)) = parse_resource_key(&key_owned) {
-                        let api: Api<EdgionAcme> = Api::namespaced(client, &ns);
-                        if let Err(status_err) = update_acme_status(&api, &name, AcmeCertPhase::Failed, |status| {
-                            status.last_failure_reason = Some(format!("{:#}", e));
-                            status.last_failure_time = Some(chrono::Utc::now().to_rfc3339());
-                        })
-                        .await
-                        {
-                            // Without this, phase stays in Issuing/Renewing and operators
-                            // cannot see that the flow failed.
-                            tracing::warn!(
-                                component = "acme_service",
-                                key = %key_owned,
-                                error = %status_err,
-                                "Failed to write Failed status back to EdgionAcme"
-                            );
-                        }
+                    let (ns, name) = parse_resource_key(&key_owned);
+                    let api: Api<EdgionAcme> = Api::namespaced(client, &ns);
+                    if let Err(status_err) = update_acme_status(&api, &name, AcmeCertPhase::Failed, |status| {
+                        status.last_failure_reason = Some(format!("{:#}", e));
+                        status.last_failure_time = Some(chrono::Utc::now().to_rfc3339());
+                    })
+                    .await
+                    {
+                        // Without this, phase stays in Issuing/Renewing and operators
+                        // cannot see that the flow failed.
+                        tracing::warn!(
+                            component = "acme_service",
+                            key = %key_owned,
+                            error = %status_err,
+                            "Failed to write Failed status back to EdgionAcme"
+                        );
                     }
 
                     // Schedule retry with exponential backoff (if under limit)
@@ -1061,14 +1054,13 @@ fn parse_cert_info(pem: &str) -> CertInfo {
 // Utility
 // ============================================================================
 
-/// Parse a "namespace/name" resource key
-fn parse_resource_key(key: &str) -> Option<(String, String)> {
+/// Parse a "namespace/name" resource key. Falls back to ("default", key) when '/' is absent.
+fn parse_resource_key(key: &str) -> (String, String) {
     let parts: Vec<&str> = key.splitn(2, '/').collect();
     if parts.len() == 2 {
-        Some((parts[0].to_string(), parts[1].to_string()))
+        (parts[0].to_string(), parts[1].to_string())
     } else {
-        // Fallback: treat as name in "default" namespace
-        Some(("default".to_string(), key.to_string()))
+        ("default".to_string(), key.to_string())
     }
 }
 
@@ -1103,7 +1095,7 @@ mod tests {
 
     #[test]
     fn test_parse_resource_key_normal() {
-        let (ns, name) = parse_resource_key("default/my-acme").unwrap();
+        let (ns, name) = parse_resource_key("default/my-acme");
         assert_eq!(ns, "default");
         assert_eq!(name, "my-acme");
     }
@@ -1111,14 +1103,14 @@ mod tests {
     #[test]
     fn test_parse_resource_key_with_slash_in_name() {
         // splitn(2, '/') means only split on the first '/'
-        let (ns, name) = parse_resource_key("ns/name/with/slashes").unwrap();
+        let (ns, name) = parse_resource_key("ns/name/with/slashes");
         assert_eq!(ns, "ns");
         assert_eq!(name, "name/with/slashes");
     }
 
     #[test]
     fn test_parse_resource_key_no_namespace() {
-        let (ns, name) = parse_resource_key("just-a-name").unwrap();
+        let (ns, name) = parse_resource_key("just-a-name");
         assert_eq!(ns, "default");
         assert_eq!(name, "just-a-name");
     }

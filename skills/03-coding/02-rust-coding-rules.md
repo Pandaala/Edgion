@@ -79,7 +79,48 @@ format!(
 format!("IO error: {}", e)
 ```
 
-## Rule 5: prefer canonical utilities over local copies
+## Rule 5: prefer graceful degrade over panic in long-running paths
+
+In **long-running paths** (data plane request/response/body filters, TLS proxy, stream proxy, plus control-plane reconcile loops / watchers / periodic tasks), an unreachable "should-not-happen" branch should normally **graceful-degrade**, not panic.
+
+A graceful-degrade branch does three things:
+1. Does **not** panic / abort.
+2. Falls back to a safe default behavior (return `None`, fall through to the rule's `default`, skip the bad entry, etc.).
+3. Leaves an observability trail — data plane uses `plugin_log.push_err("<static kind>")`; control plane uses `tracing::warn!`/`error!` with enough context.
+
+```rust
+// Correct: data-plane fallback for an invariant the config layer should have caught
+TransformType::Replace { with, .. } => match compiled_replace {
+    Some(re) => Some(re.replace_all(value, with.as_str()).to_string()),
+    None => {
+        // Invariant: validate() compiles every Replace pattern; reaching
+        // here means the config bypassed validation. Fail-open via default.
+        plugin_log.push_err("transform regex missing");
+        None
+    }
+},
+
+// Wrong: panic on the data plane — a misconfig kills every in-flight request
+None => panic!("compiled_transform_regex missing"),
+
+// Wrong: debug_assert!(false, ...) — not the project idiom, only 3 sites in src/,
+// none in gateway/plugins/; in dev/CI it crashes the test, in release it is a no-op
+// that adds nothing the existing graceful branch doesn't already have
+None => {
+    debug_assert!(false, "compiled_transform_regex missing");
+    None
+}
+```
+
+**Exceptions** (panic / `expect` / `unreachable!()` remain appropriate):
+- **Startup / one-shot init** — `main.rs`, CLI subcommand entry points, config loading, `ConfigCenter::new`, anything that runs once before the event loop spins up. Failing fast lets K8s restart the pod.
+- **True exhaustive-match dead arms** — closed-enum `match` where the trailing arm is logically unreachable; `unreachable!()` is the right tool there.
+- **Data corruption / broken invariant where continuing is less safe than crashing** — e.g., a memory data structure's internal consistency has already been violated. Document the reasoning in a comment.
+- **Test code** (`#[cfg(test)]`) — not constrained.
+
+When in doubt, prefer graceful-degrade — Edgion is a gateway, a panicked request path is a 5xx for the user. Cross-codebase audit follow-up is tracked in `tasks/todo/graceful-degrade-audit.md`.
+
+## Rule 6: prefer canonical utilities over local copies
 
 Before writing a parsing / formatting / validation helper, search `src/core/common/utils/` and `src/types/common/` for an existing one. Re-using the canonical implementation keeps behavior consistent and lets future fixes propagate to all call sites.
 
@@ -103,3 +144,4 @@ Use during code review:
 - [ ] Any unnecessary `.clone()`? Can a reference or `Arc` be used instead?
 - [ ] Do error messages carry enough context for troubleshooting?
 - [ ] New parsing/validation helper? Check `core::common::utils::` first — extend the canonical instead of forking
+- [ ] New `panic!` / `unreachable!()` / `debug_assert!(false, ...)` on a long-running path? Check Rule 5 exceptions — most should be graceful-degrade + `push_err`/`tracing::warn!`

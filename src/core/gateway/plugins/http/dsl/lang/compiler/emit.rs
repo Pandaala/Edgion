@@ -72,8 +72,12 @@ impl Compiler {
         if let Some(&idx) = self.const_regex_map.get(pattern) {
             return Ok(idx);
         }
-        // Validate regex at compile time
-        regex::Regex::new(pattern).map_err(|e| CompileError::new(format!("invalid regex '{}': {}", pattern, e)))?;
+        // Validate regex at compile time; cap DFA memory to mirror the runtime VM limit.
+        regex::RegexBuilder::new(pattern)
+            .size_limit(1 << 20)
+            .dfa_size_limit(1 << 20)
+            .build()
+            .map_err(|e| CompileError::new(format!("invalid regex '{}': {}", pattern, e)))?;
         let idx = self.check_const_limit()?;
         let owned = pattern.to_string();
         self.const_regex_map.insert(owned.clone(), idx);

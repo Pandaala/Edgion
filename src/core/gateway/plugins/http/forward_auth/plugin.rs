@@ -156,6 +156,7 @@ impl ForwardAuth {
     async fn send_error_response(
         &self,
         session: &mut dyn PluginSession,
+        plugin_log: &mut PluginLog,
         status: u16,
         body: &str,
         extra_headers: Option<&Vec<(String, String)>>,
@@ -168,10 +169,15 @@ impl ForwardAuth {
         let _ = resp.insert_header("Content-Type", "application/json");
         let _ = resp.insert_header("Connection", "close");
 
-        // Add extra headers (e.g., client_headers from auth service response)
+        // Add extra headers (e.g., client_headers from auth service response).
+        // The values were already validated by HeaderValue::to_str() upstream,
+        // so insert_header failures here indicate an invalid header name
+        // from the operator's `client_headers` config (non-token bytes, etc.).
         if let Some(headers) = extra_headers {
             for (name, value) in headers.iter() {
-                let _ = resp.insert_header(name.clone(), value.clone());
+                if resp.insert_header(name.clone(), value.clone()).is_err() {
+                    plugin_log.push_err("invalid response header");
+                }
             }
         }
 
@@ -230,6 +236,7 @@ impl RequestFilter for ForwardAuth {
                 return self
                     .send_error_response(
                         session,
+                        plugin_log,
                         self.config.status_on_error,
                         r#"{"message":"Auth service unavailable"}"#,
                         None,
@@ -289,7 +296,7 @@ impl RequestFilter for ForwardAuth {
 
             plugin_log.push_fmt("auth deny {}", la![status.to_string().as_str()]);
             apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
-            self.send_error_response(session, status, &body, Some(&extra_headers))
+            self.send_error_response(session, plugin_log, status, &body, Some(&extra_headers))
                 .await
         }
     }

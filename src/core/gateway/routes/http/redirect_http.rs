@@ -8,10 +8,31 @@ use http::StatusCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session};
+use serde::Serialize;
 use std::sync::Arc;
 use std::time::Instant;
 
 use crate::core::gateway::observe::AccessLogger;
+
+#[derive(Serialize)]
+struct RedirectRequestInfo<'a> {
+    #[serde(rename = "client-addr")]
+    client_addr: &'a str,
+    host: &'a str,
+    path: &'a str,
+    status: u16,
+}
+
+#[derive(Serialize)]
+struct RedirectLogEntry<'a> {
+    ts: i64,
+    #[serde(rename = "type")]
+    log_type: &'static str,
+    request_info: RedirectRequestInfo<'a>,
+    redirect_url: &'a str,
+    latency_ms: u64,
+    error: Option<String>,
+}
 
 /// Context for HTTP redirect - tracks request metadata for access logging
 pub struct RedirectContext {
@@ -135,21 +156,23 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
         let latency_ms = ctx.start_time.elapsed().as_millis() as u64;
         let error_msg = e.map(|err| err.to_string());
 
-        let log_entry = serde_json::json!({
-            "ts": chrono::Utc::now().timestamp_millis(),
-            "type": "redirect",
-            "request_info": {
-                "client-addr": ctx.client_addr,
-                "host": ctx.host,
-                "path": ctx.path,
-                "status": ctx.status,
+        let entry = RedirectLogEntry {
+            ts: chrono::Utc::now().timestamp_millis(),
+            log_type: "redirect",
+            request_info: RedirectRequestInfo {
+                client_addr: &ctx.client_addr,
+                host: &ctx.host,
+                path: &ctx.path,
+                status: ctx.status,
             },
-            "redirect_url": ctx.redirect_url,
-            "latency_ms": latency_ms,
-            "error": error_msg,
-        });
+            redirect_url: &ctx.redirect_url,
+            latency_ms,
+            error: error_msg,
+        };
 
-        self.access_logger.send(log_entry.to_string()).await;
+        if let Ok(s) = serde_json::to_string(&entry) {
+            self.access_logger.send(s).await;
+        }
     }
 }
 
