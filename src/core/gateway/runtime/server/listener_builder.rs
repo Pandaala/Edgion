@@ -83,7 +83,11 @@ pub fn add_http_listener(
             .and_then(|v| v.parse().ok())
             .unwrap_or(443);
 
-        let redirect_handler = EdgionHttpRedirectProxy::new(https_port, context.access_logger.clone());
+        let redirect_handler = EdgionHttpRedirectProxy::new(
+            https_port,
+            context.access_logger.clone(),
+            context.edgion_gateway_config.clone(),
+        );
         let mut http_service = http_proxy_service(&context.server_conf, redirect_handler);
         apply_connection_filter(&mut http_service, context);
         http_service.add_tcp(&addr);

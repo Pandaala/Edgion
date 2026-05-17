@@ -21,10 +21,20 @@ Suggestions of the form "accept and pick the first/last Host", "downgrade to `tr
 
 ## Code shape today
 
-- `pg_request_filter.rs::build_request_metadata` — counts `req_header.headers.get_all("host")` before path/ACME/hostname extraction; `>1` ⇒ `add_error(EdgionStatus::DuplicateHostHeader) + end_response_400`.
+- `pg_request_filter.rs::build_request_metadata` — generates `x_trace_id` first (so the rejection's access-log entry is correlatable with `tls.log`), then counts `req_header.headers.get_all("host")` before path/ACME/hostname extraction; `>1` ⇒ `add_error(EdgionStatus::DuplicateHostHeader) + end_response_400`.
+- `redirect_http.rs::EdgionHttpRedirectProxy::request_filter` — same gate at the top of the HTTP→HTTPS redirect listener; prevents an attacker from echoing a smuggled Host into the 301 `Location:` URL.
 - `edgion_gateway_config.rs::SecurityProtectConfig.reject_duplicate_host: bool` — default `true` (`default_reject_duplicate_host`).
 - `edgion_status.rs::EdgionStatus::DuplicateHostHeader = 400_05` — exhaustive `expected_http()` arm + test array updated.
-- Integration: `examples/code/client/suites/http_route/filters/security.rs::test_duplicate_host_headers` (raw TCP, two `Host:` lines, asserts 400).
+- Integration: `examples/code/client/suites/http_route/filters/security.rs` — `test_duplicate_host_headers` (same-case `Host:` × 2) and `test_duplicate_host_headers_mixed_case` (`Host:` + `host:`); both raw TCP, both assert HTTP/1.1 400.
+
+### Test coverage gaps (intentional)
+
+- **Opt-out path** (`rejectDuplicateHost: false` → duplicates accepted): not covered as a wire test because it requires a separate suite with its own `EdgionGatewayConfig` YAML (the shared `HTTPRoute/Filters/Security` suite cannot toggle the flag mid-run). The unit-level `unwrap_or(true)` default path is exercised by the existing positive cases.
+- **gRPC-over-h1 → `grpc-status=3`**: `end_response_400` is verified by code inspection to call `send_grpc_trailers_only(..., 400)` (maps to `INVALID_ARGUMENT`), but raw-TCP wire assertions for HTTP/1.1 trailers are too brittle to add here — pingora's `write_response_trailers` is designed for HTTP/2 framing. An h2-native scenario would be more reliable if real test coverage of this path is needed.
+
+## Known limitation
+
+`Host: a, b` (single line, comma-separated multi-value) is **not** detected by `count() > 1`. RFC 9110 §7.2 literally targets "more than one Host header field line" — the multi-value-in-one-line case falls outside that clause. In practice the merged value is treated as a single literal hostname and fails route lookup (404 RouteNotFound), so it does not constitute a smuggling primitive. Fix suggestions that propose splitting the single-line value on `,` to re-trigger the check are **not accepted** (would mis-classify legitimate IPv6 literals and is outside RFC §7.2's scope).
 
 ## Why this shape
 

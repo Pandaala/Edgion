@@ -293,6 +293,18 @@ async fn build_request_metadata(
         ctx.request_info.client_addr.clone()
     };
 
+    // Generate x_trace_id before any early-return guards so 400/4xx access-log
+    // entries carry a trace id that can be correlated with tls.log.
+    ctx.request_info.x_trace_id = req_header
+        .headers
+        .get("x-trace-id")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            // Generate new trace_id if not present
+            Some(uuid::Uuid::new_v4().to_string())
+        });
+
     // RFC 9110 §7.2: reject HTTP/1.1 requests carrying more than one Host header
     // line. Host smuggling defense — gated by `SecurityProtectConfig.reject_duplicate_host`
     // (default true), matching Envoy's effective behavior (commas in the coalesced
@@ -331,17 +343,6 @@ async fn build_request_metadata(
                 .and_then(|h| h.to_str().ok().map(NormalizedHostname::new))
         })
         .unwrap_or_default();
-
-    // Try to get X-Trace-Id from request headers, generate if not present
-    ctx.request_info.x_trace_id = req_header
-        .headers
-        .get("x-trace-id")
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string())
-        .or_else(|| {
-            // Generate new trace_id if not present
-            Some(uuid::Uuid::new_v4().to_string())
-        });
 
     // Extract X-Forwarded-For header (before we append to it)
     ctx.request_info.x_forwarded_for = req_header
