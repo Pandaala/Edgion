@@ -135,6 +135,66 @@ impl HttpSecurityTestSuite {
         )
     }
 
+    fn test_duplicate_host_headers() -> TestCase {
+        TestCase::new(
+            "duplicate_host_headers",
+            "Test HTTP/1.1 request with two Host header lines is rejected with 400 (RFC 9110 §7.2)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let url = ctx.http_url();
+                    let parts: Vec<&str> = url.split("://").collect();
+                    let addr = if parts.len() > 1 {
+                        parts[1].to_string()
+                    } else {
+                        parts[0].to_string()
+                    };
+
+                    match TcpStream::connect(&addr).await {
+                        Ok(mut stream) => {
+                            // Two Host header lines: a legitimate routable host followed by an
+                            // attacker-controlled one. With reject_duplicate_host=true (default)
+                            // the gateway must respond 400 instead of routing on the first value.
+                            let primary = ctx.http_host.clone().unwrap_or_else(|| "test.example.com".to_string());
+                            let request = format!(
+                                "GET /health HTTP/1.1\r\nHost: {}\r\nHost: attacker.example\r\nConnection: close\r\n\r\n",
+                                primary
+                            );
+
+                            if let Err(e) = stream.write_all(request.as_bytes()).await {
+                                return TestResult::failed(start.elapsed(), format!("Write failed: {}", e));
+                            }
+
+                            let mut response = Vec::new();
+                            if let Err(e) = stream.read_to_end(&mut response).await {
+                                return TestResult::failed(start.elapsed(), format!("Read failed: {}", e));
+                            }
+
+                            let response_str = String::from_utf8_lossy(&response);
+
+                            if response_str.contains("HTTP/1.1 400") || response_str.contains("400 Bad Request") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "✓ Duplicate Host headers rejected with 400".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected 400 Bad Request, got: {}",
+                                        response_str.lines().next().unwrap_or("")
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Connection failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     fn test_valid_hostname() -> TestCase {
         TestCase::new(
             "valid_hostname",
@@ -245,6 +305,7 @@ impl TestSuite for HttpSecurityTestSuite {
         vec![
             Self::test_missing_hostname(),
             Self::test_empty_hostname(),
+            Self::test_duplicate_host_headers(),
             Self::test_valid_hostname(),
             Self::test_hostname_with_port(),
         ]

@@ -293,6 +293,25 @@ async fn build_request_metadata(
         ctx.request_info.client_addr.clone()
     };
 
+    // RFC 9110 §7.2: reject HTTP/1.1 requests carrying more than one Host header
+    // line. Host smuggling defense — gated by `SecurityProtectConfig.reject_duplicate_host`
+    // (default true), matching Envoy's effective behavior (commas in the coalesced
+    // :authority fail Envoy's authority validator). HTTP/2 carries authority in the
+    // `:authority` pseudo-header and `headers.get_all("host")` is normally empty for
+    // h2, so this branch is a no-op for h2 / gRPC-over-h2 traffic.
+    let reject_duplicate_host = edgion_http
+        .edgion_gateway_config
+        .spec
+        .security_protect
+        .as_ref()
+        .map(|s| s.reject_duplicate_host)
+        .unwrap_or(true);
+    if reject_duplicate_host && req_header.headers.get_all("host").iter().count() > 1 {
+        ctx.add_error(EdgionStatus::DuplicateHostHeader);
+        end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true);
+    }
+
     // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback).
     // NormalizedHostname::new() applies trim, port-strip, FQDN-dot-strip, and lowercase once.
     ctx.request_info.hostname = req_header

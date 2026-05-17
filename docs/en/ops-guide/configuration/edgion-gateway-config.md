@@ -69,6 +69,7 @@ spec:
     requireSniHostMatch: true
     fallbackSni: ""
     tlsProxyLogRecord: true
+    rejectDuplicateHost: true
 
   globalPluginsRef:
     - name: "global-cors"
@@ -139,6 +140,7 @@ Extraction logic: walk `realIpHeader` from right to left, skip addresses in any 
 | `fallbackSni` | `String` | — | Fallback hostname used when the client provides no SNI |
 | `tlsProxyLogRecord` | `Boolean` | `true` | Record TLS proxy connection logs |
 | `allowLoopbackUpstream` | `Boolean` | `false` | Explicitly allow loopback upstream addresses for this GatewayClass. Link-local / metadata ranges remain blocked |
+| `rejectDuplicateHost` | `Boolean` | `true` | Reject HTTP/1.1 requests carrying more than one `Host` header line with `400 Bad Request` (RFC 9110 §7.2 Host smuggling defense). Disable only as a transitional escape hatch for legacy middleware that emits duplicate `Host` lines |
 
 ### spec.globalPluginsRef
 

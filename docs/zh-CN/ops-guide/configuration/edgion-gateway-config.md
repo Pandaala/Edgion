@@ -69,6 +69,7 @@ spec:
     requireSniHostMatch: true
     fallbackSni: ""
     tlsProxyLogRecord: true
+    rejectDuplicateHost: true
 
   globalPluginsRef:
     - name: "global-cors"
@@ -139,6 +140,7 @@ spec:
 | `fallbackSni` | `String` | — | 客户端未提供 SNI 时使用的备用主机名 |
 | `tlsProxyLogRecord` | `Boolean` | `true` | 是否记录 TLS 代理连接日志 |
 | `allowLoopbackUpstream` | `Boolean` | `false` | 显式放行该 GatewayClass 的 loopback upstream；link-local / metadata 仍然拒绝 |
+| `rejectDuplicateHost` | `Boolean` | `true` | 拒绝同一 HTTP/1.1 请求里出现多于一个 `Host:` 头部行，返回 `400 Bad Request`(RFC 9110 §7.2,Host smuggling 防御)。仅在需要兼容会发重复 `Host` 行的旧式中间件时关闭 |
 
 ### spec.globalPluginsRef
 
