@@ -197,11 +197,11 @@ impl RequestFilter for KeyAuth {
         };
         plugin_log.push(key_source_label);
 
-        // Log OK with username if available
+        // Log OK with group attribution + optional username
         if let Some(username) = metadata.headers.get("X-Consumer-Username") {
-            plugin_log.push_fmt("OK user {}", la![sensitive(username)]);
+            plugin_log.push_fmt("OK group={} user {}", la![metadata.group.as_ref(), sensitive(username)]);
         } else {
-            plugin_log.push("OK");
+            plugin_log.push_fmt("OK group={}", la![metadata.group.as_ref()]);
         }
 
         // 3. Set upstream headers (from whitelist)
@@ -236,7 +236,7 @@ mod tests {
             anonymous: None,
             realm: "Test API".to_string(),
             key_field: "key".to_string(),
-            secret_refs: None,
+            secret_groups: None,
             upstream_header_fields: vec!["X-Consumer-Username".to_string(), "X-Customer-ID".to_string()],
             resolved_keys: None,
         }
@@ -247,18 +247,31 @@ mod tests {
         let mut auth = KeyAuth::new(&config);
 
         let mut keys = HashMap::new();
+        let group: String = "partner-a".to_string();
 
         // Key 1: jack
         let mut jack_headers = HashMap::new();
         jack_headers.insert("X-Consumer-Username".to_string(), "jack".to_string());
         jack_headers.insert("X-Customer-ID".to_string(), "cust-001".to_string());
-        keys.insert("jack-key-12345".to_string(), KeyMetadata { headers: jack_headers });
+        keys.insert(
+            "jack-key-12345".to_string(),
+            KeyMetadata {
+                headers: jack_headers,
+                group: group.clone(),
+            },
+        );
 
         // Key 2: alice
         let mut alice_headers = HashMap::new();
         alice_headers.insert("X-Consumer-Username".to_string(), "alice".to_string());
         alice_headers.insert("X-Customer-ID".to_string(), "cust-002".to_string());
-        keys.insert("alice-key-67890".to_string(), KeyMetadata { headers: alice_headers });
+        keys.insert(
+            "alice-key-67890".to_string(),
+            KeyMetadata {
+                headers: alice_headers,
+                group: group.clone(),
+            },
+        );
 
         auth.load_keys(keys);
         auth
@@ -293,5 +306,59 @@ mod tests {
 
         let metadata = auth.validate_key("invalid-key");
         assert!(metadata.is_none());
+    }
+
+    use crate::core::gateway::plugins::runtime::PluginLog;
+    use serde_json::Value;
+
+    fn metadata_with_group(group: &str, username: Option<&str>) -> KeyMetadata {
+        let mut headers = HashMap::new();
+        if let Some(u) = username {
+            headers.insert("X-Consumer-Username".to_string(), u.to_string());
+        }
+        KeyMetadata {
+            headers,
+            group: group.to_string(),
+        }
+    }
+
+    fn render_log(log: &PluginLog) -> Vec<String> {
+        let v: Value = serde_json::to_value(log).unwrap();
+        v.get("log")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(|e| e.as_str().map(String::from)).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn hit_log_contains_group_and_user() {
+        let mut log = PluginLog::new("KeyAuth");
+        let meta = metadata_with_group("partner-a", Some("jack"));
+        if let Some(user) = meta.headers.get("X-Consumer-Username") {
+            log.push_fmt("OK group={} user {}", la![meta.group.as_ref(), sensitive(user)]);
+        }
+        let entries = render_log(&log);
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.starts_with("OK group=partner-a") && e.contains("user ")),
+            "expected 'OK group=partner-a user ...', got entries: {:?}",
+            entries
+        );
+    }
+
+    #[test]
+    fn hit_log_without_user_still_has_group() {
+        let mut log = PluginLog::new("KeyAuth");
+        let meta = metadata_with_group("internal", None);
+        if meta.headers.get("X-Consumer-Username").is_none() {
+            log.push_fmt("OK group={}", la![meta.group.as_ref()]);
+        }
+        let entries = render_log(&log);
+        assert!(
+            entries.iter().any(|e| e == "OK group=internal"),
+            "expected exact 'OK group=internal', got: {:?}",
+            entries
+        );
     }
 }

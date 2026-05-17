@@ -54,7 +54,7 @@ pub use hmac_auth::{HmacAlgorithm, HmacAuthConfig, HmacCredential};
 pub use ip_restriction::{DefaultAction, IpRestrictionConfig, IpSource};
 pub use jwe_decrypt::{JweContentEncryption, JweDecryptConfig, JweKeyManagement, ResolvedJweCredential};
 pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, ResolvedJwtCredential};
-pub use key_auth::{KeyAuthConfig, KeyMetadata};
+pub use key_auth::{KeyAuthConfig, KeyAuthSecretGroup, KeyMetadata};
 pub use ldap_auth::LdapAuthConfig;
 pub use linksys_ref::LinkSysRef;
 pub use lru_cache_config::LruCacheConfig;

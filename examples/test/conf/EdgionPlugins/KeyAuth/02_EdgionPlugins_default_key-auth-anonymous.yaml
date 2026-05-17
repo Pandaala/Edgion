@@ -16,9 +16,11 @@ spec:
         anonymous: "anonymous-user"
         realm: "Test API"
         keyField: "key"
-        secretRefs:
-          - name: api-keys
-            namespace: edgion-default
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: api-keys
+                namespace: edgion-default
         upstreamHeaderFields:
           - "X-Consumer-Username"
 

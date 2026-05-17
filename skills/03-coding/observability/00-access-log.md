@@ -141,8 +141,10 @@ plugin_log.push(&format!("Auth failed for user {}", name)); // PII into PluginLo
 ### Good PluginLog examples
 
 ```rust
-// KeyAuth — auth passed
-log.push("OK u=jack");
+// KeyAuth — auth passed (group attribution always present after secret_groups pilot)
+log.push_fmt("OK group={} user {}", la!["partner-a", sensitive(&"jack")]);
+// Note: failure branches (`Deny bad key`, `Deny no key`) deliberately omit `group=`
+// to avoid leaking multi-tenant topology to unauthenticated callers.
 
 // KeyAuth — key not found
 log.push("Deny no-key");

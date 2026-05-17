@@ -16,6 +16,8 @@ spec:
         authFailureDelayMs: 300
         realm: "Test API"
         keyField: "key"
-        secretRefs:
-          - name: api-keys
-            namespace: edgion-default
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: api-keys
+                namespace: edgion-default

@@ -1,5 +1,6 @@
 //! Common reusable types for Edgion custom resources.
 
+pub mod group_name;
 pub mod secret_object_ref;
 pub mod secret_slot;
 pub mod tls;

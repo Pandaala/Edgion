@@ -9,6 +9,8 @@ use std::net::IpAddr;
 use crate::core::common::matcher::ip_radix_tree::IpRadixMatcher;
 use crate::types::resources::plugin_metadata::IpGroup;
 
+pub use crate::types::resources::common::group_name::validate_group_name;
+
 /// Validate IP address or CIDR range format.
 pub fn validate_ip_or_cidr(ip_str: &str) -> Result<(), String> {
     if ip_str.contains('/') {
@@ -74,37 +76,6 @@ pub fn validate_groups_structure(groups: &[IpGroup]) -> Result<(), String> {
             let norm = to_cidr_format(cidr).map_err(|e| format!("group '{}': {}", g.name, e))?;
             if !seen_cidrs.insert(norm.clone()) {
                 return Err(format!("duplicate CIDR '{}' across groups", norm));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Validate group name per K8s label-value charset: <=63 chars,
-/// `^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$` (single-char names allowed).
-fn validate_group_name(name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("group name is empty".to_string());
-    }
-    if name.len() > 63 {
-        return Err(format!("group name '{}' exceeds 63 chars", name));
-    }
-    let bytes = name.as_bytes();
-    let is_alnum = |b: u8| b.is_ascii_alphanumeric();
-    let is_mid = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.';
-    if !is_alnum(bytes[0]) {
-        return Err(format!("group name '{}' must start with alphanumeric", name));
-    }
-    if !is_alnum(bytes[bytes.len() - 1]) {
-        return Err(format!("group name '{}' must end with alphanumeric", name));
-    }
-    // Only check the middle bytes when the name has at least 3 chars; for
-    // names of length 1 or 2 the alphanumeric checks above already cover
-    // every byte, and `bytes[1..bytes.len() - 1]` would panic for len == 1.
-    if bytes.len() > 2 {
-        for &b in &bytes[1..bytes.len() - 1] {
-            if !is_mid(b) {
-                return Err(format!("group name '{}' contains invalid character", name));
             }
         }
     }

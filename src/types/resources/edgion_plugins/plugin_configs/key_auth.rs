@@ -5,11 +5,30 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::types::common::KeyGet;
 use crate::types::resources::edgion_plugins::plugin_validation::PluginValidation;
 use crate::types::resources::gateway::SecretObjectReference;
+
+/// A named group of Secret references whose keys all carry this group's
+/// name in `KeyMetadata.group`. Used for audit / tenant attribution in
+/// PluginLog.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyAuthSecretGroup {
+    /// Group name. Charset: Kubernetes label-value
+    /// (`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`, <=63 chars).
+    /// Surfaces in PluginLog as `group=<name>`.
+    pub name: String,
+
+    /// Human-readable description (not used by runtime).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Secret references for this group. Must be non-empty.
+    pub secret_refs: Vec<SecretObjectReference>,
+}
 
 /// Key Auth plugin configuration
 ///
@@ -66,10 +85,13 @@ pub struct KeyAuthConfig {
     #[serde(default = "default_key_field")]
     pub key_field: String,
 
-    /// Secret references containing API keys
-    /// Each Secret should contain a 'keys.yaml' field with key entries
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub secret_refs: Option<Vec<SecretObjectReference>>,
+    /// Named groups of Secret references. Optional so anonymous-only
+    /// deployments (no keys) remain valid.
+    ///
+    /// Each group's `secret_refs` are resolved and merged into a single
+    /// runtime key map; the resulting `KeyMetadata.group` records origin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_groups: Option<Vec<KeyAuthSecretGroup>>,
 
     // === Upstream Headers ===
     /// Whitelist: Secret fields to add as upstream headers
@@ -86,11 +108,21 @@ pub struct KeyAuthConfig {
     pub resolved_keys: Option<HashMap<String, KeyMetadata>>,
 }
 
-/// API Key metadata containing headers to forward to upstream
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// API Key metadata attached to a resolved key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyMetadata {
-    /// Headers to forward to upstream (field_name -> value)
+    /// Headers to forward to upstream (field_name -> value).
     pub headers: HashMap<String, String>,
+
+    /// Group this key originated from. Always set by controller in current
+    /// versions. `#[serde(default)]` lets Gateway-new / Controller-old
+    /// rolling upgrades deserialize old payloads (fallback `"default"`).
+    #[serde(default = "default_group_name")]
+    pub group: String,
+}
+
+fn default_group_name() -> String {
+    "default".to_string()
 }
 
 // === Default value functions ===
@@ -123,7 +155,7 @@ impl Default for KeyAuthConfig {
             anonymous: None,
             realm: default_realm(),
             key_field: default_key_field(),
-            secret_refs: None,
+            secret_groups: None,
             upstream_header_fields: vec![],
             resolved_keys: None,
         }
@@ -178,6 +210,25 @@ impl KeyAuthConfig {
             return Err("realm cannot be empty".to_string());
         }
 
+        // Validate secret_groups structure (cross-group raw-key uniqueness
+        // is checked at controller resolve time, not here).
+        if let Some(groups) = &self.secret_groups {
+            if groups.is_empty() {
+                return Err("secret_groups cannot be empty when present".to_string());
+            }
+            let mut seen: HashSet<&str> = HashSet::new();
+            for g in groups {
+                crate::types::resources::common::group_name::validate_group_name(&g.name)
+                    .map_err(|e| format!("secret_groups: {}", e))?;
+                if !seen.insert(g.name.as_str()) {
+                    return Err(format!("duplicate group name '{}'", g.name));
+                }
+                if g.secret_refs.is_empty() {
+                    return Err(format!("group '{}' has no secretRefs", g.name));
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -212,7 +263,7 @@ mod tests {
         assert_eq!(config.key_field, "key");
         assert!(!config.hide_credentials);
         assert!(config.anonymous.is_none());
-        assert!(config.secret_refs.is_none());
+        assert!(config.secret_groups.is_none());
         assert!(config.upstream_header_fields.is_empty());
         assert!(config.resolved_keys.is_none());
     }
@@ -281,12 +332,6 @@ realm: "Production API"
         assert_eq!(config.key_sources.len(), 2);
         assert!(config.hide_credentials);
         assert_eq!(config.realm, "Production API");
-    }
-
-    #[test]
-    fn test_key_metadata_default() {
-        let metadata = KeyMetadata::default();
-        assert!(metadata.headers.is_empty());
     }
 
     // Validation tests
@@ -366,6 +411,79 @@ realm: "Production API"
             ..Default::default()
         };
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_secret_groups_empty() {
+        let config = KeyAuthConfig {
+            secret_groups: Some(vec![]),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.validate().unwrap_err(),
+            "secret_groups cannot be empty when present"
+        );
+    }
+
+    #[test]
+    fn test_validate_secret_groups_duplicate_name() {
+        let config = KeyAuthConfig {
+            secret_groups: Some(vec![
+                KeyAuthSecretGroup {
+                    name: "a".into(),
+                    description: None,
+                    secret_refs: vec![SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "s1".into(),
+                        namespace: None,
+                    }],
+                },
+                KeyAuthSecretGroup {
+                    name: "a".into(),
+                    description: None,
+                    secret_refs: vec![SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "s2".into(),
+                        namespace: None,
+                    }],
+                },
+            ]),
+            ..Default::default()
+        };
+        assert!(config.validate().unwrap_err().contains("duplicate group name 'a'"));
+    }
+
+    #[test]
+    fn test_validate_secret_groups_invalid_name() {
+        let config = KeyAuthConfig {
+            secret_groups: Some(vec![KeyAuthSecretGroup {
+                name: "-bad".into(),
+                description: None,
+                secret_refs: vec![SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "s".into(),
+                    namespace: None,
+                }],
+            }]),
+            ..Default::default()
+        };
+        assert!(config.validate().unwrap_err().contains("must start with alphanumeric"));
+    }
+
+    #[test]
+    fn test_validate_secret_groups_empty_refs() {
+        let config = KeyAuthConfig {
+            secret_groups: Some(vec![KeyAuthSecretGroup {
+                name: "a".into(),
+                description: None,
+                secret_refs: vec![],
+            }]),
+            ..Default::default()
+        };
+        assert!(config.validate().unwrap_err().contains("group 'a' has no secretRefs"));
     }
 }
 
