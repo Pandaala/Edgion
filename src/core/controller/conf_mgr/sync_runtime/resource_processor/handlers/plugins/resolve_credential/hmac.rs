@@ -50,6 +50,10 @@ fn resolve_group(
     ctx: &HandlerContext,
 ) {
     let whitelist: HashSet<&str> = config.upstream_header_fields.iter().map(|s| s.as_str()).collect();
+    // Hoist YAML keys out of the per-entry loop to avoid cloning config strings
+    // for every credential entry.
+    let username_key = serde_yaml::Value::String(config.username_field.clone());
+    let secret_key_yaml = serde_yaml::Value::String(config.secret_field.clone());
 
     for sor in secret_refs {
         let secret_key = format_secret_key(sor.namespace.as_ref().or(ep_namespace), &sor.name);
@@ -138,12 +142,19 @@ fn resolve_group(
                 continue;
             };
 
+            // Reject empty / whitespace-only username and secret — matches the
+            // pre-grouping behavior; without trim+filter, `username: ""` and
+            // `secret: " "` would silently insert as live credentials.
             let username = entry_map
-                .get(serde_yaml::Value::String(config.username_field.clone()))
-                .and_then(|v| v.as_str());
+                .get(&username_key)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty());
             let secret_value = entry_map
-                .get(serde_yaml::Value::String(config.secret_field.clone()))
-                .and_then(|v| v.as_str());
+                .get(&secret_key_yaml)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty());
 
             let (Some(username), Some(secret_value)) = (username, secret_value) else {
                 tracing::warn!(
@@ -152,7 +163,7 @@ fn resolve_group(
                     username_field = %config.username_field,
                     secret_field = %config.secret_field,
                     group = %group_name,
-                    "HmacAuth: credential entry missing username/secret field"
+                    "HmacAuth: credential entry missing or empty username/secret field"
                 );
                 continue;
             };
@@ -209,6 +220,12 @@ fn resolve_group(
                     );
                 }
             } else {
+                // `secret_key` in the warns below identifies the Secret whose
+                // entry was *dropped* (the latter occurrence); the originally
+                // retained entry lives in the Secret backing `existing_group`
+                // for cross-group dups, or earlier in the same Secret for
+                // intra-group dups. Operators triaging dup warnings should
+                // treat `secret_key` as the "loser" pointer.
                 let prev_group = seen.get(username).cloned().unwrap_or_default();
                 if prev_group != group_name {
                     tracing::warn!(

@@ -603,27 +603,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn hmac_failure_log_does_not_contain_group() {
-        // Sanity: failure branches still emit "Deny ..." literals without group=.
-        // This is a static check on the literal strings, not a runtime test.
-        let deny_strings = [
-            "Deny missing auth",
-            "Deny bad format",
-            "Deny bad algorithm",
-            "Deny missing key",
-            "Deny missing date signed",
-            "Deny bad timestamp",
-            "Deny missing required header",
-            "Deny missing header",
-            "Deny bad signature",
-        ];
-        for s in &deny_strings {
-            assert!(
-                !s.contains("group="),
-                "failure log '{}' must not carry group= (lesson L7)",
-                s
-            );
-        }
-    }
+    // Note: failure-branch "no group=" contract is enforced by review note
+    // `skills/04-review/hmac-auth/group-in-ok-log.md`, not by a unit test —
+    // a runtime test would require driving `run_request` through every
+    // failure branch (9 branches), and a literal-string-only test is a
+    // tautology (hardcoded strings can never fail the assertion). Treat the
+    // review note as the contract source of truth.
 }
