@@ -384,8 +384,18 @@ async fn build_request_metadata(
         return Ok(true);
     }
 
-    // Validate hostname is present (not required for gRPC requests)
-    if !ctx.request_info.is_grpc_request && ctx.request_info.hostname.is_empty() {
+    // Validate hostname is present.
+    //
+    // RFC 9110 §7.2 (HTTP/1.1) and RFC 9113 §8.3.1 (HTTP/2 :authority) both
+    // require rejecting messages whose target host field is missing or has an
+    // invalid value. `NormalizedHostname` trims whitespace and strips the port,
+    // so a `Host` / `:authority` of "  " collapses to empty here.
+    //
+    // gRPC traffic must take the same guard: without it an empty `:authority`
+    // would land on the first catch-all GRPCRoute and bypass per-hostname
+    // tenant isolation. `end_response_400` already routes gRPC requests to
+    // `grpc-status 3` (INVALID_ARGUMENT) trailers via `send_grpc_trailers_only`.
+    if ctx.request_info.hostname.is_empty() {
         ctx.add_error(EdgionStatus::HostMissing);
         end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
         return Ok(true); // Response sent
