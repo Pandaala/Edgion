@@ -29,7 +29,6 @@ RFC-divergence-accepted findings are recorded as per-finding files under [`rfc-d
 | **Network access control** | [ip-restriction/](ip-restriction/), [real-ip/](real-ip/), [ssrf/](ssrf/) |
 | **TLS** (downstream / upstream / backends / EdgionTls) | [edgion-tls/](edgion-tls/), [ssl/](ssl/) |
 | **URI / routing** | [uri-normalization/SKILL.md](uri-normalization/SKILL.md) |
-| **Host header validation** (RFC 9110 §7.2, host smuggling defense) | [host-header/](host-header/) |
 | **Rate limiting** | [rate-limit/](rate-limit/) |
 | **Concurrency** | [concurrency/](concurrency/), [rwlock-unwrap/](rwlock-unwrap/) |
 | **CPU / memory performance** | [cpu-memory/](cpu-memory/), [memory-leak/](memory-leak/) |
