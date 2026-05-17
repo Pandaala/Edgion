@@ -8,9 +8,11 @@ spec:
     - enable: true
       type: HmacAuth
       config:
-        secretRefs:
-          - name: hmac-credentials
-            namespace: edgion-default
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: hmac-credentials
+                namespace: edgion-default
         algorithms:
           - hmac-sha256
         clockSkew: 300

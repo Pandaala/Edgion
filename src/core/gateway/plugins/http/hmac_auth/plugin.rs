@@ -479,7 +479,10 @@ impl RequestFilter for HmacAuth {
         self.set_upstream_headers(session, credential);
         self.hide_credentials(session);
 
-        plugin_log.push_fmt("OK user {}", la![sensitive(&params.username)]);
+        plugin_log.push_fmt(
+            "OK group={} user {}",
+            la![credential.group.as_str(), sensitive(&params.username)],
+        );
         PluginRunningResult::GoodNext
     }
 }
@@ -502,6 +505,7 @@ mod tests {
             HmacCredential {
                 secret: b"alice-super-secret-key".to_vec(),
                 headers: HashMap::from([("X-Consumer-Username".to_string(), "alice".to_string())]),
+                group: "default".to_string(),
             },
         );
         config.resolved_credentials = Some(credentials);
@@ -561,5 +565,65 @@ mod tests {
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(log.contains("Deny missing date signed"));
+    }
+
+    use crate::core::gateway::plugins::runtime::PluginLog;
+    use serde_json::Value;
+
+    fn render_log(log: &PluginLog) -> Vec<String> {
+        let v: Value = serde_json::to_value(log).unwrap();
+        v.get("log")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(|e| e.as_str().map(String::from)).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn hmac_hit_log_contains_group_and_user() {
+        let mut log = PluginLog::new("HmacAuth");
+        let credential = HmacCredential {
+            secret: b"a-secret-key-at-least-32-bytes-long".to_vec(),
+            headers: HashMap::new(),
+            group: "partner-a".to_string(),
+        };
+        let username = "alice";
+
+        log.push_fmt(
+            "OK group={} user {}",
+            la![credential.group.as_str(), sensitive(username)],
+        );
+
+        let entries = render_log(&log);
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.starts_with("OK group=partner-a") && e.contains("user ")),
+            "expected 'OK group=partner-a user ...', got: {:?}",
+            entries
+        );
+    }
+
+    #[test]
+    fn hmac_failure_log_does_not_contain_group() {
+        // Sanity: failure branches still emit "Deny ..." literals without group=.
+        // This is a static check on the literal strings, not a runtime test.
+        let deny_strings = [
+            "Deny missing auth",
+            "Deny bad format",
+            "Deny bad algorithm",
+            "Deny missing key",
+            "Deny missing date signed",
+            "Deny bad timestamp",
+            "Deny missing required header",
+            "Deny missing header",
+            "Deny bad signature",
+        ];
+        for s in &deny_strings {
+            assert!(
+                !s.contains("group="),
+                "failure log '{}' must not carry group= (lesson L7)",
+                s
+            );
+        }
     }
 }

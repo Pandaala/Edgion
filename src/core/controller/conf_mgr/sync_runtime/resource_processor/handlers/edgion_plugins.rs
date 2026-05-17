@@ -272,7 +272,8 @@ mod tests {
     use crate::types::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
     use crate::types::resources::edgion_plugins::{
         BasicAuthConfig, CertSourceMode, EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, HeaderCertAuthConfig,
-        HmacAuthConfig, JweDecryptConfig, OpenidConnectConfig, RegionRouteConfig, RequestFilterEntry,
+        HmacAuthConfig, HmacAuthSecretGroup, JweDecryptConfig, OpenidConnectConfig, RegionRouteConfig,
+        RequestFilterEntry,
     };
     use crate::types::resources::gateway::SecretObjectReference;
     use crate::types::resources::plugin_metadata::{
@@ -502,11 +503,15 @@ mod tests {
         let mut ep = EdgionPlugins::new("hmac-plugins", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
         ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::HmacAuth(HmacAuthConfig {
-            secret_refs: Some(vec![SecretObjectReference {
-                group: None,
-                kind: None,
-                name: "hmac-credentials".to_string(),
-                namespace: None,
+            secret_groups: Some(vec![HmacAuthSecretGroup {
+                name: "default".to_string(),
+                description: None,
+                secret_refs: vec![SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "hmac-credentials".to_string(),
+                    namespace: None,
+                }],
             }]),
             upstream_header_fields: vec!["X-Consumer-Username".to_string()],
             ..Default::default()

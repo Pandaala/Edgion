@@ -241,6 +241,35 @@ spec:
                                       namespace:
                                         type: string
                                         description: "Secret namespace (defaults to EdgionPlugins namespace)"
+                          # --- HmacAuth config fields ---
+                          algorithms:
+                            type: array
+                            description: "Allowed HMAC algorithms"
+                            items:
+                              type: string
+                              enum: [hmac-sha256, hmac-sha384, hmac-sha512]
+                          clockSkew:
+                            type: integer
+                            minimum: 1
+                            description: "Maximum allowed clock skew in seconds"
+                          enforceHeaders:
+                            type: array
+                            description: "Headers required in signed headers list"
+                            items:
+                              type: string
+                          validateRequestBody:
+                            type: boolean
+                            description: "Validate request body digest (currently rejected at preparse)"
+                          minSecretLength:
+                            type: integer
+                            minimum: 0
+                            description: "Minimum acceptable HMAC secret length in bytes"
+                          secretField:
+                            type: string
+                            description: "Field name in credential entry for secret value"
+                          usernameField:
+                            type: string
+                            description: "Field name in credential entry for username"
 
                 # ============================================
                 # Upstream Response Filter Stage Plugins (sync)
