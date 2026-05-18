@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use crate::types::common::KeyGet;
+use crate::types::resources::common::group_name::default_group_name;
 use crate::types::resources::edgion_plugins::plugin_validation::PluginValidation;
 use crate::types::resources::gateway::SecretObjectReference;
 
@@ -119,10 +120,6 @@ pub struct KeyMetadata {
     /// rolling upgrades deserialize old payloads (fallback `"default"`).
     #[serde(default = "default_group_name")]
     pub group: String,
-}
-
-fn default_group_name() -> String {
-    "default".to_string()
 }
 
 // === Default value functions ===

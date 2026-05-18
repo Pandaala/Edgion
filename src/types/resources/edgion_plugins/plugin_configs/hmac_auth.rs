@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::types::resources::common::group_name::default_group_name;
 use crate::types::resources::gateway::SecretObjectReference;
 
 /// HMAC signature algorithm.
@@ -62,10 +63,6 @@ pub struct HmacCredential {
     /// (lesson L2).
     #[serde(default = "default_group_name")]
     pub group: String,
-}
-
-fn default_group_name() -> String {
-    "default".to_string()
 }
 
 /// A named group of Secret references whose HmacCredentials all carry this

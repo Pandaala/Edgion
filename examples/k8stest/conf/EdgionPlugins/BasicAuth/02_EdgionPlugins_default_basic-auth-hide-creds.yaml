@@ -12,8 +12,10 @@ spec:
       config:
         realm: "Test Realm"
         hideCredentials: true
-        secretRefs:
-          - name: basic-auth-alice
-            namespace: edgion-default
-          - name: basic-auth-bob
-            namespace: edgion-default
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: basic-auth-alice
+                namespace: edgion-default
+              - name: basic-auth-bob
+                namespace: edgion-default

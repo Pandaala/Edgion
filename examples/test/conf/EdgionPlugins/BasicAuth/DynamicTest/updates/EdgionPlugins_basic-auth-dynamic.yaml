@@ -12,6 +12,8 @@ spec:
       config:
         realm: "Dynamic Test Realm"
         hideCredentials: false
-        secretRefs:
-          - name: basic-auth-alice
-            namespace: edgion-default
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: basic-auth-alice
+                namespace: edgion-default

@@ -4,6 +4,7 @@
 //! Routing: peek iss claim → route to matching issuer_group → verify with
 //! that group's keys/algorithm/aud (closes issuer-key decoupling vulnerability).
 
+use crate::types::resources::common::group_name::default_group_name;
 use crate::types::resources::gateway::SecretObjectReference;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -107,10 +108,6 @@ pub struct ResolvedJwtIssuerGroup {
 
     /// Credentials for this group, keyed by `kid` (Secret's `key` field).
     pub credentials: HashMap<String, ResolvedJwtCredential>,
-}
-
-fn default_group_name() -> String {
-    "default".to_string()
 }
 
 /// JWT Auth plugin configuration (route/service level)

@@ -271,9 +271,9 @@ mod tests {
     use crate::core::controller::conf_mgr::ControllerRuntime;
     use crate::types::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
     use crate::types::resources::edgion_plugins::{
-        BasicAuthConfig, CertSourceMode, EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, HeaderCertAuthConfig,
-        HmacAuthConfig, HmacAuthSecretGroup, JweDecryptConfig, OpenidConnectConfig, RegionRouteConfig,
-        RequestFilterEntry,
+        BasicAuthConfig, BasicAuthSecretGroup, CertSourceMode, EdgionPlugin, EdgionPlugins, EdgionPluginsSpec,
+        HeaderCertAuthConfig, HmacAuthConfig, HmacAuthSecretGroup, JweDecryptConfig, OpenidConnectConfig,
+        RegionRouteConfig, RequestFilterEntry,
     };
     use crate::types::resources::gateway::SecretObjectReference;
     use crate::types::resources::plugin_metadata::{
@@ -335,20 +335,24 @@ mod tests {
         ep.metadata.namespace = Some("default".to_string());
         ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::BasicAuth(
             BasicAuthConfig {
-                secret_refs: Some(vec![
-                    SecretObjectReference {
-                        group: None,
-                        kind: None,
-                        name: "basic-auth-alice".to_string(),
-                        namespace: None,
-                    },
-                    SecretObjectReference {
-                        group: None,
-                        kind: None,
-                        name: "basic-auth-bob".to_string(),
-                        namespace: None,
-                    },
-                ]),
+                secret_groups: Some(vec![BasicAuthSecretGroup {
+                    name: "default".to_string(),
+                    description: None,
+                    secret_refs: vec![
+                        SecretObjectReference {
+                            group: None,
+                            kind: None,
+                            name: "basic-auth-alice".to_string(),
+                            namespace: None,
+                        },
+                        SecretObjectReference {
+                            group: None,
+                            kind: None,
+                            name: "basic-auth-bob".to_string(),
+                            namespace: None,
+                        },
+                    ],
+                }]),
                 ..Default::default()
             },
         ))]);
@@ -371,8 +375,14 @@ mod tests {
         };
 
         let resolved_users = config.resolved_users.as_ref().expect("expected resolved users");
-        assert_eq!(resolved_users.get("alice").map(|v| v.as_str()), Some("alice-password"));
-        assert_eq!(resolved_users.get("bob").map(|v| v.as_str()), Some("bob-password"));
+        assert_eq!(
+            resolved_users.get("alice").map(|v| v.password.as_str()),
+            Some("alice-password")
+        );
+        assert_eq!(
+            resolved_users.get("bob").map(|v| v.password.as_str()),
+            Some("bob-password")
+        );
         assert_eq!(ctx.secret_ref_manager().get_refs("default/basic-auth-alice").len(), 1);
         assert_eq!(ctx.secret_ref_manager().get_refs("default/basic-auth-bob").len(), 1);
     }

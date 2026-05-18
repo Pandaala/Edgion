@@ -1,5 +1,6 @@
-//! Group name validation shared across plugin grouping types
-//! (IpGroup, KeyAuthSecretGroup, future HmacSecretGroup / JwtIssuerGroup).
+//! Group name validation and defaults shared across plugin grouping types
+//! (IpGroup, KeyAuthSecretGroup, HmacAuthSecretGroup, JwtIssuerGroup,
+//! BasicAuthSecretGroup).
 
 /// Validate a group name per Kubernetes label-value charset.
 ///
@@ -29,6 +30,14 @@ pub fn validate_group_name(name: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Default group name used by `#[serde(default)]` on resolved-credential
+/// `group: String` fields across plugin grouping types. Provides
+/// rolling-upgrade safety: Gateway-new + Controller-old payloads without
+/// the `group` field deserialize with this fallback instead of failing.
+pub fn default_group_name() -> String {
+    "default".to_string()
 }
 
 #[cfg(test)]

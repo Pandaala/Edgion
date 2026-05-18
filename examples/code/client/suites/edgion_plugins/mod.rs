@@ -42,7 +42,10 @@ mod webhook_key_get;
 
 pub use all_endpoint_status::AllEndpointStatusTestSuite;
 pub use bandwidth_limit::BandwidthLimitTestSuite;
-pub use basic_auth::{BasicAuthDynamicInitialTestSuite, BasicAuthDynamicUpdateTestSuite, BasicAuthTestSuite};
+pub use basic_auth::{
+    BasicAuthDynamicGroupedInitialTestSuite, BasicAuthDynamicGroupedUpdateTestSuite, BasicAuthDynamicInitialTestSuite,
+    BasicAuthDynamicUpdateTestSuite, BasicAuthTestSuite,
+};
 pub use cors::CorsPluginTestSuite;
 pub use csrf::CsrfTestSuite;
 pub use ctx_set::CtxSetTestSuite;

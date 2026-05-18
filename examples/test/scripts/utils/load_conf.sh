@@ -204,15 +204,16 @@ load_directory_recursive() {
         return 1
     fi
     
-    #  updates  delete （ initial）
+    # Skip dynamic delta dirs (updates / updates_grouped / delete); only initial / initial_grouped are pre-loaded.
     if [[ "$dir" =~ /DynamicTest/updates ]] || [[ "$dir" =~ /DynamicTest/delete ]]; then
         log_info "Skipping dynamic update dir: $dir"
         return 0
     fi
-    
-    # all yaml file， updates  delete 
+
+    # Walk YAML files, excluding any updates*/ and delete*/ subdirs under DynamicTest.
     local files=$(find "$dir" -type f \( -name "*.yaml" -o -name "*.yml" \) \
         -not -path "*/DynamicTest/updates/*" \
+        -not -path "*/DynamicTest/updates_grouped/*" \
         -not -path "*/DynamicTest/delete/*" | sort)
     
     if [ -z "$files" ]; then

@@ -623,8 +623,8 @@ get_suites_to_load() {
                         for deepdir in "$subdir"/*; do
                             if [ -d "$deepdir" ]; then
                                 local deepdir_name=$(basename "$deepdir")
-                                # Skip DynamicTest/updates and DynamicTest/delete
-                                if [[ "$subdir_name" == "DynamicTest" && ("$deepdir_name" == "updates" || "$deepdir_name" == "delete") ]]; then
+                                # Skip DynamicTest delta dirs (updates*, delete*): only initial* dirs are pre-loaded
+                                if [[ "$subdir_name" == "DynamicTest" && ("$deepdir_name" == "updates" || "$deepdir_name" == "delete" || "$deepdir_name" == "updates_grouped") ]]; then
                                     continue
                                 fi
                                 has_deep_subdir=true

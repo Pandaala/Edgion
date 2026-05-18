@@ -22,8 +22,10 @@ Basic Auth is a simple HTTP authentication mechanism that requires clients to pr
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: my-users-secret
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: my-users-secret
       realm: "API Gateway"
 ```
 
@@ -41,16 +43,18 @@ stringData:
   password: "secret123"
 ```
 
-**Multiple users**: Create multiple Secrets and reference them in `secretRefs`:
+**Multiple users**: Create multiple Secrets and reference them in `secretGroups`:
 
 ```yaml
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: admin-user
-        - name: api-user
-        - name: readonly-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: admin-user
+            - name: api-user
+            - name: readonly-user
 ```
 
 ---
@@ -59,11 +63,19 @@ filters:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `secretRefs` | Array | None | **Required**. List of Kubernetes Secret references. Each Secret must be of type `kubernetes.io/basic-auth` and contain `username` and `password` fields |
+| `secretGroups` | Array | None | **Required** (except in anonymous-only mode). List of Secret groups. Each group holds a name and one or more Secret references. Each Secret must be of type `kubernetes.io/basic-auth` and contain `username` and `password` fields |
 | `realm` | String | `"API Gateway"` | Authentication realm name, displayed in the browser login dialog |
 | `hideCredentials` | Boolean | `false` | Whether to hide the Authorization header from the upstream service |
 | `anonymous` | String | None | Anonymous username. When set, unauthenticated requests are also allowed with this username |
 | `authFailureDelayMs` | Integer | `0` | Fixed delay (milliseconds) applied before returning an auth failure response. Used to mitigate brute-force and username-enumeration attacks — see [Security Best Practices · Mitigating Enumeration and Brute-Force](#6-mitigating-enumeration-and-brute-force-recommended) below |
+
+### BasicAuthSecretGroup sub-fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | String | **Required**. Group name; charset is Kubernetes label-value rules (`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`, max 63 chars). Surfaces in the access log as `group=<name>` on successful authentication |
+| `description` | String | Optional. Human-readable description; not used by the runtime |
+| `secretRefs` | Array | **Required**. Non-empty list of Secret references for this group. Each Secret is `type: kubernetes.io/basic-auth` (1 Secret = 1 user) |
 
 ### Supported password formats
 
@@ -101,8 +113,10 @@ stringData:
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: api-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-user
       hideCredentials: true  # Don't pass credentials to upstream
 ```
 
@@ -144,10 +158,12 @@ stringData:
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: admin-user
-        - name: developer-user
-        - name: readonly-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: admin-user
+            - name: developer-user
+            - name: readonly-user
       realm: "My API"
       hideCredentials: true
 ```
@@ -160,8 +176,10 @@ Allow unauthenticated requests to pass through, but mark them as anonymous users
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: premium-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: premium-user
       anonymous: "guest"  # Mark unauthenticated users as "guest"
 ```
 
@@ -175,10 +193,38 @@ filters:
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: api-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-user
       realm: "Protected API - Please Login"  # Prompt displayed in the browser
 ```
+
+### 5. Grouping Secrets by Tenant
+
+`secretGroups` lets you organize user Secrets into named groups — useful for multi-tenant deployments where each partner or team owns distinct Secrets. On successful authentication, the access log records `group=<name>` for audit and tenant attribution:
+
+```yaml
+filters:
+  - type: BasicAuth
+    config:
+      secretGroups:
+        - name: partner-a
+          description: "Partner A users"
+          secretRefs:
+            - name: partner-a-alice
+            - name: partner-a-bob
+        - name: partner-b
+          description: "Partner B users"
+          secretRefs:
+            - name: partner-b-carol
+```
+
+**Access log**: on success, the plugin writes `OK group=partner-a user alice` (the group comes from the matched group's `name`).
+
+**Security note**: Failure branches (`Deny no credential`, `Deny bad credential`, `Allow anonymous`) intentionally **do not** carry `group=`, to prevent unauthenticated callers from probing the tenant topology. `Deny bad credential` does not distinguish "unknown user" from "wrong password" — this is a deliberate security design that prevents the username-existence oracle attack.
+
+**Duplicate username across groups**: if the same username appears in Secrets from multiple groups, the first occurrence (in `secretGroups` array order) wins; later duplicates are skipped and a warning is logged. This is a management-convenience design, not a tenant isolation boundary.
 
 ---
 
@@ -291,8 +337,10 @@ This is a common property of gateway-layer Basic Auth (Traefik, Nginx, Envoy, Ko
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: api-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-user
       authFailureDelayMs: 500  # Uniform 500ms delay on auth failure, masking the user-existence timing signal
 ```
 
@@ -313,8 +361,10 @@ filters:
   # Then do Basic Auth
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: api-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-user
       authFailureDelayMs: 500
 ```
 
@@ -334,8 +384,10 @@ filters:
    # password: "hardcoded_password"
    
    # ✅ Use Kubernetes Secrets
-   secretRefs:
-     - name: user-secret
+   secretGroups:
+     - name: default
+       secretRefs:
+         - name: user-secret
    ```
 
 3. **Do not use Basic Auth for public APIs**
@@ -395,8 +447,10 @@ data:
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: api-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-user
       hideCredentials: true  # Add this line
 ```
 
@@ -418,8 +472,10 @@ filters:
   # Then authenticate
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: api-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-user
 ```
 
 **Note**: The CORS plugin must allow the `Authorization` header.
@@ -436,8 +492,10 @@ filters:
   # Then authenticate
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: internal-api-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: internal-api-user
 ```
 
 **Advantage**: Dual protection — only requests from internal IPs with correct credentials can access the resource.
@@ -509,9 +567,11 @@ spec:
       plugin:
         type: BasicAuth
         config:
-          secretRefs:
-            - name: api-admin
-            - name: api-developer
+          secretGroups:
+            - name: default
+              secretRefs:
+                - name: api-admin
+                - name: api-developer
           realm: "Protected API"
           hideCredentials: true
 ---

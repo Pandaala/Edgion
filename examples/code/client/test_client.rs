@@ -275,6 +275,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/CtxSet" => "EdgionPlugins",
         "EdgionPlugins/BasicAuth" => "EdgionPlugins",
         "EdgionPlugins/BasicAuthDynamic" => "EdgionPlugins",
+        "EdgionPlugins/BasicAuthDynamicGrouped" => "EdgionPlugins",
         "EdgionPlugins/JwtAuth" => "EdgionPlugins",
         "EdgionPlugins/JweDecrypt" => "EdgionPlugins",
         "EdgionPlugins/KeyAuth" => "EdgionPlugins",
@@ -840,6 +841,24 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 _ => {
                     runner.add_suite(Box::new(suites::BasicAuthDynamicInitialTestSuite));
                     runner.add_suite(Box::new(suites::BasicAuthDynamicUpdateTestSuite));
+                }
+            }
+        }
+        "EdgionPlugins/BasicAuthDynamicGrouped" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/BasicAuthDynamicGrouped tests require --gateway flag");
+                std::process::exit(1);
+            }
+            match phase {
+                Some("initial") => {
+                    runner.add_suite(Box::new(suites::BasicAuthDynamicGroupedInitialTestSuite));
+                }
+                Some("update") => {
+                    runner.add_suite(Box::new(suites::BasicAuthDynamicGroupedUpdateTestSuite));
+                }
+                _ => {
+                    runner.add_suite(Box::new(suites::BasicAuthDynamicGroupedInitialTestSuite));
+                    runner.add_suite(Box::new(suites::BasicAuthDynamicGroupedUpdateTestSuite));
                 }
             }
         }

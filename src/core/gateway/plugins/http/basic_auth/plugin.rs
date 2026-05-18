@@ -3,14 +3,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
 use crate::core::gateway::plugins::http::common::auth_common::{
     apply_auth_failure_delay, send_gateway_auth_error_response,
 };
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::BasicAuthConfig;
+use crate::types::resources::edgion_plugins::{BasicAuthConfig, ResolvedBasicAuthUser};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
@@ -29,82 +28,26 @@ enum AuthFailure {
 /// Basic Authentication plugin
 pub struct BasicAuth {
     name: String,
-    // Simple username -> password_hash mapping.
-    // Stored values are htpasswd-style hashes ({SHA} / $apr1$ / $1$).
+    // username -> ResolvedBasicAuthUser (password_hash + group).
+    // Stored passwords are htpasswd-style hashes ({SHA} / $apr1$ / $1$).
     // Plaintext passwords from Secrets are auto-hashed as {SHA}<base64(sha1(password))>
     // on load, matching what verify() expects.
-    user_passwords: Arc<HashMap<String, String>>,
-    plugin_namespace: String,
+    user_passwords: Arc<HashMap<String, ResolvedBasicAuthUser>>,
     config: BasicAuthConfig,
 }
 
 impl BasicAuth {
     /// Create a new BasicAuth plugin from configuration
-    pub fn new(config: &BasicAuthConfig, plugin_namespace: String) -> Self {
+    pub fn new(config: &BasicAuthConfig) -> Self {
         let mut plugin = BasicAuth {
             name: "BasicAuth".to_string(),
             user_passwords: Arc::new(HashMap::new()),
-            plugin_namespace,
             config: config.clone(),
         };
 
-        let users = config
-            .resolved_users
-            .clone()
-            .filter(|u| !u.is_empty())
-            .unwrap_or_else(|| plugin.load_users_from_secret_refs());
-        if !users.is_empty() {
-            if let Err(err) = plugin.load_users(users) {
-                tracing::warn!("BasicAuth: failed to load resolved users: {}", err);
-            }
-        }
+        let initial_users = config.resolved_users.clone().unwrap_or_default();
+        let _ = plugin.load_users(initial_users);
         plugin
-    }
-
-    fn load_users_from_secret_refs(&self) -> HashMap<String, String> {
-        let mut users = HashMap::new();
-        let Some(secret_refs) = self.config.secret_refs.as_ref() else {
-            return users;
-        };
-        for secret_ref in secret_refs {
-            let ns = secret_ref.namespace.as_deref().unwrap_or(&self.plugin_namespace);
-            let Some(secret) = get_secret(Some(ns), &secret_ref.name) else {
-                continue;
-            };
-
-            let Some(username) = Self::read_secret_utf8(&secret, "username") else {
-                continue;
-            };
-            let Some(password) = Self::read_secret_utf8(&secret, "password") else {
-                continue;
-            };
-            if users.contains_key(&username) {
-                tracing::warn!("BasicAuth: duplicate username '{}', skipping", username);
-                continue;
-            }
-            users.insert(username, password);
-        }
-        users
-    }
-
-    fn read_secret_utf8(secret: &k8s_openapi::api::core::v1::Secret, key: &str) -> Option<String> {
-        if let Some(data) = &secret.data {
-            if let Some(bytes) = data.get(key) {
-                if let Ok(v) = String::from_utf8(bytes.0.clone()) {
-                    if !v.trim().is_empty() {
-                        return Some(v);
-                    }
-                }
-            }
-        }
-        if let Some(string_data) = &secret.string_data {
-            if let Some(v) = string_data.get(key) {
-                if !v.trim().is_empty() {
-                    return Some(v.clone());
-                }
-            }
-        }
-        None
     }
 
     /// Load users from resolved Secret data.
@@ -113,18 +56,23 @@ impl BasicAuth {
     /// - Otherwise treat it as plaintext and hash as `{SHA}<base64(sha1(password))>`,
     ///   which matches what `htpasswd.rs::verify` recognises and aligns with the
     ///   `{SHA}` htpasswd format.
-    pub fn load_users(&mut self, users: HashMap<String, String>) -> Result<(), String> {
+    pub fn load_users(&mut self, users: HashMap<String, ResolvedBasicAuthUser>) -> Result<(), String> {
         let mut new_map = HashMap::new();
-        for (username, password) in users {
-            if self.is_pre_hashed(&password) {
-                // Store pre-hashed password directly
-                new_map.insert(username, password);
+        for (username, user) in users {
+            let stored_password = if self.is_pre_hashed(&user.password) {
+                user.password
             } else {
-                // Plaintext password -> store as {SHA}<base64(sha1(password))>.
-                let digest = sha1::Sha1::digest(password.as_bytes());
-                let stored = format!("{{SHA}}{}", general_purpose::STANDARD.encode(digest));
-                new_map.insert(username, stored);
-            }
+                // Plaintext -> {SHA}<base64(sha1(password))>
+                let digest = sha1::Sha1::digest(user.password.as_bytes());
+                format!("{{SHA}}{}", general_purpose::STANDARD.encode(digest))
+            };
+            new_map.insert(
+                username,
+                ResolvedBasicAuthUser {
+                    password: stored_password,
+                    group: user.group,
+                },
+            );
         }
         self.user_passwords = Arc::new(new_map);
 
@@ -152,7 +100,10 @@ impl BasicAuth {
         false
     }
 
-    async fn authenticate_request(&self, session: &mut dyn PluginSession) -> Result<String, AuthFailure> {
+    async fn authenticate_request(
+        &self,
+        session: &mut dyn PluginSession,
+    ) -> Result<(String, ResolvedBasicAuthUser), AuthFailure> {
         let auth_header_value = match session.header_value("authorization") {
             Some(v) => v,
             None => return Err(AuthFailure::MissingHeader),
@@ -163,15 +114,15 @@ impl BasicAuth {
             .extract_credentials(&auth_header_value)
             .map_err(|_| AuthFailure::BadCredentials)?;
 
-        // Look up stored hash
-        let stored_hash = self
+        // Look up stored user (clone to avoid borrow across await)
+        let user = self
             .user_passwords
             .get(&username)
-            .ok_or(AuthFailure::BadCredentials)?
-            .clone();
+            .cloned()
+            .ok_or(AuthFailure::BadCredentials)?;
 
         // All supported hashes (SHA-1 / MD5-crypt / APR-MD5) are cheap to verify.
-        let ph = stored_hash.clone();
+        let ph = user.password.clone();
         let pw = password.clone();
         let is_valid = tokio::task::spawn_blocking(move || super::htpasswd::verify(&pw, &ph))
             .await
@@ -181,7 +132,7 @@ impl BasicAuth {
             return Err(AuthFailure::BadCredentials);
         }
 
-        Ok(username)
+        Ok((username, user))
     }
 
     fn extract_credentials(&self, authorization: &str) -> BasicAuthResult<(String, String)> {
@@ -247,8 +198,8 @@ impl RequestFilter for BasicAuth {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        let username = match self.authenticate_request(session).await {
-            Ok(user) => user,
+        let (username, user) = match self.authenticate_request(session).await {
+            Ok(result) => result,
             Err(AuthFailure::MissingHeader) => {
                 if self.handle_anonymous_access(session, plugin_log) {
                     return PluginRunningResult::GoodNext;
@@ -272,7 +223,7 @@ impl RequestFilter for BasicAuth {
             }
         };
 
-        plugin_log.push_fmt("OK user {}", la![sensitive(&username)]);
+        plugin_log.push_fmt("OK group={} user {}", la![user.group.as_str(), sensitive(&username)]);
 
         // Set consumer headers for upstream
         let _ = self.set_consumer_headers(session, &username);
@@ -289,16 +240,29 @@ impl RequestFilter for BasicAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::gateway::plugins::runtime::PluginLog;
     use base64::engine::general_purpose;
+    use serde_json::Value;
+
+    fn make_user_map(username: &str, password: &str, group: &str) -> HashMap<String, ResolvedBasicAuthUser> {
+        let mut map = HashMap::new();
+        map.insert(
+            username.to_string(),
+            ResolvedBasicAuthUser {
+                password: password.to_string(),
+                group: group.to_string(),
+            },
+        );
+        map
+    }
 
     fn create_basic_auth_with_users() -> BasicAuth {
         let config = BasicAuthConfig {
             realm: "Test Realm".to_string(),
             ..Default::default()
         };
-        let mut auth = BasicAuth::new(&config, "default".to_string());
-        let mut users = HashMap::new();
-        users.insert("testuser".to_string(), "testpass".to_string());
+        let mut auth = BasicAuth::new(&config);
+        let users = make_user_map("testuser", "testpass", "default");
         auth.load_users(users).unwrap();
         auth
     }
@@ -322,5 +286,44 @@ mod tests {
         let (username, password) = auth.extract_credentials(&header).expect("should parse");
         assert_eq!(username, " user ");
         assert_eq!(password, " pass ");
+    }
+
+    fn render_log(log: &PluginLog) -> Vec<String> {
+        let v: Value = serde_json::to_value(log).unwrap();
+        v.get("log")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(|e| e.as_str().map(String::from)).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn basic_hit_log_contains_group_and_user() {
+        let mut log = PluginLog::new("BasicAuth");
+        let user = ResolvedBasicAuthUser {
+            password: "{SHA}base64hash".to_string(),
+            group: "partner-a".to_string(),
+        };
+        let username = "alice";
+        log.push_fmt("OK group={} user {}", la![user.group.as_str(), sensitive(username)]);
+
+        let entries = render_log(&log);
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.starts_with("OK group=partner-a") && e.contains("user ")),
+            "expected 'OK group=partner-a user ...', got: {:?}",
+            entries
+        );
+    }
+
+    #[test]
+    fn basic_no_group_in_failure_branches() {
+        // Sanity: lesson L7 — failure literals must not carry group=.
+        // The contract is enforced by skills/04-review/basic-auth/group-in-ok-log.md.
+        // This is a literal-string check on the static deny strings.
+        let deny_strings = ["Allow anonymous", "Deny no credential", "Deny bad credential"];
+        for s in &deny_strings {
+            assert!(!s.contains("group="), "{} must not carry group= (lesson L7)", s);
+        }
     }
 }

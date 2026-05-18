@@ -22,8 +22,10 @@ Basic Auth（基本认证）是一种简单的 HTTP 认证机制，要求客户�
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: my-users-secret
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: my-users-secret
       realm: "API Gateway"
 ```
 
@@ -41,16 +43,18 @@ stringData:
   password: "secret123"
 ```
 
-**多个用户**：创建多个 Secret，并在 `secretRefs` 中引用：
+**多个用户**：创建多个 Secret，并在 `secretGroups` 中引用：
 
 ```yaml
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: admin-user
-        - name: api-user
-        - name: readonly-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: admin-user
+            - name: api-user
+            - name: readonly-user
 ```
 
 ---
@@ -59,11 +63,19 @@ filters:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `secretRefs` | Array | 无 | **必填**。Kubernetes Secret 引用列表。每个 Secret 必须是 `kubernetes.io/basic-auth` 类型，包含 `username` 和 `password` 字段 |
+| `secretGroups` | Array | 无 | **必填**（匿名模式除外）。Secret 分组列表。每组包含一个名称和若干 Secret 引用，每个 Secret 必须是 `kubernetes.io/basic-auth` 类型，包含 `username` 和 `password` 字段 |
 | `realm` | String | `"API Gateway"` | 认证域名称，显示在浏览器登录框中 |
 | `hideCredentials` | Boolean | `false` | 是否隐藏 Authorization 头，不传递给上游服务 |
 | `anonymous` | String | 无 | 匿名用户名。设置后，未认证请求也会被允许，并设置此用户名 |
 | `authFailureDelayMs` | Integer | `0` | 认证失败时的固定延迟（毫秒）。用于缓解暴力破解和用户枚举攻击，详见下方[安全最佳实践 · 防枚举与暴力破解](#6-防枚举与暴力破解推荐配置) |
+
+### BasicAuthSecretGroup 子字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | String | **必填**。分组名称，字符集为 Kubernetes label value 规范（`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`，最多 63 字符）。认证成功时会在访问日志中以 `group=<name>` 形式出现 |
+| `description` | String | 可选。人工可读的描述，不影响运行时 |
+| `secretRefs` | Array | **必填**。该分组下的 Secret 引用列表，必须非空。每个 Secret 是 `kubernetes.io/basic-auth` 类型（1 个 Secret = 1 个用户） |
 
 ### 支持的密码格式
 
@@ -101,8 +113,10 @@ stringData:
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: api-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-user
       hideCredentials: true  # 不传递密码给上游
 ```
 
@@ -144,10 +158,12 @@ stringData:
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: admin-user
-        - name: developer-user
-        - name: readonly-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: admin-user
+            - name: developer-user
+            - name: readonly-user
       realm: "My API"
       hideCredentials: true
 ```
@@ -160,8 +176,10 @@ filters:
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: premium-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: premium-user
       anonymous: "guest"  # 未认证用户标记为 "guest"
 ```
 
@@ -175,10 +193,38 @@ filters:
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: api-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-user
       realm: "Protected API - Please Login"  # 浏览器显示的提示
 ```
+
+### 5. 按 Secret 分组
+
+通过 `secretGroups` 可以将不同租户或团队的用户 Secret 分到不同组，认证成功后访问日志会记录 `group=<name>`，便于审计和多租户归因：
+
+```yaml
+filters:
+  - type: BasicAuth
+    config:
+      secretGroups:
+        - name: partner-a
+          description: "Partner A users"
+          secretRefs:
+            - name: partner-a-alice
+            - name: partner-a-bob
+        - name: partner-b
+          description: "Partner B users"
+          secretRefs:
+            - name: partner-b-carol
+```
+
+**访问日志**：认证成功时输出 `OK group=partner-a user alice`（group 来自对应的分组名）。
+
+**安全说明**：失败分支（`Deny no credential`、`Deny bad credential`、`Allow anonymous`）有意**不携带** `group=` 信息，避免未认证的请求方探测出租户拓扑。`Deny bad credential` 不区分"用户名不存在"和"密码错误"，这是有意的安全设计，可防止用户名枚举（username-existence oracle）攻击。
+
+**重复用户名跨组优先级**：若同一 username 出现在多个分组的 Secret 中，首次出现（按 `secretGroups` 数组顺序）的分组胜出，后续重复的 Secret 会被跳过并记录告警日志。这是管理便利性设计，不是租户隔离边界。
 
 ---
 
@@ -291,8 +337,10 @@ Basic Auth 存在**用户名枚举时序侧信道**：当请求的用户名不�
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: api-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-user
       authFailureDelayMs: 500  # 认证失败统一延迟 500ms，掩盖「用户是否存在」的时序信号
 ```
 
@@ -313,8 +361,10 @@ filters:
   # 再做 Basic Auth
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: api-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-user
       authFailureDelayMs: 500
 ```
 
@@ -334,8 +384,10 @@ filters:
    # password: "hardcoded_password"
    
    # ✅ 使用 Kubernetes Secret
-   secretRefs:
-     - name: user-secret
+   secretGroups:
+     - name: default
+       secretRefs:
+         - name: user-secret
    ```
 
 3. **不要对公开 API 使用 Basic Auth**
@@ -395,8 +447,10 @@ data:
 filters:
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: api-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-user
       hideCredentials: true  # 添加此行
 ```
 
@@ -418,8 +472,10 @@ filters:
   # 再进行认证
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: api-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-user
 ```
 
 **注意**：CORS 插件必须允许 `Authorization` 头。
@@ -436,8 +492,10 @@ filters:
   # 再进行认证
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: internal-api-user
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: internal-api-user
 ```
 
 **优势**：双重保护，只有内网 IP + 正确凭证才能访问。
@@ -509,9 +567,11 @@ spec:
       plugin:
         type: BasicAuth
         config:
-          secretRefs:
-            - name: api-admin
-            - name: api-developer
+          secretGroups:
+            - name: default
+              secretRefs:
+                - name: api-admin
+                - name: api-developer
           realm: "Protected API"
           hideCredentials: true
 ---

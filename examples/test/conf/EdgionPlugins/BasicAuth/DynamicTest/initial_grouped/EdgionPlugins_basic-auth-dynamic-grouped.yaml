@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: basic-auth-dynamic-grouped
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: BasicAuth
+      config:
+        secretGroups:
+          - name: partner-a
+            secretRefs:
+              - name: basic-auth-dynamic-partner-a
+                namespace: edgion-default
+          - name: partner-b
+            secretRefs:
+              - name: basic-auth-dynamic-partner-b
+                namespace: edgion-default
+        realm: "Dynamic Partner API"

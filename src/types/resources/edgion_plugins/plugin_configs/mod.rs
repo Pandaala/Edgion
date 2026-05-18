@@ -31,7 +31,7 @@ mod response_rewrite;
 
 pub use all_endpoint_status::AllEndpointStatusConfig;
 pub use bandwidth_limit::BandwidthLimitConfig;
-pub use basic_auth::BasicAuthConfig;
+pub use basic_auth::{BasicAuthConfig, BasicAuthSecretGroup, ResolvedBasicAuthUser};
 pub use cors::CorsConfig;
 pub use csrf::CsrfConfig;
 pub use ctx_set::{
