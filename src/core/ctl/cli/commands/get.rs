@@ -5,6 +5,15 @@ use crate::core::ctl::cli::client::{parse_json_response, EdgionClient};
 use crate::core::ctl::cli::output::{print_error, print_resource, print_resource_list, OutputFormat};
 use crate::core::ctl::cli::TargetType;
 
+/// Optional knobs for `get`, threaded from clap to the per-list helpers.
+#[derive(Default)]
+pub struct GetOptions {
+    pub metadata_only: bool,
+    pub limit: Option<u32>,
+    pub continue_token: Option<String>,
+    pub all: bool,
+}
+
 /// Get command - retrieves resources
 pub async fn get(
     client: &EdgionClient,
@@ -12,16 +21,28 @@ pub async fn get(
     name: Option<&str>,
     namespace: Option<&str>,
     output: OutputFormat,
+    opts: GetOptions,
 ) -> Result<()> {
+    // Target compatibility: --metadata-only is only meaningful with --target center.
+    // The check lives here (in the command layer), NOT inside EdgionClient — the
+    // HTTP client is a generic transport and should not carry CLI UX rules.
+    if opts.metadata_only && client.target() != TargetType::Center {
+        eprintln!(
+            "Error: --metadata-only only works with --target center (got {:?}).",
+            client.target()
+        );
+        std::process::exit(2);
+    }
+
     if let Some(resource_name) = name {
-        // Get specific resource
+        // Get specific resource — opts are ignored for single-resource gets
         get_resource(client, kind, namespace, resource_name, output).await
     } else if let Some(ns) = namespace {
         // List resources in namespace
-        list_namespaced(client, kind, ns, output).await
+        list_namespaced(client, kind, ns, output, &opts).await
     } else {
         // List all resources across namespaces
-        list_all(client, kind, output).await
+        list_all(client, kind, output, &opts).await
     }
 }
 
@@ -85,6 +106,42 @@ fn extract_resource_data(data: Value, target: TargetType) -> Value {
     }
 }
 
+/// Map HTTP error status to a user-friendly CLI error message and return an
+/// `anyhow::Error`. Caller uses `?` to bail.
+///
+/// Cases:
+///   - HTTP 410: stale K8s continue token (mapped by controller's StalePagination)
+///   - HTTP 400 with "continue" or "stale" in body: same surfaced by non-K8s
+///     backends or by validation layer
+///   - HTTP 5xx: generic "backend unavailable / unsupported" hint
+///   - Other: print body verbatim
+async fn handle_list_error_status(resp: reqwest::Response) -> anyhow::Error {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    let body_lower = body.to_lowercase();
+
+    if status.as_u16() == 410 {
+        print_error("Pagination token is invalid or expired. Re-run without --continue to start over.");
+        return anyhow::anyhow!("Stale pagination token (HTTP 410)");
+    }
+    if status.as_u16() == 400
+        && (body_lower.contains("continue") || body_lower.contains("stale") || body_lower.contains("expired"))
+    {
+        print_error("Pagination token is invalid or expired. Re-run without --continue to start over.");
+        return anyhow::anyhow!("Stale pagination token (HTTP 400)");
+    }
+    if status.is_server_error() {
+        print_error(&format!(
+            "Controller returned {} — it might be unavailable or the backend doesn't support this operation. \
+             Run 'edgion-cli server-info' to check controller status and mode.",
+            status
+        ));
+        return anyhow::anyhow!("Server error: {}", status);
+    }
+    print_error(&format!("Failed to list resources: {} ({})", status, body));
+    anyhow::anyhow!("Request failed: {}", status)
+}
+
 /// Get a specific resource
 async fn get_resource(
     client: &EdgionClient,
@@ -130,12 +187,103 @@ async fn get_resource(
     Ok(())
 }
 
+/// Auto-paginate: loop until `continue_token` is null, accumulate (for
+/// yaml/json) or stream per-page (for table/wide).
+async fn list_all_paginated(
+    client: &EdgionClient,
+    kind: &str,
+    namespace: Option<&str>,
+    output: OutputFormat,
+    opts: &GetOptions,
+) -> Result<()> {
+    let mut accumulated_items: Vec<Value> = Vec::new();
+    let mut continue_token: Option<String> = opts.continue_token.clone();
+    let mut page_index = 0usize;
+
+    loop {
+        let resp = match (namespace, opts.metadata_only && client.target() == TargetType::Center) {
+            (Some(ns), true) => {
+                client
+                    .list_namespaced_keys(kind, ns, opts.limit, continue_token.as_deref())
+                    .await
+            }
+            (Some(ns), false) => {
+                client
+                    .list_namespaced(kind, ns, opts.limit, continue_token.as_deref())
+                    .await
+            }
+            (None, true) => client.list_all_keys(kind, opts.limit, continue_token.as_deref()).await,
+            (None, false) => client.list_all(kind, opts.limit, continue_token.as_deref()).await,
+        };
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => {
+                print_error(&format!("Failed to list {} (page {}): {}", kind, page_index + 1, e));
+                print_connection_hint(client);
+                anyhow::bail!("Request failed");
+            }
+        };
+        if !resp.status().is_success() {
+            // Delegate to the shared helper so --all paths get the same
+            // friendly 5xx hint / stale-token message as single-page paths.
+            return Err(handle_list_error_status(resp).await);
+        }
+        let data = parse_json_response(resp).await?;
+
+        match output {
+            OutputFormat::Table | OutputFormat::Wide => {
+                let suppress_header = page_index > 0;
+                let _ =
+                    crate::core::ctl::cli::output::print_resource_list_page_streaming(&data, output, suppress_header)?;
+            }
+            OutputFormat::Json | OutputFormat::Yaml => {
+                if let Some(items) = data.get("data").and_then(|d| d.as_array()) {
+                    accumulated_items.extend(items.iter().cloned());
+                }
+            }
+        }
+
+        continue_token = data
+            .get("continue_token")
+            .and_then(|t| t.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        page_index += 1;
+        if continue_token.is_none() {
+            break;
+        }
+    }
+
+    if matches!(output, OutputFormat::Json | OutputFormat::Yaml) {
+        crate::core::ctl::cli::output::print_resource_list_all(accumulated_items, output)?;
+    }
+    Ok(())
+}
+
 /// List resources in a namespace
-async fn list_namespaced(client: &EdgionClient, kind: &str, namespace: &str, output: OutputFormat) -> Result<()> {
+async fn list_namespaced(
+    client: &EdgionClient,
+    kind: &str,
+    namespace: &str,
+    output: OutputFormat,
+    opts: &GetOptions,
+) -> Result<()> {
+    if opts.all {
+        return list_all_paginated(client, kind, Some(namespace), output, opts).await;
+    }
     match client.target() {
         TargetType::Center => {
-            // Center target: use server-side filtering
-            let resp = match client.list_namespaced(kind, namespace).await {
+            // Center target: use server-side filtering; branch on metadata_only.
+            let resp = if opts.metadata_only {
+                client
+                    .list_namespaced_keys(kind, namespace, opts.limit, opts.continue_token.as_deref())
+                    .await
+            } else {
+                client
+                    .list_namespaced(kind, namespace, opts.limit, opts.continue_token.as_deref())
+                    .await
+            };
+            let resp = match resp {
                 Ok(r) => r,
                 Err(e) => {
                     print_error(&format!("Failed to list {} in namespace {}: {}", kind, namespace, e));
@@ -145,9 +293,7 @@ async fn list_namespaced(client: &EdgionClient, kind: &str, namespace: &str, out
             };
 
             if !resp.status().is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                print_error(&format!("Failed to list resources: {}", body));
-                anyhow::bail!("Request failed");
+                return Err(handle_list_error_status(resp).await);
             }
 
             let data = parse_json_response(resp).await?;
@@ -155,7 +301,7 @@ async fn list_namespaced(client: &EdgionClient, kind: &str, namespace: &str, out
         }
         TargetType::Server | TargetType::Client => {
             // Server/Client targets: fetch all and filter on client side
-            let resp = match client.list_all(kind).await {
+            let resp = match client.list_all(kind, opts.limit, opts.continue_token.as_deref()).await {
                 Ok(r) => r,
                 Err(e) => {
                     print_error(&format!("Failed to list {} in namespace {}: {}", kind, namespace, e));
@@ -165,9 +311,7 @@ async fn list_namespaced(client: &EdgionClient, kind: &str, namespace: &str, out
             };
 
             if !resp.status().is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                print_error(&format!("Failed to list resources: {}", body));
-                anyhow::bail!("Request failed");
+                return Err(handle_list_error_status(resp).await);
             }
 
             let mut data = parse_json_response(resp).await?;
@@ -181,8 +325,18 @@ async fn list_namespaced(client: &EdgionClient, kind: &str, namespace: &str, out
 }
 
 /// List all resources across namespaces
-async fn list_all(client: &EdgionClient, kind: &str, output: OutputFormat) -> Result<()> {
-    let resp = match client.list_all(kind).await {
+async fn list_all(client: &EdgionClient, kind: &str, output: OutputFormat, opts: &GetOptions) -> Result<()> {
+    if opts.all {
+        return list_all_paginated(client, kind, None, output, opts).await;
+    }
+    let resp = if opts.metadata_only && client.target() == TargetType::Center {
+        client
+            .list_all_keys(kind, opts.limit, opts.continue_token.as_deref())
+            .await
+    } else {
+        client.list_all(kind, opts.limit, opts.continue_token.as_deref()).await
+    };
+    let resp = match resp {
         Ok(r) => r,
         Err(e) => {
             print_error(&format!("Failed to list {}: {}", kind, e));
@@ -192,9 +346,7 @@ async fn list_all(client: &EdgionClient, kind: &str, output: OutputFormat) -> Re
     };
 
     if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        print_error(&format!("Failed to list resources: {}", body));
-        anyhow::bail!("Request failed");
+        return Err(handle_list_error_status(resp).await);
     }
 
     let data = parse_json_response(resp).await?;
@@ -284,11 +436,19 @@ mod tests {
                 name,
                 namespace,
                 output,
+                metadata_only,
+                limit,
+                continue_token,
+                all,
             } => {
                 assert_eq!(kind, "httproute");
                 assert!(name.is_none());
                 assert!(namespace.is_none());
                 assert_eq!(output, "table");
+                assert!(!metadata_only);
+                assert!(limit.is_none());
+                assert!(continue_token.is_none());
+                assert!(!all);
             }
             _ => panic!("expected Get"),
         }
@@ -313,11 +473,19 @@ mod tests {
                 name,
                 namespace,
                 output,
+                metadata_only,
+                limit,
+                continue_token,
+                all,
             } => {
                 assert_eq!(kind, "httproute");
                 assert_eq!(name.as_deref(), Some("my-route"));
                 assert_eq!(namespace.as_deref(), Some("default"));
                 assert_eq!(output, "yaml");
+                assert!(!metadata_only);
+                assert!(limit.is_none());
+                assert!(continue_token.is_none());
+                assert!(!all);
             }
             _ => panic!("expected Get"),
         }

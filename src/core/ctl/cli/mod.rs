@@ -94,6 +94,26 @@ pub enum Commands {
         /// Output format: table, json, yaml, wide
         #[arg(short, long, default_value = "table")]
         output: String,
+
+        /// Use the metadata-only `/api/v1/keys/...` endpoint (debug / AI-diagnostic
+        /// use case). Only valid with `--target center` (default).
+        #[arg(long)]
+        metadata_only: bool,
+
+        /// Maximum number of items to return per request (K8s-style pagination).
+        /// Has no effect on FS / Etcd backends (architectural no-op).
+        #[arg(long)]
+        limit: Option<u32>,
+
+        /// Continue token from a previous response, to fetch the next page.
+        /// Mutually exclusive with `--all`.
+        #[arg(long = "continue")]
+        continue_token: Option<String>,
+
+        /// Auto-paginate: loop until `continue_token` is null, output items
+        /// concatenated as a JSON array / YAML sequence (envelope stripped).
+        #[arg(long, conflicts_with = "continue_token")]
+        all: bool,
     },
 
     /// Delete a resource
@@ -152,6 +172,22 @@ impl Cli {
             return commands::login::login(&base_url, username.as_deref(), password.as_deref()).await;
         }
 
+        // Pre-flight compat check: --metadata-only only works with --target center.
+        // Must fire before ensure_auth so the error is immediate (no network call
+        // needed to diagnose an invalid flag combination).
+        if let Commands::Get {
+            metadata_only: true, ..
+        } = &self.command
+        {
+            if self.target != TargetType::Center {
+                eprintln!(
+                    "Error: --metadata-only only works with --target center (got {:?}).",
+                    self.target
+                );
+                std::process::exit(2);
+            }
+        }
+
         // Create API client with target type
         let mut client = EdgionClient::new(
             self.target,
@@ -176,9 +212,26 @@ impl Cli {
                 name,
                 namespace,
                 output,
+                metadata_only,
+                limit,
+                continue_token,
+                all,
             } => {
                 let format = OutputFormat::parse(output)?;
-                commands::get::get(&client, kind, name.as_deref(), namespace.as_deref(), format).await
+                commands::get::get(
+                    &client,
+                    kind,
+                    name.as_deref(),
+                    namespace.as_deref(),
+                    format,
+                    commands::get::GetOptions {
+                        metadata_only: *metadata_only,
+                        limit: *limit,
+                        continue_token: continue_token.clone(),
+                        all: *all,
+                    },
+                )
+                .await
             }
             Commands::Delete {
                 kind,
