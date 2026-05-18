@@ -96,6 +96,26 @@ In non-K8s mode, create and update operations:
 
 Cluster-scoped resources (such as GatewayClass) have no namespace dimension. The handler validates internally via `is_kind_cluster_scoped()` whether the kind is actually cluster-scoped, and returns `400` if it does not match.
 
+### Metadata-only Keys (list-keys-api card 01)
+
+Parallel read-only endpoints returning `ResourceKey` (`apiVersion` / `kind` / `metadata` only — no `spec` / `status`). The legacy `/api/v1/{cluster,namespaced}/...` paths above are unchanged; the two families coexist by design.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/keys/cluster/{kind}` | List cluster-scoped resource keys |
+| GET | `/api/v1/keys/namespaced/{kind}` | List keys across all namespaces |
+| GET | `/api/v1/keys/namespaced/{kind}/{namespace}` | List keys in one namespace |
+
+Query params: `limit=N` (page size) and `continue=<token>` (K8s-style cursor). Response carries `continue_token` for the next page (`null` on the last page).
+
+Backend behaviour:
+
+- **K8s**: `Api::list_metadata` (server-side `PartialObjectMetadataList` projection). The annotation `kubectl.kubernetes.io/last-applied-configuration` is stripped on the way out; other labels/annotations pass through.
+- **FS / Etcd**: returns `501 Not Implemented` with body `"list_keys is not yet supported on this backend"` — placeholder for the follow-up cards in this series.
+- Stale / expired `continue` token (K8s 410 Gone) maps to **HTTP 410**; clients must restart pagination from the first page.
+
+Call paths land in `AdminState::center_list_keys{,_namespaced}` → `CenterApi::list_keys_by_kind{,_ns}` → `ConfCenter` backend.
+
 ### ConfigServer Endpoints
 
 Used by `edgion-cli --target server`; reads from the **ConfigSyncServer cache layer** (ServerCache). The returned data is the processed snapshot produced by ResourceProcessor, in a format compatible with Gateway's `/configclient/` API.
@@ -183,6 +203,8 @@ Mapping from `ConfWriterError` to HTTP status codes:
 | `IOError` | 500 Internal Server Error |
 | `KubeError` | 500 Internal Server Error |
 | `InternalError` | 500 Internal Server Error |
+| `NotSupported` | 501 Not Implemented |
+| `StalePagination` | 410 Gone |
 
 ## Authentication System
 
