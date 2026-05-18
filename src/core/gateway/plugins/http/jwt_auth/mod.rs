@@ -37,7 +37,3 @@ pub(crate) fn to_jwt_algorithm(alg: JwtAlgorithm) -> Algorithm {
     }
 }
 
-/// Whether the algorithm is symmetric (HS*).
-pub(crate) fn is_symmetric(alg: JwtAlgorithm) -> bool {
-    matches!(alg, JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512)
-}

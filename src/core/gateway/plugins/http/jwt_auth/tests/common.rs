@@ -27,33 +27,6 @@ pub(super) fn jwt_auth_default(anonymous: Option<String>) -> JwtAuth {
     JwtAuth::new(&config, "default".to_string())
 }
 
-/// Helper: create a `ResolvedJwtIssuerGroup` for HS* testing with a single credential.
-pub(super) fn make_hs_resolved_group(
-    group_name: &str,
-    iss: &str,
-    kid: &str,
-    secret: &str,
-    algorithm: JwtAlgorithm,
-    audiences: Option<Vec<String>>,
-) -> (String, ResolvedJwtIssuerGroup) {
-    let mut creds = HashMap::new();
-    creds.insert(
-        kid.to_string(),
-        ResolvedJwtCredential {
-            key: Some(kid.to_string()),
-            secret: Some(secret.to_string()),
-            public_key: None,
-        },
-    );
-    let group = ResolvedJwtIssuerGroup {
-        group: group_name.to_string(),
-        algorithm,
-        audiences,
-        credentials: creds,
-    };
-    (iss.to_string(), group)
-}
-
 /// Helper: create JwtAuth backed by a single HS* credential.
 ///
 /// Builds a store with one issuer group (`TEST_ISS` → `TEST_KID` → `secret`).

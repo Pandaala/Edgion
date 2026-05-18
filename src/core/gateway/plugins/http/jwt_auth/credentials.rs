@@ -31,11 +31,6 @@ impl JwtIssuerGroupStore {
     pub(super) fn lookup_by_iss(&self, iss: &str) -> Option<&Arc<ResolvedJwtIssuerGroup>> {
         self.by_iss.get(iss)
     }
-
-    /// True if no groups are configured (anonymous-only deployment).
-    pub(super) fn is_empty(&self) -> bool {
-        self.by_iss.is_empty()
-    }
 }
 
 /// Build a `DecodingKey` from the credential + algorithm. Used per request

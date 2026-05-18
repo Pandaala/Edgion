@@ -290,7 +290,7 @@ impl ConfHandler<PluginMetaData> for PluginMetaDataGatewayStore {
 #[cfg(test)]
 mod stats_tests {
     use super::*;
-    use crate::types::resources::plugin_metadata::{IpGroup, PluginMetaDataSpec};
+    use crate::types::resources::plugin_metadata::{IpGroup, KeyGroup, PluginMetaDataSpec};
 
     #[test]
     fn count_returns_zero_initially() {
@@ -324,7 +324,16 @@ mod stats_tests {
             let spec = PluginMetaDataSpec {
                 metadata: MetaDataEntry::KeyList(KeyListData {
                     match_mode: Default::default(),
-                    items: vec![],
+                    // Single empty default group preserves the original
+                    // "empty-metadata publish" semantics under the new
+                    // Vec<KeyGroup> schema. validate_pre_parse is NOT
+                    // called here (mock construct), so empty items is
+                    // accepted.
+                    items: vec![KeyGroup {
+                        name: "default".to_string(),
+                        description: None,
+                        items: vec![],
+                    }],
                 }),
             };
             let mut pm = PluginMetaData::new("key-list", spec);

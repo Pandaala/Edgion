@@ -16,7 +16,7 @@ pub mod region_route;
 
 pub use global_connection_ip_restriction::{GlobalConnectionIpRestrictionData, IpGroup, ProfileRules};
 pub use ip_list::IpListData;
-pub use key_list::{KeyListData, KeyMatchMode, MetaDataItem};
+pub use key_list::{KeyGroup, KeyListData, KeyMatchMode, MetaDataItem};
 pub use region_route::{
     ClusterRegionRouteConfig, ClusterRegionRouteEntry, RefPluginEntry, RouteByKeyConfMatchMeta, ServiceRegionDef,
     ServiceRegionRouteConfig, ServiceRegionRouteEntry,
@@ -120,12 +120,11 @@ impl PluginMetaData {
                 }
             }
             MetaDataEntry::KeyList(key_list) => {
-                if matches!(key_list.match_mode, KeyMatchMode::Regex) {
-                    for item in &key_list.items {
-                        if let Err(e) = regex::Regex::new(&item.key) {
-                            errors.push(format!("Invalid regex pattern '{}': {}", item.key, e));
-                        }
-                    }
+                if let Err(e) = crate::core::common::matcher::key_group_helpers::validate_key_groups_structure(
+                    &key_list.items,
+                    &key_list.match_mode,
+                ) {
+                    errors.push(format!("KeyList invalid: {}", e));
                 }
             }
             MetaDataEntry::GlobalConnectionIpRestriction(data) => {
