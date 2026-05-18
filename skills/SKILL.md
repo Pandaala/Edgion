@@ -39,6 +39,7 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **Observability** — Access Log, Metrics, protocol logs | [02-features/04-observability/](02-features/04-observability/SKILL.md) |
 | **Annotation reference** — all edgion.io/* keys | [02-features/05-annotations/](02-features/05-annotations/SKILL.md) |
 | **Coding conventions** — log IDs, log safety, observability | [03-coding/SKILL.md](03-coding/SKILL.md) |
+| **Grouped-list design pattern** — `*_groups` schema, rolling-upgrade serde, first-wins, group-in-ok-log iron rule | [01-architecture/00-common/04-grouped-list-pattern.md](01-architecture/00-common/04-grouped-list-pattern.md) |
 | **Integration testing** — architecture, running, adding test cases | [05-testing/01-integration-testing.md](05-testing/01-integration-testing.md) |
 | **Global review** — security/correctness/observability checklists + closed false-positive entries | [10-fully-review/SKILL.md](10-fully-review/SKILL.md) |
 | **User documentation conventions** — writing conventions for authoring/reviewing docs/ documentation | [11-doc/SKILL.md](11-doc/SKILL.md) |
