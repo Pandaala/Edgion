@@ -125,7 +125,10 @@ pub mod file_system;
 pub mod kubernetes;
 
 // Re-export traits
-pub use traits::{CenterApi, CenterLifeCycle, ConfCenter, ConfEntry, ConfWriterError, ListOptions, ListResult};
+pub use traits::{
+    CenterApi, CenterLifeCycle, ConfCenter, ConfEntry, ConfWriterError, ListOptions, ListResult, ResourceKey,
+    ResourceKeyMeta,
+};
 
 // Re-export FileSystem types
 pub use file_system::{FileSystemCenter, FileSystemConfig, FileSystemController, FileSystemStorage};

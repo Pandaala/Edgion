@@ -1,7 +1,7 @@
 use crate::types::prelude_resources::*;
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
 };
@@ -180,4 +180,20 @@ pub async fn delete_cluster(
     );
 
     Ok(Json(ApiResponse::success(format!("{} deleted", kind_str))))
+}
+
+/// List metadata-only keys for a cluster-scoped kind (keys endpoint)
+pub async fn list_cluster_keys(
+    State(state): State<Arc<AdminState>>,
+    Path(kind_str): Path<String>,
+    Query(pagination): Query<super::namespaced_handlers::PaginationQuery>,
+) -> Result<Json<ListResponse<crate::core::controller::conf_mgr::conf_center::traits::ResourceKey>>, StatusCode> {
+    let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    if !is_kind_cluster_scoped(kind) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let (data, continue_token) = state.center_list_keys(kind, pagination.into_list_options()).await?;
+    Ok(Json(ListResponse::success_with_token(data, continue_token)))
 }

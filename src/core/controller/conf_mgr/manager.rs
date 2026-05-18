@@ -30,6 +30,7 @@ use super::conf_center::file_system::FileSystemCenter;
 use super::conf_center::kubernetes::KubernetesCenter;
 use super::conf_center::traits::{
     impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfCenter, ConfWriterError, ListOptions, ListResult,
+    ResourceKey,
 };
 use super::conf_center::ConfCenterConfig;
 use super::sync_runtime::ShutdownHandle;

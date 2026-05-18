@@ -20,7 +20,7 @@ use super::leader_election::{LeaderElection, LeaderElectionConfig as InternalLea
 use super::storage::KubernetesStorage;
 use super::version_detection::{preflight_check_gateway_api_crds, validate_no_watch_kinds};
 use crate::core::controller::conf_mgr::conf_center::traits::{
-    impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
+    impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult, ResourceKey,
 };
 use crate::core::controller::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownHandle;

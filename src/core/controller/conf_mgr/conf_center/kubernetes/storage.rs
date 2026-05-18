@@ -8,7 +8,7 @@ use super::version_detection::{
     ReferenceGrantVersion, TLSRouteVersion,
 };
 use crate::core::controller::conf_mgr::conf_center::traits::{
-    CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult,
+    CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult, ResourceKey, ResourceKeyMeta,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -293,17 +293,61 @@ impl KubernetesStorage {
     /// Well-known API error codes are mapped to domain variants (String payload).
     /// All other errors are wrapped in `KubeError` with the original source preserved.
     fn map_kube_error(&self, e: kube::Error) -> ConfWriterError {
-        if let kube::Error::Api(ae) = &e {
-            match ae.code {
-                400 => return ConfWriterError::ValidationError(ae.message.clone()),
-                403 => return ConfWriterError::PermissionDenied(ae.message.clone()),
-                404 => return ConfWriterError::NotFound(ae.message.clone()),
-                409 => return ConfWriterError::AlreadyExists(ae.message.clone()),
-                422 => return ConfWriterError::ValidationError(ae.message.clone()),
-                _ => {}
-            }
+        map_kube_error(e)
+    }
+}
+
+/// Map kube::Error to ConfWriterError with appropriate error types.
+///
+/// Well-known API error codes are mapped to domain variants (String payload).
+/// All other errors are wrapped in `KubeError` with the original source preserved.
+///
+/// Extracted as a free function so it can be unit-tested without a live kube client.
+fn map_kube_error(e: kube::Error) -> ConfWriterError {
+    if let kube::Error::Api(ae) = &e {
+        match ae.code {
+            400 => return ConfWriterError::ValidationError(ae.message.clone()),
+            403 => return ConfWriterError::PermissionDenied(ae.message.clone()),
+            404 => return ConfWriterError::NotFound(ae.message.clone()),
+            409 => return ConfWriterError::AlreadyExists(ae.message.clone()),
+            410 => return ConfWriterError::StalePagination(ae.message.clone()),
+            422 => return ConfWriterError::ValidationError(ae.message.clone()),
+            _ => {}
         }
-        ConfWriterError::KubeError(Box::new(e))
+    }
+    ConfWriterError::KubeError(Box::new(e))
+}
+
+const LAST_APPLIED_KEY: &str = "kubectl.kubernetes.io/last-applied-configuration";
+
+/// Project a kube `PartialObjectMeta` into a transport-friendly `ResourceKey`.
+///
+/// Drops the `last-applied-configuration` annotation (multi-KB blob the K8s
+/// apiserver attaches on `kubectl apply -f`). Other annotations and labels
+/// pass through unchanged.
+fn project_partial_meta_to_key<K>(kind: &str, part: kube::core::PartialObjectMeta<K>) -> ResourceKey {
+    let api_version = part.types.as_ref().map(|t| t.api_version.clone()).unwrap_or_default();
+
+    let meta = part.metadata;
+    let mut annotations: std::collections::BTreeMap<String, String> =
+        meta.annotations.unwrap_or_default().into_iter().collect();
+    annotations.remove(LAST_APPLIED_KEY);
+
+    let labels: std::collections::BTreeMap<String, String> = meta.labels.unwrap_or_default().into_iter().collect();
+
+    let creation_timestamp = meta.creation_timestamp.map(|t| t.0);
+
+    ResourceKey {
+        kind: kind.to_string(),
+        api_version,
+        metadata: ResourceKeyMeta {
+            namespace: meta.namespace,
+            name: meta.name.unwrap_or_default(),
+            creation_timestamp,
+            labels,
+            annotations,
+            resource_version: meta.resource_version,
+        },
     }
 }
 
@@ -626,5 +670,170 @@ impl CenterApi for KubernetesStorage {
             items,
             continue_token: list.metadata.continue_,
         })
+    }
+
+    async fn list_keys_by_kind(
+        &self,
+        kind: &str,
+        opts: Option<ListOptions>,
+    ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
+        let api = self.dynamic_api_all_namespaces(kind).await?;
+
+        let mut lp = ListParams::default();
+        if let Some(ref options) = opts {
+            if options.limit > 0 {
+                lp = lp.limit(options.limit);
+            }
+            if let Some(ref token) = options.continue_token {
+                lp = lp.continue_token(token);
+            }
+        }
+
+        let list = api.list_metadata(&lp).await.map_err(|e| self.map_kube_error(e))?;
+
+        let items: Vec<ResourceKey> = list
+            .items
+            .into_iter()
+            .map(|part| project_partial_meta_to_key(kind, part))
+            .collect();
+
+        tracing::debug!(
+            component = "kubernetes_writer",
+            kind = kind,
+            count = items.len(),
+            "Listed metadata-only keys by kind (all namespaces)"
+        );
+
+        Ok(ListResult {
+            items,
+            continue_token: list.metadata.continue_,
+        })
+    }
+
+    async fn list_keys_by_kind_ns(
+        &self,
+        kind: &str,
+        namespace: &str,
+        opts: Option<ListOptions>,
+    ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
+        let api = self.dynamic_api(kind, Some(namespace)).await?;
+
+        let mut lp = ListParams::default();
+        if let Some(ref options) = opts {
+            if options.limit > 0 {
+                lp = lp.limit(options.limit);
+            }
+            if let Some(ref token) = options.continue_token {
+                lp = lp.continue_token(token);
+            }
+        }
+
+        let list = api.list_metadata(&lp).await.map_err(|e| self.map_kube_error(e))?;
+
+        let items: Vec<ResourceKey> = list
+            .items
+            .into_iter()
+            .map(|part| project_partial_meta_to_key(kind, part))
+            .collect();
+
+        tracing::debug!(
+            component = "kubernetes_writer",
+            kind = kind,
+            namespace = namespace,
+            count = items.len(),
+            "Listed metadata-only keys by kind+ns"
+        );
+
+        Ok(ListResult {
+            items,
+            continue_token: list.metadata.continue_,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kube::api::ObjectMeta;
+    use kube::core::PartialObjectMeta;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn project_partial_meta_strips_last_applied_and_preserves_others() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "kubectl.kubernetes.io/last-applied-configuration".into(),
+            "{\"big\":\"yaml\"}".repeat(200),
+        );
+        annotations.insert("edgion.io/enable-http".into(), "true".into());
+        annotations.insert("kubernetes.io/ingress.class".into(), "edgion".into());
+
+        let part: PartialObjectMeta<kube::api::DynamicObject> = PartialObjectMeta {
+            types: Some(kube::core::TypeMeta {
+                api_version: "gateway.networking.k8s.io/v1".into(),
+                kind: "HTTPRoute".into(),
+            }),
+            metadata: ObjectMeta {
+                name: Some("my-route".into()),
+                namespace: Some("default".into()),
+                resource_version: Some("42".into()),
+                annotations: Some(annotations),
+                labels: Some({
+                    let mut l = BTreeMap::new();
+                    l.insert("app".into(), "demo".into());
+                    l
+                }),
+                ..Default::default()
+            },
+            _phantom: std::marker::PhantomData,
+        };
+
+        let key = project_partial_meta_to_key("HTTPRoute", part);
+        assert_eq!(key.kind, "HTTPRoute");
+        assert_eq!(key.metadata.name, "my-route");
+        assert_eq!(key.metadata.namespace.as_deref(), Some("default"));
+        assert_eq!(key.metadata.resource_version.as_deref(), Some("42"));
+        assert!(!key
+            .metadata
+            .annotations
+            .contains_key("kubectl.kubernetes.io/last-applied-configuration"));
+        assert_eq!(
+            key.metadata
+                .annotations
+                .get("edgion.io/enable-http")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            key.metadata
+                .annotations
+                .get("kubernetes.io/ingress.class")
+                .map(String::as_str),
+            Some("edgion")
+        );
+        assert_eq!(key.metadata.labels.get("app").map(String::as_str), Some("demo"));
+    }
+
+    #[test]
+    fn map_kube_error_410_to_stale_pagination() {
+        let ae = kube::core::ErrorResponse {
+            status: "Failure".into(),
+            message: "The provided continue parameter is too old".into(),
+            reason: "Expired".into(),
+            code: 410,
+        };
+        let err = kube::Error::Api(ae);
+        let mapped = map_kube_error(err);
+        assert!(
+            matches!(mapped, ConfWriterError::StalePagination(_)),
+            "expected StalePagination, got: {:?}",
+            mapped
+        );
+        if let ConfWriterError::StalePagination(msg) = mapped {
+            assert!(
+                msg.contains("continue parameter is too old"),
+                "unexpected message: {msg}"
+            );
+        }
     }
 }

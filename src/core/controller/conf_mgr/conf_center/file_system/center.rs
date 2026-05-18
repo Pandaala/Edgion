@@ -18,7 +18,7 @@ use super::path_registry::PathRegistry;
 use super::storage::FileSystemStorage;
 use crate::core::controller::conf_mgr::conf_center::non_kube_common::CenterBase;
 use crate::core::controller::conf_mgr::conf_center::traits::{
-    impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
+    impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult, ResourceKey,
 };
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownHandle;
 use crate::core::controller::conf_mgr::ControllerRuntime;

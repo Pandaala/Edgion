@@ -138,6 +138,68 @@ impl AdminState {
         Ok((values, continue_token))
     }
 
+    /// List metadata-only keys by kind from storage (via ConfCenter).
+    ///
+    /// Parallel to `center_list_resources`. Used by `/api/v1/keys/...` handlers.
+    /// Consumers needing `spec` (Dashboard list pages, Topology, diagnostics)
+    /// stay on `center_list_resources*`.
+    pub async fn center_list_keys(
+        &self,
+        kind: ResourceKind,
+        opts: Option<crate::core::controller::conf_mgr::ListOptions>,
+    ) -> Result<
+        (
+            Vec<crate::core::controller::conf_mgr::conf_center::traits::ResourceKey>,
+            Option<String>,
+        ),
+        StatusCode,
+    > {
+        let api = self.conf_center();
+        let kind_str = kind.as_str();
+
+        let result = api.list_keys_by_kind(kind_str, opts).await.map_err(|e| {
+            tracing::debug!(
+                component = "admin_state",
+                kind = kind_str,
+                error = %e,
+                "Failed to list keys from storage"
+            );
+            map_writer_error(e)
+        })?;
+
+        Ok((result.items, result.continue_token))
+    }
+
+    /// List metadata-only keys by kind+namespace from storage (via ConfCenter).
+    pub async fn center_list_keys_namespaced(
+        &self,
+        kind: ResourceKind,
+        namespace: &str,
+        opts: Option<crate::core::controller::conf_mgr::ListOptions>,
+    ) -> Result<
+        (
+            Vec<crate::core::controller::conf_mgr::conf_center::traits::ResourceKey>,
+            Option<String>,
+        ),
+        StatusCode,
+    > {
+        let api = self.conf_center();
+        let kind_str = kind.as_str();
+
+        let result = api.list_keys_by_kind_ns(kind_str, namespace, opts).await.map_err(|e| {
+            tracing::debug!(
+                component = "admin_state",
+                kind = kind_str,
+                namespace = namespace,
+                error = %e,
+                "Failed to list namespaced keys from storage"
+            );
+            map_writer_error(e)
+        })?;
+
+        Ok((result.items, result.continue_token))
+    }
+
     /// Get a specific resource by namespace and name from storage (via ConfCenter)
     pub async fn center_get_resource(
         &self,

@@ -211,6 +211,16 @@ pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaV
             "/api/v1/namespaced/{kind}/{namespace}/{name}",
             get(namespaced_handlers::get_namespaced),
         )
+        // Metadata-only keys list routes (Card 01 of list-keys-api series)
+        .route("/api/v1/keys/cluster/{kind}", get(cluster_handlers::list_cluster_keys))
+        .route(
+            "/api/v1/keys/namespaced/{kind}",
+            get(namespaced_handlers::list_all_namespaces_keys),
+        )
+        .route(
+            "/api/v1/keys/namespaced/{kind}/{namespace}",
+            get(namespaced_handlers::list_namespaced_keys),
+        )
         .merge(write_routes)
         // Special operations
         .route("/api/v1/server-info", get(get_server_info))

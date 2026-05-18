@@ -35,6 +35,33 @@ pub struct ConfEntry {
     pub content: String, // Raw YAML content
 }
 
+/// Metadata-only key for a Kubernetes-shaped resource. Mirrors `PartialObjectMetadata`.
+///
+/// Returned by [`CenterApi::list_keys_by_kind`] and the namespaced variant.
+/// Frontend reads `record.metadata.name` etc., same path as full objects.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceKey {
+    pub kind: String,
+    pub api_version: String,
+    pub metadata: ResourceKeyMeta,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ResourceKeyMeta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    pub name: String,
+    #[serde(rename = "creationTimestamp", skip_serializing_if = "Option::is_none")]
+    pub creation_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub labels: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub annotations: std::collections::BTreeMap<String, String>,
+    #[serde(rename = "resourceVersion", skip_serializing_if = "Option::is_none")]
+    pub resource_version: Option<String>,
+}
+
 /// List options for pagination (K8s style)
 ///
 /// When `None` is passed to list methods, all items are returned.
@@ -47,11 +74,12 @@ pub struct ListOptions {
     pub continue_token: Option<String>,
 }
 
-/// Result of a list operation with pagination support
+/// Result of a list operation with pagination support.
+///
+/// Default `T = ConfEntry` keeps existing callers source-compatible.
 #[derive(Debug, Clone)]
-pub struct ListResult {
-    /// List of configuration entries
-    pub items: Vec<ConfEntry>,
+pub struct ListResult<T = ConfEntry> {
+    pub items: Vec<T>,
     /// Token for fetching next page (None if this is the last page)
     pub continue_token: Option<String>,
 }
@@ -77,6 +105,12 @@ pub enum ConfWriterError {
 
     #[error("Internal error: {0}")]
     InternalError(String),
+
+    #[error("Not supported: {0}")]
+    NotSupported(String),
+
+    #[error("Stale pagination: {0}")]
+    StalePagination(String),
 
     // ---- infrastructure variants: preserve #[source] for error chain ----
     /// IO error. `context` names the operation; `std::io::ErrorKind` is
@@ -195,6 +229,38 @@ pub trait CenterApi: Send + Sync {
     /// # Arguments
     /// * `opts` - Pagination options. `None` returns all items, `Some(opts)` applies pagination.
     async fn list_all(&self, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError>;
+
+    /// List keys (metadata-only) by kind, across all namespaces / cluster-scoped.
+    ///
+    /// Used by `/api/v1/keys/...` admin endpoints. Backends that cannot
+    /// project metadata efficiently return [`ConfWriterError::NotSupported`].
+    ///
+    /// Default implementation returns `NotSupported`. Backends override this
+    /// once they provide a real implementation (Tasks 3 and 5).
+    async fn list_keys_by_kind(
+        &self,
+        kind: &str,
+        _opts: Option<ListOptions>,
+    ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
+        Err(ConfWriterError::NotSupported(format!(
+            "list_keys_by_kind not implemented for kind={kind}"
+        )))
+    }
+
+    /// List keys (metadata-only) by kind within a single namespace.
+    ///
+    /// Default implementation returns `NotSupported`. Backends override this
+    /// once they provide a real implementation (Tasks 3 and 5).
+    async fn list_keys_by_kind_ns(
+        &self,
+        kind: &str,
+        namespace: &str,
+        _opts: Option<ListOptions>,
+    ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
+        Err(ConfWriterError::NotSupported(format!(
+            "list_keys_by_kind_ns not implemented for kind={kind} namespace={namespace}"
+        )))
+    }
 }
 
 // ============================================================================
@@ -362,7 +428,102 @@ macro_rules! impl_center_api_delegate {
             async fn list_all(&self, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
                 self.$field.list_all(opts).await
             }
+
+            async fn list_keys_by_kind(
+                &self,
+                kind: &str,
+                opts: Option<ListOptions>,
+            ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
+                self.$field.list_keys_by_kind(kind, opts).await
+            }
+
+            async fn list_keys_by_kind_ns(
+                &self,
+                kind: &str,
+                namespace: &str,
+                opts: Option<ListOptions>,
+            ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
+                self.$field.list_keys_by_kind_ns(kind, namespace, opts).await
+            }
         }
     };
 }
 pub(crate) use impl_center_api_delegate;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resource_key_meta_is_constructible() {
+        let _meta = ResourceKeyMeta {
+            namespace: Some("ns".to_string()),
+            name: "n".to_string(),
+            creation_timestamp: None,
+            labels: Default::default(),
+            annotations: Default::default(),
+            resource_version: Some("1".to_string()),
+        };
+        let _key = ResourceKey {
+            kind: "HTTPRoute".to_string(),
+            api_version: "gateway.networking.k8s.io/v1".to_string(),
+            metadata: _meta,
+        };
+    }
+
+    #[test]
+    fn list_result_default_param_is_conf_entry() {
+        let r: ListResult = ListResult {
+            items: Vec::<ConfEntry>::new(),
+            continue_token: None,
+        };
+        assert!(r.items.is_empty());
+    }
+
+    #[test]
+    fn list_result_can_hold_resource_keys() {
+        let r: ListResult<ResourceKey> = ListResult {
+            items: Vec::new(),
+            continue_token: Some("tok".to_string()),
+        };
+        assert_eq!(r.continue_token.as_deref(), Some("tok"));
+    }
+
+    #[test]
+    fn not_supported_displays() {
+        let e = ConfWriterError::NotSupported("foo".to_string());
+        assert_eq!(format!("{e}"), "Not supported: foo");
+    }
+
+    #[test]
+    fn stale_pagination_displays() {
+        let e = ConfWriterError::StalePagination("token expired".to_string());
+        assert_eq!(format!("{e}"), "Stale pagination: token expired");
+    }
+
+    /// Locks in the JSON wire shape: ResourceKey must emit `apiVersion`
+    /// (camelCase), matching the Dashboard TS interface and the K8s
+    /// convention. Without `#[serde(rename_all = "camelCase")]` serde
+    /// emits the raw `api_version`, which silently breaks consumers.
+    #[test]
+    fn resource_key_serializes_camel_case_fields() {
+        let key = ResourceKey {
+            kind: "HTTPRoute".to_string(),
+            api_version: "gateway.networking.k8s.io/v1".to_string(),
+            metadata: ResourceKeyMeta {
+                name: "r".to_string(),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+        };
+        let json = serde_json::to_string(&key).expect("serialize");
+        assert!(
+            json.contains("\"apiVersion\":\"gateway.networking.k8s.io/v1\""),
+            "expected camelCase apiVersion, got: {json}"
+        );
+        assert!(
+            !json.contains("api_version"),
+            "must not leak snake_case api_version, got: {json}"
+        );
+    }
+}

@@ -130,6 +130,22 @@ pub fn map_writer_error(e: ConfWriterError) -> StatusCode {
             );
             StatusCode::INTERNAL_SERVER_ERROR
         }
+        ConfWriterError::NotSupported(msg) => {
+            tracing::info!(
+                component = "unified_api",
+                error = %msg,
+                "Operation not supported by backend"
+            );
+            StatusCode::NOT_IMPLEMENTED
+        }
+        ConfWriterError::StalePagination(msg) => {
+            tracing::info!(
+                component = "unified_api",
+                error = %msg,
+                "Pagination token is stale or expired"
+            );
+            StatusCode::GONE
+        }
     }
 }
 
@@ -185,4 +201,21 @@ where
     }
 
     Ok(resource)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn not_supported_maps_to_501() {
+        let status = map_writer_error(ConfWriterError::NotSupported("x".to_string()));
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[test]
+    fn stale_pagination_maps_to_410() {
+        let status = map_writer_error(ConfWriterError::StalePagination("expired".to_string()));
+        assert_eq!(status, StatusCode::GONE);
+    }
 }
