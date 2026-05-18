@@ -113,10 +113,13 @@ log_section "Page 1 (limit=10)"
 PAGE1=$(curl_admin "${ADMIN_URL}/api/v1/keys/namespaced/HTTPRoute/${NAMESPACE}?limit=10")
 echo "$PAGE1" | jq -e '.data | length == 10' >/dev/null \
     || { log_error "Page 1 length != 10"; echo "$PAGE1" | jq .; exit 1; }
-echo "$PAGE1" | jq -e '.data | all(.spec == null)' >/dev/null \
-    || { log_error "Page 1 has .spec on some item"; exit 1; }
-echo "$PAGE1" | jq -e '.data | all(.status == null)' >/dev/null \
-    || { log_error "Page 1 has .status on some item"; exit 1; }
+# Structural projection check: each item must have ONLY the ResourceKey-shaped
+# keys (apiVersion / kind / metadata). `.spec == null` alone would be vacuous
+# because ResourceKey is a typed Rust struct without that field.
+echo "$PAGE1" | jq -e '.data | all((keys | sort) == ["apiVersion","kind","metadata"])' >/dev/null \
+    || { log_error "Page 1 item key-set is not exactly {apiVersion, kind, metadata}; projection let extra fields through"; echo "$PAGE1" | jq '.data[0]'; exit 1; }
+echo "$PAGE1" | jq -e '.data | all(.metadata.name != null and .metadata.name != "")' >/dev/null \
+    || { log_error "Page 1 some item missing metadata.name"; exit 1; }
 echo "$PAGE1" | jq -e '.continue_token != null and (.continue_token | length > 0)' >/dev/null \
     || { log_error "Page 1 continue_token missing"; exit 1; }
 CONT1=$(echo "$PAGE1" | jq -r '.continue_token')

@@ -8,7 +8,7 @@ use super::version_detection::{
     ReferenceGrantVersion, TLSRouteVersion,
 };
 use crate::core::controller::conf_mgr::conf_center::traits::{
-    CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult, ResourceKey, ResourceKeyMeta,
+    CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult, ResourceKey, ResourceKeyMeta, LAST_APPLIED_KEY,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -317,8 +317,6 @@ fn map_kube_error(e: kube::Error) -> ConfWriterError {
     }
     ConfWriterError::KubeError(Box::new(e))
 }
-
-const LAST_APPLIED_KEY: &str = "kubectl.kubernetes.io/last-applied-configuration";
 
 /// Project a kube `PartialObjectMeta` into a transport-friendly `ResourceKey`.
 ///

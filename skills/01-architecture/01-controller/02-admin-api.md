@@ -110,9 +110,9 @@ Query params: `limit=N` (page size) and `continue=<token>` (K8s-style cursor). R
 
 Backend behaviour:
 
-- **K8s**: `Api::list_metadata` (server-side `PartialObjectMetadataList` projection). The annotation `kubectl.kubernetes.io/last-applied-configuration` is stripped on the way out; other labels/annotations pass through.
-- **FS / Etcd**: returns `501 Not Implemented` with body `"list_keys is not yet supported on this backend"` — placeholder for the follow-up cards in this series.
-- Stale / expired `continue` token (K8s 410 Gone) maps to **HTTP 410**; clients must restart pagination from the first page.
+- **K8s**: `Api::list_metadata` (server-side `PartialObjectMetadataList` projection). The annotation `kubectl.kubernetes.io/last-applied-configuration` is stripped on the way out; other labels/annotations pass through. Native server-side pagination via `continue` token.
+- **FS / Etcd**: trait-default projection — delegates to `get_list_by_kind*` (which already serves the informer's full-list path) and projects each `ConfEntry` to a `ResourceKey` by parsing only the `metadata` block. Strips the same `last-applied-configuration` annotation. **No pagination** (`continue_token` is always `null`); the existing `get_list_by_kind*` returns the full set, so the keys endpoint inherits that shape. If a future workload demands real FS/Etcd pagination, extend `get_list_by_kind*`'s own pagination support — the default `list_keys_*` impl transparently propagates the resulting `continue_token`.
+- Stale / expired `continue` token (K8s 410 Gone only) maps to **HTTP 410**; clients must restart pagination from the first page.
 
 Call paths land in `AdminState::center_list_keys{,_namespaced}` → `CenterApi::list_keys_by_kind{,_ns}` → `ConfCenter` backend.
 

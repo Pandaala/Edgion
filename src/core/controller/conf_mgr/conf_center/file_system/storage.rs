@@ -5,7 +5,7 @@
 
 use crate::core::common::utils::extract_resource_metadata;
 use crate::core::controller::conf_mgr::conf_center::traits::{
-    CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult, ResourceKey,
+    CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult,
 };
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
@@ -521,27 +521,6 @@ impl CenterApi for FileSystemStorage {
             continue_token: None,
         })
     }
-
-    async fn list_keys_by_kind(
-        &self,
-        _kind: &str,
-        _opts: Option<ListOptions>,
-    ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
-        Err(ConfWriterError::NotSupported(
-            "list_keys is not yet supported on this backend".to_string(),
-        ))
-    }
-
-    async fn list_keys_by_kind_ns(
-        &self,
-        _kind: &str,
-        _namespace: &str,
-        _opts: Option<ListOptions>,
-    ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
-        Err(ConfWriterError::NotSupported(
-            "list_keys is not yet supported on this backend".to_string(),
-        ))
-    }
 }
 
 /// Build resource file path:
@@ -567,35 +546,6 @@ pub(super) fn build_resource_path_from_key(root: &Path, kind: &str, key: &str) -
         None => (None, key),
     };
     build_resource_path(root, kind, namespace, name)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn list_keys_by_kind_returns_not_supported() {
-        let tmp = tempfile::tempdir().unwrap();
-        let storage = FileSystemStorage::new(tmp.path().to_path_buf());
-        let err = storage.list_keys_by_kind("HTTPRoute", None).await.unwrap_err();
-        match err {
-            ConfWriterError::NotSupported(msg) => {
-                assert!(msg.contains("not yet supported"), "msg was: {msg}");
-            }
-            other => panic!("expected NotSupported, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn list_keys_by_kind_ns_returns_not_supported() {
-        let tmp = tempfile::tempdir().unwrap();
-        let storage = FileSystemStorage::new(tmp.path().to_path_buf());
-        let err = storage
-            .list_keys_by_kind_ns("HTTPRoute", "default", None)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ConfWriterError::NotSupported(_)));
-    }
 }
 
 #[cfg(test)]

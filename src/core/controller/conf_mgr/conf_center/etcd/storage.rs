@@ -10,7 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::core::controller::conf_mgr::conf_center::traits::{
-    CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult, ResourceKey,
+    CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult,
 };
 use crate::core::gateway::link_sys::providers::etcd::EtcdLinkClient;
 
@@ -248,49 +248,5 @@ impl CenterApi for EtcdStorage {
         let prefix = self.conf_prefix();
         let kvs = self.client.get_prefix(&prefix).await.map_err(Self::map_err)?;
         Ok(self.kvs_to_list_result(kvs))
-    }
-
-    async fn list_keys_by_kind(
-        &self,
-        _kind: &str,
-        _opts: Option<ListOptions>,
-    ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
-        Err(ConfWriterError::NotSupported(
-            "list_keys is not yet supported on this backend".to_string(),
-        ))
-    }
-
-    async fn list_keys_by_kind_ns(
-        &self,
-        _kind: &str,
-        _namespace: &str,
-        _opts: Option<ListOptions>,
-    ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
-        Err(ConfWriterError::NotSupported(
-            "list_keys is not yet supported on this backend".to_string(),
-        ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[allow(unused_imports)]
-    use super::*;
-
-    /// Requires a live etcd cluster; skipped by default.
-    /// To run: `cargo test -p edgion --lib -- --ignored core::controller::conf_mgr::conf_center::etcd::storage::tests`
-    #[tokio::test]
-    #[ignore = "requires live etcd"]
-    async fn list_keys_by_kind_returns_not_supported() {
-        // EtcdStorage::new requires a live EtcdLinkClient; construct one and verify
-        // the explicit override is in place for when etcd IS available.
-        // Placeholder: the explicit override is verified via cargo check / clippy.
-        todo!("wire up a test EtcdLinkClient and assert NotSupported + 'not yet supported'")
-    }
-
-    #[tokio::test]
-    #[ignore = "requires live etcd"]
-    async fn list_keys_by_kind_ns_returns_not_supported() {
-        todo!("wire up a test EtcdLinkClient and assert NotSupported")
     }
 }
