@@ -13,6 +13,7 @@ use clap::Parser;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[command(name = "edgion-center", version, about = "Edgion Federated Center")]
@@ -147,7 +148,9 @@ impl EdgionCenterCli {
             .map_err(|e| anyhow::anyhow!("Invalid grpc_security config: {}", e))?;
 
         // Build gRPC server with optional TLS
-        let mut server_builder = tonic::transport::Server::builder();
+        let mut server_builder = tonic::transport::Server::builder()
+            .http2_keepalive_interval(Some(Duration::from_secs(10)))
+            .http2_keepalive_timeout(Some(Duration::from_secs(5)));
         if let Some(tls_cfg) = config.grpc_security.resolve_active_tls() {
             if tls_cfg.skip_tls {
                 tracing::error!(
