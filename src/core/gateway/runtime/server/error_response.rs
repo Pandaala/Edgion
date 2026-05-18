@@ -15,6 +15,7 @@ use crate::core::gateway::runtime::server::server_header::ServerHeaderOpts;
 use crate::types::{EdgionHttpContext, EdgionStatus};
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue};
+use percent_encoding::{utf8_percent_encode, CONTROLS};
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
@@ -89,10 +90,20 @@ pub(crate) async fn send_grpc_trailers_only(
     );
     trailers.insert(
         http::header::HeaderName::from_static("grpc-message"),
-        HeaderValue::from_static(grpc_message),
+        HeaderValue::from_str(&percent_encode_grpc_message(grpc_message))
+            .expect("percent-encoded grpc-message contains only ASCII, cannot fail"),
     );
     session.as_downstream_mut().write_response_trailers(trailers).await?;
     Ok(())
+}
+
+/// Percent-encode a gRPC message string per gRPC over HTTP/2 spec (RFC 3986 §2.1).
+///
+/// Keeps ASCII visible characters (0x21-0x7E) and space (0x20) as-is; percent-encodes
+/// control characters and non-ASCII bytes. Matches the encoding used by
+/// `session_adapter::send_grpc_error_direct` for consistency across gRPC error paths.
+pub(crate) fn percent_encode_grpc_message(s: &str) -> String {
+    utf8_percent_encode(s, CONTROLS).to_string()
 }
 
 /// Map an HTTP status code to a (grpc_status_code, message) pair.
@@ -447,5 +458,53 @@ mod tests {
         let (grpc_code, msg) = http_to_grpc_status(502);
         assert_eq!(grpc_code, 13, "502 must map to gRPC INTERNAL (13)");
         assert_eq!(msg, "internal", "502 gRPC message must be 'internal'");
+    }
+
+    /// ASCII messages (all current http_to_grpc_status values) must pass through
+    /// percent_encode_grpc_message unchanged — no spurious encoding on the happy path.
+    #[test]
+    fn percent_encode_grpc_message_ascii_passthrough() {
+        for msg in &[
+            "invalid argument",
+            "unauthenticated",
+            "permission denied",
+            "not found",
+            "resource exhausted",
+            "cancelled",
+            "unimplemented",
+            "unavailable",
+            "deadline exceeded",
+            "internal",
+            "unknown",
+        ] {
+            assert_eq!(
+                percent_encode_grpc_message(msg),
+                *msg,
+                "ASCII grpc-message must not be modified by percent-encoding"
+            );
+        }
+    }
+
+    /// Non-ASCII bytes must be percent-encoded per gRPC spec (RFC 3986 §2.1).
+    /// Uses latin-1 chars and a multi-byte CJK character to exercise both
+    /// two-byte and three-byte UTF-8 encoding paths.
+    #[test]
+    fn percent_encode_grpc_message_non_ascii_encoded() {
+        // é = U+00E9 → UTF-8 0xC3 0xA9 → "%C3%A9"
+        assert_eq!(percent_encode_grpc_message("caf\u{00E9}"), "caf%C3%A9");
+        // π = U+03C0 → UTF-8 0xCF 0x80 → "%CF%80"
+        assert_eq!(percent_encode_grpc_message("\u{03C0}"), "%CF%80");
+        // Mixed: ASCII space kept, non-ASCII encoded
+        assert_eq!(
+            percent_encode_grpc_message("op\u{00E9}ration invalid"),
+            "op%C3%A9ration invalid"
+        );
+    }
+
+    /// Control characters must be percent-encoded.
+    #[test]
+    fn percent_encode_grpc_message_control_chars_encoded() {
+        assert_eq!(percent_encode_grpc_message("line\nbreak"), "line%0Abreak");
+        assert_eq!(percent_encode_grpc_message("tab\there"), "tab%09here");
     }
 }
