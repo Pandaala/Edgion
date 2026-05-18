@@ -168,11 +168,14 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.ctx.path_params = Some(params);
     }
 
-    /// Send a gRPC trailers-only error response using the three-frame pattern:
+    /// Send a gRPC error response using the three-frame workaround:
     /// HEADERS (no END_STREAM) -> empty DATA -> TRAILERS (grpc-status + grpc-message).
     ///
-    /// Pingora's proxy Session.write_response_header() does NOT propagate end_of_stream
-    /// to the underlying H2 session, so a single HEADERS+END_STREAM frame cannot be used.
+    /// A spec-compliant gRPC Trailers-Only single HEADERS+END_STREAM frame cannot be emitted
+    /// due to a double-layer Pingora limitation: (1) the proxy Session drops end_of_stream
+    /// before it reaches the H2 layer, and (2) the H2 server has no API to fold pseudo-headers
+    /// and trailer fields into one HEADERS block. All mainstream gRPC clients tolerate the
+    /// three-frame form. See skills/04-review/rfc-divergence/h2-grpc-01-trailers-only-three-frame.md.
     async fn send_grpc_error_three_frame(
         inner: &mut Session,
         ctx: &mut EdgionHttpContext,

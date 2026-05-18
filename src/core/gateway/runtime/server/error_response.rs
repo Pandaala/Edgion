@@ -60,9 +60,17 @@ pub(crate) async fn send_grpc_trailers_only(
     ctx.request_info.grpc_status = Some(grpc_status);
     ctx.request_info.response_committed = true;
 
-    // Pingora's proxy Session.write_response_header() does NOT pass end_of_stream
-    // to the underlying H2 session, so we cannot use a single HEADERS+END_STREAM frame.
-    // Instead, use: HEADERS (no END_STREAM) → empty DATA → TRAILERS (with grpc-status).
+    // Cannot emit a spec-compliant gRPC Trailers-Only single HEADERS+END_STREAM frame due
+    // to a double-layer Pingora limitation (verified against Pingora 0.8.0 / main branch):
+    //   1. pingora-proxy Session::write_response_header(end_of_stream) passes end_of_stream
+    //      only to the response-header filter; it is NOT forwarded to the underlying H2 session.
+    //   2. pingora-core H2 server splits write_response_header and write_trailers into two
+    //      separate calls — there is no API to fold pseudo-headers and grpc-status/grpc-message
+    //      into one HEADERS block. Envoy can do this because it owns its H2 codec layer.
+    // The three-frame workaround (HEADERS → empty DATA → TRAILERS) is semantically correct;
+    // all mainstream gRPC clients tolerate it. See skills/04-review/rfc-divergence/
+    // h2-grpc-01-trailers-only-three-frame.md and tasks/todo/h2-grpc-01-trailers-only-
+    // single-frame.md for unblocking conditions.
     let mut resp = ResponseHeader::build(200, None)?;
     server_header_opts.apply_to_response(&mut resp);
     resp.insert_header("content-type", "application/grpc")
