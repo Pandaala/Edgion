@@ -26,7 +26,7 @@ use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::path_normalization::normalize_config_path;
 use crate::core::gateway::plugins::http::common::auth_common::{
-    send_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
+    send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
 };
 use crate::core::gateway::plugins::http::common::http_client::get_http_client_with_ssl_verify;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};

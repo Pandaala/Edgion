@@ -1,6 +1,7 @@
 //! Region Route handlers and shared helpers for Center aggregation handlers.
 
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -99,7 +100,7 @@ pub struct SyncRequest {
 pub async fn cluster_region_route_sync(
     State(state): State<ApiState>,
     Json(body): Json<SyncRequest>,
-) -> Json<serde_json::Value> {
+) -> (StatusCode, Json<serde_json::Value>) {
     // 1. Read source PM via proxy
     let source_path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", body.namespace, body.name);
     let source_pm = match state
@@ -116,19 +117,33 @@ pub async fn cluster_region_route_sync(
         Ok(r) if r.status_code == 200 => match serde_json::from_slice::<serde_json::Value>(&r.body) {
             Ok(v) => match v.get("data") {
                 Some(data) => data.clone(),
-                None => return Json(serde_json::json!({ "success": false, "error": "No data in source response" })),
+                None => {
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(serde_json::json!({ "success": false, "error": "No data in source response" })),
+                    )
+                }
             },
             Err(e) => {
-                return Json(serde_json::json!({ "success": false, "error": format!("Parse source PM failed: {e}") }))
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({ "success": false, "error": format!("Parse source PM failed: {e}") })),
+                )
             }
         },
         Ok(r) => {
-            return Json(
-                serde_json::json!({ "success": false, "error": format!("Source GET returned {}", r.status_code) }),
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(
+                    serde_json::json!({ "success": false, "error": format!("Source GET returned {}", r.status_code) }),
+                ),
             )
         }
         Err((status, msg)) => {
-            return Json(serde_json::json!({ "success": false, "error": format!("Source GET failed: {status} {msg}") }))
+            return (
+                status,
+                Json(serde_json::json!({ "success": false, "error": format!("Source GET failed: {status} {msg}") })),
+            )
         }
     };
 
@@ -201,10 +216,13 @@ pub async fn cluster_region_route_sync(
     let modified = results.iter().filter(|&&ok| ok).count() + 1; // +1 for source
     let failed = results.iter().filter(|&&ok| !ok).count();
 
-    Json(serde_json::json!({
-        "success": true,
-        "data": { "modified": modified, "failed": failed },
-    }))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "data": { "modified": modified, "failed": failed },
+        })),
+    )
 }
 
 /// `POST /api/v1/center/service-region-routes/sync`
@@ -213,7 +231,7 @@ pub async fn cluster_region_route_sync(
 pub async fn service_region_route_sync(
     State(state): State<ApiState>,
     Json(body): Json<SyncRequest>,
-) -> Json<serde_json::Value> {
+) -> (StatusCode, Json<serde_json::Value>) {
     // 1. Read source PM via proxy
     let source_path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", body.namespace, body.name);
     let source_pm = match state
@@ -230,19 +248,33 @@ pub async fn service_region_route_sync(
         Ok(r) if r.status_code == 200 => match serde_json::from_slice::<serde_json::Value>(&r.body) {
             Ok(v) => match v.get("data") {
                 Some(data) => data.clone(),
-                None => return Json(serde_json::json!({ "success": false, "error": "No data in source response" })),
+                None => {
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(serde_json::json!({ "success": false, "error": "No data in source response" })),
+                    )
+                }
             },
             Err(e) => {
-                return Json(serde_json::json!({ "success": false, "error": format!("Parse source PM failed: {e}") }))
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({ "success": false, "error": format!("Parse source PM failed: {e}") })),
+                )
             }
         },
         Ok(r) => {
-            return Json(
-                serde_json::json!({ "success": false, "error": format!("Source GET returned {}", r.status_code) }),
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(
+                    serde_json::json!({ "success": false, "error": format!("Source GET returned {}", r.status_code) }),
+                ),
             )
         }
         Err((status, msg)) => {
-            return Json(serde_json::json!({ "success": false, "error": format!("Source GET failed: {status} {msg}") }))
+            return (
+                status,
+                Json(serde_json::json!({ "success": false, "error": format!("Source GET failed: {status} {msg}") })),
+            )
         }
     };
 
@@ -285,10 +317,13 @@ pub async fn service_region_route_sync(
     let modified = results.iter().filter(|&&ok| ok).count() + 1;
     let failed = results.iter().filter(|&&ok| !ok).count();
 
-    Json(serde_json::json!({
-        "success": true,
-        "data": { "modified": modified, "failed": failed },
-    }))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "data": { "modified": modified, "failed": failed },
+        })),
+    )
 }
 
 /// Fan-out a POST request to all online controllers in parallel.

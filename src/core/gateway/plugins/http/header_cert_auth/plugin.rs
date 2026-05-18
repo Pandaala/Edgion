@@ -16,7 +16,7 @@ use x509_parser::parse_x509_certificate;
 use x509_parser::pem::Pem;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
-use crate::core::gateway::plugins::http::common::auth_common::send_auth_error_response;
+use crate::core::gateway::plugins::http::common::auth_common::send_gateway_auth_error_response;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::ctx::ClientCertInfo;
 use crate::types::filters::PluginRunningResult;
@@ -347,7 +347,7 @@ impl HeaderCertAuth {
     ) -> PluginRunningResult {
         plugin_log.push_err(detail);
         self.apply_auth_failure_delay().await;
-        let _ = send_auth_error_response(
+        let _ = send_gateway_auth_error_response(
             session,
             self.config.error_status,
             "TLSCert",

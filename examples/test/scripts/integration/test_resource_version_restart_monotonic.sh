@@ -329,8 +329,9 @@ create_or_skip() {
     payload=$(cat "${FIXTURE_PATH}")
     local code
     code=$(admin_write POST "/api/v1/namespaced/HTTPRoute/${FIXTURE_NS}" "${payload}")
-    if [ "$code" != "200" ] && [ "$code" != "201" ]; then
-        log_error "POST returned HTTP ${code}; expected 200/201"
+    # POST-create returns 201 Created per RFC 9110 §15.3.2.
+    if [ "$code" != "201" ]; then
+        log_error "POST returned HTTP ${code}; expected 201"
         return 1
     fi
     return 0
@@ -350,7 +351,13 @@ update_route() {
 
 delete_route_if_exists() {
     if [ -n "$ADMIN_TOKEN" ]; then
-        admin_write DELETE "/api/v1/namespaced/HTTPRoute/${FIXTURE_NS}/${FIXTURE_NAME}" "" > /dev/null
+        local code
+        code=$(admin_write DELETE "/api/v1/namespaced/HTTPRoute/${FIXTURE_NS}/${FIXTURE_NAME}" "")
+        # DELETE returns 204 No Content per RFC 9110 §9.3.5; 404 is also fine
+        # because the cleanup is best-effort (the route may not exist yet).
+        if [ "$code" != "204" ] && [ "$code" != "404" ]; then
+            log_error "DELETE returned HTTP ${code}; expected 204 or 404"
+        fi
     fi
 }
 

@@ -139,10 +139,8 @@ pub async fn cluster_plugin_metadata_failover(
     .await
     {
         Ok(true) => Ok(Json(serde_json::json!({ "success": true, "modified": true }))),
-        Ok(false) => Ok(Json(
-            serde_json::json!({ "success": false, "error": "no matching cluster found" }),
-        )),
-        Err(e) => Ok(Json(serde_json::json!({ "success": false, "error": e }))),
+        Ok(false) => Err(StatusCode::NOT_FOUND),
+        Err(_e) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 
@@ -164,10 +162,8 @@ pub async fn service_plugin_metadata_failover(
     .await
     {
         Ok(true) => Ok(Json(serde_json::json!({ "success": true, "modified": true }))),
-        Ok(false) => Ok(Json(
-            serde_json::json!({ "success": false, "error": "no matching cluster found" }),
-        )),
-        Err(e) => Ok(Json(serde_json::json!({ "success": false, "error": e }))),
+        Ok(false) => Err(StatusCode::NOT_FOUND),
+        Err(_e) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 

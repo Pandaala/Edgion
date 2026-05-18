@@ -64,7 +64,7 @@ pub async fn nested_ext_ref_usage(
         }
     }
 
-    Ok(Json(ApiResponse::success(NestedExtRefUsageStats {
+    Ok(Json(ApiResponse::ok_body(NestedExtRefUsageStats {
         total_edgion_plugins,
         with_nested_ext_ref,
         examples,
@@ -155,7 +155,7 @@ pub async fn conf_conflicts(State(state): State<Arc<AdminState>>) -> Json<ApiRes
             .collect(),
         None => Vec::new(),
     };
-    Json(ApiResponse::success(ConfConflictsResponse { conflicts }))
+    Json(ApiResponse::ok_body(ConfConflictsResponse { conflicts }))
 }
 
 #[cfg(test)]

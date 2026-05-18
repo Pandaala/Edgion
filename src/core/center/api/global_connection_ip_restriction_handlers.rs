@@ -72,7 +72,7 @@ pub async fn list_global_ip_restrictions(
             online_controller_ids: online.clone(),
         })
         .collect();
-    Json(ApiResponse::success(items))
+    Json(ApiResponse::ok_body(items))
 }
 
 /// `GET /api/v1/center/global-connection-ip-restrictions/{ns}/{name}`
@@ -84,14 +84,14 @@ pub async fn get_global_ip_restriction(
     let Some(per_ctrl) = state.metadata_store.get_global_ip_restriction(&pm_key) else {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(ApiResponse::error(format!(
+            Json(ApiResponse::err_body(format!(
                 "GlobalConnectionIpRestriction {}/{} not found",
                 ns, name
             ))),
         ));
     };
     let online = online_controllers(&state);
-    Ok(Json(ApiResponse::success(CenterGlobalIpRestrictionView {
+    Ok(Json(ApiResponse::ok_body(CenterGlobalIpRestrictionView {
         namespace: ns,
         name,
         controllers: per_ctrl,
@@ -124,7 +124,7 @@ pub async fn global_ip_restrictions_consistency(
             }
         })
         .collect();
-    Json(ApiResponse::success(items))
+    Json(ApiResponse::ok_body(items))
 }
 
 // =====================================================================
@@ -257,7 +257,7 @@ pub async fn create_global_ip_restriction(
         if let Err(e) = cloned.validate_and_init() {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ApiResponse::error(format!("invalid PM data: {}", e))),
+                Json(ApiResponse::err_body(format!("invalid PM data: {}", e))),
             );
         }
     }
@@ -274,7 +274,7 @@ pub async fn create_global_ip_restriction(
     let status = fanout_status(&success, &failed);
     (
         status,
-        Json(ApiResponse::success(FanOutResponse {
+        Json(ApiResponse::ok_body(FanOutResponse {
             success,
             failed,
             warnings,
@@ -359,7 +359,7 @@ pub async fn update_global_ip_restriction(
         if let Err(e) = cloned.validate_and_init() {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ApiResponse::error(format!("invalid PM data: {}", e))),
+                Json(ApiResponse::err_body(format!("invalid PM data: {}", e))),
             );
         }
     }
@@ -371,7 +371,7 @@ pub async fn update_global_ip_restriction(
     let status = fanout_status(&success, &failed);
     (
         status,
-        Json(ApiResponse::success(FanOutResponse {
+        Json(ApiResponse::ok_body(FanOutResponse {
             success,
             failed,
             warnings,
@@ -402,7 +402,7 @@ pub async fn delete_global_ip_restriction(
     let status = fanout_status(&success, &failed);
     (
         status,
-        Json(ApiResponse::success(FanOutResponse {
+        Json(ApiResponse::ok_body(FanOutResponse {
             success,
             failed,
             warnings,
@@ -493,7 +493,7 @@ pub async fn patch_enable(
     let status = fanout_status(&success, &failed);
     (
         status,
-        Json(ApiResponse::success(FanOutResponse {
+        Json(ApiResponse::ok_body(FanOutResponse {
             success,
             failed,
             warnings,
@@ -593,7 +593,7 @@ pub async fn patch_active_profile(
     let status = fanout_status(&success, &failed);
     (
         status,
-        Json(ApiResponse::success(FanOutResponse {
+        Json(ApiResponse::ok_body(FanOutResponse {
             success,
             failed,
             warnings,
@@ -625,9 +625,10 @@ pub async fn sync_global_ip_restriction(
     let per_ctrl = match state.metadata_store.get_global_ip_restriction(&pm_key) {
         Some(m) => m,
         None => {
+            // 404, not 502: Center is the authoritative origin here; no upstream gateway involved.
             return (
-                StatusCode::BAD_GATEWAY,
-                Json(ApiResponse::success(FanOutResponse {
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::ok_body(FanOutResponse {
                     success: vec![],
                     failed: vec![ControllerOpResult {
                         controller_id: "<lookup>".to_string(),
@@ -642,9 +643,10 @@ pub async fn sync_global_ip_restriction(
     };
 
     let Some(source_entry) = per_ctrl.get(&req.source_controller) else {
+        // 404: source controller has no entry for this PM (not-found, not a gateway failure).
         return (
-            StatusCode::BAD_GATEWAY,
-            Json(ApiResponse::success(FanOutResponse {
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::ok_body(FanOutResponse {
                 success: vec![],
                 failed: vec![ControllerOpResult {
                     controller_id: req.source_controller.clone(),
@@ -680,7 +682,7 @@ pub async fn sync_global_ip_restriction(
     let status = fanout_status(&success, &failed);
     (
         status,
-        Json(ApiResponse::success(FanOutResponse {
+        Json(ApiResponse::ok_body(FanOutResponse {
             success,
             failed,
             warnings,

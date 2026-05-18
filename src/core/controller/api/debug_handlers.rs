@@ -64,7 +64,7 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
         .map(|s| s.all_kinds().len())
         .unwrap_or(0);
 
-    Json(ApiResponse::success(ControllerStoreStats {
+    Json(ApiResponse::ok_body(ControllerStoreStats {
         conf_center_storage,
         secret_store,
         secret_ref_manager,

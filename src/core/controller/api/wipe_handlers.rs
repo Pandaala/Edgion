@@ -80,7 +80,7 @@ pub async fn wipe_all(State(state): State<Arc<AdminState>>) -> Json<ApiResponse<
         duration_ms = duration_ms as u64,
         "wipe_all finished"
     );
-    Json(ApiResponse::success(WipeAllResponse {
+    Json(ApiResponse::ok_body(WipeAllResponse {
         deleted,
         total,
         errors,

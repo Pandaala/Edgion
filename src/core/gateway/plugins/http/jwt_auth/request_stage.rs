@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use super::{JwtAuth, JwtAuthResult};
 use crate::core::gateway::plugins::http::common::auth_common::{
-    send_auth_error_response, set_claims_headers as set_common_claims_headers,
+    send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers,
 };
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession};
@@ -79,7 +79,7 @@ impl JwtAuth {
 
     /// Return 401 Unauthorized response with WWW-Authenticate header.
     pub(super) async fn auth_failed_return(&self, session: &mut dyn PluginSession) -> JwtAuthResult<()> {
-        send_auth_error_response(
+        send_gateway_auth_error_response(
             session,
             401,
             "Bearer",

@@ -15,7 +15,7 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
-use crate::core::gateway::plugins::http::common::auth_common::{send_auth_error_response, set_claims_headers};
+use crate::core::gateway::plugins::http::common::auth_common::{send_gateway_auth_error_response, set_claims_headers};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{JweContentEncryption, JweDecryptConfig};
@@ -145,7 +145,8 @@ impl JweDecrypt {
             }
         }
         self.apply_auth_failure_delay().await;
-        let _ = send_auth_error_response(session, failure.status(), "Bearer", "edgion", failure.message()).await;
+        let _ =
+            send_gateway_auth_error_response(session, failure.status(), "Bearer", "edgion", failure.message()).await;
         PluginRunningResult::ErrTerminateRequest
     }
 
@@ -159,7 +160,7 @@ impl JweDecrypt {
     ) -> PluginRunningResult {
         plugin_log.push(log_code);
         self.apply_auth_failure_delay().await;
-        let _ = send_auth_error_response(session, status, "Bearer", "edgion", message).await;
+        let _ = send_gateway_auth_error_response(session, status, "Bearer", "edgion", message).await;
         PluginRunningResult::ErrTerminateRequest
     }
 

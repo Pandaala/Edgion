@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use axum::Router;
 
-use super::{add_auth_status_route, add_local_auth_routes, wrap_with_unified_auth_layer};
+use super::{
+    add_auth_status_route, add_local_auth_routes, cache_control_no_store_middleware, wrap_with_unified_auth_layer,
+};
 use crate::core::common::unified_auth::UnifiedAuthState;
 
 /// Compose the admin HTTP Router in a fixed order.
@@ -30,6 +32,7 @@ use crate::core::common::unified_auth::UnifiedAuthState;
 ///    mounted only when `local_auth_intent = true`)
 /// 3. `/api/v1/auth/status` (mounted unconditionally)
 /// 4. `unified_auth` middleware (wraps all routes; skip_paths are provided by `auth_state`)
+/// 5. `Cache-Control: no-store` middleware (outermost — see `cache_control_no_store_middleware`)
 ///
 /// # Final-state contract
 /// **The returned `Router` is final.** Do not call `.route()` / `.layer()`
@@ -56,7 +59,8 @@ use crate::core::common::unified_auth::UnifiedAuthState;
 pub fn compose_admin_routes(business: Router, auth_state: Arc<UnifiedAuthState>, local_auth_intent: bool) -> Router {
     let with_auth_routes = add_local_auth_routes(business, auth_state.clone(), local_auth_intent);
     let with_status = add_auth_status_route(with_auth_routes, auth_state.clone());
-    wrap_with_unified_auth_layer(with_status, auth_state)
+    let with_auth_layer = wrap_with_unified_auth_layer(with_status, auth_state);
+    with_auth_layer.layer(axum::middleware::from_fn(cache_control_no_store_middleware))
 }
 
 #[cfg(test)]
@@ -155,5 +159,59 @@ mod tests {
         let req = Request::builder().uri("/foo").body(Body::empty()).unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// T6 -- every admin response carries `Cache-Control: no-store`.
+    ///
+    /// Verifies that the blanket middleware fires on:
+    ///   - an authenticated 200 response (business route with auth disabled),
+    ///   - a 401 rejection (auth required but no token supplied),
+    ///   - a public endpoint (/api/v1/auth/status) that returns 200 without auth.
+    #[tokio::test]
+    async fn all_responses_carry_cache_control_no_store() {
+        // Case A: auth disabled, business route → 200
+        let state_no_auth = UnifiedAuthState::from_configs(None, None, false, "test").unwrap();
+        let app_no_auth = compose_admin_routes(dummy_business(), state_no_auth, false);
+        let req = Request::builder().uri("/foo").body(Body::empty()).unwrap();
+        let resp = app_no_auth.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .map(|v| v.as_bytes()),
+            Some(b"no-store".as_slice()),
+            "200 response must carry Cache-Control: no-store"
+        );
+
+        // Case B: auth required, no token → 401
+        let state_auth = new_state_with_local();
+        let app_auth = compose_admin_routes(dummy_business(), state_auth, true);
+        let req = Request::builder().uri("/foo").body(Body::empty()).unwrap();
+        let resp = app_auth.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .map(|v| v.as_bytes()),
+            Some(b"no-store".as_slice()),
+            "401 response must carry Cache-Control: no-store"
+        );
+
+        // Case C: /api/v1/auth/status → 200 (no auth required)
+        let state_auth2 = new_state_with_local();
+        let app_auth2 = compose_admin_routes(dummy_business(), state_auth2, true);
+        let req = Request::builder()
+            .uri("/api/v1/auth/status")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app_auth2.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .map(|v| v.as_bytes()),
+            Some(b"no-store".as_slice()),
+            "/auth/status response must carry Cache-Control: no-store"
+        );
     }
 }

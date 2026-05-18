@@ -8,7 +8,9 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
+use crate::core::gateway::plugins::http::common::auth_common::{
+    apply_auth_failure_delay, send_gateway_auth_error_response,
+};
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::common::KeyGet;
@@ -136,7 +138,7 @@ impl KeyAuth {
     /// Return 401 Unauthorized response
     async fn unauthorized(&self, session: &mut dyn PluginSession, message: &str) -> PluginRunningResult {
         let body = format!("Unauthorized - {}", message);
-        let _ = send_auth_error_response(session, 401, "ApiKey", &self.config.realm, &body).await;
+        let _ = send_gateway_auth_error_response(session, 401, "ApiKey", &self.config.realm, &body).await;
         PluginRunningResult::ErrTerminateRequest
     }
 }

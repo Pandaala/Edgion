@@ -84,6 +84,8 @@ In non-K8s mode, create and update operations:
 1. Run JSON Schema validation via `SchemaValidator` (skipped in K8s mode, which is handled by the API Server)
 2. Automatically call `next_resource_version()` to assign an incrementing `resourceVersion`
 
+Successful `POST` creates respond with **`201 Created`** and a `Location` header pointing at the new resource. `PUT` updates continue to use `200 OK` with the `ApiResponse::success(...)` body. Successful `DELETE` returns **`204 No Content`** with an empty body. Failed creates still surface as the mapped HTTP error (see "Error Mapping" below) and carry no `Location` header.
+
 ### Cluster-scoped Resource CRUD
 
 | Method | Path | Description |
@@ -133,10 +135,16 @@ Response format examples:
 
 // single-resource response
 {"success": true, "data": {"metadata": {...}, "spec": {...}}}
-
-// error response
-{"success": false, "error": "HTTPRoute not found"}
 ```
+
+Error responses use standard HTTP status codes (no JSON body):
+
+| Condition | HTTP status |
+|-----------|-------------|
+| `name` query parameter absent | 400 Bad Request |
+| `kind` path segment unrecognised | 400 Bad Request |
+| Resource not found in cache | 404 Not Found |
+| ConfigSyncServer not yet ready | 503 Service Unavailable |
 
 ### ACME Service
 

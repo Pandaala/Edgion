@@ -21,11 +21,11 @@ impl OpenidConnect {
     }
 
     pub(super) async fn send_unauthorized(&self, session: &mut dyn PluginSession, body: &str) -> OidcResult<()> {
-        send_auth_error_response(session, 401, "Bearer", &self.config.realm, body).await
+        send_gateway_auth_error_response(session, 401, "Bearer", &self.config.realm, body).await
     }
 
     pub(super) async fn send_forbidden(&self, session: &mut dyn PluginSession, body: &str) -> OidcResult<()> {
-        send_auth_error_response(session, 403, "Bearer", &self.config.realm, body).await
+        send_gateway_auth_error_response(session, 403, "Bearer", &self.config.realm, body).await
     }
 
     /// Apply failure delay before returning a 401/403 response.

@@ -28,7 +28,7 @@ struct ApiResponse<T> {
 }
 
 impl<T> ApiResponse<T> {
-    fn success(data: T) -> Self {
+    fn ok_body(data: T) -> Self {
         Self {
             success: true,
             data: Some(data),
@@ -36,7 +36,7 @@ impl<T> ApiResponse<T> {
         }
     }
 
-    fn error(message: String) -> Self {
+    fn err_body(message: String) -> Self {
         Self {
             success: false,
             data: None,
@@ -73,7 +73,7 @@ struct ServerInfoResponse {
 
 /// Health check endpoint (liveness)
 async fn health_check() -> Json<ApiResponse<String>> {
-    Json(ApiResponse::success("OK".to_string()))
+    Json(ApiResponse::ok_body("OK".to_string()))
 }
 
 /// Readiness check endpoint - returns OK only when all caches are ready
@@ -91,7 +91,7 @@ async fn readiness_check(State(client): State<Arc<ConfigClient>>) -> axum::http:
 async fn get_server_info(State(client): State<Arc<ConfigClient>>) -> Json<ApiResponse<ServerInfoResponse>> {
     let server_id = client.current_server_id();
     let ready = client.is_ready().is_ok();
-    Json(ApiResponse::success(ServerInfoResponse { server_id, ready }))
+    Json(ApiResponse::ok_body(ServerInfoResponse { server_id, ready }))
 }
 
 /// Helper macro to list all resources from ConfigClient
@@ -196,15 +196,15 @@ async fn get_resource(
     Query(query): Query<ResourceQuery>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     let Some(name) = query.name else {
-        return Json(ApiResponse::error("Missing required parameter: name".to_string()));
+        return Json(ApiResponse::err_body("Missing required parameter: name".to_string()));
     };
 
     let kind = ResourceKind::from_kind_name(&kind_str).unwrap_or(ResourceKind::Unspecified);
     let resource = get_client_resource!(&client, kind, query.namespace, name);
 
     match resource {
-        Some(r) => Json(ApiResponse::success(r)),
-        None => Json(ApiResponse::error(format!("{} not found", kind_str))),
+        Some(r) => Json(ApiResponse::ok_body(r)),
+        None => Json(ApiResponse::err_body(format!("{} not found", kind_str))),
     }
 }
 
@@ -240,7 +240,7 @@ struct TestingStatusResponse {
 /// Get testing subsystem status
 async fn testing_status() -> Json<ApiResponse<TestingStatusResponse>> {
     let store = crate::core::gateway::observe::access_log_store::get_access_log_store();
-    Json(ApiResponse::success(TestingStatusResponse {
+    Json(ApiResponse::ok_body(TestingStatusResponse {
         integration_testing_mode: true,
         access_log_store: store.status(),
     }))
@@ -253,11 +253,11 @@ async fn get_access_log(Path(trace_id): Path<String>) -> Json<ApiResponse<serde_
         Some(json) => {
             // Parse JSON string back to Value
             match serde_json::from_str::<serde_json::Value>(&json) {
-                Ok(value) => Json(ApiResponse::success(value)),
-                Err(_) => Json(ApiResponse::success(serde_json::Value::String(json))),
+                Ok(value) => Json(ApiResponse::ok_body(value)),
+                Err(_) => Json(ApiResponse::ok_body(serde_json::Value::String(json))),
             }
         }
-        None => Json(ApiResponse::error(format!(
+        None => Json(ApiResponse::err_body(format!(
             "Access log not found for trace_id: {}",
             trace_id
         ))),
@@ -268,9 +268,9 @@ async fn get_access_log(Path(trace_id): Path<String>) -> Json<ApiResponse<serde_
 async fn delete_access_log(Path(trace_id): Path<String>) -> Json<ApiResponse<String>> {
     let store = crate::core::gateway::observe::access_log_store::get_access_log_store();
     if store.delete(&trace_id) {
-        Json(ApiResponse::success("Deleted".to_string()))
+        Json(ApiResponse::ok_body("Deleted".to_string()))
     } else {
-        Json(ApiResponse::error(format!(
+        Json(ApiResponse::err_body(format!(
             "Access log not found for trace_id: {}",
             trace_id
         )))
@@ -292,7 +292,7 @@ async fn list_access_logs() -> Json<crate::core::gateway::observe::access_log_st
 async fn clear_access_logs() -> Json<ApiResponse<String>> {
     let store = crate::core::gateway::observe::access_log_store::get_access_log_store();
     store.clear();
-    Json(ApiResponse::success("All access logs cleared".to_string()))
+    Json(ApiResponse::ok_body("All access logs cleared".to_string()))
 }
 
 // ==================== Debug Store Stats Endpoint ====================
@@ -495,7 +495,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         by_kind: stream_plugin_store_ref.count_by_kind(),
     };
 
-    Json(ApiResponse::success(StoreStatsResponse {
+    Json(ApiResponse::ok_body(StoreStatsResponse {
         http_routes,
         grpc_routes,
         tcp_routes,
@@ -678,7 +678,7 @@ fn get_redis_client_by_name(
     // URL path uses underscore as separator: "default_redis-main" → "default/redis-main"
     let key = name.replacen('_', "/", 1);
     crate::core::gateway::link_sys::get_redis_client(&key).ok_or_else(|| {
-        Json(ApiResponse::error(format!(
+        Json(ApiResponse::err_body(format!(
             "Redis client '{}' not found. Available: {:?}",
             key,
             crate::core::gateway::link_sys::runtime::store::list_redis_clients()
@@ -689,13 +689,13 @@ fn get_redis_client_by_name(
 /// List all registered Redis clients
 async fn redis_list_clients() -> Json<ApiResponse<Vec<String>>> {
     let clients = crate::core::gateway::link_sys::runtime::store::list_redis_clients();
-    Json(ApiResponse::success(clients))
+    Json(ApiResponse::ok_body(clients))
 }
 
 /// Health check all Redis clients
 async fn redis_health_all() -> Json<ApiResponse<Vec<crate::core::gateway::link_sys::LinkSysHealth>>> {
     let health = crate::core::gateway::link_sys::runtime::store::health_check_all_redis().await;
-    Json(ApiResponse::success(health))
+    Json(ApiResponse::ok_body(health))
 }
 
 /// Health check a single Redis client
@@ -706,8 +706,8 @@ async fn redis_health_one(Path(name): Path<String>) -> Json<ApiResponse<serde_js
     };
     let health = client.health_status().await;
     match serde_json::to_value(health) {
-        Ok(v) => Json(ApiResponse::success(v)),
-        Err(e) => Json(ApiResponse::error(format!("Serialize error: {}", e))),
+        Ok(v) => Json(ApiResponse::ok_body(v)),
+        Err(e) => Json(ApiResponse::err_body(format!("Serialize error: {}", e))),
     }
 }
 
@@ -718,11 +718,11 @@ async fn redis_ping(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Va
         Err(e) => return e,
     };
     match client.ping().await {
-        Ok(latency_ms) => Json(ApiResponse::success(serde_json::json!({
+        Ok(latency_ms) => Json(ApiResponse::ok_body(serde_json::json!({
             "latency_ms": latency_ms,
             "healthy": client.healthy(),
         }))),
-        Err(e) => Json(ApiResponse::error(format!("PING failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("PING failed: {}", e))),
     }
 }
 
@@ -733,11 +733,11 @@ async fn redis_get(Path((name, key)): Path<(String, String)>) -> Json<ApiRespons
         Err(e) => return e,
     };
     match client.get(&key).await {
-        Ok(val) => Json(ApiResponse::success(serde_json::json!({
+        Ok(val) => Json(ApiResponse::ok_body(serde_json::json!({
             "key": key,
             "value": val,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("GET failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("GET failed: {}", e))),
     }
 }
 
@@ -760,12 +760,12 @@ async fn redis_set(
     };
     let ttl = body.ttl_seconds.map(std::time::Duration::from_secs);
     match client.set(&body.key, &body.value, ttl).await {
-        Ok(()) => Json(ApiResponse::success(serde_json::json!({
+        Ok(()) => Json(ApiResponse::ok_body(serde_json::json!({
             "key": body.key,
             "value": body.value,
             "ttl_seconds": body.ttl_seconds,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("SET failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("SET failed: {}", e))),
     }
 }
 
@@ -786,10 +786,10 @@ async fn redis_del(
     };
     let keys_ref: Vec<&str> = body.keys.iter().map(|s| s.as_str()).collect();
     match client.del(&keys_ref).await {
-        Ok(count) => Json(ApiResponse::success(serde_json::json!({
+        Ok(count) => Json(ApiResponse::ok_body(serde_json::json!({
             "deleted": count,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("DEL failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("DEL failed: {}", e))),
     }
 }
 
@@ -811,12 +811,12 @@ async fn redis_hset(
         Err(e) => return e,
     };
     match client.hset(&body.key, &body.field, &body.value).await {
-        Ok(count) => Json(ApiResponse::success(serde_json::json!({
+        Ok(count) => Json(ApiResponse::ok_body(serde_json::json!({
             "key": body.key,
             "field": body.field,
             "added": count,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("HSET failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("HSET failed: {}", e))),
     }
 }
 
@@ -827,12 +827,12 @@ async fn redis_hget(Path((name, key, field)): Path<(String, String, String)>) ->
         Err(e) => return e,
     };
     match client.hget(&key, &field).await {
-        Ok(val) => Json(ApiResponse::success(serde_json::json!({
+        Ok(val) => Json(ApiResponse::ok_body(serde_json::json!({
             "key": key,
             "field": field,
             "value": val,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("HGET failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("HGET failed: {}", e))),
     }
 }
 
@@ -843,11 +843,11 @@ async fn redis_hgetall(Path((name, key)): Path<(String, String)>) -> Json<ApiRes
         Err(e) => return e,
     };
     match client.hgetall(&key).await {
-        Ok(map) => Json(ApiResponse::success(serde_json::json!({
+        Ok(map) => Json(ApiResponse::ok_body(serde_json::json!({
             "key": key,
             "fields": map,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("HGETALL failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("HGETALL failed: {}", e))),
     }
 }
 
@@ -868,11 +868,11 @@ async fn redis_rpush(
         Err(e) => return e,
     };
     match client.rpush(&body.key, body.values).await {
-        Ok(len) => Json(ApiResponse::success(serde_json::json!({
+        Ok(len) => Json(ApiResponse::ok_body(serde_json::json!({
             "key": body.key,
             "length": len,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("RPUSH failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("RPUSH failed: {}", e))),
     }
 }
 
@@ -883,11 +883,11 @@ async fn redis_lpop(Path((name, key)): Path<(String, String)>) -> Json<ApiRespon
         Err(e) => return e,
     };
     match client.lpop(&key, Some(1)).await {
-        Ok(vals) => Json(ApiResponse::success(serde_json::json!({
+        Ok(vals) => Json(ApiResponse::ok_body(serde_json::json!({
             "key": key,
             "values": vals,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("LPOP failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("LPOP failed: {}", e))),
     }
 }
 
@@ -898,11 +898,11 @@ async fn redis_llen(Path((name, key)): Path<(String, String)>) -> Json<ApiRespon
         Err(e) => return e,
     };
     match client.llen(&key).await {
-        Ok(len) => Json(ApiResponse::success(serde_json::json!({
+        Ok(len) => Json(ApiResponse::ok_body(serde_json::json!({
             "key": key,
             "length": len,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("LLEN failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("LLEN failed: {}", e))),
     }
 }
 
@@ -913,11 +913,11 @@ async fn redis_incr(Path((name, key)): Path<(String, String)>) -> Json<ApiRespon
         Err(e) => return e,
     };
     match client.incr(&key).await {
-        Ok(val) => Json(ApiResponse::success(serde_json::json!({
+        Ok(val) => Json(ApiResponse::ok_body(serde_json::json!({
             "key": key,
             "value": val,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("INCR failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("INCR failed: {}", e))),
     }
 }
 
@@ -949,14 +949,14 @@ async fn redis_lock(
             let acquire_ms = std::time::Instant::now().saturating_duration_since(start).as_millis() as u64;
             // Explicitly release
             let released = guard.unlock().await.unwrap_or(false);
-            Json(ApiResponse::success(serde_json::json!({
+            Json(ApiResponse::ok_body(serde_json::json!({
                 "key": body.key,
                 "acquired": true,
                 "acquire_ms": acquire_ms,
                 "released": released,
             })))
         }
-        Err(e) => Json(ApiResponse::error(format!("LOCK failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("LOCK failed: {}", e))),
     }
 }
 
@@ -971,7 +971,7 @@ fn get_etcd_client_by_name(
 > {
     let key = name.replacen('_', "/", 1);
     crate::core::gateway::link_sys::get_etcd_client(&key).ok_or_else(|| {
-        Json(ApiResponse::error(format!(
+        Json(ApiResponse::err_body(format!(
             "Etcd client '{}' not found. Available: {:?}",
             key,
             crate::core::gateway::link_sys::runtime::store::list_etcd_clients()
@@ -982,13 +982,13 @@ fn get_etcd_client_by_name(
 /// List all registered Etcd clients
 async fn etcd_list_clients() -> Json<ApiResponse<Vec<String>>> {
     let clients = crate::core::gateway::link_sys::runtime::store::list_etcd_clients();
-    Json(ApiResponse::success(clients))
+    Json(ApiResponse::ok_body(clients))
 }
 
 /// Health check all Etcd clients
 async fn etcd_health_all() -> Json<ApiResponse<Vec<crate::core::gateway::link_sys::LinkSysHealth>>> {
     let health = crate::core::gateway::link_sys::runtime::store::health_check_all_etcd().await;
-    Json(ApiResponse::success(health))
+    Json(ApiResponse::ok_body(health))
 }
 
 /// Health check a single Etcd client
@@ -999,8 +999,8 @@ async fn etcd_health_one(Path(name): Path<String>) -> Json<ApiResponse<serde_jso
     };
     let health = client.health_status().await;
     match serde_json::to_value(health) {
-        Ok(v) => Json(ApiResponse::success(v)),
-        Err(e) => Json(ApiResponse::error(format!("Serialize error: {}", e))),
+        Ok(v) => Json(ApiResponse::ok_body(v)),
+        Err(e) => Json(ApiResponse::err_body(format!("Serialize error: {}", e))),
     }
 }
 
@@ -1011,11 +1011,11 @@ async fn etcd_ping(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Val
         Err(e) => return e,
     };
     match client.ping().await {
-        Ok(latency_ms) => Json(ApiResponse::success(serde_json::json!({
+        Ok(latency_ms) => Json(ApiResponse::ok_body(serde_json::json!({
             "latency_ms": latency_ms,
             "healthy": client.healthy(),
         }))),
-        Err(e) => Json(ApiResponse::error(format!("PING (status) failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("PING (status) failed: {}", e))),
     }
 }
 
@@ -1026,11 +1026,11 @@ async fn etcd_get(Path((name, key)): Path<(String, String)>) -> Json<ApiResponse
         Err(e) => return e,
     };
     match client.get_string(&key).await {
-        Ok(val) => Json(ApiResponse::success(serde_json::json!({
+        Ok(val) => Json(ApiResponse::ok_body(serde_json::json!({
             "key": key,
             "value": val,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("GET failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("GET failed: {}", e))),
     }
 }
 
@@ -1052,11 +1052,11 @@ async fn etcd_put(Path(name): Path<String>, Json(body): Json<EtcdPutRequest>) ->
         .put(&body.key, body.value.as_bytes().to_vec(), body.lease_id)
         .await
     {
-        Ok(()) => Json(ApiResponse::success(serde_json::json!({
+        Ok(()) => Json(ApiResponse::ok_body(serde_json::json!({
             "key": body.key,
             "value": body.value,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("PUT failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("PUT failed: {}", e))),
     }
 }
 
@@ -1067,11 +1067,11 @@ async fn etcd_delete(Path((name, key)): Path<(String, String)>) -> Json<ApiRespo
         Err(e) => return e,
     };
     match client.delete(&key).await {
-        Ok(deleted) => Json(ApiResponse::success(serde_json::json!({
+        Ok(deleted) => Json(ApiResponse::ok_body(serde_json::json!({
             "key": key,
             "deleted": deleted,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("DELETE failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("DELETE failed: {}", e))),
     }
 }
 
@@ -1093,13 +1093,13 @@ async fn etcd_get_prefix(Path((name, prefix)): Path<(String, String)>) -> Json<A
                     })
                 })
                 .collect();
-            Json(ApiResponse::success(serde_json::json!({
+            Json(ApiResponse::ok_body(serde_json::json!({
                 "prefix": prefix,
                 "count": items.len(),
                 "entries": items,
             })))
         }
-        Err(e) => Json(ApiResponse::error(format!("GET prefix failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("GET prefix failed: {}", e))),
     }
 }
 
@@ -1110,11 +1110,11 @@ async fn etcd_delete_prefix(Path((name, prefix)): Path<(String, String)>) -> Jso
         Err(e) => return e,
     };
     match client.delete_prefix(&prefix).await {
-        Ok(deleted) => Json(ApiResponse::success(serde_json::json!({
+        Ok(deleted) => Json(ApiResponse::ok_body(serde_json::json!({
             "prefix": prefix,
             "deleted": deleted,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("DELETE prefix failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("DELETE prefix failed: {}", e))),
     }
 }
 
@@ -1134,11 +1134,11 @@ async fn etcd_lease_grant(
         Err(e) => return e,
     };
     match client.lease_grant(body.ttl_seconds).await {
-        Ok(lease_id) => Json(ApiResponse::success(serde_json::json!({
+        Ok(lease_id) => Json(ApiResponse::ok_body(serde_json::json!({
             "lease_id": lease_id,
             "ttl_seconds": body.ttl_seconds,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("LEASE GRANT failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("LEASE GRANT failed: {}", e))),
     }
 }
 
@@ -1150,14 +1150,14 @@ async fn etcd_lease_revoke(Path((name, lease_id)): Path<(String, String)>) -> Js
     };
     let lease_id: i64 = match lease_id.parse() {
         Ok(id) => id,
-        Err(_) => return Json(ApiResponse::error(format!("Invalid lease_id: {}", lease_id))),
+        Err(_) => return Json(ApiResponse::err_body(format!("Invalid lease_id: {}", lease_id))),
     };
     match client.lease_revoke(lease_id).await {
-        Ok(()) => Json(ApiResponse::success(serde_json::json!({
+        Ok(()) => Json(ApiResponse::ok_body(serde_json::json!({
             "lease_id": lease_id,
             "revoked": true,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("LEASE REVOKE failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("LEASE REVOKE failed: {}", e))),
     }
 }
 
@@ -1169,14 +1169,14 @@ async fn etcd_lease_ttl(Path((name, lease_id)): Path<(String, String)>) -> Json<
     };
     let lease_id: i64 = match lease_id.parse() {
         Ok(id) => id,
-        Err(_) => return Json(ApiResponse::error(format!("Invalid lease_id: {}", lease_id))),
+        Err(_) => return Json(ApiResponse::err_body(format!("Invalid lease_id: {}", lease_id))),
     };
     match client.lease_time_to_live(lease_id).await {
-        Ok(ttl) => Json(ApiResponse::success(serde_json::json!({
+        Ok(ttl) => Json(ApiResponse::ok_body(serde_json::json!({
             "lease_id": lease_id,
             "ttl": ttl,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("LEASE TTL failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("LEASE TTL failed: {}", e))),
     }
 }
 
@@ -1205,19 +1205,19 @@ async fn etcd_lock(
         Ok(Some(guard)) => {
             let acquire_ms = std::time::Instant::now().saturating_duration_since(start).as_millis() as u64;
             let released = guard.unlock().await.is_ok();
-            Json(ApiResponse::success(serde_json::json!({
+            Json(ApiResponse::ok_body(serde_json::json!({
                 "name": body.name,
                 "acquired": true,
                 "acquire_ms": acquire_ms,
                 "released": released,
             })))
         }
-        Ok(None) => Json(ApiResponse::success(serde_json::json!({
+        Ok(None) => Json(ApiResponse::ok_body(serde_json::json!({
             "name": body.name,
             "acquired": false,
             "reason": "timeout",
         }))),
-        Err(e) => Json(ApiResponse::error(format!("LOCK failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("LOCK failed: {}", e))),
     }
 }
 
@@ -1227,7 +1227,7 @@ async fn etcd_info(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Val
         Ok(c) => c,
         Err(e) => return e,
     };
-    Json(ApiResponse::success(serde_json::json!({
+    Json(ApiResponse::ok_body(serde_json::json!({
         "name": client.name(),
         "namespace": client.namespace(),
         "healthy": client.healthy(),
@@ -1245,7 +1245,7 @@ fn get_es_client_by_name(
 > {
     let key = name.replacen('_', "/", 1);
     crate::core::gateway::link_sys::get_es_client(&key).ok_or_else(|| {
-        Json(ApiResponse::error(format!(
+        Json(ApiResponse::err_body(format!(
             "ES client '{}' not found. Available: {:?}",
             key,
             crate::core::gateway::link_sys::runtime::store::list_es_clients()
@@ -1256,13 +1256,13 @@ fn get_es_client_by_name(
 /// List all ES clients
 async fn es_list_clients() -> Json<ApiResponse<serde_json::Value>> {
     let clients = crate::core::gateway::link_sys::runtime::store::list_es_clients();
-    Json(ApiResponse::success(serde_json::json!(clients)))
+    Json(ApiResponse::ok_body(serde_json::json!(clients)))
 }
 
 /// Health check all ES clients
 async fn es_health_all() -> Json<ApiResponse<serde_json::Value>> {
     let results = crate::core::gateway::link_sys::runtime::store::health_check_all_es().await;
-    Json(ApiResponse::success(serde_json::json!(results)))
+    Json(ApiResponse::ok_body(serde_json::json!(results)))
 }
 
 /// Health check a single ES client
@@ -1272,7 +1272,7 @@ async fn es_health_one(Path(name): Path<String>) -> Json<ApiResponse<serde_json:
         Err(e) => return e,
     };
     let health = client.health_status().await;
-    Json(ApiResponse::success(serde_json::json!({
+    Json(ApiResponse::ok_body(serde_json::json!({
         "name": health.name,
         "connected": health.connected,
         "latency_ms": health.latency_ms,
@@ -1287,10 +1287,10 @@ async fn es_ping(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Value
         Err(e) => return e,
     };
     match client.ping().await {
-        Ok(latency_ms) => Json(ApiResponse::success(serde_json::json!({
+        Ok(latency_ms) => Json(ApiResponse::ok_body(serde_json::json!({
             "latency_ms": latency_ms,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("PING failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("PING failed: {}", e))),
     }
 }
 
@@ -1300,7 +1300,7 @@ async fn es_info(Path(name): Path<String>) -> Json<ApiResponse<serde_json::Value
         Ok(c) => c,
         Err(e) => return e,
     };
-    Json(ApiResponse::success(serde_json::json!({
+    Json(ApiResponse::ok_body(serde_json::json!({
         "name": client.name(),
         "endpoints": client.endpoints(),
         "healthy": client.healthy(),
@@ -1317,11 +1317,11 @@ async fn es_index_doc(
         Err(e) => return e,
     };
     match client.index_doc(&index, &body).await {
-        Ok(doc_id) => Json(ApiResponse::success(serde_json::json!({
+        Ok(doc_id) => Json(ApiResponse::ok_body(serde_json::json!({
             "index": index,
             "doc_id": doc_id,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("INDEX DOC failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("INDEX DOC failed: {}", e))),
     }
 }
 
@@ -1334,17 +1334,17 @@ async fn es_get_doc(
         Err(e) => return e,
     };
     match client.get_doc(&index, &doc_id).await {
-        Ok(Some(source)) => Json(ApiResponse::success(serde_json::json!({
+        Ok(Some(source)) => Json(ApiResponse::ok_body(serde_json::json!({
             "index": index,
             "doc_id": doc_id,
             "source": source,
         }))),
-        Ok(None) => Json(ApiResponse::success(serde_json::json!({
+        Ok(None) => Json(ApiResponse::ok_body(serde_json::json!({
             "index": index,
             "doc_id": doc_id,
             "source": null,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("GET DOC failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("GET DOC failed: {}", e))),
     }
 }
 
@@ -1357,12 +1357,12 @@ async fn es_delete_doc(
         Err(e) => return e,
     };
     match client.delete_doc(&index, &doc_id).await {
-        Ok(deleted) => Json(ApiResponse::success(serde_json::json!({
+        Ok(deleted) => Json(ApiResponse::ok_body(serde_json::json!({
             "index": index,
             "doc_id": doc_id,
             "deleted": deleted,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("DELETE DOC failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("DELETE DOC failed: {}", e))),
     }
 }
 
@@ -1382,7 +1382,7 @@ async fn es_search(
         Err(e) => return e,
     };
     match client.search(&index, &body.query).await {
-        Ok(result) => Json(ApiResponse::success(serde_json::json!({
+        Ok(result) => Json(ApiResponse::ok_body(serde_json::json!({
             "took": result.took,
             "timed_out": result.timed_out,
             "total": result.hits.total.value,
@@ -1392,7 +1392,7 @@ async fn es_search(
                 "source": h.source,
             })).collect::<Vec<_>>(),
         }))),
-        Err(e) => Json(ApiResponse::error(format!("SEARCH failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("SEARCH failed: {}", e))),
     }
 }
 
@@ -1403,11 +1403,11 @@ async fn es_create_index(Path((client_name, index)): Path<(String, String)>) -> 
         Err(e) => return e,
     };
     match client.create_index(&index, None).await {
-        Ok(()) => Json(ApiResponse::success(serde_json::json!({
+        Ok(()) => Json(ApiResponse::ok_body(serde_json::json!({
             "index": index,
             "created": true,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("CREATE INDEX failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("CREATE INDEX failed: {}", e))),
     }
 }
 
@@ -1418,11 +1418,11 @@ async fn es_delete_index(Path((client_name, index)): Path<(String, String)>) -> 
         Err(e) => return e,
     };
     match client.delete_index(&index).await {
-        Ok(()) => Json(ApiResponse::success(serde_json::json!({
+        Ok(()) => Json(ApiResponse::ok_body(serde_json::json!({
             "index": index,
             "deleted": true,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("DELETE INDEX failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("DELETE INDEX failed: {}", e))),
     }
 }
 
@@ -1433,11 +1433,11 @@ async fn es_index_exists(Path((client_name, index)): Path<(String, String)>) -> 
         Err(e) => return e,
     };
     match client.index_exists(&index).await {
-        Ok(exists) => Json(ApiResponse::success(serde_json::json!({
+        Ok(exists) => Json(ApiResponse::ok_body(serde_json::json!({
             "index": index,
             "exists": exists,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("INDEX EXISTS failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("INDEX EXISTS failed: {}", e))),
     }
 }
 
@@ -1448,11 +1448,11 @@ async fn es_refresh_index(Path((client_name, index)): Path<(String, String)>) ->
         Err(e) => return e,
     };
     match client.refresh_index(&index).await {
-        Ok(()) => Json(ApiResponse::success(serde_json::json!({
+        Ok(()) => Json(ApiResponse::ok_body(serde_json::json!({
             "index": index,
             "refreshed": true,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("REFRESH failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("REFRESH failed: {}", e))),
     }
 }
 
@@ -1463,11 +1463,11 @@ async fn es_count(Path((client_name, index)): Path<(String, String)>) -> Json<Ap
         Err(e) => return e,
     };
     match client.count(&index, None).await {
-        Ok(count) => Json(ApiResponse::success(serde_json::json!({
+        Ok(count) => Json(ApiResponse::ok_body(serde_json::json!({
             "index": index,
             "count": count,
         }))),
-        Err(e) => Json(ApiResponse::error(format!("COUNT failed: {}", e))),
+        Err(e) => Json(ApiResponse::err_body(format!("COUNT failed: {}", e))),
     }
 }
 
@@ -1495,7 +1495,7 @@ async fn es_bulk_send(
             errors += 1;
         }
     }
-    Json(ApiResponse::success(serde_json::json!({
+    Json(ApiResponse::ok_body(serde_json::json!({
         "sent": count - errors,
         "errors": errors,
     })))

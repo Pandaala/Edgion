@@ -133,6 +133,7 @@ impl EdgionCenterCli {
             metadata_store: metadata_store.clone(),
             sync_client,
             registry: registry.clone(),
+            db_required: config.database.enabled,
         };
         let http_addr: std::net::SocketAddr = config.server.http_addr.parse()?;
         let grpc_addr: std::net::SocketAddr = config.server.grpc_addr.parse()?;

@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
-use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
+use crate::core::gateway::plugins::http::common::auth_common::{
+    apply_auth_failure_delay, send_gateway_auth_error_response,
+};
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -227,7 +229,7 @@ impl BasicAuth {
     }
 
     async fn auth_failed_return(&self, session: &mut dyn PluginSession) -> BasicAuthResult<()> {
-        send_auth_error_response(
+        send_gateway_auth_error_response(
             session,
             401,
             "Basic",

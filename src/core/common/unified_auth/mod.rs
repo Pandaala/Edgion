@@ -33,7 +33,7 @@ use arc_swap::ArcSwapOption;
 use axum::{
     body::Body,
     extract::Request,
-    http::{header, StatusCode},
+    http::{header, HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
@@ -262,10 +262,9 @@ impl UnifiedAuthState {
 /// Returns:
 /// - Status 503
 /// - Header `Retry-After: 10` (seconds)
-/// - Body `ApiResponse::error("authentication subsystem initializing, retry later")`
+/// - Body `ApiResponse::err_body("authentication subsystem initializing, retry later")`
 fn initializing_response() -> Response {
-    use axum::http::HeaderValue;
-    let body = axum::Json(crate::core::common::api::ApiResponse::<()>::error(
+    let body = axum::Json(crate::core::common::api::ApiResponse::<()>::err_body(
         "authentication subsystem initializing, retry later".to_string(),
     ));
     let mut resp = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
@@ -341,7 +340,7 @@ pub async fn unified_auth_middleware(
         None => match extract_cookie_token(&request) {
             Some(t) => t,
             None => {
-                return auth_error_response(StatusCode::UNAUTHORIZED, "Missing credentials");
+                return build_admin_auth_error_response(StatusCode::UNAUTHORIZED, "Missing credentials");
             }
         },
     };
@@ -409,7 +408,7 @@ pub async fn unified_auth_middleware(
         "Authentication failed"
     );
 
-    auth_error_response(StatusCode::UNAUTHORIZED, "Authentication failed")
+    build_admin_auth_error_response(StatusCode::UNAUTHORIZED, "Authentication failed")
 }
 
 // ---------------------------------------------------------------------------
@@ -499,7 +498,9 @@ fn try_local_validation(state: &LocalAuthState, token: &str) -> Result<UnifiedAu
     let decoding_key = DecodingKey::from_secret(state.jwt_secret.as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
-    // Disable audience validation — local tokens don't carry an `aud` claim.
+    // validate_nbf keeps local validation consistent with the OIDC path.
+    validation.validate_nbf = true;
+    // Local tokens don't carry an `aud` claim.
     validation.validate_aud = false;
 
     let token_data = decode::<LocalAuthClaims>(token, &decoding_key, &validation)
@@ -530,12 +531,23 @@ struct AuthError {
     error: String,
 }
 
-/// Build a JSON error response with the given status code and message.
-fn auth_error_response(status: StatusCode, message: &str) -> Response {
+/// Build a JSON 401/403 error response for the admin plane (axum). Adds
+/// `WWW-Authenticate: Bearer realm="edgion-admin"` on 401.
+///
+/// Gateway-plane counterpart: `gateway::plugins::http::common::auth_common::send_gateway_auth_error_response`
+/// (writes to a `PluginSession`; can't be merged — different runtimes and return shapes).
+fn build_admin_auth_error_response(status: StatusCode, message: &str) -> Response {
     let body = Json(AuthError {
         error: message.to_string(),
     });
-    (status, body).into_response()
+    let mut resp = (status, body).into_response();
+    if status == StatusCode::UNAUTHORIZED {
+        resp.headers_mut().insert(
+            header::WWW_AUTHENTICATE,
+            HeaderValue::from_static("Bearer realm=\"edgion-admin\""),
+        );
+    }
+    resp
 }
 
 /// Extract the Bearer token from the `Authorization` header.
@@ -785,12 +797,6 @@ mod tests {
 
     // -------------------------------------------------------------------
     // Token expiration / nbf / missing-claim tests for try_local_validation.
-    //
-    // `try_local_validation` decodes into `LocalAuthClaims { sub, iat, exp }`
-    // with `Validation { validate_exp = true, validate_aud = false }`.
-    // `validate_nbf` is left at its `Validation::new` default, which is
-    // `false` — so a token with a future `nbf` is NOT rejected here. The
-    // tests below pin that contract.
     // -------------------------------------------------------------------
 
     fn encode_local_token(secret: &str, claims: &serde_json::Value) -> String {
@@ -833,9 +839,9 @@ mod tests {
     }
 
     #[test]
-    fn local_validation_does_not_check_nbf() {
-        // try_local_validation leaves validate_nbf at its default (false),
-        // so a token whose nbf is in the future must still validate.
+    fn local_validation_rejects_pre_dated_nbf() {
+        // DO NOT revert this to is_ok() — doing so would re-introduce the nbf
+        // bypass that this test was written to prevent.
         let cfg = valid_local_cfg();
         let local_state = LocalAuthState::from_config(&cfg);
         let now = now_secs();
@@ -843,19 +849,16 @@ mod tests {
             "sub": "admin",
             "iat": now,
             "exp": now + 3600,
-            "nbf": now + 3600, // not yet valid by nbf semantics
+            "nbf": now + 3600, // not yet valid: nbf is 1 hour in the future
         });
         let token = encode_local_token(&cfg.jwt_secret, &claims);
 
-        let result = try_local_validation(&local_state, &token);
+        let err = try_local_validation(&local_state, &token).expect_err("token with future nbf must be rejected");
+        let lower = err.to_lowercase();
         assert!(
-            result.is_ok(),
-            "local validation must ignore nbf (current contract); got: {:?}",
-            result.err()
+            lower.contains("immature") || lower.contains("nbf") || lower.contains("not before"),
+            "error should reference nbf / immature token, got: {err}"
         );
-        let claims_out = result.unwrap();
-        assert_eq!(claims_out.provider, AuthProvider::Local);
-        assert_eq!(claims_out.sub.as_deref(), Some("admin"));
     }
 
     #[test]
@@ -911,5 +914,71 @@ mod tests {
                 "{path} must go through auth middleware (no prefix bypass)"
             );
         }
+    }
+
+    /// A missing-credentials 401 must carry `WWW-Authenticate: Bearer realm="edgion-admin"`.
+    #[tokio::test]
+    async fn missing_credentials_401_includes_www_authenticate() {
+        let state = UnifiedAuthState::from_configs(None, Some(&valid_local_cfg()), true, "test").unwrap();
+        let app = router_with_state(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/test")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let www_auth = resp
+            .headers()
+            .get("www-authenticate")
+            .expect("WWW-Authenticate header must be present on 401");
+        assert_eq!(
+            www_auth.to_str().unwrap(),
+            "Bearer realm=\"edgion-admin\"",
+            "WWW-Authenticate challenge value mismatch"
+        );
+    }
+
+    /// An invalid-token 401 must also carry `WWW-Authenticate`.
+    #[tokio::test]
+    async fn invalid_token_401_includes_www_authenticate() {
+        let state = UnifiedAuthState::from_configs(None, Some(&valid_local_cfg()), true, "test").unwrap();
+        let app = router_with_state(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/test")
+                    .header("Authorization", "Bearer not-a-valid-jwt")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let www_auth = resp
+            .headers()
+            .get("www-authenticate")
+            .expect("WWW-Authenticate header must be present on 401");
+        assert_eq!(
+            www_auth.to_str().unwrap(),
+            "Bearer realm=\"edgion-admin\"",
+            "WWW-Authenticate challenge value mismatch"
+        );
+    }
+
+    /// `build_admin_auth_error_response` must NOT add WWW-Authenticate for non-401 status codes.
+    #[test]
+    fn build_admin_auth_error_response_no_www_authenticate_for_403() {
+        let resp = build_admin_auth_error_response(StatusCode::FORBIDDEN, "Forbidden");
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(
+            resp.headers().get("www-authenticate").is_none(),
+            "WWW-Authenticate must not be added to non-401 responses"
+        );
     }
 }

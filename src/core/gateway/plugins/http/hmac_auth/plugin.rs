@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha384, Sha512};
 
-use crate::core::gateway::plugins::http::common::auth_common::send_auth_error_response;
+use crate::core::gateway::plugins::http::common::auth_common::send_gateway_auth_error_response;
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -80,7 +80,7 @@ impl HmacAuth {
     ) -> PluginRunningResult {
         plugin_log.push(log_code);
         self.apply_auth_failure_delay().await;
-        let _ = send_auth_error_response(session, status, "hmac", &self.config.realm, message).await;
+        let _ = send_gateway_auth_error_response(session, status, "hmac", &self.config.realm, message).await;
         PluginRunningResult::ErrTerminateRequest
     }
 
@@ -366,7 +366,7 @@ impl RequestFilter for HmacAuth {
         if self.config.validate_request_body {
             plugin_log.push_err("body not supported");
             self.apply_auth_failure_delay().await;
-            let _ = send_auth_error_response(
+            let _ = send_gateway_auth_error_response(
                 session,
                 500,
                 "hmac",
@@ -401,7 +401,8 @@ impl RequestFilter for HmacAuth {
             plugin_log.push_err("no creds configured");
             self.apply_auth_failure_delay().await;
             let _ =
-                send_auth_error_response(session, 500, "hmac", &self.config.realm, "No credentials configured").await;
+                send_gateway_auth_error_response(session, 500, "hmac", &self.config.realm, "No credentials configured")
+                    .await;
             return PluginRunningResult::ErrTerminateRequest;
         }
 

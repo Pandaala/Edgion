@@ -12,9 +12,9 @@ use crate::core::common::api::{self, ApiResponse};
 use crate::core::controller::conf_mgr::{ConfMgr, SchemaValidator};
 use axum::{
     extract::{Path, Request, State},
-    http::StatusCode,
+    http::{header, HeaderValue, StatusCode},
     middleware::Next,
-    response::{Json, Response},
+    response::{IntoResponse, Json, Response},
     routing::{delete, get, post, put},
     Router,
 };
@@ -27,26 +27,33 @@ use types::AdminState;
 /// `create_admin_router` (POST/PUT/DELETE on `/api/v1/cluster/...` and
 /// `/api/v1/namespaced/...`). Read endpoints, health, and auth routes are
 /// intentionally not gated.
-async fn require_ready_middleware(
-    State(state): State<Arc<AdminState>>,
-    request: Request,
-    next: Next,
-) -> Result<Response, StatusCode> {
-    state.require_ready()?;
-    Ok(next.run(request).await)
+///
+/// Includes `Retry-After: 30` — controller init / reload typically completes within 30 s.
+async fn require_ready_middleware(State(state): State<Arc<AdminState>>, request: Request, next: Next) -> Response {
+    if state.is_ready() {
+        next.run(request).await
+    } else {
+        let body = Json(ApiResponse::<()>::err_body(
+            "controller initializing, please retry after init completes".to_string(),
+        ));
+        let mut resp = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
+        resp.headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from_static("30"));
+        resp
+    }
 }
 
 // ============= Legacy Endpoints =============
 
 /// Health check endpoint - always returns OK if server is up
 async fn health_check() -> Json<ApiResponse<String>> {
-    Json(ApiResponse::success("OK".to_string()))
+    Json(ApiResponse::ok_body("OK".to_string()))
 }
 
 /// Readiness check endpoint - returns OK only when ConfigServer is ready
 async fn readiness_check(State(state): State<Arc<AdminState>>) -> Result<Json<ApiResponse<String>>, StatusCode> {
     if state.is_ready() {
-        Ok(Json(ApiResponse::success("Ready".to_string())))
+        Ok(Json(ApiResponse::ok_body("Ready".to_string())))
     } else {
         Err(StatusCode::SERVICE_UNAVAILABLE)
     }
@@ -74,7 +81,7 @@ async fn get_server_info(
                 ready: true,
                 mode: "controller".to_string(),
             };
-            Ok(Json(ApiResponse::success(info)))
+            Ok(Json(ApiResponse::ok_body(info)))
         }
         Err(_) => {
             // Server not ready yet
@@ -83,7 +90,7 @@ async fn get_server_info(
                 ready: false,
                 mode: "controller".to_string(),
             };
-            Ok(Json(ApiResponse::success(info)))
+            Ok(Json(ApiResponse::ok_body(info)))
         }
     }
 }
@@ -97,9 +104,9 @@ async fn get_server_info(
 /// 4. Restart controllers (full Init -> InitApply -> InitDone flow)
 ///
 /// Gateway clients will detect the server_id change and re-list all resources.
-async fn reload_all_resources(
-    State(state): State<Arc<AdminState>>,
-) -> Result<Json<types::ApiResponse<String>>, StatusCode> {
+///
+/// Returns `Retry-After: 5` on 503 — a reload already in progress is a transient condition.
+async fn reload_all_resources(State(state): State<Arc<AdminState>>) -> impl IntoResponse {
     tracing::info!(
         component = "admin_api",
         event = "reload_requested",
@@ -113,9 +120,10 @@ async fn reload_all_resources(
                 event = "reload_initiated",
                 "Reload initiated successfully"
             );
-            Ok(Json(types::ApiResponse::success(
+            Json(types::ApiResponse::ok_body(
                 "Reload initiated - controllers will restart with new server_id".to_string(),
-            )))
+            ))
+            .into_response()
         }
         Err(e) => {
             tracing::warn!(
@@ -124,7 +132,11 @@ async fn reload_all_resources(
                 error = %e,
                 "Reload request failed"
             );
-            Err(StatusCode::SERVICE_UNAVAILABLE)
+            let body = Json(ApiResponse::<()>::err_body(format!("reload unavailable: {}", e)));
+            let mut resp = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
+            resp.headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+            resp
         }
     }
 }
@@ -145,7 +157,7 @@ async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> Json<A
 
     crate::core::controller::services::acme::notify_resource_changed(key.clone());
 
-    Json(ApiResponse::success(format!("ACME check triggered for {}", key)))
+    Json(ApiResponse::ok_body(format!("ACME check triggered for {}", key)))
 }
 
 // ============= Router Setup =============

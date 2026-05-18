@@ -3,7 +3,7 @@ use crate::types::prelude_resources::*;
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header::LOCATION, HeaderMap, HeaderValue, StatusCode},
     response::Json,
 };
 use k8s_openapi::api::core::v1::{ConfigMap, Secret, Service};
@@ -73,12 +73,12 @@ pub async fn get_namespaced(
     resource.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
-/// Create a namespace-scoped resource
+/// Create a namespace-scoped resource.
 pub async fn create_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns)): Path<(String, String)>,
     body: Bytes,
-) -> Result<Json<ApiResponse<String>>, StatusCode> {
+) -> Result<(StatusCode, HeaderMap, Json<ApiResponse<String>>), StatusCode> {
     tracing::info!(
         component = "unified_api",
         event = "create_request",
@@ -279,7 +279,8 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        _ => return Err(StatusCode::NOT_IMPLEMENTED),
+        // 400, not 501: unknown kind is a client error; 501 is reserved for unknown HTTP methods.
+        _ => return Err(StatusCode::BAD_REQUEST),
     }
 
     tracing::info!(
@@ -292,7 +293,16 @@ pub async fn create_namespaced(
         "Resource created successfully"
     );
 
-    Ok(Json(ApiResponse::success(format!("{} created", kind_str))))
+    let location = format!("/api/v1/namespaced/{}/{}/{}", kind_str, ns, name);
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = HeaderValue::try_from(location) {
+        headers.insert(LOCATION, v);
+    }
+    Ok((
+        StatusCode::CREATED,
+        headers,
+        Json(ApiResponse::ok_body(format!("{} created", kind_str))),
+    ))
 }
 
 /// Update a namespace-scoped resource
@@ -474,7 +484,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        _ => return Err(StatusCode::NOT_IMPLEMENTED),
+        _ => return Err(StatusCode::BAD_REQUEST),
     }
 
     tracing::info!(
@@ -487,14 +497,14 @@ pub async fn update_namespaced(
         "Resource updated successfully"
     );
 
-    Ok(Json(ApiResponse::success(format!("{} updated", kind_str))))
+    Ok(Json(ApiResponse::ok_body(format!("{} updated", kind_str))))
 }
 
-/// Delete a namespace-scoped resource
+/// Delete a namespace-scoped resource.
 pub async fn delete_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns, name)): Path<(String, String, String)>,
-) -> Result<Json<ApiResponse<String>>, StatusCode> {
+) -> Result<StatusCode, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let is_k8s = state.is_k8s_mode();
@@ -516,7 +526,7 @@ pub async fn delete_namespaced(
         "Resource deleted successfully"
     );
 
-    Ok(Json(ApiResponse::success(format!("{} deleted", kind_str))))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// List metadata-only keys for a kind across all namespaces (keys endpoint)

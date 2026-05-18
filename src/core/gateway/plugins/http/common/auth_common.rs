@@ -8,12 +8,14 @@ use std::time::Duration;
 
 use crate::core::gateway::plugins::runtime::PluginSession;
 
-/// Build and send authentication error response (typically 401/403).
+/// Build and send a 401/403 auth error response for the gateway plane (Pingora).
 ///
-/// Notes:
-/// - `Connection: close` is intentionally not set. Pingora manages connection lifecycle.
-/// - `body` should not include status prefix; this function prefixes with `<status> `.
-pub async fn send_auth_error_response(
+/// Sets `WWW-Authenticate: <scheme> realm="<realm>"` on every call. `Connection: close`
+/// is intentionally not set — Pingora manages connection lifecycle.
+///
+/// Admin-plane counterpart: `unified_auth::build_admin_auth_error_response` (returns
+/// an axum `Response`; can't be merged — different runtimes and return shapes).
+pub async fn send_gateway_auth_error_response(
     session: &mut dyn PluginSession,
     status: u16,
     scheme: &str,

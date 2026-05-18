@@ -13,7 +13,9 @@ use sha2::{Digest, Sha256};
 use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::observe::metrics::registry::record_ldap_auth_error;
-use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
+use crate::core::gateway::plugins::http::common::auth_common::{
+    apply_auth_failure_delay, send_gateway_auth_error_response,
+};
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -205,7 +207,7 @@ impl LdapAuth {
     }
 
     async fn unauthorized(&self, session: &mut dyn PluginSession) -> PluginRunningResult {
-        let _ = send_auth_error_response(
+        let _ = send_gateway_auth_error_response(
             session,
             401,
             &self.config.header_type,

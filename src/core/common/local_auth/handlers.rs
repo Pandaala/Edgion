@@ -88,7 +88,7 @@ pub async fn login_handler(State(state): State<Arc<UnifiedAuthState>>, Json(req)
     // Return 503 when the local auth provider is not yet populated.
     let Some(local_state) = state.local.load_full() else {
         use axum::http::HeaderValue;
-        let body: Json<ApiResponse<()>> = Json(ApiResponse::error(
+        let body: Json<ApiResponse<()>> = Json(ApiResponse::err_body(
             "authentication subsystem initializing, retry later".to_string(),
         ));
         let mut resp = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
@@ -105,7 +105,7 @@ pub async fn login_handler(State(state): State<Arc<UnifiedAuthState>>, Json(req)
         let _ = tokio::task::spawn_blocking(move || bcrypt::verify(&password, &dummy)).await;
         tracing::debug!(component = "local_auth", "Login failed: unknown username");
         let body: Json<ApiResponse<LoginResponse>> =
-            Json(ApiResponse::error("Invalid username or password".to_string()));
+            Json(ApiResponse::err_body("Invalid username or password".to_string()));
         return (StatusCode::UNAUTHORIZED, body).into_response();
     }
 
@@ -117,7 +117,7 @@ pub async fn login_handler(State(state): State<Arc<UnifiedAuthState>>, Json(req)
         Err(_) => {
             tracing::error!(component = "local_auth", "bcrypt task panicked");
             let body: Json<ApiResponse<LoginResponse>> =
-                Json(ApiResponse::error("Internal authentication error".to_string()));
+                Json(ApiResponse::err_body("Internal authentication error".to_string()));
             return (StatusCode::INTERNAL_SERVER_ERROR, body).into_response();
         }
     };
@@ -126,13 +126,13 @@ pub async fn login_handler(State(state): State<Arc<UnifiedAuthState>>, Json(req)
         Ok(false) => {
             tracing::debug!(component = "local_auth", "Login failed: wrong password");
             let body: Json<ApiResponse<LoginResponse>> =
-                Json(ApiResponse::error("Invalid username or password".to_string()));
+                Json(ApiResponse::err_body("Invalid username or password".to_string()));
             return (StatusCode::UNAUTHORIZED, body).into_response();
         }
         Err(e) => {
             tracing::error!(component = "local_auth", error = %e, "bcrypt verify error");
             let body: Json<ApiResponse<LoginResponse>> =
-                Json(ApiResponse::error("Internal authentication error".to_string()));
+                Json(ApiResponse::err_body("Internal authentication error".to_string()));
             return (StatusCode::INTERNAL_SERVER_ERROR, body).into_response();
         }
     }
@@ -166,7 +166,7 @@ pub async fn login_handler(State(state): State<Arc<UnifiedAuthState>>, Json(req)
                 token,
                 expires_in: expiry_secs,
             };
-            let mut resp = Json(ApiResponse::success(response)).into_response();
+            let mut resp = Json(ApiResponse::ok_body(response)).into_response();
             resp.headers_mut()
                 .insert(header::SET_COOKIE, cookie_value.parse().unwrap());
             resp
@@ -174,7 +174,7 @@ pub async fn login_handler(State(state): State<Arc<UnifiedAuthState>>, Json(req)
         Err(e) => {
             tracing::error!(component = "local_auth", error = %e, "JWT encode error");
             let body: Json<ApiResponse<LoginResponse>> =
-                Json(ApiResponse::error("Failed to generate token".to_string()));
+                Json(ApiResponse::err_body("Failed to generate token".to_string()));
             (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
         }
     }
@@ -193,7 +193,7 @@ pub async fn login_handler(State(state): State<Arc<UnifiedAuthState>>, Json(req)
 pub async fn me_handler(
     axum::Extension(claims): axum::Extension<crate::core::common::unified_auth::UnifiedAuthClaims>,
 ) -> Response {
-    Json(ApiResponse::success(MeResponse {
+    Json(ApiResponse::ok_body(MeResponse {
         username: claims.sub.unwrap_or_default(),
     }))
     .into_response()
@@ -205,7 +205,7 @@ pub async fn me_handler(
 /// consult `LocalAuthState`, so no readiness guard is needed.
 pub async fn logout_handler() -> Response {
     let cookie_value = "edgion_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0";
-    let mut resp = Json(ApiResponse::<()>::success(())).into_response();
+    let mut resp = Json(ApiResponse::<()>::ok_body(())).into_response();
     resp.headers_mut()
         .insert(header::SET_COOKIE, cookie_value.parse().unwrap());
     resp

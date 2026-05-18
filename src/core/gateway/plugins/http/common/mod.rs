@@ -9,7 +9,7 @@ use std::time::Duration;
 pub mod auth_common;
 pub mod http_client;
 
-pub use auth_common::{resolve_claim_path, send_auth_error_response, set_claims_headers, Claims};
+pub use auth_common::{resolve_claim_path, send_gateway_auth_error_response, set_claims_headers, Claims};
 pub use http_client::{get_http_client, is_hop_by_hop, HOP_BY_HOP_HEADERS};
 
 /// Format a duration in human-readable form (e.g., "1.5s", "500ms").
