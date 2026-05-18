@@ -41,6 +41,20 @@ pub async fn upstream_peer(
         }
     }
 
+    // Honour client-supplied gRPC deadline. Already-expired deadlines abort
+    // before peer selection so the client sees DEADLINE_EXCEEDED via the
+    // 504 → grpc-status 4 mapping rather than waiting for a transport reset.
+    if ctx.grpc_deadline_exceeded() {
+        ctx.add_error(EdgionStatus::GrpcClientDeadlineExceeded);
+        if let Some(upstream) = ctx.get_current_upstream_mut() {
+            upstream.status = Some(504);
+        }
+        return Err(PingoraError::explain(
+            ErrorType::HTTPStatus(504),
+            "gRPC client deadline exceeded",
+        ));
+    }
+
     // Apply backoff delay on retry attempts
     if ctx.try_cnt >= 1 {
         let base_backoff = ctx.retry_backoff();
@@ -52,14 +66,54 @@ pub async fn upstream_peer(
             let delay = delay.min(std::time::Duration::from_secs(30));
 
             // TODO: abort this sleep early when the client disconnects
-            if let Some(timeout) = request_timeout {
-                let remaining =
-                    timeout.saturating_sub(std::time::Instant::now().saturating_duration_since(ctx.start_time));
-                if delay < remaining {
-                    tokio::time::sleep(delay).await;
-                }
-            } else {
+            //
+            // Bound the sleep by every deadline that applies to the request:
+            // route `request_timeout` and client `grpc-timeout`. Either
+            // remaining < delay means the caller will give up before backoff
+            // completes — skip the sleep and let the post-sleep re-check
+            // below abort the retry instead of opening a fresh upstream
+            // connection that nobody is waiting for.
+            let now = std::time::Instant::now();
+            let request_remaining =
+                request_timeout.map(|t| t.saturating_sub(now.saturating_duration_since(ctx.start_time)));
+            let deadline_remaining = [request_remaining, ctx.grpc_remaining()].into_iter().flatten().min();
+            let should_sleep = match deadline_remaining {
+                Some(r) => delay < r,
+                None => true,
+            };
+            if should_sleep {
                 tokio::time::sleep(delay).await;
+            }
+
+            // Either deadline may have just expired (or the sleep was
+            // skipped because remaining was already too tight). Re-check
+            // before letting Pingora open a new upstream connection — without
+            // this guard a tight `grpc-timeout` combined with a large backoff
+            // would let the gateway connect to a backend the caller has
+            // already abandoned, burning a circuit-breaker failure counter
+            // and an LB pick.
+            if let Some(timeout) = request_timeout {
+                let elapsed = std::time::Instant::now().saturating_duration_since(ctx.start_time);
+                if elapsed >= timeout {
+                    ctx.add_error(EdgionStatus::RequestTimeoutExceeded);
+                    if let Some(upstream) = ctx.get_current_upstream_mut() {
+                        upstream.status = Some(504);
+                    }
+                    return Err(PingoraError::explain(
+                        ErrorType::HTTPStatus(504),
+                        "Request timeout exceeded during retry backoff",
+                    ));
+                }
+            }
+            if ctx.grpc_deadline_exceeded() {
+                ctx.add_error(EdgionStatus::GrpcClientDeadlineExceeded);
+                if let Some(upstream) = ctx.get_current_upstream_mut() {
+                    upstream.status = Some(504);
+                }
+                return Err(PingoraError::explain(
+                    ErrorType::HTTPStatus(504),
+                    "gRPC client deadline exceeded during retry backoff",
+                ));
             }
         }
     }
@@ -423,12 +477,25 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
         .map(|req| req.saturating_sub(std::time::Instant::now().saturating_duration_since(ctx.start_time)))
         .filter(|r| !r.is_zero());
 
-    let effective_read_write_timeout = match (effective_backend_timeout, request_remaining) {
-        (Some(b), Some(r)) => Some(b.min(r)),
-        (Some(b), None) => Some(b),
-        (None, Some(r)) => Some(r),
-        (None, None) => None,
-    };
+    // Client-supplied `grpc-timeout` is another upper bound on read/write —
+    // an intermediary that ignores it leaves upstream work running after the
+    // client has given up. `grpc_remaining` returns the deadline minus now,
+    // so we apply the same zero-guard as request_remaining.
+    let grpc_remaining = ctx.grpc_remaining().filter(|r| !r.is_zero());
+
+    // Fold three independent upper bounds via `min`:
+    //   - `effective_backend_timeout` is `None` only when the route explicitly
+    //     disabled it via `backendRequestTimeout: "0s"` (RouteTimeout::Disabled),
+    //     in which case the route operator opted out and only the remaining
+    //     two bounds clamp.
+    //   - `request_remaining` is the route-level `request_timeout` minus elapsed
+    //     wall-clock.
+    //   - `grpc_remaining` is the client-supplied `grpc-timeout` minus elapsed.
+    // Any None value is skipped; the tightest non-None bound wins.
+    let effective_read_write_timeout = [effective_backend_timeout, request_remaining, grpc_remaining]
+        .into_iter()
+        .flatten()
+        .min();
 
     if let Some(timeout) = effective_read_write_timeout {
         peer.options.read_timeout = Some(timeout);

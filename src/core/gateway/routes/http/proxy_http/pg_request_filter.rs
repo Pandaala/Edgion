@@ -4,7 +4,7 @@ use crate::core::gateway::path_normalization::{
     contains_escaped_slash, has_invalid_percent_encoding, normalize_path, PathNormalizationConfig,
 };
 use crate::core::gateway::plugins::http::get_global_plugin_store;
-use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, try_match_grpc_route};
+use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, parse_grpc_timeout, try_match_grpc_route};
 use crate::core::gateway::routes::http::routes_mgr::get_global_http_route_managers;
 use crate::core::gateway::runtime::hostname_matches_listener;
 use crate::core::gateway::runtime::store::get_listener_gateway_info_store;
@@ -273,6 +273,26 @@ async fn build_request_metadata(
                         ctx.request_info.is_grpc_request = true;
                     }
                 }
+            }
+        }
+    }
+
+    // Parse client-supplied `grpc-timeout` deadline. The gRPC-over-HTTP/2 spec
+    // expects servers / intermediaries to honour it; the parsed deadline is
+    // anchored to `ctx.start_time` so peer timeout computation and the
+    // upstream `grpc-timeout` rewrite share one source of truth. Malformed,
+    // missing, or overflowing headers fall through to route-level
+    // `request_timeout` behaviour. `checked_add` guards against an upper-bound
+    // value (e.g. `99999999H` from a hostile client) overflowing `Instant`.
+    if ctx.request_info.is_grpc_request && ctx.request_info.grpc_client_deadline.is_none() {
+        if let Some(raw) = req_header.headers.get("grpc-timeout") {
+            if let Some(deadline) = raw
+                .to_str()
+                .ok()
+                .and_then(parse_grpc_timeout)
+                .and_then(|dur| ctx.start_time.checked_add(dur))
+            {
+                ctx.request_info.grpc_client_deadline = Some(deadline);
             }
         }
     }

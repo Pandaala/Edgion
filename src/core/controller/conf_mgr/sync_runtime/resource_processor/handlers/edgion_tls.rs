@@ -399,14 +399,7 @@ mod tests {
         processor.set_raw_store(store);
         runtime.processor_registry.register(processor);
 
-        HandlerContext::new(
-            None,
-            None,
-            TriggerChain::default(),
-            3,
-            20,
-            runtime,
-        )
+        HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime)
     }
 
     fn make_tls(parent_refs: Option<Vec<ParentReference>>, secret_name: &str) -> EdgionTls {

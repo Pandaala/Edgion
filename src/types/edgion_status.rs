@@ -135,6 +135,11 @@ pub enum EdgionStatus {
     /// gateway aborts instead of starting a new upstream attempt that would
     /// also fail. Surfaced to the client as 504.
     RequestTimeoutExceeded = 504_01,
+
+    /// Client-supplied `grpc-timeout` deadline already exceeded before peer
+    /// selection. Surfaced to the gRPC client as `grpc-status: 4` (DEADLINE_EXCEEDED)
+    /// via the standard 504 → grpc-status mapping.
+    GrpcClientDeadlineExceeded = 504_02,
 }
 
 impl EdgionStatus {
@@ -205,6 +210,7 @@ mod tests {
             EdgionStatus::PluginTerminateWithoutResponse => Some(502),
             EdgionStatus::ForwardAuthServiceUnreachable => Some(503),
             EdgionStatus::RequestTimeoutExceeded => Some(504),
+            EdgionStatus::GrpcClientDeadlineExceeded => Some(504),
         }
     }
 
@@ -251,6 +257,7 @@ mod tests {
             EdgionStatus::PluginTerminateWithoutResponse,
             EdgionStatus::ForwardAuthServiceUnreachable,
             EdgionStatus::RequestTimeoutExceeded,
+            EdgionStatus::GrpcClientDeadlineExceeded,
         ];
         for &s in all {
             assert_eq!(s.http_status(), expected_http(s), "http_status mismatch for {s:?}");

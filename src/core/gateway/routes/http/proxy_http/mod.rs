@@ -30,6 +30,7 @@ mod pg_request_body_filter;
 mod pg_request_filter;
 mod pg_response_filter;
 mod pg_upstream_peer;
+mod pg_upstream_request_filter;
 mod pg_upstream_response_body_filter;
 mod pg_upstream_response_filter;
 
@@ -110,6 +111,18 @@ impl ProxyHttp for EdgionHttpProxy {
         Self::CTX: Send + Sync,
     {
         pg_request_body_filter::request_body_filter(self, session, body, end_of_stream, ctx).await
+    }
+
+    async fn upstream_request_filter(
+        &self,
+        session: &mut Session,
+        upstream_request: &mut pingora_http::RequestHeader,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<()>
+    where
+        Self::CTX: Send + Sync,
+    {
+        pg_upstream_request_filter::upstream_request_filter(self, session, upstream_request, ctx).await
     }
 
     async fn upstream_response_filter(

@@ -43,9 +43,11 @@ pub fn error_while_proxy(
         .retry_attempts()
         .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
 
-    let timeout_exceeded = ctx.request_timeout_exceeded();
+    // Either route `request_timeout` or client `grpc-timeout` having
+    // expired disqualifies further retries.
+    let deadline_exceeded = ctx.request_timeout_exceeded() || ctx.grpc_deadline_exceeded();
 
-    let can_retry = client_reused && buffer_ok && ctx.try_cnt <= max_retries && !timeout_exceeded;
+    let can_retry = client_reused && buffer_ok && ctx.try_cnt <= max_retries && !deadline_exceeded;
 
     e.retry.decide_reuse(can_retry);
 

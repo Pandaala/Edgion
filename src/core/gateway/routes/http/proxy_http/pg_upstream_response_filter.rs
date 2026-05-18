@@ -78,17 +78,20 @@ pub fn upstream_response_filter(
                         .attempts
                         .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
 
-                    // Check request timeout
-                    let timeout_exceeded = route_unit
+                    // Check request timeout. Either the route-level
+                    // `request_timeout` or a client-supplied `grpc-timeout`
+                    // having expired disqualifies a status-code retry.
+                    let request_timeout_exceeded = route_unit
                         .rule
                         .parsed_timeouts
                         .as_ref()
                         .and_then(|t| t.request_timeout.as_duration())
                         .map(|timeout| Instant::now().saturating_duration_since(ctx.start_time) >= timeout)
                         .unwrap_or(false);
+                    let deadline_exceeded = request_timeout_exceeded || ctx.grpc_deadline_exceeded();
 
                     let buffer_ok = !session.as_ref().retry_buffer_truncated();
-                    if ctx.try_cnt <= max_retries && !timeout_exceeded && buffer_ok {
+                    if ctx.try_cnt <= max_retries && !deadline_exceeded && buffer_ok {
                         ctx.retry_on_status = true;
                         return Err(pingora_core::Error::explain(
                             pingora_core::ErrorType::HTTPStatus(status_code),

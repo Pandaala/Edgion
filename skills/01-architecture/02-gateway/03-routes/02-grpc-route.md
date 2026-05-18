@@ -104,6 +104,19 @@ Specifics:
 - Inside `GrpcMatchEngine::match_route`, `deep_match` validates the request hostname against the route's `effective_hostnames`.
 - Listener bucketing matches HTTP: routes with empty `resolved_listeners` are skipped + warned (no broadcast-to-all-ports fallback).
 
+## Client deadline (`grpc-timeout`) handling
+
+Edgion honors the client-supplied `grpc-timeout` header end-to-end:
+
+1. `pg_request_filter::build_request_metadata` parses the header (format `{number}{unit}` with units `H | M | S | m | u | n`) via `grpc_timeout::parse_grpc_timeout`. The resulting deadline is stored as `ctx.request_info.grpc_client_deadline = start_time.checked_add(parsed_value)`.
+2. `pg_upstream_peer::upstream_peer` short-circuits with `EdgionStatus::GrpcClientDeadlineExceeded` (504 → `grpc-status: 4`) when the deadline is already past at peer-selection time.
+3. `pg_upstream_peer::configure_peer_timeouts` folds `grpc_remaining()` into the upstream `read/write_timeout` via `min(backend_timeout, route_request_remaining, grpc_remaining)`. The existing zero-duration guard prevents `Duration::ZERO` from reaching Pingora.
+4. `pg_upstream_request_filter` rewrites the outgoing `grpc-timeout` header to the formatted remaining time so downstream gRPC servers see a consistent deadline.
+5. Retry-decision sites (`pg_fail_to_connect`, `pg_error_while_proxy`, `pg_upstream_response_filter` status-code retry branch) treat `request_timeout_exceeded() || grpc_deadline_exceeded()` as the unified "deadline blown — do not retry" guard, so a tight client deadline blocks LB picks and circuit-breaker counter increments the caller has already given up on.
+6. `pg_upstream_peer` retry backoff bounds the sleep by `min(request_remaining, grpc_remaining)` and re-checks both deadlines after the sleep; required so that a `retry.backoff` coarser than the client `grpc-timeout` cannot extend gateway work past the caller's deadline.
+
+Coverage spans pure gRPC (`application/grpc`) and gRPC-Web (`application/grpc-web*`). Malformed headers fall back to the route-level `request_timeout` (no behavior change). See `skills/04-review/h2-grpc/h2-grpc-03-timeout-honored.md` for the decision context.
+
 ## Key source files
 
 | File | Responsibility |
@@ -113,3 +126,4 @@ Specifics:
 | `src/core/gateway/routes/grpc/routes_mgr.rs` | GlobalGrpcRouteManagers, GrpcRouteRules |
 | `src/core/gateway/routes/grpc/conf_handler_impl.rs` | ConfHandler<GRPCRoute> implementation |
 | `src/core/gateway/routes/grpc/integration.rs` | try_match_grpc_route, handle_grpc_upstream |
+| `src/core/gateway/routes/grpc/grpc_timeout.rs` | parse_grpc_timeout, format_grpc_timeout |

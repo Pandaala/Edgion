@@ -317,6 +317,14 @@ pub struct RequestInfo {
     /// Used as a guard to prevent double-write across error response paths.
     #[serde(skip)]
     pub response_committed: bool,
+
+    /// Parsed `grpc-timeout` deadline (`start_time + value`). Populated by
+    /// `pg_request_filter::build_request_metadata` when the request carries
+    /// a syntactically valid header. `None` when no header, malformed
+    /// header, or non-gRPC request — callers fall back to route-level
+    /// `request_timeout` semantics.
+    #[serde(skip)]
+    pub grpc_client_deadline: Option<Instant>,
 }
 
 /// Backend TLS connection information
@@ -920,6 +928,24 @@ impl EdgionHttpContext {
     pub fn request_timeout_exceeded(&self) -> bool {
         self.request_timeout()
             .is_some_and(|t| Instant::now().saturating_duration_since(self.start_time) >= t)
+    }
+
+    /// Remaining wall-clock time before the client-supplied `grpc-timeout`
+    /// deadline expires. Returns `None` when no `grpc-timeout` header was
+    /// parsed, and `Some(Duration::ZERO)` when the deadline has already
+    /// passed.
+    #[inline]
+    pub fn grpc_remaining(&self) -> Option<Duration> {
+        self.request_info
+            .grpc_client_deadline
+            .map(|d| d.saturating_duration_since(Instant::now()))
+    }
+
+    /// True when a `grpc-timeout` deadline was parsed for this request and
+    /// `Instant::now()` is already past it.
+    #[inline]
+    pub fn grpc_deadline_exceeded(&self) -> bool {
+        self.grpc_remaining().is_some_and(|r| r.is_zero())
     }
 
     /// Resolve the retry `attempts` cap with field-level fallback between
