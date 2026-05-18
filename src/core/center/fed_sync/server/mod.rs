@@ -8,9 +8,11 @@
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
 
@@ -47,6 +49,11 @@ const MAX_CONTROLLER_ID_LEN: usize = 253;
 const MAX_CLUSTER_LEN: usize = 63;
 const MAX_TAG_LEN: usize = 63;
 const MAX_LIST_ITEMS: usize = 32;
+
+/// Number of consecutive missed PINGs (no Pong received) before declaring the peer offline.
+/// Three intervals allow one transient packet loss without spurious offline marking.
+/// Per RFC 9113 §6.7 (informative).
+const HEARTBEAT_MISSED_PING_BUDGET: u32 = 3;
 
 // Upper bound on total registered controllers (online + offline). Once
 // this is reached, registration of a *new* controller_id is refused;
@@ -348,7 +355,17 @@ impl FederationSync for FederationGrpcServer {
         let sync_client = self.sync_client.clone();
         let db_for_offline = self.db.clone();
         let ping_interval = Duration::from_secs(self.sync_config.ping_interval_secs);
-        let heartbeat_timeout = ping_interval * 3;
+        let heartbeat_timeout = ping_interval * HEARTBEAT_MISSED_PING_BUDGET;
+        // Tracks the epoch-ms timestamp of the last received Pong. The heartbeat task reads
+        // this to detect idle connections without wrapping message delivery in a timeout,
+        // which would falsely fire on large in-flight WatchListResponse payloads.
+        let last_pong_ms = Arc::new(AtomicU64::new(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+        ));
+        let heartbeat_cancel = CancellationToken::new();
         let cid = controller_id.clone();
 
         // 3. Forward inner_rx → out_tx
@@ -367,6 +384,9 @@ impl FederationSync for FederationGrpcServer {
         tokio::spawn({
             let inner_tx = inner_tx.clone();
             let cid = cid.clone();
+            let last_pong_ms = last_pong_ms.clone();
+            let heartbeat_cancel = heartbeat_cancel.clone();
+            let heartbeat_timeout_ms = heartbeat_timeout.as_millis() as u64;
             async move {
                 let mut interval = tokio::time::interval(ping_interval);
                 interval.tick().await; // skip first
@@ -376,6 +396,18 @@ impl FederationSync for FederationGrpcServer {
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as u64)
                         .unwrap_or(0);
+                    // Check Pong freshness before sending next Ping. Tracking last-pong-at
+                    // rather than wrapping inbound.message() in a timeout avoids false offline
+                    // declarations when a large WatchListResponse is in transit (RFC 9113 §6.7).
+                    if now_ms.saturating_sub(last_pong_ms.load(Ordering::Relaxed)) > heartbeat_timeout_ms {
+                        tracing::warn!(
+                            component = "fed_server",
+                            controller_id = %cid,
+                            "Heartbeat timeout, marking offline"
+                        );
+                        heartbeat_cancel.cancel();
+                        break;
+                    }
                     if inner_tx
                         .send(CenterMessage {
                             payload: Some(CenterPayload::Ping(Ping { timestamp: now_ms })),
@@ -404,6 +436,8 @@ impl FederationSync for FederationGrpcServer {
             let pm_cache = pm_cache.clone();
             let inner_tx = inner_tx.clone();
             let db_for_offline = db_for_offline.clone();
+            let last_pong_ms = last_pong_ms.clone();
+            let heartbeat_cancel = heartbeat_cancel.clone();
             async move {
                 // Centralize the three disconnect cleanups (timeout / stream error / stream closed).
                 // Each branch must propagate offline to all four state holders, which previously
@@ -459,39 +493,45 @@ impl FederationSync for FederationGrpcServer {
                 });
 
                 loop {
-                    match tokio::time::timeout(heartbeat_timeout, inbound.message()).await {
-                        Err(_) => {
-                            tracing::warn!(
-                                component = "fed_server",
-                                controller_id = %cid,
-                                "Heartbeat timeout, marking offline"
-                            );
+                    tokio::select! {
+                        // Heartbeat task detected Pong silence > heartbeat_timeout.
+                        _ = heartbeat_cancel.cancelled() => {
                             mark_offline_all(fed_metrics::labels::offline_reason::HEARTBEAT);
                             break;
                         }
-                        Ok(Err(e)) => {
-                            tracing::info!(
-                                component = "fed_server",
-                                controller_id = %cid,
-                                error = %e,
-                                "Stream error"
-                            );
-                            mark_offline_all(fed_metrics::labels::offline_reason::DISCONNECT);
-                            break;
-                        }
-                        Ok(Ok(None)) => {
-                            tracing::info!(
-                                component = "fed_server",
-                                controller_id = %cid,
-                                "Stream closed"
-                            );
-                            mark_offline_all(fed_metrics::labels::offline_reason::DISCONNECT);
-                            break;
-                        }
-                        Ok(Ok(Some(msg))) => {
-                            registry.update_last_seen(&cid);
-                            match msg.payload {
-                                Some(CtrlPayload::Pong(_)) => {}
+                        result = inbound.message() => {
+                            match result {
+                            Err(e) => {
+                                tracing::info!(
+                                    component = "fed_server",
+                                    controller_id = %cid,
+                                    error = %e,
+                                    "Stream error"
+                                );
+                                mark_offline_all(fed_metrics::labels::offline_reason::DISCONNECT);
+                                break;
+                            }
+                            Ok(None) => {
+                                tracing::info!(
+                                    component = "fed_server",
+                                    controller_id = %cid,
+                                    "Stream closed"
+                                );
+                                mark_offline_all(fed_metrics::labels::offline_reason::DISCONNECT);
+                                break;
+                            }
+                            Ok(Some(msg)) => {
+                                registry.update_last_seen(&cid);
+                                match msg.payload {
+                                    Some(CtrlPayload::Pong(_)) => {
+                                        last_pong_ms.store(
+                                            std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .map(|d| d.as_millis() as u64)
+                                                .unwrap_or(0),
+                                            Ordering::Relaxed,
+                                        );
+                                    }
                                 Some(CtrlPayload::CommandResponse(resp)) => {
                                     if let Some(sender) = pending_commands.lock().remove(&resp.request_id) {
                                         let _ = sender.send(resp);
@@ -702,9 +742,11 @@ impl FederationSync for FederationGrpcServer {
                                 _ => {}
                             }
                         }
-                    }
-                }
-            }
+                        }  // match result
+                    }      // result = inbound.message() => { ... }
+                    } // tokio::select!
+                } // loop
+            } // async move
         });
 
         Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(out_rx)))

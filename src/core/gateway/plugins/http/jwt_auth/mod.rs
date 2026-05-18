@@ -36,4 +36,3 @@ pub(crate) fn to_jwt_algorithm(alg: JwtAlgorithm) -> Algorithm {
         JwtAlgorithm::ES384 => Algorithm::ES384,
     }
 }
-
