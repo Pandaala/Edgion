@@ -1,26 +1,158 @@
-//! JWT verification main flow + decode error classification.
+//! JWT verification: iss-routed, algorithm-confusion-defended.
 
-use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
-use std::time::{SystemTime, UNIX_EPOCH};
+use serde_json::Value;
+use std::collections::HashSet;
+use std::sync::Arc;
 
-use super::credentials::Credentials;
-use super::{is_symmetric, to_jwt_algorithm, JwtAuth, JwtAuthResult};
-use crate::core::gateway::plugins::http::common::auth_common::Claims;
+use super::credentials::{build_decoding_key, JwtIssuerGroupStore};
+use super::to_jwt_algorithm;
 use crate::core::gateway::plugins::runtime::PluginLog;
+use crate::types::resources::edgion_plugins::plugin_configs::{JwtAuthConfig, ResolvedJwtIssuerGroup};
 
-/// Verification result containing username and claims.
-pub(super) struct VerifyResult {
-    pub(super) username: String,
-    pub(super) claims_json: Option<String>,
-    /// Raw claims for claims_to_headers mapping
-    pub(super) claims: serde_json::Value,
+#[derive(Debug)]
+pub(super) struct VerifyOk {
+    pub group: Arc<ResolvedJwtIssuerGroup>,
+    pub iss: String,
+    pub claims: Value,
 }
 
-/// Classify jsonwebtoken decode error into a short PluginLog tag.
-/// Tag is a static kind label — no token or claim contents.
-fn classify_jwt_decode_error(err: &jsonwebtoken::errors::Error) -> &'static str {
-    match err.kind() {
+#[derive(Debug)]
+pub(super) enum VerifyDeny {
+    Malformed,
+    MissingIss,
+    UnknownIss,
+    BadAlgorithm,
+    MissingKey,
+    InvalidCredentials,
+    SignatureFail,
+    ExpTooFar,
+}
+
+/// Sync verify: peek payload (insecure decode) -> route by iss -> enforce
+/// header.alg == group.algorithm -> look up kid scoped to group -> real decode.
+pub(super) fn verify_jwt(
+    token: &str,
+    store: &JwtIssuerGroupStore,
+    config: &JwtAuthConfig,
+    plugin_log: &mut PluginLog,
+) -> Result<VerifyOk, VerifyDeny> {
+    // 1. Decode header -- gives us the token's claimed alg.
+    let header = match decode_header(token) {
+        Ok(h) => h,
+        Err(_) => {
+            plugin_log.push("Deny malformed token");
+            return Err(VerifyDeny::Malformed);
+        }
+    };
+
+    // 2. Peek at payload (insecure decode) to read iss.
+    let mut peek_validation = Validation::new(header.alg);
+    peek_validation.insecure_disable_signature_validation();
+    peek_validation.validate_aud = false;
+    peek_validation.validate_exp = false;
+    peek_validation.required_spec_claims = Default::default();
+    let peek = match decode::<Value>(token, &DecodingKey::from_secret(&[]), &peek_validation) {
+        Ok(d) => d.claims,
+        Err(_) => {
+            plugin_log.push("Deny malformed token");
+            return Err(VerifyDeny::Malformed);
+        }
+    };
+
+    // 3. Extract iss (REQUIRED, must be non-empty string).
+    let iss = match peek.get("iss").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            plugin_log.push("Deny missing iss");
+            return Err(VerifyDeny::MissingIss);
+        }
+    };
+
+    // 4. Route to group (exact iss match -- no normalization, see spec §11).
+    let group = match store.lookup_by_iss(iss) {
+        Some(g) => Arc::clone(g),
+        None => {
+            plugin_log.push("Deny unknown iss"); // NO iss value in log
+            return Err(VerifyDeny::UnknownIss);
+        }
+    };
+
+    // 5. Algorithm-confusion defense -- header.alg MUST match group.algorithm.
+    //    Without this, an attacker could submit alg=HS256 token claiming an
+    //    RS-issuer's iss and force HMAC verification with the public key
+    //    used as the symmetric secret (classic JWT alg-confusion attack).
+    if header.alg != to_jwt_algorithm(group.algorithm) {
+        plugin_log.push("Deny bad algorithm"); // NO group/iss/alg value
+        return Err(VerifyDeny::BadAlgorithm);
+    }
+
+    // 6. Resolve kid within THIS group only (key_claim_name is plugin-level).
+    let kid = peek.get(&config.key_claim_name).and_then(|v| v.as_str());
+    let cred = match kid.and_then(|k| group.credentials.get(k)) {
+        Some(c) => c,
+        None => {
+            plugin_log.push("Deny missing key"); // NO group/iss/kid value
+            return Err(VerifyDeny::MissingKey);
+        }
+    };
+
+    // 7. Real verification -- group.algorithm + this cred's secret/public_key.
+    let mut validation = Validation::new(to_jwt_algorithm(group.algorithm));
+    match group.audiences.as_deref() {
+        Some(auds) if !auds.is_empty() => {
+            let set: HashSet<String> = auds.iter().cloned().collect();
+            validation.aud = Some(set);
+        }
+        _ => {
+            // None OR Some(vec![]) -> explicit "no aud check"
+            validation.validate_aud = false;
+        }
+    }
+    validation.leeway = config.lifetime_grace_period;
+
+    let decoding_key = match build_decoding_key(group.algorithm, cred, config) {
+        Ok(k) => k,
+        Err(_reason) => {
+            plugin_log.push("Deny invalid credentials");
+            return Err(VerifyDeny::InvalidCredentials);
+        }
+    };
+
+    let decoded = match decode::<Value>(token, &decoding_key, &validation) {
+        Ok(d) => d,
+        Err(e) => {
+            plugin_log.push(classify_jwt_decode_error(&e));
+            return Err(VerifyDeny::SignatureFail);
+        }
+    };
+
+    // 8. Maximum-expiration post-check (existing logic -- preserved from prior verify.rs).
+    if config.maximum_expiration > 0 {
+        if let Some(exp) = decoded.claims.get("exp").and_then(|v| v.as_u64()) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            if exp > now.saturating_add(config.maximum_expiration) {
+                plugin_log.push("Deny exp too far");
+                return Err(VerifyDeny::ExpTooFar);
+            }
+        }
+    }
+
+    Ok(VerifyOk {
+        group,
+        iss: iss.to_string(),
+        claims: decoded.claims,
+    })
+}
+
+/// Map jsonwebtoken decode errors to PluginLog literal strings.
+/// Preserves existing behavior -- all ErrorKind variants from the prior implementation.
+fn classify_jwt_decode_error(e: &jsonwebtoken::errors::Error) -> &'static str {
+    use jsonwebtoken::errors::ErrorKind;
+    match e.kind() {
         ErrorKind::ExpiredSignature => "Deny token expired",
         ErrorKind::InvalidSignature => "Deny invalid signature",
         ErrorKind::InvalidToken | ErrorKind::Base64(_) | ErrorKind::Json(_) | ErrorKind::Utf8(_) => {
@@ -34,134 +166,139 @@ fn classify_jwt_decode_error(err: &jsonwebtoken::errors::Error) -> &'static str 
     }
 }
 
-impl JwtAuth {
-    /// Verify token and return username.
-    /// On failure, pushes a `Deny <kind>; ` or `err: <kind>; ` tag to `plugin_log` before returning.
-    pub(super) fn verify_token(&self, token: &str, plugin_log: &mut PluginLog) -> JwtAuthResult<VerifyResult> {
-        let credentials = self.load_credentials().inspect_err(|_| {
-            plugin_log.push_err("credentials load fail");
-        })?;
-        let expected_alg = to_jwt_algorithm(self.config.algorithm);
-        // §3: algorithm selection
-        if is_symmetric(self.config.algorithm) {
-            plugin_log.push("alg symmetric");
-        } else {
-            plugin_log.push("alg asymmetric");
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::resources::edgion_plugins::plugin_configs::{
+        JwtAlgorithm, JwtAuthConfig, ResolvedJwtCredential, ResolvedJwtIssuerGroup,
+    };
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    fn make_hs_group(name: &str, kid: &str, secret_bytes: &[u8]) -> ResolvedJwtIssuerGroup {
+        let mut creds = HashMap::new();
+        creds.insert(
+            kid.to_string(),
+            ResolvedJwtCredential {
+                key: Some(kid.to_string()),
+                secret: Some(std::str::from_utf8(secret_bytes).unwrap().to_string()),
+                public_key: None,
+            },
+        );
+        ResolvedJwtIssuerGroup {
+            group: name.to_string(),
+            algorithm: JwtAlgorithm::HS256,
+            audiences: None,
+            credentials: creds,
         }
+    }
 
-        // Always verify algorithm from JWT header matches configured algorithm.
-        // This prevents algorithm confusion attacks (e.g., "alg": "none").
-        let header = decode_header(token).map_err(|_| {
-            plugin_log.push("Deny malformed token");
-        })?;
-        if header.alg != expected_alg {
-            plugin_log.push("Deny bad algorithm");
-            return Err(());
-        }
+    fn config_default_keyclaim() -> JwtAuthConfig {
+        JwtAuthConfig::default()
+    }
 
-        // Build validation
-        let mut validation = Validation::new(expected_alg);
-        validation.leeway = self.config.lifetime_grace_period;
-        validation.validate_exp = true;
-        validation.validate_nbf = true;
-        validation.set_required_spec_claims::<&str>(&[]);
+    fn make_token(alg: Algorithm, kid: &str, iss: &str, secret_bytes: &[u8]) -> String {
+        let claims = json!({
+            "iss": iss,
+            "key": kid,
+            "sub": "alice",
+            "exp": (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600) as u64,
+        });
+        let header = Header::new(alg);
+        encode(&header, &claims, &EncodingKey::from_secret(secret_bytes)).unwrap()
+    }
 
-        if let Some(ref issuers) = self.config.issuers {
-            if !issuers.is_empty() {
-                validation.set_issuer(issuers);
-            }
-        }
+    #[test]
+    fn verify_hits_correct_group_by_iss() {
+        let secret = b"hs256-secret-at-least-32-bytes-long-padding";
+        let group_a = make_hs_group("partner-a", "k1", secret);
+        let mut by_iss = HashMap::new();
+        by_iss.insert("https://a.example".to_string(), group_a);
+        let store = JwtIssuerGroupStore::new(by_iss);
+        let config = config_default_keyclaim();
+        let mut log = PluginLog::new("JwtAuth");
 
-        if let Some(ref audiences) = self.config.audiences {
-            if !audiences.is_empty() {
-                validation.set_audience(audiences);
-            }
-        } else {
-            validation.validate_aud = false;
-        }
+        let token = make_token(Algorithm::HS256, "k1", "https://a.example", secret);
+        let ok = verify_jwt(&token, &store, &config, &mut log).unwrap();
+        assert_eq!(ok.iss, "https://a.example");
+        assert_eq!(ok.group.group, "partner-a");
+    }
 
-        let decoding_key = match &credentials {
-            Credentials::Single(cred) => self.build_decoding_key(cred).inspect_err(|_| {
-                plugin_log.push_err("bad credential key");
-            })?,
-            Credentials::Multi(map) => {
-                // For multi-key, peek at the payload to get key_claim_name value.
-                let mut no_verify = Validation::new(expected_alg);
-                no_verify.insecure_disable_signature_validation();
-                no_verify.validate_exp = false;
-                no_verify.validate_nbf = false;
-                no_verify.validate_aud = false;
-                no_verify.set_required_spec_claims::<&str>(&[]);
+    #[test]
+    fn verify_rejects_unknown_iss() {
+        let secret = b"hs256-secret-at-least-32-bytes-long-padding";
+        let group_a = make_hs_group("partner-a", "k1", secret);
+        let mut by_iss = HashMap::new();
+        by_iss.insert("https://a.example".to_string(), group_a);
+        let store = JwtIssuerGroupStore::new(by_iss);
+        let config = config_default_keyclaim();
+        let mut log = PluginLog::new("JwtAuth");
 
-                let token_data = decode::<Claims>(token, &DecodingKey::from_secret(&[]), &no_verify).map_err(|_| {
-                    plugin_log.push("Deny malformed token");
-                })?;
-                let claims_value = token_data.claims.to_value();
+        let token = make_token(Algorithm::HS256, "k1", "https://unknown.example", secret);
+        let err = verify_jwt(&token, &store, &config, &mut log).unwrap_err();
+        assert!(matches!(err, VerifyDeny::UnknownIss));
+    }
 
-                let key_value = claims_value
-                    .get(&self.config.key_claim_name)
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        plugin_log.push("Deny missing claim");
-                    })?;
+    #[test]
+    fn verify_rejects_iss_trailing_slash_mismatch() {
+        // Token iss has trailing slash; group iss does not. Spec §11: no normalization.
+        let secret = b"hs256-secret-at-least-32-bytes-long-padding";
+        let group_a = make_hs_group("partner-a", "k1", secret);
+        let mut by_iss = HashMap::new();
+        by_iss.insert("https://a.example".to_string(), group_a); // no slash
+        let store = JwtIssuerGroupStore::new(by_iss);
+        let config = config_default_keyclaim();
+        let mut log = PluginLog::new("JwtAuth");
 
-                let cred = map.get(key_value).ok_or_else(|| {
-                    // Use a generic failure tag so external observers cannot distinguish
-                    // "key not found" from "key found but signature invalid" (key enumeration).
-                    plugin_log.push("Deny invalid credentials");
-                })?;
-                // §3: key resolved from multi-key map
-                plugin_log.push("multi key resolved");
+        let token = make_token(Algorithm::HS256, "k1", "https://a.example/", secret); // with slash
+        let err = verify_jwt(&token, &store, &config, &mut log).unwrap_err();
+        assert!(
+            matches!(err, VerifyDeny::UnknownIss),
+            "got: {:?}",
+            std::mem::discriminant(&err)
+        );
+    }
 
-                self.build_decoding_key(cred).inspect_err(|_| {
-                    plugin_log.push_err("bad credential key");
-                })?
-            }
-            Credentials::None => {
-                plugin_log.push_err("no credentials configured");
-                return Err(());
-            }
-        };
+    #[test]
+    fn verify_rejects_algorithm_confusion_attack() {
+        // partner-a is HS256. Token claims iss=partner-a but signed with HS384.
+        // header.alg=HS384 vs group.algorithm=HS256 -> Deny bad algorithm.
+        let secret = b"hs256-secret-at-least-32-bytes-long-padding";
+        let group_a = make_hs_group("partner-a", "k1", secret);
+        let mut by_iss = HashMap::new();
+        by_iss.insert("https://a.example".to_string(), group_a);
+        let store = JwtIssuerGroupStore::new(by_iss);
+        let config = config_default_keyclaim();
+        let mut log = PluginLog::new("JwtAuth");
 
-        // Verify signature and claims
-        let token_data = decode::<Claims>(token, &decoding_key, &validation).map_err(|e| {
-            plugin_log.push(classify_jwt_decode_error(&e));
-        })?;
-        let claims_value = token_data.claims.to_value();
+        let token = make_token(Algorithm::HS384, "k1", "https://a.example", secret);
+        let err = verify_jwt(&token, &store, &config, &mut log).unwrap_err();
+        assert!(matches!(err, VerifyDeny::BadAlgorithm));
+    }
 
-        // Validate maximum_expiration if configured
-        if self.config.maximum_expiration > 0 {
-            if let Some(exp) = claims_value.get("exp").and_then(|v| v.as_u64()) {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                let max_allowed_exp = now + self.config.maximum_expiration;
-                if exp > max_allowed_exp {
-                    plugin_log.push("Deny exp too far");
-                    return Err(());
-                }
-            }
-        }
+    #[test]
+    fn verify_rejects_kid_from_other_group() {
+        // partner-a has kid=ka; partner-b has kid=kb.
+        // Token claims iss=partner-b but kid=ka (from partner-a).
+        // Routing -> partner-b group -> ka not in partner-b.credentials -> Deny missing key.
+        let secret_a = b"hs256-secret-a-padding-padding-padding-padding";
+        let secret_b = b"hs256-secret-b-padding-padding-padding-padding";
+        let group_a = make_hs_group("partner-a", "ka", secret_a);
+        let group_b = make_hs_group("partner-b", "kb", secret_b);
+        let mut by_iss = HashMap::new();
+        by_iss.insert("https://a.example".to_string(), group_a);
+        by_iss.insert("https://b.example".to_string(), group_b);
+        let store = JwtIssuerGroupStore::new(by_iss);
+        let config = config_default_keyclaim();
+        let mut log = PluginLog::new("JwtAuth");
 
-        // Extract username: try key_claim_name first, then "sub" claim, then empty string
-        let username = claims_value
-            .get(&self.config.key_claim_name)
-            .and_then(|v| v.as_str())
-            .or_else(|| claims_value.get("sub").and_then(|v| v.as_str()))
-            .unwrap_or("")
-            .to_string();
-
-        let claims_json = if self.config.store_claims_in_ctx {
-            serde_json::to_string(&claims_value).ok()
-        } else {
-            None
-        };
-
-        Ok(VerifyResult {
-            username,
-            claims_json,
-            claims: claims_value,
-        })
+        // Sign with secret_a (would verify only if routed to group_a), but
+        // claim iss=https://b.example. Routing -> group_b -> kid `ka` not in
+        // group_b's credentials -> Deny missing key.
+        let token = make_token(Algorithm::HS256, "ka", "https://b.example", secret_a);
+        let err = verify_jwt(&token, &store, &config, &mut log).unwrap_err();
+        assert!(matches!(err, VerifyDeny::MissingKey));
     }
 }

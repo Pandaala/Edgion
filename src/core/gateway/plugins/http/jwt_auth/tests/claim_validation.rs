@@ -5,17 +5,13 @@ use serde_json::json;
 
 #[tokio::test]
 async fn test_issuer_validation_pass() {
-    let auth = jwt_auth_with_credential(
-        TEST_SECRET,
-        JwtAlgorithm::HS256,
-        Some(|c| {
-            c.issuers = Some(vec!["https://auth.example.com".to_string()]);
-        }),
-    );
+    // With issuer_groups, the iss is routed to the group. A token with the
+    // correct TEST_ISS is accepted.
+    let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, None);
 
     let claims = json!({
         "sub": "user123",
-        "iss": "https://auth.example.com",
+        "iss": TEST_ISS,
         "exp": now_ts() + 3600
     });
     let token = generate_hs256_token(claims, TEST_SECRET);
@@ -37,20 +33,20 @@ async fn test_issuer_validation_pass() {
 
 #[tokio::test]
 async fn test_issuer_validation_fail() {
-    let auth = jwt_auth_with_credential(
-        TEST_SECRET,
-        JwtAlgorithm::HS256,
-        Some(|c| {
-            c.issuers = Some(vec!["https://auth.example.com".to_string()]);
-        }),
-    );
+    // A token with an unknown iss is rejected with "Deny unknown iss".
+    let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, None);
 
     let claims = json!({
         "sub": "user123",
         "iss": "https://wrong-issuer.com",
         "exp": now_ts() + 3600
     });
-    let token = generate_hs256_token(claims, TEST_SECRET);
+    // Generate token with wrong iss explicitly (bypass the helper merging TEST_ISS).
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    let token = {
+        let header = Header::new(Algorithm::HS256);
+        encode(&header, &claims, &EncodingKey::from_secret(TEST_SECRET.as_bytes())).unwrap()
+    };
 
     let mut mock = MockPluginSession::new();
     let mut log = PluginLog::new("JwtAuth");
@@ -67,6 +63,8 @@ async fn test_issuer_validation_fail() {
 
     let r = auth.run_request(&mut mock, &mut log).await;
     assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
+    // With issuer_groups routing, unknown iss -> "Deny unknown iss"
+    assert!(log.contains("Deny unknown iss"), "got: {log:?}");
 }
 
 #[tokio::test]
@@ -75,6 +73,8 @@ async fn test_audience_validation_pass() {
         TEST_SECRET,
         JwtAlgorithm::HS256,
         Some(|c| {
+            // audiences on config is snapshot-merged into the group during
+            // jwt_auth_with_credential construction
             c.audiences = Some(vec!["my-api".to_string()]);
         }),
     );

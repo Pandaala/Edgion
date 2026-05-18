@@ -1,57 +1,70 @@
 // JWT Auth Plugin Test Suite
 //
 // Required config files (in examples/test/conf/EdgionPlugins/JwtAuth/):
-// - Secret_default_jwt-secret.yaml            # JWT secret: "my-jwt-secret-key-32-chars-long!!"
-// - EdgionPlugins_default_jwt-auth.yaml       # JwtAuth plugin with HS256
-// - HTTPRoute_default_jwt-auth-test.yaml      # Route with host: jwt-test.example.com
+// - 01_Secret_default_jwt-secret.yaml            # JWT secret: "my-jwt-secret-key-32-chars-long!!"
+// - EdgionPlugins_default_jwt-auth.yaml          # JwtAuth plugin with HS256 (issuerGroups: default)
+// - HTTPRoute_default_jwt-auth-test.yaml         # Route with host: jwt-test.example.com
+// - 02_Secret_default_jwt-credentials-grouped.yaml      # Two grouped Secrets
+// - 03_EdgionPlugins_default_jwt-auth-grouped.yaml      # JwtAuth with partner-a + partner-b
+// - 04_HTTPRoute_default_jwt-auth-grouped.yaml          # Route for grouped test
 //
 // Also requires base config (in examples/test/conf/EdgionPlugins/base/):
 // - Gateway.yaml                              # Gateway for EdgionPlugins tests
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use serde_json::json;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub struct JwtAuthTestSuite;
 
-/// JWT secret used in test (must match Secret_default_jwt-secret.yaml)
-const JWT_SECRET: &str = "my-jwt-secret-key-32-chars-long!!";
+/// JWT secret used in default-group tests (must match 01_Secret_default_jwt-secret.yaml decoded)
+const JWT_SECRET: &[u8] = b"my-jwt-secret-key-32-chars-long!!";
 
-type HmacSha256 = Hmac<Sha256>;
+/// Default issuer — must match the `issuers` list in EdgionPlugins_default_jwt-auth.yaml
+const DEFAULT_ISS: &str = "https://test.example";
 
-/// Generate a HS256 JWT token with custom claims
-fn generate_jwt_with_claims(claims_json: &str) -> String {
-    // Header: {"alg":"HS256","typ":"JWT"}
-    let header = r#"{"alg":"HS256","typ":"JWT"}"#;
-    let header_b64 = URL_SAFE_NO_PAD.encode(header);
-    let payload_b64 = URL_SAFE_NO_PAD.encode(claims_json);
+/// Default kid — must match the `key:` field (base64 of "default-kid") in 01_Secret_default_jwt-secret.yaml
+const DEFAULT_KID: &str = "default-kid";
 
-    // Signature: HMAC-SHA256
-    let message = format!("{}.{}", header_b64, payload_b64);
-    let mut mac = HmacSha256::new_from_slice(JWT_SECRET.as_bytes()).unwrap();
-    mac.update(message.as_bytes());
-    let signature = mac.finalize().into_bytes();
-    let signature_b64 = URL_SAFE_NO_PAD.encode(signature);
+/// Grouped test constants
+const GROUPED_HOST: &str = "jwt-auth-grouped.example.com";
+const GROUPED_ISS_A: &str = "https://a.example";
+const GROUPED_ISS_B: &str = "https://b.example";
+const GROUPED_KID_A: &str = "ka";
+const GROUPED_KID_B: &str = "kb";
+const GROUPED_SECRET_A: &[u8] = b"partner-a-jwt-secret-32-chars-long-pad";
+const GROUPED_SECRET_B: &[u8] = b"partner-b-jwt-secret-32-chars-long-pad";
 
-    format!("{}.{}.{}", header_b64, payload_b64, signature_b64)
+/// Build a HS256 JWT with iss, kid (key claim), sub and exp.
+/// Uses the `jsonwebtoken` crate (v9) — the same library used by the gateway.
+fn build_jwt_hs256(iss: &str, kid: &str, secret: &[u8], sub: &str) -> String {
+    let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 3600;
+    let claims = json!({
+        "iss": iss,
+        "key": kid,
+        "sub": sub,
+        "exp": exp,
+    });
+    let header = Header::new(Algorithm::HS256);
+    encode(&header, &claims, &EncodingKey::from_secret(secret)).unwrap()
 }
 
-/// Generate a simple HS256 JWT token
-fn generate_jwt(key_claim: &str, exp_offset_secs: i64) -> String {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-    let exp = now + exp_offset_secs;
-    let payload = format!(r#"{{"key":"{}","exp":{}}}"#, key_claim, exp);
-    generate_jwt_with_claims(&payload)
-}
-
-/// Generate JWT with sub claim (for username extraction tests)
-fn generate_jwt_with_sub(sub: &str, exp_offset_secs: i64) -> String {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-    let exp = now + exp_offset_secs;
-    let payload = format!(r#"{{"sub":"{}","exp":{}}}"#, sub, exp);
-    generate_jwt_with_claims(&payload)
+/// Build an expired HS256 JWT (exp in the past).
+fn build_expired_jwt_hs256(iss: &str, kid: &str, secret: &[u8], sub: &str) -> String {
+    let exp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .saturating_sub(3600);
+    let claims = json!({
+        "iss": iss,
+        "key": kid,
+        "sub": sub,
+        "exp": exp,
+    });
+    let header = Header::new(Algorithm::HS256);
+    encode(&header, &claims, &EncodingKey::from_secret(secret)).unwrap()
 }
 
 impl JwtAuthTestSuite {
@@ -66,8 +79,7 @@ impl JwtAuthTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/health", ctx.http_url());
 
-                    // Generate valid JWT (expires in 1 hour)
-                    let jwt = generate_jwt("test-user", 3600);
+                    let jwt = build_jwt_hs256(DEFAULT_ISS, DEFAULT_KID, JWT_SECRET, "test-user");
 
                     let request = client
                         .get(&url)
@@ -171,8 +183,7 @@ impl JwtAuthTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/health", ctx.http_url());
 
-                    // Generate expired JWT (expired 1 hour ago)
-                    let jwt = generate_jwt("test-user", -3600);
+                    let jwt = build_expired_jwt_hs256(DEFAULT_ISS, DEFAULT_KID, JWT_SECRET, "test-user");
 
                     let request = client
                         .get(&url)
@@ -208,8 +219,7 @@ impl JwtAuthTestSuite {
                     let start = Instant::now();
                     let client = &ctx.http_client;
 
-                    // Generate valid JWT
-                    let jwt = generate_jwt("test-user", 3600);
+                    let jwt = build_jwt_hs256(DEFAULT_ISS, DEFAULT_KID, JWT_SECRET, "test-user");
                     let url = format!("{}/health?jwt={}", ctx.http_url(), jwt);
 
                     let request = client.get(&url).header("host", "jwt-test.example.com");
@@ -244,8 +254,7 @@ impl JwtAuthTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/health", ctx.http_url());
 
-                    // Generate valid JWT
-                    let jwt = generate_jwt("test-user", 3600);
+                    let jwt = build_jwt_hs256(DEFAULT_ISS, DEFAULT_KID, JWT_SECRET, "test-user");
 
                     let request = client
                         .get(&url)
@@ -320,15 +329,15 @@ impl JwtAuthTestSuite {
     fn test_jwt_with_sub_claim() -> TestCase {
         TestCase::new(
             "jwt_with_sub_claim",
-            "JWT with sub claim (no key claim) returns 200",
+            "JWT with sub claim returns 200 (sub used for username extraction in OK log)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = &ctx.http_client;
                     let url = format!("{}/health", ctx.http_url());
 
-                    // Generate JWT with sub instead of key
-                    let jwt = generate_jwt_with_sub("user@example.com", 3600);
+                    // Token includes iss + key (required) and sub (for OK log username extraction)
+                    let jwt = build_jwt_hs256(DEFAULT_ISS, DEFAULT_KID, JWT_SECRET, "user@example.com");
 
                     let request = client
                         .get(&url)
@@ -365,7 +374,7 @@ impl JwtAuthTestSuite {
                     let client = &ctx.http_client;
 
                     // Valid token in header
-                    let valid_jwt = generate_jwt("valid-user", 3600);
+                    let valid_jwt = build_jwt_hs256(DEFAULT_ISS, DEFAULT_KID, JWT_SECRET, "valid-user");
                     // Invalid token in query
                     let url = format!("{}/health?jwt=invalid.token.here", ctx.http_url());
 
@@ -406,7 +415,7 @@ impl JwtAuthTestSuite {
                     let start = Instant::now();
                     let trace_id = format!("test-jwt-auth-{}", uuid::Uuid::new_v4());
                     let url = format!("{}/health", ctx.http_url());
-                    let jwt = generate_jwt("test-user", 3600);
+                    let jwt = build_jwt_hs256(DEFAULT_ISS, DEFAULT_KID, JWT_SECRET, "test-user");
 
                     let _ = ctx
                         .http_client
@@ -455,6 +464,131 @@ impl JwtAuthTestSuite {
             },
         )
     }
+
+    /// Test: JWT from partner-a group is routed and verified correctly
+    fn test_grouped_partner_a_returns_200() -> TestCase {
+        TestCase::new(
+            "grouped_partner_a_returns_200",
+            "JWT from partner-a routed and verified",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let token = build_jwt_hs256(GROUPED_ISS_A, GROUPED_KID_A, GROUPED_SECRET_A, "alice");
+                    let url = format!("{}/health", ctx.http_url());
+                    let result = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", GROUPED_HOST)
+                        .header("authorization", format!("Bearer {}", token))
+                        .send()
+                        .await;
+                    match result {
+                        Ok(r) if r.status().as_u16() == 200 => {
+                            TestResult::passed_with_message(start.elapsed(), "partner-a 200".into())
+                        }
+                        Ok(r) => TestResult::failed(start.elapsed(), format!("expected 200, got {}", r.status())),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("{}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: JWT from partner-b group is routed and verified correctly
+    fn test_grouped_partner_b_returns_200() -> TestCase {
+        TestCase::new(
+            "grouped_partner_b_returns_200",
+            "JWT from partner-b routed and verified",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let token = build_jwt_hs256(GROUPED_ISS_B, GROUPED_KID_B, GROUPED_SECRET_B, "bob");
+                    let url = format!("{}/health", ctx.http_url());
+                    let result = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", GROUPED_HOST)
+                        .header("authorization", format!("Bearer {}", token))
+                        .send()
+                        .await;
+                    match result {
+                        Ok(r) if r.status().as_u16() == 200 => {
+                            TestResult::passed_with_message(start.elapsed(), "partner-b 200".into())
+                        }
+                        Ok(r) => TestResult::failed(start.elapsed(), format!("expected 200, got {}", r.status())),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("{}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: Token with unknown iss returns 401 (mismatched issuer not in any group)
+    fn test_grouped_mismatched_iss_returns_401() -> TestCase {
+        TestCase::new(
+            "grouped_mismatched_iss_returns_401",
+            "Token with unknown iss returns 401",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    // Sign with partner-a's secret but claim an iss not in any group
+                    let token = build_jwt_hs256("https://unknown.example", GROUPED_KID_A, GROUPED_SECRET_A, "alice");
+                    let url = format!("{}/health", ctx.http_url());
+                    let result = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", GROUPED_HOST)
+                        .header("authorization", format!("Bearer {}", token))
+                        .send()
+                        .await;
+                    match result {
+                        Ok(r) if r.status().as_u16() == 401 => {
+                            TestResult::passed_with_message(start.elapsed(), "unknown iss rejected with 401".into())
+                        }
+                        Ok(r) => TestResult::failed(
+                            start.elapsed(),
+                            format!("expected 401 for unknown iss, got {}", r.status()),
+                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("{}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: Token with trailing-slash iss returns 401 (no normalization — spec §11)
+    fn test_grouped_iss_trailing_slash_returns_401() -> TestCase {
+        TestCase::new(
+            "grouped_iss_trailing_slash_returns_401",
+            "Token with trailing-slash iss returns 401 (no iss normalization)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    // Group iss is "https://a.example" (no slash); token adds trailing slash
+                    let token = build_jwt_hs256("https://a.example/", GROUPED_KID_A, GROUPED_SECRET_A, "alice");
+                    let url = format!("{}/health", ctx.http_url());
+                    let result = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", GROUPED_HOST)
+                        .header("authorization", format!("Bearer {}", token))
+                        .send()
+                        .await;
+                    match result {
+                        Ok(r) if r.status().as_u16() == 401 => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "trailing-slash iss rejected with 401 (no normalization)".into(),
+                        ),
+                        Ok(r) => TestResult::failed(
+                            start.elapsed(),
+                            format!("expected 401 for trailing-slash iss, got {}", r.status()),
+                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("{}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for JwtAuthTestSuite {
@@ -475,10 +609,15 @@ impl TestSuite for JwtAuthTestSuite {
             Self::test_token_extraction_priority(),
             // P0: WWW-Authenticate header
             Self::test_www_authenticate_header(),
-            // P2: Username extraction (sub claim fallback)
+            // P2: Username extraction (sub claim)
             Self::test_jwt_with_sub_claim(),
             // access log regression
             Self::test_stage_logs_contain_jwt_auth(),
+            // Grouped issuer tests
+            Self::test_grouped_partner_a_returns_200(),
+            Self::test_grouped_partner_b_returns_200(),
+            Self::test_grouped_mismatched_iss_returns_401(),
+            Self::test_grouped_iss_trailing_slash_returns_401(),
         ]
     }
 }

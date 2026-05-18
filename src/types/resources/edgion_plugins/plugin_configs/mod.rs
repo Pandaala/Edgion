@@ -53,7 +53,7 @@ pub use header_cert_auth::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderC
 pub use hmac_auth::{HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup, HmacCredential};
 pub use ip_restriction::{DefaultAction, IpRestrictionConfig, IpSource};
 pub use jwe_decrypt::{JweContentEncryption, JweDecryptConfig, JweKeyManagement, ResolvedJweCredential};
-pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, ResolvedJwtCredential};
+pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, ResolvedJwtCredential, ResolvedJwtIssuerGroup};
 pub use key_auth::{KeyAuthConfig, KeyAuthSecretGroup, KeyMetadata};
 pub use ldap_auth::LdapAuthConfig;
 pub use linksys_ref::LinkSysRef;

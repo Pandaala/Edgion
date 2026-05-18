@@ -270,6 +270,76 @@ spec:
                           usernameField:
                             type: string
                             description: "Field name in credential entry for username"
+                          # --- JwtAuth config fields ---
+                          algorithm:
+                            type: string
+                            enum: [HS256, HS384, HS512, RS256, RS384, RS512, ES256, ES384]
+                            description: "JwtAuth plugin-level default JWT signature algorithm (overridable per issuerGroup)"
+                          header:
+                            type: string
+                            description: "JwtAuth: header name to read token from"
+                          query:
+                            type: string
+                            description: "JwtAuth: query parameter name for token"
+                          cookie:
+                            type: string
+                            description: "JwtAuth: cookie name for token"
+                          keyClaimName:
+                            type: string
+                            description: "JwtAuth: JWT payload claim name identifying the credential key"
+                          lifetimeGracePeriod:
+                            type: integer
+                            minimum: 0
+                            description: "JwtAuth: clock skew tolerance in seconds for exp/nbf"
+                          audiences:
+                            type: array
+                            description: "JwtAuth plugin-level default valid audiences (overridable per issuerGroup)"
+                            items: { type: string }
+                          base64Secret:
+                            type: boolean
+                            description: "JwtAuth: whether HS* secret is base64-encoded"
+                          maximumExpiration:
+                            type: integer
+                            minimum: 0
+                            description: "JwtAuth: maximum allowed exp in seconds from now (0 = no limit)"
+                          storeClaimsInCtx:
+                            type: boolean
+                            description: "JwtAuth: store decoded claims in ctx var 'jwt_claims'"
+                          claimsToHeaders:
+                            type: object
+                            additionalProperties: { type: string }
+                            description: "JwtAuth: map JWT claim names to upstream header names"
+                          issuerGroups:
+                            type: array
+                            description: "JwtAuth: named groups of issuers + Secret refs"
+                            items:
+                              type: object
+                              required: [name, issuers, secretRefs]
+                              properties:
+                                name:
+                                  type: string
+                                  pattern: '^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$'
+                                  maxLength: 63
+                                description: { type: string }
+                                issuers:
+                                  type: array
+                                  minItems: 1
+                                  items: { type: string }
+                                secretRefs:
+                                  type: array
+                                  minItems: 1
+                                  items:
+                                    type: object
+                                    required: [name]
+                                    properties:
+                                      name: { type: string }
+                                      namespace: { type: string }
+                                algorithm:
+                                  type: string
+                                  enum: [HS256, HS384, HS512, RS256, RS384, RS512, ES256, ES384]
+                                audiences:
+                                  type: array
+                                  items: { type: string }
 
                 # ============================================
                 # Upstream Response Filter Stage Plugins (sync)

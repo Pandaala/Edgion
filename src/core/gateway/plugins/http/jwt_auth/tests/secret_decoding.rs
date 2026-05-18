@@ -36,5 +36,5 @@ async fn test_base64_secret_decoding() {
 
     let r = auth.run_request(&mut mock, &mut log).await;
     assert_eq!(r, PluginRunningResult::GoodNext);
-    assert!(log.contains("OK u=user123"));
+    assert!(log.contains("OK group="), "log should contain OK group=, got: {log:?}");
 }

@@ -1,18 +1,19 @@
 //! JWT Auth plugin configuration
 //!
 //! Supports verification of JWT in header, query, or cookie.
-//! Credentials: single secret/public_key (secret_ref) or multiple keys (secret_refs).
+//! Routing: peek iss claim → route to matching issuer_group → verify with
+//! that group's keys/algorithm/aud (closes issuer-key decoupling vulnerability).
 
 use crate::types::resources::gateway::SecretObjectReference;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Resolved JWT credential data (populated by controller from Secret)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedJwtCredential {
-    /// Key identifier (for multi-key mode)
+    /// Key identifier (kid) used to look up the credential within a group
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     /// Symmetric secret (for HS* algorithms), base64 encoded
@@ -51,22 +52,72 @@ pub enum JwtAlgorithm {
     ES384,
 }
 
+/// A named group of issuers + Secret refs whose credentials all carry this
+/// group's name. Token routing is by `iss` claim; verification is scoped
+/// strictly to this group's keys and (snapshot-merged) algorithm + aud.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct JwtIssuerGroup {
+    /// Group name; charset per K8s label-value
+    /// (`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`, <=63 chars).
+    /// Surfaces in PluginLog as `group=<name>`.
+    pub name: String,
+
+    /// Human-readable description (not used by runtime).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Issuers this group covers. At least one; cross-group uniqueness
+    /// enforced at preparse (this is the routing key).
+    pub issuers: Vec<String>,
+
+    /// Secret references for this group. Must be non-empty at preparse.
+    pub secret_refs: Vec<SecretObjectReference>,
+
+    /// Override the plugin-level `algorithm`. `None` = use plugin-level.
+    /// Snapshot-merged at controller resolve time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub algorithm: Option<JwtAlgorithm>,
+
+    /// Override the plugin-level `audiences`. `None` = use plugin-level.
+    /// `Some(vec![])` is treated as "no aud check for this group".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audiences: Option<Vec<String>>,
+}
+
+/// Snapshot-merged group (controller-populated). Always carries concrete
+/// `algorithm` and the per-kid credential map for this group.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedJwtIssuerGroup {
+    /// Group name (snapshot of `JwtIssuerGroup.name`). Always set by
+    /// controller; `#[serde(default)]` provides a fallback for
+    /// Gateway-new / Controller-old rolling upgrades (lesson L2).
+    #[serde(default = "default_group_name")]
+    pub group: String,
+
+    /// Snapshot-merged: group's `algorithm` if set, else plugin-level default.
+    /// Always a concrete value at runtime — gateway does NO fallback here.
+    pub algorithm: JwtAlgorithm,
+
+    /// Snapshot-merged: group's `audiences` if set, else plugin-level.
+    /// `None` = no aud check; `Some(vec![])` = explicit "no check" override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audiences: Option<Vec<String>>,
+
+    /// Credentials for this group, keyed by `kid` (Secret's `key` field).
+    pub credentials: HashMap<String, ResolvedJwtCredential>,
+}
+
+fn default_group_name() -> String {
+    "default".to_string()
+}
+
 /// JWT Auth plugin configuration (route/service level)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JwtAuthConfig {
-    /// Single Secret ref: Secret must contain "secret" (for HS*) or "publicKey" (for RS*/ES*).
-    /// Used for single-issuer verification (no key lookup by claim).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub secret_ref: Option<SecretObjectReference>,
-
-    /// Multiple credentials: list of Secret refs. Each Secret must contain "key" and "secret" (HS*)
-    /// or "key" and "publicKey" (RS*/ES*). The JWT payload claim named by key_claim_name is used
-    /// to select the credential.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub secret_refs: Option<Vec<SecretObjectReference>>,
-
-    /// Algorithm (default: HS256)
+    /// Algorithm (default: HS256). Applied at plugin level; each group may override.
     #[serde(default)]
     pub algorithm: JwtAlgorithm,
 
@@ -98,11 +149,8 @@ pub struct JwtAuthConfig {
     #[serde(default)]
     pub lifetime_grace_period: u64,
 
-    /// List of valid issuers (iss claim). If empty, issuer is not validated.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub issuers: Option<Vec<String>>,
-
-    /// List of valid audiences (aud claim). If empty, audience is not validated.
+    /// List of valid audiences (aud claim) at plugin level.
+    /// Each group may override. If empty, audience is not validated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audiences: Option<Vec<String>>,
 
@@ -136,17 +184,18 @@ pub struct JwtAuthConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claims_to_headers: Option<HashMap<String, String>>,
 
-    // === Runtime fields (populated by controller, not user-configurable) ===
-    /// Resolved single credential (from secret_ref, populated by controller)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub resolved_credential: Option<ResolvedJwtCredential>,
+    /// Issuer groups. Optional so anonymous-only deployments remain valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer_groups: Option<Vec<JwtIssuerGroup>>,
 
-    /// Resolved multiple credentials (from secret_refs, populated by controller)
-    /// Key is the credential identifier from Secret's "key" field
+    // === Runtime fields (populated by controller, not user-configurable) ===
+    /// Snapshot-merged groups indexed by `iss` (one entry per iss claim).
+    /// Built by controller from `issuer_groups` + plugin-level defaults.
+    /// Multiple iss values from the same group each hold their own copy
+    /// (clone, not Arc, to keep serde simple).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
-    pub resolved_credentials: Option<HashMap<String, ResolvedJwtCredential>>,
+    pub resolved_groups_by_iss: Option<HashMap<String, ResolvedJwtIssuerGroup>>,
 }
 
 fn default_header() -> String {
@@ -168,8 +217,6 @@ fn default_realm() -> String {
 impl Default for JwtAuthConfig {
     fn default() -> Self {
         Self {
-            secret_ref: None,
-            secret_refs: None,
             algorithm: JwtAlgorithm::default(),
             header: default_header(),
             query: default_query(),
@@ -178,7 +225,6 @@ impl Default for JwtAuthConfig {
             anonymous: None,
             key_claim_name: default_key_claim_name(),
             lifetime_grace_period: 0,
-            issuers: None,
             audiences: None,
             realm: default_realm(),
             base64_secret: false,
@@ -186,8 +232,8 @@ impl Default for JwtAuthConfig {
             auth_failure_delay_ms: 0,
             store_claims_in_ctx: false,
             claims_to_headers: None,
-            resolved_credential: None,
-            resolved_credentials: None,
+            issuer_groups: None,
+            resolved_groups_by_iss: None,
         }
     }
 }
@@ -196,24 +242,43 @@ use crate::types::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for JwtAuthConfig {
     fn validation_error(&self) -> Option<String> {
-        // When not anonymous, at least one credential source must be present.
-        // resolved_credential/resolved_credentials are set by the controller
-        // (after secret lookup); at preparse time they may be None even if
-        // secret_ref/secret_refs are set, so we only check the user-facing refs.
-        if self.anonymous.is_none()
-            && self.secret_ref.is_none()
-            && self.secret_refs.is_none()
-            && self.resolved_credential.is_none()
-            && self.resolved_credentials.is_none()
-        {
-            return Some(
-                "At least one of secretRef, secretRefs, or resolvedCredential must be provided \
-                 when anonymous is not set"
-                    .to_string(),
-            );
+        // 1. issuer_groups structural validation
+        if let Some(groups) = &self.issuer_groups {
+            if groups.is_empty() {
+                return Some("issuerGroups cannot be empty when present".to_string());
+            }
+            let mut seen_names: HashSet<&str> = HashSet::new();
+            let mut seen_issuers: HashSet<&str> = HashSet::new();
+            for g in groups {
+                if let Err(e) = crate::types::resources::common::group_name::validate_group_name(&g.name) {
+                    return Some(format!("issuerGroups: {}", e));
+                }
+                if !seen_names.insert(g.name.as_str()) {
+                    return Some(format!("duplicate group name '{}'", g.name));
+                }
+                if g.issuers.is_empty() {
+                    return Some(format!("group '{}' has no issuers", g.name));
+                }
+                if g.secret_refs.is_empty() {
+                    return Some(format!("group '{}' has no secretRefs", g.name));
+                }
+                // Cross-group iss uniqueness — critical for routing correctness.
+                // (audiences are NOT cross-group unique — legitimate sharing.)
+                for iss in &g.issuers {
+                    if iss.trim().is_empty() {
+                        return Some(format!("group '{}' has empty issuer", g.name));
+                    }
+                    if !seen_issuers.insert(iss.as_str()) {
+                        return Some(format!(
+                            "issuer '{}' appears in multiple groups; iss must be unique across groups",
+                            iss
+                        ));
+                    }
+                }
+            }
         }
 
-        // Token source fields must not be empty
+        // 2. Token source fields must not be empty
         if self.header.trim().is_empty() {
             return Some("header must not be empty".to_string());
         }
@@ -222,6 +287,13 @@ impl PluginValidation for JwtAuthConfig {
         }
         if self.cookie.trim().is_empty() {
             return Some("cookie must not be empty".to_string());
+        }
+
+        // 3. Final gate: anonymous or groups required
+        let has_groups = self.issuer_groups.as_ref().is_some_and(|v| !v.is_empty());
+        let has_resolved = self.resolved_groups_by_iss.as_ref().is_some_and(|m| !m.is_empty());
+        if self.anonymous.is_none() && !has_groups && !has_resolved {
+            return Some("issuerGroups (or resolvedGroupsByIss) is required when anonymous is not set".to_string());
         }
 
         None
@@ -243,6 +315,17 @@ mod tests {
         }
     }
 
+    fn make_issuer_group(name: &str, issuer: &str) -> JwtIssuerGroup {
+        JwtIssuerGroup {
+            name: name.to_string(),
+            description: None,
+            issuers: vec![issuer.to_string()],
+            secret_refs: vec![make_secret_ref()],
+            algorithm: None,
+            audiences: None,
+        }
+    }
+
     #[test]
     fn test_no_credential_no_anonymous_returns_error() {
         let cfg = JwtAuthConfig::default();
@@ -250,8 +333,8 @@ mod tests {
         assert!(err.is_some(), "expected a validation error");
         let msg = err.unwrap();
         assert!(
-            msg.contains("secretRef"),
-            "error message should mention secretRef, got: {msg}"
+            msg.contains("issuerGroups"),
+            "error message should mention issuerGroups, got: {msg}"
         );
     }
 
@@ -267,7 +350,7 @@ mod tests {
     #[test]
     fn test_empty_header_returns_error() {
         let cfg = JwtAuthConfig {
-            secret_ref: Some(make_secret_ref()),
+            issuer_groups: Some(vec![make_issuer_group("g", "https://a.example")]),
             header: "   ".to_string(),
             ..Default::default()
         };
@@ -277,11 +360,146 @@ mod tests {
     }
 
     #[test]
-    fn test_valid_config_with_secret_ref_returns_none() {
+    fn test_valid_config_with_issuer_group_returns_none() {
         let cfg = JwtAuthConfig {
-            secret_ref: Some(make_secret_ref()),
+            issuer_groups: Some(vec![make_issuer_group("g", "https://a.example")]),
             ..Default::default()
         };
         assert_eq!(cfg.validation_error(), None);
+    }
+
+    #[test]
+    fn test_validate_issuer_groups_empty() {
+        let config = JwtAuthConfig {
+            issuer_groups: Some(vec![]),
+            anonymous: None,
+            ..Default::default()
+        };
+        let err = config.validation_error();
+        assert_eq!(err.unwrap(), "issuerGroups cannot be empty when present");
+    }
+
+    #[test]
+    fn test_validate_issuer_groups_duplicate_name() {
+        let config = JwtAuthConfig {
+            issuer_groups: Some(vec![
+                JwtIssuerGroup {
+                    name: "a".into(),
+                    description: None,
+                    issuers: vec!["https://a.example".into()],
+                    secret_refs: vec![SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "s1".into(),
+                        namespace: None,
+                    }],
+                    algorithm: None,
+                    audiences: None,
+                },
+                JwtIssuerGroup {
+                    name: "a".into(),
+                    description: None,
+                    issuers: vec!["https://b.example".into()],
+                    secret_refs: vec![SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "s2".into(),
+                        namespace: None,
+                    }],
+                    algorithm: None,
+                    audiences: None,
+                },
+            ]),
+            anonymous: None,
+            ..Default::default()
+        };
+        assert!(config.validation_error().unwrap().contains("duplicate group name 'a'"));
+    }
+
+    #[test]
+    fn test_validate_issuer_groups_invalid_name() {
+        let config = JwtAuthConfig {
+            issuer_groups: Some(vec![JwtIssuerGroup {
+                name: "-bad".into(),
+                description: None,
+                issuers: vec!["https://a.example".into()],
+                secret_refs: vec![SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "s".into(),
+                    namespace: None,
+                }],
+                algorithm: None,
+                audiences: None,
+            }]),
+            anonymous: None,
+            ..Default::default()
+        };
+        assert!(config
+            .validation_error()
+            .unwrap()
+            .contains("must start with alphanumeric"));
+    }
+
+    #[test]
+    fn test_validate_issuer_groups_empty_issuers() {
+        let config = JwtAuthConfig {
+            issuer_groups: Some(vec![JwtIssuerGroup {
+                name: "a".into(),
+                description: None,
+                issuers: vec![],
+                secret_refs: vec![SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "s".into(),
+                    namespace: None,
+                }],
+                algorithm: None,
+                audiences: None,
+            }]),
+            anonymous: None,
+            ..Default::default()
+        };
+        assert!(config.validation_error().unwrap().contains("group 'a' has no issuers"));
+    }
+
+    #[test]
+    fn test_validate_cross_group_iss_collision() {
+        let dup_iss = "https://shared.example";
+        let config = JwtAuthConfig {
+            issuer_groups: Some(vec![
+                JwtIssuerGroup {
+                    name: "a".into(),
+                    description: None,
+                    issuers: vec![dup_iss.into()],
+                    secret_refs: vec![SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "s1".into(),
+                        namespace: None,
+                    }],
+                    algorithm: None,
+                    audiences: None,
+                },
+                JwtIssuerGroup {
+                    name: "b".into(),
+                    description: None,
+                    issuers: vec![dup_iss.into()],
+                    secret_refs: vec![SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "s2".into(),
+                        namespace: None,
+                    }],
+                    algorithm: None,
+                    audiences: None,
+                },
+            ]),
+            anonymous: None,
+            ..Default::default()
+        };
+        let err = config.validation_error().unwrap();
+        assert!(err.contains("iss must be unique across groups"), "got: {}", err);
+        assert!(err.contains(dup_iss), "got: {}", err);
     }
 }

@@ -102,18 +102,12 @@ async fn test_store_claims_in_ctx() {
 }
 
 #[tokio::test]
-async fn test_username_from_key_claim_name() {
-    let auth = jwt_auth_with_credential(
-        TEST_SECRET,
-        JwtAlgorithm::HS256,
-        Some(|c| {
-            c.key_claim_name = "preferred_username".to_string();
-        }),
-    );
+async fn test_username_from_sub() {
+    // Username is always extracted from "sub" claim in the new issuer-group model.
+    let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, None);
 
     let claims = json!({
         "sub": "sub-value",
-        "preferred_username": "custom-user",
         "exp": now_ts() + 3600
     });
     let token = generate_hs256_token(claims, TEST_SECRET);
@@ -131,21 +125,20 @@ async fn test_username_from_key_claim_name() {
 
     let r = auth.run_request(&mut mock, &mut log).await;
     assert_eq!(r, PluginRunningResult::GoodNext);
-    assert!(log.contains("OK u=custom-user"));
+    // OK log includes group, iss, and u=<sub>
+    assert!(log.contains("OK group="), "log should contain OK group=, got: {log:?}");
+    assert!(
+        log.contains("u=sub-value"),
+        "log should contain u=sub-value, got: {log:?}"
+    );
 }
 
 #[tokio::test]
-async fn test_username_fallback_to_sub() {
-    let auth = jwt_auth_with_credential(
-        TEST_SECRET,
-        JwtAlgorithm::HS256,
-        Some(|c| {
-            c.key_claim_name = "nonexistent_claim".to_string();
-        }),
-    );
+async fn test_username_missing_sub_uses_placeholder() {
+    // When no sub claim is present, username is "(missing sub)".
+    let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, None);
 
     let claims = json!({
-        "sub": "fallback-user",
         "exp": now_ts() + 3600
     });
     let token = generate_hs256_token(claims, TEST_SECRET);
@@ -163,5 +156,5 @@ async fn test_username_fallback_to_sub() {
 
     let r = auth.run_request(&mut mock, &mut log).await;
     assert_eq!(r, PluginRunningResult::GoodNext);
-    assert!(log.contains("OK u=fallback-user"));
+    assert!(log.contains("OK group="), "log should contain OK group=, got: {log:?}");
 }

@@ -1,172 +1,80 @@
-//! Credential loading from K8s Secret + DecodingKey construction.
+//! JwtAuth credential store: iss -> group, immutable post-construction.
+//!
+//! Built once from the controller-resolved `resolved_groups_by_iss` map at
+//! plugin construction. No `RwLock`, no runtime Secret fetch -- all keys are
+//! present in memory before the first request. `Arc<ResolvedJwtIssuerGroup>`
+//! lets multiple iss entries pointing to the same group share one allocation.
 
-use base64::Engine;
-use jsonwebtoken::DecodingKey;
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use super::{is_symmetric, JwtAuth, JwtAuthResult};
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
+use jsonwebtoken::DecodingKey;
 
-/// Credential loaded from Secret.
-#[derive(Debug, Clone)]
-pub(super) enum Credential {
-    /// Symmetric key (HS256/384/512)
-    Symmetric(Vec<u8>),
-    /// Asymmetric public key PEM (RS256/384/512, ES256/384/512)
-    Asymmetric(String),
+use crate::types::resources::edgion_plugins::plugin_configs::{
+    JwtAlgorithm, JwtAuthConfig, ResolvedJwtCredential, ResolvedJwtIssuerGroup,
+};
+
+/// O(1) iss -> group lookup. Built once at plugin construction.
+pub(super) struct JwtIssuerGroupStore {
+    by_iss: HashMap<String, Arc<ResolvedJwtIssuerGroup>>,
 }
 
-/// Credentials storage.
-#[derive(Debug, Clone)]
-pub(super) enum Credentials {
-    /// Single credential (from secret_ref)
-    Single(Credential),
-    /// Multiple credentials keyed by claim value (from secret_refs)
-    Multi(HashMap<String, Credential>),
-    /// No credentials configured
-    None,
+impl JwtIssuerGroupStore {
+    pub(super) fn new(by_iss_map: HashMap<String, ResolvedJwtIssuerGroup>) -> Self {
+        let arc_map = by_iss_map
+            .into_iter()
+            .map(|(iss, group)| (iss, Arc::new(group)))
+            .collect();
+        Self { by_iss: arc_map }
+    }
+
+    pub(super) fn lookup_by_iss(&self, iss: &str) -> Option<&Arc<ResolvedJwtIssuerGroup>> {
+        self.by_iss.get(iss)
+    }
+
+    /// True if no groups are configured (anonymous-only deployment).
+    pub(super) fn is_empty(&self) -> bool {
+        self.by_iss.is_empty()
+    }
 }
 
-impl JwtAuth {
-    /// Load credentials from K8s Secret (lazily, on first request).
-    pub(super) fn load_credentials(&self) -> JwtAuthResult<Credentials> {
-        {
-            let guard = self.credentials.read();
-            if let Some(ref creds) = *guard {
-                return Ok(creds.clone());
-            }
-        }
-
-        let creds = self.load_credentials_from_secret()?;
-
-        {
-            let mut guard = self.credentials.write();
-            *guard = Some(creds.clone());
-        }
-
-        Ok(creds)
-    }
-
-    /// Decode secret bytes if base64_secret is enabled.
-    fn decode_secret_if_needed(&self, secret_bytes: Vec<u8>) -> JwtAuthResult<Vec<u8>> {
-        if self.config.base64_secret {
-            let secret_str = String::from_utf8(secret_bytes).map_err(|_| ())?;
-            let decoded = base64::engine::general_purpose::STANDARD
-                .decode(secret_str.trim())
-                .map_err(|_| ())?;
-            Ok(decoded)
-        } else {
-            Ok(secret_bytes)
-        }
-    }
-
-    /// Load credentials from pre-resolved data (populated by controller).
-    /// Falls back to get_secret for backward compatibility.
-    fn load_credentials_from_secret(&self) -> JwtAuthResult<Credentials> {
-        let symmetric = is_symmetric(self.config.algorithm);
-
-        // Try pre-resolved single credential first
-        if let Some(ref resolved) = self.config.resolved_credential {
-            let cred = if symmetric {
-                let secret_b64 = resolved.secret.as_ref().ok_or(())?;
-                let secret_bytes = base64::engine::general_purpose::STANDARD
-                    .decode(secret_b64)
-                    .map_err(|_| ())?;
-                let final_secret = self.decode_secret_if_needed(secret_bytes)?;
-                Credential::Symmetric(final_secret)
+/// Build a `DecodingKey` from the credential + algorithm. Used per request
+/// (no caching -- parity with pre-grouping behavior; PEM-caching is a
+/// future perf optimization outside this pilot's scope, see spec §11).
+///
+/// Returns `Err(&'static str)` with a short reason if the key material is
+/// missing or malformed. The caller maps this to `Deny invalid credentials`.
+///
+/// Secret storage note: `ResolvedJwtCredential.secret` is stored as the raw
+/// UTF-8 string from the K8s Secret data (NOT additionally base64-encoded by
+/// the controller). If `config.base64_secret` is true, the value is itself
+/// a base64-encoded string that wraps the actual symmetric key bytes.
+pub(super) fn build_decoding_key(
+    algorithm: JwtAlgorithm,
+    cred: &ResolvedJwtCredential,
+    config: &JwtAuthConfig,
+) -> Result<DecodingKey, &'static str> {
+    use JwtAlgorithm::*;
+    match algorithm {
+        HS256 | HS384 | HS512 => {
+            let raw = cred.secret.as_deref().ok_or("missing symmetric secret")?;
+            if config.base64_secret {
+                use base64::Engine;
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(raw.trim())
+                    .map_err(|_| "base64 decode failed")?;
+                Ok(DecodingKey::from_secret(&decoded))
             } else {
-                let pem = resolved.public_key.as_ref().ok_or(())?;
-                Credential::Asymmetric(pem.clone())
-            };
-            return Ok(Credentials::Single(cred));
-        }
-
-        // Try pre-resolved multiple credentials
-        if let Some(ref resolved_map) = self.config.resolved_credentials {
-            let mut map = HashMap::new();
-            for (key, resolved) in resolved_map {
-                let cred = if symmetric {
-                    let secret_b64 = resolved.secret.as_ref().ok_or(())?;
-                    let secret_bytes = base64::engine::general_purpose::STANDARD
-                        .decode(secret_b64)
-                        .map_err(|_| ())?;
-                    let final_secret = self.decode_secret_if_needed(secret_bytes)?;
-                    Credential::Symmetric(final_secret)
-                } else {
-                    let pem = resolved.public_key.as_ref().ok_or(())?;
-                    Credential::Asymmetric(pem.clone())
-                };
-                map.insert(key.clone(), cred);
-            }
-            if !map.is_empty() {
-                return Ok(Credentials::Multi(map));
+                Ok(DecodingKey::from_secret(raw.as_bytes()))
             }
         }
-
-        // Fallback to get_secret (for controller-side or backward compatibility)
-        if let Some(ref secret_ref) = self.config.secret_ref {
-            let ns = secret_ref.namespace.as_deref().unwrap_or(&self.plugin_namespace);
-            let secret = get_secret(Some(ns), &secret_ref.name).ok_or(())?;
-
-            let data = secret.data.as_ref().ok_or(())?;
-
-            let cred = if symmetric {
-                let secret_bytes = data.get("secret").ok_or(())?;
-                let final_secret = self.decode_secret_if_needed(secret_bytes.0.clone())?;
-                Credential::Symmetric(final_secret)
-            } else {
-                let public_key_bytes = data.get("publicKey").ok_or(())?;
-                let pem = String::from_utf8(public_key_bytes.0.clone()).map_err(|_| ())?;
-                Credential::Asymmetric(pem)
-            };
-
-            return Ok(Credentials::Single(cred));
+        RS256 | RS384 | RS512 => {
+            let pem = cred.public_key.as_deref().ok_or("missing RSA public_key")?;
+            DecodingKey::from_rsa_pem(pem.as_bytes()).map_err(|_| "invalid RSA PEM")
         }
-
-        if let Some(ref secret_refs) = self.config.secret_refs {
-            let mut map = HashMap::new();
-
-            for secret_ref in secret_refs {
-                let ns = secret_ref.namespace.as_deref().unwrap_or(&self.plugin_namespace);
-                let secret = get_secret(Some(ns), &secret_ref.name).ok_or(())?;
-
-                let data = secret.data.as_ref().ok_or(())?;
-
-                let key_bytes = data.get("key").ok_or(())?;
-                let key_str = String::from_utf8(key_bytes.0.clone()).map_err(|_| ())?;
-
-                let cred = if symmetric {
-                    let secret_bytes = data.get("secret").ok_or(())?;
-                    let final_secret = self.decode_secret_if_needed(secret_bytes.0.clone())?;
-                    Credential::Symmetric(final_secret)
-                } else {
-                    let public_key_bytes = data.get("publicKey").ok_or(())?;
-                    let pem = String::from_utf8(public_key_bytes.0.clone()).map_err(|_| ())?;
-                    Credential::Asymmetric(pem)
-                };
-
-                map.insert(key_str, cred);
-            }
-
-            return Ok(Credentials::Multi(map));
-        }
-
-        Ok(Credentials::None)
-    }
-
-    /// Build DecodingKey from credential.
-    pub(super) fn build_decoding_key(&self, cred: &Credential) -> JwtAuthResult<DecodingKey> {
-        match cred {
-            Credential::Symmetric(secret) => Ok(DecodingKey::from_secret(secret)),
-            Credential::Asymmetric(pem) => {
-                if let Ok(key) = DecodingKey::from_rsa_pem(pem.as_bytes()) {
-                    return Ok(key);
-                }
-                if let Ok(key) = DecodingKey::from_ec_pem(pem.as_bytes()) {
-                    return Ok(key);
-                }
-                Err(())
-            }
+        ES256 | ES384 => {
+            let pem = cred.public_key.as_deref().ok_or("missing EC public_key")?;
+            DecodingKey::from_ec_pem(pem.as_bytes()).map_err(|_| "invalid EC PEM")
         }
     }
 }

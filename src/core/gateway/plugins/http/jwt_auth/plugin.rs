@@ -1,10 +1,8 @@
 //! JWT Authentication plugin implementation
 //!
 //! Verifies JWT from header (default Authorization), query, or cookie.
-//! Supports HS256/HS384/HS512 (symmetric) and RS256/RS384/RS512, ES256/ES384/ES512 (asymmetric).
-//! All credentials come from K8s Secret (secret_ref or secret_refs).
-
-use std::sync::Arc;
+//! Supports HS256/HS384/HS512 (symmetric) and RS256/RS384/RS512, ES256/ES384 (asymmetric).
+//! All credentials come from controller-resolved issuer groups (no runtime Secret fetch).
 
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
@@ -13,25 +11,23 @@ use crate::types::resources::edgion_plugins::JwtAuthConfig;
 
 use async_trait::async_trait;
 
-use super::credentials::Credentials;
+use super::credentials::JwtIssuerGroupStore;
 use super::request_stage::TokenSource;
+use super::verify;
 
 /// JWT Authentication plugin
 pub struct JwtAuth {
     pub(super) config: JwtAuthConfig,
-    /// EdgionPlugins namespace (fallback for secret_ref without namespace)
-    pub(super) plugin_namespace: String,
-    /// Loaded credentials (lazily populated on first request)
-    pub(super) credentials: Arc<parking_lot::RwLock<Option<Credentials>>>,
+    /// Issuer-group store built once at construction from resolved_groups_by_iss
+    pub(super) store: JwtIssuerGroupStore,
 }
 
 impl JwtAuth {
     /// Create from JwtAuthConfig with plugin namespace
-    pub fn new(config: &JwtAuthConfig, plugin_namespace: String) -> Self {
+    pub fn new(config: &JwtAuthConfig, _plugin_namespace: String) -> Self {
         JwtAuth {
+            store: JwtIssuerGroupStore::new(config.resolved_groups_by_iss.clone().unwrap_or_default()),
             config: config.clone(),
-            plugin_namespace,
-            credentials: Arc::new(parking_lot::RwLock::new(None)),
         }
     }
 }
@@ -46,7 +42,6 @@ impl RequestFilter for JwtAuth {
         // Extract token
         let (token, source) = match self.extract_token(session) {
             Some(t) => {
-                // §3: key source
                 let src_tag = match t.1 {
                     TokenSource::Header => "token from header",
                     TokenSource::Query => "token from query",
@@ -69,21 +64,27 @@ impl RequestFilter for JwtAuth {
         };
 
         // Verify token
-        match self.verify_token(&token, plugin_log) {
-            Ok(result) => {
-                plugin_log.push_fmt("OK u={}", la![sensitive(&result.username)]);
+        match verify::verify_jwt(&token, &self.store, &self.config, plugin_log) {
+            Ok(ok) => {
+                let username = ok.claims.get("sub").and_then(|v| v.as_str()).unwrap_or("(missing sub)");
+                plugin_log.push_fmt(
+                    "OK group={} iss={} u={}",
+                    la![ok.group.group.as_str(), ok.iss.as_str(), sensitive(&username)],
+                );
                 // Set claims to headers if configured
-                self.set_claims_headers(session, &result.claims);
+                self.set_claims_headers(session, &ok.claims);
                 // Store claims in context if configured
-                if let Some(ref claims_json) = result.claims_json {
-                    let _ = session.set_ctx_var("jwt_claims", claims_json);
+                if self.config.store_claims_in_ctx {
+                    if let Ok(claims_json) = serde_json::to_string(&ok.claims) {
+                        let _ = session.set_ctx_var("jwt_claims", &claims_json);
+                    }
                 }
                 self.hide_credentials_if_needed(session, source, plugin_log);
                 PluginRunningResult::GoodNext
             }
             Err(_) => {
-                // Specific `Deny <kind>; ` or `err: <kind>; ` tag was already pushed inside verify_token.
-                // Token present but invalid/expired — always reject, never allow anonymous
+                // Specific `Deny <kind>; ` tag was already pushed inside verify_jwt.
+                // Token present but invalid/expired -- always reject, never allow anonymous.
                 self.apply_auth_failure_delay().await;
                 let _ = self.auth_failed_return(session).await;
                 PluginRunningResult::ErrTerminateRequest

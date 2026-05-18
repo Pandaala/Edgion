@@ -37,7 +37,7 @@ async fn test_token_from_query_param() {
 
     let r = auth.run_request(&mut mock, &mut log).await;
     assert_eq!(r, PluginRunningResult::GoodNext);
-    assert!(log.contains("OK u=query-user"));
+    assert!(log.contains("OK group="), "log should contain OK group=, got: {log:?}");
 }
 
 #[tokio::test]
@@ -74,5 +74,5 @@ async fn test_token_from_cookie() {
 
     let r = auth.run_request(&mut mock, &mut log).await;
     assert_eq!(r, PluginRunningResult::GoodNext);
-    assert!(log.contains("OK u=cookie-user"));
+    assert!(log.contains("OK group="), "log should contain OK group=, got: {log:?}");
 }

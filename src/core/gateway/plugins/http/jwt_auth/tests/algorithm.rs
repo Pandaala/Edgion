@@ -26,7 +26,7 @@ async fn test_valid_hs256_token_succeeds() {
 
     let r = auth.run_request(&mut mock, &mut log).await;
     assert_eq!(r, PluginRunningResult::GoodNext);
-    assert!(log.contains("OK u=user123"));
+    assert!(log.contains("OK group="), "log should contain OK group=, got: {log:?}");
 }
 
 #[tokio::test]
