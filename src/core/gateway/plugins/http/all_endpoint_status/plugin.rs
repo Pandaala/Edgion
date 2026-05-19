@@ -20,7 +20,7 @@ use tokio::sync::Semaphore;
 
 use crate::core::gateway::backends::discovery::endpoint_slice::{get_roundrobin_store, EndpointSliceExt};
 use crate::core::gateway::backends::validate_endpoint_backend_addr;
-use crate::core::gateway::plugins::http::common::http_client::is_hop_by_hop;
+use crate::core::gateway::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -360,6 +360,12 @@ impl AllEndpointStatus {
         let method = self.config.method_override.as_deref().unwrap_or(original_method);
         let path = self.config.path_override.as_deref().unwrap_or(original_path);
 
+        let dynamic_listed: Vec<String> = original_headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("connection"))
+            .map(|(_, v)| connection_listed_hop_by_hop(v))
+            .unwrap_or_default();
+
         let futures: FuturesUnordered<_> = endpoints
             .iter()
             .map(|ep| {
@@ -371,6 +377,7 @@ impl AllEndpointStatus {
                 let path = path.to_string();
                 let query = original_query.map(|q| q.to_string());
                 let headers: Vec<(String, String)> = original_headers.to_vec();
+                let dynamic_listed = dynamic_listed.clone();
 
                 async move {
                     let _permit = sem
@@ -390,8 +397,10 @@ impl AllEndpointStatus {
                     let mut req = client.request(req_method, &url).timeout(timeout);
 
                     // Forward original headers, filtering hop-by-hop
+                    // (RFC 9110 §7.6.1 — static set plus names dynamically listed
+                    // in the originating request's Connection: header value).
                     for (name, value) in &headers {
-                        if !is_hop_by_hop(name) && !name.eq_ignore_ascii_case("host") {
+                        if !is_hop_by_hop_or_listed(name, &dynamic_listed) && !name.eq_ignore_ascii_case("host") {
                             req = req.header(name.as_str(), value.as_str());
                         }
                     }

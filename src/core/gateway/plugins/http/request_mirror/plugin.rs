@@ -14,7 +14,7 @@ use crate::core::gateway::backends::{
     resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr,
 };
 use crate::core::gateway::observe::metrics::record_mirror_metric;
-use crate::core::gateway::plugins::http::common::http_client::is_hop_by_hop;
+use crate::core::gateway::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::http_route::HTTPRequestMirrorFilter;
@@ -149,8 +149,13 @@ impl RequestMirrorPlugin {
 
     fn build_headers(&self, session: &dyn PluginSession, target: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
+        let connection_value = session.header_value("connection").unwrap_or_default();
+        let dynamic_listed = connection_listed_hop_by_hop(&connection_value);
         for (name, value) in session.request_headers() {
-            if is_hop_by_hop(&name) || name.eq_ignore_ascii_case("expect") || name.eq_ignore_ascii_case("host") {
+            if is_hop_by_hop_or_listed(&name, &dynamic_listed)
+                || name.eq_ignore_ascii_case("expect")
+                || name.eq_ignore_ascii_case("host")
+            {
                 continue;
             }
             if let (Ok(hn), Ok(hv)) = (HeaderName::from_bytes(name.as_bytes()), HeaderValue::from_str(&value)) {

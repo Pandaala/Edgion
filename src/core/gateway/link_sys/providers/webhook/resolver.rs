@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use crate::core::gateway::observe::metrics::record_webhook_resolve_error;
-use crate::core::gateway::plugins::http::common::http_client::is_hop_by_hop;
+use crate::core::gateway::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
 use crate::core::gateway::plugins::runtime::PluginSession;
 use crate::types::common::WebhookExtract;
 
@@ -45,10 +45,15 @@ pub async fn resolve_webhook_key(
         headers.insert("X-Forwarded-Host".to_string(), host);
     }
 
-    // Forward explicitly requested headers from the incoming request
+    // Forward explicitly requested headers from the incoming request.
+    // Per RFC 9110 §7.6.1, also strip names dynamically nominated by the
+    // originating request's Connection: header value, in addition to the
+    // canonical hop-by-hop set.
     if let Some(fwd) = forward_headers {
+        let connection_value = session.header_value("connection").unwrap_or_default();
+        let dynamic_listed = connection_listed_hop_by_hop(&connection_value);
         for name in fwd {
-            if is_hop_by_hop(name) {
+            if is_hop_by_hop_or_listed(name, &dynamic_listed) {
                 continue;
             }
             if let Some(val) = session.header_value(name) {

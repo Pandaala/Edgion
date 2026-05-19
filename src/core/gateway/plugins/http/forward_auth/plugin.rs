@@ -57,7 +57,9 @@ use std::time::Duration;
 const MAX_ERROR_BODY_BYTES: usize = 4096;
 
 use crate::core::gateway::plugins::http::common::auth_common::apply_auth_failure_delay;
-use crate::core::gateway::plugins::http::common::http_client::{get_http_client, is_hop_by_hop};
+use crate::core::gateway::plugins::http::common::http_client::{
+    connection_listed_hop_by_hop, get_http_client, is_hop_by_hop_or_listed,
+};
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -137,10 +139,14 @@ impl ForwardAuth {
         headers
     }
 
-    /// Forward all request headers from session, skipping hop-by-hop headers.
+    /// Forward all request headers from session, skipping hop-by-hop headers
+    /// (RFC 9110 §7.6.1 — both the canonical set and names dynamically listed
+    /// in the request's `Connection:` header value).
     fn forward_all_headers(&self, session: &dyn PluginSession, headers: &mut HeaderMap) {
+        let connection_value = session.header_value("connection").unwrap_or_default();
+        let dynamic_listed = connection_listed_hop_by_hop(&connection_value);
         for (name, value) in session.request_headers() {
-            if !is_hop_by_hop(&name) {
+            if !is_hop_by_hop_or_listed(&name, &dynamic_listed) {
                 if let (Ok(hn), Ok(hv)) = (HeaderName::from_bytes(name.as_bytes()), HeaderValue::from_str(&value)) {
                     headers.insert(hn, hv);
                 }
