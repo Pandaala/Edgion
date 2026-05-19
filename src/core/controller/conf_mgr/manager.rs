@@ -144,6 +144,13 @@ impl ConfMgr {
         self.conf_center.is_k8s_mode()
     }
 
+    /// Collect a stats snapshot for fed_sync push if anything has changed since
+    /// last call. Returns `Some((per_kind, total))` when at least one processor
+    /// is dirty (and clears the dirty flags); otherwise `None`.
+    pub fn collect_stats_if_dirty(&self) -> Option<(std::collections::HashMap<String, u32>, u32)> {
+        self.conf_center.runtime().processor_registry.collect_stats_if_dirty()
+    }
+
     /// Request a reload (re-initialize all processors and stores)
     ///
     /// This triggers a full restart of the configuration center:

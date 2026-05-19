@@ -115,15 +115,9 @@ pub async fn cluster_region_route_sync(
         .await
     {
         Ok(r) if r.status_code == 200 => match serde_json::from_slice::<serde_json::Value>(&r.body) {
-            Ok(v) => match v.get("data") {
-                Some(data) => data.clone(),
-                None => {
-                    return (
-                        StatusCode::BAD_GATEWAY,
-                        Json(serde_json::json!({ "success": false, "error": "No data in source response" })),
-                    )
-                }
-            },
+            // Controller's single-resource GET returns the bare PluginMetaData object,
+            // not a {success,data} wrapper. Tolerate both shapes for forward compatibility.
+            Ok(v) => v.get("data").cloned().unwrap_or(v),
             Err(e) => {
                 return (
                     StatusCode::BAD_GATEWAY,
@@ -246,15 +240,9 @@ pub async fn service_region_route_sync(
         .await
     {
         Ok(r) if r.status_code == 200 => match serde_json::from_slice::<serde_json::Value>(&r.body) {
-            Ok(v) => match v.get("data") {
-                Some(data) => data.clone(),
-                None => {
-                    return (
-                        StatusCode::BAD_GATEWAY,
-                        Json(serde_json::json!({ "success": false, "error": "No data in source response" })),
-                    )
-                }
-            },
+            // Controller's single-resource GET returns the bare PluginMetaData object,
+            // not a {success,data} wrapper. Tolerate both shapes for forward compatibility.
+            Ok(v) => v.get("data").cloned().unwrap_or(v),
             Err(e) => {
                 return (
                     StatusCode::BAD_GATEWAY,

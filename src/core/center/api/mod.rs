@@ -204,7 +204,15 @@ async fn server_info() -> impl IntoResponse {
 }
 
 async fn list_controllers(State(state): State<ApiState>) -> impl IntoResponse {
-    let summaries = state.aggregator.controller_summaries();
+    // The aggregator owns stats (key_count, stats_updated_secs_ago) but not
+    // session liveness. Fill in `last_seen_secs_ago` from the fed_sync
+    // registry here so we keep the aggregator independent of the registry.
+    let mut summaries = state.aggregator.controller_summaries();
+    for s in summaries.iter_mut() {
+        if let Some(session) = state.registry.get_session(&s.controller_id) {
+            s.last_seen_secs_ago = Some(session.last_seen.elapsed().as_secs());
+        }
+    }
     Json(ListResponse::success(summaries))
 }
 

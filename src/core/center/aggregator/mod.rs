@@ -15,6 +15,21 @@ use std::sync::Arc;
 struct ControllerSnapshot {
     info: RegisterRequest,
     offline_since: Option<std::time::Instant>,
+    /// Most recent stats push from the controller (None until the first
+    /// StatsReport arrives over fed_sync).
+    stats: Option<StatsEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct StatsEntry {
+    /// Sum of `per_kind` values from the latest StatsReport.
+    total: u64,
+    /// Per-kind counts from the latest report. Stored for future per-kind
+    /// surfaces; not yet exposed in `controller_summaries`.
+    #[allow(dead_code)]
+    per_kind: HashMap<String, u32>,
+    /// Wall-clock instant the latest report was received.
+    updated_at: std::time::Instant,
 }
 
 impl ControllerSnapshot {
@@ -22,6 +37,7 @@ impl ControllerSnapshot {
         Self {
             info,
             offline_since: None,
+            stats: None,
         }
     }
 }
@@ -147,7 +163,27 @@ impl ResourceAggregator {
         }
     }
 
+    /// Store/refresh the latest controller-reported stats snapshot.
+    ///
+    /// Called from the fed_sync server task on each `StatsReport`. Silently
+    /// drops if the controller is unknown to the aggregator (this would only
+    /// happen if a stats message races a removal).
+    pub fn update_stats(&self, controller_id: &str, per_kind: HashMap<String, u32>, total: u64) {
+        let mut map = self.inner.write();
+        if let Some(snap) = map.get_mut(controller_id) {
+            snap.stats = Some(StatsEntry {
+                total,
+                per_kind,
+                updated_at: std::time::Instant::now(),
+            });
+        }
+    }
+
     /// Summary of all known controllers (for Admin API).
+    ///
+    /// `last_seen_secs_ago` is filled in by the API layer (the aggregator does
+    /// not own the `ControllerRegistry` session table). The aggregator only
+    /// reports the stats-derived `key_count` and `stats_updated_secs_ago`.
     pub fn controller_summaries(&self) -> Vec<ControllerSummary> {
         self.inner
             .read()
@@ -158,6 +194,9 @@ impl ResourceAggregator {
                 env: s.info.env.clone(),
                 tag: s.info.tag.clone(),
                 online: s.offline_since.is_none(),
+                key_count: s.stats.as_ref().map(|e| e.total),
+                stats_updated_secs_ago: s.stats.as_ref().map(|e| e.updated_at.elapsed().as_secs()),
+                last_seen_secs_ago: None,
             })
             .collect()
     }
@@ -170,6 +209,16 @@ pub struct ControllerSummary {
     pub env: Vec<String>,
     pub tag: Vec<String>,
     pub online: bool,
+    /// Total resource count pushed by the controller (sum of per-kind counts).
+    /// `None` until the first StatsReport arrives.
+    pub key_count: Option<u64>,
+    /// Seconds since the last StatsReport from this controller.
+    /// `None` until the first StatsReport arrives.
+    pub stats_updated_secs_ago: Option<u64>,
+    /// Seconds since the last inbound fed_sync message from this controller.
+    /// Filled in by the API layer using the registry session table — the
+    /// aggregator leaves this as `None`.
+    pub last_seen_secs_ago: Option<u64>,
 }
 
 #[cfg(test)]

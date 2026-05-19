@@ -9,6 +9,7 @@
 use parking_lot::RwLock;
 use std::any::Any;
 use std::fmt::Debug;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use kube::Resource;
@@ -182,6 +183,14 @@ pub trait ProcessorObj: Send + Sync {
     /// List all resource keys in cache
     fn list_keys(&self) -> Vec<String>;
 
+    /// Number of resources currently held in cache. Must be O(1).
+    fn store_size(&self) -> usize;
+
+    /// Returns true (and clears the flag) if the processor's resource count has
+    /// changed since the last call. Used by fed_sync stats coalescing to decide
+    /// whether to push a fresh StatsReport.
+    fn take_stats_dirty(&self) -> bool;
+
     /// Check if a resource exists in cache by key
     fn contains_key(&self, key: &str) -> bool;
 
@@ -225,6 +234,11 @@ where
 
     /// Shared controller runtime (stores, registries, etc.)
     runtime: Arc<ControllerRuntime>,
+
+    /// Set whenever cache content changes; consumed by fed_sync stats push.
+    /// Initialized to `true` so the first stats coalescing tick after
+    /// fed_client startup emits an initial report.
+    stats_dirty: Arc<AtomicBool>,
 }
 
 impl<K> ResourceProcessor<K>
@@ -257,6 +271,7 @@ where
             namespace_filter: RwLock::new(None),
             raw_store: RwLock::new(None),
             runtime,
+            stats_dirty: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -280,6 +295,7 @@ where
             namespace_filter: RwLock::new(None),
             raw_store: RwLock::new(None),
             runtime,
+            stats_dirty: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -380,6 +396,7 @@ where
     /// Save resource to cache with an optional pre-assigned sync_version
     pub fn save(&self, obj: K, sv: Option<u64>) {
         self.cache.apply_change(ResourceChange::EventUpdate, obj, sv);
+        self.stats_dirty.store(true, Ordering::Relaxed);
     }
 
     /// Remove resource from cache by key with an optional pre-assigned sync_version
@@ -387,6 +404,7 @@ where
         // Get the cached object first to properly delete
         if let Some(cached) = self.cache.get_by_key(key) {
             self.cache.apply_change(ResourceChange::EventDelete, cached, sv);
+            self.stats_dirty.store(true, Ordering::Relaxed);
         }
     }
 
@@ -619,6 +637,7 @@ where
                 let obj_for_result = parsed_obj.clone();
                 if is_init {
                     self.cache.apply_change(ResourceChange::InitAdd, parsed_obj, Some(sv));
+                    self.stats_dirty.store(true, Ordering::Relaxed);
                 } else {
                     self.save(parsed_obj, Some(sv));
                 }
@@ -699,6 +718,7 @@ where
 
     fn clear(&self) {
         WatchObj::clear(self.cache.as_ref());
+        self.stats_dirty.store(true, Ordering::Relaxed);
     }
 
     fn set_namespace_filter_vec(&self, filter: Option<Vec<String>>) {
@@ -715,6 +735,15 @@ where
 
     fn list_keys(&self) -> Vec<String> {
         self.cache.list_keys()
+    }
+
+    fn store_size(&self) -> usize {
+        self.cache.len()
+    }
+
+    fn take_stats_dirty(&self) -> bool {
+        // swap-style: returns previous value while resetting to false.
+        self.stats_dirty.swap(false, Ordering::Relaxed)
     }
 
     fn contains_key(&self, key: &str) -> bool {

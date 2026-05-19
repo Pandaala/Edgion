@@ -430,6 +430,7 @@ impl FederationSync for FederationGrpcServer {
         tokio::spawn({
             let registry = registry.clone();
             let aggregator_for_offline = aggregator.clone();
+            let aggregator_for_stats = aggregator.clone();
             let cid = cid.clone();
             let sid = session_id.clone();
             let self_pending_proxies = pending_proxies.clone();
@@ -738,6 +739,11 @@ impl FederationSync for FederationGrpcServer {
                                             );
                                         }
                                     }
+                                }
+                                Some(CtrlPayload::StatsReport(report)) => {
+                                    // Push from Controller summarising per-kind resource counts.
+                                    // Stored in aggregator and exposed via the API layer.
+                                    aggregator_for_stats.update_stats(&cid, report.per_kind, report.total as u64);
                                 }
                                 _ => {}
                             }

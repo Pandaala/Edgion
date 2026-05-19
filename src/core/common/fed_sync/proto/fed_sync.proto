@@ -45,6 +45,7 @@ message ControllerMessage {
         HttpProxyResponse    http_proxy_response   = 5;  // HTTP proxy response
         FedWatchListResponse watch_list_response   = 6;  // Reverse list/watch: full list response
         FedWatchEventResponse watch_event_response = 7;  // Reverse list/watch: incremental event response
+        StatsReport          stats_report          = 8;  // Resource count snapshot pushed by controller
     }
 }
 
@@ -126,4 +127,13 @@ message HttpProxyResponse {
     uint32              status_code = 2;  // HTTP status code: 200, 404, 500, ...
     map<string, string> headers     = 3;  // HTTP response headers
     bytes               body        = 4;  // Response body
+}
+
+// ── Stats Report (Controller -> Center) ───────────────────────
+
+// StatsReport: Controller-side resource counts pushed to Center.
+// Sent at registration and whenever counts change (coalesced to 5s).
+message StatsReport {
+    map<string, uint32> per_kind = 1;  // {"HTTPRoute": 205, "Gateway": 97, ...}
+    uint32              total    = 2;  // Sum of per_kind values
 }

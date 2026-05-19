@@ -18,7 +18,7 @@ use crate::core::common::config::CenterClientConfig;
 use crate::core::common::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
     federation_sync_client::FederationSyncClient, CenterMessage, CommandResponse, ControllerMessage,
-    FedWatchEventResponse, FedWatchListResponse, HttpProxyResponse, Pong, RegisterRequest,
+    FedWatchEventResponse, FedWatchListResponse, HttpProxyResponse, Pong, RegisterRequest, StatsReport,
 };
 use crate::core::common::observe::fed_metrics;
 use crate::core::controller::conf_mgr::ConfMgr;
@@ -29,6 +29,10 @@ const MIN_STABLE_CONNECTION_SECS: u64 = 30;
 
 /// Maximum concurrent HttpProxy tasks forwarded from Center.
 const MAX_CONCURRENT_PROXY: usize = 16;
+
+/// Stats coalescing interval. Controller pushes a StatsReport at most once
+/// per `STATS_COALESCE_INTERVAL` when its resource counts change.
+const STATS_COALESCE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Exponential backoff state for reconnection attempts.
 pub struct ReconnectBackoff {
@@ -227,6 +231,40 @@ async fn connect_and_run(
         "Connected and registered with center"
     );
 
+    // Spawn stats coalescing task: every STATS_COALESCE_INTERVAL, ask the
+    // processor registry whether any kind has changed since last tick. If so,
+    // push a StatsReport over the same fed_sync stream. Cancelled at session
+    // teardown so it cannot outlive the gRPC channel.
+    let stats_cancel = CancellationToken::new();
+    {
+        let conf_mgr = conf_mgr.clone();
+        let tx = tx.clone();
+        let cancel = stats_cancel.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(STATS_COALESCE_INTERVAL);
+            // First tick fires immediately; ResourceProcessor initializes
+            // stats_dirty=true so this emits the initial report after register.
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if let Some((per_kind, total)) = conf_mgr.collect_stats_if_dirty() {
+                            let msg = ControllerMessage {
+                                payload: Some(CtrlPayload::StatsReport(StatsReport { per_kind, total })),
+                            };
+                            // Best effort: if the channel is closed (session
+                            // ending), drop the report — the next session will
+                            // emit a fresh one with stats_dirty=true.
+                            if tx.send(msg).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    _ = cancel.cancelled() => break,
+                }
+            }
+        });
+    }
+
     // Tracks the cancellation token for the active watch forwarding task, if any.
     // A new WatchRequest cancels the previous one before starting a new task.
     let mut active_watch_cancel: Option<CancellationToken> = None;
@@ -267,6 +305,10 @@ async fn connect_and_run(
     if let Some(prev) = active_watch_cancel.take() {
         prev.cancel();
     }
+    // Stop the stats coalescing task tied to this session. A new session
+    // will start a fresh one, and `stats_dirty=true` initial state ensures
+    // the next register emits an up-to-date report.
+    stats_cancel.cancel();
 
     // Record session end metrics. This runs whether the loop broke with
     // Ok(()) (clean close) or Err(..) (stream error); both count as a

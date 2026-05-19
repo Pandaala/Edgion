@@ -109,6 +109,12 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         store_guard.keys()
     }
 
+    /// Number of resources currently stored (O(1)).
+    pub fn len(&self) -> usize {
+        let store_guard = self.store.read();
+        store_guard.len()
+    }
+
     /// Start a watcher task that listens for notifications and sends data
     /// Only needs the store to access data
     ///
