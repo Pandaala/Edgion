@@ -33,7 +33,7 @@ RFC-divergence-accepted findings are recorded as per-finding files under [`rfc-d
 | **Concurrency** | [concurrency/](concurrency/), [rwlock-unwrap/](rwlock-unwrap/) |
 | **CPU / memory performance** | [cpu-memory/](cpu-memory/), [memory-leak/](memory-leak/) |
 | **Observability / logging** | [observability/](observability/) |
-| **DSL** (Value type, regex, builtin panic risks) | [dsl-value-str/](dsl-value-str/), [dsl-regex/](dsl-regex/), [dsl-builtins/](dsl-builtins/) |
+| **DSL** (Value type, regex, builtin panic risks, engine selection) | [dsl-value-str/](dsl-value-str/), [dsl-regex/](dsl-regex/), [dsl-builtins/](dsl-builtins/), [dsl-design-decisions.md](dsl-design-decisions.md) |
 | **Architecture decisions** | [architecture/](architecture/) |
 | **Resource handler / requeue** | [handler-requeue/](handler-requeue/) |
 | **Plugin runtime** | [ctx-set/](ctx-set/) |
@@ -53,6 +53,8 @@ See [`CLOSED-FINDINGS.md`](CLOSED-FINDINGS.md) for per-issue closure history (14
 - When reviewing `forward_auth::send_error_response` "`let _ = resp.insert_header(...)` swallows errors / invalid headers from auth service leave no PluginLog trace" findings: **fixed (P3-g3-016)**. `send_error_response` now takes `plugin_log: &mut PluginLog` and emits `plugin_log.push_err("invalid response header")` when an `extra_headers` entry from the configured `client_headers` fails `insert_header`. The static `Content-Type` / `Connection` inserts and the `write_response_*` calls retain `let _ = ...` intentionally — the static headers cannot fail, and `write_response_*` failures mean the downstream connection is already closed (no actionable observability). The `extra_headers` values are pre-filtered by `HeaderValue::to_str()` at the call site (operator-configured `client_headers` echo from auth service response), so realistic failures are operator misconfiguration with a non-token byte in a header **name**. If a finding claims the `extra_headers` insert silently drops, verify the current `forward_auth/plugin.rs::send_error_response` before re-reporting. Generalised rule: data-plane error-response helpers that echo operator-configured header names should funnel insert failures through PluginLog, not `tracing`.
 
 - When reviewing path-based ACL safety (misuse of `req.request_path`, direct read of `req_header().uri.path()`, raw write of `req_header_mut().set_uri()`, `RegularExpression` containing `%XX` literals, attacks beyond the commitment scope), first read [uri-normalization/SKILL.md](uri-normalization/SKILL.md)
+
+- When reviewing proposals of the form "why not just use Rhai / mlua / rune / Boa instead of the custom VM", "add user-defined fn / closures / modules to EdgionDSL", "use Rhai's `Dynamic` / `OptimizationLevel` / `Package` system", or any similar engine-replacement / feature-import proposal, first read [dsl-design-decisions.md](dsl-design-decisions.md) — the four-constraint analysis (cross-process bytecode, in-engine sandbox, no user-fn / closures, no global mutable state) disqualifies every off-the-shelf engine; the memo also reverse-indexes the closed `dsl-vm-rhai-research` series so each historical finding maps to its current canonical home.
 
 - When reviewing proposals to migrate DSL `Value::Str(Arc<str>)` to a SSO / `try_unwrap`-capable string type (`Arc<SmartString>`, `Arc<CompactString>`, `KString`, `EcoString`, etc.) for performance, first read [dsl-value-str/sso-migration-not-worth-it.md](dsl-value-str/sso-migration-not-worth-it.md)
 

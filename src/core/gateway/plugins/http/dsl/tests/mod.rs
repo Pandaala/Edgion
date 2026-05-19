@@ -22,6 +22,7 @@ mod error_policy;
 mod grpc_error_tests;
 mod http_call_tests;
 mod p3_utility_tests;
+mod property_bytecode;
 mod range_and_string_ops;
 mod req_metadata_tests;
 mod request_builtins;
