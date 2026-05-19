@@ -190,7 +190,12 @@ async fn connect_and_run(
         endpoint
     };
 
-    let channel = endpoint.connect().await?;
+    // Cap TCP connection establishment; without this the OS default (~75-130 s on Linux)
+    // blocks the reconnect loop on NAT black-holes. Mirrors conf_sync grpc_client.rs.
+    let channel = endpoint
+        .connect_timeout(Duration::from_secs(10))
+        .connect()
+        .await?;
 
     let mut client = FederationSyncClient::new(channel);
 
