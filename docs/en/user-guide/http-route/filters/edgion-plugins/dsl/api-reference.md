@@ -1810,7 +1810,7 @@ Generates an integer sequence from `start` (inclusive) to `end` (exclusive), wit
 
 **Return value**: List of numeric strings
 
-**Constraints**: At most 1000 elements are generated; any beyond that are truncated (i.e. if `end - start > 1000`, only the first 1000 are returned).
+**Constraints**: At most `min(max_list_len, 1000)` elements are generated (where `max_list_len` is the per-plugin VM limit, default 1024); any beyond that are silently truncated.
 
 **Example**:
 ```

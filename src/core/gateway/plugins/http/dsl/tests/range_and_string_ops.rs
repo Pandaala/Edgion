@@ -284,6 +284,29 @@ fn test_range_iterate() {
     assert_eq!(result, good_next());
 }
 
+// range() truncates to max_list_len when the configured limit is below the
+// 1000 hard ceiling. Truncation is silent (no error) to keep existing
+// truncation semantics; range(0, 100) with max_list_len=5 yields 5 elements.
+#[test]
+fn test_range_truncated_to_max_list_len() {
+    let source = r#"
+        let r = range(0, 100)
+        req.set_header("X-Len", to_str(len(r)))
+    "#;
+    let limits = VmLimits {
+        max_list_len: 5,
+        ..VmLimits::default()
+    };
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_request_header()
+        .withf(|h, v| h == "X-Len" && v == "5")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run_with_limits(source, session, limits);
+    assert_eq!(result, good_next());
+}
+
 // Adversarial inputs that would overflow i64 on `end - start` must surface as
 // RuntimeError::IntegerOverflow (handled by error_policy), not panic in debug
 // nor silently wrap in release. Mirrors the discipline of Add/Sub/Mul/Div in vm.rs.

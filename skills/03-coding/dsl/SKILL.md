@@ -19,6 +19,7 @@ description: DSL plugin implementation skills for Edgion — builtin development
 ## Cross-references
 
 - **Engine architecture** → [`../../01-architecture/02-gateway/dsl-engine.md`](../../01-architecture/02-gateway/dsl-engine.md): data flow, source layout, async/sync bridging, panic isolation
+- **Sandbox security model (maintainer view)** → [`../../01-architecture/02-gateway/dsl-engine-security-model.md`](../../01-architecture/02-gateway/dsl-engine-security-model.md): where each `VmLimits` cap is enforced, ReDoS posture, SSRF guard rationale — read before adding a new builtin that produces strings/lists/maps or calls out to external services
 - **Plugin system overview** → [`../../01-architecture/02-gateway/05-plugin-system.md`](../../01-architecture/02-gateway/05-plugin-system.md): where DslPlugin sits among other gateway plugins
 - **URI normalization** (paired reading for `builtins-path.md`) → [`../../01-architecture/02-gateway/uri-normalization/SKILL.md`](../../01-architecture/02-gateway/uri-normalization/SKILL.md)
 - **Value-type design memo** → [`../../04-review/dsl-value-str/sso-migration-not-worth-it.md`](../../04-review/dsl-value-str/sso-migration-not-worth-it.md): why `Value::Str(Arc<str>)` stays, why `Value::Map` is `Box`ed

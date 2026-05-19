@@ -544,7 +544,10 @@ impl Vm {
                 let diff = end
                     .checked_sub(start)
                     .ok_or(RuntimeError::IntegerOverflow { operation: "range" })?;
-                let count = diff.max(0).min(1000) as usize;
+                // Honor configured max_list_len while keeping 1000 as a hard ceiling
+                // so default config behavior is preserved.
+                let hard_cap = self.limits.max_list_len.min(1000) as i64;
+                let count = diff.max(0).min(hard_cap) as usize;
                 let end_bound = start
                     .checked_add(count as i64)
                     .ok_or(RuntimeError::IntegerOverflow { operation: "range" })?;

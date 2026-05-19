@@ -19,6 +19,7 @@ description: edgion-gateway data plane architecture — Pingora integration, rou
 | [04-tls/SKILL.md](04-tls/SKILL.md) | TLS subsystem | TLS certificate management, mTLS configuration |
 | [05-plugin-system.md](05-plugin-system.md) | Plugin system (4-phase execution model) | Understand plugin execution flow, develop new plugins, modify conditional execution logic |
 | [dsl-engine.md](dsl-engine.md) | DSL engine architecture (DslPlugin) | Maintain the DSL VM / parser / compiler / bytecode; understand async-sync bridging, panic isolation, DslRuntime lifecycle |
+| [dsl-engine-security-model.md](dsl-engine-security-model.md) | DSL sandbox security model — maintainer view | Add or extend a sandbox limit, audit Map/List/string caps, review SSRF/ReDoS posture, locate where each VmLimits field is enforced |
 | [06-load-balancing.md](06-load-balancing.md) | Load balancing strategies | Modify LB strategies, understand RoundRobin/EWMA/LeastConn/ConsistentHash selection algorithms |
 | [07-backends.md](07-backends.md) | Backend discovery + health check | Modify Endpoint/EndpointSlice discovery, health check configuration, BackendTLSPolicy |
 | [08-observe.md](08-observe.md) | Observability | AccessLog zero-copy output, Prometheus metrics, protocol logs |

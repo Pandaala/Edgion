@@ -304,7 +304,7 @@ for i in range(0, 10) {
 }
 ```
 
-`range(start, end)` generates at most **1000 elements**. Requesting more than 1000 elements produces a runtime error.
+`range(start, end)` generates at most `min(max_list_len, 1000)` elements (where `max_list_len` is the per-plugin VM limit, default 1024). Any elements beyond that cap are silently truncated.
 
 ### 4.4 while (Conditional Loop)
 
