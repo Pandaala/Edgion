@@ -19,13 +19,14 @@ pub async fn response_filter(
         let _ = upstream_response.insert_header("x-trace-id", trace_id.as_str());
     }
 
-    // Handle graceful shutdown:
-    // If the process is shutting down, add Connection: close header to notify the client/LB
-    // that this connection should not be reused.
-    // This helps in draining connections gracefully during rolling updates.
-    if session.is_process_shutting_down() {
-        let _ = upstream_response.insert_header("Connection", "close");
-    }
+    // RFC 9110 §7.6.1 forbids forwarding hop-by-hop `Connection` headers in a
+    // proxied response. `set_keepalive(None)` in pg_early_request_filter already
+    // makes Pingora's H1 codec emit `Connection: close` on the downstream wire
+    // during graceful shutdown, so the manual injection below was redundant and
+    // a MUST violation. Kept commented out as a rollback marker.
+    // if session.is_process_shutting_down() {
+    //     let _ = upstream_response.insert_header("Connection", "close");
+    // }
 
     // Run rule-level response edgion_plugins (async)
     if let Some(route_unit) = ctx.route_unit.clone() {
