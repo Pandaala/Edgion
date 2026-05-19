@@ -1322,7 +1322,7 @@ Formats a Unix timestamp as a string. The format string uses the `chrono` crate 
 
 **Return value**: Formatted time string
 
-**Constraints**: The format string must be at most 256 bytes; a runtime error is triggered if it exceeds this limit.
+**Constraints**: The format string must be at most 256 bytes; a runtime error is triggered if it exceeds this limit. An invalid format specifier (e.g. an unknown `%X`) also raises a runtime error rather than returning a string.
 
 **Common format characters**:
 - `%Y` — 4-digit year

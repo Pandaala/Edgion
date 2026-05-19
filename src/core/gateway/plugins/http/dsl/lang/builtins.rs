@@ -677,9 +677,20 @@ impl Vm {
                 let dt = chrono::DateTime::from_timestamp(timestamp, 0);
                 match dt {
                     Some(dt) => {
-                        let formatted = dt.format(&format).to_string();
-                        check_string_len(&formatted, self.limits.max_string_len)?;
-                        Ok(Value::Str(formatted.into()))
+                        // chrono's DelayedFormat::fmt returns Err for invalid specifiers (e.g. "%Q");
+                        // calling to_string() on it panics. Use write! to surface the Err safely.
+                        use std::fmt::Write;
+                        let mut formatted = String::new();
+                        match write!(formatted, "{}", dt.format(&format)) {
+                            Ok(()) => {
+                                check_string_len(&formatted, self.limits.max_string_len)?;
+                                Ok(Value::Str(formatted.into()))
+                            }
+                            Err(_) => Err(RuntimeError::ApiError {
+                                function: "time_format".into(),
+                                message: format!("invalid format string: {:?}", format),
+                            }),
+                        }
                     }
                     None => Ok(Value::Nil),
                 }

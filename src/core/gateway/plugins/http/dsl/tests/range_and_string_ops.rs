@@ -5,22 +5,6 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// Helper: assert that a DSL source produces `X-Out: expected`
-// ---------------------------------------------------------------------------
-
-fn assert_output(source: &str, expected: &str) {
-    let expected = expected.to_string();
-    let mut session = MockPluginSession::new();
-    session
-        .expect_set_request_header()
-        .withf(move |h, v| h == "X-Out" && v == expected)
-        .times(1)
-        .returning(|_, _| Ok(()));
-    let result = run(source, session);
-    assert_eq!(result, good_next());
-}
-
-// ---------------------------------------------------------------------------
 // split() list-length limit enforcement
 // ---------------------------------------------------------------------------
 
@@ -106,37 +90,37 @@ fn test_split_empty_delim_bypass_is_closed() {
 // Str + Str — explicit baseline
 #[test]
 fn test_add_str_str() {
-    assert_output(r#"req.set_header("X-Out", "hello" + " world")"#, "hello world");
+    assert_sets_request_header(r#"req.set_header("X-Out", "hello" + " world")"#, "X-Out", "hello world");
 }
 
 // Str + Int — Int coerces to decimal string
 #[test]
 fn test_add_str_int() {
-    assert_output(r#"req.set_header("X-Out", "val=" + 42)"#, "val=42");
+    assert_sets_request_header(r#"req.set_header("X-Out", "val=" + 42)"#, "X-Out", "val=42");
 }
 
 // Int + Str — Int on the left coerces to string
 #[test]
 fn test_add_int_str() {
-    assert_output(r#"req.set_header("X-Out", 7 + " items")"#, "7 items");
+    assert_sets_request_header(r#"req.set_header("X-Out", 7 + " items")"#, "X-Out", "7 items");
 }
 
 // Str + Bool(true) — Bool coerces to "true"
 #[test]
 fn test_add_str_bool_true() {
-    assert_output(r#"req.set_header("X-Out", "flag=" + true)"#, "flag=true");
+    assert_sets_request_header(r#"req.set_header("X-Out", "flag=" + true)"#, "X-Out", "flag=true");
 }
 
 // Str + Bool(false) — Bool coerces to "false"
 #[test]
 fn test_add_str_bool_false() {
-    assert_output(r#"req.set_header("X-Out", "flag=" + false)"#, "flag=false");
+    assert_sets_request_header(r#"req.set_header("X-Out", "flag=" + false)"#, "X-Out", "flag=false");
 }
 
 // Str + Nil — Nil coerces to "nil"
 #[test]
 fn test_add_str_nil() {
-    assert_output(r#"req.set_header("X-Out", "v=" + nil)"#, "v=nil");
+    assert_sets_request_header(r#"req.set_header("X-Out", "v=" + nil)"#, "X-Out", "v=nil");
 }
 
 // Bool + Bool — neither operand is Str or Int → TypeError → ErrResponse 500
@@ -214,7 +198,7 @@ fn test_same_constant_equality() {
             req.set_header("X-Out", "equal")
         }
     "#;
-    assert_output(source, "equal");
+    assert_sets_request_header(source, "X-Out", "equal");
 }
 
 // Same constant used three times in a loop — each iteration reads a fresh Arc clone.
@@ -228,7 +212,7 @@ fn test_same_constant_multiple_loads() {
         let z = "abc"
         req.set_header("X-Out", x + y + z)
     "#;
-    assert_output(source, "abcabcabc");
+    assert_sets_request_header(source, "X-Out", "abcabcabc");
 }
 
 #[test]
@@ -447,7 +431,7 @@ fn test_list_index_oob_returns_nil() {
             req.set_header("X-Out", "nil")
         }
     "#;
-    assert_output(source, "nil");
+    assert_sets_request_header(source, "X-Out", "nil");
 }
 
 // join() reassembles a split list correctly.
@@ -458,7 +442,7 @@ fn test_join_basic() {
         let joined = join(parts, "-")
         req.set_header("X-Out", joined)
     "#;
-    assert_output(source, "a-b-c");
+    assert_sets_request_header(source, "X-Out", "a-b-c");
 }
 
 // range() items are accessible by direct index.
@@ -468,7 +452,7 @@ fn test_range_index_get() {
         let r = range(10, 13)
         req.set_header("X-Out", r[0] + "-" + r[2])
     "#;
-    assert_output(source, "10-12");
+    assert_sets_request_header(source, "X-Out", "10-12");
 }
 
 #[test]

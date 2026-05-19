@@ -4,38 +4,29 @@ use super::*;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-fn assert_output(source: &str, expected: &str) {
-    let expected = expected.to_string();
-    let mut session = MockPluginSession::new();
-    session
-        .expect_set_request_header()
-        .withf(move |h, v| h == "X-Out" && v == expected)
-        .times(1)
-        .returning(|_, _| Ok(()));
-    let result = run(source, session);
-    assert_eq!(result, good_next());
-}
-
 #[test]
 fn test_sha256() {
-    assert_output(
+    assert_sets_request_header(
         r#"req.set_header("X-Out", sha256("hello"))"#,
+        "X-Out",
         "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
     );
 }
 
 #[test]
 fn test_md5() {
-    assert_output(
+    assert_sets_request_header(
         r#"req.set_header("X-Out", md5("hello"))"#,
+        "X-Out",
         "5d41402abc4b2a76b9719d911017c592",
     );
 }
 
 #[test]
 fn test_regex_find_match() {
-    assert_output(
+    assert_sets_request_header(
         "let v = regex_find(\"foo-123\", \"\\\\d+\")\nif v != nil { req.set_header(\"X-Out\", v) }",
+        "X-Out",
         "123",
     );
 }
@@ -52,15 +43,20 @@ fn test_regex_find_no_match() {
 
 #[test]
 fn test_regex_replace_single() {
-    assert_output(
+    assert_sets_request_header(
         r#"req.set_header("X-Out", regex_replace("abc-def", "-", "_"))"#,
+        "X-Out",
         "abc_def",
     );
 }
 
 #[test]
 fn test_regex_replace_all() {
-    assert_output(r#"req.set_header("X-Out", regex_replace("a-b-c", "-", "/"))"#, "a/b/c");
+    assert_sets_request_header(
+        r#"req.set_header("X-Out", regex_replace("a-b-c", "-", "/"))"#,
+        "X-Out",
+        "a/b/c",
+    );
 }
 
 // regex_find / regex_replace — dynamic (variable) pattern is rejected at compile time
@@ -175,8 +171,9 @@ fn test_regex_replace_literal_emits_dedicated_opcode() {
 // regex_replace with no match returns the original string unchanged (Cow::Borrowed path)
 #[test]
 fn test_regex_replace_no_match_returns_original() {
-    assert_output(
+    assert_sets_request_header(
         r#"req.set_header("X-Out", regex_replace("hello", "\\d+", "X"))"#,
+        "X-Out",
         "hello",
     );
 }
@@ -185,8 +182,9 @@ fn test_regex_replace_no_match_returns_original() {
 #[test]
 fn test_regex_replace_capture_groups() {
     // Rearrange YYYY-MM-DD to DD/MM/YYYY using three capture groups
-    assert_output(
+    assert_sets_request_header(
         r#"req.set_header("X-Out", regex_replace("2026-05-15", "(\\d{4})-(\\d{2})-(\\d{2})", "$3/$2/$1"))"#,
+        "X-Out",
         "15/05/2026",
     );
 }
@@ -239,42 +237,88 @@ fn test_regex_replace_result_too_long() {
 
 #[test]
 fn test_base64_encode() {
-    assert_output(r#"req.set_header("X-Out", base64_encode("hello"))"#, "aGVsbG8=");
+    assert_sets_request_header(
+        r#"req.set_header("X-Out", base64_encode("hello"))"#,
+        "X-Out",
+        "aGVsbG8=",
+    );
 }
 
 #[test]
 fn test_base64_decode() {
-    assert_output(r#"req.set_header("X-Out", base64_decode("aGVsbG8="))"#, "hello");
+    assert_sets_request_header(
+        r#"req.set_header("X-Out", base64_decode("aGVsbG8="))"#,
+        "X-Out",
+        "hello",
+    );
 }
 
 #[test]
 fn test_url_encode() {
-    assert_output(r#"req.set_header("X-Out", url_encode("a b+c"))"#, "a%20b%2Bc");
+    assert_sets_request_header(r#"req.set_header("X-Out", url_encode("a b+c"))"#, "X-Out", "a%20b%2Bc");
 }
 
 #[test]
 fn test_url_decode() {
-    assert_output(r#"req.set_header("X-Out", url_decode("a%20b"))"#, "a b");
+    assert_sets_request_header(r#"req.set_header("X-Out", url_decode("a%20b"))"#, "X-Out", "a b");
+}
+
+// base64_decode invalid input returns nil — matches hex_decode contract.
+#[test]
+fn test_base64_decode_invalid_returns_nil() {
+    let source = r#"
+        let val = base64_decode("not_base64!!!")
+        if val == nil {
+            req.set_header("X-Ok", "nil")
+        }
+    "#;
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_request_header()
+        .withf(|n, v| n == "X-Ok" && v == "nil")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run(source, session);
+    assert_eq!(result, good_next());
+}
+
+// url_decode invalid input preserves literal — unlike base64_decode/hex_decode, an invalid %XX
+// sequence is passed through as-is (per while-loop fall-through in BuiltinId::UrlDecode).
+#[test]
+fn test_url_decode_invalid_percent_preserves_literal() {
+    assert_sets_request_header(r#"req.set_header("X-Out", url_decode("%ZZ"))"#, "X-Out", "%ZZ");
 }
 
 #[test]
 fn test_to_upper() {
-    assert_output(r#"req.set_header("X-Out", to_upper("hello"))"#, "HELLO");
+    assert_sets_request_header(r#"req.set_header("X-Out", to_upper("hello"))"#, "X-Out", "HELLO");
 }
 
 #[test]
 fn test_to_lower() {
-    assert_output(r#"req.set_header("X-Out", to_lower("HELLO"))"#, "hello");
+    assert_sets_request_header(r#"req.set_header("X-Out", to_lower("HELLO"))"#, "X-Out", "hello");
 }
 
 #[test]
 fn test_substr() {
-    assert_output(r#"req.set_header("X-Out", substr("hello", 1, 3))"#, "el");
+    assert_sets_request_header(r#"req.set_header("X-Out", substr("hello", 1, 3))"#, "X-Out", "el");
+}
+
+// substr OOB clamp semantics — start/end beyond char_count yield "" rather than ApiError;
+// (*n).max(0) clamps negatives. Lock in current behavior so future refactors don't drift.
+#[test]
+fn test_substr_oob_returns_empty() {
+    assert_sets_request_header(r#"req.set_header("X-Out", substr("abc", 10, 3))"#, "X-Out", "");
+}
+
+#[test]
+fn test_substr_negative_start_clamps_to_zero() {
+    assert_sets_request_header(r#"req.set_header("X-Out", substr("abc", -1, 2))"#, "X-Out", "ab");
 }
 
 #[test]
 fn test_len() {
-    assert_output(r#"req.set_header("X-Out", to_str(len("abc")))"#, "3");
+    assert_sets_request_header(r#"req.set_header("X-Out", to_str(len("abc")))"#, "X-Out", "3");
 }
 
 #[test]
@@ -299,12 +343,44 @@ fn test_time_now() {
 
 #[test]
 fn test_to_int() {
-    assert_output(r#"req.set_header("X-Out", to_str(to_int("42")))"#, "42");
+    assert_sets_request_header(r#"req.set_header("X-Out", to_str(to_int("42")))"#, "X-Out", "42");
+}
+
+// to_int semantics for unparseable/out-of-range strings: all return nil (never TypeError or
+// IntegerOverflow). Locks in the unwrap_or(Value::Nil) behavior in BuiltinId::ToInt.
+#[test]
+fn test_to_int_unparseable_returns_nil() {
+    assert_sets_request_header(
+        r#"let v = to_int("abc")
+if v == nil { req.set_header("X-Out", "nil") }"#,
+        "X-Out",
+        "nil",
+    );
+}
+
+#[test]
+fn test_to_int_empty_string_returns_nil() {
+    assert_sets_request_header(
+        r#"let v = to_int("")
+if v == nil { req.set_header("X-Out", "nil") }"#,
+        "X-Out",
+        "nil",
+    );
+}
+
+#[test]
+fn test_to_int_overflow_returns_nil() {
+    assert_sets_request_header(
+        r#"let v = to_int("99999999999999999999")
+if v == nil { req.set_header("X-Out", "nil") }"#,
+        "X-Out",
+        "nil",
+    );
 }
 
 #[test]
 fn test_to_str() {
-    assert_output(r#"req.set_header("X-Out", to_str(42))"#, "42");
+    assert_sets_request_header(r#"req.set_header("X-Out", to_str(42))"#, "X-Out", "42");
 }
 
 #[test]

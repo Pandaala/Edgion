@@ -206,6 +206,43 @@ fn test_time_format() {
     assert_eq!(result, good_next());
 }
 
+// time_format with an invalid chrono specifier returns ApiError (does not panic).
+// Replaces the previous behavior where dt.format("%Q").to_string() would panic in
+// the data plane.
+#[test]
+fn test_time_format_invalid_specifier_returns_api_error() {
+    let session = MockPluginSession::new();
+    let err = run_expect_runtime_err(r#"time_format(0, "%Q")"#, session);
+    assert!(
+        matches!(
+            &err,
+            RuntimeError::ApiError { function, .. } if function == "time_format"
+        ),
+        "expected ApiError from time_format, got {:?}",
+        err
+    );
+}
+
+// ip_in_cidr with malformed CIDR returns false (not an error). Locks in the
+// parts.len() != 2 / parse-fail fall-through paths in BuiltinId::IpInCidr.
+#[test]
+fn test_ip_in_cidr_invalid_cidr_returns_false() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_request_header()
+        .withf(|n, v| n == "X-Ok" && v == "false")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let source = r#"
+        let v = ip_in_cidr("1.2.3.4", "not-a-cidr")
+        if v == false {
+            req.set_header("X-Ok", "false")
+        }
+    "#;
+    let result = run(source, session);
+    assert_eq!(result, good_next());
+}
+
 #[test]
 fn test_ip_in_cidr_v4_match() {
     let source = r#"

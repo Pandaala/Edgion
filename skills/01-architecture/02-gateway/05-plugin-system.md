@@ -178,6 +178,8 @@ EdgionDSL is a lightweight request/response rule engine built on a custom byteco
 
 The full architecture — data flow, source layout, plugin entry points, async/sync bridging, panic isolation, and `DslRuntime` lifecycle — lives in [`dsl-engine.md`](dsl-engine.md). User-facing syntax / builtin signatures / runtime tuning are documented in `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/`.
 
+`Value::Str` / `Value::List` type design (why `Arc<str>`, not SSO or `ImmutableString`): [`skills/04-review/dsl-value-str/sso-migration-not-worth-it.md`](../../04-review/dsl-value-str/sso-migration-not-worth-it.md).
+
 ## Stream plugins
 
 Stream plugins run at the TCP/UDP layer and use a two-stage architecture:

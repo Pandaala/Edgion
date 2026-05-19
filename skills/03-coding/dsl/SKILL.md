@@ -13,6 +13,7 @@ description: DSL plugin implementation skills for Edgion — builtin development
 | File | Topic |
 |------|-------|
 | [builtins-path.md](builtins-path.md) | `req.path` / `req.uri` / `req.query` and related path/uri/query variables: views, behavior, rewrite interaction, allocation cost |
+| [builtin-error-semantics.md](builtin-error-semantics.md) | Error-handling contract for DSL builtins — which functions return `nil` / `""` / `false` silently vs raise `RuntimeError::ApiError`; lock-in tests and "adding a new builtin" decision flow |
 | [http-call.md](http-call.md) | `http.call()` builtin: async outbound HTTP, `Value::Map` return shape, SSRF guard, config fields, test patterns |
 | [redis-builtin.md](redis-builtin.md) | `redis.*` builtins: async LinkSys Redis interaction, named alias lookup, `Map { ok, value, error }` return shape, "Adding new redis.* functions" 5-step recipe |
 

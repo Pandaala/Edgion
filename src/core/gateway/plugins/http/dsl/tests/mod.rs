@@ -12,6 +12,8 @@ pub(super) use crate::core::gateway::plugins::runtime::traits::session::{MockPlu
 pub(super) use crate::core::gateway::plugins::runtime::PluginLog;
 pub(super) use crate::types::filters::PluginRunningResult;
 
+mod api_errors;
+mod bytecode_deserialization;
 mod compile_errors;
 mod control_flow;
 mod ctx_builtins;
@@ -203,6 +205,19 @@ pub(super) fn err_response_body(status: u16, body: &str) -> PluginRunningResult 
         status,
         body: Some(body.to_string()),
     }
+}
+
+/// Run `source` and assert that the script sets request header `name` to `value` exactly once.
+pub(super) fn assert_sets_request_header(source: &str, name: &'static str, value: &str) {
+    let value = value.to_string();
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_request_header()
+        .withf(move |h, v| h == name && v == value)
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run(source, session);
+    assert_eq!(result, good_next());
 }
 
 // ---------------------------------------------------------------------------

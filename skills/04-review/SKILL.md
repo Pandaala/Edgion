@@ -33,7 +33,7 @@ RFC-divergence-accepted findings are recorded as per-finding files under [`rfc-d
 | **Concurrency** | [concurrency/](concurrency/), [rwlock-unwrap/](rwlock-unwrap/) |
 | **CPU / memory performance** | [cpu-memory/](cpu-memory/), [memory-leak/](memory-leak/) |
 | **Observability / logging** | [observability/](observability/) |
-| **DSL** (Value type, regex) | [dsl-value-str/](dsl-value-str/), [dsl-regex/](dsl-regex/) |
+| **DSL** (Value type, regex, builtin panic risks) | [dsl-value-str/](dsl-value-str/), [dsl-regex/](dsl-regex/), [dsl-builtins/](dsl-builtins/) |
 | **Architecture decisions** | [architecture/](architecture/) |
 | **Resource handler / requeue** | [handler-requeue/](handler-requeue/) |
 | **Plugin runtime** | [ctx-set/](ctx-set/) |
