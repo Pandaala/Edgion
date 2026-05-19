@@ -8,7 +8,7 @@
 use async_trait::async_trait;
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use pingora_core::apps::ServerApp;
@@ -35,6 +35,13 @@ use crate::types::{ListenerKey, MatchedInfo, Rsc};
 use super::tls_connect_retry_backoff;
 
 const UNSAFE_UPSTREAM_ADDRESS_LOG: &str = "unsafe upstream address";
+
+/// Wall-clock budget for accumulating a complete TLS ClientHello record from
+/// the downstream. Aligned with Envoy's `listener_filters_timeout` default
+/// (15 s). Using an absolute deadline (rather than per-read relative timeouts)
+/// blocks slowloris-style dribble: an attacker feeding one byte at a time
+/// cannot push the cumulative wait past this bound.
+const SNI_READ_DEADLINE: Duration = Duration::from_secs(15);
 
 fn is_service_backend_ref(group: Option<&str>, kind: Option<&str>) -> bool {
     let group_ok = matches!(group, None | Some("") | Some("core"));
@@ -76,26 +83,23 @@ impl ServerApp for EdgionTlsPassthroughProxy {
         }
 
         // 1. Read the beginning of the stream to extract SNI from ClientHello.
-        //    We read into a buffer, parse SNI, then prepend the bytes back
-        //    so upstream receives the complete TLS handshake.
+        //    We read into a bounded buffer with an absolute deadline. SNI is
+        //    parsed from exactly the ClientHello record; all bytes consumed
+        //    from downstream (which may include 0-RTT EarlyData appended by
+        //    the client in the same TCP segment) are forwarded verbatim so
+        //    upstream sees the original byte stream.
         let mut peek_buf = vec![0u8; sni_parser::MAX_CLIENT_HELLO_LEN];
-        let n = match downstream.read(&mut peek_buf).await {
-            Ok(0) => {
-                ctx.err_log = Some("connection closed before ClientHello".to_string());
-                self.log_disconnect(&mut ctx).await;
-                return None;
-            }
-            Ok(n) => n,
-            Err(e) => {
-                ctx.err_log = Some(format!("read ClientHello failed: {e}"));
+        let (record_end, filled) = match self.read_client_hello(&mut downstream, &mut peek_buf).await {
+            Ok(spans) => spans,
+            Err(err) => {
+                ctx.err_log = Some(err);
                 self.log_disconnect(&mut ctx).await;
                 return None;
             }
         };
-        let initial_bytes = &peek_buf[..n];
 
-        // 2. Extract SNI
-        let sni = match sni_parser::extract_sni(initial_bytes) {
+        // 2. Extract SNI from the complete record.
+        let sni = match sni_parser::extract_sni(&peek_buf[..record_end]) {
             Some(sni) => sni,
             None => {
                 ctx.err_log = Some("no SNI in ClientHello".to_string());
@@ -105,8 +109,12 @@ impl ServerApp for EdgionTlsPassthroughProxy {
         };
         ctx.sni = Some(sni.clone());
 
-        // 3. Handle connection: route match → connect upstream → relay
-        self.handle_connection(downstream, &mut ctx, &sni, &peek_buf[..n]).await;
+        // 3. Handle connection: route match → connect upstream → relay.
+        //    Forward every byte we drained from downstream — not just the
+        //    ClientHello record — so any trailing 0-RTT EarlyData reaches
+        //    the backend.
+        self.handle_connection(downstream, &mut ctx, &sni, &peek_buf[..filled])
+            .await;
         self.log_disconnect(&mut ctx).await;
 
         None
@@ -114,6 +122,58 @@ impl ServerApp for EdgionTlsPassthroughProxy {
 }
 
 impl EdgionTlsPassthroughProxy {
+    /// Accumulate bytes from `downstream` until a complete TLS Handshake
+    /// record is buffered.
+    ///
+    /// Returns `(record_end, filled)`:
+    /// - `record_end` is the offset just past the ClientHello record;
+    ///   `buf[..record_end]` is the exact record handed to the SNI parser.
+    /// - `filled` is the total bytes drained from downstream
+    ///   (`filled >= record_end`); the caller forwards `buf[..filled]` so
+    ///   any trailing bytes the client coalesced into the same TCP segment
+    ///   (e.g., TLS 1.3 0-RTT EarlyData) reach upstream verbatim.
+    ///
+    /// Closes the connection (returning an `Err` log string) when:
+    /// - the peer disconnects before a full record arrives,
+    /// - the record would exceed `buf.len()` (`MAX_CLIENT_HELLO_LEN`),
+    /// - the cumulative read time exceeds [`SNI_READ_DEADLINE`],
+    /// - the first byte already disproves a TLS Handshake record.
+    async fn read_client_hello(&self, downstream: &mut Stream, buf: &mut [u8]) -> Result<(usize, usize), String> {
+        let deadline = tokio::time::Instant::now() + SNI_READ_DEADLINE;
+        let mut filled: usize = 0;
+
+        loop {
+            match sni_parser::client_hello_record_complete(&buf[..filled]) {
+                sni_parser::RecordCompleteness::Complete { record_end } => {
+                    return Ok((record_end, filled));
+                }
+                sni_parser::RecordCompleteness::NotTlsHandshake => {
+                    return Err("not a TLS handshake".to_string());
+                }
+                sni_parser::RecordCompleteness::NeedMore => {}
+            }
+
+            if filled >= buf.len() {
+                return Err("ClientHello exceeds MAX_CLIENT_HELLO_LEN".to_string());
+            }
+
+            let read_fut = downstream.read(&mut buf[filled..]);
+            let n = match tokio::time::timeout_at(deadline, read_fut).await {
+                Ok(Ok(0)) => {
+                    return Err(if filled == 0 {
+                        "connection closed before ClientHello".to_string()
+                    } else {
+                        "connection closed mid-ClientHello".to_string()
+                    });
+                }
+                Ok(Ok(n)) => n,
+                Ok(Err(e)) => return Err(format!("read ClientHello failed: {e}")),
+                Err(_) => return Err("ClientHello read timeout".to_string()),
+            };
+            filled += n;
+        }
+    }
+
     /// Route match, connect upstream, and relay traffic.
     ///
     /// `initial_bytes` contains the raw ClientHello bytes already read from
