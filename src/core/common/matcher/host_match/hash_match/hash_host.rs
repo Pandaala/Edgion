@@ -73,6 +73,41 @@ impl<T> HashHost<T> {
         }
     }
 
+    /// Like `get`, but the wildcard bucket only matches a **single** left-most
+    /// label per RFC 6125 §6.4.3. Use this for TLS certificate selection.
+    ///
+    /// `get_rfc6125("foo.example.com")` matches a registered `*.example.com`;
+    /// `get_rfc6125("a.b.example.com")` does NOT — that would be a multi-label
+    /// match, which RFC 6125-compliant client TLS stacks reject during the
+    /// handshake. Route matching (which is governed by Gateway API §4.3) still
+    /// uses [`HashHost::get`], so the two semantics coexist intentionally.
+    pub fn get_rfc6125(&self, k: &str) -> Option<&T> {
+        if k.bytes().any(|b| b.is_ascii_uppercase()) {
+            self.get_rfc6125_lower(&k.to_ascii_lowercase())
+        } else {
+            self.get_rfc6125_lower(k)
+        }
+    }
+
+    fn get_rfc6125_lower(&self, k: &str) -> Option<&T> {
+        if !is_valid_domain(k) {
+            return None;
+        }
+        // Exact match wins over wildcard (parallel to `get_lower`).
+        if let Some(value) = self.map.get(k) {
+            return Some(value);
+        }
+        // Strip exactly the first DNS label and look up the `.suffix` form
+        // (e.g., `foo.example.com` -> `.example.com`). The suffix slice is
+        // used directly as the HashMap key — never re-validated as a domain,
+        // because (a) `get_lower` follows the same convention, and (b) a
+        // malformed slice can only cause a miss (returns `None`), never a
+        // wrong cert.
+        let dot = k.find('.')?;
+        let suffix = &k[dot..];
+        self.map.get(suffix)
+    }
+
     fn get_lower(&self, k: &str) -> Option<&T> {
         if !is_valid_domain(k) {
             return None;
@@ -288,5 +323,83 @@ mod tests {
         assert_eq!(host.get("api.example.com"), Some(&"ex".to_string()));
         assert_eq!(host.get("api.testing.com"), Some(&"te".to_string()));
         assert_eq!(host.get("api.unknown.com"), None);
+    }
+
+    #[test]
+    fn test_get_rfc6125_single_label() {
+        let mut host: HashHost<String> = HashHost::new();
+        host.insert("*.example.com", "wildcard".to_string());
+
+        // Single-label match — RFC 6125 §6.4.3 OK
+        assert_eq!(host.get_rfc6125("foo.example.com"), Some(&"wildcard".to_string()));
+
+        // Multi-label match — RFC 6125 §6.4.3 forbids
+        assert_eq!(host.get_rfc6125("a.b.example.com"), None);
+
+        // Root domain — wildcard does not cover bare suffix
+        assert_eq!(host.get_rfc6125("example.com"), None);
+
+        // Case-insensitive — RFC 6125 §6.4.1
+        assert_eq!(host.get_rfc6125("Foo.Example.COM"), Some(&"wildcard".to_string()));
+    }
+
+    #[test]
+    fn test_get_rfc6125_most_specific() {
+        let mut host: HashHost<String> = HashHost::new();
+        host.insert("*.example.com", "broad".to_string());
+        host.insert("*.api.example.com", "specific".to_string());
+
+        // Most-specific single-label match wins
+        assert_eq!(host.get_rfc6125("v1.api.example.com"), Some(&"specific".to_string()));
+
+        // Single label against the broad wildcard
+        assert_eq!(host.get_rfc6125("web.example.com"), Some(&"broad".to_string()));
+
+        // Four-label host — neither wildcard's single-label rule covers it.
+        // `*.api.example.com` would need exactly one label before `api.example.com`
+        // (`x.y` is two labels). `*.example.com` would need exactly one label before
+        // `example.com` (`x.y.api` is three labels).
+        assert_eq!(host.get_rfc6125("x.y.api.example.com"), None);
+    }
+
+    #[test]
+    fn test_get_rfc6125_exact_priority() {
+        let mut host: HashHost<String> = HashHost::new();
+        host.insert("foo.example.com", "exact".to_string());
+        host.insert("*.example.com", "wildcard".to_string());
+
+        // Exact match wins over wildcard
+        assert_eq!(host.get_rfc6125("foo.example.com"), Some(&"exact".to_string()));
+        // Other subdomains still hit the wildcard
+        assert_eq!(host.get_rfc6125("bar.example.com"), Some(&"wildcard".to_string()));
+    }
+
+    #[test]
+    fn test_get_rfc6125_single_label_sni_returns_none() {
+        let mut host: HashHost<String> = HashHost::new();
+        host.insert("*.example.com", "wildcard".to_string());
+
+        // SNI with no dot at all — RFC 6125 wildcards require at least one
+        // dot in the query; bare hostnames cannot match a wildcard pattern.
+        assert_eq!(host.get_rfc6125("localhost"), None);
+    }
+
+    #[test]
+    fn test_get_vs_get_rfc6125_divergence() {
+        // The two accessors deliberately diverge for multi-label SNI: `get` is the
+        // route-matching path (Gateway API §4.3, multi-label), `get_rfc6125` is the
+        // TLS cert-selection path (RFC 6125 §6.4.3, single-label). This test pins
+        // the invariant the doc-comment advertises so neither side can drift.
+        let mut host: HashHost<String> = HashHost::new();
+        host.insert("*.example.com", "wildcard".to_string());
+
+        // `get` (multi-label) — finds the wildcard for any subdomain depth
+        assert_eq!(host.get("a.b.example.com"), Some(&"wildcard".to_string()));
+        // `get_rfc6125` (single-label) — same input returns None
+        assert_eq!(host.get_rfc6125("a.b.example.com"), None);
+
+        // Single-label query: both agree
+        assert_eq!(host.get("foo.example.com"), Some(&"wildcard".to_string()));
+        assert_eq!(host.get_rfc6125("foo.example.com"), Some(&"wildcard".to_string()));
     }
 }

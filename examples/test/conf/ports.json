@@ -1,5 +1,5 @@
 {
-  "current_max": 31386,
+  "current_max": 31387,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -231,6 +231,9 @@
     },
     "HTTPRoute/Backend/BackendTLSSNIHostOverride": {
       "http": 31385
+    },
+    "EdgionTls/wildcard_single_label": {
+      "https": 31387
     }
   }
 }

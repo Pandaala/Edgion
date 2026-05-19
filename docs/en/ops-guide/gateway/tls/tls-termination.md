@@ -125,12 +125,13 @@ listeners:
         - name: wildcard-example-com-tls
 ```
 
-> **Wildcard depth note**: The Gateway API allows `*.example.com` on a Listener to route
-> requests for any subdomain depth (`api.example.com`, `deep.sub.example.com`, …).
-> However, TLS certificates follow RFC 6125 §6.4.3, which restricts `*.example.com` to a
-> **single label** — the cert covers `api.example.com` but RFC 6125-compliant client TLS
-> libraries reject the handshake for `deep.sub.example.com`. Use explicit SAN entries or a
-> dedicated certificate for deep subdomains.
+> **Wildcard depth note**: `*.example.com` on a Listener covers exactly one subdomain
+> level for TLS — `api.example.com` ✅, but `deep.sub.example.com` ❌ (RFC 6125 §6.4.3).
+> Edgion's TLS cert selection by SNI enforces this single-label rule, so a connection to
+> `deep.sub.example.com` will fail the TLS handshake unless a more specific wildcard
+> (e.g. `*.sub.example.com`) is also configured. Route matching for `HTTPRoute` /
+> `TLSRoute` remains multi-label per Gateway API §4.3 — only cert selection is
+> RFC 6125-strict.
 
 ## Related Documentation
 

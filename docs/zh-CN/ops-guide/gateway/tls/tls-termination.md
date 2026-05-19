@@ -125,6 +125,13 @@ listeners:
         - name: wildcard-example-com-tls
 ```
 
+> **通配符深度说明**: `*.example.com` 在 Listener 上的 TLS 证书仅覆盖**一级子域名** ——
+> `api.example.com` ✅，但 `deep.sub.example.com` ❌（RFC 6125 §6.4.3）。Edgion 在 SNI →
+> 证书选择阶段强制执行该单层规则，因此对 `deep.sub.example.com` 的连接会在 TLS 握手阶
+> 段失败，除非额外配置更具体的通配符（如 `*.sub.example.com`）。`HTTPRoute` /
+> `TLSRoute` 的路由匹配仍保留 Gateway API §4.3 的多级通配语义 —— 仅证书选择遵循
+> RFC 6125 严格的单层语义。
+
 ## 相关文档
 
 - [HTTPS 监听器](../listeners/https.md)

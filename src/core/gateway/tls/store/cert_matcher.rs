@@ -44,15 +44,15 @@ impl TlsCertMatcher {
 
     /// Match SNI against certificates for a specific listener.
     ///
-    /// Certificate selection uses multi-level suffix matching (`HashHost`), so a cert
-    /// registered for `*.example.com` is found for `a.b.example.com`. However, RFC 6125
-    /// §6.4.3 restricts wildcard certs to a single label — RFC 6125-compliant client TLS
-    /// libraries reject the handshake for `a.b.example.com` even when a cert is selected here.
+    /// Uses RFC 6125 §6.4.3 single-label wildcard semantics — a cert registered for
+    /// `*.example.com` matches SNI `foo.example.com` but NOT `a.b.example.com`. Route
+    /// matching at `TlsRouteTable::match_route` keeps multi-label semantics per Gateway
+    /// API §4.3 — the two layers diverge deliberately.
     pub fn match_sni(&self, key: &ListenerKey, sni: &str) -> Option<Arc<EdgionTls>> {
         let snapshot = self.data.load();
 
         if let Some(host_matcher) = snapshot.listener_matcher.get(key) {
-            if let Some(tls_list) = host_matcher.get(sni) {
+            if let Some(tls_list) = host_matcher.get_rfc6125(sni) {
                 if let Some(first) = tls_list.first() {
                     return Some(first.clone());
                 }

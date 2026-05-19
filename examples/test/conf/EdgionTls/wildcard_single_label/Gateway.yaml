@@ -1,0 +1,14 @@
+# Gateway for wildcard_single_label scenario.
+# Single HTTPS listener; no explicit hostname — the EdgionTls resource
+# constrains cert selection to the wildcard *.example.com certificate.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: wc-single-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: https-wc-single
+      protocol: HTTPS
+      port: 31387

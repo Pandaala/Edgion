@@ -328,6 +328,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionTls/fallback_sni" => "EdgionTls/fallback_sni",
         "EdgionTls/port_only" => "EdgionTls/port_only",
         "EdgionTls/BothAbsentParentRef" => "EdgionTls/BothAbsentParentRef",
+        "EdgionTls/wildcard_single_label" => "EdgionTls/wildcard_single_label",
         _ => suite,
     }
 }
@@ -1278,6 +1279,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::MtlsTestSuite));
             runner.add_suite(Box::new(suites::PortOnlyEdgionTlsTestSuite));
             runner.add_suite(Box::new(suites::FallbackSniTestSuite));
+            runner.add_suite(Box::new(suites::WildcardSingleLabelTestSuite));
         }
         "EdgionTls/https" => {
             if !gateway {
@@ -1313,6 +1315,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::FallbackSniTestSuite));
+        }
+        "EdgionTls/wildcard_single_label" => {
+            if !gateway {
+                eprintln!("Error: EdgionTls/wildcard_single_label tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::WildcardSingleLabelTestSuite));
         }
         // Status tests
         "Status/RefGrant" => {

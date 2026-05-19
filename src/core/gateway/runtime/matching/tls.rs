@@ -86,9 +86,15 @@ impl GatewayTlsMatcher {
         self.data.load().is_none()
     }
 
-    /// Match SNI against Gateway Listener hostnames with listener key dimension
+    /// Match SNI against Gateway Listener hostnames with listener key dimension.
     ///
-    /// Returns the first matching GatewayTlsEntry when found.
+    /// Returns the first matching GatewayTlsEntry when found, else falls through
+    /// to `fallback_listener_map` (catch-all listener without a hostname).
+    ///
+    /// Hostname matching follows RFC 6125 §6.4.3 single-label wildcard semantics —
+    /// `*.example.com` matches `foo.example.com` but NOT `a.b.example.com`. Route
+    /// matching at `TlsRouteTable::match_route` keeps multi-label semantics per
+    /// Gateway API §4.3 — the two layers diverge deliberately.
     ///
     /// ## Parameters
     /// - `key`: The listener key identifying the physical listener
@@ -101,7 +107,7 @@ impl GatewayTlsMatcher {
 
         // 1) Hostname-based lookup (exact > wildcard)
         if let Some(host_matcher) = data.listener_map.get(key) {
-            if let Some(entries) = host_matcher.get(sni) {
+            if let Some(entries) = host_matcher.get_rfc6125(sni) {
                 if let Some(entry) = entries.first() {
                     return Some(entry.clone());
                 }
@@ -161,7 +167,7 @@ impl GatewayTlsMatcher {
                     .options
                     .as_ref()
                     .and_then(|opts| opts.get("edgion.io/cert-provider"))
-                    .map_or(false, |v| v.as_str() == Some("EdgionTls"));
+                    .is_some_and(|v| v.as_str() == Some("EdgionTls"));
 
                 let cert_refs = match &tls_config.certificate_refs {
                     Some(refs) if !refs.is_empty() => refs.clone(),
@@ -472,6 +478,13 @@ mod tests {
         // Root domain should NOT match wildcard
         let result = matcher.match_sni(&key, "example.com");
         assert!(result.is_none(), "example.com should NOT match *.example.com");
+
+        // RFC 6125 §6.4.3: deeper subdomain MUST NOT match a single-label wildcard
+        let result = matcher.match_sni(&key, "a.b.example.com");
+        assert!(
+            result.is_none(),
+            "a.b.example.com should NOT match *.example.com (RFC 6125 §6.4.3)"
+        );
     }
 
     #[test]

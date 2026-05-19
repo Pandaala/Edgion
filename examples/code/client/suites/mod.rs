@@ -38,7 +38,7 @@ pub use udp_route::UdpTestSuite;
 // EdgionTls tests
 pub use edgion_tls::{
     CipherTestSuite, EdgionTlsBothAbsentParentRefTestSuite, FallbackSniTestSuite, GrpcTlsTestSuite, HttpsTestSuite,
-    MtlsTestSuite, PortOnlyEdgionTlsTestSuite,
+    MtlsTestSuite, PortOnlyEdgionTlsTestSuite, WildcardSingleLabelTestSuite,
 };
 
 // Gateway tests
