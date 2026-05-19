@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-time-format-deny
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "time-format-deny"
+        source: |
+          // Invalid chrono format specifier — used to panic, now surfaces ApiError.
+          let formatted = time_format(0, "%Q")
+          req.set_header("X-Time-Format", to_str(formatted))
+        errorPolicy: deny

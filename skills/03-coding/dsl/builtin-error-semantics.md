@@ -30,9 +30,9 @@ Locked in by tests under `tests/utility_functions.rs`, `tests/p3_utility_tests.r
 | `base64_decode(s)` | non-base64 input | `nil` | `test_base64_decode_invalid_returns_nil` |
 | `hex_decode(s)` | non-hex input | `nil` | `test_hex_decode_invalid` |
 | `url_decode(s)` | `%XX` where `XX` is not hex | literal `%XX` preserved | `test_url_decode_invalid_percent_preserves_literal` |
-| `url_decode(s)` | trailing `%` or `%X` (length < 3 tail) | literal preserved | (not yet pinned; same fall-through path) |
+| `url_decode(s)` | trailing `%` or `%X` (length < 3 tail) | literal preserved | `test_url_decode_single_percent_preserves_literal`, `test_url_decode_percent_one_char_preserves_literal` |
 | `ip_in_cidr(ip, cidr)` | malformed `cidr` (no `/`, bad prefix, bad ip) | `false` | `test_ip_in_cidr_invalid_cidr_returns_false` |
-| `time_format(ts, fmt)` | timestamp out of chrono's range | `nil` | (not yet pinned) |
+| `time_format(ts, fmt)` | timestamp out of chrono's range | `nil` | `test_time_format_out_of_range_timestamp_returns_nil` |
 
 **Design intent**: these builtins are used in pipelining patterns like `if to_int(req.header("X-Limit")) > 100 { deny }` or `let parts = split(url_decode(req.query("path")), "/")`. A surprise `ApiError` mid-pipeline would deny every malformed request even when the script's logic could have handled the fallback gracefully (e.g. compared `to_int(x)` to nil). The silent-fallback shape preserves operator-level error handling at the script level.
 

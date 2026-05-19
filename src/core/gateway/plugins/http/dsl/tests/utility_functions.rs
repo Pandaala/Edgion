@@ -389,3 +389,54 @@ fn test_log_returns_good_next() {
     let result = run(r#"log("hello")"#, session);
     assert_eq!(result, good_next());
 }
+
+// url_decode("%") — single byte, i+2 < bytes.len() is 0+2<1 false → fall-through preserves "%".
+#[test]
+fn test_url_decode_single_percent_preserves_literal() {
+    assert_sets_request_header(r#"req.set_header("X-Out", url_decode("%"))"#, "X-Out", "%");
+}
+
+// url_decode("%Z") — two bytes, i+2 < bytes.len() is 0+2<2 false → fall-through preserves "%Z".
+#[test]
+fn test_url_decode_percent_one_char_preserves_literal() {
+    assert_sets_request_header(r#"req.set_header("X-Out", url_decode("%Z"))"#, "X-Out", "%Z");
+}
+
+// substr("", 0, 1) — empty string, both indices clamp to 0 → "".
+#[test]
+fn test_substr_empty_input_returns_empty() {
+    assert_sets_request_header(r#"req.set_header("X-Out", substr("", 0, 1))"#, "X-Out", "");
+}
+
+// to_int("  42  ") — Rust parse::<i64> rejects surrounding whitespace → nil.
+#[test]
+fn test_to_int_surrounding_whitespace_returns_nil() {
+    assert_sets_request_header(
+        r#"let v = to_int("  42  ")
+if v == nil { req.set_header("X-Out", "nil") }"#,
+        "X-Out",
+        "nil",
+    );
+}
+
+// to_int("42abc") — trailing garbage causes parse failure → nil.
+#[test]
+fn test_to_int_trailing_garbage_returns_nil() {
+    assert_sets_request_header(
+        r#"let v = to_int("42abc")
+if v == nil { req.set_header("X-Out", "nil") }"#,
+        "X-Out",
+        "nil",
+    );
+}
+
+// to_int("0x10") — parse::<i64> does not accept hex prefix → nil.
+#[test]
+fn test_to_int_hex_prefix_returns_nil() {
+    assert_sets_request_header(
+        r#"let v = to_int("0x10")
+if v == nil { req.set_header("X-Out", "nil") }"#,
+        "X-Out",
+        "nil",
+    );
+}

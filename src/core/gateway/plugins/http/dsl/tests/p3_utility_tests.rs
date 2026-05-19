@@ -593,3 +593,35 @@ fn test_hmac_sha256_verify() {
     let result = run(source, session);
     assert_eq!(result, good_next());
 }
+
+// time_format(0, "") — empty format string; chrono DelayedFormat::fmt returns Ok("") → Value::Str("").
+#[test]
+fn test_time_format_empty_format_returns_empty() {
+    assert_sets_request_header(r#"req.set_header("X-Out", time_format(0, ""))"#, "X-Out", "");
+}
+
+// time_format(0, "%") — trailing % with no specifier; chrono returns Err → ApiError{function:"time_format"}.
+#[test]
+fn test_time_format_trailing_percent_returns_api_error() {
+    let session = MockPluginSession::new();
+    let err = run_expect_runtime_err(r#"time_format(0, "%")"#, session);
+    assert!(
+        matches!(
+            &err,
+            RuntimeError::ApiError { function, .. } if function == "time_format"
+        ),
+        "expected ApiError from time_format, got {:?}",
+        err
+    );
+}
+
+// time_format(i64::MAX, "%Y") — timestamp out of chrono's representable range → Value::Nil.
+#[test]
+fn test_time_format_out_of_range_timestamp_returns_nil() {
+    assert_sets_request_header(
+        r#"let v = time_format(9223372036854775807, "%Y")
+if v == nil { req.set_header("X-Out", "nil") }"#,
+        "X-Out",
+        "nil",
+    );
+}

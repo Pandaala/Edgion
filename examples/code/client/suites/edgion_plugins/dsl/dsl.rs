@@ -2167,6 +2167,91 @@ impl DslTestSuite {
             },
         )
     }
+
+    // ==================== Scenario 28: time_format ApiError — deny vs ignore ====================
+    // DSL source (both variants): time_format(0, "%Q") triggers ApiError (invalid chrono specifier).
+    // deny policy  → gateway returns 500 "DSL execution error".
+    // ignore policy → gateway passes request to upstream, which replies 200.
+
+    /// Test: time_format with invalid specifier under errorPolicy:deny → 500
+    fn test_time_format_deny_returns_500() -> TestCase {
+        TestCase::new(
+            "dsl_time_format_deny_returns_500",
+            "DSL: time_format(%Q) ApiError under deny policy returns 500",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-time-format-deny/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-time-format-deny.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let body = resp.text().await.unwrap_or_default();
+                            if status == 500 && body.contains("DSL execution error") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "500 with DSL execution error body".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected 500 with 'DSL execution error', got status={} body={}",
+                                        status, body
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: time_format with invalid specifier under default (ignore) policy → 200 from upstream
+    fn test_time_format_ignore_passes_through() -> TestCase {
+        TestCase::new(
+            "dsl_time_format_ignore_passes_through",
+            "DSL: time_format(%Q) ApiError under ignore policy passes through to upstream (200)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-time-format-ignore/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-time-format-ignore.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            // Execution aborted before resp.set_header — do not assert X-Time-Format.
+                            if status == 200 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "upstream replied 200; ApiError was ignored".to_string(),
+                                )
+                            } else {
+                                let body = resp.text().await.unwrap_or_default();
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 200 from upstream, got status={} body={}", status, body),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for DslTestSuite {
@@ -2238,6 +2323,9 @@ impl TestSuite for DslTestSuite {
             Self::test_dsl_path_param_prefix_extension(),
             // Scenario 27: cached_query freeze (unified-query-string-cache)
             Self::test_freeze_query_param(),
+            // Scenario 28: time_format ApiError path — deny vs ignore error policy
+            Self::test_time_format_deny_returns_500(),
+            Self::test_time_format_ignore_passes_through(),
         ]
     }
 }
