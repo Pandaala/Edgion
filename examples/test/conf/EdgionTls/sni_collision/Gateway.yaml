@@ -1,0 +1,15 @@
+# EdgionTls SNI collision Gateway
+# Single HTTPS listener; two EdgionTls resources collide on the same hostname
+# (shared-collision.example.com) bound to this listener via parentRefs/sectionName.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: edgiontls-sni-collision-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    # HTTPS listener - certificate provided by the colliding EdgionTls resources
+    - name: https
+      protocol: HTTPS
+      port: 31390

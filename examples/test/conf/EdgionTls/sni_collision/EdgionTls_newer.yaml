@@ -1,0 +1,20 @@
+# EdgionTls SNI collision - NEWER resource (creationTimestamp 2024-01-01).
+# This resource loses the hostname collision because its creationTimestamp is
+# newer. Its certificate (ECDSA edge-tls-ecdsa, CN=ecdsa-dualcert.example.com)
+# must NOT be served for SNI gateway-tls.test.com (the SAN shared by both certs).
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: edgiontls-sni-collision-newer
+  namespace: edgion-test
+  creationTimestamp: "2024-01-01T00:00:00Z"
+spec:
+  parentRefs:
+    - name: edgiontls-sni-collision-gateway
+      namespace: edgion-test
+      sectionName: https
+  hosts:
+    - gateway-tls.test.com
+  secretRef:
+    name: edge-tls-ecdsa
+    namespace: edgion-test

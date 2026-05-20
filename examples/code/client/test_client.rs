@@ -1280,6 +1280,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::PortOnlyEdgionTlsTestSuite));
             runner.add_suite(Box::new(suites::FallbackSniTestSuite));
             runner.add_suite(Box::new(suites::WildcardSingleLabelTestSuite));
+            runner.add_suite(Box::new(suites::SniCollisionTestSuite));
         }
         "EdgionTls/https" => {
             if !gateway {
@@ -1322,6 +1323,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::WildcardSingleLabelTestSuite));
+        }
+        "EdgionTls/sni_collision" => {
+            if !gateway {
+                eprintln!("Error: EdgionTls/sni_collision tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::SniCollisionTestSuite));
         }
         // Status tests
         "Status/RefGrant" => {

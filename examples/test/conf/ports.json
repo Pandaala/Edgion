@@ -100,6 +100,9 @@
     "EdgionTls/port_only": {
       "https": 31285
     },
+    "EdgionTls/sni_collision": {
+      "https": 31390
+    },
     "Gateway/TLS/GatewayTLS": {
       "https": 31220
     },

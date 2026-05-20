@@ -13,6 +13,44 @@ struct TlsEntry {
     validation: CertValidationResult,
 }
 
+/// Deterministic precedence for EdgionTls resources colliding on the same host.
+///
+/// Mirrors the Gateway API route-conflict convention and
+/// `BackendTLSPolicyStore::sort_policies_by_precedence`: oldest `creationTimestamp`
+/// wins (`Option<Time>` orders `None` first), then namespace, then name. The winner
+/// is `tls_list.first()` after this sort.
+fn edgion_tls_precedence(a: &Arc<EdgionTls>, b: &Arc<EdgionTls>) -> std::cmp::Ordering {
+    a.metadata
+        .creation_timestamp
+        .cmp(&b.metadata.creation_timestamp)
+        .then_with(|| a.metadata.namespace.cmp(&b.metadata.namespace))
+        .then_with(|| a.metadata.name.cmp(&b.metadata.name))
+}
+
+/// Warn (config-sync path only — never the handshake path) when several EdgionTls
+/// resources serve the same host on one listener. `tls_list` must already be sorted
+/// by [`edgion_tls_precedence`], so `first()` is the selected certificate.
+fn warn_edgion_tls_collision(host: &str, listener_key: &ListenerKey, tls_list: &[Arc<EdgionTls>]) {
+    let fmt = |t: &Arc<EdgionTls>| {
+        format!(
+            "{}/{}",
+            t.metadata.namespace.as_deref().unwrap_or(""),
+            t.metadata.name.as_deref().unwrap_or("")
+        )
+    };
+    let participants = tls_list.iter().map(fmt).collect::<Vec<_>>().join(", ");
+    let selected = tls_list.first().map(fmt).unwrap_or_default();
+    tracing::warn!(
+        component = "tls_store",
+        host = %host,
+        listener_key = %listener_key,
+        participants = %participants,
+        selected = %selected,
+        "Multiple EdgionTls resources serve the same hostname on one listener; \
+         selecting the certificate deterministically by (creationTimestamp, namespace, name)"
+    );
+}
+
 /// TlsStore manages all TLS certificates and builds the TLS matcher
 pub struct TlsStore {
     // Key: namespace/name (or name for cluster-scoped).
@@ -196,7 +234,17 @@ impl TlsStore {
         let mut listener_matcher = HashMap::new();
         for (listener_key, host_map) in listener_host_map {
             let mut matcher = HashHost::new();
-            for (host, tls_list) in host_map {
+            for (host, mut tls_list) in host_map {
+                if tls_list.len() > 1 {
+                    // Two or more EdgionTls resources resolve to the same host on the same
+                    // listener. Nothing admission-blocks this, and `match_sni` returns the
+                    // first entry — so without a stable sort the served certificate would
+                    // flip with HashMap iteration order across rebuilds. Sort by the Gateway
+                    // API precedence (oldest creationTimestamp wins, then namespace/name) so
+                    // the selection is deterministic, and warn the operator.
+                    tls_list.sort_by(edgion_tls_precedence);
+                    warn_edgion_tls_collision(&host, &listener_key, &tls_list);
+                }
                 matcher.insert(&host, tls_list);
             }
             listener_matcher.insert(listener_key, matcher);
@@ -346,4 +394,75 @@ static GLOBAL_TLS_STORE: LazyLock<Arc<TlsStore>> = LazyLock::new(|| Arc::new(Tls
 /// Get the global TlsStore instance
 pub fn get_global_tls_store() -> Arc<TlsStore> {
     GLOBAL_TLS_STORE.clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::resources::edgion_tls::EdgionTlsSpec;
+    use crate::types::resources::gateway::SecretObjectReference;
+    use chrono::{TimeZone, Utc};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+    use kube::api::ObjectMeta;
+
+    fn make_etls(namespace: &str, name: &str, ts: Option<Time>) -> Arc<EdgionTls> {
+        Arc::new(EdgionTls {
+            metadata: ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                creation_timestamp: ts,
+                ..Default::default()
+            },
+            spec: EdgionTlsSpec {
+                parent_refs: None,
+                hosts: vec!["shared.example.com".to_string()],
+                secret_ref: SecretObjectReference {
+                    name: format!("{name}-cert"),
+                    namespace: Some(namespace.to_string()),
+                    group: None,
+                    kind: None,
+                },
+                client_auth: None,
+                min_tls_version: None,
+                ciphers: None,
+                extend: None,
+                secret: None,
+                resolved_listeners: None,
+            },
+            status: None,
+        })
+    }
+
+    #[test]
+    fn test_edgion_tls_precedence_prefers_oldest_over_name() {
+        let older = Time(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap());
+        let newer = Time(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap());
+
+        // incumbent is lexically LARGER (team-z/zzz) but OLDER; newcomer smaller but newer.
+        let incumbent = make_etls("team-z", "zzz", Some(older));
+        let newcomer = make_etls("team-a", "aaa", Some(newer));
+
+        for mut list in [
+            vec![newcomer.clone(), incumbent.clone()],
+            vec![incumbent.clone(), newcomer.clone()],
+        ] {
+            list.sort_by(edgion_tls_precedence);
+            assert_eq!(
+                list.first().unwrap().metadata.name.as_deref(),
+                Some("zzz"),
+                "older EdgionTls must win regardless of name or input order"
+            );
+        }
+    }
+
+    #[test]
+    fn test_edgion_tls_precedence_name_tiebreak_when_no_timestamp() {
+        // No timestamps (both None) → fall back to (namespace, name) lexicographic.
+        let a = make_etls("team-a", "aaa", None);
+        let b = make_etls("team-b", "bbb", None);
+
+        let mut list = [b, a];
+        list.sort_by(edgion_tls_precedence);
+        assert_eq!(list.first().unwrap().metadata.namespace.as_deref(), Some("team-a"));
+    }
 }

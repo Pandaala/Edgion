@@ -9,6 +9,7 @@ mod grpctls;
 mod https;
 mod mtls;
 mod port_only;
+mod sni_collision;
 mod wildcard_single_label;
 
 pub use both_absent_parent_ref::EdgionTlsBothAbsentParentRefTestSuite;
@@ -18,4 +19,5 @@ pub use grpctls::GrpcTlsTestSuite;
 pub use https::HttpsTestSuite;
 pub use mtls::MtlsTestSuite;
 pub use port_only::PortOnlyEdgionTlsTestSuite;
+pub use sni_collision::SniCollisionTestSuite;
 pub use wildcard_single_label::WildcardSingleLabelTestSuite;

@@ -22,6 +22,7 @@ use crate::types::prelude_resources::Gateway;
 use crate::types::resources::gateway::{FrontendTLSValidation, SecretObjectReference};
 use arc_swap::ArcSwapOption;
 use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kube::ResourceExt;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -33,6 +34,10 @@ pub struct GatewayTlsEntry {
     pub gateway_namespace: String,
     /// Gateway name
     pub gateway_name: String,
+    /// Gateway `metadata.creationTimestamp` — primary tiebreak key when two
+    /// Gateways collide on the same hostname (oldest wins, per the Gateway API
+    /// route-conflict convention; mirrors `BackendTLSPolicyStore` precedence).
+    pub gateway_creation_ts: Option<Time>,
     /// Listener name
     pub listener_name: String,
     /// Listener key identifying the physical listener ("{addr}/{protocol}")
@@ -71,6 +76,53 @@ pub struct GatewayTlsMatcher {
     data: ArcSwapOption<TlsMatcherData>,
 }
 
+/// Deterministic ordering for entries that collide in the same matcher slot.
+///
+/// When two Gateways register TLS for the same hostname (or both as catch-all) on
+/// the same physical listener, both entries land in one `Vec`. The winner is the
+/// `entries.first()` after this sort, so the order must be stable across rebuilds
+/// rather than dependent on upstream HashMap iteration order.
+///
+/// Tiebreak follows the Gateway API route-conflict convention (oldest
+/// `creationTimestamp` wins, then namespace/name), matching
+/// `BackendTLSPolicyStore::sort_policies_by_precedence`. `Option<Time>` orders
+/// `None` before `Some`, so an entry with a missing timestamp is treated as
+/// oldest; `listener_name` is the final disambiguator for two listeners of the
+/// same Gateway. This keeps the incumbent Gateway serving when a newer one is
+/// added with a colliding hostname.
+fn tls_entry_order(a: &GatewayTlsEntry, b: &GatewayTlsEntry) -> std::cmp::Ordering {
+    a.gateway_creation_ts
+        .cmp(&b.gateway_creation_ts)
+        .then_with(|| a.gateway_namespace.cmp(&b.gateway_namespace))
+        .then_with(|| a.gateway_name.cmp(&b.gateway_name))
+        .then_with(|| a.listener_name.cmp(&b.listener_name))
+}
+
+/// Emit a warning when a TLS matcher slot accumulates more than one entry.
+///
+/// Runs only on the Controller→Gateway config-sync path (`rebuild_from_gateways`),
+/// never on the handshake path, so `tracing` is permitted here. The selected entry
+/// is `entries[0]` after `tls_entry_order` sorting.
+fn warn_tls_sni_collision(hostname: &str, entries: &[GatewayTlsEntry]) {
+    let participants = entries
+        .iter()
+        .map(|e| format!("{}/{}#{}", e.gateway_namespace, e.gateway_name, e.listener_name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let selected = entries
+        .first()
+        .map(|e| format!("{}/{}#{}", e.gateway_namespace, e.gateway_name, e.listener_name))
+        .unwrap_or_default();
+    tracing::warn!(
+        component = "gateway_tls_matcher",
+        hostname = %hostname,
+        participants = %participants,
+        selected = %selected,
+        "Cross-Gateway TLS SNI collision: multiple listeners serve the same hostname on one listener; \
+         selecting the certificate deterministically by (creationTimestamp, namespace, name, listener_name)"
+    );
+}
+
 impl GatewayTlsMatcher {
     pub fn new() -> Self {
         Self {
@@ -90,6 +142,13 @@ impl GatewayTlsMatcher {
     ///
     /// Returns the first matching GatewayTlsEntry when found, else falls through
     /// to `fallback_listener_map` (catch-all listener without a hostname).
+    ///
+    /// When multiple Gateways register the same hostname on one physical listener
+    /// (a cross-Gateway collision the controller's intra-gateway conflict detection
+    /// does not block), the slot holds several entries. `rebuild_from_gateways` keeps
+    /// each slot sorted by Gateway API precedence (oldest creationTimestamp, then
+    /// namespace, name) and logs a warning, so the `entries.first()` selected here is
+    /// deterministic across rebuilds rather than dependent on upstream HashMap iteration order.
     ///
     /// Hostname matching follows RFC 6125 §6.4.3 single-label wildcard semantics —
     /// `*.example.com` matches `foo.example.com` but NOT `a.b.example.com`. Route
@@ -183,6 +242,7 @@ impl GatewayTlsMatcher {
                         let entry = GatewayTlsEntry {
                             gateway_namespace: gateway_namespace.clone(),
                             gateway_name: gateway_name.clone(),
+                            gateway_creation_ts: gateway.metadata.creation_timestamp.clone(),
                             listener_name: listener.name.clone(),
                             listener_key: listener_key.clone(),
                             hostname: hostname.clone(),
@@ -198,7 +258,17 @@ impl GatewayTlsMatcher {
                         });
 
                         if let Some(existing) = host_matcher.get_mut_exact(hostname) {
+                            // Cross-Gateway collision: another listener already serves this same
+                            // hostname pattern (exact or wildcard) on the same physical listener.
+                            // The controller's conflict detection is intra-gateway only, so this
+                            // case is never admission-blocked.
+                            // Keep the slot sorted by Gateway API precedence (oldest
+                            // creationTimestamp, then namespace, name, listener_name) so
+                            // match_sni's entries.first() is deterministic across rebuilds
+                            // instead of following upstream HashMap iteration order.
                             existing.push(entry);
+                            existing.sort_by(tls_entry_order);
+                            warn_tls_sni_collision(hostname, existing);
                         } else {
                             host_matcher.insert(hostname, vec![entry]);
                         }
@@ -209,6 +279,7 @@ impl GatewayTlsMatcher {
                         let entry = GatewayTlsEntry {
                             gateway_namespace: gateway_namespace.clone(),
                             gateway_name: gateway_name.clone(),
+                            gateway_creation_ts: gateway.metadata.creation_timestamp.clone(),
                             listener_name: listener.name.clone(),
                             listener_key: listener_key.clone(),
                             hostname: String::new(),
@@ -217,7 +288,15 @@ impl GatewayTlsMatcher {
                             frontend_validation: tls_config.frontend_validation.clone(),
                             resolved_frontend_ca_secrets: tls_config.resolved_frontend_ca_secrets.clone(),
                         };
-                        fallback_listener_map.entry(listener_key).or_default().push(entry);
+                        let slot = fallback_listener_map.entry(listener_key).or_default();
+                        slot.push(entry);
+                        if slot.len() > 1 {
+                            // Multiple catch-all listeners (from different Gateways) on the same
+                            // physical listener — same non-deterministic-winner problem as the
+                            // hostname branch above. Sort for a deterministic fallback cert.
+                            slot.sort_by(tls_entry_order);
+                            warn_tls_sni_collision("(catch-all)", slot);
+                        }
                         fallback_entry_count += 1;
                     }
                 }
@@ -904,6 +983,169 @@ mod tests {
         let result = matcher.match_sni(&key, "other.wildcard.org");
         assert!(result.is_some());
         assert_eq!(result.unwrap().listener_name, "https-wc");
+    }
+
+    #[test]
+    fn test_cross_gateway_sni_collision_is_deterministic() {
+        // Two Gateways register TLS for the SAME hostname on the SAME listener.
+        // The controller's conflict detection is intra-gateway only, so this is not
+        // admission-blocked. match_sni must pick the same winner regardless of the
+        // order the Gateways arrive in the rebuild slice (no HashMap-order dependence).
+        let key = test_listener_key(443);
+
+        let gw_a = create_test_gateway(
+            "alpha-gw",
+            "team-a",
+            vec![create_test_listener(
+                "https",
+                Some("shared.example.com"),
+                Some(make_tls_config("alpha-cert", Some("team-a"))),
+            )],
+        );
+        let gw_b = create_test_gateway(
+            "beta-gw",
+            "team-b",
+            vec![create_test_listener(
+                "https",
+                Some("shared.example.com"),
+                Some(make_tls_config("beta-cert", Some("team-b"))),
+            )],
+        );
+
+        // Order 1: A then B
+        let matcher1 = GatewayTlsMatcher::new();
+        matcher1.rebuild_from_gateways(&[gw_a.clone(), gw_b.clone()]);
+        let winner1 = matcher1.match_sni(&key, "shared.example.com").unwrap();
+
+        // Order 2: B then A
+        let matcher2 = GatewayTlsMatcher::new();
+        matcher2.rebuild_from_gateways(&[gw_b, gw_a]);
+        let winner2 = matcher2.match_sni(&key, "shared.example.com").unwrap();
+
+        // Same deterministic winner irrespective of input order
+        assert_eq!(winner1.gateway_namespace, winner2.gateway_namespace);
+        assert_eq!(winner1.gateway_name, winner2.gateway_name);
+        // Neither Gateway sets a creationTimestamp (None), so the tiebreak falls back to
+        // (namespace, name): "team-a" < "team-b".
+        assert_eq!(winner1.gateway_namespace, "team-a");
+        assert_eq!(winner1.gateway_name, "alpha-gw");
+        assert_eq!(winner1.certificate_refs[0].name, "alpha-cert");
+    }
+
+    #[test]
+    fn test_cross_gateway_collision_prefers_oldest_creation_timestamp() {
+        // The tiebreak is creationTimestamp-first (oldest wins), then namespace/name.
+        // Give the lexically-LARGER-named Gateway the OLDER timestamp; it must still win,
+        // proving creationTimestamp dominates the name comparison.
+        use chrono::{TimeZone, Utc};
+        let key = test_listener_key(443);
+
+        let older = Time(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap());
+        let newer = Time(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap());
+
+        let mut incumbent = create_test_gateway(
+            "zzz-gw",
+            "team-z",
+            vec![create_test_listener(
+                "https",
+                Some("shared.example.com"),
+                Some(make_tls_config("incumbent-cert", Some("team-z"))),
+            )],
+        );
+        incumbent.metadata.creation_timestamp = Some(older);
+
+        let mut newcomer = create_test_gateway(
+            "aaa-gw",
+            "team-a",
+            vec![create_test_listener(
+                "https",
+                Some("shared.example.com"),
+                Some(make_tls_config("newcomer-cert", Some("team-a"))),
+            )],
+        );
+        newcomer.metadata.creation_timestamp = Some(newer);
+
+        for order in [
+            vec![incumbent.clone(), newcomer.clone()],
+            vec![newcomer.clone(), incumbent.clone()],
+        ] {
+            let matcher = GatewayTlsMatcher::new();
+            matcher.rebuild_from_gateways(&order);
+            let winner = matcher.match_sni(&key, "shared.example.com").unwrap();
+            assert_eq!(
+                winner.gateway_name, "zzz-gw",
+                "older Gateway must win regardless of name or input order"
+            );
+            assert_eq!(winner.certificate_refs[0].name, "incumbent-cert");
+        }
+    }
+
+    #[test]
+    fn test_cross_gateway_wildcard_collision_is_deterministic() {
+        // Same scenario for an identical *wildcard* hostname on one listener. Before
+        // the get_mut_exact wildcard fix, the second Gateway silently overwrote the
+        // first (last-in-slice wins) — non-deterministic by input order.
+        let key = test_listener_key(443);
+
+        let gw_a = create_test_gateway(
+            "alpha-gw",
+            "team-a",
+            vec![create_test_listener(
+                "https",
+                Some("*.example.com"),
+                Some(make_tls_config("alpha-cert", Some("team-a"))),
+            )],
+        );
+        let gw_b = create_test_gateway(
+            "beta-gw",
+            "team-b",
+            vec![create_test_listener(
+                "https",
+                Some("*.example.com"),
+                Some(make_tls_config("beta-cert", Some("team-b"))),
+            )],
+        );
+
+        let matcher1 = GatewayTlsMatcher::new();
+        matcher1.rebuild_from_gateways(&[gw_a.clone(), gw_b.clone()]);
+        let winner1 = matcher1.match_sni(&key, "foo.example.com").unwrap();
+
+        let matcher2 = GatewayTlsMatcher::new();
+        matcher2.rebuild_from_gateways(&[gw_b, gw_a]);
+        let winner2 = matcher2.match_sni(&key, "foo.example.com").unwrap();
+
+        assert_eq!(winner1.gateway_name, winner2.gateway_name);
+        assert_eq!(winner1.gateway_name, "alpha-gw");
+        assert_eq!(winner1.certificate_refs[0].name, "alpha-cert");
+    }
+
+    #[test]
+    fn test_cross_gateway_catchall_collision_is_deterministic() {
+        // Same scenario for hostname-less catch-all listeners colliding on one listener.
+        let key = test_listener_key(443);
+
+        let gw_a = create_test_gateway(
+            "alpha-gw",
+            "team-a",
+            vec![create_test_listener("https", None, Some(make_tls_config("alpha-cert", Some("team-a"))))],
+        );
+        let gw_b = create_test_gateway(
+            "beta-gw",
+            "team-b",
+            vec![create_test_listener("https", None, Some(make_tls_config("beta-cert", Some("team-b"))))],
+        );
+
+        let matcher1 = GatewayTlsMatcher::new();
+        matcher1.rebuild_from_gateways(&[gw_a.clone(), gw_b.clone()]);
+        let winner1 = matcher1.match_sni(&key, "anything.example.com").unwrap();
+
+        let matcher2 = GatewayTlsMatcher::new();
+        matcher2.rebuild_from_gateways(&[gw_b, gw_a]);
+        let winner2 = matcher2.match_sni(&key, "anything.example.com").unwrap();
+
+        assert_eq!(winner1.gateway_name, winner2.gateway_name);
+        assert_eq!(winner1.gateway_name, "alpha-gw");
+        assert_eq!(winner1.certificate_refs[0].name, "alpha-cert");
     }
 
     #[test]

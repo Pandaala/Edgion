@@ -26,6 +26,43 @@ pub struct TlsRouteTable {
     catch_all_routes: Option<Vec<Arc<TLSRoute>>>,
 }
 
+/// Deterministic precedence for TLSRoutes colliding on the same hostname.
+///
+/// Implements the Gateway API conflict-resolution rule (oldest `creationTimestamp`
+/// wins, then namespace/name), matching `BackendTLSPolicyStore` precedence. The
+/// winner is `routes.first()` after this sort, so equal-precedence overlapping
+/// routes select deterministically instead of by HashMap iteration order.
+fn tls_route_precedence(a: &Arc<TLSRoute>, b: &Arc<TLSRoute>) -> std::cmp::Ordering {
+    a.metadata
+        .creation_timestamp
+        .cmp(&b.metadata.creation_timestamp)
+        .then_with(|| a.metadata.namespace.cmp(&b.metadata.namespace))
+        .then_with(|| a.metadata.name.cmp(&b.metadata.name))
+}
+
+/// Warn (route-rebuild path only — never `match_route`) when several TLSRoutes share
+/// one hostname bucket. `routes` must already be sorted by [`tls_route_precedence`],
+/// so `first()` is the selected route.
+fn warn_tls_route_collision(hostname: &str, routes: &[Arc<TLSRoute>]) {
+    let fmt = |r: &Arc<TLSRoute>| {
+        format!(
+            "{}/{}",
+            r.metadata.namespace.as_deref().unwrap_or(""),
+            r.metadata.name.as_deref().unwrap_or("")
+        )
+    };
+    let participants = routes.iter().map(fmt).collect::<Vec<_>>().join(", ");
+    let selected = routes.first().map(fmt).unwrap_or_default();
+    tracing::warn!(
+        component = "tls_route_table",
+        hostname = %hostname,
+        participants = %participants,
+        selected = %selected,
+        "Multiple TLSRoutes serve the same hostname on one listener; \
+         selecting the route deterministically by (creationTimestamp, namespace, name)"
+    );
+}
+
 impl TlsRouteTable {
     pub fn new() -> Self {
         Self {
@@ -71,8 +108,20 @@ impl TlsRouteTable {
         }
 
         let mut host_map: HashHost<Vec<Arc<TLSRoute>>> = HashHost::new();
-        for (hostname, route_vec) in buckets {
+        for (hostname, mut route_vec) in buckets {
+            if route_vec.len() > 1 {
+                // Several TLSRoutes claim the same hostname on this listener. `match_route`
+                // returns the first, so without a stable sort the chosen route would depend
+                // on HashMap iteration order. Resolve by Gateway API precedence and warn.
+                route_vec.sort_by(tls_route_precedence);
+                warn_tls_route_collision(&hostname, &route_vec);
+            }
             host_map.insert(&hostname, route_vec);
+        }
+
+        if catch_all.len() > 1 {
+            catch_all.sort_by(tls_route_precedence);
+            warn_tls_route_collision("(catch-all)", &catch_all);
         }
 
         Self {
@@ -123,10 +172,20 @@ mod tests {
     use crate::types::ResourceMeta;
 
     fn create_test_tls_route(namespace: &str, name: &str, hostname: &str) -> TLSRoute {
+        create_test_tls_route_ts(namespace, name, hostname, None)
+    }
+
+    fn create_test_tls_route_ts(
+        namespace: &str,
+        name: &str,
+        hostname: &str,
+        creation_timestamp: Option<k8s_openapi::apimachinery::pkg::apis::meta::v1::Time>,
+    ) -> TLSRoute {
         TLSRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some(namespace.to_string()),
                 name: Some(name.to_string()),
+                creation_timestamp,
                 ..Default::default()
             },
             spec: TLSRouteSpec {
@@ -168,5 +227,32 @@ mod tests {
         let table = TlsRouteTable::new();
         assert!(table.match_route("test.example.com").is_none());
         assert!(!table.has_catch_all());
+    }
+
+    #[test]
+    fn test_same_hostname_collision_prefers_oldest_deterministically() {
+        use chrono::{TimeZone, Utc};
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+
+        let older = Some(Time(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap()));
+        let newer = Some(Time(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()));
+
+        // incumbent is lexically larger (zzz) but older; must win regardless of input order.
+        let incumbent = Arc::new(create_test_tls_route_ts("team-z", "zzz", "shared.example.com", older));
+        let newcomer = Arc::new(create_test_tls_route_ts("team-a", "aaa", "shared.example.com", newer));
+
+        for (a, b) in [(incumbent.clone(), newcomer.clone()), (newcomer.clone(), incumbent.clone())] {
+            let mut routes = HashMap::new();
+            routes.insert(a.key_name(), a);
+            routes.insert(b.key_name(), b);
+
+            let table = TlsRouteTable::from_routes(&routes);
+            let winner = table.match_route("shared.example.com").unwrap();
+            assert_eq!(
+                winner.metadata.name.as_deref(),
+                Some("zzz"),
+                "older TLSRoute must win regardless of name or input order"
+            );
+        }
     }
 }

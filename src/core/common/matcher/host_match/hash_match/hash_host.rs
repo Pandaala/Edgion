@@ -159,17 +159,31 @@ impl<T> HashHost<T> {
         matched_start.and_then(move |pos| self.map.get_mut(&k[pos..]))
     }
 
-    /// Exact-only mutable lookup: returns `Some` only if `k` was inserted as
-    /// a literal (non-wildcard) key.  Does **not** fall back to wildcard suffix
-    /// matching.  Use this when building a store to avoid accidentally merging
-    /// a new hostname entry into an existing wildcard bucket.
+    /// Exact-pattern mutable lookup: returns `Some` only for the bucket stored
+    /// under the **same pattern** `k` was inserted as. Does **not** fall back to
+    /// wildcard suffix matching (so an exact hostname never merges into a wildcard
+    /// bucket), but it DOES resolve a wildcard pattern to its own bucket: just like
+    /// [`HashHost::insert`], `"*.aaa.com"` normalizes to the `".aaa.com"` key. This
+    /// symmetry lets a store builder accumulate multiple entries for the same
+    /// wildcard pattern instead of silently overwriting (`is_valid_domain` rejects
+    /// the raw `"*"` label, so without this branch a wildcard key always missed).
+    /// Use this when building a store to avoid accidentally merging a new hostname
+    /// entry into an existing wildcard bucket.
     pub fn get_mut_exact(&mut self, k: &str) -> Option<&mut T> {
         let k_lower = k.to_lowercase();
         let k = k_lower.as_str();
-        if !is_valid_domain(k) {
+        let key = if let Some(rest) = k.strip_prefix("*.") {
+            if is_valid_domain(rest) {
+                format!(".{}", rest)
+            } else {
+                return None;
+            }
+        } else if is_valid_domain(k) {
+            k.to_string()
+        } else {
             return None;
-        }
-        self.map.get_mut(k)
+        };
+        self.map.get_mut(&key)
     }
 
     pub fn remove(&mut self, k: &str) -> Option<T> {
@@ -308,6 +322,29 @@ mod tests {
         );
         // get (read) should also prefer exact over wildcard.
         assert_eq!(host.get("fourth-example.wildcard.org"), Some(&vec!["exact"]));
+    }
+
+    #[test]
+    fn test_get_mut_exact_resolves_wildcard_pattern() {
+        let mut host: HashHost<Vec<&str>> = HashHost::new();
+        host.insert("*.example.com", vec!["w1"]);
+
+        // A wildcard pattern resolves to its own bucket (symmetric with insert),
+        // so a store builder can accumulate instead of overwriting.
+        let bucket = host
+            .get_mut_exact("*.example.com")
+            .expect("get_mut_exact must resolve the wildcard pattern to its own bucket");
+        bucket.push("w2");
+        assert_eq!(host.get_mut_exact("*.example.com"), Some(&mut vec!["w1", "w2"]));
+
+        // It must still NOT fall back to wildcard for a concrete subdomain.
+        assert!(host.get_mut_exact("foo.example.com").is_none());
+
+        // Case-insensitive, mirroring insert.
+        assert!(host.get_mut_exact("*.EXAMPLE.com").is_some());
+
+        // An invalid wildcard rest returns None, not a panic.
+        assert!(host.get_mut_exact("*.").is_none());
     }
 
     #[test]
