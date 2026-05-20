@@ -281,6 +281,9 @@ spec:
                           query:
                             type: string
                             description: "JwtAuth: query parameter name for token"
+                          allowTokenInQuery:
+                            type: boolean
+                            description: "JwtAuth: allow reading the token from the URL query parameter (default false; RFC 6750 SHOULD NOT)"
                           cookie:
                             type: string
                             description: "JwtAuth: cookie name for token"

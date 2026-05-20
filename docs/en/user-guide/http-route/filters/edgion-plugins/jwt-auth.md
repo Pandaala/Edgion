@@ -67,7 +67,8 @@ stringData:
 | `algorithm` | String | `HS256` | Plugin-level default JWT signing algorithm; overridable per issuerGroup |
 | `audiences` | Array | None | Plugin-level default valid audiences; overridable per issuerGroup |
 | `header` | String | `authorization` | Header name to read the token from (supports `Bearer <token>` or bare token) |
-| `query` | String | `jwt` | Query parameter name for the token |
+| `query` | String | `jwt` | Query parameter name for the token. Only consulted when `allowTokenInQuery` is `true` |
+| `allowTokenInQuery` | Boolean | `false` | Allow reading the token from the URL query parameter. Disabled by default because bearer tokens in URLs leak into access logs, browser history, and `Referer` headers (RFC 6750 §2.3/§5.3) |
 | `cookie` | String | `jwt` | Cookie name for the token |
 | `hideCredentials` | Boolean | `false` | Whether to remove the token from the request before forwarding to upstream |
 | `anonymous` | String | None | Anonymous username. When set, unauthenticated requests are allowed and assigned this username |
@@ -116,6 +117,17 @@ curl -H "Authorization: Bearer eyJhbGciOiJIUzI1..." https://api.example.com/reso
 ```
 
 ### 2. Query Parameter
+
+> **Disabled by default.** Bearer tokens in URLs leak into access logs, browser history, and `Referer` headers (RFC 6750 §2.3/§5.3). To use this method you must explicitly opt in with `allowTokenInQuery: true`; otherwise a token carried only in the query is ignored and the request is treated as unauthenticated.
+
+```yaml
+spec:
+  requestPlugins:
+    - type: JwtAuth
+      config:
+        allowTokenInQuery: true   # required to read the token from the query
+        # ...
+```
 
 ```bash
 curl "https://api.example.com/resource?jwt=eyJhbGciOiJIUzI1..."
@@ -426,7 +438,7 @@ curl "https://api.example.com/resource?jwt=$TOKEN"
 
 ### Avoid
 
-1. **Do not pass Tokens in URLs** (unless Headers/Cookies cannot be used)
+1. **Do not pass Tokens in URLs** — the query method is off by default (`allowTokenInQuery: false`); only enable it when Headers/Cookies genuinely cannot be used
 2. **Do not use short keys** (HS256 recommends 32+ bytes)
 3. **Do not ignore the exp claim**
 4. **Do not share a single issuerGroup across multiple issuers** — each issuer should have its own group

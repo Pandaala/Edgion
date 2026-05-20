@@ -67,7 +67,8 @@ stringData:
 | `algorithm` | String | `HS256` | 插件级默认签名算法，可被每个 issuerGroup 覆盖 |
 | `audiences` | Array | 无 | 插件级默认有效受众列表，可被每个 issuerGroup 覆盖 |
 | `header` | String | `authorization` | 从哪个 Header 读取 Token（支持 `Bearer <token>` 或裸 token） |
-| `query` | String | `jwt` | Query 参数名 |
+| `query` | String | `jwt` | Query 参数名。仅当 `allowTokenInQuery` 为 `true` 时才会读取 |
+| `allowTokenInQuery` | Boolean | `false` | 是否允许从 URL query 参数读取 token。默认禁用，因为 URL 中的 bearer token 会泄漏到 access log、浏览器历史和 `Referer` 头（RFC 6750 §2.3/§5.3） |
 | `cookie` | String | `jwt` | Cookie 名称 |
 | `hideCredentials` | Boolean | `false` | 是否隐藏 Token，不传递给上游服务 |
 | `anonymous` | String | 无 | 匿名用户名。设置后，未认证请求也会被允许，并设置此用户名 |
@@ -116,6 +117,17 @@ curl -H "Authorization: Bearer eyJhbGciOiJIUzI1..." https://api.example.com/reso
 ```
 
 ### 2. Query 参数
+
+> **默认禁用。** URL 中的 bearer token 会泄漏到 access log、浏览器历史和 `Referer` 头（RFC 6750 §2.3/§5.3）。要使用该方式必须显式设置 `allowTokenInQuery: true`；否则仅通过 query 携带的 token 会被忽略，请求按未认证处理。
+
+```yaml
+spec:
+  requestPlugins:
+    - type: JwtAuth
+      config:
+        allowTokenInQuery: true   # 读取 query 中的 token 时必须开启
+        # ...
+```
 
 ```bash
 curl "https://api.example.com/resource?jwt=eyJhbGciOiJIUzI1..."
@@ -422,7 +434,7 @@ curl "https://api.example.com/resource?jwt=$TOKEN"
 
 ### 避免做法
 
-1. **不要在 URL 中传递 Token**（除非无法使用 Header/Cookie）
+1. **不要在 URL 中传递 Token** —— query 方式默认关闭（`allowTokenInQuery: false`），仅在确实无法使用 Header/Cookie 时才开启
 2. **不要使用过短的密钥**（HS256 建议 32 字节以上）
 3. **不要忽略 exp 声明**
 4. **不要让多个颁发者共享同一个 issuerGroup**（应各自独立）

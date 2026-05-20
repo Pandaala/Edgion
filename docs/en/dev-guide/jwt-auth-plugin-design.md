@@ -87,7 +87,7 @@ The following table compares Edgion's current design with Kong JWT and APISIX jw
 
 1. **Token extraction** (priority: Header > Query > Cookie)  
    - Header: Default `authorization`, supports `Bearer <token>` or bare token.  
-   - Query: Default parameter name `jwt`.  
+   - Query: Default parameter name `jwt`. Opt-in only — gated by `allow_token_in_query` (default `false`) because tokens in URLs leak into logs/history (RFC 6750 §2.3/§5.3).  
    - Cookie: Default name `jwt`.
 
 2. **Credential model**  
@@ -122,7 +122,8 @@ The following table compares Edgion's current design with Kong JWT and APISIX jw
 | secret_refs | []SecretObjectReference? | - | Multi-key: Each Secret contains `key` + `secret` or `key` + `publicKey` |
 | algorithm | JwtAlgorithm | HS256 | HS256/HS384/HS512/RS256/ES256 |
 | header | string | "authorization" | Header name for token extraction |
-| query | string | "jwt" | Query parameter name |
+| query | string | "jwt" | Query parameter name (only read when `allow_token_in_query` is true) |
+| allow_token_in_query | bool | false | Allow reading the token from the URL query parameter (RFC 6750 §2.3/§5.3 SHOULD NOT) |
 | cookie | string | "jwt" | Cookie name |
 | hide_credentials | bool | false | Whether to remove token before forwarding to upstream |
 | anonymous | string? | - | Anonymous consumer name, allows unauthenticated access |

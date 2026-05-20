@@ -87,7 +87,7 @@
 
 1. **Token 提取**（优先级：Header > Query > Cookie）  
    - Header：默认 `authorization`，支持 `Bearer <token>` 或裸 token。  
-   - Query：默认参数名 `jwt`。  
+   - Query：默认参数名 `jwt`。需显式开启 —— 由 `allow_token_in_query`（默认 `false`）控制，因为 URL 中的 token 会泄漏到日志/历史（RFC 6750 §2.3/§5.3）。  
    - Cookie：默认名称 `jwt`。
 
 2. **凭证模型**  
@@ -122,7 +122,8 @@
 | secret_refs | []SecretObjectReference? | - | 多密钥：每个 Secret 含 `key` + `secret` 或 `key` + `publicKey` |
 | algorithm | JwtAlgorithm | HS256 | HS256/HS384/HS512/RS256/ES256 |
 | header | string | "authorization" | 取 token 的 Header 名 |
-| query | string | "jwt" | Query 参数名 |
+| query | string | "jwt" | Query 参数名（仅当 `allow_token_in_query` 为 true 时读取） |
+| allow_token_in_query | bool | false | 是否允许从 URL query 参数读取 token（RFC 6750 §2.3/§5.3 SHOULD NOT） |
 | cookie | string | "jwt" | Cookie 名 |
 | hide_credentials | bool | false | 是否不把 token 转发到上游 |
 | anonymous | string? | - | 匿名消费者名，允许未认证访问 |

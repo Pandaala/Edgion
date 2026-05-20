@@ -18,6 +18,7 @@ spec:
         algorithm: HS256
         header: authorization
         query: jwt
+        allowTokenInQuery: true
         cookie: jwt
         keyClaimName: key
         hideCredentials: false

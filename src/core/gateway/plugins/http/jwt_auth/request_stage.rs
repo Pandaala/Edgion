@@ -37,9 +37,12 @@ impl JwtAuth {
                 return Some((token.to_string(), TokenSource::Header));
             }
         }
-        if let Some(t) = session.get_query_param(&self.config.query) {
-            if !t.is_empty() {
-                return Some((t, TokenSource::Query));
+        // RFC 6750 §2.3/§5.3: bearer tokens in URLs leak into logs/history; opt-in only.
+        if self.config.allow_token_in_query {
+            if let Some(t) = session.get_query_param(&self.config.query) {
+                if !t.is_empty() {
+                    return Some((t, TokenSource::Query));
+                }
             }
         }
         if let Some(t) = session.get_cookie(&self.config.cookie) {

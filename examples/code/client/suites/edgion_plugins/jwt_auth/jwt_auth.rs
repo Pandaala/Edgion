@@ -221,11 +221,13 @@ impl JwtAuthTestSuite {
         )
     }
 
-    /// Test: JWT in query parameter should work
+    /// Test: JWT in query parameter works only when the route opts in.
+    /// The backing config sets `allowTokenInQuery: true`; the query path is off
+    /// by default (RFC 6750 §2.3/§5.3).
     fn test_jwt_in_query() -> TestCase {
         TestCase::new(
             "jwt_in_query",
-            "Valid JWT in query parameter returns 200",
+            "Valid JWT in query parameter returns 200 (allowTokenInQuery enabled)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();

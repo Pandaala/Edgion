@@ -126,6 +126,13 @@ pub struct JwtAuthConfig {
     #[serde(default = "default_query")]
     pub query: String,
 
+    /// Allow reading the token from the URL query parameter (default: false).
+    /// RFC 6750 §2.3/§5.3 advise against bearer tokens in URLs (they leak into
+    /// access logs, browser history, and Referer headers), so the query path is
+    /// opt-in. When false, the `query` field is ignored during extraction.
+    #[serde(default)]
+    pub allow_token_in_query: bool,
+
     /// Cookie name (default: "jwt")
     #[serde(default = "default_cookie")]
     pub cookie: String,
@@ -217,6 +224,7 @@ impl Default for JwtAuthConfig {
             algorithm: JwtAlgorithm::default(),
             header: default_header(),
             query: default_query(),
+            allow_token_in_query: false,
             cookie: default_cookie(),
             hide_credentials: false,
             anonymous: None,
