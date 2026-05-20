@@ -37,6 +37,16 @@ pub struct CsrfConfig {
     /// The client must send the token value in a request header with this name.
     #[serde(default = "default_name")]
     pub name: String,
+
+    /// Whether to set the `Secure` attribute on the CSRF cookie (default: true)
+    ///
+    /// Browsers only return `Secure` cookies over HTTPS, so a hardcoded `true`
+    /// breaks the double-submit check for HTTP-only deployment models (TLS
+    /// terminated upstream at an LB/sidecar, mesh-internal plain HTTP, local
+    /// development). Set this to `false` for those models. The default stays
+    /// `true` to preserve the secure-by-default behavior.
+    #[serde(default = "default_cookie_secure")]
+    pub cookie_secure: bool,
 }
 
 fn default_expires() -> i64 {
@@ -47,12 +57,17 @@ fn default_name() -> String {
     "apisix-csrf-token".to_string()
 }
 
+fn default_cookie_secure() -> bool {
+    true
+}
+
 impl Default for CsrfConfig {
     fn default() -> Self {
         CsrfConfig {
             key: String::new(),
             expires: default_expires(),
             name: default_name(),
+            cookie_secure: default_cookie_secure(),
         }
     }
 }
@@ -74,6 +89,7 @@ impl CsrfConfig {
             key,
             expires: default_expires(),
             name: default_name(),
+            cookie_secure: default_cookie_secure(),
         }
     }
 }
@@ -96,6 +112,7 @@ mod tests {
         assert_eq!(config.key, "");
         assert_eq!(config.expires, 7200);
         assert_eq!(config.name, "apisix-csrf-token");
+        assert!(config.cookie_secure);
     }
 
     #[test]
@@ -125,12 +142,14 @@ mod tests {
             key: "my-secret".to_string(),
             expires: 3600,
             name: "my-csrf-token".to_string(),
+            cookie_secure: false,
         };
 
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("my-secret"));
         assert!(json.contains("3600"));
         assert!(json.contains("my-csrf-token"));
+        assert!(json.contains("\"cookieSecure\":false"));
     }
 
     #[test]
@@ -151,5 +170,6 @@ mod tests {
         assert_eq!(config.key, "test-key");
         assert_eq!(config.expires, 7200); // default
         assert_eq!(config.name, "apisix-csrf-token"); // default
+        assert!(config.cookie_secure); // default
     }
 }

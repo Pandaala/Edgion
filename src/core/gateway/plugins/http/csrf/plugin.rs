@@ -58,13 +58,14 @@ impl Csrf {
         let token = CsrfToken::generate(&self.config.key);
         match token.encode() {
             Ok(encoded_token) => {
-                // Build a secure cookie
+                // Build the cookie.
                 // Note: http_only is often FALSE for CSRF tokens in double-submit patterns
                 // because the JS client needs to read it to populate the header.
-                // We enforce Secure (HTTPS) and Lax SameSite.
+                // Secure defaults to true; operators terminating TLS upstream (plain HTTP
+                // to the gateway) set cookie_secure=false so browsers keep returning it.
                 let cookie = CookieBuilder::new(&self.config.name, &encoded_token)
                     .path("/")
-                    .secure(true) // Enforce Secure (assumes HTTPS, critical for security)
+                    .secure(self.config.cookie_secure)
                     .same_site(SameSite::Lax) // Lax provides reasonable balance for CSRF
                     .max_age(Duration::seconds(self.config.expires))
                     .http_only(false) // Intentionally false so JS can read to set header
@@ -167,6 +168,7 @@ mod tests {
             name: "X-CSRF-Token".to_string(),
             key: "test-secret-key-32-bytes-long!".to_string(),
             expires: 7200,
+            cookie_secure: true,
         }
     }
 
@@ -179,6 +181,45 @@ mod tests {
 
         mock_session.expect_method().returning(|| "GET".to_string());
         mock_session.expect_set_response_header().returning(|_, _| Ok(()));
+
+        let result = csrf.run_request(&mut mock_session, &mut plugin_log).await;
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(plugin_log.contains("Token set"));
+    }
+
+    #[tokio::test]
+    async fn test_cookie_secure_true_emits_secure_attribute() {
+        let config = create_csrf_config(); // cookie_secure = true
+        let csrf = Csrf::new(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("Csrf");
+
+        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session
+            .expect_set_response_header()
+            .withf(|name, value| name == "Set-Cookie" && value.contains("; Secure"))
+            .returning(|_, _| Ok(()));
+
+        let result = csrf.run_request(&mut mock_session, &mut plugin_log).await;
+
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(plugin_log.contains("Token set"));
+    }
+
+    #[tokio::test]
+    async fn test_cookie_secure_false_omits_secure_attribute() {
+        let mut config = create_csrf_config();
+        config.cookie_secure = false;
+        let csrf = Csrf::new(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("Csrf");
+
+        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session
+            .expect_set_response_header()
+            .withf(|name, value| name == "Set-Cookie" && !value.contains("; Secure"))
+            .returning(|_, _| Ok(()));
 
         let result = csrf.run_request(&mut mock_session, &mut plugin_log).await;
 
