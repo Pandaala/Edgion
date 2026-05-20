@@ -19,10 +19,9 @@ spec:
     # client cert, and is_mtls is recorded as false in ssl.log / tls.log /
     # plugin context (per is_mtls_enabled() semantics).
     mode: Terminate
-    # caSecretRef is not used for verification under Terminate mode, but
-    # configure_mtls currently reads the CA secret unconditionally, so a
-    # valid reference is required to exercise the runtime path.
-    caSecretRef:
-      name: client-ca
-      namespace: edgion-test
+    # No caSecretRef on purpose: Terminate never reads or installs a client CA
+    # store, so a valid config can omit it. This config is the regression guard
+    # for F-001 — configure_mtls must return before ca_cert_pem() for Terminate,
+    # otherwise every handshake to this SNI would fail with "CA secret not
+    # loaded by controller".
     verifyDepth: 1

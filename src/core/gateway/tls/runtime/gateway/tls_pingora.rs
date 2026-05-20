@@ -879,6 +879,18 @@ impl TlsCallback {
         client_auth: &ClientAuthConfig,
         edgion_tls: &Arc<EdgionTls>,
     ) -> Result<(), Box<PingoraError>> {
+        // Terminate mode presents the server certificate but never requests or
+        // verifies a client certificate, so it needs no client CA store. Decide
+        // the verify mode first and return early for Terminate: this avoids
+        // failing the handshake for a valid Terminate config that has no
+        // caSecretRef (the validator does not require one), and skips installing
+        // a CA store that would never be consulted.
+        let verify_mode = match client_auth.mode {
+            ClientAuthMode::Terminate => return Ok(()),
+            ClientAuthMode::Mutual => SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT,
+            ClientAuthMode::OptionalMutual => SslVerifyMode::PEER,
+        };
+
         let ca_pem = edgion_tls.ca_cert_pem().map_err(|e| {
             PingoraError::explain(
                 ErrorType::InvalidCert,
@@ -901,12 +913,6 @@ impl TlsCallback {
 
         ssl.set_verify_cert_store(store)
             .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to set CA store: {}", e)))?;
-
-        let verify_mode = match client_auth.mode {
-            ClientAuthMode::Terminate => return Ok(()),
-            ClientAuthMode::Mutual => SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT,
-            ClientAuthMode::OptionalMutual => SslVerifyMode::PEER,
-        };
 
         // SAFETY: verify_depth is validated to be in range 1-9 by cert_validator
         // u8 (1-9) can always be safely converted to u32
