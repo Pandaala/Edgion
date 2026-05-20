@@ -13,7 +13,7 @@ the standards that govern their domains.
 | Layer | Code | Wildcard depth | Governing standard | Status |
 |-------|------|----------------|--------------------|--------|
 | HTTP / TLS route matching | `route::hostname_matches_listener` | multi-level | Gateway API §4.3 | ✅ correct |
-| TLS cert SAN ↔ listener config validation | `tls::validation::matches_host_pattern` | single-level | RFC 6125 §6.4.3 | ✅ correct |
+| TLS cert SAN ↔ listener config validation | `tls::validation::matches_host_pattern` (+ `is_valid_san_pattern` pre-pass) | single-level | RFC 6125 §6.4.3 | ✅ correct |
 | TLS cert selection by SNI at handshake time | `HashHost::get_rfc6125` used by `TlsCertMatcher::match_sni`, `GatewayTlsMatcher::match_sni` | single-level | RFC 6125 §6.4.3 | ✅ correct |
 
 The first two diverge intentionally — they govern different domains:
@@ -63,6 +63,16 @@ When a review/audit report claims any of the following, close as "documented tra
 5. "BoringSSL should be configured to accept multi-level wildcard SANs"
    → **rejected**; BoringSSL implements the same RFC 6125 §6.4.3 rule and is
    correct. The fix lives in Edgion's cert-selection path, not in BoringSSL.
+6. "Validator and matcher disagree on multi-star patterns; a declared host like
+   `*.*.example.com` yields a confusing `SanMismatch`" (tls-05)
+   → **resolved 2026-05-20.** `validate_cert` now runs an `is_valid_san_pattern`
+   pre-pass (`validation/cert.rs`) that emits a dedicated
+   `CertValidationError::InvalidSanPattern { pattern }` for any multi-label,
+   partial-label, or non-leftmost wildcard, instead of a generic `SanMismatch`.
+   The runtime SNI matcher already rejects these via `HashHost::get_rfc6125`
+   (single-label). The permissive `EdgionTls::matches_hostname` / `wildcard_match`
+   is dead code (only caller `get_tls_by_host` is itself unused) and was left
+   untouched. Re-reports of "validator/matcher multi-star inconsistency" → close.
 
 Verify before closing:
 

@@ -312,6 +312,11 @@ spec:
   limit; Gateway API route matching accepts this hostname, but RFC 6125-compliant client
   TLS libraries reject the handshake because `*.api.example.com` only covers one label
 
+> **Note:** Only a single, left-most-label wildcard is a valid `hosts` entry. Multi-label
+> patterns such as `*.*.example.com`, partial-label patterns such as `foo*.example.com`, and
+> non-leftmost patterns such as `a.*.example.com` are rejected at config-load time with an
+> `InvalidSanPattern` validation error (RFC 6125 §6.4.3 / RFC 5280 §4.2.1.6).
+
 ---
 
 ### Example 8: Multi-Gateway Binding
@@ -563,6 +568,7 @@ clientAuth:
 | **CA verification failed** | CA Secret does not exist or has wrong format | Check Secret: `kubectl get secret client-ca -n edge -o yaml` |
 | **Secret not found** | Secret referenced by `secretRef` does not exist | Create the Secret or correct the reference |
 | **Invalid SAN pattern** | `allowedSans` contains empty string | Remove blank SAN entries |
+| **Invalid wildcard pattern in `hosts`** | A `hosts` entry uses a multi-label/partial/non-leftmost wildcard (e.g. `*.*.example.com`) | Use a single leftmost-label wildcard such as `*.example.com` (RFC 6125 §6.4.3) |
 | **Certificate not taking effect** | EdgionTls not bound to Gateway | Check `parentRefs` configuration |
 
 ---

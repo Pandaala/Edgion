@@ -173,7 +173,10 @@ impl JwtAuthTestSuite {
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!("Expected error=\"invalid_token\" in WWW-Authenticate, got: {}", www_auth),
+                                    format!(
+                                        "Expected error=\"invalid_token\" in WWW-Authenticate, got: {}",
+                                        www_auth
+                                    ),
                                 )
                             }
                         }

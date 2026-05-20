@@ -185,7 +185,10 @@ impl OpenidConnectTestSuite {
                     } else {
                         TestResult::failed(
                             start.elapsed(),
-                            format!("Expected error=\"insufficient_scope\" in WWW-Authenticate, got: {}", www_auth),
+                            format!(
+                                "Expected error=\"insufficient_scope\" in WWW-Authenticate, got: {}",
+                                www_auth
+                            ),
                         )
                     }
                 })

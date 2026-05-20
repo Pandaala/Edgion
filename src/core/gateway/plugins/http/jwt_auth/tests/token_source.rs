@@ -60,13 +60,8 @@ async fn test_query_token_rejected_when_not_allowed_by_default() {
     mock.expect_method().returning(|| "GET".to_string());
     mock.expect_header_value().returning(|_| None);
     let token_clone = token.clone();
-    mock.expect_get_query_param().returning(move |name| {
-        if name == "jwt" {
-            Some(token_clone.clone())
-        } else {
-            None
-        }
-    });
+    mock.expect_get_query_param()
+        .returning(move |name| if name == "jwt" { Some(token_clone.clone()) } else { None });
     mock.expect_get_cookie().returning(|_| None);
     mock.expect_write_response_header().returning(|_, _| Ok(()));
     mock.expect_write_response_body().returning(|_, _| Ok(()));
@@ -74,7 +69,10 @@ async fn test_query_token_rejected_when_not_allowed_by_default() {
 
     let r = auth.run_request(&mut mock, &mut log).await;
     assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
-    assert!(log.contains("No token"), "query token must be ignored by default, got: {log:?}");
+    assert!(
+        log.contains("No token"),
+        "query token must be ignored by default, got: {log:?}"
+    );
 }
 
 #[tokio::test]
