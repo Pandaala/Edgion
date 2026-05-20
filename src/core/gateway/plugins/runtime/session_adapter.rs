@@ -477,13 +477,15 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn append_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
-        let existing = self.header_value(name);
-        let new_value = if let Some(ref current) = existing {
-            format!("{},{}", current, value)
-        } else {
-            value.to_string()
-        };
-        self.set_request_header(name, &new_value)
+        // Append as a new header field line instead of read-first-value-then-replace-all.
+        // The previous approach read only headers.get(name) (first value) and then called
+        // insert_header (replaces all), silently dropping any additional same-name values.
+        // append_header preserves every existing field line per RFC 7230 §3.2.2 list semantics.
+        self.inner
+            .req_header_mut()
+            .append_header(name.to_string(), value.to_string())
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        Ok(())
     }
 
     fn remove_request_header(&mut self, name: &str) -> PluginSessionResult<()> {

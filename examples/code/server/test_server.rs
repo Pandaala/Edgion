@@ -310,6 +310,7 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/request-header-test", get(header_echo_handler))
         .route("/both-headers-test", get(header_echo_handler))
         .route("/multi-request-headers", get(header_echo_handler))
+        .route("/multi-value-append-test", get(header_echo_handler))
         .route("/response-header-test", get(header_echo_handler))
         .route("/headers", get(headers_handler))
         .route("/auth-header-probe", get(auth_header_probe_handler))
