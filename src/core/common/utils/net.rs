@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use pingora_core::{Error as PingoraError, ErrorType};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 
 pub const DEFAULT_OPERATOR_GRPC_ADDR: &str = "127.0.0.1:50061";
@@ -39,17 +39,16 @@ pub enum BlockedBackendReason {
 pub fn classify_backend_addr(addr: &PingoraSocketAddr) -> Option<BlockedBackendReason> {
     let inet_addr = addr.as_inet()?;
     match inet_addr.ip() {
-        IpAddr::V4(ip) => {
-            if ip.octets()[0] == 127 {
-                Some(BlockedBackendReason::Localhost)
-            } else if ip.is_link_local() {
-                Some(BlockedBackendReason::LinkLocal)
-            } else {
-                None
-            }
-        }
+        IpAddr::V4(ip) => classify_v4(ip),
         IpAddr::V6(ip) => {
-            if ip.is_loopback() {
+            // IPv4-mapped IPv6 (`::ffff:a.b.c.d`) embeds an IPv4 address that the IPv6
+            // loopback / link-local checks below cannot see (`is_loopback()` is true only
+            // for `::1`, and the `fe80::/10` mask operates on `segments()[0]`, which is 0
+            // for a mapped address). Re-classify it through the IPv4 rules so that
+            // e.g. `::ffff:127.0.0.1` and `::ffff:169.254.169.254` stay blocked.
+            if let Some(v4) = ip.to_ipv4_mapped() {
+                classify_v4(v4)
+            } else if ip.is_loopback() {
                 Some(BlockedBackendReason::Localhost)
             } else if (ip.segments()[0] & 0xffc0) == 0xfe80 {
                 Some(BlockedBackendReason::LinkLocal)
@@ -57,6 +56,21 @@ pub fn classify_backend_addr(addr: &PingoraSocketAddr) -> Option<BlockedBackendR
                 None
             }
         }
+    }
+}
+
+/// Classify an IPv4 backend address against the blocked categories.
+///
+/// Shared by the `IpAddr::V4` branch and the IPv4-mapped IPv6 path of
+/// [`classify_backend_addr`].
+#[inline]
+fn classify_v4(ip: Ipv4Addr) -> Option<BlockedBackendReason> {
+    if ip.octets()[0] == 127 {
+        Some(BlockedBackendReason::Localhost)
+    } else if ip.is_link_local() {
+        Some(BlockedBackendReason::LinkLocal)
+    } else {
+        None
     }
 }
 
@@ -212,6 +226,39 @@ mod tests {
         assert_eq!(classify_backend_addr(&addr), None);
         let addr = "[2001:db8::1]:80".parse::<PingoraSocketAddr>().unwrap();
         assert_eq!(classify_backend_addr(&addr), None);
+    }
+
+    #[test]
+    fn test_classify_backend_addr_ipv4_mapped_ipv6() {
+        // IPv4-mapped IPv6 (`::ffff:a.b.c.d`) must be re-classified via the embedded IPv4
+        // address; otherwise loopback / link-local targets bypass the guard (F-003).
+        let addr = "[::ffff:127.0.0.1]:80".parse::<PingoraSocketAddr>().unwrap();
+        assert_eq!(
+            classify_backend_addr(&addr),
+            Some(BlockedBackendReason::Localhost),
+            "::ffff:127.0.0.1 (mapped loopback) must be blocked"
+        );
+
+        let addr = "[::ffff:169.254.169.254]:80".parse::<PingoraSocketAddr>().unwrap();
+        assert_eq!(
+            classify_backend_addr(&addr),
+            Some(BlockedBackendReason::LinkLocal),
+            "::ffff:169.254.169.254 (mapped cloud metadata) must be blocked"
+        );
+
+        // A mapped *public* address must still be allowed — the normalization must not
+        // over-block legitimate dual-stack backends.
+        let addr = "[::ffff:8.8.8.8]:80".parse::<PingoraSocketAddr>().unwrap();
+        assert_eq!(
+            classify_backend_addr(&addr),
+            None,
+            "::ffff:8.8.8.8 (mapped public) must be allowed"
+        );
+
+        // Plain `::1` is NOT an IPv4-mapped address (`to_ipv4_mapped()` returns None for it),
+        // so it must still be caught by the IPv6 loopback check, not silently downgraded.
+        let addr = "[::1]:80".parse::<PingoraSocketAddr>().unwrap();
+        assert_eq!(classify_backend_addr(&addr), Some(BlockedBackendReason::Localhost));
     }
 
     // resolve_domain tests — kept hermetic by using IP literals and localhost only,

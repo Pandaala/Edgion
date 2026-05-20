@@ -25,6 +25,7 @@ Acceptable fix directions:
 
 - Reuse `classify_backend_addr()` / `validate_backend_addr()` or equivalent logic.
 - DNS hostnames must be checked after resolution to addresses; cannot check only the string.
+- IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d`) must be normalized to their embedded IPv4 form before classification; otherwise mapped loopback / link-local / metadata targets bypass the IPv6 checks (fixed in backends-F003).
 - The check point should be as close as possible to the final `HttpPeer` / `reqwest` / TCP dial creation, to prevent inter-plugin bypass.
 
 Unacceptable fix directions:
