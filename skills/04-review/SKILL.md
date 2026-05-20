@@ -90,6 +90,8 @@ See [`CLOSED-FINDINGS.md`](CLOSED-FINDINGS.md) for per-issue closure history (14
 
 - When reviewing active health-probe findings of the form "IPv6 backend probe URL is missing brackets (`http://::1:8080`) / IPv6 backend is always unhealthy / `probe_grpc` `.expect()` panics on IPv6": **fixed (backends-F001, 2026-05-20)**. Read [backends/backends-F001-ipv6-probe-url-brackets.md](backends/backends-F001-ipv6-probe-url-brackets.md). `probe_http_with_client` and `probe_grpc` (`src/core/gateway/backends/health/check/probes.rs`) now build the target via `SocketAddr::new(addr.ip(), port)` and rely on `SocketAddr` Display (which brackets IPv6 literals); `probe_grpc` replaced `.parse().expect(..)` with `.parse().map_err(|_| ProbeError::InvalidUri)?`. Re-reports of either form are not accepted; verify the current `probes.rs` URL construction before re-reporting.
 
+- When reviewing LinkSys webhook-service endpoint findings of the form "`extract_ready_ips` builds `{ip}:{ep_port}` without IPv6 brackets / IPv6 webhook backend URL is malformed (`http://fe80::1:8080`)": **fixed (link-sys-F001, 2026-05-20)**. `extract_ready_ips` (`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs`) now branches on `eps.address_type == "IPv6"` and emits `format!("[{ip}]:{ep_port}")` for IPv6 (mirroring `discovery_impl.rs`); the downstream `webhook/manager.rs` builds `{scheme}://{ep}` and feeds it to reqwest. This is the same IPv6-bracketing defect class as backends-F001, in the controller LinkSys path. Re-reports are not accepted; verify the current `extract_ready_ips` before re-reporting.
+
 Usage principles:
 
 - Only write here after the conclusion has been verified against the current code and design semantics.

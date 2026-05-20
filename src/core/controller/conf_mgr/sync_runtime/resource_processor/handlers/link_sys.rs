@@ -331,10 +331,22 @@ fn extract_ready_ips(eps: &EndpointSlice, port: Option<i32>) -> Vec<String> {
         return vec![];
     };
 
+    // IPv6 literals must be bracketed in an authority (RFC 3986); the downstream
+    // webhook provider builds `{scheme}://{ep}` and feeds it to reqwest. Mirror the
+    // EndpointSlice discovery path (`discovery_impl.rs`) which branches on address_type.
+    let is_ipv6 = eps.address_type == "IPv6";
     eps.endpoints
         .iter()
         .filter(|ep| ep.conditions.as_ref().and_then(|c| c.ready).unwrap_or(false))
-        .flat_map(|ep| ep.addresses.iter().map(move |ip| format!("{ip}:{ep_port}")))
+        .flat_map(|ep| {
+            ep.addresses.iter().map(move |ip| {
+                if is_ipv6 {
+                    format!("[{ip}]:{ep_port}")
+                } else {
+                    format!("{ip}:{ep_port}")
+                }
+            })
+        })
         .collect()
 }
 
@@ -1202,6 +1214,39 @@ mod tests {
         assert!(
             !runtime.service_ref_mgr.get_refs("default/auth-svc").contains(&owner),
             "service_ref_mgr should be cleared on delete"
+        );
+    }
+
+    #[test]
+    fn test_extract_ready_ips_brackets_ipv6() {
+        use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort};
+
+        let make_eps = |address_type: &str, addr: &str| EndpointSlice {
+            address_type: address_type.to_string(),
+            endpoints: vec![Endpoint {
+                addresses: vec![addr.to_string()],
+                conditions: Some(EndpointConditions {
+                    ready: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ports: Some(vec![EndpointPort {
+                port: Some(8080),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+
+        // IPv6 endpoints must be bracketed so the downstream `{scheme}://{ep}` URL is valid.
+        assert_eq!(
+            extract_ready_ips(&make_eps("IPv6", "fd00::1"), Some(8080)),
+            vec!["[fd00::1]:8080".to_string()]
+        );
+        // IPv4 endpoints are unchanged.
+        assert_eq!(
+            extract_ready_ips(&make_eps("IPv4", "10.0.0.5"), Some(8080)),
+            vec!["10.0.0.5:8080".to_string()]
         );
     }
 }
