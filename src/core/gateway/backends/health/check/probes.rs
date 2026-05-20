@@ -9,6 +9,7 @@ pub enum ProbeError {
     UnexpectedStatus(u16),
     RequestFailed(reqwest::Error),
     InvalidPath,
+    InvalidUri,
     GrpcConnectionFailed(tonic::transport::Error),
     GrpcNotServing(i32),
     GrpcCallFailed(tonic::Status),
@@ -56,7 +57,8 @@ pub async fn probe_http_with_client(
     }
 
     let port = port_override.unwrap_or(addr.port());
-    let url = format!("http://{}:{}{}", addr.ip(), port, path);
+    let target = SocketAddr::new(addr.ip(), port);
+    let url = format!("http://{}{}", target, path);
 
     let mut req = client.get(url);
     if let Some(host_header) = host {
@@ -104,9 +106,10 @@ pub async fn probe_grpc(
     use tonic::codec::ProstCodec;
 
     let port = port_override.unwrap_or(addr.port());
-    let uri: Uri = format!("http://{}:{}", addr.ip(), port)
+    let target = SocketAddr::new(addr.ip(), port);
+    let uri: Uri = format!("http://{}", target)
         .parse()
-        .expect("valid URI from SocketAddr");
+        .map_err(|_| ProbeError::InvalidUri)?;
 
     let channel = tokio::time::timeout(
         timeout,
@@ -220,5 +223,46 @@ mod tests {
 
         let res = probe_http(addr, "/healthz", None, None, &[200], Duration::from_secs(1)).await;
         assert!(matches!(res, Err(ProbeError::UnexpectedStatus(503))));
+    }
+
+    #[tokio::test]
+    async fn test_http_probe_ipv6_url_is_bracketed() {
+        // Bind an IPv6 loopback listener; skip if the host has no IPv6 support.
+        let Ok(listener) = TcpListener::bind("[::1]:0").await else {
+            eprintln!("skipping test_http_probe_ipv6_url_is_bracketed: IPv6 loopback unavailable");
+            return;
+        };
+        let addr = listener.local_addr().expect("listener addr");
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut req_buf = [0_u8; 1024];
+                let _ = stream.read(&mut req_buf).await;
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await;
+            }
+        });
+
+        // Before the fix the URL was `http://::1:<port>/healthz` (missing brackets),
+        // which reqwest rejected as a parse error.
+        let res = probe_http(addr, "/healthz", None, None, &[200], Duration::from_secs(1)).await;
+        assert!(res.is_ok(), "IPv6 probe should succeed, got {res:?}");
+    }
+
+    #[tokio::test]
+    async fn test_grpc_probe_ipv6_does_not_panic() {
+        // No gRPC server is listening, so the probe must return an error rather than
+        // panic. Before the fix the bracketless `http://::1:1` failed to parse and the
+        // `.expect()` panicked the health-check task. This does not require a working
+        // IPv6 stack: the connect simply fails and the URI parse must succeed.
+        let addr: SocketAddr = "[::1]:1".parse().expect("parse ipv6 addr");
+        let res = probe_grpc(addr, None, "", Duration::from_millis(300)).await;
+        // The URI must parse (bracketed IPv6) and the failure must come from the
+        // network layer, not URI construction — i.e. the probe got past the parse.
+        // Before the fix this site panicked via `.expect()` on the unparseable URI.
+        assert!(matches!(
+            res,
+            Err(ProbeError::GrpcConnectionFailed(_)) | Err(ProbeError::Timeout)
+        ));
     }
 }
