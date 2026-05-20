@@ -138,7 +138,7 @@ impl KeyAuth {
     /// Return 401 Unauthorized response
     async fn unauthorized(&self, session: &mut dyn PluginSession, message: &str) -> PluginRunningResult {
         let body = format!("Unauthorized - {}", message);
-        let _ = send_gateway_auth_error_response(session, 401, "ApiKey", &self.config.realm, &body).await;
+        let _ = send_gateway_auth_error_response(session, 401, "ApiKey", &self.config.realm, None, &body).await;
         PluginRunningResult::ErrTerminateRequest
     }
 }

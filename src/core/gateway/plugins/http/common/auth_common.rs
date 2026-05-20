@@ -10,8 +10,17 @@ use crate::core::gateway::plugins::runtime::PluginSession;
 
 /// Build and send a 401/403 auth error response for the gateway plane (Pingora).
 ///
-/// Sets `WWW-Authenticate: <scheme> realm="<realm>"` on every call. `Connection: close`
-/// is intentionally not set — Pingora manages connection lifecycle.
+/// Always sets `WWW-Authenticate: <scheme> realm="<realm>"`. When `error_code` is
+/// `Some`, the challenge is extended per RFC 6750 §3.1 with `error="<code>"` and
+/// `error_description="<body>"` (the body text escaped as a `quoted-string`).
+///
+/// Pass `error_code = None` when the request carried no credentials at all — RFC
+/// 6750 §3.1 says a resource server SHOULD NOT include an error code in that case
+/// — and for non-Bearer schemes (Basic, ApiKey, ...) that do not define these
+/// attributes. Typical Bearer codes: `invalid_token` (token present but invalid),
+/// `insufficient_scope` (403), `invalid_request` (malformed request).
+///
+/// `Connection: close` is intentionally not set — Pingora manages connection lifecycle.
 ///
 /// Admin-plane counterpart: `unified_auth::build_admin_auth_error_response` (returns
 /// an axum `Response`; can't be merged — different runtimes and return shapes).
@@ -20,11 +29,21 @@ pub async fn send_gateway_auth_error_response(
     status: u16,
     scheme: &str,
     realm: &str,
+    error_code: Option<&str>,
     body: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut resp = ResponseHeader::build(status, None)?;
     resp.insert_header("Content-Type", "text/plain")?;
-    let www_auth = format!("{} realm=\"{}\"", scheme, realm);
+    let www_auth = match error_code {
+        Some(code) => format!(
+            "{} realm=\"{}\", error=\"{}\", error_description=\"{}\"",
+            scheme,
+            realm,
+            code,
+            escape_quoted_string(body)
+        ),
+        None => format!("{} realm=\"{}\"", scheme, realm),
+    };
     resp.insert_header("WWW-Authenticate", &www_auth)?;
 
     session.write_response_header(Box::new(resp), false).await?;
@@ -33,6 +52,24 @@ pub async fn send_gateway_auth_error_response(
         .await?;
     session.shutdown().await;
     Ok(())
+}
+
+/// Escape a string for safe inclusion in an HTTP `quoted-string` (RFC 9110 §5.6.4):
+/// backslash-escape `\` and `"`, and drop control characters that are not valid in
+/// a header value (prevents header injection from dynamic error messages).
+fn escape_quoted_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' | '"' => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {}
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Apply authentication failure delay to mitigate brute-force / credential-stuffing attacks.
@@ -182,8 +219,18 @@ pub fn set_claims_headers(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_claim_path, Claims};
+    use super::{escape_quoted_string, resolve_claim_path, Claims};
     use serde_json::json;
+
+    #[test]
+    fn test_escape_quoted_string() {
+        // Plain text is unchanged.
+        assert_eq!(escape_quoted_string("Token expired"), "Token expired");
+        // Backslash and double-quote are backslash-escaped.
+        assert_eq!(escape_quoted_string(r#"a"b\c"#), r#"a\"b\\c"#);
+        // Control characters (CR/LF/NUL) are dropped to prevent header injection.
+        assert_eq!(escape_quoted_string("a\r\nb\0c"), "abc");
+    }
 
     #[test]
     fn test_resolve_claim_path_dot_notation() {

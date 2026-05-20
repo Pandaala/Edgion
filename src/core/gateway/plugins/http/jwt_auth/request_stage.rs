@@ -78,12 +78,21 @@ impl JwtAuth {
     }
 
     /// Return 401 Unauthorized response with WWW-Authenticate header.
-    pub(super) async fn auth_failed_return(&self, session: &mut dyn PluginSession) -> JwtAuthResult<()> {
+    ///
+    /// `error_code` is `Some("invalid_token")` when a token was present but failed
+    /// validation, and `None` when the request carried no credentials at all (per
+    /// RFC 6750 §3.1, the bare challenge is correct in the absent-credentials case).
+    pub(super) async fn auth_failed_return(
+        &self,
+        session: &mut dyn PluginSession,
+        error_code: Option<&str>,
+    ) -> JwtAuthResult<()> {
         send_gateway_auth_error_response(
             session,
             401,
             "Bearer",
             &self.config.realm,
+            error_code,
             "Unauthorized - Invalid or missing JWT",
         )
         .await

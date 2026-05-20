@@ -185,6 +185,7 @@ impl BasicAuth {
             401,
             "Basic",
             &self.config.realm,
+            None,
             "Unauthorized - Authentication required",
         )
         .await

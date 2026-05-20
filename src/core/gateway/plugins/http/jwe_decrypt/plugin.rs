@@ -146,7 +146,8 @@ impl JweDecrypt {
         }
         self.apply_auth_failure_delay().await;
         let _ =
-            send_gateway_auth_error_response(session, failure.status(), "Bearer", "edgion", failure.message()).await;
+            send_gateway_auth_error_response(session, failure.status(), "Bearer", "edgion", None, failure.message())
+                .await;
         PluginRunningResult::ErrTerminateRequest
     }
 
@@ -160,7 +161,7 @@ impl JweDecrypt {
     ) -> PluginRunningResult {
         plugin_log.push(log_code);
         self.apply_auth_failure_delay().await;
-        let _ = send_gateway_auth_error_response(session, status, "Bearer", "edgion", message).await;
+        let _ = send_gateway_auth_error_response(session, status, "Bearer", "edgion", None, message).await;
         PluginRunningResult::ErrTerminateRequest
     }
 

@@ -156,13 +156,25 @@ impl JwtAuthTestSuite {
                     match request.send().await {
                         Ok(response) => {
                             let status = response.status().as_u16();
-                            if status == 401 {
+                            if status != 401 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 401, got {}", status));
+                            }
+                            // Token present but invalid -> RFC 6750 §3.1: challenge SHOULD carry error="invalid_token".
+                            let www_auth = response
+                                .headers()
+                                .get("WWW-Authenticate")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if www_auth.contains(r#"error="invalid_token""#) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "Invalid token returns 401 as expected".to_string(),
+                                    format!("401 with WWW-Authenticate: {}", www_auth),
                                 )
                             } else {
-                                TestResult::failed(start.elapsed(), format!("Expected 401, got {}", status))
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected error=\"invalid_token\" in WWW-Authenticate, got: {}", www_auth),
+                                )
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -304,13 +316,20 @@ impl JwtAuthTestSuite {
                             let www_auth = response.headers().get("WWW-Authenticate").and_then(|v| v.to_str().ok());
 
                             match www_auth {
-                                Some(value) if value.starts_with("Bearer") => TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Got WWW-Authenticate: {}", value),
-                                ),
+                                // No credentials presented -> RFC 6750 §3.1 says the challenge SHOULD NOT
+                                // carry an error code; only the bare `Bearer realm="..."` is expected.
+                                Some(value) if value.starts_with("Bearer") && !value.contains("error=") => {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        format!("Got WWW-Authenticate: {}", value),
+                                    )
+                                }
                                 Some(value) => TestResult::failed(
                                     start.elapsed(),
-                                    format!("WWW-Authenticate header exists but unexpected value: {}", value),
+                                    format!(
+                                        "WWW-Authenticate must omit error= for a no-credentials request, got: {}",
+                                        value
+                                    ),
                                 ),
                                 None => TestResult::failed(
                                     start.elapsed(),

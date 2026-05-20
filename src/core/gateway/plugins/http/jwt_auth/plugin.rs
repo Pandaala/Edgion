@@ -58,7 +58,8 @@ impl RequestFilter for JwtAuth {
                 }
                 // Apply failure delay before returning 401
                 self.apply_auth_failure_delay().await;
-                let _ = self.auth_failed_return(session).await;
+                // No credentials present: omit the RFC 6750 error code (SHOULD NOT).
+                let _ = self.auth_failed_return(session, None).await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
         };
@@ -86,7 +87,7 @@ impl RequestFilter for JwtAuth {
                 // Specific `Deny <kind>; ` tag was already pushed inside verify_jwt.
                 // Token present but invalid/expired -- always reject, never allow anonymous.
                 self.apply_auth_failure_delay().await;
-                let _ = self.auth_failed_return(session).await;
+                let _ = self.auth_failed_return(session, Some("invalid_token")).await;
                 PluginRunningResult::ErrTerminateRequest
             }
         }

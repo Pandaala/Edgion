@@ -80,7 +80,7 @@ impl HmacAuth {
     ) -> PluginRunningResult {
         plugin_log.push(log_code);
         self.apply_auth_failure_delay().await;
-        let _ = send_gateway_auth_error_response(session, status, "hmac", &self.config.realm, message).await;
+        let _ = send_gateway_auth_error_response(session, status, "hmac", &self.config.realm, None, message).await;
         PluginRunningResult::ErrTerminateRequest
     }
 
@@ -371,6 +371,7 @@ impl RequestFilter for HmacAuth {
                 500,
                 "hmac",
                 &self.config.realm,
+                None,
                 "validateRequestBody is not supported yet",
             )
             .await;
@@ -400,9 +401,15 @@ impl RequestFilter for HmacAuth {
         if self.credentials.is_empty() {
             plugin_log.push_err("no creds configured");
             self.apply_auth_failure_delay().await;
-            let _ =
-                send_gateway_auth_error_response(session, 500, "hmac", &self.config.realm, "No credentials configured")
-                    .await;
+            let _ = send_gateway_auth_error_response(
+                session,
+                500,
+                "hmac",
+                &self.config.realm,
+                None,
+                "No credentials configured",
+            )
+            .await;
             return PluginRunningResult::ErrTerminateRequest;
         }
 

@@ -212,6 +212,7 @@ impl LdapAuth {
             401,
             &self.config.header_type,
             &self.config.realm,
+            None,
             "Unauthorized",
         )
         .await;

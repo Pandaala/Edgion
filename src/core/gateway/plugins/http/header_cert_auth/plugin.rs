@@ -352,6 +352,7 @@ impl HeaderCertAuth {
             self.config.error_status,
             "TLSCert",
             "edgion",
+            None,
             &self.config.error_message,
         )
         .await;
