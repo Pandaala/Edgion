@@ -42,7 +42,7 @@ impl ControllerRegistry {
         info: RegisterRequest,
         stream_tx: mpsc::Sender<CenterMessage>,
         session_id: String,
-    ) {
+    ) -> Option<String> {
         let session = ControllerSession {
             controller_id: controller_id.clone(),
             session_id,
@@ -52,13 +52,33 @@ impl ControllerRegistry {
             offline_since: None,
         };
         let mut guard = self.inner.write();
+        // Capture a displaced *live* session id (takeover). An entry that is
+        // already offline (stream_tx == None) is not a live takeover.
+        let displaced = guard.get(&controller_id).and_then(|s| {
+            if s.stream_tx.is_some() {
+                Some(s.session_id.clone())
+            } else {
+                None
+            }
+        });
         // Detect same controller_id re-registering while a session entry still
         // exists — a signal for reconnect storms / session races. Covers both
-        // the online→online case and the offline→online (recovered) case.
+        // the online->online case and the offline->online (recovered) case.
         if guard.contains_key(&controller_id) {
             fed_metrics::record_session_reentry();
         }
         guard.insert(controller_id, session);
+        displaced
+    }
+
+    /// True iff `controller_id` currently maps to a session with this
+    /// `session_id`. Stale tasks use this to stop touching shared state after
+    /// a takeover.
+    pub fn is_current_session(&self, controller_id: &str, session_id: &str) -> bool {
+        self.inner
+            .read()
+            .get(controller_id)
+            .map_or(false, |s| s.session_id == session_id)
     }
 
     pub fn get_session(&self, controller_id: &str) -> Option<SessionView> {
@@ -269,5 +289,41 @@ mod tests {
         assert!(registry.remove("cid"));
         assert!(registry.get_session("cid").is_none());
         assert!(!registry.remove("cid"));
+    }
+
+    #[test]
+    fn register_returns_displaced_live_session_id() {
+        let reg = ControllerRegistry::new();
+        let (tx1, _rx1) = mpsc::channel(8);
+        let prev = reg.register("cid".to_string(), mock_info("cid"), tx1, "s1".to_string());
+        assert_eq!(prev, None, "first registration displaces nothing");
+
+        let (tx2, _rx2) = mpsc::channel(8);
+        let prev = reg.register("cid".to_string(), mock_info("cid"), tx2, "s2".to_string());
+        assert_eq!(prev, Some("s1".to_string()), "second registration displaces s1");
+    }
+
+    #[test]
+    fn register_does_not_report_offline_session_as_displaced() {
+        let reg = ControllerRegistry::new();
+        let (tx1, _rx1) = mpsc::channel(8);
+        reg.register("cid".to_string(), mock_info("cid"), tx1, "s1".to_string());
+        assert!(reg.mark_offline("cid", "s1"));
+        let (tx2, _rx2) = mpsc::channel(8);
+        let prev = reg.register("cid".to_string(), mock_info("cid"), tx2, "s2".to_string());
+        assert_eq!(prev, None, "an already-offline session is not a live takeover");
+    }
+
+    #[test]
+    fn is_current_session_tracks_latest() {
+        let reg = ControllerRegistry::new();
+        let (tx1, _rx1) = mpsc::channel(8);
+        reg.register("cid".to_string(), mock_info("cid"), tx1, "s1".to_string());
+        assert!(reg.is_current_session("cid", "s1"));
+        let (tx2, _rx2) = mpsc::channel(8);
+        reg.register("cid".to_string(), mock_info("cid"), tx2, "s2".to_string());
+        assert!(!reg.is_current_session("cid", "s1"));
+        assert!(reg.is_current_session("cid", "s2"));
+        assert!(!reg.is_current_session("unknown", "s2"));
     }
 }

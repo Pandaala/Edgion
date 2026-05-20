@@ -195,6 +195,14 @@ pub struct FederationGrpcServer {
     /// Optional — Center only persists controller registration when
     /// `database.enabled=true`. Absent DB means upsert/mark_offline are skipped.
     pub db: Option<Arc<CenterDb>>,
+    /// True when the listener was started in plaintext (no TLS / skip_tls /
+    /// allow_plaintext). Decided once at startup; identity binding is skipped
+    /// when true. Bound to the startup fact, NOT to per-connection
+    /// `peer_certs().is_none()`, so a future `client_auth_optional` regression
+    /// cannot turn "no cert" into a bypass.
+    pub listener_is_plaintext: bool,
+    /// SPIFFE trust domain for peer-identity binding (Some under mTLS).
+    pub trust_domain: Option<String>,
 }
 
 impl FederationGrpcServer {
@@ -205,6 +213,8 @@ impl FederationGrpcServer {
         sync_config: CenterSyncConfig,
         sync_client: Arc<CenterSyncClient>,
         db: Option<Arc<CenterDb>>,
+        listener_is_plaintext: bool,
+        trust_domain: Option<String>,
     ) -> Self {
         Self {
             registry,
@@ -214,6 +224,8 @@ impl FederationGrpcServer {
             sync_config,
             sync_client,
             db,
+            listener_is_plaintext,
+            trust_domain,
         }
     }
 }
@@ -223,6 +235,8 @@ impl FederationSync for FederationGrpcServer {
     type SyncStream = tokio_stream::wrappers::ReceiverStream<Result<CenterMessage, Status>>;
 
     async fn sync(&self, request: Request<Streaming<ControllerMessage>>) -> Result<Response<Self::SyncStream>, Status> {
+        // peer_certs() must be read before into_inner() consumes the request.
+        let peer_certs = request.peer_certs();
         let mut inbound = request.into_inner();
         let (out_tx, out_rx) = mpsc::channel::<Result<CenterMessage, Status>>(32);
         let (inner_tx, mut inner_rx) = mpsc::channel::<CenterMessage>(32);
@@ -266,6 +280,45 @@ impl FederationSync for FederationGrpcServer {
             return Err(Status::resource_exhausted("Federation registry is at capacity"));
         }
 
+        // Peer-identity binding (mTLS only). Skipped on plaintext listeners,
+        // gated on the startup-time fact (not peer_certs.is_none()).
+        if !self.listener_is_plaintext {
+            use crate::core::common::observe::fed_metrics::labels::peer_identity_result as pir;
+            let leaf = peer_certs.as_ref().and_then(|c| c.first());
+            let Some(leaf) = leaf else {
+                // Under mTLS the handshake guarantees a client cert; absence is
+                // a defensive internal error, never an attacker path.
+                return Err(Status::internal("missing client certificate under mTLS"));
+            };
+            let trust_domain = self.trust_domain.as_deref().unwrap_or_default();
+            match crate::core::common::fed_sync::spiffe::verify(
+                leaf.as_ref(),
+                trust_domain,
+                &register_req.cluster,
+                &register_req.controller_id,
+            ) {
+                Ok(()) => fed_metrics::record_peer_identity_check(pir::OK),
+                Err(e) => {
+                    use crate::core::common::fed_sync::spiffe::PeerIdentityError as E;
+                    let result = match e {
+                        E::Mismatch => pir::MISMATCH,
+                        E::NoSpiffeSan => pir::NO_SPIFFE_SAN,
+                        E::MultiSan => pir::MULTI_SAN,
+                        E::ParseError => pir::PARSE_ERROR,
+                    };
+                    fed_metrics::record_peer_identity_check(result);
+                    tracing::warn!(
+                        component = "fed_server",
+                        result = result,
+                        controller_id_len = register_req.controller_id.len(),
+                        cluster_len = register_req.cluster.len(),
+                        "Rejected RegisterRequest: peer identity check failed"
+                    );
+                    return Err(Status::permission_denied("peer identity verification failed"));
+                }
+            }
+        }
+
         let controller_id = register_req.controller_id.clone();
         let session_id = Uuid::new_v4().to_string();
 
@@ -277,7 +330,16 @@ impl FederationSync for FederationGrpcServer {
             "Controller registered"
         );
 
-        // 2. Register in registry + aggregator (aggregator drives online_controllers() in fan-out)
+        // 2. Register in registry FIRST (atomic takeover), then aggregator + DB.
+        let displaced = self.registry.register(
+            controller_id.clone(),
+            register_req.clone(),
+            inner_tx.clone(),
+            session_id.clone(),
+        );
+        if displaced.is_some() {
+            fed_metrics::record_session_takeover();
+        }
         self.aggregator
             .set_controller_info(&controller_id, register_req.clone());
         // Persist registration to SQLite (best-effort, isolated from the hot path).
@@ -301,12 +363,6 @@ impl FederationSync for FederationGrpcServer {
                 }
             });
         }
-        self.registry.register(
-            controller_id.clone(),
-            register_req,
-            inner_tx.clone(),
-            session_id.clone(),
-        );
 
         // Federation connection metrics: record the connect event and refresh
         // the active-sessions gauge. `online_len` captures the number of
@@ -447,7 +503,13 @@ impl FederationSync for FederationGrpcServer {
                 // gates metric emission so repeated calls (e.g., race between heartbeat timeout
                 // and stream close) do not double-count.
                 let mark_offline_all = |reason: &'static str| {
+                    // Registry guard is the single takeover authority: if this
+                    // task is stale (a newer session owns the id), do not touch
+                    // aggregator / watch_cache / db / metrics at all.
                     let transitioned = registry.mark_offline(&cid, &sid);
+                    if !transitioned {
+                        return;
+                    }
                     aggregator_for_offline.mark_offline(&cid);
                     sync_client.plugin_metadata.mark_offline(&cid);
                     if let Some(db) = &db_for_offline {
@@ -464,23 +526,21 @@ impl FederationSync for FederationGrpcServer {
                             }
                         });
                     }
-                    if transitioned {
-                        fed_metrics::record_mark_offline(reason);
-                        fed_metrics::record_connection_event(
-                            fed_metrics::labels::role::CENTER,
-                            fed_metrics::labels::event::DISCONNECTED,
-                        );
-                        fed_metrics::record_connection_duration(
-                            fed_metrics::labels::role::CENTER,
-                            std::time::Instant::now()
-                                .saturating_duration_since(session_started_at)
-                                .as_secs_f64(),
-                        );
-                        fed_metrics::set_connections_active(
-                            fed_metrics::labels::role::CENTER,
-                            registry.online_len() as u64,
-                        );
-                    }
+                    fed_metrics::record_mark_offline(reason);
+                    fed_metrics::record_connection_event(
+                        fed_metrics::labels::role::CENTER,
+                        fed_metrics::labels::event::DISCONNECTED,
+                    );
+                    fed_metrics::record_connection_duration(
+                        fed_metrics::labels::role::CENTER,
+                        std::time::Instant::now()
+                            .saturating_duration_since(session_started_at)
+                            .as_secs_f64(),
+                    );
+                    fed_metrics::set_connections_active(
+                        fed_metrics::labels::role::CENTER,
+                        registry.online_len() as u64,
+                    );
                 };
 
                 // Watch state tracking (local to this session)
@@ -522,6 +582,17 @@ impl FederationSync for FederationGrpcServer {
                                 break;
                             }
                             Ok(Some(msg)) => {
+                                // Stop a stale (superseded) session before it can
+                                // touch shared state — including refreshing the
+                                // current session's last_seen.
+                                if !registry.is_current_session(&cid, &sid) {
+                                    tracing::info!(
+                                        component = "fed_server",
+                                        controller_id = %cid,
+                                        "Session superseded by takeover, stopping stale loop"
+                                    );
+                                    break;
+                                }
                                 registry.update_last_seen(&cid);
                                 match msg.payload {
                                     Some(CtrlPayload::Pong(_)) => {
@@ -882,5 +953,68 @@ mod tests {
             reg.register(format!("c{i}"), ok_req(), tx, format!("s{i}"));
         }
         assert!(!registry_capacity_exceeded(&reg, "c0", 4));
+    }
+
+    #[test]
+    fn server_fields_default_plaintext_flag() {
+        let reg = ControllerRegistry::new();
+        let agg = std::sync::Arc::new(crate::core::center::aggregator::ResourceAggregator::new());
+        let pp: crate::core::center::proxy::PendingProxyMap =
+            std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new()));
+        let store = std::sync::Arc::new(crate::core::center::metadata_store::CenterMetaDataStore::new());
+        let sc = std::sync::Arc::new(crate::core::center::watch_cache::CenterSyncClient {
+            plugin_metadata: crate::core::center::watch_cache::CenterWatchCacheRegistry::new(store),
+        });
+        let s = FederationGrpcServer::new(
+            reg,
+            agg,
+            pp,
+            crate::core::center::config::CenterSyncConfig::default(),
+            sc,
+            None,
+            true,
+            None,
+        );
+        assert!(s.listener_is_plaintext);
+        assert!(s.trust_domain.is_none());
+    }
+
+    #[test]
+    fn takeover_then_stale_offline_keeps_controller_online() {
+        use crate::core::center::aggregator::ResourceAggregator;
+        let registry = ControllerRegistry::new();
+        let aggregator = std::sync::Arc::new(ResourceAggregator::new());
+
+        // Use a RegisterRequest whose controller_id matches the registry key so
+        // that aggregator.controller_summaries() can find it by controller_id.
+        let cid_req = RegisterRequest {
+            controller_id: "cid".to_string(),
+            cluster: "cluster-a".to_string(),
+            env: vec!["prod".to_string()],
+            tag: vec!["region:us".to_string()],
+            supported_kinds: vec!["PluginMetaData".to_string()],
+        };
+
+        // New session s2 is authoritative.
+        let (tx1, _rx1) = tokio::sync::mpsc::channel(8);
+        registry.register("cid".to_string(), cid_req.clone(), tx1, "s1".to_string());
+        aggregator.set_controller_info("cid", cid_req.clone());
+        let (tx2, _rx2) = tokio::sync::mpsc::channel(8);
+        registry.register("cid".to_string(), cid_req.clone(), tx2, "s2".to_string());
+        aggregator.set_controller_info("cid", cid_req.clone());
+
+        // Old task (s1) runs the guarded offline path.
+        let transitioned = registry.mark_offline("cid", "s1");
+        if transitioned {
+            aggregator.mark_offline("cid");
+        }
+        assert!(!transitioned, "stale s1 must not transition");
+        let online = aggregator
+            .controller_summaries()
+            .iter()
+            .find(|s| s.controller_id == "cid")
+            .map(|s| s.online)
+            .unwrap_or(false);
+        assert!(online, "controller must stay online after stale offline");
     }
 }

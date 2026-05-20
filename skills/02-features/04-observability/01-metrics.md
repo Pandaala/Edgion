@@ -92,6 +92,8 @@ All Federation baseline metrics are exposed under the `edgion_fed_` prefix. Defi
 | `edgion_fed_watch_list_total` | Counter | `kind`, `result` ∈ ok/version_too_old/parse_error/ready_wait | Center |
 | `edgion_fed_watch_errors_total` | Counter | `kind`, `reason` ∈ parse_error/timeout/recv_error | Center |
 | `edgion_fed_mark_offline_total` | Counter | `reason` ∈ heartbeat/disconnect/reload | Center |
+| `edgion_fed_peer_identity_check_total` | Counter | `result` ∈ ok/mismatch/no_spiffe_san/multi_san/parse_error | Center |
+| `edgion_fed_session_takeover_total` | Counter | (none) | Center |
 | `edgion_fed_evict_stale_total` | Counter | `source` ∈ registry/aggregator | Center |
 | `edgion_fed_session_reentry_total` | Counter | — | Center |
 | `edgion_fed_aggregator_controllers` | Gauge | `cluster` | Center |

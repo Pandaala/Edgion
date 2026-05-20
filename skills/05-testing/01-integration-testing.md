@@ -298,7 +298,7 @@ Only when a **completely different process-level configuration** is needed shoul
 | `test_resource_abnormal_metrics.sh` | Slow-test-only Controller `tick_secs=30` |
 | `test_center_no_auth.sh` | Center fail-close validation without auth (no Controller/Gateway) |
 | `run_center_test.sh` | 1 Center + 2 Controllers federation validation |
-| `run_fed_sync_test.sh` | Center + multiple Controllers federation sync |
+| `run_center_mtls_test.sh` | Center federation mTLS + SPIFFE peer-identity binding (cert SAN ↔ controller_id), wrong-identity rejection, plaintext fail-close |
 | `run_conf_sync_mtls_test.sh` | Controller↔Gateway mTLS channel |
 | `run_acme_test.sh` | Standalone ACME topology |
 

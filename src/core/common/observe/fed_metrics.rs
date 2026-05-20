@@ -47,6 +47,10 @@ pub mod names {
     pub const FANOUT_TOTAL: &str = "edgion_fed_fanout_total";
     /// Gauge: last observed ready-gate wait in seconds (Controller side).
     pub const READY_GATE_WAIT_LAST: &str = "edgion_fed_ready_gate_wait_seconds_last";
+    /// Counter: peer-identity binding outcome on the federation gRPC server.
+    pub const PEER_IDENTITY_CHECK_TOTAL: &str = "edgion_fed_peer_identity_check_total";
+    /// Counter: a live session was displaced by a new connection (takeover).
+    pub const SESSION_TAKEOVER_TOTAL: &str = "edgion_fed_session_takeover_total";
 }
 
 /// Bounded label value constants. Emitting any other value violates the
@@ -93,6 +97,13 @@ pub mod labels {
         pub const OK: &str = "ok";
         pub const PARTIAL: &str = "partial";
         pub const FAIL: &str = "fail";
+    }
+    pub mod peer_identity_result {
+        pub const OK: &str = "ok";
+        pub const MISMATCH: &str = "mismatch";
+        pub const NO_SPIFFE_SAN: &str = "no_spiffe_san";
+        pub const MULTI_SAN: &str = "multi_san";
+        pub const PARSE_ERROR: &str = "parse_error";
     }
 }
 
@@ -154,6 +165,16 @@ pub fn record_session_reentry() {
     counter!(names::SESSION_REENTRY_TOTAL).increment(1);
 }
 
+#[inline]
+pub fn record_peer_identity_check(result: &'static str) {
+    counter!(names::PEER_IDENTITY_CHECK_TOTAL, "result" => result).increment(1);
+}
+
+#[inline]
+pub fn record_session_takeover() {
+    counter!(names::SESSION_TAKEOVER_TOTAL).increment(1);
+}
+
 // ---------- Aggregator (Center) ----------
 
 /// Set the number of controllers known to the aggregator for a given
@@ -181,6 +202,34 @@ pub fn record_fanout(op: &'static str, result: &'static str) {
 #[inline]
 pub fn record_ready_gate_wait(seconds: f64) {
     gauge!(names::READY_GATE_WAIT_LAST).set(seconds);
+}
+
+#[cfg(test)]
+mod peer_auth_metric_tests {
+    use super::*;
+
+    #[test]
+    fn peer_identity_metric_name_is_stable() {
+        assert_eq!(names::PEER_IDENTITY_CHECK_TOTAL, "edgion_fed_peer_identity_check_total");
+        assert_eq!(names::SESSION_TAKEOVER_TOTAL, "edgion_fed_session_takeover_total");
+    }
+
+    #[test]
+    fn peer_identity_result_labels_are_bounded() {
+        let _ = [
+            labels::peer_identity_result::OK,
+            labels::peer_identity_result::MISMATCH,
+            labels::peer_identity_result::NO_SPIFFE_SAN,
+            labels::peer_identity_result::MULTI_SAN,
+            labels::peer_identity_result::PARSE_ERROR,
+        ];
+    }
+
+    #[test]
+    fn recorders_do_not_panic() {
+        record_peer_identity_check(labels::peer_identity_result::OK);
+        record_session_takeover();
+    }
 }
 
 #[cfg(test)]

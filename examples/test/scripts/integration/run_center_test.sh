@@ -190,6 +190,11 @@ sync:
 database:
   enabled: false
 
+# Federation gRPC runs plaintext for this functional test (it exercises
+# watch-sync / fan-out, not TLS). allow_plaintext opts out of the fail-close
+# default; mTLS + SPIFFE identity binding is covered by run_center_mtls_test.sh.
+allow_plaintext: true
+
 local_auth:
   enabled: true
   username: "${AUTH_USER}"

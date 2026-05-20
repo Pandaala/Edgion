@@ -58,6 +58,13 @@ impl ReconnectBackoff {
     }
 }
 
+/// Return the DER bytes of the first certificate in a PEM bundle.
+fn first_cert_der_from_pem(pem_bytes: &[u8]) -> Option<Vec<u8>> {
+    use x509_parser::pem::Pem;
+    let mut it = Pem::iter_from_buffer(pem_bytes);
+    it.next().and_then(|r| r.ok()).map(|p| p.contents)
+}
+
 /// Runs the federation client loop. Should be spawned as a background task.
 /// Exits only when `shutdown` is triggered.
 pub async fn run(
@@ -74,6 +81,48 @@ pub async fn run(
             "Invalid federation security config, federation client will not start"
         );
         return;
+    }
+
+    // Startup self-check: our own client cert's SPIFFE URI SAN path must match
+    // our configured cluster/name. Federation is auxiliary to the data plane,
+    // so on mismatch we DEGRADE (log + metric + do not federate), never crash.
+    if let Some(tls_cfg) = config.security.resolve_active_tls() {
+        if !tls_cfg.skip_tls {
+            match std::fs::read(tls_cfg.cert_path()) {
+                Ok(pem_bytes) => {
+                    let ok = first_cert_der_from_pem(&pem_bytes)
+                        .and_then(|d| crate::core::common::fed_sync::spiffe::extract_single_spiffe_uri(&d).ok())
+                        .and_then(|u| crate::core::common::fed_sync::spiffe::parse_controller_spiffe(&u))
+                        .map(|p| crate::core::common::fed_sync::spiffe::path_matches(&p, &config.cluster, &config.name))
+                        .unwrap_or(false);
+                    if !ok {
+                        tracing::error!(
+                            component = "fed_client",
+                            cluster = %config.cluster,
+                            name = %config.name,
+                            "Client cert SPIFFE SAN does not match cluster/name; federation client will not start"
+                        );
+                        crate::core::common::observe::system_metrics::mark_system_error(
+                            crate::core::common::observe::system_metrics::components::FED_SYNC_CLIENT,
+                            crate::core::common::observe::system_metrics::reasons::PEER_IDENTITY_SELF_CHECK,
+                        );
+                        return;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        component = "fed_client",
+                        error = %e,
+                        "Cannot read client cert for self-check; federation client will not start"
+                    );
+                    crate::core::common::observe::system_metrics::mark_system_error(
+                        crate::core::common::observe::system_metrics::components::FED_SYNC_CLIENT,
+                        crate::core::common::observe::system_metrics::reasons::PEER_IDENTITY_SELF_CHECK,
+                    );
+                    return;
+                }
+            }
+        }
     }
 
     // Wait for ConfigSyncServer to be ready before connecting to Center.
@@ -695,5 +744,13 @@ mod tests {
         backoff.next(); // 4
         backoff.reset();
         assert_eq!(backoff.current_secs(), 1);
+    }
+
+    #[test]
+    fn self_check_accepts_matching_path() {
+        use crate::core::common::fed_sync::spiffe::{parse_controller_spiffe, path_matches};
+        let p = parse_controller_spiffe("spiffe://td/controllers/prod/ctrl-1").unwrap();
+        assert!(path_matches(&p, "prod", "ctrl-1"));
+        assert!(!path_matches(&p, "prod", "other"));
     }
 }

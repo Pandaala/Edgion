@@ -44,6 +44,14 @@ pub struct CenterConfig {
     /// Omit this section to keep plaintext gRPC (backward compatible).
     #[serde(default)]
     pub grpc_security: ConfSyncSecurityConfig,
+    /// Explicit opt-out: when no TLS block is configured, allow plaintext
+    /// federation gRPC. Default false -> fail-close. Emergency/migration only.
+    #[serde(default)]
+    pub allow_plaintext: bool,
+    /// Server-side peer-identity verification. Required (with a non-empty
+    /// trust_domain) under mTLS; ignored under plaintext.
+    #[serde(default)]
+    pub peer_identity: Option<PeerIdentityConfig>,
 }
 
 impl Default for CenterConfig {
@@ -55,6 +63,24 @@ impl Default for CenterConfig {
             auth: None,
             local_auth: None,
             grpc_security: ConfSyncSecurityConfig::default(),
+            allow_plaintext: false,
+            peer_identity: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PeerIdentityConfig {
+    /// SPIFFE trust domain expected in the peer cert's URI SAN
+    /// (`spiffe://{trust_domain}/controllers/{cluster}/{name}`).
+    pub trust_domain: String,
+}
+
+impl Default for PeerIdentityConfig {
+    fn default() -> Self {
+        Self {
+            trust_domain: String::new(),
         }
     }
 }
@@ -121,5 +147,24 @@ sync:
         assert_eq!(config.server.grpc_addr, "0.0.0.0:50100");
         assert_eq!(config.sync.ping_interval_secs, 60);
         assert_eq!(config.sync.command_timeout_secs, 30); // default
+    }
+
+    #[test]
+    fn default_allow_plaintext_is_false() {
+        let c = CenterConfig::default();
+        assert!(!c.allow_plaintext, "fail-close default");
+        assert!(c.peer_identity.is_none());
+    }
+
+    #[test]
+    fn parses_peer_identity_and_allow_plaintext() {
+        let yaml = r#"
+allow_plaintext: true
+peer_identity:
+  trust_domain: "edgion.io"
+"#;
+        let c: CenterConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(c.allow_plaintext);
+        assert_eq!(c.peer_identity.unwrap().trust_domain, "edgion.io");
     }
 }

@@ -5,3 +5,4 @@
 //! (server side).
 
 pub mod proto;
+pub mod spiffe;

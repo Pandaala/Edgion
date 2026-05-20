@@ -52,6 +52,7 @@ JOB_NAMES=(
     "linksys_es"
     "acme"
     "center"
+    "center_mtls"
     "cli"
     "file_watcher"
 )
@@ -63,6 +64,7 @@ job_command() {
         linksys_es)   echo "${SCRIPT_DIR}/link_sys/run_es_test.sh --no-build" ;;
         acme)         echo "${SCRIPT_DIR}/run_acme_test.sh" ;;
         center)       echo "${SCRIPT_DIR}/run_center_test.sh" ;;
+        center_mtls)  echo "${SCRIPT_DIR}/run_center_mtls_test.sh --no-build" ;;
         cli)          echo "${SCRIPT_DIR}/test_cli_commands.sh" ;;
         file_watcher) echo "${SCRIPT_DIR}/test_file_watcher.sh" ;;
         *)            return 1 ;;

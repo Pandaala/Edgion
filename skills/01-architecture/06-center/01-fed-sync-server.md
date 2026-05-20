@@ -130,3 +130,63 @@ propagates disconnect to all four state holders in lockstep:
 `ControllerRegistry`, `ResourceAggregator`, `CenterWatchCacheRegistry`,
 and `CenterDb` (async best-effort). Session-ID matching prevents a stale
 heartbeat task from clobbering a reconnected session.
+
+## Peer Authentication
+
+Full design: `docs/superpowers/specs/2026-05-20-center-fed-peer-auth-design.md`.
+
+### Transport fail-close rules
+
+The Center federation gRPC server enforces the following transport rules at startup:
+
+| Transport state | `allow_plaintext` | Outcome |
+|-----------------|-------------------|---------|
+| No TLS configured | `false` (default) | Server **refuses to start** |
+| No TLS configured | `true` | Plaintext allowed; `edgion_system_error_state{component=fed_sync_server, reason=plaintext_default}` is set |
+| mTLS configured, `peer_identity.trust_domain` missing | — | Server **refuses to start** |
+| Config file present but fails to parse | — | Server **refuses to start** (no silent default fallback) |
+| mTLS configured, `peer_identity.trust_domain` present | — | Full SPIFFE URI-SAN verification active |
+
+New `CenterConfig` fields:
+
+```yaml
+allow_plaintext: false           # default false; set true only for emergency plaintext
+peer_identity:
+  trust_domain: "edgion.io"     # required when mTLS is active
+```
+
+### SPIFFE URI-SAN binding (mTLS only)
+
+When mTLS is active, the server verifies the client certificate on every `RegisterRequest`:
+
+1. The certificate must carry **exactly one** URI SAN. Zero or multiple SANs → `permission_denied`.
+2. The SAN must be a valid `spiffe://` URI. Parse failure → `permission_denied`.
+3. The SPIFFE path must contain **exactly three segments**: `controllers/{cluster}/{name}`. Any other segment count → `permission_denied`.
+4. The SPIFFE host must match `peer_identity.trust_domain` (case-insensitive). Mismatch → `permission_denied`.
+5. The `{cluster}` segment must equal the `RegisterRequest.cluster` field. Mismatch → `permission_denied`.
+6. The derived `controller_id` (`"{cluster}/{name}"`) must equal `RegisterRequest.controller_id`. Mismatch → `permission_denied`.
+
+No path normalization is performed (percent-decoding, dot-segment removal, etc.). The comparison is byte-exact after case-folding only the host component.
+
+Metric: `edgion_fed_peer_identity_check_total{result}` where `result` ∈ `ok` / `mismatch` / `no_spiffe_san` / `multi_san` / `parse_error`.
+
+### Race-safe session takeover
+
+A new connection for a `controller_id` that already has an active session atomically displaces the old session. The old session's teardown task cannot mark the new session offline or write stale data — session-ID matching in `mark_offline_all` ensures this. Metric: `edgion_fed_session_takeover_total` (Counter, no labels).
+
+### Controller self-check (startup, degrade-not-crash)
+
+On startup the Controller reads its own mTLS client certificate and verifies that the embedded SPIFFE URI SAN matches its configured `cluster` and `name`. On mismatch:
+
+- A `tracing::error!` is emitted.
+- `edgion_system_error_state{component=fed_sync_client, reason=peer_identity_self_check}` is set.
+- Federation sync is **not started** for this controller (federation is auxiliary; the controller does not crash).
+
+### Migration (breaking change)
+
+Existing **plaintext** federation deployments must take one of the following paths:
+
+1. **Recommended**: configure mTLS + set `peer_identity.trust_domain`, and reissue client certificates to carry exactly one URI SAN of the form `spiffe://{trust_domain}/controllers/{cluster}/{name}`.
+2. **Emergency plaintext**: set `allow_plaintext: true` in the Center config to preserve plaintext connectivity; a degraded-state metric is emitted and an alert should be configured.
+
+See `docs/superpowers/specs/2026-05-20-center-fed-peer-auth-design.md` for the full migration guide and certificate issuance details.

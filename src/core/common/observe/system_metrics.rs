@@ -50,6 +50,12 @@ pub mod reasons {
     /// is running in plaintext despite cert paths being present.
     /// Emergency bypass; must not stay enabled in production.
     pub const SKIP_TLS: &str = "skip_tls";
+    /// No TLS block configured at all; running plaintext via the explicit
+    /// `allow_plaintext` opt-out. Emergency/migration use only.
+    pub const PLAINTEXT_DEFAULT: &str = "plaintext_default";
+    /// Controller's own client cert SPIFFE SAN does not match its configured
+    /// cluster/name; federation client was not started.
+    pub const PEER_IDENTITY_SELF_CHECK: &str = "peer_identity_self_check";
 }
 
 /// Mark a system-level error condition as active.
