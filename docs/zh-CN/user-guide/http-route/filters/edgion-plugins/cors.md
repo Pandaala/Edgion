@@ -14,6 +14,8 @@ CORS (Cross-Origin Resource Sharing，跨域资源共享) 是一种浏览器安�
 - 没有 CORS 配置，浏览器会阻止前端访问 API
 - 配置 CORS 后，浏览器允许跨域访问
 
+> **说明：** CORS 不适用于 WebSocket —— 浏览器不会对 WS 连接施加同源策略，因此 Edgion 透明转发 WS 握手、不校验 `Origin` 头；如需限制 WebSocket 来源，请在后端服务中实现。
+
 ## 快速开始
 
 ### 最简单的配置（开发环境）
