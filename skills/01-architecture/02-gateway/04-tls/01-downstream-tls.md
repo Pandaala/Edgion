@@ -90,11 +90,12 @@ Invoked after the TLS handshake completes; responsible for:
 
 `apply_gateway_tls_cert` handles certificates for Gateway Listeners:
 
-1. Get the Secret from `GatewayTlsEntry`'s inline `secrets` (preferred).
-2. Fall back to looking up Secrets by `certificateRefs` from the global SecretStore.
-3. Extract the certificate and private key from the Secret's `data["tls.crt"]` and `data["tls.key"]`.
-4. Parse and set them on the SSL connection.
-5. If `frontend_validation` is present, call `configure_gateway_frontend_mtls()` to configure client certificate verification.
+1. Collect **every** Secret: prefer `GatewayTlsEntry`'s inline `secrets` (resolved by the controller from all `certificateRefs`); fall back to `resolve_secrets_from_store_or_error`, which resolves *all* `certificateRefs` from the global SecretStore.
+2. Select the cert matching the client (`select_gateway_secret`). **BoringSSL exposes only a single certificate slot per `SSL` (unlike OpenSSL's per-key-type slots), so a dual-cert listener (RSA + ECDSA) cannot rely on the library to auto-pick — we select explicitly.** ECDSA is preferred only when **(a) the negotiated version is TLS 1.3** (`negotiated_is_tls13`, via the safe `SslRef::version2()`) **and (b)** the client advertised an ECDSA `signature_algorithm` (`client_supports_ecdsa`, FFI `SSL_get0_peer_verify_algorithms` + `SSL_get_signature_algorithm_key_type`); then the ECDSA cert is served, otherwise the first RSA cert. The TLS 1.3 gate is required because in TLS 1.2 the cert key type also constrains the usable cipher suites (ECDHE-ECDSA vs ECDHE-RSA) — selecting ECDSA purely from sigalgs there could break a client that offered only ECDHE-RSA ciphers, so TLS 1.2 keeps legacy first-cert behavior. TLS 1.3 decouples auth from the cipher, making sigalg-based selection safe. This mirrors BoringSSL's / Envoy's own selection. With a single cert it is a no-op. The pure selection rule is factored into `pick_secret_index` (unit-tested).
+3. Extract the certificate and private key from the selected Secret's `data["tls.crt"]` and `data["tls.key"]` and set them on the SSL connection (`apply_secret_to_ssl`). A bad/missing cert fails the handshake (fail-closed) instead of being silently dropped.
+4. If `frontend_validation` is present, call `configure_gateway_frontend_mtls()` to configure client certificate verification.
+
+> **Why not iterate `SSL_use_certificate` per cert?** On OpenSSL that populates separate RSA/ECDSA slots; on BoringSSL each call *replaces* the single slot (last-wins), so iterating would serve only one key type. Explicit ClientHello-driven selection is the BoringSSL-correct approach.
 
 ## Gateway frontendValidation (standard mTLS)
 

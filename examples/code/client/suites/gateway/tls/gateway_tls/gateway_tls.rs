@@ -16,9 +16,106 @@
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
+use std::process::Command;
 use std::time::Instant;
 
 pub struct GatewayTlsTestSuite;
+
+/// Locate a genuine OpenSSL binary. macOS ships LibreSSL whose `s_client`
+/// mishandles a TLS 1.3 handshake against this BoringSSL listener, so prefer a
+/// real OpenSSL build (CI already has it on PATH; local dev usually via brew).
+/// Returns None when only LibreSSL is available so the caller can skip rather
+/// than report a false failure.
+fn openssl_bin() -> Option<String> {
+    for cand in ["openssl", "/opt/homebrew/bin/openssl", "/usr/local/bin/openssl"] {
+        if let Ok(out) = Command::new(cand).arg("version").output() {
+            if String::from_utf8_lossy(&out.stdout).starts_with("OpenSSL") {
+                return Some(cand.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Drive a TLS 1.3 handshake that pins the server certificate key type via the
+/// signature_algorithms extension (`ecdsa_secp256r1_sha256` → ECDSA cert,
+/// `rsa_pss_rsae_sha256` → RSA cert), returning whether it completed plus the
+/// openssl output (which carries the served certificate's subject).
+fn handshake_with_sigalg(
+    openssl: &str,
+    host: &str,
+    port: u16,
+    servername: &str,
+    sigalg: &str,
+) -> Result<(bool, String), String> {
+    let output = Command::new(openssl)
+        .args([
+            "s_client",
+            "-connect",
+            &format!("{}:{}", host, port),
+            "-servername",
+            servername,
+            "-alpn",
+            "h2,http/1.1",
+            "-sigalgs",
+            sigalg,
+            "-tls1_3",
+        ])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("Failed to run openssl: {}", e))?;
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // A completed handshake prints the served certificate subject; an aborted
+    // one prints a TLS alert / handshake failure instead.
+    let connected = combined.contains("subject=")
+        && !combined.contains("handshake failure")
+        && !combined.contains("no certificate");
+
+    Ok((connected, combined))
+}
+
+/// Drive a TLS 1.2 handshake. With `cipher = None` the client offers its default
+/// cipher list; with `cipher = Some(list)` it is restricted (used to reproduce
+/// the strict regression scenario: ECDHE-RSA-only ciphers + default sigalgs that
+/// still advertise ECDSA — ungated ECDSA selection would NO_SHARED_CIPHER here).
+/// Used to assert the dual-cert listener stays on the legacy first-cert (RSA)
+/// under TLS 1.2.
+fn handshake_tls12(
+    openssl: &str,
+    host: &str,
+    port: u16,
+    servername: &str,
+    cipher: Option<&str>,
+) -> Result<(bool, String), String> {
+    let connect = format!("{}:{}", host, port);
+    let mut args = vec!["s_client", "-connect", &connect, "-servername", servername, "-tls1_2"];
+    if let Some(c) = cipher {
+        args.push("-cipher");
+        args.push(c);
+    }
+    let output = Command::new(openssl)
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("Failed to run openssl: {}", e))?;
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let connected = combined.contains("subject=")
+        && !combined.contains("handshake failure")
+        && !combined.contains("no certificate");
+
+    Ok((connected, combined))
+}
 
 impl GatewayTlsTestSuite {
     fn test_gateway_tls_health() -> TestCase {
@@ -119,6 +216,150 @@ impl GatewayTlsTestSuite {
         )
     }
 
+    // Dual-cert listener regression test (RFC tls-04): the listener carries two
+    // certificateRefs (RSA edge-tls + ECDSA edge-tls-ecdsa). Before the fix only
+    // the first (RSA) was applied, so an ECDSA-pinned handshake failed. Verify
+    // both key-type slots are served.
+    fn test_gateway_tls_dual_cert() -> TestCase {
+        TestCase::new(
+            "gateway_tls_dual_cert",
+            "Test Gateway TLS - dual RSA+ECDSA certificateRefs both served",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let servername = "gateway-tls.test.com";
+
+                    let openssl = match openssl_bin() {
+                        Some(bin) => bin,
+                        None => {
+                            return TestResult::passed_with_message(
+                                start.elapsed(),
+                                "skipped: genuine OpenSSL not found (LibreSSL cannot pin TLS 1.3 sigalgs)".to_string(),
+                            )
+                        }
+                    };
+
+                    // 1. Pin ECDSA: server must select the ECDSA cert slot.
+                    let (ecdsa_ok, ecdsa_out) = match handshake_with_sigalg(
+                        &openssl,
+                        &ctx.target_host,
+                        ctx.https_port,
+                        servername,
+                        "ecdsa_secp256r1_sha256",
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("OpenSSL (ECDSA) failed: {}", e)),
+                    };
+                    if !ecdsa_ok {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "ECDSA-pinned handshake failed — ECDSA certificateRef was not applied (tls-04 regression)"
+                                .to_string(),
+                        );
+                    }
+                    if !ecdsa_out.contains("ecdsa-dualcert.example.com") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "ECDSA handshake did not serve the ECDSA cert (CN ecdsa-dualcert.example.com missing)"
+                                .to_string(),
+                        );
+                    }
+
+                    // 2. Pin RSA: server must still select the RSA cert slot.
+                    let (rsa_ok, rsa_out) = match handshake_with_sigalg(
+                        &openssl,
+                        &ctx.target_host,
+                        ctx.https_port,
+                        servername,
+                        "rsa_pss_rsae_sha256",
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("OpenSSL (RSA) failed: {}", e)),
+                    };
+                    if !rsa_ok {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "RSA-pinned handshake failed — RSA certificateRef not served".to_string(),
+                        );
+                    }
+                    if rsa_out.contains("ecdsa-dualcert.example.com") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "RSA handshake unexpectedly served the ECDSA cert".to_string(),
+                        );
+                    }
+
+                    // 3. TLS 1.2 regression guard: a default TLS 1.2 client must
+                    // still complete and be served the RSA cert. ECDSA selection
+                    // is gated to TLS 1.3 because in TLS 1.2 the cert key type
+                    // also constrains the cipher suite.
+                    let (tls12_ok, tls12_out) =
+                        match handshake_tls12(&openssl, &ctx.target_host, ctx.https_port, servername, None) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                return TestResult::failed(start.elapsed(), format!("OpenSSL (TLS1.2) failed: {}", e))
+                            }
+                        };
+                    if !tls12_ok {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "TLS 1.2 handshake failed on dual-cert listener (regression: ECDSA selection not gated to TLS 1.3)"
+                                .to_string(),
+                        );
+                    }
+                    if tls12_out.contains("ecdsa-dualcert.example.com") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "TLS 1.2 served the ECDSA cert; selection should stay on legacy first-cert (RSA) under TLS 1.2"
+                                .to_string(),
+                        );
+                    }
+
+                    // 4. Strict regression trigger: a TLS 1.2 client offering ONLY
+                    // ECDHE-RSA ciphers (default sigalgs still advertise ECDSA).
+                    // Without the TLS 1.3 gate the server would pick the ECDSA cert,
+                    // which ECDHE-RSA cannot use → NO_SHARED_CIPHER and a failed
+                    // handshake. With the gate it serves RSA and succeeds.
+                    let rsa_only_ciphers = "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384";
+                    let (strict_ok, strict_out) = match handshake_tls12(
+                        &openssl,
+                        &ctx.target_host,
+                        ctx.https_port,
+                        servername,
+                        Some(rsa_only_ciphers),
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("OpenSSL (TLS1.2 RSA-cipher) failed: {}", e),
+                            )
+                        }
+                    };
+                    if !strict_ok {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "TLS 1.2 ECDHE-RSA-only handshake failed — ungated ECDSA selection would cause NO_SHARED_CIPHER"
+                                .to_string(),
+                        );
+                    }
+                    if strict_out.contains("ecdsa-dualcert.example.com") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "TLS 1.2 ECDHE-RSA-only served the ECDSA cert; TLS 1.3 gate not effective".to_string(),
+                        );
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "Dual-cert: TLS1.3 serves ECDSA/RSA per sigalg; TLS1.2 (incl ECDHE-RSA-only) stays on RSA"
+                            .to_string(),
+                    )
+                })
+            },
+        )
+    }
+
     fn test_gateway_tls_status() -> TestCase {
         TestCase::new(
             "gateway_tls_status",
@@ -165,6 +406,7 @@ impl TestSuite for GatewayTlsTestSuite {
             Self::test_gateway_tls_health(),
             Self::test_gateway_tls_echo(),
             Self::test_gateway_tls_status(),
+            Self::test_gateway_tls_dual_cert(),
         ]
     }
 }

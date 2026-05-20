@@ -584,22 +584,31 @@ impl TlsCallback {
             sv: 0,
         });
 
-        let secret = if let Some(secrets) = &gateway_tls.secrets {
-            if let Some(s) = secrets.first() {
-                s.clone()
-            } else {
-                self.get_secret_from_store_or_error(gateway_tls, ssl_ctx)
-            }
-        } else {
-            self.get_secret_from_store_or_error(gateway_tls, ssl_ctx)
+        // Collect every cert/key Secret configured for this listener: prefer the
+        // controller-resolved inline secrets, otherwise resolve every
+        // certificateRef from the global store.
+        let secrets = match &gateway_tls.secrets {
+            Some(s) if !s.is_empty() => s.clone(),
+            _ => self.resolve_secrets_from_store_or_error(gateway_tls, ssl_ctx),
         };
-
         if ssl_ctx.meta.err_log.is_some() {
             return;
         }
-        self.apply_secret_to_ssl(ssl, &secret, ssl_ctx);
 
-        // Skip mTLS if server cert setup failed
+        // BoringSSL keeps a single certificate slot per SSL, so for a dual-cert
+        // listener (e.g. RSA + ECDSA) we must select the cert matching the
+        // client's offered signature algorithms here — the same selection
+        // BoringSSL/Envoy perform internally. With one configured cert this is a
+        // no-op. A bad/missing selected cert fails the handshake (fail-closed)
+        // rather than silently serving nothing.
+        let secret = match self.select_gateway_secret(ssl, &secrets) {
+            Some(s) => s.clone(),
+            None => {
+                ssl_ctx.meta.err_log = Some("no usable cert".to_string());
+                return;
+            }
+        };
+        self.apply_secret_to_ssl(ssl, &secret, ssl_ctx);
         if ssl_ctx.meta.err_log.is_some() {
             return;
         }
@@ -614,29 +623,109 @@ impl TlsCallback {
         }
     }
 
-    /// Resolve Secret via the global SecretStore by `certificate_refs[0]`.
-    fn get_secret_from_store_or_error(
+    /// Resolve every `certificate_refs` entry via the global SecretStore.
+    ///
+    /// Fallback path used when the controller has not inlined the resolved
+    /// secrets. Returns all resolved secrets; a single missing ref fails the
+    /// whole listener (fail-closed) by setting `err_log`.
+    fn resolve_secrets_from_store_or_error(
         &self,
         gateway_tls: &GatewayTlsEntry,
         ssl_ctx: &mut SslCtx,
-    ) -> k8s_openapi::api::core::v1::Secret {
-        let cert_ref = match gateway_tls.certificate_refs.first() {
-            Some(r) => r,
-            None => {
-                ssl_ctx.meta.err_log = Some("no cert refs".to_string());
-                return k8s_openapi::api::core::v1::Secret::default();
-            }
-        };
+    ) -> Vec<k8s_openapi::api::core::v1::Secret> {
+        if gateway_tls.certificate_refs.is_empty() {
+            ssl_ctx.meta.err_log = Some("no cert refs".to_string());
+            return Vec::new();
+        }
 
-        let secret_namespace = cert_ref.namespace.as_deref().unwrap_or(&gateway_tls.gateway_namespace);
-
-        match get_secret_by_name(Some(secret_namespace), &cert_ref.name) {
-            Some(s) => s,
-            None => {
-                ssl_ctx.meta.err_log = Some(format!("secret missing: {}/{}", secret_namespace, cert_ref.name));
-                k8s_openapi::api::core::v1::Secret::default()
+        let mut secrets = Vec::with_capacity(gateway_tls.certificate_refs.len());
+        for cert_ref in &gateway_tls.certificate_refs {
+            let secret_namespace = cert_ref.namespace.as_deref().unwrap_or(&gateway_tls.gateway_namespace);
+            match get_secret_by_name(Some(secret_namespace), &cert_ref.name) {
+                Some(s) => secrets.push(s),
+                None => {
+                    ssl_ctx.meta.err_log = Some(format!("secret missing: {}/{}", secret_namespace, cert_ref.name));
+                    return Vec::new();
+                }
             }
         }
+        secrets
+    }
+
+    /// Whether the connecting client advertised an ECDSA signature algorithm in
+    /// its `signature_algorithms` extension (read after the ClientHello has been
+    /// processed, i.e. in cert_cb).
+    #[cfg(feature = "boringssl")]
+    fn client_supports_ecdsa(&self, ssl: &SslRef) -> bool {
+        unsafe {
+            let ssl_ptr = ssl as *const SslRef as *const boring_sys::SSL;
+            let mut out: *const u16 = std::ptr::null();
+            let n = boring_sys::SSL_get0_peer_verify_algorithms(ssl_ptr, &mut out);
+            if n == 0 || out.is_null() {
+                return false;
+            }
+            std::slice::from_raw_parts(out, n)
+                .iter()
+                .any(|&sa| boring_sys::SSL_get_signature_algorithm_key_type(sa) == boring_sys::EVP_PKEY_EC)
+        }
+    }
+
+    /// Whether the negotiated protocol version is TLS 1.3. Safe to call in
+    /// cert_cb: the server has already finalized version negotiation (which runs
+    /// before cert selection and before cipher negotiation), so `version2`
+    /// reflects the negotiated version.
+    #[cfg(feature = "boringssl")]
+    fn negotiated_is_tls13(&self, ssl: &SslRef) -> bool {
+        ssl.version2() == Some(pingora_core::tls::ssl::SslVersion::TLS1_3)
+    }
+
+    /// Best-effort cert key-type probe: `Some(true)` for ECDSA, `Some(false)`
+    /// for any other key type (RSA), `None` when the cert cannot be parsed (the
+    /// caller then falls through in its selection).
+    #[cfg(feature = "boringssl")]
+    fn secret_is_ecdsa(secret: &k8s_openapi::api::core::v1::Secret) -> Option<bool> {
+        let cert_bytes = secret.data.as_ref()?.get(CERT)?;
+        let cert = X509::from_pem(&cert_bytes.0).ok()?;
+        let pkey = cert.public_key().ok()?;
+        Some(pkey.id() == pingora_core::tls::pkey::Id::EC)
+    }
+
+    /// Select the cert/key Secret whose key type matches the connecting client.
+    /// BoringSSL exposes a single cert slot per SSL, so a dual-cert listener
+    /// (RSA + ECDSA) requires explicit selection — otherwise only one key type
+    /// would ever be served.
+    ///
+    /// ECDSA is preferred only when (a) the negotiated version is TLS 1.3 and
+    /// (b) the client advertised an ECDSA signature algorithm. The TLS 1.3 gate
+    /// matters: in TLS 1.2 the certificate's key type also constrains the usable
+    /// cipher suites (ECDHE-ECDSA vs ECDHE-RSA), so selecting ECDSA purely from
+    /// signature_algorithms can produce a no-shared-cipher failure for a client
+    /// that offered only ECDHE-RSA ciphers. TLS 1.3 decouples auth from the
+    /// cipher, making sigalg-based selection safe. For TLS 1.2 we keep the
+    /// legacy first-cert behavior (no regression versus the pre-fix code).
+    #[cfg(feature = "boringssl")]
+    fn select_gateway_secret<'a>(
+        &self,
+        ssl: &SslRef,
+        secrets: &'a [k8s_openapi::api::core::v1::Secret],
+    ) -> Option<&'a k8s_openapi::api::core::v1::Secret> {
+        if secrets.len() <= 1 {
+            return secrets.first();
+        }
+        let prefer_ecdsa = self.negotiated_is_tls13(ssl) && self.client_supports_ecdsa(ssl);
+        let kinds: Vec<Option<bool>> = secrets.iter().map(Self::secret_is_ecdsa).collect();
+        pick_secret_index(&kinds, prefer_ecdsa).map(|i| &secrets[i])
+    }
+
+    /// Non-BoringSSL fallback: no per-key-type selection primitive is wired up,
+    /// so serve the first configured cert (unchanged legacy behavior).
+    #[cfg(not(feature = "boringssl"))]
+    fn select_gateway_secret<'a>(
+        &self,
+        _ssl: &SslRef,
+        secrets: &'a [k8s_openapi::api::core::v1::Secret],
+    ) -> Option<&'a k8s_openapi::api::core::v1::Secret> {
+        secrets.first()
     }
 
     /// Helper: Extract cert/key from Secret and apply to SSL
@@ -884,5 +973,78 @@ impl TlsCallback {
         }
 
         Ok(())
+    }
+}
+
+/// Pure selection rule shared by `select_gateway_secret`: given each secret's
+/// key-type classification (`Some(true)` = ECDSA, `Some(false)` = RSA/other,
+/// `None` = unparseable) and whether ECDSA is preferred, return the index of the
+/// cert to serve. Prefers ECDSA when requested and available; otherwise the
+/// first RSA cert; otherwise the first secret. Returns `None` only for an empty
+/// list. Extracted as a free fn so the rule is unit-testable without an `SSL`.
+#[cfg(feature = "boringssl")]
+fn pick_secret_index(kinds: &[Option<bool>], prefer_ecdsa: bool) -> Option<usize> {
+    if kinds.is_empty() {
+        return None;
+    }
+    if prefer_ecdsa {
+        if let Some(i) = kinds.iter().position(|k| *k == Some(true)) {
+            return Some(i);
+        }
+    }
+    Some(kinds.iter().position(|k| *k == Some(false)).unwrap_or(0))
+}
+
+#[cfg(all(test, feature = "boringssl"))]
+mod tests {
+    use super::pick_secret_index;
+
+    const RSA: Option<bool> = Some(false);
+    const ECDSA: Option<bool> = Some(true);
+    const UNKNOWN: Option<bool> = None;
+
+    #[test]
+    fn empty_list_returns_none() {
+        assert_eq!(pick_secret_index(&[], true), None);
+        assert_eq!(pick_secret_index(&[], false), None);
+    }
+
+    #[test]
+    fn ecdsa_preferred_picks_ecdsa_regardless_of_order() {
+        assert_eq!(pick_secret_index(&[RSA, ECDSA], true), Some(1));
+        assert_eq!(pick_secret_index(&[ECDSA, RSA], true), Some(0));
+    }
+
+    #[test]
+    fn ecdsa_not_preferred_picks_first_rsa() {
+        assert_eq!(pick_secret_index(&[ECDSA, RSA], false), Some(1));
+        assert_eq!(pick_secret_index(&[RSA, ECDSA], false), Some(0));
+    }
+
+    #[test]
+    fn ecdsa_preferred_but_only_rsa_falls_back_to_rsa() {
+        assert_eq!(pick_secret_index(&[RSA, RSA], true), Some(0));
+    }
+
+    #[test]
+    fn no_rsa_present_falls_back_to_first() {
+        // prefer_ecdsa false but only ECDSA certs: no Some(false), fall to index 0.
+        assert_eq!(pick_secret_index(&[ECDSA, ECDSA], false), Some(0));
+    }
+
+    #[test]
+    fn unparseable_certs_are_skipped_then_fall_back() {
+        // ECDSA preferred, first is unknown, second is ECDSA.
+        assert_eq!(pick_secret_index(&[UNKNOWN, ECDSA], true), Some(1));
+        // RSA preferred path skips unknown, picks the RSA.
+        assert_eq!(pick_secret_index(&[UNKNOWN, RSA], false), Some(1));
+        // All unknown: fall back to first.
+        assert_eq!(pick_secret_index(&[UNKNOWN, UNKNOWN], true), Some(0));
+    }
+
+    #[test]
+    fn single_cert_is_index_zero() {
+        assert_eq!(pick_secret_index(&[RSA], true), Some(0));
+        assert_eq!(pick_secret_index(&[ECDSA], false), Some(0));
     }
 }
