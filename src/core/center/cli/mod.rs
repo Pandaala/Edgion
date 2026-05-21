@@ -7,6 +7,7 @@ use crate::core::center::fed_sync::server::FederationGrpcServer;
 use crate::core::center::metadata_store::CenterMetaDataStore;
 use crate::core::center::proxy::{PendingProxyMap, ProxyForwarder};
 use crate::core::center::watch_cache::{CenterSyncClient, CenterWatchCacheRegistry};
+use crate::core::common::config::ConfSyncSecurityConfig;
 use crate::core::common::fed_sync::proto::federation_sync_server::FederationSyncServer;
 use anyhow::Result;
 use clap::Parser;
@@ -20,35 +21,20 @@ use std::time::Duration;
 pub enum TransportDecision {
     /// mTLS with peer-identity binding.
     Mtls,
-    /// Plaintext (skip_tls or allow_plaintext); binding skipped.
-    Plaintext,
     /// Refuse to start.
     FailClose,
 }
 
-/// Pure transport decision.
-/// - `tls_resolved`: resolve_active_tls() returned Some
-/// - `skip_tls`: the resolved TLS config has skip_tls=true
-/// - `allow_plaintext`: the explicit opt-out
+/// Pure transport decision. Federation requires mTLS; anything else fail-closes.
+/// - `sec`: the federation gRPC security config
 /// - `trust_domain`: peer_identity.trust_domain (None or empty = absent)
-pub fn decide_transport(
-    tls_resolved: bool,
-    skip_tls: bool,
-    allow_plaintext: bool,
-    trust_domain: Option<&str>,
-) -> TransportDecision {
-    if tls_resolved {
-        if skip_tls {
-            return TransportDecision::Plaintext;
-        }
-        match trust_domain {
+pub fn decide_transport(sec: &ConfSyncSecurityConfig, trust_domain: Option<&str>) -> TransportDecision {
+    match sec.resolve_mtls_or_refuse() {
+        Err(_) => TransportDecision::FailClose,
+        Ok(_) => match trust_domain {
             Some(td) if !td.trim().is_empty() => TransportDecision::Mtls,
             _ => TransportDecision::FailClose,
-        }
-    } else if allow_plaintext {
-        TransportDecision::Plaintext
-    } else {
-        TransportDecision::FailClose
+        },
     }
 }
 
@@ -139,26 +125,13 @@ impl EdgionCenterCli {
             .validate()
             .map_err(|e| anyhow::anyhow!("Invalid grpc_security config: {}", e))?;
         let trust_domain = config.peer_identity.as_ref().map(|p| p.trust_domain.clone());
-        let transport = {
-            let resolved = config.grpc_security.resolve_active_tls();
-            decide_transport(
-                resolved.is_some(),
-                resolved.map(|t| t.skip_tls).unwrap_or(false),
-                config.allow_plaintext,
-                trust_domain.as_deref(),
-            )
-        };
-        let listener_is_plaintext = match transport {
-            TransportDecision::FailClose => {
-                return Err(anyhow::anyhow!(
-                    "Federation gRPC refuses to start: no TLS configured and allow_plaintext=false \
-                     (or mTLS configured without peer_identity.trust_domain). Configure grpc_security \
-                     + peer_identity, or set allow_plaintext=true for emergency plaintext."
-                ));
-            }
-            TransportDecision::Plaintext => true,
-            TransportDecision::Mtls => false,
-        };
+        let transport = decide_transport(&config.grpc_security, trust_domain.as_deref());
+        if transport == TransportDecision::FailClose {
+            return Err(anyhow::anyhow!(
+                "Federation gRPC refuses to start: federation requires mTLS. \
+                 Configure grpc_security (certs + ca) and peer_identity.trust_domain."
+            ));
+        }
 
         let grpc_server = FederationGrpcServer::new(
             registry.clone(),
@@ -167,7 +140,6 @@ impl EdgionCenterCli {
             config.sync.clone(),
             sync_client.clone(),
             db.clone(),
-            listener_is_plaintext,
             trust_domain.clone(),
         );
         let pending_commands = grpc_server.pending_commands.clone();
@@ -217,21 +189,6 @@ impl EdgionCenterCli {
                     component = "center",
                     trust_domain = %trust_domain.as_deref().unwrap_or_default(),
                     "Federation gRPC mTLS enabled"
-                );
-            }
-            TransportDecision::Plaintext => {
-                tracing::error!(
-                    component = "center",
-                    "Federation gRPC starting WITHOUT TLS. INSECURE — emergency/migration only!"
-                );
-                let reason = if config.grpc_security.resolve_active_tls().is_some() {
-                    crate::core::common::observe::system_metrics::reasons::SKIP_TLS
-                } else {
-                    crate::core::common::observe::system_metrics::reasons::PLAINTEXT_DEFAULT
-                };
-                crate::core::common::observe::system_metrics::mark_system_error(
-                    crate::core::common::observe::system_metrics::components::FED_SYNC_SERVER,
-                    reason,
                 );
             }
             TransportDecision::FailClose => unreachable!("FailClose returned earlier"),
@@ -321,40 +278,55 @@ impl EdgionCenterCli {
 mod tests {
     use super::{decide_transport, TransportDecision};
     use crate::core::center::config::CenterConfig;
+    use crate::core::common::config::{ConfSyncSecurityConfig, ConfSyncTlsConfig};
     use crate::core::common::unified_auth::UnifiedAuthState;
 
-    #[test]
-    fn none_without_optout_fail_closes() {
-        assert_eq!(
-            decide_transport(false, false, false, None),
-            TransportDecision::FailClose
-        );
+    fn mtls_sec() -> ConfSyncSecurityConfig {
+        ConfSyncSecurityConfig {
+            tls: Some(ConfSyncTlsConfig {
+                name: None,
+                cert: "c".into(),
+                key: "k".into(),
+                ca: "a".into(),
+                skip_tls: false,
+            }),
+            ..Default::default()
+        }
     }
+
     #[test]
-    fn none_with_optout_is_plaintext() {
-        assert_eq!(decide_transport(false, false, true, None), TransportDecision::Plaintext);
+    fn none_fail_closes() {
+        let sec = ConfSyncSecurityConfig::default();
+        assert_eq!(decide_transport(&sec, None), TransportDecision::FailClose);
     }
+
     #[test]
-    fn skip_tls_is_plaintext() {
-        assert_eq!(
-            decide_transport(true, true, false, Some("edgion.io")),
-            TransportDecision::Plaintext
-        );
+    fn skip_tls_fail_closes() {
+        let sec = ConfSyncSecurityConfig {
+            tls: Some(ConfSyncTlsConfig {
+                name: None,
+                cert: "c".into(),
+                key: "k".into(),
+                ca: "a".into(),
+                skip_tls: true,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(decide_transport(&sec, Some("edgion.io")), TransportDecision::FailClose);
     }
+
     #[test]
     fn mtls_with_trust_domain_is_mtls() {
         assert_eq!(
-            decide_transport(true, false, false, Some("edgion.io")),
+            decide_transport(&mtls_sec(), Some("edgion.io")),
             TransportDecision::Mtls
         );
     }
+
     #[test]
     fn mtls_without_trust_domain_fail_closes() {
-        assert_eq!(decide_transport(true, false, false, None), TransportDecision::FailClose);
-        assert_eq!(
-            decide_transport(true, false, false, Some("")),
-            TransportDecision::FailClose
-        );
+        assert_eq!(decide_transport(&mtls_sec(), None), TransportDecision::FailClose);
+        assert_eq!(decide_transport(&mtls_sec(), Some("")), TransportDecision::FailClose);
     }
 
     /// When both local_auth and auth are None on Center:

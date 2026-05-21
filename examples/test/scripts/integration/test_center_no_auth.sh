@@ -17,6 +17,36 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 TMPDIR=$(mktemp -d)
 
+# Generate a CA + center server cert so the center can start with real mTLS.
+# No controller connects in this test; the certs only need to allow startup.
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout "$TMPDIR/ca.key" \
+  -out    "$TMPDIR/ca.crt" \
+  -days   30 \
+  -subj   "/CN=Edgion No-Auth Test CA/O=EdgionTest" \
+  2>/dev/null
+
+openssl req -newkey rsa:2048 -nodes \
+  -keyout "$TMPDIR/server.key" \
+  -out    "$TMPDIR/server.csr" \
+  -subj   "/CN=edgion-center/O=EdgionTest" \
+  2>/dev/null
+
+cat > "$TMPDIR/server.ext" <<EOF
+subjectAltName=IP:127.0.0.1,DNS:localhost
+extendedKeyUsage=serverAuth
+EOF
+
+openssl x509 -req \
+  -in     "$TMPDIR/server.csr" \
+  -CA     "$TMPDIR/ca.crt" \
+  -CAkey  "$TMPDIR/ca.key" \
+  -CAcreateserial \
+  -out    "$TMPDIR/server.crt" \
+  -days   30 \
+  -extfile "$TMPDIR/server.ext" \
+  2>/dev/null
+
 # Minimal Center configuration, no auth / local_auth section
 cat > "$TMPDIR/center.yaml" <<EOF
 server:
@@ -27,7 +57,14 @@ database:
 sync:
   command_timeout_secs: 30
 grpc_security:
-  skip_tls: true
+  active: fed
+  certs:
+    - name: fed
+      cert: $TMPDIR/server.crt
+      key: $TMPDIR/server.key
+      ca: $TMPDIR/ca.crt
+peer_identity:
+  trust_domain: "edgion.io"
 EOF
 
 cd "$REPO_ROOT"

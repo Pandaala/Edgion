@@ -38,13 +38,13 @@ use crate::types::resources::plugin_metadata::PluginMetaData;
 /// kind instead of this constant.
 const PLUGIN_METADATA_KIND: &str = "PluginMetaData";
 
-// Boundary caps on RegisterRequest fields. The federation gRPC server is
-// reachable in plaintext on default deployments; any peer that completes a
-// TCP connect can submit a RegisterRequest, so each field that becomes a
-// HashMap key, an SQLite row, or an Admin API payload must be bounded
-// here. Caps follow K8s label-value conventions (63 bytes per token, 253
-// bytes for full DNS-style identifiers) so legitimate controllers built
-// from `cluster + name` are well below the limit.
+// Boundary caps on RegisterRequest fields. The federation gRPC server requires
+// mTLS, but input validation is kept independent of the TLS layer: any peer
+// whose cert passes the mTLS handshake can still submit a RegisterRequest, so
+// each field that becomes a HashMap key, an SQLite row, or an Admin API payload
+// must be bounded here. Caps follow K8s label-value conventions (63 bytes per
+// token, 253 bytes for full DNS-style identifiers) so legitimate controllers
+// built from `cluster + name` are well below the limit.
 const MAX_CONTROLLER_ID_LEN: usize = 253;
 const MAX_CLUSTER_LEN: usize = 63;
 const MAX_TAG_LEN: usize = 63;
@@ -195,13 +195,7 @@ pub struct FederationGrpcServer {
     /// Optional — Center only persists controller registration when
     /// `database.enabled=true`. Absent DB means upsert/mark_offline are skipped.
     pub db: Option<Arc<CenterDb>>,
-    /// True when the listener was started in plaintext (no TLS / skip_tls /
-    /// allow_plaintext). Decided once at startup; identity binding is skipped
-    /// when true. Bound to the startup fact, NOT to per-connection
-    /// `peer_certs().is_none()`, so a future `client_auth_optional` regression
-    /// cannot turn "no cert" into a bypass.
-    pub listener_is_plaintext: bool,
-    /// SPIFFE trust domain for peer-identity binding (Some under mTLS).
+    /// SPIFFE trust domain for peer-identity binding (always enforced under mTLS).
     pub trust_domain: Option<String>,
 }
 
@@ -213,7 +207,6 @@ impl FederationGrpcServer {
         sync_config: CenterSyncConfig,
         sync_client: Arc<CenterSyncClient>,
         db: Option<Arc<CenterDb>>,
-        listener_is_plaintext: bool,
         trust_domain: Option<String>,
     ) -> Self {
         Self {
@@ -224,7 +217,6 @@ impl FederationGrpcServer {
             sync_config,
             sync_client,
             db,
-            listener_is_plaintext,
             trust_domain,
         }
     }
@@ -280,9 +272,8 @@ impl FederationSync for FederationGrpcServer {
             return Err(Status::resource_exhausted("Federation registry is at capacity"));
         }
 
-        // Peer-identity binding (mTLS only). Skipped on plaintext listeners,
-        // gated on the startup-time fact (not peer_certs.is_none()).
-        if !self.listener_is_plaintext {
+        // Peer-identity binding — always enforced (federation is mTLS-only).
+        {
             use crate::core::common::observe::fed_metrics::labels::peer_identity_result as pir;
             let leaf = peer_certs.as_ref().and_then(|c| c.first());
             let Some(leaf) = leaf else {
@@ -956,7 +947,7 @@ mod tests {
     }
 
     #[test]
-    fn server_fields_default_plaintext_flag() {
+    fn server_fields_default_trust_domain() {
         let reg = ControllerRegistry::new();
         let agg = std::sync::Arc::new(crate::core::center::aggregator::ResourceAggregator::new());
         let pp: crate::core::center::proxy::PendingProxyMap =
@@ -972,10 +963,8 @@ mod tests {
             crate::core::center::config::CenterSyncConfig::default(),
             sc,
             None,
-            true,
             None,
         );
-        assert!(s.listener_is_plaintext);
         assert!(s.trust_domain.is_none());
     }
 

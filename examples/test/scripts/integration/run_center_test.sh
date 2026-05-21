@@ -8,10 +8,12 @@
 # then validates watch sync, failover fan-out, consistency detection, and
 # GCIR fan-out lifecycle (create/list/get/patch/update/delete).
 #
+# Federation runs mTLS (SPIFFE peer-identity binding).
+#
 # Port allocation (all on 127.0.0.1, avoids loopback alias):
 #   center:       gRPC 50952, HTTP 5910
-#   controller-1: gRPC 50953, admin 5911  (cluster=east-cluster)
-#   controller-2: gRPC 50954, admin 5912  (cluster=west-cluster)
+#   controller-1: gRPC 50953, admin 5911  (cluster=east-cluster, name=ctrl-east)
+#   controller-2: gRPC 50954, admin 5912  (cluster=west-cluster, name=ctrl-west)
 #
 # Test cases — RegionRoute (6):
 #   1. watch_sync                  — watch-status shows both controllers with sync_version > 0
@@ -61,6 +63,7 @@ CTRL2_HTTP="http://127.0.0.1:${CTRL2_ADMIN_PORT}"
 AUTH_USER="admin"
 AUTH_PASS="test-center-pass"
 JWT_SECRET="test-jwt-secret-center"
+TRUST_DOMAIN="edgion.io"
 
 # ── State ────────────────────────────────────────────────────────────────────
 WORK_DIR=""
@@ -172,8 +175,92 @@ log "Killing stale processes..."
 
 # ── Work dir ──────────────────────────────────────────────────────────────────
 WORK_DIR=$(mktemp -d)
-mkdir -p "$WORK_DIR/logs" "$WORK_DIR/ctrl1/conf" "$WORK_DIR/ctrl2/conf"
+mkdir -p "$WORK_DIR/logs" "$WORK_DIR/certs" "$WORK_DIR/ctrl1/conf" "$WORK_DIR/ctrl2/conf"
 log "Work dir: $WORK_DIR"
+
+CERTS_DIR="$WORK_DIR/certs"
+
+# ── Generate mTLS certificates ────────────────────────────────────────────────
+log "Generating mTLS certificates (trust domain: ${TRUST_DOMAIN})..."
+
+# ─── CA ───────────────────────────────────────────────────────────────────────
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout "$CERTS_DIR/ca.key" \
+  -out    "$CERTS_DIR/ca.crt" \
+  -days   30 \
+  -subj   "/CN=Edgion Fed Test CA/O=EdgionTest" \
+  2>/dev/null
+
+# ─── Center server cert (SAN: IP:127.0.0.1 + DNS:localhost) ──────────────────
+openssl req -newkey rsa:2048 -nodes \
+  -keyout "$CERTS_DIR/server.key" \
+  -out    "$CERTS_DIR/server.csr" \
+  -subj   "/CN=edgion-center/O=EdgionTest" \
+  2>/dev/null
+
+cat > "$CERTS_DIR/server.ext" <<EOF
+subjectAltName=IP:127.0.0.1,DNS:localhost
+extendedKeyUsage=serverAuth
+EOF
+
+openssl x509 -req \
+  -in     "$CERTS_DIR/server.csr" \
+  -CA     "$CERTS_DIR/ca.crt" \
+  -CAkey  "$CERTS_DIR/ca.key" \
+  -CAcreateserial \
+  -out    "$CERTS_DIR/server.crt" \
+  -days   30 \
+  -extfile "$CERTS_DIR/server.ext" \
+  2>/dev/null
+log "  Server cert: SAN=IP:127.0.0.1,DNS:localhost"
+
+# ─── ctrl-east client cert ────────────────────────────────────────────────────
+openssl req -newkey rsa:2048 -nodes \
+  -keyout "$CERTS_DIR/ctrl-east.key" \
+  -out    "$CERTS_DIR/ctrl-east.csr" \
+  -subj   "/CN=ctrl-east/O=EdgionTest" \
+  2>/dev/null
+
+cat > "$CERTS_DIR/ctrl-east.ext" <<EOF
+subjectAltName=URI:spiffe://${TRUST_DOMAIN}/controllers/east-cluster/ctrl-east
+extendedKeyUsage=clientAuth
+EOF
+
+openssl x509 -req \
+  -in     "$CERTS_DIR/ctrl-east.csr" \
+  -CA     "$CERTS_DIR/ca.crt" \
+  -CAkey  "$CERTS_DIR/ca.key" \
+  -CAcreateserial \
+  -out    "$CERTS_DIR/ctrl-east.crt" \
+  -days   30 \
+  -extfile "$CERTS_DIR/ctrl-east.ext" \
+  2>/dev/null
+log "  ctrl-east cert: spiffe://${TRUST_DOMAIN}/controllers/east-cluster/ctrl-east"
+
+# ─── ctrl-west client cert ────────────────────────────────────────────────────
+openssl req -newkey rsa:2048 -nodes \
+  -keyout "$CERTS_DIR/ctrl-west.key" \
+  -out    "$CERTS_DIR/ctrl-west.csr" \
+  -subj   "/CN=ctrl-west/O=EdgionTest" \
+  2>/dev/null
+
+cat > "$CERTS_DIR/ctrl-west.ext" <<EOF
+subjectAltName=URI:spiffe://${TRUST_DOMAIN}/controllers/west-cluster/ctrl-west
+extendedKeyUsage=clientAuth
+EOF
+
+openssl x509 -req \
+  -in     "$CERTS_DIR/ctrl-west.csr" \
+  -CA     "$CERTS_DIR/ca.crt" \
+  -CAkey  "$CERTS_DIR/ca.key" \
+  -CAcreateserial \
+  -out    "$CERTS_DIR/ctrl-west.crt" \
+  -days   30 \
+  -extfile "$CERTS_DIR/ctrl-west.ext" \
+  2>/dev/null
+log "  ctrl-west cert: spiffe://${TRUST_DOMAIN}/controllers/west-cluster/ctrl-west"
+
+log "Certificate generation complete."
 
 # ── Write center config ───────────────────────────────────────────────────────
 cat > "$WORK_DIR/center.yaml" <<EOF
@@ -190,10 +277,16 @@ sync:
 database:
   enabled: false
 
-# Federation gRPC runs plaintext for this functional test (it exercises
-# watch-sync / fan-out, not TLS). allow_plaintext opts out of the fail-close
-# default; mTLS + SPIFFE identity binding is covered by run_center_mtls_test.sh.
-allow_plaintext: true
+grpc_security:
+  active: fed
+  certs:
+    - name: fed
+      cert: ${CERTS_DIR}/server.crt
+      key: ${CERTS_DIR}/server.key
+      ca: ${CERTS_DIR}/ca.crt
+
+peer_identity:
+  trust_domain: "${TRUST_DOMAIN}"
 
 local_auth:
   enabled: true
@@ -207,33 +300,41 @@ EOF
 write_controller_config() {
   local idx="$1" grpc_port="$2" admin_port="$3" cluster="$4" ctrl_name="$5"
   local dir="$WORK_DIR/ctrl${idx}"
-  sed "s|WORK_DIR_PLACEHOLDER|${dir}|g" > "${dir}/controller.yaml" <<EOF
-work_dir: "WORK_DIR_PLACEHOLDER"
+  cat > "${dir}/controller.yaml" <<EOF
+work_dir: "${dir}"
 
 server:
   grpc_listen: "0.0.0.0:${grpc_port}"
   admin_listen: "0.0.0.0:${admin_port}"
 
 logging:
-  log_dir: "WORK_DIR_PLACEHOLDER/logs"
+  log_dir: "${dir}/logs"
   log_prefix: "center-test-ctrl${idx}"
   log_level: "info"
   console: false
 
 conf_center:
   type: "file_system"
-  conf_dir: "WORK_DIR_PLACEHOLDER/conf"
+  conf_dir: "${dir}/conf"
 
 conf_sync:
   no_sync_kinds: ["ReferenceGrant", "Secret"]
 
 center:
-  address: "http://127.0.0.1:${CENTER_GRPC_PORT}"
+  address: "https://127.0.0.1:${CENTER_GRPC_PORT}"
   name: "${ctrl_name}"
   cluster: "${cluster}"
   env: ["testing"]
   ping_interval_secs: 5
+  security:
+    active: fed
+    certs:
+      - name: fed
+        cert: ${CERTS_DIR}/${ctrl_name}.crt
+        key: ${CERTS_DIR}/${ctrl_name}.key
+        ca: ${CERTS_DIR}/ca.crt
 EOF
+  mkdir -p "${dir}/logs"
 }
 
 write_controller_config 1 "$CTRL1_GRPC_PORT" "$CTRL1_ADMIN_PORT" "east-cluster" "ctrl-east"

@@ -41,15 +41,11 @@ pub struct CenterConfig {
     #[serde(default)]
     pub local_auth: Option<LocalAuthConfig>,
     /// TLS config for the federation gRPC server.
-    /// Omit this section to keep plaintext gRPC (backward compatible).
+    /// Federation requires mTLS; the server refuses to start without a valid TLS block.
     #[serde(default)]
     pub grpc_security: ConfSyncSecurityConfig,
-    /// Explicit opt-out: when no TLS block is configured, allow plaintext
-    /// federation gRPC. Default false -> fail-close. Emergency/migration only.
-    #[serde(default)]
-    pub allow_plaintext: bool,
     /// Server-side peer-identity verification. Required (with a non-empty
-    /// trust_domain) under mTLS; ignored under plaintext.
+    /// trust_domain) under mTLS.
     #[serde(default)]
     pub peer_identity: Option<PeerIdentityConfig>,
 }
@@ -63,7 +59,6 @@ impl Default for CenterConfig {
             auth: None,
             local_auth: None,
             grpc_security: ConfSyncSecurityConfig::default(),
-            allow_plaintext: false,
             peer_identity: None,
         }
     }
@@ -150,21 +145,18 @@ sync:
     }
 
     #[test]
-    fn default_allow_plaintext_is_false() {
+    fn default_peer_identity_is_none() {
         let c = CenterConfig::default();
-        assert!(!c.allow_plaintext, "fail-close default");
         assert!(c.peer_identity.is_none());
     }
 
     #[test]
-    fn parses_peer_identity_and_allow_plaintext() {
+    fn parses_peer_identity() {
         let yaml = r#"
-allow_plaintext: true
 peer_identity:
   trust_domain: "edgion.io"
 "#;
         let c: CenterConfig = serde_yaml::from_str(yaml).unwrap();
-        assert!(c.allow_plaintext);
         assert_eq!(c.peer_identity.unwrap().trust_domain, "edgion.io");
     }
 }

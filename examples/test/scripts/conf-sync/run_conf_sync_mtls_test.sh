@@ -264,6 +264,12 @@ conf_sync_security:
       cert: certs/grpc/secondary/server.crt
       key: certs/grpc/secondary/server.key
       ca: certs/grpc/secondary/ca.crt
+
+# Disable admin auth for this conf_sync test (it verifies conf_sync, not auth).
+# With local_auth.enabled=false, derive_require_auth() returns false (no-auth
+# mode), so /api/v1/server-info is reachable without a Bearer token.
+local_auth:
+  enabled: false
 EOF
     log_success "Controller YAML (multi-cert): $controller_yaml"
 

@@ -65,6 +65,16 @@ fn first_cert_der_from_pem(pem_bytes: &[u8]) -> Option<Vec<u8>> {
     it.next().and_then(|r| r.ok()).map(|p| p.contents)
 }
 
+/// Map a federation mTLS refusal to its `system_error_state` reason label.
+fn refusal_reason(r: crate::core::common::config::MtlsRefusal) -> &'static str {
+    use crate::core::common::config::MtlsRefusal;
+    use crate::core::common::observe::system_metrics::reasons;
+    match r {
+        MtlsRefusal::NoTls => reasons::NO_TLS_CONFIGURED,
+        MtlsRefusal::SkipTls => reasons::SKIP_TLS,
+    }
+}
+
 /// Runs the federation client loop. Should be spawned as a background task.
 /// Exits only when `shutdown` is triggered.
 pub async fn run(
@@ -83,45 +93,60 @@ pub async fn run(
         return;
     }
 
+    // Federation requires mTLS. On a non-mTLS channel (no TLS block, or
+    // skip_tls=true) DEGRADE: log + mark a metric + do not start the client.
+    // Federation is auxiliary to the data plane, so we never crash here.
+    let tls_cfg = match config.security.resolve_mtls_or_refuse() {
+        Ok(t) => t,
+        Err(refusal) => {
+            tracing::error!(
+                component = "fed_client",
+                ?refusal,
+                "Federation requires mTLS; client will not start"
+            );
+            crate::core::common::observe::system_metrics::mark_system_error(
+                crate::core::common::observe::system_metrics::components::FED_SYNC_CLIENT,
+                refusal_reason(refusal),
+            );
+            return;
+        }
+    };
+
     // Startup self-check: our own client cert's SPIFFE URI SAN path must match
-    // our configured cluster/name. Federation is auxiliary to the data plane,
-    // so on mismatch we DEGRADE (log + metric + do not federate), never crash.
-    if let Some(tls_cfg) = config.security.resolve_active_tls() {
-        if !tls_cfg.skip_tls {
-            match std::fs::read(tls_cfg.cert_path()) {
-                Ok(pem_bytes) => {
-                    let ok = first_cert_der_from_pem(&pem_bytes)
-                        .and_then(|d| crate::core::common::fed_sync::spiffe::extract_single_spiffe_uri(&d).ok())
-                        .and_then(|u| crate::core::common::fed_sync::spiffe::parse_controller_spiffe(&u))
-                        .map(|p| crate::core::common::fed_sync::spiffe::path_matches(&p, &config.cluster, &config.name))
-                        .unwrap_or(false);
-                    if !ok {
-                        tracing::error!(
-                            component = "fed_client",
-                            cluster = %config.cluster,
-                            name = %config.name,
-                            "Client cert SPIFFE SAN does not match cluster/name; federation client will not start"
-                        );
-                        crate::core::common::observe::system_metrics::mark_system_error(
-                            crate::core::common::observe::system_metrics::components::FED_SYNC_CLIENT,
-                            crate::core::common::observe::system_metrics::reasons::PEER_IDENTITY_SELF_CHECK,
-                        );
-                        return;
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(
-                        component = "fed_client",
-                        error = %e,
-                        "Cannot read client cert for self-check; federation client will not start"
-                    );
-                    crate::core::common::observe::system_metrics::mark_system_error(
-                        crate::core::common::observe::system_metrics::components::FED_SYNC_CLIENT,
-                        crate::core::common::observe::system_metrics::reasons::PEER_IDENTITY_SELF_CHECK,
-                    );
-                    return;
-                }
+    // our configured cluster/name. mTLS is guaranteed here (gate above), so this
+    // always runs. On mismatch DEGRADE (log + metric + do not federate).
+    match std::fs::read(tls_cfg.cert_path()) {
+        Ok(pem_bytes) => {
+            let ok = first_cert_der_from_pem(&pem_bytes)
+                .and_then(|d| crate::core::common::fed_sync::spiffe::extract_single_spiffe_uri(&d).ok())
+                .and_then(|u| crate::core::common::fed_sync::spiffe::parse_controller_spiffe(&u))
+                .map(|p| crate::core::common::fed_sync::spiffe::path_matches(&p, &config.cluster, &config.name))
+                .unwrap_or(false);
+            if !ok {
+                tracing::error!(
+                    component = "fed_client",
+                    cluster = %config.cluster,
+                    name = %config.name,
+                    "Client cert SPIFFE SAN does not match cluster/name; federation client will not start"
+                );
+                crate::core::common::observe::system_metrics::mark_system_error(
+                    crate::core::common::observe::system_metrics::components::FED_SYNC_CLIENT,
+                    crate::core::common::observe::system_metrics::reasons::PEER_IDENTITY_SELF_CHECK,
+                );
+                return;
             }
+        }
+        Err(e) => {
+            tracing::error!(
+                component = "fed_client",
+                error = %e,
+                "Cannot read client cert for self-check; federation client will not start"
+            );
+            crate::core::common::observe::system_metrics::mark_system_error(
+                crate::core::common::observe::system_metrics::components::FED_SYNC_CLIENT,
+                crate::core::common::observe::system_metrics::reasons::PEER_IDENTITY_SELF_CHECK,
+            );
+            return;
         }
     }
 
@@ -207,41 +232,24 @@ async fn connect_and_run(
     admin_router: axum::Router,
     conf_mgr: Arc<ConfMgr>,
 ) -> Result<()> {
-    let tls = config.security.resolve_active_tls();
-    let use_tls = tls.is_some_and(|t| !t.skip_tls);
+    // run()'s resolve_mtls_or_refuse gate guarantees mTLS before we get here.
+    let tls_cfg = config
+        .security
+        .resolve_mtls_or_refuse()
+        .expect("run() gate guarantees mTLS before connect_and_run");
 
-    // Strip existing scheme and re-add based on TLS setting
+    // Strip any scheme; federation is always https.
     let addr = config
         .address
         .trim_start_matches("https://")
         .trim_start_matches("http://");
-    let uri = if use_tls {
-        format!("https://{}", addr)
-    } else {
-        format!("http://{}", addr)
-    };
+    let uri = format!("https://{}", addr);
 
     let endpoint = Channel::from_shared(uri)?;
-    let endpoint = if let Some(tls_cfg) = tls {
-        if tls_cfg.skip_tls {
-            tracing::error!(
-                component = "fed_client",
-                "security skip_tls=true: connecting WITHOUT TLS. INSECURE, emergency use only!"
-            );
-            crate::core::common::observe::system_metrics::mark_system_error(
-                crate::core::common::observe::system_metrics::components::FED_SYNC_CLIENT,
-                crate::core::common::observe::system_metrics::reasons::SKIP_TLS,
-            );
-            endpoint
-        } else {
-            let client_tls = crate::core::common::grpc_tls::load_client_tls(tls_cfg).await?;
-            endpoint
-                .tls_config(client_tls)
-                .map_err(|e| anyhow::anyhow!("Failed to configure federation client TLS: {}", e))?
-        }
-    } else {
-        endpoint
-    };
+    let client_tls = crate::core::common::grpc_tls::load_client_tls(tls_cfg).await?;
+    let endpoint = endpoint
+        .tls_config(client_tls)
+        .map_err(|e| anyhow::anyhow!("Failed to configure federation client TLS: {}", e))?;
 
     // Cap TCP connection establishment; without this the OS default (~75-130 s on Linux)
     // blocks the reconnect loop on NAT black-holes. Mirrors conf_sync grpc_client.rs.
@@ -752,5 +760,43 @@ mod tests {
         let p = parse_controller_spiffe("spiffe://td/controllers/prod/ctrl-1").unwrap();
         assert!(path_matches(&p, "prod", "ctrl-1"));
         assert!(!path_matches(&p, "prod", "other"));
+    }
+
+    #[test]
+    fn federation_requires_mtls_channel() {
+        use crate::core::common::config::{ConfSyncSecurityConfig, ConfSyncTlsConfig, MtlsRefusal};
+        use crate::core::common::observe::system_metrics::reasons;
+
+        // No TLS block -> NoTls -> reason no_tls_configured
+        let none = ConfSyncSecurityConfig::default();
+        assert_eq!(none.resolve_mtls_or_refuse().unwrap_err(), MtlsRefusal::NoTls);
+        assert_eq!(refusal_reason(MtlsRefusal::NoTls), reasons::NO_TLS_CONFIGURED);
+
+        // skip_tls -> SkipTls -> reason skip_tls
+        let skip = ConfSyncSecurityConfig {
+            tls: Some(ConfSyncTlsConfig {
+                name: None,
+                cert: "c".into(),
+                key: "k".into(),
+                ca: "a".into(),
+                skip_tls: true,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(skip.resolve_mtls_or_refuse().unwrap_err(), MtlsRefusal::SkipTls);
+        assert_eq!(refusal_reason(MtlsRefusal::SkipTls), reasons::SKIP_TLS);
+
+        // Real mTLS -> Ok (gate passes; client proceeds to self-check)
+        let mtls = ConfSyncSecurityConfig {
+            tls: Some(ConfSyncTlsConfig {
+                name: None,
+                cert: "c".into(),
+                key: "k".into(),
+                ca: "a".into(),
+                skip_tls: false,
+            }),
+            ..Default::default()
+        };
+        assert!(mtls.resolve_mtls_or_refuse().is_ok());
     }
 }

@@ -398,6 +398,21 @@ impl ConfSyncSecurityConfig {
         self.tls.as_ref()
     }
 
+    /// Federation requires real mTLS. Returns the active cert set only when one
+    /// is configured AND `skip_tls` is not set; otherwise refuses with a reason.
+    /// Plaintext is never representable through this path.
+    ///
+    /// Precondition: assumes `validate()` has already passed — it does NOT
+    /// re-check cert path emptiness. conf_sync does NOT use this; it keeps
+    /// `resolve_active_tls()` + `skip_tls`.
+    pub fn resolve_mtls_or_refuse(&self) -> Result<&ConfSyncTlsConfig, MtlsRefusal> {
+        match self.resolve_active_tls() {
+            None => Err(MtlsRefusal::NoTls),
+            Some(t) if t.skip_tls => Err(MtlsRefusal::SkipTls),
+            Some(t) => Ok(t),
+        }
+    }
+
     /// Validate configuration at startup.
     ///
     /// Returns error for:
@@ -500,6 +515,15 @@ impl ConfSyncTlsConfig {
     pub fn ca_path(&self) -> PathBuf {
         Self::resolve_path(&self.ca)
     }
+}
+
+/// Why a federation channel refused the configured security.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MtlsRefusal {
+    /// resolve_active_tls() == None — no TLS block configured.
+    NoTls,
+    /// The active cert set has skip_tls = true.
+    SkipTls,
 }
 
 // Default values
@@ -1103,6 +1127,44 @@ metrics:
                 }
             }
         }
+    }
+
+    // ── Group G: resolve_mtls_or_refuse ─────────────────────────────────────
+
+    #[test]
+    fn resolve_mtls_or_refuse_no_tls() {
+        let sec = ConfSyncSecurityConfig::default();
+        assert_eq!(sec.resolve_mtls_or_refuse().unwrap_err(), MtlsRefusal::NoTls);
+    }
+
+    #[test]
+    fn resolve_mtls_or_refuse_skip_tls() {
+        let sec = ConfSyncSecurityConfig {
+            tls: Some(ConfSyncTlsConfig {
+                name: None,
+                cert: "c".into(),
+                key: "k".into(),
+                ca: "a".into(),
+                skip_tls: true,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(sec.resolve_mtls_or_refuse().unwrap_err(), MtlsRefusal::SkipTls);
+    }
+
+    #[test]
+    fn resolve_mtls_or_refuse_ok_for_mtls() {
+        let sec = ConfSyncSecurityConfig {
+            tls: Some(ConfSyncTlsConfig {
+                name: None,
+                cert: "c".into(),
+                key: "k".into(),
+                ca: "a".into(),
+                skip_tls: false,
+            }),
+            ..Default::default()
+        };
+        assert!(sec.resolve_mtls_or_refuse().is_ok());
     }
 
     // ── Group F: hard_cap validation (3 → 1 table-driven) ───────────────────

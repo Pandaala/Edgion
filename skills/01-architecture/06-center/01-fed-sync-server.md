@@ -137,20 +137,21 @@ Full design: `docs/superpowers/specs/2026-05-20-center-fed-peer-auth-design.md`.
 
 ### Transport fail-close rules
 
-The Center federation gRPC server enforces the following transport rules at startup:
+Federation is **mTLS-only**. There is no plaintext opt-out on either end.
+The Center federation gRPC server enforces the following rules at startup:
 
-| Transport state | `allow_plaintext` | Outcome |
-|-----------------|-------------------|---------|
-| No TLS configured | `false` (default) | Server **refuses to start** |
-| No TLS configured | `true` | Plaintext allowed; `edgion_system_error_state{component=fed_sync_server, reason=plaintext_default}` is set |
-| mTLS configured, `peer_identity.trust_domain` missing | — | Server **refuses to start** |
-| Config file present but fails to parse | — | Server **refuses to start** (no silent default fallback) |
-| mTLS configured, `peer_identity.trust_domain` present | — | Full SPIFFE URI-SAN verification active |
+| Transport state | Outcome |
+|-----------------|---------|
+| No TLS block configured | Server **refuses to start** (`run()` returns `Err` → process exits) |
+| TLS configured with `skip_tls=true` | Server **refuses to start** (`skip_tls` is refused on the federation path) |
+| mTLS configured, `peer_identity.trust_domain` missing | Server **refuses to start** |
+| Config file present but fails to parse | Server **refuses to start** (no silent default fallback) |
+| mTLS configured, `peer_identity.trust_domain` present | Full SPIFFE URI-SAN verification active |
 
-New `CenterConfig` fields:
+`CenterConfig` requires `peer_identity.trust_domain` under mTLS. The `allow_plaintext`
+field was removed — there is no plaintext escape hatch.
 
 ```yaml
-allow_plaintext: false           # default false; set true only for emergency plaintext
 peer_identity:
   trust_domain: "edgion.io"     # required when mTLS is active
 ```
@@ -184,9 +185,18 @@ On startup the Controller reads its own mTLS client certificate and verifies tha
 
 ### Migration (breaking change)
 
-Existing **plaintext** federation deployments must take one of the following paths:
+Existing **plaintext** federation deployments must configure mTLS — there is no
+plaintext opt-out. The only supported path is:
 
-1. **Recommended**: configure mTLS + set `peer_identity.trust_domain`, and reissue client certificates to carry exactly one URI SAN of the form `spiffe://{trust_domain}/controllers/{cluster}/{name}`.
-2. **Emergency plaintext**: set `allow_plaintext: true` in the Center config to preserve plaintext connectivity; a degraded-state metric is emitted and an alert should be configured.
+1. Configure mTLS + set `peer_identity.trust_domain` in the Center config.
+2. Reissue Controller client certificates to carry exactly one URI SAN of the form
+   `spiffe://{trust_domain}/controllers/{cluster}/{name}`.
 
-See `docs/superpowers/specs/2026-05-20-center-fed-peer-auth-design.md` for the full migration guide and certificate issuance details.
+A Center without valid federation mTLS (or with `skip_tls=true`) refuses to start
+and the process exits non-zero. A Controller without valid federation mTLS degrades:
+it logs an error, sets `system_error_state{component=fed_sync_client,
+reason=no_tls_configured|skip_tls}`, and does not federate (the data plane keeps running).
+
+See `docs/superpowers/specs/2026-05-20-center-fed-peer-auth-design.md` and
+`docs/superpowers/specs/2026-05-20-fed-mtls-strict-enforce-design.md` for the full
+migration guide and certificate issuance details.
