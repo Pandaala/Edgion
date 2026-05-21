@@ -46,7 +46,7 @@ pub struct DslRuntime {
 
 ## SSRF protection
 
-`is_private_ip_host(host: &str) -> bool` in `builtins.rs`:
+`is_ssrf_blocked_ip_literal(host: &str) -> bool` in `builtins.rs`:
 
 1. Strips `%zone_id` suffix (IPv6 zone IDs).
 2. Strips `[` `]` brackets — reqwest's `url` crate returns IPv6 hosts as `[::1]`.

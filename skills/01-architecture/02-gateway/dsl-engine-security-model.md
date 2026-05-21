@@ -110,12 +110,12 @@ Defense in depth around regex evaluation:
 
 The validator-side rebuild at `validator.rs:114-125` is the key safeguard against **hand-crafted bytecode that ships a regex pattern the compiler would have rejected**: even if the controller's compiler is bypassed, the validator runs the same `RegexBuilder` with the same memory caps before the VM is constructed.
 
-## 7. SSRF guard — `is_private_ip_host`
+## 7. SSRF guard — `is_ssrf_blocked_ip_literal`
 
 `http.call` resolves the URL host and, when `httpBlockPrivateIps: true` is set on the plugin config, rejects:
 - IPv4 loopback, private (10/8, 172.16/12, 192.168/16), link-local (169.254/16), unspecified (0.0.0.0)
 - IPv6 loopback (`::1`), unique local (`fc00::/7`), link-local (`fe80::/10`), and `::ffff:`-mapped IPv4 forms of the above
-- Implementation: `builtins.rs:1317-1345` (`is_private_ip_host` + `is_private_v4`). Tests live alongside in `#[cfg(test)] mod ip_tests` at `builtins.rs:1349-1416`.
+- Implementation: `builtins.rs:1329-1357` (`is_ssrf_blocked_ip_literal` + `is_private_v4`). Tests live alongside in `#[cfg(test)] mod ip_tests` at `builtins.rs:1359-1430`.
 
 **Why is the default `false`?** Two reasons:
 1. Many real deployments call internal services (Redis admin APIs, sidecar `/healthz` endpoints) from DSL scripts. Defaulting to "block private" would break the common case.

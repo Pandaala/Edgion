@@ -863,7 +863,7 @@ impl Vm {
             let raw = parsed_url.host_str().unwrap_or("");
             // url crate serializes IPv6 hosts with brackets (e.g. "[::1]") — strip them
             let host = raw.trim_matches(|c: char| c == '[' || c == ']');
-            if is_private_ip_host(host) {
+            if is_ssrf_blocked_ip_literal(host) {
                 return Err(RuntimeError::ApiError {
                     function: "http.call".into(),
                     message: format!("http.call blocked: private/loopback IP not allowed: {}", host),
@@ -1322,10 +1322,11 @@ impl Vm {
     }
 }
 
-/// Returns true if `host` is a private, loopback, or link-local IP address literal.
-/// Hostnames are not resolved — returns false, relying on network-level egress controls.
-/// Also strips IPv6 zone IDs (e.g. `fe80::1%eth0`) before parsing.
-fn is_private_ip_host(host: &str) -> bool {
+/// Return true if `host` is an IP literal that must be blocked to prevent SSRF
+/// (loopback / link-local / RFC 1918 private / RFC 4193 ULA / unspecified).
+/// Hostnames are NOT resolved here — callers rely on network-level egress controls for those.
+/// IPv6 zone IDs are stripped per RFC 6874 before parsing.
+fn is_ssrf_blocked_ip_literal(host: &str) -> bool {
     use std::net::IpAddr;
     // Strip IPv6 zone IDs (RFC 6874: "::1%eth0")
     let host = host.split('%').next().unwrap_or(host);
@@ -1357,71 +1358,71 @@ fn is_private_v4(v4: std::net::Ipv4Addr) -> bool {
 
 #[cfg(test)]
 mod ip_tests {
-    use super::is_private_ip_host;
+    use super::is_ssrf_blocked_ip_literal;
 
     #[test]
     fn test_ipv4_private_ranges() {
-        assert!(is_private_ip_host("127.0.0.1"));
-        assert!(is_private_ip_host("10.0.0.1"));
-        assert!(is_private_ip_host("172.16.0.1"));
-        assert!(is_private_ip_host("172.31.255.255"));
-        assert!(is_private_ip_host("192.168.1.1"));
-        assert!(is_private_ip_host("169.254.1.1")); // link-local
-        assert!(is_private_ip_host("0.0.0.0")); // unspecified
+        assert!(is_ssrf_blocked_ip_literal("127.0.0.1"));
+        assert!(is_ssrf_blocked_ip_literal("10.0.0.1"));
+        assert!(is_ssrf_blocked_ip_literal("172.16.0.1"));
+        assert!(is_ssrf_blocked_ip_literal("172.31.255.255"));
+        assert!(is_ssrf_blocked_ip_literal("192.168.1.1"));
+        assert!(is_ssrf_blocked_ip_literal("169.254.1.1")); // link-local
+        assert!(is_ssrf_blocked_ip_literal("0.0.0.0")); // unspecified
     }
 
     #[test]
     fn test_ipv4_public() {
-        assert!(!is_private_ip_host("8.8.8.8"));
-        assert!(!is_private_ip_host("1.1.1.1"));
-        assert!(!is_private_ip_host("203.0.113.1"));
+        assert!(!is_ssrf_blocked_ip_literal("8.8.8.8"));
+        assert!(!is_ssrf_blocked_ip_literal("1.1.1.1"));
+        assert!(!is_ssrf_blocked_ip_literal("203.0.113.1"));
     }
 
     #[test]
     fn test_ipv6_private() {
-        assert!(is_private_ip_host("::1")); // loopback
-        assert!(is_private_ip_host("fc00::1")); // unique local
-        assert!(is_private_ip_host("fd12:3456::1")); // unique local
-        assert!(is_private_ip_host("fe80::1")); // link-local
+        assert!(is_ssrf_blocked_ip_literal("::1")); // loopback
+        assert!(is_ssrf_blocked_ip_literal("fc00::1")); // unique local
+        assert!(is_ssrf_blocked_ip_literal("fd12:3456::1")); // unique local
+        assert!(is_ssrf_blocked_ip_literal("fe80::1")); // link-local
     }
 
     #[test]
     fn test_ipv4_mapped_ipv6() {
-        assert!(is_private_ip_host("::ffff:192.168.1.1"));
-        assert!(is_private_ip_host("::ffff:127.0.0.1"));
-        assert!(is_private_ip_host("::ffff:10.0.0.1"));
-        assert!(!is_private_ip_host("::ffff:8.8.8.8")); // public
+        assert!(is_ssrf_blocked_ip_literal("::ffff:192.168.1.1"));
+        assert!(is_ssrf_blocked_ip_literal("::ffff:127.0.0.1"));
+        assert!(is_ssrf_blocked_ip_literal("::ffff:10.0.0.1"));
+        assert!(!is_ssrf_blocked_ip_literal("::ffff:8.8.8.8")); // public
     }
 
     #[test]
     fn test_ipv6_zone_id_stripped() {
-        assert!(is_private_ip_host("fe80::1%eth0")); // link-local with zone ID
-        assert!(is_private_ip_host("::1%lo")); // loopback with zone ID
+        assert!(is_ssrf_blocked_ip_literal("fe80::1%eth0")); // link-local with zone ID
+        assert!(is_ssrf_blocked_ip_literal("::1%lo")); // loopback with zone ID
     }
 
     #[test]
     fn test_ipv6_public() {
-        assert!(!is_private_ip_host("2001:db8::1"));
-        assert!(!is_private_ip_host("2606:4700::1111"));
+        assert!(!is_ssrf_blocked_ip_literal("2001:db8::1"));
+        assert!(!is_ssrf_blocked_ip_literal("2606:4700::1111"));
     }
 
     #[test]
     fn test_hostnames_not_blocked() {
         // Hostnames are not resolved — always returns false
-        assert!(!is_private_ip_host("localhost"));
-        assert!(!is_private_ip_host("example.com"));
-        assert!(!is_private_ip_host("internal.corp"));
+        assert!(!is_ssrf_blocked_ip_literal("localhost"));
+        assert!(!is_ssrf_blocked_ip_literal("example.com"));
+        assert!(!is_ssrf_blocked_ip_literal("internal.corp"));
     }
 
     #[test]
     fn test_reqwest_url_host_str_brackets_stripped() {
         // url crate returns "[::ffff:c0a8:101]" (with brackets) for IPv6 hosts;
-        // the call site strips brackets before calling is_private_ip_host.
+        // the call site strips brackets before calling is_ssrf_blocked_ip_literal.
         let url = reqwest::Url::parse("http://[::ffff:192.168.1.1]:80").unwrap();
         let raw = url.host_str().unwrap_or("");
         let host = raw.trim_matches(|c: char| c == '[' || c == ']');
         assert!(
-            is_private_ip_host(host),
+            is_ssrf_blocked_ip_literal(host),
             "IPv4-mapped IPv6 not detected as private: {:?}",
             host
         );
