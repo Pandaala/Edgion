@@ -5,8 +5,8 @@
 //! # gRPC handling
 //!
 //! All public `end_response_*` functions are gRPC-aware. When `ctx.request_info.is_grpc_request`
-//! is true, they delegate to [`send_grpc_trailers_only`] which converts the HTTP status code to
-//! the corresponding gRPC status code and writes a trailers-only response.
+//! is true, they delegate to [`send_grpc_error_three_frame`] which converts the HTTP status code to
+//! the corresponding gRPC status code and writes a three-frame gRPC error response.
 //!
 //! This means callers never need to check `is_grpc_request` themselves — the conversion is
 //! handled here automatically and uniformly.
@@ -35,17 +35,22 @@ async fn shutdown_after_error_response(session: &mut Session) {
     }
 }
 
-// ─── gRPC trailers-only response ─────────────────────────────────────────────
+// ─── gRPC error response (three-frame fallback) ──────────────────────────────
 
-/// Send a gRPC trailers-only error response, converting an HTTP status code to the
-/// corresponding gRPC status code.
+/// Send a gRPC error response using HEADERS + empty DATA + TRAILERS (3-frame fallback),
+/// converting an HTTP status code to the corresponding gRPC status code.
+///
+/// NOTE: a spec-compliant Trailers-Only response would be a single HEADERS+END_STREAM
+/// frame, but Pingora's current API cannot fold trailers into the response-header frame.
+/// See the gRPC over HTTP/2 spec § Responses for the canonical shape, and
+/// skills/04-review/rfc-divergence/h2-grpc-01-trailers-only-three-frame.md for why we diverge.
 ///
 /// This is the single dispatch point for all gRPC error responses from direct Session
 /// callers. All public `end_response_*` functions call this when `is_grpc_request` is true.
 ///
 /// HTTP → gRPC status mapping follows the gRPC over HTTP/2 spec and
 /// https://cloud.google.com/apis/design/errors#http_mapping.
-pub(crate) async fn send_grpc_trailers_only(
+pub(crate) async fn send_grpc_error_three_frame(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
@@ -135,7 +140,7 @@ pub async fn end_response_400(
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
     if ctx.request_info.is_grpc_request {
-        return send_grpc_trailers_only(session, ctx, server_header_opts, 400).await;
+        return send_grpc_error_three_frame(session, ctx, server_header_opts, 400).await;
     }
     if ctx.request_info.response_committed {
         return Ok(());
@@ -174,7 +179,7 @@ pub async fn end_response_421(
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
     if ctx.request_info.is_grpc_request {
-        return send_grpc_trailers_only(session, ctx, server_header_opts, 421).await;
+        return send_grpc_error_three_frame(session, ctx, server_header_opts, 421).await;
     }
     if ctx.request_info.response_committed {
         return Ok(());
@@ -212,7 +217,7 @@ pub async fn end_response_404(
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
     if ctx.request_info.is_grpc_request {
-        return send_grpc_trailers_only(session, ctx, server_header_opts, 404).await;
+        return send_grpc_error_three_frame(session, ctx, server_header_opts, 404).await;
     }
     if ctx.request_info.response_committed {
         return Ok(());
@@ -245,13 +250,13 @@ pub async fn end_response_404(
 /// Send gRPC UNAVAILABLE (status 14) error response for backend errors.
 ///
 /// Used when no healthy upstream is available for a gRPC request.
-/// Delegates to [`send_grpc_trailers_only`] with HTTP 503 (maps to grpc-status 14).
+/// Delegates to [`send_grpc_error_three_frame`] with HTTP 503 (maps to grpc-status 14).
 pub async fn end_response_grpc_unavailable(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
-    send_grpc_trailers_only(session, ctx, server_header_opts, 503).await
+    send_grpc_error_three_frame(session, ctx, server_header_opts, 503).await
 }
 
 /// Send gRPC UNIMPLEMENTED (status 12) error response.
@@ -263,7 +268,7 @@ pub async fn end_response_grpc_unimplemented(
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
-    send_grpc_trailers_only(session, ctx, server_header_opts, 501).await
+    send_grpc_error_three_frame(session, ctx, server_header_opts, 501).await
 }
 
 /// Send 500 Internal Server Error error response (nginx-style).
@@ -274,7 +279,7 @@ pub async fn end_response_500(
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
     if ctx.request_info.is_grpc_request {
-        return send_grpc_trailers_only(session, ctx, server_header_opts, 500).await;
+        return send_grpc_error_three_frame(session, ctx, server_header_opts, 500).await;
     }
     if ctx.request_info.response_committed {
         return Ok(());
@@ -313,7 +318,7 @@ pub async fn end_response_502(
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
     if ctx.request_info.is_grpc_request {
-        return send_grpc_trailers_only(session, ctx, server_header_opts, 502).await;
+        return send_grpc_error_three_frame(session, ctx, server_header_opts, 502).await;
     }
     if ctx.request_info.response_committed {
         return Ok(());
@@ -374,7 +379,7 @@ pub async fn end_response_503(
     server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<()> {
     if ctx.request_info.is_grpc_request {
-        return send_grpc_trailers_only(session, ctx, server_header_opts, 503).await;
+        return send_grpc_error_three_frame(session, ctx, server_header_opts, 503).await;
     }
     if ctx.request_info.response_committed {
         return Ok(());

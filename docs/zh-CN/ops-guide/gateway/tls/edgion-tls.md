@@ -280,6 +280,7 @@ spec:
 - `verifyDepth: 1` - 只验证直接签发（默认）
 - `verifyDepth: 2` - 支持一层中间 CA
 - `verifyDepth: 3` - 支持两层中间 CA
+- CA Secret 的 `ca.crt` 可以包含多张证书的 PEM bundle（根证书加一张或多张中间证书）；bundle 中的每一张证书都会被加入客户端信任库。
 
 ---
 

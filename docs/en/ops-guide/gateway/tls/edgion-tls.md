@@ -280,6 +280,7 @@ spec:
 - `verifyDepth: 1` - Verify direct issuance only (default)
 - `verifyDepth: 2` - Support one intermediate CA
 - `verifyDepth: 3` - Support two intermediate CAs
+- The CA secret's `ca.crt` may hold a multi-certificate PEM bundle (root plus one or more intermediates); every certificate in the bundle is loaded into the client trust store.
 
 ---
 

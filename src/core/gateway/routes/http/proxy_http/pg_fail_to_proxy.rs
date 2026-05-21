@@ -1,5 +1,5 @@
 use super::EdgionHttpProxy;
-use crate::core::gateway::send_grpc_trailers_only;
+use crate::core::gateway::send_grpc_error_three_frame;
 use crate::types::EdgionHttpContext;
 use pingora_core::{ConnectionClosed, Error, ErrorSource, ErrorType, HTTPStatus, ReadError, WriteError};
 use pingora_proxy::{FailToProxy, Session};
@@ -44,9 +44,9 @@ pub async fn fail_to_proxy(
     if code > 0 && code != 499 && !ctx.request_info.response_committed {
         if ctx.request_info.is_grpc_request {
             // Send proper gRPC error with correct status mapping instead of an HTML error page.
-            // send_grpc_trailers_only uses http_to_grpc_status internally
+            // send_grpc_error_three_frame uses http_to_grpc_status internally
             // (e.g. 502->Internal, 504->DeadlineExceeded, 500->Internal).
-            let _ = send_grpc_trailers_only(session, ctx, &edgion_http.server_header_opts, code).await;
+            let _ = send_grpc_error_three_frame(session, ctx, &edgion_http.server_header_opts, code).await;
         } else {
             let mut resp = pingora_core::protocols::http::ServerSession::generate_error(code);
             edgion_http.server_header_opts.apply_to_response(&mut resp);

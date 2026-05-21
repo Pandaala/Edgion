@@ -23,7 +23,8 @@
 // - examples/test/certs/mtls/invalid-client.key        # invalid client private key
 // - examples/test/certs/mtls/nonmatching-client.crt    # SAN matchclient certificate
 // - examples/test/certs/mtls/nonmatching-client.key    # SAN mismatched client private key
-// - examples/test/certs/mtls/chain-client-bundle.crt   # client certificate with chain
+// - examples/test/certs/mtls/chain-client-bundle.crt   # client certificate with chain (leaf + intermediate)
+// - examples/test/certs/mtls/chain-client.crt          # leaf-only client certificate (intermediate-signed)
 // - examples/test/certs/mtls/chain-client.key          # certificate chain client private key
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -550,6 +551,61 @@ impl MtlsTestSuite {
             },
         )
     }
+
+    // Test 8b (tls-06 regression): the intermediate CA lives ONLY inside the
+    // `ca-chain` CA bundle Secret (root + intermediate). The client presents a
+    // leaf cert signed by the intermediate but does NOT present the intermediate
+    // itself, so the gateway can only build the path if it loaded every PEM
+    // block of the bundle into its trust store. Before the fix, the CA bundle
+    // loaded only the first block (root), the intermediate was dropped, and this
+    // handshake failed with "unable to get local issuer certificate".
+    fn test_cert_chain_intermediate_in_ca_store() -> TestCase {
+        TestCase::new(
+            "mtls_cert_chain_intermediate_in_ca_store",
+            "CA bundle multi-PEM: leaf-only client, intermediate loaded from ca.crt bundle（should succeed）",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    // Leaf-only client cert (signed by the intermediate). The
+                    // intermediate is intentionally NOT bundled with the client
+                    // identity — it must come from the gateway's ca-chain Secret.
+                    let cert_path = "examples/test/certs/mtls/chain-client.crt";
+                    let key_path = "examples/test/certs/mtls/chain-client.key";
+                    let hostname = "mtls-chain.example.com";
+
+                    let client =
+                        match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
+                            }
+                        };
+
+                    let url = format!("https://{}:{}/health", hostname, ctx.https_port);
+                    let request = client.get(&url).header("Host", hostname);
+
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status();
+                            if status.is_success() {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Status: {}, intermediate loaded from CA bundle", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Handshake failed — intermediate not loaded from the multi-PEM CA bundle? {}", e),
+                        ),
+                    }
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -567,6 +623,7 @@ impl TestSuite for MtlsTestSuite {
             Self::test_optional_with_cert(),
             Self::test_optional_without_cert(),
             Self::test_cert_chain_depth(),
+            Self::test_cert_chain_intermediate_in_ca_store(), // tls-06: intermediate from CA bundle
             // Terminate mode (TLS termination only, no client cert verification)
             Self::test_terminate_without_cert(),
             Self::test_terminate_with_cert(),

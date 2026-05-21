@@ -15,7 +15,7 @@ pub mod services;
 pub mod tls;
 
 pub use cli::EdgionGatewayCli;
-pub(crate) use runtime::send_grpc_trailers_only;
+pub(crate) use runtime::send_grpc_error_three_frame;
 pub use runtime::{
     end_response_400, end_response_404, end_response_421, end_response_500, end_response_502, end_response_503,
     end_response_grpc_unavailable, end_response_grpc_unimplemented, terminate_with_fallback,

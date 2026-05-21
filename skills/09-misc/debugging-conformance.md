@@ -124,7 +124,7 @@ Includes: Pods + GatewayClass + conditions of all routes + recent gateway/contro
 
 | Root cause | How to confirm | Log keywords |
 |------------|----------------|--------------|
-| Hostname mismatch but the gateway closes the stream directly without sending trailers | access log: status=200 but grpc_status=13; gateway log: no unimplemented-related output | `send_grpc_trailers_only` |
+| Hostname mismatch but the gateway closes the stream directly without sending trailers | access log: status=200 but grpc_status=13; gateway log: no unimplemented-related output | `send_grpc_error_three_frame` |
 | The route is not registered at all | Look at `route-status grpc` Accepted state | `No matching GRPCRoute` |
 | Upstream H2C connection failure | The `upstreams` field of the access log contains errors | `h2c\|h2 upstream\|connect error` |
 

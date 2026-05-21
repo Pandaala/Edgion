@@ -414,7 +414,7 @@ async fn build_request_metadata(
     // gRPC traffic must take the same guard: without it an empty `:authority`
     // would land on the first catch-all GRPCRoute and bypass per-hostname
     // tenant isolation. `end_response_400` already routes gRPC requests to
-    // `grpc-status 3` (INVALID_ARGUMENT) trailers via `send_grpc_trailers_only`.
+    // `grpc-status 3` (INVALID_ARGUMENT) trailers via `send_grpc_error_three_frame`.
     if ctx.request_info.hostname.is_empty() {
         ctx.add_error(EdgionStatus::HostMissing);
         end_response_400(session, ctx, &edgion_http.server_header_opts).await?;

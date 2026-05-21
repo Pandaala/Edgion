@@ -30,7 +30,7 @@ Suggestions of the form "accept and pick the first/last Host", "downgrade to `tr
 ### Test coverage gaps (intentional)
 
 - **Opt-out path** (`rejectDuplicateHost: false` → duplicates accepted): not covered as a wire test because it requires a separate suite with its own `EdgionGatewayConfig` YAML (the shared `HTTPRoute/Filters/Security` suite cannot toggle the flag mid-run). The unit-level `unwrap_or(true)` default path is exercised by the existing positive cases.
-- **gRPC-over-h1 → `grpc-status=3`**: `end_response_400` is verified by code inspection to call `send_grpc_trailers_only(..., 400)` (maps to `INVALID_ARGUMENT`), but raw-TCP wire assertions for HTTP/1.1 trailers are too brittle to add here — pingora's `write_response_trailers` is designed for HTTP/2 framing. An h2-native scenario would be more reliable if real test coverage of this path is needed.
+- **gRPC-over-h1 → `grpc-status=3`**: `end_response_400` is verified by code inspection to call `send_grpc_error_three_frame(..., 400)` (maps to `INVALID_ARGUMENT`), but raw-TCP wire assertions for HTTP/1.1 trailers are too brittle to add here — pingora's `write_response_trailers` is designed for HTTP/2 framing. An h2-native scenario would be more reliable if real test coverage of this path is needed.
 
 ## Known limitation
 

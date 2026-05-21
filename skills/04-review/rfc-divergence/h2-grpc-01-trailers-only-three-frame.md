@@ -35,7 +35,7 @@ Frame 3 — HEADERS (END_STREAM=1): grpc-status: N, grpc-message: "..."
 
 ## Code shape today
 
-- `src/core/gateway/runtime/server/error_response.rs:47` — `send_grpc_trailers_only`:
+- `src/core/gateway/runtime/server/error_response.rs:53` — `send_grpc_error_three_frame`:
   all public `end_response_*` functions delegate here for gRPC requests (8 call sites:
   400, 421, 404, 501, 503, 500, 502, 503).
 - `src/core/gateway/plugins/runtime/session_adapter.rs:179` — `send_grpc_error_three_frame`:
@@ -43,7 +43,7 @@ Frame 3 — HEADERS (END_STREAM=1): grpc-status: N, grpc-message: "..."
 - `src/core/gateway/plugins/runtime/session_adapter.rs:68` — `send_grpc_error_direct`:
   plugin-facing public API, same three-frame shape.
 - `src/core/gateway/routes/http/proxy_http/pg_fail_to_proxy.rs:49` — external call site
-  that delegates to `send_grpc_trailers_only` with an error code derived from Pingora's
+  that delegates to `send_grpc_error_three_frame` with an error code derived from Pingora's
   error-type matching (proxy/upstream failure path).
 - All three locations carry inline comments documenting the Pingora constraint.
 
@@ -93,7 +93,8 @@ integration test to add).
 
 - Verifier: `tasks/todo/rfc-review/_raw/verification-a2.md → V1` (CONFIRM)
 - Closure: [CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md) → h2-grpc-01
-- Related naming: `rfc-naming-h2-grpc-01-send-grpc-trailers-only-rename.md` (still pending
-  — renames the function away from the spec term as a workaround signal)
+- Related naming: naming-h2-grpc-01 (✅ closed 2026-05-21) — renamed the function
+  `send_grpc_trailers_only` → `send_grpc_error_three_frame` to signal the workaround at
+  call sites; the spec term is reserved for the future single-frame implementation.
 - Pingora source (main): `pingora-proxy/src/lib.rs::Session::write_response_header`,
   `pingora-core/src/protocols/http/v2/server.rs::write_response_header` + `write_trailers`
