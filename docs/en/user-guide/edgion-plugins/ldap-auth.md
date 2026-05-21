@@ -147,6 +147,8 @@ When allowing anonymous access, the following headers are injected:
 - Set a reasonable `cacheTtl` (e.g., 60–300 seconds) to balance performance and credential revocation latency
 - Enable account lockout and brute-force protection policies on the LDAP server
 
+> **Accepted tradeoff — cache-hit timing.** A cached credential returns faster than an uncached one (which performs a full LDAP bind). This timing difference only reveals *cache state* (whether an exact `(username, password)` pair was authenticated recently); credential validity is already conveyed by the `200`/`401` status, and triggering a cache hit requires already knowing the full valid credential. No response jitter is added — it would penalize every legitimate authenticated request. Operators who must hide cache membership can set `cacheTtl: 0` to disable caching, and can stack the `RateLimit` plugin to throttle probing.
+
 ## Related Documentation
 
 - [BasicAuth Plugin](../http-route/filters/edgion-plugins/basic-auth.md) - Basic username/password authentication
