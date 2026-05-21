@@ -71,13 +71,13 @@ impl HealthCheckManager {
     }
 
     fn upsert_task(&self, service_key: String, config: ActiveHealthCheckConfig) {
-        self.cancel_task(&service_key);
-
         let Ok(runtime_handle) = tokio::runtime::Handle::try_current() else {
             tracing::warn!(
                 service = %service_key,
                 "No active Tokio runtime, skip starting health check task"
             );
+            // No new task to spawn, but still drop any existing one for this key.
+            self.cancel_task(&service_key);
             return;
         };
 
@@ -87,7 +87,16 @@ impl HealthCheckManager {
             health_check_loop(task_service_key, config, health_store).await;
         });
 
-        self.tasks.write().insert(service_key, handle);
+        // Atomically swap the per-service handle: the single write-locked insert
+        // is the linearization point, and the displaced handle (if any) is always
+        // aborted. This prevents concurrent reconcile_service calls for the same
+        // key (Service vs EndpointSlice handlers run on independent tasks) from
+        // overwriting a freshly spawned handle without aborting it, which would
+        // leak the orphaned health-check task.
+        let previous = self.tasks.write().insert(service_key, handle);
+        if let Some(old) = previous {
+            old.abort();
+        }
     }
 
     fn remove_task(&self, service_key: &str) {

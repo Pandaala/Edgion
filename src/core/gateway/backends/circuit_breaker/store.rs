@@ -56,37 +56,38 @@ impl CircuitBreakerStore {
 
     pub fn set_service_config(&self, service_key: &str, config: Option<CircuitBreakerConfig>) {
         match config {
-            Some(cfg) => {
-                if let Some(existing) = self.services.get(service_key) {
-                    let existing_cfg = &existing.config;
-                    if existing_cfg.consecutive_errors != cfg.consecutive_errors
+            // Use a single DashMap `entry` so the check-and-swap runs under one shard write
+            // lock. This makes the config update atomic: there is no window where the key is
+            // absent (the old `get`+`remove`+`insert` form briefly removed the entry, which
+            // let concurrent data-plane readers bypass the breaker), and concurrent writers
+            // for the same key cannot lose an update — the last writer holding the lock wins.
+            Some(cfg) => match self.services.entry(service_key.to_string()) {
+                dashmap::mapref::entry::Entry::Occupied(mut occ) => {
+                    let existing_cfg = &occ.get().config;
+                    let changed = existing_cfg.consecutive_errors != cfg.consecutive_errors
                         || existing_cfg.ejection_seconds != cfg.ejection_seconds
-                        || existing_cfg.max_ejection_percent != cfg.max_ejection_percent
-                    {
-                        drop(existing);
-                        if let Some((_, old_svc)) = self.services.remove(service_key) {
-                            Self::drain_ejected_gauge(service_key, &old_svc);
-                        }
-                        self.services.insert(
-                            service_key.to_string(),
-                            Arc::new(ServiceCbState {
-                                config: cfg,
-                                endpoints: DashMap::new(),
-                                eject_lock: std::sync::Mutex::new(()),
-                            }),
-                        );
-                    }
-                } else {
-                    self.services.insert(
-                        service_key.to_string(),
-                        Arc::new(ServiceCbState {
+                        || existing_cfg.max_ejection_percent != cfg.max_ejection_percent;
+                    if changed {
+                        // `insert` swaps in the new state and returns the displaced one. Drop
+                        // the entry guard first so the gauge drain (which never touches
+                        // `self.services`) runs outside the held shard lock.
+                        let old_svc = occ.insert(Arc::new(ServiceCbState {
                             config: cfg,
                             endpoints: DashMap::new(),
                             eject_lock: std::sync::Mutex::new(()),
-                        }),
-                    );
+                        }));
+                        drop(occ);
+                        Self::drain_ejected_gauge(service_key, &old_svc);
+                    }
                 }
-            }
+                dashmap::mapref::entry::Entry::Vacant(vac) => {
+                    vac.insert(Arc::new(ServiceCbState {
+                        config: cfg,
+                        endpoints: DashMap::new(),
+                        eject_lock: std::sync::Mutex::new(()),
+                    }));
+                }
+            },
             None => {
                 if let Some((_, old_svc)) = self.services.remove(service_key) {
                     Self::drain_ejected_gauge(service_key, &old_svc);
@@ -453,6 +454,55 @@ mod tests {
         // 50% cap is 1, and 1 backend is already ejected, so this must be rejected.
         store.record_failure("default/svc1", 222, 0);
         assert!(!store.is_ejected("default/svc1", 222));
+    }
+
+    #[test]
+    fn test_config_change_resets_state_unchanged_preserves() {
+        // Regression for backends-F004: the atomic entry() swap must preserve the original
+        // semantics — a *changed* config rebuilds the service (clearing ejection state),
+        // while an *unchanged* config is a no-op that keeps the existing ejection state.
+        let store = CircuitBreakerStore::new();
+        store.set_service_config("default/svc1", Some(make_config(1, 30, 0)));
+        store.record_failure("default/svc1", 111, 2);
+        assert!(store.is_ejected("default/svc1", 111));
+
+        // Re-applying the identical config must not wipe the ejection state.
+        store.set_service_config("default/svc1", Some(make_config(1, 30, 0)));
+        assert!(store.is_ejected("default/svc1", 111));
+
+        // Applying a different config rebuilds the service with empty endpoints.
+        store.set_service_config("default/svc1", Some(make_config(5, 30, 0)));
+        assert!(!store.is_ejected("default/svc1", 111));
+    }
+
+    #[test]
+    fn test_concurrent_config_update_no_panic_and_key_present() {
+        // Regression for backends-F004: concurrent set_service_config calls for the same key
+        // must never panic and must never leave the key absent (the old remove+insert form had
+        // a window where the entry was missing). After the storm one config must be installed.
+        use std::sync::{Arc, Barrier};
+
+        let store = Arc::new(CircuitBreakerStore::new());
+        store.set_service_config("default/svc1", Some(make_config(1, 30, 0)));
+
+        let barrier = Arc::new(Barrier::new(4));
+        let handles: Vec<_> = (0..4u32)
+            .map(|i| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    // Each writer applies a distinct config to force the changed-path swap.
+                    store.set_service_config("default/svc1", Some(make_config(i + 2, 30, 0)));
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert!(store.has_service("default/svc1"));
     }
 
     #[test]
