@@ -119,6 +119,11 @@ pub enum EdgionStatus {
     /// Backend TLS certificate SAN validation failed
     BackendTlsSanValidationFailed = 502_01,
 
+    /// Backend TLS CA bundle is missing, empty, or unparseable while
+    /// `use_system_ca == false`. Fail-closed: the gateway refuses to fall back
+    /// to the system trust store when the operator opted out of it.
+    BackendTlsCaInvalid = 502_03,
+
     /// Plugin returned `ErrTerminateRequest` without committing a response.
     /// Runtime applied a 502 fallback to ensure the client receives a response.
     /// Operators: grep the `errors` field in access logs to find plugins violating
@@ -207,6 +212,7 @@ mod tests {
             EdgionStatus::BackendUnsupportedKind => Some(500),
             EdgionStatus::StickyBackendUnhealthy => Some(500),
             EdgionStatus::BackendTlsSanValidationFailed => Some(502),
+            EdgionStatus::BackendTlsCaInvalid => Some(502),
             EdgionStatus::PluginTerminateWithoutResponse => Some(502),
             EdgionStatus::ForwardAuthServiceUnreachable => Some(503),
             EdgionStatus::RequestTimeoutExceeded => Some(504),
@@ -254,6 +260,7 @@ mod tests {
             EdgionStatus::BackendUnsupportedKind,
             EdgionStatus::StickyBackendUnhealthy,
             EdgionStatus::BackendTlsSanValidationFailed,
+            EdgionStatus::BackendTlsCaInvalid,
             EdgionStatus::PluginTerminateWithoutResponse,
             EdgionStatus::ForwardAuthServiceUnreachable,
             EdgionStatus::RequestTimeoutExceeded,

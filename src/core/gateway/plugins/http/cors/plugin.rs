@@ -44,26 +44,31 @@ impl Cors {
         session.header_value("origin").is_some() && session.header_value("access-control-request-method").is_some()
     }
 
-    /// Get the validated origin (returns Some(origin) if allowed, None if rejected)
+    /// Select the value to emit in the Access-Control-Allow-Origin header for an
+    /// already-allowed `origin`. Returns the literal `"*"` only when the configured
+    /// `allow_origins` is the standard wildcard `"*"`; in every other case
+    /// (force-wildcard `"**"`, single origin, list, or regex match) the request
+    /// origin is echoed back. Separated from the allow/deny decision so the value
+    /// choice can be unit-tested on its own.
+    fn select_acao_value(&self, origin: String) -> String {
+        if self.config.allow_origins == "*" {
+            "*".to_string()
+        } else {
+            origin
+        }
+    }
+
+    /// Get the validated origin (returns Some(value) if allowed, None if rejected).
+    /// Orchestrates the allow/deny check (`CorsConfig::is_origin_allowed`) and the
+    /// ACAO value selection ([`Cors::select_acao_value`]).
     fn get_validated_origin(&self, session: &mut dyn PluginSession) -> Option<String> {
         let origin = session.header_value("origin")?;
 
-        // Check if origin is allowed
         if !self.config.is_origin_allowed(&origin) {
             return None;
         }
 
-        // Determine what to return based on config
-        if self.config.allow_origins == "**" {
-            // Force wildcard: return the actual origin
-            Some(origin)
-        } else if self.config.allow_origins == "*" {
-            // Standard wildcard
-            Some("*".to_string())
-        } else {
-            // Specific origin or matched from list/regex
-            Some(origin)
-        }
+        Some(self.select_acao_value(origin))
     }
 
     /// Compute all CORS + timing + private-network headers as key-value pairs.
@@ -305,6 +310,38 @@ mod tests {
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.contains("origin match:deny"));
+    }
+
+    #[test]
+    fn test_select_acao_value_standard_wildcard_returns_star() {
+        let mut config = create_cors_config();
+        config.allow_origins = "*".to_string();
+        let cors = Cors::new(&config);
+
+        assert_eq!(cors.select_acao_value("https://any.example.com".to_string()), "*");
+    }
+
+    #[test]
+    fn test_select_acao_value_force_wildcard_echoes_origin() {
+        let mut config = create_cors_config();
+        config.allow_origins = "**".to_string();
+        let cors = Cors::new(&config);
+
+        assert_eq!(
+            cors.select_acao_value("https://any.example.com".to_string()),
+            "https://any.example.com"
+        );
+    }
+
+    #[test]
+    fn test_select_acao_value_specific_origin_echoes_origin() {
+        let config = create_cors_config();
+        let cors = Cors::new(&config);
+
+        assert_eq!(
+            cors.select_acao_value("https://example.com".to_string()),
+            "https://example.com"
+        );
     }
 
     #[tokio::test]

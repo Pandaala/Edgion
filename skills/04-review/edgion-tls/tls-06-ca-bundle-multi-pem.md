@@ -64,15 +64,15 @@ Integration test (`examples/code/client/suites/edgion_tls/mtls/mtls.rs`):
   distinct from the existing `chain-client-bundle.crt` which bundles the
   intermediate for the older `test_cert_chain_depth` case).
 
-## Out of scope (tracked separately)
+## Related (backend direction, also closed)
 
 The **backend / upstream** direction (`BackendTLSPolicy`, `build_ca_chain` in
-`backends/peer_builder.rs`) has the same single-block `X509::from_pem` pattern
-(plus a silent parse-error swallow). It is a distinct, lower-severity path —
-backend servers normally present their own intermediates, so a root-only trust
-anchor usually suffices. Tracked as **tls-08**
-(`tasks/todo/rfc-review/rfc-violation-tls-08-backend-ca-bundle-only-first-pem-block.md`);
-do not re-file it against tls-06.
+`backends/peer_builder.rs`) had the same single-block `X509::from_pem` pattern
+(plus a silent parse-error swallow + fail-open). It was a distinct, lower-severity
+path — backend servers normally present their own intermediates, so a root-only
+trust anchor usually suffices. Fixed separately as **tls-08**; see
+[tls-08-backend-ca-bundle-multi-pem.md](tls-08-backend-ca-bundle-multi-pem.md).
+Do not re-file backend CA bundle reports against tls-06.
 
 ## Re-evaluation triggers
 

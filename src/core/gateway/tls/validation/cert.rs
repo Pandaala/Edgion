@@ -165,6 +165,35 @@ pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
         );
     }
 
+    // `extend.revocationCheck` (RFC 5280 §6.3 CRL / RFC 6960 OCSP) and
+    // `extend.ocspStapling` are reserved schema with no runtime implementation: the
+    // gateway performs NO revocation lookups or OCSP stapling regardless of these
+    // settings. We deliberately keep the fields (reserved for a future release; do NOT
+    // hard-reject, which would take down a working TLS listener over a no-op field) but
+    // surface a config-time warning so a compliance-minded operator does not silently
+    // believe revocation is enforced. This runs on the config-load path (not the data
+    // plane), once per apply.
+    // See skills/04-review/rfc-divergence/tls-07-revocation-config-not-implemented.md
+    if let Some(extend) = &tls.spec.extend {
+        use crate::types::resources::edgion_tls::RevocationMode;
+        let revocation_requested = extend
+            .revocation_check
+            .as_ref()
+            .is_some_and(|rc| rc.mode != RevocationMode::Off);
+        let stapling_requested = extend.ocsp_stapling.as_ref().is_some_and(|s| s.enabled);
+        if revocation_requested || stapling_requested {
+            tracing::warn!(
+                component = "tls_validation",
+                name = tls.metadata.name.as_deref().unwrap_or_default(),
+                revocation_check = revocation_requested,
+                ocsp_stapling = stapling_requested,
+                "EdgionTls revocationCheck/ocspStapling is configured but NOT implemented; \
+                 the gateway performs no OCSP/CRL revocation checks or OCSP stapling \
+                 regardless of this setting (reserved schema; config still accepted)"
+            );
+        }
+    }
+
     if tls.spec.secret.is_none() {
         errors.push(CertValidationError::SecretNotFound);
         return CertValidationResult::invalid(errors);
@@ -1095,6 +1124,42 @@ mod tests {
         assert!(
             result.is_valid,
             "deprecated min_tls_version (TLS 1.0) must not be rejected, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_unimplemented_revocation_config_is_not_rejected() {
+        use crate::types::resources::edgion_tls::{
+            EdgionTlsExtend, OcspStaplingConfig, RevocationCheckConfig, RevocationMode,
+        };
+
+        // tls-07 divergence: revocationCheck/ocspStapling are reserved-but-unimplemented
+        // schema. Setting them must emit a config-time warn but must NOT invalidate the
+        // resource (hard-rejecting would take down a working TLS listener over a no-op
+        // field). This test guards the "do not hard-reject" decision.
+        let (cert_pem, key_pem) = make_cert_with_validity(-1, 365);
+        let mut tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
+        tls.spec.extend = Some(EdgionTlsExtend {
+            prefer_server_ciphers: false,
+            ocsp_stapling: Some(OcspStaplingConfig {
+                enabled: true,
+                refresh_interval_seconds: None,
+                fail_open: false,
+            }),
+            session_ticket: None,
+            session_cache: None,
+            revocation_check: Some(RevocationCheckConfig {
+                mode: RevocationMode::Ocsp,
+                fail_open: false,
+            }),
+            early_data: None,
+        });
+
+        let result = validate_cert(&tls);
+        assert!(
+            result.is_valid,
+            "unimplemented revocationCheck/ocspStapling must not be rejected, got: {:?}",
             result.errors
         );
     }

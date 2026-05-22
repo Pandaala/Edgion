@@ -104,30 +104,39 @@ fn build_client_cert_key_from_secret(
 }
 
 #[cfg(feature = "boringssl")]
-fn build_ca_chain(policy: &BackendTLSPolicy) -> Option<Arc<CaType>> {
+fn build_ca_chain(policy: &BackendTLSPolicy) -> Result<Option<Arc<CaType>>, EdgionStatus> {
+    let Some(secrets) = policy.spec.resolved_ca_certificates.as_ref() else {
+        return Ok(None);
+    };
     let mut ca_chain = Vec::new();
-    for secret in policy.spec.resolved_ca_certificates.as_ref()? {
+    for secret in secrets {
         let Some(data) = &secret.data else {
             continue;
         };
         let Some(ca_pem) = data.get(CA_CERT) else {
             continue;
         };
-        if let Ok(ca) = X509::from_pem(ca_pem.0.as_slice()) {
-            ca_chain.push(ca);
+        // `stack_from_pem` parses every block of a `root + intermediate` bundle
+        // (RFC 5280 §6.1 needs the full chain); `from_pem` would keep only the
+        // first. A present-but-unparseable/empty `ca.crt` is fail-closed instead
+        // of silently swallowed.
+        let certs = X509::stack_from_pem(ca_pem.0.as_slice()).map_err(|_| EdgionStatus::BackendTlsCaInvalid)?;
+        if certs.is_empty() {
+            return Err(EdgionStatus::BackendTlsCaInvalid);
         }
+        ca_chain.extend(certs);
     }
 
     if ca_chain.is_empty() {
-        None
+        Ok(None)
     } else {
-        Some(Arc::new(ca_chain.into_boxed_slice()))
+        Ok(Some(Arc::new(ca_chain.into_boxed_slice())))
     }
 }
 
 #[cfg(not(feature = "boringssl"))]
-fn build_ca_chain(_policy: &BackendTLSPolicy) -> Option<Arc<()>> {
-    None
+fn build_ca_chain(_policy: &BackendTLSPolicy) -> Result<Option<Arc<()>>, EdgionStatus> {
+    Ok(None)
 }
 
 pub(crate) fn create_tls_peer(
@@ -175,8 +184,11 @@ pub(crate) fn create_tls_peer(
 
     #[cfg(feature = "boringssl")]
     if !policy.spec.use_system_ca {
-        if let Some(ca_chain) = build_ca_chain(policy) {
-            peer.options.ca = Some(ca_chain);
+        // Operator opted out of the system trust store, so a missing/empty CA
+        // bundle must fail-closed rather than silently fall back to it.
+        match build_ca_chain(policy)? {
+            Some(ca_chain) => peer.options.ca = Some(ca_chain),
+            None => return Err(EdgionStatus::BackendTlsCaInvalid),
         }
     }
 

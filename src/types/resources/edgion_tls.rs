@@ -99,11 +99,18 @@ fn is_default_verify_depth(depth: &u8) -> bool {
     *depth == 1
 }
 
-/// OCSP stapling configuration (planned; data model reserved)
+/// OCSP stapling configuration.
+///
+/// NOT IMPLEMENTED (reserved schema): the gateway performs no OCSP stapling at
+/// the TLS handshake regardless of these values. Setting `enabled: true` has no
+/// runtime effect today; it is accepted (a config-time warning is logged) and
+/// reserved for a future release. See RFC 6960 (OCSP) and
+/// `skills/04-review/rfc-divergence/tls-07-revocation-config-not-implemented.md`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OcspStaplingConfig {
-    /// Enable OCSP stapling (no-op until handshake support is added)
+    /// Enable OCSP stapling. NOT IMPLEMENTED: no stapling occurs regardless of
+    /// this value (reserved for a future release).
     #[serde(default)]
     pub enabled: bool,
 
@@ -233,14 +240,24 @@ pub struct SessionCacheConfig {
     pub ttl_seconds: Option<u64>,
 }
 
-/// Revocation check configuration (reserved)
+/// Certificate revocation check configuration.
+///
+/// NOT IMPLEMENTED (reserved schema): the gateway performs NO certificate
+/// revocation checking regardless of `mode`. Setting `mode: ocsp` or `mode: crl`
+/// does NOT enable OCSP (RFC 6960) or CRL (RFC 5280 §6.3) lookups — revoked
+/// client/server certificates are still accepted. The field is accepted (a
+/// config-time warning is logged) and reserved for a future release; do not rely
+/// on it for a compliance revocation guarantee. See
+/// `skills/04-review/rfc-divergence/tls-07-revocation-config-not-implemented.md`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RevocationCheckConfig {
-    /// Mode: off / ocsp / crl (future extension)
+    /// Mode: off / ocsp / crl. NOT IMPLEMENTED: any non-`off` value is a no-op
+    /// today (reserved for a future release).
     #[serde(default)]
     pub mode: RevocationMode,
-    /// Fail open if revocation data unavailable/expired
+    /// Fail open if revocation data unavailable/expired (reserved; no effect
+    /// until revocation checking is implemented).
     #[serde(default)]
     pub fail_open: bool,
 }
