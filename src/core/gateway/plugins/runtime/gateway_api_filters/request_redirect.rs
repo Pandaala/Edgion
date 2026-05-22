@@ -34,11 +34,17 @@ impl RequestRedirectFilter {
     /// - HTTP  scheme default port is 80  → omit from Location
     /// - HTTPS scheme default port is 443 → omit from Location
     /// - Any other port is always included
+    ///
+    /// The original query string is preserved (appended as `?<query>` when
+    /// non-empty), matching `URLRewriteFilter::rewrite_path` and the route-level
+    /// HTTP→HTTPS redirect; the Gateway API redirect filter has no query modifier,
+    /// so the client's query must survive the redirect.
     fn build_location(
         &self,
         original_scheme: &str,
         original_host: Option<&str>,
         original_path: &str,
+        original_query: Option<&str>,
         matched_path_len: Option<usize>,
         listener_port: u16,
     ) -> String {
@@ -88,7 +94,12 @@ impl RequestRedirectFilter {
             original_path.to_string()
         };
 
-        format!("{}://{}{}{}", scheme, hostname, port_str, path)
+        let location = format!("{}://{}{}{}", scheme, hostname, port_str, path);
+
+        match original_query {
+            Some(q) if !q.is_empty() => format!("{}?{}", location, q),
+            _ => location,
+        }
     }
 }
 
@@ -109,6 +120,7 @@ impl RequestFilter for RequestRedirectFilter {
         // Get original request info for building Location
         let original_host = session.header_value("host");
         let original_path = session.get_path().to_string();
+        let original_query = session.get_query();
         let listener_port = session.ctx().request_info.listener_port;
 
         // Extract matched path length from route info
@@ -130,6 +142,7 @@ impl RequestFilter for RequestRedirectFilter {
             original_scheme,
             original_host.as_deref(),
             &original_path,
+            original_query.as_deref(),
             matched_path_len,
             listener_port,
         );
@@ -161,5 +174,53 @@ impl RequestFilter for RequestRedirectFilter {
         }
 
         PluginRunningResult::ErrTerminateRequest
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn filter(scheme: Option<&str>, port: Option<i32>) -> RequestRedirectFilter {
+        RequestRedirectFilter::new(HTTPRequestRedirectFilter {
+            scheme: scheme.map(|s| s.to_string()),
+            hostname: None,
+            path: None,
+            port,
+            status_code: None,
+        })
+    }
+
+    #[test]
+    fn build_location_preserves_query_string() {
+        let f = filter(Some("https"), None);
+        assert_eq!(
+            f.build_location("http", Some("example.com"), "/login", Some("returnTo=/dashboard"), None, 80),
+            "https://example.com/login?returnTo=/dashboard"
+        );
+    }
+
+    #[test]
+    fn build_location_without_query_has_no_question_mark() {
+        let f = filter(Some("https"), None);
+        // None query and empty query must both omit the '?'.
+        assert_eq!(
+            f.build_location("http", Some("example.com"), "/login", None, None, 80),
+            "https://example.com/login"
+        );
+        assert_eq!(
+            f.build_location("http", Some("example.com"), "/login", Some(""), None, 80),
+            "https://example.com/login"
+        );
+    }
+
+    #[test]
+    fn build_location_appends_query_after_non_default_port() {
+        let f = filter(None, Some(8443));
+        // Query is appended after the port segment, producing a valid authority + path + query.
+        assert_eq!(
+            f.build_location("https", Some("example.com"), "/search", Some("q=hello"), None, 443),
+            "https://example.com:8443/search?q=hello"
+        );
     }
 }

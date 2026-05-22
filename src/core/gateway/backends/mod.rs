@@ -31,6 +31,7 @@ pub use service_kind::EdgionService;
 pub use validation::validate_endpoint_in_route;
 
 use crate::core::common::utils::net::resolve_domain;
+use crate::core::gateway::runtime::ServerHeaderOpts;
 use crate::core::gateway::{end_response_500, end_response_503};
 use crate::types::edgion_status::EdgionStatus;
 use crate::types::{EdgionHttpContext, ParsedLBPolicy};
@@ -395,25 +396,28 @@ fn record_unsafe_upstream_attempt(ctx: &mut EdgionHttpContext, addr: &SocketAddr
 ///
 /// # Parameters
 /// - `is_grpc`: true if this is for gRPC backend, false for HTTP backend
+/// - `server_header_opts`: the listener's configured response headers; passed in so the
+///   error path reuses the listener's HSTS decision (stripped for non-TLS listeners)
+///   instead of a fresh `ServerHeaderOpts::default()` that always carries HSTS
 pub async fn get_peer(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
     is_grpc: bool,
+    server_header_opts: &ServerHeaderOpts,
 ) -> pingora_core::Result<Box<HttpPeer>> {
     match try_get_peer(ctx, session, is_grpc).await {
         Ok(peer) => Ok(peer),
         Err(status) => {
             ctx.add_error(status);
-            let server_header_opts = crate::core::gateway::runtime::server::server_header::ServerHeaderOpts::default();
             match status {
                 EdgionStatus::BackendUnsupportedKind
                 | EdgionStatus::BackendServiceNotFound
                 | EdgionStatus::RefDenied
                 | EdgionStatus::BackendServiceImportNotImplemented => {
-                    let _ = end_response_500(session, ctx, &server_header_opts).await;
+                    let _ = end_response_500(session, ctx, server_header_opts).await;
                 }
                 _ => {
-                    let _ = end_response_503(session, ctx, &server_header_opts).await;
+                    let _ = end_response_503(session, ctx, server_header_opts).await;
                 }
             }
             Err(PingoraError::new(ErrorType::InternalError))

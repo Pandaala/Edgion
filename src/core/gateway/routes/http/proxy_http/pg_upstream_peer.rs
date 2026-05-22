@@ -168,7 +168,7 @@ pub async fn upstream_peer_grpc(
     begin_upstream_attempt(ctx);
 
     // 5. Get peer from gRPC backend
-    let mut peer = get_peer(session, ctx, true).await?;
+    let mut peer = get_peer(session, ctx, true, &edgion_http.server_header_opts).await?;
 
     // 6. Force HTTP/2 for gRPC
     peer.options.set_http_version(2, 2);
@@ -223,7 +223,7 @@ pub async fn upstream_peer_http(
     let mut peer = if ctx.sp_target_addr.is_some() {
         get_peer_with_sp_fallback(edgion_http, session, ctx).await?
     } else {
-        get_peer(session, ctx, false).await?
+        get_peer(session, ctx, false, &edgion_http.server_header_opts).await?
     };
 
     // 6. Configure peer (shared logic)
@@ -394,11 +394,11 @@ async fn get_peer_with_sp_fallback(
             // Sticky target unhealthy → drop the SP target and refresh the token in the response.
             ctx.sp_target_addr = None; // already consumed by try_get_peer, but be explicit
             ctx.sp_state = SessionPersistenceState::InjectUpdate;
-            get_peer(session, ctx, false).await
+            get_peer(session, ctx, false, &edgion_http.server_header_opts).await
         }
         Err(_) => {
             // Strict mode: no fallback to normal LB. Defer to get_peer to surface a typed error.
-            get_peer(session, ctx, false).await
+            get_peer(session, ctx, false, &edgion_http.server_header_opts).await
         }
     }
 }
