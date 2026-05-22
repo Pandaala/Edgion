@@ -1,5 +1,6 @@
 pub mod api;
 pub mod auth;
+pub mod authz;
 pub mod conf_sync;
 pub mod config;
 pub mod fed_sync;

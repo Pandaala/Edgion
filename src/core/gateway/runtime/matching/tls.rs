@@ -1127,12 +1127,20 @@ mod tests {
         let gw_a = create_test_gateway(
             "alpha-gw",
             "team-a",
-            vec![create_test_listener("https", None, Some(make_tls_config("alpha-cert", Some("team-a"))))],
+            vec![create_test_listener(
+                "https",
+                None,
+                Some(make_tls_config("alpha-cert", Some("team-a"))),
+            )],
         );
         let gw_b = create_test_gateway(
             "beta-gw",
             "team-b",
-            vec![create_test_listener("https", None, Some(make_tls_config("beta-cert", Some("team-b"))))],
+            vec![create_test_listener(
+                "https",
+                None,
+                Some(make_tls_config("beta-cert", Some("team-b"))),
+            )],
         );
 
         let matcher1 = GatewayTlsMatcher::new();

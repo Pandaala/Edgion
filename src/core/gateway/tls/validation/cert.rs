@@ -104,7 +104,10 @@ impl fmt::Display for CertValidationError {
                 write!(f, "SAN mismatch (declared: {:?}, actual: {:?})", declared, actual)
             }
             Self::NoHostsDeclared => {
-                write!(f, "No hosts declared in spec.hosts; certificate SAN cannot be validated")
+                write!(
+                    f,
+                    "No hosts declared in spec.hosts; certificate SAN cannot be validated"
+                )
             }
             Self::InvalidSanPattern { pattern } => {
                 write!(

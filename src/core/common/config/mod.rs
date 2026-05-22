@@ -755,9 +755,41 @@ impl EdgionControllerConfig {
     }
 }
 
+/// Default-deny allowlist for Center (federation) operations.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct FedRbacConfig {
+    /// Allow rules; a request is permitted iff some rule matches its (verb, kind).
+    #[serde(default)]
+    pub allow: Vec<FedAllowRule>,
+}
+
+/// One allow rule: the cartesian product of `verbs` x `kinds`. `*` wildcards either.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct FedAllowRule {
+    #[serde(default)]
+    pub verbs: Vec<String>,
+    #[serde(default)]
+    pub kinds: Vec<String>,
+}
+
+impl FedRbacConfig {
+    /// Reject malformed rules (a rule must list at least one verb and one kind).
+    pub fn validate(&self) -> Result<(), String> {
+        for (i, rule) in self.allow.iter().enumerate() {
+            if rule.verbs.is_empty() {
+                return Err(format!("rbac.allow[{i}]: verbs must not be empty"));
+            }
+            if rule.kinds.is_empty() {
+                return Err(format!("rbac.allow[{i}]: kinds must not be empty"));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Configuration for connecting this controller to a federated center.
 /// When absent, the federation client is not started.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CenterClientConfig {
     /// gRPC address of the federated center (e.g. "http://center.example.com:50052")
@@ -776,10 +808,36 @@ pub struct CenterClientConfig {
     /// TLS config for the federation gRPC channel to Center.
     #[serde(default)]
     pub security: ConfSyncSecurityConfig,
+    /// Hot-reloadable kill-switch. When false, the federation client is not run.
+    #[serde(default = "default_center_enabled")]
+    pub enabled: bool,
+    /// Default-deny RBAC for Center operations. Absent => Center authorizes nothing.
+    #[serde(default)]
+    pub rbac: Option<FedRbacConfig>,
 }
 
 fn default_ping_interval_secs() -> u64 {
     30
+}
+
+fn default_center_enabled() -> bool {
+    true
+}
+
+impl Default for CenterClientConfig {
+    fn default() -> Self {
+        Self {
+            address: String::new(),
+            name: String::new(),
+            cluster: String::new(),
+            env: Vec::new(),
+            tag: Vec::new(),
+            ping_interval_secs: default_ping_interval_secs(),
+            security: ConfSyncSecurityConfig::default(),
+            enabled: default_center_enabled(),
+            rbac: None,
+        }
+    }
 }
 
 impl CenterClientConfig {
@@ -1216,5 +1274,50 @@ metrics:
                 }
             }
         }
+    }
+
+    // ── Group H: CenterClientConfig enabled + rbac ───────────────────────────
+
+    #[test]
+    fn center_enabled_defaults_to_true() {
+        let cfg: CenterClientConfig =
+            serde_yaml::from_str("address: \"https://c:50052\"\nname: n\ncluster: c\n").unwrap();
+        assert!(cfg.enabled, "enabled must default to true (backward compatible)");
+        assert!(cfg.rbac.is_none(), "absent rbac => None => deny-all downstream");
+    }
+
+    #[test]
+    fn center_rbac_parses_allow_rules() {
+        let cfg: CenterClientConfig = serde_yaml::from_str(
+            r#"
+address: a
+name: n
+cluster: c
+enabled: false
+rbac:
+  allow:
+    - verbs: [get, list]
+      kinds: [PluginMetaData]
+    - verbs: [reload]
+      kinds: ["*"]
+"#,
+        )
+        .unwrap();
+        assert!(!cfg.enabled);
+        let rbac = cfg.rbac.expect("rbac present");
+        assert_eq!(rbac.allow.len(), 2);
+        assert_eq!(rbac.allow[0].verbs, vec!["get", "list"]);
+        assert_eq!(rbac.allow[1].kinds, vec!["*"]);
+    }
+
+    #[test]
+    fn center_rbac_validate_rejects_empty_rule() {
+        let rbac = FedRbacConfig {
+            allow: vec![FedAllowRule {
+                verbs: vec![],
+                kinds: vec!["PluginMetaData".into()],
+            }],
+        };
+        assert!(rbac.validate().is_err(), "a rule with no verbs is malformed");
     }
 }

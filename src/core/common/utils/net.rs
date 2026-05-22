@@ -346,7 +346,9 @@ mod tests {
 
         // A multi-group literal is the ambiguous case the short-circuit guards against:
         // it must resolve to exactly the given address and port, not be re-split on a colon.
-        let addr = resolve_domain("2001:db8::1", 8443).await.expect("multi-group ipv6 literal resolves");
+        let addr = resolve_domain("2001:db8::1", 8443)
+            .await
+            .expect("multi-group ipv6 literal resolves");
         assert_eq!(addr.ip().to_string(), "2001:db8::1");
         assert_eq!(addr.port(), 8443);
     }

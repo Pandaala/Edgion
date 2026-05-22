@@ -241,7 +241,10 @@ mod tests {
         let incumbent = Arc::new(create_test_tls_route_ts("team-z", "zzz", "shared.example.com", older));
         let newcomer = Arc::new(create_test_tls_route_ts("team-a", "aaa", "shared.example.com", newer));
 
-        for (a, b) in [(incumbent.clone(), newcomer.clone()), (newcomer.clone(), incumbent.clone())] {
+        for (a, b) in [
+            (incumbent.clone(), newcomer.clone()),
+            (newcomer.clone(), incumbent.clone()),
+        ] {
             let mut routes = HashMap::new();
             routes.insert(a.key_name(), a);
             routes.insert(b.key_name(), b);

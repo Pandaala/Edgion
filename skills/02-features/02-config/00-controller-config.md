@@ -252,6 +252,78 @@ When the Controller has neither `[auth]` (OIDC) nor `[local_auth]`:
 > `unified_auth_middleware` initializing branch). See
 > `skills/02-features/02-config/03-auth-bootstrap.md` for details.
 
+## `[center]` — Federation Client
+
+Connects this Controller to a Federation Center. Omit this section entirely if you are not using federation.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `address` | `String` | **Required** | gRPC address of the Center server (e.g. `https://center.example.com:50052`) |
+| `name` | `String` | **Required** | Logical name of this Controller, reported to Center |
+| `cluster` | `String` | **Required** | Cluster name, used for routing and aggregation |
+| `enabled` | `bool` | `true` | Hot-reloadable kill-switch. `false` stops the federation client without a restart. Reloaded via `POST /api/v1/reload`. |
+| `env` | `Vec<String>` | `[]` | Environment tags reported to Center (e.g. `["production"]`). |
+| `tag` | `Vec<String>` | `[]` | Arbitrary extension tags reported to Center. |
+| `ping_interval_secs` | `u64` | `30` | Heartbeat interval in seconds for the federation keep-alive ping. |
+| `security` | `ConfSyncSecurityConfig` | — | mTLS certificates for the gRPC channel (same format as `conf_sync_security`). Required -- federation fails closed without it. |
+| `rbac` | `FedRbacConfig?` | `null` | Default-deny RBAC for Center operations. **Absent => Center is authorized to do nothing.** |
+
+### `[center.rbac]` -- Federation RBAC
+
+**When `rbac` is absent** (but `[center]` is present), a built-in default policy applies:
+
+| What | Allowed |
+|------|---------|
+| Read (`get`, `list`, `watch`, `list-keys`) | All resource kinds **except** `Secret` (EdgionTls IS readable; only the Secret kind is excluded for credential safety) |
+| Write (`create`, `update`, `delete`) | `PluginMetaData` only (drives IP-restriction sync + region-route sync; grants write to ALL plugin metadata) |
+| `get`, `list`, `failover` | `RegionRoute` (synthetic label): get/list allow the aggregate read endpoints; failover covers the POST failover endpoint |
+| Everything else (`reload`, `server-info`, `diagnostics`, etc.) | Denied |
+
+**When `rbac` is present**, the explicit rules fully override the built-in default. This is how operators grant more (e.g., Secret read or reload) or less than the default.
+
+> **Security:** There is no server-side Secret backstop on the federation path. A wildcard read (`kinds: ["*"]` with `get`, `list`, or `watch`) lets Center read Secret / EdgionTls private-key material via the blind proxy. Always enumerate concrete kinds for any UI surface. The built-in default avoids this by excluding `Secret` explicitly.
+
+**Example: explicit minimal allowlist (automated operations only):**
+
+```yaml
+center:
+  address: "https://center.example.com:50052"
+  name: "ctrl-1"
+  cluster: "prod"
+  enabled: true
+  security:
+    active: primary
+    certs:
+      - name: primary
+        cert: certs/grpc/primary/client.crt
+        key: certs/grpc/primary/client.key
+        ca: certs/grpc/primary/ca.crt
+  rbac:
+    allow:
+      - verbs: [get, list, watch, create, update, delete]
+        kinds: [PluginMetaData]
+      - verbs: [failover]
+        kinds: [RegionRoute]
+      - verbs: [reload]
+        kinds: ["*"]
+```
+
+| Rule | Covers |
+|------|--------|
+| `get/list/watch/create/update/delete` on `PluginMetaData` | IP-restriction plugin sync + region-route sync; `list` also serves Center blind-proxy UI list pages |
+| `failover` on `RegionRoute` | Regional failover endpoint |
+| `reload` on `*` | Config reload (non-resource, wildcard kind is safe for write verbs) |
+
+> **Note on `kinds: ["*"]` with `reload`:** using `*` is safe here because `reload` is a write-only action with no read surface. The wildcard-read prohibition applies to `get`, `list`, and `watch` only.
+
+> **Cross-reference:** this change also fixes review finding `controller-01` -- the federation path now routes through the Admin API authorization layer instead of a bare unauthenticated router. See `skills/04-review/architecture/fed-proxy-mtls-fail-close.md` for the prior mTLS fix and the new RBAC fix status.
+
+> **Full operator guide:** see `docs/en/ops-guide/federation-rbac.md` for authorization examples, security notes, and the kill-switch reference.
+
+`FedAllowRule.verbs` accepts: `get`, `list`, `list-keys`, `watch`, `create`, `update`, `delete`, `failover`, `acme-trigger`, `reload`, `server-info`, `diagnostics`, `wipe-all`, `debug`.
+
+> **Kind casing:** `kinds` MUST use the canonical PascalCase resource Kind name (e.g. `PluginMetaData`, `HTTPRoute`, `RegionRoute`). Lowercase or alias spellings (e.g. `pluginmetadata`) are matched case-sensitively against the normalized request kind and will silently never match. Verbs are case-insensitive.
+
 ## `[path_normalization]` — Path Normalization (Gateway-side configuration)
 
 Path normalization configuration is read on the Gateway side (`src/core/gateway/path_normalization/config.rs`); the Controller config does not directly own this section, but skills documentation records it here for unified reference.

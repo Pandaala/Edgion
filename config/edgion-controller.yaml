@@ -132,6 +132,69 @@ conf_sync:
   default_capacity: 200
 
 # ============================================================================
+# Federation Client (center)
+# ============================================================================
+# Connect this Controller to a Federation Center.
+# Omit this section entirely if you are not using federation.
+#
+# center:
+#   address: "https://center.example.com:50052"
+#   name: "ctrl-1"
+#   cluster: "prod"
+#
+#   # Hot-reloadable kill-switch. false => federation client does not run.
+#   # Reloaded via POST /api/v1/reload without a process restart.
+#   # Default: true
+#   enabled: true
+#
+#   security:
+#     active: primary
+#     certs:
+#       - name: primary
+#         cert: certs/grpc/primary/client.crt
+#         key: certs/grpc/primary/client.key
+#         ca: certs/grpc/primary/ca.crt
+#
+#   # Federation RBAC for Center operations.
+#   #
+#   # ABSENT => built-in default policy applies:
+#   #   - read (get/list/watch/list-keys) on ALL resource kinds EXCEPT Secret
+#   #     (EdgionTls IS readable; only the Secret kind is excluded for credential safety)
+#   #   - write (create/update/delete) on PluginMetaData only
+#   #     (drives IP-restriction sync + region-route sync; grants write to ALL plugin
+#   #     metadata, not only region/ip -- this limitation is intentional for simplicity)
+#   #   - get, list, and failover on RegionRoute (synthetic label, not a ResourceKind):
+#   #     get/list allow the aggregate read endpoints
+#   #     (GET /api/v1/cluster-region-routes, GET /api/v1/service-region-routes);
+#   #     failover covers the POST failover endpoint
+#   #   - NO reload, server-info, diagnostics, or any other verb beyond the above
+#   #
+#   # PRESENT => the explicit rules FULLY OVERRIDE the built-in default.
+#   # Use an explicit rbac block to grant more (e.g. Secret read, reload) or less
+#   # than the default. See docs/en/ops-guide/federation-rbac.md for examples.
+#   #
+#   # IMPORTANT -- kind casing: kinds MUST use the canonical PascalCase resource
+#   # Kind name (e.g. PluginMetaData, HTTPRoute, RegionRoute). Lowercase or alias
+#   # spellings (e.g. pluginmetadata) silently never match any request. Verbs are
+#   # case-insensitive (get, GET, Get all work).
+#   #
+#   # WARNING: NEVER use kinds: ["*"] with get / list / watch.
+#   # There is no server-side Secret backstop on the fed path; a wildcard
+#   # read lets Center read Secret / EdgionTls private-key material via the
+#   # blind proxy. Always enumerate concrete kinds for any UI surface.
+#   # (The built-in default avoids this by excluding Secret explicitly.)
+#   #
+#   # Example: explicit minimal allowlist (automated operations only):
+#   rbac:
+#     allow:
+#       - verbs: [get, list, watch, create, update, delete]
+#         kinds: [PluginMetaData]
+#       - verbs: [failover]
+#         kinds: [RegionRoute]
+#       - verbs: [reload]
+#         kinds: ["*"]
+
+# ============================================================================
 # conf_sync Channel Security (mTLS)
 # ============================================================================
 # Omit this section entirely to keep plaintext gRPC (backward compatible).

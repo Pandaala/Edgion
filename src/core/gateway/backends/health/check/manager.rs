@@ -23,8 +23,7 @@ use tokio::task::JoinHandle;
 /// permit for its entire cycle and starve unrelated services' probes.
 const MAX_CONCURRENT_PROBES: usize = 50;
 
-static PROBE_SEMAPHORE: LazyLock<Arc<Semaphore>> =
-    LazyLock::new(|| Arc::new(Semaphore::new(MAX_CONCURRENT_PROBES)));
+static PROBE_SEMAPHORE: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(MAX_CONCURRENT_PROBES)));
 
 static HEALTH_CHECK_MANAGER: LazyLock<Arc<HealthCheckManager>> = LazyLock::new(|| Arc::new(HealthCheckManager::new()));
 

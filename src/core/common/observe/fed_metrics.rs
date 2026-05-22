@@ -51,6 +51,13 @@ pub mod names {
     pub const PEER_IDENTITY_CHECK_TOTAL: &str = "edgion_fed_peer_identity_check_total";
     /// Counter: a live session was displaced by a new connection (takeover).
     pub const SESSION_TAKEOVER_TOTAL: &str = "edgion_fed_session_takeover_total";
+    /// Counter: RBAC denials on the Controller admin-API federation path.
+    /// Labels: `verb` (closed set from `Verb::as_str()` + "unknown"),
+    /// `kind` (known ResourceKind, "*", "RegionRoute", or "unknown" — never raw input).
+    pub const RBAC_DENIED_TOTAL: &str = "edgion_fed_rbac_denied_total";
+    /// Gauge: federation kill-switch state. 1.0 = enabled, 0.0 = disabled.
+    /// Emitted by the supervisor on each start/stop transition.
+    pub const KILL_SWITCH_STATE: &str = "edgion_fed_kill_switch_state";
 }
 
 /// Bounded label value constants. Emitting any other value violates the
@@ -202,6 +209,31 @@ pub fn record_fanout(op: &'static str, result: &'static str) {
 #[inline]
 pub fn record_ready_gate_wait(seconds: f64) {
     gauge!(names::READY_GATE_WAIT_LAST).set(seconds);
+}
+
+// ---------- RBAC (Controller admin authz) ----------
+
+/// Increment the RBAC denial counter for the federation path.
+///
+/// `verb` must be a value from the closed set produced by `Verb::as_str()` or
+/// the literal `"unknown"`. `kind` must be a bounded value (a known ResourceKind
+/// short name, `"*"`, `"RegionRoute"`, or `"unknown"`) — the caller is
+/// responsible for bounding via `bounded_kind_label` before reaching here.
+/// Never pass raw user input as either label.
+#[inline]
+pub fn record_rbac_denied(verb: &str, kind: &str) {
+    counter!(names::RBAC_DENIED_TOTAL, "verb" => verb.to_string(), "kind" => kind.to_string()).increment(1);
+}
+
+/// Set the federation kill-switch state gauge.
+///
+/// Call this on every supervisor start/stop transition so the current state is
+/// always visible in Prometheus without querying event history.
+/// Value: `1.0` when the federation client is enabled and running, `0.0` when
+/// it is disabled (kill-switch active).
+#[inline]
+pub fn record_kill_switch_state(enabled: bool) {
+    gauge!(names::KILL_SWITCH_STATE).set(if enabled { 1.0 } else { 0.0 });
 }
 
 #[cfg(test)]
@@ -453,5 +485,75 @@ mod tests {
         super::record_consistency_mismatch();
         super::record_fanout(fanout_op::PATCH_ENABLE, fanout_result::OK);
         super::record_ready_gate_wait(0.25);
+    }
+}
+
+#[cfg(test)]
+mod rbac_metric_tests {
+    use super::*;
+
+    /// Name constants for the new RBAC metrics must follow the `edgion_fed_` prefix
+    /// convention and use only lowercase ASCII + underscores.
+    #[test]
+    fn rbac_metric_names_are_stable_and_valid() {
+        assert_eq!(names::RBAC_DENIED_TOTAL, "edgion_fed_rbac_denied_total");
+        assert_eq!(names::KILL_SWITCH_STATE, "edgion_fed_kill_switch_state");
+
+        for n in [names::RBAC_DENIED_TOTAL, names::KILL_SWITCH_STATE] {
+            assert!(n.starts_with("edgion_fed_"), "metric {n} must have edgion_fed_ prefix");
+            assert!(!n.is_empty(), "metric name must not be empty");
+            let first = n.chars().next().unwrap();
+            assert!(
+                first.is_ascii_lowercase() || first == '_',
+                "metric {n} must start with [a-z_]"
+            );
+            for c in n.chars() {
+                assert!(
+                    c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_',
+                    "metric name {n} contains illegal char {c:?} (allowed: [a-z0-9_])"
+                );
+            }
+        }
+    }
+
+    /// `record_rbac_denied` must not panic for any bounded (verb, kind) pair,
+    /// including the sentinel "unknown" values used for unclassified requests.
+    #[test]
+    fn rbac_denied_counter_increments_without_panic() {
+        // Bounded verb values produced by Verb::as_str() + the "unknown" sentinel.
+        let verbs = [
+            "get",
+            "list",
+            "list-keys",
+            "watch",
+            "create",
+            "update",
+            "delete",
+            "failover",
+            "acme-trigger",
+            "reload",
+            "server-info",
+            "diagnostics",
+            "wipe-all",
+            "debug",
+            "unknown",
+        ];
+        // Bounded kind values: known kinds, synthetic labels, "unknown".
+        let kinds = ["Secret", "PluginMetaData", "HTTPRoute", "RegionRoute", "*", "unknown"];
+        for verb in verbs {
+            for kind in kinds {
+                // Must not panic; the metrics crate no-op recorder handles absent recorder.
+                record_rbac_denied(verb, kind);
+            }
+        }
+    }
+
+    /// `record_kill_switch_state` must not panic for both `true` and `false`.
+    #[test]
+    fn kill_switch_gauge_does_not_panic() {
+        record_kill_switch_state(true);
+        record_kill_switch_state(false);
+        // Toggle back to enabled to leave gauge in a known state.
+        record_kill_switch_state(true);
     }
 }

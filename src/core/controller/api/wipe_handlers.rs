@@ -164,9 +164,16 @@ mod tests {
                 .expect("ConfMgr::create failed"),
         );
         let schema_validator = Arc::new(SchemaValidator::empty());
+        let (tx, _rx) = tokio::sync::watch::channel(crate::core::common::config::CenterClientConfig::default());
+        let authorizer = std::sync::Arc::new(crate::core::common::authz::Authorizer::new(
+            crate::core::common::authz::CenterPolicy::deny_all(),
+        ));
         Arc::new(AdminState {
             conf_mgr,
             schema_validator,
+            config_file: None,
+            authorizer,
+            center_reload_tx: tx,
         })
     }
 

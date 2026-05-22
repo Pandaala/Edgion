@@ -14,6 +14,7 @@ use tokio::sync::{watch, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
+use crate::core::common::authz::{Authorizer, Role, Verb};
 use crate::core::common::config::CenterClientConfig;
 use crate::core::common::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
@@ -83,6 +84,7 @@ pub async fn run(
     mut shutdown: watch::Receiver<bool>,
     admin_router: axum::Router,
     conf_mgr: Arc<ConfMgr>,
+    authorizer: Arc<Authorizer>,
 ) {
     if let Err(e) = config.security.validate() {
         tracing::error!(
@@ -189,7 +191,7 @@ pub async fn run(
                 tracing::info!(component = "fed_client", "Shutdown signal received, exiting");
                 return;
             }
-            result = connect_and_run(&config, &supported_kinds, admin_router.clone(), conf_mgr.clone()) => {
+            result = connect_and_run(&config, &supported_kinds, admin_router.clone(), conf_mgr.clone(), authorizer.clone()) => {
                 match result {
                     Ok(()) => {
                         // Only reset backoff if connection was alive long enough.
@@ -231,6 +233,7 @@ async fn connect_and_run(
     supported_kinds: &[String],
     admin_router: axum::Router,
     conf_mgr: Arc<ConfMgr>,
+    authorizer: Arc<Authorizer>,
 ) -> Result<()> {
     // run()'s resolve_mtls_or_refuse gate guarantees mTLS before we get here.
     let tls_cfg = config
@@ -309,7 +312,7 @@ async fn connect_and_run(
                                 payload: Some(CtrlPayload::StatsReport(StatsReport { per_kind, total })),
                             };
                             // Best effort: if the channel is closed (session
-                            // ending), drop the report — the next session will
+                            // ending), drop the report -- the next session will
                             // emit a fresh one with stats_dirty=true.
                             if tx.send(msg).await.is_err() {
                                 break;
@@ -346,6 +349,7 @@ async fn connect_and_run(
                             conf_mgr.clone(),
                             &mut active_watch_cancel,
                             proxy_semaphore.clone(),
+                            authorizer.clone(),
                         ).await {
                             break Err(e);
                         }
@@ -392,6 +396,7 @@ async fn handle_center_message(
     conf_mgr: Arc<ConfMgr>,
     active_watch_cancel: &mut Option<CancellationToken>,
     proxy_semaphore: Arc<Semaphore>,
+    authorizer: Arc<Authorizer>,
 ) -> Result<()> {
     match payload {
         CenterPayload::RegisterAck(ack) => {
@@ -582,10 +587,42 @@ async fn handle_center_message(
                 "FedWatchRequest received"
             );
 
+            // Normalize the requested kind once. The normalized (canonical) value is
+            // used for BOTH the authz check AND the store ops below so that the
+            // authorized kind is provably identical to the operated kind. A
+            // lowercase or otherwise non-canonical request kind works consistently:
+            // normalize is a no-op for already-canonical kinds.
+            //
+            // Note: a policy swap / kill-switch does NOT retroactively terminate an
+            // already-running watch stream. It only gates new WatchRequests (per-request
+            // snapshot semantics). The running forwarding task keeps its original
+            // authorization for the lifetime of the current stream.
+            let kind = crate::core::controller::api::authz_classifier::normalize_kind(&req.kind);
+
+            // RBAC check: authorize Center for Watch on the normalized kind before
+            // touching any store state. This check runs BEFORE the ConfigSyncServer
+            // lookup so a denied request never touches internal state.
+            if !authorizer.authorize(&Role::Center, Verb::Watch, &kind).allowed() {
+                let kind_label = crate::core::controller::api::authz_classifier::bounded_kind_label(&kind);
+                crate::core::common::observe::fed_metrics::record_rbac_denied("watch", kind_label);
+                // Mirror the existing watch-error frame shape: CtrlPayload::WatchEventResponse
+                // with a non-empty `error` field and all other fields defaulted to zero/empty.
+                // The Center interprets a non-empty `error` as a terminal error and re-watches.
+                let err_msg = ControllerMessage {
+                    payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
+                        request_id: req.request_id,
+                        error: "Forbidden".to_string(),
+                        ..Default::default()
+                    })),
+                };
+                let _ = tx.send(err_msg).await;
+                return Ok(());
+            }
+
             // If ConfigSyncServer is not ready, return NotReady immediately.
             // The ready gate in run() ensures CSS is ready before first connection.
             // Center-side backoff (3s) handles transient unavailability during reload.
-            // We must NOT block here — this would stall Ping/Pong and cause heartbeat timeout.
+            // We must NOT block here -- this would stall Ping/Pong and cause heartbeat timeout.
             let css = match conf_mgr.config_sync_server() {
                 Some(css) => css,
                 None => {
@@ -607,8 +644,9 @@ async fn handle_center_message(
             };
 
             // Step 1: if from_version == 0, send list first
+            // Use the pre-normalized `kind` so the store op matches what authz authorized.
             let watch_from = if req.from_version == 0 {
-                match css.list(&req.kind) {
+                match css.list(&kind) {
                     Ok(list_data) => {
                         let list_msg = ControllerMessage {
                             payload: Some(CtrlPayload::WatchListResponse(FedWatchListResponse {
@@ -646,7 +684,8 @@ async fn handle_center_message(
             }
 
             let watch_id = format!("center-{}", req.request_id);
-            match css.watch(&req.kind, watch_id, "center".to_string(), watch_from) {
+            // Use the pre-normalized `kind` for the same reason as css.list above.
+            match css.watch(&kind, watch_id, "center".to_string(), watch_from) {
                 Ok(mut event_rx) => {
                     let cancel = CancellationToken::new();
                     *active_watch_cancel = Some(cancel.clone());
@@ -710,7 +749,7 @@ async fn handle_center_message(
                                             break;
                                         }
                                     }
-                                    // If config_sync_server() returns None, reload is in progress — keep waiting
+                                    // If config_sync_server() returns None, reload is in progress -- keep waiting
                                 }
                             }
                         }
@@ -798,5 +837,80 @@ mod tests {
             ..Default::default()
         };
         assert!(mtls.resolve_mtls_or_refuse().is_ok());
+    }
+
+    /// WatchRequest-deny path: a deny-all authorizer must cause handle_center_message
+    /// to immediately send a WatchEventResponse with a non-empty error field and return
+    /// without starting any watch (active_watch_cancel remains None).
+    #[tokio::test]
+    async fn watch_request_denied_by_rbac_sends_forbidden_and_no_watch_started() {
+        use crate::core::common::authz::{Authorizer, CenterPolicy};
+        use crate::core::common::fed_sync::proto::{controller_message::Payload as CtrlPayload, FedWatchRequest};
+        use crate::core::controller::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig};
+        use std::sync::Arc;
+
+        // Construct a minimal ConfMgr using the FileSystem backend (temp dir).
+        // The deny path returns before conf_mgr is used, but the function signature requires it.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let conf_mgr = Arc::new(
+            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(
+                tmp.path().to_path_buf(),
+            )))
+            .await
+            .expect("ConfMgr::create failed"),
+        );
+
+        let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<ControllerMessage>(8);
+        let tx = Arc::new(tx);
+        let admin_router = axum::Router::new();
+        let proxy_semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let mut active_watch_cancel: Option<tokio_util::sync::CancellationToken> = None;
+
+        let payload = CenterPayload::WatchRequest(FedWatchRequest {
+            request_id: "t1".to_string(),
+            kind: "PluginMetaData".to_string(),
+            from_version: 0,
+        });
+
+        let result = handle_center_message(
+            payload,
+            tx,
+            admin_router,
+            conf_mgr,
+            &mut active_watch_cancel,
+            proxy_semaphore,
+            authorizer,
+        )
+        .await;
+
+        // The call must succeed (no internal error).
+        assert!(result.is_ok(), "handle_center_message returned Err: {:?}", result.err());
+
+        // Exactly one message must have been sent: a WatchEventResponse with non-empty error.
+        let msg = rx
+            .try_recv()
+            .expect("expected exactly one ControllerMessage on the channel");
+        match msg.payload {
+            Some(CtrlPayload::WatchEventResponse(resp)) => {
+                assert!(
+                    !resp.error.is_empty(),
+                    "expected non-empty error in WatchEventResponse, got empty"
+                );
+            }
+            other => panic!("expected WatchEventResponse, got {:?}", other),
+        }
+
+        // No second message must be present.
+        assert!(
+            rx.try_recv().is_err(),
+            "expected channel to be empty after one deny message"
+        );
+
+        // No watch task must have been started (active_watch_cancel stays None).
+        assert!(
+            active_watch_cancel.is_none(),
+            "expected active_watch_cancel to remain None after RBAC deny"
+        );
     }
 }

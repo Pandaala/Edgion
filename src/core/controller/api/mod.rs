@@ -1,3 +1,7 @@
+// pub(crate): also used by the fed_client watch check (Task 6).
+pub(crate) mod authz_classifier;
+// pub(crate): authz_layer and inject_center_identity are used at the fed spawn site (Task 6).
+pub(crate) mod authz_middleware;
 mod cluster_handlers;
 mod common;
 mod configserver_handlers;
@@ -95,6 +99,69 @@ async fn get_server_info(
     }
 }
 
+/// Re-read `[center]` from the config file on disk, swap the authz policy, and
+/// notify the federation supervisor. Called from `reload_all_resources` BEFORE
+/// `request_reload()` so the newer/stricter policy is live before any reloaded
+/// handler runs.
+///
+/// On load error: logs a warning and keeps the current policy -- on load error
+/// we keep the current policy and still proceed to `request_reload()`. Note that
+/// the current policy might already be deny-all, so this is NOT fail-open.
+///
+/// If the loaded config has no `[center]` section, the policy and supervisor are
+/// left UNCHANGED (to disable the Center connection, set `center.enabled = false`;
+/// removing the `[center]` section does not deny-all a running Center).
+///
+/// Factored out for unit-testability; the handler calls this and then
+/// `request_reload()`.
+fn apply_center_reload(state: &AdminState) {
+    let path = match &state.config_file {
+        Some(p) => p.clone(),
+        None => return,
+    };
+
+    let cli_cfg = crate::core::common::config::EdgionControllerConfig {
+        config_file: Some(path.clone()),
+        ..Default::default()
+    };
+
+    let full = match crate::core::common::config::EdgionControllerConfig::load(cli_cfg) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                component = "admin_api",
+                path = %path,
+                error = %e,
+                "reload: failed to re-read [center]; keeping current policy"
+            );
+            return;
+        }
+    };
+
+    if let Some(center) = full.center {
+        // 1) Swap policy FIRST so the new/stricter rule is live before any
+        //    reloaded handler runs.
+        if let Some(rbac) = &center.rbac {
+            if let Err(e) = rbac.validate() {
+                tracing::warn!(
+                    component = "fed_rbac",
+                    error = %e,
+                    "invalid center.rbac rule; it will not match any request"
+                );
+            }
+        }
+        let policy = crate::core::controller::fed_sync::default_policy::center_policy_from(center.rbac.as_ref());
+        // This handler is the SINGLE policy writer on the reload path.
+        // The supervisor (run_supervisor) consumes the channel value for
+        // lifecycle decisions only (start/stop/restart); it does NOT call
+        // swap_policy_from on reload, so there is no second, unordered writer.
+        state.authorizer.swap_policy(policy);
+        // 2) Notify the supervisor so it can restart the client if any
+        //    lifecycle field (enabled/address/name/cluster) changed.
+        let _ = state.center_reload_tx.send(center);
+    }
+}
+
 /// Reload all resources - triggers a full restart of the configuration center
 ///
 /// This endpoint triggers a full reload:
@@ -112,6 +179,10 @@ async fn reload_all_resources(State(state): State<Arc<AdminState>>) -> impl Into
         event = "reload_requested",
         "Reload requested via Admin API"
     );
+
+    // Re-read [center] from disk and apply it before triggering the async
+    // fire-and-forget resource reload, so the newer/stricter policy is live first.
+    apply_center_reload(&state);
 
     match state.conf_mgr.request_reload() {
         Ok(()) => {
@@ -163,10 +234,19 @@ async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> Json<A
 // ============= Router Setup =============
 
 /// Create the admin API router with unified K8s-style endpoints
-pub fn create_admin_router(conf_mgr: Arc<ConfMgr>, schema_validator: Arc<SchemaValidator>) -> Router {
+pub fn create_admin_router(
+    conf_mgr: Arc<ConfMgr>,
+    schema_validator: Arc<SchemaValidator>,
+    config_file: Option<String>,
+    authorizer: Arc<crate::core::common::authz::Authorizer>,
+    center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
+) -> Router {
     let admin_state = Arc::new(AdminState {
         conf_mgr,
         schema_validator,
+        config_file,
+        authorizer,
+        center_reload_tx,
     });
 
     // Write routes — gated by readiness middleware so requests arriving during
@@ -298,6 +378,9 @@ pub async fn serve(
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
     require_auth: bool,
     needs_retry: bool,
+    config_file: Option<String>,
+    authorizer: Arc<crate::core::common::authz::Authorizer>,
+    center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
 ) -> anyhow::Result<()> {
     serve_with_shutdown(
         conf_mgr,
@@ -307,6 +390,9 @@ pub async fn serve(
         local_auth_config,
         require_auth,
         needs_retry,
+        config_file,
+        authorizer,
+        center_reload_tx,
         std::future::pending::<()>(),
     )
     .await
@@ -321,6 +407,9 @@ pub async fn serve_with_shutdown(
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
     require_auth: bool,
     needs_retry: bool,
+    config_file: Option<String>,
+    authorizer: Arc<crate::core::common::authz::Authorizer>,
+    center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let auth_state = crate::core::common::unified_auth::UnifiedAuthState::from_configs(
@@ -331,9 +420,37 @@ pub async fn serve_with_shutdown(
     )?;
     let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
 
-    let base_router = create_admin_router(conf_mgr.clone(), schema_validator);
+    let base_router = create_admin_router(
+        conf_mgr.clone(),
+        schema_validator,
+        config_file,
+        authorizer.clone(),
+        center_reload_tx,
+    );
+
+    // Wire authz route_layers on the local admin router.
+    //
+    // Axum route_layers are applied LIFO: the last `.route_layer()` call becomes
+    // the outermost wrapper (runs first). To achieve:
+    //   unified_auth (outermost, from compose_admin_routes)
+    //     -> assign_superuser (runs before authz)
+    //       -> authz_layer (innermost route_layer, classifies + enforces)
+    //         -> handler
+    //
+    // We must add authz_layer first, then assign_superuser on top.
+    let business = base_router
+        .route_layer(axum::middleware::from_fn_with_state(
+            authorizer,
+            authz_middleware::authz_layer,
+        ))
+        .route_layer(axum::middleware::from_fn(
+            authz_middleware::assign_superuser_if_authenticated,
+        ));
+
     // The composition order is fixed inside compose_admin_routes (see its doc).
-    let app = api::compose_admin_routes(base_router, auth_state.clone(), local_auth_intent);
+    // unified_auth is added as .layer() inside compose_admin_routes, making it
+    // the outermost layer -- it runs before the route_layers above.
+    let app = api::compose_admin_routes(business, auth_state.clone(), local_auth_intent);
 
     if needs_retry {
         let auth_state_for_retry = auth_state.clone();
@@ -418,5 +535,211 @@ mod auth_status_tests {
         assert_eq!(state.build_status().status, AuthStatus::Initializing);
         state.update_local(LocalAuthState::from_config(&valid_local()));
         assert_eq!(state.build_status().status, AuthStatus::Ready);
+    }
+}
+
+#[cfg(test)]
+mod reload_center_tests {
+    use super::*;
+    use crate::core::common::authz::{Authorizer, CenterPolicy, Role, Verb};
+    use std::io::Write;
+    use std::sync::Arc;
+
+    /// Build a minimal AdminState for reload tests:
+    /// - config_file points to a caller-supplied temp path
+    /// - Authorizer starts deny-all
+    /// - watch channel created fresh
+    ///
+    /// `apply_center_reload` only touches `config_file`, `authorizer`, and
+    /// `center_reload_tx`; the ConfMgr is real but not exercised.
+    async fn make_reload_state(
+        config_path: &str,
+    ) -> (
+        Arc<AdminState>,
+        tokio::sync::watch::Receiver<crate::core::common::config::CenterClientConfig>,
+        tempfile::TempDir, // kept alive so its path stays valid
+    ) {
+        use crate::core::controller::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, SchemaValidator};
+
+        let tmp_data = tempfile::tempdir().expect("tempdir for conf data");
+        let fs_config = FileSystemConfig::new(tmp_data.path().to_path_buf());
+        let conf_mgr = Arc::new(
+            ConfMgr::create(ConfCenterConfig::FileSystem(fs_config))
+                .await
+                .expect("ConfMgr::create"),
+        );
+        let schema_validator = Arc::new(SchemaValidator::empty());
+        let (tx, rx) = tokio::sync::watch::channel(crate::core::common::config::CenterClientConfig::default());
+        let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
+        let state = Arc::new(AdminState {
+            conf_mgr,
+            schema_validator,
+            config_file: Some(config_path.to_string()),
+            authorizer,
+            center_reload_tx: tx,
+        });
+        (state, rx, tmp_data)
+    }
+
+    /// Write a minimal controller config YAML that includes a [center] block
+    /// with an RBAC rule granting `get` on `PluginMetaData`.
+    fn write_center_config(path: &str) {
+        let yaml = r#"
+center:
+  address: "http://center.example.com:50052"
+  name: "ctrl-test"
+  cluster: "test-cluster"
+  enabled: true
+  rbac:
+    allow:
+      - verbs: [get, list]
+        kinds: [PluginMetaData]
+"#;
+        let mut f = std::fs::File::create(path).expect("create config file");
+        f.write_all(yaml.as_bytes()).expect("write config");
+    }
+
+    #[tokio::test]
+    async fn reload_rereads_center_and_swaps_policy_before_request_reload() {
+        let tmp_cfg = tempfile::NamedTempFile::new().expect("named tempfile");
+        let cfg_path = tmp_cfg.path().to_str().expect("path str").to_string();
+
+        write_center_config(&cfg_path);
+
+        let (state, mut rx, _tmp_data) = make_reload_state(&cfg_path).await;
+
+        // Before: authorizer is deny-all.
+        assert!(
+            !state
+                .authorizer
+                .authorize(&Role::Center, Verb::Get, "PluginMetaData")
+                .allowed(),
+            "pre-condition: deny-all should deny"
+        );
+
+        // Mark the current value as seen so `has_changed()` is meaningful.
+        rx.borrow_and_update();
+
+        // Run the reload helper (the part that doesn't need ConfMgr to be live).
+        apply_center_reload(&state);
+
+        // Assertion 1: policy is now swapped -- Center can GET PluginMetaData.
+        assert!(
+            state
+                .authorizer
+                .authorize(&Role::Center, Verb::Get, "PluginMetaData")
+                .allowed(),
+            "post: authorizer must allow get/PluginMetaData after policy swap"
+        );
+        // Also ensure deny-all still applies for ungranted pairs.
+        assert!(
+            !state
+                .authorizer
+                .authorize(&Role::Center, Verb::Delete, "PluginMetaData")
+                .allowed(),
+            "post: delete/PluginMetaData must remain denied"
+        );
+
+        // Assertion 2: center_reload_tx has a new value (supervisor notified).
+        assert!(
+            rx.has_changed().expect("channel not closed"),
+            "supervisor channel must have a new value"
+        );
+        let new_cfg = rx.borrow_and_update();
+        assert_eq!(new_cfg.name, "ctrl-test", "center config name must match YAML");
+        assert!(new_cfg.rbac.is_some(), "center rbac must be present in new value");
+    }
+
+    #[tokio::test]
+    async fn reload_missing_config_file_keeps_current_policy() {
+        // If the config file does not exist, warn and keep current policy.
+        let (state, mut rx, _tmp_data) = make_reload_state("/nonexistent/path/edgion-controller.yaml").await;
+        rx.borrow_and_update();
+
+        apply_center_reload(&state);
+
+        // Policy must remain deny-all.
+        assert!(
+            !state
+                .authorizer
+                .authorize(&Role::Center, Verb::Get, "PluginMetaData")
+                .allowed(),
+            "policy must remain deny-all when config file is missing"
+        );
+        // Channel must NOT have received a new value.
+        assert!(
+            !rx.has_changed().expect("channel not closed"),
+            "supervisor channel must NOT be notified when config load fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn reload_no_center_section_does_not_notify() {
+        // Config file with no [center] block: policy unchanged, no notify.
+        let tmp_cfg = tempfile::NamedTempFile::new().expect("named tempfile");
+        let cfg_path = tmp_cfg.path().to_str().expect("path str").to_string();
+
+        // Write a valid config with no center section.
+        std::fs::write(&cfg_path, "# no center section\n").expect("write");
+
+        let (state, mut rx, _tmp_data) = make_reload_state(&cfg_path).await;
+        rx.borrow_and_update();
+
+        apply_center_reload(&state);
+
+        assert!(
+            !state
+                .authorizer
+                .authorize(&Role::Center, Verb::Get, "PluginMetaData")
+                .allowed(),
+            "policy must remain deny-all when no [center] section present"
+        );
+        assert!(
+            !rx.has_changed().expect("channel not closed"),
+            "supervisor channel must NOT be notified when [center] is absent"
+        );
+    }
+
+    #[tokio::test]
+    async fn reload_no_config_file_is_noop() {
+        // When config_file is None, apply_center_reload returns immediately --
+        // the authorizer policy stays deny-all and the channel is not notified.
+        use crate::core::controller::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, SchemaValidator};
+
+        let tmp_data = tempfile::tempdir().expect("tempdir for conf data");
+        let fs_config = FileSystemConfig::new(tmp_data.path().to_path_buf());
+        let conf_mgr = Arc::new(
+            ConfMgr::create(ConfCenterConfig::FileSystem(fs_config))
+                .await
+                .expect("ConfMgr::create"),
+        );
+        let schema_validator = Arc::new(SchemaValidator::empty());
+        let (tx, mut rx) = tokio::sync::watch::channel(crate::core::common::config::CenterClientConfig::default());
+        let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
+        let state = AdminState {
+            conf_mgr,
+            schema_validator,
+            config_file: None, // no config file
+            authorizer,
+            center_reload_tx: tx,
+        };
+
+        rx.borrow_and_update();
+
+        apply_center_reload(&state);
+
+        // Policy must remain deny-all.
+        assert!(
+            !state
+                .authorizer
+                .authorize(&Role::Center, Verb::Get, "PluginMetaData")
+                .allowed(),
+            "policy must be unchanged (deny-all) when config_file is None"
+        );
+        // Channel must NOT have received a new value.
+        assert!(
+            !rx.has_changed().expect("channel not closed"),
+            "supervisor channel must NOT be notified when config_file is None"
+        );
     }
 }

@@ -599,7 +599,10 @@ impl MtlsTestSuite {
                         }
                         Err(e) => TestResult::failed(
                             start.elapsed(),
-                            format!("Handshake failed — intermediate not loaded from the multi-PEM CA bundle? {}", e),
+                            format!(
+                                "Handshake failed — intermediate not loaded from the multi-PEM CA bundle? {}",
+                                e
+                            ),
                         ),
                     }
                 })
