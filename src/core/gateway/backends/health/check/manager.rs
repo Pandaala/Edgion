@@ -15,14 +15,16 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
-/// Maximum number of health check tasks that can run their probe loop
-/// concurrently. Tasks beyond this limit wait for a permit before
-/// starting their next probe cycle, providing natural backpressure
-/// without dropping or delaying individual tasks.
-const MAX_CONCURRENT_PROBE_CYCLES: usize = 50;
+/// Maximum number of individual backend probes that may be in flight
+/// concurrently across all health check tasks. Each probe acquires a
+/// permit only for the duration of its single probe call and releases it
+/// immediately after, so the limit bounds total in-flight probes rather
+/// than whole probe cycles — a service with many backends cannot hold a
+/// permit for its entire cycle and starve unrelated services' probes.
+const MAX_CONCURRENT_PROBES: usize = 50;
 
 static PROBE_SEMAPHORE: LazyLock<Arc<Semaphore>> =
-    LazyLock::new(|| Arc::new(Semaphore::new(MAX_CONCURRENT_PROBE_CYCLES)));
+    LazyLock::new(|| Arc::new(Semaphore::new(MAX_CONCURRENT_PROBES)));
 
 static HEALTH_CHECK_MANAGER: LazyLock<Arc<HealthCheckManager>> = LazyLock::new(|| Arc::new(HealthCheckManager::new()));
 
@@ -152,8 +154,6 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
     loop {
         ticker.tick().await;
 
-        let _permit = semaphore.acquire().await.expect("probe semaphore closed");
-
         let backends = get_service_backends(&service_key);
         let hashes: Vec<u64> = backends.iter().map(backend_hash).collect();
         health_store.register_service(&service_key, hashes);
@@ -176,6 +176,12 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
                 continue;
             };
 
+            // Acquire a probe permit per individual backend probe (not per cycle)
+            // so the global cap bounds total in-flight probes. The permit is held
+            // only for this single probe call and released immediately after, so a
+            // service with many backends interleaves fairly with other services
+            // instead of monopolizing one permit for its entire cycle.
+            let permit = semaphore.acquire().await.expect("probe semaphore closed");
             let result = match config.r#type {
                 HealthCheckType::Http => {
                     match http_client.as_ref() {
@@ -222,6 +228,7 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
                 HealthCheckType::Tcp => probe_tcp(*addr, config.port, timeout).await,
                 HealthCheckType::Grpc => probe_grpc(*addr, config.port, &grpc_service_name, timeout).await,
             };
+            drop(permit);
 
             health_store.record_check(
                 &service_key,

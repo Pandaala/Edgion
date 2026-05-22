@@ -48,3 +48,4 @@ See also [../CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md) for the cross-topic clos
 | [`cases/conf-sync-watcher-mpsc-chain-not-backlog.md`](cases/conf-sync-watcher-mpsc-chain-not-backlog.md) | conf_sync watcher `mpsc(100)` × 3 layers — items are batches, not single events; end-to-end backpressure |
 | [`cases/status-diff-conditions-equal-on2-bounded.md`](cases/status-diff-conditions-equal-on2-bounded.md) | `conditions_equal` O(n²) scan — n ≤ 10; HashMap overhead exceeds linear scan benefit |
 | [`cases/admin-state-cache-get-resource-full-list-scan.md`](cases/admin-state-cache-get-resource-full-list-scan.md) | `cache_get_resource` full-list + linear-scan — admin/diagnostic path, bounded by human ops |
+| [`cases/conf-sync-compress-event-vec-per-key.md`](cases/conf-sync-compress-event-vec-per-key.md) | `CompressEvent` per-key `Vec<ResourceChange>` "unbounded / OOM / O(N) scan" — confirmed-real but won't-fix; control-plane, 1-byte enum, trivially bounded |

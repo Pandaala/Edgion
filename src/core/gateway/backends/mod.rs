@@ -146,10 +146,13 @@ pub(crate) async fn try_get_peer(
                     .ok_or(EdgionStatus::BackendPortResolutionFailed)?,
             };
 
-            let addr_str = format!("{}:{}", cluster_ip, port);
-            let addr = addr_str
-                .parse::<SocketAddr>()
+            // cluster_ip is a bare IP literal (no brackets). Parse it as IpAddr and
+            // build the SocketAddr directly so IPv6 ClusterIP services work without
+            // manual bracketing (mirrors the EndpointSlice discovery_impl path).
+            let ip: std::net::IpAddr = cluster_ip
+                .parse()
                 .map_err(|_| EdgionStatus::BackendAddressParsingFailed)?;
+            let addr = SocketAddr::Inet(std::net::SocketAddr::new(ip, port));
 
             // Security check: reject loopback / link-local / metadata (SSRF defense)
             if let Err(status) = validate_backend_addr(&addr, ctx.allow_loopback_upstream) {

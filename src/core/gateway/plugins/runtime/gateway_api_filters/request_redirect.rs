@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use http::StatusCode;
 use pingora_http::ResponseHeader;
 
+use crate::core::common::utils::net::host_without_port;
 use crate::core::gateway::plugins::runtime::log::{la, PluginLog};
 use crate::core::gateway::plugins::runtime::traits::{PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -46,7 +47,7 @@ impl RequestRedirectFilter {
             .config
             .hostname
             .as_deref()
-            .or_else(|| original_host.map(|h| h.split(':').next().unwrap_or(h)))
+            .or_else(|| original_host.map(host_without_port))
             .unwrap_or("localhost");
 
         let final_port: u16 = if let Some(p) = self.config.port {

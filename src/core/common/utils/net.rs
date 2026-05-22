@@ -88,6 +88,15 @@ pub fn is_localhost(addr: &PingoraSocketAddr) -> bool {
 /// Uses tokio's async DNS resolver to avoid blocking the event loop.
 /// Returns the first resolved address.
 pub async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<SocketAddr> {
+    // Short-circuit IP literals: build the SocketAddr directly instead of handing
+    // lookup_host an unbracketed "{ip}:{port}". For an IPv6 literal that string (e.g.
+    // "::1:9090") is itself a valid IPv6 address and only resolves via lookup_host's
+    // last-colon host:port heuristic — fragile and ambiguous. Parsing the literal here
+    // is RFC-correct and also avoids a needless resolver round-trip.
+    if let Ok(ip) = IpAddr::from_str(domain) {
+        return Ok(SocketAddr::new(ip, port));
+    }
+
     let addr_str = format!("{}:{}", domain, port);
 
     let mut addrs = tokio::net::lookup_host(&addr_str).await.map_err(|e| {
@@ -102,9 +111,64 @@ pub async fn resolve_domain(domain: &str, port: u16) -> pingora_core::Result<Soc
         .ok_or_else(|| PingoraError::explain(ErrorType::ConnectError, format!("No addresses found for {}", domain)))
 }
 
+/// Strip the optional `:port` suffix from a Host-header authority, preserving an
+/// IPv6 literal's surrounding brackets so the result can be re-emitted into a URL.
+///
+/// Unlike `NormalizedHostname`, this keeps the brackets (`[::1]:8443` → `[::1]`, not
+/// `::1`) and does not lowercase or strip a trailing FQDN dot — it is meant for
+/// echoing the client's host back into a `Location` redirect target, where dropping
+/// the brackets would produce an RFC-3986-invalid authority (`https://::1/`).
+///
+/// - `[::1]:8443` → `[::1]`     (IPv6 literal with port)
+/// - `[::1]`      → `[::1]`     (IPv6 literal, no port)
+/// - `example.com:80` → `example.com`
+/// - `example.com` → `example.com`
+/// - `[::1`       → `[::1`      (malformed: returned unchanged)
+/// - `2001:db8::1` → `2001:db8::1` (bare/unbracketed IPv6: returned unchanged)
+pub fn host_without_port(host: &str) -> &str {
+    if host.starts_with('[') {
+        // IPv6 literal: keep everything up to and including the closing ']'.
+        match host.find(']') {
+            Some(end) => &host[..=end],
+            None => host,
+        }
+    } else {
+        // IPv4 / reg-name: strip a single trailing `:port` (digits only). The
+        // `count() == 1` guard rejects a bare (unbracketed) IPv6 literal such as
+        // `2001:db8::1` — which has >1 colon and no valid port to strip — so it is
+        // returned unchanged instead of being mangled into `2001:db8:`.
+        match host.rfind(':') {
+            Some(pos) if host.matches(':').count() == 1 && host[pos + 1..].bytes().all(|b| b.is_ascii_digit()) => {
+                &host[..pos]
+            }
+            _ => host,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_host_without_port() {
+        // IPv6 literals keep their brackets (port stripped or not).
+        assert_eq!(host_without_port("[::1]:8443"), "[::1]");
+        assert_eq!(host_without_port("[::1]"), "[::1]");
+        assert_eq!(host_without_port("[2001:db8::1]:443"), "[2001:db8::1]");
+        // IPv4 / registered names: strip a single trailing :port.
+        assert_eq!(host_without_port("example.com:80"), "example.com");
+        assert_eq!(host_without_port("example.com"), "example.com");
+        assert_eq!(host_without_port("127.0.0.1:8080"), "127.0.0.1");
+        // Non-numeric suffix after ':' is not a port, so it is preserved as-is.
+        assert_eq!(host_without_port("host:notaport"), "host:notaport");
+        // Malformed IPv6 (no closing bracket) is returned unchanged.
+        assert_eq!(host_without_port("[::1"), "[::1");
+        // Bare/unbracketed IPv6 literals have >1 colon and no strippable port; the
+        // single-colon guard must leave them untouched (not mangle to `2001:db8:`).
+        assert_eq!(host_without_port("2001:db8::1"), "2001:db8::1");
+        assert_eq!(host_without_port("::1"), "::1");
+    }
 
     #[test]
     fn test_is_localhost_ipv4() {
@@ -273,9 +337,18 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_domain_ipv6_literal() {
+        // Hardened path: IPv6 literals are short-circuited through IpAddr::from_str and never
+        // handed to lookup_host as an unbracketed "::1:9090" (which is itself a valid IPv6
+        // address and would otherwise rely on resolver last-colon leniency).
         let addr = resolve_domain("::1", 9090).await.expect("ipv6 literal resolves");
         assert_eq!(addr.ip().to_string(), "::1");
         assert_eq!(addr.port(), 9090);
+
+        // A multi-group literal is the ambiguous case the short-circuit guards against:
+        // it must resolve to exactly the given address and port, not be re-split on a colon.
+        let addr = resolve_domain("2001:db8::1", 8443).await.expect("multi-group ipv6 literal resolves");
+        assert_eq!(addr.ip().to_string(), "2001:db8::1");
+        assert_eq!(addr.port(), 8443);
     }
 
     #[tokio::test]

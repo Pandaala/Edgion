@@ -298,7 +298,7 @@ impl EdgionTlsPassthroughProxy {
                         );
                         info.connection_established = true;
                     }
-                    upstream = Some(stream);
+                    upstream = Some((stream, upstream_addr_str));
                     break;
                 }
                 Err(e) => {
@@ -311,8 +311,8 @@ impl EdgionTlsPassthroughProxy {
             }
         }
 
-        let mut upstream_stream = match upstream {
-            Some(s) => s,
+        let (mut upstream_stream, upstream_addr_str) = match upstream {
+            Some(pair) => pair,
             None => {
                 ctx.err_log = Some(last_err);
                 return;
@@ -322,15 +322,10 @@ impl EdgionTlsPassthroughProxy {
         // 4. Send Proxy Protocol v2 if configured
         if let Some(2) = rule.proxy_protocol_version {
             if let Ok(src_ip) = ctx.client_addr.parse::<IpAddr>() {
-                let upstream_addr_str = ctx
-                    .upstream_info
-                    .last()
-                    .and_then(|i| {
-                        let addr = i.addr.as_deref()?;
-                        let port = i.port?;
-                        Some(format!("{addr}:{port}"))
-                    })
-                    .unwrap_or_default();
+                // Use the already-bracketed upstream_addr_str (SocketAddr Display) for the PP2
+                // destination. Re-deriving it from the bare-IP info.addr would drop the IPv6
+                // brackets and fail to parse, silently advertising 0.0.0.0:0 — see proxy.rs,
+                // which feeds the bracketed string straight into the PP2 builder.
                 let src_addr = std::net::SocketAddr::new(src_ip, ctx.client_port);
                 let dst_addr: std::net::SocketAddr = upstream_addr_str.parse().unwrap_or_else(|_| {
                     std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)

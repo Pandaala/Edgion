@@ -228,6 +228,62 @@ impl HttpRedirectTestSuite {
             },
         )
     }
+
+    /// Test redirect preserves IPv6-literal Host brackets (regression: redirect-F001).
+    /// An IPv6-literal Host such as `[::1]:8443` must keep its brackets in the
+    /// `Location` URL — the pre-fix `host.split(':').next()` produced `https://[:...`.
+    fn test_redirect_ipv6_host_literal() -> TestCase {
+        TestCase::new(
+            "http_redirect_ipv6_host_literal",
+            "Verify redirect keeps IPv6-literal Host brackets in Location",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let client = reqwest::Client::builder()
+                        .redirect(Policy::none())
+                        .danger_accept_invalid_certs(true)
+                        .no_proxy()
+                        .build()
+                        .unwrap();
+
+                    let url = format!("http://{}:{}/health", ctx.target_host, ctx.http_port);
+
+                    // Host carries an IPv6 literal with a port; the redirect listener strips
+                    // the port but must preserve the brackets when echoing it into Location.
+                    match client.get(&url).header("Host", "[::1]:8443").send().await {
+                        Ok(response) => {
+                            let status = response.status();
+                            if status.as_u16() != 301 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 301, got {}", status));
+                            }
+
+                            match response.headers().get("location") {
+                                Some(location) => {
+                                    let location_str = location.to_str().unwrap_or("");
+
+                                    // Brackets preserved, port re-added by the listener, path kept.
+                                    if location_str.starts_with("https://[::1]:") && location_str.ends_with("/health") {
+                                        TestResult::passed_with_message(
+                                            start.elapsed(),
+                                            format!("IPv6 Host brackets preserved: {}", location_str),
+                                        )
+                                    } else {
+                                        TestResult::failed(
+                                            start.elapsed(),
+                                            format!("IPv6 Host brackets mangled in Location: {}", location_str),
+                                        )
+                                    }
+                                }
+                                None => TestResult::failed(start.elapsed(), "Missing Location header".to_string()),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -246,6 +302,7 @@ impl TestSuite for HttpRedirectTestSuite {
             Self::test_redirect_with_query(),
             Self::test_redirect_https_scheme(),
             Self::test_redirect_post_request(),
+            Self::test_redirect_ipv6_host_literal(),
         ]
     }
 }

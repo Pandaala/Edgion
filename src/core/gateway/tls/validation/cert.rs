@@ -52,6 +52,11 @@ pub enum CertValidationError {
     },
     /// Certificate SAN does not match declared hosts
     SanMismatch { declared: Vec<String>, actual: Vec<String> },
+    /// No hosts declared in `spec.hosts`; certificate SAN cannot be validated.
+    /// Without a declared host, SAN matching would be vacuously satisfied, so this is
+    /// reported as a configuration error (defense-in-depth; the CRD schema normally
+    /// enforces non-empty hosts).
+    NoHostsDeclared,
     /// Declared host is not a valid wildcard pattern (RFC 6125 §6.4.3 / RFC 5280 §4.2.1.6:
     /// only a single, left-most-label asterisk is permitted; multi-label wildcards such as
     /// `*.*.example.com` are explicitly forbidden)
@@ -97,6 +102,9 @@ impl fmt::Display for CertValidationError {
             }
             Self::SanMismatch { declared, actual } => {
                 write!(f, "SAN mismatch (declared: {:?}, actual: {:?})", declared, actual)
+            }
+            Self::NoHostsDeclared => {
+                write!(f, "No hosts declared in spec.hosts; certificate SAN cannot be validated")
             }
             Self::InvalidSanPattern { pattern } => {
                 write!(
@@ -225,6 +233,17 @@ pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
     }
 
     check_chain_expiration(&cert_pem, &mut errors);
+
+    // A genuinely empty `spec.hosts` is a latent misconfiguration: with no declared host,
+    // SAN matching is vacuously satisfied (the loop in check_san_matches never runs and it
+    // returns Ok). The CRD schema enforces non-empty hosts and the matcher skips no-host
+    // certs, so this guard is defense-in-depth for a schema-bypass / future-optional-field
+    // scenario. This is intentionally keyed on `spec.hosts`, NOT on `valid_hosts` below:
+    // `valid_hosts` is also empty when every declared host is an invalid wildcard, but that
+    // case is already reported via InvalidSanPattern and must not double-report here.
+    if tls.spec.hosts.is_empty() {
+        errors.push(CertValidationError::NoHostsDeclared);
+    }
 
     // Detect structurally-invalid wildcard patterns up front. Without this they would fall
     // through to a generic SanMismatch, leaving the operator chasing a phantom certificate
@@ -406,7 +425,10 @@ fn check_san_matches(cert: &X509Certificate, declared_hosts: &[String]) -> Resul
         }
     }
 
-    // Check if all declared hosts are covered by certificate
+    // Check if all declared hosts are covered by certificate.
+    // An empty `declared_hosts` here means every host in spec.hosts was an invalid wildcard
+    // (already reported as InvalidSanPattern by the caller), so returning Ok avoids double-
+    // reporting. A genuinely empty spec.hosts is caught upstream as NoHostsDeclared.
     let mut missing_hosts = Vec::new();
     for declared_host in declared_hosts {
         let covered = if let Ok(declared_ip) = declared_host.parse::<std::net::IpAddr>() {
@@ -683,6 +705,34 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
             "invalid pattern should not also report SanMismatch, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_validate_cert_reports_no_hosts_declared() {
+        // An EdgionTls with empty spec.hosts must report NoHostsDeclared rather than
+        // silently passing SAN validation (the empty-loop vacuous-pass guard).
+        let (cert_pem, key_pem) = make_cert_with_sans(vec!["example.com"], vec![]);
+        let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec![]);
+
+        let result = validate_cert(&tls);
+        assert!(!result.is_valid, "empty hosts should be invalid");
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::NoHostsDeclared)),
+            "should report NoHostsDeclared, got: {:?}",
+            result.errors
+        );
+        // Empty hosts must NOT spuriously also produce a SanMismatch.
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
+            "empty hosts should not also report SanMismatch, got: {:?}",
             result.errors
         );
     }

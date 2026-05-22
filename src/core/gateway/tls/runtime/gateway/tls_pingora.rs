@@ -613,12 +613,16 @@ impl TlsCallback {
             return;
         }
 
-        // Apply frontend validation mTLS if configured
+        // Apply frontend validation mTLS if configured. The callee reports
+        // whether it actually installed a verify mode: a frontendValidation with
+        // empty/None CA refs reaches here (the controller does not fence it) and
+        // returns Ok(false) without requesting any client cert, so flagging
+        // is_mtls=true there would mislead tls.log / tls_route consumers (the
+        // same reasoning as the EdgionTls path above, fixed in tls-F001).
         if gateway_tls.frontend_validation.is_some() {
-            if let Err(e) = self.configure_gateway_frontend_mtls(ssl, gateway_tls) {
-                ssl_ctx.meta.err_log = Some(format!("frontend mTLS error: {}", e));
-            } else {
-                ssl_ctx.meta.is_mtls = true;
+            match self.configure_gateway_frontend_mtls(ssl, gateway_tls) {
+                Err(e) => ssl_ctx.meta.err_log = Some(format!("frontend mTLS error: {}", e)),
+                Ok(verify_installed) => ssl_ctx.meta.is_mtls = verify_installed,
             }
         }
     }
@@ -793,14 +797,19 @@ impl TlsCallback {
 
     /// Configure mTLS for Gateway standard frontendValidation.
     /// Uses resolved CA secrets to verify client certificates.
+    ///
+    /// Returns `Ok(true)` when a verify mode was actually installed, `Ok(false)`
+    /// when the listener has frontendValidation but no resolved CA secrets (so no
+    /// client cert is requested/verified). The caller stamps `is_mtls` from this
+    /// so the flag reflects the real handshake, not merely an Ok return.
     fn configure_gateway_frontend_mtls(
         &self,
         ssl: &mut SslRef,
         gateway_tls: &GatewayTlsEntry,
-    ) -> Result<(), Box<PingoraError>> {
+    ) -> Result<bool, Box<PingoraError>> {
         let ca_secrets = match &gateway_tls.resolved_frontend_ca_secrets {
             Some(secrets) if !secrets.is_empty() => secrets,
-            _ => return Ok(()),
+            _ => return Ok(false),
         };
 
         let mut store_builder = X509StoreBuilder::new().map_err(|e| {
@@ -861,7 +870,7 @@ impl TlsCallback {
             ssl.set_verify_depth(10);
         }
 
-        Ok(())
+        Ok(true)
     }
 
     /// Configure mTLS (mutual TLS) client certificate verification

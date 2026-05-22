@@ -86,8 +86,9 @@ impl EdgionHttpRedirectProxy {
     /// * `uri` - The request URI path and query string
     #[inline]
     fn build_redirect_url_from_parts(&self, host: &str, uri: &str) -> String {
-        // Remove port from host if present (we'll add the HTTPS port)
-        let host_without_port = host.split(':').next().unwrap_or(host);
+        // Remove port from host if present (we'll add the HTTPS port).
+        // IPv6-aware: `[::1]:8443` → `[::1]` (brackets preserved for the redirect URL).
+        let host_without_port = crate::core::common::utils::net::host_without_port(host);
 
         // Build redirect URL
         if self.https_port == 443 {
