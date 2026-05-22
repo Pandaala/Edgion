@@ -2,7 +2,7 @@
 //!
 //! EdgionPlugins defines reusable plugin configurations that can be referenced by HTTPRoutes
 
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use crate::types::resources::common::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -15,33 +15,39 @@ pub mod custom_plugins;
 pub mod edgion_plugin;
 pub mod entry;
 
+pub mod access_decision;
 pub mod plugin_configs;
+pub mod plugin_validation;
 
 #[cfg(test)]
 mod tests;
 
 // Re-exports
+pub use access_decision::AccessDecision;
 pub use edgion_plugin::EdgionPlugin;
 pub use entry::{
     PluginEntry, RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,
     UpstreamResponseFilterEntry,
 };
 pub use plugin_configs::{
-    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CaseType, CertHeaderFormat, CertSourceMode,
-    CompiledTemplate, ConsumerBy, CorsConfig, CsrfConfig, CtxSetConfig, CtxVarRule, DebugAccessLogToHeaderConfig,
-    DefaultAction, DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing, DomainTarget, DslConfig,
-    DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch, DynamicExternalUpstreamConfig,
-    DynamicInternalUpstreamConfig, EndpointAuthMethod, EndpointExtract, ExtUpstreamExtract, ExtUpstreamOnMissing,
-    ExtUpstreamOnNoMatch, ExtractConfig, ForwardAuthConfig, HashAlgorithm, HashCalcConfig, HeaderActions,
-    HeaderCertAuthConfig, HeaderEntry, HeaderRename, HmacAlgorithm, HmacAuthConfig, HmacCredential, HttpMethod,
-    IpRestrictionConfig, IpSource, JweContentEncryption, JweDecryptConfig, JweKeyManagement, JwtAlgorithm,
-    JwtAuthConfig, KeyAuthConfig, KeyMetadata, LdapAuthConfig, LimitHeaderNames, LruCacheConfig, MappingConfig,
-    MockConfig, OnMissing, OnMissingKey, OnRedisFailure, OpenidConnectConfig, ProxyRewriteConfig, RateLimitAlgorithm,
-    RateLimitConfig, RateLimitPolicy, RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef, RegionRouteConfig,
-    ReplaceConfig, RequestRestrictionConfig, ResolvedJweCredential, ResponseHeaderActions, ResponseHeaderEntry,
-    ResponseRewriteConfig, RestrictionRule, RestrictionSource, RouteRule, RuleMatchMode, TemplateSegment,
-    TemplateVarType, TransformConfig, TransformType, UnauthAction, UpstreamHeaderConfig, VerificationMode,
+    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, BasicAuthSecretGroup, CaseType, CertHeaderFormat,
+    CertSourceMode, CompiledTemplate, ConsumerBy, CorsConfig, CsrfConfig, CtxSetConfig, CtxVarRule,
+    DebugAccessLogToHeaderConfig, DefaultAction, DirectEndpointConfig, DirectEndpointOnInvalid,
+    DirectEndpointOnMissing, DomainTarget, DslConfig, DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch,
+    DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, EndpointAuthMethod, EndpointExtract,
+    ExtUpstreamExtract, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch, ExtractConfig, ForwardAuthConfig, HashAlgorithm,
+    HashCalcConfig, HeaderActions, HeaderCertAuthConfig, HeaderEntry, HeaderRename, HmacAlgorithm, HmacAuthConfig,
+    HmacAuthSecretGroup, HmacCredential, HttpMethod, IpRestrictionConfig, IpSource, JweContentEncryption,
+    JweDecryptConfig, JweKeyManagement, JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, KeyAuthConfig, KeyMetadata,
+    LdapAuthConfig, LimitHeaderNames, LruCacheConfig, MappingConfig, MockConfig, OnMissing, OnMissingKey,
+    OnRedisFailure, OpenidConnectConfig, ProxyRewriteConfig, RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy,
+    RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef, RegionRouteConfig, ReplaceConfig,
+    RequestRestrictionConfig, ResolvedBasicAuthUser, ResolvedJweCredential, ResolvedJwtCredential,
+    ResolvedJwtIssuerGroup, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionRule,
+    RestrictionSource, RouteRule, RuleMatchMode, TemplateSegment, TemplateVarType, TransformConfig, TransformType,
+    UnauthAction, UpstreamHeaderConfig, VerificationMode,
 };
+pub use plugin_validation::PluginValidation;
 
 /// API group for EdgionPlugins
 pub const EDGION_PLUGINS_GROUP: &str = "edgion.io";
@@ -221,6 +227,12 @@ impl EdgionPlugins {
             errors.extend(response_errors);
         }
 
+        // Fail closed: if any plugin (any stage) had an invalid config, prepend a
+        // request-stage RejectFilter so every request through this EdgionPlugins
+        // is rejected with 500 before reaching upstream, rather than silently
+        // running with the misconfigured plugin absent from the chain.
+        runtime.seal_fail_closed();
+
         self.spec.plugin_runtime = Arc::new(runtime);
         self.spec.preparse_errors = errors;
     }
@@ -233,7 +245,9 @@ impl EdgionPlugins {
                     for (i, entry) in entries.iter_mut().enumerate() {
                         if let Some(conds) = entry.conditions.as_mut() {
                             if let Err(e) = conds.compile() {
-                                errors.push(format!("{}[{}] conditions regex: {}", $label, i, e));
+                                let msg = format!("{}[{}] conditions regex: {}", $label, i, e);
+                                tracing::warn!("{}", msg);
+                                errors.push(msg);
                             }
                         }
                     }

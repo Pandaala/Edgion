@@ -240,7 +240,7 @@ ETCD_CLIENT="default_etcd-test"
 ETCD_NS_CLIENT="default_etcd-ns-test"
 
 # =============================================================================
-# Cleanup (trap on EXIT, same pattern as run_redis_test.sh)
+# Cleanup (trap on EXIT, same pattern as run_es_test.sh)
 # =============================================================================
 cleanup() {
     if [ "$DO_CLEANUP" = true ]; then

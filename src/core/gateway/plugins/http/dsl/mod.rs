@@ -16,6 +16,7 @@
 pub mod config;
 pub mod lang;
 pub mod plugin;
+pub mod runtime;
 
 #[cfg(test)]
 mod tests;

@@ -10,9 +10,10 @@ JWT Auth（JSON Web Token 认证）是一种基于令牌的认证机制，客户
 
 **工作原理**：
 1. 客户端发送带有 JWT 的请求（通过 Header、Query 或 Cookie）
-2. 插件验证 JWT 签名、过期时间等声明
-3. 验证成功：允许访问，设置 `X-Consumer-Username` 头传递给上游
-4. 验证失败：返回 401 状态码
+2. 插件解码 JWT 的 `iss`（颁发者）声明，路由到对应的 issuer 组
+3. 验证 JWT 签名、过期时间等声明（使用该组的算法和密钥）
+4. 验证成功：允许访问，设置 `X-Consumer-Username` 头（值为 `sub` 声明），并记录访问日志 `OK group=<name> iss=<iss> u=<sub>`
+5. 验证失败：返回 401 状态码
 
 **与 BasicAuth 的区别**：
 - BasicAuth：每次请求传输用户名和密码
@@ -33,9 +34,13 @@ spec:
   requestPlugins:
     - type: JwtAuth
       config:
-        secretRef:
-          name: jwt-secret
         algorithm: HS256
+        issuerGroups:
+          - name: default
+            issuers:
+              - "https://my-idp.example.com"
+            secretRefs:
+              - name: jwt-secret
 ```
 
 ### 创建 Kubernetes Secret
@@ -48,6 +53,7 @@ metadata:
   namespace: default
 type: Opaque
 stringData:
+  key: "my-key-id"
   secret: "my-jwt-secret-key-32-chars-long!!"
 ```
 
@@ -57,18 +63,34 @@ stringData:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `secretRef` | Object | 无 | 单密钥模式：指向包含 `secret`（HS*）或 `publicKey`（RS*/ES*）的 Secret |
-| `secretRefs` | Array | 无 | 多密钥模式：每个 Secret 需包含 `key`（标识符）+ `secret` 或 `publicKey` |
-| `algorithm` | String | `HS256` | 签名算法，见下方支持的算法列表 |
+| `issuerGroups` | Array | 无 | Issuer 分组列表（见下方子表）。未设置 `anonymous` 时必须配置 |
+| `algorithm` | String | `HS256` | 插件级默认签名算法，可被每个 issuerGroup 覆盖 |
+| `audiences` | Array | 无 | 插件级默认有效受众列表，可被每个 issuerGroup 覆盖 |
 | `header` | String | `authorization` | 从哪个 Header 读取 Token（支持 `Bearer <token>` 或裸 token） |
-| `query` | String | `jwt` | Query 参数名 |
+| `query` | String | `jwt` | Query 参数名。仅当 `allowTokenInQuery` 为 `true` 时才会读取 |
+| `allowTokenInQuery` | Boolean | `false` | 是否允许从 URL query 参数读取 token。默认禁用，因为 URL 中的 bearer token 会泄漏到 access log、浏览器历史和 `Referer` 头（RFC 6750 §2.3/§5.3） |
 | `cookie` | String | `jwt` | Cookie 名称 |
 | `hideCredentials` | Boolean | `false` | 是否隐藏 Token，不传递给上游服务 |
 | `anonymous` | String | 无 | 匿名用户名。设置后，未认证请求也会被允许，并设置此用户名 |
-| `keyClaimName` | String | `key` | JWT payload 中用于选择密钥的 claim 名称（多密钥模式） |
+| `keyClaimName` | String | `key` | JWT payload 中用于选择密钥的 claim 名称 |
 | `lifetimeGracePeriod` | Integer | `0` | exp/nbf 时钟偏差容忍（秒） |
+| `base64Secret` | Boolean | `false` | HS* 密钥是否经过 base64 编码 |
+| `maximumExpiration` | Integer | `0` | 最大允许的 exp 时长（秒，从当前时间起）。`0` 表示不限制 |
+| `storeClaimsInCtx` | Boolean | `false` | 是否将解码后的 claims 存储到 ctx 变量 `jwt_claims` |
+| `claimsToHeaders` | Object | 无 | 将 JWT claim 名映射到上游请求头名称 |
 
-**约束**：必须配置 `secretRef` 或 `secretRefs` 之一。
+**约束**：未设置 `anonymous` 时必须配置 `issuerGroups`。
+
+### JwtIssuerGroup 子表
+
+| 字段 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `name` | String | 是 | 组名，字符集遵循 K8s label-value（`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`，≤63 字符）。成功时出现在访问日志 `group=<name>` |
+| `description` | String | 否 | 人可读说明，不影响运行时 |
+| `issuers` | Array | 是 | 该组覆盖的 issuer 列表（即 JWT `iss` 声明的值）。跨组唯一，不可重复 |
+| `secretRefs` | Array | 是 | 该组使用的 Secret 引用列表（非空）。每个 Secret 需包含 `key` + `secret`（HS*）或 `publicKey`（RS*/ES*）|
+| `algorithm` | String | 否 | 覆盖插件级 `algorithm`。未设置则继承插件级默认值 |
+| `audiences` | Array | 否 | 覆盖插件级 `audiences`。设为 `[]` 表示该组明确不做 aud 检查 |
 
 ---
 
@@ -96,6 +118,17 @@ curl -H "Authorization: Bearer eyJhbGciOiJIUzI1..." https://api.example.com/reso
 
 ### 2. Query 参数
 
+> **默认禁用。** URL 中的 bearer token 会泄漏到 access log、浏览器历史和 `Referer` 头（RFC 6750 §2.3/§5.3）。要使用该方式必须显式设置 `allowTokenInQuery: true`；否则仅通过 query 携带的 token 会被忽略，请求按未认证处理。
+
+```yaml
+spec:
+  requestPlugins:
+    - type: JwtAuth
+      config:
+        allowTokenInQuery: true   # 读取 query 中的 token 时必须开启
+        # ...
+```
+
 ```bash
 curl "https://api.example.com/resource?jwt=eyJhbGciOiJIUzI1..."
 ```
@@ -108,9 +141,97 @@ curl --cookie "jwt=eyJhbGciOiJIUzI1..." https://api.example.com/resource
 
 ---
 
+## 按 issuer 组织：issuerGroups
+
+`issuerGroups` 是 JwtAuth 的核心设计：每个 JWT 的 `iss` 声明决定使用哪个组的密钥和算法进行验证，彻底隔离不同颁发者的凭证。
+
+### 单颁发者配置
+
+```yaml
+spec:
+  requestPlugins:
+    - type: JwtAuth
+      config:
+        algorithm: HS256
+        issuerGroups:
+          - name: my-idp
+            issuers:
+              - "https://my-idp.example.com"
+            secretRefs:
+              - name: my-idp-secret
+```
+
+### 多颁发者配置（partner-a + partner-b）
+
+适用于多个合作伙伴使用不同密钥签发 JWT 的场景：
+
+```yaml
+spec:
+  requestPlugins:
+    - type: JwtAuth
+      config:
+        algorithm: HS256   # 插件级默认，被各组覆盖
+        issuerGroups:
+          - name: partner-a
+            issuers:
+              - "https://partner-a.example.com"
+            secretRefs:
+              - name: partner-a-secret
+            # 使用插件级默认 algorithm: HS256
+          - name: partner-b
+            issuers:
+              - "https://partner-b.example.com"
+            secretRefs:
+              - name: partner-b-secret
+            algorithm: HS256   # 可显式指定，覆盖插件级默认
+            audiences:
+              - "my-api.example.com"   # 该组独立的受众检查
+```
+
+**路由逻辑**：
+1. 网关先解码 JWT payload（不验签）提取 `iss` 声明
+2. 在 `issuerGroups` 中查找匹配该 `iss` 的组
+3. 检查 `header.alg` 必须等于组的 `algorithm`（防算法混淆攻击）
+4. 用该组的密钥和算法进行完整验证
+
+**组级 `algorithm` / `audiences` 覆盖语义**：
+- `algorithm`：未设置时继承插件级默认；设置后覆盖插件级
+- `audiences`：未设置时继承插件级默认；设为 `[]` 表示明确关闭该组的 aud 检查
+
+### 访问日志格式
+
+验证成功时，访问日志记录：
+
+```
+OK group=partner-a iss=https://partner-a.example.com u=user-123
+```
+
+其中：
+- `group=<name>`：路由到的 issuer 组名
+- `iss=<iss>`：JWT 的颁发者声明值
+- `u=<sub>`：JWT 的 `sub`（subject）声明值
+
+### 失败分支的安全说明
+
+**验证失败时，访问日志不包含 `group=` / `iss=` 信息**（设计决定）。
+
+原因：未认证的攻击者不应能通过错误响应枚举已配置的 issuer、推断各颁发者使用的算法、或探测 kid 分布情况——这些信息组合起来可绘制出多租户拓扑图，存在安全风险。
+
+失败分支示例：
+
+- `Deny malformed token` — Token 格式错误
+- `Deny missing iss` — Token 缺少 `iss` 声明
+- `Deny unknown iss` — `iss` 不匹配任何已配置的组
+- `Deny bad algorithm` — Token 头部 `alg` 与组算法不匹配
+- `Deny missing key` — kid 不在路由组的凭证中
+- `Deny bad signature` — 签名验证失败
+- `Deny exp` / `Deny nbf` / `Deny bad aud` — 声明验证失败
+
+---
+
 ## 常见配置场景
 
-### 1. 单密钥模式（HS256）
+### 1. HS256 单密钥
 
 **创建 Secret**：
 ```yaml
@@ -120,6 +241,7 @@ metadata:
   name: jwt-secret
 type: Opaque
 stringData:
+  key: "default-key"
   secret: "my-super-secret-key-at-least-32-chars!"
 ```
 
@@ -129,10 +251,14 @@ spec:
   requestPlugins:
     - type: JwtAuth
       config:
-        secretRef:
-          name: jwt-secret
         algorithm: HS256
         hideCredentials: true
+        issuerGroups:
+          - name: default
+            issuers:
+              - "https://my-idp.example.com"
+            secretRefs:
+              - name: jwt-secret
 ```
 
 ### 2. RSA 公钥模式（RS256）
@@ -145,6 +271,7 @@ metadata:
   name: jwt-rsa-public
 type: Opaque
 stringData:
+  key: "rsa-key"
   publicKey: |
     -----BEGIN PUBLIC KEY-----
     MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
@@ -157,51 +284,16 @@ spec:
   requestPlugins:
     - type: JwtAuth
       config:
-        secretRef:
-          name: jwt-rsa-public
         algorithm: RS256
+        issuerGroups:
+          - name: rsa-idp
+            issuers:
+              - "https://rsa-idp.example.com"
+            secretRefs:
+              - name: jwt-rsa-public
 ```
 
-### 3. 多密钥模式
-
-适用于多个服务/颁发者使用不同密钥签发 JWT 的场景。
-
-**创建多个 Secret**：
-```yaml
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: issuer-a-secret
-type: Opaque
-stringData:
-  key: "issuer-a"           # 用于匹配 JWT payload 中的 key claim
-  secret: "issuer-a-secret-key-32-chars-long!!"
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: issuer-b-secret
-type: Opaque
-stringData:
-  key: "issuer-b"
-  secret: "issuer-b-secret-key-32-chars-long!!"
-```
-
-**配置插件**：
-```yaml
-spec:
-  requestPlugins:
-    - type: JwtAuth
-      config:
-        secretRefs:
-          - name: issuer-a-secret
-          - name: issuer-b-secret
-        algorithm: HS256
-        keyClaimName: key    # JWT payload 中必须包含 {"key": "issuer-a"} 或 {"key": "issuer-b"}
-```
-
-### 4. 匿名访问模式
+### 3. 匿名访问模式
 
 允许未认证的请求通过，但会标记为匿名用户：
 
@@ -210,33 +302,32 @@ spec:
   requestPlugins:
     - type: JwtAuth
       config:
-        secretRef:
-          name: jwt-secret
+        algorithm: HS256
         anonymous: "guest"
+        issuerGroups:
+          - name: default
+            issuers:
+              - "https://my-idp.example.com"
+            secretRefs:
+              - name: jwt-secret
 ```
 
 **行为**：
-- 提供有效 Token：设置 `X-Consumer-Username: <key_claim_value>`
+- 提供有效 Token：设置 `X-Consumer-Username: <sub>`
 - 未提供 Token 或 Token 无效：设置 `X-Consumer-Username: guest` 和 `X-Anonymous-Consumer: true`
 
 ---
 
 ## Secret 数据格式
 
-### 单密钥（secretRef）
+每个 Secret 需包含以下字段：
 
 | 算法类型 | 必需字段 | 说明 |
 |----------|----------|------|
+| HS* | `key` | 标识符，与 JWT payload 中 `keyClaimName` 对应字段匹配 |
 | HS* | `secret` | HMAC 共享密钥（建议 32 字节以上） |
+| RS*/ES* | `key` | 标识符，与 JWT payload 中 `keyClaimName` 对应字段匹配 |
 | RS*/ES* | `publicKey` | PEM 格式公钥 |
-
-### 多密钥（secretRefs）
-
-| 字段 | 说明 |
-|------|------|
-| `key` | 标识符，与 JWT payload 中 `keyClaimName` 对应字段匹配 |
-| `secret` | HS* 算法的共享密钥 |
-| `publicKey` | RS*/ES* 算法的 PEM 格式公钥 |
 
 ---
 
@@ -246,7 +337,7 @@ spec:
 
 | 头名称 | 说明 | 示例 |
 |--------|------|------|
-| `X-Consumer-Username` | JWT payload 中 `keyClaimName` 对应的值 | `user-123` |
+| `X-Consumer-Username` | JWT payload 中 `sub` 声明的值 | `user-123` |
 
 ### 认证失败
 
@@ -270,9 +361,9 @@ Content-Type: text/plain
 const jwt = require('jsonwebtoken');
 
 const token = jwt.sign(
-  { key: 'my-user', exp: Math.floor(Date.now() / 1000) + 3600 },
+  { sub: 'my-user', iss: 'https://my-idp.example.com', exp: Math.floor(Date.now() / 1000) + 3600 },
   'my-super-secret-key-at-least-32-chars!',
-  { algorithm: 'HS256' }
+  { algorithm: 'HS256', keyid: 'default-key' }
 );
 
 fetch('https://api.example.com/resource', {
@@ -287,9 +378,14 @@ import jwt
 import time
 
 token = jwt.encode(
-    {'key': 'my-user', 'exp': int(time.time()) + 3600},
+    {
+        'sub': 'my-user',
+        'iss': 'https://my-idp.example.com',
+        'exp': int(time.time()) + 3600
+    },
     'my-super-secret-key-at-least-32-chars!',
-    algorithm='HS256'
+    algorithm='HS256',
+    headers={'kid': 'default-key'}
 )
 
 import requests
@@ -320,25 +416,28 @@ curl "https://api.example.com/resource?jwt=$TOKEN"
 
 1. **始终使用 HTTPS**：JWT 在传输中不应被拦截
 
-2. **设置合理的过期时间**：
+2. **为每个颁发者创建独立的 issuerGroup**：隔离密钥，防止跨颁发者密钥混用
+
+3. **设置合理的过期时间**：
    ```json
-   {"key": "user", "exp": 1735689600}  // exp 为 UNIX 时间戳
+   {"sub": "user", "iss": "https://my-idp.example.com", "exp": 1735689600}
    ```
 
-3. **隐藏凭证**：
+4. **隐藏凭证**：
    ```yaml
    hideCredentials: true  # 不传递 Token 给上游
    ```
 
-4. **使用非对称算法**：生产环境建议使用 RS256 或 ES256，私钥仅签发方持有
+5. **使用非对称算法**：生产环境建议使用 RS256 或 ES256，私钥仅签发方持有
 
-5. **定期轮换密钥**：配合多密钥模式实现平滑轮换
+6. **配置 audiences**：指定允许的受众列表，防止 JWT 被其他服务复用
 
 ### 避免做法
 
-1. **不要在 URL 中传递 Token**（除非无法使用 Header/Cookie）
+1. **不要在 URL 中传递 Token** —— query 方式默认关闭（`allowTokenInQuery: false`），仅在确实无法使用 Header/Cookie 时才开启
 2. **不要使用过短的密钥**（HS256 建议 32 字节以上）
 3. **不要忽略 exp 声明**
+4. **不要让多个颁发者共享同一个 issuerGroup**（应各自独立）
 
 ---
 
@@ -350,11 +449,12 @@ curl "https://api.example.com/resource?jwt=$TOKEN"
 - Secret 不存在或名称错误
 - Secret 缺少必需字段（`secret` 或 `publicKey`）
 - 算法与密钥类型不匹配
+- JWT 的 `iss` 声明与任何 issuerGroup 的 `issuers` 不匹配
 
 **解决方案**：
 ```bash
 kubectl get secret jwt-secret -o yaml
-# 确保包含 secret 或 publicKey 字段
+# 确保包含 key + secret 或 key + publicKey 字段
 ```
 
 ### 问题 2：Token 验证失败
@@ -362,7 +462,8 @@ kubectl get secret jwt-secret -o yaml
 **可能原因**：
 - 密钥不匹配
 - Token 已过期（检查 `exp` 声明）
-- 算法不匹配（Token 中声明的 alg 与配置不一致）
+- 算法不匹配（Token 中声明的 alg 与 issuerGroup 配置不一致）
+- JWT 缺少 `iss` 声明
 
 **解决方案**：
 ```bash
@@ -370,35 +471,43 @@ kubectl get secret jwt-secret -o yaml
 echo "eyJhbG..." | cut -d. -f2 | base64 -d
 ```
 
-### 问题 3：多密钥模式找不到密钥
+### 问题 3：多颁发者模式找不到对应组
 
 **可能原因**：
-- JWT payload 中缺少 `keyClaimName` 对应的字段
-- `keyClaimName` 的值与 Secret 中的 `key` 不匹配
+- JWT payload 中 `iss` 值与任何 issuerGroup 的 `issuers` 列表不匹配（包括尾部斜杠差异）
+- `issuers` 配置了重复的 iss 值（跨组 iss 必须唯一）
 
 **解决方案**：
-确保 JWT payload 包含：
-```json
-{"key": "issuer-a", "exp": 1735689600}
-```
-且 Secret 中 `key` 字段值为 `issuer-a`。
+确保 JWT payload 中的 `iss` 与 issuerGroups 配置完全匹配（字符串精确匹配，含协议头和路径）。
 
 ---
 
 ## 完整示例
 
 ```yaml
-# 1. 创建 Secret
+# 1. 创建 Secret（partner-a）
 apiVersion: v1
 kind: Secret
 metadata:
-  name: api-jwt-secret
+  name: partner-a-secret
   namespace: default
 type: Opaque
 stringData:
-  secret: "my-super-secret-key-for-jwt-auth-32!"
+  key: "partner-a-key"
+  secret: "partner-a-secret-key-32-chars-long!!"
 ---
-# 2. 创建 EdgionPlugins
+# 2. 创建 Secret（partner-b）
+apiVersion: v1
+kind: Secret
+metadata:
+  name: partner-b-secret
+  namespace: default
+type: Opaque
+stringData:
+  key: "partner-b-key"
+  secret: "partner-b-secret-key-32-chars-long!!"
+---
+# 3. 创建 EdgionPlugins
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -408,13 +517,24 @@ spec:
   requestPlugins:
     - type: JwtAuth
       config:
-        secretRef:
-          name: api-jwt-secret
         algorithm: HS256
         header: authorization
         hideCredentials: true
+        issuerGroups:
+          - name: partner-a
+            issuers:
+              - "https://partner-a.example.com"
+            secretRefs:
+              - name: partner-a-secret
+          - name: partner-b
+            issuers:
+              - "https://partner-b.example.com"
+            secretRefs:
+              - name: partner-b-secret
+            audiences:
+              - "my-api.example.com"
 ---
-# 3. 创建 HTTPRoute
+# 4. 创建 HTTPRoute
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -443,10 +563,10 @@ spec:
 
 **测试**：
 ```bash
-# 生成 Token（示例使用 Node.js）
-TOKEN=$(node -e "console.log(require('jsonwebtoken').sign({key:'user1',exp:Math.floor(Date.now()/1000)+3600},'my-super-secret-key-for-jwt-auth-32!'))")
+# 生成 partner-a 的 Token（示例使用 Node.js）
+TOKEN=$(node -e "console.log(require('jsonwebtoken').sign({sub:'user1',iss:'https://partner-a.example.com',exp:Math.floor(Date.now()/1000)+3600},'partner-a-secret-key-32-chars-long!!',{keyid:'partner-a-key'}))")
 
-# 使用 Token 访问
+# 使用 Token 访问（访问日志将记录 OK group=partner-a iss=https://partner-a.example.com u=user1）
 curl -H "Authorization: Bearer $TOKEN" https://api.example.com/api/data
 
 # 无 Token - 返回 401

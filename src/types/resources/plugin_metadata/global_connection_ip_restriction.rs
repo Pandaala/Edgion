@@ -1,8 +1,8 @@
 //! GlobalConnectionIpRestriction PluginMetaData variant — L4 TCP connection-phase IP restriction.
 
-use crate::core::common::matcher::ip_cidr_helpers::build_radix_matcher;
+use crate::core::common::matcher::ip_cidr_helpers::build_grouped_matcher;
 use crate::core::common::matcher::ip_radix_tree::IpRadixMatcher;
-use crate::types::resources::edgion_plugins::DefaultAction;
+use crate::types::resources::edgion_plugins::{AccessDecision, DefaultAction};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -95,6 +95,12 @@ impl ProfileRules {
             return Err("at least one of 'allow' or 'deny' must be non-empty".to_string());
         }
 
+        // Intentionally stricter than HTTP/Stream IpRestriction: a present
+        // but empty `allow`/`deny` (`Some(vec![])`) is rejected here via
+        // `build_flat_matcher` ("group list is empty"), rather than being
+        // treated as absent. This preserves pre-existing GlobalConnection
+        // semantics — do not "harmonize" it into the `!is_empty()` guard
+        // the other consumers use.
         if let Some(allow) = &self.allow {
             self.allow_matcher = Some(build_flat_matcher(allow)?);
         }
@@ -104,42 +110,31 @@ impl ProfileRules {
         Ok(())
     }
 
-    /// Check whether an IP should be allowed under this profile's rules.
-    /// Priority: deny > allow > default_action.
+    /// Returns the full access decision (group name included).
     ///
-    /// `match_ip().is_some()` means "IP is covered by some CIDR in the matcher".
-    /// build_flat_matcher always inserts with a sentinel `true` value; the stored
-    /// value is not semantically meaningful (we only care if any CIDR matched).
-    pub fn check_ip(&self, ip: &IpAddr) -> bool {
+    /// Priority: deny > allow > default_action. See spec §4.6.
+    pub fn check_ip(&self, ip: &IpAddr) -> AccessDecision {
         if let Some(deny) = &self.deny_matcher {
-            if deny.match_ip(ip).is_some() {
-                return false;
+            if let Some(g) = deny.matched_group_arc(ip) {
+                return AccessDecision::DenyByGroup(g);
             }
         }
         if let Some(allow) = &self.allow_matcher {
-            return allow.match_ip(ip).is_some();
+            if let Some(g) = allow.matched_group_arc(ip) {
+                return AccessDecision::AllowByGroup(g);
+            }
+            return AccessDecision::DenyByWhitelistMiss;
         }
-        matches!(self.default_action, DefaultAction::Allow)
+        AccessDecision::Default(self.default_action.clone())
     }
 }
 
-/// Flatten `Vec<IpGroup>` into a single IpRadixMatcher, while enforcing uniqueness of group names.
+/// Flatten `Vec<IpGroup>` into a single IpRadixMatcher.
+/// Delegates to the shared grouped-matcher builder, which performs name
+/// validation (charset + length), name uniqueness, cross-group CIDR
+/// uniqueness, and label interning.
 fn build_flat_matcher(groups: &[IpGroup]) -> Result<IpRadixMatcher, String> {
-    if groups.is_empty() {
-        return Err("group list is empty".to_string());
-    }
-    let mut seen = std::collections::HashSet::new();
-    let mut all_cidrs: Vec<String> = Vec::new();
-    for g in groups {
-        if !seen.insert(g.name.as_str()) {
-            return Err(format!("duplicate group name '{}'", g.name));
-        }
-        if g.cidrs.is_empty() {
-            return Err(format!("group '{}' cidrs is empty", g.name));
-        }
-        all_cidrs.extend(g.cidrs.iter().cloned());
-    }
-    build_radix_matcher(&all_cidrs)
+    build_grouped_matcher(groups)
 }
 
 #[cfg(test)]
@@ -271,7 +266,8 @@ mod tests {
             description: None,
         };
         let err = d.validate_and_init().unwrap_err();
-        assert!(err.contains("cidrs") && err.contains("empty"), "{}", err);
+        // Error message comes from validate_groups_structure: "group 'office' has no cidrs"
+        assert!(err.contains("cidrs") && err.contains("no"), "{}", err);
     }
 
     #[test]
@@ -310,6 +306,25 @@ mod tests {
         data.validate_and_init().unwrap();
     }
 
+    /// Convenience: `check_ip` returns an `AccessDecision`; the legacy
+    /// tests were boolean. This helper preserves their semantic intent.
+    fn is_allowed(decision: AccessDecision) -> bool {
+        matches!(
+            decision,
+            AccessDecision::AllowByGroup(_) | AccessDecision::Default(DefaultAction::Allow)
+        )
+    }
+
+    /// Convenience: any kind of deny decision.
+    fn is_denied(decision: AccessDecision) -> bool {
+        matches!(
+            decision,
+            AccessDecision::DenyByGroup(_)
+                | AccessDecision::DenyByWhitelistMiss
+                | AccessDecision::Default(DefaultAction::Deny)
+        )
+    }
+
     #[test]
     fn check_ip_allow_only_whitelist_semantics() {
         let p = ProfileRules {
@@ -327,8 +342,12 @@ mod tests {
         };
         init(&mut d);
         let p = d.profiles.get("p1").unwrap();
-        assert!(p.check_ip(&"192.168.1.50".parse().unwrap()));
-        assert!(!p.check_ip(&"8.8.8.8".parse().unwrap()));
+        assert!(is_allowed(p.check_ip(&"192.168.1.50".parse().unwrap())));
+        // Whitelist mode: unmatched IP -> DenyByWhitelistMiss.
+        assert!(matches!(
+            p.check_ip(&"8.8.8.8".parse().unwrap()),
+            AccessDecision::DenyByWhitelistMiss
+        ));
     }
 
     #[test]
@@ -348,9 +367,18 @@ mod tests {
         };
         init(&mut d);
         let p = d.profiles.get("p1").unwrap();
-        assert!(p.check_ip(&"10.0.0.1".parse().unwrap()));
-        assert!(!p.check_ip(&"10.0.0.100".parse().unwrap()));
-        assert!(!p.check_ip(&"8.8.8.8".parse().unwrap()));
+        // 10.0.0.1 matches allow group "all".
+        assert!(is_allowed(p.check_ip(&"10.0.0.1".parse().unwrap())));
+        // 10.0.0.100 matches deny group "bad" (wins over allow).
+        match p.check_ip(&"10.0.0.100".parse().unwrap()) {
+            AccessDecision::DenyByGroup(g) => assert_eq!(&*g, "bad"),
+            other => panic!("expected DenyByGroup(bad), got {:?}", other),
+        }
+        // 8.8.8.8 outside allow -> DenyByWhitelistMiss.
+        assert!(matches!(
+            p.check_ip(&"8.8.8.8".parse().unwrap()),
+            AccessDecision::DenyByWhitelistMiss
+        ));
     }
 
     #[test]
@@ -370,8 +398,8 @@ mod tests {
         };
         init(&mut d);
         let p = d.profiles.get("p1").unwrap();
-        assert!(!p.check_ip(&"1.2.3.4".parse().unwrap()));
-        assert!(p.check_ip(&"8.8.8.8".parse().unwrap()));
+        assert!(is_denied(p.check_ip(&"1.2.3.4".parse().unwrap())));
+        assert!(is_allowed(p.check_ip(&"8.8.8.8".parse().unwrap())));
     }
 
     #[test]
@@ -394,9 +422,21 @@ mod tests {
         };
         init(&mut d);
         let p = d.profiles.get("p1").unwrap();
-        assert!(p.check_ip(&"173.245.48.1".parse().unwrap()));
-        assert!(p.check_ip(&"192.168.1.50".parse().unwrap()));
-        assert!(!p.check_ip(&"8.8.8.8".parse().unwrap()));
+        // 173.245.48.1 matches the cloudflare group.
+        match p.check_ip(&"173.245.48.1".parse().unwrap()) {
+            AccessDecision::AllowByGroup(g) => assert_eq!(&*g, "cloudflare"),
+            other => panic!("expected AllowByGroup(cloudflare), got {:?}", other),
+        }
+        // 192.168.1.50 matches the office group.
+        match p.check_ip(&"192.168.1.50".parse().unwrap()) {
+            AccessDecision::AllowByGroup(g) => assert_eq!(&*g, "office"),
+            other => panic!("expected AllowByGroup(office), got {:?}", other),
+        }
+        // Outside any allow group -> DenyByWhitelistMiss.
+        assert!(matches!(
+            p.check_ip(&"8.8.8.8".parse().unwrap()),
+            AccessDecision::DenyByWhitelistMiss
+        ));
     }
 
     #[test]

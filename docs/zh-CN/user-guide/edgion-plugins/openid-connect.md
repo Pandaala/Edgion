@@ -41,7 +41,7 @@
 | `redirectUri` | String | 无 | 自定义回调 URI，须为绝对路径或绝对 URL |
 | `authorizationParams` | Object | 无 | 附加到授权请求的额外参数（不可包含保留键如 `response_type`、`client_id` 等） |
 | `revokeTokensOnLogout` | Boolean | `false` | 登出时是否调用 Token Revocation 端点 |
-| `logoutPath` | String | `"/logout"` | 触发登出的路径，须以 `/` 开头 |
+| `logoutPath` | String | `"/logout"` | 触发登出的路径，须以 `/` 开头。**加载时规范化**：配置值在 gateway 插件实例构建时自动规范化（`/auth//logout` 存储为 `/auth/logout`），INFO 日志记录转换。 |
 | `postLogoutRedirectUri` | String | 无 | 登出后重定向 URI |
 
 ### Session 参数

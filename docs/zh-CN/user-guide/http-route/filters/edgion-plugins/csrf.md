@@ -56,6 +56,7 @@ filters:
 | `key` | String | 无 | **必填**。用于签名 token 的密钥。建议 32 字符以上，使用强随机值 |
 | `expires` | Integer | `7200` (2小时) | Token 过期时间（秒）。建议与会话过期时间一致 |
 | `name` | String | `"apisix-csrf-token"` | Token 名称，用于 cookie 和 header |
+| `cookieSecure` | Boolean | `true` | 是否为 token cookie 设置 `Secure` 属性。客户端通过 HTTPS 访问 Edgion 时保持 `true`。对于 HTTP-only 部署模型（上游 LB/sidecar 终结 TLS、mesh 内部纯 HTTP、本地开发）设为 `false`——否则浏览器会丢弃 HTTP 上收到的 `Secure` cookie，导致每个修改型请求都因 `no csrf cookie` 失败 |
 
 ---
 

@@ -37,6 +37,19 @@ spec:
                         type: boolean
                         description: "Whether this plugin is enabled (default: true)"
                         default: true
+                      alias: &aliasSchema
+                        # Charset (^[a-zA-Z0-9._-]{1,32}$) is enforced by the
+                        # runtime preparse validator and surfaced as
+                        # Accepted=False/Invalid on the resource status.
+                        # The CRD only enforces length so that semantic alias
+                        # errors flow through the same operator-feedback path
+                        # as other plugin-config errors (rate=0, bad regex,
+                        # allowCredentials+wildcard, etc.) instead of being
+                        # rejected at apply-time without status visibility.
+                        type: string
+                        description: "Optional operator-defined label echoed into PluginLog.alias for distinguishing multiple entries of the same plugin type in the access log (charset ^[a-zA-Z0-9._-]{1,32}$ enforced at preparse)"
+                        maxLength: 32
+                        minLength: 1
                       # --- conditionEnable: define anchor here, reuse below ---
                       conditionEnable: &conditionEnableSchema
                         type: object
@@ -158,6 +171,178 @@ spec:
                         type: object
                         description: "Plugin-specific configuration"
                         x-kubernetes-preserve-unknown-fields: true
+                        # KeyAuth-specific fields declared here so the API server
+                        # validates them at admission time. Other plugin types have
+                        # their unknown fields preserved by the flag above.
+                        # Fields with no type constraint use x-kubernetes-preserve-unknown-fields
+                        # on their sub-objects; primitive leaf fields are typed directly.
+                        properties:
+                          # --- KeyAuth config fields ---
+                          keySources:
+                            type: array
+                            description: "Key source list (header, query, cookie, ctx, webhook)"
+                            items:
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                              properties:
+                                type:
+                                  type: string
+                                  enum: [header, query, cookie, ctx, webhook]
+                                name:
+                                  type: string
+                              required: [type]
+                          hideCredentials:
+                            type: boolean
+                            description: "Remove API Key from request after validation"
+                          authFailureDelayMs:
+                            type: integer
+                            minimum: 0
+                            description: "Delay response on auth failure in milliseconds"
+                          anonymous:
+                            type: string
+                            description: "Anonymous consumer name; allows unauthenticated requests"
+                          realm:
+                            type: string
+                            description: "Authentication realm name"
+                          keyField:
+                            type: string
+                            description: "Field name storing the key value in Secret"
+                          upstreamHeaderFields:
+                            type: array
+                            description: "Extra headers to forward upstream from key metadata"
+                            items:
+                              type: string
+                          secretGroups:
+                            type: array
+                            description: "Named groups of Secret references for KeyAuth"
+                            items:
+                              type: object
+                              required: [name, secretRefs]
+                              properties:
+                                name:
+                                  type: string
+                                  description: "Group name (Kubernetes label-value charset, max 63 chars)"
+                                  pattern: '^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$'
+                                  maxLength: 63
+                                description:
+                                  type: string
+                                  description: "Human-readable description (not used by runtime)"
+                                secretRefs:
+                                  type: array
+                                  minItems: 1
+                                  description: "Secret references for this group"
+                                  items:
+                                    type: object
+                                    required: [name]
+                                    properties:
+                                      name:
+                                        type: string
+                                        description: "Secret name"
+                                      namespace:
+                                        type: string
+                                        description: "Secret namespace (defaults to EdgionPlugins namespace)"
+                          # --- HmacAuth config fields ---
+                          algorithms:
+                            type: array
+                            description: "Allowed HMAC algorithms"
+                            items:
+                              type: string
+                              enum: [hmac-sha256, hmac-sha384, hmac-sha512]
+                          clockSkew:
+                            type: integer
+                            minimum: 1
+                            description: "Maximum allowed clock skew in seconds"
+                          enforceHeaders:
+                            type: array
+                            description: "Headers required in signed headers list"
+                            items:
+                              type: string
+                          validateRequestBody:
+                            type: boolean
+                            description: "Validate request body digest (currently rejected at preparse)"
+                          minSecretLength:
+                            type: integer
+                            minimum: 0
+                            description: "Minimum acceptable HMAC secret length in bytes"
+                          secretField:
+                            type: string
+                            description: "Field name in credential entry for secret value"
+                          usernameField:
+                            type: string
+                            description: "Field name in credential entry for username"
+                          # --- JwtAuth config fields ---
+                          algorithm:
+                            type: string
+                            enum: [HS256, HS384, HS512, RS256, RS384, RS512, ES256, ES384]
+                            description: "JwtAuth plugin-level default JWT signature algorithm (overridable per issuerGroup)"
+                          header:
+                            type: string
+                            description: "JwtAuth: header name to read token from"
+                          query:
+                            type: string
+                            description: "JwtAuth: query parameter name for token"
+                          allowTokenInQuery:
+                            type: boolean
+                            description: "JwtAuth: allow reading the token from the URL query parameter (default false; RFC 6750 SHOULD NOT)"
+                          cookie:
+                            type: string
+                            description: "JwtAuth: cookie name for token"
+                          keyClaimName:
+                            type: string
+                            description: "JwtAuth: JWT payload claim name identifying the credential key"
+                          lifetimeGracePeriod:
+                            type: integer
+                            minimum: 0
+                            description: "JwtAuth: clock skew tolerance in seconds for exp/nbf"
+                          audiences:
+                            type: array
+                            description: "JwtAuth plugin-level default valid audiences (overridable per issuerGroup)"
+                            items: { type: string }
+                          base64Secret:
+                            type: boolean
+                            description: "JwtAuth: whether HS* secret is base64-encoded"
+                          maximumExpiration:
+                            type: integer
+                            minimum: 0
+                            description: "JwtAuth: maximum allowed exp in seconds from now (0 = no limit)"
+                          storeClaimsInCtx:
+                            type: boolean
+                            description: "JwtAuth: store decoded claims in ctx var 'jwt_claims'"
+                          claimsToHeaders:
+                            type: object
+                            additionalProperties: { type: string }
+                            description: "JwtAuth: map JWT claim names to upstream header names"
+                          issuerGroups:
+                            type: array
+                            description: "JwtAuth: named groups of issuers + Secret refs"
+                            items:
+                              type: object
+                              required: [name, issuers, secretRefs]
+                              properties:
+                                name:
+                                  type: string
+                                  pattern: '^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$'
+                                  maxLength: 63
+                                description: { type: string }
+                                issuers:
+                                  type: array
+                                  minItems: 1
+                                  items: { type: string }
+                                secretRefs:
+                                  type: array
+                                  minItems: 1
+                                  items:
+                                    type: object
+                                    required: [name]
+                                    properties:
+                                      name: { type: string }
+                                      namespace: { type: string }
+                                algorithm:
+                                  type: string
+                                  enum: [HS256, HS384, HS512, RS256, RS384, RS512, ES256, ES384]
+                                audiences:
+                                  type: array
+                                  items: { type: string }
 
                 # ============================================
                 # Upstream Response Filter Stage Plugins (sync)
@@ -171,6 +356,7 @@ spec:
                       enable:
                         type: boolean
                         default: true
+                      alias: *aliasSchema
                       conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
                       type:
@@ -197,6 +383,7 @@ spec:
                       enable:
                         type: boolean
                         default: true
+                      alias: *aliasSchema
                       conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
                       type:
@@ -220,6 +407,7 @@ spec:
                       enable:
                         type: boolean
                         default: true
+                      alias: *aliasSchema
                       conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
                       type:

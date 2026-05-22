@@ -7,6 +7,8 @@
 //! - GatewayClass_observed-gen-class.yaml           (with metadata.generation: 5)
 //! - Gateway_edgion-test_observed-gen-gateway.yaml  (with metadata.generation: 3)
 
+pub mod dynamic;
 mod status_test;
 
+pub use dynamic::{HighFreqFinalTestSuite, HighFreqInitialTestSuite};
 pub use status_test::ObservedGenerationStatusTestSuite;

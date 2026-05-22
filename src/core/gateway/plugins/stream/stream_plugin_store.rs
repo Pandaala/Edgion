@@ -1,7 +1,7 @@
 //! Global store for EdgionStreamPlugins resources
 
 use arc_swap::ArcSwap;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
@@ -93,6 +93,52 @@ impl StreamPluginStore {
     pub fn count(&self) -> usize {
         self.plugins.load().len()
     }
+
+    /// Per-kind plugin entry count across all stored EdgionStreamPlugins resources.
+    ///
+    /// Discriminator: `EdgionStreamPlugin::type_name()` / `TlsRouteStreamPlugin::type_name()`
+    /// (enum variant name, e.g. "IpRestriction", "GlobalConnectionIpRestriction").
+    /// Both Stage 1 (ConnectionFilter) and Stage 2 (TlsRoute) entries are counted.
+    pub fn count_by_kind(&self) -> BTreeMap<String, usize> {
+        let mut out = BTreeMap::new();
+        let map = self.plugins.load();
+        for esp in map.values() {
+            if let Some(entries) = &esp.spec.plugins {
+                for entry in entries {
+                    *out.entry(entry.plugin.type_name().to_string()).or_insert(0) += 1;
+                }
+            }
+            if let Some(entries) = &esp.spec.tls_route_plugins {
+                for entry in entries {
+                    *out.entry(entry.plugin.type_name().to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+        out
+    }
+
+    /// Sample resource keys (namespace/name) holding stream plugins of the given kind.
+    #[allow(dead_code)] // Consumed by validator/sample-diagnostics (Task 15); allow until then.
+    pub fn keys_by_kind(&self, kind: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let map = self.plugins.load();
+        for (key, esp) in map.iter() {
+            let in_stage1 = esp
+                .spec
+                .plugins
+                .as_ref()
+                .is_some_and(|entries| entries.iter().any(|e| e.plugin.type_name() == kind));
+            let in_stage2 = esp
+                .spec
+                .tls_route_plugins
+                .as_ref()
+                .is_some_and(|entries| entries.iter().any(|e| e.plugin.type_name() == kind));
+            if in_stage1 || in_stage2 {
+                out.push(key.clone());
+            }
+        }
+        out
+    }
 }
 
 impl Default for StreamPluginStore {
@@ -128,5 +174,19 @@ impl ConfHandler<EdgionStreamPlugins> for StreamPluginStore {
             tracing::debug!(key = %key, "Removing EdgionStreamPlugins");
         }
         self.update(add_or_update, &remove);
+    }
+}
+
+#[cfg(test)]
+mod kind_stats_tests {
+    use super::*;
+
+    #[test]
+    fn empty_store_reports_empty_breakdown() {
+        let store = StreamPluginStore::new();
+        let by_kind = store.count_by_kind();
+        assert!(by_kind.is_empty());
+        let keys = store.keys_by_kind("IpRestriction");
+        assert!(keys.is_empty());
     }
 }

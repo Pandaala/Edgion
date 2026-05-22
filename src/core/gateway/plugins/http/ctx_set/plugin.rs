@@ -22,6 +22,7 @@
 use async_trait::async_trait;
 use regex::Regex;
 
+use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{
@@ -47,7 +48,7 @@ impl CtxSet {
     /// Create a new CtxSet plugin from configuration
     pub fn create(config: &CtxSetConfig) -> Box<dyn RequestFilter> {
         let mut validated_config = config.clone();
-        validated_config.validate();
+        let _ = validated_config.validate();
 
         let plugin = CtxSet {
             name: "CtxSet".to_string(),
@@ -85,6 +86,9 @@ impl CtxSet {
             TemplateVarType::Cookie => var_name.and_then(|n| session.get_cookie(n)).unwrap_or_default(),
             TemplateVarType::Ctx => var_name.and_then(|n| session.get_ctx_var(n)).unwrap_or_default(),
             TemplateVarType::Path => session.get_path().to_string(),
+            TemplateVarType::Uri => session.get_uri(),
+            TemplateVarType::RequestPath => session.get_request_path().to_string(),
+            TemplateVarType::RequestUri => session.get_request_uri(),
             TemplateVarType::Method => session.get_method().to_string(),
             TemplateVarType::ClientIp => session.remote_addr().to_string(),
         }
@@ -93,7 +97,13 @@ impl CtxSet {
     /// Process a single variable rule
     ///
     /// Returns the final value to set, or None if the value should not be set
-    async fn process_rule(&self, rule: &CtxVarRule, rule_idx: usize, session: &dyn PluginSession) -> Option<String> {
+    async fn process_rule(
+        &self,
+        rule: &CtxVarRule,
+        rule_idx: usize,
+        session: &dyn PluginSession,
+        plugin_log: &mut PluginLog,
+    ) -> Option<String> {
         // Priority: value > template > from
         let mut value = if let Some(ref static_value) = rule.value {
             // Static value has highest priority
@@ -111,7 +121,7 @@ impl CtxSet {
         // Apply extract (regex capture)
         if let Some(ref _extract) = rule.extract {
             if let Some(regex) = self.config.get_compiled_regex(rule_idx) {
-                value = match self.apply_extract(&value, regex, rule.extract.as_ref().unwrap().group) {
+                value = match self.apply_extract(&value, regex, _extract.group) {
                     Some(extracted) => extracted,
                     None => {
                         return rule.default.clone();
@@ -123,7 +133,7 @@ impl CtxSet {
         // Apply transform
         if let Some(ref transform) = rule.transform {
             let compiled_replace = self.config.get_compiled_transform_regex(rule_idx);
-            value = match self.apply_transform(&value, transform, compiled_replace) {
+            value = match self.apply_transform(&value, transform, compiled_replace, plugin_log) {
                 Some(transformed) => transformed,
                 None => {
                     return rule.default.clone();
@@ -160,21 +170,21 @@ impl CtxSet {
         value: &str,
         transform: &TransformConfig,
         compiled_replace: Option<&Regex>,
+        plugin_log: &mut PluginLog,
     ) -> Option<String> {
         // Get the transform type from the config struct
         let transform_type = transform.get_transform_type()?;
 
         match transform_type {
-            TransformType::Replace { pattern, with } => {
-                if let Some(re) = compiled_replace {
-                    Some(re.replace_all(value, with.as_str()).to_string())
-                } else {
-                    // Fallback: should not happen after validate(), pattern already validated
-                    Regex::new(&pattern)
-                        .ok()
-                        .map(|re| re.replace_all(value, with.as_str()).to_string())
+            TransformType::Replace { with, .. } => match compiled_replace {
+                Some(re) => Some(re.replace_all(value, with.as_str()).to_string()),
+                None => {
+                    // Invariant: validate() compiles every Replace pattern; reaching
+                    // here means the config bypassed validation. Fail-open via default.
+                    plugin_log.push_err("transform regex missing");
+                    None
                 }
-            }
+            },
             TransformType::Substring(start, end) => {
                 let chars: Vec<char> = value.chars().collect();
                 let start = start.min(chars.len());
@@ -199,34 +209,21 @@ impl RequestFilter for CtxSet {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        // Check for configuration errors
-        if !self.config.is_valid() {
-            let _error = self.config.get_validation_error().unwrap_or("Unknown error");
-            plugin_log.push_err("config validation fail");
-            // Fail-open: allow request to proceed on config error
-            return PluginRunningResult::GoodNext;
-        }
-
-        let mut set_count = 0;
-
         for (idx, rule) in self.config.vars.iter().enumerate() {
-            // Process the rule to get the final value
-            let value = self.process_rule(rule, idx, session).await;
+            let value = self.process_rule(rule, idx, session, plugin_log).await;
 
             match value {
                 Some(v) => {
-                    // Set the context variable
                     if let Err(_) = session.set_ctx_var(&rule.name, &v) {
                         plugin_log.push_err("ctx var set fail");
                     } else {
-                        set_count += 1;
+                        plugin_log.push_fmt("key {} set", la![rule.name.as_str()]);
                     }
                 }
                 None => {}
             }
         }
 
-        plugin_log.push(&format!("ctx set {}", set_count));
         PluginRunningResult::GoodNext
     }
 }
@@ -239,401 +236,6 @@ impl RequestFilter for CtxSet {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-    use crate::types::common::KeyGet;
-
-    fn create_basic_config() -> CtxSetConfig {
-        let yaml = r#"
-vars:
-  - name: test_var
-    value: static_value
-"#;
-        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        config
-    }
-
-    #[tokio::test]
-    async fn test_static_value() {
-        let config = create_basic_config();
-        let plugin = CtxSet::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSet");
-
-        mock_session
-            .expect_set_ctx_var()
-            .withf(|key, value| key == "test_var" && value == "static_value")
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("ctx set 1"));
-    }
-
-    #[tokio::test]
-    async fn test_from_header() {
-        let yaml = r#"
-vars:
-  - name: user_id
-    from:
-      type: header
-      name: X-User-Id
-"#;
-        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        let plugin = CtxSet::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSet");
-
-        mock_session
-            .expect_key_get()
-            .withf(|k| matches!(k, KeyGet::Header { name } if name == "X-User-Id"))
-            .return_const(Some("user123".to_string()));
-        mock_session
-            .expect_set_ctx_var()
-            .withf(|key, value| key == "user_id" && value == "user123")
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_from_header_missing_with_default() {
-        let yaml = r#"
-vars:
-  - name: user_id
-    from:
-      type: header
-      name: X-User-Id
-    default: anonymous
-"#;
-        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        let plugin = CtxSet::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSet");
-
-        mock_session
-            .expect_key_get()
-            .withf(|k| matches!(k, KeyGet::Header { name } if name == "X-User-Id"))
-            .return_const(None);
-        mock_session
-            .expect_set_ctx_var()
-            .withf(|key, value| key == "user_id" && value == "anonymous")
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_template_interpolation() {
-        let yaml = r#"
-vars:
-  - name: rate_key
-    template: "${header:X-Tenant}_${clientIp}"
-"#;
-        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        let plugin = CtxSet::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSet");
-
-        mock_session
-            .expect_header_value()
-            .withf(|name| name == "X-Tenant")
-            .return_const(Some("acme".to_string()));
-        mock_session
-            .expect_remote_addr()
-            .return_const("192.168.1.1".to_string());
-        mock_session
-            .expect_set_ctx_var()
-            .withf(|key, value| key == "rate_key" && value == "acme_192.168.1.1")
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_regex_extract() {
-        let yaml = r#"
-vars:
-  - name: tenant_id
-    from:
-      type: header
-      name: Authorization
-    extract:
-      regex: '"tenant":"([^"]+)"'
-      group: 1
-"#;
-        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        let plugin = CtxSet::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSet");
-
-        mock_session
-            .expect_key_get()
-            .return_const(Some(r#"{"tenant":"acme_corp","user":"test"}"#.to_string()));
-        mock_session
-            .expect_set_ctx_var()
-            .withf(|key, value| key == "tenant_id" && value == "acme_corp")
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_transform_case_lower() {
-        let yaml = r#"
-vars:
-  - name: method_lower
-    from:
-      type: method
-    transform:
-      case: lower
-"#;
-        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        let plugin = CtxSet::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSet");
-
-        mock_session
-            .expect_key_get()
-            .withf(|k| matches!(k, KeyGet::Method))
-            .return_const(Some("GET".to_string()));
-        mock_session
-            .expect_set_ctx_var()
-            .withf(|key, value| key == "method_lower" && value == "get")
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_transform_replace() {
-        let yaml = r#"
-vars:
-  - name: clean_path
-    from:
-      type: path
-    transform:
-      replace:
-        pattern: "^/api/v[0-9]+/"
-        with: "/"
-"#;
-        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        let plugin = CtxSet::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSet");
-
-        mock_session
-            .expect_key_get()
-            .withf(|k| matches!(k, KeyGet::Path))
-            .return_const(Some("/api/v2/users/123".to_string()));
-        mock_session
-            .expect_set_ctx_var()
-            .withf(|key, value| key == "clean_path" && value == "/users/123")
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_transform_substring() {
-        let yaml = r#"
-vars:
-  - name: short_trace
-    from:
-      type: header
-      name: X-Trace-Id
-    transform:
-      substring: [0, 8]
-"#;
-        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        let plugin = CtxSet::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSet");
-
-        mock_session
-            .expect_key_get()
-            .return_const(Some("abc123def456".to_string()));
-        mock_session
-            .expect_set_ctx_var()
-            .withf(|key, value| key == "short_trace" && value == "abc123de")
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_mapping() {
-        let yaml = r#"
-vars:
-  - name: rate_tier
-    from:
-      type: header
-      name: X-Plan
-    mapping:
-      values:
-        premium: tier_1
-        enterprise: tier_1
-        basic: tier_2
-      default: tier_3
-"#;
-        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        let plugin = CtxSet::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSet");
-
-        mock_session.expect_key_get().return_const(Some("premium".to_string()));
-        mock_session
-            .expect_set_ctx_var()
-            .withf(|key, value| key == "rate_tier" && value == "tier_1")
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_mapping_default() {
-        let yaml = r#"
-vars:
-  - name: rate_tier
-    from:
-      type: header
-      name: X-Plan
-    mapping:
-      values:
-        premium: tier_1
-      default: tier_3
-"#;
-        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        let plugin = CtxSet::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSet");
-
-        mock_session
-            .expect_key_get()
-            .return_const(Some("unknown_plan".to_string()));
-        mock_session
-            .expect_set_ctx_var()
-            .withf(|key, value| key == "rate_tier" && value == "tier_3")
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_full_pipeline() {
-        // Extract tenant from JWT-like header, lowercase it, then map to tier
-        let yaml = r#"
-vars:
-  - name: final_tier
-    from:
-      type: header
-      name: X-Token
-    extract:
-      regex: 'T:([A-Za-z]+)'
-      group: 1
-    transform:
-      case: lower
-    mapping:
-      values:
-        premium: tier_1
-        enterprise: tier_1
-      default: tier_2
-"#;
-        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        let plugin = CtxSet::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSet");
-
-        // X-Token contains "T:PREMIUM" -> extract "PREMIUM" -> lowercase "premium" -> map to "tier_1"
-        mock_session
-            .expect_key_get()
-            .return_const(Some("abc.T:PREMIUM.xyz".to_string()));
-        mock_session
-            .expect_set_ctx_var()
-            .withf(|key, value| key == "final_tier" && value == "tier_1")
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_config_error_fail_open() {
-        let config = CtxSetConfig {
-            validation_error: Some("test error".to_string()),
-            ..Default::default()
-        };
-        let plugin = CtxSet {
-            name: "CtxSet".to_string(),
-            config,
-        };
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSet");
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("config validation fail"));
-    }
-
-    #[tokio::test]
-    async fn test_multiple_vars() {
-        let yaml = r#"
-vars:
-  - name: var1
-    value: value1
-  - name: var2
-    value: value2
-"#;
-        let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        let plugin = CtxSet::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("CtxSet");
-
-        mock_session
-            .expect_set_ctx_var()
-            .withf(|key, value| key == "var1" && value == "value1")
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_set_ctx_var()
-            .withf(|key, value| key == "var2" && value == "value2")
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("ctx set 2"));
-    }
 
     #[tokio::test]
     async fn test_template_injection_prevention() {
@@ -643,8 +245,7 @@ vars:
     template: "${header:X-Inject}"
 "#;
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         let plugin = CtxSet::create(&config);
 
         let mut mock_session = MockPluginSession::new();

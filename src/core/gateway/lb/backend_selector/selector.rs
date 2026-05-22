@@ -4,7 +4,7 @@
 //! and selection with lazy initialization.
 
 use super::weighted_selector::WeightedRoundRobin;
-use arc_swap::ArcSwap;
+use arc_swap::ArcSwapOption;
 use std::sync::Arc;
 
 /// Error codes for backend selection configuration
@@ -30,13 +30,13 @@ enum SelectorState<T> {
 /// * `T` - The type of backend items (must implement Clone)
 pub struct BackendSelector<T> {
     /// Cached selector state (lazily initialized)
-    state: ArcSwap<Option<SelectorState<T>>>,
+    state: ArcSwapOption<SelectorState<T>>,
 }
 
 impl<T> Default for BackendSelector<T> {
     fn default() -> Self {
         Self {
-            state: ArcSwap::from_pointee(None),
+            state: ArcSwapOption::empty(),
         }
     }
 }
@@ -67,7 +67,7 @@ impl<T: Clone> BackendSelector<T> {
         }
 
         let state = Self::create_state(items, weights);
-        self.state.store(Arc::new(Some(state)));
+        self.state.store(Some(Arc::new(state)));
     }
 
     /// Create selector state from items and weights.
@@ -104,7 +104,10 @@ impl<T: Clone> BackendSelector<T> {
 
         // If only one valid item, return Single
         if valid_items.len() == 1 {
-            let (item, _) = valid_items.into_iter().next().unwrap();
+            let (item, _) = valid_items
+                .into_iter()
+                .next()
+                .expect("valid_items.len() == 1 checked above");
             return SelectorState::Single(item);
         }
 
@@ -118,12 +121,10 @@ impl<T: Clone> BackendSelector<T> {
     /// Must be called after init(). Returns Ok(T) on success, or Err(error_code) on error.
     pub fn select(&self) -> Result<T, u32> {
         let guard = self.state.load();
-        match &**guard {
-            Some(state) => match state {
-                SelectorState::Error(err) => Err(*err),
-                SelectorState::Single(backend) => Ok(backend.clone()),
-                SelectorState::Multiple(selector) => Ok(selector.select().clone()),
-            },
+        match guard.as_deref() {
+            Some(SelectorState::Error(err)) => Err(*err),
+            Some(SelectorState::Single(backend)) => Ok(backend.clone()),
+            Some(SelectorState::Multiple(selector)) => Ok(selector.select().clone()),
             None => Err(ERR_NO_BACKEND_REFS),
         }
     }

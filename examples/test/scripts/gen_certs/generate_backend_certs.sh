@@ -95,13 +95,84 @@ EOF
     cp "$TEMP_DIR/server.crt" "$CERTS_DIR/server.crt"
     cp "$TEMP_DIR/server.key" "$CERTS_DIR/server.key"
     cp "$TEMP_DIR/ca.crt" "$CERTS_DIR/ca.crt"
+
+    # Generate per-SNI certs for BackendTLSSNIHostOverride suite.
+    # Both are signed by the same CA so BackendTLSPolicy can reference backend-ca.
+    # Each cert's SAN is intentionally restricted to a single hostname so that
+    # the multi-SNI resolver on the backend will reject any wrong-SNI handshake.
+
+    # server-a: SAN = hostname-a.example.com only
+    openssl genrsa -out "$TEMP_DIR/server-a.key" 2048 2>/dev/null
+
+    openssl req -new \
+      -key "$TEMP_DIR/server-a.key" \
+      -out "$TEMP_DIR/server-a.csr" \
+      -subj "/CN=hostname-a.example.com/O=Edgion Backend" \
+      2>/dev/null
+
+    cat > "$TEMP_DIR/server-a.ext" <<EOF
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = hostname-a.example.com
+EOF
+
+    openssl x509 -req \
+      -in "$TEMP_DIR/server-a.csr" \
+      -CA "$TEMP_DIR/ca.crt" \
+      -CAkey "$TEMP_DIR/ca.key" \
+      -CAcreateserial \
+      -out "$TEMP_DIR/server-a.crt" \
+      -days 365 \
+      -extfile "$TEMP_DIR/server-a.ext" \
+      2>/dev/null
+
+    cp "$TEMP_DIR/server-a.crt" "$CERTS_DIR/server-a.crt"
+    cp "$TEMP_DIR/server-a.key" "$CERTS_DIR/server-a.key"
+
+    # server-b: SAN = hostname-b.example.com only
+    openssl genrsa -out "$TEMP_DIR/server-b.key" 2048 2>/dev/null
+
+    openssl req -new \
+      -key "$TEMP_DIR/server-b.key" \
+      -out "$TEMP_DIR/server-b.csr" \
+      -subj "/CN=hostname-b.example.com/O=Edgion Backend" \
+      2>/dev/null
+
+    cat > "$TEMP_DIR/server-b.ext" <<EOF
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = hostname-b.example.com
+EOF
+
+    openssl x509 -req \
+      -in "$TEMP_DIR/server-b.csr" \
+      -CA "$TEMP_DIR/ca.crt" \
+      -CAkey "$TEMP_DIR/ca.key" \
+      -CAcreateserial \
+      -out "$TEMP_DIR/server-b.crt" \
+      -days 365 \
+      -extfile "$TEMP_DIR/server-b.ext" \
+      2>/dev/null
+
+    cp "$TEMP_DIR/server-b.crt" "$CERTS_DIR/server-b.crt"
+    cp "$TEMP_DIR/server-b.key" "$CERTS_DIR/server-b.key"
 }
 
 echo_info "Backend cert dir: $CERTS_DIR"
 echo_info "Runtime Secret output: $SECRET_OUTPUT_FILE"
 
-if [ -f "$CERTS_DIR/server.crt" ] && [ -f "$CERTS_DIR/server.key" ] && [ -f "$CERTS_DIR/ca.crt" ]; then
-    echo_info "Found existing backend cert files, reusing them."
+if [ -f "$CERTS_DIR/server.crt" ] && [ -f "$CERTS_DIR/server.key" ] && [ -f "$CERTS_DIR/ca.crt" ] \
+   && [ -f "$CERTS_DIR/server-a.crt" ] && [ -f "$CERTS_DIR/server-a.key" ] \
+   && [ -f "$CERTS_DIR/server-b.crt" ] && [ -f "$CERTS_DIR/server-b.key" ]; then
+    echo_info "Found existing backend cert files (including server-a/b), reusing them."
 else
     generate_backend_certs
 fi
@@ -123,4 +194,8 @@ echo_info "Backend cert files:"
 echo_info "  - $CERTS_DIR/server.crt"
 echo_info "  - $CERTS_DIR/server.key"
 echo_info "  - $CERTS_DIR/ca.crt"
+echo_info "  - $CERTS_DIR/server-a.crt  (SAN: hostname-a.example.com)"
+echo_info "  - $CERTS_DIR/server-a.key"
+echo_info "  - $CERTS_DIR/server-b.crt  (SAN: hostname-b.example.com)"
+echo_info "  - $CERTS_DIR/server-b.key"
 echo_warning "Note: Secret YAML is runtime-generated and should not be committed."

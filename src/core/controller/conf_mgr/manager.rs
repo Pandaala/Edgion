@@ -30,6 +30,7 @@ use super::conf_center::file_system::FileSystemCenter;
 use super::conf_center::kubernetes::KubernetesCenter;
 use super::conf_center::traits::{
     impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfCenter, ConfWriterError, ListOptions, ListResult,
+    ResourceKey,
 };
 use super::conf_center::ConfCenterConfig;
 use super::sync_runtime::ShutdownHandle;
@@ -141,6 +142,13 @@ impl ConfMgr {
     /// Check if running in Kubernetes mode
     pub fn is_k8s_mode(&self) -> bool {
         self.conf_center.is_k8s_mode()
+    }
+
+    /// Collect a stats snapshot for fed_sync push if anything has changed since
+    /// last call. Returns `Some((per_kind, total))` when at least one processor
+    /// is dirty (and clears the dirty flags); otherwise `None`.
+    pub fn collect_stats_if_dirty(&self) -> Option<(std::collections::HashMap<String, u32>, u32)> {
+        self.conf_center.runtime().processor_registry.collect_stats_if_dirty()
     }
 
     /// Request a reload (re-initialize all processors and stores)

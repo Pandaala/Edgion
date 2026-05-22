@@ -139,6 +139,11 @@ impl<T> EventStore<T> {
         self.data.keys().cloned().collect()
     }
 
+    /// Return the number of stored resources (O(1)).
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
     /// Get a single resource by key
     /// Key format: "namespace/name" for namespaced resources, or just "name" for cluster-scoped
     pub fn get_by_key(&self, key: &str) -> Option<T>

@@ -38,8 +38,6 @@ pub mod components {
     pub const CONF_SYNC_SERVER: &str = "conf_sync_server";
     /// Controller-side federation gRPC client (Controller → Center).
     pub const FED_SYNC_CLIENT: &str = "fed_sync_client";
-    /// Center-side federation gRPC server.
-    pub const FED_SYNC_SERVER: &str = "fed_sync_server";
 }
 
 /// Reason label values — what kind of system-level error condition.
@@ -50,6 +48,13 @@ pub mod reasons {
     /// is running in plaintext despite cert paths being present.
     /// Emergency bypass; must not stay enabled in production.
     pub const SKIP_TLS: &str = "skip_tls";
+    /// Federation requires mTLS but no TLS block was configured; the channel
+    /// refused to start (fail-close). Distinct from a *running* plaintext
+    /// channel — federation never runs in plaintext.
+    pub const NO_TLS_CONFIGURED: &str = "no_tls_configured";
+    /// Controller's own client cert SPIFFE SAN does not match its configured
+    /// cluster/name; federation client was not started.
+    pub const PEER_IDENTITY_SELF_CHECK: &str = "peer_identity_self_check";
 }
 
 /// Mark a system-level error condition as active.
@@ -114,11 +119,11 @@ mod tests {
 
         metrics::with_local_recorder(&recorder, || {
             mark_system_error(components::CONF_SYNC_CLIENT, reasons::SKIP_TLS);
-            mark_system_error(components::FED_SYNC_SERVER, reasons::SKIP_TLS);
+            mark_system_error(components::CONF_SYNC_SERVER, reasons::SKIP_TLS);
 
             let rendered = handle.render();
             assert!(rendered.contains("component=\"conf_sync_client\""));
-            assert!(rendered.contains("component=\"fed_sync_server\""));
+            assert!(rendered.contains("component=\"conf_sync_server\""));
         });
     }
 }

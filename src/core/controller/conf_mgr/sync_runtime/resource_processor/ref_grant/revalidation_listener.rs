@@ -156,12 +156,19 @@ impl RevalidationListener for CrossNsRevalidationListener {
         // cycle detection. Without this, resources requeued here would start
         // with an empty chain and any further cascading requeues would bypass
         // the cycle limit entirely.
-        let origin_key = event
-            .affected_namespaces
-            .iter()
-            .next()
-            .cloned()
-            .unwrap_or_else(|| "*".to_string());
+        //
+        // The key is a sorted, comma-joined list of affected namespaces so
+        // the same logical event produces the same chain ID across runs,
+        // making log correlation reliable. HashSet iteration order is
+        // non-deterministic and would otherwise yield a different chain ID
+        // every time.
+        let origin_key = if event.affected_namespaces.is_empty() {
+            "*".to_string()
+        } else {
+            let mut keys: Vec<&str> = event.affected_namespaces.iter().map(String::as_str).collect();
+            keys.sort_unstable();
+            keys.join(",")
+        };
         let origin_chain = TriggerChain::new().extend("ReferenceGrant", &origin_key);
 
         let mut requeued = std::collections::HashSet::new();

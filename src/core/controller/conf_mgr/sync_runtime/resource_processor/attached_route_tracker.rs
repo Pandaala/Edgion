@@ -52,24 +52,30 @@ pub struct Attachment {
 /// Per-listener attachment map: `listener_name → { ResourceKind → { route_keys } }`.
 type ListenerMap = HashMap<String, HashMap<ResourceKind, HashSet<String>>>;
 
-pub struct AttachedRouteTracker {
+struct Inner {
     /// gateway_key → ListenerMap
-    forward: RwLock<HashMap<String, ListenerMap>>,
+    forward: HashMap<String, ListenerMap>,
     /// RouteRef → set of Attachments
-    reverse: RwLock<HashMap<RouteRef, HashSet<Attachment>>>,
+    reverse: HashMap<RouteRef, HashSet<Attachment>>,
+}
+
+pub struct AttachedRouteTracker {
+    inner: RwLock<Inner>,
 }
 
 impl AttachedRouteTracker {
     pub fn new() -> Self {
         Self {
-            forward: RwLock::new(HashMap::new()),
-            reverse: RwLock::new(HashMap::new()),
+            inner: RwLock::new(Inner {
+                forward: HashMap::new(),
+                reverse: HashMap::new(),
+            }),
         }
     }
 
     /// Register (or re-register) a route's attachments derived from its parentRefs.
     ///
-    /// Single-lock-acquisition: removes old entries and inserts new ones atomically.
+    /// Removes old entries and inserts new ones atomically under a single write lock.
     /// Returns true if the attachments actually changed (or were newly created).
     pub fn update_route(&self, route_kind: ResourceKind, route_key: &str, attachments: HashSet<Attachment>) -> bool {
         let route_ref = RouteRef {
@@ -77,22 +83,24 @@ impl AttachedRouteTracker {
             key: route_key.to_string(),
         };
 
-        let mut fwd = self.forward.write();
-        let mut rev = self.reverse.write();
+        let mut inner = self.inner.write();
 
-        let old = rev.get(&route_ref);
+        let old = inner.reverse.get(&route_ref);
         if old.map(|o| o == &attachments).unwrap_or(attachments.is_empty()) {
             return false;
         }
 
-        Self::remove_from_maps(&mut fwd, &mut rev, &route_ref);
+        let inner = &mut *inner;
+        Self::remove_from_maps(&mut inner.forward, &mut inner.reverse, &route_ref);
 
         if attachments.is_empty() {
             return true;
         }
 
         for att in &attachments {
-            fwd.entry(att.gateway_key.clone())
+            inner
+                .forward
+                .entry(att.gateway_key.clone())
                 .or_default()
                 .entry(att.listener_name.clone())
                 .or_default()
@@ -101,7 +109,7 @@ impl AttachedRouteTracker {
                 .insert(route_key.to_string());
         }
 
-        rev.insert(route_ref, attachments);
+        inner.reverse.insert(route_ref, attachments);
         true
     }
 
@@ -113,11 +121,10 @@ impl AttachedRouteTracker {
             key: route_key.to_string(),
         };
 
-        let mut fwd = self.forward.write();
-        let mut rev = self.reverse.write();
-
-        let had_entries = rev.contains_key(&route_ref);
-        Self::remove_from_maps(&mut fwd, &mut rev, &route_ref);
+        let mut inner = self.inner.write();
+        let had_entries = inner.reverse.contains_key(&route_ref);
+        let inner = &mut *inner;
+        Self::remove_from_maps(&mut inner.forward, &mut inner.reverse, &route_ref);
         had_entries
     }
 
@@ -126,8 +133,8 @@ impl AttachedRouteTracker {
     /// Returns: routes explicitly targeting `listener_name` + routes with no
     /// sectionName (targeting all listeners).
     pub fn count_for_listener(&self, gateway_key: &str, listener_name: &str) -> i32 {
-        let fwd = self.forward.read();
-        let Some(listener_map) = fwd.get(gateway_key) else {
+        let inner = self.inner.read();
+        let Some(listener_map) = inner.forward.get(gateway_key) else {
             return 0;
         };
 
@@ -147,7 +154,7 @@ impl AttachedRouteTracker {
         total
     }
 
-    /// Shared removal logic, called while locks are already held.
+    /// Shared removal logic, called while the write lock is already held.
     fn remove_from_maps(
         fwd: &mut HashMap<String, ListenerMap>,
         rev: &mut HashMap<RouteRef, HashSet<Attachment>>,
@@ -180,8 +187,9 @@ impl AttachedRouteTracker {
     }
 
     pub fn clear(&self) {
-        self.forward.write().clear();
-        self.reverse.write().clear();
+        let mut inner = self.inner.write();
+        inner.forward.clear();
+        inner.reverse.clear();
     }
 }
 

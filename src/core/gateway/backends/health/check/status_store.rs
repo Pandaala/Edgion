@@ -74,6 +74,16 @@ impl HealthStatusStore {
         }
     }
 
+    /// Number of services with tracked health state.
+    pub fn tracked_service_count(&self) -> usize {
+        self.services.load().len()
+    }
+
+    /// Service keys currently tracked (snapshot).
+    pub fn keys(&self) -> Vec<String> {
+        self.services.load().keys().cloned().collect()
+    }
+
     /// Unknown service/backend defaults to healthy.
     #[inline]
     pub fn is_healthy(&self, service_key: &str, backend_hash: u64) -> bool {
@@ -333,5 +343,17 @@ mod tests {
         for handle in threads {
             handle.join().expect("join thread");
         }
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+
+    #[test]
+    fn empty_store_reports_zero() {
+        let store = HealthStatusStore::new();
+        assert_eq!(store.tracked_service_count(), 0);
+        assert!(store.keys().is_empty());
     }
 }

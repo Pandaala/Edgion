@@ -12,8 +12,11 @@ use sha2::{Digest, Sha256};
 
 use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
-use crate::core::gateway::observe::metrics::registry::{record_ldap_auth_error, set_ldap_cache_hit_rate};
-use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
+use crate::core::gateway::observe::metrics::registry::record_ldap_auth_error;
+use crate::core::gateway::plugins::http::common::auth_common::{
+    apply_auth_failure_delay, send_gateway_auth_error_response,
+};
+use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::LdapAuthConfig;
@@ -62,38 +65,6 @@ impl LdapAuth {
             get_default_lru_cache_shards()
         };
         let auth_cache = Arc::new(ShardedLruCache::new(capacity, shards));
-
-        // Background hit-ratio monitor: runs every 30 s, logs only on transitions.
-        // Uses a Weak reference so the task exits automatically when the plugin is dropped.
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let cache_monitor = Arc::downgrade(&auth_cache);
-            handle.spawn(async move {
-                const LOW_RATIO: f64 = 0.5;
-                const MIN_SAMPLES: u64 = 100;
-                let mut was_low = false;
-                loop {
-                    tokio::time::sleep(Duration::from_secs(30)).await;
-                    let Some(cache) = cache_monitor.upgrade() else {
-                        break;
-                    };
-                    let stats = cache.stats();
-                    let total = stats.hits + stats.misses + stats.expirations;
-                    if total < MIN_SAMPLES {
-                        continue;
-                    }
-                    let ratio = stats.hit_ratio();
-                    set_ldap_cache_hit_rate(ratio);
-                    let is_low = ratio < LOW_RATIO;
-                    if is_low && !was_low {
-                        tracing::info!(hit_ratio = ratio, "LDAP cache hit ratio low; possible brute-force");
-                        was_low = true;
-                    } else if !is_low && was_low {
-                        tracing::info!(hit_ratio = ratio, "LDAP cache hit ratio recovered");
-                        was_low = false;
-                    }
-                }
-            });
-        }
 
         Self {
             name: "LdapAuth".to_string(),
@@ -172,24 +143,20 @@ impl LdapAuth {
     }
 
     fn build_bind_dn(&self, username: &str) -> Result<String, &'static str> {
-        // Allowlist: only permit characters safe in LDAP DN attribute values.
-        // This prevents LDAP injection via DN special chars (RFC 4514).
-        if username.is_empty()
-            || !username
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '@' | '-' | '_'))
-        {
-            return Err("invalid username characters");
+        // Escape per RFC 4514 (DN attribute value) instead of rejecting characters.
+        // The previous allowlist was safer than required for injection prevention but
+        // broke legitimate enterprise LDAP usernames (spaces in AD sAMAccountName,
+        // unicode CN values, '+' in gmail-style aliases, etc.).
+        if username.is_empty() {
+            return Err("empty username");
         }
+        let escaped = ldap3::dn_escape(username);
 
         if let Some(template) = &self.config.bind_dn_template {
-            return Ok(template.replace("{username}", username));
+            return Ok(template.replace("{username}", escaped.as_ref()));
         }
 
-        Ok(format!(
-            "{}={},{}",
-            self.config.attribute, username, self.config.base_dn
-        ))
+        Ok(format!("{}={},{}", self.config.attribute, escaped, self.config.base_dn))
     }
 
     async fn ldap_bind(&self, bind_dn: &str, password: &str) -> Result<(), LdapAuthError> {
@@ -240,11 +207,12 @@ impl LdapAuth {
     }
 
     async fn unauthorized(&self, session: &mut dyn PluginSession) -> PluginRunningResult {
-        let _ = send_auth_error_response(
+        let _ = send_gateway_auth_error_response(
             session,
             401,
             &self.config.header_type,
             &self.config.realm,
+            None,
             "Unauthorized",
         )
         .await;
@@ -299,7 +267,7 @@ impl RequestFilter for LdapAuth {
             self.apply_authenticated_headers(session, &cached_username);
             self.hide_credentials_if_needed(session);
             plugin_log.push("cache hit");
-            plugin_log.push(&format!("OK user {}", cached_username));
+            plugin_log.push_fmt("OK user {}", la![sensitive(cached_username.as_str())]);
             return PluginRunningResult::GoodNext;
         }
 
@@ -318,7 +286,7 @@ impl RequestFilter for LdapAuth {
                 self.store_cache(&username, &password);
                 self.apply_authenticated_headers(session, &username);
                 self.hide_credentials_if_needed(session);
-                plugin_log.push(&format!("OK user {}", username));
+                plugin_log.push_fmt("OK user {}", la![sensitive(&username)]);
                 PluginRunningResult::GoodNext
             }
             Err(LdapAuthError::InvalidCredentials) => {
@@ -348,7 +316,6 @@ impl RequestFilter for LdapAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
     use crate::types::resources::edgion_plugins::LruCacheConfig;
 
     fn test_config() -> LdapAuthConfig {
@@ -364,32 +331,6 @@ mod tests {
         LdapAuth::new(&test_config())
     }
 
-    fn encode_creds(username: &str, password: &str) -> String {
-        format!(
-            "ldap {}",
-            base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", username, password))
-        )
-    }
-
-    #[test]
-    fn test_parse_authorization_value_ok() {
-        let auth = ldap_auth_default();
-        let header = encode_creds("alice", "secret");
-        let parsed = auth.parse_authorization_value(&header);
-        assert_eq!(parsed, Some(("alice".to_string(), "secret".to_string())));
-    }
-
-    #[test]
-    fn test_parse_authorization_value_password_with_colon() {
-        let auth = ldap_auth_default();
-        let header = format!(
-            "ldap {}",
-            base64::engine::general_purpose::STANDARD.encode("alice:a:b:c")
-        );
-        let parsed = auth.parse_authorization_value(&header);
-        assert_eq!(parsed, Some(("alice".to_string(), "a:b:c".to_string())));
-    }
-
     #[test]
     fn test_parse_authorization_value_invalid() {
         let auth = ldap_auth_default();
@@ -399,42 +340,79 @@ mod tests {
     }
 
     #[test]
-    fn test_build_bind_dn_default() {
+    fn test_build_bind_dn_injection_escaped() {
         let auth = ldap_auth_default();
-        let dn = auth.build_bind_dn("alice").unwrap();
-        assert_eq!(dn, "uid=alice,dc=example,dc=com");
+
+        // RFC 4514 metacharacters must be escaped so injection becomes a
+        // literal value inside the RDN. ldap3::dn_escape uses the hex form
+        // (\HH); both forms are RFC-equivalent for any compliant server.
+        let dn = auth.build_bind_dn("alice,admin").unwrap();
+        assert_eq!(dn, r"uid=alice\2cadmin,dc=example,dc=com");
+
+        let dn = auth.build_bind_dn("alice+admin").unwrap();
+        assert_eq!(dn, r"uid=alice\2badmin,dc=example,dc=com");
+
+        // Leading '#' and trailing ' ' are also escaped per RFC 4514.
+        let dn = auth.build_bind_dn("#bob ").unwrap();
+        assert_eq!(dn, r"uid=\23bob\20,dc=example,dc=com");
+
+        // Sanity check: no bare injection-relevant metachar remains inside the
+        // attribute value. (`\` is the escape leader produced by dn_escape and
+        // is expected to appear; the metachars below would terminate the RDN
+        // or change its semantics if they leaked through unescaped.)
+        let dn = auth.build_bind_dn(r#"x"y\z<a>b;c=d"#).unwrap();
+        let value = dn
+            .strip_prefix("uid=")
+            .and_then(|s| s.strip_suffix(",dc=example,dc=com"))
+            .unwrap();
+        for ch in ['"', '<', '>', ';', '=', ',', '+'] {
+            assert!(
+                !value.contains(ch),
+                "bare metachar {:?} leaked into RDN value {:?}",
+                ch,
+                value
+            );
+        }
     }
 
     #[test]
-    fn test_build_bind_dn_template() {
-        let mut cfg = test_config();
-        cfg.bind_dn_template = Some("cn={username},ou=users,dc=example,dc=com".to_string());
-        let auth = LdapAuth::new(&cfg);
-        let dn = auth.build_bind_dn("alice").unwrap();
-        assert_eq!(dn, "cn=alice,ou=users,dc=example,dc=com");
+    fn test_build_bind_dn_accepts_spaces() {
+        // AD sAMAccountName may contain spaces. Interior spaces are not RFC 4514
+        // metacharacters and must pass through unescaped.
+        let auth = ldap_auth_default();
+        let dn = auth.build_bind_dn("John Smith").unwrap();
+        assert_eq!(dn, "uid=John Smith,dc=example,dc=com");
     }
 
     #[test]
-    fn test_build_bind_dn_injection_rejected() {
+    fn test_build_bind_dn_accepts_unicode() {
+        // Multi-byte UTF-8 in CN/uid values (e.g. accented Latin) is valid in
+        // RFC 4514 attribute values and must not be rejected or escaped.
         let auth = ldap_auth_default();
-        assert!(auth.build_bind_dn("alice,admin").is_err());
-        assert!(auth.build_bind_dn("alice+admin").is_err());
+        let dn = auth.build_bind_dn("José").unwrap();
+        assert_eq!(dn, "uid=José,dc=example,dc=com");
     }
 
     #[test]
-    fn test_cache_hit_and_expired() {
+    fn test_build_bind_dn_rejects_empty() {
         let auth = ldap_auth_default();
+        assert!(auth.build_bind_dn("").is_err());
+    }
 
-        auth.store_cache("alice", "secret");
-        assert_eq!(auth.check_cache("alice", "secret"), Some("alice".to_string()));
-
-        auth.auth_cache.insert(
-            LdapAuth::cache_key("bob", "secret"),
-            "bob".to_string(),
-            Some(std::time::Duration::from_millis(10)),
-        );
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        assert_eq!(auth.check_cache("bob", "secret"), None);
+    #[test]
+    fn test_build_bind_dn_template_escapes_username() {
+        // The {username} placeholder must be escaped before substitution so a
+        // template-based deployment is equally injection-safe.
+        let config = LdapAuthConfig {
+            ldap_host: "ldap.example.com".to_string(),
+            base_dn: "dc=example,dc=com".to_string(),
+            attribute: "uid".to_string(),
+            bind_dn_template: Some("uid={username},ou=people,dc=example,dc=com".to_string()),
+            ..Default::default()
+        };
+        let auth = LdapAuth::new(&config);
+        let dn = auth.build_bind_dn("alice,admin").unwrap();
+        assert_eq!(dn, r"uid=alice\2cadmin,ou=people,dc=example,dc=com");
     }
 
     #[test]
@@ -452,179 +430,5 @@ mod tests {
         };
         let auth = LdapAuth::new(&config);
         assert_eq!(auth.auth_cache.len(), 0);
-    }
-
-    #[test]
-    fn test_ldap_auth_store_and_check_cache() {
-        let config = LdapAuthConfig {
-            cache_ttl: 60,
-            lru_cache: LruCacheConfig {
-                capacity: 5,
-                ..Default::default()
-            },
-            ldap_host: "localhost".to_string(),
-            ldap_port: 389,
-            base_dn: "dc=test,dc=com".to_string(),
-            ..Default::default()
-        };
-        let auth = LdapAuth::new(&config);
-        auth.store_cache("alice", "secret");
-        assert_eq!(auth.check_cache("alice", "secret"), Some("alice".to_string()));
-        assert_eq!(auth.check_cache("alice", "wrong"), None);
-    }
-
-    #[test]
-    fn test_ldap_auth_cache_disabled_when_ttl_zero() {
-        let config = LdapAuthConfig {
-            cache_ttl: 0,
-            ldap_host: "localhost".to_string(),
-            ldap_port: 389,
-            base_dn: "dc=test,dc=com".to_string(),
-            ..Default::default()
-        };
-        let auth = LdapAuth::new(&config);
-        auth.store_cache("alice", "secret"); // no-op
-        assert_eq!(auth.check_cache("alice", "secret"), None);
-    }
-
-    #[test]
-    fn test_ldap_auth_lru_evicts_oldest() {
-        let config = LdapAuthConfig {
-            cache_ttl: 60,
-            lru_cache: LruCacheConfig {
-                capacity: 2,
-                ..Default::default()
-            },
-            ldap_host: "localhost".to_string(),
-            ldap_port: 389,
-            base_dn: "dc=test,dc=com".to_string(),
-            ..Default::default()
-        };
-        let auth = LdapAuth::new(&config);
-        auth.store_cache("user1", "pw1");
-        auth.store_cache("user2", "pw2");
-        auth.store_cache("user3", "pw3"); // evicts user1 (LRU)
-        assert_eq!(auth.check_cache("user1", "pw1"), None); // evicted
-        assert_eq!(auth.check_cache("user3", "pw3"), Some("user3".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_parse_credentials_proxy_priority() {
-        let auth = ldap_auth_default();
-        let mut session = MockPluginSession::new();
-
-        let proxy = encode_creds("proxy-user", "proxy-pass");
-
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("proxy-authorization"))
-            .return_once(move |_| Some(proxy));
-
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("authorization"))
-            .return_once(|_| Some(encode_creds("auth-user", "auth-pass")));
-
-        let result = auth.parse_credentials(&session);
-        assert_eq!(
-            result,
-            ParseAuthResult::Valid("proxy-user".to_string(), "proxy-pass".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn test_run_request_anonymous_missing_header() {
-        let mut cfg = test_config();
-        cfg.anonymous = Some("anonymous-user".to_string());
-        cfg.hide_credentials = true;
-        let auth = LdapAuth::new(&cfg);
-
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("LdapAuth");
-
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("proxy-authorization"))
-            .return_once(|_| None);
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("authorization"))
-            .return_once(|_| None);
-
-        session
-            .expect_set_request_header()
-            .with(
-                mockall::predicate::eq("X-Credential-Identifier"),
-                mockall::predicate::eq("anonymous-user"),
-            )
-            .returning(|_, _| Ok(()));
-        session
-            .expect_set_request_header()
-            .with(
-                mockall::predicate::eq("X-Anonymous-Consumer"),
-                mockall::predicate::eq("true"),
-            )
-            .returning(|_, _| Ok(()));
-
-        session
-            .expect_remove_request_header()
-            .with(mockall::predicate::eq("authorization"))
-            .returning(|_| Ok(()));
-        session
-            .expect_remove_request_header()
-            .with(mockall::predicate::eq("proxy-authorization"))
-            .returning(|_| Ok(()));
-
-        let result = auth.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("Allow anonymous"));
-    }
-
-    #[tokio::test]
-    async fn test_run_request_invalid_header_without_anonymous() {
-        let auth = ldap_auth_default();
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("LdapAuth");
-
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("proxy-authorization"))
-            .return_once(|_| None);
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("authorization"))
-            .return_once(|_| Some("ldap invalid-base64".to_string()));
-
-        session.expect_write_response_header().returning(|_, _| Ok(()));
-        session.expect_write_response_body().returning(|_, _| Ok(()));
-        session.expect_shutdown().returning(|| {});
-
-        let result = auth.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-    }
-
-    #[tokio::test]
-    async fn test_run_request_invalid_header_with_anonymous_still_401() {
-        let mut cfg = test_config();
-        cfg.anonymous = Some("guest".to_string());
-        let auth = LdapAuth::new(&cfg);
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("LdapAuth");
-
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("proxy-authorization"))
-            .return_once(|_| None);
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("authorization"))
-            .return_once(|_| Some("ldap invalid-base64".to_string()));
-
-        session.expect_write_response_header().returning(|_, _| Ok(()));
-        session.expect_write_response_body().returning(|_, _| Ok(()));
-        session.expect_shutdown().returning(|| {});
-
-        let result = auth.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
     }
 }

@@ -63,16 +63,58 @@ impl<T> HashHost<T> {
     }
 
     pub fn get(&self, k: &str) -> Option<&T> {
-        let k_lower = k.to_lowercase();
-        let k = k_lower.as_str();
+        // Avoid heap allocation when input is already ASCII-lowercase (the common
+        // case: HTTP/2 headers and TLS SNI names are always lowercase per spec).
+        // DNS hostnames are ASCII-only, so to_ascii_lowercase is sufficient.
+        if k.bytes().any(|b| b.is_ascii_uppercase()) {
+            self.get_lower(&k.to_ascii_lowercase())
+        } else {
+            self.get_lower(k)
+        }
+    }
+
+    /// Like `get`, but the wildcard bucket only matches a **single** left-most
+    /// label per RFC 6125 §6.4.3. Use this for TLS certificate selection.
+    ///
+    /// `get_rfc6125("foo.example.com")` matches a registered `*.example.com`;
+    /// `get_rfc6125("a.b.example.com")` does NOT — that would be a multi-label
+    /// match, which RFC 6125-compliant client TLS stacks reject during the
+    /// handshake. Route matching (which is governed by Gateway API §4.3) still
+    /// uses [`HashHost::get`], so the two semantics coexist intentionally.
+    pub fn get_rfc6125(&self, k: &str) -> Option<&T> {
+        if k.bytes().any(|b| b.is_ascii_uppercase()) {
+            self.get_rfc6125_lower(&k.to_ascii_lowercase())
+        } else {
+            self.get_rfc6125_lower(k)
+        }
+    }
+
+    fn get_rfc6125_lower(&self, k: &str) -> Option<&T> {
         if !is_valid_domain(k) {
             return None;
         }
-
+        // Exact match wins over wildcard (parallel to `get_lower`).
         if let Some(value) = self.map.get(k) {
             return Some(value);
         }
+        // Strip exactly the first DNS label and look up the `.suffix` form
+        // (e.g., `foo.example.com` -> `.example.com`). The suffix slice is
+        // used directly as the HashMap key — never re-validated as a domain,
+        // because (a) `get_lower` follows the same convention, and (b) a
+        // malformed slice can only cause a miss (returns `None`), never a
+        // wrong cert.
+        let dot = k.find('.')?;
+        let suffix = &k[dot..];
+        self.map.get(suffix)
+    }
 
+    fn get_lower(&self, k: &str) -> Option<&T> {
+        if !is_valid_domain(k) {
+            return None;
+        }
+        if let Some(value) = self.map.get(k) {
+            return Some(value);
+        }
         // Optimized wildcard lookup: only probe suffix lengths that actually
         // exist among the registered wildcard keys (longest first).
         let k_len = k.len();
@@ -84,22 +126,25 @@ impl<T> HashHost<T> {
                 }
             }
         }
-
         None
     }
 
     pub fn get_mut(&mut self, k: &str) -> Option<&mut T> {
-        let k_lower = k.to_lowercase();
-        let k = k_lower.as_str();
+        if k.bytes().any(|b| b.is_ascii_uppercase()) {
+            self.get_mut_lower(&k.to_ascii_lowercase())
+        } else {
+            self.get_mut_lower(k)
+        }
+    }
+
+    fn get_mut_lower(&mut self, k: &str) -> Option<&mut T> {
         if !is_valid_domain(k) {
             return None;
         }
-
         if self.map.contains_key(k) {
             return self.map.get_mut(k);
         }
-
-        // Optimized wildcard lookup (same strategy as get)
+        // Optimized wildcard lookup (same strategy as get_lower)
         let k_len = k.len();
         let mut matched_start = None;
         for &wk_len in &self.wildcard_key_lens {
@@ -111,21 +156,34 @@ impl<T> HashHost<T> {
                 }
             }
         }
-
         matched_start.and_then(move |pos| self.map.get_mut(&k[pos..]))
     }
 
-    /// Exact-only mutable lookup: returns `Some` only if `k` was inserted as
-    /// a literal (non-wildcard) key.  Does **not** fall back to wildcard suffix
-    /// matching.  Use this when building a store to avoid accidentally merging
-    /// a new hostname entry into an existing wildcard bucket.
+    /// Exact-pattern mutable lookup: returns `Some` only for the bucket stored
+    /// under the **same pattern** `k` was inserted as. Does **not** fall back to
+    /// wildcard suffix matching (so an exact hostname never merges into a wildcard
+    /// bucket), but it DOES resolve a wildcard pattern to its own bucket: just like
+    /// [`HashHost::insert`], `"*.aaa.com"` normalizes to the `".aaa.com"` key. This
+    /// symmetry lets a store builder accumulate multiple entries for the same
+    /// wildcard pattern instead of silently overwriting (`is_valid_domain` rejects
+    /// the raw `"*"` label, so without this branch a wildcard key always missed).
+    /// Use this when building a store to avoid accidentally merging a new hostname
+    /// entry into an existing wildcard bucket.
     pub fn get_mut_exact(&mut self, k: &str) -> Option<&mut T> {
         let k_lower = k.to_lowercase();
         let k = k_lower.as_str();
-        if !is_valid_domain(k) {
+        let key = if let Some(rest) = k.strip_prefix("*.") {
+            if is_valid_domain(rest) {
+                format!(".{}", rest)
+            } else {
+                return None;
+            }
+        } else if is_valid_domain(k) {
+            k.to_string()
+        } else {
             return None;
-        }
-        self.map.get_mut(k)
+        };
+        self.map.get_mut(&key)
     }
 
     pub fn remove(&mut self, k: &str) -> Option<T> {
@@ -267,6 +325,29 @@ mod tests {
     }
 
     #[test]
+    fn test_get_mut_exact_resolves_wildcard_pattern() {
+        let mut host: HashHost<Vec<&str>> = HashHost::new();
+        host.insert("*.example.com", vec!["w1"]);
+
+        // A wildcard pattern resolves to its own bucket (symmetric with insert),
+        // so a store builder can accumulate instead of overwriting.
+        let bucket = host
+            .get_mut_exact("*.example.com")
+            .expect("get_mut_exact must resolve the wildcard pattern to its own bucket");
+        bucket.push("w2");
+        assert_eq!(host.get_mut_exact("*.example.com"), Some(&mut vec!["w1", "w2"]));
+
+        // It must still NOT fall back to wildcard for a concrete subdomain.
+        assert!(host.get_mut_exact("foo.example.com").is_none());
+
+        // Case-insensitive, mirroring insert.
+        assert!(host.get_mut_exact("*.EXAMPLE.com").is_some());
+
+        // An invalid wildcard rest returns None, not a panic.
+        assert!(host.get_mut_exact("*.").is_none());
+    }
+
+    #[test]
     fn test_duplicate_wildcard_lengths() {
         let mut host: HashHost<String> = HashHost::new();
         // ".example.com" and ".testing.com" have different content but same length (12)
@@ -279,5 +360,83 @@ mod tests {
         assert_eq!(host.get("api.example.com"), Some(&"ex".to_string()));
         assert_eq!(host.get("api.testing.com"), Some(&"te".to_string()));
         assert_eq!(host.get("api.unknown.com"), None);
+    }
+
+    #[test]
+    fn test_get_rfc6125_single_label() {
+        let mut host: HashHost<String> = HashHost::new();
+        host.insert("*.example.com", "wildcard".to_string());
+
+        // Single-label match — RFC 6125 §6.4.3 OK
+        assert_eq!(host.get_rfc6125("foo.example.com"), Some(&"wildcard".to_string()));
+
+        // Multi-label match — RFC 6125 §6.4.3 forbids
+        assert_eq!(host.get_rfc6125("a.b.example.com"), None);
+
+        // Root domain — wildcard does not cover bare suffix
+        assert_eq!(host.get_rfc6125("example.com"), None);
+
+        // Case-insensitive — RFC 6125 §6.4.1
+        assert_eq!(host.get_rfc6125("Foo.Example.COM"), Some(&"wildcard".to_string()));
+    }
+
+    #[test]
+    fn test_get_rfc6125_most_specific() {
+        let mut host: HashHost<String> = HashHost::new();
+        host.insert("*.example.com", "broad".to_string());
+        host.insert("*.api.example.com", "specific".to_string());
+
+        // Most-specific single-label match wins
+        assert_eq!(host.get_rfc6125("v1.api.example.com"), Some(&"specific".to_string()));
+
+        // Single label against the broad wildcard
+        assert_eq!(host.get_rfc6125("web.example.com"), Some(&"broad".to_string()));
+
+        // Four-label host — neither wildcard's single-label rule covers it.
+        // `*.api.example.com` would need exactly one label before `api.example.com`
+        // (`x.y` is two labels). `*.example.com` would need exactly one label before
+        // `example.com` (`x.y.api` is three labels).
+        assert_eq!(host.get_rfc6125("x.y.api.example.com"), None);
+    }
+
+    #[test]
+    fn test_get_rfc6125_exact_priority() {
+        let mut host: HashHost<String> = HashHost::new();
+        host.insert("foo.example.com", "exact".to_string());
+        host.insert("*.example.com", "wildcard".to_string());
+
+        // Exact match wins over wildcard
+        assert_eq!(host.get_rfc6125("foo.example.com"), Some(&"exact".to_string()));
+        // Other subdomains still hit the wildcard
+        assert_eq!(host.get_rfc6125("bar.example.com"), Some(&"wildcard".to_string()));
+    }
+
+    #[test]
+    fn test_get_rfc6125_single_label_sni_returns_none() {
+        let mut host: HashHost<String> = HashHost::new();
+        host.insert("*.example.com", "wildcard".to_string());
+
+        // SNI with no dot at all — RFC 6125 wildcards require at least one
+        // dot in the query; bare hostnames cannot match a wildcard pattern.
+        assert_eq!(host.get_rfc6125("localhost"), None);
+    }
+
+    #[test]
+    fn test_get_vs_get_rfc6125_divergence() {
+        // The two accessors deliberately diverge for multi-label SNI: `get` is the
+        // route-matching path (Gateway API §4.3, multi-label), `get_rfc6125` is the
+        // TLS cert-selection path (RFC 6125 §6.4.3, single-label). This test pins
+        // the invariant the doc-comment advertises so neither side can drift.
+        let mut host: HashHost<String> = HashHost::new();
+        host.insert("*.example.com", "wildcard".to_string());
+
+        // `get` (multi-label) — finds the wildcard for any subdomain depth
+        assert_eq!(host.get("a.b.example.com"), Some(&"wildcard".to_string()));
+        // `get_rfc6125` (single-label) — same input returns None
+        assert_eq!(host.get_rfc6125("a.b.example.com"), None);
+
+        // Single-label query: both agree
+        assert_eq!(host.get("foo.example.com"), Some(&"wildcard".to_string()));
+        assert_eq!(host.get_rfc6125("foo.example.com"), Some(&"wildcard".to_string()));
     }
 }

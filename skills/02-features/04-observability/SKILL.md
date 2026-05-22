@@ -1,15 +1,15 @@
 ---
 name: observability-features
-description: 可观测性功能：Access Log 配置、Metrics 端点、协议日志输出。
+description: Use when looking up how to configure Access Logs, Metrics endpoints, or protocol log output for Edgion Gateway.
 ---
 
-# 04 可观测性功能
+# 04 Observability Features
 
-> Gateway 的日志、指标和诊断功能。
+> Gateway logging, metrics, and diagnostic features.
 
-## 文件清单
+## File List
 
-| 文件 | 主题 |
-|------|------|
-| [00-logging.md](00-logging.md) | 日志体系：Access Log、协议日志、系统日志配置 |
-| [01-metrics.md](01-metrics.md) | Prometheus Metrics 端点和指标 |
+| File | Topic |
+|------|-------|
+| [00-logging.md](00-logging.md) | Logging system: Access Log, protocol logs, system log configuration |
+| [01-metrics.md](01-metrics.md) | Prometheus metrics endpoints and metrics |

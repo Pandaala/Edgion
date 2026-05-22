@@ -1,0 +1,14 @@
+# Scenario: Cors plugin with allowCredentials=true and wildcard origin
+# Expect: Accepted=False/Invalid, message contains "allow_credentials"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ep-validation-cors-invalid
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Cors
+      config:
+        allowCredentials: true
+        allowOrigins: "*"

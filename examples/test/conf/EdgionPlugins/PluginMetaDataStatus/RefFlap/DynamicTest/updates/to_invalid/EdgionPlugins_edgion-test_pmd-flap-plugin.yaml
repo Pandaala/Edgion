@@ -1,0 +1,12 @@
+# EdgionPlugins resource referencing a non-existent PMD pmd-flap-missing.
+# Update 1 (to_invalid): PMD does not exist → EdgionPlugins Accepted=False (reason: Invalid).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: pmd-flap-plugin
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: RegionRoute
+      config:
+        serviceRegionRouteRef: "pmd-flap-missing"

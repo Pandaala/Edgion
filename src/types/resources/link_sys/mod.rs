@@ -15,7 +15,7 @@ pub mod redis;
 pub mod webhook;
 
 // Re-export common types for convenient access
-pub use common::SecretReference;
+pub use common::SecretObjectReference;
 pub use elasticsearch::ElasticsearchClientConfig;
 pub use etcd::EtcdClientConfig;
 pub use redis::RedisClientConfig;

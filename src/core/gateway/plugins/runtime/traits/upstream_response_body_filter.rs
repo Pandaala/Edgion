@@ -7,7 +7,6 @@
 use std::time::Duration;
 
 use super::session::PluginSession;
-use crate::core::gateway::plugins::runtime::log::PluginLog;
 
 /// UpstreamResponseBodyFilter trait for upstream response body stage plugins
 /// Runs during upstream_response_body_filter hook (sync - no async allowed)
@@ -19,9 +18,29 @@ use crate::core::gateway::plugins::runtime::log::PluginLog;
 ///
 /// When multiple plugins return Some(duration), the largest duration wins
 /// (most restrictive rate limit applies).
+///
+/// # No per-chunk logging
+///
+/// This trait deliberately omits the `&mut PluginLog` argument that other filter
+/// traits carry. Body filters are invoked once per upstream chunk; for a long
+/// stream that is hundreds or thousands of calls per request. Surfacing those
+/// to access log would explode log volume, and dropping them silently would
+/// just be wasted allocation. Body filters therefore do not produce per-chunk
+/// PluginLog entries. If a stage-level summary is needed in the future, it
+/// should be aggregated once per request, not emitted per chunk.
 pub trait UpstreamResponseBodyFilter: Send + Sync {
     /// Get the filter name
     fn name(&self) -> &str;
+
+    /// Optional operator-defined alias.
+    ///
+    /// Default returns `None`; the conditional wrappers in
+    /// `conditional_filter.rs` are the only impls that override this to
+    /// surface the value supplied via the EdgionPlugins entry's `alias`
+    /// field. Plain plugin impls do not need to implement this.
+    fn alias(&self) -> Option<&str> {
+        None
+    }
 
     /// Run the upstream response body filter (sync)
     ///
@@ -31,7 +50,6 @@ pub trait UpstreamResponseBodyFilter: Send + Sync {
     /// * `body` - The body chunk data (read-only reference)
     /// * `end_of_stream` - Whether this is the last chunk
     /// * `session` - Read-only session context for accessing request metadata
-    /// * `log` - Plugin execution log
     ///
     /// # Returns
     /// * `None` - No throttling
@@ -41,6 +59,5 @@ pub trait UpstreamResponseBodyFilter: Send + Sync {
         body: &Option<bytes::Bytes>,
         end_of_stream: bool,
         session: &mut dyn PluginSession,
-        log: &mut PluginLog,
     ) -> Option<Duration>;
 }

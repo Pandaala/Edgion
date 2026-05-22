@@ -27,6 +27,7 @@ These are read from `Gateway.metadata.annotations`, not per-listener metadata.
 | `edgion.io/metrics-test-key` | string | none | Test-only metrics correlation key. Consumed by Gateway runtime for integration metrics scenarios. |
 | `edgion.io/metrics-test-type` | `lb` / `retry` / `latency` | none | Test-only metrics mode selector. |
 | `edgion.io/edgion-stream-plugins` | `name` or `namespace/name` | none | Enables Gateway-level connection filtering before HTTP parsing or TLS handshake. Current verified runtime path is in `listener_builder.rs`. |
+| `edgion.io/require-sni-host-match` | `"true"` / `"false"` | inherits `EdgionGatewayConfig.spec.requireSniHostMatch` | When `true`, on HTTPS listeners the SNI must match the request `Host` header (otherwise the request is rejected). Read in `listener_gateway_info.rs`; falls back to the cluster-wide `EdgionGatewayConfig` setting when absent. |
 
 Important:
 
@@ -44,13 +45,45 @@ Notes:
 - Retry configuration uses the standard Gateway API `spec.rules[*].retry` field (see HTTPRoute/GRPCRoute resource docs). Runtime precedence: `rule.retry.attempts > EdgionGatewayConfig.spec.maxRetries`.
 - `edgion.io/hostname-resolution` is currently injected on `HTTPRoute` and `GRPCRoute`.
 
+### `edgion.io/forward-raw-path`
+
+- **Granularity**: HTTPRoute (applied to all rules under this HTTPRoute).
+- **Valid values**:
+  - `"true"` — force raw forwarding (overrides the global `forward_normalized_path` / region_route default).
+  - `"false"` — force normalized forwarding (overrides region_route-style `preserve_raw_path = true`).
+  - absent — use the default flow (rewrite final state → external_jump → global switch → normalized by default).
+- **Parsing time**: HTTPRoute load (`http_route_preparse.rs`).
+- **Storage**: `HTTPRouteRule.parsed_forward_raw_path: Option<bool>`.
+- **Invalid value handling**: tracing INFO log (including ns / name / value) + treat as absent; the route is not rejected.
+- **Priority**: the annotation has the highest priority, overriding `external_jump.preserve_raw_path` and the global `forward_normalized_path`.
+- **Example**:
+
+  ```yaml
+  apiVersion: gateway.networking.k8s.io/v1
+  kind: HTTPRoute
+  metadata:
+    name: legacy-app-raw-path
+    namespace: production
+    annotations:
+      edgion.io/forward-raw-path: "true"   # Upstream is sensitive to literal path format; normalization is forbidden
+  spec:
+    rules:
+      - matches:
+          - path:
+              type: PathPrefix
+              value: /legacy
+        backendRefs:
+          - name: legacy-server
+            port: 8080
+  ```
+
 ## TCPRoute / TLSRoute `metadata.annotations`
 
 | Key | Resource | Value | Default | Effect |
 |-----|----------|-------|---------|--------|
 | `edgion.io/edgion-stream-plugins` | `TCPRoute`, `TLSRoute` | `name` or `namespace/name` | none | Resolves dynamic `EdgionStreamPlugins` lookup key. Short names are expanded with the route namespace. |
 | `edgion.io/proxy-protocol` | `TLSRoute` | currently `"v2"` is recognized | disabled | Sends Proxy Protocol v2 to upstream. Other values are ignored. |
-| `edgion.io/max-connect-retries` | `TLSRoute` | unsigned integer string | `1` | Max upstream connect attempts. Values below `1` are normalized to `1`. |
+| `edgion.io/max-connect-retries` | `TLSRoute` | unsigned integer string | `2` | Max upstream connect attempts. Values below `1` are normalized to `1`; values above `5` are capped to `5`. |
 
 Current implementation note:
 

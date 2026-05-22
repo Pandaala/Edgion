@@ -1,124 +1,124 @@
-# 文档目录结构规范
+# Documentation Directory Structure
 
-## 顶层结构
+## Top-level structure
 
 ```
 docs/
-├── README.md              # 项目级 README（语言入口）
-├── DIRECTORY.md           # 完整目录树索引（AI 和人类共用）
+├── README.md              # Project-level README (language entry point)
+├── DIRECTORY.md           # Full directory-tree index (shared by AI and humans)
 ├── en/                    # English documentation
-├── zh-CN/                 # 中文文档
-├── ja/                    # 日本語ドキュメント（预留）
-├── refactoring/           # 内部重构设计文档（不面向用户）
-├── review/                # 代码审查记录（不面向用户）
-└── superpowers/           # 设计方案和计划（不面向用户）
+├── zh-CN/                 # Chinese documentation
+├── ja/                    # Japanese documentation (reserved)
+├── refactoring/           # Internal refactoring design docs (not user-facing)
+├── review/                # Code review records (not user-facing)
+└── superpowers/           # Design proposals and plans (not user-facing)
 ```
 
-`en/` 和 `zh-CN/` 内部结构必须完全对称。
+The internal structure of `en/` and `zh-CN/` must be fully symmetric.
 
-## 四层体系
+## Four-layer system
 
-每种语言目录下有四层，面向不同受众和阶段：
+Each language directory has four layers, targeting different audiences and stages:
 
-| 层 | 目录 | 受众 | 定位 |
-|----|------|------|------|
-| 1 | `getting-started/` | 新用户 | 从零到第一次成功运行。5 分钟能跑通 |
-| 2 | `user-guide/` | 日常使用者 | 按功能组织的使用指南。Route 类型、插件、匹配规则、后端配置 |
-| 3 | `ops-guide/` | 运维人员 | 网关运维：Gateway 配置、TLS、监听器、可观测性、基础设施 |
-| 4 | `dev-guide/` | 开发者/贡献者 | 架构概述、插件开发、资源注册、日志系统、CI/CD |
+| Layer | Directory | Audience | Positioning |
+|-------|-----------|----------|-------------|
+| 1 | `getting-started/` | New users | From zero to first successful run; runnable in 5 minutes |
+| 2 | `user-guide/` | Daily users | Usage guide organized by feature; Route types, plugins, match rules, backend configuration |
+| 3 | `ops-guide/` | Operators | Gateway operations: Gateway configuration, TLS, listeners, observability, infrastructure |
+| 4 | `dev-guide/` | Developers / contributors | Architecture overview, plugin development, resource registration, logging, CI/CD |
 
-### 层的边界
+### Layer boundaries
 
-- **getting-started** 只解释"跑通需要知道的最少知识"，不展开所有选项
-- **user-guide** 按功能聚合，每个 Route 类型独立子目录
-- **ops-guide** 关注"部署和运维"，不涉及业务路由规则
-- **dev-guide** 面向向 Edgion 贡献代码的人，不面向仅使用 Edgion 的用户
+- **getting-started** explains only "the minimum knowledge needed to get going"; do not enumerate all options
+- **user-guide** is grouped by feature; each Route type gets its own subdirectory
+- **ops-guide** focuses on "deployment and operations"; does not cover business routing rules
+- **dev-guide** targets people contributing code to Edgion, not users who only consume Edgion
 
-## 目录命名规则
+## Directory naming rules
 
-| 规则 | 示例 | 反例 |
-|------|------|------|
+| Rule | Example | Counter-example |
+|------|---------|-----------------|
 | kebab-case | `http-route/`, `backend-tls.md` | `httpRoute/`, `backend_tls.md` |
-| 目录名用复数名词或功能名 | `filters/`, `backends/`, `matches/` | `filter/` |
-| 文件名用功能名，不加序号前缀 | `cors.md`, `session-persistence.md` | `01-cors.md` |
-| README.md 作为目录索引 | `filters/README.md` | `filters/index.md` |
+| Directory names are plural nouns or feature names | `filters/`, `backends/`, `matches/` | `filter/` |
+| File names are feature names without numeric prefixes | `cors.md`, `session-persistence.md` | `01-cors.md` |
+| README.md serves as the directory index | `filters/README.md` | `filters/index.md` |
 
-**例外**：getting-started 可能需要暗示阅读顺序，但仍用功能名而非序号。
+**Exception**: getting-started may need to imply reading order, but still uses feature names rather than numeric prefixes.
 
-## README.md 规范
+## README.md conventions
 
-每个子目录的 README.md 充当该目录的导航页：
+The README.md of each subdirectory acts as a navigation page for that directory:
 
 ```markdown
-# <目录主题>
+# <Directory topic>
 
-<一句话说明这个目录覆盖什么>
+<One sentence describing what this directory covers>
 
-## 内容
+## Contents
 
-| 文档 | 说明 |
-|------|------|
-| xxx.md | 一句话描述 |
-| yyy.md | 一句话描述 |
+| Document | Description |
+|----------|-------------|
+| xxx.md | One-sentence description |
+| yyy.md | One-sentence description |
 ```
 
-要求：
-- 一级标题是目录主题，不是"目录"或"Index"
-- 表格列出该目录下所有文档，每个一句话描述
-- 如果有子目录，也列出并标注"目录"
+Requirements:
+- The H1 is the directory topic, not "Contents" or "Index"
+- The table lists every document in the directory with a one-sentence description
+- If subdirectories exist, list them too and mark them as "directory"
 
-## DIRECTORY.md 同步规则
+## DIRECTORY.md sync rules
 
-`docs/DIRECTORY.md` 是整棵文档树的完整索引。
+`docs/DIRECTORY.md` is the full index of the entire documentation tree.
 
-**触发更新**：
-- 新增文档文件
-- 删除文档文件
-- 移动或重命名文档文件
-- 新增或删除子目录
+**Triggers an update**:
+- Adding a documentation file
+- Removing a documentation file
+- Moving or renaming a documentation file
+- Adding or removing a subdirectory
 
-**不触发更新**：
-- 仅修改文档内容（文件路径未变）
+**Does not trigger an update**:
+- Modifying only file content (paths unchanged)
 
-**更新方式**：手动维护。修改文档结构的 PR 必须同步更新 DIRECTORY.md。
+**How to update**: Maintained manually. PRs that change documentation structure must update DIRECTORY.md in sync.
 
-## 新增文档放置决策树
+## Placement decision tree for new documents
 
 ```
-你要写的文档是关于…
+The document you're writing is about…
 
-├── 用户第一次接触、快速上手？
+├── First-time user contact, quick onboarding?
 │   └── getting-started/
 │
-├── 某种路由（HTTP/gRPC/TCP/UDP）的使用方式？
+├── How to use a particular route type (HTTP/gRPC/TCP/UDP)?
 │   └── user-guide/<route-type>/
-│   ├── 匹配规则 → matches/
-│   ├── 过滤器/插件 → filters/
-│   ├── 后端配置 → backends/
-│   └── 韧性（超时/重试/会话保持） → resilience/
+│   ├── Match rules → matches/
+│   ├── Filters / plugins → filters/
+│   ├── Backend configuration → backends/
+│   └── Resilience (timeout / retry / session persistence) → resilience/
 │
-├── 独立插件（不绑定特定 Route 类型）？
+├── Standalone plugin (not bound to a specific Route type)?
 │   └── user-guide/edgion-plugins/
 │
-├── Gateway/Listener/TLS 配置？
+├── Gateway / Listener / TLS configuration?
 │   └── ops-guide/gateway/
 │
-├── 可观测性（日志、指标）？
+├── Observability (logs, metrics)?
 │   └── ops-guide/observability/
 │
-├── 基础设施（Secret、ReferenceGrant、mTLS）？
+├── Infrastructure (Secret, ReferenceGrant, mTLS)?
 │   └── ops-guide/infrastructure/
 │
-├── 开发/贡献指南（架构、插件开发、CI）？
+├── Development / contribution guide (architecture, plugin development, CI)?
 │   └── dev-guide/
 │
-└── 推广材料（白皮书、介绍文）？
-    └── promotion/（仅 zh-CN）
+└── Promotional material (white papers, intro pieces)?
+    └── promotion/ (zh-CN only)
 ```
 
-## 与 skills/ 的关系
+## Relationship with skills/
 
-- `docs/` 是面向人类的文档层
-- `skills/` 是面向 AI 和开发者的知识层
-- 不要在两者间重复详细内容
-- docs/ 中如需涉及架构细节，链接到 dev-guide/ 的对应文档，不要内联 skills/ 的内容
+- `docs/` is the human-facing documentation layer
+- `skills/` is the knowledge layer for AI and developers
+- Do not duplicate detailed content between them
+- When `docs/` needs to touch architectural details, link to the corresponding doc under dev-guide/; do not inline content from skills/

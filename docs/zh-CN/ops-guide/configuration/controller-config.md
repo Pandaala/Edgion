@@ -50,7 +50,6 @@ conf_sync:
 conf_center:
   type: filesystem
   conf_dir: config/resources      # YAML 资源目录（建议写绝对路径）
-  endpoint_mode: EndpointSlice    # EndpointSlice | Endpoints | Both
 
 # ─── conf_center：Kubernetes 模式（生产部署）─────────────────────
 # conf_center:
@@ -59,7 +58,6 @@ conf_center:
 #   controller_name: edgion.io/gateway-controller  # Gateway API status 回报的 controllerName
 #   watch_namespaces: []                           # 空列表 = 监听所有命名空间
 #   label_selector: ""                             # 标签过滤
-#   endpoint_mode: EndpointSlice
 #   gateway_address: ""                            # Gateway status 中报告的地址
 #   ha_mode: leader-only                           # "leader-only" | "all-serve"
 #   no_watch_kinds: [TCPRoute, UDPRoute]           # 跳过 CRD 预检和 watch 的资源 kind
@@ -133,7 +131,6 @@ conf_center:
 |------|------|--------|------|
 | `type` | `String` | — | 固定填 `"filesystem"` |
 | `conf_dir` | `Path` | — | YAML 资源目录，**建议写绝对路径**（当前实现不会随 `work_dir` 自动解析） |
-| `endpoint_mode` | `String` | `EndpointSlice` | 后端发现模式：`EndpointSlice` / `Endpoints` / `Both` |
 
 注意：`--conf-dir` CLI 参数会直接覆盖此处的 `conf_dir`，并将 `conf_center` 切换到 FileSystem 模式。
 
@@ -146,7 +143,6 @@ conf_center:
 | `controller_name` | `String` | — | Gateway API status 里回报的 `controllerName` |
 | `watch_namespaces` | `Array<String>` | `[]`（全部） | 监听的命名空间列表，空列表表示监听所有命名空间 |
 | `label_selector` | `String` | `""` | 资源标签过滤表达式 |
-| `endpoint_mode` | `String` | `EndpointSlice` | 后端发现模式 |
 | `gateway_address` | `String` | — | Gateway status 中报告的地址，可选 |
 | `ha_mode` | `String` | — | HA 模式：`"leader-only"` 或 `"all-serve"` |
 | `no_watch_kinds` | `Array<String>` | `[]` | 跳过 CRD 预检和 watch 的资源 kind（PascalCase），如 `["TCPRoute", "UDPRoute"]` |
@@ -178,7 +174,6 @@ conf_center:
 conf_center:
   type: filesystem
   conf_dir: /home/user/my-project/config/resources
-  endpoint_mode: EndpointSlice
 ```
 
 也可以在启动时用 CLI 参数覆盖：
@@ -196,7 +191,6 @@ conf_center:
   gateway_class: edgion
   controller_name: edgion.io/gateway-controller
   watch_namespaces: [default, production]
-  endpoint_mode: EndpointSlice
   gateway_address: "203.0.113.10"
   ha_mode: leader-only
 ```

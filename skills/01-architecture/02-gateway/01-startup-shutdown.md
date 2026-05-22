@@ -1,15 +1,15 @@
 ---
 name: gateway-startup-shutdown
-description: edgion-gateway 启动与关闭流程：14 步启动序列、两阶段 Pingora 集成、Tokio 运行时生命周期管理。
+description: edgion-gateway startup and shutdown — 14-step startup sequence, two-phase Pingora integration, Tokio runtime lifecycle management.
 ---
 
-# Gateway 启动与关闭
+# Gateway startup and shutdown
 
-## 启动入口
+## Startup entry
 
-`EdgionGatewayCli::run()` (`cli/mod.rs`) 编排整个启动流程。该方法在 `main()` 线程上同步执行，内部创建 Tokio Runtime 用于异步操作，最终将控制权交给 Pingora 主循环。
+`EdgionGatewayCli::run()` (`cli/mod.rs`) orchestrates the entire startup flow. The method runs synchronously on the `main()` thread, internally creates a Tokio Runtime for async operations, and finally hands control off to the Pingora main loop.
 
-## 14 步启动序列
+## 14-step startup sequence
 
 ```rust
 // cli/mod.rs - EdgionGatewayCli::run()
@@ -19,15 +19,15 @@ pub fn run(&self) -> Result<()> {
 }
 ```
 
-### 第 1 步：加载 TOML 配置
+### Step 1: Load TOML configuration
 
 ```rust
 let config = EdgionGatewayConfig::load(self.config.clone())?;
 ```
 
-`EdgionGatewayConfig::load()` 合并 CLI 参数与 TOML 配置文件。配置结构定义在 `cli/config.rs`，包含 server、access_log、ssl_log、tcp_log、tls_log、udp_log、rate_limit、all_endpoint_status 等段。
+`EdgionGatewayConfig::load()` merges CLI arguments and the TOML configuration file. The configuration structure is defined in `cli/config.rs` and includes sections such as server, access_log, ssl_log, tcp_log, tls_log, udp_log, rate_limit, all_endpoint_status.
 
-### 第 2 步：初始化工作目录
+### Step 2: Initialize the working directory
 
 ```rust
 init_work_dir(work_dir_path)?;
@@ -35,84 +35,83 @@ let wd = work_dir();
 wd.validate()?;
 ```
 
-工作目录优先级：CLI `--work-dir` > 环境变量 `EDGION_WORK_DIR` > 配置文件 `work_dir` > 当前目录 `"."`。`init_work_dir()` 创建必要的子目录结构并通过 `validate()` 校验可写性。
+Working directory priority: CLI `--work-dir` > environment variable `EDGION_WORK_DIR` > configuration file `work_dir` > current directory `"."`. `init_work_dir()` creates the necessary subdirectory structure and `validate()` checks writability.
 
-### 第 3 步：初始化日志系统
+### Step 3: Initialize the logging system
 
 ```rust
 let log_config = config.to_log_config();
 let _log_guard = runtime.block_on(init_logging(log_config))?;
 ```
 
-`init_logging()` 配置 tracing 日志框架，返回 `WorkerGuard` 以确保日志在进程退出时刷写。同时初始化 RateLimit 全局配置和 AllEndpointStatus 全局配置。
+`init_logging()` configures the tracing logging framework and returns a `WorkerGuard` to ensure logs are flushed when the process exits. It also initializes the RateLimit global configuration and the AllEndpointStatus global configuration.
 
-### 第 4 步：创建 ConfigSyncClient（gRPC 到 Controller）
+### Step 4: Create ConfigSyncClient (gRPC to Controller)
 
 ```rust
 let mut sync_client = runtime.block_on(Self::create_config_sync_client(&config))?;
 let config_client = sync_client.get_config_client();
 ```
 
-`ConfigSyncClient::new()` 建立到 Controller 的 gRPC 连接，参数包含 `server_addr`、客户端名称 `"edgion-gateway"` 和 10 秒超时。`get_config_client()` 返回 `Arc<ConfigClient>`，聚合所有资源类型的 ClientCache。
+`ConfigSyncClient::new()` establishes a gRPC connection to the Controller. Parameters include `server_addr`, the client name `"edgion-gateway"`, and a 10-second timeout. `get_config_client()` returns `Arc<ConfigClient>`, aggregating ClientCache instances of all resource kinds.
 
-### 第 5 步：初始化全局 ConfigClient
+### Step 5: Initialize the global ConfigClient
 
 ```rust
 init_global_config_client(config_client.clone())?;
 ```
 
-将 ConfigClient 注册到全局 `OnceLock<Arc<ConfigClient>>`，使其他模块可通过 `get_global_config_client()` 访问。
+Registers the ConfigClient into a global `OnceLock<Arc<ConfigClient>>` so other modules can access it via `get_global_config_client()`.
 
-### 第 6 步：从 Controller 获取 ServerInfo
+### Step 6: Get ServerInfo from the Controller
 
 ```rust
 let server_info = runtime.block_on(sync_client.get_server_info())?;
 ```
 
-`GetServerInfo` gRPC 调用返回：
-- `endpoint_mode`：`EndpointSlice` / `Endpoint` / `Both`，决定后端发现模式
-- `supported_kinds`：Controller 支持的资源类型列表，用于选择性 Watch
-- `server_id`：Controller 实例标识，用于版本一致性校验
+The `GetServerInfo` gRPC call returns:
+- `supported_kinds`: list of resource kinds supported by the Controller, used for selective Watch.
+- `server_id`: Controller instance identifier, used for version consistency checks.
 
-解析 endpoint_mode 并通过 `init_global_endpoint_mode()` 设置全局模式。同时初始化集成测试模式和全局测试模式（由 `--integration-testing-mode` CLI 标志控制）。
+It also initializes integration testing mode and the global testing mode (controlled by the `--integration-testing-mode` CLI flag).
 
-### 第 7 步：开始 Watch 资源
+### Step 7: Start watching resources
 
 ```rust
 runtime.block_on(sync_client.start_watch_kinds(&server_info.supported_kinds))?;
 ```
 
-基于 Controller 返回的 `supported_kinds` 列表，为每种资源类型启动 gRPC Watch 流。同时启动 `start_watch_server_meta()` 后台任务，监控 gateway 实例数量用于 Cluster 级别限流。
+Based on the `supported_kinds` list returned by the Controller, start a gRPC Watch stream for each resource kind. Also start the `start_watch_server_meta()` background task to monitor the gateway instance count for cluster-level rate limiting.
 
-### 第 8 步：启动辅助服务
+### Step 8: Start auxiliary services
 
 ```rust
 runtime.block_on(Self::start_auxiliary_services(config_client.clone()));
 ```
 
-`start_auxiliary_services()` 启动四个组件：
-1. **BackendCleaner**：`BackendCleaner::new().start()`，清理 LeastConnection LB 的过期后端状态
-2. **Health Check Manager**：`get_hc_config_store()` + `get_health_check_manager()` 初始化健康检查配置存储和管理器
-3. **Admin API**：`tokio::spawn(api::serve(config_client, 5900))`，端口 5900
-4. **Metrics API**：`tokio::spawn(metrics::serve(5901))`，端口 5901，Prometheus 指标暴露
+`start_auxiliary_services()` starts four components:
+1. **BackendCleaner**: `BackendCleaner::new().start()`, cleans up stale backend state for LeastConnection LB.
+2. **Health Check Manager**: `get_hc_config_store()` + `get_health_check_manager()` initialize the health-check configuration store and manager.
+3. **Admin API**: `tokio::spawn(api::serve(config_client, 5900))`, port 5900.
+4. **Metrics API**: `tokio::spawn(metrics::serve(5901))`, port 5901, exposes Prometheus metrics.
 
-### 第 9 步：等待所有缓存就绪
+### Step 9: Wait for all caches to be ready
 
 ```rust
 runtime.block_on(Self::wait_for_ready(config_client.clone()))?;
 ```
 
-轮询 `config_client.is_ready()`（每秒一次），直到所有 ClientCache 完成首次 List（`CacheData.is_ready() == true`）。这确保 Gateway/GatewayClass/EdgionGatewayConfig/HTTPRoute 等资源在开始接收流量前已加载。
+Polls `config_client.is_ready()` (once per second) until all ClientCache instances have completed their first List (`CacheData.is_ready() == true`). This ensures resources such as Gateway/GatewayClass/EdgionGatewayConfig/HTTPRoute are loaded before traffic is accepted.
 
-### 第 10 步：预加载负载均衡器
+### Step 10: Preload load balancers
 
 ```rust
 crate::core::gateway::backends::preload_load_balancers(config_client.clone());
 ```
 
-遍历所有已加载的路由，为每个 BackendRef 预热 LB 选择器（后端发现 + 权重计算）。减少首请求延迟。
+Iterates over all loaded routes and warms the LB selector (backend discovery + weight calculation) for each BackendRef, reducing first-request latency.
 
-### 第 11 步：初始化所有可观测性 Logger
+### Step 11: Initialize all observability loggers
 
 ```rust
 runtime.block_on(init_access_logger(&config.access_log))?;
@@ -122,9 +121,9 @@ runtime.block_on(init_tls_logger(&config.tls_log))?;
 runtime.block_on(init_udp_logger(&config.udp_log))?;
 ```
 
-五个 Logger 分别处理 HTTP 访问日志、SSL 握手日志、TCP 连接日志、TLS 路由日志和 UDP 日志。每个 Logger 独立配置输出目标（文件/stdout/LinkSys）。
+Five loggers handle HTTP access logs, SSL handshake logs, TCP connection logs, TLS route logs, and UDP logs respectively. Each logger configures its output target independently (file / stdout / LinkSys).
 
-### 第 12 步：创建 Pingora 服务器（Phase 1 — 配置 Listener）
+### Step 12: Create the Pingora server (Phase 1 — configure listeners)
 
 ```rust
 let pingora_server = runtime.block_on(async {
@@ -134,21 +133,21 @@ let pingora_server = runtime.block_on(async {
 })?;
 ```
 
-Phase 1 在 Tokio Runtime 上下文中执行（`spawn_blocking` 确保 UDP listener 可用 Tokio UDP socket）：
+Phase 1 runs within the Tokio Runtime context (`spawn_blocking` ensures UDP listeners can use a Tokio UDP socket):
 
-1. **创建 ServerConf**：从 TOML 配置读取 `threads`（默认 CPU 核数）、`work_stealing`（默认 true）、`grace_period_seconds`（默认 30）、`graceful_shutdown_timeout_seconds`（默认 10）、`upstream_keepalive_pool_size`（默认 128）
-2. **Bootstrap**：`Server::new_with_opt_and_conf(None, server_conf)` + `pingora_server.bootstrap()`
-3. **创建 GatewayBase**：`GatewayBase::new(config_client)`
-4. **获取 Gateway 列表**：`config_client.list_gateways().data`
-5. **配置 Listener**：`gateway_base.configure_listeners(&mut pingora_server, gateways)`
+1. **Create ServerConf**: read `threads` (default = CPU cores), `work_stealing` (default true), `grace_period_seconds` (default 30), `graceful_shutdown_timeout_seconds` (default 10), and `upstream_keepalive_pool_size` (default 128) from the TOML configuration.
+2. **Bootstrap**: `Server::new_with_opt_and_conf(None, server_conf)` + `pingora_server.bootstrap()`.
+3. **Create GatewayBase**: `GatewayBase::new(config_client)`.
+4. **Get the Gateway list**: `config_client.list_gateways().data`.
+5. **Configure listeners**: `gateway_base.configure_listeners(&mut pingora_server, gateways)`.
 
-`configure_listeners()` 遍历每个 Gateway 的每个 Listener，依次：
-- 查找关联的 GatewayClass 和 EdgionGatewayConfig
-- 检查端口冲突和 Conflicted 状态
-- 解析 HTTP/2 annotation (`edgion.io/enable-http2`)
-- 构建 `ListenerContext` 并调用 `listener_builder::add_listener()` 将 Listener 添加到 Pingora Server
+`configure_listeners()` iterates over each Listener of each Gateway and, in order:
+- Looks up the associated GatewayClass and EdgionGatewayConfig.
+- Checks for port conflicts and the Conflicted state.
+- Parses the HTTP/2 annotation (`edgion.io/enable-http2`).
+- Builds a `ListenerContext` and calls `listener_builder::add_listener()` to add the Listener to the Pingora Server.
 
-### 第 13 步：将 Tokio 运行时移到后台线程
+### Step 13: Move the Tokio runtime to a background thread
 
 ```rust
 std::thread::spawn(move || {
@@ -158,34 +157,34 @@ std::thread::spawn(move || {
 });
 ```
 
-将 Tokio Runtime 所有权移入后台线程。`std::future::pending()` 使线程永远不退出，保持所有 Tokio 异步任务（gRPC Watch、Admin API、Metrics API、Health Check 等）持续运行。
+Moves ownership of the Tokio Runtime into a background thread. `std::future::pending()` keeps the thread alive permanently, ensuring all Tokio async tasks (gRPC Watch, Admin API, Metrics API, Health Check, etc.) keep running.
 
-### 第 14 步：运行 Pingora 服务器（Phase 2 — 阻塞主循环）
+### Step 14: Run the Pingora server (Phase 2 — blocking main loop)
 
 ```rust
 run_server(pingora_server);
 // fn run_server(server: Server) { server.run_forever(); }
 ```
 
-Phase 2 在主线程上调用 `server.run_forever()`，启动 Pingora 工作线程池接收连接并处理请求。此调用阻塞直到收到关闭信号。
+Phase 2 calls `server.run_forever()` on the main thread, starting the Pingora worker thread pool to accept connections and handle requests. This call blocks until a shutdown signal is received.
 
-## 两阶段 Pingora 集成
+## Two-phase Pingora integration
 
-| 阶段 | 函数 | 运行线程 | 职责 |
-|------|------|---------|------|
-| Phase 1 | `create_and_configure_server()` | Tokio Runtime (spawn_blocking) | 创建 ServerConf、Bootstrap、配置所有 Listener |
-| Phase 2 | `run_server()` → `server.run_forever()` | 主线程 | 启动 Pingora 工作线程池，开始接收连接 |
+| Phase | Function | Running thread | Responsibility |
+|-------|----------|----------------|----------------|
+| Phase 1 | `create_and_configure_server()` | Tokio Runtime (spawn_blocking) | Create ServerConf, bootstrap, configure all listeners |
+| Phase 2 | `run_server()` → `server.run_forever()` | Main thread | Start Pingora worker thread pool, begin accepting connections |
 
-分离原因：Phase 1 需要 Tokio 上下文（UDP listener 依赖 Tokio UDP socket），而 Phase 2 的 `run_forever()` 会接管线程控制权，所以必须在 Tokio Runtime 被移走之后调用。
+Reason for the split: Phase 1 needs the Tokio context (UDP listener depends on a Tokio UDP socket), and Phase 2's `run_forever()` takes over thread control, so it must be invoked after the Tokio Runtime has been moved away.
 
-## 关闭流程
+## Shutdown flow
 
-关闭依赖 Pingora 内置的优雅关闭机制：
+Shutdown relies on Pingora's built-in graceful shutdown mechanism:
 
-1. Pingora 收到 SIGTERM/SIGINT 信号
-2. 进入 grace period（默认 30 秒）：现有连接继续服务，`session.is_process_shutting_down()` 返回 true
-3. 在 `early_request_filter` 中禁用 keepalive：`session.set_keepalive(None)`
-4. 在 `response_filter` 中添加 `Connection: close` 响应头
-5. grace period 结束后，进入 graceful shutdown timeout（默认 10 秒）强制关闭剩余连接
-6. `run_forever()` 返回，主线程退出
-7. 后台 Tokio 线程随进程退出自动终止
+1. Pingora receives SIGTERM/SIGINT.
+2. Enter the grace period (default 30 seconds): existing connections continue to be served, `session.is_process_shutting_down()` returns true.
+3. In `early_request_filter`, disable keepalive: `session.set_keepalive(None)`.
+4. In `response_filter`, add the `Connection: close` response header.
+5. After the grace period expires, enter the graceful shutdown timeout (default 10 seconds), forcibly closing remaining connections.
+6. `run_forever()` returns, the main thread exits.
+7. The background Tokio thread terminates automatically when the process exits.

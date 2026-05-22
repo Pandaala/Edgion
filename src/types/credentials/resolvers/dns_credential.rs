@@ -19,19 +19,19 @@
 //! # Material
 //!
 //! `DnsCredentialMaterial` is intentionally minimal — it carries no parsed
-//! data. The Gateway-side consumer (`AcmeService::extract_dns_credentials`)
-//! still reads the raw `Secret.data` directly, and the pipeline calls
-//! [`SecretMaterialResolver::parse`] purely for validation. If ACME ever
-//! migrates fully onto the credential pipeline, extend this struct with
+//! data. The Controller-side consumer (`AcmeService::fetch_dns_credentials`)
+//! re-fetches the Secret from Kubernetes at issuance time and reads the raw
+//! `Secret.data` directly; the pipeline calls
+//! [`SecretMaterialResolver::parse`] purely for validation
+//! (`ResolvedRefs` condition + `SecretRefManager` registration). If ACME
+//! ever migrates fully onto the credential pipeline, extend this struct with
 //! the parsed `HashMap<&'static str, Zeroizing<String>>`; for now the
 //! `()` shape keeps the diff minimal.
 
 use k8s_openapi::ByteString;
 use std::collections::BTreeMap;
 
-use super::super::{
-    resolver::{ResolveError, SecretMaterialResolver},
-};
+use super::super::resolver::{ResolveError, SecretMaterialResolver};
 
 /// Placeholder material. See module docs for why this is empty.
 #[derive(Clone, Debug, Default)]

@@ -72,7 +72,13 @@ upstreamResponseBodyFilterPlugins:
 
 1. 此插件仅限制下游（客户端方向）的响应带宽，不限制上游请求带宽
 2. 必须放在 `upstreamResponseBodyFilterPlugins` 中，放在 `requestPlugins` 中无效
-3. 限速基于每个连接，非全局限速
+3. **限速作用域：速率作用于每个响应流（每个 HTTP 请求），既不是按连接也不是全局。**
+   插件在 chunk 之间不维护状态，对每个上游 body chunk 返回 `chunk_size / rate` 的延迟，
+   Pingora 在同一响应内的下一个 chunk 发送前等待该延迟。由此带来的实际表现：
+   - 每个正在进行的响应独立享有约 `rate` 字节/秒的吞吐。
+   - HTTP/2 多路复用：同一连接上的 N 个并发流各自获得完整 `rate`，整条连接的聚合带宽可达 N × `rate`。
+   - HTTP/1.1 keep-alive：同一连接上串行的多次响应各自独立享有完整 `rate`。
+   - 跨路由、跨连接、跨 Pod 都没有共享的令牌桶。若需要"总量限速"，应依赖外部机制（LB 层 QoS、内核 `tc`、或 Service Mesh 策略）。
 
 ---
 

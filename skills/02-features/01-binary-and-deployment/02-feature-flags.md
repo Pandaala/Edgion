@@ -1,81 +1,82 @@
 ---
 name: feature-flags
-description: Cargo Feature Flags 完整参考：allocator、TLS backend、互斥规则、运行时注意事项及构建组合。
+description: Full Cargo Feature Flags reference: allocator, TLS backend, mutual-exclusion rules, runtime notes, and build combinations.
 ---
 
 # Feature Flags
 
-## 源码位置
+## Source Locations
 
 - `Cargo.toml`
-- `src/lib.rs`（allocator 全局安装）
-- `src/core/gateway/runtime/server/listener_builder.rs`（TLS listener 守卫）
-- `src/core/gateway/tls/runtime/`（TLS 运行时守卫）
-- `src/bin/edgion_gateway.rs`、`src/bin/edgion_controller.rs`、`src/bin/edgion_cli.rs`（rustls crypto provider 初始化）
+- `src/lib.rs` (global allocator installation)
+- `src/core/gateway/runtime/server/listener_builder.rs` (TLS listener guards)
+- `src/core/gateway/tls/runtime/` (TLS runtime guards)
+- `src/bin/edgion_gateway.rs`, `src/bin/edgion_controller.rs`, `src/bin/edgion_ctl.rs`, `src/bin/edgion_center.rs` (rustls crypto provider initialization)
 
-## 默认构建
+## Default Build
 
 ```bash
-cargo build    # 等价于 --features allocator-jemalloc,boringssl
+cargo build    # Equivalent to --features allocator-jemalloc,boringssl
 ```
 
-## Feature 矩阵
+## Feature Matrix
 
-| Feature | 互斥组 | 默认 | 编译时效果 | 运行时含义 |
-|---------|--------|------|-----------|-----------|
-| `allocator-jemalloc` | Allocator | 是 | 引入 `tikv-jemallocator` | 非 MSVC 目标上设为全局分配器 |
-| `allocator-mimalloc` | Allocator | 否 | 引入 `mimalloc` | 设为全局分配器 |
-| `allocator-system` | Allocator | 否 | 无额外依赖 | 使用系统分配器 |
-| `boringssl` | TLS Backend | 是 | 启用 Pingora BoringSSL + `boring-sys` | 解锁 Gateway TLS 完整运行时路径 |
-| `rustls` | TLS Backend | 否 | 启用 Pingora rustls 后端 | **不完全对等**，见下方说明 |
-| `legacy_route_tests` | 独立 | 否 | 仅声明 | 保留/占位，当前无实际 `cfg` 调用点 |
+| Feature | Mutex Group | Default | Compile-time Effect | Runtime Meaning |
+|---------|-------------|---------|---------------------|-----------------|
+| `allocator-jemalloc` | Allocator | Yes | Pulls in `tikv-jemallocator` | Set as the global allocator on non-MSVC targets |
+| `allocator-mimalloc` | Allocator | No | Pulls in `mimalloc` | Set as the global allocator |
+| `allocator-system` | Allocator | No | No extra dependency | Use the system allocator |
+| `boringssl` | TLS Backend | Yes | Enables Pingora BoringSSL + `boring-sys` | Unlocks the full Gateway TLS runtime path |
+| `rustls` | TLS Backend | No | Enables the Pingora rustls backend | **Not fully equivalent**, see notes below |
+| `legacy_route_tests` | Standalone | No | Declared only | Reserved/placeholder, currently no actual `cfg` call site |
 
-## 互斥规则
+## Mutual Exclusion Rules
 
-- **Allocator 组**：`jemalloc` / `mimalloc` / `system`，三选一。不要在同一次构建中叠加多个，除非你同时修改了 `src/lib.rs` 中的全局分配器接线。
-- **TLS Backend 组**：`boringssl` / `rustls`，二选一。
-- 跨组可自由组合。
+- **Allocator group**: `jemalloc` / `mimalloc` / `system`, pick one. Do not stack multiple in the same build unless you also modify the global allocator wiring in `src/lib.rs`.
+- **TLS Backend group**: `boringssl` / `rustls`, pick one.
+- Cross-group combinations are free.
 
-## rustls 注意事项
+## rustls Notes
 
-Gateway TLS 运行时代码在多处使用 `#[cfg(feature = "boringssl")]` 守卫：
+The Gateway TLS runtime code uses `#[cfg(feature = "boringssl")]` guards in several places:
 
 - `src/core/gateway/runtime/server/listener_builder.rs`
 - `src/core/gateway/tls/runtime/gateway/mod.rs`
 - `src/core/gateway/tls/runtime/backend/mod.rs`
 
-实际影响：
+Practical impact:
 
-- `rustls` 仍用于 Controller / CLI / 客户端侧的 TLS 栈
-- `rustls` 构建 ≠ "所有 Gateway TLS listener 和 backend 运行时功能可用"
-- 如果任务涉及 HTTPS listener、TLSRoute 代理、数据面 TLS 运行时，使用 `boringssl`
+- `rustls` is still used for the Controller / CLI / client-side TLS stack
+- A `rustls` build ≠ "all Gateway TLS listener and backend runtime features are available"
+- If your task involves HTTPS listeners, TLSRoute proxying, or the data-plane TLS runtime, use `boringssl`
 
-## Allocator 注意事项
+## Allocator Notes
 
-`src/lib.rs` 中 jemalloc 全局安装守卫为：
+The global jemalloc installation guard in `src/lib.rs` is:
 
 ```rust
 #[cfg(all(feature = "allocator-jemalloc", not(target_env = "msvc")))]
 ```
 
-Windows/MSVC 环境下即使指定了 `allocator-jemalloc` feature，实际也不会安装。
+On Windows/MSVC, even if `allocator-jemalloc` is specified, it is not actually installed.
 
-## Binary 启动说明
+## Binary Startup Notes
 
-三个 bin 在启动时均会安装 rustls crypto provider：
+All four binaries install the rustls crypto provider on startup:
 
 - `src/bin/edgion_gateway.rs`
 - `src/bin/edgion_controller.rs`
-- `src/bin/edgion_cli.rs`
+- `src/bin/edgion_ctl.rs` (binary name `edgion-cli`)
+- `src/bin/edgion_center.rs`
 
-这是为了支持 repo 中依赖 rustls 的库，**不会**覆盖 Cargo feature 矩阵对 Gateway 数据面 TLS 后端的选择。
+This supports libraries in the repo that depend on rustls and **does not** override the Cargo feature matrix's choice of Gateway data-plane TLS backend.
 
-## 构建示例
+## Build Examples
 
-| 场景 | 命令 |
-|------|------|
-| 默认开发构建 | `cargo build` |
-| 默认 release | `cargo build --release` |
+| Scenario | Command |
+|----------|---------|
+| Default development build | `cargo build` |
+| Default release | `cargo build --release` |
 | mimalloc + BoringSSL | `cargo build --release --no-default-features --features "allocator-mimalloc,boringssl"` |
-| 系统分配器 + BoringSSL | `cargo build --release --no-default-features --features "allocator-system,boringssl"` |
-| rustls 实验 | `cargo build --no-default-features --features "allocator-jemalloc,rustls"` |
+| System allocator + BoringSSL | `cargo build --release --no-default-features --features "allocator-system,boringssl"` |
+| rustls experiment | `cargo build --no-default-features --features "allocator-jemalloc,rustls"` |

@@ -44,10 +44,9 @@ spec:
     - www.example.com
   challenge:
     type: http-01
-    http01:
-      gatewayRef:
-        name: my-gateway
-        namespace: default
+    gatewayRef:
+      name: my-gateway
+      namespace: default
   storage:
     secretName: example-tls-cert
   autoEdgionTls:
@@ -74,17 +73,17 @@ spec:
 
 ### 校验方式：challenge
 
-| 字段 | 说明 |
-|------|------|
-| `challenge.type` | `http-01` 或 `dns-01`。 |
-| `challenge.http01` | HTTP-01 时必填，需指定 `gatewayRef`（用于提供校验响应的 Gateway）。 |
-| `challenge.dns01` | DNS-01 时必填，需指定 DNS 提供商与凭据。 |
+`challenge` 是 tagged 枚举，由 `type` 区分两种形态，对应字段直接平铺在 `challenge` 下。
 
-**HTTP-01**：ACME 服务会访问 `http://<domain>/.well-known/acme-challenge/<token>`。Controller 将 token 写入 EdgionAcme 并同步到 Gateway，Gateway 仅在存在未完成校验时响应该路径，校验结束后不再拦截。
+**HTTP-01** (`type: http-01`)：
 
-**DNS-01**：Controller 根据 ACME 返回的 TXT 值，调用 DNS 提供方 API 创建 `_acme-challenge.<domain>` 的 TXT 记录，等待传播后再通知 ACME 校验；通过后删除 TXT。通配符域名必须使用 DNS-01。
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `gatewayRef` | **是** | 用于提供校验响应的 Gateway 引用。 |
 
-### DNS-01 配置（dns01）
+ACME 服务会访问 `http://<domain>/.well-known/acme-challenge/<token>`。Controller 将 token 写入 EdgionAcme 的 `status.activeChallenges` 并同步到 Gateway，Gateway 仅在存在未完成校验时响应该路径，校验结束后不再拦截。
+
+**DNS-01** (`type: dns-01`)：
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -92,6 +91,8 @@ spec:
 | `credentialRef` | object | **是** | - | 存 DNS API 凭据的 Secret 引用。 |
 | `propagationTimeout` | int | 否 | 120 | 等待 DNS 传播的最长时间（秒）。 |
 | `propagationCheckInterval` | int | 否 | 5 | 传播检查间隔（秒）。 |
+
+Controller 根据 ACME 返回的 TXT 值，调用 DNS 提供方 API 创建 `_acme-challenge.<domain>` 的 TXT 记录，等待传播后再通知 ACME 校验；通过后删除 TXT。通配符域名必须使用 DNS-01。
 
 **Cloudflare**：Secret 中需提供 `api-token`（具备 Zone.DNS:Edit 权限）。
 

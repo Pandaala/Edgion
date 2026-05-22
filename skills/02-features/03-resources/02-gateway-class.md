@@ -1,18 +1,18 @@
 ---
 name: gateway-class-resource
-description: GatewayClass 资源 Schema：控制器绑定和运行时配置引用。
+description: GatewayClass resource schema: controller binding and runtime configuration reference.
 ---
 
-# GatewayClass 资源
+# GatewayClass Resource
 
 > API: `gateway.networking.k8s.io/v1` | Scope: Cluster
-> Gateway API v1.4.0 Core 资源
+> Gateway API v1.4.0 Core resource
 
-GatewayClass 定义了 Gateway 的"类型"，关联到特定的控制器实现，并可引用运行时配置。
+GatewayClass defines the "type" of a Gateway, associating it with a specific controller implementation and optionally referencing a runtime configuration.
 
-> **设计决策**：Edgion 采用 1 Controller : 1 GatewayClass 模式（与 Envoy Gateway、NGINX Gateway Fabric 一致），明确不支持单实例管理多个 GatewayClass。`parametersRef` 可选——未设置时 Gateway 使用内置默认值；设置时必须引用 `edgion.io/EdgionGatewayConfig`。
+> **Design decision**: Edgion adopts the 1 Controller : 1 GatewayClass pattern (consistent with Envoy Gateway and NGINX Gateway Fabric); a single instance explicitly does not support managing multiple GatewayClasses. `parametersRef` is optional — when unset, the Gateway uses built-in defaults; when set, it must reference `edgion.io/EdgionGatewayConfig`.
 
-## 完整 Schema
+## Full Schema
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -20,21 +20,21 @@ kind: GatewayClass
 metadata:
   name: edgion
 spec:
-  controllerName: edgion.io/gateway-controller   # 必填：控制器标识
-  parametersRef:                                   # 可选：运行时配置引用
+  controllerName: edgion.io/gateway-controller   # Required: controller identifier
+  parametersRef:                                   # Optional: runtime configuration reference
     group: edgion.io
     kind: EdgionGatewayConfig
     name: default-config
-  description: "Edgion Gateway powered by Pingora" # 可选：描述
+  description: "Edgion Gateway powered by Pingora" # Optional: description
 ```
 
-## spec 字段
+## spec Fields
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `controllerName` | `String` | 是 | 控制器标识（Edgion 固定为 `edgion.io/gateway-controller`） |
-| `parametersRef` | `ParametersRef?` | 否 | 引用 EdgionGatewayConfig CRD |
-| `description` | `String?` | 否 | 人类可读描述 |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `controllerName` | `String` | Yes | Controller identifier (fixed at `edgion.io/gateway-controller` for Edgion) |
+| `parametersRef` | `ParametersRef?` | No | Reference to an EdgionGatewayConfig CRD |
+| `description` | `String?` | No | Human-readable description |
 
 ### parametersRef Schema
 
@@ -42,15 +42,15 @@ spec:
 parametersRef:
   group: String      # "edgion.io"
   kind: String       # "EdgionGatewayConfig"
-  name: String       # EdgionGatewayConfig 资源名称
+  name: String       # EdgionGatewayConfig resource name
 ```
 
-## 与 Gateway 的关系
+## Relationship with Gateway
 
 ```
 GatewayClass (cluster-scoped)
-  ├── controllerName: 标识由哪个控制器处理
-  ├── parametersRef → EdgionGatewayConfig (运行时配置)
+  ├── controllerName: identifies which controller handles it
+  ├── parametersRef → EdgionGatewayConfig (runtime configuration)
   │
   └── Gateway.spec.gatewayClassName: "edgion"
        ├── Listener 1 (port, protocol, tls)
@@ -58,18 +58,18 @@ GatewayClass (cluster-scoped)
        └── ...
 ```
 
-- 一个 GatewayClass 可对应多个 Gateway
-- Controller 在 K8s 模式下通过 `conf_center.gateway_class` 配置匹配的 GatewayClass 名称
-- FileSystem 模式下忽略 GatewayClass 过滤
+- One GatewayClass can correspond to multiple Gateways.
+- In K8s mode, the Controller matches the GatewayClass name via `conf_center.gateway_class`.
+- GatewayClass filtering is ignored in FileSystem mode.
 
 ## Status Schema
 
 ```yaml
 status:
   conditions:
-    - type: Accepted                    # 控制器已接受此 GatewayClass
+    - type: Accepted                    # Controller has accepted this GatewayClass
       status: "True"
       reason: Accepted
-    - type: SupportedVersion            # API 版本支持
+    - type: SupportedVersion            # API version supported
       status: "True"
 ```

@@ -10,11 +10,12 @@ use std::time::Duration;
 
 use anyhow::Result;
 use etcd_client::{
-    DeleteOptions, EventType, GetOptions, LockOptions as EtcdLockOptions, PutOptions, WatchOptions, WatchStream,
+    Compare, CompareOp, DeleteOptions, EventType, GetOptions, LockOptions as EtcdLockOptions, PutOptions, Txn, TxnOp,
+    WatchOptions, WatchStream,
 };
 
 use super::client::EtcdLinkClient;
-use crate::core::gateway::link_sys::providers::redis::LinkSysHealth;
+use crate::core::gateway::link_sys::LinkSysHealth;
 
 // ============================================================================
 // KV Operations
@@ -150,6 +151,48 @@ impl EtcdLinkClient {
             .collect();
 
         Ok((items, cluster_revision))
+    }
+
+    /// PUT key value only if the key does not yet exist (version == 0).
+    /// Returns `true` if the key was created, `false` if it already existed.
+    pub async fn txn_put_if_absent(&self, key: &str, value: impl Into<Vec<u8>>) -> Result<bool> {
+        let mut client = self
+            .get_client()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
+        let full_key = self.full_key(key);
+        let value = value.into();
+
+        let txn = Txn::new()
+            .when(vec![Compare::version(full_key.clone(), CompareOp::Equal, 0)])
+            .and_then(vec![TxnOp::put(full_key, value, None)]);
+
+        let resp = client
+            .txn(txn)
+            .await
+            .map_err(|e| anyhow::anyhow!("Etcd TXN put_if_absent {}: {:?}", key, e))?;
+        Ok(resp.succeeded())
+    }
+
+    /// PUT key value only if the key already exists (version > 0).
+    /// Returns `true` if the key was updated, `false` if it did not exist.
+    pub async fn txn_put_if_exists(&self, key: &str, value: impl Into<Vec<u8>>) -> Result<bool> {
+        let mut client = self
+            .get_client()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
+        let full_key = self.full_key(key);
+        let value = value.into();
+
+        let txn = Txn::new()
+            .when(vec![Compare::version(full_key.clone(), CompareOp::Greater, 0)])
+            .and_then(vec![TxnOp::put(full_key, value, None)]);
+
+        let resp = client
+            .txn(txn)
+            .await
+            .map_err(|e| anyhow::anyhow!("Etcd TXN put_if_exists {}: {:?}", key, e))?;
+        Ok(resp.succeeded())
     }
 
     /// DELETE with prefix → number of deleted keys
@@ -387,7 +430,9 @@ impl EtcdLinkClient {
     /// Unlike Redis locks (SET NX + Lua), etcd locks are based on
     /// Lease + MVCC revision and provide linearizable consistency.
     /// The lock blocks until acquired (or cancelled by the lease expiring).
-    pub async fn lock(&self, lock_name: &str, ttl_secs: i64) -> Result<EtcdLockGuard> {
+    ///
+    /// Crate-private: callers must go through `try_lock` so the wait is bounded.
+    async fn lock(&self, lock_name: &str, ttl_secs: i64) -> Result<EtcdLockGuard> {
         let mut client = self
             .get_client()
             .await
@@ -443,7 +488,7 @@ impl EtcdLinkClient {
             .status()
             .await
             .map_err(|e| anyhow::anyhow!("Etcd STATUS: {:?}", e))?;
-        Ok(start.elapsed().as_millis() as u64)
+        Ok(std::time::Instant::now().saturating_duration_since(start).as_millis() as u64)
     }
 
     /// Get detailed health status for admin API exposure.

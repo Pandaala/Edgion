@@ -6,6 +6,8 @@
 // - HTTPRoute.yaml                    # Routes for cipher test hosts
 // - EdgionTls_cipher_legacy.yaml      # TLS 1.2 + legacy ciphers (AES128-SHA, etc.)
 // - EdgionTls_cipher_modern.yaml      # TLS 1.2 + modern ciphers (ECDHE-RSA-AES256-GCM-SHA384, etc.)
+// - EdgionTls_cipher_strict.yaml      # TLS 1.3-only on https-strict listener (port 31197)
+// - EdgionTls_cipher_permissive.yaml  # TLS 1.2 on the SAME listener (per-SNI policy demo)
 //
 // This test uses openssl s_client to verify:
 // 1. Server negotiates the expected cipher
@@ -104,6 +106,15 @@ fn test_with_specific_cipher(host: &str, port: u16, servername: &str, cipher: &s
     let success = combined.contains("CONNECTED") && !negotiated_cipher.is_empty() && negotiated_cipher != "(NONE)";
 
     Ok((success, negotiated_cipher))
+}
+
+/// Strict handshake success check: rejects `Cipher=0000` and `(NONE)` placeholders
+/// that openssl s_client emits when handshake aborts. Used by the
+/// `cipher_client_cipher_mismatch` and `cipher_multi_sni_different_policy` tests
+/// which need to distinguish actual handshake completion from openssl's lenient
+/// session-info dump on failure.
+fn handshake_truly_completed(info: &TlsConnectionInfo) -> bool {
+    info.connected && info.cipher != "0000" && info.cipher != "(NONE)" && !info.cipher.is_empty()
 }
 
 // Legacy ciphers that should be accepted by the legacy endpoint
@@ -279,6 +290,122 @@ impl CipherTestSuite {
             },
         )
     }
+
+    // Test 5: ClientCipherMismatch — Gateway requires TLS 1.3, client forces TLS 1.2 → handshake fails.
+    // This is the original 04#7 case from todo-test-cover/04-integration-gaps-gateway.md.
+    fn test_client_cipher_mismatch() -> TestCase {
+        TestCase::new(
+            "cipher_client_cipher_mismatch",
+            "ClientCipherMismatch: TLS 1.3-only listener rejects TLS 1.2 client",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let hostname = "cipher-strict.wildcard.example.com";
+                    let port = ctx.https_port + 2; // 31197 (https-strict)
+
+                    match get_tls_info(&ctx.target_host, port, hostname, "-tls1_2") {
+                        Ok(info) => {
+                            if !handshake_truly_completed(&info) {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!(
+                                        "TLS 1.2 correctly rejected by TLS 1.3-only SNI. \
+                                         Protocol={}, Cipher={}",
+                                        info.protocol, info.cipher
+                                    ),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "TLS 1.2 unexpectedly accepted by TLS 1.3-only SNI. \
+                                         Protocol={}, Cipher={}",
+                                        info.protocol, info.cipher
+                                    ),
+                                )
+                            }
+                        }
+                        // openssl s_client returning Err means subprocess failure;
+                        // a handshake-level rejection prints to stderr but exits 0,
+                        // so this branch is only for environment issues.
+                        Err(e) => TestResult::failed(start.elapsed(), format!("OpenSSL test failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // Test 6: MultiSniDifferentPolicy — same port, different SNI, different minVersion.
+    // Proves the per-SNI policy enforcement that this fix exists for.
+    fn test_multi_sni_different_policy() -> TestCase {
+        TestCase::new(
+            "cipher_multi_sni_different_policy",
+            "MultiSniDifferentPolicy: TLS 1.2 accepted on permissive SNI, rejected on strict SNI (same port)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let port = ctx.https_port + 2; // 31197 (https-strict listener)
+
+                    // 1. Permissive SNI accepts TLS 1.2
+                    let permissive = match get_tls_info(
+                        &ctx.target_host,
+                        port,
+                        "cipher-permissive.wildcard.example.com",
+                        "-tls1_2",
+                    ) {
+                        Ok(info) => info,
+                        Err(e) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("OpenSSL test (permissive) failed: {}", e),
+                            )
+                        }
+                    };
+                    if !handshake_truly_completed(&permissive) {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "permissive SNI should accept TLS 1.2 but did not. \
+                                 Protocol={}, Cipher={}",
+                                permissive.protocol, permissive.cipher
+                            ),
+                        );
+                    }
+
+                    // 2. Strict SNI rejects TLS 1.2 (same port, different SNI)
+                    let strict =
+                        match get_tls_info(&ctx.target_host, port, "cipher-strict.wildcard.example.com", "-tls1_2") {
+                            Ok(info) => info,
+                            Err(e) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("OpenSSL test (strict) failed: {}", e),
+                                )
+                            }
+                        };
+                    if handshake_truly_completed(&strict) {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "strict SNI should reject TLS 1.2 but accepted it. \
+                                 Protocol={}, Cipher={}",
+                                strict.protocol, strict.cipher
+                            ),
+                        );
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        format!(
+                            "Per-SNI policy enforced on shared port {}: permissive accepted ({}), \
+                             strict rejected (Protocol={}, Cipher={})",
+                            port, permissive.cipher, strict.protocol, strict.cipher
+                        ),
+                    )
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -293,6 +420,8 @@ impl TestSuite for CipherTestSuite {
             Self::test_tls12_modern_cipher(),
             Self::test_legacy_cipher_accepted(),
             Self::test_modern_cipher_accepted(),
+            Self::test_client_cipher_mismatch(),
+            Self::test_multi_sni_different_policy(),
         ]
     }
 }

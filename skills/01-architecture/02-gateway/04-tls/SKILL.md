@@ -1,13 +1,13 @@
 ---
 name: gateway-tls-overview
-description: TLS 子系统总览：TLS Store、SNI 匹配、证书管理、BoringSSL/OpenSSL 后端选择。
+description: TLS subsystem overview — TLS Store, SNI matching, certificate management, BoringSSL/OpenSSL backend selection.
 ---
 
-# TLS 子系统总览
+# TLS subsystem overview
 
-## 架构概述
+## Architecture
 
-Edgion Gateway 的 TLS 子系统分为两个方向和一个存储层：
+The Edgion Gateway TLS subsystem is split into two directions plus a storage layer:
 
 ```
                     ┌─────────────────────────────┐
@@ -19,58 +19,59 @@ Edgion Gateway 的 TLS 子系统分为两个方向和一个存储层：
               ▼                                 ▼
    ┌──────────────────┐              ┌──────────────────┐
    │  Downstream TLS  │              │   Upstream TLS   │
-   │ (客户端→Gateway)  │              │ (Gateway→后端)    │
+   │  (client→Gateway)│              │ (Gateway→backend)│
    │                  │              │                  │
-   │ - TLS 终止       │              │ - BackendTLSPolicy│
-   │ - SNI 证书选择   │              │ - mTLS 到后端     │
-   │ - mTLS 客户端验证│              │ - 证书信息提取    │
+   │ - TLS termination│              │ - BackendTLSPolicy│
+   │ - SNI cert select│              │ - mTLS to backend│
+   │ - mTLS client    │              │ - cert info      │
+   │   verification   │              │   extraction     │
    └──────────────────┘              └──────────────────┘
 ```
 
-## 模块结构
+## Module structure
 
 ```
 src/core/gateway/tls/
-├── mod.rs                          # 模块入口，feature flag 条件编译
+├── mod.rs                          # module entry, feature-flag conditional compilation
 ├── store/
 │   ├── mod.rs
-│   ├── tls_store.rs                # TlsStore：证书存储与验证
-│   ├── cert_matcher.rs             # TlsCertMatcher：listener+SNI 证书匹配
-│   └── conf_handler.rs             # ConfHandler<EdgionTls> 实现
+│   ├── tls_store.rs                # TlsStore: certificate storage and validation
+│   ├── cert_matcher.rs             # TlsCertMatcher: listener+SNI certificate matching
+│   └── conf_handler.rs             # ConfHandler<EdgionTls> implementation
 ├── runtime/
 │   ├── mod.rs
 │   ├── gateway/
 │   │   ├── mod.rs
-│   │   └── tls_pingora.rs          # TlsCallback：Pingora listener TLS 回调
+│   │   └── tls_pingora.rs          # TlsCallback: Pingora listener TLS callbacks
 │   └── backend/
 │       ├── mod.rs
-│       ├── backend_api.rs           # 统一后端 API（BoringSSL/OpenSSL 分派）
-│       └── cert_extractor.rs        # 客户端证书信息提取
+│       ├── backend_api.rs           # unified backend API (BoringSSL/OpenSSL dispatch)
+│       └── cert_extractor.rs        # client certificate info extraction
 ├── validation/
 │   ├── mod.rs
-│   ├── cert.rs                      # 证书有效性验证
-│   └── mtls.rs                      # mTLS 相关验证
+│   ├── cert.rs                      # certificate validity checks
+│   └── mtls.rs                      # mTLS-related validation
 ├── boringssl/
 │   ├── mod.rs
-│   └── mtls_verify_callback.rs      # BoringSSL mTLS 验证回调
+│   └── mtls_verify_callback.rs      # BoringSSL mTLS verification callback
 └── openssl/
-    └── mod.rs                       # OpenSSL 预留模块
+    └── mod.rs                       # OpenSSL placeholder module
 ```
 
-## 证书存储
+## Certificate storage
 
 ### TlsStore
 
-`TlsStore` 是证书的规范存储层，以 `namespace/name` 为键存储所有 `EdgionTls` 资源：
+`TlsStore` is the canonical certificate storage layer; it stores all `EdgionTls` resources keyed by `namespace/name`:
 
-- 内部使用 `RwLock<HashMap<String, TlsEntry>>`，每个条目包含 `Arc<EdgionTls>` 和 `CertValidationResult`。
-- 证书在写入时立即执行验证（`validate_cert`），无效证书仍然存储但不进入匹配器。
-- 写操作（`full_set` / `partial_update`）在持有写锁期间同步重建匹配器，确保存储与匹配器的一致性。
-- 全局单例：`GLOBAL_TLS_STORE`（`LazyLock<Arc<TlsStore>>`）。
+- Internally uses `RwLock<HashMap<String, TlsEntry>>`; each entry contains an `Arc<EdgionTls>` and a `CertValidationResult`.
+- Validation (`validate_cert`) runs synchronously on write; invalid certificates are still stored but never enter the matcher.
+- Write operations (`full_set` / `partial_update`) rebuild the matcher synchronously while holding the write lock, ensuring consistency between store and matcher.
+- Global singleton: `GLOBAL_TLS_STORE` (`LazyLock<Arc<TlsStore>>`).
 
 ### TlsCertMatcher
 
-`TlsCertMatcher` 是用于 TLS 握手热路径的高性能匹配器：
+`TlsCertMatcher` is a high-performance matcher used on the TLS handshake hot path:
 
 ```rust
 struct TlsCertMatcherData {
@@ -82,15 +83,15 @@ pub struct TlsCertMatcher {
 }
 ```
 
-- 两层索引：`ListenerKey → HashHost(SNI → EdgionTls)`。
-- `HashHost` 支持精确和通配主机名匹配（`*.example.com`）。
-- 使用 `ArcSwap` 实现无锁读取，匹配调用（`match_sni`）发生在 TLS 握手回调中，必须快速返回。
-- 全局单例：`TLS_CERT_MATCHER`（`LazyLock<TlsCertMatcher>`）。
-- 仅包含已通过验证且有 `resolved_listeners` 的证书（未绑定 listener 的证书被跳过）。
+- Two-level index: `ListenerKey → HashHost(SNI → EdgionTls)`.
+- `HashHost` supports both exact and wildcard hostname matches (`*.example.com`).
+- Uses `ArcSwap` for lock-free reads. The match call (`match_sni`) runs inside the TLS handshake callback and must return quickly.
+- Global singleton: `TLS_CERT_MATCHER` (`LazyLock<TlsCertMatcher>`).
+- Includes only certificates that pass validation and have `resolved_listeners` (certificates not bound to a listener are skipped).
 
 ### GatewayTlsMatcher
 
-`GatewayTlsMatcher` 是 Gateway Listener TLS 配置的匹配器（作为 EdgionTls 匹配失败后的回退层）：
+`GatewayTlsMatcher` matches the TLS configuration of Gateway listeners (acts as the fallback layer when EdgionTls matching fails):
 
 ```rust
 struct TlsMatcherData {
@@ -98,45 +99,101 @@ struct TlsMatcherData {
 }
 ```
 
-- 从 Gateway 资源的 Listener TLS 配置中提取证书引用。
-- 同样使用 `ListenerKey → HashHost(hostname → GatewayTlsEntry)` 两层索引。
-- `ArcSwap` 无锁读取，内层 `Option` 提供快速路径（无 Gateway TLS 配置时直接返回）。
-- 全局单例：`GATEWAY_TLS_MATCHER`。
-- 通过 `rebuild_from_gateways` 在 Gateway 配置变更时重建。
+- Extracts certificate references from Gateway resource Listener TLS configuration.
+- Same two-level index `ListenerKey → HashHost(hostname → GatewayTlsEntry)`.
+- `ArcSwap` for lock-free reads; the inner `Option` provides a fast path (returns immediately when no Gateway TLS configuration exists).
+- Global singleton: `GATEWAY_TLS_MATCHER`.
+- Rebuilt via `rebuild_from_gateways` whenever Gateway configuration changes.
 
-## SNI 匹配流程
+## SNI matching flow (post-Phase 1 refactor)
 
-TLS 握手时，`TlsCallback::match_and_apply_cert` 按以下优先级查找证书：
+The TLS handshake is composed of two BoringSSL callbacks chained in state-machine order:
+
+### 1. Early callback `select_certificate_callback` (after ClientHello, before version negotiation)
+
+Registration site: `new_tls_settings_with_callback` (`tls_pingora.rs`).
+Trigger: BoringSSL `handshake_server.cc:694`, **earlier** than the version range freeze at `handshake_server.cc:710`.
+
+Responsibilities (this is the only true effective point for `min_tls_version`):
+
+- Extract the SNI from ClientHello (`ch.servername(NameType::HOST_NAME)`).
+- Layer 1 match: `TlsCertMatcher::match_sni(listener_key, sni)` — query EdgionTls.
+- On hit, if `et.spec.min_tls_version` is set → `ssl.set_min_proto_version(...)` per-connection.
+  - On failure, fail-closed: `err_log = "min ver: ..."` + `log_ssl` + return `Err(SelectCertError::ERROR)`.
+- Write the match result (`Arc<EdgionTls>` + the resolved SNI) into the SSL ex_data via `store_ssl_ctx` as a snapshot.
+- Always returns `Ok(())` (except on version-set failure), allowing the handshake to proceed to cert_cb.
+
+Why `min_tls_version` cannot be set in cert_cb: BoringSSL `handshake_server.cc:710` makes it explicit — the version range is frozen immediately after select_cb; cert_cb (`L759`) is one step too late.
+
+### 2. Certificate callback `certificate_callback` (cert_cb, handshake_server.cc:759)
+
+Implemented as `TlsAccept::certificate_callback`. Pingora uses `SSL_set_cert_cb` to pause the handshake into an async-friendly form.
+
+cert_cb is a **pure snapshot consumer** — all SNI resolution and Layer 1 / 2 matching happen in select_cb. select_cb already fail-closes on `store_ssl_ctx` failure by returning Err, so once cert_cb runs the snapshot must exist and must record exactly one hit.
+
+Responsibilities:
+
+1. `take_ssl_ctx` consumes the snapshot written by select_cb (consume-style read; the ex_data slot is cleared automatically). `take_ssl_ctx` returning None is unreachable in theory (guaranteed by the select_cb contract); if it happens, treat it as a BoringSSL state-machine violation, write `err_log = "no snapshot"` + `log_ssl`, and exit.
+2. Snapshot has EdgionTls: call `apply_edgion_tls_cert` directly.
+3. Snapshot has GatewayTls: call `apply_gateway_tls_cert` directly.
+4. Snapshot exists but both are None (theoretically unreachable): write `err_log = "snapshot empty"` + `log_ssl` and exit.
+5. `err_log` was set during apply (cert/key load, install, mTLS configuration failure): `log_ssl` immediately and **skip finalize** — ex_data stays null (the entry-time `take_ssl_ctx` already cleared it), BoringSSL aborts the handshake because the cert was not installed, and `free_ssl_ctx` returns immediately on a null ptr, avoiding double logging.
+6. apply succeeded: call `finalize_ssl_ctx` to stamp `tls_id` and write the SslCtx back to ex_data via `store_ssl_ctx` for `handshake_complete_callback` to consume.
+
+`apply_edgion_tls_cert` does only the following inside cert_cb timing: cert/key install, mTLS verify configuration, and `configure_ciphers` (the TLS1.2 cipher list still works in cert_cb because BoringSSL chooses the cipher only after cert_cb — `handshake_server.cc:810`). **It no longer handles `min_tls_version`**.
+
+### 3. Completion callback `handshake_complete_callback`
+
+`take_ssl_ctx` → take client cert info (if mTLS) → stamp `handshake_complete_time` → `log_ssl` → return `Arc<TlsConnMeta>` as the digest extension for downstream HTTP / TLS proxy code.
+
+### 4. Early-abort audit hook (introduced in Task 10)
+
+When select_cb has stored a snapshot but cert_cb is never invoked (typical case: version negotiation fails and BoringSSL's alert protocol_version terminates the handshake outright), the FFI release callback `free_ssl_ctx` fires when the SSL object is destroyed.
+
+`free_ssl_ctx` checks `ssl_ctx.meta.tls_id.is_none()` — meaning `finalize_ssl_ctx` did not run — and pushes `err_log = "early abort"` (without overriding a more specific err_log) + `log_ssl`. This closes the audit blind spot of "connections rejected by the min_tls_version policy leaving no record in ssl.log".
+
+Wrapped in `std::panic::catch_unwind` to prevent panics from crossing the FFI boundary (same pattern as `mtls_verify_callback`).
+
+### Overall priority
 
 ```
-1. EdgionTls（TlsCertMatcher::match_sni）
-   └── 匹配成功 → 应用 EdgionTls 证书
-       ├── 配置 mTLS（如有 client_auth）
-       ├── 设置最低 TLS 版本（如有 min_tls_version）
-       └── 设置密码套件（如有 ciphers）
-
-2. Gateway TLS（GatewayTlsMatcher::match_sni）
-   └── 匹配成功 → 从 Gateway Listener 的 certificateRefs 获取 Secret
-       ├── 优先使用内联 secrets
-       └── 回退到从全局 SecretStore 查找
-
-3. 均未匹配 → 记录 "cert not found" 错误日志
+ClientHello → select_cb (SNI resolve + Layer 1/2 match + min_tls_version + snapshot)
+            ├─ no SNI / cert not found / min ver fail / store_ssl_ctx fail
+            │     → log_ssl once + return Err → BoringSSL abort, cert_cb does not fire
+            └─ hit → snapshot stored → return Ok
+            → freeze version range
+            → version negotiation (may be rejected here by alert; triggers free_ssl_ctx "early abort" audit)
+            → cert_cb (consume snapshot + apply cert/mtls/ciphers; no fallback matching)
+            ├─ apply failure → log_ssl once + skip finalize → BoringSSL abort
+            └─ success → finalize_ssl_ctx + store_ssl_ctx writes back to ex_data
+            → cipher selection (TLS1.2)
+            → handshake_complete_callback (writes ssl.log)
 ```
 
-## 证书来源
+Match failures are handled in select_cb only (`"cert not found"`); cert_cb performs no fallback matching.
 
-| 来源 | CRD | 匹配层 | 说明 |
-|------|-----|--------|------|
-| EdgionTls | `edgion.io/EdgionTls` | TlsCertMatcher | Edgion 自有 TLS 资源，支持 mTLS、最低版本、密码套件等高级配置 |
-| Gateway Listener | `gateway.networking.k8s.io/Gateway` | GatewayTlsMatcher | 标准 Gateway API TLS 配置，通过 `certificateRefs` 引用 Kubernetes Secret |
+## Certificate sources
 
-## 关键源文件
+| Source | CRD | Match layer | Description |
+|--------|-----|-------------|-------------|
+| EdgionTls | `edgion.io/EdgionTls` | TlsCertMatcher | Edgion-specific TLS resource, supports advanced configuration: mTLS, minimum version, cipher suites, etc. |
+| Gateway Listener | `gateway.networking.k8s.io/Gateway` | GatewayTlsMatcher | Standard Gateway API TLS configuration; references Kubernetes Secrets via `certificateRefs` |
 
-| 文件 | 职责 |
-|------|------|
-| `src/core/gateway/tls/store/tls_store.rs` | TlsStore：证书存储与验证 |
-| `src/core/gateway/tls/store/cert_matcher.rs` | TlsCertMatcher：listener+SNI 匹配 |
-| `src/core/gateway/tls/store/conf_handler.rs` | ConfHandler<EdgionTls> 实现 |
+## File list
+
+| File | Topic |
+|------|-------|
+| [01-downstream-tls.md](01-downstream-tls.md) | Downstream TLS (client→gateway) — Pingora Listener callbacks, certificate selection, client cert verification |
+| [02-upstream-tls.md](02-upstream-tls.md) | Upstream TLS (gateway→backend) — mTLS configuration, BackendTLSPolicy, certificate extraction |
+| [03-ssl-backends.md](03-ssl-backends.md) | SSL backend implementations — BoringSSL/OpenSSL feature flags, interface abstraction, recommendations |
+
+## Key source files
+
+| File | Responsibility |
+|------|----------------|
+| `src/core/gateway/tls/store/tls_store.rs` | TlsStore: certificate storage and validation |
+| `src/core/gateway/tls/store/cert_matcher.rs` | TlsCertMatcher: listener+SNI matching |
+| `src/core/gateway/tls/store/conf_handler.rs` | ConfHandler<EdgionTls> implementation |
 | `src/core/gateway/runtime/matching/tls.rs` | GatewayTlsMatcher |
 | `src/core/gateway/tls/runtime/gateway/tls_pingora.rs` | TlsCallback |
-| `src/core/gateway/tls/validation/cert.rs` | 证书验证 |
+| `src/core/gateway/tls/validation/cert.rs` | Certificate validation |

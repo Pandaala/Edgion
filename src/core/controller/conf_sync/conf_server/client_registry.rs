@@ -5,7 +5,6 @@
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::time::SystemTime;
 use tokio::sync::Notify;
 
 /// Lightweight registry for tracking connected gateway instances.
@@ -19,12 +18,7 @@ pub struct ClientRegistry {
     notify: Notify,
 }
 
-struct ClientMeta {
-    #[allow(dead_code)]
-    client_name: String,
-    #[allow(dead_code)]
-    connected_at: SystemTime,
-}
+struct ClientMeta {}
 
 impl ClientRegistry {
     pub fn new() -> Self {
@@ -38,13 +32,7 @@ impl ClientRegistry {
     pub fn register(&self, client_id: String, client_name: String) {
         let mut clients = self.clients.write();
         let is_new = !clients.contains_key(&client_id);
-        clients.insert(
-            client_id.clone(),
-            ClientMeta {
-                client_name: client_name.clone(),
-                connected_at: SystemTime::now(),
-            },
-        );
+        clients.insert(client_id.clone(), ClientMeta {});
         if is_new {
             tracing::info!(
                 client_id = %client_id,

@@ -1,54 +1,54 @@
 ---
 name: 05-resources
-description: 资源分类与处理：通用处理流程、每种资源的功能点/特殊处理/跨资源关联。
+description: Resource taxonomy and processing — common processing flow, per-resource feature points / special handling / cross-resource relationships.
 ---
 
-# 05 资源架构
+# 05 Resource Architecture
 
-> 本目录描述每种资源从 Controller 到 Gateway 的**内部处理流程**：Handler 各阶段逻辑、requeue 关联、源码位置。
-> 资源的**外部契约**（YAML Schema、字段类型与默认值）见 [02-features/03-resources/](../../02-features/03-resources/SKILL.md)——两边编号一一对齐，改代码通常两边都要看。
+> This directory describes the **internal processing flow** of each resource from Controller to Gateway: per-stage Handler logic, requeue relationships, source code locations.
+> The **external contract** of each resource (YAML schema, field types and defaults) lives in [02-features/03-resources/](../../02-features/03-resources/SKILL.md) — the numbering on the two sides is aligned, and code changes typically need to look at both.
 >
-> 每篇资源文档遵循统一结构：
-> 1. **通用流程引用** — 指向 [00-resource-flow.md](00-resource-flow.md) 的通用流程
-> 2. **资源特有功能** — Handler 各阶段（filter/validate/preparse/parse/on_change/on_delete/update_status）的具体行为
-> 3. **跨资源关联** — 该资源与其他资源之间的引用、级联更新、requeue 关系
+> Each resource document follows a unified structure:
+> 1. **Common-flow reference** — points to the common flow in [00-resource-flow.md](00-resource-flow.md)
+> 2. **Resource-specific behavior** — concrete behavior of each Handler stage (filter/validate/preparse/parse/on_change/on_delete/update_status)
+> 3. **Cross-resource relationships** — references, cascading updates, and requeue relationships between this resource and others
 
-## 文件清单
+## File list
 
-| 文件 | 主题 | 推荐阅读场景 |
+| File | Topic | Recommended reading scenario |
 |------|------|-------------|
-| [00-resource-flow.md](00-resource-flow.md) | 资源通用处理流程 | 理解资源从 Controller 到 Gateway 的流转 |
-| **核心配置** | | |
-| [01-gateway.md](01-gateway.md) | Gateway 资源 | 修改 Gateway/Listener 逻辑 |
-| [02-gateway-class.md](02-gateway-class.md) | GatewayClass 资源 | 修改 GatewayClass 处理 |
-| [03-edgion-gateway-config.md](03-edgion-gateway-config.md) | EdgionGatewayConfig 资源 | 修改全局配置 |
-| **路由** | | |
-| [04-http-route.md](04-http-route.md) | HTTPRoute 资源 | 修改 HTTP 路由 |
-| [05-grpc-route.md](05-grpc-route.md) | GRPCRoute 资源 | 修改 gRPC 路由 |
-| [06-tcp-route.md](06-tcp-route.md) | TCPRoute 资源 | 修改 TCP 路由 |
-| [07-tls-route.md](07-tls-route.md) | TLSRoute 资源 | 修改 TLS 路由 |
-| [08-udp-route.md](08-udp-route.md) | UDPRoute 资源 | 修改 UDP 路由 |
-| **安全与策略** | | |
-| [09-edgion-tls.md](09-edgion-tls.md) | EdgionTls 资源 | 修改 TLS 证书管理 |
-| [10-secret.md](10-secret.md) | Secret 资源 | 理解 Secret 处理和安全约束 |
-| [11-reference-grant.md](11-reference-grant.md) | ReferenceGrant 资源 | 理解跨命名空间引用 |
-| [12-backend-tls-policy.md](12-backend-tls-policy.md) | BackendTLSPolicy 资源 | 配置后端 TLS |
-| **插件与扩展** | | |
-| [13-edgion-plugins.md](13-edgion-plugins.md) | EdgionPlugins 资源 | 理解插件配置 |
-| [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) | EdgionStreamPlugins 资源 | 理解 Stream 插件 |
-| [15-plugin-metadata.md](15-plugin-metadata.md) | PluginMetaData 资源 | 理解插件元数据 |
-| **后端与服务** | | |
-| [16-service-endpoints.md](16-service-endpoints.md) | Service + EndpointSlice + Endpoint | 后端发现 |
+| [00-resource-flow.md](00-resource-flow.md) | Common resource processing flow | Understanding how resources flow from Controller to Gateway |
+| **Core configuration** | | |
+| [01-gateway.md](01-gateway.md) | Gateway resource | Modifying Gateway/Listener logic |
+| [02-gateway-class.md](02-gateway-class.md) | GatewayClass resource | Modifying GatewayClass handling |
+| [03-edgion-gateway-config.md](03-edgion-gateway-config.md) | EdgionGatewayConfig resource | Modifying global configuration |
+| **Routes** | | |
+| [04-http-route.md](04-http-route.md) | HTTPRoute resource | Modifying HTTP routing |
+| [05-grpc-route.md](05-grpc-route.md) | GRPCRoute resource | Modifying gRPC routing |
+| [06-tcp-route.md](06-tcp-route.md) | TCPRoute resource | Modifying TCP routing |
+| [07-tls-route.md](07-tls-route.md) | TLSRoute resource | Modifying TLS routing |
+| [08-udp-route.md](08-udp-route.md) | UDPRoute resource | Modifying UDP routing |
+| **Security and policy** | | |
+| [09-edgion-tls.md](09-edgion-tls.md) | EdgionTls resource | Modifying TLS certificate management |
+| [10-secret.md](10-secret.md) | Secret resource | Understanding Secret handling and security constraints |
+| [11-reference-grant.md](11-reference-grant.md) | ReferenceGrant resource | Understanding cross-namespace references |
+| [12-backend-tls-policy.md](12-backend-tls-policy.md) | BackendTLSPolicy resource | Configuring backend TLS |
+| **Plugins and extensions** | | |
+| [13-edgion-plugins.md](13-edgion-plugins.md) | EdgionPlugins resource | Understanding plugin configuration |
+| [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) | EdgionStreamPlugins resource | Understanding Stream plugins |
+| [15-plugin-metadata.md](15-plugin-metadata.md) | PluginMetaData resource | Understanding plugin metadata |
+| **Backends and services** | | |
+| [16-service-endpoints.md](16-service-endpoints.md) | Service + EndpointSlice + Endpoint | Backend discovery |
 | **ACME** | | |
-| [17-edgion-acme.md](17-edgion-acme.md) | EdgionAcme 资源 | 自动证书 |
-| **基础设施** | | |
-| [18-link-sys.md](18-link-sys.md) | LinkSys 资源 | 外部系统连接 |
-| **关联关系** | | |
-| [19-resource-dependency.md](19-resource-dependency.md) | 资源间依赖关系 | 理解跨资源引用、Store 查询、requeue 级联 |
+| [17-edgion-acme.md](17-edgion-acme.md) | EdgionAcme resource | Automatic certificates |
+| **Infrastructure** | | |
+| [18-link-sys.md](18-link-sys.md) | LinkSys resource | External system connections |
+| **Relationships** | | |
+| [19-resource-dependency.md](19-resource-dependency.md) | Inter-resource dependencies | Understanding cross-resource references, Store queries, and requeue cascades |
 
-## 资源关联总图
+## Resource relationship overview
 
-spec 层面引用关系（简图）：
+Spec-level reference relationships (simplified):
 
 ```
 GatewayClass ──────► Gateway ◄────── EdgionGatewayConfig
@@ -63,17 +63,17 @@ GatewayClass ──────► Gateway ◄────── EdgionGatewayCo
             ▼
      BackendTLSPolicy
 
-Gateway ──► Secret (TLS 证书)
-         ──► EdgionTls (扩展 TLS)
-         ──► EdgionAcme (自动证书)
+Gateway ──► Secret (TLS certificates)
+         ──► EdgionTls (extended TLS)
+         ──► EdgionAcme (automatic certificates)
 
-HTTPRoute/GRPCRoute ──► EdgionPlugins (HTTP 插件)
-                    ──► EdgionStreamPlugins (Stream 插件)
-                    ──► PluginMetaData (插件元数据)
+HTTPRoute/GRPCRoute ──► EdgionPlugins (HTTP plugins)
+                    ──► EdgionStreamPlugins (Stream plugins)
+                    ──► PluginMetaData (plugin metadata)
 
-跨命名空间引用 ──► ReferenceGrant
+Cross-namespace references ──► ReferenceGrant
 
-AccessLog/Plugin 数据 ──► LinkSys (外部系统)
+AccessLog/Plugin data ──► LinkSys (external systems)
 ```
 
-Controller 内部 Store 查询与 requeue 级联见 [19-resource-dependency.md](19-resource-dependency.md)。
+Controller-internal Store queries and requeue cascades are documented in [19-resource-dependency.md](19-resource-dependency.md).

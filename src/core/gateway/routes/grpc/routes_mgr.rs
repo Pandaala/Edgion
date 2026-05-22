@@ -8,6 +8,7 @@ use crate::core::gateway::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::core::gateway::routes::grpc::{GrpcMatchEngine, GrpcRouteRuleUnit};
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
+use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use crate::types::{GRPCBackendRef, GRPCRoute, GRPCRouteRule, ListenerKey};
 
@@ -44,6 +45,7 @@ impl GrpcRouteRules {
     ///
     /// # Parameters
     /// - `session`: The HTTP session
+    /// - `ctx`: Request context containing the normalized current path
     /// - `index`: Pre-built gateway/listener index for this port
     /// - `hostname`: Request hostname for route-level hostname matching
     ///
@@ -51,11 +53,12 @@ impl GrpcRouteRules {
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
+        ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
         hostname: &str,
     ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
         if let Some(ref engine) = self.match_engine {
-            engine.match_route(session, index, hostname)
+            engine.match_route(session, ctx, index, hostname)
         } else {
             Err(EdError::RouteNotFound())
         }
@@ -128,11 +131,12 @@ impl DomainGrpcRouteRules {
     pub fn match_route(
         &self,
         session: &mut pingora_proxy::Session,
+        ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
         hostname: &str,
     ) -> Result<(Arc<GrpcRouteRuleUnit>, GatewayInfo), EdError> {
         let grpc_routes = self.grpc_routes.load();
-        grpc_routes.match_route(session, index, hostname)
+        grpc_routes.match_route(session, ctx, index, hostname)
     }
 
     /// Returns true if this port has any gRPC routes registered.
@@ -296,6 +300,24 @@ impl GlobalGrpcRouteManagers {
                 removed_stale += 1;
             }
         }
+
+        // Sweep orphan entries left over from earlier rebuild_all calls — see the
+        // matching comment in HTTP routes_mgr::rebuild_affected_listener_managers.
+        let route_referenced: HashSet<ListenerKey> = self
+            .route_cache
+            .iter()
+            .flat_map(|e| resolved_listeners_for_grpc_route(e.value()).to_vec())
+            .collect();
+        let orphans: Vec<ListenerKey> = self
+            .by_listener
+            .iter()
+            .filter(|e| !route_referenced.contains(e.key()) && !active_listeners.contains(e.key()))
+            .map(|e| e.key().clone())
+            .collect();
+        for key in &orphans {
+            self.by_listener.remove(key);
+        }
+        removed_stale += orphans.len();
 
         tracing::info!(
             component = "global_grpc_route_managers",

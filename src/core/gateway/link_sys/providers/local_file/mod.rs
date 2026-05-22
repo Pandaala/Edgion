@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::SyncSender;
 
 use crate::core::common::utils::available_cpu_cores;
-use crate::types::link_sys::{LocalFileWriterConfig, RotationConfig};
+use crate::types::output::{LocalFileWriterConfig, RotationConfig};
 use crate::types::work_dir;
 
 /// Log type for metrics differentiation

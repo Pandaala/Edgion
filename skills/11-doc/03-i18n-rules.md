@@ -1,62 +1,62 @@
-# 多语言规范
+# Internationalization Rules
 
-## 语言与目录
+## Languages and directories
 
-| 语言 | 目录 | 状态 |
-|------|------|------|
-| English | `docs/en/` | 活跃 |
-| 中文（简体） | `docs/zh-CN/` | 活跃 |
-| 日本語 | `docs/ja/` | 预留，暂未启动 |
+| Language | Directory | Status |
+|----------|-----------|--------|
+| English | `docs/en/` | Active |
+| Chinese (Simplified) | `docs/zh-CN/` | Active |
+| Japanese | `docs/ja/` | Reserved, not yet started |
 
-## 源语言约定
+## Source-language convention
 
-**zh-CN 为源语言，en 为翻译目标**。
+**zh-CN is the source language; en is the translation target.**
 
-理由：项目核心团队以中文为主，新文档通常先以中文写成。
+Reason: the project's core team is primarily Chinese-speaking, and new documents are usually written in Chinese first.
 
-工作流：
-1. 在 zh-CN/ 写完中文文档
-2. 翻译到 en/（同一 PR 或后续 PR）
-3. 后续修改时，改源语言（zh-CN），再同步翻译
+Workflow:
+1. Write the Chinese document under zh-CN/
+2. Translate to en/ (in the same PR or a follow-up PR)
+3. For subsequent edits, modify the source language (zh-CN) and then sync the translation
 
-**例外**：如果某篇文档更适合先以英文写成（如面向国际社区的功能），可以以 en 为源，但要在 PR 中注明。
+**Exception**: If a particular document is better written in English first (for example, a feature targeting the international community), it may use en as the source, but note this in the PR.
 
-## 对称规则
+## Symmetry rules
 
-### 目录结构对称
+### Directory structure symmetry
 
-en/ 和 zh-CN/ 的目录结构必须完全一致：
+The directory structures of en/ and zh-CN/ must be fully consistent:
 
 ```
-✅ 正确：
+✅ Correct:
 docs/en/user-guide/http-route/filters/edgion-plugins/cors.md
 docs/zh-CN/user-guide/http-route/filters/edgion-plugins/cors.md
 
-❌ 错误（zh-CN 有但 en 没有）：
+❌ Incorrect (zh-CN has it but en does not):
 docs/zh-CN/user-guide/http-route/backends/circuit-breaker.md
-（en/ 下缺少对应文件）
+(no corresponding file under en/)
 ```
 
-### 文件名一致
+### Filename consistency
 
-文件名在所有语言中保持一致（英文 kebab-case），不翻译文件名：
+Filenames are kept identical across all languages (English kebab-case); do not translate filenames:
 
 ```
 ✅ docs/zh-CN/getting-started/first-gateway.md
-❌ docs/zh-CN/getting-started/第一个网关.md
+❌ docs/zh-CN/getting-started/<localized-name>.md
 ```
 
-### 章节结构对称
+### Section structure symmetry
 
-同一文档的章节标题可以翻译，但章节结构（数量、顺序、层级）必须一致。
+The section titles of the same document may be translated, but the section structure (count, order, level) must be identical.
 
-### YAML 示例一致
+### YAML examples consistent
 
-YAML 代码块在所有语言中完全相同（包括字段值）。仅注释文字翻译：
+YAML code blocks are fully identical across languages (including field values). Only the comment text is translated:
 
 ```yaml
 # zh-CN
-# 允许的前端域名
+# <Chinese translation of "Allowed frontend origins">
 allow_origins: "https://app.example.com"
 
 # en
@@ -64,86 +64,86 @@ allow_origins: "https://app.example.com"
 allow_origins: "https://app.example.com"
 ```
 
-## 术语表
+## Glossary
 
-以下术语在中文文档中保持英文原文，不翻译：
+The following terms remain in English (untranslated) in Chinese documentation:
 
-### Gateway API 标准术语
+### Standard Gateway API terms
 
-| 英文 | 中文文档中的写法 | 不要写成 |
-|------|-----------------|---------|
-| Gateway | Gateway | 网关（作为资源名时） |
-| GatewayClass | GatewayClass | 网关类 |
-| HTTPRoute | HTTPRoute | HTTP 路由（作为资源名时） |
+| English | Form in Chinese docs | Do not write as |
+|---------|----------------------|-----------------|
+| Gateway | Gateway | A Chinese translation of "gateway" when used as a resource name |
+| GatewayClass | GatewayClass | A Chinese translation of "gateway class" |
+| HTTPRoute | HTTPRoute | A Chinese translation such as "HTTP route" when used as a resource name |
 | GRPCRoute | GRPCRoute | — |
 | TCPRoute | TCPRoute | — |
 | UDPRoute | UDPRoute | — |
 | TLSRoute | TLSRoute | — |
-| Listener | Listener | 监听器（作为字段名时） |
-| BackendRef | BackendRef | 后端引用 |
-| ParentRef | ParentRef | 父引用 |
-| Filter | Filter（作为字段名时） | 过滤器（可用于概念描述） |
-| Secret | Secret | 密钥（作为 K8s 资源时） |
-| Namespace | Namespace | 命名空间（可用于概念描述） |
-| ReferenceGrant | ReferenceGrant | 引用授权 |
-| Service | Service（作为 K8s 资源时） | 服务 |
+| Listener | Listener | A Chinese translation of "listener" when used as a field name |
+| BackendRef | BackendRef | A Chinese translation of "backend reference" |
+| ParentRef | ParentRef | A Chinese translation of "parent reference" |
+| Filter | Filter (when used as a field name) | A Chinese translation of "filter" (acceptable as conceptual description only) |
+| Secret | Secret | A Chinese translation of "secret/key" when referring to the K8s resource |
+| Namespace | Namespace | A Chinese translation of "namespace" (acceptable as conceptual description only) |
+| ReferenceGrant | ReferenceGrant | A Chinese translation of "reference grant" |
+| Service | Service (when referring to the K8s resource) | A Chinese translation of "service" |
 
-### Edgion 特有术语
+### Edgion-specific terms
 
-| 英文 | 中文文档中的写法 |
-|------|-----------------|
+| English | Form in Chinese docs |
+|---------|----------------------|
 | EdgionPlugins | EdgionPlugins |
 | EdgionTls | EdgionTls |
 | EdgionGatewayConfig | EdgionGatewayConfig |
-| Controller | 控制面 / Controller（首次出现标注：控制面（Controller）） |
-| Gateway（作为 Edgion 组件） | 数据面 / Gateway（首次出现标注：数据面（Gateway）） |
+| Controller | Chinese term for "control plane" / Controller (annotate on first appearance with the original English in parentheses) |
+| Gateway (as the Edgion component) | Chinese term for "data plane" / Gateway (annotate on first appearance with the original English in parentheses) |
 | edgion-cli | edgion-cli |
 | PluginLog | PluginLog |
 | access log | access log |
 
-### 通用技术术语
+### General technical terms
 
-| 英文 | 中文 | 说明 |
-|------|------|------|
-| TLS termination | TLS 终结 | 可翻译 |
-| mTLS | mTLS | 不翻译 |
-| load balancing | 负载均衡 | 可翻译 |
-| health check | 健康检查 | 可翻译 |
-| circuit breaker | 熔断器 | 可翻译 |
-| rate limiting | 限流 | 可翻译 |
-| session persistence | 会话保持 | 可翻译 |
-| upstream | 上游 | 可翻译 |
-| downstream | 下游 | 可翻译 |
-| backend | 后端 | 可翻译 |
+| English | Chinese | Notes |
+|---------|---------|-------|
+| TLS termination | (Chinese translation of "TLS termination") | Translatable |
+| mTLS | mTLS | Do not translate |
+| load balancing | (Chinese translation of "load balancing") | Translatable |
+| health check | (Chinese translation of "health check") | Translatable |
+| circuit breaker | (Chinese translation of "circuit breaker") | Translatable |
+| rate limiting | (Chinese translation of "rate limiting") | Translatable |
+| session persistence | (Chinese translation of "session persistence") | Translatable |
+| upstream | (Chinese translation of "upstream") | Translatable |
+| downstream | (Chinese translation of "downstream") | Translatable |
+| backend | (Chinese translation of "backend") | Translatable |
 
-## 同步工作流
+## Sync workflow
 
-### 新增文档
+### Adding a document
 
-1. 在 zh-CN/ 创建文档（源语言）
-2. 翻译到 en/
-3. 更新两个目录的 README.md（如果有）
-4. 更新 `docs/DIRECTORY.md`
+1. Create the document under zh-CN/ (source language)
+2. Translate to en/
+3. Update the README.md in both directories (if any)
+4. Update `docs/DIRECTORY.md`
 
-### 修改现有文档
+### Modifying an existing document
 
-1. 修改 zh-CN/ 中的源文档
-2. 同步修改 en/ 中的翻译
-3. 如果本次无法同步翻译，在 PR 中标注 `[i18n-sync-needed]`
+1. Modify the source document under zh-CN/
+2. Sync the modification into the translation under en/
+3. If you cannot sync the translation in this PR, mark the PR with `[i18n-sync-needed]`
 
-### 同步状态追踪
+### Sync-status tracking
 
-当翻译滞后时，可在英文文档顶部加临时标注：
+When a translation lags behind, you may add a temporary callout at the top of the English document:
 
 ```markdown
 > ⚠️ This page may be out of date with the zh-CN version. Last synced: 2026-03-15.
 ```
 
-任务完成后移除标注。
+Remove the callout once the task is complete.
 
-## 中文排版规则
+## Chinese typography rules
 
-- 中文与英文/数字之间加空格：`配置 Gateway 的 TLS 终结`
-- 中文与行内代码之间加空格：`配置 \`allow_origins\` 字段`
-- 使用全角标点：句号用 `。`，逗号用 `，`，冒号用 `：`（代码/YAML 中除外）
-- 专有名词使用正确大小写：`Kubernetes`，不是 `kubernetes`
+- Add a space between Chinese characters and English / digits (for example, between Chinese prose and a token like `Gateway` or `TLS`)
+- Add a space between Chinese characters and inline code (for example, between Chinese prose and a token like `allow_origins`)
+- Use full-width punctuation for full stop, comma, and colon (except in code / YAML)
+- Use correct capitalization for proper nouns: `Kubernetes`, not `kubernetes`

@@ -18,9 +18,10 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
-use crate::core::gateway::backends::discovery::endpoint::{get_endpoint_roundrobin_store, EndpointExt};
 use crate::core::gateway::backends::discovery::endpoint_slice::{get_roundrobin_store, EndpointSliceExt};
-use crate::core::gateway::plugins::http::common::http_client::is_hop_by_hop;
+use crate::core::gateway::backends::validate_endpoint_backend_addr;
+use crate::core::gateway::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
+use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::plugin_configs::all_endpoint_status::MAX_GLOBAL_CONCURRENCY;
@@ -102,7 +103,7 @@ static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 /// Get elapsed milliseconds since process start (monotonic).
 fn elapsed_ms() -> u64 {
-    PROCESS_START.elapsed().as_millis() as u64
+    Instant::now().saturating_duration_since(*PROCESS_START).as_millis() as u64
 }
 
 // ============================================================
@@ -230,14 +231,29 @@ struct ResolvedEndpoint {
     use_tls: bool,
 }
 
+fn resolved_endpoint_from_backend(
+    backend: pingora_load_balancing::Backend,
+    backend_name: &str,
+    use_tls: bool,
+    allow_loopback_upstream: bool,
+) -> Result<ResolvedEndpoint, ()> {
+    validate_endpoint_backend_addr(&backend.addr, allow_loopback_upstream).map_err(|_| ())?;
+    Ok(ResolvedEndpoint {
+        address: backend.addr.to_string(),
+        backend_name: backend_name.to_string(),
+        use_tls,
+    })
+}
+
 /// Resolve all endpoint addresses for a backend reference.
-/// Tries EndpointSlice first (newer K8s API), falls back to Endpoints.
+/// Resolves backend endpoints from the EndpointSlice store.
 fn resolve_endpoints(
     backend_name: &str,
     backend_namespace: &str,
     backend_port: u16,
     use_tls: bool,
-) -> Vec<ResolvedEndpoint> {
+    allow_loopback_upstream: bool,
+) -> (Vec<ResolvedEndpoint>, usize) {
     let service_key = format!("{}/{}", backend_namespace, backend_name);
 
     // Try EndpointSlice first (preferred, newer K8s API)
@@ -248,32 +264,24 @@ fn resolve_endpoints(
             backends.extend(slice.build_backends(backend_port));
         }
         if !backends.is_empty() {
-            return backends
+            let mut unsafe_count = 0;
+            let endpoints = backends
                 .into_iter()
-                .map(|b| ResolvedEndpoint {
-                    address: b.addr.to_string(),
-                    backend_name: backend_name.to_string(),
-                    use_tls,
+                .filter_map(|b| {
+                    match resolved_endpoint_from_backend(b, backend_name, use_tls, allow_loopback_upstream) {
+                        Ok(endpoint) => Some(endpoint),
+                        Err(()) => {
+                            unsafe_count += 1;
+                            None
+                        }
+                    }
                 })
                 .collect();
+            return (endpoints, unsafe_count);
         }
     }
 
-    // Fallback to Endpoints
-    let ep_store = get_endpoint_roundrobin_store();
-    if let Some(endpoints) = ep_store.get_endpoint_for_service(&service_key) {
-        return endpoints
-            .build_backends(backend_port)
-            .into_iter()
-            .map(|b| ResolvedEndpoint {
-                address: b.addr.to_string(),
-                backend_name: backend_name.to_string(),
-                use_tls,
-            })
-            .collect();
-    }
-
-    vec![] // No endpoints found
+    (vec![], 0) // No endpoints found
 }
 
 // ============================================================
@@ -352,6 +360,12 @@ impl AllEndpointStatus {
         let method = self.config.method_override.as_deref().unwrap_or(original_method);
         let path = self.config.path_override.as_deref().unwrap_or(original_path);
 
+        let dynamic_listed: Vec<String> = original_headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("connection"))
+            .map(|(_, v)| connection_listed_hop_by_hop(v))
+            .unwrap_or_default();
+
         let futures: FuturesUnordered<_> = endpoints
             .iter()
             .map(|ep| {
@@ -363,9 +377,13 @@ impl AllEndpointStatus {
                 let path = path.to_string();
                 let query = original_query.map(|q| q.to_string());
                 let headers: Vec<(String, String)> = original_headers.to_vec();
+                let dynamic_listed = dynamic_listed.clone();
 
                 async move {
-                    let _permit = sem.acquire().await.unwrap();
+                    let _permit = sem
+                        .acquire()
+                        .await
+                        .expect("Semaphore never closed (created per fan_out_requests call)");
                     let start = Instant::now();
 
                     let scheme = if use_tls { "https" } else { "http" };
@@ -379,8 +397,10 @@ impl AllEndpointStatus {
                     let mut req = client.request(req_method, &url).timeout(timeout);
 
                     // Forward original headers, filtering hop-by-hop
+                    // (RFC 9110 §7.6.1 — static set plus names dynamically listed
+                    // in the originating request's Connection: header value).
                     for (name, value) in &headers {
-                        if !is_hop_by_hop(name) && name.to_lowercase() != "host" {
+                        if !is_hop_by_hop_or_listed(name, &dynamic_listed) && !name.eq_ignore_ascii_case("host") {
                             req = req.header(name.as_str(), value.as_str());
                         }
                     }
@@ -407,7 +427,7 @@ impl AllEndpointStatus {
                             EndpointResult {
                                 address: addr,
                                 status: Some(status),
-                                latency_ms: start.elapsed().as_millis() as u64,
+                                latency_ms: Instant::now().saturating_duration_since(start).as_millis() as u64,
                                 body: Some(body),
                                 body_truncated: truncated,
                                 headers: resp_headers,
@@ -426,7 +446,7 @@ impl AllEndpointStatus {
                             EndpointResult {
                                 address: addr,
                                 status: None,
-                                latency_ms: start.elapsed().as_millis() as u64,
+                                latency_ms: Instant::now().saturating_duration_since(start).as_millis() as u64,
                                 body: None,
                                 body_truncated: false,
                                 headers: None,
@@ -483,28 +503,38 @@ impl RequestFilter for AllEndpointStatus {
         let global_config = get_all_endpoint_status_global_config();
 
         // === Global rate limit check ===
+        // Loop until we either claim the execution slot via CAS or get rate-limited.
+        // A bare load+check followed by a discarded CAS would let concurrent requests
+        // that all read the same `last` value bypass the min-interval gate together.
         let min_interval = global_config.min_interval_ms;
         if min_interval > 0 {
-            let now = elapsed_ms();
-            let last = LAST_EXECUTION_MS.load(Ordering::Relaxed);
-            let since_last = now.saturating_sub(last);
+            loop {
+                let last = LAST_EXECUTION_MS.load(Ordering::Relaxed);
+                let now = elapsed_ms();
+                let since_last = now.saturating_sub(last);
 
-            if since_last < min_interval {
-                let retry_after_s = (min_interval - since_last).div_ceil(1000);
-                log.push_err("rate limited");
-                let body = format!(r#"{{"error":"rate limited, retry after {}s"}}"#, retry_after_s);
-                return self
-                    .send_json_response_with_headers(
-                        session,
-                        429,
-                        &body,
-                        &[("Retry-After", &retry_after_s.to_string())],
-                    )
-                    .await;
+                if since_last < min_interval {
+                    let retry_after_s = (min_interval - since_last).div_ceil(1000);
+                    log.push_err("rate limited");
+                    let body = format!(r#"{{"error":"rate limited, retry after {}s"}}"#, retry_after_s);
+                    return self
+                        .send_json_response_with_headers(
+                            session,
+                            429,
+                            &body,
+                            &[("Retry-After", &retry_after_s.to_string())],
+                        )
+                        .await;
+                }
+
+                if LAST_EXECUTION_MS
+                    .compare_exchange(last, now, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    break;
+                }
+                // Another request claimed the slot; re-load and re-check.
             }
-
-            // CAS to claim this execution slot
-            let _ = LAST_EXECUTION_MS.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed);
         }
 
         // === Global concurrency gate ===
@@ -557,13 +587,16 @@ impl RequestFilter for AllEndpointStatus {
         let mut all_backend_results: Vec<BackendResult> = Vec::new();
         let mut all_endpoints: Vec<ResolvedEndpoint> = Vec::new();
         let mut total_truncated = false;
+        let mut unsafe_endpoint_count = 0usize;
 
         for backend_ref in &backend_refs {
             let namespace = backend_ref.namespace.as_deref().unwrap_or(&route_namespace);
             let port = backend_ref.port.map(|p| p as u16).unwrap_or(80);
             let use_tls = backend_ref.backend_tls_policy.is_some();
 
-            let resolved = resolve_endpoints(&backend_ref.name, namespace, port, use_tls);
+            let (resolved, unsafe_count) =
+                resolve_endpoints(&backend_ref.name, namespace, port, use_tls, ctx.allow_loopback_upstream);
+            unsafe_endpoint_count += unsafe_count;
 
             all_backend_results.push(BackendResult {
                 name: backend_ref.name.clone(),
@@ -574,6 +607,10 @@ impl RequestFilter for AllEndpointStatus {
             });
 
             all_endpoints.extend(resolved);
+        }
+
+        if unsafe_endpoint_count > 0 {
+            log.push_err("unsafe upstream");
         }
 
         // Apply max_endpoints limit
@@ -595,7 +632,7 @@ impl RequestFilter for AllEndpointStatus {
                     truncated: false,
                     timeout_ms: self.config.effective_timeout_ms(),
                     wall_timeout_ms: self.config.effective_wall_timeout_ms(),
-                    total_latency_ms: start.elapsed().as_millis() as u64,
+                    total_latency_ms: Instant::now().saturating_duration_since(start).as_millis() as u64,
                     total_response_bytes: 0,
                     wall_timeout_hit: false,
                 },
@@ -669,7 +706,7 @@ impl RequestFilter for AllEndpointStatus {
         // Update last execution timestamp
         LAST_EXECUTION_MS.store(elapsed_ms(), Ordering::Relaxed);
 
-        let total_latency = start.elapsed().as_millis() as u64;
+        let total_latency = Instant::now().saturating_duration_since(start).as_millis() as u64;
 
         // 5. Build aggregated response
         let response = AggregatedResponse {
@@ -698,7 +735,7 @@ impl RequestFilter for AllEndpointStatus {
             }
         };
 
-        log.push(&format!("status served {}", total_endpoints));
+        log.push_fmt("status served {}", la![total_endpoints.to_string().as_str()]);
 
         self.send_json_response(session, 200, &json_body).await
         // _global_permit is dropped here, releasing the concurrency slot

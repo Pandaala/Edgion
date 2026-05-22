@@ -1,0 +1,330 @@
+// CSRF Plugin Integration Test Suite
+//
+// Tests the CSRF protection plugin (double-submit cookie pattern).
+// The plugin generates a signed token cookie on safe methods (GET/HEAD/OPTIONS),
+// and on unsafe methods (POST/PUT/DELETE) validates that:
+//   1. A CSRF token header is present (name: "X-CSRF-Token")
+//   2. A CSRF cookie with the same name is present
+//   3. Header value == cookie value
+//   4. Token signature is valid and not expired
+//
+// Required config files (in examples/test/conf/EdgionPlugins/Csrf/):
+//   - EdgionPlugins_default_csrf-test.yaml   # Csrf plugin with key/name config
+//   - HTTPRoute_default_csrf-test.yaml        # Route: csrf-test.example.com
+
+use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+
+pub struct CsrfTestSuite;
+
+const HOST: &str = "csrf-test.example.com";
+const TOKEN_HEADER: &str = "X-CSRF-Token";
+
+/// Extract the CSRF token value from a Set-Cookie header string.
+/// The cookie looks like: X-CSRF-Token=<value>; Path=/; ...
+fn extract_csrf_token(set_cookie: &str, name: &str) -> Option<String> {
+    for part in set_cookie.split(';') {
+        let part = part.trim();
+        if let Some(value) = part.strip_prefix(&format!("{}=", name)) {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+impl CsrfTestSuite {
+    /// GET request → 200 + Set-Cookie with CSRF token in response
+    fn test_safe_method_sets_cookie() -> TestCase {
+        TestCase::new(
+            "safe_method_sets_cookie",
+            "GET request skips CSRF validation and sets token cookie in response",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = std::time::Instant::now();
+                    let url = format!("{}/health", ctx.http_url());
+
+                    let resp = match ctx.http_client.get(&url).header("host", HOST).send().await {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let status = resp.status().as_u16();
+                    if status != 200 {
+                        return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                    }
+
+                    let cookie_header = resp
+                        .headers()
+                        .get("set-cookie")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("");
+
+                    if cookie_header.contains(TOKEN_HEADER) {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!("GET returned 200 with Set-Cookie containing {}", TOKEN_HEADER),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected Set-Cookie with {}, got: {:?}", TOKEN_HEADER, cookie_header),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    /// POST with valid CSRF token (header + cookie match, valid signature) → 200
+    fn test_valid_csrf_token_passes() -> TestCase {
+        TestCase::new(
+            "valid_csrf_token_passes",
+            "POST with matching header+cookie CSRF token returns 200",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = std::time::Instant::now();
+                    let get_url = format!("{}/health", ctx.http_url());
+                    // /echo accepts both GET and POST; /health is GET-only
+                    let post_url = format!("{}/echo", ctx.http_url());
+
+                    // Step 1: GET to obtain a fresh CSRF token cookie
+                    let get_resp = match ctx.http_client.get(&get_url).header("host", HOST).send().await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("GET (token fetch) failed: {}", e))
+                        }
+                    };
+
+                    if get_resp.status().as_u16() != 200 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("GET returned {} instead of 200", get_resp.status()),
+                        );
+                    }
+
+                    let set_cookie = match get_resp
+                        .headers()
+                        .get("set-cookie")
+                        .and_then(|v| v.to_str().ok())
+                        .map(String::from)
+                    {
+                        Some(v) => v,
+                        None => {
+                            return TestResult::failed(start.elapsed(), "GET response missing Set-Cookie header".into())
+                        }
+                    };
+
+                    let token = match extract_csrf_token(&set_cookie, TOKEN_HEADER) {
+                        Some(t) => t,
+                        None => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!(
+                                    "Could not extract {} token from Set-Cookie: {}",
+                                    TOKEN_HEADER, set_cookie
+                                ),
+                            )
+                        }
+                    };
+
+                    // Step 2: POST with token in both header and cookie
+                    let cookie_val = format!("{}={}", TOKEN_HEADER, token);
+                    let post_resp = match ctx
+                        .http_client
+                        .post(&post_url)
+                        .header("host", HOST)
+                        .header("cookie", &cookie_val)
+                        .header(TOKEN_HEADER, &token)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("POST failed: {}", e)),
+                    };
+
+                    let status = post_resp.status().as_u16();
+                    if status == 200 {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "POST with valid CSRF token returned 200".into(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 200 for valid CSRF token, got {}", status),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    /// POST without CSRF header → 401
+    fn test_missing_header_returns_401() -> TestCase {
+        TestCase::new(
+            "missing_csrf_header_returns_401",
+            "POST without CSRF header returns 401",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = std::time::Instant::now();
+                    let url = format!("{}/health", ctx.http_url());
+
+                    let resp = match ctx.http_client.post(&url).header("host", HOST).send().await {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let status = resp.status().as_u16();
+                    if status == 401 {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "POST without CSRF header correctly returned 401".into(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 401 for missing CSRF header, got {}", status),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    /// POST with header but no cookie → 401
+    fn test_missing_cookie_returns_401() -> TestCase {
+        TestCase::new(
+            "missing_csrf_cookie_returns_401",
+            "POST with CSRF header but no cookie returns 401",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = std::time::Instant::now();
+                    let url = format!("{}/health", ctx.http_url());
+
+                    let resp = match ctx
+                        .http_client
+                        .post(&url)
+                        .header("host", HOST)
+                        .header(TOKEN_HEADER, "some-token-value")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let status = resp.status().as_u16();
+                    if status == 401 {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "POST with header but no cookie correctly returned 401".into(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 401 for missing CSRF cookie, got {}", status),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    /// POST with mismatched header and cookie tokens → 401
+    fn test_mismatched_tokens_returns_401() -> TestCase {
+        TestCase::new(
+            "mismatched_tokens_returns_401",
+            "POST with non-matching header and cookie CSRF tokens returns 401",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = std::time::Instant::now();
+                    let url = format!("{}/health", ctx.http_url());
+
+                    let resp = match ctx
+                        .http_client
+                        .post(&url)
+                        .header("host", HOST)
+                        .header("cookie", format!("{}=cookie-token-aaa", TOKEN_HEADER))
+                        .header(TOKEN_HEADER, "header-token-bbb")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let status = resp.status().as_u16();
+                    if status == 401 {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "POST with mismatched tokens correctly returned 401".into(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 401 for mismatched tokens, got {}", status),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    /// POST with matching but invalid (unsigned/corrupted) tokens → 401
+    fn test_invalid_signature_returns_401() -> TestCase {
+        TestCase::new(
+            "invalid_token_signature_returns_401",
+            "POST with matching but unsigned CSRF tokens returns 401",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = std::time::Instant::now();
+                    let url = format!("{}/health", ctx.http_url());
+
+                    // A value that matches header==cookie but is not a valid signed token
+                    let fake_token = "not-a-valid-csrf-token";
+                    let resp = match ctx
+                        .http_client
+                        .post(&url)
+                        .header("host", HOST)
+                        .header("cookie", format!("{}={}", TOKEN_HEADER, fake_token))
+                        .header(TOKEN_HEADER, fake_token)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let status = resp.status().as_u16();
+                    if status == 401 {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "POST with invalid token signature correctly returned 401".into(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 401 for invalid token signature, got {}", status),
+                        )
+                    }
+                })
+            },
+        )
+    }
+}
+
+impl TestSuite for CsrfTestSuite {
+    fn name(&self) -> &str {
+        "Csrf"
+    }
+
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![
+            Self::test_safe_method_sets_cookie(),
+            Self::test_valid_csrf_token_passes(),
+            Self::test_missing_header_returns_401(),
+            Self::test_missing_cookie_returns_401(),
+            Self::test_mismatched_tokens_returns_401(),
+            Self::test_invalid_signature_returns_401(),
+        ]
+    }
+}

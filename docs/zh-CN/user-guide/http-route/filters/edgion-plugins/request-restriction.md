@@ -43,7 +43,7 @@
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `name` | `string` | ❌ | - | 规则名称（用于日志） |
-| `source` | `string` | ✅ | - | 数据源：`Header`、`Cookie`、`Query`、`Path`、`Method`、`Referer` |
+| `source` | `string` | ✅ | - | 数据源：`Header`、`Cookie`、`Query`、`Path`、`RequestPath`、`Method`、`Referer` |
 | `key` | `string` | 视情况 | - | 键名（Header/Cookie/Query 必填，Path/Method/Referer 忽略） |
 | `allow` | `string[]` | ❌ | - | 精确匹配允许列表（白名单） |
 | `allowRegex` | `string[]` | ❌ | - | 正则匹配允许列表 |
@@ -56,14 +56,26 @@
 
 ### 数据源说明
 
-| 数据源 | 说明 | 需要 key |
-|--------|------|----------|
-| `Header` | HTTP 请求头 | ✅ |
-| `Cookie` | HTTP Cookie | ✅ |
-| `Query` | URL 查询参数 | ✅ |
-| `Path` | 请求路径 | ❌ |
-| `Method` | HTTP 方法 | ❌ |
-| `Referer` | Referer 请求头 | ❌ |
+| 数据源 | 说明 | 需要 key | path 视图 |
+|--------|------|----------|-----------|
+| `Header` | HTTP 请求头 | ✅ | — |
+| `Cookie` | HTTP Cookie | ✅ | — |
+| `Query` | URL 查询参数 | ✅ | — |
+| `Path` | 请求路径（规范化后 current 视图） | ❌ | current（规范化） |
+| `RequestPath` | 请求路径（客户端入口 raw 视图） | ❌ | entry raw（冻结） |
+| `Method` | HTTP 方法 | ❌ | — |
+| `Referer` | Referer 请求头 | ❌ | — |
+
+#### `Path` 与 `RequestPath` 的区别（path normalization）
+
+| source | 视图 | 含义 | `deny`/`allow` 值是否规范化 |
+|--------|------|------|---------------------------|
+| `Path` | current（规范化） | post-rewrite 规范化 path | ✅ 加载时规范化（与请求侧匹配同一空间） |
+| `RequestPath` | entry raw（冻结） | 客户端原始 path，不受 rewrite 影响 | ❌ 不规范化（operator 按字面匹配） |
+
+**推荐用法**：绝大多数 ACL 场景使用 `Path`，它覆盖 `%XX` 编码 / 双斜杠 / dot-segment / path-parameter 等所有绕过变体。`RequestPath` 仅用于需要按字面 raw 形态判断的特殊场景（如「只要含 `%2F` 就拒绝」）。
+
+**`Path` + allow-list 的 `;param` 副作用**：path normalization 会剥除每个 segment 中的 `;param=...`（例如 `/api/users;v=1/data` → `/api/users/data`）。若 allow-list 配置了精确路径，迁移时注意检查含 `;` 的请求样本，确认规则仍按预期命中。
 
 ### 匹配方式说明
 

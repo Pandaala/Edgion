@@ -24,7 +24,7 @@
 //!
 //! ## Configuration
 //!
-//! - `common`: Common types shared across backends (EndpointMode)
+//! - `common`: Common types shared across backends
 //! - `config`: Top-level ConfCenterConfig enum
 //! - `kubernetes::config`: Kubernetes-specific config (LeaderElectionConfig, MetadataFilterConfig)
 //!
@@ -125,7 +125,10 @@ pub mod file_system;
 pub mod kubernetes;
 
 // Re-export traits
-pub use traits::{CenterApi, CenterLifeCycle, ConfCenter, ConfEntry, ConfWriterError, ListOptions, ListResult};
+pub use traits::{
+    CenterApi, CenterLifeCycle, ConfCenter, ConfEntry, ConfWriterError, ListOptions, ListResult, ResourceKey,
+    ResourceKeyMeta,
+};
 
 // Re-export FileSystem types
 pub use file_system::{FileSystemCenter, FileSystemConfig, FileSystemController, FileSystemStorage};
@@ -140,5 +143,4 @@ pub use kubernetes::{
 pub use etcd::{EtcdCenter, EtcdConfig};
 
 // Re-export configuration types
-pub use common::EndpointMode;
 pub use config::ConfCenterConfig;

@@ -11,22 +11,23 @@ use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing_appender::non_blocking::WorkerGuard;
 
 /// Derive whether the operator *expects* admin API authentication.
 ///
-/// Intent-based rather than assembly-based — returns `true` in the Controller
+/// Intent-based rather than assembly-based -- returns `true` in the Controller
 /// auto-generate fallback case (no `[auth]` and no `[local_auth]`) even though
 /// neither config segment is present, because the Controller will attempt to
 /// install credentials via K8s Secret.
 ///
 /// Rules:
-/// - `[auth].enabled == true` → true
-/// - `[local_auth].enabled == true` (including `needs_generation()`) → true
-/// - `[local_auth]` present with `enabled == false` → that segment contributes false
-/// - Neither segment present → true (Controller auto-generate fallback)
-/// - `[auth]` present + `[local_auth]` absent → value of `[auth].enabled`
+/// - `[auth].enabled == true` -> true
+/// - `[local_auth].enabled == true` (including `needs_generation()`) -> true
+/// - `[local_auth]` present with `enabled == false` -> that segment contributes false
+/// - Neither segment present -> true (Controller auto-generate fallback)
+/// - `[auth]` present + `[local_auth]` absent -> value of `[auth].enabled`
 pub(crate) fn derive_require_auth(
     auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
@@ -59,7 +60,7 @@ pub(crate) async fn resolve_local_config(
     conf_mgr: &ConfMgr,
 ) -> (Option<crate::core::common::local_auth::LocalAuthConfig>, bool) {
     match (config.local_auth.as_ref(), oidc_enabled) {
-        // (a) explicit [local_auth] + enabled + needs_generation → fetch Secret
+        // (a) explicit [local_auth] + enabled + needs_generation -> fetch Secret
         (Some(cfg), _) if cfg.enabled && cfg.needs_generation() => {
             match crate::core::common::local_auth::secret::ensure_admin_credentials(conf_mgr).await {
                 Ok(generated) => (Some(generated), false),
@@ -73,11 +74,11 @@ pub(crate) async fn resolve_local_config(
                 }
             }
         }
-        // (b) explicit [local_auth] + enabled + has password → use as-is
+        // (b) explicit [local_auth] + enabled + has password -> use as-is
         (Some(cfg), _) if cfg.enabled => (Some(cfg.clone()), false),
-        // (c) explicit [local_auth] + enabled=false → caller did not want local auth
+        // (c) explicit [local_auth] + enabled=false -> caller did not want local auth
         (Some(_), _) => (None, false),
-        // (d) neither [auth] nor [local_auth] → auto-generate fallback
+        // (d) neither [auth] nor [local_auth] -> auto-generate fallback
         (None, false) => match crate::core::common::local_auth::secret::ensure_admin_credentials(conf_mgr).await {
             Ok(generated) => (Some(generated), false),
             Err(e) => {
@@ -233,6 +234,9 @@ impl EdgionControllerCli {
         local_auth_config: Option<crate::core::common::local_auth::LocalAuthConfig>,
         require_auth: bool,
         needs_retry: bool,
+        config_file: Option<String>,
+        authorizer: std::sync::Arc<crate::core::common::authz::Authorizer>,
+        center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
         shutdown_handle: ShutdownHandle,
     ) -> Result<()> {
         tracing::info!(
@@ -253,7 +257,7 @@ impl EdgionControllerCli {
             let mut signal = shutdown_handle.signal();
             async move {
                 signal.wait().await;
-                // Brief delay so Admin API finishes first — gRPC clients can complete final sync
+                // Brief delay so Admin API finishes first -- gRPC clients can complete final sync
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         };
@@ -299,6 +303,9 @@ impl EdgionControllerCli {
                     local_auth_config.as_ref(),
                     require_auth,
                     needs_retry,
+                    config_file,
+                    authorizer,
+                    center_reload_tx,
                     admin_shutdown
                 )
             )
@@ -366,7 +373,7 @@ impl EdgionControllerCli {
         crate::core::common::config::init_controller_config(config.clone());
 
         // Initialize test mode if enabled via CLI --test-mode
-        // This affects: endpoint_mode (forced to Both), metrics test features
+        // This affects: metrics test features
         crate::core::common::config::init_global_test_mode(self.config.test_mode);
 
         // 1. Initialize environment (work_dir, logging)
@@ -448,16 +455,39 @@ impl EdgionControllerCli {
         // Must happen before federation client so the base admin router can be created.
         let schema_validator = Self::load_schemas(config.is_k8s_mode());
 
-        // 7. Start federation client if center config is present.
+        // 6b. Construct the shared Authorizer and center-reload watch channel ONCE.
+        // The Authorizer is initialized from `[center].rbac` if present, else the built-in
+        // default policy (read-all-except-Secret + PluginMetaData write + RegionRoute failover)
+        // via `center_policy_from`.
+        // Both are cloned into every create_admin_router call site and into the fed path.
+        let initial_center_cfg = config.center.clone().unwrap_or_default();
+        if let Some(rbac) = &initial_center_cfg.rbac {
+            if let Err(e) = rbac.validate() {
+                tracing::warn!(
+                    component = "fed_rbac",
+                    error = %e,
+                    "invalid center.rbac rule; it will not match any request"
+                );
+            }
+        }
+        let initial_policy =
+            crate::core::controller::fed_sync::default_policy::center_policy_from(initial_center_cfg.rbac.as_ref());
+        let authorizer = std::sync::Arc::new(crate::core::common::authz::Authorizer::new(initial_policy));
+        // The original receiver is intentionally dropped here. The federation supervisor (Task 7)
+        // will obtain its own receiver via `center_reload_tx.subscribe()`, which works even after
+        // this initial receiver is dropped -- as long as the Sender is alive. The Sender lives for
+        // the duration of the process because it is stored in `AdminState` (via `create_admin_router`)
+        // and cloned into the fed path above.
+        let initial_center_cfg_for_supervisor = initial_center_cfg.clone();
+        let (center_reload_tx, _center_reload_rx) = tokio::sync::watch::channel(initial_center_cfg);
+        let config_file = self.config.config_file.clone();
+
+        // 7. Start federation client (via supervisor) if center config is present.
         // Must be after conf_mgr.start() so processor_registry is populated.
-        // The base admin router (without auth middleware) is passed so the client
-        // can proxy HTTP requests from Center directly to the local admin API.
-        let _fed_shutdown_tx = if let Some(center_config) = config.center.clone() {
-            let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-
-            let center_api: Arc<dyn crate::core::controller::conf_mgr::conf_center::traits::CenterApi> =
-                conf_mgr.clone();
-
+        // The supervisor owns the fed client lifecycle: it starts/stops the client
+        // on reload and ensures the prior task is awaited before a new one spawns,
+        // preventing dual registration at Center.
+        if let Some(center_config) = config.center.clone() {
             let kinds: Vec<String> = conf_mgr
                 .runtime()
                 .processor_registry
@@ -466,22 +496,71 @@ impl EdgionControllerCli {
                 .map(|s| s.to_string())
                 .collect();
 
-            // Create the base admin router without auth — Center is trusted, auth handled externally
-            let admin_router = create_admin_router(conf_mgr.clone(), schema_validator.clone());
-
-            tokio::spawn(crate::core::controller::fed_sync::fed_client::run(
-                center_config,
-                center_api,
-                kinds,
-                shutdown_rx,
-                admin_router,
+            // Build the fed router:
+            //   1. Base admin router (routes + handlers, no auth).
+            //   2. route_layer: authz_layer (innermost route_layer -- added first).
+            //   3. .layer: inject_center_identity (outermost -- added last, runs first).
+            // Axum LIFO rule for route_layer means adding route_layer first makes it
+            // innermost; inject_center_identity is a plain .layer so it wraps everything.
+            // Final onion (outer -> inner):
+            //   inject_center_identity -> authz_layer -> handler
+            let base_router = create_admin_router(
                 conf_mgr.clone(),
-            ));
+                schema_validator.clone(),
+                config_file.clone(),
+                authorizer.clone(),
+                center_reload_tx.clone(),
+            );
+            let fed_router = base_router
+                .route_layer(axum::middleware::from_fn_with_state(
+                    authorizer.clone(),
+                    crate::core::controller::api::authz_middleware::authz_layer,
+                ))
+                .layer(axum::middleware::from_fn(
+                    crate::core::controller::api::authz_middleware::inject_center_identity,
+                ));
+            // IMPORTANT: Do NOT add any .route()/.merge() to fed_router AFTER this
+            // point. route_layer only wraps routes present when it is applied; a
+            // route added later would bypass authz_layer entirely.
 
-            Some(shutdown_tx) // kept alive for duration of process
-        } else {
-            None
-        };
+            // Capture everything the per-spawn closure needs. `axum::Router` is
+            // `Clone`; the authz route_layer inside it shares the same
+            // `Arc<Authorizer>`, so cloning the router per spawn is cheap and
+            // correct -- all spawns see the same live policy.
+            let kinds_for_spawn = kinds;
+            let conf_mgr_for_spawn = conf_mgr.clone();
+            let authorizer_for_spawn = authorizer.clone();
+
+            let spawn_client = move |rx: watch::Receiver<bool>| {
+                let router = fed_router.clone();
+                let cfg = center_config.clone();
+                let kinds = kinds_for_spawn.clone();
+                let conf_mgr = conf_mgr_for_spawn.clone();
+                let authorizer = authorizer_for_spawn.clone();
+                tokio::spawn(async move {
+                    crate::core::controller::fed_sync::fed_client::run(cfg, kinds, rx, router, conf_mgr, authorizer)
+                        .await;
+                })
+            };
+
+            // Get a reload receiver from the shared sender. The original receiver
+            // constructed above was intentionally dropped (`_center_reload_rx`);
+            // `subscribe()` creates a fresh receiver from the same sender that is
+            // stored in AdminState and used by the reload handler.
+            let reload_rx = center_reload_tx.subscribe();
+            let initial = initial_center_cfg_for_supervisor;
+            let authorizer_for_supervisor = authorizer.clone();
+
+            let supervisor = crate::core::controller::fed_sync::supervisor::FederationSupervisor::new(spawn_client);
+            // Intentionally detached: run_supervisor lives for the process lifetime,
+            // driven by the reload watch channel whose sender is stored in AdminState.
+            tokio::spawn(crate::core::controller::fed_sync::supervisor::run_supervisor(
+                supervisor,
+                initial,
+                reload_rx,
+                authorizer_for_supervisor,
+            ));
+        }
 
         // 8. Parse addresses and start services with shutdown support
         // Note: Services start immediately but return UNAVAILABLE until ConfigServer is ready
@@ -504,7 +583,10 @@ impl EdgionControllerCli {
             auth_config,
             local_auth_config,
             require_auth, // from derive_require_auth (intent-based, not post-resolve)
-            needs_retry,  // consumed by serve/serve_with_shutdown → spawns secret_retry_loop
+            needs_retry,  // consumed by serve/serve_with_shutdown -> spawns secret_retry_loop
+            config_file,
+            authorizer,
+            center_reload_tx,
             shutdown_handle,
         )
         .await
@@ -583,9 +665,10 @@ mod require_auth_tests {
         c
     }
 
-    /// 双显式 opt-out：operator 明确 disabled 两边。require_auth 应为 false
-    /// （respect 明示意图）。守护：未来若有人把"any None/disabled → true"简化
-    /// 进公式，会打破 no-auth 模式。
+    /// Double explicit opt-out: the operator explicitly disabled both sides.
+    /// require_auth must be false (respect the explicit intent). Guard: if
+    /// someone later simplifies the formula to "any None/disabled -> true",
+    /// it would break the no-auth mode.
     #[test]
     fn require_auth_both_explicit_disabled_false() {
         let oidc = oidc_disabled();

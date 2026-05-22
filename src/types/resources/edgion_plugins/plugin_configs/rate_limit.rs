@@ -15,11 +15,20 @@
 //! - Dual-slot (red/blue) design for sliding window behavior
 //! - Lock-free atomic operations for high concurrency
 
+use crate::core::common::utils::parse_duration;
 use crate::types::common::KeyGet;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::time::Duration;
 use tracing;
+
+fn deserialize_non_empty_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    Ok(opt.filter(|s| !s.is_empty()))
+}
 
 // ========== Rate Limit Scope ==========
 
@@ -76,22 +85,43 @@ pub enum RateLimitScope {
 pub struct LimitHeaderNames {
     /// Header name for rate limit value
     /// Only shown if explicitly configured
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
     pub limit: Option<String>,
 
     /// Header name for remaining quota
     /// Only shown if explicitly configured
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
     pub remaining: Option<String>,
 
     /// Header name for reset timestamp
-    /// Only shown if explicitly configured
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Only shown if explicitly configured.
+    ///
+    /// Note: behavior differs by plugin. `RateLimit` (in-process CMS) emits this
+    /// on both allowed and rejected responses. `RateLimitRedis` only emits it on
+    /// rejection (429) responses — the Redis Lua scripts do not return a
+    /// window-reset timestamp for allowed requests.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
     pub reset: Option<String>,
 
     /// Header name for human-readable retry time (e.g., "1.5s", "500ms")
     /// Only shown if explicitly configured
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
     pub retry_in: Option<String>,
 }
 
@@ -171,6 +201,7 @@ pub struct RateLimitConfig {
     /// Maximum requests per interval
     ///
     /// For example, rate=100 with interval="1s" means 100 requests per second.
+    #[schemars(range(min = 1))]
     pub rate: isize,
 
     /// Time interval for rate calculation (default: "1s")
@@ -221,6 +252,7 @@ pub struct RateLimitConfig {
 
     /// HTTP status code for rejected requests (default: 429)
     #[serde(default = "default_reject_status")]
+    #[schemars(range(min = 100, max = 599))]
     pub reject_status: u16,
 
     /// Custom rejection message
@@ -294,11 +326,6 @@ pub struct RateLimitConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimator_slots_k: Option<usize>,
 
-    /// Validation error (runtime only)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
-
     /// Parsed interval duration (runtime only)
     #[serde(skip)]
     #[schemars(skip)]
@@ -342,7 +369,6 @@ impl Default for RateLimitConfig {
             scope: RateLimitScope::default(),
             skew_tolerance: default_skew_tolerance(),
             estimator_slots_k: None,
-            validation_error: None,
             interval_duration: None,
             effective_slots: None,
         }
@@ -355,30 +381,20 @@ pub use crate::core::gateway::cli::config::{
 };
 
 impl RateLimitConfig {
-    /// Validate and compile the configuration
+    /// Validate and compile the configuration.
     ///
     /// Uses the global RateLimit configuration from toml config file.
-    pub fn validate(&mut self) {
+    /// Returns `Err(message)` if invalid; on success, `interval_duration` and
+    /// `effective_slots` are populated.
+    pub fn validate(&mut self) -> Result<(), String> {
         let default_slots = get_default_estimator_slots();
         let max_slots = get_max_estimator_slots();
-        self.validate_with_global_config(default_slots, max_slots);
+        self.validate_with_global_config(default_slots, max_slots)
     }
 
-    /// Validate and compile the configuration with global config values
-    pub fn validate_with_global_config(&mut self, default_slots: usize, max_slots: usize) {
-        if let Err(e) = self.validate_and_compile(default_slots, max_slots) {
-            self.validation_error = Some(e);
-        }
-    }
-
-    /// Check if configuration is valid
-    pub fn is_valid(&self) -> bool {
-        self.validation_error.is_none()
-    }
-
-    /// Get validation error message
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
+    /// Validate and compile the configuration with explicit global config values.
+    pub fn validate_with_global_config(&mut self, default_slots: usize, max_slots: usize) -> Result<(), String> {
+        self.validate_and_compile(default_slots, max_slots)
     }
 
     /// Get the parsed interval duration
@@ -422,21 +438,54 @@ impl RateLimitConfig {
         }
     }
 
-    fn validate_and_compile(&mut self, default_slots: usize, max_slots: usize) -> Result<(), String> {
+    /// Check fields for validation errors without mutating any state.
+    ///
+    /// Only returns errors for structurally invalid configurations.
+    /// Clamp/assignment side effects (skew_tolerance, interval_duration, effective_slots)
+    /// are intentionally NOT performed here — they remain in `validate_and_compile`.
+    fn check_fields(&self) -> Option<String> {
         // Validate rate
         if self.rate <= 0 {
-            return Err("rate must be greater than 0".to_string());
+            return Some("rate must be greater than 0".to_string());
         }
 
         // Validate Cluster scope constraints
-        if self.scope == RateLimitScope::Cluster {
-            // Cluster scope with very low rate may result in 0 effective rate per instance
-            if self.rate < 2 {
-                return Err("rate must be >= 2 for Cluster scope (to ensure non-zero effective rate)".to_string());
+        if self.scope == RateLimitScope::Cluster && self.rate < 2 {
+            return Some("rate must be >= 2 for Cluster scope (to ensure non-zero effective rate)".to_string());
+        }
+
+        // Validate reject_status
+        if self.reject_status < 100 || self.reject_status >= 600 {
+            return Some(format!("Invalid reject_status: {}", self.reject_status));
+        }
+
+        // Validate keys: check if name is required but empty for each key
+        for (i, key) in self.key.iter().enumerate() {
+            if let Some(name) = key.name() {
+                if name.is_empty() {
+                    return Some(format!(
+                        "'key[{}].name' cannot be empty for type {:?}",
+                        i,
+                        key.source_type()
+                    ));
+                }
             }
         }
 
-        // Validate and clamp skewTolerance (only meaningful for Cluster, but always validate)
+        // Validate interval can be parsed (do not store the result)
+        if let Err(e) = parse_duration(&self.interval) {
+            return Some(e.to_string());
+        }
+
+        None
+    }
+
+    fn validate_and_compile(&mut self, default_slots: usize, max_slots: usize) -> Result<(), String> {
+        if let Some(err) = self.check_fields() {
+            return Err(err);
+        }
+
+        // Clamp skewTolerance (only meaningful for Cluster, but always apply)
         if self.skew_tolerance < 1.0 {
             tracing::warn!(
                 configured = self.skew_tolerance,
@@ -453,31 +502,8 @@ impl RateLimitConfig {
             self.skew_tolerance = 2.0;
         }
 
-        // Validate reject_status
-        if self.reject_status < 100 || self.reject_status >= 600 {
-            return Err(format!("Invalid reject_status: {}", self.reject_status));
-        }
-
-        // Validate keys: check if name is required but empty for each key
-        for (i, key) in self.key.iter().enumerate() {
-            if let Some(name) = key.name() {
-                if name.is_empty() {
-                    return Err(format!(
-                        "'key[{}].name' cannot be empty for type {:?}",
-                        i,
-                        key.source_type()
-                    ));
-                }
-            }
-
-            // Log warning for unsupported KeyGet types in rate limiting
-            if matches!(key, KeyGet::Method) {
-                tracing::warn!("KeyGet::Method is not recommended for rate limiting (key[{}])", i);
-            }
-        }
-
-        // Parse interval
-        self.interval_duration = Some(parse_duration(&self.interval)?);
+        // Parse interval and store
+        self.interval_duration = Some(parse_duration(&self.interval).map_err(|e| e.to_string())?);
 
         // Compute effective estimator slots
         // Plugin config is in K units, convert to actual slots
@@ -499,38 +525,23 @@ impl RateLimitConfig {
 
         self.effective_slots = Some(effective);
 
+        // Log warning for unsupported KeyGet types in rate limiting
+        for (i, key) in self.key.iter().enumerate() {
+            if matches!(key, KeyGet::Method) {
+                tracing::warn!("KeyGet::Method is not recommended for rate limiting (key[{}])", i);
+            }
+        }
+
         Ok(())
     }
 }
 
-/// Parse duration string (e.g., "500ms", "1s", "2m")
-pub fn parse_duration(s: &str) -> Result<Duration, String> {
-    let s = s.trim();
-    if s.is_empty() {
-        return Err("Duration string is empty".to_string());
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for RateLimitConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.check_fields()
     }
-
-    // Find where the number ends and unit begins
-    let (num_str, unit) = s
-        .char_indices()
-        .find(|(_, c)| !c.is_ascii_digit() && *c != '.')
-        .map(|(i, _)| s.split_at(i))
-        .unwrap_or((s, "s")); // Default to seconds
-
-    let num: f64 = num_str
-        .parse()
-        .map_err(|_| format!("Invalid duration number: {}", num_str))?;
-
-    let multiplier = match unit.to_lowercase().as_str() {
-        "ms" | "millis" | "milliseconds" => 0.001,
-        "s" | "sec" | "seconds" | "" => 1.0,
-        "m" | "min" | "minutes" => 60.0,
-        "h" | "hour" | "hours" => 3600.0,
-        "d" | "day" | "days" => 86400.0,
-        _ => return Err(format!("Unknown duration unit: {}", unit)),
-    };
-
-    Ok(Duration::from_secs_f64(num * multiplier))
 }
 
 #[cfg(test)]
@@ -565,9 +576,8 @@ mod tests {
             rate: 0,
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("rate"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("rate"));
     }
 
     #[test]
@@ -577,9 +587,8 @@ mod tests {
             key: vec![KeyGet::Header { name: "".to_string() }],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("key[0].name"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("key[0].name"));
     }
 
     #[test]
@@ -588,8 +597,7 @@ mod tests {
             rate: 10,
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         assert_eq!(config.get_interval_duration(), Duration::from_secs(1));
     }
 
@@ -610,8 +618,7 @@ mod tests {
             interval: "5s".to_string(),
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         assert_eq!(config.interval_duration, Some(Duration::from_secs(5)));
     }
 
@@ -619,15 +626,27 @@ mod tests {
     fn test_limit_header_names() {
         let headers = LimitHeaderNames {
             limit: Some("X-Limit".to_string()),
-            remaining: Some("".to_string()), // Empty string should return None
+            remaining: Some("".to_string()),
             reset: None,
             retry_in: Some("Retry-After".to_string()),
         };
 
         assert_eq!(headers.limit_header(), Some("X-Limit"));
-        assert_eq!(headers.remaining_header(), None); // Empty string filtered
+        assert_eq!(headers.remaining_header(), None);
         assert_eq!(headers.reset_header(), None);
         assert_eq!(headers.retry_in_header(), Some("Retry-After"));
+    }
+
+    #[test]
+    fn test_limit_header_names_empty_string_normalized_on_deserialize() {
+        // Empty strings must be normalized to None at deserialization time,
+        // eliminating the dual representation of "not configured".
+        let json = r#"{"limit":"X-Limit","remaining":"","reset":null}"#;
+        let headers: LimitHeaderNames = serde_json::from_str(json).unwrap();
+        assert_eq!(headers.limit, Some("X-Limit".to_string()));
+        assert_eq!(headers.remaining, None);
+        assert_eq!(headers.reset, None);
+        assert_eq!(headers.retry_in, None);
     }
 
     #[test]
@@ -636,8 +655,7 @@ mod tests {
             rate: 10,
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         // Default should be 64K = 65536 (from global config)
         assert_eq!(config.get_effective_slots(), get_default_estimator_slots());
     }
@@ -649,8 +667,7 @@ mod tests {
             estimator_slots_k: Some(16), // 16K = 16384 slots
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         assert_eq!(config.get_effective_slots(), 16 * SLOTS_K);
     }
 
@@ -662,8 +679,9 @@ mod tests {
             ..Default::default()
         };
         // Global config: default=64K, max=256K for this test
-        config.validate_with_global_config(64 * SLOTS_K, 256 * SLOTS_K);
-        assert!(config.is_valid());
+        config
+            .validate_with_global_config(64 * SLOTS_K, 256 * SLOTS_K)
+            .expect("validate should succeed");
         assert_eq!(config.get_effective_slots(), 256 * SLOTS_K); // Capped at max
     }
 
@@ -676,8 +694,7 @@ mod tests {
             estimator_slots_k: Some(0),
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         assert_eq!(config.get_effective_slots(), get_min_estimator_slots()); // At least minimum (1K)
     }
 
@@ -885,9 +902,8 @@ rate: 50
             scope: RateLimitScope::Cluster,
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("Cluster scope"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("Cluster scope"));
     }
 
     #[test]
@@ -898,8 +914,7 @@ rate: 50
             skew_tolerance: 0.5, // Below minimum
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         assert_eq!(config.skew_tolerance, 1.0); // Clamped to 1.0
     }
 
@@ -911,8 +926,7 @@ rate: 50
             skew_tolerance: 3.0, // Above maximum
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        config.validate().expect("validate should succeed");
         assert_eq!(config.skew_tolerance, 2.0); // Clamped to 2.0
     }
 
@@ -974,5 +988,58 @@ rate: 100
             // effective_rate = ceil(10 * 1.2 / 4) = ceil(3.0) = 3
             assert_eq!(config.get_effective_rate(), 3);
         });
+    }
+}
+
+#[cfg(test)]
+mod validation_trait_tests {
+    use super::*;
+    use crate::types::resources::edgion_plugins::PluginValidation;
+
+    #[test]
+    fn validation_error_returns_field_error_without_validate_call() {
+        let config = RateLimitConfig {
+            rate: 0,
+            ..Default::default()
+        };
+        // Should report an error about rate, without any validate() call.
+        assert!(config.validation_error().is_some(), "rate=0 must be invalid");
+    }
+
+    #[test]
+    fn validation_error_does_not_treat_clamp_as_error() {
+        let config = RateLimitConfig {
+            skew_tolerance: 5.0, // Will be clamped at runtime, NOT an error.
+            ..Default::default()
+        };
+        assert!(
+            config.validation_error().is_none(),
+            "skew_tolerance clamp must not surface as preparse error"
+        );
+    }
+
+    #[test]
+    fn rate_field_has_minimum_1_in_json_schema() {
+        let schema = serde_json::to_value(schemars::schema_for!(RateLimitConfig)).unwrap();
+        let minimum = schema["properties"]["rate"]["minimum"]
+            .as_f64()
+            .expect("rate field must have a numeric minimum in JSON Schema");
+        assert_eq!(minimum, 1.0, "rate minimum should be 1");
+    }
+
+    #[test]
+    fn reject_status_field_has_range_in_json_schema() {
+        let schema = serde_json::to_value(schemars::schema_for!(RateLimitConfig)).unwrap();
+        let props = &schema["properties"]["rejectStatus"];
+        assert_eq!(
+            props["minimum"].as_f64(),
+            Some(100.0),
+            "rejectStatus minimum should be 100"
+        );
+        assert_eq!(
+            props["maximum"].as_f64(),
+            Some(599.0),
+            "rejectStatus maximum should be 599"
+        );
     }
 }

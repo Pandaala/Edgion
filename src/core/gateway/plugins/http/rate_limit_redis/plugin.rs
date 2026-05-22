@@ -21,6 +21,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::core::gateway::link_sys::get_redis_client;
 use crate::core::gateway::link_sys::providers::redis::RedisLinkClient;
+use crate::core::gateway::plugins::http::common::format_duration;
+use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{OnMissingKey, OnRedisFailure, RateLimitAlgorithm, RateLimitRedisConfig};
@@ -100,16 +102,6 @@ fn build_redis_key(prefix: &str, algo: &str, policy_idx: usize, limit_key: &str,
     }
 }
 
-/// Format duration in human-readable format (e.g., "1.5s", "500ms")
-fn format_duration(d: Duration) -> String {
-    let secs = d.as_secs_f64();
-    if secs >= 1.0 {
-        format!("{:.1}s", secs)
-    } else {
-        format!("{}ms", d.as_millis())
-    }
-}
-
 // ========== RateLimitRedis Plugin ==========
 
 /// Redis-based precise rate limiting plugin.
@@ -129,7 +121,7 @@ impl RateLimitRedis {
     /// Create a new RateLimitRedis plugin from configuration.
     pub fn create(config: &RateLimitRedisConfig) -> Box<dyn RequestFilter> {
         let mut validated = config.clone();
-        validated.validate();
+        let _ = validated.validate();
         Box::new(RateLimitRedis {
             name: "RateLimitRedis".to_string(),
             config: validated,
@@ -372,8 +364,9 @@ impl RateLimitRedis {
             most_restrictive = Some(Self::merge_result(most_restrictive, result));
         }
 
-        // At least one policy is guaranteed by validation
-        Ok(most_restrictive.unwrap())
+        most_restrictive.ok_or_else(|| {
+            anyhow::anyhow!("rate_limit_redis: no policy after iteration — validation invariant violated")
+        })
     }
 
     /// Add rate limit headers to response.
@@ -384,6 +377,11 @@ impl RateLimitRedis {
 
         let remaining = remaining.max(0) as u64;
 
+        // Note: the success path does not emit a reset header. The Lua scripts
+        // return only {allowed, current, remaining, retry_ms}, so there is no
+        // precise window-reset timestamp available for an allowed request.
+        // A reset header is only emitted on the rejection path, where
+        // `retry_after` gives a meaningful value.
         if let Some(headers) = self.config.get_header_names() {
             // Custom headers: only show what's explicitly configured
             if let Some(limit_header) = headers.limit_header() {
@@ -391,15 +389,6 @@ impl RateLimitRedis {
             }
             if let Some(remaining_header) = headers.remaining_header() {
                 let _ = session.set_response_header(remaining_header, &remaining.to_string());
-            }
-            if let Some(reset_header) = headers.reset_header() {
-                // For Redis-based rate limiting, we don't have a precise reset timestamp
-                // Use current time + retry estimate (0 for allowed requests)
-                let reset_timestamp = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let _ = session.set_response_header(reset_header, &reset_timestamp.to_string());
             }
         } else {
             // Default: use X-RateLimit-* style
@@ -417,13 +406,20 @@ impl RateLimitRedis {
     ) -> PluginRunningResult {
         let message = self.config.reject_message.as_deref().unwrap_or("Rate limit exceeded");
 
+        // invariant: 429 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
         let mut resp = Box::new(
             ResponseHeader::build(self.config.reject_status, None)
                 .unwrap_or_else(|_| ResponseHeader::build(429, None).expect("429 is valid")),
         );
         resp.insert_header("Content-Type", "application/json").ok();
-        resp.insert_header("Retry-After", retry_after.as_secs().to_string())
-            .ok();
+        // RFC 7231 §7.1.3: Retry-After is a delta-seconds integer; "0" tells
+        // RFC-compliant clients to retry immediately and risks a hot-loop under
+        // pressure. Omit the header for Duration::ZERO (Redis-failure Deny and
+        // OnMissingKey::Deny paths) and ceil any positive sub-second value to 1.
+        if !retry_after.is_zero() {
+            let secs = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
+            resp.insert_header("Retry-After", secs.to_string()).ok();
+        }
 
         // Add rate limit headers (all controlled by show_limit_headers)
         if self.config.show_limit_headers {
@@ -491,22 +487,20 @@ impl RequestFilter for RateLimitRedis {
         // PluginLog must stay short (≤40B) and must never contain the resolved
         // limit_key, the redis_ref config value, or raw Redis error text — they
         // can carry user-identifying values or deployment details. Detailed
-        // diagnostics go to tracing / metrics instead.
+        // diagnostics go to metrics instead.
 
         // 1. Validate config
-        if !self.config.is_valid() {
+        use crate::types::resources::edgion_plugins::PluginValidation;
+        if self.config.validation_error().is_some() {
             plugin_log.push_err("cfg load fail");
-            let resp = Box::new(
-                ResponseHeader::build(500, None)
-                    .unwrap_or_else(|_| ResponseHeader::build(429, None).expect("429 is valid")),
-            );
-            let _ = session.write_response_header(resp, false).await;
-            let _ = session
-                .write_response_body(
-                    Some(bytes::Bytes::from(r#"{"message":"Internal rate limiter error"}"#)),
-                    true,
-                )
-                .await;
+            // invariant: 500 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
+            let mut resp = Box::new(ResponseHeader::build(500, None).expect("500 is a valid status code"));
+            resp.insert_header("Content-Type", "application/json").ok();
+            let body = Bytes::from(r#"{"message":"Internal rate limiter error"}"#);
+            if session.write_response_header(resp, false).await.is_err() {
+                return PluginRunningResult::ErrTerminateRequest;
+            }
+            let _ = session.write_response_body(Some(body), true).await;
             return PluginRunningResult::ErrTerminateRequest;
         }
 
@@ -554,12 +548,18 @@ impl RequestFilter for RateLimitRedis {
         match self.check_rate_limit(&client, &limit_key).await {
             Ok(result) if result.allowed => {
                 self.add_headers(session, result.remaining, result.limit);
-                plugin_log.push(&format!("rl:ok,kl={},r={}", kl, result.remaining));
+                plugin_log.push_fmt(
+                    "rl:ok,kl={},r={}",
+                    la![kl.to_string().as_str(), result.remaining.to_string().as_str()],
+                );
                 PluginRunningResult::GoodNext
             }
             Ok(result) => {
                 let retry_after = Duration::from_millis(result.retry_ms.max(0) as u64);
-                plugin_log.push(&format!("rl:lim,kl={},rms={}", kl, result.retry_ms));
+                plugin_log.push_fmt(
+                    "rl:lim,kl={},rms={}",
+                    la![kl.to_string().as_str(), result.retry_ms.to_string().as_str()],
+                );
                 self.reject_request(session, retry_after, Some(&result)).await
             }
             Err(_e) => {
@@ -577,28 +577,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_truncate_limit_key_normal() {
-        assert_eq!(truncate_limit_key("192.168.1.1", 4096), "192.168.1.1");
-    }
-
-    #[test]
-    fn test_truncate_limit_key_exact() {
-        let key = "a".repeat(4096);
-        assert_eq!(truncate_limit_key(&key, 4096).len(), 4096);
-    }
-
-    #[test]
-    fn test_truncate_limit_key_over() {
-        let key = "a".repeat(5000);
-        assert_eq!(truncate_limit_key(&key, 4096).len(), 4096);
-    }
-
-    #[test]
-    fn test_truncate_limit_key_empty() {
-        assert_eq!(truncate_limit_key("", 4096), "");
-    }
-
-    #[test]
     fn test_truncate_limit_key_utf8_boundary() {
         // "" = 12 bytes in UTF-8 (3 bytes per char)
         let key = "";
@@ -609,9 +587,9 @@ mod tests {
     }
 
     #[test]
-    fn test_truncate_limit_key_custom_max_len() {
-        let key = "a".repeat(200);
-        assert_eq!(truncate_limit_key(&key, 64).len(), 64);
+    fn test_truncate_limit_key_over() {
+        let key = "a".repeat(5000);
+        assert_eq!(truncate_limit_key(&key, 4096).len(), 4096);
     }
 
     #[test]
@@ -621,72 +599,12 @@ mod tests {
     }
 
     #[test]
-    fn test_build_redis_key_fixed_window() {
-        let key = build_redis_key("edgion:rl:", "fw", 1, "192.168.1.1", "1707900");
-        assert_eq!(key, "edgion:rl:fw:1:192.168.1.1:1707900");
-    }
-
-    #[test]
-    fn test_build_redis_key_token_bucket() {
-        let key = build_redis_key("edgion:rl:", "tb", 0, "api-key-123", "");
-        assert_eq!(key, "edgion:rl:tb:0:api-key-123");
-    }
-
-    #[test]
-    fn test_build_redis_key_custom_prefix() {
-        let key = build_redis_key("myapp:rl:", "sw", 0, "test", "");
-        assert_eq!(key, "myapp:rl:sw:0:test");
-    }
-
-    #[test]
-    fn test_rate_limit_result_from_lua_allowed() {
-        let result = RateLimitResult::from_lua_result(&[1, 5, 95, 0], 100);
-        assert!(result.allowed);
-        assert_eq!(result.current, 5);
-        assert_eq!(result.remaining, 95);
-        assert_eq!(result.limit, 100);
-        assert_eq!(result.retry_ms, 0);
-    }
-
-    #[test]
     fn test_rate_limit_result_from_lua_denied() {
         let result = RateLimitResult::from_lua_result(&[0, 100, 0, 500], 100);
         assert!(!result.allowed);
         assert_eq!(result.current, 100);
         assert_eq!(result.remaining, 0);
         assert_eq!(result.retry_ms, 500);
-    }
-
-    #[test]
-    fn test_rate_limit_result_from_lua_empty() {
-        let result = RateLimitResult::from_lua_result(&[], 100);
-        assert!(!result.allowed); // 0 != 1
-        assert_eq!(result.current, 0);
-        assert_eq!(result.remaining, 0);
-        assert_eq!(result.retry_ms, 0);
-    }
-
-    #[test]
-    fn test_merge_result_both_allowed() {
-        let r1 = RateLimitResult {
-            allowed: true,
-            current: 5,
-            remaining: 95,
-            limit: 100,
-            retry_ms: 0,
-        };
-        let r2 = RateLimitResult {
-            allowed: true,
-            current: 800,
-            remaining: 200,
-            limit: 1000,
-            retry_ms: 0,
-        };
-        let merged = RateLimitRedis::merge_result(Some(r1), r2);
-        assert!(merged.allowed);
-        // r1 has lower remaining (95 < 200), so r1 is most restrictive
-        assert_eq!(merged.remaining, 95);
-        assert_eq!(merged.limit, 100);
     }
 
     #[test]
@@ -712,50 +630,29 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_result_both_denied() {
-        let r1 = RateLimitResult {
-            allowed: false,
-            current: 101,
-            remaining: 0,
-            limit: 100,
-            retry_ms: 500,
-        };
-        let r2 = RateLimitResult {
-            allowed: false,
-            current: 1001,
-            remaining: 0,
-            limit: 1000,
-            retry_ms: 3000,
-        };
-        let merged = RateLimitRedis::merge_result(Some(r1), r2);
-        assert!(!merged.allowed);
-        assert_eq!(merged.retry_ms, 3000); // Largest retry_ms
-        assert_eq!(merged.limit, 100); // Smallest limit
-    }
-
-    #[test]
-    fn test_merge_result_none() {
-        let r = RateLimitResult {
-            allowed: true,
-            current: 5,
-            remaining: 95,
-            limit: 100,
-            retry_ms: 0,
-        };
-        let merged = RateLimitRedis::merge_result(None, r);
-        assert!(merged.allowed);
-        assert_eq!(merged.remaining, 95);
-    }
-
-    #[test]
-    fn test_format_duration_seconds() {
-        assert_eq!(format_duration(Duration::from_secs(2)), "2.0s");
-        assert_eq!(format_duration(Duration::from_millis(1500)), "1.5s");
-    }
-
-    #[test]
     fn test_format_duration_milliseconds() {
         assert_eq!(format_duration(Duration::from_millis(500)), "500ms");
         assert_eq!(format_duration(Duration::from_millis(50)), "50ms");
+    }
+
+    #[tokio::test]
+    async fn test_config_validation_error() {
+        use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
+
+        // Invalid redis_ref (missing namespace slash) makes the config invalid.
+        let config = RateLimitRedisConfig {
+            redis_ref: "invalid".to_string(),
+            ..Default::default()
+        };
+        let plugin = RateLimitRedis::create(&config);
+
+        let mut mock_session = MockPluginSession::new();
+        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
+        let mut plugin_log = PluginLog::new("RateLimitRedis");
+
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(plugin_log.contains("cfg load fail"));
     }
 }

@@ -3,26 +3,26 @@ name: 06-tracing
 description: Debugging and troubleshooting skill for Edgion. Use when local code changes break routing, plugins, sync, readiness, or runtime behavior.
 ---
 
-# 06 调试与排障
+# 06 Debugging and Troubleshooting
 
-> 面向日常开发排障：代码改完后快速定位问题层次。
-> 工具链：Admin API、edgion-cli 三视图、Access Log Store、Metrics、resource_diff。
+> Daily development troubleshooting: quickly locate the layer of an issue after a code change.
+> Toolchain: Admin API, edgion-cli three views, Access Log Store, Metrics, resource_diff.
 
-## 文件清单
+## File list
 
-| 文件 | 主题 | 状态 |
+| File | Topic | Status |
 |------|------|------|
-| [00-debugging.md](00-debugging.md) | 日常开发调试、Admin API、edgion-cli、Access Log Store、Metrics、问题速查 | ✅ 已重构 |
+| [00-debugging.md](00-debugging.md) | Daily development debugging, Admin API, edgion-cli, Access Log Store, Metrics, quick lookup | Refactored |
 
-## 快速入口
+## Quick entry points
 
-### 最快的本地调试方式
+### Fastest local debugging
 
 ```bash
 ./examples/test/scripts/integration/run_integration.sh --keep-alive -r <Resource> -i <Item>
 ```
 
-### 三视图定位问题层次
+### Three views to locate the issue layer
 
 ```bash
 ./target/debug/edgion-cli get httproute -n default
@@ -30,7 +30,7 @@ description: Debugging and troubleshooting skill for Edgion. Use when local code
 ./target/debug/edgion-cli -t client get httproute -n default
 ```
 
-### 相关知识
+### Related knowledge
 
-- TLS 专项排障：[../09-misc/debugging-tls-gateway.md](../09-misc/debugging-tls-gateway.md)
-- 集成测试运行：[../05-testing/01-integration-testing.md](../05-testing/01-integration-testing.md)
+- TLS-specific troubleshooting: [../09-misc/debugging-tls-gateway.md](../09-misc/debugging-tls-gateway.md)
+- Running integration tests: [../05-testing/01-integration-testing.md](../05-testing/01-integration-testing.md)

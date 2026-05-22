@@ -1,12 +1,12 @@
 # LinkSys Development Guide
 
-用于这些任务：
+Use this for tasks such as:
 
-- 新增或扩展 `LinkSys` 外部系统连接能力
-- 调整 Redis / Etcd / Elasticsearch / Webhook 的运行时接线
-- 排查 “LinkSys YAML 已同步，但 gateway 侧 runtime client / webhook manager 没更新”
+- Adding or extending an external system connection capability in `LinkSys`.
+- Adjusting the runtime wiring for Redis / Etcd / Elasticsearch / Webhook.
+- Troubleshooting "the LinkSys YAML has synced but the gateway-side runtime client / webhook manager has not updated".
 
-## 先读这些真实入口
+## Read these real entry points first
 
 - [../../../src/types/resources/link_sys/mod.rs](../../../src/types/resources/link_sys/mod.rs)
 - [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs)
@@ -15,237 +15,276 @@
 - [../../../src/core/gateway/link_sys/runtime/store.rs](../../../src/core/gateway/link_sys/runtime/store.rs)
 - [../../../src/core/gateway/link_sys/providers/webhook/mod.rs](../../../src/core/gateway/link_sys/providers/webhook/mod.rs)
 
-## 先分清你改的是哪一类东西
+## First, identify which kind of change you are making
 
-LinkSys 现在不是“每种外部系统一个资源 kind”，而是一个统一的 `LinkSys` CRD，加 `SystemConfig` 变体：
+LinkSys is no longer "one resource kind per external system" — it is a single `LinkSys` CRD plus `SystemConfig` variants:
 
 - `Redis`
 - `Etcd`
 - `Elasticsearch`
 - `Webhook`
-- `Kafka` 目前只有 schema placeholder，还没有完整 runtime 落地
+- `Kafka` currently has only a schema placeholder; full runtime is not landed yet.
 
-另外还有一个容易混淆的点：
+Another easy point of confusion:
 
-- `local_file` provider 在 `src/core/gateway/link_sys/providers/local_file/`
-- 但它不是 `LinkSys` 的 `SystemConfig` 变体，而是日志落盘用的本地 `DataSender`
+- The `local_file` provider lives at `src/core/gateway/link_sys/providers/local_file/`.
+- It is not a `LinkSys` `SystemConfig` variant — it is a local `DataSender` for log persistence.
 
-所以先判断：
+So first decide:
 
-1. 你是在给已有 `LinkSys` 增加一个新的 `SystemConfig` 变体？
-2. 你是在扩已有 provider 的 runtime client / ops / config mapping？
-3. 你其实只需要一个非 CRD 的内部 provider（类似 `local_file`）？
+1. Are you adding a new `SystemConfig` variant to the existing `LinkSys`?
+2. Are you extending the runtime client / ops / config mapping of an existing provider?
+3. Do you actually only need a non-CRD internal provider (similar to `local_file`)?
 
-大多数 LinkSys 开发任务，答案其实是 1 或 2，不是“加一个新资源 kind”。
+For most LinkSys development tasks, the answer is 1 or 2 — not "add a new resource kind".
 
-## 当前真实心智模型
+## The current real mental model
 
-当前主链路是：
+The current main pipeline:
 
-1. `LinkSys` YAML 进入 controller
-2. `impl_resource_meta!(LinkSys, ...)` 和 gateway 侧 `ConfHandler` 都会调 `validate_config()`
-3. controller `LinkSysHandler` 主要负责标准 status 更新，不做复杂依赖解析
-4. gateway `ConfigClient` 里有专门的 `ClientCache<LinkSys>`
-5. 这个 cache 注册了 `create_link_sys_handler()`
-6. `LinkSysStore.full_set()` / `partial_update()` 会把资源分发到各个 runtime manager
-7. 调用方最终通过 typed API 取 runtime client，例如：
+1. `LinkSys` YAML enters the controller.
+2. Both `impl_resource_meta!(LinkSys, ...)` and the gateway-side `ConfHandler` call `validate_config()`.
+3. The Controller's `LinkSysHandler` mainly handles standard status updates, with no complex dependency resolution.
+4. The gateway `ConfigClient` has a dedicated `ClientCache<LinkSys>`.
+5. That cache registers `create_link_sys_handler()`.
+6. `LinkSysStore.full_set()` / `partial_update()` dispatches resources to each runtime manager.
+7. Callers ultimately get the runtime client through typed APIs, e.g.:
    - `get_redis_client("namespace/name")`
    - `get_etcd_client("namespace/name")`
    - `get_es_client("namespace/name")`
    - `get_webhook_manager().get("namespace/name")`
 
-也就是说：
+In short:
 
-- controller 侧主要管“资源是否合法、状态是否正确”
-- gateway 侧 `LinkSysStore` 才是 runtime 生命周期入口
+- The Controller side mainly manages "is the resource valid, is the status correct".
+- The Gateway side `LinkSysStore` is the runtime lifecycle entry point.
 
-## 当前已落地的子系统
+## Subsystems already landed
 
 ### 1. Redis / Etcd / Elasticsearch
 
-这三类都走“CRD 配置 -> runtime client -> typed store / ops”的模式。
+These three follow the pattern "CRD config -> runtime client -> typed store / ops".
 
-通常目录长这样：
+The directory typically looks like:
 
 - `src/types/resources/link_sys/<system>.rs`
 - `src/core/gateway/link_sys/providers/<system>/client.rs`
 - `src/core/gateway/link_sys/providers/<system>/config_mapping.rs`
 - `src/core/gateway/link_sys/providers/<system>/ops.rs`
 
-其中：
+Where:
 
-- `client.rs` 管生命周期和底层客户端包装
-- `config_mapping.rs` 负责 CRD 配置到库配置的转换
-- `ops.rs` 暴露 Edgion 真正需要的高层操作
+- `client.rs` manages the lifecycle and wraps the underlying client.
+- `config_mapping.rs` converts CRD configuration into library configuration.
+- `ops.rs` exposes the higher-level operations Edgion actually needs.
 
-`Elasticsearch` 还额外有：
+`Elasticsearch` additionally has:
 
 - `bulk.rs`
 - `data_sender.rs`
 
-因为它现在也承担日志等 `DataSender<String>` 场景。
+because it now also serves `DataSender<String>` scenarios such as logs.
 
 ### 2. Webhook
 
-Webhook 不是普通 KV client，而是一个独立的 webhook service manager 模式：
+Webhook is a **general-purpose outbound HTTP client**: the LinkSys CRD only describes "how to connect" (uri, auth, tls, timeouts, retries, health checks); call semantics (method/path/headers/body) are passed by the consumer in `WebhookCallRequest`.
 
-- `providers/webhook/manager.rs`：全局注册表
-- `providers/webhook/runtime.rs`：运行时状态
-- `providers/webhook/health.rs`：主动健康检查
-- `providers/webhook/resolver.rs`：给 `KeyGet::Webhook` 这类路径消费
+Module layout:
 
-关键点：
+- `providers/webhook/manager.rs`: global registry + a global `webhookMaxResponseBytes` AtomicUsize + the public `WebhookCallHandle`.
+- `providers/webhook/runtime.rs`: runtime state (`WebhookRuntime` containing health / rate counter / http client).
+- `providers/webhook/health.rs`: active + passive health checks.
+- `providers/webhook/call.rs`: unified call interface `webhook_call()` / `WebhookCallRequest` / `WebhookCallResult` / `WebhookCallError`.
+- `providers/webhook/resolver.rs`: `KeyGet::Webhook` adapter (wraps forwardHeaders / pathSuffix / extract).
+- `providers/webhook/client.rs`: `WebhookLinkClient` (LinkSysLifecycle adapter, syncs the resource into the manager).
 
-- key 仍然是 `namespace/name`
-- `WebhookManager.upsert()` 会按配置重建 HTTP client 和健康检查任务
-- 删除资源时要正确 abort 旧 health task
+Key points:
+
+- The key remains `namespace/name`.
+- `WebhookManager.upsert()` rebuilds the HTTP client and the health-check task based on configuration (idempotent); on resource deletion, abort the old health task.
+- Don't reinvent call logic — every outbound call goes through `webhook_call(&runtime, req, get_webhook_global_max())`, which uniformly handles the health gate, rate limiting, auth injection, retries, and response-size limits.
+- `WebhookServiceConfig.defaultHeaders` are static connection-layer headers; caller-supplied headers have higher priority (caller wins on conflict).
+
+#### Public API for plugin / gateway internal consumers
+
+```rust
+use crate::core::gateway::link_sys::{get_webhook_call_handle, WebhookCallRequest};
+
+let handle = get_webhook_call_handle("prod/notifier").await
+    .ok_or("webhook not registered")?;
+
+let result = handle.call(WebhookCallRequest {
+    method: "POST".into(),
+    path: "/events".into(),       // appended after uri; an empty string keeps uri as-is
+    headers: my_headers,          // merged with defaultHeaders, caller takes precedence
+    body: Some(json_body.into()),
+}).await?;
+
+// result.status / result.headers / result.body
+```
+
+Error variants: `Unhealthy` / `RateLimited` / `Timeout` / `Connect` / `StatusNotSuccess` / `ResponseTooLarge` / `Exhausted`.
+
+#### `KeyGet::Webhook` call semantics
+
+```yaml
+from:
+  type: webhook
+  webhookRef: "ns/name"
+  forwardHeaders: [X-Tenant-Id]   # header names forwarded from the inbound request to the webhook (hop-by-hop are skipped automatically)
+  pathSuffix: "/v2/resolve"        # appended after uri
+  extract: { source: bodyText }
+```
+
+resolver.rs always appends the `X-Forwarded-For/Method/Uri/Host` context headers; you don't need to list them in forwardHeaders.
 
 ### 3. Kafka
 
-当前 `SystemConfig::Kafka` 只有 placeholder schema。不要把它当成已经有 provider/runtime/store 接线的完整实现。
+Currently `SystemConfig::Kafka` has only a placeholder schema. Don't treat it as a fully wired implementation with provider/runtime/store integration.
 
-## 真实的 ConfHandler 桥接模式
+## The real ConfHandler bridging pattern
 
-LinkSys 现在的桥接关系已经固定了：
+The bridging for LinkSys is now fixed:
 
-1. `ConfigClient::new()` 里创建 `ClientCache<LinkSys>`
-2. 调 `create_link_sys_handler()` 注册 conf processor
-3. `create_link_sys_handler()` 返回全局 `LinkSysStore`
-4. `ConfHandler<LinkSys>::full_set()` / `partial_update()` 先做 `validate_config()`
-5. 再调用 `LinkSysStore.replace_all()` / `update()`
-6. `runtime/store.rs` 里的 `dispatch_full_set()` / `dispatch_partial_update()` 异步分发到 Redis / Etcd / ES / Webhook runtime
+1. `ConfigClient::new()` creates `ClientCache<LinkSys>`.
+2. It calls `create_link_sys_handler()` to register the conf processor.
+3. `create_link_sys_handler()` returns the global `LinkSysStore`.
+4. `ConfHandler<LinkSys>::full_set()` / `partial_update()` first runs `validate_config()`.
+5. Then calls `LinkSysStore.replace_all()` / `update()`.
+6. `dispatch_full_set()` / `dispatch_partial_update()` in `runtime/store.rs` async-dispatches to the Redis / Etcd / ES / Webhook runtimes.
 
-因此，如果你改的是 gateway 侧 runtime 行为，重点看的是：
+So if you are changing gateway-side runtime behavior, focus on:
 
 - [conf_handler.rs](../../../src/core/gateway/link_sys/runtime/conf_handler.rs)
 - [store.rs](../../../src/core/gateway/link_sys/runtime/store.rs)
 
-不是再自己造一套旁路 watcher。
+Don't build a parallel watcher of your own.
 
-## 新增一个 LinkSys 系统，通常要改哪些地方
+## What you typically modify when adding a new LinkSys system
 
-如果你是在现有 `LinkSys` 资源里新增一个 system variant，通常至少要碰这些位置：
+If you are adding a new system variant within the existing `LinkSys` resource, you typically touch at least:
 
 1. `src/types/resources/link_sys/<system>.rs`
 2. `src/types/resources/link_sys/mod.rs`
 3. `config/crd/edgion-crd/link_sys_crd.yaml`
 4. `src/core/gateway/link_sys/providers/<system>/`
 5. `src/core/gateway/link_sys/runtime/store.rs`
-6. 必要时 `src/core/gateway/api/mod.rs`
+6. If needed, `src/core/gateway/api/mod.rs`
 7. `examples/test/conf/LinkSys/<System>/`
 8. `examples/test/conf/Services/<system>/docker-compose.yaml`
 9. `examples/test/scripts/integration/link_sys/run_<system>_test.sh`
 
-通常不需要新增新的 resource kind，也不需要额外改 controller processor 框架本身。
+Typically you do not need to add a new resource kind, nor do you need to modify the controller processor framework itself.
 
-## 推荐开发顺序
+## Recommended development order
 
-### 1. 先补类型和 schema
+### 1. Start with types and schema
 
-先定义或扩展：
+First define or extend:
 
-- `SystemConfig` 变体
-- `<System>ClientConfig`
-- `validate_config()` 分支
-- CRD schema
+- The `SystemConfig` variant.
+- The `<System>ClientConfig`.
+- The `validate_config()` branch.
+- The CRD schema.
 
-如果 schema 还没补齐，就不要先写人类文档或测试 YAML。
+If the schema is not in place, do not start writing human docs or test YAML.
 
-### 2. 再补 provider runtime
+### 2. Then add the provider runtime
 
-优先把 provider 目录拆成清晰的三层：
+Split the provider directory into three clear layers:
 
 - config mapping
 - runtime client
 - high-level ops
 
-不要把 CRD 类型、库配置转换、业务操作全塞进一个文件。
+Don't shove CRD types, library configuration translation, and business operations into a single file.
 
-### 3. 再接入 `runtime/store.rs`
+### 3. Then wire into `runtime/store.rs`
 
-这里是最容易漏的地方。至少要补：
+This is the easiest place to forget. At minimum, add:
 
-- `dispatch_full_set()` 分支
-- `dispatch_partial_update()` 分支
-- typed runtime store 的 insert / remove / replace-all 逻辑
-- 删除时旧 client / 旧任务的清理逻辑
+- The `dispatch_full_set()` branch.
+- The `dispatch_partial_update()` branch.
+- The typed runtime store's insert / remove / replace-all logic.
+- The cleanup logic for old clients / old tasks on deletion.
 
-如果系统支持热更新，优先复用“先 swap 新实例，再后台 init 或 shutdown 旧实例”的已有模式。
+If the system supports hot reload, prefer the existing pattern of "swap in the new instance first, then init or shut down the old one in the background".
 
-### 4. 只在测试需要时补 admin testing endpoints
+### 4. Add admin testing endpoints only when tests need them
 
-如果 integration test 需要直接验证客户端行为，就在：
+If integration tests need to validate client behavior directly, add a testing-router endpoint in:
 
 - `src/core/gateway/api/mod.rs`
 
-里补 testing router 的 endpoint。
-
-当前仓库已经有这几类 testing endpoints：
+The repo currently has these testing endpoints:
 
 - Redis
 - Etcd
 - Elasticsearch
 
-它们只在 `--integration-testing-mode` 下挂到 gateway admin API。
+They are mounted onto the gateway admin API only under `--integration-testing-mode`.
 
-### 5. 最后补测试与 compose
+### 5. Finally, add tests and compose
 
-现有脚本是真实存在的：
+Existing scripts and drivers:
 
-- `examples/test/scripts/integration/link_sys/run_redis_test.sh`
-- `examples/test/scripts/integration/link_sys/run_etcd_test.sh`
-- `examples/test/scripts/integration/link_sys/run_es_test.sh`
+- `examples/test/scripts/integration/run_integration.sh -r LinkSys -i Redis` (Redis is integrated into the main runner; the assertions live in `link_sys/redis_assertions.sh` and Redis docker is auto-started via the runner's `start_redis_service_if_needed` precondition)
+- `examples/test/scripts/integration/link_sys/run_etcd_test.sh` (standalone)
+- `examples/test/scripts/integration/link_sys/run_es_test.sh` (standalone)
 
-配置与依赖也已经分层：
+Configurations and dependencies are also layered:
 
 - `examples/test/conf/LinkSys/<System>/`
 - `examples/test/conf/Services/<system>/docker-compose.yaml`
 
-新增系统时，优先照着这套结构补，不要自己再发明一套测试脚本命名。
+When adding a new system, follow this layout instead of inventing your own test-script naming.
 
-## 什么时候不要走 LinkSys
+## When NOT to use LinkSys
 
-这些场景通常不该硬塞进 `LinkSys`：
+Do not force the following scenarios into `LinkSys`:
 
-- 只是一个进程内工具型 sender，没有 CRD 配置需求
-- 不需要按 `namespace/name` 动态更新
-- 不需要 controller -> gateway 同步
-- 只是日志本地落盘这类内部能力
+- A purely in-process tool-style sender with no CRD configuration need.
+- No need to update dynamically by `namespace/name`.
+- No need for controller -> gateway sync.
+- A purely internal capability such as local log persistence.
 
-这种情况更接近 `local_file` provider，而不是新 `SystemConfig`。
+These resemble the `local_file` provider rather than a new `SystemConfig`.
 
-## 常见坑
+## Common pitfalls
 
-- 只加了 `SystemConfig` 变体，忘了补 `validate_config()` 或 CRD
-- provider 已经写完，但 `runtime/store.rs` 没分发，导致 YAML 已同步但 runtime 不生效
-- 只补了 full sync，忘了 partial update / remove 路径
-- Webhook 更新时没有正确清理旧 health task
-- 把 LinkSys 当成“新 resource kind”，结果改了很多不该动的 controller 框架代码
-- 写了测试 compose 和 YAML，却没补 gateway admin testing endpoint，导致很难断言运行时行为
+- Adding only a `SystemConfig` variant and forgetting `validate_config()` or the CRD.
+- The provider is finished but `runtime/store.rs` does not dispatch, so the YAML is synced but the runtime does not take effect.
+- Only handling full sync, forgetting the partial-update / remove paths.
+- Failing to abort the old health task on Webhook update.
+- Treating LinkSys as "a new resource kind" and modifying controller framework code that should not be touched.
+- Writing the test compose and YAML but forgetting the gateway admin testing endpoint, making runtime-behavior assertions hard.
 
-## 验证
+## Validation
 
-先做最小静态检查：
+Run the smallest static check first:
 
 ```bash
 cargo check
 ```
 
-如果改了某个现有系统，优先跑对应脚本：
+If you modified an existing system, run the corresponding entry point first:
 
 ```bash
-./examples/test/scripts/integration/link_sys/run_redis_test.sh
+# Redis: now part of the main runner
+./examples/test/scripts/integration/run_integration.sh --no-prepare -r LinkSys -i Redis
+
+# Etcd / Elasticsearch: standalone
 ./examples/test/scripts/integration/link_sys/run_etcd_test.sh
 ./examples/test/scripts/integration/link_sys/run_es_test.sh
 ```
 
-如果你改的是文档 / skill / AI 入口，也别忘了：
+If you modified docs / skill / AI entry points, also run:
 
 ```bash
 make check-agent-docs
 ```
 
-## 相关
+## Related
 
 - [03-link-sys-testing.md](../../05-testing/03-link-sys-testing.md)
 - [12-edgion-plugin-dev.md](12-edgion-plugin-dev.md)

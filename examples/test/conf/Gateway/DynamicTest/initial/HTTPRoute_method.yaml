@@ -17,5 +17,6 @@ spec:
         value: /api/v1
       method: GET
     backendRefs:
-    - name: test-backend
-      port: 8080
+    - name: test-http
+      namespace: edgion-test
+      port: 30001

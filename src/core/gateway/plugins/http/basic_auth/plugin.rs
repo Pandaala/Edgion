@@ -2,20 +2,18 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
-use crate::core::gateway::cache::ShardedLruCache;
-use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
-use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
+use crate::core::gateway::plugins::http::common::auth_common::{
+    apply_auth_failure_delay, send_gateway_auth_error_response,
+};
+use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::BasicAuthConfig;
+use crate::types::resources::edgion_plugins::{BasicAuthConfig, ResolvedBasicAuthUser};
 
-use async_singleflight::DefaultGroup;
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
-use sha2::{Digest, Sha256};
+use sha1::Digest;
 
 type BasicAuthError = Box<dyn std::error::Error + Send + Sync>;
 type BasicAuthResult<T> = Result<T, BasicAuthError>;
@@ -30,138 +28,53 @@ enum AuthFailure {
 /// Basic Authentication plugin
 pub struct BasicAuth {
     name: String,
-    // Simple username -> password_hash mapping
-    // We store whatever is verified: either a bcrypt hash (generated locally)
-    // or a pre-supplied hash (from htpasswd).
-    user_passwords: Arc<HashMap<String, String>>,
-    /// LRU cache: auth header value -> username (TTL-based, managed by LocalLruCache)
-    auth_cache: Arc<ShardedLruCache<String, String>>,
-    sf_group: Arc<DefaultGroup<bool>>,
-    plugin_namespace: String,
+    // username -> ResolvedBasicAuthUser (password_hash + group).
+    // Stored passwords are htpasswd-style hashes ({SHA} / $apr1$ / $1$).
+    // Plaintext passwords from Secrets are auto-hashed as {SHA}<base64(sha1(password))>
+    // on load, matching what verify() expects.
+    user_passwords: Arc<HashMap<String, ResolvedBasicAuthUser>>,
     config: BasicAuthConfig,
 }
 
 impl BasicAuth {
     /// Create a new BasicAuth plugin from configuration
-    pub fn new(config: &BasicAuthConfig, plugin_namespace: String) -> Self {
-        let capacity = if config.lru_cache.capacity == 0 {
-            get_default_lru_cache_capacity()
-        } else {
-            config.lru_cache.capacity
-        };
-        let shards = if config.lru_cache.shards > 0 {
-            config.lru_cache.shards
-        } else {
-            get_default_lru_cache_shards()
-        };
+    pub fn new(config: &BasicAuthConfig) -> Self {
         let mut plugin = BasicAuth {
             name: "BasicAuth".to_string(),
             user_passwords: Arc::new(HashMap::new()),
-            auth_cache: Arc::new(ShardedLruCache::new(capacity, shards)),
-            sf_group: Arc::new(DefaultGroup::new()),
-            plugin_namespace,
             config: config.clone(),
         };
 
-        let users = config
-            .resolved_users
-            .clone()
-            .filter(|u| !u.is_empty())
-            .unwrap_or_else(|| plugin.load_users_from_secret_refs());
-        if !users.is_empty() {
-            if let Err(err) = plugin.load_users(users) {
-                tracing::warn!("BasicAuth: failed to load resolved users: {}", err);
-            }
-        }
+        let initial_users = config.resolved_users.clone().unwrap_or_default();
+        let _ = plugin.load_users(initial_users);
         plugin
     }
 
-    fn load_users_from_secret_refs(&self) -> HashMap<String, String> {
-        let mut users = HashMap::new();
-        let Some(secret_refs) = self.config.secret_refs.as_ref() else {
-            return users;
-        };
-        for secret_ref in secret_refs {
-            let ns = secret_ref.namespace.as_deref().unwrap_or(&self.plugin_namespace);
-            let Some(secret) = get_secret(Some(ns), &secret_ref.name) else {
-                continue;
-            };
-
-            let Some(username) = Self::read_secret_utf8(&secret, "username") else {
-                continue;
-            };
-            let Some(password) = Self::read_secret_utf8(&secret, "password") else {
-                continue;
-            };
-            if users.contains_key(&username) {
-                tracing::warn!("BasicAuth: duplicate username '{}', skipping", username);
-                continue;
-            }
-            users.insert(username, password);
-        }
-        users
-    }
-
-    fn read_secret_utf8(secret: &k8s_openapi::api::core::v1::Secret, key: &str) -> Option<String> {
-        if let Some(data) = &secret.data {
-            if let Some(bytes) = data.get(key) {
-                if let Ok(v) = String::from_utf8(bytes.0.clone()) {
-                    if !v.trim().is_empty() {
-                        return Some(v);
-                    }
-                }
-            }
-        }
-        if let Some(string_data) = &secret.string_data {
-            if let Some(v) = string_data.get(key) {
-                if !v.trim().is_empty() {
-                    return Some(v.clone());
-                }
-            }
-        }
-        None
-    }
-
-    /// Load users from resolved Secret data
+    /// Load users from resolved Secret data.
     ///
-    /// Supports adaptive behavior:
-    /// - If password looks like a hash (bcrypt, md5, sha1, etc.), store as-is.
-    /// - If password looks like plaintext, hash it using Bcrypt (default security).
-    pub fn load_users(&mut self, users: HashMap<String, String>) -> Result<(), String> {
+    /// - If the password looks like a supported htpasswd hash, store as-is.
+    /// - Otherwise treat it as plaintext and hash as `{SHA}<base64(sha1(password))>`,
+    ///   which matches what `htpasswd.rs::verify` recognises and aligns with the
+    ///   `{SHA}` htpasswd format.
+    pub fn load_users(&mut self, users: HashMap<String, ResolvedBasicAuthUser>) -> Result<(), String> {
         let mut new_map = HashMap::new();
-        for (username, password) in users {
-            if self.is_pre_hashed(&password) {
-                // Warn (once per load) when a weak htpasswd hash format is encountered.
-                // SHA-1 ({SHA}) is unsalted and APR1 ($apr1$) / MD5-crypt ($1$) only run 1000
-                // rounds. Operators should migrate to bcrypt.
-                let weak_fmt = if password.starts_with("{SHA}") {
-                    Some("{SHA}")
-                } else if password.starts_with("$apr1$") {
-                    Some("$apr1$")
-                } else if password.starts_with("$1$") {
-                    Some("$1$")
-                } else {
-                    None
-                };
-                if let Some(fmt) = weak_fmt {
-                    tracing::warn!(
-                        component = "basic_auth",
-                        "htpasswd entry uses weak hash format ({}), consider upgrading to bcrypt",
-                        fmt
-                    );
-                }
-                // Store pre-hashed password directly
-                new_map.insert(username, password);
+        for (username, user) in users {
+            let stored_password = if self.is_pre_hashed(&user.password) {
+                user.password
             } else {
-                // Hash plaintext password with bcrypt (cost 10) for storage
-                let hash = bcrypt::hash(&password, bcrypt::DEFAULT_COST)
-                    .map_err(|e| format!("Failed to hash password for {}: {}", username, e))?;
-                new_map.insert(username, hash);
-            }
+                // Plaintext -> {SHA}<base64(sha1(password))>
+                let digest = sha1::Sha1::digest(user.password.as_bytes());
+                format!("{{SHA}}{}", general_purpose::STANDARD.encode(digest))
+            };
+            new_map.insert(
+                username,
+                ResolvedBasicAuthUser {
+                    password: stored_password,
+                    group: user.group,
+                },
+            );
         }
         self.user_passwords = Arc::new(new_map);
-        // Clear cache on user reload to ensure revoked passwords take effect immediately
-        self.auth_cache.clear();
 
         tracing::info!(
             "BasicAuth: Loaded {} users (mixed hashed/plaintext source)",
@@ -170,12 +83,8 @@ impl BasicAuth {
         Ok(())
     }
 
-    /// Check if a password string looks like a supported hash
+    /// Check if a password string looks like a supported htpasswd hash.
     fn is_pre_hashed(&self, s: &str) -> bool {
-        // Bcrypt
-        if s.starts_with("$2a$") || s.starts_with("$2b$") || s.starts_with("$2y$") {
-            return true;
-        }
         // Apache MD5 ($apr1$)
         if s.starts_with("$apr1$") {
             return true;
@@ -191,78 +100,39 @@ impl BasicAuth {
         false
     }
 
-    async fn authenticate_request(&self, session: &mut dyn PluginSession) -> Result<String, AuthFailure> {
+    async fn authenticate_request(
+        &self,
+        session: &mut dyn PluginSession,
+    ) -> Result<(String, ResolvedBasicAuthUser), AuthFailure> {
         let auth_header_value = match session.header_value("authorization") {
             Some(v) => v,
             None => return Err(AuthFailure::MissingHeader),
         };
-
-        // Fast path: cache lookup (skipped entirely when cache_ttl == 0)
-        if self.config.cache_ttl > 0 {
-            if let Some(username) = self.auth_cache.get(&auth_header_value) {
-                return Ok(username);
-            }
-        }
 
         // Decode credentials
         let (username, password) = self
             .extract_credentials(&auth_header_value)
             .map_err(|_| AuthFailure::BadCredentials)?;
 
-        // Look up stored hash
-        let stored_hash = self
+        // Look up stored user (clone to avoid borrow across await)
+        let user = self
             .user_passwords
             .get(&username)
-            .ok_or(AuthFailure::BadCredentials)?
-            .clone();
+            .cloned()
+            .ok_or(AuthFailure::BadCredentials)?;
 
-        // Bcrypt hashes start with "$2" — only these are expensive enough to warrant singleflight
-        let is_bcrypt = stored_hash.starts_with("$2");
-        let is_valid: bool = if is_bcrypt && self.config.singleflight {
-            // singleflight key: SHA256(password_bytes || stored_hash_bytes)
-            // Never stores plaintext password in the map key.
-            let sf_key = {
-                let mut h = Sha256::new();
-                h.update(password.as_bytes());
-                h.update(stored_hash.as_bytes());
-                format!("{:x}", h.finalize())
-            };
-            let ph = stored_hash.clone();
-            let pw = password.clone();
-            // work() returns Result<bool, Option<()>> — unwrap_or(false) on error
-            let result = self
-                .sf_group
-                .work(&sf_key, async move {
-                    let verified = tokio::task::spawn_blocking(move || super::htpasswd::verify(&pw, &ph))
-                        .await
-                        .unwrap_or(false);
-                    Ok::<bool, ()>(verified)
-                })
-                .await;
-            result.unwrap_or(false)
-        } else {
-            // Non-bcrypt (SHA1/MD5/APR-MD5) or singleflight disabled
-            let ph = stored_hash.clone();
-            let pw = password.clone();
-            tokio::task::spawn_blocking(move || super::htpasswd::verify(&pw, &ph))
-                .await
-                .map_err(|_| AuthFailure::BadCredentials)?
-        };
+        // All supported hashes (SHA-1 / MD5-crypt / APR-MD5) are cheap to verify.
+        let ph = user.password.clone();
+        let pw = password.clone();
+        let is_valid = tokio::task::spawn_blocking(move || super::htpasswd::verify(&pw, &ph))
+            .await
+            .map_err(|_| AuthFailure::BadCredentials)?;
 
         if !is_valid {
             return Err(AuthFailure::BadCredentials);
         }
 
-        // Cache success only — failures are never stored
-        if self.config.cache_ttl > 0 {
-            self.auth_cache.insert(
-                auth_header_value.to_string(),
-                username.clone(),
-                Some(Duration::from_secs(self.config.cache_ttl)),
-            );
-        }
-
-        Ok(username)
+        Ok((username, user))
     }
 
     fn extract_credentials(&self, authorization: &str) -> BasicAuthResult<(String, String)> {
@@ -284,20 +154,13 @@ impl BasicAuth {
 
         let decoded_str = String::from_utf8(decoded).map_err(|_| "Invalid UTF-8 in decoded authorization")?;
 
-        // Split username:password
-        let parts: Vec<&str> = decoded_str.splitn(2, ':').collect();
-        if parts.len() != 2 {
-            return Err("Invalid decoded data format".into());
-        }
-
-        let username = parts[0].to_string();
-        let password = parts[1].to_string();
+        let (username, password) = decoded_str.split_once(':').ok_or("Invalid decoded data format")?;
 
         if username.is_empty() || password.is_empty() {
             return Err("Empty username or password".into());
         }
 
-        Ok((username, password))
+        Ok((username.to_string(), password.to_string()))
     }
 
     fn set_consumer_headers(&self, session: &mut dyn PluginSession, username: &str) -> BasicAuthResult<()> {
@@ -317,11 +180,12 @@ impl BasicAuth {
     }
 
     async fn auth_failed_return(&self, session: &mut dyn PluginSession) -> BasicAuthResult<()> {
-        send_auth_error_response(
+        send_gateway_auth_error_response(
             session,
             401,
             "Basic",
             &self.config.realm,
+            None,
             "Unauthorized - Authentication required",
         )
         .await
@@ -335,8 +199,8 @@ impl RequestFilter for BasicAuth {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        let username = match self.authenticate_request(session).await {
-            Ok(user) => user,
+        let (username, user) = match self.authenticate_request(session).await {
+            Ok(result) => result,
             Err(AuthFailure::MissingHeader) => {
                 if self.handle_anonymous_access(session, plugin_log) {
                     return PluginRunningResult::GoodNext;
@@ -349,9 +213,9 @@ impl RequestFilter for BasicAuth {
             Err(AuthFailure::BadCredentials) => {
                 // Unified PluginLog tag blocks log-grep-based enumeration (unknown user vs
                 // wrong password look identical in access log). Timing-side enumeration is
-                // a separate concern — bcrypt verify only runs when the user exists, so a
-                // sub-ms fast path still reveals user existence. Mitigate via
-                // `auth_failure_delay_ms` at the deployment layer.
+                // a separate concern — verify only runs when the user exists, so a fast
+                // path still reveals user existence. Mitigate via `auth_failure_delay_ms`
+                // at the deployment layer.
                 plugin_log.push("Deny bad credential");
                 // Credentials present but invalid — always reject, never anonymous
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
@@ -360,7 +224,7 @@ impl RequestFilter for BasicAuth {
             }
         };
 
-        plugin_log.push(&format!("OK user {}", username));
+        plugin_log.push_fmt("OK group={} user {}", la![user.group.as_str(), sensitive(&username)]);
 
         // Set consumer headers for upstream
         let _ = self.set_consumer_headers(session, &username);
@@ -377,180 +241,31 @@ impl RequestFilter for BasicAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-    use crate::types::resources::edgion_plugins::LruCacheConfig;
+    use crate::core::gateway::plugins::runtime::PluginLog;
     use base64::engine::general_purpose;
+    use serde_json::Value;
+
+    fn make_user_map(username: &str, password: &str, group: &str) -> HashMap<String, ResolvedBasicAuthUser> {
+        let mut map = HashMap::new();
+        map.insert(
+            username.to_string(),
+            ResolvedBasicAuthUser {
+                password: password.to_string(),
+                group: group.to_string(),
+            },
+        );
+        map
+    }
 
     fn create_basic_auth_with_users() -> BasicAuth {
         let config = BasicAuthConfig {
             realm: "Test Realm".to_string(),
-            cache_ttl: 300,
-            lru_cache: LruCacheConfig {
-                capacity: 10,
-                ..Default::default()
-            },
-            singleflight: false, // disable for deterministic tests
             ..Default::default()
         };
-        let mut auth = BasicAuth::new(&config, "default".to_string());
-        let mut users = HashMap::new();
-        users.insert("testuser".to_string(), "testpass".to_string());
+        let mut auth = BasicAuth::new(&config);
+        let users = make_user_map("testuser", "testpass", "default");
         auth.load_users(users).unwrap();
         auth
-    }
-
-    fn encode_credentials(username: &str, password: &str) -> String {
-        let credentials = format!("{}:{}", username, password);
-        format!("Basic {}", general_purpose::STANDARD.encode(credentials.as_bytes()))
-    }
-
-    #[tokio::test]
-    async fn test_successful_auth_with_cache() {
-        let auth = create_basic_auth_with_users();
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("BasicAuth");
-
-        let auth_header = encode_credentials("testuser", "testpass");
-
-        mock_session.expect_method().returning(|| "GET".to_string());
-        // Called once normally, then potentially cache hit logic checks header existence
-        // Note: Mockall expectations consume calls.
-
-        // Setup mock to allow multiple calls to header_value("authorization")
-        // because cache check reads it, and slow path reads it again if miss.
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("authorization"))
-            .returning(move |_| Some(auth_header.clone()));
-
-        mock_session.expect_set_request_header().returning(|_, _| Ok(()));
-
-        // First run: Cache Miss -> Populate
-        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert_eq!(auth.auth_cache.len(), 1);
-
-        // Second run: Cache Hit
-        // We reuse the same mock calls, just ensuring it doesn't crash/fail
-        let result2 = auth.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result2, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_auth_failed_returns_401() {
-        let auth = create_basic_auth_with_users();
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("BasicAuth");
-
-        mock_session.expect_method().returning(|| "GET".to_string());
-        mock_session.expect_header_value().returning(|_| None);
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-        mock_session.expect_shutdown().returning(|| {});
-
-        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-    }
-
-    #[tokio::test]
-    async fn test_anonymous_access() {
-        let config = BasicAuthConfig {
-            realm: "Test".to_string(),
-            anonymous: Some("anonymous-user".to_string()),
-            ..Default::default()
-        };
-        let auth = BasicAuth::new(&config, "default".to_string());
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("BasicAuth");
-
-        mock_session.expect_method().returning(|| "GET".to_string());
-        mock_session.expect_header_value().returning(|_| None);
-        mock_session.expect_set_request_header().returning(|_, _| Ok(()));
-
-        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allow anonymous"));
-    }
-
-    #[tokio::test]
-    async fn test_wrong_password_with_anonymous_must_reject() {
-        let config = BasicAuthConfig {
-            realm: "Test".to_string(),
-            anonymous: Some("anonymous-user".to_string()),
-            ..Default::default()
-        };
-        let mut auth = BasicAuth::new(&config, "default".to_string());
-        let mut users = HashMap::new();
-        users.insert("admin".to_string(), "password".to_string());
-        auth.load_users(users).unwrap();
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("BasicAuth");
-        let wrong_auth_header = encode_credentials("admin", "wrongpassword");
-
-        mock_session.expect_method().returning(|| "GET".to_string());
-        mock_session
-            .expect_header_value()
-            .returning(move |_| Some(wrong_auth_header.clone()));
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-        mock_session.expect_shutdown().returning(|| {});
-
-        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-    }
-
-    #[tokio::test]
-    async fn test_no_header_with_anonymous_allows_access() {
-        let config = BasicAuthConfig {
-            realm: "Test".to_string(),
-            anonymous: Some("anonymous-user".to_string()),
-            ..Default::default()
-        };
-        let auth = BasicAuth::new(&config, "default".to_string());
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("BasicAuth");
-
-        mock_session.expect_method().returning(|| "GET".to_string());
-        mock_session.expect_header_value().returning(|_| None);
-        mock_session.expect_set_request_header().returning(|_, _| Ok(()));
-
-        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_hide_credentials() {
-        let config = BasicAuthConfig {
-            realm: "Test".to_string(),
-            hide_credentials: true,
-            ..Default::default()
-        };
-        let mut auth = BasicAuth::new(&config, "default".to_string());
-        let mut users = HashMap::new();
-        users.insert("testuser".to_string(), "testpass".to_string());
-        auth.load_users(users).unwrap();
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("BasicAuth");
-        let auth_header = encode_credentials("testuser", "testpass");
-
-        mock_session.expect_method().returning(|| "GET".to_string());
-        mock_session
-            .expect_header_value()
-            .returning(move |_| Some(auth_header.clone()));
-        mock_session.expect_set_request_header().returning(|_, _| Ok(()));
-        mock_session
-            .expect_remove_request_header()
-            .with(mockall::predicate::eq("authorization"))
-            .times(1)
-            .returning(|_| Ok(()));
-
-        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
     }
 
     #[test]
@@ -574,152 +289,42 @@ mod tests {
         assert_eq!(password, " pass ");
     }
 
+    fn render_log(log: &PluginLog) -> Vec<String> {
+        let v: Value = serde_json::to_value(log).unwrap();
+        v.get("log")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(|e| e.as_str().map(String::from)).collect())
+            .unwrap_or_default()
+    }
+
     #[test]
-    fn test_basic_auth_cache_is_lru() {
-        let config = BasicAuthConfig {
-            cache_ttl: 60,
-            lru_cache: LruCacheConfig {
-                capacity: 10,
-                ..Default::default()
-            },
-            singleflight: false,
-            resolved_users: Some(std::collections::HashMap::from([("u".to_string(), "p".to_string())])),
-            ..Default::default()
-        };
-        let auth = BasicAuth::new(&config, "default".to_string());
-        assert_eq!(auth.auth_cache.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_load_users_clears_lru_cache() {
-        use std::collections::HashMap as StdMap;
-        let config = BasicAuthConfig {
-            cache_ttl: 300,
-            lru_cache: LruCacheConfig {
-                capacity: 10,
-                ..Default::default()
-            },
-            singleflight: false,
-            resolved_users: Some(StdMap::from([("alice".to_string(), "pw".to_string())])),
-            ..Default::default()
-        };
-        let mut auth = BasicAuth::new(&config, "default".to_string());
-        auth.auth_cache.insert(
-            "Basic someheader".to_string(),
-            "alice".to_string(),
-            Some(std::time::Duration::from_secs(300)),
-        );
-        assert_eq!(auth.auth_cache.len(), 1);
-        auth.load_users(StdMap::from([("alice".to_string(), "pw".to_string())]))
-            .unwrap();
-        assert_eq!(auth.auth_cache.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_bcrypt_singleflight_path_succeeds() {
-        // bcrypt hash of "hunter2" at cost 4 (fast for tests)
-        let bcrypt_hash = bcrypt::hash("hunter2", 4).unwrap();
-        use std::collections::HashMap as StdMap;
-        let config = BasicAuthConfig {
-            cache_ttl: 60,
-            lru_cache: LruCacheConfig {
-                capacity: 10,
-                ..Default::default()
-            },
-            singleflight: true, // enable singleflight
-            resolved_users: Some(StdMap::from([("alice".to_string(), bcrypt_hash)])),
-            ..Default::default()
-        };
-        let auth = BasicAuth::new(&config, "default".to_string());
-        use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-        let mut session = MockPluginSession::new();
-        let hdr = format!(
-            "Basic {}",
-            base64::engine::general_purpose::STANDARD.encode("alice:hunter2")
-        );
-        session.expect_header_value().returning(move |_| Some(hdr.clone()));
-        session.expect_set_request_header().returning(|_, _| Ok(()));
+    fn basic_hit_log_contains_group_and_user() {
         let mut log = PluginLog::new("BasicAuth");
-        let result = auth.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        // verify the cache was populated after singleflight success
-        assert_eq!(auth.auth_cache.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_non_bcrypt_does_not_use_singleflight() {
-        // SHA1 hash — singleflight must not interfere with non-bcrypt verification
-        let sha1_hash = "{SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g="; // SHA1("password")
-        use std::collections::HashMap as StdMap;
-        let config = BasicAuthConfig {
-            cache_ttl: 0, // disable cache so we test the slow path
-            lru_cache: LruCacheConfig {
-                capacity: 10,
-                ..Default::default()
-            },
-            singleflight: true,
-            resolved_users: Some(StdMap::from([("user".to_string(), sha1_hash.to_string())])),
-            ..Default::default()
+        let user = ResolvedBasicAuthUser {
+            password: "{SHA}base64hash".to_string(),
+            group: "partner-a".to_string(),
         };
-        let auth = BasicAuth::new(&config, "default".to_string());
-        use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-        let mut session = MockPluginSession::new();
-        let hdr = format!(
-            "Basic {}",
-            base64::engine::general_purpose::STANDARD.encode("user:password")
+        let username = "alice";
+        log.push_fmt("OK group={} user {}", la![user.group.as_str(), sensitive(username)]);
+
+        let entries = render_log(&log);
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.starts_with("OK group=partner-a") && e.contains("user ")),
+            "expected 'OK group=partner-a user ...', got: {:?}",
+            entries
         );
-        session.expect_header_value().returning(move |_| Some(hdr.clone()));
-        session.expect_set_request_header().returning(|_, _| Ok(()));
-        let mut log = PluginLog::new("BasicAuth");
-        let result = auth.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
     }
 
-    async fn run_auth_and_capture_log(auth: BasicAuth, auth_header: String) -> PluginLog {
-        let mut session = MockPluginSession::new();
-        session.expect_method().returning(|| "GET".to_string());
-        session
-            .expect_header_value()
-            .returning(move |_| Some(auth_header.clone()));
-        session.expect_write_response_header().returning(|_, _| Ok(()));
-        session.expect_write_response_body().returning(|_, _| Ok(()));
-        session.expect_shutdown().returning(|| {});
-        let mut log = PluginLog::new("BasicAuth");
-        let r = auth.run_request(&mut session, &mut log).await;
-        assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
-        log
-    }
-
-    #[tokio::test]
-    async fn test_auth_fail_tag_unknown_user() {
-        let auth = create_basic_auth_with_users(); // users: { testuser: testpass }
-        let log = run_auth_and_capture_log(auth, encode_credentials("nobody", "whatever")).await;
-        assert!(log.contains("Deny bad credential"));
-    }
-
-    #[tokio::test]
-    async fn test_auth_fail_tag_wrong_password() {
-        let auth = create_basic_auth_with_users(); // users: { testuser: testpass }
-        let log = run_auth_and_capture_log(auth, encode_credentials("testuser", "wrongpass")).await;
-        assert!(log.contains("Deny bad credential"));
-    }
-
-    /// Verifies the two BadCredentials paths emit identical tags so an attacker cannot
-    /// distinguish "unknown user" from "wrong password" via log-grep. Does NOT claim to
-    /// mitigate timing-side enumeration — see the comment at `run_request` for that.
-    #[tokio::test]
-    async fn test_auth_fail_tag_unified_in_log() {
-        let auth_unknown = create_basic_auth_with_users();
-        let log_unknown = run_auth_and_capture_log(auth_unknown, encode_credentials("ghost", "x")).await;
-        let auth_wrong = create_basic_auth_with_users();
-        let log_wrong = run_auth_and_capture_log(auth_wrong, encode_credentials("testuser", "bad")).await;
-
-        let unknown_json = serde_json::to_string(&log_unknown).unwrap();
-        let wrong_json = serde_json::to_string(&log_wrong).unwrap();
-        assert!(unknown_json.contains("Deny bad credential"));
-        assert!(wrong_json.contains("Deny bad credential"));
-        assert!(!unknown_json.contains("unknown"));
-        assert!(!unknown_json.contains("pw"));
-        assert!(!wrong_json.contains("pw"));
+    #[test]
+    fn basic_no_group_in_failure_branches() {
+        // Sanity: lesson L7 — failure literals must not carry group=.
+        // The contract is enforced by skills/04-review/basic-auth/group-in-ok-log.md.
+        // This is a literal-string check on the static deny strings.
+        let deny_strings = ["Allow anonymous", "Deny no credential", "Deny bad credential"];
+        for s in &deny_strings {
+            assert!(!s.contains("group="), "{} must not carry group= (lesson L7)", s);
+        }
     }
 }

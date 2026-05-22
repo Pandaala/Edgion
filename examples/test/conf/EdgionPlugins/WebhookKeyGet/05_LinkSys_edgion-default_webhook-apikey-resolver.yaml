@@ -1,0 +1,22 @@
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: webhook-apikey-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      type: uri
+      uri: "http://127.0.0.1:30001/webhook/apikey-resolve"
+    requestMethod: GET
+    timeoutMs: 5000
+    auth:
+      type: apiKey
+      secretRef:
+        name: webhook-apikey
+      in: header
+      headerName: X-API-Key
+    successStatusCodes: [200]
+    allowDegradation: true
+    maxResponseBytes: 4096

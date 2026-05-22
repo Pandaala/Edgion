@@ -6,7 +6,7 @@
 
 ## 1. 类型系统
 
-EdgionDSL 拥有五种内置值类型：
+EdgionDSL 拥有六种内置值类型：
 
 | 类型 | 说明 | 示例字面量 |
 |------|------|-----------|
@@ -15,8 +15,11 @@ EdgionDSL 拥有五种内置值类型：
 | `Bool` | 布尔值 | `true`、`false` |
 | `Nil` | 空值，表示"无值" | `nil` |
 | `List` | 字符串列表，用于迭代（只读） | 由 `req.header_names()` 等 API 返回 |
+| `Map` | 字符串键、任意类型值的有序映射表 | `{"key": "value"}`、`{"status": 200}` |
 
 `List` 类型仅作为迭代容器使用，不能用字面量直接构造，也不能直接与其他类型比较。
+
+`Map` 类型保存一组有序的键值对，键始终为 `String`，值可以是任意 DSL 类型（包括嵌套 `Map`）。通过索引访问读取值（`map["key"]`）；键不存在时返回 `nil`。`Map` 目前主要由 `http.call()` 返回，也可通过 `{key: expr, ...}` 字面量直接构造扁平 Map。
 
 ### 1.1 类型转换
 
@@ -28,6 +31,7 @@ EdgionDSL 拥有五种内置值类型：
 | `Bool` | `true` → `"true"`，`false` → `"false"` |
 | `Nil` | `"nil"` |
 | `List` | `"[list]"`（固定字符串，不展开内容） |
+| `Map` | `"[map]"`（固定字符串，不展开内容） |
 | `String` | 不变 |
 
 ```dsl
@@ -499,7 +503,50 @@ let quoted = "she said \"hello\""
 
 ---
 
-## 8. 注释
+## 8. Map 字面量与索引访问
+
+### 8.1 Map 字面量
+
+使用 `{key: expr, ...}` 语法构造扁平映射表（字符串键，任意类型值）。键必须是字符串字面量，值可以是任意表达式：
+
+```dsl
+let hdrs = {"Content-Type": "application/json", "X-Api-Key": "secret"}
+let meta = {"retries": 3, "enabled": true}
+```
+
+Map 字面量主要用于向 `http.call()` 传递可选的 `headers` 参数。
+
+### 8.2 索引访问
+
+使用 `expr[key]` 读取 `Map` 中的值：
+
+- `key` 必须是 `String` 表达式。键不存在时返回 `nil`。
+- `List` 不支持直接索引访问，请使用 `for...in` 迭代。
+
+```dsl
+let r = http.call("GET", "https://api.example.com/status", nil)
+
+// 读取顶层字段
+let code = r["status"]          // Int
+
+// 读取嵌套 Map 字段（响应头以 Map 形式返回）
+let ct = r["headers"]["content-type"]   // Str | Nil
+
+if code == 200 {
+  req.set_header("X-Backend-Ok", "true")
+}
+```
+
+`len()` 作用于 `Map` 时返回键值对数量：
+
+```dsl
+let m = {"a": 1, "b": 2, "c": 3}
+let n = len(m)    // 3
+```
+
+---
+
+## 9. 注释
 
 EdgionDSL 支持单行注释，以 `//` 开始，到行末结束：
 
@@ -522,7 +569,7 @@ return next()
 
 ---
 
-## 9. 综合示例
+## 10. 综合示例
 
 ### 示例 1：多条件请求校验
 

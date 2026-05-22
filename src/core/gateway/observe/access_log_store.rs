@@ -124,7 +124,7 @@ impl AccessLogStore {
     /// Get an access log entry by trace_id
     pub fn get(&self, trace_id: &str) -> Option<String> {
         self.entries.get(trace_id).and_then(|entry| {
-            if entry.stored_at.elapsed() < self.ttl {
+            if Instant::now().saturating_duration_since(entry.stored_at) < self.ttl {
                 Some(entry.json.clone())
             } else {
                 None
@@ -142,10 +142,10 @@ impl AccessLogStore {
         let now = Instant::now();
         self.entries
             .iter()
-            .filter(|entry| entry.stored_at.elapsed() < self.ttl)
+            .filter(|entry| Instant::now().saturating_duration_since(entry.stored_at) < self.ttl)
             .map(|entry| AccessLogListItem {
                 trace_id: entry.key().clone(),
-                stored_at_ms_ago: now.duration_since(entry.stored_at).as_millis() as u64,
+                stored_at_ms_ago: now.saturating_duration_since(entry.stored_at).as_millis() as u64,
             })
             .collect()
     }
@@ -168,7 +168,8 @@ impl AccessLogStore {
 
     /// Remove expired entries
     fn cleanup_expired(&self) {
-        self.entries.retain(|_, entry| entry.stored_at.elapsed() < self.ttl);
+        self.entries
+            .retain(|_, entry| Instant::now().saturating_duration_since(entry.stored_at) < self.ttl);
     }
 }
 

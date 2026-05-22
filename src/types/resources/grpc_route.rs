@@ -47,16 +47,19 @@ pub struct GRPCRouteSpec {
     /// Controller-resolved effective hostnames (intersection of route hostnames and listener hostnames).
     /// Set by the controller ProcessorHandler; the data plane uses these directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub resolved_hostnames: Option<Vec<String>>,
 
     /// Pre-computed listener keys from parentRef resolution (set by Controller).
     /// Used by Gateway to bind this route to per-listener route tables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub resolved_listeners: Option<Vec<ListenerKey>>,
 
     /// Controller-identified invalid rule indices.
     /// Gateway skips these rules during route compilation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub invalid_rule_indices: Option<Vec<usize>>,
 
     /// Rules defines the gRPC routing rules
@@ -262,6 +265,7 @@ pub struct GRPCBackendRef {
     /// Set by Controller when this backend's cross-namespace reference
     /// is not permitted (no matching ReferenceGrant).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub ref_denied: Option<RefDenied>,
 }
 
@@ -288,10 +292,6 @@ pub struct GRPCRouteFilter {
     /// ExtensionRef is an optional, implementation-specific extension to the "filter" behavior
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension_ref: Option<LocalObjectReference>,
-
-    /// Max depth for nested ExtensionRef plugin resolution (default 5)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extension_ref_max_depth: Option<usize>,
 }
 
 /// GRPCRouteFilterType identifies a type of GRPCRoute filter
@@ -388,10 +388,27 @@ pub struct GRPCRouteRetry {
 
 /// Extension trait for GRPCRoute to parse hidden logic
 impl GRPCRoute {
-    /// Parse all extension_ref in backend_refs and populate extension_info fields
+    /// Parse all extension_ref in backend_refs and populate extension_info fields.
     ///
     /// This method should be called after deserializing GRPCRoute from YAML/JSON
     /// to populate the runtime-only extension_info fields.
+    ///
+    /// # Incomplete by itself
+    ///
+    /// `preparse()` only covers plugin runtimes. It does **not** parse timeouts
+    /// or retry configurations. A fully pre-processed `GRPCRoute` requires all
+    /// three calls:
+    ///
+    /// ```ignore
+    /// route.preparse();
+    /// route.parse_timeouts();
+    /// route.parse_retry();
+    /// ```
+    ///
+    /// Production code paths go through `ResourceMeta::pre_parse()` (implemented
+    /// via `impl_resource_meta!` in `types/resource/meta/impls.rs`), which chains
+    /// all three. Prefer `pre_parse()` over calling `preparse()` directly unless
+    /// you intentionally want only the subset above.
     pub fn preparse(&mut self) {
         let Some(rules) = self.spec.rules.as_mut() else {
             return;
@@ -403,7 +420,7 @@ impl GRPCRoute {
         for rule in rules.iter_mut() {
             // Initialize rule-level plugin_runtime from rule.plugins
             if let Some(filters) = &rule.filters {
-                rule.plugin_runtime = Arc::new(PluginRuntime::from_grpcroute_filters(filters, namespace));
+                rule.plugin_runtime = Arc::new(PluginRuntime::from_grpcroute_filters_for_rule(filters, namespace));
             }
 
             let Some(backend_refs) = rule.backend_refs.as_mut() else {
@@ -428,7 +445,8 @@ impl GRPCRoute {
 
                 // Initialize plugin_runtime from plugins
                 if let Some(filters) = &backend_ref.filters {
-                    backend_ref.plugin_runtime = Arc::new(PluginRuntime::from_grpcroute_filters(filters, namespace));
+                    backend_ref.plugin_runtime =
+                        Arc::new(PluginRuntime::from_grpcroute_filters_for_backend(filters, namespace));
                 }
             }
         }

@@ -1,0 +1,21 @@
+# BackendTLSPolicy for SNI host override suite — policy A.
+# validation.hostname = "hostname-a.example.com" instructs the Gateway to use
+# this value as the TLS SNI extension when connecting to btls-sni-service-a.
+# The multi-SNI backend resolver returns cert A only for this exact SNI, so any
+# misconfiguration (wrong SNI or no SNI) causes a handshake failure.
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  name: btls-sni-policy-a
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: btls-sni-service-a
+  validation:
+    caCertificateRefs:
+      - name: backend-ca
+        kind: Secret
+        group: ""
+    hostname: hostname-a.example.com

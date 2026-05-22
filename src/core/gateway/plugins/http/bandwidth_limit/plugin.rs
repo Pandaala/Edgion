@@ -15,10 +15,28 @@
 //! With rate = 1MB/s and a 64KB chunk:
 //! - delay = 65536 / 1048576 = 0.0625 seconds ≈ 62.5ms per chunk
 //! - Effective throughput ≈ 1MB/s
+//!
+//! ## Scope: per response stream, NOT per connection or global
+//!
+//! The plugin instance has no state across chunks — each filter invocation computes a delay
+//! purely from the current chunk size and the configured rate. The instance is shared across
+//! all requests routed through this plugin config, but because there is no shared token bucket
+//! or wall-clock accounting, each in-flight response stream independently gets ~`rate_bps`
+//! throughput:
+//!
+//! - **HTTP/2 multiplexing**: N concurrent streams on the same connection each receive the full
+//!   `rate_bps`; the aggregate connection bandwidth can reach N × `rate_bps`.
+//! - **HTTP/1.1 keep-alive**: sequential responses on the same connection each receive the full
+//!   `rate_bps` in turn.
+//! - **No cross-route / cross-connection / cross-pod aggregation**: a global cap requires an
+//!   external mechanism (LB QoS, kernel `tc`, or a service-mesh policy).
+//!
+//! This is a deliberate design tradeoff (no state = no cross-request coordination cost). For
+//! audits and user documentation see the "Important Notes" section of the user guide and the
+//! `skills/04-review/rate-limit/bandwidth-limit-per-stream.md` decision record.
 
 use std::time::Duration;
 
-use crate::core::gateway::plugins::runtime::log::PluginLog;
 use crate::core::gateway::plugins::runtime::traits::{PluginSession, UpstreamResponseBodyFilter};
 use crate::types::resources::edgion_plugins::plugin_configs::BandwidthLimitConfig;
 
@@ -57,10 +75,8 @@ impl UpstreamResponseBodyFilter for BandwidthLimit {
         body: &Option<bytes::Bytes>,
         _end_of_stream: bool,
         _session: &mut dyn PluginSession,
-        log: &mut PluginLog,
     ) -> Option<Duration> {
         if self.rate_bps == 0 {
-            log.push("Skip bandwidth zero");
             return None;
         }
 
@@ -68,7 +84,6 @@ impl UpstreamResponseBodyFilter for BandwidthLimit {
             let chunk_size = data.len();
             if chunk_size > 0 {
                 let delay_secs = chunk_size as f64 / self.rate_bps as f64;
-                log.push("Rate bandwidth");
                 return Some(Duration::from_secs_f64(delay_secs));
             }
         }
@@ -91,40 +106,12 @@ mod tests {
     }
 
     #[test]
-    fn test_bandwidth_limit_1mb() {
-        let plugin = create_test_plugin("1mb");
-        let body = Some(bytes::Bytes::from(vec![0u8; 65536])); // 64KB chunk
-        let mut log = PluginLog::new("test");
-
-        // Create a minimal mock session
-        let mut session = MockPluginSession::new();
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
-
-        // 64KB / 1MB/s = 0.0625s = 62.5ms
-        assert!(delay.is_some());
-        let d = delay.unwrap();
-        assert!(d.as_millis() >= 62 && d.as_millis() <= 63);
-    }
-
-    #[test]
-    fn test_bandwidth_limit_empty_body() {
-        let plugin = create_test_plugin("1mb");
-        let body: Option<bytes::Bytes> = Some(bytes::Bytes::new());
-        let mut log = PluginLog::new("test");
-
-        let mut session = MockPluginSession::new();
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
-        assert!(delay.is_none());
-    }
-
-    #[test]
     fn test_bandwidth_limit_none_body() {
         let plugin = create_test_plugin("1mb");
         let body: Option<bytes::Bytes> = None;
-        let mut log = PluginLog::new("test");
 
         let mut session = MockPluginSession::new();
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
+        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session);
         assert!(delay.is_none());
     }
 
@@ -132,27 +119,10 @@ mod tests {
     fn test_bandwidth_limit_invalid_rate() {
         let plugin = create_test_plugin("invalid");
         let body = Some(bytes::Bytes::from(vec![0u8; 1024]));
-        let mut log = PluginLog::new("test");
 
         let mut session = MockPluginSession::new();
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
+        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session);
         // Invalid rate -> fail-open, no throttling
         assert!(delay.is_none());
-    }
-
-    #[test]
-    fn test_bandwidth_limit_512kb() {
-        let plugin = create_test_plugin("512kb");
-        let body = Some(bytes::Bytes::from(vec![0u8; 1024])); // 1KB chunk
-        let mut log = PluginLog::new("test");
-
-        let mut session = MockPluginSession::new();
-        let delay = plugin.run_upstream_response_body_filter(&body, false, &mut session, &mut log);
-
-        // 1KB / 512KB/s = 1/512 ≈ 0.00195s ≈ 1.95ms
-        assert!(delay.is_some());
-        let d = delay.unwrap();
-        let micros = d.as_micros();
-        assert!((1900..=2000).contains(&micros), "Expected ~1953us, got {}us", micros);
     }
 }

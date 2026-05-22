@@ -12,6 +12,7 @@ use fred::clients::Pool;
 use fred::interfaces::{ClientLike, HashesInterface, KeysInterface, ListInterface, LuaInterface};
 
 use super::client::RedisLinkClient;
+use crate::core::gateway::link_sys::LinkSysHealth;
 
 // ============================================================================
 // Basic Key-Value Operations
@@ -378,18 +379,6 @@ fn generate_lock_value() -> String {
 // Health Check
 // ============================================================================
 
-use serde::Serialize;
-
-/// Health status of a LinkSys client, exposed via admin API.
-#[derive(Debug, Clone, Serialize)]
-pub struct LinkSysHealth {
-    pub name: String,
-    pub system_type: String,
-    pub connected: bool,
-    pub latency_ms: Option<u64>,
-    pub error: Option<String>,
-}
-
 impl RedisLinkClient {
     /// Active health check via PING. Returns latency in milliseconds.
     pub async fn ping(&self) -> Result<u64> {
@@ -398,7 +387,7 @@ impl RedisLinkClient {
             .ping::<String>(None)
             .await
             .map_err(|e| anyhow::anyhow!("Redis PING failed: {:?}", e))?;
-        Ok(start.elapsed().as_millis() as u64)
+        Ok(std::time::Instant::now().saturating_duration_since(start).as_millis() as u64)
     }
 
     /// Get detailed health status for admin API exposure.

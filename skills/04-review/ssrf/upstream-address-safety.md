@@ -1,0 +1,60 @@
+---
+name: upstream-address-safety
+description: Decision rule for upstream address safety boundary. Read this file first when reviewing paths that rewrite or select an upstream — DynamicExternalUpstream, RegionRoute, DynamicInternalUpstream, DirectEndpoint, RequestMirror, EndpointSlice/LB, etc.
+---
+
+# Upstream Address Safety
+
+## Conclusion
+
+Any path along which the Gateway data plane will establish an upstream connection must satisfy two layers of constraints simultaneously:
+
+1. **Authorization constraint**: the requester can only select operator/route-authorized targets, e.g., `domainMap`, `backendRefs`, RegionRoute PM, RequestMirror backendRef.
+2. **Address safety constraint**: the final dial address must undergo safety checks based on its source type:
+   - External / DNS-style upstream (e.g., `ExternalJumpPreset`) by default rejects loopback and link-local / metadata addresses, namely `127.0.0.0/8`, `::1`, `169.254.0.0/16`, `fe80::/10`.
+   - K8s Endpoint / EndpointSlice-derived upstream by default likewise rejects loopback and link-local / metadata; only the explicit integration testing mode may permit Endpoint-derived loopback for local fixtures.
+   - `EdgionGatewayConfig.spec.securityProtect.allowLoopbackUpstream=true` is a GatewayClass-level operator override that only permits loopback, not link-local / metadata.
+
+RFC1918 private addresses (`10/8`, `172.16/12`, `192.168/16`) are allowed by default; K8s Service, Pod, cross-cluster gateway, and enterprise internal APIs all rely on these addresses.
+
+## Review Decision
+
+If a path applies only the authorization constraint but does not apply the address safety constraint before the final dial, it counts as a real issue, typically rated **P2 security hardening / defense bypass**. It is not arbitrary user SSRF, but it bypasses Edgion's existing defenses against cloud metadata / link-local. Missing loopback in external/DNS-style upstreams is treated the same way.
+
+Acceptable fix directions:
+
+- Reuse `classify_backend_addr()` / `validate_backend_addr()` or equivalent logic.
+- DNS hostnames must be checked after resolution to addresses; cannot check only the string.
+- IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d`) must be normalized to their embedded IPv4 form before classification; otherwise mapped loopback / link-local / metadata targets bypass the IPv6 checks (fixed in backends-F003).
+- The check point should be as close as possible to the final `HttpPeer` / `reqwest` / TCP dial creation, to prevent inter-plugin bypass.
+
+Unacceptable fix directions:
+
+- Block all private CIDRs.
+- Resolve DNS only at config-validation time.
+- Rely solely on `domainMap` / `backendRefs` allowlists to prove safety; allowlists are an authorization boundary, not a metadata-address defense line.
+
+## Inventoried Paths
+
+| Path | Current semantics | Review notes |
+|---|---|---|
+| `DynamicExternalUpstream` | Request value can only hit `domainMap`, but the target hostname/IP can be given by config | After resolution, must reject loopback + link-local; rejecting only loopback is not enough |
+| `RegionRoute` | `RegionDef.backendEndpoint` in PM dials external hostnames via `ExternalJumpPreset` | Same category as DynamicExternalUpstream; also requires post-resolution validation |
+| `DynamicInternalUpstream` | Can only choose existing BackendRef from current route's `backendRefs` | Authorization constraint is decent; final address safety should be uniformly guaranteed by the chosen BackendRef's main backend dial path |
+| `DirectEndpoint` | The request supplies an IP, but it must exist in the Endpoint/EndpointSlice corresponding to the current route's `backendRefs` | Endpoint membership only proves "belongs to an authorized Service"; does not automatically prove address safety; the final direct-dial address should also be validated |
+| `RequestMirror` | Mirror backendRef is configured; independent of main request success/failure | After LB selects an endpoint, validation should be the same as the main backend; falling back to unchecked K8s DNS + reqwest's own resolution when endpoint store is missing is not allowed |
+| `AllEndpointStatus` | Request triggers fan-out to all endpoints of the current route's backend | Although not the main upstream, it is a data-plane endpoint dial; before fan-out, unsafe endpoints must be filtered out and a bounded plugin log written |
+| Endpoint / EndpointSlice LB | Operator/K8s provides endpoints; the main request dials directly | LB-selected addresses must be validated near `HttpPeer` creation; production rejects loopback + link-local by default |
+
+## Current Compatibility Constraints
+
+Edgion's local integration fixtures rely on `127.0.0.1` Endpoint/EndpointSlice, so test/dev compatibility must be explicitly isolated and must not affect production default policy. Currently recommended layering:
+
+- External / DNS jump: by default reject loopback + link-local; operator override may only permit loopback.
+- Endpoint/EndpointSlice-derived dial: production by default rejects loopback + link-local; `--integration-testing-mode` may permit loopback to support local fixtures, but still rejects link-local / metadata; the operator override likewise may only permit loopback.
+
+## Relationship with the ForwardAuth / Webhook Rule
+
+[forward-auth-webhook-ssrf.md](forward-auth-webhook-ssrf.md) closes findings of the form "static operator URI should ban internal access", because ForwardAuth/Webhook's legitimate use case is precisely to access internal services, and a blanket private-network block would break the feature.
+
+This rule is narrower: it does not ban internal networks, only loopback and link-local / metadata; and it focuses on the consistency of safety policies among Gateway upstream dial paths.

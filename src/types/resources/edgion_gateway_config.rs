@@ -57,6 +57,10 @@ pub struct EdgionGatewayConfigSpec {
     /// against ReferenceGrant policies
     #[serde(default)]
     pub enable_reference_grant_validation: bool,
+
+    /// Global LinkSys provider configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_sys: Option<LinkSysGlobalConfig>,
 }
 
 // ============================================
@@ -133,18 +137,21 @@ pub struct ClientTimeout {
     /// Format: Duration string (e.g., "60s", "1m", "500ms")
     /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_client_read_timeout")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub read_timeout: String,
 
     /// Timeout for writing response to client
     /// Format: Duration string (e.g., "60s", "1m", "500ms")
     /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_client_write_timeout")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub write_timeout: String,
 
     /// HTTP keepalive timeout
     /// Format: Duration string (e.g., "75s", "1m", "500ms")
     /// Without unit defaults to seconds (e.g., "75" = "75s")
     #[serde(default = "default_client_keepalive_timeout")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub keepalive_timeout: String,
 }
 
@@ -155,18 +162,21 @@ pub struct BackendTimeout {
     /// Format: Duration string (e.g., "5s", "1m", "500ms")
     /// Without unit defaults to seconds (e.g., "5" = "5s")
     #[serde(default = "default_backend_connect_timeout")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub default_connect_timeout: String,
 
     /// Total request timeout including retries
     /// Format: Duration string (e.g., "60s", "1m", "500ms")
     /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_backend_request_timeout")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub default_request_timeout: String,
 
     /// Idle timeout for backend connection pool
     /// Format: Duration string (e.g., "300s", "5m", "500ms")
     /// Without unit defaults to seconds (e.g., "300" = "300s")
     #[serde(default = "default_backend_idle_timeout")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub default_idle_timeout: String,
 
     /// **DEPRECATED**: Use top-level `maxRetries` in EdgionGatewayConfigSpec instead.
@@ -218,6 +228,7 @@ impl Default for EdgionGatewayConfigSpec {
             global_plugins_ref: None,
             preflight_policy: None,
             enable_reference_grant_validation: false,
+            link_sys: None,
         }
     }
 }
@@ -286,6 +297,23 @@ pub struct SecurityProtectConfig {
     /// access log entries for TLS proxy connections are suppressed. (default: true)
     #[serde(default = "default_tls_proxy_log_record")]
     pub tls_proxy_log_record: bool,
+
+    /// Allow loopback upstream addresses for this Gateway.
+    ///
+    /// Default false. This is an explicit operator override for local sidecar or
+    /// node-local deployments. Link-local / cloud metadata ranges remain blocked.
+    #[serde(default)]
+    pub allow_loopback_upstream: bool,
+
+    /// Reject HTTP/1.1 requests that contain more than one Host header.
+    ///
+    /// Per RFC 9110 §7.2 a server MUST respond with 400 to a request that
+    /// contains more than one Host header field line; allowing such requests
+    /// to pass enables Host smuggling across the gateway. Disable only as a
+    /// transitional escape hatch for legacy middleware that emits duplicate
+    /// Host lines. Default: true.
+    #[serde(default = "default_reject_duplicate_host")]
+    pub reject_duplicate_host: bool,
 }
 
 fn default_xff_limit() -> usize {
@@ -297,6 +325,10 @@ fn default_require_sni_host_match() -> bool {
 }
 
 fn default_tls_proxy_log_record() -> bool {
+    true
+}
+
+fn default_reject_duplicate_host() -> bool {
     true
 }
 
@@ -349,6 +381,25 @@ pub struct PluginReference {
     /// Namespace of the EdgionPlugins resource (defaults to "default")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
+}
+
+// ============================================
+// LinkSys Global Configuration
+// ============================================
+
+/// Global configuration for LinkSys providers
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkSysGlobalConfig {
+    /// Global hard cap for webhook response body size (bytes).
+    /// Per-resource `maxResponseBytes` is clamped to this value.
+    /// Default: 16384 (16KB)
+    #[serde(default = "default_webhook_max_response_bytes")]
+    pub webhook_max_response_bytes: usize,
+}
+
+fn default_webhook_max_response_bytes() -> usize {
+    16384
 }
 
 impl EdgionGatewayConfigSpec {

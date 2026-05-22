@@ -2,9 +2,9 @@
 //!
 //! Implementations:
 //! - [x] LocalFileWriter - file-based with rotation
-//! - [ ] EsSender - Elasticsearch with FailedCache support
-//! - [ ] KafkaSender - Kafka async producer
-//! - [ ] ClickHouseSender - ClickHouse batch insert
+//! - [ ] Elasticsearch sender with FailedCache support (planned)
+//! - [ ] Kafka async producer (planned)
+//! - [ ] ClickHouse batch insert (planned)
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -13,16 +13,7 @@ use async_trait::async_trait;
 ///
 /// Generic over the data type `T` to support different payload types:
 /// - `String` for text-based logs (LocalFileWriter)
-/// - Custom structs for structured logging (ES, ClickHouse)
-///
-/// # FailedCache Pattern (for ES/remote senders)
-/// ```ignore
-/// struct EsSender {
-///     client: EsClient,
-///     failed_cache: Option<Box<dyn DataSender<String>>>, // e.g., LocalFileWriter or Redis
-/// }
-/// ```
-/// When ES is unavailable, logs are cached locally and replayed on recovery.
+/// - Custom structs for structured logging (future ES, ClickHouse)
 #[async_trait]
 pub trait DataSender<T>: Send + Sync
 where
@@ -40,7 +31,3 @@ where
     /// Get the name of this sender (for logging)
     fn name(&self) -> &str;
 }
-
-/// Type alias for string-based data senders (most common case)
-#[allow(dead_code)]
-pub type StringDataSender = dyn DataSender<String>;

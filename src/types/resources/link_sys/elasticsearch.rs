@@ -4,12 +4,10 @@
 //! Uses reqwest HTTP client internally — no `elasticsearch` crate dependency.
 //! Compatible with Elasticsearch 7.x / 8.x and OpenSearch.
 
-use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::common::SecretReference;
-use crate::types::resources::common::TlsConfig;
+use crate::types::resources::common::{SecretSlot, TlsConfig};
 
 /// Elasticsearch client configuration
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -61,24 +59,18 @@ pub struct ElasticsearchClientConfig {
 pub enum ElasticsearchAuth {
     /// Basic authentication (username + password in Secret)
     Basic {
-        #[serde(rename = "secretRef")]
-        secret_ref: SecretReference,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        secret: Option<Secret>,
+        #[serde(flatten)]
+        slot: SecretSlot,
     },
     /// API Key authentication (apiKeyId + apiKeySecret in Secret)
     ApiKey {
-        #[serde(rename = "secretRef")]
-        secret_ref: SecretReference,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        secret: Option<Secret>,
+        #[serde(flatten)]
+        slot: SecretSlot,
     },
     /// Bearer token authentication (bearerToken in Secret)
     Bearer {
-        #[serde(rename = "secretRef")]
-        secret_ref: SecretReference,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        secret: Option<Secret>,
+        #[serde(flatten)]
+        slot: SecretSlot,
     },
 }
 
@@ -131,6 +123,13 @@ pub struct EsBulk {
     /// Maximum bulk request body size in bytes (default: 10MB)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_body_bytes: Option<usize>,
+
+    /// Capacity of the in-memory mpsc channel between log producers and the
+    /// bulk ingest task (default: 10000, ceiling: 100000). When the channel is
+    /// full, producers backpressure on the access-log path; raise this to
+    /// absorb bursts when ES is temporarily slow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_size: Option<usize>,
 }
 
 /// Elasticsearch index naming configuration
@@ -279,6 +278,7 @@ bulk:
   maxRetries: 3
   backoffMs: 1000
   maxBodyBytes: 10485760
+  channelSize: 20000
 index:
   prefix: "edgion-logs"
   datePattern: "%Y.%m.%d"
@@ -288,14 +288,15 @@ compatibility:
         let config: ElasticsearchClientConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.endpoints.len(), 2);
         match config.auth.as_ref().unwrap() {
-            ElasticsearchAuth::Basic { secret_ref, .. } => {
-                assert_eq!(secret_ref.name, "es-creds");
+            ElasticsearchAuth::Basic { slot } => {
+                assert_eq!(slot.secret_ref.name, "es-creds");
             }
             _ => panic!("Expected Basic auth"),
         }
         assert!(config.tls.as_ref().unwrap().enabled);
         assert_eq!(config.timeout.as_ref().unwrap().connect, Some(5000));
         assert_eq!(config.bulk.as_ref().unwrap().batch_size, Some(500));
+        assert_eq!(config.bulk.as_ref().unwrap().channel_size, Some(20_000));
         assert_eq!(config.index.as_ref().unwrap().prefix.as_deref(), Some("edgion-logs"));
     }
 
@@ -311,8 +312,8 @@ auth:
 "#;
         let config: ElasticsearchClientConfig = serde_yaml::from_str(yaml).unwrap();
         match config.auth.unwrap() {
-            ElasticsearchAuth::ApiKey { secret_ref, .. } => {
-                assert_eq!(secret_ref.name, "es-api-key");
+            ElasticsearchAuth::ApiKey { slot } => {
+                assert_eq!(slot.secret_ref.name, "es-api-key");
             }
             _ => panic!("Expected ApiKey auth"),
         }
@@ -330,8 +331,8 @@ auth:
 "#;
         let config: ElasticsearchClientConfig = serde_yaml::from_str(yaml).unwrap();
         match config.auth.unwrap() {
-            ElasticsearchAuth::Bearer { secret_ref, .. } => {
-                assert_eq!(secret_ref.name, "es-bearer-token");
+            ElasticsearchAuth::Bearer { slot } => {
+                assert_eq!(slot.secret_ref.name, "es-bearer-token");
             }
             _ => panic!("Expected Bearer auth"),
         }
@@ -368,14 +369,19 @@ compatibility:
 
     #[test]
     fn test_serde_roundtrip_json() {
+        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
         let config = ElasticsearchClientConfig {
             endpoints: vec!["http://localhost:9200".to_string()],
             auth: Some(ElasticsearchAuth::Basic {
-                secret_ref: SecretReference {
-                    name: "es-creds".to_string(),
-                    namespace: None,
+                slot: SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "es-creds".to_string(),
+                        namespace: None,
+                    },
+                    secret: None,
                 },
-                secret: None,
             }),
             ..Default::default()
         };
@@ -387,27 +393,50 @@ compatibility:
     fn es_auth_rejects_inline_username() {
         let yaml = "type: basic\nsecretRef:\n  name: s\nusername: leaked";
         let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline username 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline username must be rejected by deny_unknown_fields");
     }
 
     #[test]
     fn es_auth_rejects_inline_password() {
         let yaml = "type: basic\nsecretRef:\n  name: s\npassword: leaked";
         let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline password 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline password must be rejected by deny_unknown_fields");
     }
 
     #[test]
     fn es_auth_rejects_inline_api_key() {
         let yaml = "type: apiKey\nsecretRef:\n  name: s\napiKeyId: leaked";
         let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline apiKeyId 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline apiKeyId must be rejected by deny_unknown_fields");
     }
 
     #[test]
     fn es_auth_rejects_inline_bearer_token() {
         let yaml = "type: bearer\nsecretRef:\n  name: s\nbearerToken: leaked";
         let r: Result<ElasticsearchAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline bearerToken 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline bearerToken must be rejected by deny_unknown_fields");
+    }
+
+    #[test]
+    fn es_auth_basic_yaml_roundtrip() {
+        let yaml = "type: basic\nsecretRef:\n  name: es-creds";
+        let a: super::ElasticsearchAuth = serde_yaml::from_str(yaml).unwrap();
+        match a {
+            super::ElasticsearchAuth::Basic { slot } => assert_eq!(slot.secret_ref.name, "es-creds"),
+            _ => panic!("expected Basic"),
+        }
+    }
+
+    #[test]
+    fn es_auth_apikey_yaml_roundtrip() {
+        let yaml = "type: apiKey\nsecretRef:\n  name: es-creds";
+        let a: super::ElasticsearchAuth = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(a, super::ElasticsearchAuth::ApiKey { .. }));
+    }
+
+    #[test]
+    fn es_auth_rejects_unknown_field() {
+        let yaml = "type: basic\nsecretRef:\n  name: x\nbogus: 1";
+        assert!(serde_yaml::from_str::<super::ElasticsearchAuth>(yaml).is_err());
     }
 }

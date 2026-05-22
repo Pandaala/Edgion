@@ -71,4 +71,56 @@ impl ServiceStore {
 
         self.services.store(Arc::new(new_map));
     }
+
+    /// Number of services currently in the store.
+    pub fn count(&self) -> usize {
+        self.services.load().len()
+    }
+
+    /// Keys currently in the store (snapshot copy). Used by leak detection.
+    pub fn keys(&self) -> Vec<String> {
+        self.services.load().keys().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+    use k8s_openapi::api::core::v1::Service;
+
+    fn svc(name: &str) -> Service {
+        Service {
+            metadata: kube::api::ObjectMeta {
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn count_returns_zero_when_empty() {
+        let store = ServiceStore::new();
+        assert_eq!(store.count(), 0);
+        assert!(store.keys().is_empty());
+    }
+
+    #[test]
+    fn count_and_keys_track_inserts_and_removes() {
+        let store = ServiceStore::new();
+        let mut add = HashMap::new();
+        add.insert("default/a".to_string(), svc("a"));
+        add.insert("default/b".to_string(), svc("b"));
+        store.update(add, &HashSet::new());
+        assert_eq!(store.count(), 2);
+        let mut keys = store.keys();
+        keys.sort();
+        assert_eq!(keys, vec!["default/a".to_string(), "default/b".to_string()]);
+
+        let mut remove = HashSet::new();
+        remove.insert("default/a".to_string());
+        store.update(HashMap::new(), &remove);
+        assert_eq!(store.count(), 1);
+        assert_eq!(store.keys(), vec!["default/b".to_string()]);
+    }
 }

@@ -13,12 +13,17 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use reqwest::Client;
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
+
+use async_trait::async_trait;
 
 use crate::core::gateway::link_sys::credential::{CredentialState, ResolvedCredential};
+use crate::core::gateway::link_sys::lifecycle::LinkSysLifecycle;
 use crate::types::resources::link_sys::elasticsearch::ElasticsearchClientConfig;
 
 use super::bulk::bulk_ingest_loop;
@@ -47,6 +52,9 @@ pub struct EsLinkClient {
     bulk_sender: parking_lot::Mutex<Option<mpsc::Sender<String>>>,
     /// Shutdown signal sender (populated after init)
     shutdown_tx: parking_lot::Mutex<Option<watch::Sender<bool>>>,
+    /// Handle to the spawned bulk ingest task (populated after init), awaited in `shutdown()`
+    /// to drain buffered docs before returning.
+    bulk_task: parking_lot::Mutex<Option<JoinHandle<()>>>,
 }
 
 impl EsLinkClient {
@@ -68,6 +76,7 @@ impl EsLinkClient {
             bulk_config,
             bulk_sender: parking_lot::Mutex::new(None),
             shutdown_tx: parking_lot::Mutex::new(None),
+            bulk_task: parking_lot::Mutex::new(None),
         })
     }
 
@@ -92,8 +101,9 @@ impl EsLinkClient {
 
         self.healthy.store(health.is_ok(), Ordering::Relaxed);
 
-        // Spawn background bulk ingest task
-        let (tx, rx) = mpsc::channel::<String>(10_000); // Buffer up to 10k pending docs
+        // Spawn background bulk ingest task. Channel capacity is operator-tunable
+        // via `bulk.channelSize` (defaults to 10k, ceiling 100k); see EsBulkConfig.
+        let (tx, rx) = mpsc::channel::<String>(self.bulk_config.channel_size);
         let (shutdown_sender, shutdown_rx) = watch::channel(false);
 
         let client = self.client.clone();
@@ -102,12 +112,13 @@ impl EsLinkClient {
         let healthy = self.healthy.clone();
         let name = self.name.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             bulk_ingest_loop(client, endpoints, bulk_config, healthy, name, rx, shutdown_rx).await;
         });
 
         *self.bulk_sender.lock() = Some(tx);
         *self.shutdown_tx.lock() = Some(shutdown_sender);
+        *self.bulk_task.lock() = Some(handle);
 
         tracing::info!("ES [{}] initialized, bulk ingest task started", self.name);
         Ok(())
@@ -145,21 +156,32 @@ impl EsLinkClient {
     }
 
     /// Send a document to the bulk ingest buffer.
-    /// Non-blocking: returns immediately, doc is batched in background.
+    ///
+    /// Tries a non-blocking send first; on `Full`, increments the
+    /// `link_sys_es_bulk_channel_full` counter and falls back to an awaiting
+    /// send so the producer backpressures rather than drops the document. On
+    /// `Closed` (receiver gone), returns a "bulk channel closed" error so the
+    /// caller can decide how to handle the drop.
     pub async fn send_bulk(&self, doc: String) -> Result<()> {
         let sender = self.bulk_sender.lock().clone();
-        if let Some(sender) = sender {
-            sender
-                .send(doc)
-                .await
-                .map_err(|_| anyhow::anyhow!("ES [{}] bulk channel closed", self.name))?;
-        } else {
+        let Some(sender) = sender else {
             anyhow::bail!("ES [{}] not initialized (bulk sender not ready)", self.name);
+        };
+        match sender.try_send(doc) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(doc)) => {
+                crate::core::gateway::observe::metrics::registry::record_link_sys_es_bulk_channel_full();
+                sender
+                    .send(doc)
+                    .await
+                    .map_err(|_| anyhow::anyhow!("ES [{}] bulk channel closed", self.name))?;
+                Ok(())
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(anyhow::anyhow!("ES [{}] bulk channel closed", self.name)),
         }
-        Ok(())
     }
 
-    /// Graceful shutdown: signal background task and drop sender.
+    /// Graceful shutdown: signal background task and drop sender, then await drain.
     pub async fn shutdown(&self) -> Result<()> {
         tracing::info!("ES [{}] shutting down", self.name);
 
@@ -171,6 +193,25 @@ impl EsLinkClient {
         // Drop the bulk sender to unblock the receiver
         *self.bulk_sender.lock() = None;
         self.healthy.store(false, Ordering::Relaxed);
+
+        // Await the bulk task so buffered docs get flushed before we return.
+        // Bound the wait so a hung HTTP flush cannot stall the caller indefinitely
+        // (per-request timeout + retries can reach ~90s; we cap the total wait at 10s).
+        let handle = self.bulk_task.lock().take();
+        if let Some(handle) = handle {
+            match tokio::time::timeout(Duration::from_secs(10), handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::warn!("ES [{}] bulk task join error: {:?}", self.name, e);
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "ES [{}] bulk task did not drain within 10s; buffered docs may be lost",
+                        self.name
+                    );
+                }
+            }
+        }
 
         Ok(())
     }
@@ -194,5 +235,16 @@ impl std::fmt::Debug for EsLinkClient {
             .field("endpoints", &self.endpoints)
             .field("healthy", &self.healthy.load(Ordering::Relaxed))
             .finish()
+    }
+}
+
+#[async_trait]
+impl LinkSysLifecycle for EsLinkClient {
+    async fn init(&self) -> anyhow::Result<()> {
+        EsLinkClient::init(self).await
+    }
+
+    async fn shutdown(&self) -> anyhow::Result<()> {
+        EsLinkClient::shutdown(self).await
     }
 }

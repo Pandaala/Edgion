@@ -7,8 +7,47 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::core::gateway::lb::WeightedRoundRobin;
 use crate::types::resources::link_sys::webhook::WebhookServiceConfig;
 use reqwest::Client;
+
+// ============================================================
+// WebhookResolvedTarget — resolved runtime target
+// ============================================================
+
+/// Resolved target for a webhook service at runtime.
+///
+/// Derived from `WebhookTarget` during manager upsert. Decouples
+/// routing decisions from the raw configuration.
+pub enum WebhookResolvedTarget {
+    /// Single base URL: Uri target or ServiceClusterIp.
+    Static(String),
+    /// WRR pool of pod IPs: Service/ServiceEndpointSlice with injected endpoints.
+    Endpoints(WeightedRoundRobin<String>),
+    /// Endpoints not yet injected by Controller (transient state).
+    Pending,
+}
+
+impl std::fmt::Debug for WebhookResolvedTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Static(url) => write!(f, "Static({url:?})"),
+            Self::Endpoints(rr) => write!(f, "Endpoints(count={})", rr.len()),
+            Self::Pending => write!(f, "Pending"),
+        }
+    }
+}
+
+impl WebhookResolvedTarget {
+    /// Pick the next base URL. Returns `None` when the target is `Pending`.
+    pub fn pick_url(&self) -> Option<String> {
+        match self {
+            Self::Static(url) => Some(url.clone()),
+            Self::Endpoints(rr) => Some(rr.select().clone()),
+            Self::Pending => None,
+        }
+    }
+}
 
 // ============================================================
 // WebhookRuntime — per-webhook runtime state
@@ -21,6 +60,9 @@ pub struct WebhookRuntime {
 
     /// HTTP client for this webhook. When TLS config is present, this is a custom client.
     pub http_client: Arc<Client>,
+
+    /// Resolved target for outbound requests (derived from `config.target` at upsert time).
+    pub resolved_target: WebhookResolvedTarget,
 
     // ---- Health state ----
     /// Current health status (true = healthy). Lock-free reads via AtomicBool.

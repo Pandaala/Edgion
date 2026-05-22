@@ -3,12 +3,11 @@
 //! Defines the connection parameters and health check settings for an external
 //! HTTP webhook service. Referenced by KeyGet::Webhook via "namespace/name".
 
-use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::common::SecretReference;
-use crate::types::resources::common::TlsConfig;
+use crate::core::gateway::backends::service_kind::EdgionService;
+use crate::types::resources::common::{SecretSlot, TlsConfig};
 
 // ============================================================
 // WebhookAuth — authentication configuration
@@ -22,24 +21,68 @@ use crate::types::resources::common::TlsConfig;
 pub enum WebhookAuth {
     /// Basic authentication (username + password in Secret)
     Basic {
-        #[serde(rename = "secretRef")]
-        secret_ref: SecretReference,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        secret: Option<Secret>,
+        #[serde(flatten)]
+        slot: SecretSlot,
     },
     /// Bearer token authentication (bearerToken in Secret)
     Bearer {
-        #[serde(rename = "secretRef")]
-        secret_ref: SecretReference,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        secret: Option<Secret>,
+        #[serde(flatten)]
+        slot: SecretSlot,
     },
     /// HMAC signature authentication (hmacKey in Secret)
     Hmac {
-        #[serde(rename = "secretRef")]
-        secret_ref: SecretReference,
+        #[serde(flatten)]
+        slot: SecretSlot,
+    },
+    /// API Key authentication — injects the key as a header or query parameter.
+    /// The secret must contain a `apiKey` data key.
+    ApiKey {
+        #[serde(flatten)]
+        slot: SecretSlot,
+        /// Where to inject the key: "header" or "query"
+        r#in: String,
+        /// Header name when `in = "header"` (e.g. "X-API-Key")
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "headerName")]
+        header_name: Option<String>,
+        /// Query parameter name when `in = "query"` (e.g. "api_key")
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "queryParam")]
+        query_param: Option<String>,
+    },
+}
+
+// ============================================================
+// WebhookTarget — target backend for the webhook
+// ============================================================
+
+/// Webhook target backend.
+///
+/// Selects where the webhook request is sent. Use `Uri` for external HTTP/HTTPS
+/// endpoints (existing behavior) or `Service` to target a Kubernetes Service
+/// whose endpoints are injected by the Controller.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum WebhookTarget {
+    /// External HTTP/HTTPS endpoint (existing behavior).
+    Uri { uri: String },
+
+    /// Kubernetes Service backend.
+    /// `kind` semantics match `EdgionService::from_kind()`:
+    ///   `None` / `""` / `"Service"` / `"ServiceEndpointSlice"` → WRR over endpoints (injected by Controller)
+    ///   `"ServiceClusterIp"`                                    → ClusterIP DNS, kube-proxy LB
+    Service {
+        name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        secret: Option<Secret>,
+        namespace: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<String>,
+        /// Pod IPs injected by the Controller. Format: "ip:port". Not set by users.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[schemars(skip)]
+        endpoints: Vec<String>,
     },
 }
 
@@ -52,8 +95,9 @@ pub enum WebhookAuth {
 /// Defines how to connect to an external HTTP service used for key resolution,
 /// identity mapping, or other webhook-based lookups.
 ///
-/// ## YAML Example (LinkSys CRD)
+/// ## YAML Examples (LinkSys CRD)
 ///
+/// External URI target:
 /// ```yaml
 /// apiVersion: edgion.io/v1
 /// kind: LinkSys
@@ -63,12 +107,11 @@ pub enum WebhookAuth {
 /// spec:
 ///   type: webhook
 ///   config:
-///     uri: "https://key-service.internal/resolve"
+///     target:
+///       type: uri
+///       uri: "https://key-service.internal/resolve"
 ///     requestMethod: POST
 ///     timeoutMs: 3000
-///     requestHeaders:
-///       - Authorization
-///       - X-Request-ID
 ///     successStatusCodes: [200]
 ///     allowDegradation: true
 ///     statusOnError: 503
@@ -77,6 +120,15 @@ pub enum WebhookAuth {
 ///         path: "/healthz"
 ///         intervalSec: 10
 ///         unhealthyThreshold: 3
+/// ```
+///
+/// Kubernetes Service target:
+/// ```yaml
+///     target:
+///       type: service
+///       name: my-webhook-svc
+///       namespace: prod
+///       port: 8080
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -89,12 +141,16 @@ pub struct WebhookServiceConfig {
     pub auth: Option<WebhookAuth>,
 
     // ============================================================
+    // Target
+    // ============================================================
+    /// Webhook target backend (required).
+    /// Use `WebhookTarget::Uri` for an external HTTP/HTTPS URL or
+    /// `WebhookTarget::Service` for a Kubernetes Service backend.
+    pub target: WebhookTarget,
+
+    // ============================================================
     // Connection
     // ============================================================
-    /// Webhook service URL (required).
-    /// Example: "https://key-service.internal/resolve"
-    pub uri: String,
-
     /// HTTP method for the webhook request.
     /// Default: GET
     #[serde(default = "default_method")]
@@ -116,19 +172,6 @@ pub struct WebhookServiceConfig {
     pub tls: Option<TlsConfig>,
 
     // ============================================================
-    // Request forwarding
-    // ============================================================
-    /// Headers to forward from the original request to the webhook service.
-    ///
-    /// Behavior:
-    /// - None: forward ONLY standard X-Forwarded-* headers
-    /// - Some(list): forward the listed headers + X-Forwarded-* headers
-    ///
-    /// Hop-by-hop headers are always excluded.
-    #[serde(default)]
-    pub request_headers: Option<Vec<String>>,
-
-    // ============================================================
     // Response handling
     // ============================================================
     /// Status codes considered as success.
@@ -136,11 +179,14 @@ pub struct WebhookServiceConfig {
     #[serde(default)]
     pub success_status_codes: Option<Vec<u16>>,
 
+    /// Static headers sent on every outbound call (merged with per-call headers; caller wins on conflict).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_headers: Option<std::collections::HashMap<String, String>>,
+
     /// Maximum response body size to read in bytes.
     /// Prevents memory exhaustion from unexpectedly large webhook responses.
     ///
     /// Default: 1024 (1KB)
-    /// Hard upper limit: controlled by WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES (16KB)
     #[serde(default = "default_max_response_bytes")]
     pub max_response_bytes: usize,
 
@@ -400,9 +446,6 @@ fn default_max_backoff() -> u64 {
     60
 }
 
-/// Global hard upper limit for webhook response body size (16KB).
-pub const WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES: usize = 16384;
-
 // ============================================================
 // Default + Validation
 // ============================================================
@@ -411,11 +454,11 @@ impl Default for WebhookServiceConfig {
     fn default() -> Self {
         Self {
             auth: None,
-            uri: String::new(),
+            target: WebhookTarget::Uri { uri: String::new() },
             request_method: default_method(),
             timeout_ms: default_timeout_ms(),
             tls: None,
-            request_headers: None,
+            default_headers: None,
             success_status_codes: None,
             max_response_bytes: default_max_response_bytes(),
             allow_degradation: false,
@@ -429,31 +472,52 @@ impl Default for WebhookServiceConfig {
 
 impl WebhookServiceConfig {
     /// Validate the configuration and return an error message if invalid.
-    pub fn get_validation_error(&self) -> Option<&str> {
-        if self.uri.is_empty() {
-            return Some("uri is required");
-        }
-        if !self.uri.starts_with("http://") && !self.uri.starts_with("https://") {
-            return Some("uri must start with http:// or https://");
+    pub fn get_validation_error(&self) -> Option<String> {
+        match &self.target {
+            WebhookTarget::Uri { uri } => {
+                if uri.is_empty() {
+                    return Some("uri is required".to_string());
+                }
+                if !uri.starts_with("http://") && !uri.starts_with("https://") {
+                    return Some("uri must start with http:// or https://".to_string());
+                }
+            }
+            WebhookTarget::Service { name, port, kind, .. } => {
+                if name.is_empty() {
+                    return Some("service name is required".to_string());
+                }
+                if port.is_some_and(|p| p <= 0) {
+                    return Some("service port must be > 0".to_string());
+                }
+                match EdgionService::from_kind(kind.as_ref()) {
+                    EdgionService::Unsupported(k) => {
+                        return Some(format!("unsupported service kind: {k}"));
+                    }
+                    EdgionService::ServiceImport => {
+                        return Some("ServiceImport is not yet supported for webhook".to_string());
+                    }
+                    EdgionService::ServiceExternalName => {
+                        return Some("ServiceExternalName is not supported for webhook".to_string());
+                    }
+                    _ => {}
+                }
+            }
         }
         let method_upper = self.request_method.to_uppercase();
         if !matches!(
             method_upper.as_str(),
             "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS"
         ) {
-            return Some("requestMethod must be a valid HTTP method");
+            return Some("requestMethod must be a valid HTTP method".to_string());
         }
         if self.timeout_ms == 0 {
-            return Some("timeoutMs must be greater than 0");
+            return Some("timeoutMs must be greater than 0".to_string());
         }
         if !(200..=599).contains(&self.status_on_error) {
-            return Some("statusOnError must be between 200 and 599");
+            return Some("statusOnError must be between 200 and 599".to_string());
         }
         if self.max_response_bytes == 0 {
-            return Some("maxResponseBytes must be greater than 0");
-        }
-        if self.max_response_bytes > WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES {
-            return Some("maxResponseBytes exceeds global limit (16KB)");
+            return Some("maxResponseBytes must be greater than 0".to_string());
         }
         None
     }
@@ -479,22 +543,26 @@ mod tests {
         assert!(config.retry.is_none());
         assert!(config.rate_limit.is_none());
         assert!(config.health_check.is_none());
+        // Default target is Uri with empty string
+        matches!(config.target, WebhookTarget::Uri { ref uri } if uri.is_empty());
     }
 
     #[test]
     fn test_validation_empty_uri() {
         let config = WebhookServiceConfig::default();
-        assert_eq!(config.get_validation_error(), Some("uri is required"));
+        assert_eq!(config.get_validation_error().as_deref(), Some("uri is required"));
     }
 
     #[test]
     fn test_validation_invalid_uri() {
         let config = WebhookServiceConfig {
-            uri: "ftp://invalid".to_string(),
+            target: WebhookTarget::Uri {
+                uri: "ftp://invalid".into(),
+            },
             ..Default::default()
         };
         assert_eq!(
-            config.get_validation_error(),
+            config.get_validation_error().as_deref(),
             Some("uri must start with http:// or https://")
         );
     }
@@ -502,12 +570,14 @@ mod tests {
     #[test]
     fn test_validation_invalid_method() {
         let config = WebhookServiceConfig {
-            uri: "http://example.com".to_string(),
+            target: WebhookTarget::Uri {
+                uri: "http://example.com/hook".into(),
+            },
             request_method: "INVALID".to_string(),
             ..Default::default()
         };
         assert_eq!(
-            config.get_validation_error(),
+            config.get_validation_error().as_deref(),
             Some("requestMethod must be a valid HTTP method")
         );
     }
@@ -515,42 +585,173 @@ mod tests {
     #[test]
     fn test_validation_zero_timeout() {
         let config = WebhookServiceConfig {
-            uri: "http://example.com".to_string(),
+            target: WebhookTarget::Uri {
+                uri: "http://example.com/hook".into(),
+            },
             timeout_ms: 0,
             ..Default::default()
         };
-        assert_eq!(config.get_validation_error(), Some("timeoutMs must be greater than 0"));
-    }
-
-    #[test]
-    fn test_validation_max_response_bytes_exceeds_global() {
-        let config = WebhookServiceConfig {
-            uri: "http://example.com".to_string(),
-            max_response_bytes: WEBHOOK_GLOBAL_MAX_RESPONSE_BYTES + 1,
-            ..Default::default()
-        };
         assert_eq!(
-            config.get_validation_error(),
-            Some("maxResponseBytes exceeds global limit (16KB)")
+            config.get_validation_error().as_deref(),
+            Some("timeoutMs must be greater than 0")
         );
     }
 
     #[test]
     fn test_validation_valid_config() {
         let config = WebhookServiceConfig {
-            uri: "https://api.example.com/resolve".to_string(),
+            target: WebhookTarget::Uri {
+                uri: "https://api.example.com/resolve".into(),
+            },
+            ..Default::default()
+        };
+        assert!(config.get_validation_error().is_none());
+    }
+
+    // ---- Service target validation ----
+
+    #[test]
+    fn test_validation_service_empty_name() {
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "".to_string(),
+                namespace: None,
+                port: None,
+                group: None,
+                kind: None,
+                endpoints: vec![],
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            config.get_validation_error().as_deref(),
+            Some("service name is required")
+        );
+    }
+
+    #[test]
+    fn test_validation_service_port_zero() {
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "my-svc".to_string(),
+                namespace: None,
+                port: Some(0),
+                group: None,
+                kind: None,
+                endpoints: vec![],
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            config.get_validation_error().as_deref(),
+            Some("service port must be > 0")
+        );
+    }
+
+    #[test]
+    fn test_validation_service_port_negative() {
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "my-svc".to_string(),
+                namespace: None,
+                port: Some(-1),
+                group: None,
+                kind: None,
+                endpoints: vec![],
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            config.get_validation_error().as_deref(),
+            Some("service port must be > 0")
+        );
+    }
+
+    #[test]
+    fn test_validation_service_valid() {
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "my-svc".to_string(),
+                namespace: Some("prod".to_string()),
+                port: Some(8080),
+                group: None,
+                kind: None,
+                endpoints: vec![],
+            },
             ..Default::default()
         };
         assert!(config.get_validation_error().is_none());
     }
 
     #[test]
+    fn test_validation_service_kind_service_import() {
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "my-svc".to_string(),
+                namespace: None,
+                port: Some(80),
+                group: None,
+                kind: Some("ServiceImport".to_string()),
+                endpoints: vec![],
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            config.get_validation_error().as_deref(),
+            Some("ServiceImport is not yet supported for webhook")
+        );
+    }
+
+    #[test]
+    fn test_validation_service_kind_external_name() {
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "my-svc".to_string(),
+                namespace: None,
+                port: Some(80),
+                group: None,
+                kind: Some("ServiceExternalName".to_string()),
+                endpoints: vec![],
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            config.get_validation_error().as_deref(),
+            Some("ServiceExternalName is not supported for webhook")
+        );
+    }
+
+    #[test]
+    fn test_validation_service_kind_unsupported() {
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "my-svc".to_string(),
+                namespace: None,
+                port: Some(80),
+                group: None,
+                kind: Some("BogusKind".to_string()),
+                endpoints: vec![],
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            config.get_validation_error().as_deref(),
+            Some("unsupported service kind: BogusKind")
+        );
+    }
+
+    #[test]
     fn test_serde_minimal_yaml() {
         let yaml = r#"
-uri: "http://localhost:8080/resolve"
+target:
+  type: uri
+  uri: "http://localhost:8080/resolve"
 "#;
         let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.uri, "http://localhost:8080/resolve");
+        match &config.target {
+            WebhookTarget::Uri { uri } => assert_eq!(uri, "http://localhost:8080/resolve"),
+            _ => panic!("expected Uri target"),
+        }
         assert_eq!(config.request_method, "GET");
         assert_eq!(config.timeout_ms, 5000);
         assert!(config.get_validation_error().is_none());
@@ -559,12 +760,11 @@ uri: "http://localhost:8080/resolve"
     #[test]
     fn test_serde_full_yaml() {
         let yaml = r#"
-uri: "https://key-service.internal/resolve"
+target:
+  type: uri
+  uri: "https://key-service.internal/resolve"
 requestMethod: POST
 timeoutMs: 3000
-requestHeaders:
-  - Authorization
-  - X-Request-ID
 successStatusCodes: [200]
 maxResponseBytes: 2048
 allowDegradation: true
@@ -590,7 +790,12 @@ healthCheck:
     healthyThreshold: 1
 "#;
         let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.uri, "https://key-service.internal/resolve");
+        match &config.target {
+            WebhookTarget::Uri { uri } => {
+                assert_eq!(uri, "https://key-service.internal/resolve")
+            }
+            _ => panic!("expected Uri target"),
+        }
         assert_eq!(config.request_method, "POST");
         assert_eq!(config.timeout_ms, 3000);
         assert_eq!(config.max_response_bytes, 2048);
@@ -613,18 +818,118 @@ healthCheck:
     }
 
     #[test]
+    fn test_serde_service_target_yaml() {
+        let yaml = r#"
+target:
+  type: service
+  name: my-webhook-svc
+  namespace: prod
+  port: 8080
+"#;
+        let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
+        match &config.target {
+            WebhookTarget::Service {
+                name, namespace, port, ..
+            } => {
+                assert_eq!(name, "my-webhook-svc");
+                assert_eq!(namespace.as_deref(), Some("prod"));
+                assert_eq!(*port, Some(8080));
+            }
+            _ => panic!("expected Service target"),
+        }
+        assert!(config.get_validation_error().is_none());
+    }
+
+    #[test]
     fn test_serde_roundtrip() {
         let config = WebhookServiceConfig {
-            uri: "https://example.com/api".to_string(),
+            target: WebhookTarget::Uri {
+                uri: "https://example.com/api".into(),
+            },
             request_method: "POST".to_string(),
             ..Default::default()
         };
 
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: WebhookServiceConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.uri, config.uri);
+        match (&deserialized.target, &config.target) {
+            (WebhookTarget::Uri { uri: u1 }, WebhookTarget::Uri { uri: u2 }) => {
+                assert_eq!(u1, u2)
+            }
+            _ => panic!("target mismatch after roundtrip"),
+        }
         assert_eq!(deserialized.request_method, config.request_method);
         assert_eq!(deserialized.timeout_ms, config.timeout_ms);
+    }
+
+    #[test]
+    fn test_serde_service_target_roundtrip() {
+        // Verifies both serialization and deserialization of the Service variant,
+        // including optional fields and endpoints injected by the Controller.
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "auth-svc".into(),
+                namespace: Some("prod".into()),
+                port: Some(8080),
+                group: None,
+                kind: Some("ServiceClusterIp".into()),
+                endpoints: vec!["10.0.0.1:8080".into(), "10.0.0.2:8080".into()],
+            },
+            request_method: "POST".into(),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+        // Verify "type":"service" tag is present in the output.
+        assert!(
+            json.contains("\"type\":\"service\""),
+            "serialized JSON must contain type tag"
+        );
+        // Verify endpoints are serialized.
+        assert!(json.contains("10.0.0.1:8080"), "endpoints must be serialized");
+        // Verify None fields are omitted.
+        assert!(!json.contains("\"group\""), "None group must be omitted");
+
+        let deserialized: WebhookServiceConfig = serde_json::from_str(&json).unwrap();
+        match deserialized.target {
+            WebhookTarget::Service {
+                name,
+                namespace,
+                port,
+                kind,
+                endpoints,
+                ..
+            } => {
+                assert_eq!(name, "auth-svc");
+                assert_eq!(namespace.as_deref(), Some("prod"));
+                assert_eq!(port, Some(8080));
+                assert_eq!(kind.as_deref(), Some("ServiceClusterIp"));
+                assert_eq!(endpoints, vec!["10.0.0.1:8080", "10.0.0.2:8080"]);
+            }
+            _ => panic!("expected Service target after roundtrip"),
+        }
+    }
+
+    #[test]
+    fn test_serde_service_target_empty_endpoints_omitted() {
+        // endpoints: Vec::is_empty → skip_serializing_if ensures empty endpoints
+        // do not appear in the serialized output (users never set them manually).
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "svc".into(),
+                namespace: None,
+                port: Some(80),
+                group: None,
+                kind: None,
+                endpoints: vec![],
+            },
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            !json.contains("\"endpoints\""),
+            "empty endpoints must be omitted from output"
+        );
     }
 
     #[test]
@@ -653,8 +958,8 @@ secretRef:
 "#;
         let auth: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
         match auth {
-            WebhookAuth::Basic { secret_ref, .. } => {
-                assert_eq!(secret_ref.name, "webhook-creds");
+            WebhookAuth::Basic { slot } => {
+                assert_eq!(slot.secret_ref.name, "webhook-creds");
             }
             _ => panic!("Expected Basic auth"),
         }
@@ -670,9 +975,9 @@ secretRef:
 "#;
         let auth: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
         match auth {
-            WebhookAuth::Bearer { secret_ref, .. } => {
-                assert_eq!(secret_ref.name, "webhook-token");
-                assert_eq!(secret_ref.namespace.as_deref(), Some("secrets"));
+            WebhookAuth::Bearer { slot } => {
+                assert_eq!(slot.secret_ref.name, "webhook-token");
+                assert_eq!(slot.secret_ref.namespace.as_deref(), Some("secrets"));
             }
             _ => panic!("Expected Bearer auth"),
         }
@@ -687,8 +992,8 @@ secretRef:
 "#;
         let auth: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
         match auth {
-            WebhookAuth::Hmac { secret_ref, .. } => {
-                assert_eq!(secret_ref.name, "webhook-hmac-key");
+            WebhookAuth::Hmac { slot } => {
+                assert_eq!(slot.secret_ref.name, "webhook-hmac-key");
             }
             _ => panic!("Expected Hmac auth"),
         }
@@ -698,20 +1003,22 @@ secretRef:
     fn webhook_auth_rejects_inline_username() {
         let yaml = "type: basic\nsecretRef:\n  name: s\nusername: leaked";
         let r: Result<WebhookAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline username 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline username must be rejected by deny_unknown_fields");
     }
 
     #[test]
     fn webhook_auth_rejects_inline_password() {
         let yaml = "type: basic\nsecretRef:\n  name: s\npassword: leaked";
         let r: Result<WebhookAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline password 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline password must be rejected by deny_unknown_fields");
     }
 
     #[test]
     fn test_webhook_config_with_auth() {
         let yaml = r#"
-uri: "https://api.example.com/resolve"
+target:
+  type: uri
+  uri: "https://api.example.com/resolve"
 auth:
   type: bearer
   secretRef:
@@ -720,10 +1027,110 @@ auth:
         let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.auth.is_some());
         match config.auth.unwrap() {
-            WebhookAuth::Bearer { secret_ref, .. } => {
-                assert_eq!(secret_ref.name, "api-token");
+            WebhookAuth::Bearer { slot } => {
+                assert_eq!(slot.secret_ref.name, "api-token");
             }
             _ => panic!("Expected Bearer auth"),
         }
+    }
+
+    #[test]
+    fn test_serde_default_headers() {
+        let yaml = r#"
+target:
+  type: uri
+  uri: "http://api.example.com"
+defaultHeaders:
+  X-Source: edgion
+  Content-Type: "application/json"
+"#;
+        let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
+        let headers = config.default_headers.unwrap();
+        assert_eq!(headers.get("X-Source").map(String::as_str), Some("edgion"));
+        assert_eq!(
+            headers.get("Content-Type").map(String::as_str),
+            Some("application/json")
+        );
+    }
+
+    #[test]
+    fn test_webhook_auth_api_key_header() {
+        let yaml = r#"
+type: apiKey
+secretRef:
+  name: my-api-key
+in: header
+headerName: X-API-Key
+"#;
+        let auth: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
+        match auth {
+            WebhookAuth::ApiKey {
+                slot,
+                r#in,
+                header_name,
+                ..
+            } => {
+                assert_eq!(slot.secret_ref.name, "my-api-key");
+                assert_eq!(r#in, "header");
+                assert_eq!(header_name.as_deref(), Some("X-API-Key"));
+            }
+            _ => panic!("Expected ApiKey auth"),
+        }
+    }
+
+    #[test]
+    fn test_webhook_auth_api_key_query() {
+        let yaml = r#"
+type: apiKey
+secretRef:
+  name: my-api-key
+in: query
+queryParam: api_key
+"#;
+        let auth: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
+        match auth {
+            WebhookAuth::ApiKey { r#in, query_param, .. } => {
+                assert_eq!(r#in, "query");
+                assert_eq!(query_param.as_deref(), Some("api_key"));
+            }
+            _ => panic!("Expected ApiKey auth"),
+        }
+    }
+
+    #[test]
+    fn webhook_auth_basic_yaml_roundtrip() {
+        let yaml = "type: basic\nsecretRef:\n  name: w-creds";
+        let a: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
+        match a {
+            WebhookAuth::Basic { slot } => assert_eq!(slot.secret_ref.name, "w-creds"),
+            _ => panic!("expected Basic"),
+        }
+    }
+
+    #[test]
+    fn webhook_auth_apikey_with_extras_yaml_roundtrip() {
+        let yaml = "type: apiKey\nsecretRef:\n  name: w-creds\nin: header\nheaderName: X-API-Key";
+        let a: WebhookAuth = serde_yaml::from_str(yaml).unwrap();
+        match a {
+            WebhookAuth::ApiKey {
+                slot,
+                r#in,
+                header_name,
+                query_param,
+            } => {
+                assert_eq!(slot.secret_ref.name, "w-creds");
+                assert_eq!(r#in, "header");
+                assert_eq!(header_name.as_deref(), Some("X-API-Key"));
+                assert!(query_param.is_none());
+            }
+            _ => panic!("expected ApiKey"),
+        }
+    }
+
+    #[test]
+    fn webhook_auth_basic_rejects_unknown_field_new() {
+        let yaml = "type: basic\nsecretRef:\n  name: x\nbogus: 1";
+        let r: Result<WebhookAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err(), "expected error for unknown field, got {:?}", r);
     }
 }

@@ -3,6 +3,7 @@ use crate::types::EdgionHttpContext;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error, ErrorType};
 use pingora_proxy::Session;
+use std::time::Instant;
 
 /// fail_to_connect - called when connection to upstream fails
 #[inline]
@@ -27,7 +28,11 @@ pub fn fail_to_connect(
         if status_code != 504 {
             upstream.err.push(e.etype().as_str().to_string());
         }
-        upstream.et = Some(upstream.start_time.elapsed().as_millis() as u64);
+        upstream.et = Some(
+            Instant::now()
+                .saturating_duration_since(upstream.start_time)
+                .as_millis() as u64,
+        );
     }
 
     // Record circuit breaker failure
@@ -38,41 +43,23 @@ pub fn fail_to_connect(
     }
 
     // Check request timeout dynamically before allowing retry
-    // If timeout is exceeded, block all retries and return 504
-    let request_timeout = ctx
-        .route_unit
-        .as_ref()
-        .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-        .and_then(|timeouts| timeouts.request_timeout.as_duration())
-        .or_else(|| {
-            ctx.grpc_route_unit
-                .as_ref()
-                .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
-                .and_then(|timeouts| timeouts.request_timeout.as_duration())
-        });
-
-    if let Some(timeout) = request_timeout {
-        let elapsed = ctx.start_time.elapsed();
-        if elapsed >= timeout {
-            // Set 504 status for timeout
-            if let Some(upstream) = ctx.get_current_upstream_mut() {
-                upstream.status = Some(504);
-            }
-            // Do not set retry flag - this blocks any further retries
-            return e;
+    // If timeout is exceeded, block all retries and return 504. Both the
+    // route-level `request_timeout` and a client-supplied `grpc-timeout`
+    // (which can be tighter than the route timeout) abort retries; either
+    // deadline blown means a new LB pick / connection / circuit-breaker
+    // counter increment would only burn resources the caller has given up on.
+    if ctx.request_timeout_exceeded() || ctx.grpc_deadline_exceeded() {
+        // Set 504 status for timeout
+        if let Some(upstream) = ctx.get_current_upstream_mut() {
+            upstream.status = Some(504);
         }
+        // Do not set retry flag - this blocks any further retries
+        return e;
     }
 
     // Determine max_retries: rule.retry.attempts > global (HTTP or gRPC route)
     let max_retries = ctx
-        .route_unit
-        .as_ref()
-        .and_then(|unit| unit.rule.parsed_retry.as_ref().and_then(|r| r.attempts))
-        .or_else(|| {
-            ctx.grpc_route_unit
-                .as_ref()
-                .and_then(|unit| unit.rule.parsed_retry.as_ref().and_then(|r| r.attempts))
-        })
+        .retry_attempts()
         .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
 
     if ctx.try_cnt <= max_retries {

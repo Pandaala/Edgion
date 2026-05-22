@@ -8,7 +8,7 @@
 use async_trait::async_trait;
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use pingora_core::apps::ServerApp;
@@ -21,7 +21,9 @@ use super::proxy::{TlsContext, TlsUpstreamInfo};
 use super::sni_parser;
 use super::TlsRouteManager;
 use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
-use crate::core::gateway::backends::{resolve_target_port, select_roundrobin_backend, PortLookupSource};
+use crate::core::gateway::backends::{
+    resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr,
+};
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::runtime::matching::route::hostname_matches_listener;
@@ -29,6 +31,17 @@ use crate::core::gateway::runtime::store::get_listener_gateway_info_store;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::ResourceMeta;
 use crate::types::{ListenerKey, MatchedInfo, Rsc};
+
+use super::tls_connect_retry_backoff;
+
+const UNSAFE_UPSTREAM_ADDRESS_LOG: &str = "unsafe upstream address";
+
+/// Wall-clock budget for accumulating a complete TLS ClientHello record from
+/// the downstream. Aligned with Envoy's `listener_filters_timeout` default
+/// (15 s). Using an absolute deadline (rather than per-read relative timeouts)
+/// blocks slowloris-style dribble: an attacker feeding one byte at a time
+/// cannot push the cumulative wait past this bound.
+const SNI_READ_DEADLINE: Duration = Duration::from_secs(15);
 
 fn is_service_backend_ref(group: Option<&str>, kind: Option<&str>) -> bool {
     let group_ok = matches!(group, None | Some("") | Some("core"));
@@ -70,26 +83,23 @@ impl ServerApp for EdgionTlsPassthroughProxy {
         }
 
         // 1. Read the beginning of the stream to extract SNI from ClientHello.
-        //    We read into a buffer, parse SNI, then prepend the bytes back
-        //    so upstream receives the complete TLS handshake.
+        //    We read into a bounded buffer with an absolute deadline. SNI is
+        //    parsed from exactly the ClientHello record; all bytes consumed
+        //    from downstream (which may include 0-RTT EarlyData appended by
+        //    the client in the same TCP segment) are forwarded verbatim so
+        //    upstream sees the original byte stream.
         let mut peek_buf = vec![0u8; sni_parser::MAX_CLIENT_HELLO_LEN];
-        let n = match downstream.read(&mut peek_buf).await {
-            Ok(0) => {
-                ctx.err_log = Some("connection closed before ClientHello".to_string());
-                self.log_disconnect(&mut ctx).await;
-                return None;
-            }
-            Ok(n) => n,
-            Err(e) => {
-                ctx.err_log = Some(format!("read ClientHello failed: {e}"));
+        let (record_end, filled) = match self.read_client_hello(&mut downstream, &mut peek_buf).await {
+            Ok(spans) => spans,
+            Err(err) => {
+                ctx.err_log = Some(err);
                 self.log_disconnect(&mut ctx).await;
                 return None;
             }
         };
-        let initial_bytes = &peek_buf[..n];
 
-        // 2. Extract SNI
-        let sni = match sni_parser::extract_sni(initial_bytes) {
+        // 2. Extract SNI from the complete record.
+        let sni = match sni_parser::extract_sni(&peek_buf[..record_end]) {
             Some(sni) => sni,
             None => {
                 ctx.err_log = Some("no SNI in ClientHello".to_string());
@@ -99,8 +109,12 @@ impl ServerApp for EdgionTlsPassthroughProxy {
         };
         ctx.sni = Some(sni.clone());
 
-        // 3. Handle connection: route match → connect upstream → relay
-        self.handle_connection(downstream, &mut ctx, &sni, &peek_buf[..n]).await;
+        // 3. Handle connection: route match → connect upstream → relay.
+        //    Forward every byte we drained from downstream — not just the
+        //    ClientHello record — so any trailing 0-RTT EarlyData reaches
+        //    the backend.
+        self.handle_connection(downstream, &mut ctx, &sni, &peek_buf[..filled])
+            .await;
         self.log_disconnect(&mut ctx).await;
 
         None
@@ -108,6 +122,58 @@ impl ServerApp for EdgionTlsPassthroughProxy {
 }
 
 impl EdgionTlsPassthroughProxy {
+    /// Accumulate bytes from `downstream` until a complete TLS Handshake
+    /// record is buffered.
+    ///
+    /// Returns `(record_end, filled)`:
+    /// - `record_end` is the offset just past the ClientHello record;
+    ///   `buf[..record_end]` is the exact record handed to the SNI parser.
+    /// - `filled` is the total bytes drained from downstream
+    ///   (`filled >= record_end`); the caller forwards `buf[..filled]` so
+    ///   any trailing bytes the client coalesced into the same TCP segment
+    ///   (e.g., TLS 1.3 0-RTT EarlyData) reach upstream verbatim.
+    ///
+    /// Closes the connection (returning an `Err` log string) when:
+    /// - the peer disconnects before a full record arrives,
+    /// - the record would exceed `buf.len()` (`MAX_CLIENT_HELLO_LEN`),
+    /// - the cumulative read time exceeds [`SNI_READ_DEADLINE`],
+    /// - the first byte already disproves a TLS Handshake record.
+    async fn read_client_hello(&self, downstream: &mut Stream, buf: &mut [u8]) -> Result<(usize, usize), String> {
+        let deadline = tokio::time::Instant::now() + SNI_READ_DEADLINE;
+        let mut filled: usize = 0;
+
+        loop {
+            match sni_parser::client_hello_record_complete(&buf[..filled]) {
+                sni_parser::RecordCompleteness::Complete { record_end } => {
+                    return Ok((record_end, filled));
+                }
+                sni_parser::RecordCompleteness::NotTlsHandshake => {
+                    return Err("not a TLS handshake".to_string());
+                }
+                sni_parser::RecordCompleteness::NeedMore => {}
+            }
+
+            if filled >= buf.len() {
+                return Err("ClientHello exceeds MAX_CLIENT_HELLO_LEN".to_string());
+            }
+
+            let read_fut = downstream.read(&mut buf[filled..]);
+            let n = match tokio::time::timeout_at(deadline, read_fut).await {
+                Ok(Ok(0)) => {
+                    return Err(if filled == 0 {
+                        "connection closed before ClientHello".to_string()
+                    } else {
+                        "connection closed mid-ClientHello".to_string()
+                    });
+                }
+                Ok(Ok(n)) => n,
+                Ok(Err(e)) => return Err(format!("read ClientHello failed: {e}")),
+                Err(_) => return Err("ClientHello read timeout".to_string()),
+            };
+            filled += n;
+        }
+    }
+
     /// Route match, connect upstream, and relay traffic.
     ///
     /// `initial_bytes` contains the raw ClientHello bytes already read from
@@ -179,28 +245,20 @@ impl EdgionTlsPassthroughProxy {
                 continue;
             }
 
-            let namespace = backend_ref
-                .namespace
-                .as_deref()
-                .or_else(|| tls_route.metadata.namespace.as_deref())
-                .unwrap_or("default");
-            let service_key = format!("{}/{}", namespace, &backend_ref.name);
+            let route_ns = tls_route.metadata.namespace.as_deref().unwrap_or("default");
+            let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
+            let service_key = format!("{}/{}", backend_ns, backend_ref.name);
 
-            let backend = match select_roundrobin_backend(&service_key) {
+            let backend = match select_roundrobin_backend_key(&service_key) {
                 Some(b) => b,
                 None => {
-                    last_err = format!("no endpoint: {service_key}");
+                    last_err = format!("no endpoint: {}", service_key);
                     continue;
                 }
             };
 
-            let mut upstream_addr = backend.addr;
-            resolve_target_port(
-                &mut upstream_addr,
-                backend_ref.port,
-                &service_key,
-                PortLookupSource::Auto,
-            );
+            let mut upstream_addr = backend.inner().addr.clone();
+            resolve_target_port_key(&mut upstream_addr, backend_ref.port, &service_key);
             let upstream_addr_str = upstream_addr.to_string();
             let parsed_upstream_addr: Option<std::net::SocketAddr> = upstream_addr_str.parse().ok();
 
@@ -210,7 +268,7 @@ impl EdgionTlsPassthroughProxy {
                 backend: Some(MatchedInfo {
                     rsc: Rsc {
                         kind: backend_ref.kind.clone().unwrap_or_else(|| "Service".to_string()),
-                        ns: namespace.to_string(),
+                        ns: backend_ns.to_string(),
                         name: backend_ref.name.clone(),
                     },
                     section: None,
@@ -223,6 +281,10 @@ impl EdgionTlsPassthroughProxy {
                 proxy_protocol_sent: false,
                 upstream_protocol: Some("TLS-Passthrough".to_string()),
             });
+            if validate_endpoint_backend_addr(&upstream_addr, self.allow_loopback_upstream()).is_err() {
+                ctx.err_log = Some(UNSAFE_UPSTREAM_ADDRESS_LOG.to_string());
+                return;
+            }
 
             let peer = BasicPeer::new(&upstream_addr_str);
             match self.connector.new_stream(&peer).await {
@@ -236,20 +298,21 @@ impl EdgionTlsPassthroughProxy {
                         );
                         info.connection_established = true;
                     }
-                    upstream = Some(stream);
+                    upstream = Some((stream, upstream_addr_str));
                     break;
                 }
                 Err(e) => {
                     last_err = format!("connect failed: {upstream_addr_str}: {e}");
                     if attempt + 1 < max_attempts {
                         ctx.push_log(&format!("retry {}/{max_attempts}: {last_err}", attempt + 1));
+                        tokio::time::sleep(tls_connect_retry_backoff(attempt)).await;
                     }
                 }
             }
         }
 
-        let mut upstream_stream = match upstream {
-            Some(s) => s,
+        let (mut upstream_stream, upstream_addr_str) = match upstream {
+            Some(pair) => pair,
             None => {
                 ctx.err_log = Some(last_err);
                 return;
@@ -259,15 +322,10 @@ impl EdgionTlsPassthroughProxy {
         // 4. Send Proxy Protocol v2 if configured
         if let Some(2) = rule.proxy_protocol_version {
             if let Ok(src_ip) = ctx.client_addr.parse::<IpAddr>() {
-                let upstream_addr_str = ctx
-                    .upstream_info
-                    .last()
-                    .and_then(|i| {
-                        let addr = i.addr.as_deref()?;
-                        let port = i.port?;
-                        Some(format!("{addr}:{port}"))
-                    })
-                    .unwrap_or_default();
+                // Use the already-bracketed upstream_addr_str (SocketAddr Display) for the PP2
+                // destination. Re-deriving it from the bare-IP info.addr would drop the IPv6
+                // brackets and fail to parse, silently advertising 0.0.0.0:0 — see proxy.rs,
+                // which feeds the bracketed string straight into the PP2 builder.
                 let src_addr = std::net::SocketAddr::new(src_ip, ctx.client_port);
                 let dst_addr: std::net::SocketAddr = upstream_addr_str.parse().unwrap_or_else(|_| {
                     std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
@@ -327,10 +385,6 @@ impl EdgionTlsPassthroughProxy {
                                 ctx.err_log = Some("upstream write err".to_string());
                                 return;
                             }
-                            if (upstream.flush().await).is_err() {
-                                ctx.err_log = Some("upstream flush err".to_string());
-                                return;
-                            }
                         }
                         Err(_) => {
                             ctx.err_log = Some("downstream read err".to_string());
@@ -349,6 +403,7 @@ impl EdgionTlsPassthroughProxy {
                                 ctx.err_log = Some("downstream write err".to_string());
                                 return;
                             }
+                            // Listener streams buffer writes; flush client-facing bytes promptly.
                             if (downstream.flush().await).is_err() {
                                 ctx.err_log = Some("downstream flush err".to_string());
                                 return;
@@ -395,6 +450,15 @@ impl EdgionTlsPassthroughProxy {
             .security_protect
             .as_ref()
             .is_none_or(|sp| sp.tls_proxy_log_record)
+    }
+
+    fn allow_loopback_upstream(&self) -> bool {
+        self.edgion_gateway_config
+            .spec
+            .security_protect
+            .as_ref()
+            .map(|s| s.allow_loopback_upstream)
+            .unwrap_or(false)
     }
 
     async fn log_disconnect(&self, ctx: &mut TlsContext) {

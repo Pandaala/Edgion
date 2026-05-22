@@ -11,6 +11,9 @@
 //   - 03_HTTPRoute_default_basic-auth-hide-creds.yaml   # Route: basic-auth-hide-creds.example.com
 //   - 04_EdgionPlugins_default_basic-auth-delay.yaml    # authFailureDelayMs=300
 //   - 05_HTTPRoute_default_basic-auth-delay.yaml        # Route: basic-auth-delay.example.com
+//   - 06_Secret_default_basic-auth-users-grouped.yaml          # Two grouped Secrets
+//   - 07_EdgionPlugins_default_basic-auth-grouped.yaml         # BasicAuth with partner-a + partner-b
+//   - 08_HTTPRoute_default_basic-auth-grouped.yaml             # Route for grouped test
 //
 // Test scenarios:
 //   1. Basic auth: valid credentials → 200
@@ -18,6 +21,8 @@
 //   3. Basic auth: wrong password → 401
 //   4. hide_credentials: Authorization header removed from upstream request after successful auth
 //   5. auth_failure_delay_ms: 401 response is delayed by at least the configured time
+//   6. grouped: partner-a user (alice) authenticates → 200
+//   7. grouped: partner-b user (bob) authenticates → 200
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -33,6 +38,13 @@ const USER_BOB: (&str, &str) = ("bob", "bob-secret");
 const TEST_HOST: &str = "basic-auth-test.example.com";
 const HIDE_CREDS_HOST: &str = "basic-auth-hide-creds.example.com";
 const DELAY_HOST: &str = "basic-auth-delay.example.com";
+
+/// Grouped test constants (must match 06/07/08 YAML fixtures)
+const GROUPED_HOST: &str = "basic-auth-grouped.example.com";
+const GROUPED_USER_A: &str = "alice";
+const GROUPED_PASSWORD_A: &str = "partner-a-pass";
+const GROUPED_USER_B: &str = "bob";
+const GROUPED_PASSWORD_B: &str = "partner-b-pass";
 
 /// Configured delay (ms) — must match authFailureDelayMs in 04_EdgionPlugins_default_basic-auth-delay.yaml
 const CONFIGURED_DELAY_MS: u64 = 300;
@@ -427,6 +439,129 @@ impl BasicAuthTestSuite {
         )
     }
 
+    fn test_stage_logs_contain_basic_auth() -> TestCase {
+        TestCase::new(
+            "stage_logs_contain_basic_auth",
+            "Access log stage_logs contains BasicAuth plugin entry on successful auth",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let trace_id = format!("test-basic-auth-{}", uuid::Uuid::new_v4());
+                    let url = format!("{}/health", ctx.http_url());
+                    let auth = basic_auth_header(USER_ALICE.0, USER_ALICE.1);
+
+                    let _ = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", TEST_HOST)
+                        .header("Authorization", &auth)
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await;
+
+                    let entry = match ctx
+                        .access_log_client()
+                        .get_access_log_with_retry(&trace_id, 10, 200)
+                        .await
+                    {
+                        Ok(e) => e,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Access log not found: {}", e)),
+                    };
+
+                    let found = entry.data["stage_logs"]
+                        .as_array()
+                        .map(|stages| {
+                            stages.iter().any(|stage| {
+                                stage["edgion_plugins"]
+                                    .as_array()
+                                    .map(|eps| {
+                                        eps.iter().any(|ep| {
+                                            ep["logs"]
+                                                .as_array()
+                                                .map(|logs| {
+                                                    logs.iter().any(|l| l["name"].as_str() == Some("BasicAuth"))
+                                                })
+                                                .unwrap_or(false)
+                                        })
+                                    })
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(false);
+
+                    if found {
+                        TestResult::passed_with_message(start.elapsed(), "BasicAuth found in stage_logs".to_string())
+                    } else {
+                        TestResult::failed(start.elapsed(), "BasicAuth not found in stage_logs".to_string())
+                    }
+                })
+            },
+        )
+    }
+
+    // ============================================================
+    // Grouped secret_groups Tests
+    // ============================================================
+
+    /// Partner-a user (alice) authenticates against grouped EdgionPlugins → 200
+    fn test_grouped_partner_a_returns_200() -> TestCase {
+        TestCase::new(
+            "grouped_partner_a_returns_200",
+            "Partner-a user (alice) authenticates against grouped EdgionPlugins",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let auth = basic_auth_header(GROUPED_USER_A, GROUPED_PASSWORD_A);
+                    let url = format!("{}/health", ctx.http_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", GROUPED_HOST)
+                        .header("Authorization", &auth)
+                        .send()
+                        .await
+                    {
+                        Ok(r) if r.status().as_u16() == 200 => {
+                            TestResult::passed_with_message(start.elapsed(), "partner-a 200".into())
+                        }
+                        Ok(r) => TestResult::failed(start.elapsed(), format!("expected 200, got {}", r.status())),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Partner-b user (bob) authenticates against grouped EdgionPlugins → 200
+    fn test_grouped_partner_b_returns_200() -> TestCase {
+        TestCase::new(
+            "grouped_partner_b_returns_200",
+            "Partner-b user (bob) authenticates against grouped EdgionPlugins",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let auth = basic_auth_header(GROUPED_USER_B, GROUPED_PASSWORD_B);
+                    let url = format!("{}/health", ctx.http_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", GROUPED_HOST)
+                        .header("Authorization", &auth)
+                        .send()
+                        .await
+                    {
+                        Ok(r) if r.status().as_u16() == 200 => {
+                            TestResult::passed_with_message(start.elapsed(), "partner-b 200".into())
+                        }
+                        Ok(r) => TestResult::failed(start.elapsed(), format!("expected 200, got {}", r.status())),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     /// Successful auth with delay config must NOT be delayed.
     /// Verifies that the delay is only applied on failure paths, not success.
     fn test_no_delay_on_success() -> TestCase {
@@ -510,6 +645,11 @@ impl TestSuite for BasicAuthTestSuite {
             Self::test_auth_failure_delay_on_missing_credentials(),
             Self::test_auth_failure_delay_on_wrong_password(),
             Self::test_no_delay_on_success(),
+            // access log regression
+            Self::test_stage_logs_contain_basic_auth(),
+            // grouped secret_groups
+            Self::test_grouped_partner_a_returns_200(),
+            Self::test_grouped_partner_b_returns_200(),
         ]
     }
 }

@@ -1,20 +1,25 @@
 use serde::Serialize;
 use smallvec::SmallVec;
 
-/// Fixed buffer capacity (bytes)
-const BUFFER_CAPACITY: usize = 100;
+/// Tier-1 fixed buffer capacity (bytes). Entries that no longer fit overflow
+/// into the tier-2 `ULogBuffer`.
+const BUFFER_CAPACITY: usize = 128;
 
-/// Max log entries in fixed buffer
-const MAX_LOG_ENTRIES: usize = 20;
+/// Inline capacity hint for the `positions` SmallVec — NOT a hard entry-count
+/// cap. The only limit on tier 1 is `BUFFER_CAPACITY`; in the pathological
+/// many-tiny-entries case `positions` simply spills to the heap.
+const POSITIONS_INLINE_CAP: usize = 20;
 
-/// Max buffer size (bytes) for unbounded ULogBuffer
+/// Tier-2 overflow buffer cap (bytes).
 const ULOG_MAX_BUFFER: usize = 512;
 
-/// Fixed-size log buffer (stack-allocated, zero heap allocation)
+/// Byte-bounded log buffer. The byte store is stack-allocated; the `positions`
+/// index is inline for up to `POSITIONS_INLINE_CAP` entries and spills to the
+/// heap beyond that.
 #[derive(Debug, Clone)]
 pub struct LogBuffer {
     buffer: SmallVec<[u8; BUFFER_CAPACITY]>,
-    positions: SmallVec<[usize; MAX_LOG_ENTRIES]>,
+    positions: SmallVec<[usize; POSITIONS_INLINE_CAP]>,
 }
 
 impl LogBuffer {
@@ -31,9 +36,6 @@ impl LogBuffer {
     /// block accidental token/claim leakage via `format!` or error `Display`.
     #[inline]
     pub fn push(&mut self, log: &str) -> bool {
-        if self.positions.len() >= MAX_LOG_ENTRIES {
-            return false;
-        }
         if self.buffer.len() + log.len() > BUFFER_CAPACITY {
             return false;
         }
@@ -43,25 +45,31 @@ impl LogBuffer {
         true
     }
 
-    /// Push an error entry with unified `"err: "` prefix and `"; "` suffix.
+    /// Push an error entry with unified `"err: "` prefix.
     /// `kind` is `&'static str` — enforces compile-time literal, blocks accidental
     /// token / claim / user-input leakage via `format!` or error `Display`.
     #[inline]
     pub fn push_err(&mut self, kind: &'static str) -> bool {
         const PREFIX: &[u8] = b"err: ";
-        const SUFFIX: &[u8] = b"; ";
-        if self.positions.len() >= MAX_LOG_ENTRIES {
-            return false;
-        }
-        let total = PREFIX.len() + kind.len() + SUFFIX.len();
+        let total = PREFIX.len() + kind.len();
         if self.buffer.len() + total > BUFFER_CAPACITY {
             return false;
         }
         self.buffer.extend_from_slice(PREFIX);
         self.buffer.extend_from_slice(kind.as_bytes());
-        self.buffer.extend_from_slice(SUFFIX);
         self.positions.push(self.buffer.len());
         true
+    }
+
+    /// Iterate the buffer's entries, in push order.
+    pub fn entries(&self) -> impl Iterator<Item = &str> + '_ {
+        let buffer = &self.buffer;
+        let mut start = 0;
+        self.positions.iter().map(move |&end| {
+            let slice = &buffer[start..end];
+            start = end;
+            std::str::from_utf8(slice).unwrap_or("")
+        })
     }
 
     #[cfg(test)]
@@ -83,16 +91,7 @@ impl Serialize for LogBuffer {
     where
         S: serde::Serializer,
     {
-        use serde::ser::SerializeSeq;
-        let mut seq = serializer.serialize_seq(Some(self.positions.len()))?;
-        let mut start = 0;
-        for &end in &self.positions {
-            let slice = &self.buffer[start..end];
-            let s = std::str::from_utf8(slice).map_err(serde::ser::Error::custom)?;
-            seq.serialize_element(s)?;
-            start = end;
-        }
-        seq.end()
+        serializer.collect_seq(self.entries())
     }
 }
 
@@ -124,21 +123,30 @@ impl ULogBuffer {
         true
     }
 
-    /// Push an error entry with unified `"err: "` prefix and `"; "` suffix.
+    /// Push an error entry with unified `"err: "` prefix.
     /// See [`LogBuffer::push_err`] for rationale.
     #[inline]
     pub fn push_err(&mut self, kind: &'static str) -> bool {
         const PREFIX: &str = "err: ";
-        const SUFFIX: &str = "; ";
-        let total = PREFIX.len() + kind.len() + SUFFIX.len();
+        let total = PREFIX.len() + kind.len();
         if self.buffer.len() + total > ULOG_MAX_BUFFER {
             return false;
         }
         self.buffer.push_str(PREFIX);
         self.buffer.push_str(kind);
-        self.buffer.push_str(SUFFIX);
         self.positions.push(self.buffer.len());
         true
+    }
+
+    /// Iterate the buffer's entries, in push order.
+    pub fn entries(&self) -> impl Iterator<Item = &str> + '_ {
+        let buffer = &self.buffer;
+        let mut start = 0;
+        self.positions.iter().map(move |&end| {
+            let slice = &buffer[start..end];
+            start = end;
+            slice
+        })
     }
 
     #[cfg(test)]
@@ -158,13 +166,43 @@ impl Serialize for ULogBuffer {
     where
         S: serde::Serializer,
     {
-        use serde::ser::SerializeSeq;
-        let mut seq = serializer.serialize_seq(Some(self.positions.len()))?;
-        let mut start = 0;
-        for &end in &self.positions {
-            seq.serialize_element(&self.buffer[start..end])?;
-            start = end;
+        serializer.collect_seq(self.entries())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_buffer_accepts_until_128_bytes() {
+        let mut b = LogBuffer::new();
+        // 16-byte entries: 8 entries == 128 bytes exactly fit, the 9th is rejected.
+        for i in 0..8 {
+            assert!(b.push("0123456789abcdef"), "entry {i} should fit the 128-byte budget");
         }
-        seq.end()
+        assert!(
+            !b.push("0123456789abcdef"),
+            "9th entry must be rejected (byte budget full)"
+        );
+    }
+
+    #[test]
+    fn log_buffer_has_no_entry_count_cap() {
+        let mut b = LogBuffer::new();
+        // 1-byte entries: 128 of them all fit (the old code capped at 20 entries).
+        for i in 0..128 {
+            assert!(b.push("x"), "entry {i} should fit under the byte budget");
+        }
+        assert!(!b.push("x"), "129th byte must be rejected");
+    }
+
+    #[test]
+    fn log_buffer_rejects_oversize_entry_without_partial_write() {
+        let mut b = LogBuffer::new();
+        let big = "y".repeat(200);
+        assert!(!b.push(&big), "an over-budget entry is rejected");
+        // The buffer was not partially mutated: a small entry still fits.
+        assert!(b.push("ok"), "buffer untouched after a rejected oversize push");
     }
 }

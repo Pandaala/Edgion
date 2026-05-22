@@ -43,29 +43,12 @@ pub fn build_connect_options(
     let mut has_options = false;
 
     if crd.auth.is_some() {
-        match auth {
-            CredentialState::Resolved(m) => {
-                // `BasicAuthResolver` legitimately supports password-only
-                // secrets — username may be `None` inside a valid material.
-                let user = m.username.as_deref().unwrap_or("");
-                options = options.with_user(user, m.password.as_str());
-                has_options = true;
-            }
-            CredentialState::Pending => {
-                anyhow::bail!(
-                    "Etcd auth is configured via secretRef but credential material \
-                     has not been resolved yet; refusing to build client without credentials"
-                );
-            }
-            CredentialState::Invalid(reason) => {
-                anyhow::bail!("Etcd credential material is invalid: {reason}");
-            }
-            CredentialState::NotRequired => {
-                anyhow::bail!(
-                    "Etcd auth configured in CRD but credential state is NotRequired (internal bug)"
-                );
-            }
-        }
+        let m = crate::core::gateway::link_sys::credential::require_basic_material(auth, "Etcd")?.ok_or_else(|| {
+            anyhow::anyhow!("Etcd auth configured in CRD but credential state is NotRequired (internal bug)")
+        })?;
+        let user = m.username.as_deref().unwrap_or("");
+        options = options.with_user(user, m.password.as_str());
+        has_options = true;
     }
 
     // TLS — parse CA / mTLS material from the CRD (inline + resolved Secret)
@@ -125,12 +108,14 @@ fn build_tls_options(tls: &TlsConfig) -> Result<TlsOptions> {
         }
     }
 
-    // etcd-client TlsOptions does not expose an insecure_skip_verify knob;
-    // surfacing a warning lets operators know the flag is ignored here.
+    // etcd-client TlsOptions does not expose an insecure_skip_verify knob.
+    // Aligning with Redis: refuse to start rather than silently ignoring the
+    // operator's intent (an operator who set `insecure_skip_verify: true` for
+    // testing would otherwise get strict verification without any signal).
     if tls.insecure_skip_verify == Some(true) {
-        tracing::warn!(
-            "Etcd: insecure_skip_verify is not directly supported by etcd-client TlsOptions; \
-             use a custom channel if needed"
+        anyhow::bail!(
+            "Etcd TLS insecure_skip_verify is configured but not supported by etcd-client. \
+             TLS always verifies certificates. Use a proper CA certificate or connect without TLS."
         );
     }
 
@@ -177,14 +162,18 @@ mod tests {
     }
 
     fn crd_with_secret_ref() -> EtcdClientConfig {
-        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
         EtcdClientConfig {
             auth: Some(EtcdAuth {
-                secret_ref: SecretReference {
-                    name: "etcd-creds".to_string(),
-                    namespace: None,
+                slot: SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "etcd-creds".to_string(),
+                        namespace: None,
+                    },
+                    secret: None,
                 },
-                secret: None,
             }),
             ..minimal_config(vec!["http://localhost:2379".to_string()])
         }
@@ -325,6 +314,27 @@ mod tests {
         };
         let options = build_connect_options(&crd, &no_auth()).unwrap();
         assert!(options.is_some());
+    }
+
+    /// P1-02: aligning with Redis, `insecure_skip_verify: true` must fail
+    /// fast rather than silently being ignored — etcd-client cannot honour
+    /// the flag and an operator who set it (e.g. for self-signed dev certs)
+    /// would otherwise get strict verification with no signal.
+    #[test]
+    fn test_insecure_skip_verify_bails() {
+        let crd = EtcdClientConfig {
+            tls: Some(TlsConfig {
+                enabled: true,
+                certs: None,
+                insecure_skip_verify: Some(true),
+            }),
+            ..minimal_config(vec!["https://localhost:2379".to_string()])
+        };
+        let err = build_connect_options(&crd, &no_auth()).expect_err("should refuse insecure_skip_verify");
+        assert!(
+            err.to_string().contains("insecure_skip_verify"),
+            "unexpected error message: {err}"
+        );
     }
 
     #[test]

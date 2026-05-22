@@ -9,7 +9,8 @@
 //!
 //! - **config**: `LocalAuthConfig` — TOML-based configuration and defaults.
 //! - **handlers**: Login and me HTTP handlers.
-//! - **middleware**: Axum middleware that validates JWT Bearer tokens.
+//! - **middleware**: `LocalAuthState` shared with `unified_auth` for local
+//!   validation fallback. The actual middleware lives in `unified_auth`.
 
 pub mod config;
 pub mod handlers;
@@ -21,4 +22,4 @@ pub use config::LocalAuthConfig;
 pub use handlers::{
     login_handler, logout_handler, me_handler, AuthStatus, AuthStatusResponse, LoginRequest, LoginResponse,
 };
-pub use middleware::{local_auth_middleware, LocalAuthState};
+pub use middleware::LocalAuthState;

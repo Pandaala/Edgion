@@ -1,16 +1,16 @@
 ---
 name: backend-tls-policy-features
-description: BackendTLSPolicy 完整 Schema：上游后端 TLS 验证和 mTLS。
+description: Full BackendTLSPolicy schema: upstream backend TLS validation and mTLS.
 ---
 
-# BackendTLSPolicy 资源
+# BackendTLSPolicy Resource
 
 > API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
-> Gateway API v1.5.0 资源；旧集群可能仍 served `v1alpha3`
+> Gateway API v1.5.0 resource; older clusters may still serve `v1alpha3`
 
-BackendTLSPolicy 定义网关到后端的 TLS 连接配置，包括 CA 验证和客户端证书（mTLS）。
+BackendTLSPolicy defines the TLS connection configuration from the gateway to the backend, including CA validation and client certificates (mTLS).
 
-## 完整 Schema
+## Full Schema
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -19,74 +19,74 @@ metadata:
   name: my-backend-tls
   namespace: default
 spec:
-  targetRefs:                                      # 目标 Service
+  targetRefs:                                      # Target Service
     - group: ""
       kind: Service
       name: backend-service
-      sectionName: https                           # 可选：指定 Service 端口名
+      sectionName: https                           # Optional: specify a Service port name
 
   validation:
-    hostname: "backend.internal.svc"               # 必填：TLS SNI 和证书验证主机名
-    caCertificateRefs:                             # CA 证书引用（Secret 或 ConfigMap）
+    hostname: "backend.internal.svc"               # Required: TLS SNI and certificate validation hostname
+    caCertificateRefs:                             # CA certificate references (Secret or ConfigMap)
       - group: ""
-        kind: ConfigMap                            # ConfigMap: 读取 ca.crt key
+        kind: ConfigMap                            # ConfigMap: read the ca.crt key
         name: backend-ca-cert
-    subjectAltNames:                               # SAN 白名单（可选）
+    subjectAltNames:                               # SAN allowlist (optional)
       - type: Hostname
         hostname: "backend.internal.svc"
       - type: URI
         uri: "spiffe://cluster.local/ns/default/sa/backend"
-    wellKnownCACertificates: System                # 使用系统 CA（可选）
+    wellKnownCACertificates: System                # Use system CAs (optional)
 
-  options:                                         # Edgion 扩展选项
-    edgion.io/client-certificate-ref: "client-cert"          # 客户端证书（同 namespace）
+  options:                                         # Edgion extension options
+    edgion.io/client-certificate-ref: "client-cert"          # Client certificate (same namespace)
 ```
 
-## 版本兼容策略
+## Multi-version Compatibility Strategy
 
-- controller 内部主模型按 `v1` 处理
-- 若集群只 served `v1alpha3`，controller 可以回退监听旧版本，并在进入 handler 前转换成统一内部类型
-- 不建议同时为 `v1` 和 `v1alpha3` 启两个 watcher
-- 若集群已只 served `v1`，旧的 `v1alpha3` manifest 需要迁移为 `v1`
-- FileSystem 模式下可以接受 `v1` 和 `v1alpha3` 文件输入，但应在解析入口统一转换成 `v1` 内部模型
+- The controller's primary internal model is processed as `v1`.
+- If a cluster only serves `v1alpha3`, the controller can fall back to watching the older version, converting to the unified internal type before entering handlers.
+- It is not recommended to start two watchers for both `v1` and `v1alpha3` simultaneously.
+- If a cluster only serves `v1`, older `v1alpha3` manifests must be migrated to `v1`.
+- In FileSystem mode, both `v1` and `v1alpha3` file inputs are accepted, but they should be uniformly converted to the `v1` internal model at the parsing entry.
 
-## spec 字段详解
+## spec Field Details
 
 ### targetRefs
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `group` | `String` | 是 | 通常 `""` (core) |
-| `kind` | `String` | 是 | 通常 `Service` |
-| `name` | `String` | 是 | Service 名称 |
-| `sectionName` | `String?` | 否 | Service 端口名 |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `group` | `String` | Yes | Typically `""` (core) |
+| `kind` | `String` | Yes | Typically `Service` |
+| `name` | `String` | Yes | Service name |
+| `sectionName` | `String?` | No | Service port name |
 
 ### validation
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `hostname` | `String` | 是 | TLS SNI 和证书验证的主机名 |
-| `caCertificateRefs` | `Vec<CACertRef>?` | 否 | CA 证书引用列表（支持 Secret 和 ConfigMap，ConfigMap 读取 `ca.crt` key） |
-| `subjectAltNames` | `Vec<SubjectAltName>?` | 否 | SAN 白名单 |
-| `wellKnownCACertificates` | `String?` | 否 | `System`：使用系统 CA 证书 |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `hostname` | `String` | Yes | TLS SNI and certificate validation hostname |
+| `caCertificateRefs` | `Vec<CACertRef>?` | No | CA certificate reference list (supports Secret and ConfigMap; ConfigMap reads the `ca.crt` key) |
+| `subjectAltNames` | `Vec<SubjectAltName>?` | No | SAN allowlist |
+| `wellKnownCACertificates` | `String?` | No | `System`: use system CA certificates |
 
 **SubjectAltName**:
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
+| Field | Type | Description |
+|-------|------|-------------|
 | `type` | `String` | `Hostname` / `URI` |
-| `hostname` | `String?` | type=Hostname 时必填 |
-| `uri` | `String?` | type=URI 时必填 |
+| `hostname` | `String?` | Required when type=Hostname |
+| `uri` | `String?` | Required when type=URI |
 
-### options — Edgion 扩展
+### options — Edgion Extensions
 
-| Key | 值格式 | 说明 |
-|-----|--------|------|
-| `edgion.io/client-certificate-ref` | `name` | 客户端证书 Secret（同 namespace，用于网关→后端 mTLS） |
+| Key | Value Format | Description |
+|-----|--------------|-------------|
+| `edgion.io/client-certificate-ref` | `name` | Client certificate Secret (same namespace, used for gateway→backend mTLS) |
 
 ## Status Schema
 
-ancestorRef 通过 `Service → Route → Gateway` 三步查询自动解析，指向关联的 Gateway（非 BackendTLSPolicy 自身）。
+The ancestorRef is automatically resolved through a three-step `Service → Route → Gateway` lookup, pointing to the associated Gateway (not the BackendTLSPolicy itself).
 
 ```yaml
 status:
@@ -108,24 +108,24 @@ status:
 
 ### Accepted condition reasons
 
-| Reason | 含义 | 优先级 |
-|--------|------|--------|
-| `Invalid` | 校验失败（如 caCertificateRefs 和 wellKnownCACertificates 互斥） | 1（最高） |
-| `NoValidCACertificate` | 所有 CA 证书引用都无效 | 2 |
-| `Conflicted` | 同一 target 存在更高优先级的 policy | 3 |
-| `Accepted` | 正常接受 | 4 |
+| Reason | Meaning | Priority |
+|--------|---------|----------|
+| `Invalid` | Validation failed (e.g., caCertificateRefs and wellKnownCACertificates are mutually exclusive) | 1 (highest) |
+| `NoValidCACertificate` | All CA certificate references are invalid | 2 |
+| `Conflicted` | A higher-priority policy exists for the same target | 3 |
+| `Accepted` | Accepted normally | 4 |
 
 ### ResolvedRefs condition reasons
 
-| Reason | 含义 | 优先级 |
-|--------|------|--------|
-| `InvalidKind` | caCertificateRef kind 不支持（非 Secret/ConfigMap） | 1（最高） |
-| `InvalidCACertificateRef` | CA ref 不存在或缺少 `ca.crt` key | 2 |
-| `ResolvedRefs` | 所有引用已解析 | 3 |
+| Reason | Meaning | Priority |
+|--------|---------|----------|
+| `InvalidKind` | The caCertificateRef kind is not supported (not Secret/ConfigMap) | 1 (highest) |
+| `InvalidCACertificateRef` | The CA ref does not exist or is missing the `ca.crt` key | 2 |
+| `ResolvedRefs` | All references resolved | 3 |
 
-### 冲突检测
+### Conflict Detection
 
-多个 BackendTLSPolicy 指向同一 Service（相同 sectionName）时，按 Gateway API 优先级规则只有一个被 Accepted：
-- 先按 `creationTimestamp` 升序（更早创建的优先）
-- 相同时间按 `{namespace}/{name}` 字典序
-- 不同 `sectionName` 不冲突
+When multiple BackendTLSPolicies target the same Service (with the same sectionName), only one is Accepted per the Gateway API priority rules:
+- Sort by `creationTimestamp` ascending (earlier-created wins).
+- Tie-break by lexicographic order of `{namespace}/{name}`.
+- Different `sectionName` values do not conflict.

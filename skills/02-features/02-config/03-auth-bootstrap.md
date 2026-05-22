@@ -1,64 +1,64 @@
-# Admin 凭证引导（Auth Bootstrap）
+# Admin Credential Bootstrap (Auth Bootstrap)
 
-描述 Controller / Center 的 admin 凭证在启动时的来源，以及 operator 的配置路径。
+Describes where the Controller / Center admin credentials come from at startup and the configuration paths available to operators.
 
-## 行为总览
+## Behavior Overview
 
-| 组件 | 无 `[local_auth]` + 无 `[auth]` | 有 `[local_auth]` | 有 `[auth]` OIDC |
-|------|---|---|---|
-| Controller | 自动生成 Secret `edgion-admin-credentials`（K8s 模式）或写入 conf 目录（本地模式）；登录用生成的密码 | Static 凭证从配置文件 | OIDC 流程 |
-| Center | **server 启动 + 业务路由永远 503** + 启动 WARN 日志 | Static 凭证从配置文件 | OIDC 流程 |
+| Component | No `[local_auth]` + No `[auth]` | With `[local_auth]` | With `[auth]` OIDC |
+|-----------|---|---|---|
+| Controller | Auto-generates Secret `edgion-admin-credentials` (K8s mode) or writes to the conf directory (local mode); log in with the generated password | Static credentials from the configuration file | OIDC flow |
+| Center | **Server starts + business routes always 503** + WARN log at startup | Static credentials from the configuration file | OIDC flow |
 
-**关键差异**：Controller 支持"零配置启动"（Secret 自动生成保留）；Center 要求 operator 显式提供凭证。
+**Key difference**: Controller supports "zero-config startup" (Secret auto-generation is retained); Center requires the operator to provide credentials explicitly.
 
-### Center 的 503 语义（fail-close）
+### Center's 503 Semantics (fail-close)
 
-Center 没有自动生成能力。当 `[local_auth]` 和 `[auth]` 都未配置时：
-- `require_auth` 派生为 `true`（safe default：避免 admin API 裸奔）
-- 没有任何 auth provider ready
-- `unified_auth_middleware` 走"fail-close"分支返回 `503 Service Unavailable`（携带 `Retry-After: 10`）
-- `/health`、`/ready`、`/metrics`、`/api/v1/auth/status` 仍可访问（skip_paths + early-return 路径）
-- 启动日志打印 WARN：`No authentication configured. Admin endpoints will return 503 until you configure [local_auth] or [auth] in your TOML.`
+Center has no auto-generation capability. When neither `[local_auth]` nor `[auth]` is configured:
+- `require_auth` derives to `true` (safe default: avoids leaving the admin API exposed).
+- No auth provider is ready.
+- `unified_auth_middleware` takes the "fail-close" branch and returns `503 Service Unavailable` (with `Retry-After: 10`).
+- `/health`, `/ready`, `/metrics`, `/api/v1/auth/status` remain accessible (skip_paths + early-return paths).
+- The startup log prints WARN: `No authentication configured. Admin endpoints will return 503 until you configure [local_auth] or [auth] in your TOML.`
 
-## Controller: 读取自动生成的凭证
+## Controller: Reading the Auto-generated Credentials
 
-### K8s 模式
+### K8s Mode
 
 ```bash
 kubectl -n edgion-system get secret edgion-admin-credentials \
     -o jsonpath='{.data.password}' | base64 -d
 ```
 
-### 本地模式
+### Local Mode
 
 ```bash
 cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
 ```
 
-### 修改密码
+### Changing the Password
 
-`kubectl edit secret edgion-admin-credentials` 后 Controller 的 secret retry loop 会热更新
-`UnifiedAuthState`（CancellationToken 关停信号下语义稳定；见 fix #01 round 3 的结构性回归）。
+After `kubectl edit secret edgion-admin-credentials`, the Controller's secret retry loop hot-reloads
+`UnifiedAuthState` (semantics are stable under the CancellationToken shutdown signal; see the structural regression in fix #01 round 3).
 
-## Center: 如何提供 admin 凭证
+## Center: How to Provide Admin Credentials
 
-### 选项 A：`local_auth` 本地账号密码（YAML）
+### Option A: `local_auth` local username/password (YAML)
 
 ```yaml
 local_auth:
   enabled: true
   username: admin
-  # bcrypt hash。生成：htpasswd -bnBC 10 "" <your-password> | tr -d ':\n'
-  # 或使用明文密码字段（deploy/center-test/deploy.yaml 有 test 示例）
+  # bcrypt hash. Generate via: htpasswd -bnBC 10 "" <your-password> | tr -d ':\n'
+  # Or use a plaintext password field (deploy/center-test/deploy.yaml has a test example)
   password: "<your-password>"
-  jwt_secret: "<一个足够长的随机字符串，至少 32 字符>"
+  jwt_secret: "<a sufficiently long random string, at least 32 characters>"
   jwt_expiry_hours: 24
   skip_paths:
     - "/health"
     - "/ready"
 ```
 
-### 选项 B：`auth` OIDC
+### Option B: `auth` OIDC
 
 ```yaml
 auth:
@@ -68,18 +68,18 @@ auth:
   # ...
 ```
 
-### 什么都不配的后果（fail-close via 503）
+### Consequences of Configuring Nothing (fail-close via 503)
 
-Center 启动依然成功，但：
-- 所有 `/api/v1/*` 业务路径以 503 拒绝
-- `/health` / `/ready` / `/metrics` / `/api/v1/auth/status` 仍可访问
-- 启动日志打印 WARN（见上）
+Center starts successfully, but:
+- All `/api/v1/*` business paths are rejected with 503.
+- `/health` / `/ready` / `/metrics` / `/api/v1/auth/status` remain accessible.
+- The startup log prints WARN (see above).
 
-operator 发现后补配后重启即可。
+The operator can supply the configuration and restart afterward.
 
-### 显式关闭所有 provider 的后果（no-auth mode，**危险**）
+### Consequences of Explicitly Disabling All Providers (no-auth mode, **dangerous**)
 
-如果 operator **明确**把所有 provider 都设成 `enabled: false`，例如：
+If the operator **explicitly** sets all providers to `enabled: false`, for example:
 
 ```yaml
 local_auth:
@@ -88,56 +88,56 @@ auth:
   enabled: false
 ```
 
-此时：
-- `require_auth = false`（respect operator 的 opt-out 意图）
-- `unified_auth_middleware` 直接 passthrough 所有请求
-- **所有 `/api/v1/*` 业务路径无需 token 即可访问**——admin API **完全开放**
-- 启动时 WARN：`Admin API is running in NO-AUTH mode: ...`（2026-04-20 起）
+Then:
+- `require_auth = false` (respecting the operator's opt-out intent).
+- `unified_auth_middleware` directly passes through all requests.
+- **All `/api/v1/*` business paths are accessible without a token** — the admin API is **completely open**.
+- Startup WARN: `Admin API is running in NO-AUTH mode: ...` (since 2026-04-20).
 
-这是合法的"纯无认证模式"（例如内网隔离 + 其它网关层做认证），但**非常容易被误操作触发**（比如 operator 想"临时关掉 local_auth 只用 OIDC"却同时关错了两个）。如果你的部署真的要走这条路径，请：
+This is a legitimate "pure no-auth mode" (e.g., internal-network isolation + authentication handled by another gateway layer), but it is **very easy to trigger by mistake** (e.g., the operator wants to "temporarily disable local_auth and use OIDC only" but accidentally disables both). If your deployment really takes this path:
 
-1. 显式在部署文档写明"无认证模式，依赖 X 层做认证"
-2. 不要把这个 YAML 放到能被外网访问的 Center 上
+1. Explicitly state in the deployment documentation that this is "no-auth mode, relying on layer X for authentication".
+2. Do not place this YAML on a Center exposed to the public internet.
 
-如果你只是想**切换**到 OIDC-only，正确做法是：
-- `local_auth` 段整个**删掉**（或只留一个 `enabled: false`）
-- `auth` 段配成 `enabled: true` + 有效 discovery
-- 这样 `oidc_intent = true`，`require_auth = true`，走正常 OIDC 流程
+If you simply want to **switch** to OIDC-only, the correct approach is:
+- **Remove** the `local_auth` section entirely (or leave only `enabled: false`).
+- Configure the `auth` section with `enabled: true` + a valid discovery.
+- Then `oidc_intent = true`, `require_auth = true`, and the normal OIDC flow runs.
 
-## K8s 部署：Secret 挂载 Center YAML
+## K8s Deployment: Mounting Center YAML via Secret
 
-推荐模式：将 Center YAML 配置（含 `local_auth:` 段）存为 K8s Secret，挂载到 Center Pod 作为主配置文件。
+Recommended pattern: store the Center YAML configuration (including the `local_auth:` section) as a K8s Secret and mount it into the Center Pod as the main configuration file.
 
-参考：`deploy/center-test/deploy.yaml`。
+Reference: `deploy/center-test/deploy.yaml`.
 
-## JWT 撤销语义（`[local_auth]` 模式）
+## JWT Revocation Semantics (`[local_auth]` mode)
 
-**现状**：本地 admin JWT 是 **stateless** 的——Edgion 无服务端 token 黑名单，`POST /api/v1/auth/logout` 仅清除浏览器 cookie（`Max-Age=0`），**已签发的 token 在到达 `exp` 之前仍然有效**。
+**Current state**: local admin JWTs are **stateless** — Edgion has no server-side token blacklist; `POST /api/v1/auth/logout` only clears the browser cookie (`Max-Age=0`); **issued tokens remain valid until they reach `exp`**.
 
-暴露窗口上限 = `jwt_expiry_hours`（默认 `24`）。
+Upper bound on the exposure window = `jwt_expiry_hours` (default `24`).
 
-### 这是刻意的 stateless 取舍
+### This Is an Intentional Stateless Trade-off
 
-与 **Argo CD 本地管理员** / **Kubernetes Dashboard 内置 token** 同模式。引入服务端黑名单会遇到两种架构困境：
+Same pattern as **Argo CD local administrator** / **Kubernetes Dashboard built-in token**. Introducing a server-side blacklist runs into two architectural difficulties:
 
-| 方案 | 问题 |
-|---|---|
-| 内存黑名单（`HashSet<jti>`） | 多实例 HA 部署时每实例独立——logout 打到实例 A、后续请求打到实例 B → B 不知道撤销 = **假象防御**；进程重启清零 |
-| Redis 黑名单 | Admin API 路径引入 Redis 硬依赖 + 每请求 1 次 RT 延迟 + Redis 故障时 fail-open vs fail-close 两难 |
+| Approach | Problem |
+|----------|---------|
+| In-memory blacklist (`HashSet<jti>`) | In multi-instance HA deployments each instance is independent — logout hits instance A while subsequent requests hit instance B → B does not know about the revocation = **illusory defense**; process restarts wipe it. |
+| Redis blacklist | Introduces a hard Redis dependency on the admin API path + 1 RT latency per request + a fail-open vs. fail-close dilemma when Redis is unavailable. |
 
-所以 Edgion 选择"stateless JWT + 通过其他途径提供撤销能力"。
+So Edgion chooses "stateless JWT + provide revocation through other means".
 
-### 需要真正撤销能力时：**走 OIDC federation**
+### When Real Revocation Is Needed: **Use OIDC Federation**
 
-`unified_auth` 支持 `[auth]` 段配 OIDC（Keycloak / Auth0 / Okta / Azure AD / Google 等）：
-- 在 IdP 端撤销用户 session 或 refresh token → 所有基于该 session 的 access token 失效
-- IdP 端统一的 session 生命周期管理、revocation、审计日志
-- 这是"管理端认证"真正需要生产级撤销时的**业界标准路径**
+`unified_auth` supports configuring OIDC in the `[auth]` section (Keycloak / Auth0 / Okta / Azure AD / Google, etc.):
+- Revoke a user session or refresh token at the IdP → all access tokens based on that session become invalid.
+- Unified session lifecycle management, revocation, and audit logs at the IdP.
+- This is the **industry-standard path** when production-grade revocation is genuinely required for "management-side authentication".
 
-切换示例（Controller 或 Center 任一）：
+Switch example (either Controller or Center):
 
 ```yaml
-# 关闭 local_auth，改走 OIDC
+# Disable local_auth, switch to OIDC
 local_auth:
   enabled: false
 auth:
@@ -149,41 +149,41 @@ auth:
   # ...
 ```
 
-### 如果必须用 `[local_auth]`：缩短暴露窗口
+### If You Must Use `[local_auth]`: Shorten the Exposure Window
 
-对暂时不能走 OIDC 的部署：
+For deployments that cannot yet use OIDC:
 
 ```yaml
 local_auth:
   enabled: true
   # ...
-  jwt_expiry_hours: 4       # 生产推荐 1-4 小时，而非默认 24h
+  jwt_expiry_hours: 4       # Production recommendation: 1-4 hours rather than the default 24h
 ```
 
-**关于 CLI 工作流**：`edgion-cli` 的 `ensure_auth()` 会在 token 过期或 controller 重启后**自动 re-login**（前提是配置文件里能解析出 credentials），缩短 `jwt_expiry_hours` 不会破坏 CLI 用户体验；只会让浏览器 dashboard 场景更频繁提示重登。
+**About the CLI workflow**: `edgion-cli`'s `ensure_auth()` automatically **re-logs in** after the token expires or the controller restarts (provided that credentials can be parsed from the configuration file). Shortening `jwt_expiry_hours` does not break the CLI user experience; it only makes the browser dashboard scenario re-prompt for login more often.
 
-### 退役运维的标准操作（"撤销"的替代方案）
+### Standard Operations for Decommissioning (Alternatives to "Revocation")
 
-由于没有 per-token 撤销，处理 operator 离职 / 权限回收时：
+Since per-token revocation is unavailable, when handling operator departures / privilege removal:
 
-1. **改密码**：`kubectl edit secret edgion-admin-credentials` 修改 `password` 字段 → Controller secret retry loop 热更新 `UnifiedAuthState` → 所有未来登录必须用新密码（但**已签发的 token** 仍到 `exp` 才失效）
-2. **轮换 `jwt_secret`**：修改 Secret 中的 `jwt_secret` 字段 → 所有已签发 token 立刻失效（**一键 revoke all**，但会顺便把当前登录的所有管理员都踢掉）
-3. **等窗口过期**：若 `jwt_expiry_hours` 已缩到 1-4h，这也是可接受的方案
+1. **Change the password**: `kubectl edit secret edgion-admin-credentials` to modify the `password` field → the Controller secret retry loop hot-reloads `UnifiedAuthState` → all future logins must use the new password (but **issued tokens** still remain valid until `exp`).
+2. **Rotate `jwt_secret`**: modify the `jwt_secret` field in the Secret → all issued tokens become invalid immediately (**one-click revoke all**, but it also kicks off all currently logged-in administrators).
+3. **Wait for the window to expire**: if `jwt_expiry_hours` has been shortened to 1-4h, this is also acceptable.
 
-**方案 2（轮换 jwt_secret）是最快的"批量撤销"**，适合紧急情况；日常人员变动建议配合 OIDC federation 做。
+**Option 2 (rotate jwt_secret) is the fastest "bulk revocation"**, suitable for emergencies; routine personnel changes should be paired with OIDC federation.
 
-## 相关回归测试
+## Related Regression Tests
 
 - `examples/test/scripts/integration/test_center_no_auth.sh` —
-  Center 无 auth 配置启动 + /api/v1/controllers 业务路径 503 + WARN 日志的集成层结构性回归。
-  纳入 `run_integration.sh` 的前置检查。
+  Integration-layer structural regression for Center starting without auth configured + 503 on `/api/v1/controllers` business paths + WARN log.
+  Included in the prerequisites of `run_integration.sh`.
 
-## 历史
+## History
 
-- 2026-04-20：Center 删除 `admin/edgion1234` 默认 fallback（BREAKING）。
-  - 核心原因：fix #01 round 2 bug 1（`LocalAuthConfig::default()` 启动 panic）的根因是
-    Center 的 `or_else(|| Some(edgion1234))` fallback 替 operator 造了一个
-    password/jwt_secret 不满足 fix #01 加强 validate 的凭证。
-  - 修复：Center 不再兜底；operator 必须显式配置 `[local_auth]` 或 `[auth]`，
-    否则 admin API 全部 503。
-  - 相关 spec：`docs/superpowers/specs/2026-04-20-admin-server-unification-design.md`。
+- 2026-04-20: Center removed the default `admin/edgion1234` fallback (BREAKING).
+  - Root cause: the bug 1 in fix #01 round 2 (`LocalAuthConfig::default()` panicked at startup) was rooted in
+    the Center's `or_else(|| Some(edgion1234))` fallback constructing credentials for the operator that did not
+    satisfy fix #01's strengthened validate.
+  - Fix: Center no longer provides a fallback; the operator must explicitly configure `[local_auth]` or `[auth]`,
+    otherwise the admin API returns 503 across the board.
+  - Related spec: `docs/superpowers/specs/2026-04-20-admin-server-unification-design.md`.

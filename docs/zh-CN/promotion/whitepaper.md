@@ -364,7 +364,7 @@ pub trait RequestFilter: Send + Sync {
 - **短路中断。** 任何插件返回 `ErrResponse` 或 `ErrTerminateRequest`，将立即中断插件链，不再执行后续插件。这使得认证插件可以放在链首，未认证请求不会到达后续业务插件。
 - **条件执行。** 每个插件条目支持 `conditions` 配置，运行时在执行插件前先评估条件（基于请求 method、path、header、cookie 等），条件不满足则跳过该插件。这相当于为每个插件添加了一个前置的 if 判断。
 - **启用/禁用。** 每个插件条目支持 `enabled` 字段，设为 false 的插件会在构建 PluginRuntime 时被完全跳过。
-- **嵌套引用。** 通过 `ExtensionRef` 机制，一个 EdgionPlugins 可以引用另一个 EdgionPlugins 资源，实现插件配置的复用。运行时通过 `push_plugin_ref` / `has_plugin_ref` 进行循环引用检测，防止无限递归。
+- **跨路由复用。** 多条 HTTPRoute / GRPCRoute 可以通过 `ExtensionRef`（Gateway API 标准 filter）引用同一个 EdgionPlugins 资源，从而共享同一套插件链配置。该模型对标 Envoy ECDS：复用通过"多 Route 引用同一资源"表达，filter chain 自身保持扁平 list，不构成 graph。
 
 ### 5.4 Panic 隔离
 
@@ -485,7 +485,7 @@ Edgion 为每种协议 Listener 维护独立的日志通道和日志文件：
 | TLS | `tls_log` | `init_tls_logger` | `edgion_tls_log_dropped_total` |
 | UDP | `udp_log` | `init_udp_logger` | `edgion_udp_log_dropped_total` |
 
-这种隔离设计确保了：一个协议的日志写入瓶颈不会连锁影响其他协议。TCP 日志写入慢不会导致 HTTP 访问日志丢失。每个日志通道拥有独立的缓冲区（`LogBuffer`/`ULogBuffer`），使用 `SmallVec` 实现栈上分配，减少堆内存压力。
+这种隔离设计确保了：一个协议的日志写入瓶颈不会连锁影响其他协议。TCP 日志写入慢不会导致 HTTP 访问日志丢失。每个日志通道拥有独立的缓冲区，使用 `SmallVec` 实现栈上分配，减少堆内存压力。
 
 ### 6.4 异步 Channel 派发
 

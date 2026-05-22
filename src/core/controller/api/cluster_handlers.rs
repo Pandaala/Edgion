@@ -1,8 +1,8 @@
 use crate::types::prelude_resources::*;
 use axum::{
     body::Bytes,
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{Path, Query, State},
+    http::{header::LOCATION, HeaderMap, HeaderValue, StatusCode},
     response::Json,
 };
 use std::sync::Arc;
@@ -41,12 +41,12 @@ pub async fn get_cluster(
     resource.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
-/// Create a cluster-scoped resource
+/// Create a cluster-scoped resource.
 pub async fn create_cluster(
     State(state): State<Arc<AdminState>>,
     Path(kind_str): Path<String>,
     body: Bytes,
-) -> Result<Json<ApiResponse<String>>, StatusCode> {
+) -> Result<(StatusCode, HeaderMap, Json<ApiResponse<String>>), StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     if !is_kind_cluster_scoped(kind) {
@@ -94,7 +94,16 @@ pub async fn create_cluster(
         "Cluster resource created"
     );
 
-    Ok(Json(ApiResponse::success(format!("{} created", kind_str))))
+    let location = format!("/api/v1/cluster/{}/{}", kind_str, name);
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = HeaderValue::try_from(location) {
+        headers.insert(LOCATION, v);
+    }
+    Ok((
+        StatusCode::CREATED,
+        headers,
+        Json(ApiResponse::ok_body(format!("{} created", kind_str))),
+    ))
 }
 
 /// Update a cluster-scoped resource
@@ -147,14 +156,14 @@ pub async fn update_cluster(
         "Cluster resource updated"
     );
 
-    Ok(Json(ApiResponse::success(format!("{} updated", kind_str))))
+    Ok(Json(ApiResponse::ok_body(format!("{} updated", kind_str))))
 }
 
-/// Delete a cluster-scoped resource
+/// Delete a cluster-scoped resource.
 pub async fn delete_cluster(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, name)): Path<(String, String)>,
-) -> Result<Json<ApiResponse<String>>, StatusCode> {
+) -> Result<StatusCode, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     if !is_kind_cluster_scoped(kind) {
@@ -179,5 +188,21 @@ pub async fn delete_cluster(
         "Cluster resource deleted"
     );
 
-    Ok(Json(ApiResponse::success(format!("{} deleted", kind_str))))
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// List metadata-only keys for a cluster-scoped kind (keys endpoint)
+pub async fn list_cluster_keys(
+    State(state): State<Arc<AdminState>>,
+    Path(kind_str): Path<String>,
+    Query(pagination): Query<super::namespaced_handlers::PaginationQuery>,
+) -> Result<Json<ListResponse<crate::core::controller::conf_mgr::conf_center::traits::ResourceKey>>, StatusCode> {
+    let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    if !is_kind_cluster_scoped(kind) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let (data, continue_token) = state.center_list_keys(kind, pagination.into_list_options()).await?;
+    Ok(Json(ListResponse::success_with_token(data, continue_token)))
 }

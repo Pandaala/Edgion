@@ -1,6 +1,4 @@
-use crate::core::controller::conf_mgr::conf_center::EndpointMode;
 use crate::core::gateway::api;
-use crate::core::gateway::backends::init_global_endpoint_mode;
 use crate::core::gateway::cli::pingora::{create_and_configure_server, run_server};
 use crate::core::gateway::conf_sync::{ConfigClient, ConfigSyncClient};
 use crate::core::gateway::lb::leastconn::BackendCleaner;
@@ -69,10 +67,19 @@ impl EdgionGatewayCli {
         config: &EdgionGatewayConfig,
         shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
-        // Start backend cleaner
-        let cleaner = BackendCleaner::new();
+        // Start backend cleaner; stop it when the shutdown signal fires.
+        let mut cleaner = BackendCleaner::new();
         cleaner.start();
         tracing::info!("Backend cleaner task started for LeastConnection LB");
+        let mut cleaner_shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            while !*cleaner_shutdown.borrow() {
+                if cleaner_shutdown.changed().await.is_err() {
+                    break;
+                }
+            }
+            cleaner.stop().await;
+        });
 
         // Initialize health check stores and manager (tasks start on resource updates).
         let _ = crate::core::gateway::backends::health::check::get_hc_config_store();
@@ -186,7 +193,7 @@ impl EdgionGatewayCli {
         // 5. Initialize RateLimit global configuration
         config::init_rate_limit_global_config(&config.rate_limit);
         config::init_lru_cache_global_config(&config.lru_cache);
-        config::init_plugin_metadata_config(config.plugin_metadata.clone());
+        crate::types::sensitive::init_sensitive(config.access_log_sensitive.clone());
 
         // 5.1 Initialize AllEndpointStatus global configuration
         crate::core::gateway::plugins::http::all_endpoint_status::plugin::init_all_endpoint_status_global_config(
@@ -208,26 +215,10 @@ impl EdgionGatewayCli {
         init_global_config_client(config_client.clone())
             .map_err(|e| anyhow!("Failed to initialize global config client: {}", e))?;
 
-        // 4.1. Get server info from Controller (includes EndpointMode and supported kinds)
+        // 4.1. Get server info from Controller (includes supported kinds)
         let server_info = runtime
             .block_on(sync_client.get_server_info())
             .map_err(|e| anyhow!("Failed to get server info from Controller: {}", e))?;
-
-        // 4.2. Parse and initialize global endpoint mode from Controller
-        let endpoint_mode = match server_info.endpoint_mode.as_str() {
-            "EndpointSlice" => EndpointMode::EndpointSlice,
-            "Endpoint" => EndpointMode::Endpoint,
-            "Both" => EndpointMode::Both,
-            _ => {
-                tracing::warn!(
-                    component = "startup",
-                    endpoint_mode = %server_info.endpoint_mode,
-                    "Unknown endpoint mode from Controller, defaulting to EndpointSlice"
-                );
-                EndpointMode::EndpointSlice
-            }
-        };
-        init_global_endpoint_mode(endpoint_mode);
 
         // 4.3. Initialize integration testing mode from CLI flag
         // This flag activates: Access Log Store + Metrics Test Data collection
@@ -239,11 +230,10 @@ impl EdgionGatewayCli {
 
         tracing::info!(
             component = "startup",
-            endpoint_mode = ?endpoint_mode,
             test_mode = integration_testing,
             integration_testing_mode = integration_testing,
             server_id = %server_info.server_id,
-            "Global endpoint mode initialized from Controller"
+            "Gateway startup configuration initialized"
         );
 
         // 5. Start watching resources based on Controller's supported kinds
@@ -265,6 +255,12 @@ impl EdgionGatewayCli {
         // 5.2 Initialize metrics configuration (global OnceLock for hot-path access)
         config::init_request_duration_config(config.metrics.request_duration.clone());
         config::init_backend_requests_config(config.metrics.backend_requests.clone());
+
+        // 5.3 Initialize path normalization config (global OnceLock for hot-path access)
+        config::init_path_normalization_config(config.path_normalization.clone());
+
+        // 5.4 Initialize access log options (global OnceLock for hot-path access)
+        config::init_access_log_options(config.access_log_options.clone());
 
         // 6. Start auxiliary services
         // Create shutdown channel for auxiliary services

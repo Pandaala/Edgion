@@ -10,7 +10,7 @@ use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
 use crate::core::gateway::runtime::server::http_to_grpc_status;
 use crate::types::common::{KeyGet, KeySet, WebhookExtract};
 use crate::types::filters::PluginRunningResult;
-use crate::types::{DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset, MirrorState};
+use crate::types::{EdgionHttpContext, MirrorState, PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget};
 
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
@@ -51,6 +51,14 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.ctx.plugin_running_result = PluginRunningResult::ErrTerminateRequest;
     }
 
+    /// Apply queued response-header ops onto a freshly-built `ResponseHeader`.
+    /// Used by request-stage termination paths (ErrResponse) that build their
+    /// own response and would otherwise drop plugin-queued headers on the floor.
+    #[inline]
+    pub fn drain_pending_response_header_ops(&mut self, response_header: &mut ResponseHeader) {
+        self.ctx.drain_pending_response_header_ops(response_header);
+    }
+
     /// Send a gRPC error response with user-specified grpc-status and grpc-message.
     ///
     /// Uses the same three-frame pattern as `send_grpc_error_three_frame`:
@@ -64,6 +72,12 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.grpc_response_terminated = true;
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
+        // Apply queued ops first so request-stage plugins (e.g. cookie issuance)
+        // still land their headers even when the request terminates with a
+        // gRPC error. Then write content-type LAST so a queued Set on
+        // "content-type" cannot overwrite the gRPC contract value and break
+        // tonic clients with Internal(13).
+        self.ctx.drain_pending_response_header_ops(&mut resp);
         resp.insert_header("content-type", "application/grpc")
             .map_err(|e| Box::new(e) as PluginSessionError)?;
         self.inner
@@ -78,7 +92,8 @@ impl<'a> PingoraSessionAdapter<'a> {
         let mut trailers = HeaderMap::new();
         trailers.insert(
             http::header::HeaderName::from_static("grpc-status"),
-            HeaderValue::from_str(&grpc_status.to_string()).unwrap(),
+            HeaderValue::from_str(&grpc_status.to_string())
+                .expect("u16 decimal string is always a valid HeaderValue (ASCII digits only)"),
         );
         if let Some(msg) = message {
             // Per gRPC spec, grpc-message must be percent-encoded for non-ASCII chars
@@ -112,11 +127,15 @@ impl<'a> PingoraSessionAdapter<'a> {
     ///
     /// Looks up the WebhookRuntime from the global registry, performs health/rate-limit
     /// checks, sends the HTTP request with retry, and extracts the value from the response.
-    ///
-    /// TODO: Full implementation in Phase 3 (WebhookRegistry + runtime)
-    async fn resolve_webhook(&self, webhook_ref: &str, extract: &WebhookExtract) -> Option<String> {
+    async fn resolve_webhook(
+        &self,
+        webhook_ref: &str,
+        forward_headers: Option<&[String]>,
+        path_suffix: Option<&str>,
+        extract: &WebhookExtract,
+    ) -> Option<String> {
         use crate::core::gateway::link_sys::providers::webhook::resolve_webhook_key;
-        resolve_webhook_key(self, webhook_ref, extract).await
+        resolve_webhook_key(self, webhook_ref, forward_headers, path_suffix, extract).await
     }
 
     /// Extract path parameters from route pattern (lazy extraction).
@@ -138,7 +157,10 @@ impl<'a> PingoraSessionAdapter<'a> {
         if let Some(pattern) = pattern {
             // Only parse if pattern contains parameters
             if pattern.contains(':') {
-                let actual_path = self.inner.req_header().uri.path();
+                // Use normalized current path so :param extraction matches the
+                // view the route matcher used (strips ;param, merges //, decodes
+                // unreserved %xx, removes /./ /../).
+                let actual_path = self.ctx.path();
                 params = Self::parse_path_params(pattern, actual_path);
             }
         }
@@ -146,11 +168,14 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.ctx.path_params = Some(params);
     }
 
-    /// Send a gRPC trailers-only error response using the three-frame pattern:
+    /// Send a gRPC error response using the three-frame workaround:
     /// HEADERS (no END_STREAM) -> empty DATA -> TRAILERS (grpc-status + grpc-message).
     ///
-    /// Pingora's proxy Session.write_response_header() does NOT propagate end_of_stream
-    /// to the underlying H2 session, so a single HEADERS+END_STREAM frame cannot be used.
+    /// A spec-compliant gRPC Trailers-Only single HEADERS+END_STREAM frame cannot be emitted
+    /// due to a double-layer Pingora limitation: (1) the proxy Session drops end_of_stream
+    /// before it reaches the H2 layer, and (2) the H2 server has no API to fold pseudo-headers
+    /// and trailer fields into one HEADERS block. All mainstream gRPC clients tolerate the
+    /// three-frame form. See skills/04-review/rfc-divergence/h2-grpc-01-trailers-only-three-frame.md.
     async fn send_grpc_error_three_frame(
         inner: &mut Session,
         ctx: &mut EdgionHttpContext,
@@ -162,6 +187,12 @@ impl<'a> PingoraSessionAdapter<'a> {
         ctx.request_info.response_committed = true;
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
+        // Drain queued response-header ops (e.g. X-Trace-Id, Set-Cookie set
+        // by an earlier request-stage plugin) before re-asserting
+        // content-type. Mirrors `send_grpc_error_direct`: write content-type
+        // LAST so a queued Set on "content-type" cannot break the gRPC
+        // contract.
+        ctx.drain_pending_response_header_ops(&mut resp);
         resp.insert_header("content-type", "application/grpc")
             .map_err(|e| Box::new(e) as PluginSessionError)?;
         inner
@@ -176,7 +207,8 @@ impl<'a> PingoraSessionAdapter<'a> {
         let mut trailers = HeaderMap::new();
         trailers.insert(
             http::header::HeaderName::from_static("grpc-status"),
-            HeaderValue::from_str(&grpc_status.to_string()).unwrap(),
+            HeaderValue::from_str(&grpc_status.to_string())
+                .expect("u16 decimal string is always a valid HeaderValue (ASCII digits only)"),
         );
         trailers.insert(
             http::header::HeaderName::from_static("grpc-message"),
@@ -245,19 +277,16 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn get_query_param(&self, name: &str) -> Option<String> {
-        self.inner.req_header().uri.query().and_then(|query| {
-            // Parse query string manually: "key1=value1&key2=value2"
-            // Case-sensitive key matching per RFC 3986
-            query.split('&').find_map(|pair| {
-                let mut parts = pair.splitn(2, '=');
-                let key = parts.next()?;
-                if key == name {
-                    parts.next().map(|v| v.to_string())
-                } else {
-                    None
-                }
-            })
-        })
+        // Decoded values (percent-decoded, '+' → ' ') shared with the route
+        // matcher via EdgionHttpContext::cached_query. Parsed at most once
+        // per request regardless of how many plugins call this method.
+        // Use entry_raw_query (frozen at request entry) so plugins observe
+        // the client-sent query, not any rewritten upstream URI — keeps the
+        // cache order-independent across plugin reads.
+        self.ctx
+            .cached_query(self.ctx.request_info.entry_raw_query.as_deref())
+            .get(name)
+            .cloned()
     }
 
     fn get_cookie(&self, name: &str) -> Option<String> {
@@ -280,7 +309,19 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn get_path(&self) -> &str {
-        self.inner.req_header().uri.path()
+        self.ctx.path()
+    }
+
+    fn get_request_path(&self) -> &str {
+        self.ctx.request_path()
+    }
+
+    fn get_uri(&self) -> String {
+        self.ctx.uri(self.inner.req_header())
+    }
+
+    fn get_request_uri(&self) -> String {
+        self.ctx.request_uri()
     }
 
     fn get_query(&self) -> Option<String> {
@@ -323,10 +364,15 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             self.grpc_response_terminated = true;
             return Self::send_grpc_error_three_frame(self.inner, self.ctx, http_status).await;
         }
-        self.inner
+        let result = self
+            .inner
             .write_response_header(resp, end_of_stream)
             .await
-            .map_err(|e| Box::new(e) as PluginSessionError)
+            .map_err(|e| Box::new(e) as PluginSessionError);
+        if result.is_ok() {
+            self.ctx.request_info.response_committed = true;
+        }
+        result
     }
 
     fn write_response_header_boxed<'b>(
@@ -340,10 +386,15 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 self.grpc_response_terminated = true;
                 return Self::send_grpc_error_three_frame(self.inner, self.ctx, http_status).await;
             }
-            self.inner
+            let result = self
+                .inner
                 .write_response_header(resp, end_of_stream)
                 .await
-                .map_err(|e| Box::new(e) as PluginSessionError)
+                .map_err(|e| Box::new(e) as PluginSessionError);
+            if result.is_ok() {
+                self.ctx.request_info.response_committed = true;
+            }
+            result
         })
     }
 
@@ -352,10 +403,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             resp.insert_header(name.to_string(), value.to_string())
                 .map_err(|e| Box::new(e) as PluginSessionError)?;
         } else {
-            // Queue for later application
-            self.ctx
-                .response_headers_to_add
-                .push((name.to_string(), value.to_string()));
+            self.ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+                name: name.to_string(),
+                value: value.to_string(),
+            });
         }
         Ok(())
     }
@@ -365,10 +416,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             resp.append_header(name.to_string(), value.to_string())
                 .map_err(|e| Box::new(e) as PluginSessionError)?;
         } else {
-            // Queue for later application
-            self.ctx
-                .response_headers_to_add
-                .push((name.to_string(), value.to_string()));
+            self.ctx.pending_response_header_ops.push(PendingHeaderOp::Append {
+                name: name.to_string(),
+                value: value.to_string(),
+            });
         }
         Ok(())
     }
@@ -376,6 +427,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn remove_response_header(&mut self, name: &str) -> PluginSessionResult<()> {
         if let Some(resp) = &mut self.response_header {
             resp.remove_header(name);
+        } else {
+            self.ctx
+                .pending_response_header_ops
+                .push(PendingHeaderOp::Remove { name: name.to_string() });
         }
         Ok(())
     }
@@ -422,13 +477,15 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn append_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
-        let existing = self.header_value(name);
-        let new_value = if let Some(ref current) = existing {
-            format!("{},{}", current, value)
-        } else {
-            value.to_string()
-        };
-        self.set_request_header(name, &new_value)
+        // Append as a new header field line instead of read-first-value-then-replace-all.
+        // The previous approach read only headers.get(name) (first value) and then called
+        // insert_header (replaces all), silently dropping any additional same-name values.
+        // append_header preserves every existing field line per RFC 7230 §3.2.2 list semantics.
+        self.inner
+            .req_header_mut()
+            .append_header(name.to_string(), value.to_string())
+            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        Ok(())
     }
 
     fn remove_request_header(&mut self, name: &str) -> PluginSessionResult<()> {
@@ -439,6 +496,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn set_upstream_uri(&mut self, uri: &str) -> PluginSessionResult<()> {
         let parsed_uri = uri.parse::<Uri>().map_err(|e| Box::new(e) as PluginSessionError)?;
         self.inner.req_header_mut().set_uri(parsed_uri);
+        let cfg = crate::core::gateway::cli::config::get_path_normalization_config();
+        self.ctx.refresh_normalized_path(self.inner.req_header(), cfg);
+        self.ctx.uri_finalized = true;
         Ok(())
     }
 
@@ -522,20 +582,16 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.request_info.grpc_method.clone()
     }
 
-    fn push_plugin_ref(&mut self, key: String) {
-        self.ctx.push_plugin_ref(key);
-    }
-
-    fn pop_plugin_ref(&mut self) {
-        self.ctx.pop_plugin_ref();
-    }
-
-    fn plugin_ref_depth(&self) -> usize {
-        self.ctx.plugin_ref_depth()
-    }
-
-    fn has_plugin_ref(&self, key: &str) -> bool {
-        self.ctx.has_plugin_ref(key)
+    fn resolved_route_ext_ref(
+        &self,
+        index: usize,
+    ) -> Option<std::sync::Arc<crate::core::gateway::plugins::runtime::PluginRuntime>> {
+        self.ctx
+            .resolved_route_ext_refs
+            .as_ref()?
+            .get(index)?
+            .as_ref()
+            .map(std::sync::Arc::clone)
     }
 
     fn push_edgion_plugins_log(&mut self, log: EdgionPluginsLog) {
@@ -544,21 +600,13 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn start_edgion_plugins_log(&mut self, name: String) -> EdgionPluginsLogToken {
         let idx = self.ctx.pending_edgion_plugins_logs.len();
-        let depth = self.ctx.plugin_ref_depth();
         self.ctx
             .pending_edgion_plugins_logs
             .push(EdgionPluginsLog { name, logs: Vec::new() });
-        EdgionPluginsLogToken::new(idx, depth)
+        EdgionPluginsLogToken::new(idx)
     }
 
     fn push_to_edgion_plugins_log(&mut self, token: &EdgionPluginsLogToken, log: PluginLog) {
-        debug_assert_eq!(
-            self.ctx.plugin_ref_depth(),
-            token.depth(),
-            "EdgionPluginsLogToken used in wrong scope: expected depth {}, got {}",
-            token.depth(),
-            self.ctx.plugin_ref_depth()
-        );
         if let Some(edgion_log) = self.ctx.pending_edgion_plugins_logs.get_mut(token.idx()) {
             edgion_log.logs.push(log);
         }
@@ -591,7 +639,15 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             }
 
             // ---- Async variant: calls external webhook service ----
-            KeyGet::Webhook { webhook_ref, extract } => self.resolve_webhook(webhook_ref, extract).await,
+            KeyGet::Webhook {
+                webhook_ref,
+                forward_headers,
+                path_suffix,
+                extract,
+            } => {
+                self.resolve_webhook(webhook_ref, forward_headers.as_deref(), path_suffix.as_deref(), extract)
+                    .await
+            }
         }
     }
 
@@ -642,16 +698,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         }
     }
 
-    fn set_direct_endpoint(&mut self, info: DirectEndpointPreset) {
-        self.ctx.direct_endpoint = Some(info);
-    }
-
-    fn set_internal_jump(&mut self, info: InternalJumpPreset) {
-        self.ctx.internal_jump = Some(info);
-    }
-
-    fn set_external_jump(&mut self, info: ExternalJumpPreset) {
-        self.ctx.external_jump = Some(info);
+    fn set_upstream_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome {
+        self.ctx.try_set_jump(target)
     }
 
     fn set_mirror_state(&mut self, state: MirrorState) {

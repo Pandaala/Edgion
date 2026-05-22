@@ -15,6 +15,7 @@
 //! - RateLimit: in-process CMS, ~nanosecond, approximate, per-instance
 //! - RateLimitRedis: Redis-backed, ~0.1-1ms, precise, cluster-wide
 
+use crate::core::common::utils::parse_duration;
 use crate::types::common::KeyGet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -102,6 +103,7 @@ pub enum OnRedisFailure {
 #[serde(rename_all = "camelCase")]
 pub struct RateLimitPolicy {
     /// Maximum requests (or cost units) allowed per interval.
+    #[schemars(range(min = 1))]
     pub rate: u64,
 
     /// Time interval (e.g., "1s", "1m", "1h", "1d").
@@ -178,6 +180,7 @@ pub struct RateLimitRedisConfig {
 
     /// HTTP status code for rejected requests (default: 429)
     #[serde(default = "default_reject_status")]
+    #[schemars(range(min = 100, max = 599))]
     pub reject_status: u16,
 
     /// Custom rejection message (JSON body)
@@ -206,6 +209,7 @@ pub struct RateLimitRedisConfig {
     /// Useful for APIs where different endpoints have different costs.
     /// For example, a search endpoint might cost 5, while a simple GET costs 1.
     #[serde(default = "default_cost")]
+    #[schemars(range(min = 1))]
     pub cost: u32,
 
     /// Maximum length of the limit key portion in Redis keys (default: 4096 bytes).
@@ -214,13 +218,8 @@ pub struct RateLimitRedisConfig {
     /// to this length before being embedded into the Redis key string.
     /// This prevents Redis OOM from maliciously long header values.
     #[serde(default = "default_max_key_len")]
+    #[schemars(range(min = 64, max = 65536))]
     pub max_key_len: usize,
-
-    // --- Runtime fields (skip serialization) ---
-    /// Validation error (runtime only)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 // ========== Default Functions ==========
@@ -263,7 +262,6 @@ impl Default for RateLimitRedisConfig {
             on_redis_failure: OnRedisFailure::default(),
             cost: default_cost(),
             max_key_len: default_max_key_len(),
-            validation_error: None,
         }
     }
 }
@@ -271,21 +269,12 @@ impl Default for RateLimitRedisConfig {
 // ========== Validation ==========
 
 impl RateLimitRedisConfig {
-    /// Validate and compile the configuration.
-    pub fn validate(&mut self) {
-        if let Err(e) = self.validate_inner() {
-            self.validation_error = Some(e);
-        }
-    }
-
-    /// Check if configuration is valid.
-    pub fn is_valid(&self) -> bool {
-        self.validation_error.is_none()
-    }
-
-    /// Get validation error message.
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
+    /// Validate the configuration and populate `interval_duration` for each policy.
+    ///
+    /// Returns `Err(message)` if any field is invalid. On success, every policy
+    /// has its `interval_duration` parsed and stored.
+    pub fn validate(&mut self) -> Result<(), String> {
+        self.validate_inner()
     }
 
     /// Get custom header names (if configured).
@@ -293,8 +282,11 @@ impl RateLimitRedisConfig {
         self.header_names.as_ref()
     }
 
-    fn validate_inner(&mut self) -> Result<(), String> {
-        // redis_ref format: "namespace/name" — must be exactly two segments
+    fn check_fields(&self) -> Option<String> {
+        // Mirror every return Err(...) branch from validate_inner,
+        // but DO NOT mirror the `policy.interval_duration = Some(dur)` assignment.
+
+        // redis_ref format check
         let ref_parts: Vec<&str> = self.redis_ref.split('/').collect();
         if ref_parts.len() != 2
             || ref_parts[0].is_empty()
@@ -303,60 +295,54 @@ impl RateLimitRedisConfig {
                 .iter()
                 .all(|p| p.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_'))
         {
-            return Err(format!(
+            return Some(format!(
                 "Invalid redis_ref '{}': must be 'namespace/name' (alphanumeric, '-', '_' only)",
                 self.redis_ref
             ));
         }
 
-        // At least one policy
         if self.policies.is_empty() {
-            return Err("At least one rate limit policy is required".to_string());
+            return Some("At least one rate limit policy is required".to_string());
         }
 
-        // Cap maximum policies to prevent combinatorial explosion
         if self.policies.len() > 10 {
-            return Err(format!("Too many policies ({}): max 10 allowed", self.policies.len()));
+            return Some(format!("Too many policies ({}): max 10 allowed", self.policies.len()));
         }
 
-        // Validate each policy
-        for (i, policy) in self.policies.iter_mut().enumerate() {
+        for (i, policy) in self.policies.iter().enumerate() {
             if policy.rate == 0 {
-                return Err(format!("policies[{}].rate must be > 0", i));
+                return Some(format!("policies[{}].rate must be > 0", i));
             }
-            let dur = super::rate_limit::parse_duration(&policy.interval)
-                .map_err(|e| format!("policies[{}].interval: {}", i, e))?;
-            // Minimum interval to prevent excessive Redis writes
-            if dur < Duration::from_millis(100) {
-                return Err(format!(
-                    "policies[{}].interval too small (< 100ms): could overwhelm Redis",
-                    i
-                ));
+            match parse_duration(&policy.interval) {
+                Err(e) => return Some(format!("policies[{}].interval: {}", i, e)),
+                Ok(dur) if dur < Duration::from_millis(100) => {
+                    return Some(format!(
+                        "policies[{}].interval too small (< 100ms): could overwhelm Redis",
+                        i
+                    ));
+                }
+                Ok(_) => {} // valid; skip interval_duration assignment (that's validate_inner's side effect)
             }
-            policy.interval_duration = Some(dur);
         }
 
-        // Validate reject_status
         if self.reject_status < 100 || self.reject_status >= 600 {
-            return Err(format!("Invalid reject_status: {}", self.reject_status));
+            return Some(format!("Invalid reject_status: {}", self.reject_status));
         }
 
-        // Validate key_prefix: must be non-empty, end with ':', ASCII printable only
         if self.key_prefix.is_empty() {
-            return Err("key_prefix cannot be empty".to_string());
+            return Some("key_prefix cannot be empty".to_string());
         }
         if !self.key_prefix.ends_with(':') {
-            return Err(format!("key_prefix '{}' must end with ':'", self.key_prefix));
+            return Some(format!("key_prefix '{}' must end with ':'", self.key_prefix));
         }
         if !self.key_prefix.chars().all(|c| c.is_ascii() && !c.is_ascii_control()) {
-            return Err("key_prefix must contain only printable ASCII".to_string());
+            return Some("key_prefix must contain only printable ASCII".to_string());
         }
 
-        // Validate key sources
         for (i, key) in self.key.iter().enumerate() {
             if let Some(name) = key.name() {
                 if name.is_empty() {
-                    return Err(format!(
+                    return Some(format!(
                         "key[{}].name cannot be empty for type {:?}",
                         i,
                         key.source_type()
@@ -365,20 +351,42 @@ impl RateLimitRedisConfig {
             }
         }
 
-        // Validate cost
         if self.cost == 0 {
-            return Err("cost must be > 0".to_string());
+            return Some("cost must be > 0".to_string());
         }
 
-        // Validate max_key_len: reasonable bounds [64, 65536]
         if self.max_key_len < 64 {
-            return Err(format!("max_key_len {} too small (min 64)", self.max_key_len));
+            return Some(format!("max_key_len {} too small (min 64)", self.max_key_len));
         }
         if self.max_key_len > 65536 {
-            return Err(format!("max_key_len {} too large (max 65536 = 64KB)", self.max_key_len));
+            return Some(format!("max_key_len {} too large (max 65536 = 64KB)", self.max_key_len));
+        }
+
+        None
+    }
+
+    fn validate_inner(&mut self) -> Result<(), String> {
+        if let Some(err) = self.check_fields() {
+            return Err(err);
+        }
+
+        // All field checks passed; do the compile-only side effects.
+        for policy in self.policies.iter_mut() {
+            let dur = parse_duration(&policy.interval).expect("interval pre-validated by check_fields");
+            policy.interval_duration = Some(dur);
         }
 
         Ok(())
+    }
+}
+
+// ========== PluginValidation trait impl ==========
+
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for RateLimitRedisConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.check_fields()
     }
 }
 
@@ -415,34 +423,30 @@ mod tests {
     #[test]
     fn test_valid_config() {
         let mut config = create_valid_config();
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
     }
 
     #[test]
     fn test_invalid_redis_ref_empty() {
         let mut config = create_valid_config();
         config.redis_ref = "".to_string();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("redis_ref"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("redis_ref"));
     }
 
     #[test]
     fn test_invalid_redis_ref_no_slash() {
         let mut config = create_valid_config();
         config.redis_ref = "shared-redis".to_string();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("redis_ref"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("redis_ref"));
     }
 
     #[test]
     fn test_invalid_redis_ref_special_chars() {
         let mut config = create_valid_config();
         config.redis_ref = "default/redis@cluster".to_string();
-        config.validate();
-        assert!(!config.is_valid());
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -452,9 +456,8 @@ mod tests {
             policies: vec![],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("At least one"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("At least one"));
     }
 
     #[test]
@@ -471,9 +474,8 @@ mod tests {
                 .collect(),
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("Too many"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("Too many"));
     }
 
     #[test]
@@ -488,9 +490,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("rate must be > 0"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("rate must be > 0"));
     }
 
     #[test]
@@ -505,52 +506,46 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("too small"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("too small"));
     }
 
     #[test]
     fn test_invalid_key_prefix_no_colon() {
         let mut config = create_valid_config();
         config.key_prefix = "edgion_rl".to_string();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("must end with ':'"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("must end with ':'"));
     }
 
     #[test]
     fn test_invalid_key_prefix_empty() {
         let mut config = create_valid_config();
         config.key_prefix = "".to_string();
-        config.validate();
-        assert!(!config.is_valid());
+        assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_zero_cost() {
         let mut config = create_valid_config();
         config.cost = 0;
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("cost"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("cost"));
     }
 
     #[test]
     fn test_max_key_len_too_small() {
         let mut config = create_valid_config();
         config.max_key_len = 32;
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("max_key_len"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("max_key_len"));
     }
 
     #[test]
     fn test_max_key_len_too_large() {
         let mut config = create_valid_config();
         config.max_key_len = 100_000;
-        config.validate();
-        assert!(!config.is_valid());
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -573,8 +568,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
         assert_eq!(config.policies[0].interval_duration, Some(Duration::from_secs(1)));
         assert_eq!(config.policies[1].interval_duration, Some(Duration::from_secs(3600)));
     }
@@ -639,23 +633,64 @@ keyPrefix: "myapp:rl:"
     fn test_invalid_reject_status() {
         let mut config = create_valid_config();
         config.reject_status = 600;
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("reject_status"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("reject_status"));
     }
 
     #[test]
     fn test_empty_key_name() {
         let mut config = create_valid_config();
         config.key = vec![KeyGet::Header { name: "".to_string() }];
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("key[0].name"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("key[0].name"));
     }
 
     #[test]
     fn test_on_redis_failure_default() {
         let config = RateLimitRedisConfig::default();
         assert_eq!(config.on_redis_failure, OnRedisFailure::Allow);
+    }
+
+    #[cfg(test)]
+    mod validation_trait_tests {
+        use super::*;
+        use crate::types::resources::edgion_plugins::PluginValidation;
+
+        #[test]
+        fn validation_error_returns_field_error_without_validate_call() {
+            // invalid redis_ref should be caught without calling validate()
+            let config = RateLimitRedisConfig {
+                redis_ref: "invalid".to_string(), // missing slash
+                policies: vec![RateLimitPolicy {
+                    rate: 100,
+                    interval: "1s".to_string(),
+                    algorithm: RateLimitAlgorithm::default(),
+                    interval_duration: None,
+                }],
+                ..Default::default()
+            };
+            assert!(config.validation_error().is_some());
+        }
+
+        #[test]
+        fn validation_error_does_not_treat_interval_duration_assignment_as_error() {
+            // policy.interval_duration = Some(dur) is a side effect, not an error.
+            // A valid config should return None even though interval_duration is None before validate().
+            let config = RateLimitRedisConfig {
+                redis_ref: "default/shared-redis".to_string(),
+                policies: vec![RateLimitPolicy {
+                    rate: 100,
+                    interval: "1s".to_string(),
+                    algorithm: RateLimitAlgorithm::default(),
+                    interval_duration: None,
+                }],
+                ..Default::default()
+            };
+            assert_eq!(
+                config.validation_error(),
+                None,
+                "valid config with unset interval_duration must return None"
+            );
+        }
     }
 }

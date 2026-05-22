@@ -5,18 +5,21 @@
 //! and `time 0.1` (RUSTSEC-2020-0071).
 //!
 //! Supported hash formats:
-//!   - Bcrypt   `$2a$` / `$2b$` / `$2y$`
 //!   - SHA-1    `{SHA}<base64>`
 //!   - APR1     `$apr1$salt$hash`   (Apache htpasswd MD5)
 //!   - MD5-crypt `$1$salt$hash`     (BSD / Linux)
+//!
+//! Bcrypt is intentionally not supported in the gateway data-plane: it would
+//! force a result cache to keep verify cost off the hot path, and the cache
+//! brings revocation lag and memory cost. This aligns with Envoy's and Kong's
+//! basic-auth filter behavior. For stronger schemes use external auth
+//! (forward_auth / ext_authz).
 
 use base64::{engine::general_purpose, Engine as _};
 
 /// Verify a plaintext password against a stored htpasswd hash string.
 pub fn verify(password: &str, hash: &str) -> bool {
-    if hash.starts_with("$2a$") || hash.starts_with("$2b$") || hash.starts_with("$2y$") {
-        bcrypt::verify(password, hash).unwrap_or(false)
-    } else if let Some(encoded) = hash.strip_prefix("{SHA}") {
+    if let Some(encoded) = hash.strip_prefix("{SHA}") {
         verify_sha1(password, encoded)
     } else if hash.starts_with("$apr1$") {
         verify_md5_variant(password, hash, b"$apr1$")
@@ -163,19 +166,12 @@ fn compute_md5_crypt(password: &[u8], salt: &[u8], magic: &[u8]) -> String {
     );
     to64(&mut out, result[11] as u32, 2);
 
-    String::from_utf8(out).expect("base64 output is always valid UTF-8")
+    String::from_utf8(out).expect("ITOA64 alphabet is 7-bit ASCII; to64() emits only those bytes")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn bcrypt_valid() {
-        let hash = bcrypt::hash("hello", 4).unwrap();
-        assert!(verify("hello", &hash));
-        assert!(!verify("wrong", &hash));
-    }
 
     #[test]
     fn sha1_valid() {

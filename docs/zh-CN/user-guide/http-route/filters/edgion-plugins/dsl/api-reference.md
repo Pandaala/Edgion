@@ -2,7 +2,7 @@
 
 本文档列出 EdgionDSL 所有内置函数，按功能分类组织。每个函数均给出完整签名、参数说明、返回值、限制条件和使用示例。
 
-**类型说明**：EdgionDSL 有 5 种运行时类型：`Str`（字符串）、`Int`（64 位整数）、`Bool`（布尔值）、`Nil`（空值/缺失）、`List`（字符串列表，不可由用户直接构造）。
+**类型说明**：EdgionDSL 有 6 种运行时类型：`Str`（字符串）、`Int`（64 位整数）、`Bool`（布尔值）、`Nil`（空值/缺失）、`List`（字符串列表，不可由用户直接构造）、`Map`（有序字符串键映射表；由 `http.call()` 返回，也可通过 `{key: expr}` 字面量构造）。
 
 **阶段说明**：部分函数仅在特定执行阶段有效。`req.*` 写操作和 `grpc_error()` 仅在请求阶段有意义；`resp.*` 读写操作仅在响应阶段有效。
 
@@ -23,6 +23,7 @@
 - [时间](#时间)
 - [JSON](#json)
 - [网络](#网络)
+- [Redis（redis.*）](#redisredis)
 - [控制流函数](#控制流函数)
 - [其他工具](#其他工具)
 
@@ -1249,7 +1250,7 @@ if signature != expected {
 
 **返回值**：第一个匹配的子字符串，或 `nil`
 
-**限制**：正则表达式字符串最大长度为 1024 字节；不合法的正则表达式会触发运行时错误。
+**限制**：pattern 必须为字符串字面量。1024 字节长度限制和正则语法均在编译期校验。
 
 **示例**：
 ```
@@ -1277,7 +1278,7 @@ if ct != nil {
 
 **返回值**：替换后的字符串
 
-**限制**：正则表达式字符串最大长度为 1024 字节；不合法的正则表达式会触发运行时错误。
+**限制**：pattern 必须为字符串字面量。1024 字节长度限制和正则语法均在编译期校验。
 
 **示例**：
 ```
@@ -1321,7 +1322,7 @@ if request_ts == nil or ts - request_ts > 300 {
 
 **返回值**：格式化后的时间字符串
 
-**限制**：格式字符串最大长度为 256 字节；超出时触发运行时错误。
+**限制**：格式字符串最大长度为 256 字节；超出时触发运行时错误。无效的格式说明符（例如未知的 `%X`）同样会触发运行时错误，而不是返回字符串。
 
 **常用格式字符**：
 - `%Y` — 4 位年份
@@ -1377,6 +1378,299 @@ if payload != nil {
 ---
 
 ## 网络
+
+### http.call
+
+**签名**：`http.call(method, url, body [, timeout_ms [, headers]])` → `Map`
+
+从网关向任意 HTTP/HTTPS 端点发起出站请求。从脚本角度看，该调用是同步的，收到响应或超时后返回。
+
+**参数**：
+- `method`（Str）— HTTP 方法，如 `"GET"`、`"POST"`、`"PUT"`
+- `url`（Str）— 包含协议和主机名的完整 URL，如 `"https://api.example.com/v1/check"`
+- `body`（Str | Nil）— 请求体；不需要请求体时传 `nil`
+- `timeout_ms`（Int，可选）— 单次调用超时（毫秒）；上限为 `httpMaxTimeoutMs`（默认 5000）
+- `headers`（Map，可选）— 附加请求头，以字符串键值对 `Map` 表示
+
+**返回值**：包含以下字段的 `Map`：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `status` | Int | HTTP 响应状态码；调用失败（超时、连接错误、SSRF 拦截等）时为 `0` |
+| `body` | Str | UTF-8 响应体；失败或响应体为空时为空字符串 |
+| `headers` | Map | 响应头；键为小写头名称，值为该头名称对应的最后一个值 |
+
+**此函数永远不会抛出运行时错误。** 网络故障、超时、SSRF 拦截均返回 `status = 0` 和空 body。
+
+**限制**：
+- 仅接受 `http` 和 `https` 协议；其他协议（如 `file://`、`ftp://`）返回 `status = 0`。
+- 当 `httpBlockPrivateIps: true` 时，目标为回环、私有、链路本地地址的请求返回 `status = 0`。
+- 响应体超过 `httpMaxResponseBodyBytes`（默认 1 MiB）时会被截断。
+- 响应 `headers` Map 超过 `max_map_size` 时静默截断为前 `max_map_size` 项（SSRF / 大响应头防护）；调用仍返回成功。
+- 实际超时为 `min(timeout_ms, httpMaxTimeoutMs)`。
+- 全局客户端最多跟随 10 次重定向。
+
+**配置字段**（位于插件 `config` 块内）：
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `httpMaxTimeoutMs` | Integer | `5000` | 单次调用超时上限（毫秒） |
+| `httpMaxResponseBodyBytes` | Integer | `1048576` | 响应体最大字节数；超出时截断 |
+| `httpBlockPrivateIps` | Boolean | `false` | 拦截对私有/回环/链路本地 IP 的出站调用（SSRF 防护） |
+
+**示例 — 调用健康检查端点并根据状态分支**：
+```
+let r = http.call("GET", "http://internal-service/health", nil, 1000)
+if r["status"] == 200 {
+  req.set_header("X-Backend-Healthy", "true")
+} else {
+  return deny(503, "backend unavailable")
+}
+```
+
+**示例 — POST JSON 并携带自定义请求头**：
+```
+let hdrs = {"Content-Type": "application/json", "X-Api-Key": req.header("X-Api-Key")}
+let r = http.call("POST", "https://auth.example.com/verify", "{\"token\":\"abc\"}", 2000, hdrs)
+if r["status"] != 200 {
+  return deny(401, "auth check failed")
+}
+```
+
+**示例 — 读取响应头**：
+```
+let r = http.call("GET", "https://api.example.com/quota", nil, 2000)
+let remaining = r["headers"]["x-ratelimit-remaining"]
+if remaining != nil {
+  resp.set_header("X-Quota-Remaining", remaining)
+}
+```
+
+---
+
+## Redis（redis.*）
+
+所有 `redis.*` 函数均由预先配置的 LinkSys Redis 连接池提供支持。连接池通过 `linkSysRefs` 配置字段在请求时解析。每个 `redis.*` 调用都需要 `link`（别名）作为第一个参数，用于识别使用哪个连接。
+
+**错误协议**：每个 `redis.*` 函数均返回 `Map { ok: Bool, value: <类型>, error: Str | Nil }`。函数**不会触发运行时错误**，也**不会 panic**。脚本作者自行决定如何处理失败（快速拒绝、降级放行或优雅退化）。
+
+- `ok: true` — 操作成功；`value` 为结果值；`error` 为 `nil`。
+- `ok: false` — Redis 连接或操作出错；`value` 为 `nil`；`error` 为错误信息。
+- 当 `link` 参数不匹配 `linkSysRefs` 中的任何别名时，返回 `ok: false, error: "link 'x' not found in linkSysRefs"`。
+- 当指定的 link 存在但尚未就绪时，返回 `ok: false, error: "link 'x' not ready"`。
+
+**配置字段**（位于 `config` 内部）：
+
+| 字段 | 类型 | 是否必填 | 说明 |
+|------|------|----------|------|
+| `linkSysRefs` | Vec<{namespace, name}> | 使用 `redis.*` 时必填 | LinkSys Redis 资源列表。每个元素包含 `namespace` 和 `name` 字段；`name` 是用于 `redis.*` 调用的别名。若脚本中存在任何 `redis.*` 内置调用，此字段为必填项；缺失时插件加载失败。 |
+
+### redis.get
+
+**签名**：`redis.get(link, key)` → `Map { ok: Bool, value: Str | Nil, error: Str | Nil }`
+
+读取字符串键的值。键不存在时返回 `value: nil`。
+
+**参数**：
+- `link`（Str）— 来自 `linkSysRefs[].name` 的别名
+- `key`（Str）— Redis 键名
+
+**示例 — 快速拒绝**：
+```
+let r = redis.get("cache", "feature:dark-mode")
+if !r["ok"] {
+  log_warn("redis error: " + r["error"])
+  return deny(503, "service unavailable")
+}
+if r["value"] == "on" {
+  req.set_header("X-Feature-Dark-Mode", "true")
+}
+```
+
+---
+
+### redis.set
+
+**签名**：`redis.set(link, key, value)` 或 `redis.set(link, key, value, ttl_ms)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+设置字符串键的值，可选传入毫秒级 TTL。
+
+**参数**：
+- `link`（Str）— 来自 `linkSysRefs[].name` 的别名
+- `key`（Str）— Redis 键名
+- `value`（Str）— 存储的值
+- `ttl_ms`（Int，可选）— 过期时间（毫秒）；`nil` 或 `0` 表示不设置过期
+
+---
+
+### redis.del
+
+**签名**：`redis.del(link, key)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+删除一个键。键被删除时返回 `value: true`，键不存在时返回 `value: false`。
+
+**参数**：
+- `link`（Str）— 来自 `linkSysRefs[].name` 的别名
+- `key`（Str）— Redis 键名
+
+---
+
+### redis.exists
+
+**签名**：`redis.exists(link, key)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+检查键是否存在。
+
+**参数**：
+- `link`（Str）— 来自 `linkSysRefs[].name` 的别名
+- `key`（Str）— Redis 键名
+
+---
+
+### redis.ttl
+
+**签名**：`redis.ttl(link, key)` → `Map { ok: Bool, value: Int, error: Str | Nil }`
+
+返回键的剩余生存时间（秒）。
+
+| `value` | 含义 |
+|---------|------|
+| `>= 0` | 剩余 TTL（秒） |
+| `-1` | 键存在但无过期时间 |
+| `-2` | 键不存在 |
+
+仅在连接错误时才返回 `ok: false`。
+
+**参数**：
+- `link`（Str）— 来自 `linkSysRefs[].name` 的别名
+- `key`（Str）— Redis 键名
+
+---
+
+### redis.expire
+
+**签名**：`redis.expire(link, key, seconds)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+为已有键设置过期时间（秒）。若键不存在返回 `value: false`。
+
+**参数**：
+- `link`（Str）— 来自 `linkSysRefs[].name` 的别名
+- `key`（Str）— Redis 键名
+- `seconds`（Int）— 过期时间（秒）
+
+---
+
+### redis.incr
+
+**签名**：`redis.incr(link, key)` → `Map { ok: Bool, value: Int, error: Str | Nil }`
+
+将键的整数值原子自增 1。键不存在时创建并置为 1。
+
+**参数**：
+- `link`（Str）— 来自 `linkSysRefs[].name` 的别名
+- `key`（Str）— Redis 键名
+
+**示例 — 简单限流**：
+```
+let r = redis.incr("cache", "rate:" + req.client_ip)
+if !r["ok"] {
+  return deny(503, "service unavailable")
+}
+if r["value"] > 100 {
+  return deny(429, "rate limit exceeded")
+}
+```
+
+---
+
+### redis.incr_by
+
+**签名**：`redis.incr_by(link, key, delta)` → `Map { ok: Bool, value: Int, error: Str | Nil }`
+
+将键的整数值原子增加 `delta`（可为负数）。
+
+**参数**：
+- `link`（Str）— 来自 `linkSysRefs[].name` 的别名
+- `key`（Str）— Redis 键名
+- `delta`（Int）— 增加量（可为负数）
+
+---
+
+### redis.hget
+
+**签名**：`redis.hget(link, key, field)` → `Map { ok: Bool, value: Str | Nil, error: Str | Nil }`
+
+获取哈希字段的值。键或字段不存在时返回 `value: nil`。
+
+**参数**：
+- `link`（Str）— 来自 `linkSysRefs[].name` 的别名
+- `key`（Str）— 哈希键名
+- `field`（Str）— 字段名
+
+---
+
+### redis.hset
+
+**签名**：`redis.hset(link, key, field, value)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+设置哈希字段的值。成功时返回 `value: true`。
+
+**参数**：
+- `link`（Str）— 来自 `linkSysRefs[].name` 的别名
+- `key`（Str）— 哈希键名
+- `field`（Str）— 字段名
+- `value`（Str）— 字段值
+
+---
+
+### redis.hdel
+
+**签名**：`redis.hdel(link, key, field)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+删除哈希字段。字段存在并被删除时返回 `value: true`，否则返回 `value: false`。
+
+**参数**：
+- `link`（Str）— 来自 `linkSysRefs[].name` 的别名
+- `key`（Str）— 哈希键名
+- `field`（Str）— 字段名
+
+---
+
+### redis.hgetall
+
+**签名**：`redis.hgetall(link, key)` → `Map { ok: Bool, value: Map, error: Str | Nil }`
+
+获取哈希的所有字段和值。键不存在时返回空 `Map`。在连接错误,或哈希条目数超过 `max_map_size` 限制时返回 `ok: false`(后者不会构造超大 `Map`,`error` 会描述实际大小与上限)。
+
+**参数**：
+- `link`（Str）— 来自 `linkSysRefs[].name` 的别名
+- `key`（Str）— 哈希键名
+
+**示例**：
+```
+let r = redis.hgetall("cache", "user:config:1234")
+if r["ok"] {
+  let theme = r["value"]["theme"]
+  if theme != nil {
+    resp.set_header("X-User-Theme", theme)
+  }
+}
+```
+
+---
+
+### redis.hexists
+
+**签名**：`redis.hexists(link, key, field)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+检查哈希字段是否存在。
+
+**参数**：
+- `link`（Str）— 来自 `linkSysRefs[].name` 的别名
+- `key`（Str）— 哈希键名
+- `field`（Str）— 字段名
+
+---
 
 ### ip_in_cidr
 
@@ -1646,6 +1940,7 @@ if sig == nil {
 | `time_now()` | 时间 | `Int` | 0 |
 | `time_format(timestamp, format)` | 时间 | `Str` | 2 |
 | `json_get(json_str, path)` | JSON | `Str\|Int\|Bool\|Nil` | 2 |
+| `http.call(method, url, body [, timeout_ms [, headers]])` | 网络 | `Map` | 2–5 |
 | `ip_in_cidr(ip, cidr)` | 网络 | `Bool` | 2 |
 | `uuid()` | 工具 | `Str` | 0 |
 | `range(start, end)` | 工具 | `List` | 2 |

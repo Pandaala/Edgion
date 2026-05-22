@@ -56,8 +56,10 @@ impl PreflightHandler {
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         // If CORS config exists, apply CORS headers and return success
         if let Some(cors_config) = cors_config {
-            // Create CORS plugin instance to handle preflight
-            let cors_plugin = Cors::new(cors_config);
+            // Build an ad-hoc Cors plugin from the shared Arc — the route's
+            // PluginRuntime owns the canonical Arc<CorsConfig>, so this avoids
+            // a deep clone of the config per preflight request.
+            let cors_plugin = Cors::from_arc(Arc::clone(cors_config));
             let mut plugin_log = PluginLog::new("PreflightHandler");
 
             // Wrap pingora session in adapter

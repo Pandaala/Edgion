@@ -172,21 +172,6 @@ macro_rules! define_resources {
             None
         }
 
-        /// Compile-time exhaustiveness check helper
-        /// This ensures all ResourceKind variants are covered in the macro definition
-        #[allow(dead_code)]
-        const fn _exhaustive_check() {
-            // This will cause a compile error if a ResourceKind variant is missing
-            // from the define_resources! macro invocation
-            const fn check(kind: $crate::types::ResourceKind) {
-                match kind {
-                    $crate::types::ResourceKind::Unspecified => {}
-                    $($crate::types::ResourceKind::$variant => {})*
-                }
-            }
-            // Trigger the check at compile time
-            check($crate::types::ResourceKind::Unspecified);
-        }
     };
 
     // Helper: map capacity tier identifier to constant

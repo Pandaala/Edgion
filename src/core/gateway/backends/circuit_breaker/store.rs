@@ -27,6 +27,10 @@ impl Default for EndpointState {
 struct ServiceCbState {
     config: CircuitBreakerConfig,
     endpoints: DashMap<u64, EndpointState>,
+    /// Serializes the percent-check + ejection steps in `record_failure` to prevent
+    /// concurrent calls for distinct backends from both passing the max-ejection-percent
+    /// guard simultaneously and over-ejecting beyond the configured limit.
+    eject_lock: std::sync::Mutex<()>,
 }
 
 pub struct CircuitBreakerStore {
@@ -40,37 +44,50 @@ impl CircuitBreakerStore {
         }
     }
 
+    /// Number of services with circuit-breaker state.
+    pub fn service_count(&self) -> usize {
+        self.services.len()
+    }
+
+    /// Service keys currently tracked (snapshot).
+    pub fn keys(&self) -> Vec<String> {
+        self.services.iter().map(|kv| kv.key().clone()).collect()
+    }
+
     pub fn set_service_config(&self, service_key: &str, config: Option<CircuitBreakerConfig>) {
         match config {
-            Some(cfg) => {
-                if let Some(existing) = self.services.get(service_key) {
-                    let existing_cfg = &existing.config;
-                    if existing_cfg.consecutive_errors != cfg.consecutive_errors
+            // Use a single DashMap `entry` so the check-and-swap runs under one shard write
+            // lock. This makes the config update atomic: there is no window where the key is
+            // absent (the old `get`+`remove`+`insert` form briefly removed the entry, which
+            // let concurrent data-plane readers bypass the breaker), and concurrent writers
+            // for the same key cannot lose an update — the last writer holding the lock wins.
+            Some(cfg) => match self.services.entry(service_key.to_string()) {
+                dashmap::mapref::entry::Entry::Occupied(mut occ) => {
+                    let existing_cfg = &occ.get().config;
+                    let changed = existing_cfg.consecutive_errors != cfg.consecutive_errors
                         || existing_cfg.ejection_seconds != cfg.ejection_seconds
-                        || existing_cfg.max_ejection_percent != cfg.max_ejection_percent
-                    {
-                        drop(existing);
-                        if let Some((_, old_svc)) = self.services.remove(service_key) {
-                            Self::drain_ejected_gauge(service_key, &old_svc);
-                        }
-                        self.services.insert(
-                            service_key.to_string(),
-                            Arc::new(ServiceCbState {
-                                config: cfg,
-                                endpoints: DashMap::new(),
-                            }),
-                        );
-                    }
-                } else {
-                    self.services.insert(
-                        service_key.to_string(),
-                        Arc::new(ServiceCbState {
+                        || existing_cfg.max_ejection_percent != cfg.max_ejection_percent;
+                    if changed {
+                        // `insert` swaps in the new state and returns the displaced one. Drop
+                        // the entry guard first so the gauge drain (which never touches
+                        // `self.services`) runs outside the held shard lock.
+                        let old_svc = occ.insert(Arc::new(ServiceCbState {
                             config: cfg,
                             endpoints: DashMap::new(),
-                        }),
-                    );
+                            eject_lock: std::sync::Mutex::new(()),
+                        }));
+                        drop(occ);
+                        Self::drain_ejected_gauge(service_key, &old_svc);
+                    }
                 }
-            }
+                dashmap::mapref::entry::Entry::Vacant(vac) => {
+                    vac.insert(Arc::new(ServiceCbState {
+                        config: cfg,
+                        endpoints: DashMap::new(),
+                        eject_lock: std::sync::Mutex::new(()),
+                    }));
+                }
+            },
             None => {
                 if let Some((_, old_svc)) = self.services.remove(service_key) {
                     Self::drain_ejected_gauge(service_key, &old_svc);
@@ -94,10 +111,11 @@ impl CircuitBreakerStore {
             return false;
         };
 
-        if ejected_at.elapsed() >= svc.config.ejection_duration() {
+        if Instant::now().saturating_duration_since(ejected_at) >= svc.config.ejection_duration() {
             drop(ep);
-            svc.endpoints.remove(&backend_hash);
-            crate::core::gateway::observe::metrics::record_cb_recovery(service_key);
+            if svc.endpoints.remove(&backend_hash).is_some() {
+                crate::core::gateway::observe::metrics::record_cb_recovery(service_key);
+            }
             return false;
         }
 
@@ -124,16 +142,33 @@ impl CircuitBreakerStore {
             return;
         }
 
-        // Step 2: check max_ejection_percent (no entry lock held, safe to iterate)
-        if svc.config.max_ejection_percent > 0 && total_endpoints > 0 {
+        // Steps 2+3: held together under eject_lock so that concurrent record_failure
+        // calls for *different* backends cannot both pass the percent-check simultaneously
+        // and exceed max_ejection_percent.
+        let _eject_guard = svc.eject_lock.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Step 2: check max_ejection_percent.
+        // Fall back to the observed endpoint count when the caller-provided total is 0
+        // (e.g., selector snapshot momentarily empty during scale-down). Without this
+        // fallback the entire percent cap would be skipped and concurrent failures could
+        // eject every tracked backend regardless of `maxEjectionPercent`.
+        if svc.config.max_ejection_percent > 0 {
+            let effective_total = if total_endpoints > 0 {
+                total_endpoints
+            } else {
+                svc.endpoints.len().max(1)
+            };
             let currently_ejected = svc.endpoints.iter().filter(|e| e.value().ejected_at.is_some()).count();
-            let max_ejectable = (total_endpoints as u64 * svc.config.max_ejection_percent as u64 / 100) as usize;
+            let max_ejectable = (effective_total as u64 * svc.config.max_ejection_percent as u64 / 100) as usize;
             if currently_ejected >= max_ejectable.max(1) {
                 return;
             }
         }
 
-        // Step 3: actually eject (re-acquire lock)
+        // Step 3: actually eject (re-acquire DashMap shard lock).
+        // Trailing `;` is required: without it the Option<RefMut> temporary is a
+        // trailing expression whose lifetime extends to the enclosing block end,
+        // overlapping _eject_guard's borrow of the same Arc — the compiler rejects it.
         if let Some(mut ep) = svc.endpoints.get_mut(&backend_hash) {
             ep.ejected_at = Some(Instant::now());
             crate::core::gateway::observe::metrics::record_cb_ejection(service_key);
@@ -146,10 +181,15 @@ impl CircuitBreakerStore {
             None => return,
         };
 
-        // Success → remove entry entirely to avoid memory growth from stale endpoints.
-        // Only healthy endpoints with prior failures have entries; removing returns them
-        // to the default state (no entry = healthy).
-        svc.endpoints.remove(&backend_hash);
+        // Remove the entry on success: a healthy backend goes back to the default
+        // "no entry = no tracked failures" state. If the removed entry happened to be
+        // ejected (an in-flight request completing after ejection took effect), pair the
+        // removal with `record_cb_recovery` so the gauge stays balanced.
+        if let Some((_, ep)) = svc.endpoints.remove(&backend_hash) {
+            if ep.ejected_at.is_some() {
+                crate::core::gateway::observe::metrics::record_cb_recovery(service_key);
+            }
+        }
     }
 
     #[inline]
@@ -200,7 +240,7 @@ impl CircuitBreakerStore {
             ext: Default::default(),
         };
         let hash = crate::core::gateway::backends::health::check::backend_hash(&backend);
-        let total = crate::core::gateway::backends::get_backends_for_service(service_key).len();
+        let total = crate::core::gateway::backends::selector::get_backends_for_service_key(service_key).len();
         self.record_failure(service_key, hash, total);
     }
 
@@ -291,6 +331,41 @@ mod tests {
     }
 
     #[test]
+    fn test_max_ejection_percent_concurrent_no_over_eject() {
+        use std::sync::{Arc, Barrier};
+
+        // 4 backends, 50% limit → at most 2 may be ejected regardless of concurrency.
+        let store = Arc::new(CircuitBreakerStore::new());
+        store.set_service_config("default/svc1", Some(make_config(1, 30, 50)));
+
+        let barrier = Arc::new(Barrier::new(4));
+        let hashes = [100u64, 200, 300, 400];
+
+        let handles: Vec<_> = hashes
+            .iter()
+            .copied()
+            .map(|hash| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store.record_failure("default/svc1", hash, 4);
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let ejected = hashes.iter().filter(|&&h| store.is_ejected("default/svc1", h)).count();
+        assert!(
+            ejected <= 2,
+            "over-ejected: {ejected} backends ejected, limit is 2 (50% of 4)"
+        );
+    }
+
+    #[test]
     fn test_remove_service_clears_state() {
         let store = CircuitBreakerStore::new();
         store.set_service_config("default/svc1", Some(make_config(1, 30, 0)));
@@ -302,6 +377,135 @@ mod tests {
     }
 
     #[test]
+    fn test_record_success_on_ejected_does_not_leak_gauge() {
+        // Regression for g7-006 Issue A: record_success removing an ejected entry must
+        // fire record_cb_recovery so the CB_EJECTED_ENDPOINTS gauge stays balanced.
+        let store = CircuitBreakerStore::new();
+        store.set_service_config("default/svc1", Some(make_config(1, 30, 0)));
+
+        store.record_failure("default/svc1", 111, 2);
+        assert!(store.is_ejected("default/svc1", 111));
+
+        // record_success on an ejected backend should remove the entry. After removal,
+        // is_ejected returns false (no entry = healthy). The +1/-1 gauge symmetry is
+        // verified by inspection of the removal branch in record_success itself.
+        store.record_success("default/svc1", 111);
+        assert!(!store.is_ejected("default/svc1", 111));
+    }
+
+    #[test]
+    fn test_percent_cap_applies_concurrently_when_total_endpoints_is_zero() {
+        // Regression for g7-006 Issue B under concurrency: 4 backends report failures
+        // simultaneously while the selector snapshot is empty (total_endpoints == 0).
+        // With the fallback to observed endpoint count, the percent cap must still
+        // bound the number of ejected backends.
+        use std::sync::{Arc, Barrier};
+
+        let store = Arc::new(CircuitBreakerStore::new());
+        // 50% cap. Once endpoints.len() reaches 4, max_ejectable = 2.
+        store.set_service_config("default/svc1", Some(make_config(1, 30, 50)));
+
+        let barrier = Arc::new(Barrier::new(4));
+        let hashes = [100u64, 200, 300, 400];
+
+        let handles: Vec<_> = hashes
+            .iter()
+            .copied()
+            .map(|hash| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    // total=0 simulates the empty-selector-snapshot scale-down race.
+                    store.record_failure("default/svc1", hash, 0);
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let ejected = hashes.iter().filter(|&&h| store.is_ejected("default/svc1", h)).count();
+        // The first thread observes endpoints.len()=1 (cap=1, ejects), the second sees
+        // endpoints.len()=2 (cap=1, currently_ejected=1, rejects). After that, each new
+        // thread inserts its entry first then enters the lock — endpoints.len() grows
+        // monotonically inside the lock, so the cap rises but currently_ejected catches
+        // up. Upper bound is 50% of 4 = 2.
+        assert!(
+            ejected <= 2,
+            "over-ejected under total=0 race: {ejected} backends ejected, 50% cap of 4 is 2"
+        );
+    }
+
+    #[test]
+    fn test_percent_cap_applies_when_total_endpoints_is_zero() {
+        // Regression for g7-006 Issue B: when the selector snapshot is momentarily empty
+        // (total_endpoints == 0), the percent guard must still apply using the observed
+        // endpoint count as a fallback, otherwise concurrent failures would over-eject.
+        let store = CircuitBreakerStore::new();
+        store.set_service_config("default/svc1", Some(make_config(1, 30, 50)));
+
+        // First failure with total=0 establishes the endpoint and ejects (max(1) of 50% of 1).
+        store.record_failure("default/svc1", 111, 0);
+        assert!(store.is_ejected("default/svc1", 111));
+
+        // Second backend tries to eject with total=0 — observed endpoints are now 2, the
+        // 50% cap is 1, and 1 backend is already ejected, so this must be rejected.
+        store.record_failure("default/svc1", 222, 0);
+        assert!(!store.is_ejected("default/svc1", 222));
+    }
+
+    #[test]
+    fn test_config_change_resets_state_unchanged_preserves() {
+        // Regression for backends-F004: the atomic entry() swap must preserve the original
+        // semantics — a *changed* config rebuilds the service (clearing ejection state),
+        // while an *unchanged* config is a no-op that keeps the existing ejection state.
+        let store = CircuitBreakerStore::new();
+        store.set_service_config("default/svc1", Some(make_config(1, 30, 0)));
+        store.record_failure("default/svc1", 111, 2);
+        assert!(store.is_ejected("default/svc1", 111));
+
+        // Re-applying the identical config must not wipe the ejection state.
+        store.set_service_config("default/svc1", Some(make_config(1, 30, 0)));
+        assert!(store.is_ejected("default/svc1", 111));
+
+        // Applying a different config rebuilds the service with empty endpoints.
+        store.set_service_config("default/svc1", Some(make_config(5, 30, 0)));
+        assert!(!store.is_ejected("default/svc1", 111));
+    }
+
+    #[test]
+    fn test_concurrent_config_update_no_panic_and_key_present() {
+        // Regression for backends-F004: concurrent set_service_config calls for the same key
+        // must never panic and must never leave the key absent (the old remove+insert form had
+        // a window where the entry was missing). After the storm one config must be installed.
+        use std::sync::{Arc, Barrier};
+
+        let store = Arc::new(CircuitBreakerStore::new());
+        store.set_service_config("default/svc1", Some(make_config(1, 30, 0)));
+
+        let barrier = Arc::new(Barrier::new(4));
+        let handles: Vec<_> = (0..4u32)
+            .map(|i| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    // Each writer applies a distinct config to force the changed-path swap.
+                    store.set_service_config("default/svc1", Some(make_config(i + 2, 30, 0)));
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert!(store.has_service("default/svc1"));
+    }
+
+    #[test]
     fn test_different_services_isolated() {
         let store = CircuitBreakerStore::new();
         store.set_service_config("default/svc1", Some(make_config(1, 30, 0)));
@@ -310,5 +514,17 @@ mod tests {
         store.record_failure("default/svc1", 111, 2);
         assert!(store.is_ejected("default/svc1", 111));
         assert!(!store.is_ejected("default/svc2", 111));
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+
+    #[test]
+    fn empty_store_reports_zero() {
+        let store = CircuitBreakerStore::new();
+        assert_eq!(store.service_count(), 0);
+        assert!(store.keys().is_empty());
     }
 }

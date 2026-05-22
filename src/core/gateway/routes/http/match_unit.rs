@@ -82,10 +82,12 @@ pub struct HttpRouteRuleUnit {
     pub path_regex: Option<Regex>,
     /// Parent references for sectionName matching
     pub parent_refs: Option<Vec<ParentReference>>,
-    /// Pre-compiled regexes for header RegularExpression matchers (aligned with headers vec)
-    pub compiled_header_regexes: Vec<Option<Arc<Regex>>>,
-    /// Pre-compiled regexes for query param RegularExpression matchers (aligned with query_params vec)
-    pub compiled_query_regexes: Vec<Option<Arc<Regex>>>,
+    /// Pre-compiled regexes for header RegularExpression matchers (aligned with headers vec).
+    /// `Regex` is internally Arc-like; the surrounding `HttpRouteRuleUnit` is shared via
+    /// outer `Arc<HttpRouteRuleUnit>`, so no extra `Arc` wrapper is needed.
+    pub compiled_header_regexes: Vec<Option<Regex>>,
+    /// Pre-compiled regexes for query param RegularExpression matchers (aligned with query_params vec).
+    pub compiled_query_regexes: Vec<Option<Regex>>,
     /// True when the match item has non-empty query_params conditions.
     /// Used to skip query string parsing on the hot path for routes that don't need it.
     pub has_query_matchers: bool,
@@ -99,13 +101,22 @@ impl HttpRouteRuleUnit {
     /// with the `headers` / `query_params` slices in `HTTPRouteMatch`.
     pub fn compile_match_regexes(
         match_item: &crate::types::HTTPRouteMatch,
-    ) -> (Vec<Option<Arc<Regex>>>, Vec<Option<Arc<Regex>>>) {
+    ) -> (Vec<Option<Regex>>, Vec<Option<Regex>>) {
+        // Controller validates regex patterns at preparse (see ref_grant/validator.rs::check_regex_pattern),
+        // so compilation failures here indicate a controller/gateway sync invariant violation.
         let header_regexes = match_item.headers.as_ref().map_or_else(Vec::new, |headers| {
             headers
                 .iter()
                 .map(|hm| {
                     if hm.match_type.as_deref() == Some("RegularExpression") {
-                        Regex::new(&hm.value).ok().map(|r| Arc::new(r))
+                        match Regex::new(&hm.value) {
+                            Ok(r) => Some(r),
+                            Err(e) => {
+                                tracing::error!(header = %hm.name, pattern = %hm.value, error = %e,
+                                    "Header regex failed to compile at gateway despite controller validation; matcher will fail-closed");
+                                None
+                            }
+                        }
                     } else {
                         None
                     }
@@ -117,7 +128,14 @@ impl HttpRouteRuleUnit {
                 .iter()
                 .map(|qm| {
                     if qm.match_type.as_deref() == Some("RegularExpression") {
-                        Regex::new(&qm.value).ok().map(|r| Arc::new(r))
+                        match Regex::new(&qm.value) {
+                            Ok(r) => Some(r),
+                            Err(e) => {
+                                tracing::error!(query = %qm.name, pattern = %qm.value, error = %e,
+                                    "Query regex failed to compile at gateway despite controller validation; matcher will fail-closed");
+                                None
+                            }
+                        }
                     } else {
                         None
                     }
@@ -254,7 +272,7 @@ impl HttpRouteRuleUnit {
     pub(crate) fn match_header(
         req_header: &pingora_http::RequestHeader,
         header_match: &crate::types::HTTPHeaderMatch,
-        compiled_regex: Option<&Arc<Regex>>,
+        compiled_regex: Option<&Regex>,
     ) -> Result<bool, EdError> {
         let header_value = match req_header.headers.get(&header_match.name) {
             Some(value) => value.to_str().unwrap_or(""),
@@ -265,14 +283,10 @@ impl HttpRouteRuleUnit {
 
         match match_type {
             "Exact" => Ok(header_value == header_match.value),
-            "RegularExpression" => {
-                if let Some(re) = compiled_regex {
-                    return Ok(re.is_match(header_value));
-                }
-                let re = Regex::new(&header_match.value)
-                    .map_err(|e| EdError::RouteMatchError(format!("Invalid regex: {}", e)))?;
-                Ok(re.is_match(header_value))
-            }
+            "RegularExpression" => match compiled_regex {
+                Some(re) => Ok(re.is_match(header_value)),
+                None => Ok(false),
+            },
             _ => Ok(false),
         }
     }
@@ -282,7 +296,7 @@ impl HttpRouteRuleUnit {
     pub(crate) fn match_query_param(
         query_params: &HashMap<String, String>,
         query_param_match: &crate::types::HTTPQueryParamMatch,
-        compiled_regex: Option<&Arc<Regex>>,
+        compiled_regex: Option<&Regex>,
     ) -> Result<bool, EdError> {
         let param_value = match query_params.get(&query_param_match.name) {
             Some(value) => value,
@@ -293,14 +307,10 @@ impl HttpRouteRuleUnit {
 
         match match_type {
             "Exact" => Ok(param_value == &query_param_match.value),
-            "RegularExpression" => {
-                if let Some(re) = compiled_regex {
-                    return Ok(re.is_match(param_value));
-                }
-                let re = Regex::new(&query_param_match.value)
-                    .map_err(|e| EdError::RouteMatchError(format!("Invalid regex: {}", e)))?;
-                Ok(re.is_match(param_value))
-            }
+            "RegularExpression" => match compiled_regex {
+                Some(re) => Ok(re.is_match(param_value)),
+                None => Ok(false),
+            },
             _ => Ok(false),
         }
     }
@@ -314,8 +324,8 @@ impl HttpRouteRuleUnit {
         parent_refs: &Option<Vec<ParentReference>>,
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
-        compiled_header_regexes: &[Option<Arc<Regex>>],
-        compiled_query_regexes: &[Option<Arc<Regex>>],
+        compiled_header_regexes: &[Option<Regex>],
+        compiled_query_regexes: &[Option<Regex>],
         has_query_matchers: bool,
     ) -> Result<Option<GatewayInfo>, EdError> {
         let method = req_header.method.as_str();
@@ -354,13 +364,17 @@ impl HttpRouteRuleUnit {
             }
         }
 
-        // 3. Check Query Parameters — lazy parse: only when this route has query matchers
+        // 3. Check Query Parameters — lazy parse: only when this route has query matchers.
+        // ctx.cached_query() ensures the query string is parsed at most once per request
+        // across all route candidates, sharing the result with PluginSession::get_query_param.
+        // Use entry_raw_query (frozen at request entry) so route matching observes the
+        // client-sent query, not any rewritten upstream URI.
         if has_query_matchers {
             if let Some(query_param_matches) = &match_item.query_params {
-                let query_params = req_header.uri.query().map(Self::parse_query_string).unwrap_or_default();
+                let query_params = ctx.cached_query(ctx.request_info.entry_raw_query.as_deref());
                 for (idx, query_param_match) in query_param_matches.iter().enumerate() {
                     let pre = compiled_query_regexes.get(idx).and_then(|r| r.as_ref());
-                    if !Self::match_query_param(&query_params, query_param_match, pre)? {
+                    if !Self::match_query_param(query_params, query_param_match, pre)? {
                         return Ok(None);
                     }
                 }
@@ -442,12 +456,16 @@ mod tests {
 
     #[test]
     fn test_url_decode_multibyte_utf8() {
-        // Chinese character 你 = E4 BD A0
-        assert_eq!(HttpRouteRuleUnit::url_decode("%E4%BD%A0"), "你");
-        // Euro sign € = E2 82 AC
+        // 2-byte UTF-8: e-acute (U+00E9 = C3 A9), the typical loanword case.
+        assert_eq!(HttpRouteRuleUnit::url_decode("%C3%A9"), "é");
+        // 3-byte UTF-8: euro sign (U+20AC = E2 82 AC), a currency symbol.
         assert_eq!(HttpRouteRuleUnit::url_decode("%E2%82%AC"), "€");
-        // Mixed: ASCII + multi-byte + ASCII
-        assert_eq!(HttpRouteRuleUnit::url_decode("key%3D%E4%BD%A0%E5%A5%BD"), "key=你好");
+        // Mixed: ASCII + multi-byte + ASCII (`price=€100`).
+        assert_eq!(HttpRouteRuleUnit::url_decode("price%3D%E2%82%AC100"), "price=€100");
+        // Two adjacent multi-byte runs back-to-back: 2-byte then 3-byte
+        // (`é€` = C3 A9 E2 82 AC). Guards against decoder state bugs at
+        // multi-byte boundaries.
+        assert_eq!(HttpRouteRuleUnit::url_decode("%C3%A9%E2%82%AC"), "é€");
     }
 
     #[test]

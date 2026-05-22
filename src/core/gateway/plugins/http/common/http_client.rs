@@ -25,7 +25,7 @@
 //! - **Default timeouts**: Prevent external services from hanging the gateway.
 //!   Individual plugins can override per-request timeouts.
 
-use reqwest::{Certificate, Client, Identity};
+use reqwest::Client;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -97,9 +97,13 @@ pub fn get_http_client_with_ssl_verify(ssl_verify: bool) -> &'static Client {
 /// When `config.tls` is present, builds a custom client with the configured TLS settings
 /// (insecure_skip_verify, custom CA, client certs). When no TLS config, returns `None` to
 /// indicate the caller should use `get_http_client()` for connection pooling.
+///
+/// `insecure_skip_verify` is gated through the shared
+/// [`link_sys::tls::apply_insecure_skip_verify`] helper, which refuses to honour the flag
+/// when `EDGION_ENV=production`.
 pub fn build_webhook_client(
     config: &crate::types::resources::link_sys::webhook::WebhookServiceConfig,
-) -> Option<Result<Client, reqwest::Error>> {
+) -> Option<anyhow::Result<Client>> {
     let tls = config.tls.as_ref()?;
 
     let mut builder = Client::builder()
@@ -108,44 +112,25 @@ pub fn build_webhook_client(
         .connect_timeout(Duration::from_secs(5))
         .redirect(reqwest::redirect::Policy::none());
 
-    if tls.insecure_skip_verify == Some(true) {
-        tracing::warn!("Webhook TLS: insecure_skip_verify enabled — certificate verification disabled");
-        builder = builder.danger_accept_invalid_certs(true);
-    }
+    builder = match crate::core::gateway::link_sys::tls::apply_insecure_skip_verify(builder, tls, "Webhook") {
+        Ok(b) => b,
+        Err(e) => return Some(Err(e)),
+    };
 
-    // Resolve CA / mTLS from inline PEM + embedded Secret (private key is
-    // secret-only; inline is rejected by `TlsCerts::deny_unknown_fields`).
-    if let Some(material) = crate::core::gateway::link_sys::tls::build_material(tls) {
-        if let Some(ca_pem) = &material.ca_pem {
-            match Certificate::from_pem(ca_pem) {
-                Ok(cert) => {
-                    builder = builder.add_root_certificate(cert);
-                }
-                Err(e) => {
-                    tracing::error!("Webhook TLS: invalid CA certificate PEM: {}", e);
-                    return Some(Err(e));
-                }
-            }
-        }
+    builder = match crate::core::gateway::link_sys::tls::apply_to_reqwest_builder(builder, tls, "Webhook") {
+        Ok(b) => b,
+        Err(e) => return Some(Err(e)),
+    };
 
-        if let Some(combined) = crate::core::gateway::link_sys::tls::combined_identity_pem(&material) {
-            match Identity::from_pem(combined.as_slice()) {
-                Ok(identity) => {
-                    builder = builder.identity(identity);
-                }
-                Err(e) => {
-                    tracing::error!("Webhook TLS: invalid client certificate PEM: {}", e);
-                    return Some(Err(e));
-                }
-            }
-        }
-    }
-
-    Some(builder.build())
+    Some(builder.build().map_err(anyhow::Error::from))
 }
 
-/// Hop-by-hop headers that MUST NOT be forwarded to external services.
-/// Per RFC 2616 Section 13.5.1 and RFC 7230 Section 6.1
+/// Canonical hop-by-hop headers that MUST NOT be forwarded to upstream services.
+///
+/// Per RFC 9110 §7.6.1 (which obsoletes RFC 2616 §13.5.1 and RFC 7230 §6.1).
+/// The dynamic part of §7.6.1 — header names additionally nominated by the
+/// `Connection:` header value of the current message — is handled by
+/// [`connection_listed_hop_by_hop`] and [`is_hop_by_hop_or_listed`].
 pub const HOP_BY_HOP_HEADERS: &[&str] = &[
     "connection",
     "keep-alive",
@@ -157,10 +142,51 @@ pub const HOP_BY_HOP_HEADERS: &[&str] = &[
     "upgrade",
 ];
 
-/// Check if a header name is a hop-by-hop header (case-insensitive).
+/// Check whether `name` is one of the canonical hop-by-hop headers
+/// (case-insensitive).
+///
+/// This only consults the static set in [`HOP_BY_HOP_HEADERS`]. To also honour
+/// the per-message dynamic list nominated by the `Connection:` header value
+/// (RFC 9110 §7.6.1), use [`is_hop_by_hop_or_listed`] together with
+/// [`connection_listed_hop_by_hop`].
 pub fn is_hop_by_hop(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     HOP_BY_HOP_HEADERS.contains(&lower.as_str())
+}
+
+/// Parse the value of the request's `Connection:` header into a deduplicated
+/// list of lowercase connection-option names (RFC 9110 §7.6.1).
+///
+/// Each comma-separated token is trimmed and lowercased; empty tokens are
+/// skipped. An intermediary MUST remove every header field whose name matches
+/// one of these tokens before forwarding the message.
+///
+/// Callers that have no `Connection:` header should pass `""`, which returns
+/// an empty list.
+pub fn connection_listed_hop_by_hop(connection_value: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for token in connection_value.split(',') {
+        let t = token.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let lower = t.to_ascii_lowercase();
+        if !out.iter().any(|s| s == &lower) {
+            out.push(lower);
+        }
+    }
+    out
+}
+
+/// Check whether `name` is hop-by-hop, considering both the canonical static
+/// list ([`HOP_BY_HOP_HEADERS`]) and the dynamic list nominated by the request's
+/// `Connection:` header value (RFC 9110 §7.6.1).
+///
+/// `dynamic_listed` should be the value returned by
+/// [`connection_listed_hop_by_hop`] for the originating request.
+pub fn is_hop_by_hop_or_listed(name: &str, dynamic_listed: &[String]) -> bool {
+    let lower = name.to_ascii_lowercase();
+    HOP_BY_HOP_HEADERS.contains(&lower.as_str()) || dynamic_listed.iter().any(|s| s == &lower)
 }
 
 #[cfg(test)]
@@ -194,6 +220,45 @@ mod tests {
         assert!(!is_hop_by_hop("x-forwarded-for"));
         assert!(!is_hop_by_hop("cookie"));
         assert!(!is_hop_by_hop("accept"));
+    }
+
+    #[test]
+    fn test_connection_listed_hop_by_hop_parses_tokens() {
+        // Single token
+        assert_eq!(
+            connection_listed_hop_by_hop("X-Sensitive"),
+            vec!["x-sensitive".to_string()]
+        );
+        // Multiple tokens, mixed case, surrounding whitespace
+        assert_eq!(
+            connection_listed_hop_by_hop("X-A, X-B , close"),
+            vec!["x-a".to_string(), "x-b".to_string(), "close".to_string()],
+        );
+        // Empty / whitespace tokens are skipped
+        assert_eq!(connection_listed_hop_by_hop(",  ,X-Only,"), vec!["x-only".to_string()],);
+        // Duplicates are deduplicated case-insensitively
+        assert_eq!(
+            connection_listed_hop_by_hop("X-Dup, x-dup, X-DUP"),
+            vec!["x-dup".to_string()],
+        );
+        // Empty input
+        assert!(connection_listed_hop_by_hop("").is_empty());
+    }
+
+    #[test]
+    fn test_is_hop_by_hop_or_listed_combines_static_and_dynamic() {
+        let listed = connection_listed_hop_by_hop("X-Sensitive, X-Token");
+        // Static hop-by-hop matches regardless of dynamic set
+        assert!(is_hop_by_hop_or_listed("Connection", &listed));
+        assert!(is_hop_by_hop_or_listed("TRANSFER-ENCODING", &[]));
+        // Dynamic-only names match when listed
+        assert!(is_hop_by_hop_or_listed("x-sensitive", &listed));
+        assert!(is_hop_by_hop_or_listed("X-Token", &listed));
+        // Same names do not match when dynamic set is empty
+        assert!(!is_hop_by_hop_or_listed("X-Sensitive", &[]));
+        // Unrelated headers do not match
+        assert!(!is_hop_by_hop_or_listed("Authorization", &listed));
+        assert!(!is_hop_by_hop_or_listed("Cookie", &listed));
     }
 
     #[test]

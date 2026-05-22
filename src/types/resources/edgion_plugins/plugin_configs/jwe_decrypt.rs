@@ -108,6 +108,7 @@ pub struct JweDecryptConfig {
 
     /// Max accepted token size.
     #[serde(default = "default_max_token_size")]
+    #[schemars(range(min = 1))]
     pub max_token_size: usize,
 
     /// Allowed content encryption algorithms in JWE protected header.
@@ -128,20 +129,18 @@ pub struct JweDecryptConfig {
 
     /// Max bytes for a single mapped header value.
     #[serde(default = "default_max_header_value_bytes")]
+    #[schemars(range(min = 1))]
     pub max_header_value_bytes: usize,
 
     /// Max bytes for all mapped headers.
     #[serde(default = "default_max_total_header_bytes")]
+    #[schemars(range(min = 1))]
     pub max_total_header_bytes: usize,
 
     // === Runtime fields (controller populated) ===
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_credential: Option<ResolvedJweCredential>,
-
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 fn default_header() -> String {
@@ -188,16 +187,11 @@ impl Default for JweDecryptConfig {
             max_header_value_bytes: default_max_header_value_bytes(),
             max_total_header_bytes: default_max_total_header_bytes(),
             resolved_credential: None,
-            validation_error: None,
         }
     }
 }
 
 impl JweDecryptConfig {
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
-    }
-
     pub fn detect_validation_error(&self) -> Option<String> {
         if self.secret_ref.is_none() && self.resolved_credential.is_none() {
             return Some("secretRef is required".to_string());
@@ -229,6 +223,9 @@ impl JweDecryptConfig {
             }
         }
         if let Some(resolved) = &self.resolved_credential {
+            if resolved.secret.is_none() {
+                return Some("resolvedCredential.secret is required".to_string());
+            }
             if let Some(secret_b64) = &resolved.secret {
                 let decoded = match base64::engine::general_purpose::STANDARD.decode(secret_b64) {
                     Ok(v) => v,
@@ -269,6 +266,14 @@ impl JweDecryptConfig {
             }
         }
         None
+    }
+}
+
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for JweDecryptConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.detect_validation_error()
     }
 }
 
@@ -325,5 +330,18 @@ mod tests {
         };
         let err = cfg.detect_validation_error();
         assert!(err.is_none());
+    }
+
+    #[test]
+    fn validation_error_resolved_credential_without_secret() {
+        use crate::types::resources::edgion_plugins::PluginValidation;
+        let config = JweDecryptConfig {
+            resolved_credential: Some(ResolvedJweCredential { secret: None }),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.validation_error(),
+            Some("resolvedCredential.secret is required".to_string())
+        );
     }
 }

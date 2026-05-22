@@ -37,13 +37,12 @@ spec:
 
   challenge:
     type: dns-01
-    dns01:
-      provider: alidns
-      credentialRef:
-        name: alidns-credentials
-        namespace: default
-      propagationTimeout: 180     # Alibaba DNS may need more time
-      propagationCheckInterval: 10
+    provider: alidns
+    credentialRef:
+      name: alidns-credentials
+      namespace: default
+    propagationTimeout: 180      # Alibaba DNS may need more time
+    propagationCheckInterval: 10
 
   renewal:
     renewBeforeDays: 14

@@ -45,6 +45,31 @@ pub struct EdgionGatewayConfig {
     #[serde(default = "default_access_log_config")]
     pub access_log: LogConfig,
 
+    /// Sensitive data masking for access logs. Disabled by default.
+    ///
+    /// TOML example (replace mode):
+    ///   [access_log_sensitive]
+    ///   mode = "replace"
+    ///   replace_with = "***"
+    ///
+    /// TOML example (wrap mode):
+    ///   [access_log_sensitive]
+    ///   mode = "wrap"
+    ///   wrap_prefix = "<E>"
+    ///   wrap_suffix = "</E>"
+    #[arg(skip)]
+    #[serde(default, skip_serializing)]
+    pub access_log_sensitive: crate::types::sensitive::SensitiveMaskConfig,
+
+    /// Access log output options that don't fit into the shared `LogConfig`.
+    ///
+    /// TOML example:
+    ///   [access_log_options]
+    ///   include_raw_uri = true
+    #[arg(skip)]
+    #[serde(default)]
+    pub access_log_options: crate::types::observe::AccessLogOptions,
+
     #[arg(skip)]
     #[serde(default = "default_ssl_log_config")]
     pub ssl_log: LogConfig,
@@ -80,11 +105,6 @@ pub struct EdgionGatewayConfig {
     #[serde(default, alias = "auth_cache")]
     pub lru_cache: LruCacheGlobalConfig,
 
-    /// Plugin metadata global configuration
-    #[arg(skip)]
-    #[serde(default)]
-    pub plugin_metadata: PluginMetadataConfig,
-
     /// AllEndpointStatus plugin global configuration
     #[arg(skip)]
     #[serde(default)]
@@ -105,6 +125,19 @@ pub struct EdgionGatewayConfig {
     #[arg(skip)]
     #[serde(default)]
     pub conf_sync_security: crate::core::common::config::ConfSyncSecurityConfig,
+
+    /// URI path normalization configuration.
+    ///
+    /// Controls rejection behaviour for unusual but technically valid encodings.
+    /// Both flags default to `false`; the BASE normalization algorithm always runs.
+    ///
+    /// TOML example:
+    ///   [path_normalization]
+    ///   reject_escaped_slashes = true
+    ///   reject_invalid_percent_encoding = false
+    #[arg(skip)]
+    #[serde(default)]
+    pub path_normalization: crate::core::gateway::path_normalization::PathNormalizationConfig,
 }
 
 /// Gateway configuration
@@ -417,6 +450,51 @@ pub fn get_backend_requests_config() -> &'static BackendRequestsConfig {
 }
 
 // ============================================
+// Path Normalization Global Configuration
+// ============================================
+
+/// Global path normalization config, initialized once at startup.
+static PATH_NORMALIZATION_CONFIG: OnceLock<crate::core::gateway::path_normalization::PathNormalizationConfig> =
+    OnceLock::new();
+
+/// Initialize the global path normalization config (call once at startup).
+pub fn init_path_normalization_config(config: crate::core::gateway::path_normalization::PathNormalizationConfig) {
+    let _ = PATH_NORMALIZATION_CONFIG.set(config);
+}
+
+/// Get the global path normalization config (zero-cost after init).
+///
+/// Returns the default config (both reject flags off) if
+/// `init_path_normalization_config` was not called (e.g., unit tests that
+/// don't boot the full Gateway). Production paths always initialize before
+/// the first request.
+#[inline]
+pub fn get_path_normalization_config() -> &'static crate::core::gateway::path_normalization::PathNormalizationConfig {
+    PATH_NORMALIZATION_CONFIG.get_or_init(crate::core::gateway::path_normalization::PathNormalizationConfig::default)
+}
+
+// ============================================
+// Access Log Options Global Configuration
+// ============================================
+
+/// Global access log options, initialized once at startup.
+static ACCESS_LOG_OPTIONS: OnceLock<crate::types::observe::AccessLogOptions> = OnceLock::new();
+
+/// Initialize the global access log options (call once at startup).
+pub fn init_access_log_options(options: crate::types::observe::AccessLogOptions) {
+    let _ = ACCESS_LOG_OPTIONS.set(options);
+}
+
+/// Get the global access log options (zero-cost after init).
+///
+/// Returns the default (all flags off) if `init_access_log_options` was not
+/// called, e.g. unit tests that don't boot the full Gateway.
+#[inline]
+pub fn get_access_log_options() -> &'static crate::types::observe::AccessLogOptions {
+    ACCESS_LOG_OPTIONS.get_or_init(crate::types::observe::AccessLogOptions::default)
+}
+
+// ============================================
 // RateLimit Global Configuration
 // ============================================
 
@@ -652,66 +730,6 @@ pub fn get_default_lru_cache_shards() -> usize {
 }
 
 // ============================================
-// Plugin Metadata Global Configuration
-// ============================================
-
-const DEFAULT_CTX_LOG_DENYLIST: &[&str] = &["auth", "pass", "claim", "payload", "token", "secret", "credential"];
-
-fn default_ctx_log_denylist() -> Vec<String> {
-    DEFAULT_CTX_LOG_DENYLIST.iter().map(|s| s.to_string()).collect()
-}
-
-/// Plugin metadata global configuration.
-///
-/// Controls cross-cutting plugin behaviors, e.g. which ctx keys are excluded from access log.
-///
-/// ## TOML Configuration Example:
-/// ```toml
-/// [plugin_metadata]
-/// ctx_log_denylist = ["auth", "pass", "claim", "payload", "token", "secret", "credential"]
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PluginMetadataConfig {
-    /// Ctx keys containing these substrings (case-insensitive) are excluded from access log.
-    /// Keys starting with `_` are always excluded regardless of this list.
-    /// Default covers common auth/credential patterns.
-    ///
-    /// **Warning:** Setting this field in TOML **replaces** the entire default list.
-    /// To extend the defaults, include all default keywords plus your additions.
-    #[serde(default = "default_ctx_log_denylist")]
-    pub ctx_log_denylist: Vec<String>,
-}
-
-impl Default for PluginMetadataConfig {
-    fn default() -> Self {
-        Self {
-            ctx_log_denylist: default_ctx_log_denylist(),
-        }
-    }
-}
-
-static PLUGIN_METADATA_CONFIG: OnceLock<PluginMetadataConfig> = OnceLock::new();
-
-/// Initialize the global plugin metadata configuration (call once at startup).
-pub fn init_plugin_metadata_config(config: PluginMetadataConfig) {
-    let _ = PLUGIN_METADATA_CONFIG.set(config);
-}
-
-/// Get the ctx log denylist from global config.
-///
-/// # Panics
-///
-/// Panics if called before `init_plugin_metadata_config` — this prevents silent PII leakage
-/// that would occur if the denylist were silently empty due to a missed init call.
-pub fn get_ctx_log_denylist() -> &'static [String] {
-    PLUGIN_METADATA_CONFIG
-        .get()
-        .expect("PluginMetadataConfig not initialized — call init_plugin_metadata_config at startup")
-        .ctx_log_denylist
-        .as_slice()
-}
-
 impl EdgionGatewayConfig {
     /// Load configuration from TOML file if config_file is specified,
     /// then merge with CLI arguments (CLI takes precedence)
@@ -859,35 +877,42 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_metadata_config_default() {
-        let config = PluginMetadataConfig::default();
-        let denylist = config.ctx_log_denylist;
-        assert!(denylist.contains(&"auth".to_string()));
-        assert!(denylist.contains(&"claim".to_string()));
-        assert!(denylist.contains(&"payload".to_string()));
-        assert!(denylist.contains(&"token".to_string()));
-        assert!(denylist.contains(&"pass".to_string()));
-        assert!(denylist.contains(&"secret".to_string()));
-        assert!(denylist.contains(&"credential".to_string()));
+    fn test_access_log_sensitive_default_is_off() {
+        let cfg: EdgionGatewayConfig = toml::from_str("").unwrap();
+        assert!(matches!(
+            cfg.access_log_sensitive.mode,
+            crate::types::sensitive::SensitiveMode::Off
+        ));
     }
 
     #[test]
-    fn test_plugin_metadata_config_yaml_deserialize() {
-        let yaml = r#"
-plugin_metadata:
-  ctx_log_denylist: [custom_key, my_secret]
+    fn test_access_log_sensitive_replace_mode() {
+        let toml_str = r#"
+[access_log_sensitive]
+mode = "replace"
+replace_with = "{MSKED}"
 "#;
-        let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("parse failed");
-        let denylist = &config.plugin_metadata.ctx_log_denylist;
-        assert!(denylist.contains(&"custom_key".to_string()));
-        assert!(denylist.contains(&"my_secret".to_string()));
-        assert!(!denylist.contains(&"auth".to_string()));
+        let cfg: EdgionGatewayConfig = toml::from_str(toml_str).unwrap();
+        assert!(matches!(
+            cfg.access_log_sensitive.mode,
+            crate::types::sensitive::SensitiveMode::Replace
+        ));
+        assert_eq!(cfg.access_log_sensitive.replace_with, "{MSKED}");
     }
 
     #[test]
-    fn test_get_ctx_log_denylist_returns_slice() {
-        init_plugin_metadata_config(PluginMetadataConfig::default());
-        let list = get_ctx_log_denylist();
-        assert!(!list.is_empty());
+    fn test_access_log_sensitive_wrap_mode() {
+        let toml_str = r#"
+[access_log_sensitive]
+mode = "wrap"
+wrap_prefix = "<E>"
+wrap_suffix = "</E>"
+"#;
+        let cfg: EdgionGatewayConfig = toml::from_str(toml_str).unwrap();
+        assert!(matches!(
+            cfg.access_log_sensitive.mode,
+            crate::types::sensitive::SensitiveMode::Wrap
+        ));
+        assert_eq!(cfg.access_log_sensitive.wrap_prefix, "<E>");
     }
 }

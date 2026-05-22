@@ -1,15 +1,15 @@
 ---
 name: acme-features
-description: EdgionAcme CRD 完整 Schema：Let's Encrypt 自动证书签发、续期、DNS-01/HTTP-01 挑战。
+description: Full EdgionAcme CRD schema: Let's Encrypt automatic certificate issuance, renewal, DNS-01/HTTP-01 challenges.
 ---
 
-# EdgionAcme 资源
+# EdgionAcme Resource
 
 > API: `edgion.io/v1` | Scope: Namespaced
 
-EdgionAcme 实现 ACME 协议自动证书管理（Let's Encrypt 等），支持 HTTP-01 和 DNS-01 挑战。
+EdgionAcme implements automatic certificate management via the ACME protocol (Let's Encrypt and similar), supporting HTTP-01 and DNS-01 challenges.
 
-## 完整 Schema
+## Full Schema
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -18,110 +18,108 @@ metadata:
   name: my-acme
   namespace: default
 spec:
-  server: "https://acme-v02.api.letsencrypt.org/directory"   # ACME 服务器
-  email: "admin@example.com"                                  # 必填：联系邮箱
-  domains:                                                     # 必填：证书域名列表
+  server: "https://acme-v02.api.letsencrypt.org/directory"   # ACME server
+  email: "admin@example.com"                                  # Required: contact email
+  domains:                                                     # Required: certificate domain list
     - "example.com"
-    - "*.example.com"                                          # 通配符域名需 DNS-01
+    - "*.example.com"                                          # Wildcard domains require DNS-01
 
-  keyType: ecdsa-p256                                          # 证书密钥算法
+  keyType: ecdsa-p256                                          # Certificate key algorithm
 
-  challenge:
-    challengeType: http-01                                     # http-01 | dns-01
-    http01:
-      gatewayRef:                                              # HTTP-01 需要的 Gateway 引用
-        name: my-gateway
-        namespace: default
-    # dns01:                                                   # DNS-01 配置
-    #   provider: cloudflare                                   # cloudflare | alidns
-    #   credentialRef:
-    #     name: cloudflare-api-token
-    #     namespace: default
-    #   propagationTimeout: 120
-    #   propagationCheckInterval: 5
+  challenge:                                                   # tagged enum: type=http-01 | dns-01
+    type: http-01
+    gatewayRef:                                                # Gateway reference required by HTTP-01
+      name: my-gateway
+      namespace: default
+    # When switching to DNS-01, replace the entire section with:
+    # type: dns-01
+    # provider: cloudflare                                     # cloudflare | alidns
+    # credentialRef:
+    #   name: cloudflare-api-token
+    #   namespace: default
+    # propagationTimeout: 120
+    # propagationCheckInterval: 5
 
   renewal:
-    renewBeforeDays: 30                                        # 到期前多少天续期
-    checkInterval: 86400                                       # 续期检查间隔（秒）
-    failBackoff: 300                                           # 失败后退避时间（秒）
+    renewBeforeDays: 30                                        # Renew this many days before expiration
+    checkInterval: 86400                                       # Renewal check interval (seconds)
+    failBackoff: 300                                           # Backoff after failure (seconds)
 
-  # externalAccountBinding:                                    # EAB（可选）
+  # externalAccountBinding:                                    # EAB (optional)
   #   keyId: "kid123"
   #   hmacKey: "base64url-encoded-key"
 
   storage:
-    secretName: "my-acme-cert"                                 # 证书存储 Secret 名称
-    secretNamespace: "default"                                 # 证书 Secret 命名空间
+    secretName: "my-acme-cert"                                 # Secret name for storing the certificate
+    secretNamespace: "default"                                 # Namespace of the certificate Secret
 
   autoEdgionTls:
-    enabled: true                                              # 自动创建 EdgionTls
-    name: "acme-my-acme"                                       # EdgionTls 名称
-    parentRefs:                                                # EdgionTls 的 parentRefs
+    enabled: true                                              # Auto-create EdgionTls
+    name: "acme-my-acme"                                       # EdgionTls name
+    parentRefs:                                                # EdgionTls parentRefs
       - name: my-gateway
         sectionName: https
 ```
 
-## spec 字段详解
+## spec Field Details
 
-### 基础字段
+### Basic Fields
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `server` | `String` | Let's Encrypt 生产 | ACME 目录 URL |
-| `email` | `String` | **必填** | ACME 账户注册邮箱 |
-| `domains` | `Vec<String>` | **必填** | 证书域名列表 |
-| `keyType` | `AcmeKeyType` | `ecdsa-p256` | 密钥算法 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `server` | `String` | Let's Encrypt production | ACME directory URL |
+| `email` | `String` | **Required** | ACME account registration email |
+| `domains` | `Vec<String>` | **Required** | Certificate domain list |
+| `keyType` | `AcmeKeyType` | `ecdsa-p256` | Key algorithm |
 
-**AcmeKeyType 枚举**:
+**AcmeKeyType enum**:
 
-| 值 | 说明 |
-|----|------|
-| `ecdsa-p256` | ECDSA P-256（默认，推荐） |
+| Value | Description |
+|-------|-------------|
+| `ecdsa-p256` | ECDSA P-256 (default, recommended) |
 | `ecdsa-p384` | ECDSA P-384 |
 
-### challenge — 挑战配置
+### challenge — Challenge Configuration
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `challengeType` | `String` | `http-01` | `http-01` / `dns-01` |
+`challenge` is a `#[serde(tag = "type")]` internally tagged enum, corresponding to the Rust `AcmeChallenge`. `type` determines the variant, and the corresponding fields are flattened directly under `challenge`; there are no `http01:` / `dns01:` sub-fields. The two field groups are mutually exclusive at the type level.
 
-**HTTP-01**:
+**HTTP-01** (`type: http-01`):
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `http01.gatewayRef` | `ParentReference` | 用于响应 ACME 挑战的 Gateway |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `gatewayRef` | `ParentReference` | Yes | Gateway used to respond to the ACME challenge |
 
-**DNS-01**:
+**DNS-01** (`type: dns-01`):
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `dns01.provider` | `String` | — | DNS 提供商：`cloudflare` / `alidns` |
-| `dns01.credentialRef` | `SecretObjectReference` | — | API 凭证 Secret |
-| `dns01.propagationTimeout` | `u64` | `120` | DNS 传播超时（秒） |
-| `dns01.propagationCheckInterval` | `u64` | `5` | 传播检查间隔（秒） |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `provider` | `String` | — | DNS provider: `cloudflare` / `alidns` |
+| `credentialRef` | `SecretObjectReference` | — | API credentials Secret |
+| `propagationTimeout` | `u64` | `120` | DNS propagation timeout (seconds) |
+| `propagationCheckInterval` | `u64` | `5` | Propagation check interval (seconds) |
 
-### renewal — 续期配置
+### renewal — Renewal Configuration
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `renewBeforeDays` | `u32` | `30` | 到期前天数触发续期 |
-| `checkInterval` | `u64` | `86400` | 续期检查间隔（秒，默认 24h） |
-| `failBackoff` | `u64` | `300` | 失败退避时间（秒，默认 5min） |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `renewBeforeDays` | `u32` | `30` | Number of days before expiration to trigger renewal |
+| `checkInterval` | `u64` | `86400` | Renewal check interval (seconds, default 24h) |
+| `failBackoff` | `u64` | `300` | Backoff after failure (seconds, default 5min) |
 
-### storage — 证书存储
+### storage — Certificate Storage
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `secretName` | `String` | 证书存储的 K8s Secret 名称 |
-| `secretNamespace` | `String?` | Secret 命名空间（默认同 EdgionAcme） |
+| Field | Type | Description |
+|-------|------|-------------|
+| `secretName` | `String` | Name of the K8s Secret storing the certificate |
+| `secretNamespace` | `String?` | Secret namespace (defaults to the same as EdgionAcme) |
 
-### autoEdgionTls — 自动 EdgionTls
+### autoEdgionTls — Auto EdgionTls
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `enabled` | `bool` | `true` | 自动创建/更新 EdgionTls |
-| `name` | `String?` | `acme-{name}` | EdgionTls 资源名称 |
-| `parentRefs` | `Vec<ParentReference>?` | — | EdgionTls 的 Gateway 挂载点 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `true` | Automatically create/update an EdgionTls resource |
+| `name` | `String?` | `acme-{name}` | EdgionTls resource name |
+| `parentRefs` | `Vec<ParentReference>?` | — | Gateway attachment points for the EdgionTls |
 
 ## Status Schema
 
@@ -129,27 +127,34 @@ spec:
 status:
   phase: Ready                                     # Pending | Issuing | Ready | Renewing | Failed
   certificateSerial: "1234567890"
-  certificateNotAfter: "2026-06-20T00:00:00Z"      # 到期时间
+  certificateNotAfter: "2026-06-20T00:00:00Z"      # Expiration time
   lastRenewalTime: "2026-03-20T12:00:00Z"
   lastFailureReason: ""
   lastFailureTime: ""
   secretName: "my-acme-cert"
   edgionTlsName: "acme-my-acme"
   accountUri: "https://acme-v02.api.letsencrypt.org/acme/acct/123"
+  activeChallenges:                                # In-flight HTTP-01 challenge tokens
+    - domain: "example.com"
+      token: "..."
+      keyAuthorization: "..."
+      expireAt: 1700000000
 ```
 
-**AcmeCertPhase 枚举**:
+`activeChallenges` is written by `AcmeService` via the `/status` subresource SSA (with a dedicated fieldManager `edgion-acme-challenges`). The Gateway reads it via the `EdgionAcme.active_challenges()` helper to serve `/.well-known/acme-challenge/<token>`. Non-empty only while HTTP-01 is in flight. Operators must not write it manually.
 
-| Phase | 说明 |
-|-------|------|
-| `Pending` | 等待首次签发 |
-| `Issuing` | ACME 签发中 |
-| `Ready` | 证书有效 |
-| `Renewing` | 续期中 |
-| `Failed` | 上次操作失败 |
+**AcmeCertPhase enum**:
 
-## 运行约束
+| Phase | Description |
+|-------|-------------|
+| `Pending` | Waiting for the first issuance |
+| `Issuing` | ACME issuance in progress |
+| `Ready` | Certificate is valid |
+| `Renewing` | Renewal in progress |
+| `Failed` | Last operation failed |
 
-- ACME 服务仅在 **Leader** Controller 上运行
-- HTTP-01 挑战需要 Gateway 的 80 端口可达
-- 通配符域名必须使用 DNS-01 挑战
+## Operational Constraints
+
+- The ACME service only runs on the **Leader** Controller.
+- HTTP-01 challenges require port 80 of the Gateway to be reachable.
+- Wildcard domains must use the DNS-01 challenge.

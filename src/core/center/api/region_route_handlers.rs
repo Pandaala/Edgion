@@ -1,10 +1,30 @@
 //! Region Route handlers and shared helpers for Center aggregation handlers.
 
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::Json;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::ApiState;
+
+// ============= Failover Request Type =============
+
+/// Strongly-typed body for `/api/v1/center/{cluster,service}-region-routes/failover`.
+///
+/// The failover endpoint can only change the targeted region's `failoverTo` field.
+/// Any extra field (e.g. `myRegion`, `spec`, full PM YAML) is rejected at the
+/// deserialization stage, so the contract is enforced by the type system rather
+/// than by runtime checks.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FailoverRequest {
+    pub namespace: String,
+    pub name: String,
+    pub region_name: String,
+    /// Empty string = clear failover.
+    pub failover_to: String,
+}
 
 // ============= RegionRoute MetaDataStore Handlers =============
 
@@ -34,15 +54,9 @@ pub async fn list_service_region_routes(State(state): State<ApiState>) -> Json<s
 /// Response: `{ modified: N, failed: N }`
 pub async fn cluster_region_route_failover(
     State(state): State<ApiState>,
-    Json(body): Json<serde_json::Value>,
+    Json(req): Json<FailoverRequest>,
 ) -> Json<serde_json::Value> {
-    let body_bytes = match serde_json::to_vec(&body) {
-        Ok(b) => b,
-        Err(e) => return Json(serde_json::json!({ "success": false, "error": e.to_string() })),
-    };
-
-    let (modified, failed) =
-        fan_out_failover(&state, "/api/v1/cluster-region-routes/failover".to_string(), body_bytes).await;
+    let (modified, failed) = fan_out_failover(&state, "/api/v1/cluster-region-routes/failover".to_string(), &req).await;
 
     Json(serde_json::json!({
         "success": true,
@@ -58,15 +72,9 @@ pub async fn cluster_region_route_failover(
 /// Response: `{ modified: N, failed: N }`
 pub async fn service_region_route_failover(
     State(state): State<ApiState>,
-    Json(body): Json<serde_json::Value>,
+    Json(req): Json<FailoverRequest>,
 ) -> Json<serde_json::Value> {
-    let body_bytes = match serde_json::to_vec(&body) {
-        Ok(b) => b,
-        Err(e) => return Json(serde_json::json!({ "success": false, "error": e.to_string() })),
-    };
-
-    let (modified, failed) =
-        fan_out_failover(&state, "/api/v1/service-region-routes/failover".to_string(), body_bytes).await;
+    let (modified, failed) = fan_out_failover(&state, "/api/v1/service-region-routes/failover".to_string(), &req).await;
 
     Json(serde_json::json!({
         "success": true,
@@ -92,7 +100,7 @@ pub struct SyncRequest {
 pub async fn cluster_region_route_sync(
     State(state): State<ApiState>,
     Json(body): Json<SyncRequest>,
-) -> Json<serde_json::Value> {
+) -> (StatusCode, Json<serde_json::Value>) {
     // 1. Read source PM via proxy
     let source_path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", body.namespace, body.name);
     let source_pm = match state
@@ -107,21 +115,29 @@ pub async fn cluster_region_route_sync(
         .await
     {
         Ok(r) if r.status_code == 200 => match serde_json::from_slice::<serde_json::Value>(&r.body) {
-            Ok(v) => match v.get("data") {
-                Some(data) => data.clone(),
-                None => return Json(serde_json::json!({ "success": false, "error": "No data in source response" })),
-            },
+            // Controller's single-resource GET returns the bare PluginMetaData object,
+            // not a {success,data} wrapper. Tolerate both shapes for forward compatibility.
+            Ok(v) => v.get("data").cloned().unwrap_or(v),
             Err(e) => {
-                return Json(serde_json::json!({ "success": false, "error": format!("Parse source PM failed: {e}") }))
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({ "success": false, "error": format!("Parse source PM failed: {e}") })),
+                )
             }
         },
         Ok(r) => {
-            return Json(
-                serde_json::json!({ "success": false, "error": format!("Source GET returned {}", r.status_code) }),
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(
+                    serde_json::json!({ "success": false, "error": format!("Source GET returned {}", r.status_code) }),
+                ),
             )
         }
         Err((status, msg)) => {
-            return Json(serde_json::json!({ "success": false, "error": format!("Source GET failed: {status} {msg}") }))
+            return (
+                status,
+                Json(serde_json::json!({ "success": false, "error": format!("Source GET failed: {status} {msg}") })),
+            )
         }
     };
 
@@ -194,10 +210,13 @@ pub async fn cluster_region_route_sync(
     let modified = results.iter().filter(|&&ok| ok).count() + 1; // +1 for source
     let failed = results.iter().filter(|&&ok| !ok).count();
 
-    Json(serde_json::json!({
-        "success": true,
-        "data": { "modified": modified, "failed": failed },
-    }))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "data": { "modified": modified, "failed": failed },
+        })),
+    )
 }
 
 /// `POST /api/v1/center/service-region-routes/sync`
@@ -206,7 +225,7 @@ pub async fn cluster_region_route_sync(
 pub async fn service_region_route_sync(
     State(state): State<ApiState>,
     Json(body): Json<SyncRequest>,
-) -> Json<serde_json::Value> {
+) -> (StatusCode, Json<serde_json::Value>) {
     // 1. Read source PM via proxy
     let source_path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", body.namespace, body.name);
     let source_pm = match state
@@ -221,21 +240,29 @@ pub async fn service_region_route_sync(
         .await
     {
         Ok(r) if r.status_code == 200 => match serde_json::from_slice::<serde_json::Value>(&r.body) {
-            Ok(v) => match v.get("data") {
-                Some(data) => data.clone(),
-                None => return Json(serde_json::json!({ "success": false, "error": "No data in source response" })),
-            },
+            // Controller's single-resource GET returns the bare PluginMetaData object,
+            // not a {success,data} wrapper. Tolerate both shapes for forward compatibility.
+            Ok(v) => v.get("data").cloned().unwrap_or(v),
             Err(e) => {
-                return Json(serde_json::json!({ "success": false, "error": format!("Parse source PM failed: {e}") }))
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({ "success": false, "error": format!("Parse source PM failed: {e}") })),
+                )
             }
         },
         Ok(r) => {
-            return Json(
-                serde_json::json!({ "success": false, "error": format!("Source GET returned {}", r.status_code) }),
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(
+                    serde_json::json!({ "success": false, "error": format!("Source GET returned {}", r.status_code) }),
+                ),
             )
         }
         Err((status, msg)) => {
-            return Json(serde_json::json!({ "success": false, "error": format!("Source GET failed: {status} {msg}") }))
+            return (
+                status,
+                Json(serde_json::json!({ "success": false, "error": format!("Source GET failed: {status} {msg}") })),
+            )
         }
     };
 
@@ -278,15 +305,33 @@ pub async fn service_region_route_sync(
     let modified = results.iter().filter(|&&ok| ok).count() + 1;
     let failed = results.iter().filter(|&&ok| !ok).count();
 
-    Json(serde_json::json!({
-        "success": true,
-        "data": { "modified": modified, "failed": failed },
-    }))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "data": { "modified": modified, "failed": failed },
+        })),
+    )
 }
 
 /// Fan-out a POST request to all online controllers in parallel.
 /// Returns `(modified_count, failed_count)`.
-async fn fan_out_failover(state: &ApiState, path: String, body_bytes: Vec<u8>) -> (usize, usize) {
+///
+/// Body is re-serialized from the typed `FailoverRequest` here — Center never
+/// forwards raw upstream bytes, ensuring controllers always receive a clean
+/// 4-field payload regardless of how the operator structured the original request.
+async fn fan_out_failover(state: &ApiState, path: String, req: &FailoverRequest) -> (usize, usize) {
+    let body_bytes = match serde_json::to_vec(req) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!(
+                component = "center",
+                error = %e,
+                "FailoverRequest serialization failed unexpectedly"
+            );
+            unreachable!("FailoverRequest contains only String fields; serialization cannot fail");
+        }
+    };
     let summaries = state.aggregator.controller_summaries();
     let online: Vec<_> = summaries.into_iter().filter(|s| s.online).collect();
 
@@ -337,4 +382,53 @@ async fn fan_out_failover(state: &ApiState, path: String, body_bytes: Vec<u8>) -
     let modified = results.iter().filter(|&&ok| ok).count();
     let failed = results.iter().filter(|&&ok| !ok).count();
     (modified, failed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failover_request_rejects_unknown_fields() {
+        let json = r#"{
+            "namespace": "default",
+            "name": "test-cluster-route",
+            "regionName": "east",
+            "failoverTo": "west",
+            "myRegion": "evil"
+        }"#;
+        let result: Result<FailoverRequest, _> = serde_json::from_str(json);
+        assert!(result.is_err(), "unknown field 'myRegion' must be rejected at center");
+    }
+
+    #[test]
+    fn failover_request_rejects_full_pm_payload() {
+        // A real-world risk: someone tries to send a full PluginMetaData YAML/JSON.
+        let json = r#"{
+            "namespace": "default",
+            "name": "test-cluster-route",
+            "regionName": "east",
+            "failoverTo": "west",
+            "spec": {"metadata": {"config": {"myRegion": "evil"}}}
+        }"#;
+        let result: Result<FailoverRequest, _> = serde_json::from_str(json);
+        assert!(
+            result.is_err(),
+            "spec field must be rejected — center failover does not accept full PM"
+        );
+    }
+
+    #[test]
+    fn failover_request_roundtrip_canonical() {
+        let json = r#"{"namespace":"default","name":"r","regionName":"east","failoverTo":"west"}"#;
+        let req: FailoverRequest = serde_json::from_str(json).expect("canonical payload accepted");
+        assert_eq!(req.namespace, "default");
+        assert_eq!(req.region_name, "east");
+        assert_eq!(req.failover_to, "west");
+        // Re-serialize: only the 4 contract fields, nothing else.
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(s.contains("\"regionName\":\"east\""));
+        assert!(!s.contains("myRegion"));
+        assert!(!s.contains("spec"));
+    }
 }

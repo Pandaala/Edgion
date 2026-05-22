@@ -1,38 +1,51 @@
 ---
 name: gateway-observe
-description: Gateway 可观测性：AccessLog 零拷贝 JSON、协议日志、Prometheus 指标、AccessLogStore 集成测试支持。
+description: Gateway observability — zero-copy AccessLog JSON, protocol logs, Prometheus metrics, AccessLogStore for integration testing.
 ---
 
-# Gateway 可观测性
+# Gateway observability
 
-> 可观测性模块提供访问日志、协议日志、Prometheus 指标三个维度的运行时洞察。
+> The observability module provides three dimensions of runtime insight: access logs, protocol logs, and Prometheus metrics.
+
+## Iron rule for data plane observability
+
+**Data plane hot paths (`pg_*` callbacks, plugin runtime, stream routes, session_persistence, TLS callbacks, etc.) MUST NOT use any `tracing::` macro (including `tracing::debug!`).**
+
+The only allowed observability channels on the data plane are:
+
+1. AccessLog (per-request JSON log for HTTP/gRPC, zero-copy).
+2. Protocol logs (`ssl_log` / `tcp_log` / `tls_log` / `udp_log`).
+3. Prometheus metrics (`metrics::counter!` / `histogram!` / `gauge!`).
+4. Error code accumulation (`EdgionStatus`, written into `EdgionHttpContext.errors` and ultimately landing in the AccessLog `errors` field).
+
+Control-plane and startup logs use `tracing` and are not subject to this rule. See [`../../03-coding/01-log-safety.md`](../../03-coding/01-log-safety.md) iron rule 3 for details.
 
 ## Access Log
 
 ### AccessLogEntry
 
-`AccessLogEntry<'a>` 是零拷贝的访问日志条目，所有字段引用 `EdgionHttpContext` 中的数据：
+`AccessLogEntry<'a>` is a zero-copy access-log entry; all fields reference data inside `EdgionHttpContext`:
 
 ```rust
 pub struct AccessLogEntry<'a> {
     pub timestamp: i64,
     pub request_info: &'a RequestInfo,
-    pub match_info: Option<RouteMatchInfo<'a>>,  // HTTP 或 gRPC 路由匹配信息
+    pub match_info: Option<RouteMatchInfo<'a>>,  // HTTP or gRPC route match info
     pub errors: &'a [EdgionStatus],
     pub backend_context: Option<&'a BackendContext>,
-    pub stage_logs: &'a [StageLogs],             // 插件执行日志
-    pub conn_est: Option<bool>,                   // 上游连接是否建立
-    pub ctx: &'a HashMap<String, String>,         // 自定义上下文变量
+    pub stage_logs: &'a [StageLogs],             // plugin execution logs
+    pub conn_est: Option<bool>,                   // whether the upstream connection is established
+    pub ctx: &'a HashMap<String, String>,         // custom context variables
 }
 ```
 
-- `RouteMatchInfo` 是 `untagged` 枚举，支持 HTTP（`MatchInfo`）和 gRPC（`GrpcMatchInfo`）两种匹配信息
-- 通过 `AccessLogEntry::from_context(ctx)` 从 EdgionHttpContext 构建
-- 序列化为 JSON 时使用 `serde` 的 `skip_serializing_if` 减少输出体积
+- `RouteMatchInfo` is an `untagged` enum supporting both HTTP (`MatchInfo`) and gRPC (`GrpcMatchInfo`) match info.
+- Built from EdgionHttpContext via `AccessLogEntry::from_context(ctx)`.
+- JSON serialization uses serde's `skip_serializing_if` to reduce output size.
 
 ### AccessLogger
 
-AccessLogger 是日志分发器，将日志发送到第一个健康的 DataSender：
+AccessLogger is a log dispatcher that sends the log to the first healthy DataSender:
 
 ```rust
 pub struct AccessLogger {
@@ -40,123 +53,123 @@ pub struct AccessLogger {
 }
 ```
 
-- `register()` — 注册 DataSender（如 LocalFileWriter、Elasticsearch DataSender）
-- `init()` — 初始化所有 sender
-- `send()` — 遍历 senders，发送到第一个 `healthy()` 返回 true 的 sender
+- `register()` — register a DataSender (e.g., LocalFileWriter, Elasticsearch DataSender).
+- `init()` — initialize all senders.
+- `send()` — iterate senders and send to the first one whose `healthy()` returns true.
 
-可配置输出目标：
-- **LocalFile** — 本地文件（支持日志轮转）
-- **LinkSys** — 外部系统（Elasticsearch、Redis 等）
+Configurable output targets:
+- **LocalFile** — local files (with log rotation).
+- **LinkSys** — external systems (Elasticsearch, Redis, etc.).
 
-## 协议日志
+## Protocol logs
 
-每种协议有独立的日志器，通过 `init_*_logger()` 初始化：
+Each protocol has its own logger, initialized via `init_*_logger()`:
 
-| 协议 | 初始化函数 | 日志条目 | 说明 |
-|------|------------|----------|------|
-| SSL | `init_ssl_logger()` | `log_ssl()` | SSL/TLS 握手日志 |
-| TCP | `init_tcp_logger()` | `TcpLogEntry` / `log_tcp()` | TCP 连接日志 |
-| TLS | `init_tls_logger()` | `log_tls()` | TLS 路由日志 |
-| UDP | `init_udp_logger()` | `UdpLogEntry` / `log_udp()` | UDP 会话日志 |
+| Protocol | Init function | Log entry | Description |
+|----------|---------------|-----------|-------------|
+| SSL | `init_ssl_logger()` | `log_ssl()` | SSL/TLS handshake logs |
+| TCP | `init_tcp_logger()` | `TcpLogEntry` / `log_tcp()` | TCP connection logs |
+| TLS | `init_tls_logger()` | `log_tls()` | TLS route logs |
+| UDP | `init_udp_logger()` | `UdpLogEntry` / `log_udp()` | UDP session logs |
 
-日志基础设施：
-- `create_async_logger()` — 创建异步日志器
-- `create_sync_logger()` — 创建同步日志器
-- `init_default()` / `init_logging()` — 初始化默认日志系统（`SysLogConfig`）
-- `logs/buffer.rs` — 日志缓冲
-- `logs/logger_factory.rs` — 日志器工厂
+Logging infrastructure:
+- `create_async_logger()` — create an asynchronous logger.
+- `create_sync_logger()` — create a synchronous logger.
+- `init_default()` / `init_logging()` — initialize the default logging system (`SysLogConfig`).
+- `logs/buffer.rs` — log buffering.
+- `logs/logger_factory.rs` — logger factory.
 
-## Prometheus 指标
+## Prometheus metrics
 
-### 暴露端口
+### Exposed port
 
-指标通过 `:5901` 端口暴露，Axum 路由：
-- `GET /metrics` — Prometheus 格式指标
-- `GET /health` — 健康检查端点
+Metrics are exposed on port `:5901` via Axum routes:
+- `GET /metrics` — Prometheus-format metrics.
+- `GET /health` — health-check endpoint.
 
-### 指标注册表
+### Metric registry
 
-`GatewayMetrics` 全局单例，使用 `metrics` crate 注册以下指标：
+`GatewayMetrics` is a global singleton that registers the following metrics using the `metrics` crate:
 
-| 指标名 | 类型 | 说明 |
-|--------|------|------|
-| `edgion_ctx_created_total` | Counter | 创建的上下文总数 |
-| `edgion_ctx_active` | Gauge | 当前活跃上下文数 |
-| `edgion_requests_total` | Counter | 请求总数 |
-| `edgion_requests_failed_total` | Counter | 失败请求总数 |
-| `edgion_access_log_dropped_total` | Counter | 丢弃的访问日志数 |
-| `edgion_ssl_log_dropped_total` | Counter | 丢弃的 SSL 日志数 |
-| `edgion_tcp_log_dropped_total` | Counter | 丢弃的 TCP 日志数 |
-| `edgion_tls_log_dropped_total` | Counter | 丢弃的 TLS 日志数 |
-| `edgion_udp_log_dropped_total` | Counter | 丢弃的 UDP 日志数 |
-| `edgion_status_update_total` | Counter | K8s 状态更新总数 |
-| `edgion_status_update_failed_total` | Counter | K8s 状态更新失败数 |
-| `edgion_status_update_skipped_total` | Counter | K8s 状态更新跳过数 |
-| `edgion_config_reload_signals_total` | Counter | 配置重载信号数 |
-| `edgion_config_relist_total` | Counter | 配置重新列举数 |
-| `edgion_backend_requests_total` | Counter | 后端请求总数（按后端分组） |
-| `edgion_gateway_request_bytes_total` | Counter | 网关请求字节数 |
-| `edgion_gateway_response_bytes_total` | Counter | 网关响应字节数 |
-| `edgion_mirror_requests_total` | Counter | 镜像请求数（`status` label 细分 `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout`；mirror 是 fire-and-forget，per-request latency 查 mirror access log `et` 字段，不再以 histogram 暴露） |
-| `edgion_controller_connected_gateways` | Gauge | 已连接的网关实例数 |
-| `edgion_controller_schema_validation_errors_total` | Counter | Schema 验证错误数 |
+| Metric name | Type | Description |
+|-------------|------|-------------|
+| `edgion_ctx_created_total` | Counter | Total contexts created |
+| `edgion_ctx_active` | Gauge | Currently active contexts |
+| `edgion_requests_total` | Counter | Total requests |
+| `edgion_requests_failed_total` | Counter | Total failed requests |
+| `edgion_access_log_dropped_total` | Counter | Number of dropped access logs |
+| `edgion_ssl_log_dropped_total` | Counter | Number of dropped SSL logs |
+| `edgion_tcp_log_dropped_total` | Counter | Number of dropped TCP logs |
+| `edgion_tls_log_dropped_total` | Counter | Number of dropped TLS logs |
+| `edgion_udp_log_dropped_total` | Counter | Number of dropped UDP logs |
+| `edgion_status_update_total` | Counter | Total K8s status updates |
+| `edgion_status_update_failed_total` | Counter | Failed K8s status updates |
+| `edgion_status_update_skipped_total` | Counter | Skipped K8s status updates |
+| `edgion_config_reload_signals_total` | Counter | Configuration reload signals |
+| `edgion_config_relist_total` | Counter | Configuration relist count |
+| `edgion_backend_requests_total` | Counter | Total backend requests (grouped by backend) |
+| `edgion_gateway_request_bytes_total` | Counter | Gateway request bytes |
+| `edgion_gateway_response_bytes_total` | Counter | Gateway response bytes |
+| `edgion_mirror_requests_total` | Counter | Mirror requests (the `status` label distinguishes `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout`; mirror is fire-and-forget; for per-request latency look up the `et` field in the mirror access log — no longer exposed as a histogram) |
+| `edgion_controller_connected_gateways` | Gauge | Number of connected gateway instances |
+| `edgion_controller_schema_validation_errors_total` | Counter | Schema validation error count |
 
-全局标签：`service=edgion-gateway`
+Global label: `service=edgion-gateway`.
 
-辅助函数：
-- `record_backend_request()` — 记录后端请求指标
-- `record_mirror_metric()` — 记录镜像指标
-- `status_group()` — 状态码分组
+Helper functions:
+- `record_backend_request()` — record backend request metrics.
+- `record_mirror_metric()` — record mirror metrics.
+- `status_group()` — status-code grouping.
 
-### 测试指标
+### Test metrics
 
-`test_metrics.rs` 提供集成测试用的指标数据注入：
-- `set_latency_test_data()` — 设置延迟测试数据
-- `set_lb_test_data()` — 设置 LB 测试数据
-- `set_retry_test_data()` — 设置重试测试数据
+`test_metrics.rs` provides metric data injection for integration testing:
+- `set_latency_test_data()` — set latency test data.
+- `set_lb_test_data()` — set LB test data.
+- `set_retry_test_data()` — set retry test data.
 
-## AccessLogStore（集成测试模式）
+## AccessLogStore (integration testing mode)
 
-仅在 `--integration-testing-mode` 下激活的内存日志存储：
+An in-memory log store activated only under `--integration-testing-mode`:
 
 ```rust
 pub struct AccessLogStore {
     entries: DashMap<String, StoredEntry>,  // trace_id -> JSON
-    ttl: Duration,                          // 默认 5 分钟
-    max_capacity: usize,                    // 默认 10,000 条
+    ttl: Duration,                          // default 5 minutes
+    max_capacity: usize,                    // default 10,000 entries
     total_stored: AtomicU64,
 }
 ```
 
-- 按 `trace_id` 索引，支持精确查询
-- DashMap 提供无锁并发访问
-- TTL 过期自动清理（每 100 次 store 触发一次）
-- 容量满时先清理过期条目
-- API：`store()`、`get()`、`delete()`、`list()`、`clear()`、`status()`
-- 全局单例通过 `get_access_log_store()` 获取
+- Indexed by `trace_id` for exact lookup.
+- DashMap provides lock-free concurrent access.
+- TTL-expired entries are cleaned automatically (triggered every 100 stores).
+- When at capacity, expired entries are cleaned first.
+- API: `store()`, `get()`, `delete()`, `list()`, `clear()`, `status()`.
+- Global singleton accessed via `get_access_log_store()`.
 
-## 目录布局
+## Directory layout
 
 ```
 src/core/gateway/observe/
-├── mod.rs                    # 模块导出
-├── access_log/               # 访问日志
-│   ├── entry.rs              # AccessLogEntry 定义（零拷贝）
-│   ├── logger.rs             # AccessLogger（DataSender 分发）
+├── mod.rs                    # module exports
+├── access_log/               # access logs
+│   ├── entry.rs              # AccessLogEntry definition (zero-copy)
+│   ├── logger.rs             # AccessLogger (DataSender dispatch)
 │   └── mod.rs
-├── access_log_store.rs       # AccessLogStore（集成测试内存存储）
-├── logs/                     # 协议日志
-│   ├── ssl_log.rs            # SSL 日志
-│   ├── tcp_log.rs            # TCP 日志
-│   ├── tls_log.rs            # TLS 日志
-│   ├── udp_log.rs            # UDP 日志
-│   ├── sys_log.rs            # 系统日志配置
-│   ├── buffer.rs             # 日志缓冲
-│   ├── logger_factory.rs     # 日志器工厂
+├── access_log_store.rs       # AccessLogStore (in-memory store for integration testing)
+├── logs/                     # protocol logs
+│   ├── ssl_log.rs            # SSL log
+│   ├── tcp_log.rs            # TCP log
+│   ├── tls_log.rs            # TLS log
+│   ├── udp_log.rs            # UDP log
+│   ├── sys_log.rs            # system log configuration
+│   ├── buffer.rs             # log buffering
+│   ├── logger_factory.rs     # logger factory
 │   └── mod.rs
-└── metrics/                  # Prometheus 指标
-    ├── api.rs                # Axum HTTP 端点（:5901）
-    ├── registry.rs           # GatewayMetrics 定义
-    ├── test_metrics.rs       # 测试用指标注入
+└── metrics/                  # Prometheus metrics
+    ├── api.rs                # Axum HTTP endpoint (:5901)
+    ├── registry.rs           # GatewayMetrics definition
+    ├── test_metrics.rs       # test-only metric injection
     └── mod.rs
 ```

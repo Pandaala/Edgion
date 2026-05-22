@@ -1,16 +1,16 @@
 ---
 name: gateway-runtime-store
-description: 运行时存储：Gateway 资源管理、路由配置存储、ArcSwap 无锁读取、Listener 配置、错误响应生成。
+description: Runtime stores — Gateway resource management, route configuration storage, ArcSwap lock-free reads, listener configuration, error response generation.
 ---
 
-# 运行时存储
+# Runtime stores
 
-> 运行时存储模块管理 Gateway 资源配置、路由管理器和监听器信息，
-> 使用 ArcSwap 实现无锁读取，支持运行时动态配置更新。
+> The runtime store module manages Gateway resource configuration, route managers, and listener information,
+> using ArcSwap for lock-free reads and supporting dynamic configuration updates at runtime.
 
 ## Gateway Store
 
-`GatewayStore` 存储 Gateway CRD 资源：
+`GatewayStore` stores Gateway CRD resources:
 
 ```rust
 pub struct GatewayStore {
@@ -18,89 +18,89 @@ pub struct GatewayStore {
 }
 ```
 
-操作：
-- `add_gateway()` — 添加（key 重复时返回错误）
-- `update_gateway()` — 更新或插入
-- `remove_gateway()` — 删除
-- `get_gateway()` — 按 key 查询
-- `list_gateways()` — 列举所有
-- `clear()` — 清空
+Operations:
+- `add_gateway()` — add (returns an error if the key already exists).
+- `update_gateway()` — update or insert.
+- `remove_gateway()` — remove.
+- `get_gateway()` — query by key.
+- `list_gateways()` — list all.
+- `clear()` — clear.
 
-全局单例：`get_global_gateway_store()` 返回 `Arc<RwLock<GatewayStore>>`。
+Global singleton: `get_global_gateway_store()` returns `Arc<RwLock<GatewayStore>>`.
 
-## Gateway 配置存储（GatewayConfigStore）
+## Gateway configuration store (GatewayConfigStore)
 
-`GatewayConfigStore` 提供按 Listener 查询的 Gateway ��态配置，采用两层匹配结构：
+`GatewayConfigStore` provides per-Listener Gateway configuration queries with a two-level matching structure:
 
 ```rust
 pub struct GatewayListenerConfig {
-    host_map: Option<HashMap<String, Arc<ListenerConfig>>>,           // 精确主机名匹配
-    wildcard_host_map: Option<HashHost<Arc<ListenerConfig>>>,         // 通配符主机名匹配
-    listener_map: Option<HashMap<String, Arc<ListenerConfig>>>,       // 按 listener name 匹配
+    host_map: Option<HashMap<String, Arc<ListenerConfig>>>,           // exact hostname match
+    wildcard_host_map: Option<HashHost<Arc<ListenerConfig>>>,         // wildcard hostname match
+    listener_map: Option<HashMap<String, Arc<ListenerConfig>>>,       // match by listener name
 }
 ```
 
-`ListenerConfig` 包含：
-- `name` — Listener 名称
-- `port` — 监听端口
-- `hostname` — 可选的 SNI 主机名
-- `allowed_routes` — 允许的路由配置
+`ListenerConfig` includes:
+- `name` — Listener name.
+- `port` — listening port.
+- `hostname` — optional SNI hostname.
+- `allowed_routes` — allowed route configuration.
 
-路由匹配策略：
-- **带 sectionName** 的路由：通过 `listener_map` 精确匹配 listener name
-- **不带 sectionName** 的路由：通过 `host_map`（精确）或 `wildcard_host_map`（通配符）匹配主机名
+Route matching strategies:
+- **Routes with a sectionName**: exact match against `listener_map` by listener name.
+- **Routes without a sectionName**: match by hostname against `host_map` (exact) or `wildcard_host_map` (wildcard).
 
-性能优化：所有内部 HashMap 使用 `Option` 类型，大多数 Gateway 不配置 hostname，可跳过 host_map 查询。
+Performance optimization: all internal HashMaps use `Option`; most Gateways do not configure a hostname, so the host_map lookup can be skipped.
 
-全局单例：`get_global_gateway_config_store()`
+Global singleton: `get_global_gateway_config_store()`.
 
 ## ListenerGatewayInfo Store
 
-`ListenerGatewayInfoStore` 管理每个 Listener 的 Gateway 信息聚合视图，以 `ListenerKey`（格式 `"{addr}/{protocol}"`）为索引：
+`ListenerGatewayInfoStore` manages an aggregated Gateway info view for each Listener, indexed by `ListenerKey` (formatted as `"{addr}/{protocol}"`):
 
-- `get_listener_gateway_info_store()` — 获取全局实例
-- `rebuild_listener_gateway_infos()` — 重建 Listener-Gateway 映射关系
-- 提供 `GatewayInfo`（包含 Gateway 的聚合运行时信息）
+- `get_listener_gateway_info_store()` — get the global instance.
+- `rebuild_listener_gateway_infos()` — rebuild the Listener-Gateway mapping.
+- Provides `GatewayInfo` (containing the aggregated runtime info of the Gateway).
 
-## ArcSwap 无锁读取模式
+## ArcSwap lock-free read pattern
 
-运行时存储广泛使用 ArcSwap 模式实现高性能并发访问：
+Runtime stores use the ArcSwap pattern extensively for high-performance concurrent access:
 
 ```
-写入路径（低频）：                    读取路径（高频）：
-ConfHandler.full_set()               store.load()  -> Arc<T>
-  -> 构建新 HashMap                     -> 零成本原子读
-  -> ArcSwap.store(Arc::new(map))      -> 无锁、无拷贝
+Write path (low frequency):              Read path (high frequency):
+ConfHandler.full_set()                   store.load()  -> Arc<T>
+  -> build new HashMap                      -> zero-cost atomic read
+  -> ArcSwap.store(Arc::new(map))           -> lock-free, copy-free
 ```
 
-使用 ArcSwap 的存储：
-- `GatewayConfigStore` — Gateway listener 配置
-- `LinkSysStore` — LinkSys 资源
-- `PluginStore` — EdgionPlugins 资源
-- 各 provider 运行时 store（Redis/Etcd/ES）
-- `BackendSelector` — 后端选择器状态
+Stores using ArcSwap:
+- `GatewayConfigStore` — Gateway listener configuration.
+- `LinkSysStore` — LinkSys resources.
+- `PluginStore` — EdgionPlugins resources.
+- Each provider's runtime store (Redis / Etcd / ES).
+- `BackendSelector` — backend selector state.
 
-与 RwLock 的区别：GatewayStore 使用 `Arc<RwLock<GatewayStore>>`（写操作需要互斥），适用于写频率较高的场景。
+Difference vs RwLock: `GatewayStore` uses `Arc<RwLock<GatewayStore>>` (writes need mutual exclusion), suitable for higher write-frequency scenarios.
 
-## 错误响应生成
+## Error response generation
 
-Gateway 运行时提供标准化的错误响应生成函数：
+The Gateway runtime provides standardized error response generators:
 
-| 函数 | 状态码 | 用途 |
-|------|--------|------|
-| `end_response_400()` | 400 Bad Request | 请求格式错误 |
-| `end_response_404()` | 404 Not Found | 路由未匹配 |
-| `end_response_421()` | 421 Misdirected Request | SNI 不匹配 |
-| `end_response_500()` | 500 Internal Server Error | 内部错误 |
-| `end_response_503()` | 503 Service Unavailable | 无可用后端 |
+| Function | Status code | Use case |
+|----------|-------------|----------|
+| `end_response_400()` | 400 Bad Request | Malformed request |
+| `end_response_404()` | 404 Not Found | No route matched |
+| `end_response_421()` | 421 Misdirected Request | SNI mismatch |
+| `end_response_500()` | 500 Internal Server Error | Internal error |
+| `end_response_503()` | 503 Service Unavailable | No backend available |
 
-## 目录布局
+## Directory layout
 
 ```
 src/core/gateway/runtime/
 └── store/
-    ├── mod.rs                # 模块导出
-    ├── gateway.rs            # GatewayStore（Gateway 资源 CRUD）
-    ├── config.rs             # GatewayConfigStore（Listener ��置）
-    └── listener_gateway_info.rs  # ListenerGatewayInfoStore（Listener-Gateway 映射）
+    ├── mod.rs                # module exports
+    ├── gateway.rs            # GatewayStore (CRUD for Gateway resources)
+    ├── config.rs             # GatewayConfigStore (Listener configuration)
+    └── listener_gateway_info.rs  # ListenerGatewayInfoStore (Listener-Gateway mapping)
 ```

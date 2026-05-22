@@ -17,9 +17,21 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
+# Coverage mode: switch to instrumented binary directory.
+# LLVM_PROFILE_FILE override is critical: show-env defaults to target/Edgion-*.profraw,
+# but cargo llvm-cov report only scans target/llvm-cov-target/*.profraw — keep them aligned.
+if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
+    eval $(cargo llvm-cov show-env --export-prefix 2>/dev/null)
+    export CARGO_TARGET_DIR="${PROJECT_ROOT}/target/llvm-cov-target"
+    export LLVM_PROFILE_FILE="${PROJECT_ROOT}/target/llvm-cov-target/Edgion-%p-%10m.profraw"
+    BIN_DIR="${PROJECT_ROOT}/target/llvm-cov-target/debug"
+else
+    BIN_DIR="${PROJECT_ROOT}/target/debug"
+fi
+
 # config
 CONF_DIR="${PROJECT_ROOT}/examples/test/conf"
-EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
+EDGION_CLI="${BIN_DIR}/edgion-cli"
 CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:5800}"
 GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:5900}"
 
@@ -192,15 +204,16 @@ load_directory_recursive() {
         return 1
     fi
     
-    #  updates  delete （ initial）
+    # Skip dynamic delta dirs (updates / updates_grouped / delete); only initial / initial_grouped are pre-loaded.
     if [[ "$dir" =~ /DynamicTest/updates ]] || [[ "$dir" =~ /DynamicTest/delete ]]; then
         log_info "Skipping dynamic update dir: $dir"
         return 0
     fi
-    
-    # all yaml file， updates  delete 
+
+    # Walk YAML files, excluding any updates*/ and delete*/ subdirs under DynamicTest.
     local files=$(find "$dir" -type f \( -name "*.yaml" -o -name "*.yml" \) \
         -not -path "*/DynamicTest/updates/*" \
+        -not -path "*/DynamicTest/updates_grouped/*" \
         -not -path "*/DynamicTest/delete/*" | sort)
     
     if [ -z "$files" ]; then
@@ -236,12 +249,12 @@ load_directory_recursive() {
 verify_sync() {
     log_section "verifyresourcesync"
     
-    if [ ! -f "${PROJECT_ROOT}/target/debug/examples/resource_diff" ]; then
+    if [ ! -f "${BIN_DIR}/examples/resource_diff" ]; then
         log_warn "resource_diff Build，Skipverify"
         return 0
     fi
     
-    "${PROJECT_ROOT}/target/debug/examples/resource_diff" \
+    "${BIN_DIR}/examples/resource_diff" \
         --controller-url "$CONTROLLER_URL" \
         --gateway-url "$GATEWAY_ADMIN_URL"
     

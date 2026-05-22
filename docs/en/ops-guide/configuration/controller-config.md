@@ -50,7 +50,6 @@ conf_sync:
 conf_center:
   type: filesystem
   conf_dir: config/resources      # YAML resource directory (prefer absolute paths)
-  endpoint_mode: EndpointSlice    # EndpointSlice | Endpoints | Both
 
 # ─── conf_center: Kubernetes mode (production) ────────────────────
 # conf_center:
@@ -59,7 +58,6 @@ conf_center:
 #   controller_name: edgion.io/gateway-controller  # controllerName reported in Gateway API status
 #   watch_namespaces: []                           # Empty = watch all namespaces
 #   label_selector: ""                             # Label filter for watched resources
-#   endpoint_mode: EndpointSlice
 #   gateway_address: ""                            # Address reported in Gateway status
 #   ha_mode: leader-only                           # "leader-only" | "all-serve"
 #   no_watch_kinds: [TCPRoute, UDPRoute]           # Skip CRD pre-check and watch for these kinds
@@ -133,7 +131,6 @@ Certificates can be generated with `edgion-cli gen-certs --output file --output-
 |-----------|------|---------|-------------|
 | `type` | `String` | — | Must be `"filesystem"` |
 | `conf_dir` | `Path` | — | YAML resource directory. **Use absolute paths** — the current implementation does not resolve this relative to `work_dir` |
-| `endpoint_mode` | `String` | `EndpointSlice` | Backend discovery mode: `EndpointSlice` / `Endpoints` / `Both` |
 
 Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` to FileSystem mode.
 
@@ -146,7 +143,6 @@ Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` 
 | `controller_name` | `String` | — | `controllerName` reported in Gateway API status |
 | `watch_namespaces` | `Array<String>` | `[]` (all) | Namespaces to watch; empty list means all namespaces |
 | `label_selector` | `String` | `""` | Label selector filter for watched resources |
-| `endpoint_mode` | `String` | `EndpointSlice` | Backend discovery mode |
 | `gateway_address` | `String` | — | Address reported in Gateway status. Optional |
 | `ha_mode` | `String` | — | HA mode: `"leader-only"` or `"all-serve"` |
 | `no_watch_kinds` | `Array<String>` | `[]` | Resource kinds to skip CRD pre-check and watch for (PascalCase), e.g. `["TCPRoute", "UDPRoute"]` |
@@ -178,7 +174,6 @@ Use local YAML files to simulate Kubernetes resources without a cluster:
 conf_center:
   type: filesystem
   conf_dir: /home/user/my-project/config/resources
-  endpoint_mode: EndpointSlice
 ```
 
 You can also override at startup via CLI:
@@ -196,7 +191,6 @@ conf_center:
   gateway_class: edgion
   controller_name: edgion.io/gateway-controller
   watch_namespaces: [default, production]
-  endpoint_mode: EndpointSlice
   gateway_address: "203.0.113.10"
   ha_mode: leader-only
 ```

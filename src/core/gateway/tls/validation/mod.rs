@@ -6,8 +6,11 @@ pub(crate) use cert::check_key_matches_cert;
 pub use cert::{validate_cert, CertValidationError, CertValidationResult};
 pub use mtls::{validate_cn_whitelist, validate_san_whitelist};
 
-/// Match a value against a pattern, supporting exact match and single-level wildcard (`*.example.com`).
-/// Case-insensitive per RFC 6125 §6.4.1.
+/// Match value against pattern using a single-leftmost-label wildcard. Per RFC 6125 §6.4.1
+/// (case-insensitive) and §6.4.3 (`*.example.com` matches `api.example.com` but NOT
+/// `a.b.example.com`). Used for TLS cert SAN validation at config load time; the same
+/// single-label rule is now also applied by `HashHost::get_rfc6125` at SNI selection
+/// time (Gateway API route matching at `hostname_matches_listener` remains multi-label).
 pub(crate) fn matches_host_pattern(value: &str, pattern: &str) -> bool {
     if value.eq_ignore_ascii_case(pattern) {
         return true;

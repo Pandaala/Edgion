@@ -91,11 +91,11 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 6. Path  (: /params/:uid/info)
+    # 6. Path parameter (`:uid` syntax) — exercises radix matcher param extraction
     - matches:
         - path:
-            type: RegularExpression
-            value: "^/params/[^/]+/info$"
+            type: PathPrefix
+            value: /params/:uid/info
       filters:
         - type: ExtensionRef
           extensionRef:

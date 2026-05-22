@@ -91,17 +91,49 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # 6. Path  (: /params/:uid/info)
+    # 6. Path parameter (`:uid` syntax) — exercises radix matcher param extraction
     - matches:
         - path:
-            type: RegularExpression
-            value: "^/params/[^/]+/info$"
+            type: PathPrefix
+            value: /params/:uid/info
       filters:
         - type: ExtensionRef
           extensionRef:
             group: edgion.io
             kind: EdgionPlugins
             name: proxy-rewrite-path-param
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 7. Header rewrite + $arg_<name> always url-encoded (unified-query-string-cache Fix 3)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /request-header-test
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: proxy-rewrite-header-arg
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 8. Regex capture in header value — always url-encoded (mirrors rule 7's $arg_ rule)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /capture-header
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: proxy-rewrite-capture-header
       backendRefs:
         - name: test-http
           namespace: edgion-test

@@ -1,9 +1,12 @@
 //! Common reusable types for Edgion custom resources.
 
-pub mod secret_ref;
+pub mod group_name;
+pub mod secret_object_ref;
+pub mod secret_slot;
 pub mod tls;
 
-pub use secret_ref::SecretReference;
+pub use secret_object_ref::SecretObjectReference;
+pub use secret_slot::SecretSlot;
 pub use tls::{TlsCerts, TlsConfig};
 
 // ---- Types shared across all route resources ----

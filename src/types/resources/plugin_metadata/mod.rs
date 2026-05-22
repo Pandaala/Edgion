@@ -16,10 +16,13 @@ pub mod region_route;
 
 pub use global_connection_ip_restriction::{GlobalConnectionIpRestrictionData, IpGroup, ProfileRules};
 pub use ip_list::IpListData;
-pub use key_list::{KeyListData, KeyMatchMode, MetaDataItem};
-pub use region_route::{ClusterRegionRouteConfig, RouteByKeyConfMatchMeta, ServiceRegionDef, ServiceRegionRouteConfig};
+pub use key_list::{KeyGroup, KeyListData, KeyMatchMode, MetaDataItem};
+pub use region_route::{
+    ClusterRegionRouteConfig, ClusterRegionRouteEntry, RefPluginEntry, RouteByKeyConfMatchMeta, ServiceRegionDef,
+    ServiceRegionRouteConfig, ServiceRegionRouteEntry,
+};
 
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use crate::types::resources::common::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -111,22 +114,17 @@ impl PluginMetaData {
         let mut errors = Vec::new();
         match &self.spec.metadata {
             MetaDataEntry::IpList(ip_list) => {
-                for cidr in &ip_list.items {
-                    if !cidr.contains('/')
-                        && !cidr.contains(':')
-                        && !cidr.chars().all(|c| c.is_ascii_digit() || c == '.')
-                    {
-                        errors.push(format!("Invalid IP/CIDR format: {}", cidr));
-                    }
+                if let Err(e) = crate::core::common::matcher::ip_cidr_helpers::validate_groups_structure(&ip_list.items)
+                {
+                    errors.push(format!("IpList invalid: {}", e));
                 }
             }
             MetaDataEntry::KeyList(key_list) => {
-                if matches!(key_list.match_mode, KeyMatchMode::Regex) {
-                    for item in &key_list.items {
-                        if let Err(e) = regex::Regex::new(&item.key) {
-                            errors.push(format!("Invalid regex pattern '{}': {}", item.key, e));
-                        }
-                    }
+                if let Err(e) = crate::core::common::matcher::key_group_helpers::validate_key_groups_structure(
+                    &key_list.items,
+                    &key_list.match_mode,
+                ) {
+                    errors.push(format!("KeyList invalid: {}", e));
                 }
             }
             MetaDataEntry::GlobalConnectionIpRestriction(data) => {

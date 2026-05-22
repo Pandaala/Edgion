@@ -37,6 +37,7 @@ use std::time::Instant;
 const MAIN_HOST: &str = "region-route-main.example.com";
 const NORULES_HOST: &str = "region-route-norules.example.com";
 const MYREGION_HOST: &str = "region-route-myregion.example.com";
+const BROKEN_REF_HOST: &str = "region-route-broken-ref.example.com";
 
 pub struct RegionRouteTestSuite;
 
@@ -73,6 +74,32 @@ impl RegionRouteTestSuite {
                                 TestResult::passed(start.elapsed())
                             } else {
                                 TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// serviceRegionRouteRef points at a PluginMetaData that does not resolve →
+    /// region_route's resolve_config returns BrokenRef → data plane responds 500.
+    fn broken_ref_returns_500() -> TestCase {
+        TestCase::new(
+            "broken_ref_returns_500",
+            "Broken serviceRegionRouteRef: resolve_config returns BrokenRef, request gets 500",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/echo", ctx.edgion_plugins_url());
+                    match ctx.http_client.get(&url).header("host", BROKEN_REF_HOST).send().await {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status == 500 {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected 500 (BrokenRef), got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -903,6 +930,8 @@ impl TestSuite for RegionRouteTestSuite {
             // Pass-through (200)
             Self::no_route_rules_passes_through(),
             Self::missing_key_passes_through(),
+            // Broken ref (500)
+            Self::broken_ref_returns_500(),
             // Hash routing (502 + access log)
             Self::hash_routing_logged(),
             Self::hash_routing_deterministic(),

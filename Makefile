@@ -243,3 +243,39 @@ version: ## Show current version
 	@echo "$(BLUE)Version:$(NC) $(YELLOW)$(VERSION)$(NC)"
 
 .DEFAULT_GOAL := help
+
+# =============================================================================
+# Coverage targets (cargo-llvm-cov based)
+# =============================================================================
+.PHONY: coverage coverage-unit coverage-integration coverage-report coverage-clean
+
+coverage: coverage-clean coverage-unit coverage-integration coverage-report ## Full coverage (unit + integration)
+
+coverage-unit: ## Unit tests only, collect profraw via cargo llvm-cov
+	cargo llvm-cov --no-report --workspace
+
+coverage-integration: ## Integration tests with instrumented binaries
+	EDGION_COVERAGE=1 ./examples/test/scripts/integration/run_integration.sh
+
+coverage-report: ## Merge profraw and generate HTML + lcov
+	cargo llvm-cov report \
+	  --html --output-dir target/coverage \
+	  --ignore-filename-regex '(\.c|\.cc|\.cpp|vendor/|\.generated\.)'
+	cargo llvm-cov report \
+	  --lcov --output-path target/coverage/lcov.info \
+	  --ignore-filename-regex '(\.c|\.cc|\.cpp|vendor/|\.generated\.)'
+	@echo "Report: target/coverage/html/index.html"
+
+coverage-clean: ## Remove llvm-cov profraw and coverage reports
+	cargo llvm-cov clean --workspace
+	rm -f target/*.profraw
+	rm -f target/llvm-cov-target/*.profraw
+	rm -f target/llvm-cov-target/Edgion-profraw-list target/llvm-cov-target/Edgion.profdata
+	rm -rf target/coverage
+
+# =============================================================================
+# De-sinicization guard
+# =============================================================================
+.PHONY: check-english-only
+check-english-only: ## Fail if non-English letter characters appear outside docs/ and tasks/
+	./scripts/check_english_only.sh

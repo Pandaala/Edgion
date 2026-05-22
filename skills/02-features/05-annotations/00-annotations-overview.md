@@ -1,87 +1,91 @@
 ---
 name: annotations-overview
-description: Edgion 注解总览：按资源类型分类的所有 edgion.io/* 注解快速查找。
+description: Edgion annotations overview: a quick lookup for all edgion.io/* annotations grouped by resource type.
 ---
 
-# 注解总览
+# Annotations Overview
 
-## 前缀规范
+## Prefix Convention
 
-- 所有 Edgion 注解使用 `edgion.io/` 前缀（**不是** `edgion.com/`）
-- Stream 插件注解键是 `edgion-stream-plugins`（**不是** `stream-plugins`）
+- All Edgion annotations use the `edgion.io/` prefix (**not** `edgion.com/`).
+- The Stream plugin annotation key is `edgion-stream-plugins` (**not** `stream-plugins`).
 
-## 按资源类型查找
+## Lookup by Resource Type
 
 ### Gateway
 
-| 注解 | 值 | 说明 |
-|------|---|------|
-| `edgion.io/enable-http2` | `"true"\|"false"` | Listener 侧 HTTP/2（默认 true）：HTTP→h2c，HTTPS→ALPN h2 |
-| `edgion.io/http-to-https-redirect` | `"true"\|"false"` | HTTP→HTTPS 重定向 |
-| `edgion.io/https-redirect-port` | `port` | HTTPS 重定向端口 |
-| `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins 绑定 |
-| `edgion.io/require-sni-host-match` | `"true"` | 启用 HTTPS listener 421 Misdirected Request 检测（全局关闭时 per-Gateway 开启） |
-| `edgion.io/metrics-test-key` | `string` | 测试用 Metrics 标签键 |
-| `edgion.io/metrics-test-type` | `string` | 测试用 Metrics 标签值 |
+| Annotation | Value | Description |
+|------------|-------|-------------|
+| `edgion.io/enable-http2` | `"true"\|"false"` | Listener-side HTTP/2 (default true): HTTP→h2c, HTTPS→ALPN h2 |
+| `edgion.io/http-to-https-redirect` | `"true"\|"false"` | HTTP→HTTPS redirect |
+| `edgion.io/https-redirect-port` | `port` | HTTPS redirect port |
+| `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins binding |
+| `edgion.io/require-sni-host-match` | `"true"` | Enable HTTPS listener 421 Misdirected Request detection (per-Gateway opt-in when globally disabled) |
+| `edgion.io/metrics-test-key` | `string` | Metrics label key for testing |
+| `edgion.io/metrics-test-type` | `string` | Metrics label value for testing |
 
 ### HTTPRoute / GRPCRoute
 
-| 注解 | 值 | 说明 |
-|------|---|------|
-| `edgion.io/hostname-resolution` | — | 系统管理（不要手动设置） |
+| Annotation | Value | Description |
+|------------|-------|-------------|
+| `edgion.io/hostname-resolution` | — | System-managed (do not set manually) |
+
+- `edgion.io/forward-raw-path` (HTTPRoute) — three-state control over the upstream path forwarding view:
+  - `"true"` forces raw, `"false"` forces normalized (overrides region_route); absent falls back to the default flow.
+  - See spec §14.6 / metadata reference for details.
 
 ### TCPRoute / TLSRoute
 
-| 注解 | 值 | 说明 |
-|------|---|------|
-| `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins 绑定 |
-| `edgion.io/proxy-protocol` | `"1"\|"2"` | Proxy Protocol 版本 |
-| `edgion.io/max-connect-retries` | `u32` | 最大连接重试 |
+| Annotation | Value | Description |
+|------------|-------|-------------|
+| `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins binding |
+| `edgion.io/proxy-protocol` | `"1"\|"2"` | Proxy Protocol version |
+| `edgion.io/max-connect-retries` | `u32` | Max connection retries |
 
 ### EdgionTls
 
-| 注解 | 值 | 说明 |
-|------|---|------|
-| `edgion.io/expose-client-cert` | `"true"\|"false"` | 暴露客户端证书到请求头 |
+| Annotation | Value | Description |
+|------------|-------|-------------|
+| `edgion.io/expose-client-cert` | `"true"\|"false"` | Expose client certificate to request headers |
 
 ### Service / EndpointSlice / Endpoints
 
-| 注解 | 值 | 说明 |
-|------|---|------|
-| `edgion.io/health-check` | YAML 字符串 | 健康检查配置 |
-| `edgion.io/circuit-breaker` | YAML 字符串 | 熔断器配置（consecutiveErrors/ejectionSeconds/maxEjectionPercent） |
+| Annotation | Value | Description |
+|------------|-------|-------------|
+| `edgion.io/health-check` | YAML string | Health check configuration |
+| `edgion.io/circuit-breaker` | YAML string | Circuit breaker configuration (consecutiveErrors/ejectionSeconds/maxEjectionPercent) |
 
-> **后端协议选择**：不通过注解控制，使用 Service `spec.ports[].appProtocol` 标准字段（GEP-1911）。支持 `kubernetes.io/h2c`（HTTP/2 明文上游）和 `kubernetes.io/ws`（WebSocket）。详见 [annotations-metadata.md](references/annotations-metadata.md)。
+> **Backend protocol selection**: not controlled via annotation; use the standard Service `spec.ports[].appProtocol` field (GEP-1911). `kubernetes.io/h2c` (HTTP/2 cleartext upstream) and `kubernetes.io/ws` (WebSocket) are supported. See [annotations-metadata.md](references/annotations-metadata.md) for details.
 
-## Options 键
+## Options Keys
 
 ### Gateway Listener `tls.options`
 
-| 键 | 值 | 说明 |
-|----|---|------|
-| `edgion.io/cert-provider` | `"secret"\|"edgion-tls"` | 证书来源 |
+| Key | Value | Description |
+|-----|-------|-------------|
+| `edgion.io/cert-provider` | `"secret"\|"edgion-tls"` | Certificate source |
 
 ### BackendTLSPolicy `spec.options`
 
-| 键 | 值 | 说明 |
-|----|---|------|
-| `edgion.io/client-certificate-ref` | `ns/name` | 客户端证书 Secret |
+| Key | Value | Description |
+|-----|-------|-------------|
+| `edgion.io/client-certificate-ref` | `ns/name` | Client certificate Secret |
 
 ## Labels
 
-| Label | 值 | 说明 |
-|-------|---|------|
-| `edgion.io/leader` | pod name | Leader 选举标记 |
-| `edgion.io/managed-by` | `"acme"` | ACME 管理标记 |
-| `edgion.io/acme-resource` | resource name | ACME 资源关联 |
+| Label | Value | Description |
+|-------|-------|-------------|
+| `edgion.io/leader` | pod name | Leader election marker |
+| `edgion.io/managed-by` | `"acme"` | ACME management marker |
+| `edgion.io/acme-resource` | resource name | ACME resource association |
 
-## 系统保留键
+## System Reserved Keys
 
-以下注解由系统自动管理，**不要手动设置**：
+The following annotations are managed automatically by the system; **do not set them manually**:
 
-| 注解 | 说明 |
-|------|------|
-| `edgion.io/hostname-resolution` | Controller 注入的域名解析结果 |
-| `edgion.io/sync-version` | 配置同步版本号 |
+| Annotation | Description |
+|------------|-------------|
+| `edgion.io/hostname-resolution` | DNS resolution results injected by the Controller |
+| `edgion.io/sync-version` | Configuration sync version number |
 
-详细参考见 [references/](references/) 目录。
+See the [references/](references/) directory for the detailed reference.

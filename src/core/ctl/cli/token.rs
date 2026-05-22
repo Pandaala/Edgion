@@ -59,9 +59,13 @@ pub fn save_token(token: &str) -> Result<()> {
     Ok(())
 }
 
-/// Delete the saved token file. Silently ignores errors (e.g., file doesn't exist).
+/// Delete the saved token file. Silently ignores NotFound; prints a warning for other errors.
 pub fn delete_token() {
     if let Some(path) = token_file_path() {
-        let _ = fs::remove_file(path);
+        if let Err(e) = fs::remove_file(&path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("warning: failed to delete token file: {e}");
+            }
+        }
     }
 }

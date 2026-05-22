@@ -42,8 +42,10 @@ spec:
     - enable: true
       type: HmacAuth
       config:
-        secretRefs:
-          - name: hmac-credentials
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: hmac-credentials
         algorithms:
           - hmac-sha256
         clockSkew: 300
@@ -55,7 +57,7 @@ spec:
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `secretRefs` | Array | ✅* | 无 | Kubernetes Secret 引用列表 |
+| `secretGroups` | Array | ✅* | 无 | 凭证 Secret 分组列表（见下方子表） |
 | `algorithms` | Array | ❌ | `["hmac-sha256","hmac-sha384","hmac-sha512"]` | 允许的签名算法 |
 | `clockSkew` | Integer | ❌ | `300` | 允许的时钟偏移秒数 |
 | `enforceHeaders` | Array | ❌ | 无 | 签名中必须包含的 header 列表 |
@@ -71,6 +73,14 @@ spec:
 
 \* 未设置 `anonymous` 时必填。
 
+### `secretGroups` 子表（`HmacAuthSecretGroup`）
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | String | ✅ | 组名（Kubernetes label-value 字符集，≤63 字符） |
+| `description` | String | ❌ | 人工可读描述（运行时不使用） |
+| `secretRefs` | Array | ✅ | 该组的 Kubernetes Secret 引用列表（至少 1 个） |
+
 ---
 
 ## 常见配置场景
@@ -82,8 +92,10 @@ requestPlugins:
   - enable: true
     type: HmacAuth
     config:
-      secretRefs:
-        - name: hmac-credentials
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: hmac-credentials
       algorithms:
         - hmac-sha256
       hideCredentials: true
@@ -96,8 +108,10 @@ requestPlugins:
   - enable: true
     type: HmacAuth
     config:
-      secretRefs:
-        - name: hmac-credentials
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: hmac-credentials
       enforceHeaders:
         - "@request-target"
         - host
@@ -113,9 +127,11 @@ requestPlugins:
   - enable: true
     type: HmacAuth
     config:
-      secretRefs:
-        - name: user-a-credentials
-        - name: user-b-credentials
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: user-a-credentials
+            - name: user-b-credentials
       algorithms:
         - hmac-sha256
         - hmac-sha512
@@ -168,8 +184,10 @@ HMAC Auth 插件使用**时间戳窗口**机制防止签名重放——请求 `D
 filters:
   - type: HmacAuth
     config:
-      secretRefs:
-        - name: hmac-creds
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: hmac-creds
       clockSkew: 300          # 5 分钟窗口；高敏感接口建议缩到 60
       hideCredentials: true   # 不把 Authorization/Signature 透传给上游（降低日志泄漏面）
       enforceHeaders:
@@ -193,6 +211,49 @@ filters:
 业界（AWS / Stripe / GitHub / Kong / APISIX）都选择"网关做时间戳窗口、业务层做 idempotency key"的分层，Edgion 遵循同一模式。
 
 若你的部署形态确实需要网关层 nonce dedup（极端情况），可提 issue 讨论独立实现方案。
+
+---
+
+## 按组组织 Secret
+
+`secretGroups` 允许将多个合作伙伴或租户的凭证分组管理，每个组独立维护 Secret 引用，并在访问日志中携带组名标识（`OK group=<name> user <X>`），便于审计归因。
+
+**跨组用户名冲突处理**：同一用户名在多个组中出现时，遵循**先到先得（first-wins）**规则——第一个组的凭证被保留，后续重复条目产生 `warn` 日志但不影响插件整体可用性。
+
+```yaml
+requestPlugins:
+  - enable: true
+    type: HmacAuth
+    config:
+      secretGroups:
+        - name: partner-a
+          description: "Partner A API credentials"
+          secretRefs:
+            - name: hmac-credentials-partner-a
+              namespace: edgion-default
+        - name: partner-b
+          description: "Partner B API credentials"
+          secretRefs:
+            - name: hmac-credentials-partner-b
+              namespace: edgion-default
+      algorithms:
+        - hmac-sha256
+      clockSkew: 300
+      enforceHeaders:
+        - "@request-target"
+        - host
+        - date
+      upstreamHeaderFields:
+        - X-Consumer-Username
+        - X-Customer-ID
+```
+
+认证成功时，访问日志记录：
+
+```
+OK group=partner-a user partner-a-user
+OK group=partner-b user partner-b-user
+```
 
 ---
 

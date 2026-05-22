@@ -11,6 +11,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+use crate::core::gateway::path_normalization::normalize_config_path;
+
 /// Threshold for pre-compiling values into a HashSet for O(1) lookup.
 /// When values.len() > this threshold, a HashSet will be built during compilation.
 pub const VALUES_HASHSET_THRESHOLD: usize = 16;
@@ -75,16 +77,12 @@ pub struct RequestRestrictionConfig {
 
     /// HTTP status code for rejection (default: 403)
     #[serde(default = "default_status")]
+    #[schemars(range(min = 100, max = 599))]
     pub status: u16,
 
     /// Custom rejection message
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-
-    /// Validation error message (runtime only)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 /// A single restriction rule
@@ -167,6 +165,8 @@ pub enum RestrictionSource {
     Query,
     /// Request path (no key needed)
     Path,
+    /// Entry-time raw path (frozen). For audit / special raw-form deny.
+    RequestPath,
     /// HTTP method (no key needed)
     Method,
     /// Referer header (no key needed)
@@ -212,7 +212,6 @@ impl Default for RequestRestrictionConfig {
             match_mode: RuleMatchMode::default(),
             status: default_status(),
             message: None,
-            validation_error: None,
         }
     }
 }
@@ -238,50 +237,45 @@ impl Default for RestrictionRule {
 }
 
 impl RequestRestrictionConfig {
-    /// Validate configuration and compile matchers
-    pub fn validate(&mut self) {
-        if let Err(e) = self.validate_and_compile() {
-            self.validation_error = Some(e);
-        }
+    /// Validate configuration and compile matchers.
+    ///
+    /// Returns `Err(message)` if any rule is malformed; on success every rule has
+    /// its compiled matchers (HashSets, regex) populated.
+    pub fn validate(&mut self) -> Result<(), String> {
+        self.validate_and_compile()
     }
 
-    /// Check if configuration is valid
-    pub fn is_valid(&self) -> bool {
-        self.validation_error.is_none()
-    }
-
-    /// Get validation error message
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
-    }
-
-    /// Validate and compile all rules
-    fn validate_and_compile(&mut self) -> Result<(), String> {
+    /// Stateless field validation — mirrors every error branch of validate_and_compile
+    /// without mutating self or compiling any matchers.
+    pub fn check_fields(&self) -> Option<String> {
         // Must have at least one rule
         if self.rules.is_empty() {
-            return Err("At least one rule must be specified".to_string());
+            return Some("At least one rule must be specified".to_string());
         }
 
         // Validate status code
         if self.status < 100 || self.status >= 600 {
-            return Err(format!("Invalid status code: {}", self.status));
+            return Some(format!("Invalid status code: {}", self.status));
         }
 
-        // Validate and compile each rule
-        for (i, rule) in self.rules.iter_mut().enumerate() {
+        // Validate each rule (field checks only — no compilation)
+        for (i, rule) in self.rules.iter().enumerate() {
             let rule_name = rule.name.clone().unwrap_or_else(|| format!("rule[{}]", i));
 
             // Validate key requirement based on source
             match rule.source {
                 RestrictionSource::Header | RestrictionSource::Cookie | RestrictionSource::Query => {
                     if rule.key.is_none() || rule.key.as_ref().is_some_and(|k| k.is_empty()) {
-                        return Err(format!(
+                        return Some(format!(
                             "Rule '{}': 'key' is required for source {:?}",
                             rule_name, rule.source
                         ));
                     }
                 }
-                RestrictionSource::Path | RestrictionSource::Method | RestrictionSource::Referer => {
+                RestrictionSource::Path
+                | RestrictionSource::RequestPath
+                | RestrictionSource::Method
+                | RestrictionSource::Referer => {
                     // Key is not needed for these sources
                 }
             }
@@ -290,13 +284,66 @@ impl RequestRestrictionConfig {
             let has_allow = rule.allow.is_some() || rule.allow_regex.is_some();
             let has_deny = rule.deny.is_some() || rule.deny_regex.is_some();
             if !has_allow && !has_deny {
-                return Err(format!(
+                return Some(format!(
                     "Rule '{}': at least one of 'allow', 'allowRegex', 'deny', or 'denyRegex' must be specified",
                     rule_name
                 ));
             }
 
-            // Compile rule
+            // Validate allow/deny list emptiness
+            if let Some(values) = &rule.allow {
+                if values.is_empty() {
+                    return Some(format!("Rule '{}': 'allow' list cannot be empty", rule_name));
+                }
+            }
+            if let Some(patterns) = &rule.allow_regex {
+                if patterns.is_empty() {
+                    return Some(format!("Rule '{}': 'allowRegex' list cannot be empty", rule_name));
+                }
+                // Validate regex patterns are valid
+                let combined = patterns
+                    .iter()
+                    .map(|p| format!("({})", p))
+                    .collect::<Vec<_>>()
+                    .join("|");
+                if let Err(e) = Regex::new(&combined) {
+                    return Some(format!("Rule '{}': Invalid allowRegex: {}", rule_name, e));
+                }
+            }
+            if let Some(values) = &rule.deny {
+                if values.is_empty() {
+                    return Some(format!("Rule '{}': 'deny' list cannot be empty", rule_name));
+                }
+            }
+            if let Some(patterns) = &rule.deny_regex {
+                if patterns.is_empty() {
+                    return Some(format!("Rule '{}': 'denyRegex' list cannot be empty", rule_name));
+                }
+                // Validate regex patterns are valid
+                let combined = patterns
+                    .iter()
+                    .map(|p| format!("({})", p))
+                    .collect::<Vec<_>>()
+                    .join("|");
+                if let Err(e) = Regex::new(&combined) {
+                    return Some(format!("Rule '{}': Invalid denyRegex: {}", rule_name, e));
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Validate and compile all rules
+    fn validate_and_compile(&mut self) -> Result<(), String> {
+        // Run stateless field checks first
+        if let Some(err) = self.check_fields() {
+            return Err(err);
+        }
+
+        // Compile each rule (field checks already passed)
+        for (i, rule) in self.rules.iter_mut().enumerate() {
+            let rule_name = rule.name.clone().unwrap_or_else(|| format!("rule[{}]", i));
             rule.compile().map_err(|e| format!("Rule '{}': {}", rule_name, e))?;
         }
 
@@ -304,9 +351,58 @@ impl RequestRestrictionConfig {
     }
 }
 
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for RequestRestrictionConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.check_fields()
+    }
+}
+
 impl RestrictionRule {
-    /// Compile the rule: build HashSets and merge regex patterns
+    /// Compile the rule: build HashSets and merge regex patterns.
+    ///
+    /// For `Path`-source rules, exact-match `allow` / `deny` values are normalized
+    /// at load time via [`normalize_config_path`] so they inhabit the same normalized
+    /// space as the request path produced by `session.get_path()`.
+    /// `RequestPath`-source and all other sources are left as-is (raw form).
+    /// Regex patterns are never normalized.
     pub fn compile(&mut self) -> Result<(), String> {
+        let rule_name = self.name.as_deref().unwrap_or("<unnamed>");
+
+        // For Path source, normalize exact-match values at load time.
+        if self.source == RestrictionSource::Path {
+            let path_cfg = crate::core::gateway::cli::config::get_path_normalization_config();
+            if let Some(values) = self.allow.as_mut() {
+                for v in values.iter_mut() {
+                    let normalized = normalize_config_path(v, path_cfg);
+                    if normalized != *v {
+                        tracing::info!(
+                            "request_restriction rule '{}': Path allow value normalized: {:?} -> {:?}",
+                            rule_name,
+                            v,
+                            normalized
+                        );
+                        *v = normalized;
+                    }
+                }
+            }
+            if let Some(values) = self.deny.as_mut() {
+                for v in values.iter_mut() {
+                    let normalized = normalize_config_path(v, path_cfg);
+                    if normalized != *v {
+                        tracing::info!(
+                            "request_restriction rule '{}': Path deny value normalized: {:?} -> {:?}",
+                            rule_name,
+                            v,
+                            normalized
+                        );
+                        *v = normalized;
+                    }
+                }
+            }
+        }
+
         // Compile allow values
         if let Some(values) = &self.allow {
             if values.is_empty() {
@@ -499,9 +595,8 @@ mod tests {
     #[test]
     fn test_empty_rules_validation() {
         let mut config = RequestRestrictionConfig::default();
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("At least one rule"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("At least one rule"));
     }
 
     #[test]
@@ -515,9 +610,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("key"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("key"));
     }
 
     #[test]
@@ -531,8 +625,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -546,8 +639,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(Some("bad")), Some(true)); // Denied
@@ -566,8 +658,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(Some("Googlebot/2.1")), Some(true)); // Denied
@@ -586,8 +677,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(Some("/admin")), Some(true)); // Denied (exact)
@@ -606,8 +696,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(Some("GET")), Some(false)); // Allowed
@@ -625,8 +714,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(Some("/api/v1/users")), Some(false)); // Allowed
@@ -648,7 +736,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
+        let _ = config.validate();
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(None), Some(false)); // Allow when missing
 
@@ -663,7 +751,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config2.validate();
+        let _ = config2.validate();
         let rule2 = &config2.rules[0];
         assert_eq!(rule2.check_value(None), Some(true)); // Deny when missing
 
@@ -678,7 +766,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config3.validate();
+        let _ = config3.validate();
         let rule3 = &config3.rules[0];
         assert_eq!(rule3.check_value(None), None); // Skip rule
     }
@@ -695,8 +783,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(Some("badvalue")), Some(true)); // Denied (case insensitive)
@@ -715,8 +802,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert_eq!(rule.check_value(Some("/api/users")), Some(false)); // Allowed
@@ -737,8 +823,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert!(rule.deny_set.is_some()); // HashSet should be compiled
@@ -762,8 +847,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
 
         let rule = &config.rules[0];
         assert!(rule.deny_set.is_none()); // HashSet should NOT be compiled
@@ -780,9 +864,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("Invalid"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("Invalid"));
     }
 
     #[test]
@@ -796,9 +879,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("cannot be empty"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("cannot be empty"));
     }
 
     #[test]
@@ -812,8 +894,164 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("at least one"));
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("at least one"));
+    }
+
+    // ------------------------------------------------------------------
+    // Group H: normalize_config_path integration
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn path_deny_values_normalized_at_compile() {
+        // "/admin/./" → mid-string `/./` removed; trailing `/` preserved (not a terminal `/.`)
+        // "/api%2Fv1" → %2F decoded to "/api/v1"
+        let mut rule = RestrictionRule {
+            name: Some("test-path-norm".to_string()),
+            source: RestrictionSource::Path,
+            deny: Some(vec!["/admin/./".to_string(), "/api%2Fv1".to_string()]),
+            ..Default::default()
+        };
+        rule.compile().expect("compile should succeed");
+
+        let deny = rule.deny.as_ref().expect("deny should be Some");
+        // Trailing `/` preserved — `/./` is mid-string, not a terminal dot-segment.
+        assert_eq!(deny[0], "/admin/", "mid-string `/./` removed; trailing `/` preserved");
+        // "/api%2Fv1" → %2F decoded → "/api/v1"
+        assert_eq!(deny[1], "/api/v1", "encoded slash should be decoded");
+    }
+
+    #[test]
+    fn path_allow_values_normalized_at_compile() {
+        let mut rule = RestrictionRule {
+            name: Some("test-path-allow-norm".to_string()),
+            source: RestrictionSource::Path,
+            allow: Some(vec!["/%61dmin".to_string()]),
+            ..Default::default()
+        };
+        rule.compile().expect("compile should succeed");
+
+        let allow = rule.allow.as_ref().expect("allow should be Some");
+        // "/%61dmin" → %61 = 'a' → "/admin"
+        assert_eq!(allow[0], "/admin", "unreserved percent-encoded char should be decoded");
+    }
+
+    #[test]
+    fn request_path_deny_values_kept_raw() {
+        // RequestPath source: values must NOT be normalized
+        let raw = "/api%2Fv1".to_string();
+        let mut rule = RestrictionRule {
+            name: Some("test-rp-raw".to_string()),
+            source: RestrictionSource::RequestPath,
+            deny: Some(vec![raw.clone()]),
+            ..Default::default()
+        };
+        rule.compile().expect("compile should succeed");
+
+        let deny = rule.deny.as_ref().expect("deny should be Some");
+        assert_eq!(deny[0], raw, "RequestPath deny values must be kept as-is (raw form)");
+    }
+
+    #[test]
+    fn path_regex_not_normalized() {
+        // Regex patterns must never be touched by normalization
+        let pattern = "^/api%2Fv[0-9]+/.*".to_string();
+        let mut rule = RestrictionRule {
+            name: Some("test-regex-untouched".to_string()),
+            source: RestrictionSource::Path,
+            deny_regex: Some(vec![pattern.clone()]),
+            ..Default::default()
+        };
+        rule.compile().expect("compile should succeed");
+
+        let deny_regex = rule.deny_regex.as_ref().expect("deny_regex should be Some");
+        assert_eq!(deny_regex[0], pattern, "deny_regex patterns must not be normalized");
+    }
+
+    #[test]
+    fn request_path_source_check_value_raw_match() {
+        // RequestPath rule with raw deny value should match raw input literally
+        let mut rule = RestrictionRule {
+            name: Some("test-rp-check".to_string()),
+            source: RestrictionSource::RequestPath,
+            deny: Some(vec!["/%61dmin".to_string()]),
+            ..Default::default()
+        };
+        rule.compile().expect("compile should succeed");
+
+        // Exact raw form matches
+        assert_eq!(rule.check_value(Some("/%61dmin")), Some(true));
+        // Normalized form does NOT match (kept raw)
+        assert_eq!(rule.check_value(Some("/admin")), Some(false));
+    }
+}
+
+#[cfg(test)]
+mod validation_trait_tests {
+    use super::*;
+    use crate::types::resources::edgion_plugins::PluginValidation;
+
+    #[test]
+    fn validation_error_returns_field_error_without_validate_call() {
+        // Default config has no rules — first error from check_fields is "At least one rule".
+        let config = RequestRestrictionConfig::default();
+        let result = config.validation_error();
+        assert!(
+            result.as_deref().unwrap_or("").contains("At least one rule"),
+            "expected 'At least one rule' error, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn validation_error_returns_none_for_valid_config() {
+        let config = RequestRestrictionConfig {
+            rules: vec![RestrictionRule {
+                source: RestrictionSource::Header,
+                key: Some("X-Test".to_string()),
+                deny: Some(vec!["bad".to_string()]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(config.validation_error(), None);
+    }
+
+    #[test]
+    fn validation_error_catches_missing_key_for_header() {
+        let config = RequestRestrictionConfig {
+            rules: vec![RestrictionRule {
+                source: RestrictionSource::Header,
+                key: None,
+                deny: Some(vec!["bad".to_string()]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let result = config.validation_error();
+        assert!(
+            result.as_deref().unwrap_or("").contains("key"),
+            "expected 'key' error, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn validation_error_catches_invalid_regex() {
+        let config = RequestRestrictionConfig {
+            rules: vec![RestrictionRule {
+                source: RestrictionSource::Header,
+                key: Some("X-Test".to_string()),
+                deny_regex: Some(vec!["[invalid".to_string()]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let result = config.validation_error();
+        assert!(
+            result.as_deref().unwrap_or("").contains("Invalid"),
+            "expected 'Invalid' regex error, got: {:?}",
+            result
+        );
     }
 }

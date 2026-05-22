@@ -1,5 +1,6 @@
 # LinkSys Redis resource for integration testing.
-# Connects to the Docker Redis instance started by run_redis_test.sh.
+# Connects to the Docker Redis instance managed by run_integration.sh
+# (auto-started when LinkSys/Redis or any Redis-dependent suite runs).
 # Auth: secretRef → 00_Secret_default_redis-test-auth.yaml (password matches --requirepass).
 apiVersion: edgion.io/v1
 kind: LinkSys

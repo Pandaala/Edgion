@@ -49,8 +49,10 @@ spec:
         keySources:
           - type: header
             name: "X-API-Key"
-        secretRefs:
-          - name: api-keys
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: api-keys
 ```
 
 ---
@@ -65,7 +67,7 @@ spec:
 | `anonymous` | String | ❌ | 无 | 匿名用户名，设置后未认证请求也允许通过 |
 | `realm` | String | ❌ | `"API Gateway"` | 认证域名称 |
 | `keyField` | String | ❌ | `"key"` | Secret 中存储 key 值的字段名 |
-| `secretRefs` | Array | ✅ | 无 | Kubernetes Secret 引用列表 |
+| `secretGroups` | Array | ✅ | 无 | 按组组织的 Kubernetes Secret 引用列表（见下方说明） |
 | `upstreamHeaderFields` | Array | ❌ | `[]` | 认证成功后传递给上游的额外 header（从 key metadata 提取） |
 
 ### KeySource 子字段
@@ -74,6 +76,14 @@ spec:
 |------|------|------|------|
 | `type` | String | ✅ | 来源类型：`header` / `query` / `cookie` / `ctx` |
 | `name` | String | ✅ | 来源名称（如 header 名、query 参数名） |
+
+### KeyAuthSecretGroup 子字段
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | String | ✅ | 组名称，字符集：`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`，最长 63 字符 |
+| `description` | String | ❌ | 描述信息（仅供参考，运行时不使用） |
+| `secretRefs` | Array | ✅ | 该组的 Kubernetes Secret 引用列表，至少一个 |
 
 ---
 
@@ -89,8 +99,10 @@ requestPlugins:
       keySources:
         - type: header
           name: "X-API-Key"
-      secretRefs:
-        - name: api-keys
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-keys
       hideCredentials: true
 ```
 
@@ -115,8 +127,10 @@ requestPlugins:
           name: api_key
         - type: cookie
           name: api_key
-      secretRefs:
-        - name: api-keys
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-keys
 ```
 
 **测试**：
@@ -138,8 +152,10 @@ requestPlugins:
       keySources:
         - type: header
           name: "X-API-Key"
-      secretRefs:
-        - name: api-keys
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-keys
       anonymous: "guest"
 ```
 
@@ -153,13 +169,51 @@ requestPlugins:
       keySources:
         - type: header
           name: "X-API-Key"
-      secretRefs:
-        - name: api-keys
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-keys
       upstreamHeaderFields:
         - "X-Consumer-Username"
         - "X-Customer-ID"
         - "X-User-Tier"
 ```
+
+### 场景 5：按组组织多租户 API Key
+
+`secretGroups` 允许将来自不同合作方或租户的 Secret 分组管理，每个 Key 的组来源会记录在访问日志中，便于审计和归因。
+
+```yaml
+requestPlugins:
+  - enable: true
+    type: KeyAuth
+    config:
+      keySources:
+        - type: header
+          name: "X-API-Key"
+      realm: "Partner API"
+      keyField: "key"
+      secretGroups:
+        - name: partner-a
+          description: "Partner A API keys"
+          secretRefs:
+            - name: api-keys-partner-a
+              namespace: edgion-default
+        - name: partner-b
+          description: "Partner B API keys"
+          secretRefs:
+            - name: api-keys-partner-b
+              namespace: edgion-default
+      upstreamHeaderFields:
+        - "X-Consumer-Username"
+        - "X-Customer-ID"
+```
+
+**访问日志输出**：认证成功时，PluginLog 会记录组信息：
+- 带用户名：`OK group=partner-a user <masked>`
+- 不带用户名：`OK group=partner-a`
+
+认证失败分支（`Deny bad key`、`Deny no key`）和匿名通过（`Allow anon`）不记录 `group=` 信息，防止向未认证调用方泄露多租户拓扑。
 
 ---
 
@@ -169,6 +223,7 @@ requestPlugins:
 - 设置 `hideCredentials: true` 后，认证使用的来源（Header/Query/Cookie）会从请求中移除
 - `anonymous` 模式下，未提供 Key 的请求也会通过，但会设置 `X-Anonymous-Consumer: true`
 - Key 存储在 Kubernetes Secret 的 `keys.yaml` 字段中，格式为 YAML 数组
+- 同一 Key 在多个组中出现时，以先定义的组为准（first-wins），并记录警告日志
 
 ---
 
@@ -233,8 +288,10 @@ spec:
             name: "X-API-Key"
           - type: query
             name: api_key
-        secretRefs:
-          - name: api-keys
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: api-keys
         hideCredentials: true
         realm: "Protected API"
 ---

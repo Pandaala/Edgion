@@ -35,13 +35,12 @@ spec:
 
   challenge:
     type: dns-01
-    dns01:
-      provider: cloudflare
-      credentialRef:
-        name: cloudflare-api-token
-        namespace: default
-      propagationTimeout: 120    # seconds to wait for DNS propagation
-      propagationCheckInterval: 5 # seconds between DNS checks
+    provider: cloudflare
+    credentialRef:
+      name: cloudflare-api-token
+      namespace: default
+    propagationTimeout: 120     # seconds to wait for DNS propagation
+    propagationCheckInterval: 5 # seconds between DNS checks
 
   storage:
     secretName: wildcard-tls-cert

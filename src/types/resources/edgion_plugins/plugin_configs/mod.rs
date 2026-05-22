@@ -17,6 +17,7 @@ mod jwe_decrypt;
 mod jwt_auth;
 mod key_auth;
 mod ldap_auth;
+mod linksys_ref;
 mod lru_cache_config;
 mod mock;
 mod openid_connect;
@@ -30,7 +31,7 @@ mod response_rewrite;
 
 pub use all_endpoint_status::AllEndpointStatusConfig;
 pub use bandwidth_limit::BandwidthLimitConfig;
-pub use basic_auth::BasicAuthConfig;
+pub use basic_auth::{BasicAuthConfig, BasicAuthSecretGroup, ResolvedBasicAuthUser};
 pub use cors::CorsConfig;
 pub use csrf::CsrfConfig;
 pub use ctx_set::{
@@ -49,12 +50,13 @@ pub use dynamic_internal_upstream::{
 };
 pub use forward_auth::ForwardAuthConfig;
 pub use header_cert_auth::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig, UpstreamHeaderConfig};
-pub use hmac_auth::{HmacAlgorithm, HmacAuthConfig, HmacCredential};
+pub use hmac_auth::{HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup, HmacCredential};
 pub use ip_restriction::{DefaultAction, IpRestrictionConfig, IpSource};
 pub use jwe_decrypt::{JweContentEncryption, JweDecryptConfig, JweKeyManagement, ResolvedJweCredential};
-pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, ResolvedJwtCredential};
-pub use key_auth::{KeyAuthConfig, KeyMetadata};
+pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, ResolvedJwtCredential, ResolvedJwtIssuerGroup};
+pub use key_auth::{KeyAuthConfig, KeyAuthSecretGroup, KeyMetadata};
 pub use ldap_auth::LdapAuthConfig;
+pub use linksys_ref::LinkSysRef;
 pub use lru_cache_config::LruCacheConfig;
 pub use mock::MockConfig;
 pub use openid_connect::{EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode};

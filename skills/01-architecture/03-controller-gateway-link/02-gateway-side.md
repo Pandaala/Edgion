@@ -1,15 +1,15 @@
 ---
 name: link-gateway-side
-description: Gateway 侧 gRPC 实现：ConfigSyncClient、ClientCache、CacheEventDispatch、ConfHandler、ArcSwap 无锁读取、重连机制。
+description: Gateway-side gRPC implementation — ConfigSyncClient, ClientCache, CacheEventDispatch, ConfHandler, ArcSwap lock-free reads, reconnection mechanism.
 ---
 
-# Gateway 侧实现
+# Gateway-side implementation
 
-Gateway 通过 `ConfigSyncClient` 连接 Controller 的 gRPC 服务，接收资源配置并写入本地 `ClientCache<T>`。每种资源类型通过 `ConfHandler` 将缓存数据转化为运行时代理行为，使用 ArcSwap 实现无锁读取。
+The Gateway connects to the Controller's gRPC service via `ConfigSyncClient`, receives resource configuration, and writes it into the local `ClientCache<T>`. For each resource type, a `ConfHandler` turns the cache data into runtime proxy behavior, using ArcSwap for lock-free reads.
 
 ## ConfigSyncClient
 
-管理与 Controller 的 gRPC 连接，负责 List/Watch 调用、版本跟踪、断线重连。
+Manages the gRPC connection to the Controller; handles List/Watch calls, version tracking, and reconnection.
 
 ```rust
 pub struct ConfigSyncClient {
@@ -20,30 +20,30 @@ pub struct ConfigSyncClient {
 }
 ```
 
-### 启动同步序列
+### Startup sync sequence
 
-1. **连接建立**：通过 tonic 连接 Controller 的 gRPC 端口（默认 :50051）
-2. **GetServerInfo**：获取 `server_id`、`endpoint_mode`、`supported_kinds`
-3. **逐 kind List**：对 `supported_kinds` 中的每种资源执行 List 调用，获取全量快照
-4. **逐 kind Watch**：使用 List 返回的 `sync_version` 作为 `from_version`，启动 Watch 流
-5. **WatchServerMeta**：注册到 Controller 的 ClientRegistry，接收 `gateway_instance_count` 变更
+1. **Connection establishment**: connect to the Controller's gRPC port (default :50051) via tonic
+2. **GetServerInfo**: fetch `server_id`, `supported_kinds`
+3. **Per-kind List**: for each resource in `supported_kinds`, issue a List call and fetch the full snapshot
+4. **Per-kind Watch**: use the `sync_version` returned by List as `from_version` and start the Watch stream
+5. **WatchServerMeta**: register with the Controller's ClientRegistry and receive `gateway_instance_count` changes
 
-### 重连机制
+### Reconnection mechanism
 
-ConfigSyncClient 检测到以下情况时触发重连：
+ConfigSyncClient triggers a reconnection in the following situations:
 
-| 触发条件 | 行为 |
+| Trigger condition | Behavior |
 |---------|------|
-| Watch 流收到 `WATCH_ERR_SERVER_RELOAD` | Controller 执行了 reload，全量 relist |
-| Watch 流收到 `WATCH_ERR_SERVER_ID_MISMATCH` | Controller 重启，重新 GetServerInfo + 全量 relist |
-| gRPC 连接断开 | 指数退避重连，重新建立连接并全量同步 |
-| `server_id` 变化 | 全量 relist 所有 kind |
+| Watch stream receives `WATCH_ERR_SERVER_RELOAD` | Controller performed a reload, full relist |
+| Watch stream receives `WATCH_ERR_SERVER_ID_MISMATCH` | Controller restarted, re-run GetServerInfo + full relist |
+| gRPC connection broken | Reconnect with exponential backoff, re-establish connection and full sync |
+| `server_id` changed | Full relist for all kinds |
 
-重连后 Gateway 重新执行完整的同步序列（GetServerInfo → List → Watch），确保配置与 Controller 完全一致。
+After reconnecting, Gateway re-runs the full sync sequence (GetServerInfo → List → Watch) to ensure the configuration is fully consistent with the Controller.
 
 ## ClientCache\<T\>
 
-每种资源类型一个缓存实例，存储从 Controller 同步的资源数据。
+One cache instance per resource type, storing resource data synced from the Controller.
 
 ```rust
 pub struct ClientCache<T> where T: kube::Resource {
@@ -56,36 +56,36 @@ pub struct ClientCache<T> where T: kube::Resource {
 
 ### CacheData\<T\>
 
-ClientCache 内部持有 `CacheData<T>`（RwLock 保护），包含：
-- 全量资源快照（`HashMap<String, T>`）
-- 当前 `sync_version`
-- `server_id`（用于检测 Controller 重启）
-- `CompressEvent`：待处理的增量事件队列（在 `handler` 内部）
+ClientCache internally holds `CacheData<T>` (RwLock-protected), which contains:
+- A full resource snapshot (`HashMap<String, T>`)
+- The current `sync_version`
+- `server_id` (used to detect Controller restarts)
+- `CompressEvent`: a queue of pending incremental events (inside the `handler`)
 
-#### 事件批压缩 background task
+#### Event-batch compression background task
 
-`set_conf_processor` 调用时，`CacheData` 会为该资源类型启动一个后台 Tokio task，每 **100ms** 唤醒一次，把积压的 `CompressEvent` 批量 dispatch 给 `ConfHandler.partial_update()`。
+When `set_conf_processor` is called, `CacheData` starts a background Tokio task for that resource type that wakes up every **100ms**, batching the accumulated `CompressEvent`s and dispatching them to `ConfHandler.partial_update()`.
 
-**设计意图**：防止 K8s 短时间内大量资源变更（如滚动更新、ConfigMap 批量写入）导致 `partial_update` 被高频调用，进而触发过多次 ArcSwap 重建。100ms 窗口把多个增量事件合并为一次 `partial_update`，显著降低 ArcSwap store 的频率。
+**Design intent**: prevent a burst of K8s resource changes (e.g., rolling updates, batch ConfigMap writes) from invoking `partial_update` at high frequency and triggering excessive ArcSwap rebuilds. The 100ms window merges multiple incremental events into a single `partial_update`, significantly reducing the rate of ArcSwap stores.
 
-**已知优化点（待实施）**：当前 background task 每 100ms 无条件拿写锁检查队列是否为空，在配置稳定期会造成不必要的 RwLock 写锁竞争（写锁 pending 时会阻塞新的读者）。优化方向：改为 `tokio::sync::Notify` + debounce，`add_compress_event` 时 `notify_one()`，task 在 `notified().await` 处休眠，有事件时才唤醒并等待小窗口（~100ms）批量处理。这是纯性能优化，不改变语义。
+**Known optimization (TODO)**: the current background task unconditionally takes the write lock every 100ms to check whether the queue is empty, which causes unnecessary RwLock write-lock contention during steady state (a pending write lock blocks new readers). The optimization direction: switch to `tokio::sync::Notify` + debounce — `add_compress_event` calls `notify_one()`; the task sleeps in `notified().await` and only wakes on events, then waits a small window (~100ms) for batch processing. This is a pure performance optimization with no semantic change.
 
 ### DynClientCache
 
-类型擦除的统一调度接口，使 ConfigSyncClient 能以统一方式管理不同类型的 ClientCache：
+A type-erased uniform dispatch interface that lets ConfigSyncClient manage ClientCaches of different types in a uniform way:
 
 ```
 ConfigSyncClient
-  └── Vec<Arc<dyn DynClientCache>>   // 按 kind 索引
+  └── Vec<Arc<dyn DynClientCache>>   // Indexed by kind
        ├── ClientCache<Gateway>
        ├── ClientCache<HTTPRoute>
        ├── ClientCache<GRPCRoute>
        └── ...
 ```
 
-## 事件分发（CacheEventDispatch）
+## Event dispatch (CacheEventDispatch)
 
-`CacheEventDispatch<T>` trait 定义了缓存事件的处理接口：
+The `CacheEventDispatch<T>` trait defines the cache event handling interface:
 
 ```rust
 pub trait CacheEventDispatch<T> {
@@ -94,22 +94,22 @@ pub trait CacheEventDispatch<T> {
 }
 ```
 
-ClientCache 实现此 trait，将 gRPC 事件（来自 Watch 流的 WatchResponse）映射到 ResourceChange 操作：
+ClientCache implements this trait, mapping gRPC events (from WatchResponse on the Watch stream) to ResourceChange operations:
 
-| Watch 事件 | ResourceChange | 处理逻辑 |
+| Watch event | ResourceChange | Handling logic |
 |-----------|---------------|---------|
-| 初始化开始 | `InitStart` | 记录日志，准备接收初始化数据 |
-| 初始化数据 | `InitAdd` | 写入 CacheData 快照（不触发 ConfHandler） |
-| 初始化完成 | `InitDone` | 标记缓存就绪，调用 ConfHandler.full_set() |
-| 运行时新增 | `EventAdd` | 更新 CacheData + 调用 ConfHandler.partial_update(add) |
-| 运行时更新 | `EventUpdate` | 更新 CacheData + 调用 ConfHandler.partial_update(update) |
-| 运行时删除 | `EventDelete` | 从 CacheData 移除 + 调用 ConfHandler.partial_update(remove) |
+| Init start | `InitStart` | Log it, prepare to receive initialization data |
+| Init data | `InitAdd` | Write to the CacheData snapshot (does not trigger ConfHandler) |
+| Init done | `InitDone` | Mark cache ready, call ConfHandler.full_set() |
+| Runtime add | `EventAdd` | Update CacheData + call ConfHandler.partial_update(add) |
+| Runtime update | `EventUpdate` | Update CacheData + call ConfHandler.partial_update(update) |
+| Runtime delete | `EventDelete` | Remove from CacheData + call ConfHandler.partial_update(remove) |
 
-事件分发还会压缩事件批次——多个连续的增量事件可合并为一次 partial_update 调用，减少运行时结构的重建频率。
+Event dispatch also compresses event batches — multiple consecutive incremental events can be merged into a single partial_update call, reducing the rebuild frequency of runtime structures.
 
 ## ConfHandler
 
-每种资源类型的配置处理器，定义在 `src/core/common/conf_sync/traits.rs`：
+The configuration handler for each resource type, defined in `src/core/common/conf_sync/traits.rs`:
 
 ```rust
 pub trait ConfHandler<T>: Send + Sync {
@@ -120,45 +120,45 @@ pub trait ConfHandler<T>: Send + Sync {
 
 ### full_set
 
-初始化同步完成时调用（InitDone 之后），接收全量资源快照。ConfHandler 据此构建完整的运行时结构并通过 ArcSwap 原子替换。
+Called when initialization sync completes (after InitDone), with a full resource snapshot. Based on this, ConfHandler builds a complete runtime structure and atomically replaces it via ArcSwap.
 
 ### partial_update
 
-运行时增量变更时调用，接收三组数据：
-- `add`：新增的资源
-- `update`：更新的资源
-- `remove`：删除的资源键集合
+Called on runtime incremental changes; receives three groups of data:
+- `add`: newly added resources
+- `update`: updated resources
+- `remove`: set of removed resource keys
 
-ConfHandler 据此增量更新运行时结构。对于复杂资源（如路由），partial_update 可能触发部分或全量重建，取决于变更的影响范围。
+Based on this, ConfHandler incrementally updates the runtime structure. For complex resources (e.g., routes), partial_update may trigger a partial or full rebuild depending on the scope of the change.
 
-### Preparse（预解析）
+### Preparse
 
-ConfHandler 在接收到变更后会触发 preparse 操作，将 Kubernetes 风格的声明式资源转换为高效的运行时数据结构。例如：
-- HTTPRoute → 路由匹配树
-- EdgionPlugins → 插件执行链
-- EdgionTls → TLS 证书和密钥配置
-- Gateway → 监听器绑定和端口映射
+After receiving changes, ConfHandler triggers preparse, transforming declarative Kubernetes-style resources into efficient runtime data structures. For example:
+- HTTPRoute → route matching tree
+- EdgionPlugins → plugin execution chain
+- EdgionTls → TLS certificate and key configuration
+- Gateway → listener bindings and port mappings
 
-## ArcSwap 无锁读取
+## ArcSwap lock-free reads
 
-Gateway 使用 ArcSwap 实现配置数据的无锁读取：
+Gateway uses ArcSwap to enable lock-free reads of configuration data:
 
 ```
-写入路径（Tokio 运行时）:
+Write path (Tokio runtime):
   gRPC Watch → CacheEventDispatch → ConfHandler → ArcSwap.store()
 
-读取路径（Pingora 代理层）:
-  请求处理 → ArcSwap.load() → 读取最新配置
+Read path (Pingora proxy layer):
+  Request handling → ArcSwap.load() → read the latest configuration
 ```
 
-这种设计确保：
-- **写入不阻塞读取**：配置更新通过原子指针替换完成，读取方始终看到一致的快照
-- **零拷贝读取**：Pingora 线程通过 `Arc` 引用计数共享数据，无需克隆
-- **无锁**：读取路径不涉及任何锁竞争，适合高并发代理场景
+This design ensures:
+- **Writes do not block reads**: configuration updates complete via atomic pointer replacement; readers always see a consistent snapshot
+- **Zero-copy reads**: Pingora threads share the data via `Arc` reference counting, no cloning needed
+- **Lock-free**: the read path involves no lock contention, suitable for a high-concurrency proxy scenario
 
 ## WatchServerMeta
 
-Gateway 通过 WatchServerMeta RPC 接收集群级元数据：
+Gateway receives cluster-level metadata via the WatchServerMeta RPC:
 
 ```rust
 message ServerMetaEvent {
@@ -168,13 +168,13 @@ message ServerMetaEvent {
 }
 ```
 
-`gateway_instance_count` 反映当前连接到 Controller 的 Gateway 实例总数。Gateway 使用此信息进行集群级感知，典型用途是集群级限流——单实例配额 = 集群总配额 / `gateway_instance_count`。
+`gateway_instance_count` reflects the total number of Gateway instances currently connected to the Controller. Gateway uses this information for cluster-level awareness; a typical use is cluster-level rate limiting — per-instance quota = total cluster quota / `gateway_instance_count`.
 
-当有新的 Gateway 实例上线或下线时，Controller 的 ClientRegistry 会推送更新的 count 给所有已连接实例。
+When new Gateway instances come online or go offline, the Controller's ClientRegistry pushes the updated count to all connected instances.
 
 ## ConfigClient
 
-聚合所有资源类型的 ClientCache，提供类型安全的查询接口：
+Aggregates the ClientCaches of all resource types and provides a type-safe query interface:
 
 ```
 ConfigClient
@@ -193,22 +193,22 @@ ConfigClient
   ├── ClientCache<EdgionGatewayConfig>
   ├── ClientCache<LinkSys>
   ├── ClientCache<EdgionAcme>
-  └── ClientCache<Service/EndpointSlice/Endpoint>
+  └── ClientCache<Service/EndpointSlice>
 ```
 
-ConfigClient 还提供 `is_ready()` 方法，检查所有必需资源是否已完成初始化同步。Gateway 只有在 ConfigClient 就绪后才开始接受流量。
+ConfigClient also provides an `is_ready()` method, checking whether all required resources have completed initial sync. The Gateway only starts accepting traffic after ConfigClient is ready.
 
-## 模块结构
+## Module structure
 
 ```
 src/core/gateway/conf_sync/
 ├── conf_client/
-│   ├── mod.rs              # 模块导出
-│   ├── config_client.rs    # ConfigClient 聚合层
-│   └── grpc_client.rs      # ConfigSyncClient gRPC 客户端
+│   ├── mod.rs              # Module exports
+│   ├── config_client.rs    # ConfigClient aggregation layer
+│   └── grpc_client.rs      # ConfigSyncClient gRPC client
 └── cache_client/
-    ├── mod.rs              # 模块导出
-    ├── cache.rs            # ClientCache<T>、DynClientCache
-    ├── cache_data.rs       # CacheData<T> 数据存储
-    └── event_dispatch.rs   # CacheEventDispatch 实现
+    ├── mod.rs              # Module exports
+    ├── cache.rs            # ClientCache<T>, DynClientCache
+    ├── cache_data.rs       # CacheData<T> data store
+    └── event_dispatch.rs   # CacheEventDispatch implementation
 ```

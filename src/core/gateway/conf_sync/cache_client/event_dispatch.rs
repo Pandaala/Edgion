@@ -50,7 +50,7 @@ impl<T: ResourceMeta + Resource + Clone + Send + 'static> CacheEventDispatch<T> 
             }
         }
 
-        tracing::info!(component = "cache_client", event = "apply_change", change = ?change, kind = kind, name = ?name, namespace = ?namespace, version = version, "Applying change to cache");
+        tracing::debug!(component = "cache_client", event = "apply_change", change = ?change, kind = kind, name = ?name, namespace = ?namespace, version = version, "Applying change to cache");
     }
 
     fn set_ready(&self) {
@@ -321,7 +321,7 @@ where
                                                         event_sv,
                                                     );
 
-                                                    tracing::info!(kind = T::kind_name(), name = ?resource.name_any(), namespace = ?resource.namespace(), rv = resource.get_version(), sv = event_sv, "Received resource from watch event");
+                                                    tracing::debug!(kind = T::kind_name(), name = ?resource.name_any(), namespace = ?resource.namespace(), rv = resource.get_version(), sv = event_sv, "Received resource from watch event");
                                                     let change = match event_type {
                                                         "add" => ResourceChange::EventAdd,
                                                         "update" => ResourceChange::EventUpdate,
@@ -382,5 +382,123 @@ where
         });
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the `CacheEventDispatch` impl on `ClientCache`.
+    //!
+    //! These tests exercise only the lock-protected mutation logic of
+    //! `apply_change` and `set_ready` — the change kind dispatched against a
+    //! freshly constructed `ClientCache` (without a configured processor or
+    //! gRPC channel). The full watch/relist/backoff loop in `start_watch` is
+    //! deferred to integration coverage — see
+    //! `tasks/todo-test-cover/05-integration-gaps-controller.md` #3 (relist
+    //! storm) and #4 (server_id failover).
+    use super::*;
+    use crate::core::common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
+    use k8s_openapi::api::core::v1::ConfigMap;
+    use kube::core::ObjectMeta;
+
+    fn make_cm(namespace: &str, name: &str) -> ConfigMap {
+        ConfigMap {
+            metadata: ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn new_client_cache() -> ClientCache<ConfigMap> {
+        ClientCache::<ConfigMap>::new("client-id".to_string(), "client-name".to_string())
+    }
+
+    fn cached_keys(cache: &ClientCache<ConfigMap>) -> Vec<String> {
+        let mut keys = cache.keys();
+        keys.sort();
+        keys
+    }
+
+    #[test]
+    fn init_add_inserts_resource_into_cache() {
+        let cache = new_client_cache();
+        cache.apply_change(ResourceChange::InitAdd, make_cm("ns1", "a"), None);
+        assert_eq!(cached_keys(&cache), vec!["ns1/a".to_string()]);
+    }
+
+    #[test]
+    fn event_add_inserts_resource_into_cache() {
+        let cache = new_client_cache();
+        cache.apply_change(ResourceChange::EventAdd, make_cm("ns1", "a"), None);
+        let stored = cache.get("ns1/a").expect("present");
+        assert_eq!(stored.metadata.name.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn event_update_overwrites_existing_resource() {
+        let cache = new_client_cache();
+        let mut original = make_cm("ns1", "a");
+        original.metadata.resource_version = Some("1".to_string());
+        cache.apply_change(ResourceChange::EventAdd, original, None);
+
+        let mut updated = make_cm("ns1", "a");
+        updated.metadata.resource_version = Some("2".to_string());
+        cache.apply_change(ResourceChange::EventUpdate, updated, None);
+
+        assert_eq!(cache.len(), 1);
+        let stored = cache.get("ns1/a").expect("present");
+        assert_eq!(stored.metadata.resource_version.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn event_delete_removes_resource_from_cache() {
+        let cache = new_client_cache();
+        cache.apply_change(ResourceChange::InitAdd, make_cm("ns1", "a"), None);
+        assert_eq!(cache.len(), 1);
+        cache.apply_change(ResourceChange::EventDelete, make_cm("ns1", "a"), None);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn init_start_signal_does_not_mutate_data() {
+        let cache = new_client_cache();
+        cache.apply_change(ResourceChange::InitAdd, make_cm("ns1", "a"), None);
+        // InitStart is a signal, not a data event — must not change stored data.
+        cache.apply_change(ResourceChange::InitStart, make_cm("ns2", "b"), None);
+        assert_eq!(cached_keys(&cache), vec!["ns1/a".to_string()]);
+    }
+
+    #[test]
+    fn init_done_signal_does_not_mutate_data() {
+        let cache = new_client_cache();
+        cache.apply_change(ResourceChange::InitAdd, make_cm("ns1", "a"), None);
+        // InitDone is a signal — same expectation as InitStart.
+        cache.apply_change(ResourceChange::InitDone, make_cm("ns2", "b"), None);
+        assert_eq!(cached_keys(&cache), vec!["ns1/a".to_string()]);
+    }
+
+    #[test]
+    fn set_ready_marks_cache_ready() {
+        let cache = new_client_cache();
+        assert!(!cache.is_ready());
+        CacheEventDispatch::set_ready(&cache);
+        assert!(cache.is_ready());
+    }
+
+    #[test]
+    fn multiple_resources_with_distinct_keys_coexist() {
+        let cache = new_client_cache();
+        cache.apply_change(ResourceChange::InitAdd, make_cm("ns1", "a"), None);
+        cache.apply_change(ResourceChange::InitAdd, make_cm("ns1", "b"), None);
+        cache.apply_change(ResourceChange::InitAdd, make_cm("ns2", "a"), None);
+        // ns1/a and ns2/a share a name but different namespaces — both must
+        // survive because key_name() includes the namespace prefix.
+        assert_eq!(
+            cached_keys(&cache),
+            vec!["ns1/a".to_string(), "ns1/b".to_string(), "ns2/a".to_string()]
+        );
     }
 }

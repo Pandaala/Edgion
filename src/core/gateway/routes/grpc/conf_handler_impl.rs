@@ -6,14 +6,12 @@ use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, GrpcRou
 use crate::types::{GRPCRoute, ListenerKey, ResourceMeta};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 
 impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
     fn full_set(&self, data: &HashMap<String, Arc<GRPCRoute>>) {
-        tracing::info!(
-            component = "grpc_route_manager",
-            count = data.len(),
-            "Full set gRPC routes"
-        );
+        let start_time = Instant::now();
+        tracing::info!(component = "grpc_route_manager", count = data.len(), "full set start");
 
         // Step 1: Parse all routes and build units cache
         self.route_cache.clear();
@@ -30,7 +28,11 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
         // Step 2: Rebuild all per-listener managers
         self.rebuild_all_listener_managers();
 
-        tracing::info!(component = "grpc_route_manager", "full set done");
+        tracing::info!(
+            component = "grpc_route_manager",
+            ms = Instant::now().saturating_duration_since(start_time).as_millis(),
+            "full set done"
+        );
     }
 
     fn partial_update(
@@ -39,6 +41,7 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
         update: HashMap<String, Arc<GRPCRoute>>,
         remove: HashSet<String>,
     ) {
+        let start_time = Instant::now();
         tracing::info!(
             component = "grpc_route_manager",
             add = add.len(),
@@ -93,7 +96,11 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
         // Rebuild affected listener managers
         self.rebuild_affected_listener_managers(&affected_listeners);
 
-        tracing::info!(component = "grpc_route_manager", "partial update done");
+        tracing::info!(
+            component = "grpc_route_manager",
+            ms = Instant::now().saturating_duration_since(start_time).as_millis(),
+            "partial update done"
+        );
     }
 }
 

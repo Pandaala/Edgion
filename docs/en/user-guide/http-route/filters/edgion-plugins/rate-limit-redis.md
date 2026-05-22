@@ -76,7 +76,7 @@ spec:
 - Rate limits by client IP by default
 - Default algorithm is SlidingWindow
 - Redis failure defaults to allowing requests (fail-open)
-- Returns `X-RateLimit-*` response headers by default
+- Returns `X-RateLimit-Limit` and `X-RateLimit-Remaining` response headers by default; `X-RateLimit-Reset` is only emitted on rejection (429) responses (see HeaderNames below)
 - Default reject status code is 429
 
 ---
@@ -120,7 +120,7 @@ Each entry in the `policies` array contains:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `rate` | Integer | — (required) | Maximum requests (or cost units) allowed per interval. Must be > 0 |
-| `interval` | String | — (required) | Time window, e.g. `"1s"`, `"1m"`, `"1h"`, `"1d"`. Minimum: 100ms |
+| `interval` | String | — (required) | Time window, e.g. `"1s"`, `"1m"`, `"1h"`, `"1d"`, or combined like `"1h30m"`. Minimum: 100ms |
 | `algorithm` | Enum | `SlidingWindow` | Rate limiting algorithm. See algorithm table below |
 
 #### Algorithm Reference
@@ -171,7 +171,7 @@ Customize rate limit response header names. Only explicitly configured fields ap
 |-----------|------|---------|-------------|
 | `limit` | String | None | Rate limit header name (default: `X-RateLimit-Limit`) |
 | `remaining` | String | None | Remaining quota header name (default: `X-RateLimit-Remaining`) |
-| `reset` | String | None | Window reset time header name (default: `X-RateLimit-Reset`) |
+| `reset` | String | None | Window reset time header name (default: `X-RateLimit-Reset`). Only emitted on rejection (429) responses — the Redis Lua scripts do not return a window-reset timestamp for allowed requests |
 | `retryIn` | String | None | Human-readable retry time (e.g., `"1.5s"`) |
 
 ---

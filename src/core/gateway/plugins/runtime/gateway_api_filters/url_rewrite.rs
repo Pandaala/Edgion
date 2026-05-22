@@ -85,16 +85,9 @@ impl URLRewriteFilter {
             return;
         };
 
-        let mut ok = true;
         if let Err(_e) = session.set_upstream_host(hostname) {
-            ok = false;
             plugin_log.push_err("host rewrite fail");
-        }
-
-        // Keep :authority in sync for HTTP/2 style requests.
-        let _ = session.set_request_header(":authority", hostname);
-
-        if ok {
+        } else {
             plugin_log.push("host rewrite");
         }
     }

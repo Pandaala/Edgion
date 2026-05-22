@@ -58,7 +58,9 @@ spec:
   maxRetries: 3
 
   realIp:
-    trustedIps: ["10.0.0.0/8", "172.16.0.0/12"]
+    trustedIps:
+      - name: private-ranges
+        cidrs: ["10.0.0.0/8", "172.16.0.0/12"]
     realIpHeader: "X-Forwarded-For"
     recursive: true
 
@@ -67,6 +69,7 @@ spec:
     requireSniHostMatch: true
     fallbackSni: ""
     tlsProxyLogRecord: true
+    rejectDuplicateHost: true
 
   globalPluginsRef:
     - name: "global-cors"
@@ -120,11 +123,13 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `trustedIps` | `Array<String>` | `[]` | 可信代理 IP 或 CIDR 列表 |
+| `trustedIps` | `Array<IpGroup>` | `[]` | 可信代理 IP 分组列表 |
 | `realIpHeader` | `String` | `X-Forwarded-For` | 从哪个请求头提取真实 IP |
 | `recursive` | `Boolean` | `true` | 是否从右向左遍历 header，跳过可信代理，取第一个非信任 IP |
 
-提取逻辑：从右向左遍历 `realIpHeader`，跳过 `trustedIps` 中的地址，取第一个非信任 IP。
+`trustedIps` 中每一项都是一个 `IpGroup` 对象：`name`（必填；≤63 字符，字符集 `[a-zA-Z0-9._-]`，首尾必须是字母或数字，在列表内唯一）、`description`（可选）、`cidrs`（必填；非空的 IP 或 CIDR 字符串列表）。
+
+提取逻辑：从右向左遍历 `realIpHeader`，跳过任一 `trustedIps` 分组中的地址，取第一个非信任 IP。
 
 ### spec.securityProtect
 
@@ -134,6 +139,8 @@ spec:
 | `requireSniHostMatch` | `Boolean` | `true` | HTTPS listener 级别 421 Misdirected Request 检测，SNI 与 Host 不匹配时拒绝请求 |
 | `fallbackSni` | `String` | — | 客户端未提供 SNI 时使用的备用主机名 |
 | `tlsProxyLogRecord` | `Boolean` | `true` | 是否记录 TLS 代理连接日志 |
+| `allowLoopbackUpstream` | `Boolean` | `false` | 显式放行该 GatewayClass 的 loopback upstream；link-local / metadata 仍然拒绝 |
+| `rejectDuplicateHost` | `Boolean` | `true` | 拒绝同一 HTTP/1.1 请求里出现多于一个 `Host:` 头部行，返回 `400 Bad Request`(RFC 9110 §7.2,Host smuggling 防御)。仅在需要兼容会发重复 `Host` 行的旧式中间件时关闭 |
 
 ### spec.globalPluginsRef
 
@@ -168,9 +175,11 @@ globalPluginsRef:
 spec:
   realIp:
     trustedIps:
-      - "10.0.0.0/8"
-      - "172.16.0.0/12"
-      - "192.168.0.0/16"
+      - name: private-ranges
+        cidrs:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
     realIpHeader: "X-Forwarded-For"
     recursive: true
 ```

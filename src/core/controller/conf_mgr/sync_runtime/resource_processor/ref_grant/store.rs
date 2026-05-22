@@ -15,6 +15,16 @@ type RawGrantMap = HashMap<String, Arc<ReferenceGrant>>;
 /// Type alias for the indexed grant map (key: to_namespace, value: grants in that namespace)
 type IndexedGrantMap = HashMap<String, Vec<Arc<ReferenceGrant>>>;
 
+/// Internal state holding both the raw map and the to_namespace index.
+///
+/// Both maps live behind a single lock so every mutation atomically updates the
+/// index alongside the raw map — no split-lock window where a reader can
+/// observe a half-applied change.
+struct State {
+    raw: RawGrantMap,
+    by_to_namespace: IndexedGrantMap,
+}
+
 /// Global store for ReferenceGrant resources
 ///
 /// Uses two-layer storage:
@@ -23,26 +33,22 @@ type IndexedGrantMap = HashMap<String, Vec<Arc<ReferenceGrant>>>;
 ///
 /// Note: This is control plane code, so we use simple RwLock instead of ArcSwap.
 pub struct ReferenceGrantStore {
-    /// Raw storage: namespace/name -> ReferenceGrant
-    grants: RwLock<RawGrantMap>,
-
-    /// Indexed storage: to_namespace -> Vec<ReferenceGrant>
-    /// Used for permission checking
-    grants_by_to_namespace: RwLock<IndexedGrantMap>,
+    state: RwLock<State>,
 }
 
 impl ReferenceGrantStore {
     pub fn new() -> Self {
         Self {
-            grants: RwLock::new(HashMap::new()),
-            grants_by_to_namespace: RwLock::new(HashMap::new()),
+            state: RwLock::new(State {
+                raw: HashMap::new(),
+                by_to_namespace: HashMap::new(),
+            }),
         }
     }
 
     /// Get a reference grant by key (namespace/name)
     pub fn get(&self, key: &str) -> Option<Arc<ReferenceGrant>> {
-        let grants = self.grants.read();
-        grants.get(key).cloned()
+        self.state.read().raw.get(key).cloned()
     }
 
     /// Get a reference grant by namespace and name
@@ -56,8 +62,12 @@ impl ReferenceGrantStore {
     /// This is the primary query method for permission checking.
     /// Returns all ReferenceGrants defined in the target namespace.
     pub fn get_by_to_namespace(&self, to_namespace: &str) -> Vec<Arc<ReferenceGrant>> {
-        let index = self.grants_by_to_namespace.read();
-        index.get(to_namespace).cloned().unwrap_or_default()
+        self.state
+            .read()
+            .by_to_namespace
+            .get(to_namespace)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Check if a reference from (namespace, group, kind) to (namespace, group, kind, name)
@@ -105,68 +115,47 @@ impl ReferenceGrantStore {
     pub fn upsert(&self, key: String, grant: Arc<ReferenceGrant>) {
         let to_namespace = grant.namespace().map(|s| s.to_string());
 
-        // Update raw storage
-        {
-            let mut grants = self.grants.write();
-            grants.insert(key, grant.clone());
-        }
-
-        // Rebuild index for affected namespace
+        let mut state = self.state.write();
+        state.raw.insert(key, grant);
         if let Some(ns) = to_namespace {
-            self.rebuild_namespace_index(&ns);
+            Self::rebuild_namespace_index_locked(&mut state, &ns);
         }
     }
 
     /// Remove a grant by key
     pub fn remove(&self, key: &str) -> Option<Arc<ReferenceGrant>> {
-        // Get the grant first to know which namespace to rebuild
-        let grant = {
-            let mut grants = self.grants.write();
-            grants.remove(key)
-        };
-
-        // Rebuild index for affected namespace
-        if let Some(ref g) = grant {
-            if let Some(ns) = g.namespace() {
-                self.rebuild_namespace_index(ns);
-            }
+        let mut state = self.state.write();
+        let grant = state.raw.remove(key)?;
+        if let Some(ns) = grant.namespace().map(|s| s.to_string()) {
+            Self::rebuild_namespace_index_locked(&mut state, &ns);
         }
-
-        grant
+        Some(grant)
     }
 
-    /// Rebuild the index for a specific namespace
-    fn rebuild_namespace_index(&self, namespace: &str) {
-        let grants = self.grants.read();
-        let mut index = self.grants_by_to_namespace.write();
-
-        let grants_in_ns: Vec<Arc<ReferenceGrant>> = grants
+    /// Rebuild the index for a specific namespace.
+    ///
+    /// Caller must already hold the state write lock.
+    fn rebuild_namespace_index_locked(state: &mut State, namespace: &str) {
+        let grants_in_ns: Vec<Arc<ReferenceGrant>> = state
+            .raw
             .values()
             .filter(|g| g.namespace() == Some(namespace))
             .cloned()
             .collect();
 
         if grants_in_ns.is_empty() {
-            index.remove(namespace);
+            state.by_to_namespace.remove(namespace);
         } else {
-            index.insert(namespace.to_string(), grants_in_ns);
+            state.by_to_namespace.insert(namespace.to_string(), grants_in_ns);
         }
     }
 
     /// Replace all grants and rebuild all indexes
     pub fn replace_all(&self, new_grants: RawGrantMap) {
-        // Rebuild index first
         let new_index = Self::build_index(&new_grants);
-
-        // Update both storages
-        {
-            let mut grants = self.grants.write();
-            *grants = new_grants;
-        }
-        {
-            let mut index = self.grants_by_to_namespace.write();
-            *index = new_index;
-        }
+        let mut state = self.state.write();
+        state.raw = new_grants;
+        state.by_to_namespace = new_index;
     }
 
     /// Update grants incrementally and rebuild affected indexes only
@@ -175,29 +164,24 @@ impl ReferenceGrantStore {
         add_or_update: HashMap<String, Arc<ReferenceGrant>>,
         remove: &std::collections::HashSet<String>,
     ) {
-        // Identify affected namespaces before updating
-        let affected_namespaces = {
-            let grants = self.grants.read();
-            Self::build_affected_namespaces(&add_or_update, remove, &grants)
-        };
+        let mut state = self.state.write();
 
-        // Update raw storage
-        {
-            let mut grants = self.grants.write();
+        // Identify affected namespaces against the pre-update raw map so that
+        // removed grants still contribute their old namespace.
+        let affected_namespaces = Self::build_affected_namespaces(&add_or_update, remove, &state.raw);
 
-            // Add or update
-            for (key, grant) in add_or_update {
-                grants.insert(key, grant);
-            }
-
-            // Remove
-            for key in remove {
-                grants.remove(key);
-            }
+        // Apply mutations to raw storage.
+        for (key, grant) in add_or_update {
+            state.raw.insert(key, grant);
+        }
+        for key in remove {
+            state.raw.remove(key);
         }
 
-        // Rebuild affected indexes incrementally
-        self.rebuild_indexes_incremental(&affected_namespaces);
+        // Rebuild affected indexes within the same write critical section.
+        for ns in &affected_namespaces {
+            Self::rebuild_namespace_index_locked(&mut state, ns);
+        }
     }
 
     /// Build index from raw grants
@@ -240,33 +224,6 @@ impl ReferenceGrantStore {
         affected
     }
 
-    /// Rebuild indexes for affected namespaces only
-    fn rebuild_indexes_incremental(&self, affected_namespaces: &std::collections::HashSet<String>) {
-        if affected_namespaces.is_empty() {
-            return;
-        }
-
-        let grants = self.grants.read();
-        let mut index = self.grants_by_to_namespace.write();
-
-        // Rebuild only affected namespaces
-        for ns in affected_namespaces {
-            let grants_in_ns: Vec<Arc<ReferenceGrant>> = grants
-                .values()
-                .filter(|g| g.namespace() == Some(ns.as_str()))
-                .cloned()
-                .collect();
-
-            if grants_in_ns.is_empty() {
-                // Remove empty namespace from index
-                index.remove(ns);
-            } else {
-                // Update namespace index
-                index.insert(ns.clone(), grants_in_ns);
-            }
-        }
-    }
-
     /// Identify all namespaces affected by this update (public for handler use)
     pub fn identify_affected_namespaces(
         &self,
@@ -274,7 +231,7 @@ impl ReferenceGrantStore {
         update: &HashMap<String, ReferenceGrant>,
         remove: &std::collections::HashSet<String>,
     ) -> std::collections::HashSet<String> {
-        let grants = self.grants.read();
+        let state = self.state.read();
         let mut affected = std::collections::HashSet::new();
 
         // Extract from new/updated grants
@@ -289,7 +246,7 @@ impl ReferenceGrantStore {
 
         // Extract from removed grants
         for key in remove {
-            if let Some(grant) = grants.get(key) {
+            if let Some(grant) = state.raw.get(key) {
                 if let Some(ns) = grant.namespace() {
                     affected.insert(ns.to_string());
                 }
@@ -305,8 +262,7 @@ impl ReferenceGrantStore {
     /// Get all grants (for testing/debugging)
     #[cfg(test)]
     pub fn get_all(&self) -> HashMap<String, Arc<ReferenceGrant>> {
-        let grants = self.grants.read();
-        grants.clone()
+        self.state.read().raw.clone()
     }
 }
 

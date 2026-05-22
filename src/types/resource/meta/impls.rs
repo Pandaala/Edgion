@@ -10,13 +10,12 @@ use crate::impl_resource_meta;
 // K8s native resources
 // =============================================================================
 
-use k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Secret, Service};
+use k8s_openapi::api::core::v1::{ConfigMap, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 
 impl_resource_meta!(Service, Service, "Service");
 impl_resource_meta!(Secret, Secret, "Secret");
 impl_resource_meta!(ConfigMap, ConfigMap, "ConfigMap");
-impl_resource_meta!(Endpoints, Endpoint, "Endpoints");
 impl_resource_meta!(EndpointSlice, EndpointSlice, "EndpointSlice");
 
 // =============================================================================

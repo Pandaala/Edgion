@@ -4,6 +4,8 @@
 //! then instantiating a sandboxed VM. Execution is wrapped via execute_safe()
 //! with catch_unwind for fault isolation.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 
 use crate::core::gateway::plugins::runtime::traits::UpstreamResponseFilter;
@@ -11,15 +13,36 @@ use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFi
 use crate::types::filters::PluginRunningResult;
 
 use super::config::DslConfig;
-use super::lang::bytecode::CompiledScript;
+use super::lang::bytecode::{BuiltinId, CompiledScript, OpCode};
 use super::lang::validator::{compile_dsl_source, ValidationLimits, Validator};
 use super::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
+use super::runtime::DslRuntime;
+
+fn is_redis_builtin_id(id: BuiltinId) -> bool {
+    matches!(
+        id,
+        BuiltinId::RedisGet
+            | BuiltinId::RedisSet
+            | BuiltinId::RedisDel
+            | BuiltinId::RedisExists
+            | BuiltinId::RedisTtl
+            | BuiltinId::RedisExpire
+            | BuiltinId::RedisIncr
+            | BuiltinId::RedisIncrBy
+            | BuiltinId::RedisHGet
+            | BuiltinId::RedisHSet
+            | BuiltinId::RedisHDel
+            | BuiltinId::RedisHGetAll
+            | BuiltinId::RedisHExists
+    )
+}
 
 /// DslPlugin — runs a pre-compiled DSL script per request
 pub struct DslPlugin {
     name: String,
     vm: Vm,
     error_policy: DslErrorPolicy,
+    runtime: DslRuntime,
 }
 
 impl DslPlugin {
@@ -29,9 +52,15 @@ impl DslPlugin {
         script: CompiledScript,
         limits: VmLimits,
         error_policy: DslErrorPolicy,
+        runtime: DslRuntime,
     ) -> Result<Self, String> {
         let vm = Vm::new(script, limits).map_err(|e| format!("VM creation error: {}", e))?;
-        Ok(Self { name, vm, error_policy })
+        Ok(Self {
+            name,
+            vm,
+            error_policy,
+            runtime,
+        })
     }
 
     /// Compile source code to CompiledScript, or deserialize from pre-compiled bytecode.
@@ -39,14 +68,19 @@ impl DslPlugin {
     /// Priority: bytecode (pre-compiled) > source (compile on-the-fly).
     /// This allows YAML users to write inline `source` code directly, while
     /// the controller can also pre-compile to `bytecode` for production use.
-    fn resolve_script(config: &DslConfig) -> Result<CompiledScript, String> {
+    pub(crate) fn resolve_script(config: &DslConfig) -> Result<CompiledScript, String> {
+        let val_limits = ValidationLimits {
+            max_map_size: config.max_map_size.unwrap_or(512),
+            ..ValidationLimits::default()
+        };
+
         // 1. Pre-compiled bytecode takes priority
         if let Some(bytecode_str) = &config.bytecode {
             let script = CompiledScript::deserialize_base64(bytecode_str)
                 .map_err(|e| format!("bytecode deserialization failed: {}", e))?;
 
             // Validate pre-compiled bytecode to prevent malicious payloads
-            let validator = Validator::new(ValidationLimits::default());
+            let validator = Validator::new(val_limits);
             let errors = validator.validate(&script);
             if !errors.is_empty() {
                 let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
@@ -56,15 +90,9 @@ impl DslPlugin {
             return Ok(script);
         }
 
-        // 2. Use cached bytecode from validation phase (avoids double compilation)
-        if let Some(cached_b64) = config.get_compiled_bytecode() {
-            return CompiledScript::deserialize_base64(&cached_b64)
-                .map_err(|e| format!("cached bytecode deserialization failed: {}", e));
-        }
-
-        // 3. Compile from source code (fallback if cache was not populated)
+        // 2. Compile from source code
         if let Some(source) = &config.source {
-            let bytecode_b64 = compile_dsl_source(source, &ValidationLimits::default())
+            let bytecode_b64 = compile_dsl_source(source, &val_limits)
                 .map_err(|errs| format!("DSL compile errors: {}", errs.join("; ")))?;
             return CompiledScript::deserialize_base64(&bytecode_b64)
                 .map_err(|e| format!("compiled bytecode deserialization failed: {}", e));
@@ -73,30 +101,108 @@ impl DslPlugin {
         Err("either source or bytecode must be provided".to_string())
     }
 
-    /// Extract script, limits, and error policy from DslConfig (shared by factory methods)
-    fn resolve_parts(config: &DslConfig) -> Option<(CompiledScript, VmLimits, DslErrorPolicy)> {
-        let script = match Self::resolve_script(config) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("DSL plugin '{}' failed to load: {}", config.name, e);
-                return None;
+    /// Best-effort compile-time check that every `redis.*` builtin's link name
+    /// appears in `linksys_refs`. See the inline notes for the heuristic's
+    /// known false-positive/negative limitations.
+    fn check_redis_link_names(config: &DslConfig, script: &CompiledScript) -> Result<(), String> {
+        // Compile-time link-name check (best-effort heuristic):
+        // Scan bytecode for redis.* CallBuiltin at index i. The first argument
+        // (link name) is pushed deepest, at index i-argc — but only when every
+        // argument is a single-instruction push (LoadConst, GetLocal, etc.).
+        //
+        // Known limitations:
+        //   False negative: if any argument is a multi-instruction sub-expression,
+        //     i-argc lands mid-expression and the LoadConst match fails silently.
+        //     The check is skipped; runtime ok=false is the fallback.
+        //   False positive: a multi-instruction argument can shift i-argc onto an
+        //     unrelated LoadConst, causing a valid plugin to be incorrectly rejected.
+        //
+        // For a precise check, move this logic to the compiler (AST layer).
+        // For now, it catches the common case of literal link names and typos.
+        use super::lang::bytecode::Constant;
+        let valid_names: std::collections::HashSet<&str> =
+            config.linksys_refs.iter().map(|r| r.name.as_str()).collect();
+        for (i, op) in script.code.iter().enumerate() {
+            if let OpCode::CallBuiltin(id, argc) = op {
+                if is_redis_builtin_id(*id) && *argc >= 1 {
+                    // First arg is deepest on stack; pushed argc instructions before the call
+                    // (works when all args are single-instruction pushes)
+                    let first_arg_pos = i.wrapping_sub(*argc as usize);
+                    if first_arg_pos < i {
+                        if let Some(OpCode::LoadConst(k)) = script.code.get(first_arg_pos) {
+                            if let Some(Constant::Str(link_name)) = script.constants.get(*k as usize) {
+                                if !valid_names.contains(link_name.as_str()) {
+                                    return Err(format!(
+                                        "redis.* uses link '{}' which is not in linkSysRefs",
+                                        link_name
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
             }
-        };
+        }
+        Ok(())
+    }
+
+    /// Validate a `DslConfig` exactly as far as construction would: resolve the
+    /// script (compile `source` / deserialize+validate `bytecode`), check the
+    /// `linksys_refs` config, and run the redis link-name scan. Returns the
+    /// first error string, or `Ok(())`. This is intended to be used as the
+    /// single validation entry point by `DslConfig::validation_error()` so the
+    /// control plane sees the same failures the data-plane constructor would hit.
+    ///
+    /// Note: VM init (`Vm::new`) is intentionally NOT run here — it is the one
+    /// failure that cannot be predicted statically and is covered by the
+    /// data-plane seal backstop instead.
+    pub(crate) fn validate_config(config: &DslConfig) -> Result<(), String> {
+        let script = Self::resolve_script(config)?;
+        config.validate()?;
+        Self::check_redis_link_names(config, &script)?;
+        Ok(())
+    }
+
+    /// Extract script, limits, error policy, and runtime from DslConfig
+    fn resolve_parts(config: &DslConfig) -> Result<(CompiledScript, VmLimits, DslErrorPolicy, DslRuntime), String> {
+        let script = Self::resolve_script(config)?;
+        config.validate()?;
+        Self::check_redis_link_names(config, &script)?;
+
         let limits = VmLimits {
             max_steps: config.max_steps.unwrap_or(10_000),
             max_loop_iterations: config.max_loop_iterations.unwrap_or(100),
             max_call_count: config.max_call_count.unwrap_or(500),
             max_stack_depth: config.max_stack_depth.unwrap_or(128),
             max_string_len: config.max_string_len.unwrap_or(8192),
+            max_list_len: config.max_list_len.unwrap_or(1024),
+            max_map_size: config.max_map_size.unwrap_or(512),
         };
         let policy = config.error_policy.clone().unwrap_or_default();
-        Some((script, limits, policy))
+        let redis_links: HashMap<String, String> = config
+            .linksys_refs
+            .iter()
+            .map(|r| (r.name.clone(), format!("{}/{}", r.namespace, r.name)))
+            .collect();
+        let runtime = DslRuntime {
+            max_timeout_ms: config.http_max_timeout_ms.unwrap_or(5_000),
+            max_response_body_bytes: config.http_max_response_body_bytes.unwrap_or(1024 * 1024),
+            block_private_ips: config.http_block_private_ips.unwrap_or(false),
+            redis_links,
+        };
+        Ok((script, limits, policy, runtime))
     }
 
     /// Create from DslConfig (used by PluginRuntime factory for request stage)
     pub fn from_config(config: &DslConfig) -> Option<Box<dyn RequestFilter>> {
-        let (script, limits, policy) = Self::resolve_parts(config)?;
-        match DslPlugin::new(config.name.clone(), script, limits, policy) {
+        let (script, limits, policy, runtime) = match Self::resolve_parts(config) {
+            Ok(parts) => parts,
+            Err(e) => {
+                tracing::error!("DSL plugin '{}' failed to load: {}", config.name, e);
+                return None;
+            }
+        };
+        match DslPlugin::new(config.name.clone(), script, limits, policy, runtime) {
             Ok(p) => Some(Box::new(p)),
             Err(e) => {
                 tracing::error!("DSL plugin '{}' VM init failed: {}", config.name, e);
@@ -107,8 +213,14 @@ impl DslPlugin {
 
     /// Create from DslConfig (used by PluginRuntime factory for upstream response filter stage)
     pub fn from_config_response(config: &DslConfig) -> Option<Box<dyn UpstreamResponseFilter>> {
-        let (script, limits, policy) = Self::resolve_parts(config)?;
-        match DslPlugin::new(config.name.clone(), script, limits, policy) {
+        let (script, limits, policy, runtime) = match Self::resolve_parts(config) {
+            Ok(parts) => parts,
+            Err(e) => {
+                tracing::error!("DSL plugin '{}' failed to load: {}", config.name, e);
+                return None;
+            }
+        };
+        match DslPlugin::new(config.name.clone(), script, limits, policy, runtime) {
             Ok(p) => Some(Box::new(p)),
             Err(e) => {
                 tracing::error!("DSL plugin '{}' VM init failed: {}", config.name, e);
@@ -125,7 +237,7 @@ impl RequestFilter for DslPlugin {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        execute_safe(&self.vm, session, log, &self.error_policy)
+        execute_safe(&self.vm, session, log, &self.error_policy, &self.runtime).await
     }
 }
 
@@ -139,6 +251,67 @@ impl UpstreamResponseFilter for DslPlugin {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        execute_safe(&self.vm, session, log, &self.error_policy)
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(execute_safe(
+                &self.vm,
+                session,
+                log,
+                &self.error_policy,
+                &self.runtime,
+            ))
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_config_rejects_uncompilable_source() {
+        use super::super::config::DslConfig;
+        let config = DslConfig {
+            name: "bad".to_string(),
+            source: Some("this is not valid dsl @@@".to_string()),
+            bytecode: None,
+            ..Default::default()
+        };
+        let err = DslPlugin::validate_config(&config).expect_err("uncompilable source must fail");
+        assert!(!err.is_empty(), "error string must be non-empty: {err}");
+    }
+
+    #[test]
+    fn validate_config_accepts_valid_source() {
+        use super::super::config::DslConfig;
+        let config = DslConfig {
+            name: "ok".to_string(),
+            source: Some("let a = 1".to_string()),
+            bytecode: None,
+            ..Default::default()
+        };
+        assert!(
+            DslPlugin::validate_config(&config).is_ok(),
+            "a trivial valid script must pass validation"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_unknown_redis_link() {
+        use super::super::config::DslConfig;
+        // The script is syntactically valid DSL: `redis.get` takes a link alias
+        // as its first (string-literal) argument. `linksys_refs` is empty, so
+        // the link "mylink" is undeclared and the redis link-name scan must
+        // reject the config after `resolve_script` succeeds.
+        let config = DslConfig {
+            name: "unknown-link".to_string(),
+            source: Some("let r = redis.get(\"mylink\", \"mykey\")".to_string()),
+            bytecode: None,
+            ..Default::default()
+        };
+        let err = DslPlugin::validate_config(&config).expect_err("redis call referencing an undeclared link must fail");
+        assert!(
+            err.contains("linkSysRefs"),
+            "error message must mention linkSysRefs, got: {err}"
+        );
     }
 }

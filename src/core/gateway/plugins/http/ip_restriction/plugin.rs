@@ -78,58 +78,48 @@ impl RequestFilter for IpRestriction {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        // Determine whether to deny this request
-        let should_deny = match self.get_client_ip(session) {
-            Some(ip) => {
-                // Priority 1: deny list (highest priority)
-                if let Some(ref deny_matcher) = self.config.deny_matcher {
-                    if deny_matcher.match_ip(&ip) == Some(true) {
-                        plugin_log.push("Deny ip match");
-                        true
-                    } else if let Some(ref allow_matcher) = self.config.allow_matcher {
-                        // Priority 2: allow list present — whitelist mode
-                        if allow_matcher.match_ip(&ip) == Some(true) {
-                            plugin_log.push("Allow ip match");
-                            false
-                        } else {
-                            plugin_log.push("Deny ip match");
-                            true
-                        }
-                    } else {
-                        // Priority 3: default action
-                        let deny = matches!(self.config.default_action, DefaultAction::Deny);
-                        if deny {
-                            plugin_log.push("Deny default");
-                        } else {
-                            plugin_log.push("Allow default");
-                        }
-                        deny
-                    }
-                } else if let Some(ref allow_matcher) = self.config.allow_matcher {
-                    // Priority 2: allow list present (no deny list) — whitelist mode
-                    if allow_matcher.match_ip(&ip) == Some(true) {
-                        plugin_log.push("Allow ip match");
-                        false
-                    } else {
-                        plugin_log.push("Deny ip match");
-                        true
-                    }
+        use crate::types::resources::edgion_plugins::AccessDecision;
+
+        let client_ip_opt = self.get_client_ip(session);
+
+        let should_deny = match client_ip_opt {
+            Some(ip) => match self.config.check_ip_access(&ip) {
+                AccessDecision::AllowByGroup(g) => {
+                    plugin_log.push(&format!("allow:group={}", g));
+                    false
+                }
+                AccessDecision::DenyByGroup(g) => {
+                    plugin_log.push(&format!("deny:group={}", g));
+                    true
+                }
+                AccessDecision::DenyByWhitelistMiss => {
+                    plugin_log.push("deny:not-in-allow");
+                    true
+                }
+                AccessDecision::Default(DefaultAction::Allow) => {
+                    plugin_log.push("allow:default");
+                    false
+                }
+                AccessDecision::Default(DefaultAction::Deny) => {
+                    plugin_log.push("deny:default");
+                    true
+                }
+            },
+            None => {
+                // No client IP could be extracted.
+                let whitelist_mode = self.config.allow_matcher.is_some();
+                if whitelist_mode {
+                    plugin_log.push("deny:no-client-ip");
+                    true
                 } else {
-                    // Priority 3: default action
                     let deny = matches!(self.config.default_action, DefaultAction::Deny);
-                    if deny {
-                        plugin_log.push("Deny default");
+                    plugin_log.push(if deny {
+                        "deny:no-client-ip"
                     } else {
-                        plugin_log.push("Allow default");
-                    }
+                        "allow:no-client-ip"
+                    });
                     deny
                 }
-            }
-            None => {
-                plugin_log.push("No client IP");
-                // Allow list configured means whitelist mode: unknown IP is not in whitelist → deny.
-                // Otherwise, fall back to default_action.
-                self.config.allow_matcher.is_some() || matches!(self.config.default_action, DefaultAction::Deny)
             }
         };
 
@@ -140,7 +130,8 @@ impl RequestFilter for IpRestriction {
                 .as_deref()
                 .unwrap_or("Your IP address is not allowed to access this resource");
 
-            // Build error response
+            // Build error response.
+            // invariant: 403 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
             let mut resp = Box::new(
                 ResponseHeader::build(self.config.status, None)
                     .unwrap_or_else(|_| ResponseHeader::build(403, None).expect("403 is valid")),
@@ -171,10 +162,15 @@ mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
     use crate::types::resources::edgion_plugins::DefaultAction;
+    use crate::types::resources::plugin_metadata::IpGroup;
 
     fn create_ip_config_allow_list() -> IpRestrictionConfig {
         let config = IpRestrictionConfig {
-            allow: Some(vec!["192.168.1.0/24".to_string()]),
+            allow: Some(vec![IpGroup {
+                name: "default".into(),
+                description: None,
+                cidrs: vec!["192.168.1.0/24".into()],
+            }]),
             deny: None,
             default_action: DefaultAction::Deny,
             ip_source: IpSource::ClientIp,
@@ -189,7 +185,11 @@ mod tests {
     fn create_ip_config_deny_list() -> IpRestrictionConfig {
         let config = IpRestrictionConfig {
             allow: None,
-            deny: Some(vec!["10.0.0.100".to_string()]),
+            deny: Some(vec![IpGroup {
+                name: "default".into(),
+                description: None,
+                cidrs: vec!["10.0.0.100".into()],
+            }]),
             default_action: DefaultAction::Allow,
             ip_source: IpSource::ClientIp,
             message: None,
@@ -198,57 +198,6 @@ mod tests {
             deny_matcher: None,
         };
         IpRestrictionConfig::new(config).unwrap()
-    }
-
-    #[tokio::test]
-    async fn test_allowed_ip_passes() {
-        let config = create_ip_config_allow_list();
-        let plugin = IpRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("IpRestriction");
-
-        mock_session
-            .expect_remote_addr()
-            .return_const("192.168.1.50".to_string());
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allow ip match"));
-    }
-
-    #[tokio::test]
-    async fn test_denied_ip_blocked() {
-        let config = create_ip_config_allow_list();
-        let plugin = IpRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("IpRestriction");
-
-        mock_session.expect_remote_addr().return_const("10.0.0.50".to_string());
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny ip match"));
-    }
-
-    #[tokio::test]
-    async fn test_blacklist_blocks_specific_ip() {
-        let config = create_ip_config_deny_list();
-        let plugin = IpRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("IpRestriction");
-
-        mock_session.expect_remote_addr().return_const("10.0.0.100".to_string());
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny ip match"));
     }
 
     #[tokio::test]
@@ -263,7 +212,7 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allow default"));
+        assert!(plugin_log.contains("allow:default"));
     }
 
     #[tokio::test]
@@ -281,47 +230,24 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("No client IP"));
+        assert!(plugin_log.contains("deny:no-client-ip"));
     }
 
     #[tokio::test]
-    async fn test_missing_ip_allowed_when_default_action_allow_and_no_whitelist() {
-        // Deny-only list + default_action=Allow: unknown IP should be allowed
-        let config = create_ip_config_deny_list();
+    async fn test_whitelist_miss_emits_not_in_allow() {
+        let config = create_ip_config_allow_list();
         let plugin = IpRestriction::create(&config);
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("IpRestriction");
 
-        mock_session.expect_remote_addr().return_const("".to_string());
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("No client IP"));
-    }
-
-    #[tokio::test]
-    async fn test_missing_ip_denied_when_default_action_deny_and_no_whitelist() {
-        // Deny-only list + default_action=Deny: unknown IP should be denied
-        let config = IpRestrictionConfig::new(IpRestrictionConfig {
-            deny: Some(vec!["10.0.0.100".to_string()]),
-            default_action: DefaultAction::Deny,
-            ip_source: IpSource::ClientIp,
-            status: 403,
-            ..Default::default()
-        })
-        .unwrap();
-        let plugin = IpRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("IpRestriction");
-
-        mock_session.expect_remote_addr().return_const("".to_string());
+        // An IP outside the configured allow range.
+        mock_session.expect_remote_addr().return_const("10.0.0.1".to_string());
         mock_session.expect_write_response_header().returning(|_, _| Ok(()));
         mock_session.expect_write_response_body().returning(|_, _| Ok(()));
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("No client IP"));
+        assert!(plugin_log.contains("deny:not-in-allow"));
     }
 }

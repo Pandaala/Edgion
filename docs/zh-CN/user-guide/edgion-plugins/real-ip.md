@@ -33,9 +33,11 @@ spec:
     - type: RealIp
       config:
         trustedIps:
-          - "10.0.0.0/8"
-          - "172.16.0.0/12"
-          - "192.168.0.0/16"
+          - name: private-ranges
+            cidrs:
+              - "10.0.0.0/8"
+              - "172.16.0.0/12"
+              - "192.168.0.0/16"
         realIpHeader: "X-Forwarded-For"
         recursive: true
 ```
@@ -44,18 +46,28 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `trustedIps` | Array\<String\> | —（必填） | 可信代理 IP 地址或 CIDR 范围列表 |
+| `trustedIps` | Array\<IpGroup\> | —（必填） | 可信代理 IP 分组列表 |
 | `realIpHeader` | String | `"X-Forwarded-For"` | 提取真实 IP 的 Header 名称 |
 | `recursive` | Boolean | `true` | 是否启用递归查找（Nginx 风格） |
 | `maxTrustedHops` | Integer | 无（不限） | `recursive=true` 时可信代理跳数上限，详见 [安全取舍](#安全取舍trustedips-和-maxtrustedhops) |
 
 #### trustedIps
 
-可信代理的 IP 地址或 CIDR 范围列表。对应 Nginx 的 `set_real_ip_from` 指令。
+可信代理 IP 分组列表。对应 Nginx 的 `set_real_ip_from` 指令。
 
-- 支持单个 IP 地址：`"192.168.1.1"`
-- 支持 CIDR 范围：`"10.0.0.0/8"`
-- 支持 IPv6：`"2001:db8::/32"`
+列表中每一项都是一个 `IpGroup` 对象：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | String | 是 | 分组名称；≤63 字符，字符集 `[a-zA-Z0-9._-]`，首尾必须是字母或数字，在列表内唯一 |
+| `description` | String | 否 | 分组的可选描述 |
+| `cidrs` | Array\<String\> | 是 | 非空的 IP 地址或 CIDR 范围列表 |
+
+`cidrs` 中每一项支持：
+
+- 单个 IP 地址：`"192.168.1.1"`
+- CIDR 范围：`"10.0.0.0/8"`
+- IPv6：`"2001:db8::/32"`
 
 #### realIpHeader
 
@@ -118,14 +130,21 @@ spec:
 ```yaml
 # ❌ 反例：覆盖面过宽，任何来自内网的请求都被当作可信代理
 trustedIps:
-  - "10.0.0.0/8"
+  - name: internal
+    cidrs:
+      - "10.0.0.0/8"
 
 # ✅ 正例：仅包含实际代理（如 Cloudflare 回源 IP、内部 LB IP）
 trustedIps:
-  - "103.21.244.0/22"     # Cloudflare
-  - "103.22.200.0/22"
-  - "173.245.48.0/20"
-  - "10.1.0.10"           # 内部 LB 出口 IP（单一地址）
+  - name: cloudflare
+    cidrs:
+      - "103.21.244.0/22"
+      - "103.22.200.0/22"
+      - "173.245.48.0/20"
+  - name: internal-lb
+    description: Internal LB egress (single address)
+    cidrs:
+      - "10.1.0.10"
 ```
 
 **第二道（辅助）：设置 `maxTrustedHops` 作为硬上限**
@@ -134,8 +153,12 @@ trustedIps:
 
 ```yaml
 trustedIps:
-  - "103.21.244.0/22"     # Cloudflare（1 跳）
-  - "10.1.0.10"           # 内部 LB（1 跳）
+  - name: cloudflare
+    cidrs:
+      - "103.21.244.0/22"   # Cloudflare（1 跳）
+  - name: internal-lb
+    cidrs:
+      - "10.1.0.10"         # 内部 LB（1 跳）
 maxTrustedHops: 2         # 只信任 2 跳；攻击者无法通过填充多层"可信" IP 推进到左端
 ```
 
@@ -193,8 +216,12 @@ Edgion Gateway (client_addr: 192.168.1.1)
 **配置：**
 ```yaml
 trustedIps:
-  - "192.168.0.0/16"  # 负载均衡器
-  - "198.51.100.0/24" # CDN
+  - name: load-balancer
+    cidrs:
+      - "192.168.0.0/16"
+  - name: cdn
+    cidrs:
+      - "198.51.100.0/24"
 realIpHeader: "X-Forwarded-For"
 recursive: true
 ```
@@ -205,10 +232,12 @@ recursive: true
 
 ```yaml
 trustedIps:
-  - "173.245.48.0/20"
-  - "103.21.244.0/22"
-  - "103.22.200.0/22"
-  # ... 更多 Cloudflare IP 范围
+  - name: cloudflare
+    cidrs:
+      - "173.245.48.0/20"
+      - "103.21.244.0/22"
+      - "103.22.200.0/22"
+      # ... 更多 Cloudflare IP 范围
 realIpHeader: "CF-Connecting-IP"
 recursive: false
 ```
@@ -228,9 +257,11 @@ spec:
     - type: RealIp
       config:
         trustedIps:
-          - "10.0.0.0/8"
-          - "172.16.0.0/12"
-          - "192.168.0.0/16"
+          - name: private-ranges
+            cidrs:
+              - "10.0.0.0/8"
+              - "172.16.0.0/12"
+              - "192.168.0.0/16"
 ```
 
 ### 示例 2：Cloudflare 配置
@@ -246,16 +277,18 @@ spec:
     - type: RealIp
       config:
         trustedIps:
-          - "173.245.48.0/20"
-          - "103.21.244.0/22"
-          - "103.22.200.0/22"
-          - "103.31.4.0/22"
-          - "141.101.64.0/18"
-          - "108.162.192.0/18"
-          - "190.93.240.0/20"
-          - "188.114.96.0/20"
-          - "197.234.240.0/22"
-          - "198.41.128.0/17"
+          - name: cloudflare
+            cidrs:
+              - "173.245.48.0/20"
+              - "103.21.244.0/22"
+              - "103.22.200.0/22"
+              - "103.31.4.0/22"
+              - "141.101.64.0/18"
+              - "108.162.192.0/18"
+              - "190.93.240.0/20"
+              - "188.114.96.0/20"
+              - "197.234.240.0/22"
+              - "198.41.128.0/17"
         realIpHeader: "CF-Connecting-IP"
         recursive: false
 ```
@@ -273,10 +306,15 @@ spec:
     - type: RealIp
       config:
         trustedIps:
-          - "10.0.0.0/8"       # 内网代理
-          - "172.16.0.0/12"    # 私有网络
-          - "192.168.0.0/16"   # 本地网络
-          - "198.51.100.0/24"  # CDN
+          - name: internal
+            description: Internal proxy and private networks
+            cidrs:
+              - "10.0.0.0/8"
+              - "172.16.0.0/12"
+              - "192.168.0.0/16"
+          - name: cdn
+            cidrs:
+              - "198.51.100.0/24"
         realIpHeader: "X-Forwarded-For"
         recursive: true
 ```
@@ -312,7 +350,7 @@ A: 查看请求日志中的 `remote_addr` 字段，或者在后端服务查看 `
 
 ### Q: 可以同时信任多个 CDN 吗？
 
-A: 可以，将所有 CDN 的 IP 范围都添加到 `trustedIps` 列表中即可。
+A: 可以，将每个 CDN 作为 `trustedIps` 下独立的一个分组（每个 CDN 一个 `IpGroup`，把它的范围写进 `cidrs`）。
 
 ### Q: 支持动态更新吗？
 

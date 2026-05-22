@@ -353,6 +353,141 @@ impl WebhookKeyGetTestSuite {
         )
     }
 
+    // ==================== 5. Webhook pathSuffix appended to LinkSys uri ====================
+    fn test_webhook_path_suffix_extract() -> TestCase {
+        TestCase::new(
+            "webhook_path_suffix_extract",
+            "Webhook: pathSuffix is appended to the LinkSys uri before the request is made",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = &ctx.http_client;
+                    let url = format!("http://{}:31180/test/webhook-keyget/api", ctx.target_host);
+
+                    let trace_id = format!("test-wh-pathsuffix-{}", uuid::Uuid::new_v4());
+
+                    let response = client
+                        .get(url)
+                        .header("host", TEST_HOST)
+                        .header("X-Tenant-Id", "delta-co")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await;
+
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+
+                            let al_client = ctx.access_log_client();
+                            let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Failed to fetch access log: {}", e),
+                                    )
+                                }
+                            };
+
+                            let access_log = entry.data.to_string();
+
+                            // Verify webhook resolved path_suffix_id from /webhook/resolve/extra
+                            // test_server /webhook/resolve/extra returns {"data":{"path_suffix_id":"suffix-delta-co"}}
+                            if access_log.contains(r#""webhook_path_suffix_id":"suffix-delta-co""#) {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "ctx.webhook_path_suffix_id correctly resolved via pathSuffix-extended URL"
+                                        .to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected webhook_path_suffix_id=suffix-delta-co in ctx. Access-Log: {}",
+                                        access_log
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 7. Webhook apiKey auth injects key into outbound request ====================
+    fn test_webhook_apikey_auth() -> TestCase {
+        TestCase::new(
+            "webhook_apikey_auth",
+            "Webhook: WebhookAuth::ApiKey injects the API key header into the outbound request",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = &ctx.http_client;
+                    let url = format!("http://{}:31180/test/webhook-keyget/api", ctx.target_host);
+
+                    let trace_id = format!("test-wh-apikey-{}", uuid::Uuid::new_v4());
+
+                    let response = client
+                        .get(url)
+                        .header("host", TEST_HOST)
+                        .header("X-Tenant-Id", "epsilon-org")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await;
+
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+
+                            let al_client = ctx.access_log_client();
+                            let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Failed to fetch access log: {}", e),
+                                    )
+                                }
+                            };
+
+                            let access_log = entry.data.to_string();
+
+                            // Verify webhook resolved apikey_user from /webhook/apikey-resolve
+                            // test_server returns 401 unless X-API-Key == "test-secret-key-12345"
+                            // so a successful resolve proves the gateway injected the correct key
+                            if access_log.contains(r#""webhook_apikey_user":"apikey-epsilon-org""#) {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "ctx.webhook_apikey_user correctly resolved — API key was injected by gateway"
+                                        .to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected webhook_apikey_user=apikey-epsilon-org in ctx. Access-Log: {}",
+                                        access_log
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     // ==================== 6. Webhook with missing tenant uses local default ====================
     fn test_local_default_without_header() -> TestCase {
         TestCase::new(
@@ -428,6 +563,8 @@ impl TestSuite for WebhookKeyGetTestSuite {
             Self::test_local_key_get_alongside_webhook(),
             Self::test_webhook_default_fallback(),
             Self::test_local_default_without_header(),
+            Self::test_webhook_path_suffix_extract(),
+            Self::test_webhook_apikey_auth(),
         ]
     }
 }

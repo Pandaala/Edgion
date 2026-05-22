@@ -1,13 +1,13 @@
 ---
 name: resource-system
-description: 资源系统架构：define_resources! 宏、ResourceMeta trait、ResourceKind 枚举、Preparse 机制、资源类型全表。
+description: Resource system architecture — define_resources! macro, ResourceMeta trait, ResourceKind enum, Preparse mechanism, full resource type table.
 ---
 
-# 资源系统
+# Resource system
 
-## 唯一真相源 — `define_resources!`
+## Single source of truth — `define_resources!`
 
-所有资源在 `src/types/resource/defs.rs` 中通过 `define_resources!` 宏统一声明：
+All resources are declared centrally in `src/types/resource/defs.rs` via the `define_resources!` macro:
 
 ```rust
 define_resources! {
@@ -21,76 +21,76 @@ define_resources! {
         is_base_conf: false,
         in_registry: true,
     },
-    // ... 所有其他类型
+    // ... all other types
 }
 ```
 
-该宏自动生成：`ResourceKind` 枚举、`from_kind_name()` 方法、`from_content()` 方法、注册表元数据。
+The macro auto-generates the `ResourceKind` enum, the `from_kind_name()` method, the `from_content()` method, and registry metadata.
 
-## ResourceMeta Trait
+## ResourceMeta trait
 
-每个资源都通过 `impl_resource_meta!` 实现 `ResourceMeta`：
+Every resource implements `ResourceMeta` via `impl_resource_meta!`:
 
 ```rust
 pub trait ResourceMeta {
     fn get_version(&self) -> u64;
     fn resource_kind() -> ResourceKind;
     fn kind_name() -> &'static str;
-    fn key_name(&self) -> String;           // "namespace/name" 格式
-    fn pre_parse(&mut self) { }             // 可选的预解析钩子
+    fn key_name(&self) -> String;           // "namespace/name" format
+    fn pre_parse(&mut self) { }             // Optional pre-parse hook
 }
 ```
 
-## ResourceKind 枚举
+## ResourceKind enum
 
-自动生成的枚举包含全部 21 种资源类型：
+The auto-generated enum contains all 21 resource types:
 
 `GatewayClass`, `EdgionGatewayConfig`, `Gateway`, `HTTPRoute`, `GRPCRoute`, `TCPRoute`, `TLSRoute`, `UDPRoute`, `Service`, `EndpointSlice`, `Endpoint`, `Secret`, `EdgionTls`, `EdgionPlugins`, `EdgionStreamPlugins`, `PluginMetaData`, `LinkSys`, `ReferenceGrant`, `BackendTLSPolicy`, `EdgionAcme`, `ConfigMap`
 
-## 资源类型全表
+## Full resource type table
 
-| 分类 | 资源 | 集群级 | 同步到 Gateway | 说明 |
+| Category | Resource | Cluster-scoped | Synced to Gateway | Description |
 |------|------|:------:|:--------------:|------|
-| **核心配置** | GatewayClass | ✓ | ✓ | Gateway API GatewayClass |
-| | EdgionGatewayConfig | ✓ | ✓ | Edgion 全局配置 |
+| **Core configuration** | GatewayClass | ✓ | ✓ | Gateway API GatewayClass |
+| | EdgionGatewayConfig | ✓ | ✓ | Edgion global configuration |
 | | Gateway | ✗ | ✓ | Gateway API Gateway |
-| **路由** | HTTPRoute | ✗ | ✓ | HTTP/HTTPS 路由规则 |
-| | GRPCRoute | ✗ | ✓ | gRPC 路由规则 |
-| | TCPRoute | ✗ | ✓ | TCP 路由规则 |
-| | TLSRoute | ✗ | ✓ | TLS 路由规则 |
-| | UDPRoute | ✗ | ✓ | UDP 路由规则 |
-| **后端/服务** | Service | ✗ | ✓ | Kubernetes Service |
+| **Routes** | HTTPRoute | ✗ | ✓ | HTTP/HTTPS routing rules |
+| | GRPCRoute | ✗ | ✓ | gRPC routing rules |
+| | TCPRoute | ✗ | ✓ | TCP routing rules |
+| | TLSRoute | ✗ | ✓ | TLS routing rules |
+| | UDPRoute | ✗ | ✓ | UDP routing rules |
+| **Backends / services** | Service | ✗ | ✓ | Kubernetes Service |
 | | EndpointSlice | ✗ | ✓ | Kubernetes EndpointSlice |
-| | Endpoint | ✗ | ✓ | Kubernetes Endpoint（旧版） |
-| **安全/策略** | EdgionTls | ✗ | ✓ | TLS 证书配置 |
-| | Secret | ✗ | **✗** | Kubernetes Secret（不同步） |
-| | ReferenceGrant | ✗ | **✗** | 跨命名空间引用授权（不同步） |
-| | BackendTLSPolicy | ✗ | ✓ | 后端 TLS 策略 |
-| **插件/扩展** | EdgionPlugins | ✗ | ✓ | HTTP 层插件定义 |
-| | EdgionStreamPlugins | ✗ | ✓ | Stream 层插件定义 |
-| | PluginMetaData | ✗ | ✓ | 插件元数据 |
-| **ACME** | EdgionAcme | ✗ | ✓ | ACME 自动证书 |
-| **基础设施** | LinkSys | ✗ | ✓ | 外部系统连接器 |
-| | ConfigMap | ✗ | ✗ | Kubernetes ConfigMap（不同步到 Gateway） |
+| | Endpoint | ✗ | ✓ | Kubernetes Endpoint (legacy) |
+| **Security / policy** | EdgionTls | ✗ | ✓ | TLS certificate configuration |
+| | Secret | ✗ | **✗** | Kubernetes Secret (not synced) |
+| | ReferenceGrant | ✗ | **✗** | Cross-namespace reference authorization (not synced) |
+| | BackendTLSPolicy | ✗ | ✓ | Backend TLS policy |
+| **Plugins / extensions** | EdgionPlugins | ✗ | ✓ | HTTP-layer plugin definitions |
+| | EdgionStreamPlugins | ✗ | ✓ | Stream-layer plugin definitions |
+| | PluginMetaData | ✗ | ✓ | Plugin metadata |
+| **ACME** | EdgionAcme | ✗ | ✓ | ACME automated certificates |
+| **Infrastructure** | LinkSys | ✗ | ✓ | External system connectors |
+| | ConfigMap | ✗ | ✗ | Kubernetes ConfigMap (not synced to Gateway) |
 
-> **注意**：Secret 和 ReferenceGrant 不同步到 Gateway，它们的数据在 Controller 侧被消费（Secret 内容嵌入到需要的资源中，ReferenceGrant 只在 Controller 做跨命名空间校验）。
+> **Note**: Secret and ReferenceGrant are not synced to the Gateway; their data is consumed on the Controller side (Secret content is embedded into the resources that need it; ReferenceGrant is used only on the Controller for cross-namespace validation).
 
-## Preparse 机制
+## Preparse mechanism
 
-Preparse 在配置加载时（而非每请求时）构建运行时结构：
+Preparse builds runtime structures at config-load time (rather than per request):
 
-| 资源 | Preparse 用途 |
+| Resource | Preparse purpose |
 |------|-------------|
-| HTTPRoute | 从 filters 构建 `PluginRuntime`，解析超时，解析 ExtensionRef LB |
-| GRPCRoute | 同 HTTPRoute |
-| EdgionPlugins | 验证所有插件配置，填充 `preparse_errors` |
-| LinkSys | 验证端点、拓扑 |
-| EdgionTls | 验证 TLS 配置 |
+| HTTPRoute | Build `PluginRuntime` from filters, parse timeouts, resolve ExtensionRef LB |
+| GRPCRoute | Same as HTTPRoute |
+| EdgionPlugins | Validate all plugin configurations, populate `preparse_errors` |
+| LinkSys | Validate endpoints and topology |
+| EdgionTls | Validate TLS configuration |
 
-Preparse 在 **Controller**（用于状态报告）和 **Gateway**（用于构建运行时结构）**两侧都执行**。
+Preparse runs on **both the Controller** (for status reporting) **and the Gateway** (for building runtime structures).
 
-## 相关文档
+## Related documentation
 
-- [添加新资源指南](../01-controller/09-add-new-resource/00-guide.md) — 添加新资源类型的步骤
-- [配置中心](../01-controller/03-config-center/SKILL.md) — 资源如何经过 Workqueue 和 ResourceProcessor 处理
-- [资源通用处理流程](../05-resources/00-resource-flow.md) — 从 Controller 到 Gateway 的完整流转
+- [Add-new-resource guide](../01-controller/09-add-new-resource/00-guide.md) — Steps to add a new resource type
+- [ConfigCenter](../01-controller/03-config-center/SKILL.md) — How resources flow through Workqueue and ResourceProcessor
+- [Resource common processing flow](../05-resources/00-resource-flow.md) — End-to-end flow from Controller to Gateway

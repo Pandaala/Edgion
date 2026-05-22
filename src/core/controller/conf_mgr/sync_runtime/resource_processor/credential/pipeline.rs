@@ -1,6 +1,6 @@
 //! Top-level credential resolution pipeline.
 //!
-//! Orchestrates the seven-step credential resolution flow:
+//! Orchestrates the credential resolution flow:
 //! 1. Compute effective Secret namespace.
 //! 2. Register SecretRefManager dependency (always — even if Secret absent or
 //!    cross-namespace `ReferenceGrant` not yet present).
@@ -10,16 +10,16 @@
 //! 6. Extract `Secret.data`.
 //! 7. Delegate to [`SecretMaterialResolver::parse`] for keys/decode checks.
 //!
-//! Two public entry points share this flow:
-//! - [`resolve_credential`] — returns the parsed `Material` (kept for tests
-//!   and legacy call sites).
-//! - [`resolve_secret`] — returns the validated `Secret` itself, so handlers
-//!   can attach it to a CRD spec for gRPC sync to the Gateway.
+//! Three public entry points:
+//! - [`fetch_secret`] — steps 1–4 only; returns the raw `Secret`. Used by
+//!   plugin resolvers that do their own data-shape extraction (EdgionPlugins).
+//! - [`resolve_secret`] — full pipeline; returns the validated `Secret`.
+//! - [`resolve_credential`] — full pipeline; returns the parsed `Material`.
 
 use k8s_openapi::api::core::v1::Secret;
 
 use crate::types::credentials::{ResolveError, SecretMaterialResolver};
-use crate::types::resources::common::SecretReference;
+use crate::types::resources::common::SecretObjectReference;
 
 use super::super::{format_secret_key, HandlerContext, ResourceRef};
 
@@ -74,18 +74,43 @@ pub enum ResolveOutcome<T> {
     Invalid(InvalidCredentialError),
 }
 
+/// Two-way result of [`fetch_secret`]. Fetching never produces an `Invalid`
+/// outcome (type/key validation happens in later pipeline stages), so this
+/// type is strictly narrower than [`ResolveOutcome`].
+#[derive(Debug)]
+pub enum FetchOutcome<T> {
+    /// Successfully fetched.
+    Ok(T),
+
+    /// Fetch is deferred — caller should set `Pending` status and wait for
+    /// the referenced Secret to appear or for the cross-namespace
+    /// `ReferenceGrant` to be granted.
+    Pending(PendingReason),
+}
+
 // ---------------------------------------------------------------------------
-// Internal steps (shared by the two public entry points)
+// Internal steps (shared by the three public entry points)
 // ---------------------------------------------------------------------------
 
-/// Run steps 1..=5 of the pipeline and return the looked-up `Secret`.
-async fn fetch_secret(
+/// Fetch the Secret object: compute namespace, register dependency, check
+/// cross-namespace ReferenceGrant, look up in the store.
+///
+/// Returns [`FetchOutcome::Ok`] or [`FetchOutcome::Pending`] (with
+/// `SecretNotFound` or `ReferenceGrantMissing`). The narrower
+/// [`FetchOutcome`] return type makes the absence of an `Invalid` arm
+/// explicit; callers should not write a fallback `Invalid` branch.
+///
+/// Callers that only need the raw Secret (e.g. EdgionPlugins plugin
+/// resolvers) use this directly; the typed pipeline entry points
+/// (`resolve_secret`, `resolve_credential`) layer type and key validation
+/// on top via `resolve_inner`.
+pub fn fetch_secret(
     ctx: &HandlerContext,
     owner: &ResourceRef,
     owner_group: &str,
     owner_kind: &str,
-    secret_ref: &SecretReference,
-) -> ResolveOutcome<Secret> {
+    secret_ref: &SecretObjectReference,
+) -> FetchOutcome<Secret> {
     // ── Step 1: compute effective namespace ──────────────────────────────
     let owner_ns = owner.namespace.as_deref().unwrap_or("default");
     let secret_ns = secret_ref.effective_namespace(owner_ns).to_string();
@@ -109,7 +134,7 @@ async fn fetch_secret(
             Some(&secret_ref.name),
         );
         if !allowed {
-            return ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
+            return FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
                 from_ns: owner_ns.to_string(),
                 to_ns: secret_ns,
                 secret_name: secret_ref.name.clone(),
@@ -123,8 +148,8 @@ async fn fetch_secret(
         .secret_store
         .get(Some(secret_ns.as_str()), &secret_ref.name)
     {
-        Some(s) => ResolveOutcome::Ok(s),
-        None => ResolveOutcome::Pending(PendingReason::SecretNotFound {
+        Some(s) => FetchOutcome::Ok(s),
+        None => FetchOutcome::Pending(PendingReason::SecretNotFound {
             namespace: secret_ns,
             name: secret_ref.name.clone(),
         }),
@@ -136,7 +161,7 @@ async fn fetch_secret(
 fn check_secret_type<R: SecretMaterialResolver>(secret: &Secret, resolver: &R) -> Option<InvalidCredentialError> {
     let allowed = resolver.allowed_secret_types();
     let got = secret.type_.as_deref().unwrap_or("");
-    if allowed.iter().any(|a| *a == got) {
+    if allowed.contains(&got) {
         None
     } else {
         Some(InvalidCredentialError::InvalidSecretType {
@@ -157,78 +182,80 @@ fn map_parse_error(err: ResolveError) -> InvalidCredentialError {
     }
 }
 
+/// Shared body for `resolve_secret` and `resolve_credential`.
+/// Runs the full pipeline (fetch + type check + parse) and returns the
+/// validated `(Secret, Material)` pair.
+fn resolve_inner<R: SecretMaterialResolver>(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    owner_group: &str,
+    owner_kind: &str,
+    secret_ref: &SecretObjectReference,
+    resolver: &R,
+) -> ResolveOutcome<(Secret, R::Material)> {
+    let secret = match fetch_secret(ctx, owner, owner_group, owner_kind, secret_ref) {
+        FetchOutcome::Ok(s) => s,
+        FetchOutcome::Pending(r) => return ResolveOutcome::Pending(r),
+    };
+
+    if let Some(e) = check_secret_type(&secret, resolver) {
+        return ResolveOutcome::Invalid(e);
+    }
+
+    let data = match secret.data.as_ref() {
+        Some(d) => d,
+        None => {
+            return ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(resolver.required_keys().to_vec()));
+        }
+    };
+
+    match resolver.parse(data) {
+        Result::Ok(m) => ResolveOutcome::Ok((secret, m)),
+        Err(e) => ResolveOutcome::Invalid(map_parse_error(e)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public entry points
 // ---------------------------------------------------------------------------
 
 /// Resolve a credential Secret and return the validated [`Secret`] object.
 ///
-/// This is the primary entry point used by handlers that attach the Secret
-/// directly onto the CRD spec for gRPC sync to the Gateway. The resolver is
-/// used purely for **validation** (keys, types, decode) — its `Material`
-/// output is discarded here; the Gateway re-derives material on demand.
+/// Primary entry point for handlers that attach the raw Secret to a CRD
+/// spec for gRPC sync to the Gateway. The resolver validates keys, types,
+/// and encoding; its `Material` output is discarded here.
 pub async fn resolve_secret<R: SecretMaterialResolver>(
     ctx: &HandlerContext,
     owner: &ResourceRef,
     owner_group: &str,
     owner_kind: &str,
-    secret_ref: &SecretReference,
+    secret_ref: &SecretObjectReference,
     resolver: &R,
 ) -> ResolveOutcome<Secret> {
-    let secret = match fetch_secret(ctx, owner, owner_group, owner_kind, secret_ref).await {
-        ResolveOutcome::Ok(s) => s,
-        ResolveOutcome::Pending(r) => return ResolveOutcome::Pending(r),
-        ResolveOutcome::Invalid(e) => return ResolveOutcome::Invalid(e),
-    };
-
-    if let Some(e) = check_secret_type(&secret, resolver) {
-        return ResolveOutcome::Invalid(e);
-    }
-
-    let data = match secret.data.as_ref() {
-        Some(d) => d,
-        None => {
-            return ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(resolver.required_keys().to_vec()));
-        }
-    };
-
-    match resolver.parse(data) {
-        Result::Ok(_material) => ResolveOutcome::Ok(secret),
-        Err(e) => ResolveOutcome::Invalid(map_parse_error(e)),
+    match resolve_inner(ctx, owner, owner_group, owner_kind, secret_ref, resolver) {
+        ResolveOutcome::Ok((secret, _)) => ResolveOutcome::Ok(secret),
+        ResolveOutcome::Pending(r) => ResolveOutcome::Pending(r),
+        ResolveOutcome::Invalid(e) => ResolveOutcome::Invalid(e),
     }
 }
 
-/// Legacy entry point that returns the parsed `Material` instead of the raw
-/// Secret. Kept for completeness and unit tests; new call sites should
-/// prefer [`resolve_secret`].
+/// Resolve a credential Secret and return the parsed `Material`.
+///
+/// Kept for unit tests and any call site that needs the typed material
+/// rather than the raw Secret. New call sites should prefer
+/// [`resolve_secret`] unless the Material is specifically required.
 pub async fn resolve_credential<R: SecretMaterialResolver>(
     ctx: &HandlerContext,
     owner: &ResourceRef,
     owner_group: &str,
     owner_kind: &str,
-    secret_ref: &SecretReference,
+    secret_ref: &SecretObjectReference,
     resolver: &R,
 ) -> ResolveOutcome<R::Material> {
-    let secret = match fetch_secret(ctx, owner, owner_group, owner_kind, secret_ref).await {
-        ResolveOutcome::Ok(s) => s,
-        ResolveOutcome::Pending(r) => return ResolveOutcome::Pending(r),
-        ResolveOutcome::Invalid(e) => return ResolveOutcome::Invalid(e),
-    };
-
-    if let Some(e) = check_secret_type(&secret, resolver) {
-        return ResolveOutcome::Invalid(e);
-    }
-
-    let data = match secret.data.as_ref() {
-        Some(d) => d,
-        None => {
-            return ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(resolver.required_keys().to_vec()));
-        }
-    };
-
-    match resolver.parse(data) {
-        Result::Ok(m) => ResolveOutcome::Ok(m),
-        Err(e) => ResolveOutcome::Invalid(map_parse_error(e)),
+    match resolve_inner(ctx, owner, owner_group, owner_kind, secret_ref, resolver) {
+        ResolveOutcome::Ok((_, material)) => ResolveOutcome::Ok(material),
+        ResolveOutcome::Pending(r) => ResolveOutcome::Pending(r),
+        ResolveOutcome::Invalid(e) => ResolveOutcome::Invalid(e),
     }
 }
 
@@ -246,9 +273,7 @@ mod tests {
     use k8s_openapi::ByteString;
     use kube::api::ObjectMeta;
 
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
-        HandlerContext, ResourceRef, SecretRefManager,
-    };
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
     use crate::types::credentials::BasicAuthResolver;
@@ -257,16 +282,7 @@ mod tests {
     fn make_ctx(secrets: HashMap<String, Secret>) -> (HandlerContext, Arc<ControllerRuntime>) {
         let runtime = Arc::new(ControllerRuntime::default());
         runtime.secret_store.replace_all(secrets);
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let ctx = HandlerContext::new(
-            secret_ref_manager,
-            None,
-            None,
-            TriggerChain::default(),
-            5,
-            20,
-            runtime.clone(),
-        );
+        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
         (ctx, runtime)
     }
 
@@ -301,8 +317,10 @@ mod tests {
         ResourceRef::new(ResourceKind::LinkSys, Some(ns.to_string()), name.to_string())
     }
 
-    fn secret_ref(name: &str, namespace: Option<&str>) -> SecretReference {
-        SecretReference {
+    fn secret_ref(name: &str, namespace: Option<&str>) -> SecretObjectReference {
+        SecretObjectReference {
+            group: None,
+            kind: None,
             name: name.to_string(),
             namespace: namespace.map(|s| s.to_string()),
         }

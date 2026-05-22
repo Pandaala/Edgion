@@ -38,7 +38,6 @@ impl TlsRoutePluginRuntime {
 
         for entry in entries {
             if !entry.is_enabled() {
-                tracing::debug!(plugin_type = entry.type_name(), "Skipping disabled TLS route plugin");
                 continue;
             }
 
@@ -46,7 +45,6 @@ impl TlsRoutePluginRuntime {
                 TlsRouteStreamPlugin::IpRestriction(config) => Arc::new(TlsRouteIpRestriction::new(config)),
             };
 
-            tracing::debug!(plugin_name = plugin.name(), "Added TLS route plugin to runtime");
             plugins.push(plugin);
         }
 

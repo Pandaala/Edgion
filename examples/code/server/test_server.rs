@@ -11,6 +11,7 @@ use axum::{
     Router,
 };
 use clap::Parser;
+use h2::server as h2s;
 use parking_lot::Mutex;
 use std::net::SocketAddr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -103,6 +104,32 @@ struct Cli {
     /// Client CA file path for mTLS backend server
     #[arg(long)]
     client_ca_file: Option<String>,
+
+    /// H2 raw backend port that sends protocol-violating streams (for H2TrailerMalformed testing)
+    #[arg(long)]
+    h2_trailer_malformed_port: Option<u16>,
+
+    /// HTTPS backend multi-SNI port (for BackendTLSSNIHostOverride testing)
+    /// The server uses a per-SNI cert resolver: hostname-a.example.com -> cert-a,
+    /// hostname-b.example.com -> cert-b, any other SNI -> handshake rejected.
+    #[arg(long)]
+    https_backend_multi_sni_port: Option<u16>,
+
+    /// TLS certificate file for multi-SNI backend (cert A, SAN: hostname-a.example.com)
+    #[arg(long)]
+    multi_sni_cert_a: Option<String>,
+
+    /// TLS private key file for multi-SNI backend (key A)
+    #[arg(long)]
+    multi_sni_key_a: Option<String>,
+
+    /// TLS certificate file for multi-SNI backend (cert B, SAN: hostname-b.example.com)
+    #[arg(long)]
+    multi_sni_cert_b: Option<String>,
+
+    /// TLS private key file for multi-SNI backend (key B)
+    #[arg(long)]
+    multi_sni_key_b: Option<String>,
 
     /// Log level
     #[arg(long, default_value = "info")]
@@ -212,6 +239,40 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Start H2 trailer-malformed raw backend server (if configured)
+    if let Some(h2tm_port) = cli.h2_trailer_malformed_port {
+        let handle = tokio::spawn(start_h2_trailer_malformed_server(h2tm_port));
+        handles.push(handle);
+    }
+
+    // Start HTTPS multi-SNI backend server (if configured)
+    if let Some(multi_sni_port) = cli.https_backend_multi_sni_port {
+        match (
+            cli.multi_sni_cert_a.as_ref(),
+            cli.multi_sni_key_a.as_ref(),
+            cli.multi_sni_cert_b.as_ref(),
+            cli.multi_sni_key_b.as_ref(),
+        ) {
+            (Some(cert_a), Some(key_a), Some(cert_b), Some(key_b)) => {
+                let handle = tokio::spawn(start_https_backend_multi_sni_server(
+                    multi_sni_port,
+                    cert_a.clone(),
+                    key_a.clone(),
+                    cert_b.clone(),
+                    key_b.clone(),
+                ));
+                handles.push(handle);
+            }
+            _ => {
+                error!(
+                    "https-backend-multi-sni-port specified but one or more of \
+                     multi-sni-cert-a / multi-sni-key-a / multi-sni-cert-b / multi-sni-key-b \
+                     is missing"
+                );
+            }
+        }
+    }
+
     info!("");
     info!("========================================");
     info!("All servers started, press Ctrl+C to stop");
@@ -249,6 +310,7 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/request-header-test", get(header_echo_handler))
         .route("/both-headers-test", get(header_echo_handler))
         .route("/multi-request-headers", get(header_echo_handler))
+        .route("/multi-value-append-test", get(header_echo_handler))
         .route("/response-header-test", get(header_echo_handler))
         .route("/headers", get(headers_handler))
         .route("/auth-header-probe", get(auth_header_probe_handler))
@@ -259,6 +321,14 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route(
             "/webhook/resolve-body",
             get(webhook_resolve_body_handler).post(webhook_resolve_body_handler),
+        )
+        .route(
+            "/webhook/resolve/extra",
+            get(webhook_resolve_extra_handler).post(webhook_resolve_extra_handler),
+        )
+        .route(
+            "/webhook/apikey-resolve",
+            get(webhook_apikey_resolve_handler).post(webhook_apikey_resolve_handler),
         )
         .route("/webhook/healthz", get(health_handler))
         .route("/status/{code}", get(status_handler))
@@ -739,6 +809,52 @@ async fn webhook_resolve_body_handler(req: AxumRequest<Body>) -> impl IntoRespon
     format!("  body-key-{}  ", tenant)
 }
 
+/// Endpoint for pathSuffix testing — returns a payload that proves the suffix routed here.
+async fn webhook_resolve_extra_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    let tenant = req
+        .headers()
+        .get("x-tenant-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+    let body = format!(r#"{{"data":{{"path_suffix_id":"suffix-{tenant}"}}}}"#);
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        body,
+    )
+}
+
+/// Endpoint for apiKey-auth testing — returns 401 unless X-API-Key header present and correct.
+async fn webhook_apikey_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    let api_key = req
+        .headers()
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if api_key != "test-secret-key-12345" {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            r#"{"error":"missing or wrong api key"}"#.to_string(),
+        );
+    }
+    let tenant = req
+        .headers()
+        .get("x-tenant-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+    let body = format!(r#"{{"data":{{"apikey_user":"apikey-{tenant}"}}}}"#);
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        body,
+    )
+}
+
 async fn status_handler(Path(code): Path<u16>) -> impl IntoResponse {
     (
         axum::http::StatusCode::from_u16(code).unwrap_or(axum::http::StatusCode::OK),
@@ -756,13 +872,21 @@ async fn catch_all_handler(
     Extension(server_addr): Extension<String>,
     req: AxumRequest<Body>,
 ) -> impl IntoResponse {
-    format!(
+    let mut resp = format!(
         "Server: {}\nClient: {}\nMethod: {}\nPath: {}\n",
         server_addr,
         addr,
         req.method(),
         req.uri().path()
-    )
+    );
+    // Echo headers in the same format as `echo_handler` so plugin tests that
+    // rewrite the URI to an unmapped path can still verify header rewrites.
+    resp.push_str("\nHeaders:\n");
+    for (key, value) in req.headers() {
+        let display = display_header_name(key.as_str());
+        resp.push_str(&format!("  {}: {}\n", display, value.to_str().unwrap_or("<invalid>")));
+    }
+    resp
 }
 
 // ============================================================================
@@ -1224,6 +1348,9 @@ async fn oidc_discovery_handler(req: AxumRequest<Body>) -> impl IntoResponse {
         "issuer": issuer,
         "jwks_uri": format!("{}/jwks", endpoint_base),
         "introspection_endpoint": format!("{}/introspect", endpoint_base),
+        "token_endpoint": format!("{}/token", endpoint_base),
+        "userinfo_endpoint": format!("{}/userinfo", endpoint_base),
+        "authorization_endpoint": format!("{}/authorize", endpoint_base),
     });
 
     (StatusCode::OK, Json(body))
@@ -1496,6 +1623,71 @@ async fn start_https_backend_mtls_server(
     Ok(())
 }
 
+// ============================================================================
+// H2 Trailer-Malformed Raw Backend (for H2TrailerMalformed protocol testing)
+// ============================================================================
+//
+// This backend speaks raw HTTP/2 via the `h2` crate and deliberately produces
+// a protocol-violating stream to exercise Pingora's upstream H2 reader.
+//
+// Violation chosen: send RST_STREAM(REFUSED_STREAM) before any HEADERS frame.
+// The stream is reset by the server before response status is committed, so
+// Pingora's upstream H2 client sees the failure with no headers in flight and
+// must surface a 5xx to the downstream client (status not yet sent).
+//
+// Alternatives considered:
+//   1. Drop SendStream after sending HEADERS(200) + partial DATA without
+//      END_STREAM. The h2 crate emits RST_STREAM(CANCEL) on drop, but by then
+//      the 200 headers were already proxied to the downstream client, so
+//      Pingora can only reset the downstream stream — the test sees 200 OK
+//      instead of 5xx, defeating the assertion.
+//   2. Send a trailers HEADERS frame containing `transfer-encoding: chunked`
+//      (forbidden in HTTP/2 per RFC 9113 §8.2.2). The h2 crate's
+//      `send_trailers()` rejects this at the library level before any bytes
+//      hit the wire.
+// The pre-headers RST_STREAM approach produces a wire-level anomaly that
+// Pingora must handle and that the downstream-facing assertion can catch.
+
+async fn start_h2_trailer_malformed_server(port: u16) -> Result<()> {
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
+    info!("H2 trailer-malformed server listening on 0.0.0.0:{}", port);
+
+    loop {
+        match listener.accept().await {
+            Ok((tcp, peer)) => {
+                info!("H2TrailerMalformed: accepted connection from {}", peer);
+                tokio::spawn(async move {
+                    if let Err(e) = handle_h2_trailer_malformed_conn(tcp).await {
+                        // Log at info level so the test-server output shows what happened.
+                        // This is expected behaviour (Pingora will reset the stream).
+                        info!("H2TrailerMalformed: connection handler finished: {}", e);
+                    }
+                });
+            }
+            Err(e) => {
+                error!("H2TrailerMalformed: accept error: {}", e);
+            }
+        }
+    }
+}
+
+async fn handle_h2_trailer_malformed_conn(tcp: tokio::net::TcpStream) -> Result<()> {
+    let mut conn = h2s::handshake(tcp).await?;
+
+    while let Some(request) = conn.accept().await {
+        let (req, mut respond) = request?;
+        info!("H2TrailerMalformed: received {} {}", req.method(), req.uri().path());
+
+        // Reset the stream with REFUSED_STREAM before sending any HEADERS
+        // frame. Pingora's upstream H2 reader observes the reset before it
+        // has committed any response status downstream, so it can return a
+        // 5xx to the client.
+        respond.send_reset(h2::Reason::REFUSED_STREAM);
+    }
+
+    Ok(())
+}
+
 fn load_mtls_rustls_config(cert_path: &str, key_path: &str, client_ca_path: &str) -> Result<rustls::ServerConfig> {
     let cert_chain = CertificateDer::pem_file_iter(cert_path)
         .with_context(|| format!("failed to read certificate file {}", cert_path))?
@@ -1526,4 +1718,95 @@ fn load_mtls_rustls_config(cert_path: &str, key_path: &str, client_ca_path: &str
 
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     Ok(config)
+}
+
+// ============================================================================
+// Multi-SNI HTTPS Backend (for BackendTLSSNIHostOverride testing)
+// ============================================================================
+//
+// The server uses a per-SNI certificate resolver that routes incoming TLS
+// ClientHello messages to one of two certificates based on server_name:
+//
+//   SNI = "hostname-a.example.com"  ->  cert A  (SAN: hostname-a.example.com)
+//   SNI = "hostname-b.example.com"  ->  cert B  (SAN: hostname-b.example.com)
+//   any other SNI / no SNI          ->  None    (rustls sends unrecognized_name alert)
+//
+// This makes it possible to prove that the Gateway sends the correct SNI to
+// the upstream backend as required by BackendTLSPolicy.spec.validation.hostname:
+// both routes only succeed when the Gateway uses exactly the right per-policy
+// hostname as the TLS SNI extension value.
+
+use rustls::server::{ClientHello, ResolvesServerCert};
+use rustls::sign::CertifiedKey;
+
+#[derive(Debug)]
+struct MultiSniResolver {
+    cert_a: Arc<CertifiedKey>,
+    cert_b: Arc<CertifiedKey>,
+}
+
+impl ResolvesServerCert for MultiSniResolver {
+    fn resolve(&self, hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        match hello.server_name() {
+            Some("hostname-a.example.com") => Some(self.cert_a.clone()),
+            Some("hostname-b.example.com") => Some(self.cert_b.clone()),
+            // Reject all other SNI values (including absent SNI).
+            // rustls translates None return into an unrecognized_name TLS alert,
+            // which causes the TLS handshake to fail — proving that the backend
+            // won't serve traffic for wrong-SNI connections.
+            _ => None,
+        }
+    }
+}
+
+fn load_certified_key(cert_path: &str, key_path: &str) -> Result<Arc<CertifiedKey>> {
+    let cert_chain: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_path)
+        .with_context(|| format!("failed to read cert file {}", cert_path))?
+        .collect::<Result<Vec<_>, _>>()
+        .with_context(|| format!("failed to parse cert chain {}", cert_path))?;
+
+    let private_key =
+        PrivateKeyDer::from_pem_file(key_path).with_context(|| format!("failed to parse private key {}", key_path))?;
+
+    let signing_key = rustls::crypto::ring::sign::any_supported_type(&private_key)
+        .with_context(|| format!("unsupported private key type in {}", key_path))?;
+
+    Ok(Arc::new(CertifiedKey::new(cert_chain, signing_key)))
+}
+
+async fn start_https_backend_multi_sni_server(
+    port: u16,
+    cert_a_path: String,
+    key_a_path: String,
+    cert_b_path: String,
+    key_b_path: String,
+) -> Result<()> {
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let server_addr_str = format!("0.0.0.0:{}", port);
+
+    let cert_a = load_certified_key(&cert_a_path, &key_a_path)?;
+    let cert_b = load_certified_key(&cert_b_path, &key_b_path)?;
+
+    let resolver = Arc::new(MultiSniResolver { cert_a, cert_b });
+
+    let mut tls_config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_cert_resolver(resolver);
+
+    // Advertise HTTP/1.1 only; this test verifies SNI dispatch, not protocol version.
+    tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+
+    let tls_config = RustlsConfig::from_config(Arc::new(tls_config));
+    let app = create_echo_router(server_addr_str.clone());
+
+    info!("Multi-SNI HTTPS backend listening on https://{}", addr);
+    info!("  Cert A (hostname-a.example.com): {}", cert_a_path);
+    info!("  Cert B (hostname-b.example.com): {}", cert_b_path);
+
+    let app_with_connect_info = app.into_make_service_with_connect_info::<SocketAddr>();
+    axum_server::bind_rustls(addr, tls_config)
+        .serve(app_with_connect_info)
+        .await?;
+
+    Ok(())
 }

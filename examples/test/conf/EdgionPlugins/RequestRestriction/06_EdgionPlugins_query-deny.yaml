@@ -1,0 +1,22 @@
+# Query source: deny when name parameter equals decoded "hello world"
+# Verifies plugin-side get_query_param returns the percent-decoded value
+# (shared with route matcher via EdgionHttpContext::cached_query).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-query-deny
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        rules:
+          - name: "block-decoded-space"
+            source: Query
+            key: "name"
+            deny:
+              - "hello world"
+            onMissing: Allow
+        status: 403
+        message: "Query value blocked"

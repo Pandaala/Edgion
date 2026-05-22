@@ -4,7 +4,7 @@ use crate::core::gateway::plugins::runtime::log::{EdgionPluginsLog, EdgionPlugin
 use crate::types::common::{KeyGet, KeySet};
 use crate::types::ctx::ClientCertInfo;
 use crate::types::EdgionStatus;
-use crate::types::{DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset, MirrorState};
+use crate::types::{EdgionHttpContext, MirrorState, SetJumpOutcome, UpstreamJumpTarget};
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
@@ -38,6 +38,16 @@ pub trait PluginSession: Send + Sync {
 
     /// Get the request path (without query string)
     fn get_path(&self) -> &str;
+
+    /// Get the entry-time raw path (frozen, immune to rewrites).
+    /// Use for audit, security investigation, special raw-form deny rules.
+    fn get_request_path(&self) -> &str;
+
+    /// Get the current normalized full URI (current path + current query).
+    fn get_uri(&self) -> String;
+
+    /// Get the entry-time raw full URI (entry path + entry query, frozen).
+    fn get_request_uri(&self) -> String;
 
     /// Get the request query string (without leading '?')
     fn get_query(&self) -> Option<String>;
@@ -168,17 +178,21 @@ pub trait PluginSession: Send + Sync {
     /// ctx fields; only the error list.
     fn add_error(&mut self, status: EdgionStatus);
 
-    /// Track nested plugin references to prevent cycles
-    fn push_plugin_ref(&mut self, key: String);
-
-    /// Remove last tracked plugin reference
-    fn pop_plugin_ref(&mut self);
-
-    /// Current depth of nested plugin references
-    fn plugin_ref_depth(&self) -> usize;
-
-    /// Check whether reference key already exists in stack
-    fn has_plugin_ref(&self, key: &str) -> bool;
+    /// Look up the resolved target `PluginRuntime` for an `ExtensionRef` at the
+    /// given index (assigned at route build time by
+    /// `PluginRuntime::from_httproute_filters_for_rule` /
+    /// `from_grpcroute_filters_for_rule`). Returns `None` if the ref was
+    /// dangling at resolve time, or if `index` is out of range (defensive).
+    ///
+    /// Default impl returns `None` — used by adapters that don't carry an
+    /// `EdgionHttpContext` (e.g. some test mocks). Production path is
+    /// `PingoraSessionAdapter`, which reads `ctx.resolved_route_ext_refs`.
+    fn resolved_route_ext_ref(
+        &self,
+        _index: usize,
+    ) -> Option<std::sync::Arc<crate::core::gateway::plugins::runtime::PluginRuntime>> {
+        None
+    }
 
     /// Push EdgionPlugins execution log to pending list (for ExtensionRef)
     fn push_edgion_plugins_log(&mut self, log: EdgionPluginsLog);
@@ -230,20 +244,12 @@ pub trait PluginSession: Send + Sync {
     /// * `value` - The value to set, or None to remove
     fn key_set(&mut self, key: &KeySet, value: Option<String>) -> PluginSessionResult<()>;
 
-    /// Set direct endpoint info for upstream routing.
-    /// Called by DirectEndpoint plugin to bypass normal LB.
-    /// The info persists across retries (Clone, not consumed).
-    fn set_direct_endpoint(&mut self, info: DirectEndpointPreset);
-
-    /// Set internal jump target for backend selection.
-    /// Called by DynamicInternalUpstream plugin to target a specific BackendRef.
-    /// The info persists in ctx and is consumed by select_http_backend().
-    fn set_internal_jump(&mut self, info: InternalJumpPreset);
-
-    /// Set external jump target for domain-based routing.
-    /// Called by DynamicExternalUpstream plugin to route to an external domain.
-    /// DNS resolution happens later in upstream_peer phase.
-    fn set_external_jump(&mut self, info: ExternalJumpPreset);
+    /// Set the unified upstream-jump slot. First-write-wins (see `SetJumpOutcome`).
+    /// Plugins should match on the returned outcome to log the rejection on
+    /// their own `PluginLog` line:
+    ///   `Set` -> existing per-plugin status string
+    ///   `Rejected` -> `log.push("jump locked, rejected")`
+    fn set_upstream_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome;
 
     /// Set request mirror state used by request_body_filter tee.
     fn set_mirror_state(&mut self, state: MirrorState);

@@ -1,0 +1,13 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: csrf-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Csrf
+      config:
+        key: "csrf-integration-test-key-32bytes"
+        expires: 7200
+        name: "X-CSRF-Token"

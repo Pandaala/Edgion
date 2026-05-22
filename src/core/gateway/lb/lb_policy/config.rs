@@ -20,20 +20,3 @@ pub fn get_policies_for_service(service_key: &str) -> Vec<LbPolicy> {
     let store = get_global_policy_store();
     store.get(service_key)
 }
-
-/// Parse policy list from string (e.g., "consistent,leastconn")
-#[allow(dead_code)]
-pub fn parse_policies(s: &str) -> Vec<LbPolicy> {
-    s.split(',').filter_map(|part| LbPolicy::parse(part.trim())).collect()
-}
-
-/// Parse service key into namespace and name
-#[allow(dead_code)]
-fn parse_service_key(service_key: &str) -> Option<(&str, &str)> {
-    let parts: Vec<&str> = service_key.split('/').collect();
-    if parts.len() == 2 {
-        Some((parts[0], parts[1]))
-    } else {
-        None
-    }
-}

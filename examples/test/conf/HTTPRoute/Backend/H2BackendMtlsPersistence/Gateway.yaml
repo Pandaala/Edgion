@@ -1,0 +1,17 @@
+# H2 Backend mTLS + SessionPersistence Gateway
+# HTTP listener — client-to-gateway is plain HTTP.
+# Gateway-to-backend uses H2 over TLS (ALPN h2) with mTLS.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: h2-mtls-sp-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31384
+      allowedRoutes:
+        namespaces:
+          from: All

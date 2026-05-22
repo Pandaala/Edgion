@@ -38,8 +38,8 @@ spec:
                       type: object
                       description: |
                         Variant-specific configuration. Shape depends on `type`:
-                          - KeyList: { matchMode?: "Exact"|"Regex", items: [{ key, code?, priority?, id?, behavior? }] }
-                          - IpList: { items: string[] }                     (CIDRs or bare IPs, v4/v6)
+                          - KeyList: { matchMode?: "Exact"|"Regex", items: [{ name, description?, items: [{ key, code?, priority?, id?, behavior? }] }] }
+                          - IpList: { items: [{ name, description?, cidrs: string[] }] }   (grouped CIDRs / bare IPs, v4/v6)
                           - ClusterRegionRoute: full cluster topology + route rules + matchMap
                           - ServiceRegionRoute: { clusterRef: {namespace, name}, regions: [{ name, failoverTo? }] }
                           - GlobalConnectionIpRestriction: { enable, activeProfile, profiles: { <name>: { defaultAction, allow?, deny? } } }

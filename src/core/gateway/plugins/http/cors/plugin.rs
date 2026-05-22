@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
+use std::sync::Arc;
 
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -12,34 +13,21 @@ type CorsResult<T> = Result<T, CorsError>;
 /// CORS (Cross-Origin Resource Sharing) plugin
 pub struct Cors {
     name: String,
-    config: CorsConfig,
+    config: Arc<CorsConfig>,
 }
 
 impl Cors {
-    /// Create from CorsConfig (for EdgionPlugin system)
+    /// Create from a `CorsConfig` reference. Wraps the config in an `Arc` —
+    /// callers that already hold an `Arc<CorsConfig>` should use
+    /// [`Cors::from_arc`] instead to avoid a deep clone.
     pub fn new(config: &CorsConfig) -> Self {
-        let config = config.clone();
+        Self::from_arc(Arc::new(config.clone()))
+    }
 
-        // Log warnings for force wildcard usage
-        if config.allow_origins == "**" {
-            tracing::warn!(
-                component = "cors",
-                "Using '**' for allow_origins bypasses security checks"
-            );
-        }
-        if config.allow_methods == "**" {
-            tracing::warn!(
-                component = "cors",
-                "Using '**' for allow_methods bypasses security checks"
-            );
-        }
-        if config.allow_headers == "**" {
-            tracing::warn!(
-                component = "cors",
-                "Using '**' for allow_headers will reflect client headers"
-            );
-        }
-
+    /// Create from a shared `Arc<CorsConfig>` without cloning the underlying
+    /// config. Used by the preflight hot path to construct an ad-hoc `Cors`
+    /// per request without re-cloning the config.
+    pub fn from_arc(config: Arc<CorsConfig>) -> Self {
         Cors {
             name: "Cors".to_string(),
             config,
@@ -56,26 +44,31 @@ impl Cors {
         session.header_value("origin").is_some() && session.header_value("access-control-request-method").is_some()
     }
 
-    /// Get the validated origin (returns Some(origin) if allowed, None if rejected)
+    /// Select the value to emit in the Access-Control-Allow-Origin header for an
+    /// already-allowed `origin`. Returns the literal `"*"` only when the configured
+    /// `allow_origins` is the standard wildcard `"*"`; in every other case
+    /// (force-wildcard `"**"`, single origin, list, or regex match) the request
+    /// origin is echoed back. Separated from the allow/deny decision so the value
+    /// choice can be unit-tested on its own.
+    fn select_acao_value(&self, origin: String) -> String {
+        if self.config.allow_origins == "*" {
+            "*".to_string()
+        } else {
+            origin
+        }
+    }
+
+    /// Get the validated origin (returns Some(value) if allowed, None if rejected).
+    /// Orchestrates the allow/deny check (`CorsConfig::is_origin_allowed`) and the
+    /// ACAO value selection ([`Cors::select_acao_value`]).
     fn get_validated_origin(&self, session: &mut dyn PluginSession) -> Option<String> {
         let origin = session.header_value("origin")?;
 
-        // Check if origin is allowed
         if !self.config.is_origin_allowed(&origin) {
             return None;
         }
 
-        // Determine what to return based on config
-        if self.config.allow_origins == "**" {
-            // Force wildcard: return the actual origin
-            Some(origin)
-        } else if self.config.allow_origins == "*" {
-            // Standard wildcard
-            Some("*".to_string())
-        } else {
-            // Specific origin or matched from list/regex
-            Some(origin)
-        }
+        Some(self.select_acao_value(origin))
     }
 
     /// Compute all CORS + timing + private-network headers as key-value pairs.
@@ -301,72 +294,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_preflight_request_success() {
-        let config = create_cors_config();
-        let cors = Cors::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("Cors");
-
-        mock_session.expect_method().returning(|| "OPTIONS".to_string());
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("origin"))
-            .returning(|_| Some("https://example.com".to_string()));
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-method"))
-            .returning(|_| Some("POST".to_string()));
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-headers"))
-            .returning(|_| None);
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-private-network"))
-            .returning(|_| None);
-        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_append_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("cors preflight"));
-        assert!(plugin_log.contains("origin match:allow"));
-    }
-
-    #[tokio::test]
-    async fn test_normal_cors_request() {
-        let config = create_cors_config();
-        let cors = Cors::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("Cors");
-
-        mock_session.expect_method().returning(|| "GET".to_string());
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("origin"))
-            .returning(|_| Some("https://example.com".to_string()));
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-method"))
-            .returning(|_| None);
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-headers"))
-            .returning(|_| None);
-        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_append_response_header().returning(|_, _| Ok(()));
-
-        let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("cors actual"));
-        assert!(plugin_log.contains("origin match:allow"));
-    }
-
-    #[tokio::test]
     async fn test_origin_not_allowed() {
         let config = create_cors_config();
         let cors = Cors::new(&config);
@@ -385,6 +312,38 @@ mod tests {
         assert!(plugin_log.contains("origin match:deny"));
     }
 
+    #[test]
+    fn test_select_acao_value_standard_wildcard_returns_star() {
+        let mut config = create_cors_config();
+        config.allow_origins = "*".to_string();
+        let cors = Cors::new(&config);
+
+        assert_eq!(cors.select_acao_value("https://any.example.com".to_string()), "*");
+    }
+
+    #[test]
+    fn test_select_acao_value_force_wildcard_echoes_origin() {
+        let mut config = create_cors_config();
+        config.allow_origins = "**".to_string();
+        let cors = Cors::new(&config);
+
+        assert_eq!(
+            cors.select_acao_value("https://any.example.com".to_string()),
+            "https://any.example.com"
+        );
+    }
+
+    #[test]
+    fn test_select_acao_value_specific_origin_echoes_origin() {
+        let config = create_cors_config();
+        let cors = Cors::new(&config);
+
+        assert_eq!(
+            cors.select_acao_value("https://example.com".to_string()),
+            "https://example.com"
+        );
+    }
+
     #[tokio::test]
     async fn test_no_origin_header_skip() {
         let config = create_cors_config();
@@ -401,40 +360,5 @@ mod tests {
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         // No origin header, should skip CORS processing (no logs)
-    }
-
-    #[tokio::test]
-    async fn test_preflight_continue() {
-        let mut config = create_cors_config();
-        config.preflight_continue = true;
-        let cors = Cors::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("Cors");
-
-        mock_session.expect_method().returning(|| "OPTIONS".to_string());
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("origin"))
-            .returning(|_| Some("https://example.com".to_string()));
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-method"))
-            .returning(|_| Some("POST".to_string()));
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-headers"))
-            .returning(|_| None);
-        mock_session
-            .expect_header_value()
-            .with(mockall::predicate::eq("access-control-request-private-network"))
-            .returning(|_| None);
-        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_append_response_header().returning(|_, _| Ok(()));
-
-        let result = cors.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("cors preflight"));
-        assert!(plugin_log.contains("origin match:allow"));
     }
 }

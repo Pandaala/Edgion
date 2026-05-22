@@ -99,15 +99,7 @@ impl Default for TcpRouteHandler {
 #[async_trait::async_trait]
 impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
     fn validate(&self, route: &TCPRoute, _ctx: &HandlerContext) -> Vec<String> {
-        let mut errors = validate_tcp_route_if_enabled(route);
-        let backend_ref_tuples = collect_backend_ref_tuples(route);
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        errors.extend(
-            super::route_utils::validate_backend_refs(route_ns, &backend_ref_tuples, _ctx.runtime())
-                .iter()
-                .map(|e| e.message()),
-        );
-        errors
+        validate_tcp_route_if_enabled(route)
     }
 
     fn preparse(&self, route: &mut TCPRoute, _ctx: &HandlerContext) -> Vec<String> {

@@ -42,8 +42,10 @@ spec:
     - enable: true
       type: HmacAuth
       config:
-        secretRefs:
-          - name: hmac-credentials
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: hmac-credentials
         algorithms:
           - hmac-sha256
         clockSkew: 300
@@ -55,7 +57,7 @@ spec:
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `secretRefs` | Array | Yes* | none | Kubernetes Secret references |
+| `secretGroups` | Array | Yes* | none | Named groups of credential Secrets (see sub-table below) |
 | `algorithms` | Array | No | `["hmac-sha256","hmac-sha384","hmac-sha512"]` | Allowed signing algorithms |
 | `clockSkew` | Integer | No | `300` | Allowed clock skew in seconds |
 | `enforceHeaders` | Array | No | none | Headers that must be included in signature |
@@ -71,6 +73,14 @@ spec:
 
 \* Required when `anonymous` is not set.
 
+### `secretGroups` sub-table (`HmacAuthSecretGroup`)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | String | Yes | Group name (Kubernetes label-value charset, max 63 chars) |
+| `description` | String | No | Human-readable description (not used at runtime) |
+| `secretRefs` | Array | Yes | Kubernetes Secret references for this group (at least 1) |
+
 ---
 
 ## Usage Scenarios
@@ -82,8 +92,10 @@ requestPlugins:
   - enable: true
     type: HmacAuth
     config:
-      secretRefs:
-        - name: hmac-credentials
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: hmac-credentials
       algorithms:
         - hmac-sha256
       hideCredentials: true
@@ -96,8 +108,10 @@ requestPlugins:
   - enable: true
     type: HmacAuth
     config:
-      secretRefs:
-        - name: hmac-credentials
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: hmac-credentials
       enforceHeaders:
         - "@request-target"
         - host
@@ -113,9 +127,11 @@ requestPlugins:
   - enable: true
     type: HmacAuth
     config:
-      secretRefs:
-        - name: user-a-credentials
-        - name: user-b-credentials
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: user-a-credentials
+            - name: user-b-credentials
       algorithms:
         - hmac-sha256
         - hmac-sha512
@@ -168,8 +184,10 @@ In theory, an attacker who obtains a valid signature can replay it arbitrarily m
 filters:
   - type: HmacAuth
     config:
-      secretRefs:
-        - name: hmac-creds
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: hmac-creds
       clockSkew: 300          # 5-minute window; shrink to 60 for sensitive endpoints
       hideCredentials: true   # strip Authorization/Signature from upstream (reduces log-leak surface)
       enforceHeaders:
@@ -194,6 +212,56 @@ Nonce deduplication requires **per-request state storage** (in-memory LRU or Red
 The industry (AWS / Stripe / GitHub / Kong / APISIX) has settled on "gateway does timestamp window, business layer does idempotency keys". Edgion follows the same layering.
 
 If your deployment truly needs gateway-layer nonce deduplication (edge cases), please open an issue to discuss a standalone implementation.
+
+---
+
+## Organizing Secrets by Group
+
+`secretGroups` lets you manage credentials for multiple partners or tenants in
+separate named groups. Each group independently maintains its own Secret
+references. When a request is successfully authenticated, the access log
+records the originating group (`OK group=<name> user <X>`), providing a clear
+audit trail.
+
+**Cross-group duplicate usernames**: If the same username appears in more than
+one group, the **first-wins** rule applies — the credential from the
+earliest-listed group is kept, and a `warn` log is emitted for the rejected
+duplicate. The plugin continues serving requests normally.
+
+```yaml
+requestPlugins:
+  - enable: true
+    type: HmacAuth
+    config:
+      secretGroups:
+        - name: partner-a
+          description: "Partner A API credentials"
+          secretRefs:
+            - name: hmac-credentials-partner-a
+              namespace: edgion-default
+        - name: partner-b
+          description: "Partner B API credentials"
+          secretRefs:
+            - name: hmac-credentials-partner-b
+              namespace: edgion-default
+      algorithms:
+        - hmac-sha256
+      clockSkew: 300
+      enforceHeaders:
+        - "@request-target"
+        - host
+        - date
+      upstreamHeaderFields:
+        - X-Consumer-Username
+        - X-Customer-ID
+```
+
+On successful authentication, the access log records:
+
+```
+OK group=partner-a user partner-a-user
+OK group=partner-b user partner-b-user
+```
 
 ---
 

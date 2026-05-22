@@ -1,59 +1,59 @@
 ---
 name: resource-reference-grant
-description: ReferenceGrant 资源：跨命名空间引用授权、不同步到 Gateway、事件分发 requeue。
+description: ReferenceGrant resource — cross-namespace reference authorization, not synced to Gateway, event-driven requeue.
 ---
 
-# ReferenceGrant 资源
+# ReferenceGrant resource
 
-> **通用流程**: 参见 [00-resource-flow.md](00-resource-flow.md)
+> **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-ReferenceGrant 是 Gateway API 标准资源，用于授权跨命名空间的资源引用。它属于 **no_sync_kind**，不同步到 Gateway，仅在 Controller 侧维护全局授权存储，并在变更时通过事件分发触发受影响资源的重新校验。
+ReferenceGrant is a Gateway API standard resource that authorizes cross-namespace resource references. It belongs to **no_sync_kind** and is not synced to the Gateway; it is maintained only in a global authorization store on the Controller side and, on change, triggers re-validation of affected resources via event dispatch.
 
-## 源码位置
+## Source code locations
 
 - Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/reference_grant.rs`
-- 授权存储: `src/core/controller/conf_mgr/sync_runtime/resource_processor/ref_grant/`
-- 类型定义: `src/types/resources/reference_grant.rs`
+- Authorization store: `src/core/controller/conf_mgr/sync_runtime/resource_processor/ref_grant/`
+- Type definitions: `src/types/resources/reference_grant.rs`
 
-## 不同步到 Gateway
+## Not synced to Gateway
 
-ReferenceGrant 被列入 `DEFAULT_NO_SYNC_KINDS`（`["ReferenceGrant", "Secret"]`），不通过 gRPC 同步到 Gateway。跨命名空间引用的授权决策完全在 Controller 侧完成，结果以 `ref_denied` 字段的形式嵌入路由资源同步到 Gateway。
+ReferenceGrant is included in `DEFAULT_NO_SYNC_KINDS` (`["ReferenceGrant", "Secret"]`) and is not synced to the Gateway via gRPC. Cross-namespace reference authorization decisions are made entirely on the Controller side, and the result is embedded as a `ref_denied` field on route resources synced to the Gateway.
 
-## Controller 侧处理
+## Controller-side processing
 
 ### parse
 
-将 ReferenceGrant 写入全局 `ReferenceGrantStore`（upsert）。Store 提供 `check_reference_allowed()` 方法，供其他 Handler 检查跨命名空间引用是否被允许。
+Write the ReferenceGrant into the global `ReferenceGrantStore` (upsert). The store provides a `check_reference_allowed()` method for other Handlers to check whether a cross-namespace reference is allowed.
 
 ### on_change
 
-1. 收集受影响的命名空间集合（包括 ReferenceGrant 所在的 to namespace 和所有 from namespaces）
-2. 通过 `ReferenceGrantChangedEvent` 分发变更事件
-3. 事件监听器（`CrossNsRefManager`）收到事件后，requeue 所有在受影响命名空间中有跨命名空间引用的资源
+1. Collect the set of affected namespaces (including the ReferenceGrant's to namespace and all from namespaces)
+2. Dispatch a change event via `ReferenceGrantChangedEvent`
+3. The event listener (`CrossNsRefManager`), upon receiving the event, requeues all resources within affected namespaces that have cross-namespace references
 
 ### on_delete
 
-1. 从 ReferenceGrantStore 删除该条目
-2. 收集受影响命名空间并分发变更事件，触发重新校验
+1. Remove the entry from ReferenceGrantStore
+2. Collect affected namespaces and dispatch a change event to trigger re-validation
 
-## ReferenceGrant 授权检查流程
+## ReferenceGrant authorization check flow
 
-其他资源的 Handler 在 parse 阶段检查跨命名空间引用时：
+When other resources' Handlers check cross-namespace references during the parse stage:
 
-1. 检测 backendRef 或 secretRef 的 namespace 与资源本身的 namespace 不同
-2. 调用 `is_cross_ns_ref_allowed()` → `ReferenceGrantStore.check_reference_allowed()`
-3. 检查参数：from_namespace、from_group、from_kind、to_namespace、to_group、to_kind、to_name
-4. 若不允许：在 backendRef 上设置 `ref_denied` 字段（Gateway 侧据此拒绝请求），或在 Gateway TLS 引用中设置 RefNotPermitted 错误
+1. Detect that the namespace of the backendRef or secretRef differs from the resource's own namespace
+2. Call `is_cross_ns_ref_allowed()` → `ReferenceGrantStore.check_reference_allowed()`
+3. Check parameters: from_namespace, from_group, from_kind, to_namespace, to_group, to_kind, to_name
+4. If not allowed: set the `ref_denied` field on the backendRef (the Gateway side rejects requests accordingly), or set a RefNotPermitted error on the Gateway TLS reference
 
-可通过配置禁用 ReferenceGrant 校验（`is_reference_grant_validation_enabled()`），此时所有跨命名空间引用默认允许。
+ReferenceGrant validation can be disabled by configuration (`is_reference_grant_validation_enabled()`), in which case all cross-namespace references are allowed by default.
 
-## 跨资源关联
+## Cross-resource relationships
 
-| 关联方向 | 目标资源 | 关联机制 | 说明 |
+| Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
-| ReferenceGrant → HTTPRoute | HTTPRoute | CrossNsRefManager + 事件分发 | 变更时 requeue 有跨命名空间 backendRef 的路由 |
-| ReferenceGrant → GRPCRoute | GRPCRoute | CrossNsRefManager + 事件分发 | 同上 |
-| ReferenceGrant → TCPRoute | TCPRoute | CrossNsRefManager + 事件分发 | 同上 |
-| ReferenceGrant → TLSRoute | TLSRoute | CrossNsRefManager + 事件分发 | 同上 |
-| ReferenceGrant → UDPRoute | UDPRoute | CrossNsRefManager + 事件分发 | 同上 |
-| ReferenceGrant → Gateway | Gateway | CrossNsRefManager + 事件分发 | 变更时 requeue 有跨命名空间 certificateRef 的 Gateway |
+| ReferenceGrant → HTTPRoute | HTTPRoute | CrossNsRefManager + event dispatch | On change, requeue routes with cross-namespace backendRefs |
+| ReferenceGrant → GRPCRoute | GRPCRoute | CrossNsRefManager + event dispatch | Same as above |
+| ReferenceGrant → TCPRoute | TCPRoute | CrossNsRefManager + event dispatch | Same as above |
+| ReferenceGrant → TLSRoute | TLSRoute | CrossNsRefManager + event dispatch | Same as above |
+| ReferenceGrant → UDPRoute | UDPRoute | CrossNsRefManager + event dispatch | Same as above |
+| ReferenceGrant → Gateway | Gateway | CrossNsRefManager + event dispatch | On change, requeue Gateways with cross-namespace certificateRefs |

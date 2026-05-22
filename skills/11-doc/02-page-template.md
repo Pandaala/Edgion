@@ -1,123 +1,123 @@
-# 页面模板规范
+# Page Template
 
-本文档定义各类文档页的标准章节结构。每个模板列出**必选**和**可选**章节。
+This document defines the standard section structure for each kind of documentation page. Each template lists **required** and **optional** sections.
 
-## 插件页模板
+## Plugin page template
 
-适用于：`user-guide/http-route/filters/edgion-plugins/*.md`、`user-guide/edgion-plugins/*.md`
+Applies to: `user-guide/http-route/filters/edgion-plugins/*.md`, `user-guide/edgion-plugins/*.md`
 
 ```markdown
-# <插件名称>
+# <Plugin name>
 
-> **🔌 Edgion 扩展**
+> **🔌 Edgion extension**
 > 
-> <插件名> 是 `EdgionPlugins` CRD 提供的 <一句话功能>，不属于标准 Gateway API。
+> <Plugin name> is a <one-sentence functional description> provided by the `EdgionPlugins` CRD; it is not part of standard Gateway API.
 
-## 什么是 <概念>？                    [可选，概念不自明时加]
+## What is <concept>?                  [Optional, add if the concept is not self-evident]
 
-用 2-3 句非技术语言解释这个概念。配合一个简单的类比或例子。
+Explain the concept in 2–3 sentences using non-technical language. Pair with a simple analogy or example.
 
-## 快速开始                           [必选]
+## Quick Start                         [Required]
 
-### 最简单的配置
+### Simplest configuration
 
-最小可用的 YAML 片段，能跑通的。
+A minimal viable YAML snippet that works.
 
-### 默认值说明                        [可选]
+### Default-value notes                [Optional]
 
-关键默认行为，尤其是安全相关的默认策略。
-
----
-
-## 配置参数                           [必选]
-
-（参数表格式见下方 §配置参数表规范）
-
-### 基础参数
-### 安全参数                          [可选，有安全相关参数时]
-### 高级参数                          [可选，有高级/不常用参数时]
-### 特殊值说明                        [可选，有通配符等特殊语义时]
+Key default behaviors, especially security-related defaults.
 
 ---
 
-## 常见配置场景                       [必选，至少 3 个场景]
+## Configuration parameters            [Required]
 
-### 1. 场景名称
+(Parameter table format: see §Configuration parameter table conventions below)
 
-说明 + 完整 YAML 示例。场景从简单到复杂排列。
-
----
-
-## 常见问题                           [推荐]
-
-（FAQ 格式见下方 §FAQ 与排错规范）
+### Basic parameters
+### Security parameters                [Optional, when there are security-related parameters]
+### Advanced parameters                [Optional, when there are advanced / less-common parameters]
+### Special-value notes                [Optional, when there are wildcards or other special semantics]
 
 ---
 
-## 安全最佳实践                       [可选，安全相关插件必选]
+## Common configuration scenarios      [Required, at least 3 scenarios]
 
-### ✅ 推荐做法
-### ❌ 避免的做法
+### 1. Scenario name
 
----
-
-## 性能优化建议                       [可选]
+Description + complete YAML example. Order scenarios from simple to complex.
 
 ---
 
-## 完整配置示例                       [推荐]
+## FAQ                                 [Recommended]
 
-一个生产级的完整 YAML，包含 HTTPRoute + 插件配置。
+(FAQ format: see §FAQ and troubleshooting conventions below)
 
 ---
 
-## 相关链接                           [必选]
+## Security best practices             [Optional, required for security-related plugins]
 
-- 外部参考（RFC、MDN 等）
-- 相关文档页内部链接
+### ✅ Recommended
+### ❌ To avoid
+
+---
+
+## Performance tuning                  [Optional]
+
+---
+
+## Complete configuration example      [Recommended]
+
+A production-grade complete YAML, including HTTPRoute + plugin configuration.
+
+---
+
+## Related links                       [Required]
+
+- External references (RFC, MDN, etc.)
+- Internal links to related doc pages
 ```
 
-## Gateway API Filter 页模板
+## Gateway API Filter page template
 
-适用于：`user-guide/http-route/filters/gateway-api/*.md`
+Applies to: `user-guide/http-route/filters/gateway-api/*.md`
 
 ```markdown
-# <Filter 名称>
+# <Filter name>
 
-<不需要 Edgion 扩展标注>
+<No Edgion-extension callout needed>
 
-## 功能说明                           [必选]
+## Overview                            [Required]
 
-1-2 段说明这个 Filter 做什么。
+1–2 paragraphs describing what the Filter does.
 
-## 配置                               [必选]
+## Configuration                       [Required]
 
-YAML 示例 + 参数说明。
+YAML example + parameter description.
 
-## 示例                               [必选]
+## Examples                            [Required]
 
-### 示例 1: <场景>
-### 示例 2: <场景>
+### Example 1: <scenario>
+### Example 2: <scenario>
 
-## 注意事项                           [可选]
+## Notes                               [Optional]
 
-## 相关文档                           [必选]
+## Related documents                   [Required]
 ```
 
-## Route 类型总览页模板
+## Route-type overview page template
 
-适用于：`user-guide/http-route/overview.md`、`user-guide/grpc-route/overview.md` 等
+Applies to: `user-guide/http-route/overview.md`, `user-guide/grpc-route/overview.md`, etc.
 
 ```markdown
-# <Route 类型> 总览
+# <Route type> Overview
 
-<一句话说明这种 Route 的用途>
+<One sentence describing the purpose of this Route type>
 
-## 基本结构                           [必选]
+## Basic structure                     [Required]
 
-最小 YAML 示例 + 关键字段说明。
+Minimum YAML example + key field notes.
 
-## 核心概念                           [必选]
+## Core concepts                       [Required]
 
 ### ParentRefs
 ### Rules
@@ -125,261 +125,256 @@ YAML 示例 + 参数说明。
 ### Filters / Plugins
 ### BackendRefs
 
-每个概念 2-3 句说明 + 指向详细文档的链接。
+For each concept, give 2–3 sentences plus a link to the detailed doc.
 
-## 完整示例                           [必选]
+## Complete example                    [Required]
 
-一个涵盖常用功能的完整 YAML。
+A complete YAML covering common features.
 
-## 子文档导航                         [必选]
+## Subdocument navigation              [Required]
 
-| 主题 | 文档 | 说明 |
-|------|------|------|
-| 匹配规则 | matches/ | ... |
-| 过滤器 | filters/ | ... |
-| 后端配置 | backends/ | ... |
+| Topic | Document | Description |
+|-------|----------|-------------|
+| Match rules | matches/ | ... |
+| Filters | filters/ | ... |
+| Backend configuration | backends/ | ... |
 ```
 
-## 运维配置页模板
+## Ops configuration page template
 
-适用于：`ops-guide/` 下的功能配置页
+Applies to: feature-configuration pages under `ops-guide/`.
 
 ```markdown
-# <功能名称>
+# <Feature name>
 
-<一句话说明>
+<One sentence summary>
 
-## 概述                               [必选]
+## Overview                            [Required]
 
-功能是什么、何时需要。可用 ASCII 图说明数据流。
+What the feature is and when you need it. May use ASCII diagrams to illustrate the data flow.
 
-## 配置方式                           [必选]
+## Configuration                       [Required]
 
-### 方式 1: <标准方式>
+### Method 1: <standard approach>
 
-YAML 示例。
+YAML example.
 
-### 方式 2: <扩展方式>               [可选，有 Edgion 扩展时]
+### Method 2: <extension approach>     [Optional, when there is an Edgion extension]
 
-> **🔌 Edgion 扩展**
+> **🔌 Edgion extension**
 
-YAML 示例。
+YAML example.
 
-## <细节章节>                         [按需]
+## <Detail sections>                   [As needed]
 
-比如证书管理、参数调优等。
+E.g. certificate management, parameter tuning.
 
-## 示例                               [必选]
+## Examples                            [Required]
 
-### 示例 1: <场景>
-### 示例 2: <场景>
+### Example 1: <scenario>
+### Example 2: <scenario>
 
-## 相关文档                           [必选]
+## Related documents                   [Required]
 ```
 
-## Getting Started 页模板
+## Getting Started page template
 
-适用于：`getting-started/` 下的引导页
+Applies to: onboarding pages under `getting-started/`.
 
 ```markdown
-# <标题>
+# <Title>
 
-<开篇一句话说明本页目标>
+<Opening sentence describing the goal of this page>
 
-## Step 1: <动作>                     [必选]
+## Step 1: <action>                    [Required]
 
-最小必要的知识 + YAML 示例。
-每一步结尾说明"这一步确定了什么"。
-链接到深入文档："更多细节见：..."
+The minimum knowledge needed + a YAML example.
+End each step by stating "what this step has established".
+Link to deeper documents: "See more: …"
 
-## Step 2: <动作>
+## Step 2: <action>
 
 ...
 
-## Step N: 理解整体流程               [必选]
+## Step N: Understanding the overall flow [Required]
 
-把前面的步骤串起来，说明端到端的流程。
+Tie the previous steps together and describe the end-to-end flow.
 
-## 下一步建议                         [必选]
+## Next steps                          [Required]
 
-按读者意图分流：
-- "如果你要继续做 X，读…"
-- "如果你想了解 Y，读…"
+Branch by reader intent:
+- "If you want to keep doing X, read …"
+- "If you want to learn about Y, read …"
 ```
 
-## 章节顺序通则
+## General section ordering
 
-无论哪种页面，章节顺序都遵循**渐进复杂度**原则：
+Regardless of page type, section order follows the **progressive complexity** principle:
 
 ```
-概述/快速开始（是什么、最简单的用法）
+Overview / Quick Start (what is it, simplest usage)
   ↓
-配置参数（怎么配）
+Configuration parameters (how to configure)
   ↓
-常见场景（实际用法示例）
+Common scenarios (real-world usage examples)
   ↓
-高级话题（安全、性能、边缘情况）
+Advanced topics (security, performance, edge cases)
   ↓
-FAQ / 排错
+FAQ / Troubleshooting
   ↓
-相关链接
+Related links
 ```
 
 ---
 
-## 配置参数表规范
+## Configuration parameter table conventions
 
-### 标准表头
+### Standard header
 
-所有配置参数表使用统一的四列格式：
-
-```markdown
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-```
-
-英文版本：
+All configuration parameter tables use a unified four-column format:
 
 ```markdown
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 ```
 
-### 参数列
+Chinese version: same four columns, with header cells translated to the Chinese equivalents of "Parameter", "Type", "Default", and "Description".
 
-- 使用反引号包裹：`` `allow_origins` ``
-- 嵌套字段用点号：`` `tls.mode` ``
-- 与 YAML 中的字段名完全一致（snake_case 或 camelCase，取决于实际 Schema）
+### Parameter column
 
-### 类型列
+- Wrap with backticks: `` `allow_origins` ``
+- Use dot notation for nested fields: `` `tls.mode` ``
+- Match the field name in YAML exactly (snake_case or camelCase, depending on the actual schema)
 
-使用统一的类型标注：
+### Type column
 
-| 类型 | 写法 | 对应 |
-|------|------|------|
-| 字符串 | String | Rust `String` / YAML 字符串 |
-| 整数 | Integer | Rust `i32`/`u32`/`i64`/`u64` |
-| 布尔值 | Boolean | Rust `bool` |
-| 字符串数组 | Array\<String\> | Rust `Vec<String>` |
-| 对象数组 | Array\<Object\> | Rust `Vec<T>` |
-| 枚举 | Enum | Rust `enum`，在说明中列出可选值 |
-| 对象 | Object | Rust `struct`，另起子表说明 |
-| 持续时间 | Duration | 如 `"30s"`、`"5m"` |
+Use a unified set of type labels:
 
-不使用 Rust 类型名（如 `Option<String>`），也不使用 JSON Schema 类型名。
+| Type | Notation | Maps to |
+|------|----------|---------|
+| String | String | Rust `String` / YAML string |
+| Integer | Integer | Rust `i32`/`u32`/`i64`/`u64` |
+| Boolean | Boolean | Rust `bool` |
+| Array of strings | Array\<String\> | Rust `Vec<String>` |
+| Array of objects | Array\<Object\> | Rust `Vec<T>` |
+| Enum | Enum | Rust `enum`; list possible values in the description |
+| Object | Object | Rust `struct`; describe with a separate sub-table |
+| Duration | Duration | E.g. `"30s"`, `"5m"` |
 
-### 默认值列
+Do not use Rust type names (such as `Option<String>`) or JSON Schema type names.
 
-| 情况 | 写法 |
-|------|------|
-| 有默认值 | 反引号包裹：`` `"GET,HEAD,OPTIONS"` `` |
-| 无默认值（必填） | `—`（必填） 或 **必填** |
-| 无默认值（选填） | `无` |
-| 空字符串 | `` `""` (空) `` |
-| 布尔默认值 | `` `false` `` 或 `` `true` `` |
+### Default column
 
-### 说明列
+| Case | Notation |
+|------|----------|
+| Has a default | Backticks: `` `"GET,HEAD,OPTIONS"` `` |
+| No default (required) | `—` (required) or **Required** |
+| No default (optional) | `none` |
+| Empty string | `` `""` (empty) `` |
+| Boolean default | `` `false` `` or `` `true` `` |
 
-- 一句话说清参数用途
-- 必填字段标注 **必填**（或在默认值列标注）
-- 如果值域有限，在说明中列举：`可选值：\`Terminate\` | \`Passthrough\``
-- 给出典型值的示例：`示例：\`"https://app.com,https://admin.com"\``
-- 多值分隔方式需说明：`多个用逗号分隔`
+### Description column
 
-### 参数分组
+- One sentence stating the purpose of the parameter
+- Mark required fields as **Required** (or note this in the default column)
+- If the value space is bounded, enumerate the values: `Allowed values: \`Terminate\` | \`Passthrough\``
+- Provide an example of a typical value: `Example: \`"https://app.com,https://admin.com"\``
+- Describe multi-value separators: `Use commas to separate multiple values`
 
-当参数超过 6 个时，按功能分组并使用三级标题。常用分组名称：
-- **基础参数** — 必填和最常用的参数
-- **安全参数** — 认证、授权、加密相关
-- **高级参数** — 不常用、调优、边缘场景
-- **性能参数** — 缓存、超时、并发相关
+### Parameter grouping
 
-### 嵌套对象处理
+When parameters exceed 6, group them by function and use H3 headings. Common group names:
+- **Basic parameters** — required and most common parameters
+- **Security parameters** — authentication, authorization, encryption
+- **Advanced parameters** — less common, tuning, edge cases
+- **Performance parameters** — caching, timeouts, concurrency
 
-**方式 1：子表**（嵌套较深时）：
+### Nested object handling
+
+**Method 1: Sub-table** (for deeper nesting):
 
 ```markdown
-| `healthCheck` | Object | 无 | 健康检查配置，见下表 |
+| `healthCheck` | Object | none | Health check configuration; see the table below |
 
-#### `healthCheck` 子字段
+#### `healthCheck` sub-fields
 
-| `interval` | Duration | `"10s"` | 检查间隔 |
-| `timeout` | Duration | `"5s"` | 超时时间 |
+| `interval` | Duration | `"10s"` | Check interval |
+| `timeout` | Duration | `"5s"` | Timeout |
 ```
 
-**方式 2：点号路径**（嵌套较浅时）：
+**Method 2: Dot path** (for shallow nesting):
 
 ```markdown
-| `healthCheck.interval` | Duration | `"10s"` | 健康检查间隔 |
-| `healthCheck.timeout` | Duration | `"5s"` | 健康检查超时 |
+| `healthCheck.interval` | Duration | `"10s"` | Health check interval |
+| `healthCheck.timeout` | Duration | `"5s"` | Health check timeout |
 ```
 
-### 枚举值处理
+### Enum handling
 
-- **行内列出**（值 ≤ 3 个）：`可选值：\`Terminate\` | \`Passthrough\``
-- **独立表格**（值 > 3 个）：另起子表列出每个值和说明
+- **Inline list** (≤ 3 values): `Allowed values: \`Terminate\` | \`Passthrough\``
+- **Separate table** (> 3 values): use a sub-table to list each value with a description
 
-### 特殊值说明
+### Special-value notes
 
-当参数有通配符、魔法值等特殊语义时，在参数表之后加"特殊值说明"表格：
+When a parameter has wildcards or magic values, add a "Special values" table after the parameter table:
 
 ```markdown
-| 值 | 含义 | 使用场景 |
-|----|------|----------|
-| `*` | 通配符，允许所有 | **不推荐生产使用** |
-| `""` (空字符串) | 拒绝所有 | 默认值，安全 |
+| Value | Meaning | Use case |
+|-------|---------|----------|
+| `*` | Wildcard, allow all | **Not recommended in production** |
+| `""` (empty string) | Reject all | Default value, safe |
 ```
 
 ---
 
-## FAQ 与排错规范
+## FAQ and troubleshooting conventions
 
-### 何时需要 FAQ 章节
+### When a FAQ section is needed
 
-| 文档类型 | FAQ | 说明 |
-|----------|-----|------|
-| 插件页 | 推荐 | 配置错误是最常见的问题 |
-| Route 总览页 | 可选 | 概念理解类问题 |
-| 运维配置页 | 推荐 | 部署和调试问题 |
-| Getting Started | 不需要 | 引导页不适合放 FAQ |
+| Document type | FAQ | Notes |
+|---------------|-----|-------|
+| Plugin page | Recommended | Configuration mistakes are the most common issue |
+| Route overview page | Optional | Conceptual questions |
+| Ops configuration page | Recommended | Deployment and debugging issues |
+| Getting Started | Not needed | Onboarding pages don't suit FAQs |
 
-### Q/A 格式
+### Q/A format
 
 ```markdown
-### Q1: 问题标题（用疑问句）
+### Q1: Question title (use a question form)
 
-**A**: 答案。先给结论，再展开。
+**A**: The answer. Lead with the conclusion, then expand.
 ```
 
-规则：
-- 用 `### Q1:` 编号 + 疑问句
-- 回答开头 `**A**:` 粗体标记
-- 第一句话就给出答案
-- 每个 Q/A 之间空一行
+Rules:
+- Use `### Q1:` numbering + an interrogative form
+- Begin the answer with a bold `**A**:`
+- The first sentence gives the answer
+- Leave a blank line between Q/A pairs
 
-### 正反示例标注
+### Right / wrong example markers
 
-用 ✅/❌ 标注正确和错误的做法。可以在代码块中行内对比，也可以用 `### ✅ 推荐做法` / `### ❌ 避免的做法` 章节标题。
+Use ✅/❌ to mark correct vs. incorrect approaches. You can compare inline within code blocks, or use `### ✅ Recommended` / `### ❌ To avoid` section titles.
 
-### 排错步骤
+### Troubleshooting steps
 
-- 简短排错（≤ 3 步）：直接在答案中列步骤
-- 详细排错（> 3 步）：用独立章节，包含命令 + 检查点 + 关键字
+- Short troubleshooting (≤ 3 steps): list the steps directly in the answer
+- Detailed troubleshooting (> 3 steps): use a separate section with commands + checkpoints + key terms
 
-### 问题排序优先级
+### Question priority order
 
-1. 配置错误 → 2. 概念理解 → 3. 环境差异 → 4. 调试方法 → 5. 性能调优 → 6. 兼容性
+1. Configuration mistakes → 2. Conceptual understanding → 3. Environment differences → 4. Debugging methods → 5. Performance tuning → 6. Compatibility
 
-### "获取帮助"章节
+### "Get help" section
 
-每个有 FAQ 的页面末尾加：
+Add to the end of every page that has a FAQ:
 
 ```markdown
-## 获取帮助
+## Get help
 
-如果遇到问题：
+If you run into problems:
 
-1. 检查本文档的常见问题部分
-2. 查看网关日志
-3. 提交 Issue 到 GitHub
+1. Check the FAQ section of this document
+2. Check the gateway logs
+3. Open an issue on GitHub
 ```

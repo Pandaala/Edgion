@@ -4,7 +4,9 @@
 //! TLS config from the per-resource `*Tls` struct. After R1 these are all
 //! unified behind [`crate::types::resources::common::TlsConfig`]; this module
 //! centralizes the lookup / merge logic so every provider consumes the same
-//! [`TlsMaterial`] shape.
+//! [`TlsMaterial`] shape. It also houses the reqwest-specific helpers
+//! ([`apply_insecure_skip_verify`], [`apply_to_reqwest_builder`]) so all
+//! reqwest-based providers (ES, webhook) share one wiring path.
 //!
 //! Precedence for each field:
 //! - `ca_pem` / `client_cert_pem`: **inline PEM** on the CRD wins if set, else
@@ -104,8 +106,24 @@ pub fn build_rustls_client_config(tls: &TlsConfig) -> Result<Option<ClientConfig
         if native.certs.is_empty() {
             anyhow::bail!("no system CA certificates were loaded for LinkSys TLS");
         }
+        let mut added = 0usize;
+        let mut rejected = 0usize;
         for cert in native.certs {
-            roots.add(cert).ok();
+            if roots.add(cert).is_ok() {
+                added += 1;
+            } else {
+                rejected += 1;
+            }
+        }
+        if rejected > 0 {
+            tracing::warn!(
+                added,
+                rejected,
+                "LinkSys TLS: some system CA certificates were rejected by rustls"
+            );
+        }
+        if added == 0 {
+            anyhow::bail!("no system CA certificates accepted by rustls for LinkSys TLS");
         }
     }
 
@@ -144,6 +162,103 @@ pub fn combined_identity_pem(m: &TlsMaterial) -> Option<Zeroizing<Vec<u8>>> {
     Some(Zeroizing::new(out))
 }
 
+/// Apply CA root and mTLS identity from a [`TlsConfig`] to a reqwest client builder.
+///
+/// Factored out of the ES and webhook providers so all reqwest-based providers
+/// share the same wiring and error messages. Call this **after**
+/// [`apply_insecure_skip_verify`]. Whether to guard on `tls.enabled` is the
+/// caller's responsibility — ES gates this inside `if tls.enabled { … }`;
+/// webhook enters the TLS branch whenever `config.tls` is `Some(_)`.
+///
+/// `provider` is a short display name (e.g. `"Elasticsearch"`, `"Webhook"`)
+/// embedded in error messages so operators can identify which provider produced
+/// the invalid PEM.
+///
+/// Returns the builder unchanged when [`build_material`] yields `None` (no
+/// certs configured).
+pub fn apply_to_reqwest_builder(
+    builder: reqwest::ClientBuilder,
+    tls: &TlsConfig,
+    provider: &str,
+) -> Result<reqwest::ClientBuilder> {
+    let Some(material) = build_material(tls) else {
+        return Ok(builder);
+    };
+    let mut builder = builder;
+    if let Some(ca) = &material.ca_pem {
+        builder = builder.add_root_certificate(
+            reqwest::Certificate::from_pem(ca)
+                .with_context(|| format!("{provider} TLS: invalid CA certificate PEM"))?,
+        );
+    }
+    if let Some(combined) = combined_identity_pem(&material) {
+        builder = builder.identity(
+            reqwest::Identity::from_pem(combined.as_slice())
+                .with_context(|| format!("{provider} TLS: invalid client identity PEM"))?,
+        );
+    }
+    Ok(builder)
+}
+
+/// Cross-test mutex for any test that reads/writes `EDGION_ENV`. `cargo test`
+/// runs tests within a single binary in parallel by default, and `std::env::set_var`
+/// mutates a process-global table; concurrent env-touching tests can clobber each
+/// other's `set_var`/`remove_var` calls and produce flaky CI failures. Each such
+/// test must `let _guard = ENV_TEST_MUTEX.lock();` for the duration of its
+/// snapshot/mutate/restore window. A shared mutex is used (not one per file) so
+/// tests in `tls.rs` and `providers/elasticsearch/config_mapping.rs` serialize
+/// against each other.
+#[cfg(test)]
+pub(crate) static ENV_TEST_MUTEX: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+/// Apply the `tls.insecure_skip_verify` flag to a reqwest client builder under a
+/// uniform cross-provider policy.
+///
+/// Policy when `insecure_skip_verify == Some(true)`:
+/// - `EDGION_ENV=production` → return an error so the LinkSys refuses to start,
+///   surfacing the misconfiguration loudly instead of silently disabling
+///   verification on a production data path.
+/// - otherwise → emit a warning and call `danger_accept_invalid_certs(true)`.
+///
+/// When `insecure_skip_verify` is unset or `false`, the builder is returned
+/// unchanged.
+///
+/// Caller responsibilities:
+/// - When `tls.enabled == false`, skip this entirely (the flag is moot when TLS
+///   is not enabled). Mirror the ES behaviour by only calling this helper from
+///   inside an `if tls.enabled { ... }` branch.
+/// - Redis / Etcd SDKs do not expose a skip-verify knob — those providers
+///   `bail!` at the call site rather than going through this helper.
+pub fn apply_insecure_skip_verify(
+    builder: reqwest::ClientBuilder,
+    tls: &TlsConfig,
+    provider: &str,
+) -> Result<reqwest::ClientBuilder> {
+    if tls.insecure_skip_verify != Some(true) {
+        return Ok(builder);
+    }
+    let is_prod = std::env::var("EDGION_ENV")
+        .map(|v| v.eq_ignore_ascii_case("production"))
+        .unwrap_or(false);
+    if is_prod {
+        anyhow::bail!(
+            "{} TLS insecure_skip_verify cannot be enabled in production (EDGION_ENV=production). \
+             Use a proper CA certificate or disable TLS verification only in non-production environments.",
+            provider
+        );
+    }
+    // TODO(g9a-003-followup): once `edgion_system_error_state` (skip-list #12) is
+    // wired into the gateway crate, increment a labelled counter / set a gauge
+    // here so an operator can alert on "TLS verification disabled" outside of
+    // log scrapers. The deferral is intentional — the gauge is not yet defined
+    // anywhere in the codebase and wiring it would explode the safety-fix scope.
+    tracing::warn!(
+        provider = provider,
+        "TLS certificate verification disabled — insecure! Not allowed when EDGION_ENV=production",
+    );
+    Ok(builder.danger_accept_invalid_certs(true))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,92 +279,141 @@ mod tests {
         }
     }
 
+    /// Table-driven tests for `build_material`.
+    ///
+    /// `expected` encodes the return value:
+    ///   - `None`  → `build_material` must return `None`
+    ///   - `Some((ca, cert, key))` → must return `Some(material)` with those field values
+    ///
+    /// The "key always from secret, never from inline" invariant is explicit in case
+    /// `inline_overrides_secret_for_public_material`: inline ca/cert win, but the key
+    /// is still the one from the secret, not overridable by any inline field.
     #[test]
-    fn returns_none_without_certs() {
-        let tls = TlsConfig {
-            enabled: true,
-            certs: None,
-            insecure_skip_verify: None,
-        };
-        assert!(build_material(&tls).is_none());
-    }
+    fn test_build_material_matrix() {
+        struct BuildMaterialCase {
+            name: &'static str,
+            tls: TlsConfig,
+            /// None  → expect build_material to return None
+            /// Some((ca, cert, key)) → expect Some(material) with these field values
+            expected: Option<(Option<&'static [u8]>, Option<&'static [u8]>, Option<&'static [u8]>)>,
+        }
 
-    #[test]
-    fn extracts_from_secret_only() {
-        let tls = TlsConfig {
-            enabled: true,
-            certs: Some(TlsCerts {
-                ca_cert: None,
-                client_cert: None,
-                secret_ref: None,
-                secret: Some(secret_with(&[
-                    ("ca.crt", b"CA"),
-                    ("tls.crt", b"CERT"),
-                    ("tls.key", b"KEY"),
-                ])),
-            }),
-            insecure_skip_verify: None,
-        };
-        let m = build_material(&tls).expect("material");
-        assert_eq!(m.ca_pem.as_deref(), Some(b"CA".as_ref()));
-        assert_eq!(m.client_cert_pem.as_deref(), Some(b"CERT".as_ref()));
-        assert_eq!(m.client_key_pem.as_ref().map(|z| z.as_slice()), Some(b"KEY".as_ref()));
-    }
+        let cases = vec![
+            // Case 1 (was: returns_none_without_certs)
+            // certs field absent → None
+            BuildMaterialCase {
+                name: "returns_none_without_certs",
+                tls: TlsConfig {
+                    enabled: true,
+                    certs: None,
+                    insecure_skip_verify: None,
+                },
+                expected: None,
+            },
+            // Case 2 (was: extracts_from_secret_only)
+            // All three fields sourced from secret; no inline overrides present
+            BuildMaterialCase {
+                name: "extracts_from_secret_only",
+                tls: TlsConfig {
+                    enabled: true,
+                    certs: Some(TlsCerts {
+                        ca_cert: None,
+                        client_cert: None,
+                        secret_ref: None,
+                        secret: Some(secret_with(&[
+                            ("ca.crt", b"CA"),
+                            ("tls.crt", b"CERT"),
+                            ("tls.key", b"KEY"),
+                        ])),
+                    }),
+                    insecure_skip_verify: None,
+                },
+                expected: Some((Some(b"CA"), Some(b"CERT"), Some(b"KEY"))),
+            },
+            // Case 3 (was: inline_overrides_secret_for_public_material)
+            // Inline ca/cert override their secret counterparts; the key is NOT
+            // overridable by inline — it always comes from the secret.
+            BuildMaterialCase {
+                name: "inline_overrides_secret_for_public_material",
+                tls: TlsConfig {
+                    enabled: true,
+                    certs: Some(TlsCerts {
+                        ca_cert: Some("INLINE_CA".into()),
+                        client_cert: Some("INLINE_CERT".into()),
+                        secret_ref: None,
+                        secret: Some(secret_with(&[
+                            ("ca.crt", b"SECRET_CA"),
+                            ("tls.crt", b"SECRET_CERT"),
+                            ("tls.key", b"KEY"),
+                        ])),
+                    }),
+                    insecure_skip_verify: None,
+                },
+                // ca and cert come from inline; key still from secret (invariant)
+                expected: Some((Some(b"INLINE_CA"), Some(b"INLINE_CERT"), Some(b"KEY"))),
+            },
+            // Case 4 (was: inline_only_ca)
+            // Only inline ca provided; no secret → cert and key are absent
+            BuildMaterialCase {
+                name: "inline_only_ca",
+                tls: TlsConfig {
+                    enabled: true,
+                    certs: Some(TlsCerts {
+                        ca_cert: Some("CA".into()),
+                        client_cert: None,
+                        secret_ref: None,
+                        secret: None,
+                    }),
+                    insecure_skip_verify: None,
+                },
+                expected: Some((Some(b"CA"), None, None)),
+            },
+            // Case 5 (was: empty_certs_returns_none)
+            // TlsCerts present but all fields None → None
+            BuildMaterialCase {
+                name: "empty_certs_returns_none",
+                tls: TlsConfig {
+                    enabled: true,
+                    certs: Some(TlsCerts {
+                        ca_cert: None,
+                        client_cert: None,
+                        secret_ref: None,
+                        secret: None,
+                    }),
+                    insecure_skip_verify: None,
+                },
+                expected: None,
+            },
+        ];
 
-    #[test]
-    fn inline_overrides_secret_for_public_material() {
-        let tls = TlsConfig {
-            enabled: true,
-            certs: Some(TlsCerts {
-                ca_cert: Some("INLINE_CA".into()),
-                client_cert: Some("INLINE_CERT".into()),
-                secret_ref: None,
-                secret: Some(secret_with(&[
-                    ("ca.crt", b"SECRET_CA"),
-                    ("tls.crt", b"SECRET_CERT"),
-                    ("tls.key", b"KEY"),
-                ])),
-            }),
-            insecure_skip_verify: None,
-        };
-        let m = build_material(&tls).unwrap();
-        assert_eq!(m.ca_pem.as_deref(), Some(b"INLINE_CA".as_ref()));
-        assert_eq!(m.client_cert_pem.as_deref(), Some(b"INLINE_CERT".as_ref()));
-        // key always from secret
-        assert_eq!(m.client_key_pem.as_ref().map(|z| z.as_slice()), Some(b"KEY".as_ref()));
-    }
-
-    #[test]
-    fn inline_only_ca() {
-        let tls = TlsConfig {
-            enabled: true,
-            certs: Some(TlsCerts {
-                ca_cert: Some("CA".into()),
-                client_cert: None,
-                secret_ref: None,
-                secret: None,
-            }),
-            insecure_skip_verify: None,
-        };
-        let m = build_material(&tls).unwrap();
-        assert_eq!(m.ca_pem.as_deref(), Some(b"CA".as_ref()));
-        assert!(m.client_cert_pem.is_none());
-        assert!(m.client_key_pem.is_none());
-    }
-
-    #[test]
-    fn empty_certs_returns_none() {
-        let tls = TlsConfig {
-            enabled: true,
-            certs: Some(TlsCerts {
-                ca_cert: None,
-                client_cert: None,
-                secret_ref: None,
-                secret: None,
-            }),
-            insecure_skip_verify: None,
-        };
-        assert!(build_material(&tls).is_none());
+        for case in &cases {
+            match &case.expected {
+                None => {
+                    assert!(
+                        build_material(&case.tls).is_none(),
+                        "[{}] expected None but got Some",
+                        case.name,
+                    );
+                }
+                Some((exp_ca, exp_cert, exp_key)) => {
+                    let m = build_material(&case.tls)
+                        .unwrap_or_else(|| panic!("[{}] expected Some but got None", case.name));
+                    assert_eq!(m.ca_pem.as_deref(), *exp_ca, "[{}] ca_pem mismatch", case.name,);
+                    assert_eq!(
+                        m.client_cert_pem.as_deref(),
+                        *exp_cert,
+                        "[{}] client_cert_pem mismatch",
+                        case.name,
+                    );
+                    assert_eq!(
+                        m.client_key_pem.as_ref().map(|z| z.as_slice()),
+                        *exp_key,
+                        "[{}] client_key_pem mismatch — key must always come from secret, never from inline",
+                        case.name,
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -366,6 +530,70 @@ mod tests {
         assert!(build_rustls_client_config(&tls).is_err());
     }
 
+    /// `apply_insecure_skip_verify` must `bail!` when `EDGION_ENV=production` and the
+    /// flag is set, so a misconfigured LinkSys refuses to start instead of silently
+    /// disabling certificate verification on a production data path.
+    ///
+    /// The non-prod branch must accept the flag (warn + apply) so dev/staging keeps
+    /// the existing escape hatch.
+    ///
+    /// Note: this test mutates the global `EDGION_ENV` env var. The
+    /// `super::ENV_TEST_MUTEX` guard serialises against any other env-touching
+    /// test (e.g. ES `test_tls_disabled_ignores_insecure_skip_verify_even_in_prod`)
+    /// so concurrent runs in the same test binary cannot clobber each other's
+    /// `set_var` / `remove_var` calls. The prior value is snapshotted and
+    /// restored before the guard releases.
+    #[test]
+    fn apply_insecure_skip_verify_prod_bails_nonprod_accepts() {
+        let _env_guard = super::ENV_TEST_MUTEX.lock();
+
+        let tls_skip = TlsConfig {
+            enabled: true,
+            certs: None,
+            insecure_skip_verify: Some(true),
+        };
+        let tls_nop = TlsConfig {
+            enabled: true,
+            certs: None,
+            insecure_skip_verify: None,
+        };
+
+        let prior = std::env::var("EDGION_ENV").ok();
+
+        // 1. Production → bail.
+        std::env::set_var("EDGION_ENV", "production");
+        let prod_err = apply_insecure_skip_verify(reqwest::Client::builder(), &tls_skip, "TestProvider").err();
+        assert!(
+            prod_err
+                .as_ref()
+                .is_some_and(|e| e.to_string().contains("EDGION_ENV=production")),
+            "prod must bail with EDGION_ENV mention, got: {:?}",
+            prod_err
+        );
+
+        // 2. Non-production (or unset) → accepts. We don't assert on the resulting
+        //    builder's internal state (reqwest exposes no introspection); the contract
+        //    is that no error is returned.
+        std::env::remove_var("EDGION_ENV");
+        assert!(
+            apply_insecure_skip_verify(reqwest::Client::builder(), &tls_skip, "TestProvider").is_ok(),
+            "non-prod must accept insecure_skip_verify=true"
+        );
+
+        // 3. Flag absent → noop pass-through, even in production.
+        std::env::set_var("EDGION_ENV", "production");
+        assert!(
+            apply_insecure_skip_verify(reqwest::Client::builder(), &tls_nop, "TestProvider").is_ok(),
+            "missing insecure_skip_verify must pass through unchanged"
+        );
+
+        // Restore prior state.
+        match prior {
+            Some(v) => std::env::set_var("EDGION_ENV", v),
+            None => std::env::remove_var("EDGION_ENV"),
+        }
+    }
+
     #[test]
     fn rustls_config_system_roots_when_ca_absent() {
         install_test_crypto_provider();
@@ -393,5 +621,82 @@ mod tests {
             ),
             Ok(None) => panic!("expected Some(config) or Err, got Ok(None)"),
         }
+    }
+
+    // ------------------------------------------------------------------
+    // apply_to_reqwest_builder
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn apply_to_reqwest_builder_passthrough_when_no_material() {
+        let tls = TlsConfig {
+            enabled: true,
+            certs: None,
+            insecure_skip_verify: None,
+        };
+        assert!(
+            apply_to_reqwest_builder(reqwest::Client::builder(), &tls, "Test").is_ok(),
+            "should return Ok when build_material yields None"
+        );
+    }
+
+    #[test]
+    fn apply_to_reqwest_builder_valid_ca_only() {
+        let (ca_pem, _cert_pem, _key_pem) = gen_ca_and_leaf();
+        let tls = TlsConfig {
+            enabled: true,
+            certs: Some(TlsCerts {
+                ca_cert: Some(ca_pem),
+                client_cert: None,
+                secret_ref: None,
+                secret: None,
+            }),
+            insecure_skip_verify: None,
+        };
+        assert!(
+            apply_to_reqwest_builder(reqwest::Client::builder(), &tls, "Test").is_ok(),
+            "valid CA PEM should not produce an error"
+        );
+    }
+
+    #[test]
+    fn apply_to_reqwest_builder_valid_mtls() {
+        let (ca_pem, cert_pem, key_pem) = gen_ca_and_leaf();
+        let tls = TlsConfig {
+            enabled: true,
+            certs: Some(TlsCerts {
+                ca_cert: Some(ca_pem),
+                client_cert: Some(cert_pem),
+                secret_ref: None,
+                secret: Some(secret_with(&[("tls.key", key_pem.as_bytes())])),
+            }),
+            insecure_skip_verify: None,
+        };
+        assert!(
+            apply_to_reqwest_builder(reqwest::Client::builder(), &tls, "Test").is_ok(),
+            "valid CA + mTLS identity should not produce an error"
+        );
+    }
+
+    #[test]
+    fn apply_to_reqwest_builder_invalid_identity_errors() {
+        let (ca_pem, _cert_pem, _key_pem) = gen_ca_and_leaf();
+        let tls = TlsConfig {
+            enabled: true,
+            certs: Some(TlsCerts {
+                ca_cert: Some(ca_pem),
+                client_cert: Some("bad-cert".into()),
+                secret_ref: None,
+                secret: Some(secret_with(&[("tls.key", b"bad-key")])),
+            }),
+            insecure_skip_verify: None,
+        };
+        let err = apply_to_reqwest_builder(reqwest::Client::builder(), &tls, "TestProvider")
+            .expect_err("invalid identity PEM must return Err");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("TestProvider TLS:"),
+            "error must carry provider prefix, got: {msg}"
+        );
     }
 }

@@ -1,0 +1,21 @@
+# RateLimit dynamic test - update phase: onMissingKey=Deny.
+# Request without X-Rate-Key header → 429.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: rate-limit-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RateLimit
+      config:
+        rate: 100
+        interval: "1m"
+        key:
+          - type: header
+            name: "X-Rate-Key"
+        onMissingKey: Deny
+        rejectStatus: 429
+        rejectMessage: "Rate limit exceeded"
+        showLimitHeaders: false

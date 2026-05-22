@@ -1,0 +1,155 @@
+//! Tests for ctx.* builtins: get / set / remove.
+//!
+//! Covers happy paths, the upstream_response_filter phase, and the ApiError
+//! path returned by fallible session.set_ctx_var / remove_ctx_var.
+
+use super::*;
+
+// ── Happy paths ──────────────────────────────────────────────────────────────
+
+#[test]
+fn test_ctx_set_then_get() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_ctx_var()
+        .withf(|k, v| k == "k" && v == "v")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_get_ctx_var()
+        .withf(|k| k == "k")
+        .times(1)
+        .returning(|_| Some("v".to_string()));
+    session
+        .expect_set_request_header()
+        .withf(|h, v| h == "X-Ctx" && v == "v")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run(
+        r#"ctx.set("k", "v")
+let value = ctx.get("k")
+req.set_header("X-Ctx", value)"#,
+        session,
+    );
+    assert_eq!(result, good_next());
+}
+
+#[test]
+fn test_ctx_set_then_remove_then_get() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_ctx_var()
+        .withf(|k, v| k == "k" && v == "v")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_remove_ctx_var()
+        .withf(|k| k == "k")
+        .times(1)
+        .returning(|_| Ok(()));
+    session
+        .expect_get_ctx_var()
+        .withf(|k| k == "k")
+        .times(1)
+        .returning(|_| None);
+    session
+        .expect_set_request_header()
+        .withf(|h, v| h == "X-Removed" && v == "true")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run(
+        r#"ctx.set("k", "v")
+ctx.remove("k")
+let value = ctx.get("k")
+if value == nil { req.set_header("X-Removed", "true") }"#,
+        session,
+    );
+    assert_eq!(result, good_next());
+}
+
+#[test]
+fn test_ctx_get_missing_returns_nil() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_get_ctx_var()
+        .withf(|k| k == "missing")
+        .times(1)
+        .returning(|_| None);
+    session
+        .expect_set_request_header()
+        .withf(|h, v| h == "X-NoVal" && v == "true")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run(
+        r#"let value = ctx.get("missing")
+if value == nil { req.set_header("X-NoVal", "true") }"#,
+        session,
+    );
+    assert_eq!(result, good_next());
+}
+
+// ── Cross-phase: ctx.get in upstream_response_filter ─────────────────────────
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_ctx_shared_request_to_upstream_response() {
+    use crate::core::gateway::plugins::http::dsl::config::DslConfig;
+    use crate::core::gateway::plugins::http::dsl::plugin::DslPlugin;
+    let mut session = MockPluginSession::new();
+    session
+        .expect_get_ctx_var()
+        .withf(|k| k == "k")
+        .times(1)
+        .returning(|_| Some("from_request_phase".to_string()));
+    session
+        .expect_set_response_header()
+        .withf(|h, v| h == "X-Ctx-Out" && v == "from_request_phase")
+        .times(1)
+        .returning(|_, _| Ok(()));
+
+    let config = DslConfig {
+        source: Some(
+            r#"let value = ctx.get("k")
+if value != nil { resp.set_header("X-Ctx-Out", value) }"#
+                .to_string(),
+        ),
+        name: "test-ctx-resp".into(),
+        ..Default::default()
+    };
+    let plugin = DslPlugin::from_config_response(&config).expect("from_config_response failed");
+    let mut log = PluginLog::new("test");
+    let mut s = session;
+    let result = plugin.run_upstream_response_filter(&mut s as &mut dyn PluginSession, &mut log);
+    assert_eq!(result, good_next());
+}
+
+// ── Error paths: session-side failure → RuntimeError::ApiError ───────────────
+
+#[test]
+fn test_ctx_set_session_error_yields_api_error() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_ctx_var()
+        .withf(|k, v| k == "x" && v == "y")
+        .times(1)
+        .returning(|_, _| Err(Box::new(std::io::Error::other("injected ctx.set failure"))));
+    let err = run_expect_runtime_err(r#"ctx.set("x", "y")"#, session);
+    assert!(matches!(
+        err,
+        RuntimeError::ApiError { ref function, .. } if function == "ctx.set"
+    ));
+}
+
+#[test]
+fn test_ctx_remove_session_error_yields_api_error() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_remove_ctx_var()
+        .withf(|k| k == "x")
+        .times(1)
+        .returning(|_| Err(Box::new(std::io::Error::other("injected ctx.remove failure"))));
+    let err = run_expect_runtime_err(r#"ctx.remove("x")"#, session);
+    assert!(matches!(
+        err,
+        RuntimeError::ApiError { ref function, .. } if function == "ctx.remove"
+    ));
+}

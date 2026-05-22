@@ -1,28 +1,28 @@
 ---
 name: batch-conformance-debugging
-description: 批量 conformance 测试失败的日志采集、分析和诊断方法，用于定位测试间状态泄漏和并发问题
+description: Log collection, analysis, and diagnosis methods for batch conformance test failures, used to localize cross-test state leakage and concurrency issues
 ---
 
-# 批量 Conformance 测试调试
+# Batch Conformance Test Debugging
 
-当测试单独跑通过但批量跑失败时，使用本指南。核心思路：**采集三路日志 → 找关键模式 → 时序关联 → 定位根因**。
+Use this guide when tests pass individually but fail when run in batch. The core idea: **collect three streams of logs → identify key patterns → correlate timelines → locate root cause**.
 
-## 1. 日志采集
+## 1. Log collection
 
-批量测试前启动三路日志采集，所有日志带时间戳：
+Before running a batch, start three log-collection streams; all logs carry timestamps:
 
 ```bash
-# 终端 1: Controller 日志
+# Terminal 1: Controller logs
 kubectl logs -f deployment/edgion-controller -n edgion-system --timestamps 2>&1 | tee /tmp/controller-batch.log
 
-# 终端 2: Gateway 日志
+# Terminal 2: Gateway logs
 kubectl logs -f deployment/edgion-gateway -n edgion-system --timestamps 2>&1 | tee /tmp/gateway-batch.log
 
-# 终端 3: 测试输出
+# Terminal 3: Test output
 ./scripts/orbstack-dev.sh test --core 2>&1 | tee /tmp/test-batch.log
 ```
 
-单独跑失败的测试做对比：
+For comparison, run the failing test alone:
 
 ```bash
 kubectl logs -f deployment/edgion-controller -n edgion-system --timestamps 2>&1 | tee /tmp/controller-single.log &
@@ -30,104 +30,104 @@ kubectl logs -f deployment/edgion-gateway -n edgion-system --timestamps 2>&1 | t
 ./scripts/orbstack-dev.sh test --run-test <FailingTestName> 2>&1 | tee /tmp/test-single.log
 ```
 
-## 2. 关键日志模式
+## 2. Key log patterns
 
-### Controller 端
+### Controller side
 
-| 模式 | 含义 | 搜索方式 |
-|------|------|---------|
-| queue depth 告警 | requeue 队列积压（达 80% 容量时告警） | `grep -i "queue.*depth\|queue.*warn\|capacity"` |
-| requeue 风暴 | 同一个 key 被反复 requeue | `grep "enqueue\|requeue" \| sort \| uniq -c \| sort -rn` |
-| status patch 冲突 | ResourceVersion 冲突导致 status 写入失败 | `grep -i "conflict\|resource.version\|status.*fail\|status.*error"` |
-| 删除/创建时序重叠 | 资源还没删完就被重新创建 | `grep "on_delete\|on_change\|on_add"` 看同一个 key 的事件间隔 |
-| trigger chain 深度 | 级联 requeue 过深被截断 | `grep -i "trigger.*cycle\|trigger.*depth\|cascade"` |
-| 处理耗时 | 单个 work item 处理时间过长 | `grep -i "process.*ms\|elapsed\|slow"` |
+| Pattern | Meaning | Search method |
+|---------|---------|---------------|
+| Queue-depth warning | Requeue queue backlog (warn at 80% capacity) | `grep -i "queue.*depth\|queue.*warn\|capacity"` |
+| Requeue storm | The same key is repeatedly requeued | `grep "enqueue\|requeue" \| sort \| uniq -c \| sort -rn` |
+| Status-patch conflict | Status writes fail due to ResourceVersion conflict | `grep -i "conflict\|resource.version\|status.*fail\|status.*error"` |
+| Delete/create timing overlap | A resource is recreated before its deletion completes | `grep "on_delete\|on_change\|on_add"`; look at the time interval between events for the same key |
+| Trigger-chain depth | Cascaded requeue truncated due to depth | `grep -i "trigger.*cycle\|trigger.*depth\|cascade"` |
+| Processing duration | A single work item takes too long | `grep -i "process.*ms\|elapsed\|slow"` |
 
-### Gateway 端
+### Gateway side
 
-| 模式 | 含义 | 搜索方式 |
-|------|------|---------|
-| `TOO_OLD_VERSION` | 事件缓冲区溢出，触发全量 re-list | `grep "TOO_OLD_VERSION\|EVENTS_LOST"` |
-| `SERVER_RELOAD` | Controller 重启导致全量重同步 | `grep "SERVER_RELOAD\|SERVER_ID_MISMATCH\|server_id"` |
-| re-list 触发 | Gateway 发起全量列表请求（非启动阶段） | `grep -i "re-list\|full.*list\|list.*request"` |
-| sync version 跳跃 | 版本号非连续递增 | `grep "sync_version\|from_version"` |
-| 路由表更新 | 路由添加/删除时间点 | `grep -i "route.*add\|route.*delete\|route.*update\|partial_update"` |
-| backoff 触发 | 连接断开后重连等待 | `grep -i "backoff\|reconnect\|retry"` |
+| Pattern | Meaning | Search method |
+|---------|---------|---------------|
+| `TOO_OLD_VERSION` | Event buffer overflow, triggering full re-list | `grep "TOO_OLD_VERSION\|EVENTS_LOST"` |
+| `SERVER_RELOAD` | Controller restart causes full re-sync | `grep "SERVER_RELOAD\|SERVER_ID_MISMATCH\|server_id"` |
+| Re-list trigger | Gateway issues a full list request (not at startup) | `grep -i "re-list\|full.*list\|list.*request"` |
+| Sync version jump | Version numbers are not consecutively increasing | `grep "sync_version\|from_version"` |
+| Routing-table updates | When routes are added / removed | `grep -i "route.*add\|route.*delete\|route.*update\|partial_update"` |
+| Backoff trigger | Reconnection wait after a disconnect | `grep -i "backoff\|reconnect\|retry"` |
 
-### Test Output
+### Test output
 
-| 模式 | 含义 | 搜索方式 |
-|------|------|---------|
-| 意外 200 | 旧路由还在，请求被错误转发 | `grep "expected 404.*got 200\|unexpected.*200"` |
-| 意外 404 | 新路由还没生效 | `grep "expected 200.*got 404\|unexpected.*404"` |
-| status condition 不匹配 | status 来自上一个测试 | `grep "condition.*expected\|status.*mismatch\|Accepted.*False"` |
-| 超时 | 等待条件超时 | `grep -i "timeout\|timed out\|deadline"` |
+| Pattern | Meaning | Search method |
+|---------|---------|---------------|
+| Unexpected 200 | Old route still active; request was incorrectly forwarded | `grep "expected 404.*got 200\|unexpected.*200"` |
+| Unexpected 404 | New route hasn't taken effect yet | `grep "expected 200.*got 404\|unexpected.*404"` |
+| Status condition mismatch | Status is from the previous test | `grep "condition.*expected\|status.*mismatch\|Accepted.*False"` |
+| Timeout | Waiting for a condition timed out | `grep -i "timeout\|timed out\|deadline"` |
 
-## 3. 时序关联分析
+## 3. Timeline-correlation analysis
 
-**目标：** 把测试失败的时间点和 controller/gateway 日志对齐，判断属于哪种失败模式。
+**Goal:** align the test failure time with controller / gateway logs to determine which failure mode applies.
 
-### 步骤
+### Steps
 
-1. **从 test output 找失败时间点**
+1. **Find the failure timestamps in the test output**
    ```bash
    grep -E "FAIL|--- FAIL" /tmp/test-batch.log
    ```
 
-2. **在 controller 日志中找该时间窗口（前后 30 秒）的事件**
+2. **Look in the controller log for events in that time window (±30 seconds)**
    ```bash
-   # 假设失败时间是 14:32:15
+   # Assuming the failure was at 14:32:15
    awk '/14:31:45/,/14:32:45/' /tmp/controller-batch.log
    ```
 
-3. **在 gateway 日志中找同一时间窗口的 sync 事件**
+3. **Look in the gateway log for sync events in the same time window**
    ```bash
    awk '/14:31:45/,/14:32:45/' /tmp/gateway-batch.log
    ```
 
-4. **判断失败模式**
+4. **Identify the failure mode**
 
-| 观察到的现象 | 失败模式 | 根因方向 |
-|-------------|---------|---------|
-| 测试 N 的 Route 删除事件在测试 N+1 开始后才出现 | 旧路由残留 | Controller 处理延迟或 Gateway sync 延迟 |
-| 测试 N+1 的 Route 创建事件已处理但 Gateway 没收到 | 新路由没到 | gRPC sync 延迟或事件丢失 |
-| Status patch 在测试 N+1 的断言之后才写入 | Status 滞后 | Status 写入队列积压或冲突重试 |
-| 同一个 key 反复 enqueue/dequeue | Requeue 风暴 | 级联 requeue 放大 |
+| Observation | Failure mode | Root-cause direction |
+|-------------|--------------|----------------------|
+| The Route delete event for test N appears only after test N+1 has started | Stale route lingering | Controller processing delay or gateway sync delay |
+| The Route create event for test N+1 has been processed but the gateway didn't receive it | New route did not arrive | gRPC sync delay or event lost |
+| Status patch is written only after test N+1's assertion | Status lag | Status-write queue backlog or conflict retries |
+| The same key is repeatedly enqueued/dequeued | Requeue storm | Cascaded requeue amplification |
 
-## 4. 单跑 vs 批量对比
+## 4. Single vs. batch comparison
 
-对同一个失败测试：
+For the same failing test:
 
 ```bash
-# 对比 controller 日志中该测试资源的处理时序
+# Compare the controller log timing for that test's resources
 diff <(grep "same-namespace\|httproute" /tmp/controller-single.log) \
      <(grep "same-namespace\|httproute" /tmp/controller-batch.log)
 ```
 
-重点关注：
-- **事件间隔差异**：批量跑时删除到重建的间隔是否更短
-- **队列深度差异**：批量跑时是否出现了单跑没有的积压
-- **额外事件**：批量跑时是否有其他测试的资源事件穿插进来
+Focus on:
+- **Event-interval differences**: in the batch run, is the gap between delete and recreate shorter?
+- **Queue-depth differences**: does the batch run hit a backlog the single run doesn't?
+- **Extra events**: in the batch run, are there interleaved resource events from other tests?
 
-## 5. 诊断结论模板
+## 5. Diagnostic-conclusion template
 
-分析完成后，用以下格式记录：
+After analysis, record using this format:
 
 ```
-测试: <TestName>
-失败模式: 旧路由残留 / 新路由没到 / Status 滞后 / Requeue 风暴
-证据:
-  - [时间戳] controller: <关键日志行>
-  - [时间戳] gateway: <关键日志行>
-  - [时间戳] test: <失败断言>
-时序问题: 测试 N 的 <事件> 和测试 N+1 的 <事件> 间隔仅 <X>ms
-建议修复方向: <具体建议>
+Test: <TestName>
+Failure mode: stale route lingering / new route did not arrive / status lag / requeue storm
+Evidence:
+  - [timestamp] controller: <key log line>
+  - [timestamp] gateway: <key log line>
+  - [timestamp] test: <failed assertion>
+Timing issue: the gap between <event> in test N and <event> in test N+1 is only <X>ms
+Suggested fix direction: <specific suggestion>
 ```
 
-## 相关文件
+## Related files
 
-- 批量修复计划: `tasks/todo/conformance-fix-batches/README.md`
-- Batch 7 详情: `tasks/todo/conformance-fix-batches/batch-07-batch-concurrency.md`
+- Batch fix plan: `tasks/todo/conformance-fix-batches/README.md`
+- Batch 7 details: `tasks/todo/conformance-fix-batches/batch-07-batch-concurrency.md`
 - Controller workqueue: `src/core/controller/conf_mgr/sync_runtime/workqueue.rs`
 - Gateway sync: `src/core/gateway/conf_sync/cache_client/event_dispatch.rs`
-- Conformance 测试入口: `examples/gateway-api-conformance/conformance_test.go`
+- Conformance test entry point: `examples/gateway-api-conformance/conformance_test.go`

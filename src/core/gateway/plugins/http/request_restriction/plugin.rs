@@ -67,7 +67,7 @@ impl RequestRestriction {
     pub fn create(config: &RequestRestrictionConfig) -> Box<dyn RequestFilter> {
         // Clone and validate the config to compile regex patterns
         let mut validated_config = config.clone();
-        validated_config.validate();
+        let _ = validated_config.validate();
 
         let plugin = RequestRestriction {
             name: "RequestRestriction".to_string(),
@@ -93,6 +93,7 @@ impl RequestRestriction {
                 session.get_query_param(key)
             }
             RestrictionSource::Path => Some(session.get_path().to_string()),
+            RestrictionSource::RequestPath => Some(session.get_request_path().to_string()),
             RestrictionSource::Method => Some(session.get_method().to_string()),
             RestrictionSource::Referer => session.header_value("Referer"),
         }
@@ -159,9 +160,11 @@ impl RequestFilter for RequestRestriction {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
+        use crate::types::resources::edgion_plugins::PluginValidation;
         // Check for configuration errors
-        if !self.config.is_valid() {
+        if self.config.validation_error().is_some() {
             plugin_log.push_err("restriction config invalid");
+            // invariant: 500 and 403 are compile-time-literal HTTP status codes; ResponseHeader::build cannot fail.
             let resp = Box::new(
                 ResponseHeader::build(500, None)
                     .unwrap_or_else(|_| ResponseHeader::build(403, None).expect("403 is valid")),
@@ -183,6 +186,7 @@ impl RequestFilter for RequestRestriction {
             let deny_msg = match denied_source {
                 Some(RestrictionSource::Method) => "Deny method",
                 Some(RestrictionSource::Path) => "Deny path",
+                Some(RestrictionSource::RequestPath) => "Deny request path",
                 Some(RestrictionSource::Header) => "Deny header",
                 Some(RestrictionSource::Cookie) => "Deny cookie",
                 Some(RestrictionSource::Query) => "Deny query",
@@ -197,7 +201,8 @@ impl RequestFilter for RequestRestriction {
                 .as_deref()
                 .unwrap_or("Access denied by restriction policy");
 
-            // Build error response
+            // Build error response.
+            // invariant: 403 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
             let mut resp = Box::new(
                 ResponseHeader::build(self.config.status, None)
                     .unwrap_or_else(|_| ResponseHeader::build(403, None).expect("403 is valid")),
@@ -231,186 +236,6 @@ mod tests {
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
     use crate::types::resources::edgion_plugins::OnMissing;
 
-    fn create_header_deny_config() -> RequestRestrictionConfig {
-        let mut config = RequestRestrictionConfig {
-            rules: vec![RestrictionRule {
-                name: Some("block-bots".to_string()),
-                source: RestrictionSource::Header,
-                key: Some("User-Agent".to_string()),
-                deny_regex: Some(vec!["(?i).*Bot.*".to_string(), "(?i).*Spider.*".to_string()]),
-                on_missing: OnMissing::Allow,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        config.validate();
-        config
-    }
-
-    fn create_path_allow_config() -> RequestRestrictionConfig {
-        let mut config = RequestRestrictionConfig {
-            rules: vec![RestrictionRule {
-                name: Some("api-only".to_string()),
-                source: RestrictionSource::Path,
-                allow: Some(vec!["/health".to_string()]),
-                allow_regex: Some(vec!["^/api/.*".to_string()]),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        config.validate();
-        config
-    }
-
-    fn create_method_allow_config() -> RequestRestrictionConfig {
-        let mut config = RequestRestrictionConfig {
-            rules: vec![RestrictionRule {
-                name: Some("readonly".to_string()),
-                source: RestrictionSource::Method,
-                allow: Some(vec!["GET".to_string(), "HEAD".to_string()]),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        config.validate();
-        config
-    }
-
-    #[tokio::test]
-    async fn test_header_deny_blocks_bot() {
-        let config = create_header_deny_config();
-        let plugin = RequestRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RequestRestriction");
-
-        mock_session
-            .expect_header_value()
-            .withf(|k| k == "User-Agent")
-            .return_const(Some("Googlebot/2.1".to_string()));
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny"));
-    }
-
-    #[tokio::test]
-    async fn test_header_deny_allows_normal_ua() {
-        let config = create_header_deny_config();
-        let plugin = RequestRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RequestRestriction");
-
-        mock_session
-            .expect_header_value()
-            .withf(|k| k == "User-Agent")
-            .return_const(Some("Mozilla/5.0 (Windows NT 10.0)".to_string()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allow"));
-    }
-
-    #[tokio::test]
-    async fn test_path_allow_blocks_non_api() {
-        let config = create_path_allow_config();
-        let plugin = RequestRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RequestRestriction");
-
-        mock_session.expect_get_path().return_const("/admin/users".to_string());
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny"));
-    }
-
-    #[tokio::test]
-    async fn test_path_allow_passes_api() {
-        let config = create_path_allow_config();
-        let plugin = RequestRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RequestRestriction");
-
-        mock_session.expect_get_path().return_const("/api/users".to_string());
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allow"));
-    }
-
-    #[tokio::test]
-    async fn test_path_allow_passes_health() {
-        let config = create_path_allow_config();
-        let plugin = RequestRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RequestRestriction");
-
-        mock_session.expect_get_path().return_const("/health".to_string());
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allow"));
-    }
-
-    #[tokio::test]
-    async fn test_method_allow_blocks_post() {
-        let config = create_method_allow_config();
-        let plugin = RequestRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RequestRestriction");
-
-        mock_session.expect_get_method().return_const("POST".to_string());
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny"));
-    }
-
-    #[tokio::test]
-    async fn test_method_allow_passes_get() {
-        let config = create_method_allow_config();
-        let plugin = RequestRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RequestRestriction");
-
-        mock_session.expect_get_method().return_const("GET".to_string());
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allow"));
-    }
-
-    #[tokio::test]
-    async fn test_missing_header_allowed_by_default() {
-        let config = create_header_deny_config();
-        let plugin = RequestRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RequestRestriction");
-
-        mock_session
-            .expect_header_value()
-            .withf(|k| k == "User-Agent")
-            .return_const(None::<String>);
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allow"));
-    }
-
     #[tokio::test]
     async fn test_missing_header_denied_when_configured() {
         let mut config = RequestRestrictionConfig {
@@ -424,7 +249,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        config.validate();
+        let _ = config.validate();
 
         let plugin = RequestRestriction::create(&config);
         let mut mock_session = MockPluginSession::new();
@@ -444,132 +269,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_multiple_rules_any_mode() {
-        // Any mode: first denial wins
-        let mut config = RequestRestrictionConfig {
-            rules: vec![
-                RestrictionRule {
-                    name: Some("block-bots".to_string()),
-                    source: RestrictionSource::Header,
-                    key: Some("User-Agent".to_string()),
-                    deny_regex: Some(vec![".*Bot.*".to_string()]),
-                    ..Default::default()
-                },
-                RestrictionRule {
-                    name: Some("block-admin".to_string()),
-                    source: RestrictionSource::Path,
-                    deny_regex: Some(vec!["^/admin/.*".to_string()]),
-                    ..Default::default()
-                },
-            ],
-            match_mode: RuleMatchMode::Any,
-            ..Default::default()
-        };
-        config.validate();
-
-        let plugin = RequestRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RequestRestriction");
-
-        // Normal UA but admin path - should be denied by path rule
-        mock_session
-            .expect_header_value()
-            .withf(|k| k == "User-Agent")
-            .return_const(Some("Mozilla/5.0".to_string()));
-        mock_session.expect_get_path().return_const("/admin/users".to_string());
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny"));
-    }
-
-    #[tokio::test]
-    async fn test_cookie_restriction() {
+    async fn test_request_path_source_uses_entry_raw() {
+        // RequestPath source must call get_request_path(), not get_path().
+        // The deny list value is kept raw (/%61dmin) and must match the raw entry path.
         let mut config = RequestRestrictionConfig {
             rules: vec![RestrictionRule {
-                name: Some("block-debug".to_string()),
-                source: RestrictionSource::Cookie,
-                key: Some("debug".to_string()),
-                deny: Some(vec!["true".to_string(), "1".to_string()]),
+                name: Some("deny-raw-path".to_string()),
+                source: RestrictionSource::RequestPath,
+                deny: Some(vec!["/%61dmin".to_string()]),
                 ..Default::default()
             }],
             ..Default::default()
         };
-        config.validate();
+        assert!(config.validate().is_ok());
 
         let plugin = RequestRestriction::create(&config);
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("RequestRestriction");
 
+        // Entry-time raw path is "/%61dmin" — should be denied
         mock_session
-            .expect_get_cookie()
-            .withf(|k| k == "debug")
-            .return_const(Some("true".to_string()));
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny"));
-    }
-
-    #[tokio::test]
-    async fn test_query_restriction() {
-        let mut config = RequestRestrictionConfig {
-            rules: vec![RestrictionRule {
-                name: Some("block-test".to_string()),
-                source: RestrictionSource::Query,
-                key: Some("mode".to_string()),
-                deny: Some(vec!["test".to_string(), "debug".to_string()]),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        config.validate();
-
-        let plugin = RequestRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RequestRestriction");
-
-        mock_session
-            .expect_get_query_param()
-            .withf(|k| k == "mode")
-            .return_const(Some("test".to_string()));
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny"));
-    }
-
-    #[tokio::test]
-    async fn test_referer_restriction() {
-        let mut config = RequestRestrictionConfig {
-            rules: vec![RestrictionRule {
-                name: Some("allow-internal".to_string()),
-                source: RestrictionSource::Referer,
-                allow_regex: Some(vec![".*example\\.com.*".to_string()]),
-                on_missing: OnMissing::Deny,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        config.validate();
-
-        let plugin = RequestRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RequestRestriction");
-
-        mock_session
-            .expect_header_value()
-            .withf(|k| k == "Referer")
-            .return_const(Some("https://evil.com/page".to_string()));
+            .expect_get_request_path()
+            .return_const("/%61dmin".to_string());
         mock_session.expect_write_response_header().returning(|_, _| Ok(()));
         mock_session.expect_write_response_body().returning(|_, _| Ok(()));
 

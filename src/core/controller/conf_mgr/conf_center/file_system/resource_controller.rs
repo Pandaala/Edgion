@@ -11,8 +11,10 @@
 //! - Delete(info) -> processor.on_delete(&obj)
 
 use super::event::FileSystemEvent;
-use super::file_watcher::{build_path_from_key, KindEventReceiver};
+use super::file_watcher::KindEventReceiver;
+use super::path_registry::{PathRegistry, ResourceKey};
 use super::status::FileSystemStatusHandler;
+use super::storage::build_resource_path_from_key;
 use crate::core::controller::conf_mgr::conf_center::common::parse_resource_content;
 use crate::core::controller::conf_mgr::sync_runtime::metrics::{controller_metrics, InitSyncTimer};
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
@@ -38,6 +40,11 @@ where
     kind: &'static str,
     processor: Arc<ResourceProcessor<K>>,
     conf_dir: PathBuf,
+    /// Shared with watcher / status handler / storage — single source of truth
+    /// for `(kind, key) → on-disk path`. Used here to resolve the spec path
+    /// the worker re-reads (may be nested) and to feed the status handler so
+    /// `.yaml.status` lands beside its spec.
+    registry: Arc<PathRegistry>,
     event_rx: KindEventReceiver,
     shutdown_signal: Option<ShutdownSignal>,
     /// Raw store shared with processor for cross-resource key lookups.
@@ -53,6 +60,7 @@ where
         kind: &'static str,
         processor: Arc<ResourceProcessor<K>>,
         conf_dir: PathBuf,
+        registry: Arc<PathRegistry>,
         event_rx: KindEventReceiver,
     ) -> Self {
         let fs_raw_store = Arc::new(LocalRawStore::new());
@@ -65,6 +73,7 @@ where
             kind,
             processor,
             conf_dir,
+            registry,
             event_rx,
             shutdown_signal: None,
             fs_raw_store,
@@ -94,8 +103,9 @@ where
         let mut worker_handle: Option<JoinHandle<()>> = None;
         let mut shutdown = self.shutdown_signal.clone();
 
-        // Status handler for init phase (also used by worker)
-        let status_handler = FileSystemStatusHandler::new(self.conf_dir.clone());
+        // Status handler for init phase. Registry-aware so `.yaml.status` writes
+        // land beside the spec (which may be nested under a namespace subdir).
+        let status_handler = FileSystemStatusHandler::new(self.conf_dir.clone()).with_registry(self.registry.clone());
 
         loop {
             let event = if let Some(ref mut signal) = shutdown {
@@ -145,7 +155,7 @@ where
                                     self.fs_raw_store.upsert(key.clone(), Arc::new(obj.clone()));
 
                                     // Read existing status from .status file for comparison
-                                    let existing_status_json = status_handler.read_status_json(kind, &key);
+                                    let existing_status_json = status_handler.read_status_json(kind, &key).await;
 
                                     let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
@@ -156,11 +166,10 @@ where
                                             if status_changed {
                                                 match extract_status_value(&obj) {
                                                     Some(status_value) => {
-                                                        match status_handler.write_status_value(
-                                                            kind,
-                                                            &key,
-                                                            &status_value,
-                                                        ) {
+                                                        match status_handler
+                                                            .write_status_value(kind, &key, &status_value)
+                                                            .await
+                                                        {
                                                             Ok(()) => {
                                                                 crate::core::controller::conf_mgr::sync_runtime::record_status_write(kind, "filesystem");
                                                                 tracing::info!(
@@ -201,8 +210,9 @@ where
                                     let error_msg = e.to_string();
                                     // Extract key from path
                                     if let Some(key) = extract_key_from_path(&path, kind) {
-                                        if let Err(write_err) =
-                                            status_handler.write_error_status(kind, &key, "ParseError", &error_msg)
+                                        if let Err(write_err) = status_handler
+                                            .write_error_status(kind, &key, "ParseError", &error_msg)
+                                            .await
                                         {
                                             tracing::warn!(
                                                 component = "fs_resource_controller",
@@ -241,6 +251,7 @@ where
                             worker_handle = Some(spawn_worker(
                                 self.processor.clone(),
                                 self.conf_dir.clone(),
+                                self.registry.clone(),
                                 kind,
                                 self.shutdown_signal.clone(),
                                 self.fs_raw_store.clone(),
@@ -259,14 +270,17 @@ where
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
                                         self.fs_raw_store.upsert(key.clone(), Arc::new(obj.clone()));
-                                        let existing_status_json = status_handler.read_status_json(kind, &key);
+                                        let existing_status_json = status_handler.read_status_json(kind, &key).await;
                                         let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
                                         if let WorkItemResult::Processed { obj, status_changed } = result {
                                             init_count += 1;
                                             if status_changed {
                                                 if let Some(status_value) = extract_status_value(&obj) {
-                                                    match status_handler.write_status_value(kind, &key, &status_value) {
+                                                    match status_handler
+                                                        .write_status_value(kind, &key, &status_value)
+                                                        .await
+                                                    {
                                                         Ok(()) => {
                                                             crate::core::controller::conf_mgr::sync_runtime::record_status_write(kind, "filesystem");
                                                             tracing::info!(
@@ -306,6 +320,13 @@ where
                                 match parse_resource_content::<K>(&content) {
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
+                                        tracing::info!(
+                                            component = "fs_resource_controller",
+                                            kind = kind,
+                                            key = %key,
+                                            path = %path.display(),
+                                            "Received runtime Apply event, enqueuing"
+                                        );
                                         self.fs_raw_store.upsert(key, Arc::new(obj.clone()));
                                         self.processor.on_apply(&obj).await;
                                     }
@@ -432,6 +453,7 @@ use tokio::sync::broadcast;
 fn spawn_worker<K>(
     processor: Arc<ResourceProcessor<K>>,
     conf_dir: PathBuf,
+    registry: Arc<PathRegistry>,
     kind: &'static str,
     shutdown_signal: Option<ShutdownSignal>,
     fs_raw_store: Arc<LocalRawStore<K>>,
@@ -440,7 +462,7 @@ where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
 {
     let workqueue = processor.workqueue();
-    let status_handler = FileSystemStatusHandler::new(conf_dir.clone());
+    let status_handler = FileSystemStatusHandler::new(conf_dir.clone()).with_registry(registry.clone());
 
     tokio::spawn(async move {
         // Clone shutdown_signal once outside the loop
@@ -466,11 +488,19 @@ where
 
             match item {
                 Some(work_item) => {
-                    // For FileSystem mode, we read from file instead of K8s store
-                    let path = build_path_from_key(&conf_dir, kind, &work_item.key);
+                    // For FileSystem mode we re-read the spec from disk. The
+                    // canonical path lives in `PathRegistry` (winner of this
+                    // (kind, key)); we fall back to the default nested layout
+                    // only when the registry has no record — which mainly
+                    // happens for keys that were enqueued but whose Create
+                    // event the watcher hasn't yet observed.
+                    let rkey = ResourceKey::new(kind.to_string(), work_item.key.clone());
+                    let path = registry
+                        .winner_of(&rkey)
+                        .unwrap_or_else(|| build_resource_path_from_key(&conf_dir, kind, &work_item.key));
 
                     let (store_obj, parse_error) = if path.exists() {
-                        match std::fs::read_to_string(&path) {
+                        match tokio::fs::read_to_string(&path).await {
                             Ok(content) => match parse_resource_content::<K>(&content) {
                                 Ok(obj) => {
                                     // Keep raw store in sync with the latest file version.
@@ -514,8 +544,9 @@ where
 
                     // Handle parse errors by writing error status
                     if let Some(error_msg) = parse_error {
-                        if let Err(e) =
-                            status_handler.write_error_status(kind, &work_item.key, "ParseError", &error_msg)
+                        if let Err(e) = status_handler
+                            .write_error_status(kind, &work_item.key, "ParseError", &error_msg)
+                            .await
                         {
                             tracing::warn!(
                                 component = "fs_resource_controller",
@@ -530,7 +561,7 @@ where
                     }
 
                     // Read existing status from .status file for comparison
-                    let existing_status_json = status_handler.read_status_json(kind, &work_item.key);
+                    let existing_status_json = status_handler.read_status_json(kind, &work_item.key).await;
 
                     // Use processor's process_work_item which handles the reconciliation logic
                     let result = processor
@@ -548,7 +579,10 @@ where
                             if status_changed {
                                 match extract_status_value(&obj) {
                                     Some(status_value) => {
-                                        match status_handler.write_status_value(kind, &work_item.key, &status_value) {
+                                        match status_handler
+                                            .write_status_value(kind, &work_item.key, &status_value)
+                                            .await
+                                        {
                                             Ok(()) => {
                                                 crate::core::controller::conf_mgr::sync_runtime::record_status_write(
                                                     kind,
@@ -586,7 +620,7 @@ where
                         }
                         WorkItemResult::Deleted { key } => {
                             // Delete status file when resource is deleted
-                            if let Err(e) = status_handler.delete_status(kind, &key) {
+                            if let Err(e) = status_handler.delete_status(kind, &key).await {
                                 tracing::warn!(
                                     component = "fs_resource_controller",
                                     kind = kind,

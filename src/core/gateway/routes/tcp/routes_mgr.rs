@@ -197,6 +197,24 @@ impl GlobalTcpRouteManagers {
             }
         }
 
+        // Sweep orphan entries left over from earlier rebuild_all calls — see the
+        // matching comment in HTTP routes_mgr::rebuild_affected_listener_managers.
+        let route_referenced: HashSet<ListenerKey> = self
+            .route_cache
+            .iter()
+            .flat_map(|e| resolved_listeners_for_route(e.value()).to_vec())
+            .collect();
+        let orphans: Vec<ListenerKey> = self
+            .by_listener
+            .iter()
+            .filter(|e| !route_referenced.contains(e.key()) && !active_listeners.contains(e.key()))
+            .map(|e| e.key().clone())
+            .collect();
+        for key in &orphans {
+            self.by_listener.remove(key);
+        }
+        removed_stale += orphans.len();
+
         tracing::info!(
             component = "global_tcp_route_managers",
             affected = affected_listeners.len(),

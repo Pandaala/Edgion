@@ -59,6 +59,7 @@ REQUIRED_SAN_ENTRIES=(
     "DNS:match-test.example.com"
     "DNS:*.wildcard.example.com"
     "DNS:section-test.example.com"
+    "DNS:default.example.com"
     "DNS:gateway-tls.test.com"
     "DNS:*.sandbox.example.com"
     "DNS:*.pp2.example.com"
@@ -70,6 +71,7 @@ REQUIRED_SAN_ENTRIES=(
     "DNS:no-hostname-gateway-tls.test.com"
     "DNS:sni421-exact.test.com"
     "DNS:*.sni421.test.com"
+    "DNS:*.example.com"
 )
 
 create_secret_yaml() {
@@ -137,12 +139,31 @@ generate_tls_cert() {
       -out "$TEMP_DIR/edge-tls.crt" \
       -days 365 \
       -subj "/CN=test.example.com" \
-      -addext "subjectAltName=DNS:test.example.com,DNS:grpc.example.com,DNS:tcp.example.com,DNS:match-test.example.com,DNS:*.wildcard.example.com,DNS:section-test.example.com,DNS:gateway-tls.test.com,DNS:*.sandbox.example.com,DNS:*.pp2.example.com,DNS:*.sp-allow.example.com,DNS:*.sp-deny.example.com,DNS:*.both-absent.example.com,DNS:both-absent-tls.example.com,DNS:port-only.example.com,DNS:no-hostname-gateway-tls.test.com,DNS:sni421-exact.test.com,DNS:*.sni421.test.com" \
+      -addext "subjectAltName=DNS:test.example.com,DNS:grpc.example.com,DNS:tcp.example.com,DNS:match-test.example.com,DNS:*.wildcard.example.com,DNS:section-test.example.com,DNS:default.example.com,DNS:gateway-tls.test.com,DNS:*.sandbox.example.com,DNS:*.pp2.example.com,DNS:*.sp-allow.example.com,DNS:*.sp-deny.example.com,DNS:*.both-absent.example.com,DNS:both-absent-tls.example.com,DNS:port-only.example.com,DNS:no-hostname-gateway-tls.test.com,DNS:sni421-exact.test.com,DNS:*.sni421.test.com,DNS:*.example.com" \
       2>/dev/null
 
     cp "$TEMP_DIR/edge-tls.crt" "$CERTS_DIR/server.crt"
     cp "$TEMP_DIR/edge-tls.key" "$CERTS_DIR/server.key"
     cp "$TEMP_DIR/edge-tls.crt" "$CERTS_DIR/ca.pem"
+}
+
+# ECDSA companion certificate for the Gateway dual-cert (RSA + ECDSA) listener.
+# Shares the gateway-tls.test.com SAN with the RSA edge-tls cert; a unique CN
+# (ecdsa-dualcert.example.com) lets the dual-cert test tell which key-type slot
+# the server picked during the handshake.
+generate_ecdsa_cert() {
+    log_info "Generating ECDSA dual-cert companion certificate..."
+    openssl ecparam -name prime256v1 -genkey -noout -out "$TEMP_DIR/edge-tls-ecdsa.key" 2>/dev/null
+    openssl req -x509 -new -nodes \
+      -key "$TEMP_DIR/edge-tls-ecdsa.key" \
+      -out "$TEMP_DIR/edge-tls-ecdsa.crt" \
+      -days 365 \
+      -subj "/CN=ecdsa-dualcert.example.com" \
+      -addext "subjectAltName=DNS:gateway-tls.test.com,DNS:ecdsa-dualcert.example.com" \
+      2>/dev/null
+
+    cp "$TEMP_DIR/edge-tls-ecdsa.crt" "$CERTS_DIR/server-ecdsa.crt"
+    cp "$TEMP_DIR/edge-tls-ecdsa.key" "$CERTS_DIR/server-ecdsa.key"
 }
 
 cert_matches_required_sans() {
@@ -180,12 +201,26 @@ if [ ! -f "$CERTS_DIR/ca.pem" ] && [ -f "$CERTS_DIR/server.crt" ]; then
     cp "$CERTS_DIR/server.crt" "$CERTS_DIR/ca.pem"
 fi
 
+if [ -f "$CERTS_DIR/server-ecdsa.crt" ] && [ -f "$CERTS_DIR/server-ecdsa.key" ]; then
+    log_info "Found existing ECDSA cert/key, reusing them."
+else
+    generate_ecdsa_cert
+    log_success "ECDSA cert/key generated."
+fi
+
 create_secret_yaml \
     "edge-tls" \
     "edgion-test" \
     "$CERTS_DIR/server.crt" \
     "$CERTS_DIR/server.key" \
     "$SECRET_OUTPUT_FILE"
+
+create_secret_yaml \
+    "edge-tls-ecdsa" \
+    "edgion-test" \
+    "$CERTS_DIR/server-ecdsa.crt" \
+    "$CERTS_DIR/server-ecdsa.key" \
+    "$SECRET_OUTPUT_DIR/Secret_edgion-test_edge-tls-ecdsa.yaml"
 
 write_status_refgrant_tls_secrets "$CERTS_DIR/server.crt" "$CERTS_DIR/server.key"
 

@@ -29,7 +29,6 @@ data:
       gateway_class: public-gateway
       controller_name: edgion.io/gateway-controller
       watch_namespaces: [edgion-system, edgion-default, edgion-test, edgion-backend]
-      endpoint_mode: both
       # HA mode: "leader-only" (default) or "all-serve"
       ha_mode: leader-only
 
@@ -37,7 +36,7 @@ data:
         lease_name: edgion-controller-leader
         lease_namespace: edgion-system
         lease_duration_secs: 15
-        renew_period_secs: 10
+        renew_deadline_secs: 10
         retry_period_secs: 2
 
       metadata_filter:

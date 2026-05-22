@@ -8,11 +8,10 @@ use k8s_openapi::ByteString;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::core::controller::conf_mgr::conf_center::common::EndpointMode;
 use crate::core::gateway::link_sys::credential::CredentialState;
 use crate::types::credentials::materials::BasicAuthMaterial;
 use crate::types::credentials::resolvers::tls::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
-use crate::types::resources::common::{SecretReference, TlsCerts, TlsConfig};
+use crate::types::resources::common::{SecretObjectReference, SecretSlot, TlsCerts, TlsConfig};
 use crate::types::resources::link_sys::etcd::{EtcdAuth, EtcdClientConfig, EtcdKeepAlive, EtcdTimeout};
 
 // ============================================================================
@@ -28,7 +27,6 @@ use crate::types::resources::link_sys::etcd::{EtcdAuth, EtcdClientConfig, EtcdKe
 /// type = "etcd"
 /// endpoints = ["http://127.0.0.1:2379"]
 /// key_prefix = "/edgion"
-/// endpoint_mode = "endpoint_slice"
 ///
 /// [conf_center.auth]
 /// username = "root"
@@ -47,10 +45,6 @@ pub struct EtcdConfig {
     /// Key prefix for all configuration keys (default: "/edgion")
     #[serde(default = "default_key_prefix")]
     pub key_prefix: String,
-
-    /// Endpoint discovery mode (default: Auto → EndpointSlice)
-    #[serde(default)]
-    pub endpoint_mode: EndpointMode,
 
     /// Authentication (username/password)
     #[serde(default)]
@@ -116,18 +110,13 @@ pub struct EtcdTlsConfig {
 // ============================================================================
 
 impl EtcdConfig {
-    /// Get endpoint mode
-    pub fn endpoint_mode(&self) -> EndpointMode {
-        self.endpoint_mode
-    }
-
     /// Convert to `EtcdClientConfig` + `CredentialState` that
     /// `EtcdLinkClient::from_config()` accepts.
     ///
     /// TLS certificate file paths are read from disk and embedded as PEM strings.
     ///
     /// Auth note: Controller's ConfCenter uses file-based credentials (TOML
-    /// `[conf_center.auth]`), not `SecretReference`. To reuse the same
+    /// `[conf_center.auth]`), not `SecretObjectReference`. To reuse the same
     /// `build_connect_options` code path as the LinkSys CRD flow, we:
     /// - fill `EtcdClientConfig.auth` with a synthetic `EtcdAuth` placeholder
     ///   (the `secret_ref` is never read by the Gateway provider; only
@@ -140,20 +129,24 @@ impl EtcdConfig {
     pub fn to_client_config(&self) -> anyhow::Result<(EtcdClientConfig, CredentialState<BasicAuthMaterial>)> {
         // Auth: wire TOML username/password into CredentialState::Resolved so
         // `build_connect_options` picks it up — previously this path hard-coded
-        // `auth = None` which silently dropped the TOML credentials (I4-class
-        // silent fallback, regression of the fix-change effort).
+        // `auth = None` which silently dropped the TOML credentials (a
+        // silent-fallback regression of the credential-state contract).
         let (auth, auth_state): (Option<EtcdAuth>, CredentialState<BasicAuthMaterial>) = match &self.auth {
             Some(cfg) => (
                 Some(EtcdAuth {
-                    // Placeholder `secret_ref` — not used by the provider. The
+                    // Placeholder slot — `secret_ref` not used by the provider. The
                     // provider only checks `crd.auth.is_some()` to decide
                     // whether to authenticate; the material comes from
                     // `auth_state`, not from `secret_ref`.
-                    secret_ref: SecretReference {
-                        name: "conf-center-toml".to_string(),
-                        namespace: None,
+                    slot: SecretSlot {
+                        secret_ref: SecretObjectReference {
+                            group: None,
+                            kind: None,
+                            name: "conf-center-toml".to_string(),
+                            namespace: None,
+                        },
+                        secret: None,
                     },
-                    secret: None,
                 }),
                 CredentialState::Resolved(BasicAuthMaterial {
                     username: Some(cfg.username.clone()),
@@ -276,7 +269,6 @@ endpoints: ["http://127.0.0.1:2379"]
         let config: EtcdConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.endpoints, vec!["http://127.0.0.1:2379"]);
         assert_eq!(config.key_prefix, "/edgion");
-        assert!(config.endpoint_mode.is_auto());
         assert!(config.auth.is_none());
         assert!(config.tls.is_none());
     }
@@ -286,7 +278,6 @@ endpoints: ["http://127.0.0.1:2379"]
         let yaml = r#"
 endpoints: ["http://etcd-1:2379", "http://etcd-2:2379"]
 key_prefix: /my-app
-endpoint_mode: endpoint_slice
 connect_timeout_ms: 3000
 request_timeout_ms: 8000
 keep_alive_time_secs: 30
@@ -298,7 +289,6 @@ auth:
         let config: EtcdConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.endpoints.len(), 2);
         assert_eq!(config.key_prefix, "/my-app");
-        assert!(config.endpoint_mode.is_endpoint_slice());
         assert_eq!(config.connect_timeout_ms, Some(3000));
 
         let auth = config.auth.as_ref().unwrap();
@@ -311,7 +301,6 @@ auth:
         let config = EtcdConfig {
             endpoints: vec!["http://127.0.0.1:2379".to_string()],
             key_prefix: "/edgion".to_string(),
-            endpoint_mode: EndpointMode::default(),
             auth: None,
             tls: None,
             connect_timeout_ms: None,
@@ -335,7 +324,6 @@ auth:
         let config = EtcdConfig {
             endpoints: vec!["http://127.0.0.1:2379".to_string()],
             key_prefix: "/edgion".to_string(),
-            endpoint_mode: EndpointMode::default(),
             auth: Some(EtcdAuthConfig {
                 username: "root".to_string(),
                 password: "changeme".to_string(),
@@ -371,7 +359,6 @@ auth:
         let config = EtcdConfig {
             endpoints: vec!["http://127.0.0.1:2379".to_string()],
             key_prefix: "/edgion".to_string(),
-            endpoint_mode: EndpointMode::default(),
             auth: None,
             tls: None,
             connect_timeout_ms: None,

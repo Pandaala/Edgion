@@ -1,32 +1,32 @@
 ---
 name: architecture
-description: 架构导航 skill。按 bin 类型（Controller/Gateway/Ctl）和资源类型组织，涵盖通用约定、各 bin 架构、gRPC 同步、资源处理。
+description: Use when understanding how Edgion works internally — Controller/Gateway/Center/Ctl architecture, gRPC sync, resource processing flow, or adding a new plugin/resource/connector.
 ---
 
-# 01 架构与核心功能
+# 01 Architecture and core features
 
-> Edgion 是基于 Pingora 的 Kubernetes Gateway，采用 Controller–Gateway 分离架构。
+> Edgion is a Kubernetes Gateway built on Pingora, using a Controller–Gateway split architecture.
 
-## 整体架构
+## Overall architecture
 
-Edgion 是单 Crate、三 bin 的项目。**Controller 决策，Gateway 执行，Ctl 运维。**
+Edgion is a single-Crate, four-binary project. **Controller decides, Gateway executes, Ctl operates, Center federates.**
 
 ```mermaid
 flowchart TD
-    User["用户 / K8s API"] --> Controller
-    Traffic["客户端流量"] --> Gateway
+    User["User / K8s API"] --> Controller
+    Traffic["Client traffic"] --> Gateway
 
-    subgraph Controller["edgion-controller (控制面)"]
+    subgraph Controller["edgion-controller (control plane)"]
         CC["ConfCenter (File/K8s)"] --> WQ["Workqueue (per-kind)"]
         WQ --> RP["ResourceProcessor\n(validate/preparse/parse)"]
         RP --> SC["ServerCache"]
-        CrossRef["跨资源依赖\nSecretRefManager\nServiceRefManager\nCrossNamespaceRefManager\nRequeueChain"]
-        CtrlServices["Admin API (:5800)\nConfigSyncServer (:50051)\nACME Service (可选, 仅 Leader)"]
+        CrossRef["Cross-resource dependencies\nSecretRefManager\nServiceRefManager\nCrossNamespaceRefManager\nRequeueChain"]
+        CtrlServices["Admin API (:5800)\nConfigSyncServer (:50051)\nACME Service (optional, Leader only)"]
     end
 
     SC -- "gRPC Watch/List" --> SyncClient
 
-    subgraph Gateway["edgion-gateway (数据面)"]
+    subgraph Gateway["edgion-gateway (data plane)"]
         SyncClient["ConfigSyncClient"] --> ClientCache["ClientCache"] --> ConfHandler["ConfHandler"]
         PingoraServer["Pingora Server"]
         ConnFilter["ConnectionFilter (StreamPlugins)"]
@@ -35,108 +35,126 @@ flowchart TD
         PingoraServer --- ConnFilter
         PingoraServer --- ProxyHttp
         PingoraServer --- StreamRoutes
-        TLS["TLS 子系统\n下游 TLS (客户端→网关)\n上游 TLS (网关→后端 mTLS)"]
+        TLS["TLS subsystem\nDownstream TLS (client → gateway)\nUpstream TLS (gateway → backend mTLS)"]
         GwServices["Admin API (:5900)\nMetrics (:5901)"]
     end
 
-    subgraph CLI["edgion-cli (CLI 工具)"]
-        CliOps["apply/delete/get/reload\n3 种 target: center/server/client"]
+    subgraph CLI["edgion-cli (CLI tool)"]
+        CliOps["apply/delete/get/reload\n3 targets: center/server/client"]
+    end
+
+    subgraph Center["edgion-center (federation center)"]
+        CenterNode["Aggregates resources across federated controllers\nServes Center API"]
     end
 
     CLI -- "HTTP API" --> Controller
 ```
 
-## 细粒度定位
+## Fine-grained locator
 
-| 你想了解… | 从这里开始 |
+| What you want to learn | Start here |
 |-----------|-----------|
-| 项目全貌、代码组织、三 bin 共用约定 | [00-common/](00-common/SKILL.md) |
-| Controller 内部如何处理资源 | [01-controller/](01-controller/SKILL.md) |
-| Gateway 如何处理请求 | [02-gateway/](02-gateway/SKILL.md) |
-| Controller 和 Gateway 如何同步 | [03-controller-gateway-link/](03-controller-gateway-link/SKILL.md) |
-| edgion-cli 命令和 target 模式 | [04-ctl/](04-ctl/SKILL.md) |
-| 某种具体资源的完整处理链路 | [05-resources/](05-resources/SKILL.md) |
-| 排查路由不匹配 | [02-gateway/03-routes/](02-gateway/03-routes/SKILL.md) |
-| 排查 TLS 证书问题 | [02-gateway/04-tls/](02-gateway/04-tls/SKILL.md) |
-| 排查 gRPC 同步问题 | [03-controller-gateway-link/00-overview.md](03-controller-gateway-link/00-overview.md) |
-| **开发新资源类型** | [01-controller/09-add-new-resource/](01-controller/09-add-new-resource/00-guide.md) |
-| **开发 HTTP 插件** | [02-gateway/12-edgion-plugin-dev.md](02-gateway/12-edgion-plugin-dev.md) |
-| **开发 Stream 插件** | [02-gateway/13-stream-plugin-dev.md](02-gateway/13-stream-plugin-dev.md) |
-| **开发 LinkSys 连接器** | [02-gateway/14-link-sys-dev.md](02-gateway/14-link-sys-dev.md) |
-| **实现 ConfHandler** | [02-gateway/11-conf-handler-guidelines.md](02-gateway/11-conf-handler-guidelines.md) |
-| **实现 update_status** | [01-controller/10-status-management.md](01-controller/10-status-management.md) |
+| Project at a glance, code organization, conventions shared by the four binaries | [00-common/](00-common/SKILL.md) |
+| How the Controller processes resources internally | [01-controller/](01-controller/SKILL.md) |
+| How the Gateway processes requests | [02-gateway/](02-gateway/SKILL.md) |
+| How Controller and Gateway sync | [03-controller-gateway-link/](03-controller-gateway-link/SKILL.md) |
+| edgion-cli commands and target modes | [04-ctl/](04-ctl/SKILL.md) |
+| The full processing chain for a specific resource | [05-resources/](05-resources/SKILL.md) |
+| How edgion-center federates multi-cluster Controllers | [06-center/](06-center/SKILL.md) |
+| Troubleshoot route mismatch | [02-gateway/03-routes/](02-gateway/03-routes/SKILL.md) |
+| Troubleshoot TLS certificate issues | [02-gateway/04-tls/](02-gateway/04-tls/SKILL.md) |
+| Troubleshoot gRPC sync issues | [03-controller-gateway-link/00-overview.md](03-controller-gateway-link/00-overview.md) |
+| **Develop a new resource type** | [01-controller/09-add-new-resource/](01-controller/09-add-new-resource/00-guide.md) |
+| **Develop an HTTP plugin** | [02-gateway/12-edgion-plugin-dev.md](02-gateway/12-edgion-plugin-dev.md) |
+| **Develop a Stream plugin** | [02-gateway/13-stream-plugin-dev.md](02-gateway/13-stream-plugin-dev.md) |
+| **Develop a LinkSys connector** | [02-gateway/14-link-sys-dev.md](02-gateway/14-link-sys-dev.md) |
+| **Implement a ConfHandler** | [02-gateway/11-conf-handler-guidelines.md](02-gateway/11-conf-handler-guidelines.md) |
+| **Implement update_status** | [01-controller/10-status-management.md](01-controller/10-status-management.md) |
 
 ---
 
-## 目录总览
+## Directory overview
 
-### [00-common/](00-common/SKILL.md) — 通用约定
+### [00-common/](00-common/SKILL.md) — Common conventions
 
-三个 bin 共同遵守的基础约定：项目总览、命令行/目录/配置路径、Core 模块分层、资源系统（define_resources! 宏）。
+Foundational conventions shared by all four binaries: project overview, command line / directory / config-path conventions, Core module layering, and the resource system (`define_resources!` macro).
 
-### [01-controller/](01-controller/SKILL.md) — edgion-controller 架构
+### [01-controller/](01-controller/SKILL.md) — edgion-controller architecture
 
-控制面内部架构，按模块拆分：
+Internal architecture of the control plane, broken down by module:
 
-| 模块 | 关键词 |
+| Module | Keywords |
 |------|--------|
-| 总体架构 | ConfMgr 门面、ProcessorRegistry |
-| 启动/关闭 | Leader 选举、HA 模式、事件驱动主循环 |
-| Admin API | :5800 端口、CRUD、health/ready |
-| 配置中心 | ConfCenter trait、FileSystem / Kubernetes 两种实现 |
-| Workqueue | 去重、指数退避、dirty requeue |
-| ResourceProcessor | 11 步处理流水线、23 种 Handler |
-| Requeue | 跨资源联动、TriggerChain 环检测 |
-| CacheServer | ServerCache + EventStore、gRPC 数据源 |
-| ACME | Let's Encrypt 自动证书、仅 Leader |
-| 添加新资源 | workflow + 4 类模板（route-like/controller-only/plugin-like/cluster-scoped） |
-| Status 管理 | update_status 实现规范、已知陷阱 |
+| Overall architecture | ConfMgr facade, ProcessorRegistry |
+| Startup / shutdown | Leader election, HA mode, event-driven main loop |
+| Admin API | port :5800, CRUD, health/ready |
+| ConfigCenter | ConfCenter trait, FileSystem / Kubernetes implementations |
+| Workqueue | deduplication, exponential backoff, dirty requeue |
+| ResourceProcessor | 11-step processing pipeline, 23 Handler kinds |
+| Requeue | cross-resource linkage, TriggerChain cycle detection |
+| CacheServer | ServerCache + EventStore, gRPC data source |
+| ACME | Let's Encrypt automated certificates, Leader only |
+| Adding a new resource | workflow + 4 template categories (route-like / controller-only / plugin-like / cluster-scoped) |
+| Status management | update_status implementation conventions, known pitfalls |
 
-### [02-gateway/](02-gateway/SKILL.md) — edgion-gateway 架构
+### [02-gateway/](02-gateway/SKILL.md) — edgion-gateway architecture
 
-数据面内部架构，按子系统拆分：
+Internal architecture of the data plane, broken down by subsystem:
 
-| 子系统 | 关键词 |
+| Subsystem | Keywords |
 |--------|--------|
-| 总体架构 | 双运行时模型（Tokio + Pingora） |
-| 启动/关闭 | 14 步启动序列、两阶段 Pingora 集成 |
-| Pingora 生命周期 | 7 阶段 ProxyHttp 回调、ConnectionFilter |
-| [路由](02-gateway/03-routes/) | 多级匹配流水线、HTTP/gRPC/TCP/TLS/UDP 各自引擎 |
-| [TLS](02-gateway/04-tls/) | 下游/上游 TLS、SNI 匹配、BoringSSL/OpenSSL |
-| 插件系统 | 4 阶段执行、28 个 HTTP 插件、条件执行 |
-| 负载均衡 | RoundRobin/EWMA/LeastConn/ConsistentHash/Weighted |
-| 后端 | Service/EndpointSlice 发现、健康检查 |
-| 可观测性 | AccessLog（零拷贝 JSON）、Prometheus Metrics |
-| LinkSys | ES/Redis/Etcd/Webhook/File 外部集成 |
-| 运行时存储 | Gateway/Route 配置、ArcSwap 原子切换 |
-| ConfHandler 开发 | full_set/partial_update 规范、增量更新约束 |
-| HTTP 插件开发 | EdgionPlugin 阶段选择、runtime 接线、ExtensionRef |
-| Stream 插件开发 | ConnectionFilter / TlsRoute 两阶段 |
-| LinkSys 开发 | 外部系统连接器开发、LinkSysStore 桥接 |
+| Overall architecture | dual-runtime model (Tokio + Pingora) |
+| Startup / shutdown | 14-step startup sequence, two-phase Pingora integration |
+| Pingora lifecycle | 7-phase ProxyHttp callbacks, ConnectionFilter |
+| [Routes](02-gateway/03-routes/) | multi-stage matching pipeline, separate engines for HTTP/gRPC/TCP/TLS/UDP |
+| [TLS](02-gateway/04-tls/) | downstream/upstream TLS, SNI matching, BoringSSL/OpenSSL |
+| Plugin system | 4-phase execution, 28 HTTP plugins, conditional execution |
+| Load balancing | RoundRobin/EWMA/LeastConn/ConsistentHash/Weighted |
+| Backends | Service/EndpointSlice discovery, health checks |
+| Observability | AccessLog (zero-copy JSON), Prometheus Metrics |
+| LinkSys | ES/Redis/Etcd/Webhook/File external integrations |
+| Runtime store | Gateway/Route configuration, ArcSwap atomic swap |
+| ConfHandler development | full_set/partial_update conventions, incremental update constraints |
+| HTTP plugin development | EdgionPlugin phase selection, runtime wiring, ExtensionRef |
+| Stream plugin development | ConnectionFilter / TlsRoute two phases |
+| LinkSys development | external system connector development, LinkSysStore bridging |
 
-### [03-controller-gateway-link/](03-controller-gateway-link/SKILL.md) — 双向 gRPC 同步
+### [03-controller-gateway-link/](03-controller-gateway-link/SKILL.md) — Bidirectional gRPC sync
 
-ConfigSync 协议（GetServerInfo / List / Watch / WatchServerMeta），Controller 侧 ConfigSyncServer + Gateway 侧 ConfigSyncClient 的实现。
+The ConfigSync protocol (GetServerInfo / List / Watch / WatchServerMeta), the Controller-side ConfigSyncServer and the Gateway-side ConfigSyncClient implementation.
 
-### [04-ctl/](04-ctl/SKILL.md) — edgion-cli 架构
+### [04-ctl/](04-ctl/SKILL.md) — edgion-cli architecture
 
-CLI 工具：3 种 target 模式（center/server/client）、apply/delete/get/reload 子命令。
+CLI tool: 3 target modes (center/server/client), apply/delete/get/reload subcommands.
 
-### [05-resources/](05-resources/SKILL.md) — 资源架构
+### [05-resources/](05-resources/SKILL.md) — Resource architecture
 
-通用处理流程 + 20 种资源的功能点、特殊处理、跨资源关联。
-资源 Schema（字段定义、默认值）见 [02-features/03-resources/](../02-features/03-resources/SKILL.md)（编号对齐，职责互补）。
+Common processing flow + features, special handling, and cross-resource links for all 20 resources.
+For resource Schema (field definitions, default values) see [02-features/03-resources/](../02-features/03-resources/SKILL.md) (numbered to align, complementary responsibilities).
 
-| 分类 | 资源 |
+| Category | Resources |
 |------|------|
-| 核心配置 | Gateway, GatewayClass, EdgionGatewayConfig |
-| 路由 | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute |
-| 安全/策略 | EdgionTls, Secret, ReferenceGrant, BackendTLSPolicy |
-| 插件/扩展 | EdgionPlugins, EdgionStreamPlugins, PluginMetaData |
-| 后端/服务 | Service, EndpointSlice, Endpoint |
-| 自动化 | EdgionAcme |
-| 基础设施 | LinkSys |
+| Core configuration | Gateway, GatewayClass, EdgionGatewayConfig |
+| Routes | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute |
+| Security / policy | EdgionTls, Secret, ReferenceGrant, BackendTLSPolicy |
+| Plugins / extensions | EdgionPlugins, EdgionStreamPlugins, PluginMetaData |
+| Backends / services | Service, EndpointSlice, Endpoint |
+| Automation | EdgionAcme |
+| Infrastructure | LinkSys |
 
-### [06-gateway-api.md](06-gateway-api.md) — Gateway API 合规性
+### [06-center/](06-center/SKILL.md) — edgion-center architecture
 
-Gateway API v1.5.0 支持范围、一致性测试、Edgion 扩展点、有意偏差。
+Federation center: accepts gRPC streams from multiple Controllers, reverse-Watch
+aggregates PluginMetaData, persists controller registry to SQLite, and exposes an
+HTTP Admin API.
+
+| Module | Keywords |
+|--------|---------|
+| Overview | Deployment shape, ports, TLS posture, startup lifecycle, failure modes |
+| Federation gRPC server | `RegisterRequest` validation caps, bidirectional stream protocol, error handling |
+| Aggregator / watch cache | `ResourceAggregator`, `CenterWatchCache`, `CenterMetaDataStore`, reverse-Watch data flow |
+| Persistence | SQLite `controllers` table, `CenterDb`, Admin API, Docker build notes |
+
+### [06-gateway-api.md](06-gateway-api.md) — Gateway API conformance
+
+Gateway API v1.5.0 supported scope, conformance tests, Edgion extension points, intentional deviations.

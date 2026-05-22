@@ -1,0 +1,488 @@
+---
+name: fix-rfc-issue
+description: Use when the user says "fix RFC", "next RFC", "handle RFC", "review RFC findings", or invokes /fix-rfc — to process a single finding from tasks/todo/rfc-review/ (rfc-violation-*, rfc-naming-*, rfc-refactor-*, or rfc-doc-comments-additions.md). Equivalent phrases in other languages also trigger this skill.
+---
+
+# RFC-Compliance Issue Fix Workflow
+
+## Iron Law
+
+```
+NO FIX WITHOUT (VERDICT + DESIGN/CONSTRAINT ANALYSIS) CONFIRMED FIRST
+NEVER SACRIFICE A SPECIFIC FEATURE OR INTENTIONAL DESIGN FOR RFC PURITY
+ALWAYS CHECK GATEWAY API CONFORMANCE BEFORE FIXING
+NO CLOSE WITHOUT A STEP 5 SUBAGENT REVIEW
+```
+
+Violating the letter of these gates is violating the spirit of the workflow. RFC compliance is **one** constraint among many — Gateway API conformance, Pingora capabilities, plugin-SDK stability, operator escape hatches, and existing design decisions captured in `skills/` all weigh against pure RFC alignment. The skill exists to keep that weighing honest.
+
+**Hard gates** (each MUST be reached, presented to the user, and confirmed before proceeding past it):
+
+1. Step 1 — Verdict + Value verdict + RFC strictness, presented in the template
+2. **Step 1.5 — Design / Constraint analysis** (new vs `fix-review-issue`), with mandatory pause for ⚠️ / 🔴 dispositions
+3. Step 2 — Fix Impact panel, with a pause if complexity is `complex` OR Gateway API conformance is `needs-check` OR public plugin-SDK surface is touched
+4. Step 5 — Mandatory subagent review (no exceptions, including for `trivial`, `📝`, and naming-rename-only fixes), explicit Gateway API regression sweep
+
+## Red Flags — STOP if you catch yourself thinking any of these
+
+- "It's an RFC MUST, we have no choice but to fix it" — even MUSTs can be a deliberate divergence (Pingora limitation, Gateway API mandates otherwise, operator-facing flag); always run Step 1.5
+- "Strict RFC compliance is always better than current behavior" — current behavior may compensate for upstream / downstream realities the RFC didn't anticipate
+- "I'll just delete this 'unsafe' config option (TLS 1.0, query-param token, etc.) to be RFC-clean" — operator escape hatches exist for migration paths; removing them silently is a feature regression
+- "Gateway API conformance is orthogonal to RFC, no need to check" — Gateway API has its own hostname matching, header handling, status code conventions; conformance is currently ALL PASS and must stay so
+- "Pingora's limitation note in the code is outdated, let me just work around it" — verify the upstream first; many "workaround" patches recreate Pingora bugs we already worked around once
+- "This RFC clause is a SHOULD, but I'll still fix it as a P1" — the project's policy is: SHOULD/MAY only get fixed when zero design conflict exists
+- "While I'm in this file I'll also clean up the nearby thing"
+- "Step 1.5 is paranoid for this one, I'll just proceed"
+- "Step 5 review is overkill for a 1-line / doc-comment-only change" — Iron Law says mandatory, no exceptions
+
+All of these mean: **return to the gate you skipped and run it properly.**
+
+## Communication rules (enforced throughout)
+
+1. **Match the user's language for narrative text** (explanations, prompts, summaries). Code, file paths, error messages, RFC clause quotes, and quoted source text remain in their original language. Section headings inside the templates below may be left as-is or translated to match the user's language.
+2. **Every response must end with a status line:**
+   ```
+   --- Current position: Step X — <step name> ---
+   ```
+   Replace X with the current step number (Pre-flight = 0, Step 1 / 1.5 / 2-6 as numbered). If pausing for user input, append `(awaiting confirmation)`.
+
+## When to use
+
+- Processing a specific finding file from `tasks/todo/rfc-review/`:
+  - `rfc-violation-*.md` (40 entries)
+  - `rfc-naming-*.md` (3 entries — real renames)
+  - `rfc-refactor-*.md` (5 entries — structural)
+  - One entry from `rfc-doc-comments-additions.md` (29 line items)
+- Or picking the next pending file when no specific finding is given.
+
+---
+
+## Pre-flight
+
+### P0 — Determine the issue directory and target
+
+Default `ISSUE_DIR` for this skill: `tasks/todo/rfc-review/`.
+
+Parse the invocation arguments:
+
+| Argument form | Action |
+|---|---|
+| Looks like a path (contains `/`) | Use it directly as `ISSUE_DIR` |
+| Looks like a finding ID (e.g. `http1-01`, `tls-03`, `dc-tls-13`) | Locate the matching file under `tasks/todo/rfc-review/`; for `dc-*` IDs the target is a section inside `rfc-doc-comments-additions.md` |
+| Both | Use the path as `ISSUE_DIR`, use the ID to select within |
+| No argument | List candidates in priority order: P1 > P2 > P3 from `INDEX.md`; if exactly one is unfinished, use it; otherwise present the list and ask. Doc-comment entries are batched — only suggest opening `rfc-doc-comments-additions.md` when the user explicitly asks for "doc-comment sweep" or all violations / refactors / renames are closed. |
+
+Record the resolved target and confirm to the user before continuing.
+
+### P1 — Read the target file completely
+
+For `rfc-doc-comments-additions.md` entries, also note the `dc-<area>-NN` header you intend to address — multiple entries can be batched in one sweep if they share a file, but each gets its own Step 1 presentation.
+
+### P2 — Read MANDATORY context (this is broader than `fix-review-issue`)
+
+Load, in order, only what applies to the finding's area:
+
+1. `tasks/todo/rfc-review/PLAN.md` — workflow context, finding template, how this finding came to exist
+2. `tasks/todo/rfc-review/_raw/uncertain.md` — refuted candidates: confirm this finding is **not** one of them or a sibling pattern
+3. `tasks/todo/rfc-review/_raw/verification-<area>.md` — the sealed sonnet verifier's verdict for this finding (CONFIRM / UNCERTAIN reasoning is grounding for Step 1)
+4. `skills/04-review/SKILL.md` — existing per-pattern decision notes
+5. **`skills/08-kubernetes/01-gateway-api/SKILL.md`** — Gateway API conformance status (currently ALL PASS for GATEWAY-HTTP / GATEWAY-GRPC / GATEWAY-TLS); any sub-files matching the finding's area (e.g., `01-not-implemented.md` for "we don't do that" decisions)
+6. Area-specific architecture skill, picking only what matches the finding:
+   - `http1` / `h2-grpc` findings → `skills/01-architecture/02-gateway/03-routes/SKILL.md`
+   - `ws` findings → `skills/01-architecture/02-gateway/03-routes/SKILL.md` (WS is a transparent tunnel; document this)
+   - `tls` findings → `skills/01-architecture/02-gateway/04-tls/SKILL.md`
+   - `cookie-auth` findings → `skills/04-review/local-auth/`, `skills/04-review/oidc/`, `skills/04-review/cors/`, `skills/04-review/auth-timing/`, `skills/04-review/forward-auth/` as applicable
+   - `admin-rest` findings → `skills/01-architecture/01-controller/SKILL.md`, `skills/01-architecture/06-center/SKILL.md`
+7. **Source code at the cited `file:line`** — never proceed past Step 1 without confirming the cited code still says what the finding claims it says (the rfc-review batch was produced at a snapshot; code may have moved)
+
+### P3 — Identify the finding's Type
+
+| File prefix | Type | Default Step path |
+|---|---|---|
+| `rfc-violation-*` | A — real violation | Full workflow 1 → 1.5 → 2 → 3 → 4 → 5 → 6 |
+| `rfc-naming-*` | B — real rename | Workflow 1 → 1.5 → 2 (search callers across crate) → 3 (rename + verify cargo check at each step) → 4 (skip 4a unless public API) → 5 → 6 |
+| `rfc-refactor-*` | C — structural refactor | Same as Type A but Step 2 forces complexity ≥ `moderate` (any structural change is at least moderate by definition) |
+| `rfc-doc-comments-additions.md` (single dc-* section) | D — doc-comment only | Workflow 1 → 1.5 (lighter — only confirm RFC strictness) → Step 3 trivial → Step 4b if the rule should be captured in skills → Step 5 (still mandatory) → Step 6 |
+
+---
+
+## Step 1 — Validate: is this really a problem the project should accept fixing?
+
+Check the finding against:
+
+- The sealed sonnet verifier's conclusion in `_raw/verification-<area>.md` — was it CONFIRM, UNCERTAIN, or REFUTE? REFUTE means stop now and close as ❌.
+- Existing `skills/04-review/` entries — is there an explicit accepted-tradeoff for this exact pattern?
+- `skills/08-kubernetes/01-gateway-api/01-not-implemented.md` — is the "violation" actually a documented Gateway API non-implementation that the project signed off on?
+- `CLOSED-FINDINGS.md` — has an analogous P-finding been closed under the related review-* skill (the existing 04-review CLOSED log uses P-IDs like `P3-g3-016`)?
+- Current source code state — the file may already be fixed by another stream of work; RFC review was a point-in-time snapshot.
+
+**Present to the user (mandatory pause before proceeding):**
+
+```
+## Finding <ID>: <title>
+File: <file:line>
+Area: <http1 | h2-grpc | ws | tls | cookie-auth | admin-rest>
+Severity: <P1 | P2 | P3>
+Verification: <CONFIRM | UNCERTAIN | REFUTE> per _raw/verification-<area>.md
+
+### What the RFC says
+RFC <num> §<sec>: <verbatim quote, 1-3 lines>
+Strictness: MUST | MUST NOT | SHOULD | SHOULD NOT | MAY | informative
+
+### What the code does
+<1-3 plain-English sentences describing the concrete behavior at file:line>
+
+### Fix Value
+Trigger frequency : almost never | low | medium | hot path
+Real-world harm   : negligible | minor (interop friction / log noise) | moderate (incorrect routing / observable break) | severe (security boundary / data corruption)
+Fix cost          : tiny (1-5 lines) | small (single file) | medium (multi-file) | large (cross-module / public API)
+Risk introduced   : none | low | medium | high
+Value verdict     : 🔴 Not worth fixing (RFC SHOULD/MAY + project constraint cost > benefit)
+                    🟡 Optional fix (improvement but not urgent, no design conflict)
+                    🟢 Worth fixing (clear benefit, controlled cost)
+
+### Verdict
+✅ Real issue — needs a code fix
+📝 Doc / comment only — no behavior change needed
+⚠️  Accepted tradeoff — close without code change; add skills/04-review/ entry
+❌ Already fixed, refuted by verifier, or false positive — close without change
+```
+
+Relationship between Value verdict and Verdict:
+- Value verdict 🔴 → regardless of Verdict, recommend downgrade to ⚠️ or ❌; explain reasoning
+- Value verdict 🟡 → keep Verdict but mark "low priority, may skip" in Step 2
+- Value verdict 🟢 → proceed normally
+
+Wait for the user to confirm or correct before proceeding.
+- Verdict ❌ → skip to Step 6 (close without change).
+- Verdict ⚠️ → go to Step 1.5; on confirmation, jump to Step 4b only (add a `skills/04-review/` entry), then Step 6.
+- Verdict 📝 → go to Step 1.5; on confirmation, jump to Step 4 (doc/comment work + side-effect checks), then Step 5 (review), then Step 6.
+- Verdict ✅ → continue to **Step 1.5 (mandatory)**.
+
+---
+
+## Step 1.5 — Design / Constraint analysis (RFC-specific gate)
+
+**This is the gate `fix-review-issue` does not have.** It exists because RFC findings are uniquely prone to "we MUST fix this because it's an RFC violation" tunnel vision that ignores the project's other constraints.
+
+Before any code analysis, classify the situation along these axes. **Three sources must be consulted: Gateway API conformance, the project `skills/` knowledge base, and the code itself.**
+
+**Present to the user:**
+
+```
+### Design / Constraint Analysis
+
+RFC strictness            : MUST | MUST NOT | SHOULD | SHOULD NOT | MAY | informative
+Verifier confidence       : <copy from _raw/verification-<area>.md NOTES line>
+
+Is the current behavior intentional?
+  □ Yes — by design (existing skills/ entry or in-code comment documents it). Cite: <ref>
+  □ Partially — current behavior happens to diverge from RFC but was never explicitly decided
+  □ No — current behavior is a gap; project would have preferred RFC-aligned
+
+Is RFC-aligned behavior achievable?
+  □ Yes — Pingora exposes the needed primitive; no upstream blocker
+  □ Yes, but only with a workaround (cite the workaround; flag fragility)
+  □ No — Pingora limitation; cite the upstream issue or in-tree workaround note
+  □ No — Gateway API mandates the current (RFC-divergent) behavior; cite the spec section
+  □ No — would break a public plugin-SDK contract or schema field
+
+Conflicts with project constraints (CHECK EACH; do not skip):
+  ☐ Gateway API conformance suite (currently ALL PASS — must remain so)
+     → If unclear, mark `needs-check` and run a relevant conformance sub-test in Step 2
+  ☐ Existing skills/ design decision
+     → grep skills/04-review/ and skills/01-architecture/ for the affected pattern
+  ☐ Plugin SDK / public API stability (CRD schema, plugin trait signatures, public re-exports)
+  ☐ Data-plane hot path performance (per-request tracing, per-request allocation, per-request grep, etc.)
+  ☐ Operator escape hatch (a configurable feature that, if removed, breaks documented migration paths)
+  ☐ A specific feature the project ships intentionally (e.g., grpc-web fallthrough, TLS 1.0 admission)
+
+Disposition:
+  🟢 Fix as-is — no design conflict, no operator-visible regression
+  🟡 Fix with mitigation — possible only after preserving the current behavior via a config flag, a feature-gated escape hatch, or a deprecation warning
+  🔴 Reject fix — RFC strictness < project constraint cost; close as ⚠️ accepted tradeoff
+  ⚠️  Defer — needs a brainstorming session; promote to tasks/todo/<id>-<slug>.md
+```
+
+**Mandatory pause for user confirmation on:**
+- 🟡 (the user must approve the mitigation shape — flag name, default, deprecation horizon)
+- 🔴 (the user must approve closing as ⚠️; record reasoning by appending a section to `skills/04-review/RFC-DIVERGENCES.md`)
+- ⚠️ (the user must approve the promotion + the brainstorming brief)
+
+🟢 may continue to Step 2 without pause **only if** the finding is also `complexity = trivial` per Step 2 (and you are confident in that classification before Step 2).
+
+### The "never sacrifice" rule (explicit)
+
+If the simplest RFC-aligned fix requires any of:
+- removing a CRD field operators may already be using
+- dropping a plugin runtime capability (DSL function, plugin trait method)
+- breaking a Gateway API conformance test
+- changing a default in a way that flips operator-visible behavior without a deprecation period
+- introducing `tracing::*` on the data-plane hot path (see [observability/dsl-vm-execute-tracing-declined.md](observability/dsl-vm-execute-tracing-declined.md))
+
+…then the fix must be reshaped (🟡 with mitigation) or rejected (🔴). RFC purity is not a justification for any of those costs.
+
+---
+
+## Step 2 — Fix impact analysis
+
+Before writing any code:
+
+1. **Root-cause check**: is the cited file:line the actual origin of the divergence, or just where it surfaces? If symptom-only, trace upstream. For RFC findings, the "Suggested fix" in the finding file is often the discovery agent's first guess — verify it against the real call chain.
+2. **Search callers / usages** of the affected symbol; for Type B renames, this is the entire blast radius.
+3. **Identify**:
+   - **Blast radius**: how many files; on the data-plane hot path?
+   - **Behavior change**: does the fix change observable behavior (HTTP status code, header presence, log format, metric label, plugin trait signature)?
+   - **Gateway API conformance**: does any conformance test depend on the current (RFC-divergent) behavior? If `needs-check` was marked in Step 1.5, run a targeted conformance test now and record the result here.
+   - **New issue risk**: lock ordering, API contract break, regression in a sibling feature.
+4. **Classify complexity**:
+   - **Trivial** — 1–5 lines, 1 file, no API change, no behavior change → main agent.
+   - **Moderate** — multi-file or minor behavior change → main agent with search-before-edit.
+   - **Complex** — cross-module, public API change, hot-path touch, structural refactor (Type C is always at least moderate; often complex) → spawn an implementation subagent.
+
+**Present to the user:**
+
+```
+### Fix Impact
+Root cause              : <symptom-only | origin-confirmed> — <where the origin is>
+Blast radius            : <N file(s)> — <hot-path | controller-plane | init-only | test-only>
+Behavior change         : <yes / no> — <brief; name the observable surface>
+Gateway API conformance : <unaffected | needs-rerun | verified-still-pass> — <which tests>
+New issue risk          : <none | low | medium> — <brief reason>
+Complexity              : trivial | moderate | complex
+Implementation          : main agent | subagent
+```
+
+Pause here if complexity is **complex**, new issue risk is **medium**, root cause is `symptom-only`, OR Gateway API conformance is `needs-rerun` — confirm with the user before proceeding.
+
+---
+
+## Step 3 — Implement the fix
+
+Same strategy table as `fix-review-issue.skill`:
+
+| Complexity | Strategy |
+|---|---|
+| Trivial | 3A — main agent, single pass |
+| Moderate | 3A — main agent, single pass |
+| Complex, parallelizable | 3B — split, spawn parallel subagents |
+| Complex, must be sequential | 3C — split, execute one at a time with `cargo check` between sub-steps |
+
+### 3A — Main agent (trivial / moderate)
+
+- Apply the minimal change described in the finding's "Suggested fix" section, adjusted for any root-cause finding from Step 2.
+- For Type B renames: do all rename mechanics in one pass (`Edit` with `replace_all` if safe, else explicit per-call-site edits). Update re-exports and `pub use` lines simultaneously.
+- For Type D doc-comments: apply the comment text from `rfc-doc-comments-additions.md` verbatim (or with the agreed mitigation from Step 1.5). Drop obsoleted RFC citations (RFC 2616 / 7230 → RFC 9110/9112) wherever they appear in the same file.
+- Do not refactor or expand scope beyond what the finding requires.
+- Code must be in English. Add a comment only when the WHY is non-obvious.
+- For multi-file changes: search for all call sites first, then edit.
+
+### 3B / 3C
+
+Same shape as in `fix-review-issue.skill`. Type C (structural refactor) usually requires 3C: introduce the new type / const / signature first, then update call sites in dependency order, then remove the old shape.
+
+For ANY rename or signature change, present an "Implementation Split Plan" before executing, and verify each subagent's diff is in-scope before merging.
+
+---
+
+## Step 4 — Side effects: docs, skills & integration tests
+
+Run after Step 3 for all ✅ code fixes. Also the primary work for 📝 verdicts.
+
+### 4a. User documentation (`docs/`)
+
+Ask: does the fix change user-visible behavior, a configuration field, a default value, an HTTP status code returned by an admin endpoint, or a public API?
+
+- If **yes**: update the relevant `docs/en/` page(s); sync `docs/zh/` if straightforward or add a `<!-- TODO: sync zh -->` marker.
+- If **no**: note "docs not affected" and continue.
+
+### 4b. Skills knowledge base (`skills/`)
+
+This is **especially important for RFC findings** because the project will get re-reviewed in future sweeps; without a skills entry, the same finding gets re-flagged.
+
+- ✅ fixes where the code now matches RFC: add an entry under the relevant `skills/04-review/<topic>/` (or create one) explaining what was fixed and what re-reports to reject.
+- ⚠️ accepted tradeoffs: **mandatory** create `skills/04-review/rfc-divergence/<finding-id>-<short-slug>.md` (flat directory; finding ID already encodes the area) — see template in 4c below.
+- 📝 doc-comment-only: if the doc-comment encodes a deliberate divergence, also add the skills entry (4c).
+- Check `skills/SKILL.md` "Key constraints" table; if the fix touches a listed constraint, update the table entry.
+- Update `CLOSED-FINDINGS.md` with the row: finding ID, fix date, topic, summary, linked rule.
+
+### 4c. RFC-divergence record (mandatory for ⚠️ and for 🟡 mitigation fixes)
+
+For any finding where the project knowingly diverges from an RFC clause, create a new file at `skills/04-review/rfc-divergence/<finding-id>-<short-slug>.md`. The directory is flat — finding IDs already encode area (`http1-04`, `tls-03`, etc.). Keep the file short; verbose justification belongs in the original review notes, not the durable rule.
+
+**File template** (one per divergence; aim for under ~50 lines):
+
+```markdown
+---
+name: <finding-id>-<short-slug>
+description: Accepted RFC <num> §<sec> divergence — <one-line>. Reject re-reports.
+---
+
+# <finding-id> — <one-line title>
+
+**Status:** ⚠️ accepted divergence · YYYY-MM-DD
+**RFC:** RFC <num> §<sec> (MUST | SHOULD | MAY)
+
+## Conclusion
+
+<1-2 sentences on what we do instead.>
+
+Suggestions of the form "<rejected suggestion>" are **not accepted**.
+
+## RFC clause
+
+> <verbatim, 1-3 lines>
+
+## Code shape today
+
+- `<file:line>` — <one line>
+- `<file:line>` — <one line>
+
+## Why we diverge
+
+1. **<Primary: Gateway API conformance / Pingora limitation / operator escape hatch / project feature>** — <concrete>
+2. **<Secondary>** — <concrete>
+
+## Re-evaluation triggers
+
+- <Gateway API spec / conformance change>
+- <Operator-reported incident showing real harm>
+- <Edgion drops a related declaration>
+
+## Reference
+
+- Verifier: `tasks/todo/rfc-review/_raw/verification-<area>.md → <ID>`
+- Closure: [CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md)
+- (optional) Gateway API test / Pingora upstream issue
+```
+
+### 4d. Integration tests (`examples/test/`)
+
+For RFC fixes that change observable behavior — STATUS code, header presence, error mapping, framing — a regression test is highly recommended.
+
+- Search `examples/test/` for related scenarios first.
+- If the fix changes a wire-observable property (`405 + Allow`, `WWW-Authenticate` on admin 401, percent-encoded `grpc-message`, etc.) add a scenario that asserts the new property; follow `skills/05-testing/01-integration-testing.md`.
+- For Type D doc-comment-only fixes: integration test is not needed.
+
+### 4e. Update the RFC review tracking
+
+- **Delete** the finding file from `tasks/todo/rfc-review/` (it is now closed).
+- Update `tasks/todo/rfc-review/INDEX.md`: remove the row for the closed finding from the severity table; update the count summary at the top.
+- For Type D entries from `rfc-doc-comments-additions.md`: strike through the `dc-<id>` heading (do not delete the section — keep historical traceability) and add a `**Closed: <date>, fix: <commit>**` line beneath.
+
+### 📝 verdict path
+
+For a doc/comment-only verdict:
+- 4a applies if the comment belongs in `docs/`.
+- 4b/4c apply if the comment encodes a divergence the project formally accepts.
+- Otherwise: add the explanatory comment directly to the source at the indicated location, following the proposed text in the finding file.
+- 4d may be skipped.
+- 4e still runs.
+
+---
+
+## Step 5 — Subagent review (mandatory)
+
+**Always spawn a review subagent**, even for trivial changes and Type D doc-comment fixes.
+
+Brief the subagent (NOTE the additions vs `fix-review-issue`):
+
+```
+Task: review an RFC-compliance code fix for correctness, regression, AND Gateway API conformance impact. Research only — do not modify any files.
+
+Original finding: <ID> — <title>
+RFC clause: RFC <num> §<sec> (strictness: <MUST | SHOULD | MAY>)
+Disposition from Step 1.5: <🟢 / 🟡 with mitigation / accepted-tradeoff>
+Files changed: <list>
+
+Fix summary:
+<1–3 sentences>
+
+Please:
+1. Read the changed files in full + the cited RFC §<sec> at datatracker.ietf.org.
+2. Check all callers / usages of modified symbols.
+3. Verify the fix actually addresses the cited RFC clause (does the new code satisfy the MUST/SHOULD?).
+4. **Gateway API regression sweep**: list any Gateway API conformance test under examples/test/ that touches the changed surface; assess whether the fix could flip its result. If unclear, name the test and recommend a manual run.
+5. **Project-constraint sweep**: confirm the fix does NOT (a) remove an operator-facing CRD field, (b) silently change a default, (c) add tracing::* on a data-plane hot path (refer to skills/03-coding/01-log-safety.md), (d) break a plugin trait or pub-export.
+6. Look for regressions, edge cases, or new bugs introduced by the fix.
+
+Report format:
+## Review Result
+Verdict: LGTM | Issues Found
+
+### RFC clause satisfied
+<one line: yes | no | partial — explain>
+
+### Gateway API conformance impact
+<one line: unaffected | needs-rerun: <test name> | breaks: <test name>>
+
+### Issues Found (if any)
+- [severity] <issue>: <location> — <explanation>
+
+### Edge Cases Checked
+- <what you checked and the conclusion>
+```
+
+If the subagent reports **Issues Found** OR **Gateway API conformance impact ≠ unaffected**:
+- Fix each issue or run the named conformance test.
+- Re-spawn the review subagent on the updated code.
+- Repeat until LGTM + unaffected.
+
+---
+
+## Step 6 — Close the finding
+
+Run in sequence:
+
+1. `cargo check --all-targets` — must pass.
+2. `cargo clippy --all-targets` — must pass with no new warnings.
+3. `make check-agent-docs` — must pass (this enforces English-only + skills consistency, which RFC fixes touching `skills/` may break).
+
+If all pass:
+- Verify Step 4e was actually executed (the finding file is gone, INDEX.md is updated).
+- Report to the user:
+  ```
+  Closed: tasks/todo/rfc-review/<filename>
+  RFC: RFC <num> §<sec> (<MUST/SHOULD/MAY>)
+  Disposition: <🟢 / 🟡 / ⚠️>
+  Fix summary: <1–2 sentences>
+  Files changed: <list>
+  Skills entries added/updated: <list, or "none">
+  Gateway API conformance: <unaffected | re-run with result>
+  ```
+- Do NOT run `git commit` — wait for the user's explicit instruction.
+
+If any check fails: fix the errors and re-run before declaring closure.
+
+---
+
+## Common Rationalizations
+
+When tempted to skip a step, check this table first:
+
+| Excuse | Reality |
+|---|---|
+| "It's an RFC MUST, I have to fix it" | Even MUSTs can be deliberately diverged (Pingora limitation, Gateway API mandates, plugin SDK contract). Run Step 1.5. |
+| "Strict RFC compliance always wins" | Project policy is: RFC compliance is one constraint among many. The Iron Law is explicit: never sacrifice a specific feature or design for purity. |
+| "Gateway API conformance test for this surface isn't critical" | Conformance is currently ALL PASS. Any flip is a release blocker; check before, not after. |
+| "Step 1.5 is bureaucratic, this fix is obviously safe" | "Obvious" fixes are how Gateway API tests break. Run Step 1.5 — it's a 60-second template. |
+| "Removing this 'unsafe' config option (TLS 1.0, JWT in query, etc.) makes us RFC-clean" | Operator escape hatches exist because real deployments need them. Removal needs deprecation period + user-facing notice, not a casual delete. |
+| "I'll add a tracing::warn! to surface the divergence" | Read skills/03-coding/01-log-safety.md before any tracing addition; data-plane prohibition is iron-rule, not nuance. |
+| "Pingora limitation note in the code is probably stale" | Verify against current pingora-core source / upstream issues before working around. Re-creating worked-around bugs is the #1 RFC-fix regression source. |
+| "Suggested fix in the finding file is obviously right" | The discovery agent was sonnet at finding-time; it didn't run Step 1.5. Treat it as input, not decision. |
+| "Step 5 review is overkill for a doc-comment-only change" | Doc-comment fixes can encode wrong divergence rationale, mis-cite RFCs, or leak into auto-generated API docs. Mandatory, no exceptions. |
+| "cargo check passed, clippy is probably fine" | Step 6 requires both + `make check-agent-docs` (English-only + skills consistency). All three. |
+| "User said 'fix this finding' once, I can skip future confirmation prompts on similar findings" | Approval is per-gate per-finding. Each Step 1 / 1.5 / 2 panel needs its own confirmation. |
+
+If your reasoning matches any row: **stop, return to the skipped gate, run it properly.**
+
+---
+
+## Key constraints (apply throughout)
+
+- **English only** in all source content (code, comments, error strings, doc comments, skills entries).
+- **Minimal scope** — fix only what the finding describes; do not bundle a fix for a sibling pattern even if it looks similar.
+- **No behavior change without operator visibility** — if the fix changes a default, an HTTP status code, or a header, the change must be documented in `docs/` AND have an operator-facing note (e.g., release notes line, configuration migration).
+- **Hot-path prohibition** — no `tracing::*` calls on the request/connection processing path, regardless of how tempting it is to surface the RFC divergence in logs.
+- **Gateway API conformance is sacrosanct** — currently ALL PASS. Any fix that risks flipping it must be either reshaped or rejected.
+- **Do not commit** — report changes and wait for the user's instruction.

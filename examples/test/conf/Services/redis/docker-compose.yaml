@@ -1,5 +1,7 @@
 # Redis standalone instance for LinkSys integration testing.
-# Started/stopped by run_redis_test.sh.
+# Started/stopped by run_integration.sh's Redis precondition
+# (start_redis_service_if_needed); also reusable as a developer fixture
+# via `docker compose up -d` from this directory.
 services:
   redis:
     image: redis:7-alpine

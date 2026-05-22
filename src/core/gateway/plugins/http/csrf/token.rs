@@ -23,7 +23,10 @@ impl CsrfToken {
         rand::rng().fill_bytes(&mut random_bytes);
         let random = hex::encode(random_bytes);
 
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
 
         let sign = Self::gen_sign(&random, timestamp, key);
 
@@ -36,7 +39,8 @@ impl CsrfToken {
 
     /// Generate signature for token
     fn gen_sign(random: &str, expires: i64, key: &str) -> String {
-        let mut mac = HmacSha256::new_from_slice(key.as_bytes()).expect("HMAC accepts any key size");
+        let mut mac = HmacSha256::new_from_slice(key.as_bytes())
+            .expect("HMAC accepts any non-empty key per RFC 2104; key validated non-empty by config loader");
         let data = format!("expires:{},random:{}", expires, random);
         mac.update(data.as_bytes());
         hex::encode(mac.finalize().into_bytes())
@@ -62,7 +66,10 @@ impl CsrfToken {
     /// Verify token signature and expiration
     pub fn verify(&self, key: &str, max_expires: i64) -> bool {
         // Check expiration
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
 
         if max_expires > 0 && now - self.expires > max_expires {
             return false;

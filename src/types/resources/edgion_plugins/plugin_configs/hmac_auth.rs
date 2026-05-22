@@ -2,11 +2,12 @@
 //!
 //! Supports HTTP Signature style authentication using HMAC algorithms.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::types::resources::common::group_name::default_group_name;
 use crate::types::resources::gateway::SecretObjectReference;
 
 /// HMAC signature algorithm.
@@ -45,14 +46,40 @@ impl HmacAlgorithm {
 }
 
 /// HMAC credential loaded from K8s Secret.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HmacCredential {
     /// HMAC shared secret bytes.
     pub secret: Vec<u8>,
+
     /// Metadata headers to forward to upstream.
     #[serde(default)]
     pub headers: HashMap<String, String>,
+
+    /// Group this credential originated from. Always set by controller in
+    /// current versions; `#[serde(default)]` provides a fallback so that
+    /// Gateway-new / Controller-old rolling upgrades don't break
+    /// deserialization of `resolved_credentials` payloads predating this field
+    /// (lesson L2).
+    #[serde(default = "default_group_name")]
+    pub group: String,
+}
+
+/// A named group of Secret references whose HmacCredentials all carry this
+/// group's name. Surfaces in PluginLog as `group=<name>` for audit attribution.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HmacAuthSecretGroup {
+    /// Group name; charset = Kubernetes label-value
+    /// (`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`, <=63 chars).
+    pub name: String,
+
+    /// Human-readable description (not used by runtime).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Secret references for this group. Must be non-empty at preparse.
+    pub secret_refs: Vec<SecretObjectReference>,
 }
 
 /// HMAC Auth plugin configuration.
@@ -60,9 +87,13 @@ pub struct HmacCredential {
 #[serde(rename_all = "camelCase")]
 pub struct HmacAuthConfig {
     // === Credential Source ===
-    /// Secret references containing HMAC credentials.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub secret_refs: Option<Vec<SecretObjectReference>>,
+    /// Named groups of Secret references. Optional so anonymous-only
+    /// deployments (no credentials) remain valid.
+    ///
+    /// Each group's `secret_refs` are resolved and merged into a single
+    /// runtime credential map; `HmacCredential.group` records origin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_groups: Option<Vec<HmacAuthSecretGroup>>,
 
     // === Signature Verification ===
     /// Allowed HMAC algorithms.
@@ -71,6 +102,7 @@ pub struct HmacAuthConfig {
 
     /// Maximum allowed clock skew in seconds.
     #[serde(default = "default_clock_skew")]
+    #[schemars(range(min = 1))]
     pub clock_skew: u64,
 
     /// Headers that must be included in signed headers list.
@@ -123,11 +155,6 @@ pub struct HmacAuthConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_credentials: Option<HashMap<String, HmacCredential>>,
-
-    // === Validation fields ===
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 fn default_algorithms() -> Vec<HmacAlgorithm> {
@@ -161,7 +188,7 @@ fn default_username_field() -> String {
 impl Default for HmacAuthConfig {
     fn default() -> Self {
         Self {
-            secret_refs: None,
+            secret_groups: None,
             algorithms: default_algorithms(),
             clock_skew: default_clock_skew(),
             enforce_headers: None,
@@ -175,16 +202,11 @@ impl Default for HmacAuthConfig {
             username_field: default_username_field(),
             upstream_header_fields: vec![],
             resolved_credentials: None,
-            validation_error: None,
         }
     }
 }
 
 impl HmacAuthConfig {
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
-    }
-
     pub fn detect_validation_error(&self) -> Option<String> {
         fn has_control_chars(s: &str) -> bool {
             s.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
@@ -205,11 +227,6 @@ impl HmacAuthConfig {
         if self.username_field.trim().is_empty() {
             return Some("usernameField cannot be empty".to_string());
         }
-        if let Some(secret_refs) = &self.secret_refs {
-            if secret_refs.is_empty() {
-                return Some("secretRefs cannot be empty when provided".to_string());
-            }
-        }
         if let Some(required) = &self.enforce_headers {
             if required.is_empty() {
                 return Some("enforceHeaders cannot be empty when provided".to_string());
@@ -227,20 +244,49 @@ impl HmacAuthConfig {
         if self.upstream_header_fields.iter().any(|h| has_control_chars(h)) {
             return Some("upstreamHeaderFields contains invalid control characters".to_string());
         }
+
+        // Validate secret_groups structure (cross-group username uniqueness
+        // is checked at controller resolve time, not here).
+        if let Some(groups) = &self.secret_groups {
+            if groups.is_empty() {
+                return Some("secretGroups cannot be empty when present".to_string());
+            }
+            let mut seen: HashSet<&str> = HashSet::new();
+            for g in groups {
+                if let Err(e) = crate::types::resources::common::group_name::validate_group_name(&g.name) {
+                    return Some(format!("secretGroups: {}", e));
+                }
+                if !seen.insert(g.name.as_str()) {
+                    return Some(format!("duplicate group name '{}'", g.name));
+                }
+                if g.secret_refs.is_empty() {
+                    return Some(format!("group '{}' has no secretRefs", g.name));
+                }
+            }
+        }
+
         if self.validate_request_body {
             return Some("validateRequestBody is not supported yet (requires request body cache support)".to_string());
         }
 
-        let has_secret_refs = self.secret_refs.as_ref().is_some_and(|v| !v.is_empty());
+        let has_secret_groups = self.secret_groups.as_ref().is_some_and(|v| !v.is_empty());
         let has_resolved = self
             .resolved_credentials
             .as_ref()
             .is_some_and(|credentials| !credentials.is_empty());
-        if self.anonymous.is_none() && !has_secret_refs && !has_resolved {
-            return Some("secretRefs (or resolvedCredentials) is required when anonymous is not set".to_string());
+        if self.anonymous.is_none() && !has_secret_groups && !has_resolved {
+            return Some("secretGroups (or resolvedCredentials) is required when anonymous is not set".to_string());
         }
 
         None
+    }
+}
+
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for HmacAuthConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.detect_validation_error()
     }
 }
 
@@ -295,25 +341,105 @@ mod tests {
     #[test]
     fn test_detect_validation_error_requires_credentials_or_anonymous() {
         let config = HmacAuthConfig {
-            secret_refs: None,
+            secret_groups: None,
             resolved_credentials: None,
             anonymous: None,
             ..Default::default()
         };
         let err = config.detect_validation_error();
         assert!(err.is_some());
-        assert!(err.unwrap().contains("secretRefs"));
+        assert!(err.unwrap().contains("secretGroups"));
     }
 
     #[test]
     fn test_detect_validation_error_allows_anonymous_without_credentials() {
         let config = HmacAuthConfig {
-            secret_refs: None,
+            secret_groups: None,
             resolved_credentials: None,
             anonymous: Some("guest".to_string()),
             ..Default::default()
         };
         let err = config.detect_validation_error();
         assert!(err.is_none());
+    }
+
+    #[test]
+    fn test_validate_secret_groups_empty() {
+        let config = HmacAuthConfig {
+            secret_groups: Some(vec![]),
+            ..Default::default()
+        };
+        let err = config.detect_validation_error();
+        assert_eq!(err.unwrap(), "secretGroups cannot be empty when present");
+    }
+
+    #[test]
+    fn test_validate_secret_groups_duplicate_name() {
+        let config = HmacAuthConfig {
+            secret_groups: Some(vec![
+                HmacAuthSecretGroup {
+                    name: "a".into(),
+                    description: None,
+                    secret_refs: vec![SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "s1".into(),
+                        namespace: None,
+                    }],
+                },
+                HmacAuthSecretGroup {
+                    name: "a".into(),
+                    description: None,
+                    secret_refs: vec![SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "s2".into(),
+                        namespace: None,
+                    }],
+                },
+            ]),
+            ..Default::default()
+        };
+        assert!(config
+            .detect_validation_error()
+            .unwrap()
+            .contains("duplicate group name 'a'"));
+    }
+
+    #[test]
+    fn test_validate_secret_groups_invalid_name() {
+        let config = HmacAuthConfig {
+            secret_groups: Some(vec![HmacAuthSecretGroup {
+                name: "-bad".into(),
+                description: None,
+                secret_refs: vec![SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "s".into(),
+                    namespace: None,
+                }],
+            }]),
+            ..Default::default()
+        };
+        assert!(config
+            .detect_validation_error()
+            .unwrap()
+            .contains("must start with alphanumeric"));
+    }
+
+    #[test]
+    fn test_validate_secret_groups_empty_refs() {
+        let config = HmacAuthConfig {
+            secret_groups: Some(vec![HmacAuthSecretGroup {
+                name: "a".into(),
+                description: None,
+                secret_refs: vec![],
+            }]),
+            ..Default::default()
+        };
+        assert!(config
+            .detect_validation_error()
+            .unwrap()
+            .contains("group 'a' has no secretRefs"));
     }
 }

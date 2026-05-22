@@ -1,22 +1,22 @@
 # Edgion Unit Testing
 
-用于这些任务：
+Use for these tasks:
 
-- 为新增或修改的模块编写单元测试
-- 提升代码覆盖率
-- 验证单个函数 / 结构体 / 模块的行为正确性
+- Writing unit tests for new or modified modules
+- Improving code coverage
+- Verifying the behavioral correctness of a single function / struct / module
 
-## 设计原则
+## Design principles
 
-- 单元测试 + 集成测试组合目标：**99% 代码覆盖率**
-- 单元测试负责：纯逻辑、数据结构、解析、校验、工具函数
-- 集成测试负责：跨进程交互、配置同步、路由行为、插件运行时
+- The combined goal of unit tests + integration tests: **99% code coverage**
+- Unit tests cover: pure logic, data structures, parsing, validation, utility functions
+- Integration tests cover: cross-process interaction, config sync, routing behavior, plugin runtime
 
-## 项目约定
+## Project conventions
 
-### 测试位置
+### Test location
 
-Edgion 采用 Rust 标准的 **inline test module** 模式，测试写在源文件底部：
+Edgion uses Rust's standard **inline test module** pattern; tests live at the bottom of the source file:
 
 ```rust
 #[cfg(test)]
@@ -30,44 +30,44 @@ mod tests {
 }
 ```
 
-不使用独立的 `tests/` 目录做单元测试。
+A separate `tests/` directory is not used for unit tests.
 
-### 测试文件分布
+### Distribution of test files
 
-单元测试主要覆盖以下区域：
+Unit tests mainly cover the following areas:
 
-| 区域 | 示例路径 | 测试重点 |
+| Area | Example path | Test focus |
 |------|---------|---------|
-| 资源类型解析 | `src/types/resources/*.rs` | CRD 结构反序列化、字段校验、preparse |
-| 插件配置 | `src/types/resources/edgion_plugins/plugin_configs/*.rs` | `validate_and_init()`、默认值、边界条件 |
-| LinkSys 配置 | `src/types/resources/link_sys/*.rs` | 连接器配置解析与校验 |
-| Core 工具函数 | `src/core/common/utils/mod.rs` | 字符串处理、路径工具、通用逻辑 |
-| 配置系统 | `src/core/common/config/mod.rs` | TOML 解析、配置合并、默认值 |
-| Gateway 后端 | `src/core/gateway/backends/mod.rs` | 后端选择、负载均衡逻辑 |
-| 工作目录 | `src/types/work_dir.rs` | 路径解析、目录创建、权限校验 |
+| Resource type parsing | `src/types/resources/*.rs` | CRD struct deserialization, field validation, preparse |
+| Plugin configuration | `src/types/resources/edgion_plugins/plugin_configs/*.rs` | `validate_and_init()`, default values, edge cases |
+| LinkSys configuration | `src/types/resources/link_sys/*.rs` | Connector config parsing and validation |
+| Core utility functions | `src/core/common/utils/mod.rs` | String handling, path utilities, common logic |
+| Configuration system | `src/core/common/config/mod.rs` | TOML parsing, config merging, default values |
+| Gateway backends | `src/core/gateway/backends/mod.rs` | Backend selection, load-balancing logic |
+| Working directory | `src/types/work_dir.rs` | Path resolution, directory creation, permission checks |
 
-## 运行方式
+## How to run
 
 ```bash
-# 全量单元测试
+# Full unit test run
 cargo test --all
 
-# 只跑某个模块的测试
+# Run only one module's tests
 cargo test --lib -p edgion -- types::resources::http_route
 
-# 只跑某个具体测试函数
+# Run only a specific test function
 cargo test --lib test_function_name
 
-# 显示测试输出（调试用）
+# Show test output (for debugging)
 cargo test --all -- --nocapture
 
-# 顺序执行（避免并发问题）
+# Sequential execution (avoid concurrency issues)
 cargo test --all -- --test-threads=1
 ```
 
-## 编写规范
+## Writing rules
 
-### 1. 每个新增 / 修改的公开函数都应有对应测试
+### 1. Every new / modified public function should have a corresponding test
 
 ```rust
 pub fn parse_duration(s: &str) -> Result<Duration, Error> { ... }
@@ -88,7 +88,7 @@ mod tests {
 }
 ```
 
-### 2. 用 `tempfile` 处理文件系统测试
+### 2. Use `tempfile` for filesystem tests
 
 ```rust
 #[test]
@@ -99,7 +99,7 @@ fn test_work_dir_creation() {
 }
 ```
 
-### 3. 测试命名清晰表达意图
+### 3. Test names should clearly express intent
 
 ```rust
 #[test]
@@ -112,39 +112,77 @@ fn test_cors_config_rejects_empty_allow_methods() { ... }
 fn test_reference_grant_matches_exact_namespace() { ... }
 ```
 
-### 4. 测试边界条件和错误路径
+### 4. Test boundary conditions and error paths
 
-每个 `validate_and_init()` 至少覆盖：
-- 合法默认配置
-- 必填字段缺失
-- 非法值（空字符串、超范围数字、格式错误）
-- 边界值
+Each `validate_and_init()` should at minimum cover:
+- Valid default configuration
+- Missing required fields
+- Invalid values (empty string, out-of-range number, format error)
+- Boundary values
 
-### 5. 避免测试中的反模式
+### 5. Avoid antipatterns in tests
 
-- **不要** mock 数据库或外部服务 — 这属于集成测试范畴
-- **不要** 在单元测试中启动 HTTP server 或 gRPC — 用集成测试
-- **不要** 依赖文件系统的绝对路径 — 用 `tempfile`
-- **不要** 写只验证 "不 panic" 的空测试
+- **Do not** mock the database or external services — that belongs to integration tests
+- **Do not** start HTTP servers or gRPC inside unit tests — use integration tests
+- **Do not** depend on absolute filesystem paths — use `tempfile`
+- **Do not** write empty tests that only verify "no panic"
 
-## CI 集成
+## Must-read before deleting / merging unit tests: decision rules
 
-单元测试在 CI 中通过 `.github/workflows/ci.yml` 自动运行：
+When pruning / merging unit tests (parameterizing, removing tests covered equivalently by integration), **a test matching any of the following must be kept as a unit test** — do not delete and do not merge it to the point of losing granularity:
+
+1. **Data-structure invariants** — e.g., LRU counter underflow, NaN protection when `hit_ratio` denominator is 0
+2. **Error message text** — mapping from `reason` / `message` of a Condition to an enum (integration tests cannot precisely compare text)
+3. **Algorithmic correctness** — IP CIDR validity, radix-tree construction, hostname wildcard coverage
+4. **Spec compliance** — sort/filter behavior required by the Gateway API spec (e.g., regex-length priority)
+5. **Wire format / serialization compatibility** — serde attributes like `rename_all` (fields hard-parsed across CLI / processes)
+6. **Security boundaries** — mTLS `verify_depth` range, cipher allowlist, SAN coverage logic
+7. **Version compatibility** — CRD version conversion such as v1alpha3→v1 (integration usually runs only the latest version)
+8. **Regression fixes** — tests with a historical bug ID (e.g., P0-07 leastconn count)
+9. **Pure cryptography / JWT issuance and verification** — cannot be proved by black-box requests
+
+### Untouchable list (examples, not exhaustive)
+
+| Location | Reason |
+|---|---|
+| `src/core/gateway/lb/runtime_state/mod.rs` leastconn count | P0-07 regression |
+| `src/core/gateway/tls/validation/cert.rs` | mTLS verify_depth / SAN wildcard |
+| `src/core/gateway/cache/lru.rs` invariant tests | LRU underflow / hit_ratio |
+| `src/core/gateway/routes/grpc/match_engine.rs` sort tests | spec conformance |
+| `src/core/gateway/runtime/matching/route.rs` allowed_routes | spec conformance |
+| `src/core/controller/conf_mgr/sync_runtime/resource_processor/status_utils.rs` Condition mapping | reason/message text |
+| `src/core/controller/conf_mgr/sync_runtime/resource_processor/listener_port_manager.rs` port-conflict matrix | Protocol mixing rules |
+| `src/core/controller/conf_mgr/conf_center/file_system/resource_controller.rs` v1alpha3→v1 | Version compatibility |
+| `src/core/common/matcher/**` | IP / host matching algorithm |
+| `src/core/common/utils/duration.rs` / `real_ip_extractor.rs` | Duration expression / header priority algorithm |
+| `src/core/common/unified_auth/mod.rs` `from_configs` / `require_auth` | Multi-source auth assembly |
+| `src/core/common/local_auth/handlers.rs` `AuthStatus` JSON wire format | CLI hard-parsing dependency |
+
+### Reviewer checklist (mandatory for pruning PRs)
+
+If a PR deletes any test in the table above, the description must state:
+- **Reason** — why it can be removed
+- **Replacement coverage** — which integration suite / which case provides equivalent coverage
+- **Why integration is precisely equivalent** — integration tests are systemically blind to error-message text, internal invariants, and exception-path enumerations; prove this case isn't hit
+
+## CI integration
+
+Unit tests run automatically in CI via `.github/workflows/ci.yml`:
 
 ```yaml
 - name: Run tests
   run: cargo test --all
 ```
 
-每次 push 到 `main`/`master` 和每个 PR 都会触发。
+Triggered on every push to `main`/`master` and every PR.
 
-## 与集成测试的分工
+## Division of labor with integration tests
 
-| 维度 | 单元测试 | 集成测试 |
+| Dimension | Unit test | Integration test |
 |------|---------|---------|
-| **范围** | 单个函数 / 模块 | Controller + Gateway + test_server 跨进程 |
-| **运行速度** | 秒级 | 分钟级 |
-| **外部依赖** | 无（最多 tempfile） | 需要启动多个进程 |
-| **覆盖重点** | 解析、校验、纯逻辑 | 配置同步、路由、插件运行时、TLS |
-| **运行命令** | `cargo test --all` | `run_integration.sh` |
-| **失败含义** | 某个函数逻辑有 bug | 跨组件交互有问题 |
+| **Scope** | Single function / module | Controller + Gateway + test_server cross-process |
+| **Speed** | seconds | minutes |
+| **External deps** | None (at most tempfile) | Multiple processes must be started |
+| **Coverage focus** | Parsing, validation, pure logic | Config sync, routing, plugin runtime, TLS |
+| **Run command** | `cargo test --all` | `run_integration.sh` |
+| **Failure means** | Bug in one function's logic | Cross-component interaction issue |

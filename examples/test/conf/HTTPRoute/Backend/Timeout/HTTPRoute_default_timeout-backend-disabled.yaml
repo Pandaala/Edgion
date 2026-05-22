@@ -15,7 +15,7 @@ spec:
             type: PathPrefix
             value: /
       timeouts:
-        backendRequest: "0s"   # "0s" = 禁用后端请求超时，request timeout 未设置
+        backendRequest: "0s"   # "0s" = disable backend request timeout; request timeout not set
       backendRefs:
         - name: test-http
           namespace: edgion-test

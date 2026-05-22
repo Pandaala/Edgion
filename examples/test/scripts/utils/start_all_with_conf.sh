@@ -21,6 +21,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 CERTS_DIR="${SCRIPT_DIR}/../gen_certs"
 
+# Coverage mode: switch to instrumented binary directory and export coverage env to children.
+# LLVM_PROFILE_FILE override is critical: show-env defaults to target/Edgion-*.profraw,
+# but cargo llvm-cov report only scans target/llvm-cov-target/*.profraw — keep them aligned.
+if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
+    eval $(cargo llvm-cov show-env --export-prefix 2>/dev/null)
+    export CARGO_TARGET_DIR="${PROJECT_ROOT}/target/llvm-cov-target"
+    export LLVM_PROFILE_FILE="${PROJECT_ROOT}/target/llvm-cov-target/Edgion-%p-%10m.profraw"
+    BIN_DIR="${PROJECT_ROOT}/target/llvm-cov-target/debug"
+else
+    BIN_DIR="${PROJECT_ROOT}/target/debug"
+fi
+
 # Workdirectory
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORK_DIR="${PROJECT_ROOT}/integration_testing/testing_${TIMESTAMP}"
@@ -144,22 +156,22 @@ check_binaries() {
     
     local missing=false
     
-    if [ ! -f "${PROJECT_ROOT}/target/debug/edgion-controller" ]; then
+    if [ ! -f "${BIN_DIR}/edgion-controller" ]; then
         log_error "edgion-controller Build"
         missing=true
     fi
     
-    if [ ! -f "${PROJECT_ROOT}/target/debug/edgion-gateway" ]; then
+    if [ ! -f "${BIN_DIR}/edgion-gateway" ]; then
         log_error "edgion-gateway Build"
         missing=true
     fi
     
-    if [ ! -f "${PROJECT_ROOT}/target/debug/examples/test_server" ]; then
+    if [ ! -f "${BIN_DIR}/examples/test_server" ]; then
         log_error "test_server Build"
         missing=true
     fi
     
-    if [ ! -f "${PROJECT_ROOT}/target/debug/examples/resource_diff" ]; then
+    if [ ! -f "${BIN_DIR}/examples/resource_diff" ]; then
         log_error "resource_diff Build"
         missing=true
     fi
@@ -286,7 +298,11 @@ start_test_server() {
     BACKEND_CERT="${PROJECT_ROOT}/examples/test/certs/backend/server.crt"
     BACKEND_KEY="${PROJECT_ROOT}/examples/test/certs/backend/server.key"
     BACKEND_MTLS_CLIENT_CA="${PROJECT_ROOT}/examples/test/certs/mtls/client-ca.crt"
-    
+    BACKEND_CERT_A="${PROJECT_ROOT}/examples/test/certs/backend/server-a.crt"
+    BACKEND_KEY_A="${PROJECT_ROOT}/examples/test/certs/backend/server-a.key"
+    BACKEND_CERT_B="${PROJECT_ROOT}/examples/test/certs/backend/server-b.crt"
+    BACKEND_KEY_B="${PROJECT_ROOT}/examples/test/certs/backend/server-b.key"
+
     # Checkafter TLS certificate
     local https_backend_args=""
     if [ -f "$BACKEND_CERT" ] && [ -f "$BACKEND_KEY" ]; then
@@ -303,8 +319,16 @@ start_test_server() {
     else
         log_warning "Backend mTLS ，Skip HTTPS mTLS after"
     fi
-    
-    "${PROJECT_ROOT}/target/debug/examples/test_server" \
+
+    local https_backend_multi_sni_args=""
+    if [ -f "$BACKEND_CERT_A" ] && [ -f "$BACKEND_KEY_A" ] && [ -f "$BACKEND_CERT_B" ] && [ -f "$BACKEND_KEY_B" ]; then
+        https_backend_multi_sni_args="--https-backend-multi-sni-port 30026 --multi-sni-cert-a $BACKEND_CERT_A --multi-sni-key-a $BACKEND_KEY_A --multi-sni-cert-b $BACKEND_CERT_B --multi-sni-key-b $BACKEND_KEY_B"
+        log_info "HTTPS multi-SNI backend on port 30026"
+    else
+        log_warning "Backend multi-SNI certs not found, skipping multi-SNI backend (port 30026)"
+    fi
+
+    "${BIN_DIR}/examples/test_server" \
         --http-ports "30001,30002,30003" \
         --grpc-ports "30021,30022,30023" \
         --websocket-port 30005 \
@@ -312,9 +336,11 @@ start_test_server() {
         --udp-port 30011 \
         --tcp-pp2-port 30012 \
         --auth-port 30040 \
+        --h2-trailer-malformed-port 30025 \
         --log-level info \
         $https_backend_args \
         $https_backend_mtls_args \
+        $https_backend_multi_sni_args \
         > "${LOG_DIR}/test_server.log" 2>&1 &
     
     local pid=$!
@@ -350,7 +376,7 @@ start_controller() {
     # Start controller with --test-mode to enable:
     # - Both endpoint mode (sync both Endpoints and EndpointSlice)
     # - Metrics test features (test_key, test_data)
-    "${PROJECT_ROOT}/target/debug/edgion-controller" \
+    "${BIN_DIR}/edgion-controller" \
         -c "$CONTROLLER_CONFIG" \
         --work-dir "${WORK_DIR}" \
         --conf-dir "$CONFIG_DIR" \
@@ -394,7 +420,7 @@ start_gateway() {
     EDGION_ACCESS_LOG="${LOG_DIR}/edgion_access.log" \
     RUST_LOG="${gateway_rust_log}" \
     EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/edgion_access.log" \
-    "${PROJECT_ROOT}/target/debug/edgion-gateway" \
+    "${BIN_DIR}/edgion-gateway" \
         -c "$GATEWAY_CONFIG" \
         --work-dir "${WORK_DIR}" \
         --server-addr "http://127.0.0.1:${CONTROLLER_GRPC_PORT}" \
@@ -458,7 +484,7 @@ load_base_config() {
     log_section ""
     
     local conf_src="${PROJECT_ROOT}/examples/test/conf/base"
-    local edgion_cli="${PROJECT_ROOT}/target/debug/edgion-cli"
+    local edgion_cli="${BIN_DIR}/edgion-cli"
 
     if [ ! -d "$conf_src" ]; then
         log_warning "configdirectory: $conf_src"
@@ -526,7 +552,7 @@ generate_certs() {
 load_generated_secrets() {
     log_section "LoadGeneratedSecrets"
 
-    local edgion_cli="${PROJECT_ROOT}/target/debug/edgion-cli"
+    local edgion_cli="${BIN_DIR}/edgion-cli"
     if [ ! -d "$GENERATED_SECRET_DIR" ]; then
         log_warning "Generated Secret directory not found: $GENERATED_SECRET_DIR"
         return 0
@@ -597,8 +623,8 @@ get_suites_to_load() {
                         for deepdir in "$subdir"/*; do
                             if [ -d "$deepdir" ]; then
                                 local deepdir_name=$(basename "$deepdir")
-                                # Skip DynamicTest/updates and DynamicTest/delete
-                                if [[ "$subdir_name" == "DynamicTest" && ("$deepdir_name" == "updates" || "$deepdir_name" == "delete") ]]; then
+                                # Skip DynamicTest delta dirs (updates*, delete*): only initial* dirs are pre-loaded
+                                if [[ "$subdir_name" == "DynamicTest" && ("$deepdir_name" == "updates" || "$deepdir_name" == "delete" || "$deepdir_name" == "updates_grouped") ]]; then
                                     continue
                                 fi
                                 has_deep_subdir=true
@@ -680,7 +706,7 @@ load_configs() {
 verify_sync() {
     log_section "verifyresourcesync"
     
-    local resource_diff="${PROJECT_ROOT}/target/debug/examples/resource_diff"
+    local resource_diff="${BIN_DIR}/examples/resource_diff"
     
     if [ ! -f "$resource_diff" ]; then
         log_warning "resource_diff ，Skipverify"

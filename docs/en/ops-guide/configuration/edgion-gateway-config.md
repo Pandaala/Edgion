@@ -58,7 +58,9 @@ spec:
   maxRetries: 3
 
   realIp:
-    trustedIps: ["10.0.0.0/8", "172.16.0.0/12"]
+    trustedIps:
+      - name: private-ranges
+        cidrs: ["10.0.0.0/8", "172.16.0.0/12"]
     realIpHeader: "X-Forwarded-For"
     recursive: true
 
@@ -67,6 +69,7 @@ spec:
     requireSniHostMatch: true
     fallbackSni: ""
     tlsProxyLogRecord: true
+    rejectDuplicateHost: true
 
   globalPluginsRef:
     - name: "global-cors"
@@ -120,11 +123,13 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `trustedIps` | `Array<String>` | `[]` | List of trusted proxy IPs or CIDRs |
+| `trustedIps` | `Array<IpGroup>` | `[]` | List of trusted proxy IP groups |
 | `realIpHeader` | `String` | `X-Forwarded-For` | Header from which to extract the real client IP |
 | `recursive` | `Boolean` | `true` | Traverse the header right-to-left, skip trusted proxies, and take the first non-trusted IP |
 
-Extraction logic: walk `realIpHeader` from right to left, skip addresses in `trustedIps`, and return the first non-trusted IP.
+Each `trustedIps` entry is an `IpGroup` object: `name` (required; ≤63 chars, charset `[a-zA-Z0-9._-]`, must start/end alphanumeric, unique within the list), `description` (optional), and `cidrs` (required; non-empty list of IP or CIDR strings).
+
+Extraction logic: walk `realIpHeader` from right to left, skip addresses in any `trustedIps` group, and return the first non-trusted IP.
 
 ### spec.securityProtect
 
@@ -134,6 +139,8 @@ Extraction logic: walk `realIpHeader` from right to left, skip addresses in `tru
 | `requireSniHostMatch` | `Boolean` | `true` | HTTPS listener-level 421 Misdirected Request detection; rejects requests where SNI does not match the Host header |
 | `fallbackSni` | `String` | — | Fallback hostname used when the client provides no SNI |
 | `tlsProxyLogRecord` | `Boolean` | `true` | Record TLS proxy connection logs |
+| `allowLoopbackUpstream` | `Boolean` | `false` | Explicitly allow loopback upstream addresses for this GatewayClass. Link-local / metadata ranges remain blocked |
+| `rejectDuplicateHost` | `Boolean` | `true` | Reject HTTP/1.1 requests carrying more than one `Host` header line with `400 Bad Request` (RFC 9110 §7.2 Host smuggling defense). Disable only as a transitional escape hatch for legacy middleware that emits duplicate `Host` lines |
 
 ### spec.globalPluginsRef
 
@@ -168,9 +175,11 @@ When Gateway is deployed behind a load balancer, configure trusted proxy IPs to 
 spec:
   realIp:
     trustedIps:
-      - "10.0.0.0/8"
-      - "172.16.0.0/12"
-      - "192.168.0.0/16"
+      - name: private-ranges
+        cidrs:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
     realIpHeader: "X-Forwarded-For"
     recursive: true
 ```

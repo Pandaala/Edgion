@@ -162,8 +162,8 @@ metadata:
 spec:
   initContainers:
     - name: init-data
-      image: busybox
-      imagePullPolicy: IfNotPresent
+      image: edgion-all:local
+      imagePullPolicy: Never
       command: ['sh', '-c', 'mkdir -p /edgion/data/EdgionPlugins /edgion/data/HTTPRoute && cp /init-data/*.yaml /edgion/data/EdgionPlugins/ && cp /init-data-http/*.yaml /edgion/data/HTTPRoute/ 2>/dev/null; echo done']
       volumeMounts:
         - name: init-data
@@ -210,8 +210,8 @@ metadata:
 spec:
   initContainers:
     - name: init-data
-      image: busybox
-      imagePullPolicy: IfNotPresent
+      image: edgion-all:local
+      imagePullPolicy: Never
       command: ['sh', '-c', 'mkdir -p /edgion/data/EdgionPlugins /edgion/data/HTTPRoute && cp /init-data/*.yaml /edgion/data/EdgionPlugins/ && cp /init-data-http/*.yaml /edgion/data/HTTPRoute/ 2>/dev/null; echo done']
       volumeMounts:
         - name: init-data
@@ -394,8 +394,8 @@ metadata:
 spec:
   initContainers:
     - name: init-data
-      image: busybox
-      imagePullPolicy: IfNotPresent
+      image: edgion-all:local
+      imagePullPolicy: Never
       command: ['sh', '-c', 'mkdir -p /edgion/data/EdgionPlugins /edgion/data/HTTPRoute && cp /init-data/*.yaml /edgion/data/EdgionPlugins/ && cp /init-data-http/*.yaml /edgion/data/HTTPRoute/ 2>/dev/null; echo done']
       volumeMounts:
         - name: init-data
@@ -442,8 +442,8 @@ metadata:
 spec:
   initContainers:
     - name: init-data
-      image: busybox
-      imagePullPolicy: IfNotPresent
+      image: edgion-all:local
+      imagePullPolicy: Never
       command: ['sh', '-c', 'mkdir -p /edgion/data/EdgionPlugins /edgion/data/HTTPRoute && cp /init-data/*.yaml /edgion/data/EdgionPlugins/ && cp /init-data-http/*.yaml /edgion/data/HTTPRoute/ 2>/dev/null; echo done']
       volumeMounts:
         - name: init-data
@@ -490,8 +490,8 @@ metadata:
 spec:
   initContainers:
     - name: init-data
-      image: busybox
-      imagePullPolicy: IfNotPresent
+      image: edgion-all:local
+      imagePullPolicy: Never
       command: ['sh', '-c', 'mkdir -p /edgion/data/EdgionPlugins /edgion/data/HTTPRoute && cp /init-data/*.yaml /edgion/data/EdgionPlugins/ && cp /init-data-http/*.yaml /edgion/data/HTTPRoute/ 2>/dev/null; echo done']
       volumeMounts:
         - name: init-data
@@ -538,8 +538,8 @@ metadata:
 spec:
   initContainers:
     - name: init-data
-      image: busybox
-      imagePullPolicy: IfNotPresent
+      image: edgion-all:local
+      imagePullPolicy: Never
       command: ['sh', '-c', 'mkdir -p /edgion/data/EdgionPlugins /edgion/data/HTTPRoute && cp /init-data/*.yaml /edgion/data/EdgionPlugins/ && cp /init-data-http/*.yaml /edgion/data/HTTPRoute/ 2>/dev/null; echo done']
       volumeMounts:
         - name: init-data

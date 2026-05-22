@@ -60,9 +60,9 @@ pub async fn secret_retry_loop(
 
     loop {
         tokio::select! {
-            // CancellationToken::cancelled() 的语义恰好匹配 retry loop 的意图：
-            // - token.cancel() 调用后 resolve → 正常关停
-            // - token 被 drop 但未 cancel → 永不 resolve（不会误触关停）
+            // CancellationToken::cancelled() semantics happen to match the retry loop's intent:
+            // - resolves after token.cancel() is called -> normal shutdown
+            // - token dropped but not cancelled -> never resolves (no spurious shutdown)
             _ = shutdown.cancelled() => {
                 tracing::info!(component = component, "retry loop received shutdown, exiting");
                 return;

@@ -4,6 +4,7 @@ use crate::core::gateway::backends::discovery::conf_handler_common::{update_affe
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
+use crate::core::gateway::lb::compiled_selector;
 use crate::core::gateway::lb::runtime_state;
 use crate::types::resources::health_check::ActiveHealthCheckConfig;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
@@ -83,21 +84,22 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
         );
 
         let config_store = get_hc_config_store();
-        let old_keys: HashSet<String> = config_store.endpoint_slice_keys().into_iter().collect();
+        // Use cell keys (not HC config store keys) so services without HC annotations
+        // are also tracked and their cells dropped when the service is deleted.
+        let old_keys: HashSet<String> = compiled_selector::all_cell_keys().into_iter().collect();
 
         // 1. Only update RoundRobin store's data layer (shared data layer)
         let roundrobin_store = get_roundrobin_store();
         let data_owned = arc_map_to_owned(data);
         let all_services = roundrobin_store.replace_data_only(data_owned);
 
-        // 2. Update all existing LBs in ALL stores
-        // This handles relist scenario where data might have changed
-        update_all_existing_lbs(&*roundrobin_store);
+        // 2. Push fresh backends into cells for all known services
+        update_all_existing_lbs(&*roundrobin_store, &all_services);
 
         // 3. Sync EndpointSlice-level health check config
         self.sync_health_check_configs_for_services(&all_services);
 
-        // 4. Invalidate selector caches for all services (data may have changed)
+        // 4. Invalidate SP-affinity caches for all services (data may have changed)
         for service_key in &all_services {
             runtime_state::invalidate_selector_cache(service_key);
         }
@@ -111,6 +113,7 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
                 get_health_check_manager().reconcile_service(service_key);
                 runtime_state::remove_service(service_key);
                 cb_store.remove_service(service_key);
+                compiled_selector::drop_cell(service_key);
             }
         }
 
@@ -154,6 +157,7 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
                     get_health_check_manager().reconcile_service(service_key);
                     runtime_state::remove_service(service_key);
                     cb_store.remove_service(service_key);
+                    compiled_selector::drop_cell(service_key);
                 }
             }
         }

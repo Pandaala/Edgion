@@ -109,6 +109,73 @@ impl HeaderModifierTestSuite {
         )
     }
 
+    /// Test RequestHeaderModifier add onto a header the client already sent with
+    /// multiple same-name values. Regression for F-001: append must preserve every
+    /// existing field line (RFC 7230 §3.2.2 list semantics), not collapse to the
+    /// first value plus the appended one. The client sends two X-Multi-Append
+    /// values; the route appends a third. The echoed body must contain all three.
+    fn test_request_header_append_preserves_multi_value() -> TestCase {
+        TestCase::new(
+            "request_header_append_preserves_multi_value",
+            "Test RequestHeaderModifier add preserves pre-existing multi-value header entries",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let url = format!("{}/multi-value-append-test", ctx.http_url());
+
+                    // Send the same header name twice so the request carries two field lines.
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("Host", TEST_HOST)
+                        .header("X-Multi-Append", "keep-first")
+                        .header("X-Multi-Append", "keep-second")
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            if !response.status().is_success() {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 2xx, got {}", response.status()),
+                                );
+                            }
+
+                            match response.text().await {
+                                Ok(body) => {
+                                    // All three values must survive: the two client-sent values
+                                    // plus the gateway-appended one. The old read-first-then-replace
+                                    // logic dropped "keep-second".
+                                    let mut missing = Vec::new();
+                                    for value in ["keep-first", "keep-second", "appended-value"] {
+                                        if !body.contains(value) {
+                                            missing.push(value);
+                                        }
+                                    }
+
+                                    if missing.is_empty() {
+                                        TestResult::passed_with_message(
+                                            start.elapsed(),
+                                            "Multi-value request header preserved on append".to_string(),
+                                        )
+                                    } else {
+                                        TestResult::failed(
+                                            start.elapsed(),
+                                            format!("Append dropped value(s) {:?} in echoed body: {}", missing, body),
+                                        )
+                                    }
+                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Failed to read body: {}", e)),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     /// Test RequestHeaderModifier - remove header
     fn test_request_header_remove() -> TestCase {
         TestCase::new(
@@ -462,6 +529,7 @@ impl TestSuite for HeaderModifierTestSuite {
         vec![
             Self::test_request_header_set(),
             Self::test_request_header_add(),
+            Self::test_request_header_append_preserves_multi_value(),
             Self::test_request_header_remove(),
             Self::test_response_header_set(),
             Self::test_response_header_add(),

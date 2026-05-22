@@ -102,6 +102,14 @@ pub mod condition_reasons {
     /// Gateway API upstream reason — see the "Edgion extension" note above
     /// the Secret-focused reasons for the general caveat.
     pub const INVALID_PLUGIN_METADATA_REF: &str = "InvalidPluginMetaDataRef";
+    /// Gateway-level: edgion.io/edgion-stream-plugins annotation references a missing resource.
+    pub const INVALID_STREAM_PLUGINS_REF: &str = "InvalidStreamPluginsRef";
+
+    // Listener ResolvedRefs reasons (Gateway API v1.5)
+    /// Listener certificate Secret ref invalid or unresolvable.
+    pub const INVALID_CERTIFICATE_REF: &str = "InvalidCertificateRef";
+    /// Listener CA certificate ref kind unsupported.
+    pub const INVALID_CA_CERTIFICATE_KIND: &str = "InvalidCACertificateKind";
 
     // Programmed reasons (for listener Programmed condition)
     pub const PROGRAMMED: &str = "Programmed";
@@ -124,10 +132,14 @@ pub mod condition_reasons {
 pub enum AcceptedError {
     /// Resource namespace not allowed by listener's allowedRoutes policy
     NotAllowedByListeners { resource_ns: String },
+    /// Route kind not allowed by listener's allowedRoutes.kinds policy
+    NotAllowedByListenerKind { resource_kind: String },
     /// Route hostnames don't intersect with any listener hostname
     NoMatchingListenerHostname { hostnames: Vec<String> },
     /// sectionName doesn't match any listener
     NoMatchingParent { section_name: String },
+    /// Referenced parent Gateway not yet present in the store (init window)
+    ParentNotFound { parent_name: String },
     /// Resource failed validation or preparse (generic validation error)
     Invalid { message: String },
 }
@@ -136,8 +148,10 @@ impl AcceptedError {
     pub fn reason(&self) -> &'static str {
         match self {
             Self::NotAllowedByListeners { .. } => condition_reasons::NOT_ALLOWED_BY_LISTENERS,
+            Self::NotAllowedByListenerKind { .. } => condition_reasons::NOT_ALLOWED_BY_LISTENERS,
             Self::NoMatchingListenerHostname { .. } => condition_reasons::NO_MATCHING_LISTENER_HOSTNAME,
             Self::NoMatchingParent { .. } => condition_reasons::NO_MATCHING_PARENT,
+            Self::ParentNotFound { .. } => condition_reasons::NO_MATCHING_PARENT,
             Self::Invalid { .. } => condition_reasons::INVALID,
         }
     }
@@ -147,11 +161,17 @@ impl AcceptedError {
             Self::NotAllowedByListeners { resource_ns } => {
                 format!("Namespace '{}' not allowed by Gateway listeners", resource_ns)
             }
+            Self::NotAllowedByListenerKind { resource_kind } => {
+                format!("Route kind '{}' not allowed by Gateway listeners", resource_kind)
+            }
             Self::NoMatchingListenerHostname { hostnames } => {
                 format!("No matching hostname for route hostnames {:?}", hostnames)
             }
             Self::NoMatchingParent { section_name } => {
                 format!("No matching listener for sectionName '{}'", section_name)
+            }
+            Self::ParentNotFound { parent_name } => {
+                format!("Parent Gateway '{}' not found", parent_name)
             }
             Self::Invalid { message } => message.clone(),
         }
@@ -533,6 +553,15 @@ mod tests {
     }
 
     #[test]
+    fn test_accepted_error_not_allowed_by_listener_kind() {
+        let err = AcceptedError::NotAllowedByListenerKind {
+            resource_kind: "GRPCRoute".to_string(),
+        };
+        assert_eq!(err.reason(), "NotAllowedByListeners");
+        assert_eq!(err.message(), "Route kind 'GRPCRoute' not allowed by Gateway listeners");
+    }
+
+    #[test]
     fn test_accepted_error_no_matching_listener_hostname() {
         let err = AcceptedError::NoMatchingListenerHostname {
             hostnames: vec!["a.example.com".to_string(), "b.example.com".to_string()],
@@ -549,6 +578,15 @@ mod tests {
         };
         assert_eq!(err.reason(), "NoMatchingParent");
         assert_eq!(err.message(), "No matching listener for sectionName 'https'");
+    }
+
+    #[test]
+    fn test_accepted_error_parent_not_found() {
+        let err = AcceptedError::ParentNotFound {
+            parent_name: "default/my-gateway".to_string(),
+        };
+        assert_eq!(err.reason(), "NoMatchingParent");
+        assert_eq!(err.message(), "Parent Gateway 'default/my-gateway' not found");
     }
 
     #[test]

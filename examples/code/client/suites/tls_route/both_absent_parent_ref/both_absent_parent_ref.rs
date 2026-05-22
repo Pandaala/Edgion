@@ -128,7 +128,7 @@ impl TlsBothAbsentParentRefTestSuite {
                     {
                         return TestResult::failed(start.elapsed(), format!("Failed to delete Gateway: {}", e));
                     }
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    tokio::time::sleep(Duration::from_millis(1000)).await;
 
                     // Phase 3: re-apply Gateway
                     let gateway_yaml = r#"apiVersion: gateway.networking.k8s.io/v1

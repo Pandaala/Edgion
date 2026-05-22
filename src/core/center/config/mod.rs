@@ -10,8 +10,6 @@ pub struct DatabaseConfig {
     pub sqlite_path: String,
     /// Whether the SQLite database is enabled.
     pub enabled: bool,
-    /// How often (seconds) to sync RegionRoute snapshots from online controllers.
-    pub sync_interval_secs: u64,
 }
 
 impl Default for DatabaseConfig {
@@ -19,7 +17,6 @@ impl Default for DatabaseConfig {
         Self {
             sqlite_path: "data/center.db".to_string(),
             enabled: true,
-            sync_interval_secs: 60,
         }
     }
 }
@@ -44,9 +41,13 @@ pub struct CenterConfig {
     #[serde(default)]
     pub local_auth: Option<LocalAuthConfig>,
     /// TLS config for the federation gRPC server.
-    /// Omit this section to keep plaintext gRPC (backward compatible).
+    /// Federation requires mTLS; the server refuses to start without a valid TLS block.
     #[serde(default)]
     pub grpc_security: ConfSyncSecurityConfig,
+    /// Server-side peer-identity verification. Required (with a non-empty
+    /// trust_domain) under mTLS.
+    #[serde(default)]
+    pub peer_identity: Option<PeerIdentityConfig>,
 }
 
 impl Default for CenterConfig {
@@ -58,6 +59,23 @@ impl Default for CenterConfig {
             auth: None,
             local_auth: None,
             grpc_security: ConfSyncSecurityConfig::default(),
+            peer_identity: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PeerIdentityConfig {
+    /// SPIFFE trust domain expected in the peer cert's URI SAN
+    /// (`spiffe://{trust_domain}/controllers/{cluster}/{name}`).
+    pub trust_domain: String,
+}
+
+impl Default for PeerIdentityConfig {
+    fn default() -> Self {
+        Self {
+            trust_domain: String::new(),
         }
     }
 }
@@ -83,10 +101,6 @@ impl Default for CenterServerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CenterSyncConfig {
-    /// How often to send ListRequest to each controller (seconds, default: 300 = 5min)
-    pub list_interval_secs: u64,
-    /// Timeout waiting for ListResponse (seconds, default: 30)
-    pub list_timeout_secs: u64,
     /// Timeout waiting for CommandResponse (seconds, default: 30)
     pub command_timeout_secs: u64,
     /// Heartbeat ping interval sent to controllers (seconds, default: 30)
@@ -96,8 +110,6 @@ pub struct CenterSyncConfig {
 impl Default for CenterSyncConfig {
     fn default() -> Self {
         Self {
-            list_interval_secs: 300,
-            list_timeout_secs: 30,
             command_timeout_secs: 30,
             ping_interval_secs: 30,
         }
@@ -113,9 +125,7 @@ mod tests {
         let config = CenterConfig::default();
         assert_eq!(config.server.grpc_addr, "0.0.0.0:50052");
         assert_eq!(config.server.http_addr, "0.0.0.0:5810");
-        assert_eq!(config.sync.list_interval_secs, 300);
         assert_eq!(config.sync.ping_interval_secs, 30);
-        assert_eq!(config.sync.list_timeout_secs, 30);
         assert_eq!(config.sync.command_timeout_secs, 30);
     }
 
@@ -126,11 +136,27 @@ server:
   grpc_addr: "0.0.0.0:50100"
   http_addr: "0.0.0.0:5900"
 sync:
-  list_interval_secs: 60
+  ping_interval_secs: 60
 "#;
         let config: CenterConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.server.grpc_addr, "0.0.0.0:50100");
-        assert_eq!(config.sync.list_interval_secs, 60);
-        assert_eq!(config.sync.ping_interval_secs, 30); // default
+        assert_eq!(config.sync.ping_interval_secs, 60);
+        assert_eq!(config.sync.command_timeout_secs, 30); // default
+    }
+
+    #[test]
+    fn default_peer_identity_is_none() {
+        let c = CenterConfig::default();
+        assert!(c.peer_identity.is_none());
+    }
+
+    #[test]
+    fn parses_peer_identity() {
+        let yaml = r#"
+peer_identity:
+  trust_domain: "edgion.io"
+"#;
+        let c: CenterConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(c.peer_identity.unwrap().trust_domain, "edgion.io");
     }
 }

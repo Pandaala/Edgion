@@ -1,0 +1,18 @@
+# EdgionTls hosting the fallback_sni hostname so that no-SNI clients,
+# whose SNI gets resolved to default.example.com via Gateway config's
+# security_protect.fallback_sni, find a matching cert here.
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: fallback-sni
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: fallback-sni-gateway
+      namespace: edgion-test
+      sectionName: https-fallback
+  hosts:
+    - default.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

@@ -7,33 +7,33 @@ description: Compatibility notes for Edgion's Gateway API handling, including in
 
 Use this note when changing Gateway API behavior in Edgion and you need to understand intentional compatibility boundaries.
 
-## 文件索引
+## File index
 
-| 文件 | 内容 |
-|------|------|
-| [01-not-implemented.md](01-not-implemented.md) | 不实现/暂不实现的 Gateway API 功能：addresses 上报、跨类型 Hostname 冲突、infrastructure、`ListenerSet`、`HTTPRouteRequestMultipleMirrors`、BackendTLSPolicy conformance（已实现，SANValidation 暂不声明）、BackendTrafficPolicy、`TLSRouteModeMixed`、TLS profile；已完成项：~~frontendValidation~~ ✅ |
-| [02-conformance-testing.md](02-conformance-testing.md) | 如何运行、调试和逐步验证 Gateway API conformance tests：脚本用法、粒度控制、Port-Forward、调试技巧 |
-| [03-conformance-workflow.md](03-conformance-workflow.md) | 跨会话工作流：逐项推进 conformance 测试（环境检查→功能分析→运行→诊断→记录） |
-| [05-batch-conformance-debugging.md](05-batch-conformance-debugging.md) | 批量 conformance 失败的日志采集、时序关联和根因定位（Batch 7 专用） |
-| [06-conformance-debug-cookbook.md](06-conformance-debug-cookbook.md) | Conformance 排障手册：Pre-flight 检查、常见失败模式（namespace 被删、端口未绑定、进程残留等）、高效运行技巧 |
+| File | Content |
+|------|---------|
+| [01-not-implemented.md](01-not-implemented.md) | Gateway API features not implemented or postponed: addresses reporting, cross-type Hostname conflict detection, infrastructure, `ListenerSet`, `HTTPRouteRequestMultipleMirrors`, BackendTLSPolicy conformance (implemented; SANValidation not yet declared), BackendTrafficPolicy, `TLSRouteModeMixed`, TLS profile; completed items: ~~frontendValidation~~ ✅ |
+| [02-conformance-testing.md](02-conformance-testing.md) | How to run, debug, and incrementally validate Gateway API conformance tests: script usage, granularity control, port-forward, debugging tips |
+| [03-conformance-workflow.md](03-conformance-workflow.md) | Cross-session workflow: drive conformance tests one item at a time (environment check → feature analysis → run → diagnose → record) |
+| [05-batch-conformance-debugging.md](05-batch-conformance-debugging.md) | Log collection, timeline correlation, and root-cause localization for batch conformance failures (Batch 7 specific) |
+| [06-conformance-debug-cookbook.md](06-conformance-debug-cookbook.md) | Conformance troubleshooting cookbook: pre-flight checks, common failure modes (namespace deleted, ports not bound, stale processes, etc.), efficient run tips |
 
 
-## Conformance 最新结果（feature-04-06, 2026-04-07）
+## Latest conformance results (feature-04-06, 2026-04-07)
 
-**ALL PASS**（in-cluster 模式，split-profile 运行）
+**ALL PASS** (in-cluster mode, split-profile run)
 
-### Profile 声明状态
+### Profile declaration status
 
-| Profile | 声明 | 结果 |
-|---------|------|------|
+| Profile | Declared | Result |
+|---------|----------|--------|
 | `GATEWAY-HTTP` | ✅ | Core 33/33, Extended 32/32 — FULL PASS |
 | `GATEWAY-GRPC` | ✅ | Core 13/13 — FULL PASS |
 | `GATEWAY-TLS` | ✅ | Core 18/18, Extended 3/3 — FULL PASS |
-| `MESH-*` | ❌ | 不适用（Edgion 不是 service mesh） |
+| `MESH-*` | ❌ | Not applicable (Edgion is not a service mesh) |
 
-### 运行方式
+### How to run
 
-HTTP/GRPC 和 TLS **必须分开跑**（port 443 冲突，详见 cookbook 2.3.1）：
+HTTP/GRPC and TLS **must be run separately** (port 443 conflict; see cookbook 2.3.1):
 
 ```bash
 # Step 1: HTTP + gRPC
@@ -47,15 +47,15 @@ HTTP/GRPC 和 TLS **必须分开跑**（port 443 冲突，详见 cookbook 2.3.1�
 
 Reports: `examples/gateway-api-conformance/reports/`
 
-### 已修复的问题（本轮）
+### Issues fixed in this round
 
-| 问题 | 根因 | 修复 |
-|------|------|------|
-| Controller 周期性重启 (~27s) | `tokio::time::timeout(25s)` 从启动计时 | `tokio::select!` — 信号后才开始计时 |
-| TLS cert x509 CA:FALSE | upstream conformance suite 自签名证书缺 `IsCA:true` | 经验证 v1.5.1 测试未触发此路径，无需 patch |
-| TLS backend 旧证书缓存 | Secret 重建后 pod 不 reload | `--clean-slate` 自动 rollout restart TLS backend |
+| Issue | Root cause | Fix |
+|-------|------------|-----|
+| Controller periodically restarting (~27s) | `tokio::time::timeout(25s)` started timing from boot | `tokio::select!` — timing starts only after a signal |
+| TLS cert x509 CA:FALSE | upstream conformance suite self-signed cert lacked `IsCA:true` | Verified that v1.5.1 tests don't trigger this path; no patch needed |
+| Stale TLS-backend cert cache | Pod did not reload after Secret recreation | `--clean-slate` automatically rolls out the TLS backend |
 
-配置位置：`examples/gateway-api-conformance/conformance_test.go`（`opts.ConformanceProfiles`）
+Configuration location: `examples/gateway-api-conformance/conformance_test.go` (`opts.ConformanceProfiles`)
 
 ## TLS Certificate Selection
 

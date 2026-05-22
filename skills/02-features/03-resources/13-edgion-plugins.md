@@ -1,15 +1,15 @@
 ---
 name: http-plugin-catalog
-description: EdgionPlugins CRD Schema 和 28 个 HTTP 插件完整目录。
+description: Full EdgionPlugins CRD schema and catalog of 28 HTTP plugins.
 ---
 
-# EdgionPlugins — HTTP 插件
+# EdgionPlugins — HTTP Plugins
 
 > API: `edgion.io/v1` | Scope: Namespaced
 
-EdgionPlugins 资源定义一组 HTTP 层插件配置，通过 ExtensionRef 被路由引用。
+The EdgionPlugins resource defines a set of HTTP-layer plugin configurations referenced by routes via ExtensionRef.
 
-## 基础 Schema
+## Basic Schema
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -19,8 +19,8 @@ metadata:
   namespace: default
 spec:
   plugins:
-    - type: RateLimit           # 插件类型
-      config:                   # 插件配置（因类型而异）
+    - type: RateLimit           # Plugin type
+      config:                   # Plugin configuration (varies by type)
         rate: 100
         burst: 200
         key: "$remote_addr"
@@ -29,88 +29,89 @@ spec:
         allowOrigins: ["*"]
 ```
 
-## 插件目录
+## Plugin Catalog
 
-### 认证类
+### Authentication
 
-| 类型 | 说明 | Secret 依赖 |
-|------|------|------------|
-| `BasicAuth` | HTTP Basic 认证 | ✅ username/password |
-| `JwtAuth` | JWT Token 验证（RSA/EC/HMAC/EdDSA） | ✅ 公钥/密钥 |
-| `JweDecrypt` | JWE 加密 Token 解密 | ✅ 加密密钥 |
-| `HmacAuth` | HMAC 签名验证 | ✅ access_key + secret_key |
-| `KeyAuth` | API Key 认证 | ✅ API keys |
-| `HeaderCertAuth` | 请求头/连接证书认证 | — |
-| `LdapAuth` | LDAP 认证 | — |
-| `ForwardAuth` | 外部认证服务转发 | — |
+| Type | Description | Secret Dependency |
+|------|-------------|-------------------|
+| `BasicAuth` | HTTP Basic authentication | ✅ username/password |
+| `JwtAuth` | JWT token verification (RSA/EC/HMAC/EdDSA) | ✅ public/secret keys |
+| `JweDecrypt` | JWE encrypted token decryption | ✅ encryption key |
+| `HmacAuth` | HMAC signature verification | ✅ access_key + secret_key |
+| `KeyAuth` | API key authentication | ✅ API keys |
+| `HeaderCertAuth` | Request-header / connection certificate authentication | — |
+| `LdapAuth` | LDAP authentication | — |
+| `ForwardAuth` | Forward to an external authentication service | — |
 | `OpenidConnect` | OpenID Connect / OAuth2 | ✅ client_secret + session_secret |
 
-### 安全类
+### Security
 
-| 类型 | 说明 |
-|------|------|
-| `Cors` | CORS 跨域资源共享 |
-| `Csrf` | CSRF 防护 |
-| `IpRestriction` | IP 黑白名单（支持 CIDR） |
-| `RequestRestriction` | 请求限制（header/body 规则） |
+| Type | Description |
+|------|-------------|
+| `Cors` | CORS cross-origin resource sharing |
+| `Csrf` | CSRF protection |
+| `IpRestriction` | IP allow/deny list (CIDR supported) |
+| `RequestRestriction` | Request restrictions (header/body rules) |
 
-### 流量控制类
+### Traffic Control
 
-| 类型 | 说明 |
-|------|------|
-| `RateLimit` | 本地限流（CMS 算法） |
-| `RateLimitRedis` | 分布式限流（Redis 后端） |
-| `BandwidthLimit` | 带宽限制 |
+| Type | Description |
+|------|-------------|
+| `RateLimit` | Local rate limiting (CMS algorithm) |
+| `RateLimitRedis` | Distributed rate limiting (Redis backend) |
+| `BandwidthLimit` | Bandwidth limiting |
 
-### 请求/响应修改类
+### Request/Response Modification
 
-| 类型 | 说明 |
-|------|------|
-| `RequestHeaderModifier` | 修改请求头（Gateway API 标准） |
-| `ResponseHeaderModifier` | 修改响应头（Gateway API 标准） |
-| `RequestRedirect` | HTTP 重定向（Gateway API 标准） |
-| `UrlRewrite` | URL 重写（Gateway API 标准） |
-| `RequestMirror` | 请求镜像（Gateway API 标准） |
-| `ProxyRewrite` | 代理重写（高级路径/头部重写） |
-| `ResponseRewrite` | 响应重写（状态码/头部/Body） |
-| `RealIp` | 真实 IP 提取 |
-| `CtxSet` | 设置上下文变量 |
+| Type | Description |
+|------|-------------|
+| `RequestHeaderModifier` | Modify request headers (Gateway API standard) |
+| `ResponseHeaderModifier` | Modify response headers (Gateway API standard) |
+| `RequestRedirect` | HTTP redirect (Gateway API standard) |
+| `UrlRewrite` | URL rewrite (Gateway API standard) |
+| `RequestMirror` | Request mirroring (Gateway API standard) |
+| `ProxyRewrite` | Proxy rewrite (advanced path/header rewriting) |
+| `ResponseRewrite` | Response rewrite (status code/headers/body) |
+| `RealIp` | Real IP extraction |
+| `CtxSet` | Set context variables |
 
-### 路由/后端类
+### Routing/Backend
 
-| 类型 | 说明 |
-|------|------|
-| `ExtensionRef` | 嵌套引用其他 EdgionPlugins |
-| `DirectEndpoint` | 直接指定后端端点 |
-| `DynamicInternalUpstream` | 动态内部上游 |
-| `DynamicExternalUpstream` | 动态外部上游 |
-| `AllEndpointStatus` | 所有端点状态查询 |
+| Type | Description |
+|------|-------------|
+| `DirectEndpoint` | Directly specify a backend endpoint |
+| `DynamicInternalUpstream` | Dynamic internal upstream |
+| `DynamicExternalUpstream` | Dynamic external upstream |
+| `AllEndpointStatus` | All-endpoint status query |
 
-### 调试/测试类
+> Note: `EdgionPlugin::ExtensionRef` (the nested form) has been removed. Multi-plugin reuse is achieved via an aggregate EdgionPlugins resource or by listing multiple ExtensionRef entries side-by-side in the HTTPRoute filter list. See `docs/zh-CN/migrations/<version>-extension-ref.md` for details.
 
-| 类型 | 说明 |
-|------|------|
-| `Mock` | Mock 响应（测试/原型） |
-| `DebugAccessLogToHeader` | 调试用：Access Log 注入响应头 |
-| `Dsl` | DSL 脚本插件（沙箱 VM 执行，详见架构 `01-architecture/02-gateway/05-plugin-system.md` DSL 引擎章节） |
+### Debugging/Testing
 
-## 插件执行阶段
+| Type | Description |
+|------|-------------|
+| `Mock` | Mock response (testing/prototyping) |
+| `DebugAccessLogToHeader` | Debug: inject the access log into a response header |
+| `Dsl` | DSL script plugin (executed in a sandbox VM; see the DSL engine section in architecture `01-architecture/02-gateway/05-plugin-system.md`) |
 
-HTTP 插件在 Pingora 的 4 个阶段执行：
+## Plugin Execution Stages
 
-| 阶段 | 触发时机 | 典型插件 |
-|------|---------|---------|
-| `RequestFilter` | 收到请求后、选择后端前 | Auth、RateLimit、CORS、IP 限制 |
-| `UpstreamResponseFilter` | 收到后端响应头后 | ResponseHeaderModifier |
-| `UpstreamResponseBodyFilter` | 收到后端响应 Body 后 | ResponseRewrite（Body 修改） |
-| `UpstreamResponse` | 后端响应完成后 | 日志记录 |
+HTTP plugins execute across Pingora's 4 stages:
 
-## Secret 依赖
+| Stage | Trigger Time | Typical Plugins |
+|-------|--------------|-----------------|
+| `RequestFilter` | After the request is received and before backend selection | Auth, RateLimit, CORS, IP restriction |
+| `UpstreamResponseFilter` | After upstream response headers are received | ResponseHeaderModifier |
+| `UpstreamResponseBodyFilter` | After upstream response body is received | ResponseRewrite (body modification) |
+| `UpstreamResponse` | After the upstream response completes | Logging |
 
-以下插件类型在 Controller 侧 `parse()` 阶段会从 `GLOBAL_SECRET_STORE` 读取 Secret 数据：
+## Secret Dependencies
 
-| 插件 | 读取的 Secret 字段 |
-|------|-------------------|
+The following plugin types read Secret data from `GLOBAL_SECRET_STORE` during the Controller-side `parse()` stage:
+
+| Plugin | Secret Fields Read |
+|--------|--------------------|
 | `BasicAuth` | username, password |
 | `JwtAuth` | RSA/EC/HMAC/EdDSA public keys, key metadata |
 | `JweDecrypt` | JWE encryption key |
@@ -119,4 +120,4 @@ HTTP 插件在 Pingora 的 4 个阶段执行：
 | `OpenidConnect` | client_secret, session_secret |
 | `HeaderCertAuth` | CA certificates |
 
-Secret 变更会通过 SecretRefManager 自动触发 EdgionPlugins 重新处理。
+Secret changes automatically trigger reprocessing of EdgionPlugins via SecretRefManager.

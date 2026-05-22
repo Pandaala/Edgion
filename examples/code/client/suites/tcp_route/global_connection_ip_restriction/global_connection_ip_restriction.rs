@@ -256,6 +256,79 @@ impl GcirEnforcementTestSuite {
             },
         )
     }
+    /// Test 4: PM missing → fail-closed
+    ///
+    /// Delete the PluginMetaData that the GCIR stream plugin references.
+    /// `on_connection` cannot resolve the PM → records "fail_closed_pm_missing"
+    /// and returns `Deny("ip:deny:pm-missing")`. The connection must be closed.
+    fn gcir_fail_closed_pm_missing() -> TestCase {
+        TestCase::new(
+            "gcir_fail_closed_pm_missing",
+            "GCIR with missing PM: connection must be denied (fail-closed), not passed through",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    // First ensure the PM exists so delete has a known baseline.
+                    if let Err(e) = ctx.apply_yaml(&pm_yaml_with("allow-local", true)).await {
+                        return TestResult::failed(start.elapsed(), format!("Failed to apply PM before delete: {}", e));
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    // Delete the PM the GCIR plugin references.
+                    if let Err(e) = ctx
+                        .delete_resource("PluginMetaData", "edgion-test", "gcir-enforce-test")
+                        .await
+                    {
+                        return TestResult::failed(start.elapsed(), format!("Failed to delete PM: {}", e));
+                    }
+
+                    // Wait for deletion to propagate to the Gateway.
+                    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+                    let addr = ctx.tcp_addr();
+
+                    let result = match tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await {
+                        Ok(Ok(mut stream)) => {
+                            let _ = stream.write_all(b"Hello GCIR no-PM").await;
+                            let mut buf = vec![0u8; 1024];
+                            match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
+                                Ok(Ok(0)) => TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Connection closed by GCIR (PM missing → fail-closed, EOF)".to_string(),
+                                ),
+                                Ok(Ok(n)) => TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected denial (PM missing) but received {} bytes — fail-open leak", n),
+                                ),
+                                Ok(Err(_)) => TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Connection rejected by GCIR (PM missing → fail-closed, read error)".to_string(),
+                                ),
+                                Err(_) => TestResult::failed(
+                                    start.elapsed(),
+                                    "Read timed out — GCIR PM-missing did not deny the connection".to_string(),
+                                ),
+                            }
+                        }
+                        Ok(Err(_)) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Connection refused by GCIR (PM missing → fail-closed)".to_string(),
+                        ),
+                        Err(_) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Connection dropped by GCIR (PM missing → fail-closed, timeout)".to_string(),
+                        ),
+                    };
+
+                    // Restore PM so subsequent test runs start in a known-good state.
+                    let _ = ctx.apply_yaml(&pm_yaml_with("allow-local", true)).await;
+
+                    result
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for GcirEnforcementTestSuite {
@@ -268,6 +341,7 @@ impl TestSuite for GcirEnforcementTestSuite {
             Self::gcir_allow_localhost(),
             Self::gcir_deny_after_switch(),
             Self::gcir_fail_open_disabled(),
+            Self::gcir_fail_closed_pm_missing(),
         ]
     }
 }

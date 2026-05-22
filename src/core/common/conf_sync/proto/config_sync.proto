@@ -69,7 +69,6 @@ message ServerInfoRequest {}
 // Server info response
 message ServerInfoResponse {
     string server_id = 1;              // Server instance ID
-    string endpoint_mode = 2;          // "EndpointSlice", "Endpoint", or "Auto"
     repeated string supported_kinds = 3;  // List of resource kinds supported by this server
 }
 

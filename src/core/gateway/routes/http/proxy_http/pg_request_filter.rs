@@ -1,19 +1,29 @@
-use super::EdgionHttpProxy;
+use super::{resolve_global_plugins, resolve_route_ext_refs, EdgionHttpProxy};
+use crate::core::gateway::cli::config::get_path_normalization_config;
+use crate::core::gateway::path_normalization::{
+    contains_escaped_slash, has_invalid_percent_encoding, normalize_path, PathNormalizationConfig,
+};
 use crate::core::gateway::plugins::http::get_global_plugin_store;
-use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, try_match_grpc_route};
+use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, parse_grpc_timeout, try_match_grpc_route};
 use crate::core::gateway::routes::http::routes_mgr::get_global_http_route_managers;
 use crate::core::gateway::runtime::hostname_matches_listener;
 use crate::core::gateway::runtime::store::get_listener_gateway_info_store;
 use crate::core::gateway::runtime::store::listener_gateway_info::format_gateway_key;
+use crate::core::gateway::services::acme::challenge_store::get_global_challenge_store;
 use crate::core::gateway::{
     end_response_400, end_response_404, end_response_421, end_response_500, end_response_grpc_unimplemented,
+    terminate_with_fallback,
 };
 use crate::types::ctx::NormalizedHostname;
 use crate::types::filters::PluginRunningResult;
-use crate::types::resources::{CorsConfig, EdgionPlugin, HTTPRouteFilter, HTTPRouteFilterType};
+use crate::types::resources::{CorsConfig, HTTPRouteFilter, HTTPRouteFilterType};
 use crate::types::{EdgionHttpContext, EdgionStatus, TlsConnId, TlsConnMeta};
+use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::Session;
 use std::sync::Arc;
+
+/// ACME HTTP-01 challenge path prefix
+const ACME_CHALLENGE_PREFIX: &str = "/.well-known/acme-challenge/";
 
 #[inline]
 pub async fn request_filter(
@@ -160,24 +170,43 @@ pub async fn request_filter(
         }
     }
 
-    // Step 2: Run global plugins from EdgionGatewayConfig (executed before route-level plugins)
-    if let Some(ref plugin_refs) = edgion_http.edgion_gateway_config.spec.global_plugins_ref {
-        for plugin_ref in plugin_refs {
-            // Construct plugin key: namespace/name
-            let plugin_key = format!(
-                "{}/{}",
-                plugin_ref.namespace.as_deref().unwrap_or("default"),
-                plugin_ref.name
-            );
+    // === Per-request resolve (Phase 4 of unified plugin snapshot) ===
+    // Resolve once at request_filter entry; later stages read directly from
+    // ctx without paying any format!() / store-lookup cost.
+    if ctx.resolved_global_plugins.is_none() {
+        let gw_name = edgion_http
+            .edgion_gateway_config
+            .metadata
+            .name
+            .as_deref()
+            .unwrap_or("<unnamed>");
+        let resolved = resolve_global_plugins(
+            edgion_http.edgion_gateway_config.spec.global_plugins_ref.as_deref(),
+            gw_name,
+        );
+        ctx.resolved_global_plugins = Some(Arc::new(resolved));
+    }
 
-            if let Some(runtime) = get_global_plugin_store().get_plugin_runtime(&plugin_key) {
-                runtime.run_request_plugins(session, ctx).await;
-                if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-                    if ctx.request_info.is_grpc_request && !ctx.request_info.response_committed {
-                        let _ = end_response_500(session, ctx, &edgion_http.server_header_opts).await;
-                    }
-                    return Ok(true);
-                }
+    if ctx.resolved_route_ext_refs.is_none() {
+        let resolved = match (&ctx.route_unit, &ctx.grpc_route_unit) {
+            (Some(unit), _) => resolve_route_ext_refs(unit.rule.plugin_runtime.ext_ref_keys(), &unit.resource_key),
+            (_, Some(unit)) => resolve_route_ext_refs(unit.rule.plugin_runtime.ext_ref_keys(), &unit.resource_key),
+            _ => Vec::new(),
+        };
+        ctx.resolved_route_ext_refs = Some(Arc::new(resolved));
+    }
+
+    // Step 2: Run global plugins from EdgionGatewayConfig (executed before route-level plugins)
+    // Reads the per-request snapshot populated above (zero format!/store cost).
+    if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(Arc::clone) {
+        for runtime in plugins.iter() {
+            if runtime.request_plugins_count() == 0 {
+                continue;
+            }
+            runtime.run_request_plugins(session, ctx).await;
+            if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+                let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
+                return Ok(true);
             }
         }
     }
@@ -190,17 +219,13 @@ pub async fn request_filter(
             .run_request_plugins(session, ctx)
             .await;
         if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-            if ctx.request_info.is_grpc_request && !ctx.request_info.response_committed {
-                let _ = end_response_500(session, ctx, &edgion_http.server_header_opts).await;
-            }
+            let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
             return Ok(true);
         }
     } else if let Some(route_unit) = ctx.route_unit.clone() {
         route_unit.rule.plugin_runtime.run_request_plugins(session, ctx).await;
         if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
-            if ctx.request_info.is_grpc_request && !ctx.request_info.response_committed {
-                let _ = end_response_500(session, ctx, &edgion_http.server_header_opts).await;
-            }
+            let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
             return Ok(true);
         }
     }
@@ -221,6 +246,9 @@ async fn build_request_metadata(
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<bool> {
     let req_header = session.req_header();
+    let raw_path = req_header.uri.path().to_string();
+    let raw_query = req_header.uri.query().map(str::to_string);
+    let path_norm_cfg = get_path_normalization_config();
 
     // Protocol detection: check for WebSocket, gRPC-Web, and gRPC
     if ctx.request_info.discover_protocol.is_none() {
@@ -249,21 +277,72 @@ async fn build_request_metadata(
         }
     }
 
-    // Extract client_addr and client_port (TCP connection address)
-    let client_addr_str = session.client_addr().map(|addr| addr.to_string()).unwrap_or_default();
-    let parsed_addr = client_addr_str.parse::<std::net::SocketAddr>().ok();
-    ctx.request_info.client_addr = parsed_addr
-        .map(|a| a.ip().to_string())
-        .unwrap_or_else(|| client_addr_str.clone());
-    ctx.request_info.client_port = parsed_addr.map(|a| a.port()).unwrap_or(0);
+    // Parse client-supplied `grpc-timeout` deadline. The gRPC-over-HTTP/2 spec
+    // expects servers / intermediaries to honour it; the parsed deadline is
+    // anchored to `ctx.start_time` so peer timeout computation and the
+    // upstream `grpc-timeout` rewrite share one source of truth. Malformed,
+    // missing, or overflowing headers fall through to route-level
+    // `request_timeout` behaviour. `checked_add` guards against an upper-bound
+    // value (e.g. `99999999H` from a hostile client) overflowing `Instant`.
+    if ctx.request_info.is_grpc_request && ctx.request_info.grpc_client_deadline.is_none() {
+        if let Some(raw) = req_header.headers.get("grpc-timeout") {
+            if let Some(deadline) = raw
+                .to_str()
+                .ok()
+                .and_then(parse_grpc_timeout)
+                .and_then(|dur| ctx.start_time.checked_add(dur))
+            {
+                ctx.request_info.grpc_client_deadline = Some(deadline);
+            }
+        }
+    }
 
-    // Extract remote_addr (real client IP, considering trusted proxies)
+    // Extract client_addr and client_port (TCP connection address).
+    // as_inet() avoids the to_string() -> parse() round trip; UDS downstream
+    // is not a real scenario for the HTTP gateway, so falling back to empty
+    // string for non-inet addresses is acceptable.
+    let inet = session.client_addr().and_then(|a| a.as_inet());
+    ctx.request_info.client_addr = inet.map(|s| s.ip().to_string()).unwrap_or_default();
+    ctx.request_info.client_port = inet.map(|s| s.port()).unwrap_or(0);
+
+    // Extract remote_addr (real client IP, considering trusted proxies).
+    // extract_real_ip accepts a bare IP string as well as "ip:port".
     ctx.request_info.remote_addr = if let Some(extractor) = &edgion_http.real_ip_extractor {
-        extractor.extract_real_ip(&client_addr_str, req_header)
+        extractor.extract_real_ip(&ctx.request_info.client_addr, req_header)
     } else {
-        // No extractor configured, use client_addr (already IP only)
         ctx.request_info.client_addr.clone()
     };
+
+    // Generate x_trace_id before any early-return guards so 400/4xx access-log
+    // entries carry a trace id that can be correlated with tls.log.
+    ctx.request_info.x_trace_id = req_header
+        .headers
+        .get("x-trace-id")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            // Generate new trace_id if not present
+            Some(uuid::Uuid::new_v4().to_string())
+        });
+
+    // RFC 9110 §7.2: reject HTTP/1.1 requests carrying more than one Host header
+    // line. Host smuggling defense — gated by `SecurityProtectConfig.reject_duplicate_host`
+    // (default true), matching Envoy's effective behavior (commas in the coalesced
+    // :authority fail Envoy's authority validator). HTTP/2 carries authority in the
+    // `:authority` pseudo-header and `headers.get_all("host")` is normally empty for
+    // h2, so this branch is a no-op for h2 / gRPC-over-h2 traffic.
+    let reject_duplicate_host = edgion_http
+        .edgion_gateway_config
+        .spec
+        .security_protect
+        .as_ref()
+        .map(|s| s.reject_duplicate_host)
+        .unwrap_or(true);
+    if reject_duplicate_host && req_header.headers.get_all("host").iter().count() > 1 {
+        ctx.add_error(EdgionStatus::DuplicateHostHeader);
+        end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true);
+    }
 
     // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback).
     // NormalizedHostname::new() applies trim, port-strip, FQDN-dot-strip, and lowercase once.
@@ -284,27 +363,6 @@ async fn build_request_metadata(
                 .and_then(|h| h.to_str().ok().map(NormalizedHostname::new))
         })
         .unwrap_or_default();
-
-    // Validate hostname is present (not required for gRPC requests)
-    if !ctx.request_info.is_grpc_request && ctx.request_info.hostname.is_empty() {
-        ctx.add_error(EdgionStatus::HostMissing);
-        end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
-        return Ok(true); // Response sent
-    }
-
-    // Extract request path
-    ctx.request_info.path = req_header.uri.path().to_string();
-
-    // Try to get X-Trace-Id from request headers, generate if not present
-    ctx.request_info.x_trace_id = req_header
-        .headers
-        .get("x-trace-id")
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string())
-        .or_else(|| {
-            // Generate new trace_id if not present
-            Some(uuid::Uuid::new_v4().to_string())
-        });
 
     // Extract X-Forwarded-For header (before we append to it)
     ctx.request_info.x_forwarded_for = req_header
@@ -336,6 +394,33 @@ async fn build_request_metadata(
         }
     }
 
+    if let Some(status) = apply_path_normalization_entry(ctx, &raw_path, raw_query, path_norm_cfg) {
+        ctx.add_error(status);
+        end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true);
+    }
+
+    if try_serve_acme_challenge(edgion_http, session, ctx).await? {
+        return Ok(true);
+    }
+
+    // Validate hostname is present.
+    //
+    // RFC 9110 §7.2 (HTTP/1.1) and RFC 9113 §8.3.1 (HTTP/2 :authority) both
+    // require rejecting messages whose target host field is missing or has an
+    // invalid value. `NormalizedHostname` trims whitespace and strips the port,
+    // so a `Host` / `:authority` of "  " collapses to empty here.
+    //
+    // gRPC traffic must take the same guard: without it an empty `:authority`
+    // would land on the first catch-all GRPCRoute and bypass per-hostname
+    // tenant isolation. `end_response_400` already routes gRPC requests to
+    // `grpc-status 3` (INVALID_ARGUMENT) trailers via `send_grpc_error_three_frame`.
+    if ctx.request_info.hostname.is_empty() {
+        ctx.add_error(EdgionStatus::HostMissing);
+        end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true); // Response sent
+    }
+
     // Validate X-Forwarded-For length against security configuration
     if let Some(security_config) = &edgion_http.edgion_gateway_config.spec.security_protect {
         if let Some(ref existing_xff) = ctx.request_info.x_forwarded_for {
@@ -352,6 +437,86 @@ async fn build_request_metadata(
     Ok(false) // Continue processing
 }
 
+/// Serve ACME HTTP-01 challenge response if there is an active challenge matching the request.
+///
+/// Called after request metadata and path normalization entry are populated so
+/// the access log retains client/host/trace/raw URI context for challenge hits.
+#[inline]
+async fn try_serve_acme_challenge(
+    edgion_http: &EdgionHttpProxy,
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+) -> pingora_core::Result<bool> {
+    let store = get_global_challenge_store();
+    if store.is_empty() {
+        return Ok(false);
+    }
+
+    let Some((token, host)) = acme_challenge_token_and_host(session.req_header()) else {
+        return Ok(false);
+    };
+
+    let key_auth = match store.lookup(token, &host) {
+        Some(v) => v,
+        None => return Ok(false),
+    };
+
+    ctx.add_info(EdgionStatus::AcmeChallengeServed);
+    ctx.request_info.status = Some(200);
+    ctx.request_info.response_committed = true;
+
+    let mut resp = ResponseHeader::build(200, None)?;
+    edgion_http.server_header_opts.apply_to_response(&mut resp);
+    resp.insert_header("Content-Type", "text/plain")?;
+    resp.insert_header("Content-Length", key_auth.len().to_string())?;
+
+    session.write_response_header(Box::new(resp), false).await?;
+    session.write_response_body(Some(key_auth), true).await?;
+
+    Ok(true)
+}
+
+fn acme_challenge_token_and_host(req_header: &RequestHeader) -> Option<(&str, String)> {
+    let token = match req_header.uri.path().strip_prefix(ACME_CHALLENGE_PREFIX) {
+        Some(t) if !t.is_empty() => t,
+        _ => return None,
+    };
+
+    let host = req_header
+        .headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_string();
+
+    Some((token, host))
+}
+
+fn apply_path_normalization_entry(
+    ctx: &mut EdgionHttpContext,
+    raw_path: &str,
+    raw_query: Option<String>,
+    cfg: &PathNormalizationConfig,
+) -> Option<EdgionStatus> {
+    ctx.request_info.entry_raw_path = raw_path.to_string();
+    ctx.request_info.entry_raw_query = raw_query;
+
+    if cfg.reject_escaped_slashes && contains_escaped_slash(raw_path) {
+        return Some(EdgionStatus::PathEscapedSlashRejected);
+    }
+
+    if cfg.reject_invalid_percent_encoding && has_invalid_percent_encoding(raw_path) {
+        return Some(EdgionStatus::PathInvalidPercentEncoding);
+    }
+
+    ctx.request_info.normalized_current_path = normalize_path(raw_path, cfg).unwrap_or_else(|| raw_path.to_string());
+
+    None
+}
+
 /// Append client IP to X-Forwarded-For header (inline for performance)
 ///
 /// This function always appends the client IP to maintain the proxy chain,
@@ -365,7 +530,10 @@ fn append_x_forwarded_for(session: &mut Session, ctx: &EdgionHttpContext) {
     let req_header_mut = session.req_header_mut();
     if let Some(ref existing_xff) = ctx.request_info.x_forwarded_for {
         // X-Forwarded-For exists, append client IP
-        let new_xff = format!("{}, {}", existing_xff, client_ip);
+        let mut new_xff = String::with_capacity(existing_xff.len() + 2 + client_ip.len());
+        new_xff.push_str(existing_xff);
+        new_xff.push_str(", ");
+        new_xff.push_str(client_ip);
         let _ = req_header_mut.insert_header("X-Forwarded-For", &new_xff);
     } else {
         // X-Forwarded-For doesn't exist, create new
@@ -382,11 +550,65 @@ fn set_x_real_ip(session: &mut Session, ctx: &EdgionHttpContext) {
     let _ = req_header_mut.insert_header("X-Real-IP", &ctx.request_info.remote_addr);
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pingora_http::RequestHeader;
+
+    #[test]
+    fn acme_challenge_token_and_host_extracts_token_and_strips_host_port() {
+        let mut req = RequestHeader::build("GET", b"/.well-known/acme-challenge/token-1", None).unwrap();
+        req.insert_header("host", "example.com:80").unwrap();
+
+        let (token, host) = acme_challenge_token_and_host(&req).unwrap();
+
+        assert_eq!(token, "token-1");
+        assert_eq!(host, "example.com");
+    }
+
+    #[test]
+    fn acme_challenge_token_and_host_ignores_non_challenge_paths() {
+        let req = RequestHeader::build("GET", b"/api/.well-known/acme-challenge/token-1", None).unwrap();
+
+        assert!(acme_challenge_token_and_host(&req).is_none());
+    }
+
+    #[test]
+    fn path_reject_freezes_entry_raw_uri_for_access_log() {
+        let mut ctx = EdgionHttpContext::new();
+        let cfg = PathNormalizationConfig {
+            reject_escaped_slashes: true,
+            reject_invalid_percent_encoding: true,
+            ..Default::default()
+        };
+
+        let status = apply_path_normalization_entry(&mut ctx, "/admin%2Fsecret", Some("trace=1".to_string()), &cfg);
+
+        assert_eq!(status, Some(EdgionStatus::PathEscapedSlashRejected));
+        assert_eq!(ctx.request_path(), "/admin%2Fsecret");
+        assert_eq!(ctx.request_uri(), "/admin%2Fsecret?trace=1");
+    }
+
+    #[test]
+    fn path_normalization_entry_refreshes_normalized_current_path() {
+        let mut ctx = EdgionHttpContext::new();
+        let cfg = PathNormalizationConfig::default();
+
+        let status = apply_path_normalization_entry(&mut ctx, "/admin//../secret", None, &cfg);
+
+        assert_eq!(status, None);
+        assert_eq!(ctx.request_path(), "/admin//../secret");
+        assert_eq!(ctx.path(), "/secret");
+    }
+}
+
 /// Extract CORS configuration dynamically from route filters
 ///
-/// This function searches through route filters to find EdgionPlugins references
-/// and extracts the CORS configuration from the global plugin store.
-/// This ensures we always get the latest CORS config even if EdgionPlugin is updated.
+/// Walks the route's `ExtensionRef` filters that point at `EdgionPlugins`
+/// resources and returns the first pre-resolved `Arc<CorsConfig>` cached on
+/// the matched `PluginRuntime`. The cache is rebuilt on every `EdgionPlugins`
+/// preparse, so hot-reload semantics are preserved while the preflight hot
+/// path avoids deep-cloning the full `CorsConfig` per request.
 fn extract_cors_config_from_route_filters(
     filters: &Option<Vec<HTTPRouteFilter>>,
     namespace: &str,
@@ -407,16 +629,7 @@ fn extract_cors_config_from_route_filters(
 
         let key = format!("{}/{}", namespace, ext_ref.name);
         let cors = get_global_plugin_store()
-            .with_plugin(&key, |p| {
-                p.spec.request_plugins.as_ref()?.iter().find_map(|entry| {
-                    if let EdgionPlugin::Cors(cfg) = &entry.plugin {
-                        if entry.is_enabled() {
-                            return Some(Arc::new(cfg.clone()));
-                        }
-                    }
-                    None
-                })
-            })
+            .with_plugin(&key, |p| p.spec.plugin_runtime.cors_config_arc())
             .flatten();
         if cors.is_some() {
             return cors;

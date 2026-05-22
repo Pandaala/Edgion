@@ -1,0 +1,19 @@
+# EdgionTls wildcard_single_label scenario
+# RFC 6125 §6.4.3: a wildcard label matches exactly ONE DNS label.
+# The wildcard *.example.com therefore covers foo.example.com but NOT
+# a.b.example.com (two-label left side) nor example.com (bare apex).
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: wc-single-tls
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: wc-single-gateway
+      namespace: edgion-test
+      sectionName: https-wc-single
+  hosts:
+    - "*.example.com"
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

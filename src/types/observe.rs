@@ -1,6 +1,6 @@
 //! Observability configuration types
 
-use crate::types::link_sys::StringOutput;
+use crate::types::output::StringOutput;
 use clap::Args;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,7 @@ impl LogConfig {
     pub fn with_path(path: impl Into<String>, enabled: bool) -> Self {
         Self {
             enabled,
-            output: StringOutput::LocalFile(crate::types::link_sys::LocalFileWriterCfg {
+            output: StringOutput::LocalFile(crate::types::output::LocalFileWriterCfg {
                 path: path.into(),
                 queue_size: None,
                 rotation: None,
@@ -43,6 +43,19 @@ impl LogConfig {
     pub fn disabled_default(path: impl Into<String>) -> Self {
         Self::with_path(path, false)
     }
+}
+
+/// Access log output options that are not part of the generic [`LogConfig`].
+///
+/// Sits alongside `[access_log]` in TOML (e.g. `[access_log_options]`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AccessLogOptions {
+    /// When `true`, the access log entry includes a `request_uri` field carrying
+    /// the entry-time raw path + raw query (the original URI the client sent).
+    /// Default `false` — the access log emits only the current normalized
+    /// `path` field, no raw path or query.
+    pub include_raw_uri: bool,
 }
 
 /// Log type enumeration

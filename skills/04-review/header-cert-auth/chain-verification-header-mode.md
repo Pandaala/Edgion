@@ -1,42 +1,42 @@
 ---
 name: chain-verification-header-mode
-description: HeaderCertAuth Header 模式证书链验证 finding 判定规则。审查"Header 模式只做单层 CA 匹配、未构建完整证书链"类 finding 时先读此文件。
+description: Decision rule for HeaderCertAuth Header-mode certificate chain verification findings. Read this file first when reviewing "Header mode only does single-layer CA matching, does not build full certificate chain" findings.
 ---
 
-# HeaderCertAuth Header 模式 — 单层 CA 匹配 NOT-AN-ISSUE
+# HeaderCertAuth Header Mode — Single-Layer CA Matching NOT-AN-ISSUE
 
-## 结论
+## Conclusion
 
-`header_cert_auth` Header 模式的 `verify_against_ca()` 只做单层 CA 匹配（叶证书签名 vs 配置 CA），不构建完整 X.509 路径，判定为 **NOT-AN-ISSUE**。不接受"改用 webpki / 实现链式路径构建"类修复建议。
+The `verify_against_ca()` of `header_cert_auth` Header mode performs only single-layer CA matching (leaf-cert signature vs configured CA), without building a full X.509 path; classified as **NOT-AN-ISSUE**. Fix suggestions of the form "switch to webpki / implement chain-path construction" are not accepted.
 
-## 核心理由
+## Core Rationale
 
-**1. Header 模式的架构前提**
+**1. Architectural premise of Header mode**
 
-Header 模式的前置条件是存在 TLS 终止代理（Nginx / Envoy / Traefik / HAProxy）：
-- 代理已在 TLS 握手层完成完整 X.509 链验证（root → intermediate → leaf 全链）
-- 验证通过后才将 cert 放入 header（如 `ssl-client-cert` / `x-forwarded-client-cert`）
-- Edgion 从 header 读取的 cert 已是经过代理信任的 cert
+Header mode's prerequisite is a TLS-terminating proxy in front (Nginx / Envoy / Traefik / HAProxy):
+- The proxy has already performed full X.509 chain verification (root → intermediate → leaf) at the TLS handshake layer
+- After verification passes, the cert is placed into a header (such as `ssl-client-cert` / `x-forwarded-client-cert`)
+- The cert that Edgion reads from the header is already a cert trusted via the proxy
 
-在这个架构中，`verify_against_ca()` 是**二次过滤**（"这张 cert 属于我配置的哪个 CA 组织"），不是首次安全验证。单层匹配满足此目的。
+In this architecture, `verify_against_ca()` is **secondary filtering** ("which CA organization that I configured does this cert belong to"), not first-time security verification. Single-layer matching satisfies this purpose.
 
-**2. 行业一致**
+**2. Industry consistency**
 
-Kong `mtls-auth` plugin 在 header 模式下同样只做单层 CA 匹配，不在应用层重做链验证。行业模型是：链验证 = TLS 层责任；应用层读 header = 信任代理已验证。
+Kong's `mtls-auth` plugin in header mode likewise only does single-layer CA matching, without redoing chain verification at the application layer. The industry model is: chain verification = TLS layer's responsibility; reading header at the application layer = trust that the proxy has verified.
 
-**3. 真实攻击面在部署层**
+**3. The real attack surface is at the deployment layer**
 
-实际安全风险是代理是否剥离外部请求里的 cert header（防止攻击者直接注入伪造 cert）。这是部署配置问题，不是 Edgion 代码问题：
-- Nginx：`proxy_set_header ssl-client-cert ""` 清除外来 header 后再设置
-- Envoy：自动覆盖 XFCC header，不透传外部
-- 文档应说明 operator 需确认代理剥离行为
+The actual security risk is whether the proxy strips the cert header from external requests (preventing the attacker from injecting a forged cert directly). This is a deployment-config issue, not an Edgion code issue:
+- Nginx: `proxy_set_header ssl-client-cert ""` clears incoming headers before setting
+- Envoy: automatically overrides the XFCC header; does not pass through external
+- Documentation should explain that the operator must confirm proxy-stripping behavior
 
-## 不接受的修复建议
+## Fix Suggestions Not Accepted
 
-- 引入 `webpki` 做路径构建（rustls 生态，与 BoringSSL 项目不兼容，且冗余）
-- 用 `x509_parser` 自己实现链式遍历（代理已验证，此处冗余；实现细节多，引入新 bug 风险）
-- 要求所有配置的 CA 必须通过相互验证（破坏当前 flat CA bundle 的使用方式）
+- Introduce `webpki` for path construction (rustls ecosystem; incompatible with the BoringSSL project, and redundant)
+- Implement chain traversal manually with `x509_parser` (already verified by the proxy; redundant here; many implementation details, risk of new bugs)
+- Require all configured CAs to be cross-validated (breaks the current flat CA bundle usage)
 
-## 附：Connection 模式不受影响
+## Note: Connection Mode is Unaffected
 
-`mode=Connection` 路径由 Pingora/BoringSSL TLS 握手层完成完整链验证，不经过 `verify_against_ca()`，天然正确。
+The `mode=Connection` path performs full chain verification at the Pingora/BoringSSL TLS handshake layer, without going through `verify_against_ca()`; naturally correct.

@@ -1,16 +1,16 @@
 ---
 name: grpcroute-features
-description: GRPCRoute 完整 Schema：gRPC service/method 匹配、过滤器、gRPC-Web 支持。
+description: Full GRPCRoute schema: gRPC service/method matching, filters, gRPC-Web support.
 ---
 
-# GRPCRoute 资源
+# GRPCRoute Resource
 
 > API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
-> Gateway API v1.4.0 Core 资源
+> Gateway API v1.4.0 Core resource
 
-GRPCRoute 定义 gRPC 协议的路由规则，支持按 service/method 匹配和 gRPC-Web。
+GRPCRoute defines routing rules for the gRPC protocol, supporting matching by service/method and gRPC-Web.
 
-## 完整 Schema
+## Full Schema
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -30,8 +30,8 @@ spec:
     - matches:
         - method:
             type: Exact                            # Exact | RegularExpression
-            service: "mypackage.MyService"         # gRPC service 名称
-            method: "GetItem"                      # gRPC method 名称
+            service: "mypackage.MyService"         # gRPC service name
+            method: "GetItem"                      # gRPC method name
           headers:
             - type: Exact
               name: x-custom-header
@@ -75,9 +75,9 @@ spec:
         backendRequest: "10s"
 
       retry:
-        attempts: 3                                # 最大重试次数
-        backoff: "500ms"                           # 重试退避间隔（指数退避基数）
-        codes:                                     # gRPC 状态码（⚠️ 尚不支持，见下方说明）
+        attempts: 3                                # Maximum retry attempts
+        backoff: "500ms"                           # Retry backoff interval (exponential backoff base)
+        codes:                                     # gRPC status codes (⚠️ not yet supported, see notes below)
           - 14                                     # UNAVAILABLE
 
       sessionPersistence:
@@ -85,56 +85,56 @@ spec:
         sessionName: "GRPC_SESSION"
 ```
 
-## 匹配条件 Schema
+## Match Condition Schema
 
 ### GRPCMethodMatch
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
+| Field | Type | Description |
+|-------|------|-------------|
 | `type` | `String` | `Exact` / `RegularExpression` |
-| `service` | `String?` | gRPC service 全限定名（如 `mypackage.MyService`） |
-| `method` | `String?` | gRPC method 名称 |
+| `service` | `String?` | gRPC service fully qualified name (e.g., `mypackage.MyService`) |
+| `method` | `String?` | gRPC method name |
 
-匹配逻辑：
-- `type: Exact`（默认）：按字面值精确匹配
-- `type: RegularExpression`：service 和 method 都按正则匹配（`type` 同时作用于两个字段）
-- `service` + `method` 都指定 → 匹配单个方法
-- 只指定 `service` → 匹配该 service 的所有方法
-- 都不指定 → 匹配所有 gRPC 请求
-- 精确匹配优先于正则匹配；正则间按模式长度降序排优先级
+Matching logic:
+- `type: Exact` (default): match by literal value.
+- `type: RegularExpression`: both service and method are matched by regex (`type` applies to both fields simultaneously).
+- Both `service` + `method` specified → match a single method.
+- Only `service` specified → match all methods of that service.
+- Neither specified → match all gRPC requests.
+- Exact match takes precedence over regex match; among regex entries, priority is by pattern length in descending order.
 
 ### GRPCHeaderMatch
 
-与 HTTPRoute 的 headers 匹配相同。
+Same as the headers matching of HTTPRoute.
 
-## 过滤器类型
+## Filter Types
 
-| 类型 | 说明 |
-|------|------|
-| `RequestHeaderModifier` | 修改请求头 |
-| `ResponseHeaderModifier` | 修改响应头 |
-| `RequestMirror` | 请求镜像 |
-| `ExtensionRef` | 引用 EdgionPlugins |
+| Type | Description |
+|------|-------------|
+| `RequestHeaderModifier` | Modify request headers |
+| `ResponseHeaderModifier` | Modify response headers |
+| `RequestMirror` | Request mirroring |
+| `ExtensionRef` | Reference an EdgionPlugins resource |
 
-**注意**：GRPCRoute 不支持 `RequestRedirect` 和 `URLRewrite`。
+**Note**: GRPCRoute does not support `RequestRedirect` or `URLRewrite`.
 
-## gRPC-Web 支持
+## gRPC-Web Support
 
-Edgion 自动检测 gRPC-Web 请求（通过 `content-type` 头），无需额外配置。gRPC-Web 请求按 GRPCRoute 规则路由。
+Edgion automatically detects gRPC-Web requests (via the `content-type` header), no extra configuration required. gRPC-Web requests are routed by GRPCRoute rules.
 
-## 重试支持
+## Retry Support
 
-GRPCRoute 支持 `retry.attempts`（最大重试次数）和 `retry.backoff`（指数退避基数，上限 30s）。
+GRPCRoute supports `retry.attempts` (max retry attempts) and `retry.backoff` (exponential backoff base, capped at 30s).
 
-**`retry.codes` 限制**：GRPCRoute 的 `codes` 字段包含 gRPC 状态码（0-16），而非 HTTP 状态码。gRPC 状态码位于 HTTP/2 trailers（`grpc-status`）中，当前 Pingora 代理架构无法在 trailers 阶段拦截并触发重试。因此 `codes` 字段会被解析但 **运行时忽略**，并输出警告日志。未来实现 trailers 拦截后将支持此功能。
+**`retry.codes` limitation**: GRPCRoute's `codes` field contains gRPC status codes (0-16), not HTTP status codes. gRPC status codes live in HTTP/2 trailers (`grpc-status`), and the current Pingora proxy architecture cannot intercept the trailers stage to trigger retries. As a result, the `codes` field is parsed but **ignored at runtime**, and a warning log is emitted. Once trailers interception is implemented, this feature will be supported.
 
-当前重试仅在连接失败（`fail_to_connect`）和代理错误（`error_while_proxy`）时触发，与 HTTPRoute 的连接级重试行为一致。
+Currently, retries are only triggered on connection failure (`fail_to_connect`) and proxy errors (`error_while_proxy`), consistent with HTTPRoute's connection-level retry behavior.
 
-## 与 HTTPRoute 的区别
+## Differences from HTTPRoute
 
-| 维度 | HTTPRoute | GRPCRoute |
-|------|----------|-----------|
-| 匹配维度 | path + headers + query + method | service + method + headers |
-| 过滤器 | 6 种（含 Redirect、URLRewrite） | 4 种（无 Redirect、URLRewrite） |
-| 内部实现 | 独立匹配引擎 | 共享 route_utils，gRPC 特有 MatchInfo |
-| gRPC-Web | 不支持 | 自动检测 |
+| Dimension | HTTPRoute | GRPCRoute |
+|-----------|-----------|-----------|
+| Match dimensions | path + headers + query + method | service + method + headers |
+| Filters | 6 types (including Redirect, URLRewrite) | 4 types (no Redirect, URLRewrite) |
+| Internal implementation | Independent matching engine | Shared route_utils, gRPC-specific MatchInfo |
+| gRPC-Web | Not supported | Auto-detected |

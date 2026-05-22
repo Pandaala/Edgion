@@ -102,3 +102,65 @@ pub async fn login(base_url: &str, username: Option<&str>, password: Option<&str
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::core::ctl::cli::{Cli, Commands};
+    use clap::Parser;
+
+    #[test]
+    fn cli_parses_login_with_no_args_leaves_username_and_password_none() {
+        let cli = Cli::try_parse_from(["edgion-cli", "login"]).expect("login with no flags should parse");
+        match cli.command {
+            Commands::Login { username, password } => {
+                assert!(username.is_none());
+                assert!(password.is_none());
+            }
+            other => panic!("expected Login, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cli_parses_login_with_username_and_password_long_flags() {
+        let cli = Cli::try_parse_from(["edgion-cli", "login", "--username", "admin", "--password", "secret"])
+            .expect("login with long flags should parse");
+        match cli.command {
+            Commands::Login { username, password } => {
+                assert_eq!(username.as_deref(), Some("admin"));
+                assert_eq!(password.as_deref(), Some("secret"));
+            }
+            _ => panic!("expected Login"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_login_with_short_flags() {
+        let cli = Cli::try_parse_from(["edgion-cli", "login", "-u", "alice", "-p", "pw"])
+            .expect("login with short flags should parse");
+        match cli.command {
+            Commands::Login { username, password } => {
+                assert_eq!(username.as_deref(), Some("alice"));
+                assert_eq!(password.as_deref(), Some("pw"));
+            }
+            _ => panic!("expected Login"),
+        }
+    }
+
+    #[test]
+    fn cli_login_with_server_flag_at_root_parses() {
+        let cli = Cli::try_parse_from([
+            "edgion-cli",
+            "--server",
+            "http://ctl.example.com:5800",
+            "login",
+            "-u",
+            "admin",
+        ])
+        .expect("login with --server should parse");
+        assert_eq!(cli.server.as_deref(), Some("http://ctl.example.com:5800"));
+        match cli.command {
+            Commands::Login { username, .. } => assert_eq!(username.as_deref(), Some("admin")),
+            _ => panic!("expected Login"),
+        }
+    }
+}

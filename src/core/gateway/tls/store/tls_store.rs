@@ -2,26 +2,66 @@ use crate::core::common::matcher::HashHost;
 use crate::core::gateway::tls::validation::cert::{validate_cert, CertValidationResult};
 use crate::types::listener_key::ListenerKey;
 use crate::types::EdgionTls;
-use parking_lot::RwLock;
+use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 /// Internal entry for TLS certificate with validation status
+#[derive(Clone)]
 struct TlsEntry {
     tls: Arc<EdgionTls>,
     validation: CertValidationResult,
 }
 
+/// Deterministic precedence for EdgionTls resources colliding on the same host.
+///
+/// Mirrors the Gateway API route-conflict convention and
+/// `BackendTLSPolicyStore::sort_policies_by_precedence`: oldest `creationTimestamp`
+/// wins (`Option<Time>` orders `None` first), then namespace, then name. The winner
+/// is `tls_list.first()` after this sort.
+fn edgion_tls_precedence(a: &Arc<EdgionTls>, b: &Arc<EdgionTls>) -> std::cmp::Ordering {
+    a.metadata
+        .creation_timestamp
+        .cmp(&b.metadata.creation_timestamp)
+        .then_with(|| a.metadata.namespace.cmp(&b.metadata.namespace))
+        .then_with(|| a.metadata.name.cmp(&b.metadata.name))
+}
+
+/// Warn (config-sync path only — never the handshake path) when several EdgionTls
+/// resources serve the same host on one listener. `tls_list` must already be sorted
+/// by [`edgion_tls_precedence`], so `first()` is the selected certificate.
+fn warn_edgion_tls_collision(host: &str, listener_key: &ListenerKey, tls_list: &[Arc<EdgionTls>]) {
+    let fmt = |t: &Arc<EdgionTls>| {
+        format!(
+            "{}/{}",
+            t.metadata.namespace.as_deref().unwrap_or(""),
+            t.metadata.name.as_deref().unwrap_or("")
+        )
+    };
+    let participants = tls_list.iter().map(fmt).collect::<Vec<_>>().join(", ");
+    let selected = tls_list.first().map(fmt).unwrap_or_default();
+    tracing::warn!(
+        component = "tls_store",
+        host = %host,
+        listener_key = %listener_key,
+        participants = %participants,
+        selected = %selected,
+        "Multiple EdgionTls resources serve the same hostname on one listener; \
+         selecting the certificate deterministically by (creationTimestamp, namespace, name)"
+    );
+}
+
 /// TlsStore manages all TLS certificates and builds the TLS matcher
 pub struct TlsStore {
-    // Key: namespace/name (or name for cluster-scoped)
-    tls_data: RwLock<HashMap<String, TlsEntry>>,
+    // Key: namespace/name (or name for cluster-scoped).
+    // Single writer (config-sync). Readers are lock-free.
+    tls_data: ArcSwap<HashMap<String, TlsEntry>>,
 }
 
 impl TlsStore {
     pub fn new() -> Self {
         Self {
-            tls_data: RwLock::new(HashMap::new()),
+            tls_data: ArcSwap::from_pointee(HashMap::new()),
         }
     }
 
@@ -30,15 +70,13 @@ impl TlsStore {
         // Capture count before moving
         let cert_count = data.len();
 
-        // TODO(observability): Add metric for certificate reload operations
         tracing::info!(
             component = "tls_store",
             count = cert_count,
             "Full set of TLS certificates"
         );
 
-        let mut tls_data = self.tls_data.write();
-        tls_data.clear();
+        let mut new_map: HashMap<String, TlsEntry> = HashMap::with_capacity(cert_count);
 
         for (key, tls) in data {
             // Validate certificate
@@ -53,7 +91,7 @@ impl TlsStore {
                 );
             }
 
-            tls_data.insert(
+            new_map.insert(
                 key,
                 TlsEntry {
                     tls: Arc::new(tls),
@@ -62,23 +100,9 @@ impl TlsStore {
             );
         }
 
-        // Rebuild matcher BEFORE releasing write lock to prevent race condition
-        // This ensures store and matcher are always consistent
-        if let Err(e) = self.rebuild_matcher_from_data(&tls_data) {
-            // TODO(observability): Add metric for matcher rebuild failures
-            // This is a critical error - store updated but matcher not synced
-            tracing::error!(
-                component = "tls_store",
-                error = %e,
-                cert_count = cert_count,
-                "CRITICAL: Failed to rebuild TLS matcher after full set. \
-                 Store and matcher are now inconsistent!"
-            );
-            // TODO(error-handling): Consider returning Result from full_set
-            // to propagate this error to callers for retry logic
-        }
+        self.rebuild_matcher_from_data(&new_map);
 
-        // Lock is automatically released here
+        self.tls_data.store(Arc::new(new_map));
     }
 
     /// Partially update TLS certificates
@@ -101,7 +125,8 @@ impl TlsStore {
             "Partial update of TLS certificates"
         );
 
-        let mut tls_data = self.tls_data.write();
+        let current = self.tls_data.load_full();
+        let mut new_map = (*current).clone();
 
         // Add new certificates
         for (key, tls) in add {
@@ -116,7 +141,7 @@ impl TlsStore {
                 );
             }
 
-            tls_data.insert(
+            new_map.insert(
                 key,
                 TlsEntry {
                     tls: Arc::new(tls),
@@ -138,7 +163,7 @@ impl TlsStore {
                 );
             }
 
-            tls_data.insert(
+            new_map.insert(
                 key,
                 TlsEntry {
                     tls: Arc::new(tls),
@@ -149,36 +174,20 @@ impl TlsStore {
 
         // Remove certificates
         for key in remove {
-            tls_data.remove(key);
+            new_map.remove(key);
         }
 
-        // Rebuild matcher BEFORE releasing write lock to prevent race condition
-        // This ensures store and matcher are always consistent
-        if let Err(e) = self.rebuild_matcher_from_data(&tls_data) {
-            // TODO(observability): Add metric for matcher rebuild failures
-            // This is a critical error - store updated but matcher not synced
-            tracing::error!(
-                component = "tls_store",
-                error = %e,
-                added = add_count,
-                updated = update_count,
-                removed = remove_count,
-                "CRITICAL: Failed to rebuild TLS matcher after partial update. \
-                 Store and matcher are now inconsistent!"
-            );
-            // TODO(error-handling): Consider returning Result from partial_update
-            // to propagate this error to callers for retry logic
-        }
+        self.rebuild_matcher_from_data(&new_map);
 
-        // Lock is automatically released here
+        self.tls_data.store(Arc::new(new_map));
     }
 
     /// Rebuild the TLS certificate matcher from provided data.
     /// Only listener-resolved certs are admitted into the matcher.
     ///
     /// # Arguments
-    /// * `tls_data` - Reference to the TLS data map (already locked)
-    fn rebuild_matcher_from_data(&self, tls_data: &HashMap<String, TlsEntry>) -> anyhow::Result<()> {
+    /// * `tls_data` - Reference to the TLS data map
+    fn rebuild_matcher_from_data(&self, tls_data: &HashMap<String, TlsEntry>) {
         let mut listener_host_map: HashMap<ListenerKey, HashMap<String, Vec<Arc<EdgionTls>>>> = HashMap::new();
         let mut total_hosts = 0;
         let mut valid_certs = 0;
@@ -225,13 +234,23 @@ impl TlsStore {
         let mut listener_matcher = HashMap::new();
         for (listener_key, host_map) in listener_host_map {
             let mut matcher = HashHost::new();
-            for (host, tls_list) in host_map {
+            for (host, mut tls_list) in host_map {
+                if tls_list.len() > 1 {
+                    // Two or more EdgionTls resources resolve to the same host on the same
+                    // listener. Nothing admission-blocks this, and `match_sni` returns the
+                    // first entry — so without a stable sort the served certificate would
+                    // flip with HashMap iteration order across rebuilds. Sort by the Gateway
+                    // API precedence (oldest creationTimestamp wins, then namespace/name) so
+                    // the selection is deterministic, and warn the operator.
+                    tls_list.sort_by(edgion_tls_precedence);
+                    warn_edgion_tls_collision(&host, &listener_key, &tls_list);
+                }
                 matcher.insert(&host, tls_list);
             }
             listener_matcher.insert(listener_key, matcher);
         }
 
-        super::cert_matcher::set_tls_cert_matcher(listener_matcher)?;
+        super::cert_matcher::get_tls_cert_matcher().set(listener_matcher);
 
         tracing::info!(
             component = "tls_store",
@@ -241,18 +260,6 @@ impl TlsStore {
             total_hosts = total_hosts,
             "TLS matcher rebuilt successfully"
         );
-
-        Ok(())
-    }
-
-    /// Rebuild the TLS certificate matcher
-    /// This method acquires a read lock and rebuilds the matcher
-    ///
-    /// Prefer `rebuild_matcher_from_data` when the caller already holds a lock.
-    #[allow(dead_code)]
-    fn rebuild_matcher(&self) -> anyhow::Result<()> {
-        let tls_data = self.tls_data.read();
-        self.rebuild_matcher_from_data(&tls_data)
     }
 
     /// Get all TLS certificates (for debugging/monitoring)
@@ -261,14 +268,10 @@ impl TlsStore {
     /// including both valid and invalid ones.
     ///
     /// # Performance
-    /// This method acquires a read lock and clones all Arc pointers.
-    /// It's safe to call concurrently from multiple threads.
-    ///
-    /// # Thread Safety
-    /// Thread-safe: acquires RwLock read lock
+    /// Lock-free: clones Arc pointers from the current snapshot.
     pub fn list_all(&self) -> Vec<Arc<EdgionTls>> {
-        let tls_data = self.tls_data.read();
-        tls_data.values().map(|entry| entry.tls.clone()).collect()
+        let snapshot = self.tls_data.load();
+        snapshot.values().map(|entry| entry.tls.clone()).collect()
     }
 
     /// Check if a specific TLS certificate exists in the store
@@ -280,13 +283,10 @@ impl TlsStore {
     /// `true` if certificate exists (regardless of validity), `false` otherwise
     ///
     /// # Performance
-    /// O(1) hash lookup with read lock
-    ///
-    /// # Thread Safety
-    /// Thread-safe: acquires RwLock read lock
+    /// Lock-free: O(1) hash lookup on the current snapshot.
     pub fn contains(&self, key: &str) -> bool {
-        let tls_data = self.tls_data.read();
-        tls_data.contains_key(key)
+        let snapshot = self.tls_data.load();
+        snapshot.contains_key(key)
     }
 
     /// Get validation status for a specific certificate
@@ -298,13 +298,10 @@ impl TlsStore {
     /// `Some(CertValidationResult)` if certificate exists, `None` otherwise
     ///
     /// # Performance
-    /// O(1) hash lookup with read lock. Result is cloned.
-    ///
-    /// # Thread Safety
-    /// Thread-safe: acquires RwLock read lock
+    /// Lock-free: O(1) hash lookup on the current snapshot. Result is cloned.
     pub fn get_validation_status(&self, key: &str) -> Option<CertValidationResult> {
-        let tls_data = self.tls_data.read();
-        tls_data.get(key).map(|entry| entry.validation.clone())
+        let snapshot = self.tls_data.load();
+        snapshot.get(key).map(|entry| entry.validation.clone())
     }
 
     /// Get all invalid certificates with their validation errors
@@ -316,14 +313,10 @@ impl TlsStore {
     /// Vector of (certificate_key, validation_result) tuples
     ///
     /// # Performance
-    /// O(n) iteration over all certificates with read lock.
-    /// Results are cloned.
-    ///
-    /// # Thread Safety
-    /// Thread-safe: acquires RwLock read lock
+    /// Lock-free: O(n) iteration over the current snapshot. Results are cloned.
     pub fn get_invalid_certs(&self) -> Vec<(String, CertValidationResult)> {
-        let tls_data = self.tls_data.read();
-        tls_data
+        let snapshot = self.tls_data.load();
+        snapshot
             .iter()
             .filter(|(_, entry)| !entry.validation.is_valid)
             .map(|(key, entry)| (key.clone(), entry.validation.clone()))
@@ -336,10 +329,7 @@ impl TlsStore {
     /// Tuple of (valid_count, invalid_count)
     ///
     /// # Performance
-    /// O(n) iteration over all certificates with read lock
-    ///
-    /// # Thread Safety
-    /// Thread-safe: acquires RwLock read lock
+    /// Lock-free: O(n) iteration over the current snapshot.
     ///
     /// # Example
     /// ```ignore
@@ -347,9 +337,9 @@ impl TlsStore {
     /// println!("Valid: {}, Invalid: {}", valid, invalid);
     /// ```
     pub fn get_cert_stats(&self) -> (usize, usize) {
-        let tls_data = self.tls_data.read();
-        let total = tls_data.len();
-        let invalid = tls_data.values().filter(|entry| !entry.validation.is_valid).count();
+        let snapshot = self.tls_data.load();
+        let total = snapshot.len();
+        let invalid = snapshot.values().filter(|entry| !entry.validation.is_valid).count();
         (total - invalid, invalid)
     }
 
@@ -365,15 +355,11 @@ impl TlsStore {
     /// `Some(Arc<EdgionTls>)` if a valid matching certificate is found, `None` otherwise
     ///
     /// # Performance
-    /// O(n) iteration over all certificates with read lock.
-    /// Early return on first match.
-    ///
-    /// # Thread Safety
-    /// Thread-safe: acquires RwLock read lock
+    /// Lock-free: O(n) iteration over the current snapshot. Early return on first match.
     pub fn get_tls_by_host(&self, hostname: &str) -> Option<Arc<EdgionTls>> {
-        let tls_data = self.tls_data.read();
+        let snapshot = self.tls_data.load();
 
-        for entry in tls_data.values() {
+        for entry in snapshot.values() {
             // Only return valid certificates
             if !entry.validation.is_valid {
                 continue;
@@ -392,7 +378,7 @@ impl TlsStore {
 impl TlsStore {
     /// Total number of TLS entries (valid + invalid).
     pub fn entry_count(&self) -> usize {
-        self.tls_data.read().len()
+        self.tls_data.load().len()
     }
 }
 
@@ -408,4 +394,75 @@ static GLOBAL_TLS_STORE: LazyLock<Arc<TlsStore>> = LazyLock::new(|| Arc::new(Tls
 /// Get the global TlsStore instance
 pub fn get_global_tls_store() -> Arc<TlsStore> {
     GLOBAL_TLS_STORE.clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::resources::edgion_tls::EdgionTlsSpec;
+    use crate::types::resources::gateway::SecretObjectReference;
+    use chrono::{TimeZone, Utc};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+    use kube::api::ObjectMeta;
+
+    fn make_etls(namespace: &str, name: &str, ts: Option<Time>) -> Arc<EdgionTls> {
+        Arc::new(EdgionTls {
+            metadata: ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                creation_timestamp: ts,
+                ..Default::default()
+            },
+            spec: EdgionTlsSpec {
+                parent_refs: None,
+                hosts: vec!["shared.example.com".to_string()],
+                secret_ref: SecretObjectReference {
+                    name: format!("{name}-cert"),
+                    namespace: Some(namespace.to_string()),
+                    group: None,
+                    kind: None,
+                },
+                client_auth: None,
+                min_tls_version: None,
+                ciphers: None,
+                extend: None,
+                secret: None,
+                resolved_listeners: None,
+            },
+            status: None,
+        })
+    }
+
+    #[test]
+    fn test_edgion_tls_precedence_prefers_oldest_over_name() {
+        let older = Time(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap());
+        let newer = Time(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap());
+
+        // incumbent is lexically LARGER (team-z/zzz) but OLDER; newcomer smaller but newer.
+        let incumbent = make_etls("team-z", "zzz", Some(older));
+        let newcomer = make_etls("team-a", "aaa", Some(newer));
+
+        for mut list in [
+            vec![newcomer.clone(), incumbent.clone()],
+            vec![incumbent.clone(), newcomer.clone()],
+        ] {
+            list.sort_by(edgion_tls_precedence);
+            assert_eq!(
+                list.first().unwrap().metadata.name.as_deref(),
+                Some("zzz"),
+                "older EdgionTls must win regardless of name or input order"
+            );
+        }
+    }
+
+    #[test]
+    fn test_edgion_tls_precedence_name_tiebreak_when_no_timestamp() {
+        // No timestamps (both None) → fall back to (namespace, name) lexicographic.
+        let a = make_etls("team-a", "aaa", None);
+        let b = make_etls("team-b", "bbb", None);
+
+        let mut list = [b, a];
+        list.sort_by(edgion_tls_precedence);
+        assert_eq!(list.first().unwrap().metadata.namespace.as_deref(), Some("team-a"));
+    }
 }

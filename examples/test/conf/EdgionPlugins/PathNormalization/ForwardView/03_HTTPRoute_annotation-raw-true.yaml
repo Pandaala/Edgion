@@ -1,0 +1,42 @@
+# PathNormalization Scenario 03 — ForwardView (annotation: forward-raw-path = "true")
+#
+# Host: path-fwd-raw.example.com
+# Gateway: reuses edgion-plugins-gateway (edgion-test namespace)
+#
+# Annotation edgion.io/forward-raw-path: "true" forces the gateway to forward the
+# entry-time raw (un-normalized) path to upstream, regardless of the global
+# forward_normalized_path TOML setting.
+#
+# Routing still uses the normalized path for matching (/%61pi matches /api prefix),
+# but upstream receives the original /%61pi/data encoding.
+#
+# TC-B manual verification:
+#   curl -i -H "Host: path-fwd-raw.example.com" \
+#     "http://127.0.0.1:31180/%61pi/data?x=1"
+#   # Expected: backend echoes Path: /%61pi/data (raw, not decoded)
+#   # Expected query: ?x=1 unchanged
+#
+# Automated test: /%61pi/data routes to PathPrefix /api → 200
+# (route match uses normalized path; echo path assertion verifies raw forwarding)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: forward-view-raw
+  namespace: edgion-default
+  annotations:
+    edgion.io/forward-raw-path: "true"
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "path-fwd-raw.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

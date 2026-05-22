@@ -1,31 +1,32 @@
 ---
 name: gateway-plugin-system
-description: 插件系统架构：4 阶段执行、PluginRuntime 预构建、条件执行、29 个 HTTP 插件、Stream 插件。
+description: Plugin system architecture — 4-phase execution, PluginRuntime pre-build, conditional execution, 29 HTTP plugins, Stream plugins.
 ---
 
-# 插件系统
+# Plugin system
 
-> 插件系统是 Edgion Gateway 的请求处理扩展机制。
-> 通过 4 个执行阶段覆盖请求的完整生命周期，在 route preparse 阶段一次性构建 PluginRuntime，避免每请求开销。
+> The plugin system is Edgion Gateway's request-handling extension mechanism.
+> Four execution phases cover the full lifecycle of a request; the PluginRuntime is built once during route preparse to avoid per-request overhead.
 
-## 四阶段执行模型
+## Four-phase execution model
 
-| 阶段 | trait | 时机 | 异步/同步 | 方法签名 | 返回值 |
-|------|-------|------|-----------|----------|--------|
-| RequestFilter | `RequestFilter` | 转发到上游之前 | async | `run_request(&self, session, log) -> PluginRunningResult` | 可终止请求或返回自定义响应 |
-| UpstreamResponseFilter | `UpstreamResponseFilter` | 收到上游响应 headers 之后 | sync | `run_upstream_response_filter(&self, session, log) -> PluginRunningResult` | 可修改响应头、终止 |
-| UpstreamResponseBodyFilter | `UpstreamResponseBodyFilter` | 每个响应 body chunk | sync | `run_upstream_response_body_filter(&self, body, end_of_stream, session, log) -> Option<Duration>` | 返回 Duration 用于带宽限制 |
-| UpstreamResponse | `UpstreamResponse` | 上游响应完成之后 | async | `run_upstream_response(&self, session, log) -> PluginRunningResult` | 异步后处理 |
+| Phase | trait | Timing | Async/sync | Method signature | Return |
+|-------|-------|--------|------------|------------------|--------|
+| RequestFilter | `RequestFilter` | Before forwarding to upstream | async | `run_request(&self, session, log) -> PluginRunningResult` | Can terminate the request or return a custom response |
+| UpstreamResponseFilter | `UpstreamResponseFilter` | After upstream response headers received | sync | `run_upstream_response_filter(&self, session, log) -> PluginRunningResult` | Can modify response headers, terminate |
+| UpstreamResponseBodyFilter | `UpstreamResponseBodyFilter` | Each response body chunk | sync | `run_upstream_response_body_filter(&self, body, end_of_stream, session) -> Option<Duration>` | Returns Duration for bandwidth limiting; **note: the signature deliberately omits `&mut PluginLog`** — see the "no PluginLog in body phase" constraint below |
+| UpstreamResponse | `UpstreamResponse` | After the upstream response completes | async | `run_upstream_response(&self, session, log) -> PluginRunningResult` | Async post-processing |
 
-执行流程要点：
-- 每个阶段内，插件按注册顺序依次执行
-- 任一插件返回 `ErrTerminateRequest` 或 `ErrResponse` 时立即终止该阶段，后续插件不再执行
-- UpstreamResponseBodyFilter 阶段当多个插件返回 Duration 时，取最大值（最严格的限流生效）
-- 每个阶段执行结束后，插件日志记录到 `ctx.stage_logs` 中，包含插件名、耗时、条件跳过信息
+Execution flow notes:
+- Within each phase, plugins run in registration order.
+- If any plugin returns `ErrTerminateRequest` or `ErrResponse`, the phase terminates immediately and subsequent plugins are skipped.
+- In the UpstreamResponseBodyFilter phase, when multiple plugins return Duration values, the maximum is used (the strictest limit takes effect).
+- After each phase completes, plugin logs are recorded into `ctx.stage_logs`, including plugin name, elapsed time, and conditional-skip information.
+- **Exception**: the UpstreamResponseBodyFilter phase **does not** write to `ctx.stage_logs` and does not push entries into `ctx.pending_edgion_plugins_logs`. This phase is invoked once per chunk; per-chunk logging would blow up log volume on long streams. See the "no PluginLog in body phase" constraint below.
 
 ## PluginRuntime
 
-`PluginRuntime` 是插件执行的核心容器，持有四个阶段的插件列表：
+`PluginRuntime` is the core container for plugin execution; it holds plugin lists for the four phases:
 
 ```rust
 pub struct PluginRuntime {
@@ -36,232 +37,205 @@ pub struct PluginRuntime {
 }
 ```
 
-**构建时机**：HTTPRoute/GRPCRoute preparse 阶段（非每请求）。入口：`from_httproute_filters()` / `from_grpcroute_filters()`（Gateway API 标准 filter）；EdgionPlugins CRD 条目通过 `add_from_request_filters()` / `add_from_upstream_response_filters()` / `add_from_upstream_response_body_filters()` / `add_from_upstream_responses()` 加载，各返回 `Vec<String>` 验证错误。`clone()` 返回空实例（preparse 时重建）。
+**Build timing**: HTTPRoute / GRPCRoute preparse phase (not per-request). Entry points (Gateway API standard filters) are split by scope: rule level uses `from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`, backend level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. The legacy `from_httproute_filters()` / `from_grpcroute_filters()` are `#[deprecated]` and forward to the new entries with rule scope by default. EdgionPlugins CRD entries are loaded via `add_from_request_filters()` / `add_from_upstream_response_filters()` / `add_from_upstream_response_body_filters()` / `add_from_upstream_responses()`, each returning `Vec<String>` of validation errors. `clone()` returns an empty instance (rebuilt during preparse). Each entry may also carry an optional `alias: String` (`^[a-zA-Z0-9._-]{1,32}$`), echoed verbatim into `PluginLog.alias` so multiple entries of the same plugin type can be distinguished in the access log.
 
-## 条件执行
+## Conditional execution
 
-EdgionPlugins 定义的插件通过 `Conditional*` wrapper 自动包装，支持条件判断：
+Plugins defined in EdgionPlugins are automatically wrapped with a `Conditional*` wrapper to support conditional evaluation:
 
-| 包装类型 | 包装对象 |
-|----------|----------|
+| Wrapper | Wrapped object |
+|---------|----------------|
 | `ConditionalRequestFilter` | `RequestFilter` |
 | `ConditionalUpstreamResponseFilter` | `UpstreamResponseFilter` |
 | `ConditionalUpstreamResponseBodyFilter` | `UpstreamResponseBodyFilter` |
 | `ConditionalUpstreamResponse` | `UpstreamResponse` |
 
-条件模型 (`PluginConditions`)：
-- **skip** 条件：满足任一条件则跳过插件执行
-- **run** 条件：必须满足所有条件才执行插件，否则跳过
+Condition model (`PluginConditions`):
+- **skip** conditions: if any condition matches, skip plugin execution.
+- **run** conditions: all conditions must match to execute the plugin; otherwise skip.
 
-条件类型包括：
-- `KeyExist` — 键是否存在（如 header、query param）
-- `KeyMatch` — 键值精确/多值/正则匹配
-- `Include` — 键值是否在指定集合中（支持 values 列表和正则）
-- `Exclude` — 键值不在集合中（Include 的反向）
-- `TimeRange` — 当前时间是否在指定范围内
-- `Probability` — 概率性执行（如 10% 采样）
+Condition kinds include:
+- `KeyExist` — whether a key exists (e.g., header, query param).
+- `KeyMatch` — exact / multi-value / regex match against a key value.
+- `Include` — whether the key value is in a given set (supports values list and regex).
+- `Exclude` — value not in the set (the inverse of Include).
+- `TimeRange` — whether the current time falls within a given range.
+- `Probability` — probabilistic execution (e.g., 10% sampling).
 
-条件评估分为异步版本（`evaluate_detail`）和同步版本（`evaluate_detail_sync`），分别用于 async 和 sync 阶段。
+Condition evaluation has three paths:
+- `evaluate_detail` (async): used by async phases (RequestFilter, UpstreamResponse), takes `&mut PluginLog`.
+- `evaluate_detail_sync` (sync): used by sync phases that need to write `cond_skip` into the outer PluginLog (`ConditionalUpstreamResponseFilter`).
+- `evaluate_sync` / `Condition::evaluate_sync_silent`: **body phase only**, no log, zero allocation. Internally goes through `KeyMatchCondition::evaluate_sync_silent` / `IncludeCondition::evaluate_sync_silent` / `ExcludeCondition::evaluate_sync_silent`. **Do NOT call `evaluate_detail_sync` in the body phase**; doing so reintroduces per-chunk PluginLog allocation.
 
-Gateway API 标准 filter（通过 `add_from_httproute_filters` 添加的）不包装条件，始终执行。
+Gateway API standard filters (added through the private `add_from_httproute_filters_inner`; the public entries are the scope-explicit `from_httproute_filters_for_rule` / `from_httproute_filters_for_backend` mentioned above) are not wrapped with conditions and always execute.
 
-跳过日志格式：`"skip:keyExist,hdr:X-Internal"` 或 `"!run:include,method"`。
+Skip log format: `"skip:keyExist,hdr:X-Internal"` or `"!run:include,method"`.
 
-### ⚠️ 关键约束：regex 必须在 preparse 阶段 compile
+### ⚠️ Critical constraint: regex must be compiled during preparse
 
-`KeyMatch`、`Include`、`Exclude` 支持 `regex` 字段。`compiled_regex` 字段标注了 `#[serde(skip)]`，反序列化后为 `None`。**必须在 preparse 阶段调用 `compile()` 完成编译**，否则每次请求命中 fallback 路径时都会执行 `Regex::new()`，造成严重 CPU 开销。
+`KeyMatch`, `Include`, and `Exclude` support a `regex` field. The `compiled_regex` field is annotated with `#[serde(skip)]` and is `None` after deserialization. **`compile()` MUST be called during preparse to complete compilation**; otherwise every request that hits the fallback path will execute `Regex::new()`, causing significant CPU overhead.
 
-**compile 调用链**（一次性，在 gRPC list/watch 接收资源时触发）：
+**compile call chain** (one-time, triggered when resources are received via gRPC list/watch):
 
 ```
 resource.pre_parse()                        # event_dispatch.rs
   → EdgionPlugins::preparse()              # edgion_plugins/mod.rs
-      → compile_conditions()               # 遍历全部 entry，调 PluginConditions::compile()
+      → compile_conditions()               # iterate all entries, call PluginConditions::compile()
           → Condition::compile()           # conditions/types.rs
               → KeyMatchCondition::compile() / IncludeCondition::compile() / ExcludeCondition::compile()
-      → add_from_*()                       # plugin_runtime.rs（此时 clone 到的 conditions 已编译好）
+      → add_from_*()                       # plugin_runtime.rs (the cloned conditions are already compiled at this point)
 ```
 
-**新增带 regex 的条件类型时**：在 `Condition::compile()` 的 match 臂中加入对应分支，否则该类型 regex 永远不会被编译。
+**When adding a new condition kind that uses regex**: add a corresponding arm to `Condition::compile()`'s match; otherwise the new kind's regex will never be compiled.
 
-## HTTP 插件列表（29 个）
+### ⚠️ Critical constraint: no PluginLog in body phase (per-chunk path must allocate zero)
 
-### 认证类（8 个）
+**Background**: the trait signature of `UpstreamResponseBodyFilter::run_upstream_response_body_filter` **deliberately omits** the `&mut PluginLog` parameter. The body phase fires once per chunk — for a long stream (gRPC server-streaming, large file downloads), this can mean hundreds to thousands of invocations per request. Any per-chunk log allocation accumulates at O(chunks × plugins) and has previously caused two bugs:
 
-| 插件 | 模块 | 说明 |
-|------|------|------|
-| BasicAuth | `basic_auth` | HTTP Basic 认证 |
-| JwtAuth | `jwt_auth` | JWT 令牌验证 |
-| KeyAuth | `key_auth` | API Key 认证（header/query） |
-| LdapAuth | `ldap_auth` | LDAP 目录认证 |
-| HmacAuth | `hmac_auth` | HMAC 签名验证 |
-| HeaderCertAuth | `header_cert_auth` | 基于请求头中证书信息的认证 |
-| OpenidConnect | `openid_connect` | OpenID Connect 认证 |
-| ForwardAuth | `forward_auth` | 将认证请求转发到外部服务 |
+- `ExtensionRefFilter` called `start_edgion_plugins_log` in the body phase, pushing one entry per chunk into `ctx.pending_edgion_plugins_logs` without a stage drain — long streams leaked memory continuously (fixed, issue g2-001).
+- `run_upstream_response_body_plugins` allocated a `PluginLog::new(filter.name())` for every filter on every chunk and immediately dropped it — pure wasted allocation, plus silent loss of `cond_skip` and other diagnostics (fixed, issue g2-004).
 
-### 安全类（3 个）
+**Hard constraints to follow when designing new plugins, conditions, or wrappers**:
 
-| 插件 | 模块 | 说明 |
-|------|------|------|
-| Cors | `cors` | CORS 跨域资源共享策略 |
-| Csrf | `csrf` | CSRF 令牌验证 |
-| IpRestriction | `ip_restriction` | IP 黑白名单限制 |
+1. **Do not add `&mut PluginLog` to `UpstreamResponseBodyFilter::run_upstream_response_body_filter`**. The trait signature is the contract; it promises no per-chunk logging in this phase. If diagnostics are truly needed someday, follow #4.
+2. **When implementing a new body-phase filter**, do not call `log.push*` or `log.set_*` inside the filter — there is no log; use `tracing::debug!` for dev logs.
+3. **When adding a new body-phase wrapper** (similar to `ConditionalUpstreamResponseBodyFilter`), do not create temporary logs via `PluginLog::new(...)`. Condition evaluation must go through `PluginConditions::evaluate_sync` or the `Condition::evaluate_sync_silent` chain — not `evaluate_detail_sync`.
+4. **For "body-phase summaries"** (e.g., how many times this request hit rate limiting): aggregate per-request, not push per-chunk. Add an aggregation slot in `EdgionHttpContext`, accumulate during the body phase, and emit once at the end of the request into `stage_logs`. **Never** write per-chunk execution traces into the access log.
+5. **ExtensionRef body path**: use `ExtensionRefFilter::resolve_runtime_silent`, **not** `prepare_execution` (the latter calls `start_edgion_plugins_log`).
+6. **Resource / configuration error diagnostics** ("referenced EdgionPlugins not found", "wrong kind", etc.) should be surfaced in Controller preparse / status conditions; **do not** rely on body-phase runtime logs as a backstop — body phase silently no-ops, and per-chunk error logs are themselves a DoS risk.
 
-### 流量控制类（3 个）
+**Self-checklist** (run through this for every body-phase change during PR review):
 
-| 插件 | 模块 | 说明 |
-|------|------|------|
-| RateLimit | `rate_limit` | 本地内存限流 |
-| RateLimitRedis | `rate_limit_redis` | 基于 Redis 的分布式限流（Lua 脚本） |
-| BandwidthLimit | `bandwidth_limit` | 带宽限制（UpstreamResponseBodyFilter 阶段） |
+- [ ] No `&mut PluginLog` added to the `UpstreamResponseBodyFilter` trait or its impls.
+- [ ] No heap allocations on the body-phase hot path (`PluginLog::new(...)`, `String::from(...)`, `format!(...)`, `Vec::new()`, etc.).
+- [ ] Condition evaluation uses the silent chain (grep for `evaluate_sync_silent` / `evaluate_sync` rather than `evaluate_detail_sync`).
+- [ ] No `ctx.pending_edgion_plugins_logs.push` or `session.start_edgion_plugins_log` calls on the body path.
 
-### 请求/响应转换类（3 个）
+## HTTP plugin list (29 total)
 
-| 插件 | 模块 | 说明 |
-|------|------|------|
-| ProxyRewrite | `proxy_rewrite` | 代理路径/Host/header 重写 |
-| ResponseRewrite | `response_rewrite` | 响应头修改（UpstreamResponseFilter 阶段） |
-| RealIp | `real_ip` | 从 X-Forwarded-For 等头部提取真实客户端 IP |
+### Authentication (8)
 
-### 路由类（4 个）
+| Plugin | Module | Description |
+|--------|--------|-------------|
+| BasicAuth | `basic_auth` | HTTP Basic auth |
+| JwtAuth | `jwt_auth` | JWT token verification |
+| KeyAuth | `key_auth` | API key authentication (header/query) |
+| LdapAuth | `ldap_auth` | LDAP directory authentication |
+| HmacAuth | `hmac_auth` | HMAC signature verification |
+| HeaderCertAuth | `header_cert_auth` | Authentication based on certificate info in request headers |
+| OpenidConnect | `openid_connect` | OpenID Connect authentication |
+| ForwardAuth | `forward_auth` | Forward auth requests to an external service |
 
-| 插件 | 模块 | 说明 |
-|------|------|------|
-| DynamicExternalUpstream | `dynamic_external_upstream` | 动态外部上游（运行时指定外部地址） |
-| DynamicInternalUpstream | `dynamic_internal_upstream` | 动态内部上游（运行时选择 K8s Service） |
-| DirectEndpoint | `direct_endpoint` | 直接指定后端端点地址 |
-| RegionRoute | `region_route` | 多 region 流量路由：引用 ServiceRegionRoute PluginMetaData（`serviceRegionRouteRef`）→ clusterRef → ClusterRegionRoute PluginMetaData。Gateway 实时查询 PluginMetaDataGatewayStore，有序 routeRules（RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange）+ hashKeyGet passthrough + hashCalc writeBack + failoverTo（静态重定向）。无 baseInfo，无 auto failover |
+### Security (3)
 
-### 其他类（8 个）
+| Plugin | Module | Description |
+|--------|--------|-------------|
+| Cors | `cors` | CORS cross-origin resource sharing policy |
+| Csrf | `csrf` | CSRF token verification |
+| IpRestriction | `ip_restriction` | IP allow/deny lists |
 
-| 插件 | 模块 | 说明 |
-|------|------|------|
-| Mock | `mock` | 返回模拟响应（不转发到上游） |
-| DslPlugin | `dsl` | DSL 脚本引擎（Parser→AST→Compiler→Bytecode→VM，~4700 行，详见下方 DSL 引擎章节） |
-| CtxSet | `ctx_set` | 设置请求上下文变量 |
-| JweDecrypt | `jwe_decrypt` | JWE 加密令牌解密 |
-| RequestMirrorPlugin | `request_mirror` | 请求镜像（复制请求到另一个后端） |
-| RequestRestriction | `request_restriction` | 请求限制（按路径、方法等） |
-| AllEndpointStatus | `all_endpoint_status` | 返回所有后端端点状态 |
-| DebugAccessLogToHeader | `debug_access_log` | 将 access log 信息写入响应头（调试用，UpstreamResponseFilter 阶段） |
+### Traffic control (3)
 
-## DSL 脚本引擎（DslPlugin）
+| Plugin | Module | Description |
+|--------|--------|-------------|
+| RateLimit | `rate_limit` | Local in-memory rate limiting |
+| RateLimitRedis | `rate_limit_redis` | Distributed rate limiting based on Redis (Lua scripts) |
+| BandwidthLimit | `bandwidth_limit` | Bandwidth limiting (UpstreamResponseBodyFilter phase) |
 
-> 源码：`src/core/gateway/plugins/http/dsl/`（~4700 行，含 `lang/` 子目录）
-> 增强设计文档：`docs/superpowers/specs/2026-03-22-dsl-plugin-enhancement-design.md`
+### Request / response transformation (3)
 
-EdgionDSL 是轻量级请求/响应规则引擎，基于自研字节码 VM，定位为"零运行时依赖、编译时安全保证、亚毫秒级执行"。
+| Plugin | Module | Description |
+|--------|--------|-------------|
+| ProxyRewrite | `proxy_rewrite` | Proxy path / Host / header rewriting |
+| ResponseRewrite | `response_rewrite` | Response header modification (UpstreamResponseFilter phase) |
+| RealIp | `real_ip` | Extract the real client IP from headers such as X-Forwarded-For |
 
-### 架构
+### Routing (4)
 
-```
-源码/YAML → Parser(nom) → AST → Compiler → Bytecode(JSON/base64) → VM 执行
-```
+| Plugin | Module | Description |
+|--------|--------|-------------|
+| DynamicExternalUpstream | `dynamic_external_upstream` | Dynamic external upstream (specify external address at runtime) |
+| DynamicInternalUpstream | `dynamic_internal_upstream` | Dynamic internal upstream (select K8s Service at runtime) |
+| DirectEndpoint | `direct_endpoint` | Specify a backend endpoint address directly |
+| RegionRoute | `region_route` | Multi-region traffic routing: references a ServiceRegionRoute PluginMetaData (`serviceRegionRouteRef`) → clusterRef → ClusterRegionRoute PluginMetaData. The Gateway queries PluginMetaDataGatewayStore at runtime; uses ordered routeRules (RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange) + hashKeyGet passthrough + hashCalc writeBack + failoverTo (static redirect). No baseInfo, no auto failover. |
 
-- **Parser**：nom combinator，解析预算 50k 次调用
-- **AST**：节点上限 2000，嵌套深度 ≤64
-- **Compiler**：类型检查、函数签名校验、正则编译期验证，输出字节码（≤256KB）
-- **VM**：同步栈式 VM，`catch_unwind` 隔离 panic
+### Other (8)
 
-### 已实现能力（39 个 Builtin）
+| Plugin | Module | Description |
+|--------|--------|-------------|
+| Mock | `mock` | Return a mocked response (no upstream forwarding) |
+| DslPlugin | `dsl` | DSL script engine (Parser→AST→Compiler→Bytecode→VM, ~4700 lines; see [`dsl-engine.md`](dsl-engine.md) for the architecture) |
+| CtxSet | `ctx_set` | Set request context variables |
+| JweDecrypt | `jwe_decrypt` | Decrypt JWE-encrypted tokens |
+| RequestMirrorPlugin | `request_mirror` | Request mirroring (clone the request to another backend) |
+| RequestRestriction | `request_restriction` | Request restriction (by path, method, etc.) |
+| AllEndpointStatus | `all_endpoint_status` | Return the status of all backend endpoints |
+| DebugAccessLogToHeader | `debug_access_log` | Write access-log info to response headers (for debugging, UpstreamResponseFilter phase) |
 
-| 类别 | API |
-|------|-----|
-| Request 读取（15） | `req.header`/`method`/`path`/`query`/`query_string`/`cookie`/`client_ip`/`remote_ip`/`path_param`/`header_names`/`scheme`/`host`/`uri`/`content_type`/`has_header` |
-| Request 修改（6） | `req.set_header`/`append_header`/`remove_header`/`set_uri`/`set_host`/`set_method` |
-| Response 修改（3） | `resp.set_header`/`append_header`/`remove_header` |
-| Context KV（3） | `ctx.get`/`set`/`remove` |
-| 工具函数（12） | `log`/`len`/`substr`/`to_int`/`to_str`/`to_upper`/`to_lower`/`base64_encode`/`base64_decode`/`url_encode`/`url_decode`/`time_now` |
+## DSL script engine (DslPlugin)
 
-语言特性：变量（let/let mut）、if/else、while、for-range、for-in、逻辑/比较/算术运算符、字符串方法（starts_with/ends_with/contains/matches）、`return deny(status, body)` / `return next()`。
+EdgionDSL is a lightweight request/response rule engine built on a custom bytecode VM (`src/core/gateway/plugins/http/dsl/`, ~4700 lines). It implements both `RequestFilter` and `UpstreamResponseFilter`; the UpstreamResponseFilter path bridges the sync trait into the `async fn execute` VM via `tokio::task::block_in_place`. Panics are isolated by `vm::execute_safe` (`AssertUnwindSafe + catch_unwind`), and a layered sandbox caps source size (≤64 KB), AST nodes (≤2000), bytecode size (≤256 KB), and runtime budgets (steps / loop / call / stack / string / list / map).
 
-### 沙箱安全模型
+The full architecture — data flow, source layout, plugin entry points, async/sync bridging, panic isolation, and `DslRuntime` lifecycle — lives in [`dsl-engine.md`](dsl-engine.md). User-facing syntax / builtin signatures / runtime tuning are documented in `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/`.
 
-| 层 | 限制 |
-|----|------|
-| 解析 | 源码 ≤64KB，解析预算 50k，AST ≤2000 节点，嵌套 ≤64 |
-| 编译 | 指令 ≤1000，locals ≤64，常量 ≤256，正则语法检查 |
-| 运行时 | steps ≤10k，loop ≤100 次，calls ≤500，stack ≤128，string ≤8KB（均可 per-plugin 配置） |
+`Value::Str` / `Value::List` type design (why `Arc<str>`, not SSO or `ImmutableString`): [`skills/04-review/dsl-value-str/sso-migration-not-worth-it.md`](../../04-review/dsl-value-str/sso-migration-not-worth-it.md).
 
-### 待实现增强（设计已完成）
+## Stream plugins
 
-分三步实现（详见设计文档）：
-1. **Step-1（P0）**：实现 5 个 stub 函数（sha256/md5/regex_find/regex_replace/range-as-expr），仅改 `builtins.rs`
-2. **Step-2（P1）**：resp 读取（resp.status/resp.header/resp.has_header）+ break/continue
-3. **Step-3（P2）**：实现 UpstreamResponseFilter trait，支持响应阶段执行
+Stream plugins run at the TCP/UDP layer and use a two-stage architecture:
 
-### 配置方式
+| Stage | Location | Timing | Plugins |
+|-------|----------|--------|---------|
+| Stage 1: ConnectionFilter | `connection_filter_bridge.rs` | pre-TLS, IP info only | `StreamIpRestriction` |
+| Stage 2: TlsRoute | `tls_route/` | post-TLS handshake, post-route match | `TlsRouteIpRestriction` |
 
-```yaml
-type: Dsl
-config:
-  name: "my-script"
-  source: |          # 内联源码（或用 bytecode: 预编译）
-    let auth = req.header("Authorization")
-    if auth == nil {
-      return deny(401, "Unauthorized")
-    }
-  errorPolicy: deny  # ignore | deny | denyWith
-  vmLimits:          # 可选，覆盖默认限制
-    maxSteps: 50000
-```
+- `StreamPlugin` trait: defines the `run_connection_filter(ctx) -> StreamPluginResult` interface.
+- `TlsRoutePlugin` trait: defines the TLS-route-level plugin interface.
+- `StreamPluginRuntime`: manages the plugin chain for the ConnectionFilter stage.
+- `TlsRoutePluginRuntime`: manages the plugin chain for the TLS-route stage.
+- `StreamPluginStore`: receives EdgionPlugins resource changes via ConfHandler.
 
-## Stream 插件
-
-Stream 插件在 TCP/UDP 层运行，采用两阶段架构：
-
-| 阶段 | 位置 | 时机 | 插件 |
-|------|------|------|------|
-| Stage 1: ConnectionFilter | `connection_filter_bridge.rs` | pre-TLS, 仅 IP 信息 | `StreamIpRestriction` |
-| Stage 2: TlsRoute | `tls_route/` | TLS 握手后, 路由匹配后 | `TlsRouteIpRestriction` |
-
-- `StreamPlugin` trait：定义 `run_connection_filter(ctx) -> StreamPluginResult` 接口
-- `TlsRoutePlugin` trait：定义 TLS 路由级别的插件接口
-- `StreamPluginRuntime`：管理 ConnectionFilter 阶段的插件链
-- `TlsRoutePluginRuntime`：管理 TLS 路由阶段的插件链
-- `StreamPluginStore`：通过 ConfHandler 接收 EdgionPlugins 资源变更
-
-## 目录布局
+## Directory layout
 
 ```
 src/core/gateway/plugins/
-├── http/                          # HTTP 插件目录（28 个；加上 gateway_api_filters/ 里的 DebugAccessLogToHeader 共 29 个）
-│   ├── basic_auth/                # 各插件子目录
+├── http/                          # HTTP plugin directory (28; with DebugAccessLogToHeader in gateway_api_filters/, total 29)
+│   ├── basic_auth/                # one subdirectory per plugin
 │   ├── jwt_auth/
 │   ├── cors/
-│   ├── dsl/                       # DSL 引擎（含 lang/ 子目录：AST、编译器、VM）
+│   ├── dsl/                       # DSL engine (with lang/ subdirectory: AST, compiler, VM)
 │   ├── ...
-│   ├── common/                    # 插件共用工具（auth_common, jwt_common）
-│   ├── conf_handler_impl.rs       # EdgionPlugins ConfHandler 实现
-│   └── plugin_store.rs            # HTTP 插件资源存储
-├── stream/                        # TCP/UDP 层插件
-│   ├── ip_restriction/            # Stream IP 限制实现
-│   ├── tls_route/                 # TLS 路由级插件
-│   │   ├── ip_restriction.rs      # TLS 路由 IP 限制
+│   ├── common/                    # shared plugin utilities (auth_common, jwt_common)
+│   ├── conf_handler_impl.rs       # EdgionPlugins ConfHandler implementation
+│   └── plugin_store.rs            # HTTP plugin resource store
+├── stream/                        # TCP/UDP layer plugins
+│   ├── ip_restriction/            # Stream IP-restriction implementation
+│   ├── tls_route/                 # TLS-route-level plugins
+│   │   ├── ip_restriction.rs      # TLS-route IP restriction
 │   │   ├── tls_route_plugin_runtime.rs
 │   │   └── tls_route_plugin_trait.rs
-│   ├── connection_filter_bridge.rs # Pingora ConnectionFilter 桥接
-│   ├── stream_plugin_runtime.rs   # Stream 插件运行时
-│   ├── stream_plugin_store.rs     # Stream 插件资源存储
-│   └── stream_plugin_trait.rs     # StreamPlugin trait 定义
-└── runtime/                       # 插件框架
-    ├── plugin_runtime.rs          # PluginRuntime 核心（4 阶段管理 + 插件创建工厂）
-    ├── conditional_filter.rs      # 条件包装器（4 种 Conditional* 类型）
-    ├── conditions/                # 条件评估引擎（KeyExist, Include, Probability）
-    ├── session_adapter.rs         # PingoraSessionAdapter（Pingora Session → PluginSession 适配）
-    ├── log.rs                     # 插件执行日志（PluginLog, StageLogs）
-    ├── traits/                    # 4 个阶段的 trait 定义
+│   ├── connection_filter_bridge.rs # Pingora ConnectionFilter bridge
+│   ├── stream_plugin_runtime.rs   # stream plugin runtime
+│   ├── stream_plugin_store.rs     # stream plugin resource store
+│   └── stream_plugin_trait.rs     # StreamPlugin trait definition
+└── runtime/                       # plugin framework
+    ├── plugin_runtime.rs          # PluginRuntime core (4-phase management + plugin creation factory)
+    ├── conditional_filter.rs      # conditional wrapper (4 Conditional* types)
+    ├── conditions/                # condition evaluation engine (KeyExist, Include, Probability)
+    ├── session_adapter.rs         # PingoraSessionAdapter (Pingora Session → PluginSession adapter)
+    ├── log.rs                     # plugin execution log (PluginLog, StageLogs)
+    ├── traits/                    # trait definitions for the 4 phases
     │   ├── request_filter.rs
     │   ├── upstream_response_filter.rs
     │   ├── upstream_response_body_filter.rs
     │   ├── upstream_response.rs
-    │   └── session.rs             # PluginSession trait（统一会话抽象）
-    └── gateway_api_filters/       # Gateway API 标准 filter 实现
+    │   └── session.rs             # PluginSession trait (unified session abstraction)
+    └── gateway_api_filters/       # Gateway API standard filter implementations
         ├── request_header_modifier.rs
         ├── response_header_modifier.rs
         ├── request_redirect.rs
         ├── url_rewrite.rs
-        ├── extension_ref.rs       # ExtensionRef（递归引用 EdgionPlugins）
+        ├── extension_ref.rs       # ExtensionRef (route/backend filter list referencing EdgionPlugins, Gateway API standard) — nested form removed; see docs/zh-CN/migrations/<version>-extension-ref.md
         ├── cors_filter.rs
         └── debug_access_log.rs
 ```

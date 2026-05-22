@@ -6,7 +6,7 @@
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::types::err::EdError;
 use crate::types::filters::PluginRunningResult;
-use crate::types::EdgionHttpContext;
+use crate::types::{EdgionHttpContext, EdgionStatus};
 use pingora_proxy::Session;
 use std::sync::Arc;
 
@@ -46,12 +46,12 @@ pub async fn try_match_grpc_route(
     ctx: &mut EdgionHttpContext,
     index: &GatewayInfoIndex,
 ) -> Result<bool, EdError> {
-    if let Ok((service, method)) = super::match_engine::parse_grpc_path(&ctx.request_info.path) {
+    if let Ok((service, method)) = super::match_engine::parse_grpc_path(&ctx.request_info.normalized_current_path) {
         ctx.request_info.grpc_service = Some(service.to_string());
         ctx.request_info.grpc_method = Some(method.to_string());
     }
 
-    match grpc_routes.match_route(session, index, &ctx.request_info.hostname) {
+    match grpc_routes.match_route(session, ctx, index, &ctx.request_info.hostname) {
         Ok((grpc_route_unit, matched_gi)) => {
             ctx.grpc_route_unit = Some(grpc_route_unit);
             ctx.gateway_info = matched_gi;
@@ -102,6 +102,9 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
 
     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
+        if !ctx.request_info.response_committed {
+            ctx.add_error(EdgionStatus::PluginTerminateWithoutResponse);
+        }
         return Err(EdError::PluginTerminated());
     }
 

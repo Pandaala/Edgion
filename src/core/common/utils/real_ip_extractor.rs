@@ -27,7 +27,8 @@
 //! Result: remote_addr = "203.0.113.1"
 //! ```
 
-use crate::core::common::matcher::ip_radix_tree::{IpRadixError, IpRadixMatcher};
+use crate::core::common::matcher::ip_radix_tree::IpRadixMatcher;
+use crate::types::resources::plugin_metadata::IpGroup;
 use pingora_http::RequestHeader;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -52,10 +53,10 @@ pub struct RealIpExtractor {
 }
 
 impl RealIpExtractor {
-    /// Creates a new RealIpExtractor with trusted proxy CIDRs
+    /// Creates a new RealIpExtractor with trusted proxy IP groups
     ///
     /// # Arguments
-    /// * `trusted_ips` - List of CIDR strings (e.g., ["10.0.0.0/8", "192.168.0.0/16"])
+    /// * `trusted_ips` - List of `IpGroup` (each with a `name` and `cidrs`)
     /// * `real_ip_header` - Header name to extract real IP from (e.g., "X-Forwarded-For")
     /// * `recursive` - Nginx-style `real_ip_recursive`: true = traverse right-to-left skipping trusted;
     ///   false = take rightmost IP directly
@@ -63,55 +64,68 @@ impl RealIpExtractor {
     ///
     /// # Returns
     /// * `Ok(RealIpExtractor)` - Successfully created extractor
-    /// * `Err(IpRadixError)` - Failed to build matcher (only if all CIDRs are invalid)
+    /// * `Err(String)` - Failed to build matcher (only if all CIDRs are invalid and build fails)
     ///
     /// # Notes
     /// - Invalid CIDRs are skipped with a warning log
     /// - If no valid CIDRs are provided, returns extractor with no matcher (all IPs untrusted)
     pub fn new(
-        trusted_ips: &[String],
+        trusted_ips: &[IpGroup],
         real_ip_header: String,
         recursive: bool,
         max_trusted_hops: Option<u32>,
-    ) -> Result<Self, IpRadixError> {
-        let trusted_proxy_matcher = if !trusted_ips.is_empty() {
-            let mut builder = IpRadixMatcher::builder();
-            let mut valid_count = 0;
-            let mut invalid_count = 0;
+    ) -> Result<Self, String> {
+        let mut builder = IpRadixMatcher::builder();
+        let mut valid_count: usize = 0;
+        let mut invalid_count: usize = 0;
 
-            for cidr in trusted_ips {
-                match builder.insert(cidr, true) {
-                    Ok(_) => {
-                        valid_count += 1;
-                    }
+        for group in trusted_ips {
+            for cidr in &group.cidrs {
+                match crate::core::common::matcher::ip_cidr_helpers::to_cidr_format(cidr) {
+                    Ok(norm) => match builder.insert(&norm, &group.name) {
+                        Ok(_) => valid_count += 1,
+                        Err(e) => {
+                            invalid_count += 1;
+                            tracing::warn!(
+                                group = %group.name,
+                                cidr = %cidr,
+                                error = ?e,
+                                "invalid CIDR in trusted_ips, skipping"
+                            );
+                        }
+                    },
                     Err(e) => {
                         invalid_count += 1;
                         tracing::warn!(
+                            group = %group.name,
                             cidr = %cidr,
-                            error = ?e,
-                            "Invalid CIDR in trusted_ips, skipping"
+                            error = %e,
+                            "invalid CIDR format in trusted_ips, skipping"
                         );
                     }
                 }
             }
+        }
 
-            if valid_count > 0 {
-                tracing::info!(
-                    valid_cidrs = valid_count,
-                    invalid_cidrs = invalid_count,
-                    "RealIpExtractor CIDR validation completed"
-                );
-                Some(Arc::new(builder.build()?))
-            } else {
-                tracing::warn!(
-                    total_cidrs = trusted_ips.len(),
-                    "No valid CIDRs in trusted_ips, real IP extraction will be disabled"
-                );
-                None
-            }
-        } else {
+        // Forgiving semantics: empty/all-invalid → no matcher → every IP
+        // returns false from is_trusted_proxy (matches today's behavior).
+        let trusted_proxy_matcher = if valid_count == 0 {
             None
+        } else {
+            Some(Arc::new(
+                builder
+                    .build()
+                    .map_err(|e| format!("Failed to build trusted IP matcher: {}", e))?,
+            ))
         };
+
+        if invalid_count > 0 {
+            tracing::warn!(
+                valid = valid_count,
+                invalid = invalid_count,
+                "some trusted_ips CIDRs were invalid and skipped"
+            );
+        }
 
         Ok(Self {
             trusted_proxy_matcher,
@@ -121,19 +135,17 @@ impl RealIpExtractor {
         })
     }
 
-    /// Checks if an IP address is a trusted proxy
-    ///
-    /// # Arguments
-    /// * `ip` - IP address to check
-    ///
-    /// # Returns
-    /// * `true` - IP is in trusted proxy list
-    /// * `false` - IP is not trusted or no trusted proxies configured
+    /// Zero-allocation membership check. Hot path; called O(XFF-length)
+    /// times per request in `resolve_from_header`.
     pub fn is_trusted_proxy(&self, ip: &IpAddr) -> bool {
-        self.trusted_proxy_matcher
-            .as_ref()
-            .and_then(|m| m.match_ip(ip))
-            .unwrap_or(false)
+        self.trusted_proxy_matcher.as_ref().is_some_and(|m| m.contains(ip))
+    }
+
+    /// Cold path for debug logging. Returns the matched trusted-proxy
+    /// group name (longest-prefix), or `None` when the IP is not trusted
+    /// or no matcher is configured.
+    pub fn matched_trusted_group(&self, ip: &IpAddr) -> Option<&str> {
+        self.trusted_proxy_matcher.as_ref().and_then(|m| m.matched_group(ip))
     }
 
     /// Get the configured real IP header name
@@ -257,6 +269,14 @@ pub fn extract_ip_string(addr: &str) -> String {
 mod tests {
     use super::*;
 
+    fn group(name: &str, cidrs: &[&str]) -> IpGroup {
+        IpGroup {
+            name: name.to_string(),
+            description: None,
+            cidrs: cidrs.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
     #[test]
     fn test_no_trusted_ips() {
         let extractor = RealIpExtractor::new(&[], "X-Forwarded-For".to_string(), true, None).unwrap();
@@ -270,8 +290,8 @@ mod tests {
 
     #[test]
     fn test_client_not_trusted() {
-        let extractor =
-            RealIpExtractor::new(&["10.0.0.0/8".to_string()], "X-Forwarded-For".to_string(), true, None).unwrap();
+        let groups = vec![group("default", &["10.0.0.0/8"])];
+        let extractor = RealIpExtractor::new(&groups, "X-Forwarded-For".to_string(), true, None).unwrap();
 
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
         headers.insert_header("X-Forwarded-For", "203.0.113.1").unwrap();
@@ -283,13 +303,11 @@ mod tests {
 
     #[test]
     fn test_recursive_extraction() {
-        let extractor = RealIpExtractor::new(
-            &["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
-            "X-Forwarded-For".to_string(),
-            true,
-            None,
-        )
-        .unwrap();
+        let groups = vec![
+            group("private", &["192.168.0.0/16"]),
+            group("public", &["198.51.100.0/24"]),
+        ];
+        let extractor = RealIpExtractor::new(&groups, "X-Forwarded-For".to_string(), true, None).unwrap();
 
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
         headers
@@ -303,13 +321,11 @@ mod tests {
 
     #[test]
     fn test_non_recursive_extraction() {
-        let extractor = RealIpExtractor::new(
-            &["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
-            "X-Forwarded-For".to_string(),
-            false,
-            None,
-        )
-        .unwrap();
+        let groups = vec![
+            group("private", &["192.168.0.0/16"]),
+            group("public", &["198.51.100.0/24"]),
+        ];
+        let extractor = RealIpExtractor::new(&groups, "X-Forwarded-For".to_string(), false, None).unwrap();
 
         // Non-recursive: rightmost 192.168.1.1 is trusted → use client_addr
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
@@ -330,13 +346,8 @@ mod tests {
 
     #[test]
     fn test_all_ips_trusted_fallback() {
-        let extractor = RealIpExtractor::new(
-            &["0.0.0.0/0".to_string()], // All IPs trusted
-            "X-Forwarded-For".to_string(),
-            true,
-            None,
-        )
-        .unwrap();
+        let groups = vec![group("any", &["0.0.0.0/0"])]; // All IPs trusted
+        let extractor = RealIpExtractor::new(&groups, "X-Forwarded-For".to_string(), true, None).unwrap();
 
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
         headers
@@ -357,19 +368,17 @@ mod tests {
 
     #[test]
     fn test_invalid_cidrs_skipped() {
-        let extractor = RealIpExtractor::new(
+        let groups = vec![group(
+            "mixed",
             &[
-                "10.0.0.0/8".to_string(),
-                "invalid-cidr".to_string(),
-                "192.168.0.0/16".to_string(),
-                "300.0.0.0/8".to_string(),
-                "172.16.0.0/12".to_string(),
+                "10.0.0.0/8",
+                "invalid-cidr",
+                "192.168.0.0/16",
+                "300.0.0.0/8",
+                "172.16.0.0/12",
             ],
-            "X-Forwarded-For".to_string(),
-            true,
-            None,
-        )
-        .unwrap();
+        )];
+        let extractor = RealIpExtractor::new(&groups, "X-Forwarded-For".to_string(), true, None).unwrap();
 
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
         headers
@@ -382,13 +391,8 @@ mod tests {
 
     #[test]
     fn test_all_invalid_cidrs() {
-        let extractor = RealIpExtractor::new(
-            &["invalid-cidr".to_string(), "not-an-ip/24".to_string()],
-            "X-Forwarded-For".to_string(),
-            true,
-            None,
-        )
-        .unwrap();
+        let groups = vec![group("bad", &["invalid-cidr", "not-an-ip/24"])];
+        let extractor = RealIpExtractor::new(&groups, "X-Forwarded-For".to_string(), true, None).unwrap();
 
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
         headers.insert_header("X-Forwarded-For", "203.0.113.1").unwrap();
@@ -402,8 +406,9 @@ mod tests {
     /// is in place.
     #[test]
     fn test_max_trusted_hops_caps_recursive_traversal() {
+        let groups = vec![group("internal", &["10.0.0.0/8"])];
         let extractor = RealIpExtractor::new(
-            &["10.0.0.0/8".to_string()],
+            &groups,
             "X-Forwarded-For".to_string(),
             true,
             Some(2), // cap: stop after skipping 2 trusted hops
@@ -428,13 +433,8 @@ mod tests {
     /// is still returned (the cap is an upper bound, not a forced value).
     #[test]
     fn test_max_trusted_hops_does_not_block_real_client_within_window() {
-        let extractor = RealIpExtractor::new(
-            &["10.0.0.0/8".to_string()],
-            "X-Forwarded-For".to_string(),
-            true,
-            Some(3),
-        )
-        .unwrap();
+        let groups = vec![group("internal", &["10.0.0.0/8"])];
+        let extractor = RealIpExtractor::new(&groups, "X-Forwarded-For".to_string(), true, Some(3)).unwrap();
 
         // Only 1 trusted hop before reaching 1.2.3.4 (within cap=3).
         let mut headers = RequestHeader::build("GET", b"/", None).unwrap();
@@ -450,8 +450,9 @@ mod tests {
     /// semantics unchanged).
     #[test]
     fn test_max_trusted_hops_ignored_in_non_recursive_mode() {
+        let groups = vec![group("internal", &["10.0.0.0/8"])];
         let extractor = RealIpExtractor::new(
-            &["10.0.0.0/8".to_string()],
+            &groups,
             "X-Forwarded-For".to_string(),
             false,
             Some(1), // set but should be ignored
@@ -463,5 +464,16 @@ mod tests {
         // Non-recursive takes rightmost → 10.0.0.99 is trusted → fallback to client_addr.
         let result = extractor.extract_real_ip("10.0.0.1:45678", &headers);
         assert_eq!(result, "10.0.0.1");
+    }
+
+    #[test]
+    fn matched_trusted_group_returns_name() {
+        let groups = vec![group("cloudflare", &["173.245.48.0/20"])];
+        let extractor = RealIpExtractor::new(&groups, "X-Forwarded-For".to_string(), true, None).unwrap();
+        assert_eq!(
+            extractor.matched_trusted_group(&"173.245.48.5".parse().unwrap()),
+            Some("cloudflare")
+        );
+        assert_eq!(extractor.matched_trusted_group(&"8.8.8.8".parse().unwrap()), None);
     }
 }

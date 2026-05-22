@@ -7,6 +7,24 @@ use zeroize::Zeroizing;
 
 use super::TargetType;
 
+/// Append `limit` and `continue` query params to a URL.
+///
+/// Uses `query_pairs_mut` so values are properly URL-encoded (continue tokens are
+/// base64-url-safe per K8s spec, but be defensive).
+fn build_list_url_with_pagination(base: &str, limit: Option<u32>, continue_token: Option<&str>) -> Result<String> {
+    let mut url = reqwest::Url::parse(base)?;
+    {
+        let mut q = url.query_pairs_mut();
+        if let Some(n) = limit {
+            q.append_pair("limit", &n.to_string());
+        }
+        if let Some(tok) = continue_token {
+            q.append_pair("continue", tok);
+        }
+    }
+    Ok(url.to_string())
+}
+
 /// Default server ports for different targets
 const DEFAULT_PORT_CENTER: u16 = 5800;
 const DEFAULT_PORT_SERVER: u16 = 5800;
@@ -77,7 +95,7 @@ impl EdgionClient {
         let status_code = resp.status();
         if !status_code.is_success() {
             bail!(
-                "/auth/status returned HTTP {} — controller 版本过老或配置异常",
+                "/auth/status returned HTTP {} -- controller is too old or misconfigured",
                 status_code
             );
         }
@@ -90,8 +108,8 @@ impl EdgionClient {
             .get("data")
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("/auth/status missing `data` field"))?;
-        let status: AuthStatusResponse =
-            serde_json::from_value(data).context("/auth/status schema unrecognized — CLI/controller 版本不匹配")?;
+        let status: AuthStatusResponse = serde_json::from_value(data)
+            .context("/auth/status schema unrecognized -- CLI/controller version mismatch")?;
 
         match status.status {
             AuthStatus::Disabled => return Ok(()),
@@ -224,31 +242,66 @@ impl EdgionClient {
     }
 
     /// GET request - list all resources of a kind (cross-namespace)
-    pub async fn list_all(&self, kind: &str) -> Result<Response> {
-        let url = match self.target {
+    pub async fn list_all(&self, kind: &str, limit: Option<u32>, continue_token: Option<&str>) -> Result<Response> {
+        let base = match self.target {
             TargetType::Center => self.build_url(&format!("/api/v1/namespaced/{}", kind)),
             TargetType::Server => self.build_url(&format!("/configserver/{}/list", kind)),
             TargetType::Client => self.build_url(&format!("/configclient/{}/list", kind)),
         };
-        let request = self.client.get(&url);
-        self.send_request(request, &url).await
+        let url = build_list_url_with_pagination(&base, limit, continue_token)?;
+        self.send_request(self.client.get(&url), &url).await
     }
 
     /// GET request - list resources in a namespace
     /// For center target: uses server-side filtering
     /// For server/client targets: this method should not be called directly,
     /// use list_all() and filter on client side instead
-    pub async fn list_namespaced(&self, kind: &str, namespace: &str) -> Result<Response> {
+    pub async fn list_namespaced(
+        &self,
+        kind: &str,
+        namespace: &str,
+        limit: Option<u32>,
+        continue_token: Option<&str>,
+    ) -> Result<Response> {
         match self.target {
             TargetType::Center => {
-                let url = self.build_url(&format!("/api/v1/namespaced/{}/{}", kind, namespace));
-                let request = self.client.get(&url);
-                self.send_request(request, &url).await
+                let base = self.build_url(&format!("/api/v1/namespaced/{}/{}", kind, namespace));
+                let url = build_list_url_with_pagination(&base, limit, continue_token)?;
+                self.send_request(self.client.get(&url), &url).await
             }
             // For server/client, we fetch all and filter on client side
             // This is handled in get.rs, but we provide a fallback here
-            TargetType::Server | TargetType::Client => self.list_all(kind).await,
+            TargetType::Server | TargetType::Client => self.list_all(kind, limit, continue_token).await,
         }
+    }
+
+    /// List metadata-only resource keys across all namespaces via the keys
+    /// endpoint. Only meaningful when `target == Center`; callers gate this via
+    /// the command-level check.
+    pub async fn list_all_keys(
+        &self,
+        kind: &str,
+        limit: Option<u32>,
+        continue_token: Option<&str>,
+    ) -> Result<Response> {
+        let base = self.build_url(&format!("/api/v1/keys/namespaced/{}", kind));
+        let url = build_list_url_with_pagination(&base, limit, continue_token)?;
+        self.send_request(self.client.get(&url), &url).await
+    }
+
+    /// List metadata-only resource keys in a specific namespace via the keys
+    /// endpoint. Only meaningful when `target == Center`; callers gate this via
+    /// the command-level check.
+    pub async fn list_namespaced_keys(
+        &self,
+        kind: &str,
+        namespace: &str,
+        limit: Option<u32>,
+        continue_token: Option<&str>,
+    ) -> Result<Response> {
+        let base = self.build_url(&format!("/api/v1/keys/namespaced/{}/{}", kind, namespace));
+        let url = build_list_url_with_pagination(&base, limit, continue_token)?;
+        self.send_request(self.client.get(&url), &url).await
     }
 
     /// GET request - get a specific resource
@@ -462,8 +515,8 @@ mod ensure_auth_tests {
         assert!(r.is_err(), "404 must bail, got {:?}", r);
         let msg = format!("{:?}", r.unwrap_err());
         assert!(
-            msg.contains("404") || msg.contains("过老") || msg.contains("too old"),
-            "err message should mention 404/版本过老: {msg}"
+            msg.contains("404") || msg.contains("too old"),
+            "err message should mention 404 / too old: {msg}"
         );
     }
 

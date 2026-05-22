@@ -174,6 +174,23 @@ async fn send(&self, data: String) -> Result<()> {
 
 可通过 Prometheus 监控 `access_log_dropped` 指标，及时发现问题。
 
+#### 5. 日志脱敏（默认关闭）
+
+通过 `[access_log_sensitive]` 配置统一控制敏感字段输出方式，三档全局开关 + 默认 `off`：
+
+| 模式 | 行为 |
+|------|------|
+| `off`（默认） | 敏感字段以明文输出，与历史行为完全一致；运行时仅一次原子读，可视为零成本 |
+| `replace` | 整个值替换为 `replace_with`（默认 `***`） |
+| `wrap` | 在原值两端附加 `wrap_prefix` / `wrap_suffix`（默认 `<E>...</E>`），便于下游识别脱敏区段 |
+
+**保护范围**：
+- access log 字段：`client_addr` / `remote_addr` / `path` / `x_forwarded_for` / `sni` / 客户端证书 `subject`、`sans`、`cn`
+- plugin log：通过 `sensitive(...)` 标注的参数；DSL `log_warn` / `log_error` 的用户参数
+- ssl.log：mTLS 白名单校验失败错误中的客户端证书字段
+
+详细配置参见 [Gateway 配置 → access_log_sensitive](../ops-guide/configuration/gateway-config.md#access_log_sensitive)。
+
 ## 模块详解
 
 ### Access Logger

@@ -11,6 +11,7 @@ pub mod observe;
 pub mod output;
 pub mod resources;
 pub mod schema;
+pub mod sensitive;
 pub mod work_dir;
 
 // Re-export common types
@@ -28,11 +29,6 @@ pub mod resource;
 
 pub use self::output::{LocalFileWriterCfg, LocalFileWriterConfig, RotationConfig, RotationStrategy, StringOutput};
 
-// Backward compatibility: link_sys module alias for output types
-pub mod link_sys {
-    pub use super::output::*;
-}
-
 // Re-export from resource module
 pub use self::resource::ResourceKind;
 pub use self::resource::ResourceMeta;
@@ -45,8 +41,8 @@ pub use self::resource::{
 pub use self::constants::app::*;
 pub use self::ctx::{
     BackendContext, BackendTlsInfo, DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset,
-    MatchInfo, MatchedInfo, MirrorConfig, MirrorState, RequestInfo, Rsc, SessionPersistenceState, TlsConnId,
-    TlsConnMeta, UpstreamInfo,
+    MatchInfo, MatchedInfo, MirrorConfig, MirrorState, PendingHeaderOp, RequestInfo, Rsc, SessionPersistenceState,
+    SetJumpOutcome, TlsConnId, TlsConnMeta, UpstreamInfo, UpstreamJumpTarget,
 };
 pub use self::edgion_status::EdgionStatus;
 pub use self::err::{

@@ -1,0 +1,18 @@
+# EWMA LB basic distribution — regression for lb/attempt.rs LbCommit::Ewma lifecycle.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: lb-ewma-gateway
+  namespace: edgion-test
+  annotations:
+    edgion.io/metrics-test-key: "lb-ewma-test"
+    edgion.io/metrics-test-type: "lb"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31125
+      allowedRoutes:
+        namespaces:
+          from: All

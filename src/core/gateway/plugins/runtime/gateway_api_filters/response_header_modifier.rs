@@ -35,30 +35,36 @@ impl UpstreamResponseFilter for ResponseHeaderModifierFilter {
     fn run_upstream_response_filter(
         &self,
         session: &mut dyn PluginSession,
-        _log: &mut PluginLog,
+        log: &mut PluginLog,
     ) -> PluginRunningResult {
-        self.modify_headers(session)
+        self.modify_headers(session, log)
     }
 }
 
 impl ResponseHeaderModifierFilter {
-    fn modify_headers(&self, session: &mut dyn PluginSession) -> PluginRunningResult {
+    fn modify_headers(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         // Set headers
         if let Some(headers) = &self.config.set {
             for h in headers {
-                let _ = session.set_response_header(&h.name, &h.value);
+                if session.set_response_header(&h.name, &h.value).is_err() {
+                    log.push_err("set resp hdr fail");
+                }
             }
         }
         // Add headers
         if let Some(headers) = &self.config.add {
             for h in headers {
-                let _ = session.append_response_header(&h.name, &h.value);
+                if session.append_response_header(&h.name, &h.value).is_err() {
+                    log.push_err("add resp hdr fail");
+                }
             }
         }
         // Remove headers
         if let Some(headers) = &self.config.remove {
             for h in headers {
-                let _ = session.remove_response_header(h);
+                if session.remove_response_header(h).is_err() {
+                    log.push_err("remove resp hdr fail");
+                }
             }
         }
         PluginRunningResult::GoodNext

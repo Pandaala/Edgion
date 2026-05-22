@@ -2,6 +2,7 @@
 //! These structures are not serialized, only used for runtime analysis
 
 use super::{HTTPRoute, HTTPRouteFilterType, LocalObjectReference};
+use crate::core::gateway::path_normalization::normalize_config_path;
 use crate::core::gateway::plugins::PluginRuntime;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -57,6 +58,13 @@ impl BackendExtensionInfo {
             return None;
         }
 
+        // `is_lb_policy_kind` is the single source of truth for which kinds are
+        // LBPolicy kinds. Bail out early for any non-LBPolicy kind so the kind
+        // list never needs to be duplicated here.
+        if !is_lb_policy_kind(&ext_ref.kind) {
+            return None;
+        }
+
         match ext_ref.kind.as_str() {
             "LBPolicyConsistentHash" => {
                 Self::parse_consistent_hash_name(&ext_ref.name).map(ParsedLBPolicy::ConsistentHash)
@@ -80,19 +88,43 @@ impl BackendExtensionInfo {
     }
 }
 
+/// True if `kind` names a load-balancing-policy ExtensionRef (as opposed to a
+/// plugin reference). LBPolicy ExtensionRefs live on `backendRefs[].filters` and
+/// are consumed by `BackendExtensionInfo` / `parse_lb_policy`, not the plugin
+/// runtime — callers that gate "is this a supported ExtensionRef kind" must
+/// treat these as recognized, not unsupported.
+pub(crate) fn is_lb_policy_kind(kind: &str) -> bool {
+    matches!(kind, "LBPolicyConsistentHash" | "LBPolicyLeastConn" | "LBPolicyEwma")
+}
+
 /// Extension trait for HTTPRoute to parse hidden logic
 impl HTTPRoute {
-    /// Parse all extension_ref in backend_refs and populate extension_info fields
+    /// Parse all extension_ref in backend_refs and populate extension_info fields.
     ///
     /// This method should be called after deserializing HTTPRoute from YAML/JSON
     /// to populate the runtime-only extension_info fields.
     ///
-    /// # Example
+    /// # Incomplete by itself
+    ///
+    /// `preparse()` only covers plugin runtimes, path-matcher normalization, and
+    /// the `forward-raw-path` annotation. It does **not** parse timeouts or retry
+    /// configurations. A fully pre-processed `HTTPRoute` requires all three calls:
+    ///
     /// ```ignore
-    /// let mut route: HTTPRoute = serde_yaml::from_str(yaml_str)?;
-    /// route.parse_hidden_logic();
+    /// route.preparse();
+    /// route.parse_timeouts();
+    /// route.parse_retry();
     /// ```
+    ///
+    /// Production code paths go through `ResourceMeta::pre_parse()` (implemented
+    /// via `impl_resource_meta!` in `types/resource/meta/impls.rs`), which chains
+    /// all three. Prefer `pre_parse()` over calling `preparse()` directly unless
+    /// you intentionally want only the subset above.
     pub fn preparse(&mut self) {
+        // Normalize path matcher values before any other processing so downstream
+        // logic always sees the canonical path representation.
+        self.normalize_path_matchers();
+
         let Some(rules) = self.spec.rules.as_mut() else {
             return;
         };
@@ -100,11 +132,35 @@ impl HTTPRoute {
         // Get namespace for ExtensionRef lookups
         let namespace = self.metadata.namespace.as_deref().unwrap_or("default");
 
+        // Parse `edgion.io/forward-raw-path` annotation. Three-state:
+        // "true" / "false" / absent. Invalid values logged INFO and treated as None.
+        let parsed_forward_raw_path: Option<bool> = self
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(crate::types::constants::annotations::edgion::FORWARD_RAW_PATH))
+            .and_then(|v| match v.as_str() {
+                "true" => Some(true),
+                "false" => Some(false),
+                other => {
+                    tracing::info!(
+                        route_namespace = %self.metadata.namespace.as_deref().unwrap_or("default"),
+                        route_name = %self.metadata.name.as_deref().unwrap_or(""),
+                        annotation = %crate::types::constants::annotations::edgion::FORWARD_RAW_PATH,
+                        value = %other,
+                        "ignored: expected \"true\" or \"false\""
+                    );
+                    None
+                }
+            });
+
         for rule in rules.iter_mut() {
             // Initialize rule-level plugin_runtime from rule.plugins
             if let Some(filters) = &rule.filters {
-                rule.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters, namespace));
+                rule.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters_for_rule(filters, namespace));
             }
+
+            rule.parsed_forward_raw_path = parsed_forward_raw_path;
 
             let Some(backend_refs) = rule.backend_refs.as_mut() else {
                 continue;
@@ -128,7 +184,8 @@ impl HTTPRoute {
 
                 // Initialize plugin_runtime from plugins
                 if let Some(filters) = &backend_ref.filters {
-                    backend_ref.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters(filters, namespace));
+                    backend_ref.plugin_runtime =
+                        Arc::new(PluginRuntime::from_httproute_filters_for_backend(filters, namespace));
                 }
             }
         }
@@ -150,6 +207,52 @@ impl HTTPRoute {
 
                 if rule.parsed_timeouts.is_some() {
                     tracing::debug!("Parsed route-level timeouts for HTTPRoute rule");
+                }
+            }
+        }
+    }
+
+    /// Normalize path matcher values for all rules at load time.
+    ///
+    /// For `Exact` and `PathPrefix` match types, applies [`normalize_config_path`] so the
+    /// stored value inhabits the same normalized space as the request-side path produced by
+    /// Group E (which reads `ctx.path()`, the already-normalized current path).
+    ///
+    /// `RegularExpression` patterns are left unchanged — regex patterns cannot be
+    /// machine-normalized; correctness is the operator's responsibility.
+    pub fn normalize_path_matchers(&mut self) {
+        let route_ns = self.metadata.namespace.as_deref().unwrap_or("default");
+        let route_name = self.metadata.name.as_deref().unwrap_or("");
+
+        let Some(rules) = self.spec.rules.as_mut() else {
+            return;
+        };
+
+        let path_cfg = crate::core::gateway::cli::config::get_path_normalization_config();
+        for rule in rules.iter_mut() {
+            let Some(matches) = rule.matches.as_mut() else {
+                continue;
+            };
+            for m in matches.iter_mut() {
+                let Some(path) = m.path.as_mut() else {
+                    continue;
+                };
+                // Only normalize Exact and PathPrefix; skip RegularExpression and unknown types.
+                let match_type = path.match_type.as_deref().unwrap_or("PathPrefix");
+                if match_type == "Exact" || match_type == "PathPrefix" {
+                    if let Some(value) = path.value.as_mut() {
+                        let normalized = normalize_config_path(value, path_cfg);
+                        if normalized != *value {
+                            tracing::info!(
+                                route = %format!("{}/{}", route_ns, route_name),
+                                match_type = %match_type,
+                                original = %value,
+                                normalized = %normalized,
+                                "HTTPRoute path matcher value normalized at load time"
+                            );
+                            *value = normalized;
+                        }
+                    }
                 }
             }
         }
@@ -315,5 +418,217 @@ mod tests {
                 "x-user-id".to_string()
             )))
         );
+    }
+
+    // =========================================================================
+    // Group J: HTTPRoute path matcher normalization tests
+    // =========================================================================
+
+    fn make_route_with_path(match_type: &str, value: &str) -> HTTPRoute {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": "test", "namespace": "default"},
+            "spec": {
+                "rules": [{
+                    "matches": [{
+                        "path": {"type": match_type, "value": value}
+                    }]
+                }]
+            }
+        }))
+        .expect("route should deserialize")
+    }
+
+    fn get_path_value(route: &HTTPRoute) -> &str {
+        route.spec.rules.as_ref().unwrap()[0].matches.as_ref().unwrap()[0]
+            .path
+            .as_ref()
+            .unwrap()
+            .value
+            .as_deref()
+            .unwrap()
+    }
+
+    #[test]
+    fn http_route_path_match_exact_normalized() {
+        // Trailing slash should be removed by dot-segment/normalization logic.
+        // normalize_config_path("/admin/") should produce "/admin/" — actually trailing
+        // slash is not removed by the BASE algorithm; test with a genuine normalizable input.
+        // Input with percent-encoded slash: "/api%2Fv1" → "/api/v1"
+        let mut route = make_route_with_path("Exact", "/admin/");
+        route.normalize_path_matchers();
+        // "/admin/" has no dot-segments or percent-encoding; normalize is a no-op → unchanged
+        assert_eq!(get_path_value(&route), "/admin/");
+
+        // A value that genuinely needs normalization (double slash collapsed)
+        let mut route2 = make_route_with_path("Exact", "/admin//foo");
+        route2.normalize_path_matchers();
+        assert_eq!(get_path_value(&route2), "/admin/foo");
+    }
+
+    #[test]
+    fn http_route_path_match_exact_percent_encoded_normalized() {
+        // Percent-encoded slash should be decoded: "/api%2Fv1" → "/api/v1"
+        let mut route = make_route_with_path("Exact", "/api%2Fv1");
+        route.normalize_path_matchers();
+        assert_eq!(get_path_value(&route), "/api/v1");
+    }
+
+    #[test]
+    fn http_route_path_match_pathprefix_normalized() {
+        // Percent-encoded slash decoded: "/api%2Fv1" → "/api/v1"
+        let mut route = make_route_with_path("PathPrefix", "/api%2Fv1");
+        route.normalize_path_matchers();
+        assert_eq!(get_path_value(&route), "/api/v1");
+    }
+
+    #[test]
+    fn http_route_path_match_regex_not_normalized() {
+        // RegularExpression values must not be modified
+        let input = "/admin%2F.*";
+        let mut route = make_route_with_path("RegularExpression", input);
+        route.normalize_path_matchers();
+        assert_eq!(get_path_value(&route), input);
+    }
+
+    #[test]
+    fn http_route_path_match_already_normalized_unchanged() {
+        // Already-normalized value — normalize_config_path is a no-op
+        let mut route = make_route_with_path("Exact", "/api/v1");
+        route.normalize_path_matchers();
+        assert_eq!(get_path_value(&route), "/api/v1");
+    }
+
+    #[test]
+    fn http_route_path_match_dot_segment_normalized() {
+        // Dot segments should be resolved: "/api/v1/./foo" → "/api/v1/foo"
+        let mut route = make_route_with_path("PathPrefix", "/api/v1/./foo");
+        route.normalize_path_matchers();
+        assert_eq!(get_path_value(&route), "/api/v1/foo");
+    }
+
+    // =========================================================================
+    // forward-raw-path annotation parsing tests
+    // =========================================================================
+
+    fn make_test_http_route() -> HTTPRoute {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": "test-route", "namespace": "default"},
+            "spec": {
+                "rules": [
+                    {
+                        "matches": [{"path": {"type": "PathPrefix", "value": "/api"}}]
+                    }
+                ]
+            }
+        }))
+        .expect("test HTTPRoute should deserialize")
+    }
+
+    #[test]
+    fn parses_forward_raw_path_true() {
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::types::constants::annotations::edgion::FORWARD_RAW_PATH.to_string(),
+            "true".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_forward_raw_path, Some(true));
+        }
+    }
+
+    #[test]
+    fn parses_forward_raw_path_false() {
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::types::constants::annotations::edgion::FORWARD_RAW_PATH.to_string(),
+            "false".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_forward_raw_path, Some(false));
+        }
+    }
+
+    #[test]
+    fn parses_forward_raw_path_absent_is_none() {
+        let mut route = make_test_http_route();
+        route.metadata.annotations = None;
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_forward_raw_path, None);
+        }
+    }
+
+    #[test]
+    fn parses_forward_raw_path_invalid_is_none() {
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::types::constants::annotations::edgion::FORWARD_RAW_PATH.to_string(),
+            "yes".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_forward_raw_path, None);
+        }
+    }
+
+    #[test]
+    fn parses_forward_raw_path_uppercase_is_invalid() {
+        // Strict match: only lowercase "true" / "false" accepted.
+        // "True" / "TRUE" / "False" all log INFO and treat as None.
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::types::constants::annotations::edgion::FORWARD_RAW_PATH.to_string(),
+            "True".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_forward_raw_path, None);
+        }
+    }
+
+    #[test]
+    fn parses_forward_raw_path_with_whitespace_is_invalid() {
+        // Whitespace not trimmed: "  true  " is invalid.
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::types::constants::annotations::edgion::FORWARD_RAW_PATH.to_string(),
+            "  true  ".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_forward_raw_path, None);
+        }
+    }
+
+    #[test]
+    fn parses_forward_raw_path_empty_is_invalid() {
+        // Empty value: "" is invalid (operator likely meant to delete the annotation).
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::types::constants::annotations::edgion::FORWARD_RAW_PATH.to_string(),
+            String::new(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_forward_raw_path, None);
+        }
     }
 }

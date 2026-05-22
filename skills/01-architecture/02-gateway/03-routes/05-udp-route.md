@@ -1,28 +1,28 @@
 ---
 name: gateway-udp-route
-description: UDP 路由：per-listener 路由表、无状态代理、ConfHandler。
+description: UDP route — per-listener route table, stateless proxy, ConfHandler.
 ---
 
-# UDP 路由
+# UDP route
 
-## 概述
+## Overview
 
-UDPRoute 实现了 Gateway API 的 L4 UDP 路由功能。UDP 路由是最简单的路由类型：无连接状态、无主机名匹配维度，每个 listener 绑定至多一条路由，使用 first-match 语义选择后端。
+UDPRoute implements the L4 UDP routing capability of the Gateway API. UDP routing is the simplest route type — connectionless and without a hostname matching dimension; each listener is bound to at most one route and uses first-match semantics to select the backend.
 
-## 模块结构
+## Module structure
 
 ```
 src/core/gateway/routes/udp/
-├── mod.rs                # 模块入口与类型导出
-├── conf_handler_impl.rs  # ConfHandler<UDPRoute> 实现
+├── mod.rs                # module entry and type exports
+├── conf_handler_impl.rs  # ConfHandler<UDPRoute> implementation
 ├── routes_mgr.rs         # UdpPortRouteManager / GlobalUdpRouteManagers
-├── udp_route_table.rs    # UdpRouteTable：per-listener 不可变路由快照
-└── edgion_udp.rs         # EdgionUdpProxy：UDP 代理实现
+├── udp_route_table.rs    # UdpRouteTable: per-listener immutable route snapshot
+└── edgion_udp.rs         # EdgionUdpProxy: UDP proxy implementation
 ```
 
-## Per-listener 路由表
+## Per-listener route table
 
-`UdpRouteTable` 结构与 `TcpRouteTable` 完全一致：
+`UdpRouteTable` has the same structure as `TcpRouteTable`:
 
 ```rust
 pub struct UdpRouteTable {
@@ -30,56 +30,56 @@ pub struct UdpRouteTable {
 }
 ```
 
-- **构建**：`from_routes` 从 `HashMap<String, Arc<UDPRoute>>` 收集所有路由。
-- **匹配**：`match_route()` 使用 first-match 语义，返回 `routes.first()`。
-- 无主机名维度（UDP 没有类似 SNI 的机制）。
-- 按 Gateway API 规范，每个 UDP listener 通常至多绑定一个 UDPRoute。
+- **Build**: `from_routes` collects all routes from `HashMap<String, Arc<UDPRoute>>`.
+- **Match**: `match_route()` uses first-match semantics, returning `routes.first()`.
+- No hostname dimension (UDP has no SNI-like mechanism).
+- Per the Gateway API spec, each UDP listener is typically bound to at most one UDPRoute.
 
-## 路由管理
+## Route management
 
-`GlobalUdpRouteManagers` 遵循统一的 per-listener 管理模式：
+`GlobalUdpRouteManagers` follows the unified per-listener management pattern:
 
 ```
 GlobalUdpRouteManagers
-├── route_cache: DashMap<String, Arc<UDPRoute>>        # 全局路由缓存
+├── route_cache: DashMap<String, Arc<UDPRoute>>        # global route cache
 └── by_listener: DashMap<ListenerKey, Arc<UdpPortRouteManager>>
     └── UdpPortRouteManager
-        └── route_table: ArcSwap<UdpRouteTable>        # per-listener 快照
+        └── route_table: ArcSwap<UdpRouteTable>        # per-listener snapshot
 ```
 
-### Listener 分桶
+### Listener bucketing
 
-通过 `resolved_listeners`（Controller 预计算）将路由分配到对应 listener。无 `resolved_listeners` 的路由会打印警告并跳过。
+Routes are distributed to the matching listener via `resolved_listeners` (Controller-precomputed). Routes without `resolved_listeners` log a warning and are skipped.
 
-### 重建策略
+### Rebuild strategy
 
-- `rebuild_all_listener_managers`：全量重建所有 listener 路由表，清理无路由的过期 listener。
-- `rebuild_affected_listener_managers`：仅重建受影响 listener（增量更新时使用）。
+- `rebuild_all_listener_managers`: full rebuild of every listener route table; cleans up stale listeners with no routes.
+- `rebuild_affected_listener_managers`: rebuild only affected listeners (used by incremental updates).
 
-## UDP 无状态代理
+## Stateless UDP proxy
 
-`EdgionUdpProxy` 是 UDP 代理的核心实现：
+`EdgionUdpProxy` is the core UDP proxy implementation:
 
-- 持有 `Arc<UdpPortRouteManager>`，通过 `load_route_table()` 获取当前路由快照（per-packet 热路径）。
-- 每个数据包调用 `match_route()` 获取路由。
-- 从路由的 `backend_refs` 中选择后端。
-- UDP 是无连接协议，每个数据包独立转发，不维护连接状态。
-- 支持加权后端选择（与 TCP/HTTP 相同的 `BackendSelector` 机制）。
+- Holds an `Arc<UdpPortRouteManager>` and gets the current snapshot via `load_route_table()` (per-packet hot path).
+- Calls `match_route()` for each datagram to obtain the route.
+- Selects a backend from the route's `backend_refs`.
+- UDP is connectionless — each datagram is forwarded independently with no connection state.
+- Supports weighted backend selection (same `BackendSelector` mechanism as TCP / HTTP).
 
-## ConfHandler 处理
+## ConfHandler handling
 
-`ConfHandler<UDPRoute>` 实现与 TCPRoute 完全一致：
+`ConfHandler<UDPRoute>` is implemented identically to TCPRoute:
 
-- `full_set`：清空 route_cache，全量替换，调用 `rebuild_all_listener_managers`。
-- `partial_update`：计算受影响 listener，更新 route_cache，调用 `rebuild_affected_listener_managers`。
+- `full_set`: clear route_cache, full replace, call `rebuild_all_listener_managers`.
+- `partial_update`: compute affected listeners, update route_cache, call `rebuild_affected_listener_managers`.
 
-路由的 `ArcSwap` 原子切换确保已有数据包处理不受影响。
+The route's `ArcSwap` atomic swap ensures in-flight datagram handling is unaffected.
 
-## 关键源文件
+## Key source files
 
-| 文件 | 职责 |
-|------|------|
-| `src/core/gateway/routes/udp/routes_mgr.rs` | GlobalUdpRouteManagers、UdpPortRouteManager |
+| File | Responsibility |
+|------|----------------|
+| `src/core/gateway/routes/udp/routes_mgr.rs` | GlobalUdpRouteManagers, UdpPortRouteManager |
 | `src/core/gateway/routes/udp/udp_route_table.rs` | UdpRouteTable |
 | `src/core/gateway/routes/udp/edgion_udp.rs` | EdgionUdpProxy |
-| `src/core/gateway/routes/udp/conf_handler_impl.rs` | ConfHandler<UDPRoute> 实现 |
+| `src/core/gateway/routes/udp/conf_handler_impl.rs` | ConfHandler<UDPRoute> implementation |

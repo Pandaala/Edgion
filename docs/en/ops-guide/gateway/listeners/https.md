@@ -29,7 +29,7 @@ listeners:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| mode | string | | Terminate (default) or Passthrough |
+| mode | enum | | `Terminate` (default) or `Passthrough`; any other value is rejected by the CRD |
 | certificateRefs | array | Yes | Certificate Secret references |
 | options | map | | TLS options |
 

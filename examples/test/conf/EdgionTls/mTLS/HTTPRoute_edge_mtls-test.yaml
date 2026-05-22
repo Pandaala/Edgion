@@ -13,6 +13,7 @@ spec:
     - "mtls-optional.example.com"
     - "mtls-san.example.com"
     - "mtls-chain.example.com"
+    - "mtls-terminate.example.com"
   rules:
     - matches:
         - path:

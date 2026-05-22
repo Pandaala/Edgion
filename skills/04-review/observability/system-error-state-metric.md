@@ -1,60 +1,65 @@
-# `edgion_system_error_state` gauge：系统级降级状态的登记簿
+---
+name: system-error-state-metric
+description: Use when reviewing findings about unsafe modes (skip_tls, AllowInsecureFallback, etc.); documents when to close a report by reusing the edgion_system_error_state gauge rather than adding a hard constraint.
+---
 
-## 结论
+# `edgion_system_error_state` Gauge: Registry of System-Level Degraded States
 
-Edgion 使用 `edgion_system_error_state{component, reason}` gauge 登记**"进程运行中但处于某种已知降级/不安全状态"**的情况。典型用例是 `skip_tls=true` 的紧急 TLS 绕过——行为本身保留（operator 有紧急逃生门需求），通过 metric 让 Prometheus/Alertmanager 捕获"降级模式被激活 + 未及时关闭"的情况。
+## Conclusion
 
-遇到 review 报"Edgion 某处允许不安全模式（`skip_tls`、`AllowInsecureFallback` 等），应在代码层面拒绝启动 / 加两因素确认 / 强制时限"时，按下述规则判定是否复用本机制关闭而非引入新硬约束。
+Edgion uses the `edgion_system_error_state{component, reason}` gauge to register **"the process is running but in a known degraded/unsafe state"**. The typical use case is the emergency TLS bypass `skip_tls=true` — the behavior itself is preserved (operators have a legitimate emergency-escape-hatch need); the metric lets Prometheus/Alertmanager catch "degraded mode is active + not turned off in time".
 
-## 设计约束
+When a review reports "Edgion permits an unsafe mode somewhere (`skip_tls`, `AllowInsecureFallback`, etc.); should refuse startup at the code level / require two-factor confirmation / enforce a time limit", apply the rules below to decide whether to close it by reusing this mechanism rather than introducing a new hard constraint.
 
-1. **Metric 名**：`edgion_system_error_state`（gauge，值始终为 `1` 当条件激活；进程重启才会复位）
-2. **标签**：
-   - `component`：上报主体（定义在 `src/core/common/observe/system_metrics.rs::components`）
-     - 当前：`conf_sync_client`、`conf_sync_server`、`fed_sync_client`、`fed_sync_server`
-   - `reason`：降级条件类型（定义在 `system_metrics.rs::reasons`）
-     - 当前：`skip_tls`
-3. **Label 值必须从 bounded 常量中取**，不允许传入自由字符串（Prometheus 基数风险）
-4. **设置一次即可**：这些是**启动时确定的配置降级**，不是瞬时故障；不需要清零逻辑（进程 restart 语义已覆盖）
-5. **辅配 `tracing::error!`**：日志做启动一次性提示，metric 做持续可观测；两者并存
+## Design Constraints
 
-## 何时用这个机制
+1. **Metric name**: `edgion_system_error_state` (gauge; value is always `1` when the condition is active; only resets on process restart)
+2. **Labels**:
+   - `component`: reporting subject (defined in `src/core/common/observe/system_metrics.rs::components`)
+     - Currently: `conf_sync_client`, `conf_sync_server`, `fed_sync_client`, `fed_sync_server`
+   - `reason`: degradation condition type (defined in `system_metrics.rs::reasons`)
+     - Currently: `skip_tls`, `plaintext_default`, `peer_identity_self_check`
+3. **Label values must be drawn from bounded constants**; passing free-form strings is not allowed (Prometheus cardinality risk)
+4. **Set once and done**: these are **configuration degradations determined at startup**, not transient faults; no zeroing logic is needed (process restart semantics already cover it)
+5. **Pair with `tracing::error!`**: log gives a one-shot startup warning; the metric provides continuous observability; both coexist
 
-**适用**（用 metric 登记 + 保留行为）：
-- 有**明确紧急逃生门价值**的降级模式（operator 在极端场景能用）
-- 代码层面拒绝会堵死合法用例
-- 降级是启动配置决策，非瞬时
-- 监控层面能及时发现"忘记关"就足够
+## When to Use This Mechanism
 
-**不适用**（应该代码层面拒绝或重构）：
-- 降级无任何合法使用场景（纯粹 legacy，删除无损失）
-- 降级在运行时频繁切换（应该用 counter / event，不是 state gauge）
-- 降级涉及用户可控输入（攻击面更大，不该有逃生门）
+**Applicable** (use the metric to register + preserve the behavior):
+- Degraded modes with **clear emergency-escape-hatch value** (operators can use them in extreme scenarios)
+- Refusing at the code level would block legitimate use cases
+- The degradation is a startup configuration decision, not transient
+- Monitoring is sufficient to catch "forgot to turn off" promptly
 
-## 判定规则：review 说"XX 不安全模式应在代码层禁止"时
+**Not applicable** (should refuse at the code level or refactor):
+- Degradation has no legitimate use case (purely legacy; deletion is lossless)
+- Degradation toggles frequently at runtime (should use counter / event, not state gauge)
+- Degradation involves user-controllable input (the attack surface is larger; an escape hatch should not exist)
 
-按以下顺序判定：
+## Decision Rule: When Review Says "XX Unsafe Mode Should Be Forbidden at Code Level"
 
-1. **当前是否已上报 metric？**
-   - 看 `src/core/common/observe/system_metrics.rs::components` 是否覆盖报告点
-   - 看 `system_metrics.rs::reasons` 是否覆盖该降级类型
-2. **是否符合"适用"场景**（见上节）？
-3. 三点都是 yes → 指向本文件 + `tasks/security-audit/04-admin-api.md` M2 决策关闭
-4. 若 review 的点 metric 尚未覆盖 → 评估是否**新增一个 reason 常量**（而非新增独立 metric）；新增后再按上述流程关闭
+Decide in the following order:
 
-## 例外场景（需重评）
+1. **Is the metric already reported?**
+   - Check whether `src/core/common/observe/system_metrics.rs::components` covers the report point
+   - Check whether `system_metrics.rs::reasons` covers this degradation type
+2. **Does it match the "applicable" scenarios** (see above)?
+3. All three are yes → point to this file + `tasks/security-audit/04-admin-api.md` M2 decision and close
+4. If the metric does not yet cover the review point → assess whether to **add a new reason constant** (rather than a new independent metric); after adding, close per the flow above
 
-- 降级模式开始出现 frequent flip（运行时被反复开关）：gauge 语义不适用，需考虑改 counter 或 event log
-- `component` / `reason` 基数超过 20 个：Prometheus 开销扩大，需重评 label 是否需要合并或分层
-- 某降级模式被证明"完全无合法使用场景"：从 metric 登记升级为代码层面拒绝
+## Exceptional Scenarios (need reassessment)
 
-## 背景记录
+- The degraded mode starts to show frequent flips (toggled at runtime repeatedly): gauge semantics no longer apply; consider switching to counter or event log
+- `component` / `reason` cardinality exceeds 20: Prometheus overhead grows; reassess whether labels need to be merged or layered
+- A degraded mode is shown to "have no legitimate use case at all": upgrade from metric registration to code-level refusal
 
-- 决策日期：2026-04-22
-- 决策来源：`tasks/security-audit/04-admin-api.md` M2（gRPC `skip_tls=true` 明文连接）
-- 实现文件：`src/core/common/observe/system_metrics.rs`
-- 首批覆盖站点：5 处 `skip_tls=true` 分支（Gateway / Controller / Center）
-- 典型 Alertmanager 规则（operator 侧配置，非 Edgion 内置）:
+## Background Notes
+
+- Decision date: 2026-04-22
+- Decision source: `tasks/security-audit/04-admin-api.md` M2 (gRPC `skip_tls=true` plaintext connection)
+- Implementation file: `src/core/common/observe/system_metrics.rs`
+- First-batch covered sites: 5 `skip_tls=true` branches (Gateway / Controller / Center)
+- Typical Alertmanager rule (configured on the operator side, not built into Edgion):
   ```yaml
   - alert: EdgionSystemErrorState
     expr: edgion_system_error_state > 0

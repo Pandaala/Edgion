@@ -21,7 +21,6 @@ pub enum ResourceKind {
     EdgionStreamPlugins = 16,
     ReferenceGrant = 17,
     BackendTLSPolicy = 18,
-    Endpoint = 19,
     EdgionAcme = 20,
     ConfigMap = 21,
 }
@@ -54,7 +53,6 @@ impl ResourceKind {
             ResourceKind::EdgionStreamPlugins => "EdgionStreamPlugins",
             ResourceKind::ReferenceGrant => "ReferenceGrant",
             ResourceKind::BackendTLSPolicy => "BackendTLSPolicy",
-            ResourceKind::Endpoint => "Endpoint",
             ResourceKind::EdgionAcme => "EdgionAcme",
             ResourceKind::ConfigMap => "ConfigMap",
         }
@@ -67,16 +65,14 @@ impl ResourceKind {
     /// add the corresponding entry in resource_defs.rs.
     ///
     /// This check runs at compile time via const evaluation.
-    #[allow(dead_code)]
     const fn _compile_time_sync_check() {
-        // This match must cover all ResourceKind variants.
-        // If a new variant is added to ResourceKind but not to resource_defs.rs,
-        // the exhaustive check in resource_defs.rs will catch it.
+        // This match enforces that every ResourceKind variant is listed here.
+        // If a new variant is added to the enum but not to this match, compilation fails.
         //
-        // Conversely, if a variant exists in resource_defs.rs but not here,
-        // the macro expansion will fail because ResourceKind::VariantName won't exist.
-        //
-        // This creates a bidirectional compile-time check.
+        // Note: this is a one-way check. A variant present here but absent from
+        // resource_defs.rs still compiles — the resource simply won't appear in
+        // the registry. Adding an entry to resource_defs.rs that references a
+        // non-existent enum variant also causes a compile error (via macro expansion).
         const fn check(kind: ResourceKind) {
             match kind {
                 ResourceKind::Unspecified => {}
@@ -98,7 +94,6 @@ impl ResourceKind {
                 ResourceKind::EdgionStreamPlugins => {}
                 ResourceKind::ReferenceGrant => {}
                 ResourceKind::BackendTLSPolicy => {}
-                ResourceKind::Endpoint => {}
                 ResourceKind::EdgionAcme => {}
                 ResourceKind::ConfigMap => {} // NOTE: When adding a new ResourceKind variant:
                                               // 1. Add it to this match
@@ -109,7 +104,12 @@ impl ResourceKind {
         // Trigger the check
         check(ResourceKind::Unspecified);
     }
+}
 
+// Evaluate at compile time so the exhaustiveness match above is actually enforced.
+const _: () = ResourceKind::_compile_time_sync_check();
+
+impl ResourceKind {
     /// Extract resource kind from content (supports both YAML and JSON formats)
     pub fn from_content(content: &str) -> Option<Self> {
         static RE_JSON: std::sync::LazyLock<regex::Regex> =
@@ -137,12 +137,12 @@ impl ResourceKind {
         match kind_str.to_lowercase().as_str() {
             "unspecified" => Some(ResourceKind::Unspecified),
             "gatewayclass" => Some(ResourceKind::GatewayClass),
-            "edgiongwconfig" | "edgiongatewayconfig" | "ztracegatewayconfig" => Some(ResourceKind::EdgionGatewayConfig),
+            "edgiongwconfig" | "edgiongatewayconfig" => Some(ResourceKind::EdgionGatewayConfig),
             "gateway" => Some(ResourceKind::Gateway),
             "httproute" => Some(ResourceKind::HTTPRoute),
             "service" => Some(ResourceKind::Service),
             "endpointslice" => Some(ResourceKind::EndpointSlice),
-            "edgiontls" | "ztracetls" => Some(ResourceKind::EdgionTls),
+            "edgiontls" => Some(ResourceKind::EdgionTls),
             "secret" => Some(ResourceKind::Secret),
             "edgionplugins" => Some(ResourceKind::EdgionPlugins),
             "grpcroute" => Some(ResourceKind::GRPCRoute),
@@ -154,7 +154,6 @@ impl ResourceKind {
             "edgionstreamplugins" => Some(ResourceKind::EdgionStreamPlugins),
             "referencegrant" | "referencegrants" => Some(ResourceKind::ReferenceGrant),
             "backendtlspolicy" | "backendtlspolicies" => Some(ResourceKind::BackendTLSPolicy),
-            "endpoint" | "endpoints" => Some(ResourceKind::Endpoint),
             "edgionacme" => Some(ResourceKind::EdgionAcme),
             "configmap" => Some(ResourceKind::ConfigMap),
             _ => None,

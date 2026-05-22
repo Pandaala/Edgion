@@ -1,200 +1,337 @@
 # Edgion Integration Testing
 
-用于这些任务：
+Use for these tasks:
 
-- 运行或缩小本地集成测试范围
-- 新增一个 `examples/test/` 用例
-- 排查 “YAML 已加载，但 gateway 行为不对 / 测试结果不稳定 / 证书或后端行为不匹配”
+- Running or narrowing down local integration tests
+- Adding a new `examples/test/` case
+- Investigating "YAML loaded but gateway behaves wrong / test result unstable / cert or backend behavior mismatched"
 
-先读本页拿到主 workflow；需要具体映射时再读：
+Read this page first to get the main workflow; for specific mappings read these next:
 
-- 套件与目录映射： [references/integration-suite-map.md](references/integration-suite-map.md)
-- `test_server` 能力清单： [references/test-server-capabilities.md](references/test-server-capabilities.md)
-- 保留现场后的排障步骤： [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md)
+- Suite / directory mapping: [references/integration-suite-map.md](references/integration-suite-map.md)
+- `test_server` capability list: [references/test-server-capabilities.md](references/test-server-capabilities.md)
+- Troubleshooting after preserving the scene: [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md)
 
-## 快速开始
+## macOS prerequisite: lo0 alias
+
+`HTTPRoute/Backend/LB*` tests use `127.0.0.2` / `127.0.0.3` / `127.0.0.4` as multiple independent endpoints for LeastConn / RoundRobin / ConsistentHash. Linux routes the entire `127/8` to `lo` by default, so CI (ubuntu-latest) works out of the box; **on macOS, by default `lo0` only binds `127.0.0.1`**, so an alias must be added to `lo0` manually, otherwise connect silently times out (test_server binding `0.0.0.0` cannot save it).
+
+`run_integration.sh` performs a preflight check at startup. If the alias is missing it exits and prints the `sudo ifconfig lo0 alias …` command — run it manually once as instructed. The alias is lost after a reboot and must be re-added; for permanent effect use a launchd plist (instructions in the prompt).
+
+## Quick start
 
 ```bash
-# 全量本地集成测试
+# Full local integration test
 ./examples/test/scripts/integration/run_integration.sh
 
-# 只跑某个 resource family
+# Run only one resource family
 ./examples/test/scripts/integration/run_integration.sh -r HTTPRoute
 
-# 只跑某个 item
+# Run only one item
 ./examples/test/scripts/integration/run_integration.sh -r TLSRoute -i MultiSNI
 
-# 已经 build 过后，跳过 prepare
+# Already built, skip prepare
 ./examples/test/scripts/integration/run_integration.sh --no-prepare -r EdgionPlugins -i KeyAuth
 
-# 跑完保留现场，方便手动排查
+# Keep the scene after the run for manual investigation
 ./examples/test/scripts/integration/run_integration.sh --no-prepare --keep-alive -r Gateway -i StreamPlugins
 ```
 
-## 先记住真实目录
+### Run every integration test in one shot
 
-- `examples/test/conf/`：测试 YAML，按 resource/item 组织
-- `examples/code/client/`：Rust 测试客户端与 suite 实现
-- `examples/code/server/test_server.rs`：本地 HTTP/gRPC/WebSocket/TCP/UDP 测试后端
-- `examples/code/validator/`：`resource_diff`、`config_load_validator`
-- `examples/test/scripts/integration/run_integration.sh`：主入口
-- `examples/test/scripts/utils/`：`prepare.sh`、`start_all_with_conf.sh`、`load_conf.sh`、`kill_all.sh`
-- `examples/test/scripts/gen_certs/`：测试证书生成脚本
-- `integration_testing/testing_<timestamp>/`：本次运行的日志、PID、生成 Secret、报告目录
+`run_integration.sh` only covers the suites that share its single controller/gateway topology. Several other tests live in standalone scripts (Etcd / Elasticsearch LinkSys, ACME, Center watch-sync, edgion-cli E2E, FileWatcher) — each with its own service lifecycle and port layout. To exercise *everything* end-to-end use the sequential orchestrator:
 
-不要再按旧版测试目录约定去找代码或证书脚本。当前仓库实际代码在 `examples/code/`，证书脚本在 `examples/test/scripts/gen_certs/`。
+```bash
+# Run every job in fast mode, continue on failure, unified report at the end
+./examples/test/scripts/integration/run_all_integration.sh
 
-## 运行链路
+# Skip the top-level cargo build (children may still rebuild incrementally)
+./examples/test/scripts/integration/run_all_integration.sh --no-prepare
 
-`run_integration.sh` 的真实职责是：
+# Propagate --full-test to the main runner (LdapAuth, slow timeouts, etc.)
+./examples/test/scripts/integration/run_all_integration.sh --full-test
 
-1. 调 `prepare.sh` 构建 `edgion-controller`、`edgion-gateway`、`edgion-cli`、`test_server`、`test_client`、`test_client_direct`、`resource_diff`、`config_load_validator`
-2. 调 `start_all_with_conf.sh` 清现场、建 `integration_testing/testing_<timestamp>/`
-3. 在 `${WORK_DIR}/generated-secrets/` 生成运行时 Secret，并在 suite YAML 之后再加载一次
-4. 拉起 `test_server`、controller、gateway，并等待健康检查
-5. 先加载 `examples/test/conf/base/`，再加载目标 suite 对应配置，最后加载运行时生成 Secret
-6. 用 `resource_diff` 验证 controller 与 gateway 同步状态
-7. 调 `test_client -g -r <Resource> -i <Item>` 执行测试
-8. 默认清理；带 `--keep-alive` 时保留进程、日志和工作目录
+# Limit the run
+./examples/test/scripts/integration/run_all_integration.sh --only main,linksys_etcd
+./examples/test/scripts/integration/run_all_integration.sh --skip acme,center
+```
 
-几个关键事实：
+Each job's stdout/stderr is captured to `integration_testing/run_all_<timestamp>/<job>.log` plus a machine-readable `summary.txt`. Job names: `main`, `linksys_etcd`, `linksys_es`, `acme`, `center`, `cli`, `file_watcher`. All children share controller/gateway ports (5800/5900) so they run sequentially even when their topologies differ.
 
-- `--full-test` 会额外包含慢测试，并要求 Docker 环境可用
-- `run_integration.sh` 会先检查 `ulimit -n`，不足时尝试提升到 `65535`
-- `start_all_with_conf.sh` 会导出 `EDGION_WORK_DIR` 和 `EDGION_GENERATED_SECRET_DIR`
-- `load_conf.sh` 会跳过模板 Secret，最终以工作目录里生成的版本覆盖
+## Memorize the actual directory layout
 
-## 先分类，再写测试
+- `examples/test/conf/`: test YAML, organized by resource/item
+- `examples/code/client/`: Rust test client and suite implementations
+- `examples/code/server/test_server.rs`: local HTTP/gRPC/WebSocket/TCP/UDP test backend
+- `examples/code/validator/`: `resource_diff`, `config_load_validator`
+- `examples/test/scripts/integration/run_integration.sh`: main entry (shared controller/gateway suites)
+- `examples/test/scripts/integration/run_all_integration.sh`: top-level orchestrator that sequences `run_integration.sh` plus every standalone integration script (Etcd / ES LinkSys, ACME, Center, CLI, FileWatcher) and emits a unified report
+- `examples/test/scripts/utils/`: `prepare.sh`, `start_all_with_conf.sh`, `load_conf.sh`, `kill_all.sh`
+- `examples/test/scripts/gen_certs/`: test certificate generation scripts
+- `integration_testing/testing_<timestamp>/`: this run's logs, PIDs, generated Secrets, and report directory
 
-`test_client` 现在的本地集成测试主要分成这些家族：
+Do not search for code or cert scripts using older test-directory conventions. Current code lives in `examples/code/`; cert scripts are in `examples/test/scripts/gen_certs/`.
 
-- `HTTPRoute`：Basic、Match、Backend、Filters、Protocol
-- `GRPCRoute`：Basic、Match
-- `Gateway`：Security、RealIP、AllowedRoutes、TLS、DynamicTest、StreamPlugins、PortConflict、Combined
+## Run flow
+
+The actual responsibilities of `run_integration.sh` are:
+
+1. Call `prepare.sh` to build `edgion-controller`, `edgion-gateway`, `edgion-cli`, `test_server`, `test_client`, `test_client_direct`, `resource_diff`, `config_load_validator`
+2. Call `start_all_with_conf.sh` to clean the scene and create `integration_testing/testing_<timestamp>/`
+3. Generate runtime Secrets under `${WORK_DIR}/generated-secrets/` and load them once after the suite YAML
+4. Start `test_server`, controller, gateway, and wait for health checks
+5. First load `examples/test/conf/base/`, then load the configuration of the target suite, and finally load runtime-generated Secrets
+6. Use `resource_diff` to verify the controller↔gateway sync state
+7. Call `test_client -g -r <Resource> -i <Item>` to run the tests
+8. Clean up by default; with `--keep-alive` the processes, logs, and working directory are kept
+
+A few key facts:
+
+- `--full-test` additionally includes slow tests and requires Docker to be available
+- `run_integration.sh` first checks `ulimit -n` and tries to raise it to `65535` if insufficient
+- `start_all_with_conf.sh` exports `EDGION_WORK_DIR` and `EDGION_GENERATED_SECRET_DIR`
+- `load_conf.sh` skips template Secrets; the generated version in the working directory takes precedence at the end
+
+## Categorize first, then write the test
+
+The current `test_client` local integration tests are mainly grouped into these families:
+
+- `HTTPRoute`: Basic, Match, Backend, Filters, Protocol
+- `GRPCRoute`: Basic, Match
+- `Gateway`: Security, RealIP, AllowedRoutes, TLS, DynamicTest, StreamPlugins, PortConflict, Combined
 - `TCPRoute` / `TLSRoute` / `UDPRoute`
 - `EdgionPlugins`
 - `EdgionTls`
-- `ReferenceGrant` 状态测试
-- `Services`（如 ACME）以及 `LinkSys` 的独立链路
+- `ReferenceGrant` status tests
+- `Services` (e.g., ACME) and the standalone path of `LinkSys`
 
-对应的 YAML 目录、Rust suite、是否必须带 `--gateway`，统一见 [references/integration-suite-map.md](references/integration-suite-map.md)。
+The corresponding YAML directory, Rust suite, and whether `--gateway` is required are in [references/integration-suite-map.md](references/integration-suite-map.md).
 
-## 新增或修改一个本地集成测试
+## Adding or modifying a local integration test
 
-### 1. 先选最近的已有 suite
+### 1. Pick the closest existing suite
 
-先在这些地方找最接近的模板：
+Look for the closest template:
 
 ```bash
 rg -n "MultiSNI|KeyAuth|HealthCheckTransition|ReferenceGrant" examples/code examples/test/conf
 ```
 
-优先复制“同协议、同验证方式、同依赖类型”的 case，不要从空白开始写。
+Prefer copying a case with "same protocol, same validation method, same dependency type" rather than starting from scratch.
 
-### 2. 先改 YAML，再改 Rust
+### 2. Modify YAML first, then Rust
 
-通常顺序是：
+The usual order is:
 
-1. 在 `examples/test/conf/<Resource>/<Item>/` 写或改 YAML
-2. 如需新 listener 端口，更新 `examples/test/conf/ports.json`
-3. 如 YAML 用到新字段，先确认对应 CRD 已覆盖
-4. 再去改 `examples/code/client/suites/...`
+1. Write or modify YAML under `examples/test/conf/<Resource>/<Item>/`
+2. Update `examples/test/conf/ports.json` if a new listener port is needed
+3. If the YAML uses a new field, first confirm the corresponding CRD covers it
+4. Then modify `examples/code/client/suites/...`
 
-测试失败时，先确认是“配置没生效”还是“断言写错了”，不要一上来改 runtime 代码。
+When a test fails, first determine "the configuration didn't take effect" vs "the assertion is wrong" — don't go straight to runtime code.
 
-### 3. 复用 `test_server`，不要随手新造后端
+### 3. Reuse `test_server`; do not casually invent a new backend
 
-大多数 HTTP、gRPC、WebSocket、TCP、UDP、ForwardAuth、OIDC、mirror、delay、status-code 场景，`test_server` 已经够用。只有当现有端点或协议确实不覆盖你的场景时，才扩 `examples/code/server/test_server.rs`。
+For most HTTP, gRPC, WebSocket, TCP, UDP, ForwardAuth, OIDC, mirror, delay, and status-code scenarios, `test_server` is sufficient. Only extend `examples/code/server/test_server.rs` when existing endpoints or protocols truly do not cover your scenario.
 
-`test_server` 已支持的后端端口和端点见 [references/test-server-capabilities.md](references/test-server-capabilities.md)。
+The backend ports and endpoints already supported by `test_server` are in [references/test-server-capabilities.md](references/test-server-capabilities.md).
 
-### 4. 注册 suite 的触点要补全
+### 4. Suite registration touchpoints must be complete
 
-新增 suite 时通常至少要同步这些位置：
+When adding a new suite, you typically need to update at least:
 
 - `examples/code/client/suites/<family>/...`
 - `examples/code/client/suites/<family>/mod.rs`
 - `examples/code/client/suites/mod.rs`
 - `examples/code/client/test_client.rs`
 
-如果只是往已有 family 下加 item，最容易漏的是 `test_client.rs` 里的：
+If you only add an item under an existing family, the most commonly missed places in `test_client.rs` are:
 
 - `resolve_suite()`
 - `suite_to_port_key()`
 - `add_suites_for_suite()`
 
-### 5. 判断验证方式
+### 5. Choose the validation method
 
-优先顺序通常是：
+The usual priority is:
 
-1. 直接响应断言：状态码、header、body、握手是否成功
-2. Access log：插件执行链、条件命中、内部字段、stage logs
-3. Metrics：负载均衡、hash、一致性、延迟统计
-4. `resource_diff` / `config_load_validator`：配置是否被 controller/gateway 正确接受
+1. Direct response assertions: status code, header, body, handshake success
+2. Access log: plugin chain, condition match, internal fields, stage logs
+3. Metrics: load balancing, hash, consistency, latency stats (**only existing counter/gauge — do not add a plugin-specific one**)
+4. `resource_diff` / `config_load_validator`: whether the configuration was correctly accepted by controller/gateway
 
-经验上：
+Rules of thumb:
 
-- 插件链路、条件执行、header/body 改写，用 access log 更稳
-- LB、retry、hash、一致性，用 metrics 更稳
-- `TLSRoute` / `EdgionTls` 常常需要同时看握手结果、gateway 日志和 access log
+- Plugin chains, conditional execution, header/body rewrite — access log is more reliable
+- LB, retry, hash, consistency — metrics are more reliable
+- `TLSRoute` / `EdgionTls` often require looking at handshake result, gateway log, and access log together
 
-### 6. 缩小范围跑
+> **Metrics-assertion scope limit**: metrics assertions are only used for existing counter/gauge (e.g., `edgion_backend_requests_total`, `edgion_conn_ip_restriction_events_total`); **do not add a plugin-specific counter just to verify plugin behavior** (e.g., `edgion_rate_limit_rejected_total`). Response assertions + access log already verify auth, rate limit, rewrite, etc. correctly. See [`03-coding/observability/01-metrics.md`](../03-coding/observability/01-metrics.md) "Prohibitions: each plugin registers its own metrics".
 
-先跑最窄命令：
+### 6. Run a narrow scope
+
+First run the narrowest command:
 
 ```bash
 ./examples/test/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
 ```
 
-如果需要直接重复打流量或自己控制 phase，再在保留现场后单独调用：
+If you need to repeatedly hit traffic or control phases yourself, after preserving the scene call:
 
 ```bash
 ./target/debug/examples/test_client -g -r <Resource> -i <Item>
 ```
 
-`Gateway/DynamicTest` 这类动态场景需要关注 `test_client --phase <initial|update>` 的分支，不要只看普通 item 执行路径。
+## Dynamic (hot reload) testing
 
-## 常见排查顺序
+Hot-reload tests are orchestrated by the Rust-side scenario framework and **run automatically by default** as the final step of the full integration test.
 
-1. 先看 `${WORK_DIR}/report.log` 和 `${WORK_DIR}/test_logs/<case>.log`
-2. 再看 `${WORK_DIR}/logs/controller.log`、`${WORK_DIR}/logs/gateway.log`
-3. 涉及插件或路由命中时，再看 access log / `tls_access.log`
-4. 怀疑配置未加载时，用 `edgion-cli` 或 admin API 查 controller/gateway 当前资源
-5. 怀疑测试后端行为不符时，再回到 `test_server` 端口和端点能力核对
+### How to trigger and inspect
 
-详细命令和日志入口见 [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md)。
+```bash
+# Default run: includes dynamic scenarios (all families + dynamic at the end)
+./examples/test/scripts/integration/run_integration.sh
 
-## 认证在集成测试中的行为
+# Running only -r Gateway: still includes dynamic (migrated from the legacy run_dynamic_tests behavior)
+./examples/test/scripts/integration/run_integration.sh -r Gateway
 
-集成测试中认证由框架自动处理，无需手动操作：
+# Narrow run (-r set to non-Gateway, e.g. -r EdgionPlugins): skips dynamic for faster iteration
 
-- Controller 启动时自动生成随机凭据，写入 `{WORK_DIR}/config/resources/Secret_edgion-system_edgion-admin-credentials.yaml`
-- `load_conf.sh` 调用 `edgion-cli` 时，`ensure_auth()` 自动通过 `EDGION_WORK_DIR` 找到配置 → 读取 Secret → 完成登录
-- `start_all_with_conf.sh` 导出 `EDGION_WORK_DIR`，使自动认证路径可达
-- CI/测试环境无需任何手动 `edgion-cli login` 步骤
+# List registered scenario ids
+./target/debug/examples/test_client --list-dynamic-scenarios
 
-### Center 无认证配置回归测试
+# Run a single scenario (after preserving the scene)
+./target/debug/examples/test_client -g --dynamic-scenario BasicAuthDynamic
+```
 
-`examples/test/scripts/integration/test_center_no_auth.sh` 是一个独立自包含的集成层回归，
-验证 Center 在无 `[local_auth]` + 无 `[auth]` 时：server 启动成功、`/health` 与
-`/api/v1/auth/status` 返回 200、`/api/v1/controllers` 等业务路径返回 503（fail-close）、
-启动日志包含 `No authentication configured` WARN。作为 fix #01 bug 1/4 + Task 4 fix 的
-结构性回归被纳入 `run_integration.sh` 的前置检查，不依赖 Controller/Gateway/test_server 环境。
+The final step of the full `run_integration.sh` flow enumerates the output of `--list-dynamic-scenarios` and invokes `--dynamic-scenario` one by one; each appears as `Dyn_<id>` in `report.log`.
 
-## 容易踩坑的地方
+### Current scenario set
 
-- YAML 在 `examples/test/conf/` 写了，但 `test_client.rs` 没注册，结果用例根本没跑到
-- 新增 item 忘了补 `suite_to_port_key()`，流量打到了错误 listener
-- `--gateway` 漏掉，导致本应走 gateway 的 suite 直接报错
-- 复用了旧测试证书，导致 SAN 不匹配
-- 运行时生成 Secret 在 `${WORK_DIR}/generated-secrets/`，却只盯着模板 YAML 看
-- 以为是 gateway bug，实际是 `test_server` 路径或端口不匹配
-- 直接改 `LinkSys` 或 K8s 场景，却没有切到对应 skill 文档
+| Scenario id | conf directory | Verifies |
+|-------------|----------|---------|
+| `GatewayDynamic` | `Gateway/DynamicTest/` | Gateway/HTTPRoute config changes (migrated case) |
+| `DslDynamic` | `EdgionPlugins/DslDynamic/DynamicTest/` | DSL plugin source switch v1→v2 |
+| `BasicAuthDynamic` | `EdgionPlugins/BasicAuth/DynamicTest/` | `secretRefs` list shrinks; bob credentials removed → 401 |
+| `RateLimitDynamic` | `EdgionPlugins/RateLimit/DynamicTest/` | `onMissingKey` switched from Allow to Deny |
 
-## 什么时候继续读别的文档
+### Where the framework lives
 
-- 要看 suite/resource/item 的具体映射： [references/integration-suite-map.md](references/integration-suite-map.md)
-- 要确认 `test_server` 端口、端点、OIDC/auth、mirror 能力： [references/test-server-capabilities.md](references/test-server-capabilities.md)
-- 要保留现场做手工排查： [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md)
-- 要跑 K8s 版本： [02-k8s-integration-testing.md](02-k8s-integration-testing.md)
-- 要跑 LinkSys： [03-link-sys-testing.md](03-link-sys-testing.md)
+- Framework code: `examples/code/client/dynamic/`
+  - `ctx.rs` — `ScenarioCtx`: composition operators `assert_phase`, `wait_phase`, `apply_dir`, `delete_resources`, `sleep` (the legacy `wait_resource_sync` method has been removed; the underlying `wait::wait_for_resource_sync` function and the `examples/code/validator/resource_diff` binary are kept as a setup-time sanity check)
+  - `scenario.rs` — `Scenario` struct + `PhaseSuite` phase→suite factory mapping
+  - `registry.rs` — explicit `all()` list (one line per new scenario)
+  - `scenarios/<id>.rs` — one file per scenario; the N-phase state machine is glued together with `ScenarioCtx`
+- Design doc: `docs/superpowers/specs/2026-04-25-plugin-dynamic-test-framework-design.md`
+- Implementation plan: `docs/superpowers/plans/2026-04-25-plugin-dynamic-test-framework.md`
+
+### Adding a dynamic scenario
+
+1. Write `initial/` + `updates/` YAML under `examples/test/conf/<Resource>/<Item>/DynamicTest/` (`load_conf.sh` automatically skips `updates/` and `delete/`)
+2. Write two phase suites in `examples/code/client/suites/<family>/dynamic.rs` (`<Name>InitialTestSuite` / `<Name>UpdateTestSuite`); re-export them via the family `mod.rs` to `suites::*`
+3. Add branches to the three dispatch tables in `test_client.rs`: `resolve_suite` (for aliases if needed), `suite_to_port_key`, `add_suites_for_suite` (selects a suite by `--phase`)
+4. Write the scenario in `examples/code/client/dynamic/scenarios/<id>.rs`; the `run` function chains the N phases in order: `assert_phase` (initial) → `apply_dir` / `delete_resources` (changes) → `wait_phase` (with timeout, until the final-state business assertions all pass). **Do not** rely on `sleep` as a fallback and **do not** use `wait_resource_sync` — the former is unreliable, and the latter is no longer exposed on ScenarioCtx
+5. Add `pub mod <id>;` to `dynamic/scenarios/mod.rs`
+6. Append `crate::dynamic::scenarios::<id>::SCENARIO` to `all()` in `dynamic/registry.rs`
+
+After that `--list-dynamic-scenarios` lists it automatically, and `run_integration.sh` (default) includes it under the full run or the `-r Gateway` path.
+
+### Manual phase-by-phase debugging
+
+A scenario internally schedules suites via `ctx.assert_phase(scenario, "initial"|"update")`. To bypass the orchestration manually, the legacy path is still available (after preserving the scene):
+
+```bash
+# Run only the initial-phase assertions
+./target/debug/examples/test_client -g -r <Resource> -i <Item> --phase initial
+# After manually applying updates/, run the update-phase assertions
+./target/debug/edgion-cli --server http://127.0.0.1:5800 \
+    apply -f examples/test/conf/<Resource>/<Item>/DynamicTest/updates/
+sleep 3
+./target/debug/examples/test_client -g -r <Resource> -i <Item> --phase update
+```
+
+The `--phase` argument is still effective (each dynamic dispatch routes to the corresponding suite by phase) and is the common entry point for investigating a phase's behavior inside a scenario.
+
+> Note: scenarios no longer use a fixed `sleep` for synchronization — see the `wait_phase` operator in the ScenarioCtx list above. For manual debugging, `sleep` is still acceptable since a human at the terminal can read the log to decide on the timeout.
+
+## Common investigation order
+
+1. First check `${WORK_DIR}/report.log` and `${WORK_DIR}/test_logs/<case>.log`
+2. Then check `${WORK_DIR}/logs/controller.log` and `${WORK_DIR}/logs/gateway.log`
+3. For plugin or routing-match issues, check the access log / `tls_access.log`
+4. If you suspect the configuration was not loaded, use `edgion-cli` or the admin API to query the controller/gateway's current resources
+5. If you suspect the test backend behaves wrong, go back to `test_server` ports and endpoint capabilities
+
+For detailed commands and log entry points see [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md).
+
+## Authentication behavior in integration tests
+
+In integration tests, authentication is handled by the framework automatically — no manual action is required:
+
+- The Controller generates random credentials at startup and writes them to `{WORK_DIR}/config/resources/Secret_edgion-system_edgion-admin-credentials.yaml`
+- When `load_conf.sh` invokes `edgion-cli`, `ensure_auth()` automatically locates the config via `EDGION_WORK_DIR` → reads the Secret → completes login
+- `start_all_with_conf.sh` exports `EDGION_WORK_DIR` so the auto-auth path is reachable
+- CI / test environments require no manual `edgion-cli login` step
+
+### Center no-auth-config regression test
+
+`examples/test/scripts/integration/test_center_no_auth.sh` is a self-contained integration-layer regression
+verifying that, with neither `[local_auth]` nor `[auth]` configured, the Center: starts successfully, returns 200 for `/health` and
+`/api/v1/auth/status`, returns 503 (fail-close) for business paths like `/api/v1/controllers`, and the startup log contains a
+`No authentication configured` WARN. It is included in the preflight of `run_integration.sh` as a structural regression for fix #01 bug 1/4 + Task 4 fix and does not depend on the Controller/Gateway/test_server environment.
+
+## Gateway / Controller reuse principle
+
+> Premise of integration-test design: **the same kind of tests reuse the same Gateway + Controller**. New suites are attached to the main `run_integration.sh` processes by default, and **must not** spawn their own `edgion-gateway` / `edgion-controller`.
+
+### Main flow
+
+`run_integration.sh` → `start_all_with_conf.sh` starts 1 Gateway + 1 Controller. All family suites (HTTPRoute / GRPCRoute / TCPRoute / UDPRoute / TLSRoute / EdgionPlugins / EdgionTls / Gateway / Status / LinkSys / dynamic scenarios) share the same processes; configuration changes are made online via `TestContext::apply_yaml()` / `delete_resource()` to drive Controller-to-Gateway sync without restarts.
+
+### Standalone-topology exceptions (legitimate)
+
+Only when a **completely different process-level configuration** is needed should a standalone start be used; each standalone scenario still starts only one set:
+
+| Script | Reason for standalone topology |
+|---|---|
+| `test_file_watcher.sh` | Controller FileSystem source (mutually exclusive with K8s mode) |
+| `test_resource_abnormal_metrics.sh` | Slow-test-only Controller `tick_secs=30` |
+| `test_center_no_auth.sh` | Center fail-close validation without auth (no Controller/Gateway) |
+| `run_center_test.sh` | 1 Center + 2 Controllers federation validation |
+| `run_center_mtls_test.sh` | Center federation mTLS + SPIFFE peer-identity binding (cert SAN ↔ controller_id), wrong-identity rejection, plaintext fail-close |
+| `run_conf_sync_mtls_test.sh` | Controller↔Gateway mTLS channel |
+| `run_acme_test.sh` | Standalone ACME topology |
+
+A new standalone script must include a header comment explaining "why the main environment cannot be reused"; otherwise the PR cannot be merged.
+
+### Antipatterns (signals that block reviewer approval)
+
+When a new suite / new script contains any of the following, the reviewer must block the merge and ask the author to either reuse the main process or be added to the exception list above:
+
+- `Command::new("edgion-gateway")` / `Command::new("./edgion-gateway")` / `spawn_gateway`-style calls
+- A new script under `examples/code/client/` or `examples/test/scripts/` (not in the exception list) calling `start_all` / `start_all_with_conf`
+- Repeatedly killing / restarting `edgion-gateway` within the same script (unless the test is specifically about Gateway restart behavior — even then only one restart cycle is allowed)
+
+Reasonable `Command::new` examples (do not block): invoking external tools like `openssl`, `docker`, `curl` to validate client-side protocols — they don't count as "starting Gateway".
+
+### CI safety net
+
+After startup, `run_integration.sh` does a self-check `pgrep -c edgion-gateway`; if it detects ≥ 2 `edgion-gateway` processes during the run it fails fast and exits (to prevent silent violations). If your new suite triggers this check, first see whether cleanup is missing or `Command::new("edgion-gateway")` is misused.
+
+## Common pitfalls
+
+- YAML written under `examples/test/conf/` but not registered in `test_client.rs` — the case never runs
+- New item missing in `suite_to_port_key()` — traffic hits the wrong listener
+- `--gateway` missing — a suite that should go through the gateway errors out
+- Reusing old test certificates — SAN mismatch
+- Runtime-generated Secrets are in `${WORK_DIR}/generated-secrets/` but you only inspect template YAML
+- Assuming a gateway bug when it's actually a `test_server` path or port mismatch
+- Modifying `LinkSys` or K8s scenarios directly without switching to the corresponding skill doc
+
+## When to read other docs
+
+- For specific suite/resource/item mappings: [references/integration-suite-map.md](references/integration-suite-map.md)
+- To verify `test_server` ports, endpoints, OIDC/auth, mirror capabilities: [references/test-server-capabilities.md](references/test-server-capabilities.md)
+- To preserve the scene for manual investigation: [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md)
+- To run the K8s version: [02-k8s-integration-testing.md](02-k8s-integration-testing.md)
+- To run LinkSys: [03-link-sys-testing.md](03-link-sys-testing.md)

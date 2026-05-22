@@ -7,7 +7,6 @@
 //! - `file_system::FileSystemConfig`: FileSystem-specific configuration
 //! - `kubernetes::KubernetesConfig`: Kubernetes-specific configuration
 
-use super::common::EndpointMode;
 use super::etcd::EtcdConfig;
 use super::file_system::FileSystemConfig;
 use super::kubernetes::KubernetesConfig;
@@ -25,7 +24,6 @@ use std::path::PathBuf;
 /// ```yaml
 /// type: file_system
 /// conf_dir: /etc/edgion/conf
-/// endpoint_mode: endpoint_slice
 /// ```
 ///
 /// ## Example (Kubernetes mode)
@@ -37,7 +35,6 @@ use std::path::PathBuf;
 ///   - default
 ///   - prod
 /// label_selector: app=edgion
-/// endpoint_mode: auto
 /// leader_election:
 ///   lease_name: edgion-controller-leader
 ///   lease_namespace: edgion-system
@@ -75,15 +72,6 @@ impl ConfCenterConfig {
     /// Check if running in Etcd mode
     pub fn is_etcd_mode(&self) -> bool {
         matches!(self, Self::Etcd(_))
-    }
-
-    /// Get the endpoint mode
-    pub fn endpoint_mode(&self) -> EndpointMode {
-        match self {
-            Self::FileSystem(config) => config.endpoint_mode(),
-            Self::Kubernetes(config) => config.endpoint_mode(),
-            Self::Etcd(config) => config.endpoint_mode(),
-        }
     }
 
     /// Get FileSystem config (if in FileSystem mode)
@@ -138,12 +126,11 @@ mod tests {
     fn test_file_system_config() {
         let config = ConfCenterConfig::FileSystem(FileSystemConfig {
             conf_dir: PathBuf::from("/etc/edgion/conf"),
-            endpoint_mode: EndpointMode::EndpointSlice,
+            poll_interval_ms: None,
         });
 
         assert!(!config.is_k8s_mode());
         assert_eq!(config.conf_dir(), Some(&PathBuf::from("/etc/edgion/conf")));
-        assert_eq!(config.endpoint_mode(), EndpointMode::EndpointSlice);
         assert!(config.as_file_system().is_some());
         assert!(config.as_kubernetes().is_none());
     }

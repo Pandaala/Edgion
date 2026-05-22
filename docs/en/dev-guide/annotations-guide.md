@@ -44,7 +44,7 @@ If the placement is wrong, the code path and the documentation usually drift wit
 |-----|----------|--------|
 | `edgion.io/edgion-stream-plugins` | `TCPRoute` / `TLSRoute` | Resolves an `EdgionStreamPlugins` reference |
 | `edgion.io/proxy-protocol` | `TLSRoute` | Current implementation recognizes `"v2"` |
-| `edgion.io/max-connect-retries` | `TLSRoute` | Max upstream connection attempts |
+| `edgion.io/max-connect-retries` | `TLSRoute` | Max upstream connection attempts; default 2, capped at 5 |
 | `edgion.io/expose-client-cert` | `EdgionTls` | Exposes mTLS client certificate info to the plugin/session layer |
 | `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | Active health-check YAML config (type: http/tcp/grpc) |
 

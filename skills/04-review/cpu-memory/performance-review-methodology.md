@@ -1,173 +1,178 @@
-# CPU/Memory 性能审计方法论
+---
+name: performance-review-methodology
+description: Use when evaluating CPU or memory audit findings; provides the general decision methodology (trace call chain, distinguish phases, verify mechanism) to avoid common false positives.
+---
 
-> 来源：2026-04 CPU/Memory Review 中误报率过高（49%）的问题复盘。本文提供**通用判定方法**，避免常见误报。
-> 具体场景请查阅同目录的 `not-a-performance-issue.md`。
+# CPU/Memory Performance Audit Methodology
+
+> Source: post-mortem of the high false-positive rate (49%) in the 2026-04 CPU/Memory review. This document provides **general decision methodology** to avoid common false positives.
+> For specific scenarios, see `not-a-performance-issue.md` in the same directory.
 
 ---
 
-## 核心原则
+## Core Principle
 
-**追溯调用链，区分阶段，验证机制**。
+**Trace the call chain, distinguish phases, verify the mechanism.**
 
-很多看似严重的性能问题，在代码实际执行路径中并不触发。
+Many seemingly serious performance problems are not actually triggered along the real execution paths in code.
 
 ---
 
-## 必须区分的关键阶段
+## Critical Phases That Must Be Distinguished
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  配置加载阶段 (冷路径)          请求处理阶段 (热路径)            │
-│  ─────────────────────          ─────────────────────            │
-│  • preparse() / compile()       • run_request() / handle()      │
-│  • from_yaml() / deserialize    • match_host() / route()        │
-│  • 资源创建 / 初始化            • 每个请求都会执行               │
-│                                                                  │
-│  Clone/Regex 编译在这里 → OK    Clone/Regex 编译在这里 → 问题   │
+│  Config-load phase (cold path)        Request-handling phase (hot path)  │
+│  ─────────────────────                ─────────────────────              │
+│  • preparse() / compile()             • run_request() / handle()         │
+│  • from_yaml() / deserialize          • match_host() / route()           │
+│  • Resource creation / init           • Executed for every request       │
+│                                                                          │
+│  Clone/Regex compile here → OK        Clone/Regex compile here → issue  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**验证问题是否在热路径**：
-1. 找到可疑代码的调用点
-2. 追溯调用链到入口函数
-3. 判断入口是配置变更触发还是每请求触发
+**To verify whether the issue is on the hot path**:
+1. Find the call sites of the suspicious code
+2. Trace the call chain back to the entry function
+3. Determine whether the entry is config-change-triggered or per-request-triggered
 
 ---
 
-## Rust 性能模式检查清单
+## Rust Performance Pattern Checklist
 
-### Arc 包装后 Clone 是 O(1)
+### Arc-Wrapped Clone is O(1)
 
 ```rust
-// ❌ 误报：看起来有 Clone 开销
-let config = self.plugin_config.clone();  // 如果是 Arc<T>，这只是引用计数+1
+// ❌ False positive: looks like Clone has overhead
+let config = self.plugin_config.clone();  // If Arc<T>, this is just refcount +1
 
-// 检查方法：查看类型定义
+// Verification: look at the type definition
 pub plugin_config: Arc<PluginRuntime>  // Arc Clone = O(1)
-pub plugin_config: PluginRuntime       // 值 Clone = O(n) ← 真问题
+pub plugin_config: PluginRuntime       // Value Clone = O(n) ← real issue
 ```
 
-### preparse 阶段的工作不会在热路径重复
+### Work Done in the preparse Phase Will Not Be Repeated on the Hot Path
 
-Edgion 的 `EdgionPlugins::preparse()` 负责在配置加载时预编译 Regex、预处理条件等。
+Edgion's `EdgionPlugins::preparse()` is responsible for precompiling regex, preprocessing conditions, etc. at config load time.
 
 ```rust
-// 常见模式
+// Common pattern
 impl Plugin {
     fn preparse(&mut self) {
         self.compiled_regex = Some(Regex::new(&self.pattern).unwrap());
     }
     
     fn handle_request(&self) {
-        // 使用 self.compiled_regex，不会重新编译
+        // Use self.compiled_regex; it will not be recompiled
     }
 }
 ```
 
-**检查要点**：
-- 搜索 `preparse`、`compile`、`compile_conditions` 方法
-- 确认 `#[serde(skip)]` 的运行时字段是否在初始化阶段设置
+**Key checks**:
+- Search for `preparse`, `compile`, `compile_conditions` methods
+- Confirm whether `#[serde(skip)]` runtime fields are set during the init phase
 
-### fallback 代码是防御性编程
+### Fallback Code is Defensive Programming
 
 ```rust
-// 这种代码通常不是性能问题
+// This kind of code is usually not a performance issue
 if self.compiled.is_none() {
-    // fallback：只在 preparse 失败时触发
+    // fallback: only triggered if preparse failed
     self.compiled = Some(compile_pattern(&self.pattern)?);
 }
 ```
 
-**判断方法**：检查正常流程中 `compiled` 是否已被 `preparse()` 设置。
+**Decision method**: check whether `compiled` has been set by `preparse()` in the normal flow.
 
 ---
 
-## 内存增长分析原则
+## Memory Growth Analysis Principles
 
-### 区分 "与规模成正比" vs "无限增长"
+### Distinguish "proportional to scale" vs "unbounded growth"
 
-| 场景 | 判断 |
+| Scenario | Verdict |
 |------|------|
-| HashMap 存储 K8s 资源状态 | ✅ 正常 — 与集群规模成正比 |
-| 每次请求都往 Vec push | ❌ 泄漏 — 无限增长 |
-| 离线节点保留历史数据 | ⚠️ 检查是否有清理机制 |
+| HashMap stores K8s resource state | ✅ Normal — proportional to cluster scale |
+| Push to Vec on every request | ❌ Leak — unbounded growth |
+| Offline node retains historical data | ⚠️ Check whether a cleanup mechanism exists |
 
-### 检查已有的清理机制
+### Check Existing Cleanup Mechanisms
 
-**必须搜索的关键词**：
+**Keywords to search**:
 - `remove` / `delete` / `clear` / `gc` / `cleanup`
 - `ttl` / `timeout` / `expire`
 - `max_entries` / `capacity` / `limit`
 - Admin API / DELETE endpoint
 
 ```rust
-// 示例：代码注释说明了设计决策
+// Example: code comment explains the design decision
 // Offline entries are retained in memory and must be removed explicitly via
 // the Admin DELETE API (see ticket #20).
 ```
 
-**如果找到清理机制** → 不是泄漏，是设计决策。
+**If a cleanup mechanism is found** → not a leak; it is a design decision.
 
 ---
 
-## 验证流程
+## Verification Flow
 
 ```
-发现可疑代码
+Find suspicious code
     ↓
-追溯调用链 → 找到入口函数
+Trace call chain → find entry function
     ↓
-是热路径？
-    ├─ 否 → ❌ 误报（冷路径）
-    └─ 是 → 检查 Arc/Box 包装
-                ├─ 有包装 → Clone O(1)？
-                │             ├─ 是 → ❌ 误报（Arc Clone）
-                │             └─ 否 → ✅ 确认问题
-                └─ 无包装 → ✅ 确认问题
+Hot path?
+    ├─ No → ❌ False positive (cold path)
+    └─ Yes → check Arc/Box wrapping
+                ├─ Wrapped → Clone O(1)?
+                │             ├─ Yes → ❌ False positive (Arc Clone)
+                │             └─ No → ✅ Confirmed issue
+                └─ Not wrapped → ✅ Confirmed issue
 ```
 
 ---
 
-## 常见误报模式
+## Common False-Positive Patterns
 
-| 看起来像问题 | 实际情况 | 检查方法 |
+| Looks like an issue | Reality | Verification method |
 |-------------|----------|----------|
-| `config.clone()` 在处理函数 | config 是 `Arc<T>` | 查看类型定义 |
-| `Regex::new()` 在 match 代码 | 有 `preparse()` 预编译 | 搜索 preparse 调用 |
-| HashMap 无限增长 | 存储当前状态快照 | 检查是否跟踪外部资源 |
-| 离线数据不清理 | 有 Admin DELETE API | 搜索 remove/delete 方法 |
-| 大枚举 Clone 开销 | 只在配置加载时 Clone | 追溯 Clone 调用链 |
-| 重复 Entry 类型结构体 | 类型安全，不影响运行时 | 确认是编译期还是运行时 |
+| `config.clone()` in handler | config is `Arc<T>` | Look at type definition |
+| `Regex::new()` in match code | `preparse()` does precompilation | Search for preparse calls |
+| HashMap grows unboundedly | Stores current state snapshot | Check whether external resources are tracked |
+| Offline data not cleaned up | Has Admin DELETE API | Search for remove/delete methods |
+| Large enum Clone overhead | Cloned only at config load | Trace Clone call chain |
+| Repeated Entry-type structs | Type safety, no runtime impact | Confirm whether compile-time or runtime |
 
 ---
 
-## 报告格式
+## Report Format
 
-对每个风险点，验证后的报告必须包含：
+For each risk point, the verified report must include:
 
 ```markdown
-### [风险点名称]
+### [Risk point name]
 
-**原始评级**: 🔴 高
-**验证结果**: ❌ 误报 / ✅ 确认 / ⚠️ 潜在
+**Original rating**: 🔴 High
+**Verification result**: ❌ False positive / ✅ Confirmed / ⚠️ Potential
 
-**调用链分析**:
-- 入口函数: `xxx`
-- 触发条件: 配置变更 / 每请求 / 定时任务
+**Call-chain analysis**:
+- Entry function: `xxx`
+- Trigger condition: config change / per-request / scheduled task
 
-**关键代码**:
-[代码片段]
+**Key code**:
+[Code snippet]
 
-**结论**: [原因说明]
+**Conclusion**: [Reason explanation]
 ```
 
 ---
 
-## Red Flags — 需要重新验证
+## Red Flags — Need Re-Verification
 
-如果 review 时出现这些想法，停下来重新验证：
+If these thoughts appear during a review, stop and re-verify:
 
-- "这个 Clone 肯定很昂贵" → 检查是否 Arc 包装
-- "每次请求都会编译 Regex" → 搜索 preparse/compile 方法
-- "这个 HashMap 会无限增长" → 检查是否跟踪外部资源状态
-- "没有看到清理代码" → 搜索 Admin API / gc / ttl
+- "This Clone must be expensive" → check whether Arc-wrapped
+- "Regex is compiled every request" → search for preparse/compile methods
+- "This HashMap grows unboundedly" → check whether external resource state is tracked
+- "No cleanup code seen" → search for Admin API / gc / ttl

@@ -2,38 +2,38 @@
 name: docker-build
 description: Use when building Edgion images with Docker, understanding the multi-stage build, cargo-chef caching, feature passing, or runtime-image layout.
 ---
-# Docker 编译
+# Docker Build
 
-用于回答这些问题：
+Use this skill to answer:
 
-- `docker/Dockerfile` 的多阶段构建到底怎么走
-- `cargo-chef` 缓存的是哪一层
-- 构建参数 `BINARY`、`BUILD_TYPE`、`FEATURES` 分别影响什么
-- 什么时候用 `docker/Dockerfile`，什么时候用 `docker/Dockerfile.runtime`
+- How the multi-stage build in `docker/Dockerfile` actually flows
+- What layer `cargo-chef` caches
+- What the build args `BINARY`, `BUILD_TYPE`, and `FEATURES` each affect
+- When to use `docker/Dockerfile` vs. `docker/Dockerfile.runtime`
 
-## 主要文件
+## Main files
 
 - `docker/Dockerfile`
 - `docker/Dockerfile.builder`
 - `docker/Dockerfile.runtime`
 
-## `docker/Dockerfile` 的 4 个阶段
+## The 4 stages of `docker/Dockerfile`
 
 ### 1. `chef`
 
-- 基础镜像：`rust:<version>-slim`
-- 安装 `cargo-chef`
-- 只负责提供 `cargo chef` 命令
+- Base image: `rust:<version>-slim`
+- Installs `cargo-chef`
+- Only responsible for providing the `cargo chef` command
 
 ### 2. `planner`
 
-- 复制 `Cargo.toml`、`Cargo.lock`、`src/lib.rs`、`src/bin`
-- 运行 `cargo chef prepare --recipe-path recipe.json`
-- 生成依赖配方，不编译业务代码
+- Copies `Cargo.toml`, `Cargo.lock`, `src/lib.rs`, `src/bin`
+- Runs `cargo chef prepare --recipe-path recipe.json`
+- Generates the dependency recipe; does not compile business code
 
 ### 3. `builder`
 
-- 安装构建依赖：
+- Installs build dependencies:
   - `g++`
   - `cmake`
   - `git`
@@ -41,33 +41,33 @@ description: Use when building Edgion images with Docker, understanding the mult
   - `perl`
   - `pkg-config`
   - `protobuf-compiler`
-- 先执行 `cargo chef cook --release --features "${FEATURES}" --recipe-path recipe.json`
-- 再复制完整源码并真正 `cargo build`
+- Runs `cargo chef cook --release --features "${FEATURES}" --recipe-path recipe.json` first
+- Then copies the full source and runs the actual `cargo build`
 
-缓存意义：
+Caching meaning:
 
-- 依赖没变时，`cargo chef cook` 这一层能复用
-- 这样业务代码改动不会每次都把整个依赖树重编一遍
+- When dependencies haven't changed, the `cargo chef cook` layer can be reused
+- This avoids rebuilding the entire dependency tree every time business code changes
 
 ### 4. `runtime`
 
-- 运行时镜像：`debian:trixie-slim`
-- 只安装 `ca-certificates` 和 `libssl3`
-- 创建非 root 用户 `edgion`
-- 拷贝最终二进制和默认配置
+- Runtime image: `debian:trixie-slim`
+- Installs only `ca-certificates` and `libssl3`
+- Creates a non-root user `edgion`
+- Copies the final binary and default configuration
 
-## 构建参数
+## Build arguments
 
-| 参数 | 默认值 | 作用 |
-|------|--------|------|
-| `RUST_VERSION` | `1.92` | Rust toolchain 版本 |
-| `BINARY` | `edgion-gateway` | 要构建的 bin 或 example 名称 |
-| `BUILD_TYPE` | `bin` | `bin` 或 `example` |
-| `FEATURES` | `default` | 传给 `cargo build` / `cargo chef cook` 的 Cargo features |
+| Argument | Default | Purpose |
+|----------|---------|---------|
+| `RUST_VERSION` | `1.92` | Rust toolchain version |
+| `BINARY` | `edgion-gateway` | Name of the bin or example to build |
+| `BUILD_TYPE` | `bin` | `bin` or `example` |
+| `FEATURES` | `default` | Cargo features passed to `cargo build` / `cargo chef cook` |
 
-## 常用命令
+## Common commands
 
-### 构建 bin 镜像
+### Build a bin image
 
 ```bash
 docker build \
@@ -76,7 +76,7 @@ docker build \
   -f docker/Dockerfile .
 ```
 
-### 构建 controller
+### Build the controller
 
 ```bash
 docker build \
@@ -85,7 +85,7 @@ docker build \
   -f docker/Dockerfile .
 ```
 
-### 构建 example
+### Build an example
 
 ```bash
 docker build \
@@ -95,7 +95,7 @@ docker build \
   -f docker/Dockerfile .
 ```
 
-### 切换 features
+### Switch features
 
 ```bash
 docker build \
@@ -105,27 +105,27 @@ docker build \
   -f docker/Dockerfile .
 ```
 
-## `docker/Dockerfile.runtime` 什么时候用
+## When to use `docker/Dockerfile.runtime`
 
-这个文件不是源码编译镜像，而是“把已经编好的产物打包成运行时镜像”。
+This file is not a source-build image; it "packages an already-built artifact into a runtime image".
 
-适合：
+Suitable for:
 
-- CI 已经提前交叉编译好了二进制
-- 只想快速打 runtime image
-- 本地已有 `target/release` 产物，不想再在 Docker 里重新编译
+- CI has already cross-compiled the binary
+- You only want to quickly produce a runtime image
+- You already have `target/release` artifacts locally and don't want to rebuild inside Docker
 
-关键参数：
+Key arguments:
 
-| 参数 | 作用 |
-|------|------|
-| `BINARY` | `gateway` / `controller` 或 example 名 |
-| `BUILD_TYPE` | `bin` 或 `example` |
-| `BINARY_PATH` | 预编译产物目录 |
-| `RUNTIME_BASE` | 运行时基础镜像，默认 `ubuntu:24.04` |
-| `EXTRA_PACKAGES` | 额外运行时 apt 包 |
+| Argument | Purpose |
+|----------|---------|
+| `BINARY` | `gateway` / `controller` or example name |
+| `BUILD_TYPE` | `bin` or `example` |
+| `BINARY_PATH` | Pre-built artifact directory |
+| `RUNTIME_BASE` | Runtime base image, defaults to `ubuntu:24.04` |
+| `EXTRA_PACKAGES` | Extra runtime apt packages |
 
-示例：
+Example:
 
 ```bash
 docker build \
@@ -136,15 +136,15 @@ docker build \
   -t edgion/edgion-gateway:runtime-local .
 ```
 
-## 多架构与 builder 镜像
+## Multi-architecture and the builder image
 
-`docker/Dockerfile.builder` 是单独的“构建环境镜像”，更适合：
+`docker/Dockerfile.builder` is a standalone "build environment image", more suitable for:
 
-- 从任意宿主机编 Linux 目标
-- 多架构编译实验
-- 不想把完整源码构建过程塞进最终业务镜像
+- Building Linux targets from any host
+- Multi-architecture build experiments
+- Avoiding embedding the full source-build process into the final business image
 
-示例思路：
+Example approach:
 
 ```bash
 docker build --platform linux/arm64 -t edgion-builder -f docker/Dockerfile.builder .
@@ -152,16 +152,16 @@ docker run --rm --platform linux/arm64 -v "$(pwd)":/project edgion-builder \
   cargo build --release --target aarch64-unknown-linux-gnu
 ```
 
-## 最常见的误区
+## Most common misconceptions
 
-| 误区 | 更准确的说法 |
-|------|--------------|
-| `cargo-chef` 会缓存所有源码编译 | 它主要缓存“依赖层”，源码改动后的最终 build 仍会执行 |
-| `FEATURES` 只影响最终 `cargo build` | 它同样影响 `cargo chef cook` 依赖缓存层 |
-| `Dockerfile.runtime` 可以直接从源码编译 | 不能，它依赖预编译产物目录 |
-| example 构建也会自动带 `edgion-cli` | `BUILD_TYPE=example` 时不会打包 `edgion-cli` |
+| Misconception | More accurate version |
+|---------------|------------------------|
+| `cargo-chef` caches the entire source build | It mainly caches the "dependency layer"; the final build after source changes still runs |
+| `FEATURES` only affects the final `cargo build` | It also affects the `cargo chef cook` dependency-cache layer |
+| `Dockerfile.runtime` can compile from source | It cannot; it depends on a pre-built artifact directory |
+| Example builds also automatically include `edgion-cli` | When `BUILD_TYPE=example`, `edgion-cli` is not packaged |
 
-## 相关
+## Related
 
 - [00-local-build.md](00-local-build.md)
 - [../../02-features/01-binary-and-deployment/02-feature-flags.md](../../02-features/01-binary-and-deployment/02-feature-flags.md)

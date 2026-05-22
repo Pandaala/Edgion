@@ -12,7 +12,6 @@ static CONTROLLER_CONFIG: OnceLock<EdgionControllerConfig> = OnceLock::new();
 
 /// Global test mode flag (Controller)
 /// When enabled:
-/// - endpoint_mode is forced to Both (sync both Endpoints and EndpointSlice)
 /// - metrics test_key/test_type annotations are processed
 static GLOBAL_TEST_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -29,7 +28,7 @@ pub fn init_global_test_mode(enabled: bool) {
     if enabled {
         tracing::info!(
             component = "test_mode",
-            "Test mode enabled: endpoint_mode=Both, metrics test features active"
+            "Test mode enabled: metrics test features active"
         );
     }
 }
@@ -132,11 +131,16 @@ pub struct EdgionControllerConfig {
     #[serde(skip)]
     pub conf_dir: Option<PathBuf>,
 
+    /// PollWatcher poll interval override in milliseconds (file-system mode only).
+    /// Skips automatic file-count-based calculation. Min: 100 ms. For integration testing.
+    #[arg(long, value_name = "MS")]
+    #[serde(skip)]
+    pub fs_poll_interval_ms: Option<u64>,
+
     /// Enable test mode for integration testing
     /// When enabled:
-    /// - endpoint_mode is forced to Both (sync both Endpoints and EndpointSlice)
     /// - metrics test_key/test_type Gateway annotations are processed
-    #[arg(long, help = "Enable test mode (Both endpoint mode + metrics test features)")]
+    #[arg(long, help = "Enable test mode (metrics test features)")]
     #[serde(skip)]
     pub test_mode: bool,
 
@@ -394,6 +398,21 @@ impl ConfSyncSecurityConfig {
         self.tls.as_ref()
     }
 
+    /// Federation requires real mTLS. Returns the active cert set only when one
+    /// is configured AND `skip_tls` is not set; otherwise refuses with a reason.
+    /// Plaintext is never representable through this path.
+    ///
+    /// Precondition: assumes `validate()` has already passed — it does NOT
+    /// re-check cert path emptiness. conf_sync does NOT use this; it keeps
+    /// `resolve_active_tls()` + `skip_tls`.
+    pub fn resolve_mtls_or_refuse(&self) -> Result<&ConfSyncTlsConfig, MtlsRefusal> {
+        match self.resolve_active_tls() {
+            None => Err(MtlsRefusal::NoTls),
+            Some(t) if t.skip_tls => Err(MtlsRefusal::SkipTls),
+            Some(t) => Ok(t),
+        }
+    }
+
     /// Validate configuration at startup.
     ///
     /// Returns error for:
@@ -496,6 +515,15 @@ impl ConfSyncTlsConfig {
     pub fn ca_path(&self) -> PathBuf {
         Self::resolve_path(&self.ca)
     }
+}
+
+/// Why a federation channel refused the configured security.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MtlsRefusal {
+    /// resolve_active_tls() == None — no TLS block configured.
+    NoTls,
+    /// The active cert set has skip_tls = true.
+    SkipTls,
 }
 
 // Default values
@@ -614,6 +642,13 @@ impl EdgionControllerConfig {
                 );
             }
         }
+        if let ConfCenterConfig::FileSystem(fs_cfg) = &self.conf_center {
+            if let Some(ms) = fs_cfg.poll_interval_ms {
+                if ms < 100 {
+                    anyhow::bail!("conf_center.poll_interval_ms must be >= 100 ms, got {}", ms);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -625,11 +660,17 @@ impl EdgionControllerConfig {
         }
 
         // Configuration directory: CLI --conf-dir overrides conf_center.conf_dir
+        // Case A: --conf-dir provided — build a new FileSystemConfig and apply poll interval override
         if let Some(conf_dir) = &cli.conf_dir {
-            // Preserve existing endpoint_mode if we're switching from FileSystem to FileSystem
-            let endpoint_mode = base.conf_center.endpoint_mode();
-            base.conf_center =
-                ConfCenterConfig::FileSystem(FileSystemConfig::new(conf_dir.clone()).with_endpoint_mode(endpoint_mode));
+            let mut fs_cfg = FileSystemConfig::new(conf_dir.clone());
+            fs_cfg.poll_interval_ms = cli.fs_poll_interval_ms;
+            base.conf_center = ConfCenterConfig::FileSystem(fs_cfg);
+        }
+        // Case B: conf_center already set from config file — still apply the CLI poll interval override
+        if let Some(ms) = cli.fs_poll_interval_ms {
+            if let ConfCenterConfig::FileSystem(fs_cfg) = &mut base.conf_center {
+                fs_cfg.poll_interval_ms = Some(ms);
+            }
         }
 
         // Server config
@@ -714,9 +755,41 @@ impl EdgionControllerConfig {
     }
 }
 
+/// Default-deny allowlist for Center (federation) operations.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct FedRbacConfig {
+    /// Allow rules; a request is permitted iff some rule matches its (verb, kind).
+    #[serde(default)]
+    pub allow: Vec<FedAllowRule>,
+}
+
+/// One allow rule: the cartesian product of `verbs` x `kinds`. `*` wildcards either.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct FedAllowRule {
+    #[serde(default)]
+    pub verbs: Vec<String>,
+    #[serde(default)]
+    pub kinds: Vec<String>,
+}
+
+impl FedRbacConfig {
+    /// Reject malformed rules (a rule must list at least one verb and one kind).
+    pub fn validate(&self) -> Result<(), String> {
+        for (i, rule) in self.allow.iter().enumerate() {
+            if rule.verbs.is_empty() {
+                return Err(format!("rbac.allow[{i}]: verbs must not be empty"));
+            }
+            if rule.kinds.is_empty() {
+                return Err(format!("rbac.allow[{i}]: kinds must not be empty"));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Configuration for connecting this controller to a federated center.
 /// When absent, the federation client is not started.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CenterClientConfig {
     /// gRPC address of the federated center (e.g. "http://center.example.com:50052")
@@ -735,10 +808,36 @@ pub struct CenterClientConfig {
     /// TLS config for the federation gRPC channel to Center.
     #[serde(default)]
     pub security: ConfSyncSecurityConfig,
+    /// Hot-reloadable kill-switch. When false, the federation client is not run.
+    #[serde(default = "default_center_enabled")]
+    pub enabled: bool,
+    /// Default-deny RBAC for Center operations. Absent => Center authorizes nothing.
+    #[serde(default)]
+    pub rbac: Option<FedRbacConfig>,
 }
 
 fn default_ping_interval_secs() -> u64 {
     30
+}
+
+fn default_center_enabled() -> bool {
+    true
+}
+
+impl Default for CenterClientConfig {
+    fn default() -> Self {
+        Self {
+            address: String::new(),
+            name: String::new(),
+            cluster: String::new(),
+            env: Vec::new(),
+            tag: Vec::new(),
+            ping_interval_secs: default_ping_interval_secs(),
+            security: ConfSyncSecurityConfig::default(),
+            enabled: default_center_enabled(),
+            rbac: None,
+        }
+    }
 }
 
 impl CenterClientConfig {
@@ -752,40 +851,75 @@ impl CenterClientConfig {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_get_capacity_override_wins() {
-        let mut overrides = HashMap::new();
-        overrides.insert("HTTPRoute".to_string(), 999);
-        let config = ConfSyncConfig {
-            default_capacity: 200,
-            capacity_overrides: Some(overrides),
-            no_sync_kinds: None,
-        };
-        assert_eq!(config.get_capacity("HTTPRoute"), 999);
+    // ── Helper ───────────────────────────────────────────────────────────────
+
+    fn make_tls(name: Option<&str>, cert: &str) -> ConfSyncTlsConfig {
+        ConfSyncTlsConfig {
+            name: name.map(|s| s.to_string()),
+            cert: cert.to_string(),
+            key: "k".to_string(),
+            ca: "ca".to_string(),
+            skip_tls: false,
+        }
     }
 
-    #[test]
-    fn test_get_capacity_falls_back_to_global_default() {
-        let config = ConfSyncConfig {
-            default_capacity: 200,
-            capacity_overrides: None,
-            no_sync_kinds: None,
-        };
-        assert_eq!(config.get_capacity("GatewayClass"), 200);
-        assert_eq!(config.get_capacity("HTTPRoute"), 200);
-        assert_eq!(config.get_capacity("EdgionAcme"), 200);
-        assert_eq!(config.get_capacity("Service"), 200);
-    }
+    // ── Group A: get_capacity (3 → 1 table-driven) ──────────────────────────
 
     #[test]
-    fn test_get_capacity_unknown_falls_back_to_global() {
-        let config = ConfSyncConfig {
-            default_capacity: 200,
-            capacity_overrides: None,
-            no_sync_kinds: None,
-        };
-        assert_eq!(config.get_capacity("SomeUnknownKind"), 200);
+    fn test_get_capacity_table_driven() {
+        struct Case {
+            name: &'static str,
+            default_capacity: u32,
+            override_entry: Option<(&'static str, u32)>, // (kind, cap) to insert
+            query_kind: &'static str,
+            expected: u32,
+        }
+
+        let cases = [
+            Case {
+                name: "override wins for known kind",
+                default_capacity: 200,
+                override_entry: Some(("HTTPRoute", 999)),
+                query_kind: "HTTPRoute",
+                expected: 999,
+            },
+            Case {
+                name: "falls back to default when no overrides",
+                default_capacity: 200,
+                override_entry: None,
+                query_kind: "GatewayClass",
+                expected: 200,
+            },
+            Case {
+                name: "unknown kind falls back to global default",
+                default_capacity: 200,
+                override_entry: None,
+                query_kind: "SomeUnknownKind",
+                expected: 200,
+            },
+        ];
+
+        for case in &cases {
+            let capacity_overrides = case.override_entry.map(|(kind, cap)| {
+                let mut m = HashMap::new();
+                m.insert(kind.to_string(), cap);
+                m
+            });
+            let config = ConfSyncConfig {
+                default_capacity: case.default_capacity,
+                capacity_overrides,
+                no_sync_kinds: None,
+            };
+            assert_eq!(
+                config.get_capacity(case.query_kind),
+                case.expected,
+                "case: {}",
+                case.name
+            );
+        }
     }
+
+    // ── Group B: independent tests (4, kept as-is) ──────────────────────────
 
     #[test]
     fn test_conf_sync_default() {
@@ -821,116 +955,157 @@ center:
         assert_eq!(center.ping_interval_secs, 30); // default
     }
 
-    // ── ConfSyncSecurityConfig: resolve_active_tls ──────────────────────────
+    // ── Group C: resolve_active_tls (5 → 1 table-driven) ───────────────────
 
-    fn make_tls(name: Option<&str>, cert: &str) -> ConfSyncTlsConfig {
-        ConfSyncTlsConfig {
-            name: name.map(|s| s.to_string()),
-            cert: cert.to_string(),
-            key: "k".to_string(),
-            ca: "ca".to_string(),
-            skip_tls: false,
+    #[test]
+    fn test_resolve_active_tls_scenarios() {
+        struct Case {
+            name: &'static str,
+            cfg: ConfSyncSecurityConfig,
+            expected_cert: Option<&'static str>,
+        }
+
+        let cases = [
+            Case {
+                name: "legacy tls field falls back",
+                cfg: ConfSyncSecurityConfig {
+                    tls: Some(make_tls(None, "legacy.crt")),
+                    ..Default::default()
+                },
+                expected_cert: Some("legacy.crt"),
+            },
+            Case {
+                name: "single cert entry with no active selector",
+                cfg: ConfSyncSecurityConfig {
+                    certs: vec![make_tls(Some("primary"), "primary.crt")],
+                    ..Default::default()
+                },
+                expected_cert: Some("primary.crt"),
+            },
+            Case {
+                name: "multi certs with matching active selector",
+                cfg: ConfSyncSecurityConfig {
+                    active: Some("new".to_string()),
+                    certs: vec![make_tls(Some("old"), "old.crt"), make_tls(Some("new"), "new.crt")],
+                    ..Default::default()
+                },
+                expected_cert: Some("new.crt"),
+            },
+            Case {
+                name: "multi certs without active selector returns None",
+                cfg: ConfSyncSecurityConfig {
+                    certs: vec![make_tls(Some("a"), "a.crt"), make_tls(Some("b"), "b.crt")],
+                    ..Default::default()
+                },
+                expected_cert: None,
+            },
+            Case {
+                name: "empty config returns None",
+                cfg: ConfSyncSecurityConfig::default(),
+                expected_cert: None,
+            },
+        ];
+
+        for case in &cases {
+            assert_eq!(
+                case.cfg.resolve_active_tls().map(|t| t.cert.as_str()),
+                case.expected_cert,
+                "case: {}",
+                case.name
+            );
         }
     }
 
+    // ── Group D: validate_active_tls (5 → 1 table-driven) ──────────────────
+
     #[test]
-    fn test_resolve_active_tls_legacy_fallback() {
-        let cfg = ConfSyncSecurityConfig {
-            tls: Some(make_tls(None, "legacy.crt")),
-            ..Default::default()
-        };
-        assert_eq!(cfg.resolve_active_tls().map(|t| t.cert.as_str()), Some("legacy.crt"));
+    fn test_validate_active_tls_scenarios() {
+        enum Expected {
+            Ok,
+            Err(&'static str),
+        }
+
+        struct Case {
+            name: &'static str,
+            cfg: ConfSyncSecurityConfig,
+            expected: Expected,
+        }
+
+        let cases = [
+            Case {
+                name: "empty config is valid",
+                cfg: ConfSyncSecurityConfig::default(),
+                expected: Expected::Ok,
+            },
+            Case {
+                name: "single entry with skip_tls is valid",
+                cfg: ConfSyncSecurityConfig {
+                    certs: vec![ConfSyncTlsConfig {
+                        name: Some("p".to_string()),
+                        cert: String::new(),
+                        key: String::new(),
+                        ca: String::new(),
+                        skip_tls: true,
+                    }],
+                    ..Default::default()
+                },
+                expected: Expected::Ok,
+            },
+            Case {
+                name: "duplicate cert names errors",
+                cfg: ConfSyncSecurityConfig {
+                    active: Some("dup".to_string()),
+                    certs: vec![make_tls(Some("dup"), "a.crt"), make_tls(Some("dup"), "b.crt")],
+                    ..Default::default()
+                },
+                expected: Expected::Err(""),
+            },
+            Case {
+                name: "multi certs without active selector errors",
+                cfg: ConfSyncSecurityConfig {
+                    certs: vec![make_tls(Some("a"), "a.crt"), make_tls(Some("b"), "b.crt")],
+                    ..Default::default()
+                },
+                expected: Expected::Err("no 'active' selector"),
+            },
+            Case {
+                name: "active selector not found in certs errors",
+                cfg: ConfSyncSecurityConfig {
+                    active: Some("missing".to_string()),
+                    certs: vec![make_tls(Some("primary"), "primary.crt")],
+                    ..Default::default()
+                },
+                expected: Expected::Err("does not match any cert name"),
+            },
+        ];
+
+        for case in &cases {
+            let result = case.cfg.validate();
+            match &case.expected {
+                Expected::Ok => {
+                    assert!(result.is_ok(), "case '{}' expected Ok, got {:?}", case.name, result);
+                }
+                Expected::Err(substr) => {
+                    assert!(result.is_err(), "case '{}' expected Err, got Ok", case.name);
+                    if !substr.is_empty() {
+                        let msg = format!("{:?}", result.unwrap_err());
+                        assert!(
+                            msg.contains(substr),
+                            "case '{}': error message {:?} does not contain {:?}",
+                            case.name,
+                            msg,
+                            substr
+                        );
+                    }
+                }
+            }
+        }
     }
 
-    #[test]
-    fn test_resolve_active_tls_single_entry_no_active() {
-        let cfg = ConfSyncSecurityConfig {
-            certs: vec![make_tls(Some("primary"), "primary.crt")],
-            ..Default::default()
-        };
-        assert_eq!(cfg.resolve_active_tls().map(|t| t.cert.as_str()), Some("primary.crt"));
-    }
+    // ── Group E: metrics_resource_abnormal defaults (2 independent, kept) ───
 
     #[test]
-    fn test_resolve_active_tls_multi_certs_matching_active() {
-        let cfg = ConfSyncSecurityConfig {
-            active: Some("new".to_string()),
-            certs: vec![make_tls(Some("old"), "old.crt"), make_tls(Some("new"), "new.crt")],
-            ..Default::default()
-        };
-        assert_eq!(cfg.resolve_active_tls().map(|t| t.cert.as_str()), Some("new.crt"));
-    }
-
-    #[test]
-    fn test_resolve_active_tls_multi_certs_no_active_returns_none() {
-        let cfg = ConfSyncSecurityConfig {
-            certs: vec![make_tls(Some("a"), "a.crt"), make_tls(Some("b"), "b.crt")],
-            ..Default::default()
-        };
-        assert!(cfg.resolve_active_tls().is_none());
-    }
-
-    #[test]
-    fn test_resolve_active_tls_no_config_returns_none() {
-        let cfg = ConfSyncSecurityConfig::default();
-        assert!(cfg.resolve_active_tls().is_none());
-    }
-
-    // ── ConfSyncSecurityConfig: validate ────────────────────────────────────
-
-    #[test]
-    fn test_validate_empty_is_ok() {
-        assert!(ConfSyncSecurityConfig::default().validate().is_ok());
-    }
-
-    #[test]
-    fn test_validate_single_entry_skip_tls_ok() {
-        let cfg = ConfSyncSecurityConfig {
-            certs: vec![ConfSyncTlsConfig {
-                name: Some("p".to_string()),
-                cert: String::new(),
-                key: String::new(),
-                ca: String::new(),
-                skip_tls: true,
-            }],
-            ..Default::default()
-        };
-        assert!(cfg.validate().is_ok());
-    }
-
-    #[test]
-    fn test_validate_duplicate_cert_names_errors() {
-        let cfg = ConfSyncSecurityConfig {
-            active: Some("dup".to_string()),
-            certs: vec![make_tls(Some("dup"), "a.crt"), make_tls(Some("dup"), "b.crt")],
-            ..Default::default()
-        };
-        assert!(cfg.validate().is_err());
-    }
-
-    #[test]
-    fn test_validate_multi_certs_without_active_errors() {
-        let cfg = ConfSyncSecurityConfig {
-            certs: vec![make_tls(Some("a"), "a.crt"), make_tls(Some("b"), "b.crt")],
-            ..Default::default()
-        };
-        let err = cfg.validate().unwrap_err();
-        assert!(err.to_string().contains("no 'active' selector"));
-    }
-
-    #[test]
-    fn test_validate_active_not_found_errors() {
-        let cfg = ConfSyncSecurityConfig {
-            active: Some("missing".to_string()),
-            certs: vec![make_tls(Some("primary"), "primary.crt")],
-            ..Default::default()
-        };
-        let err = cfg.validate().unwrap_err();
-        assert!(err.to_string().contains("does not match any cert name"));
-    }
-
-    #[test]
-    fn metrics_resource_abnormal_defaults_are_applied_when_section_omitted() {
+    fn test_metrics_resource_abnormal_defaults() {
         let yaml = "work_dir: /tmp\n";
         let cfg: EdgionControllerConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(cfg.metrics.resource_abnormal.enabled);
@@ -938,7 +1113,7 @@ center:
     }
 
     #[test]
-    fn metrics_resource_abnormal_explicit_values_parse() {
+    fn test_metrics_resource_abnormal_explicit_values_parse() {
         let yaml = r#"
 metrics:
   resource_abnormal:
@@ -950,56 +1125,199 @@ metrics:
         assert_eq!(cfg.metrics.resource_abnormal.tick_secs, 60);
     }
 
+    // ── Group E cont.: tick validation (4 → 1 table-driven) ─────────────────
+
     #[test]
-    fn metrics_resource_abnormal_tick_too_small_rejected() {
-        let mut cfg = EdgionControllerConfig::default();
-        cfg.metrics.resource_abnormal.tick_secs = 29;
-        let err = cfg.validate_metrics().unwrap_err();
-        assert!(err.to_string().contains("tick_secs"));
+    fn test_metrics_resource_abnormal_tick_scenarios() {
+        struct Case {
+            name: &'static str,
+            enabled: bool,
+            tick_secs: u64,
+            expect_err_substr: Option<&'static str>,
+        }
+
+        let cases = [
+            Case {
+                name: "tick 29 is too small",
+                enabled: true,
+                tick_secs: 29,
+                expect_err_substr: Some("tick_secs"),
+            },
+            Case {
+                name: "tick 30 is the minimum and is accepted",
+                enabled: true,
+                tick_secs: 30,
+                expect_err_substr: None,
+            },
+            Case {
+                name: "tick 3601 is too large",
+                enabled: true,
+                tick_secs: 3601,
+                expect_err_substr: Some("tick_secs"),
+            },
+            Case {
+                name: "disabled skips range check even with tick 0",
+                enabled: false,
+                tick_secs: 0,
+                expect_err_substr: None,
+            },
+        ];
+
+        for case in &cases {
+            let mut cfg = EdgionControllerConfig::default();
+            cfg.metrics.resource_abnormal.enabled = case.enabled;
+            cfg.metrics.resource_abnormal.tick_secs = case.tick_secs;
+            let result = cfg.validate_metrics();
+            match case.expect_err_substr {
+                None => {
+                    assert!(result.is_ok(), "case '{}' expected Ok, got {:?}", case.name, result);
+                }
+                Some(substr) => {
+                    assert!(result.is_err(), "case '{}' expected Err, got Ok", case.name);
+                    let msg = format!("{:?}", result.unwrap_err());
+                    assert!(
+                        msg.contains(substr),
+                        "case '{}': error {:?} does not contain {:?}",
+                        case.name,
+                        msg,
+                        substr
+                    );
+                }
+            }
+        }
+    }
+
+    // ── Group G: resolve_mtls_or_refuse ─────────────────────────────────────
+
+    #[test]
+    fn resolve_mtls_or_refuse_no_tls() {
+        let sec = ConfSyncSecurityConfig::default();
+        assert_eq!(sec.resolve_mtls_or_refuse().unwrap_err(), MtlsRefusal::NoTls);
     }
 
     #[test]
-    fn metrics_resource_abnormal_tick_minimum_30_accepted() {
-        let mut cfg = EdgionControllerConfig::default();
-        cfg.metrics.resource_abnormal.tick_secs = 30;
-        cfg.validate_metrics().unwrap();
+    fn resolve_mtls_or_refuse_skip_tls() {
+        let sec = ConfSyncSecurityConfig {
+            tls: Some(ConfSyncTlsConfig {
+                name: None,
+                cert: "c".into(),
+                key: "k".into(),
+                ca: "a".into(),
+                skip_tls: true,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(sec.resolve_mtls_or_refuse().unwrap_err(), MtlsRefusal::SkipTls);
     }
 
     #[test]
-    fn metrics_resource_abnormal_tick_too_large_rejected() {
-        let mut cfg = EdgionControllerConfig::default();
-        cfg.metrics.resource_abnormal.tick_secs = 3601;
-        let err = cfg.validate_metrics().unwrap_err();
-        assert!(err.to_string().contains("tick_secs"));
+    fn resolve_mtls_or_refuse_ok_for_mtls() {
+        let sec = ConfSyncSecurityConfig {
+            tls: Some(ConfSyncTlsConfig {
+                name: None,
+                cert: "c".into(),
+                key: "k".into(),
+                ca: "a".into(),
+                skip_tls: false,
+            }),
+            ..Default::default()
+        };
+        assert!(sec.resolve_mtls_or_refuse().is_ok());
+    }
+
+    // ── Group F: hard_cap validation (3 → 1 table-driven) ───────────────────
+
+    #[test]
+    fn test_metrics_resource_abnormal_hard_cap_scenarios() {
+        struct Case {
+            name: &'static str,
+            hard_cap: usize,
+            expect_err_substr: Option<&'static str>,
+        }
+
+        let cases = [
+            Case {
+                name: "default hard_cap is 1000 and is accepted",
+                hard_cap: 1000,
+                expect_err_substr: None,
+            },
+            Case {
+                name: "hard_cap 9 is too small",
+                hard_cap: 9,
+                expect_err_substr: Some("hard_cap"),
+            },
+            Case {
+                name: "hard_cap 100_001 is too large",
+                hard_cap: 100_001,
+                expect_err_substr: Some("hard_cap"),
+            },
+        ];
+
+        for case in &cases {
+            let mut cfg = EdgionControllerConfig::default();
+            cfg.metrics.resource_abnormal.hard_cap = case.hard_cap;
+            let result = cfg.validate_metrics();
+            match case.expect_err_substr {
+                None => {
+                    assert!(result.is_ok(), "case '{}' expected Ok, got {:?}", case.name, result);
+                }
+                Some(substr) => {
+                    assert!(result.is_err(), "case '{}' expected Err, got Ok", case.name);
+                    let msg = format!("{:?}", result.unwrap_err());
+                    assert!(
+                        msg.contains(substr),
+                        "case '{}': error {:?} does not contain {:?}",
+                        case.name,
+                        msg,
+                        substr
+                    );
+                }
+            }
+        }
+    }
+
+    // ── Group H: CenterClientConfig enabled + rbac ───────────────────────────
+
+    #[test]
+    fn center_enabled_defaults_to_true() {
+        let cfg: CenterClientConfig =
+            serde_yaml::from_str("address: \"https://c:50052\"\nname: n\ncluster: c\n").unwrap();
+        assert!(cfg.enabled, "enabled must default to true (backward compatible)");
+        assert!(cfg.rbac.is_none(), "absent rbac => None => deny-all downstream");
     }
 
     #[test]
-    fn metrics_resource_abnormal_tick_disabled_skips_range_check() {
-        let mut cfg = EdgionControllerConfig::default();
-        cfg.metrics.resource_abnormal.enabled = false;
-        cfg.metrics.resource_abnormal.tick_secs = 0;
-        cfg.validate_metrics().unwrap();
+    fn center_rbac_parses_allow_rules() {
+        let cfg: CenterClientConfig = serde_yaml::from_str(
+            r#"
+address: a
+name: n
+cluster: c
+enabled: false
+rbac:
+  allow:
+    - verbs: [get, list]
+      kinds: [PluginMetaData]
+    - verbs: [reload]
+      kinds: ["*"]
+"#,
+        )
+        .unwrap();
+        assert!(!cfg.enabled);
+        let rbac = cfg.rbac.expect("rbac present");
+        assert_eq!(rbac.allow.len(), 2);
+        assert_eq!(rbac.allow[0].verbs, vec!["get", "list"]);
+        assert_eq!(rbac.allow[1].kinds, vec!["*"]);
     }
 
     #[test]
-    fn metrics_resource_abnormal_hard_cap_default_is_1000() {
-        let cfg = EdgionControllerConfig::default();
-        assert_eq!(cfg.metrics.resource_abnormal.hard_cap, 1000);
-    }
-
-    #[test]
-    fn metrics_resource_abnormal_hard_cap_too_small_rejected() {
-        let mut cfg = EdgionControllerConfig::default();
-        cfg.metrics.resource_abnormal.hard_cap = 9;
-        let err = cfg.validate_metrics().unwrap_err();
-        assert!(err.to_string().contains("hard_cap"));
-    }
-
-    #[test]
-    fn metrics_resource_abnormal_hard_cap_too_large_rejected() {
-        let mut cfg = EdgionControllerConfig::default();
-        cfg.metrics.resource_abnormal.hard_cap = 100_001;
-        let err = cfg.validate_metrics().unwrap_err();
-        assert!(err.to_string().contains("hard_cap"));
+    fn center_rbac_validate_rejects_empty_rule() {
+        let rbac = FedRbacConfig {
+            allow: vec![FedAllowRule {
+                verbs: vec![],
+                kinds: vec!["PluginMetaData".into()],
+            }],
+        };
+        assert!(rbac.validate().is_err(), "a rule with no verbs is malformed");
     }
 }

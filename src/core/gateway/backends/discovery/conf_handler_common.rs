@@ -1,45 +1,14 @@
+use crate::core::gateway::lb::compiled_selector;
 use crate::core::gateway::lb::runtime_state;
+use crate::core::gateway::lb::EdgionBackend;
 use pingora_core::protocols::l4::socket::SocketAddr;
-use pingora_load_balancing::Backend;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Common trait for round-robin stores used by endpoint and endpoint_slice handlers.
-///
-/// Both `EndpointStore<RoundRobin>` and `EpSliceStore<RoundRobin>` expose these
-/// four methods with identical signatures, so we can share `update_all_existing_lbs`
-/// and `update_affected_lbs` generically.
 pub(in crate::core::gateway::backends::discovery) trait RoundRobinStoreOps {
-    /// Return all service keys that currently have an active LoadBalancer.
-    fn get_existing_service_keys(&self) -> Vec<String>;
-    /// Update the LoadBalancer for `service_key` if one exists; remove it when
-    /// the data layer no longer has data for that key.
-    fn update_lb_if_exists(&self, service_key: &str);
-    /// Return the backend set currently held by the existing LB (pre-update snapshot).
-    fn get_backends_from_lb(&self, service_key: &str) -> Vec<Backend>;
-    /// Return the backend set from the data layer (post-update view).
-    fn get_backends_for_service(&self, service_key: &str) -> Vec<Backend>;
-}
-
-impl<S> RoundRobinStoreOps for super::endpoint::EndpointStore<S>
-where
-    S: pingora_load_balancing::selection::BackendSelection + 'static,
-    S::Iter: pingora_load_balancing::selection::BackendIter,
-{
-    fn get_existing_service_keys(&self) -> Vec<String> {
-        self.get_existing_service_keys()
-    }
-
-    fn update_lb_if_exists(&self, service_key: &str) {
-        self.update_lb_if_exists(service_key);
-    }
-
-    fn get_backends_from_lb(&self, service_key: &str) -> Vec<Backend> {
-        self.get_backends_from_lb(service_key)
-    }
-
-    fn get_backends_for_service(&self, service_key: &str) -> Vec<Backend> {
-        self.get_backends_for_service(service_key)
-    }
+    /// Return the backend set from the data layer.
+    fn get_backends_for_service(&self, service_key: &str) -> Vec<EdgionBackend>;
 }
 
 impl<S> RoundRobinStoreOps for super::endpoint_slice::EpSliceStore<S>
@@ -47,19 +16,7 @@ where
     S: pingora_load_balancing::selection::BackendSelection + 'static,
     S::Iter: pingora_load_balancing::selection::BackendIter,
 {
-    fn get_existing_service_keys(&self) -> Vec<String> {
-        self.get_existing_service_keys()
-    }
-
-    fn update_lb_if_exists(&self, service_key: &str) {
-        self.update_lb_if_exists(service_key);
-    }
-
-    fn get_backends_from_lb(&self, service_key: &str) -> Vec<Backend> {
-        self.get_backends_from_lb(service_key)
-    }
-
-    fn get_backends_for_service(&self, service_key: &str) -> Vec<Backend> {
+    fn get_backends_for_service(&self, service_key: &str) -> Vec<EdgionBackend> {
         self.get_backends_for_service(service_key)
     }
 }
@@ -71,6 +28,10 @@ where
 /// Diff old vs new backend address sets, remove stale entries from runtime
 /// state, and invalidate selector caches.
 ///
+/// Uses the cell's pre-replace snapshot to look up the live `Arc<EdgionBackend>`
+/// for each removed address; if the backend still has in-flight connections
+/// (`conn() > 0`) it is marked draining rather than removed immediately.
+///
 /// The `added` variable that appeared in both original handlers was a dead
 /// variable and has been removed; the cache is invalidated whenever the two
 /// sets differ.
@@ -78,6 +39,7 @@ pub(in crate::core::gateway::backends::discovery) fn cleanup_removed_backends(
     service_key: &str,
     old: &HashSet<SocketAddr>,
     new: &HashSet<SocketAddr>,
+    old_cell_snapshot: &[Arc<EdgionBackend>],
 ) {
     let removed: Vec<SocketAddr> = old.difference(new).cloned().collect();
 
@@ -93,8 +55,18 @@ pub(in crate::core::gateway::backends::discovery) fn cleanup_removed_backends(
         );
         let cb_store = crate::core::gateway::backends::get_circuit_breaker_store();
         for addr in &removed {
-            if runtime_state::get_count(service_key, addr) > 0 {
-                runtime_state::mark_backend_draining(service_key, addr);
+            // Look up the live Arc<EdgionBackend> from the pre-replace snapshot
+            // to read the in-flight conn_count directly from the atomic.
+            let live = old_cell_snapshot.iter().find(|b| &b.inner().addr == addr);
+            let in_flight = live.map_or(0, |b| b.conn());
+            if in_flight > 0 {
+                // live.is_some() is guaranteed here: in_flight = live.map_or(0, ...) > 0
+                runtime_state::begin_draining(
+                    service_key,
+                    addr,
+                    live.expect("live is Some when in_flight > 0 (guarded by map_or above)")
+                        .clone(),
+                );
             } else {
                 runtime_state::remove_backend(service_key, addr);
             }
@@ -103,30 +75,55 @@ pub(in crate::core::gateway::backends::discovery) fn cleanup_removed_backends(
     }
 }
 
-/// Refresh every LB that already exists in `store` from its data layer.
-pub(in crate::core::gateway::backends::discovery) fn update_all_existing_lbs<S: RoundRobinStoreOps>(store: &S) {
-    for service_key in store.get_existing_service_keys() {
-        store.update_lb_if_exists(&service_key);
+/// Push fresh backend lists from the data layer into every cell that this store
+/// knows about. Called after `full_set` to ensure all known services are warm.
+///
+/// Always calls `replace_backends` even when the new list is empty — this
+/// correctly clears stale backends on scale-to-zero. The previous guard
+/// (`if !new_backends.is_empty()`) left cells holding invalid backends when
+/// all pods terminated.
+///
+/// Also runs `cleanup_removed_backends` to register draining for any backends
+/// with in-flight connections, matching the behaviour of `update_affected_lbs`.
+pub(in crate::core::gateway::backends::discovery) fn update_all_existing_lbs<S: RoundRobinStoreOps>(
+    store: &S,
+    service_keys: &HashSet<String>,
+) {
+    for service_key in service_keys {
+        let new_backends = store.get_backends_for_service(service_key);
+        let new_addrs: HashSet<SocketAddr> = new_backends.iter().map(|b| b.inner().addr.clone()).collect();
+
+        let cell = compiled_selector::get_or_create_cell(service_key);
+        let old_cell_snapshot = cell.backends_snapshot();
+        let old_addrs: HashSet<SocketAddr> = old_cell_snapshot.iter().map(|b| b.inner().addr.clone()).collect();
+
+        cleanup_removed_backends(service_key, &old_addrs, &new_addrs, &old_cell_snapshot);
+        cell.replace_backends(new_backends);
     }
 }
 
-/// Refresh LBs for `affected_services` and clean up any removed backends.
+/// Sync cells and clean up removed backends for `affected_services`.
+///
+/// Uses the cell's pre-replace snapshot as the "old" address set so that
+/// `cleanup_removed_backends` can read live conn counts from the
+/// `Arc<EdgionBackend>` objects still held by in-flight requests.
 pub(in crate::core::gateway::backends::discovery) fn update_affected_lbs<S: RoundRobinStoreOps>(
     store: &S,
     affected_services: &HashSet<String>,
 ) {
     for service_key in affected_services {
-        let old_addrs: HashSet<SocketAddr> = store
-            .get_backends_from_lb(service_key)
-            .into_iter()
-            .map(|b| b.addr)
-            .collect();
-        store.update_lb_if_exists(service_key);
-        let new_addrs: HashSet<SocketAddr> = store
-            .get_backends_for_service(service_key)
-            .into_iter()
-            .map(|b| b.addr)
-            .collect();
-        cleanup_removed_backends(service_key, &old_addrs, &new_addrs);
+        let new_backends = store.get_backends_for_service(service_key);
+        let new_addrs: HashSet<SocketAddr> = new_backends.iter().map(|b| b.inner().addr.clone()).collect();
+
+        // Pre-replace snapshot: empty on first sync (no cell yet), which
+        // means old_addrs == empty → removed == empty → no cleanup needed,
+        // which is the correct behaviour for a first-time sync.
+        let cell = compiled_selector::get_or_create_cell(service_key);
+        let old_cell_snapshot = cell.backends_snapshot();
+        let old_addrs: HashSet<SocketAddr> = old_cell_snapshot.iter().map(|b| b.inner().addr.clone()).collect();
+
+        cleanup_removed_backends(service_key, &old_addrs, &new_addrs, &old_cell_snapshot);
+
+        cell.replace_backends(new_backends);
     }
 }

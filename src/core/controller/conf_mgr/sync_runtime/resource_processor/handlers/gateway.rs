@@ -13,13 +13,14 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     ConflictKey, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::controller::conf_mgr::ControllerRuntime;
+use crate::types::constants::annotations;
 use crate::types::constants::app::GATEWAY_NAME;
 use crate::types::listener_key::resolve_listener_addr;
 use crate::types::prelude_resources::Gateway;
 use crate::types::resources::common::is_core_api_group;
 use crate::types::resources::gateway::{
-    GatewayAddress, GatewayStatus, GatewayStatusAddress, GatewayTLSConfig, Listener as GatewayListener, ListenerStatus,
-    RouteGroupKind,
+    FrontendValidationMode, GatewayAddress, GatewayStatus, GatewayStatusAddress, GatewayTLSConfig, GatewayTlsMode,
+    Listener as GatewayListener, ListenerStatus, RouteGroupKind,
 };
 use crate::types::ResourceKind;
 use k8s_openapi::api::core::v1::Service;
@@ -234,6 +235,23 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Clear old references first (for update scenario)
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
 
+        // Clear and re-register stream plugin annotation ref (for update/remove annotation scenario)
+        ctx.runtime().stream_plugin_ref_mgr.clear_resource_refs(&resource_ref);
+        if let Some(v) = g
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(annotations::edgion::EDGION_STREAM_PLUGINS))
+        {
+            let raw = v.trim();
+            if !raw.is_empty() {
+                let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("default");
+                let (ns, name) = parse_stream_plugin_ref(raw, gateway_ns);
+                let key = format!("{}/{}", ns, name);
+                ctx.runtime().stream_plugin_ref_mgr.add_ref(key, resource_ref.clone());
+            }
+        }
+
         // Track cross-namespace Secret references so ReferenceGrant changes requeue this Gateway
         let cross_ns_ref = ResourceRef::new(
             ResourceKind::Gateway,
@@ -273,10 +291,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     None => continue,
                 };
 
-                // Only Terminate mode needs certificate resolution;
-                // Passthrough proxies raw TLS and unsupported modes (e.g. Mixed) will be rejected later.
-                let mode = tls_config.mode.as_deref().unwrap_or("Terminate");
-                if mode != "Terminate" {
+                // Only Terminate mode needs certificate resolution; Passthrough proxies raw TLS.
+                if tls_config.mode.unwrap_or_default() != GatewayTlsMode::Terminate {
                     continue;
                 }
 
@@ -441,32 +457,38 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         let current_hostnames: Vec<String> = listeners.iter().filter_map(|l| l.hostname.clone()).collect();
         let current_ports: Vec<i32> = listeners.iter().map(|l| l.port).collect();
 
-        let hostnames_changed = route_index.update_gateway_hostnames(&gateway_key, current_hostnames);
-        let ports_changed = route_index.update_gateway_ports(&gateway_key, current_ports);
-
         // CYCLE PREVENTION: Only requeue referencing routes when listener
         // hostnames or ports actually changed. All Route.on_change handlers
         // unconditionally requeue their parent Gateways, so removing this
         // condition would create Route→Gateway→Route infinite loops.
-        if hostnames_changed || ports_changed {
-            let referencing_routes = route_index.get_routes_for_gateway(&gateway_key);
-            if !referencing_routes.is_empty() {
+        //
+        // Atomicity: change detection and route collection share one write
+        // guard inside the index, so a concurrent `update_route` cannot insert
+        // a new route between the two steps and slip past requeue.
+        let listener_change =
+            route_index.update_listener_config_and_collect_routes(&gateway_key, current_hostnames, current_ports);
+        match listener_change {
+            Some(change) if !change.routes.is_empty() => {
                 tracing::info!(
                     gateway = %gateway_key,
-                    route_count = referencing_routes.len(),
-                    hostnames_changed,
-                    ports_changed,
+                    route_count = change.routes.len(),
+                    hostnames_changed = change.hostnames_changed,
+                    ports_changed = change.ports_changed,
                     "Gateway listener config changed, requeue referencing routes"
                 );
-                for (route_kind, route_key) in referencing_routes {
+                for (route_kind, route_key) in change.routes {
                     ctx.requeue(route_kind.as_str(), route_key).await;
                 }
             }
-        } else {
-            tracing::trace!(
-                gateway = %gateway_key,
-                "Gateway listener hostnames/ports unchanged, skip requeue referencing routes"
-            );
+            Some(_) => {
+                // Listener config changed but no routes reference this Gateway yet.
+            }
+            None => {
+                tracing::trace!(
+                    gateway = %gateway_key,
+                    "Gateway listener hostnames/ports unchanged, skip requeue referencing routes"
+                );
+            }
         }
     }
 
@@ -478,6 +500,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         );
         // Clear SecretRefManager references
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.runtime().stream_plugin_ref_mgr.clear_resource_refs(&resource_ref);
 
         // Clear cross-namespace reference tracking
         let cross_ns_ref = ResourceRef::new(
@@ -535,8 +558,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     .tls
                     .as_ref()
                     .and_then(|t| t.frontend_validation.as_ref())
-                    .and_then(|fv| fv.mode.as_deref())
-                    == Some("AllowInsecureFallback");
+                    .and_then(|fv| fv.mode.as_ref())
+                    == Some(&FrontendValidationMode::AllowInsecureFallback);
 
                 let unsupported_tls_mode = listener_has_unsupported_tls_mode(l);
                 let mixed_tls_conflict = mixed_tls_listeners.contains(&l.name);
@@ -561,6 +584,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             .collect();
 
         let derived_addresses = derive_gateway_addresses(gateway, self.default_address.as_deref(), _ctx.runtime());
+
+        // Pre-compute stream plugin ref validation before taking a mutable borrow of gateway.
+        let stream_plugin_ref_error = validate_gateway_stream_plugin_ref(gateway, _ctx.runtime());
 
         // Initialize status if not present
         let status = gateway.status.get_or_insert_with(GatewayStatus::default);
@@ -598,17 +624,34 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             update_gateway_condition(conditions, cond);
         }
 
-        // Gateway-level ResolvedRefs (Gateway API v1.5): indicates whether non-Listener
-        // object references (e.g. infrastructure, backendTLS) on the Gateway are resolved.
-        // Currently no such references exist in the spec, so this is always True.
+        // Gateway-level ResolvedRefs: True unless edgion.io/edgion-stream-plugins
+        // annotation references a missing EdgionStreamPlugins resource.
         {
-            let cond = condition_true(
-                condition_types::RESOLVED_REFS,
-                condition_reasons::RESOLVED_REFS,
-                "All gateway-level references resolved",
-                generation,
-            );
-            update_gateway_condition(conditions, cond);
+            match stream_plugin_ref_error {
+                None => {
+                    let cond = condition_true(
+                        condition_types::RESOLVED_REFS,
+                        condition_reasons::RESOLVED_REFS,
+                        "All gateway-level references resolved",
+                        generation,
+                    );
+                    update_gateway_condition(conditions, cond);
+                }
+                Some(message) => {
+                    tracing::warn!(
+                        annotation = annotations::edgion::EDGION_STREAM_PLUGINS,
+                        error = %message,
+                        "Gateway-level stream plugin ref unresolved; stream plugin chain will be empty"
+                    );
+                    let cond = condition_false(
+                        condition_types::RESOLVED_REFS,
+                        condition_reasons::INVALID_STREAM_PLUGINS_REF,
+                        message,
+                        generation,
+                    );
+                    update_gateway_condition(conditions, cond);
+                }
+            }
         }
 
         // Gateway-level Programmed condition:
@@ -699,7 +742,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                         conditions: Vec::new(),
                     };
                     listener_statuses.push(new_ls);
-                    listener_statuses.last_mut().unwrap()
+                    listener_statuses.last_mut().expect("just pushed; Vec is non-empty")
                 };
 
                 ls.supported_kinds = supported_kinds;
@@ -1048,9 +1091,15 @@ fn update_listener_conditions(
 }
 
 fn is_valid_pem(data: &[u8]) -> bool {
-    x509_parser::pem::Pem::iter_from_buffer(data)
-        .next()
-        .is_some_and(|r| r.is_ok())
+    let mut iter = x509_parser::pem::Pem::iter_from_buffer(data);
+    let mut any = false;
+    for r in iter.by_ref() {
+        any = true;
+        if r.is_err() {
+            return false;
+        }
+    }
+    any
 }
 
 fn pick_gateway_resolved_refs_reason(errors: &[GatewayResolvedRefsError]) -> &'static str {
@@ -1065,7 +1114,7 @@ fn pick_gateway_resolved_refs_reason(errors: &[GatewayResolvedRefsError]) -> &'s
         .iter()
         .any(|e| matches!(e, GatewayResolvedRefsError::InvalidCACertificateKind { .. }))
     {
-        return "InvalidCACertificateKind";
+        return condition_reasons::INVALID_CA_CERTIFICATE_KIND;
     }
     if errors.iter().any(|e| {
         matches!(
@@ -1081,7 +1130,7 @@ fn pick_gateway_resolved_refs_reason(errors: &[GatewayResolvedRefsError]) -> &'s
     {
         return condition_reasons::INVALID_CA_CERTIFICATE_REF;
     }
-    "InvalidCertificateRef"
+    condition_reasons::INVALID_CERTIFICATE_REF
 }
 
 fn validate_listener_resolved_refs(
@@ -1150,8 +1199,10 @@ fn validate_listener_resolved_refs(
                                 reason: "empty certificate or key data".to_string(),
                             });
                         } else {
-                            let cert_data = cert_bytes.unwrap();
-                            let key_data = key_bytes.unwrap();
+                            let cert_data =
+                                cert_bytes.expect("cert_bytes is Some: contains_key and non-empty verified above");
+                            let key_data =
+                                key_bytes.expect("key_bytes is Some: contains_key and non-empty verified above");
                             let cert_pem_valid = is_valid_pem(cert_data);
                             let key_pem_valid = is_valid_pem(key_data);
 
@@ -1364,21 +1415,27 @@ fn has_all_ca_refs_invalid(listener: &GatewayListener, errors: &[GatewayResolved
         return false;
     }
 
-    // Count how many CA-ref-related errors there are
-    let ca_error_count = errors
-        .iter()
-        .filter(|e| {
-            matches!(
-                e,
-                GatewayResolvedRefsError::InvalidCACertificateKind { .. }
-                    | GatewayResolvedRefsError::InvalidCACertificateRef { .. }
-                    | GatewayResolvedRefsError::CACertRefNotPermitted { .. }
-            )
-        })
-        .count();
+    // A single CA ref can produce multiple errors (e.g. both `InvalidCACertificateRef`
+    // for missing key AND `CACertRefNotPermitted` for cross-ns without ReferenceGrant).
+    // Count distinct invalid refs by (namespace, name) so a multi-error ref is not
+    // double-counted as if it were multiple invalid refs.
+    let mut invalid_refs: std::collections::HashSet<(&str, &str)> = std::collections::HashSet::new();
+    let mut kind_error_count = 0usize;
+    for e in errors {
+        match e {
+            GatewayResolvedRefsError::InvalidCACertificateRef { namespace, name, .. }
+            | GatewayResolvedRefsError::CACertRefNotPermitted { namespace, name, .. } => {
+                invalid_refs.insert((namespace.as_str(), name.as_str()));
+            }
+            // `InvalidCACertificateKind` carries no ref identity, but the producing
+            // sites short-circuit further checks for that ref, so each occurrence
+            // corresponds to exactly one distinct invalid ref.
+            GatewayResolvedRefsError::InvalidCACertificateKind { .. } => kind_error_count += 1,
+            _ => {}
+        }
+    }
 
-    // All CA refs are invalid if the number of CA errors >= number of CA refs
-    ca_error_count >= ca_ref_count
+    invalid_refs.len() + kind_error_count >= ca_ref_count
 }
 
 /// Returns the set of listener names that participate in a mixed TLS termination
@@ -1389,18 +1446,13 @@ fn detect_mixed_tls_mode_listeners(
     addresses: Option<&Vec<GatewayAddress>>,
 ) -> std::collections::HashSet<String> {
     use std::collections::HashMap;
-    let mut port_modes: HashMap<u16, Vec<(String, String)>> = HashMap::new();
+    let mut port_modes: HashMap<u16, Vec<(String, GatewayTlsMode)>> = HashMap::new();
 
     for l in listeners {
         if !l.protocol.eq_ignore_ascii_case("TLS") {
             continue;
         }
-        let mode = l
-            .tls
-            .as_ref()
-            .and_then(|t| t.mode.as_deref())
-            .unwrap_or("Terminate")
-            .to_string();
+        let mode = l.tls.as_ref().and_then(|t| t.mode).unwrap_or_default();
         let addr = resolve_listener_addr(addresses, l.port);
         port_modes.entry(addr.port()).or_default().push((l.name.clone(), mode));
     }
@@ -1421,15 +1473,13 @@ fn detect_mixed_tls_mode_listeners(
 }
 
 fn listener_has_unsupported_tls_mode(listener: &GatewayListener) -> bool {
-    let Some(mode) = listener.tls.as_ref().and_then(|tls| tls.mode.as_deref()) else {
+    // The CRD enum + serde rejects values other than Terminate/Passthrough,
+    // so the only remaining semantic constraint is: HTTPS does not support
+    // Passthrough (the listener must terminate TLS to expose HTTP routes).
+    let Some(mode) = listener.tls.as_ref().and_then(|tls| tls.mode.as_ref()) else {
         return false;
     };
-
-    match listener.protocol.to_uppercase().as_str() {
-        "TLS" => mode != "Passthrough" && mode != "Terminate",
-        "HTTPS" => mode != "Terminate",
-        _ => false,
-    }
+    listener.protocol.eq_ignore_ascii_case("HTTPS") && *mode == GatewayTlsMode::Passthrough
 }
 
 /// Compute supported kinds for a listener, honoring allowedRoutes.kinds when provided.
@@ -1502,10 +1552,171 @@ fn get_supported_kinds_for_protocol(protocol: &str) -> Vec<RouteGroupKind> {
     }
 }
 
+/// Parse `"namespace/name"` annotation value.
+/// Falls back to `gateway_ns` when the value contains no slash.
+/// Multi-slash values (e.g. `"a/b/c"`) yield `name = "b/c"`, which will never
+/// match a real resource key — callers treat this as not found.
+fn parse_stream_plugin_ref(value: &str, gateway_ns: &str) -> (String, String) {
+    if let Some((ns, name)) = value.split_once('/') {
+        (ns.to_string(), name.to_string())
+    } else {
+        (gateway_ns.to_string(), value.to_string())
+    }
+}
+
+/// Returns `Some(error_message)` when the Gateway has the
+/// `edgion.io/edgion-stream-plugins` annotation but the referenced
+/// `EdgionStreamPlugins` resource does not exist in the processor registry.
+/// Returns `None` when: annotation absent, annotation empty, or resource found.
+fn validate_gateway_stream_plugin_ref(gateway: &Gateway, runtime: &ControllerRuntime) -> Option<String> {
+    let annotation_value = gateway
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|a| a.get(annotations::edgion::EDGION_STREAM_PLUGINS))?;
+    let annotation_value = annotation_value.trim();
+    if annotation_value.is_empty() {
+        return None;
+    }
+    let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
+    let (ns, name) = parse_stream_plugin_ref(annotation_value, gateway_ns);
+    let key = format!("{}/{}", ns, name);
+    let exists = runtime
+        .processor_registry
+        .get("EdgionStreamPlugins")
+        .and_then(|p| p.get_raw_any(&key))
+        .is_some();
+    if exists {
+        None
+    } else {
+        Some(format!("EdgionStreamPlugins '{}' not found", key))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::gateway_service_lookup_candidates;
+    use super::{
+        gateway_service_lookup_candidates, has_all_ca_refs_invalid, parse_stream_plugin_ref,
+        validate_gateway_stream_plugin_ref, GatewayResolvedRefsError,
+    };
+    use crate::core::controller::conf_mgr::ControllerRuntime;
     use crate::types::constants::app::GATEWAY_NAME;
+    use crate::types::prelude_resources::Gateway;
+    use crate::types::resources::common::SecretObjectReference;
+    use crate::types::resources::gateway::{
+        FrontendTLSValidation, GatewaySpec, GatewayTLSConfig, GatewayTlsMode, Listener as GatewayListener,
+    };
+    use std::collections::BTreeMap;
+
+    fn make_test_gateway(ns: &str) -> Gateway {
+        Gateway {
+            metadata: kube::core::ObjectMeta {
+                namespace: Some(ns.to_string()),
+                ..Default::default()
+            },
+            spec: GatewaySpec {
+                gateway_class_name: "test".to_string(),
+                listeners: None,
+                addresses: None,
+                tls: None,
+            },
+            status: None,
+        }
+    }
+
+    fn make_gateway_with_annotation(ns: &str, annotation_value: &str) -> Gateway {
+        let mut gw = make_test_gateway(ns);
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "edgion.io/edgion-stream-plugins".to_string(),
+            annotation_value.to_string(),
+        );
+        gw.metadata.annotations = Some(annotations);
+        gw
+    }
+
+    #[test]
+    fn validate_stream_plugin_ref_no_annotation_returns_none() {
+        let runtime = ControllerRuntime::default();
+        let gw = make_test_gateway("default");
+        assert!(validate_gateway_stream_plugin_ref(&gw, &runtime).is_none());
+    }
+
+    #[test]
+    fn validate_stream_plugin_ref_empty_annotation_returns_none() {
+        let runtime = ControllerRuntime::default();
+        let gw = make_gateway_with_annotation("default", "  ");
+        assert!(validate_gateway_stream_plugin_ref(&gw, &runtime).is_none());
+    }
+
+    #[test]
+    fn validate_stream_plugin_ref_missing_resource_returns_error() {
+        let runtime = ControllerRuntime::default();
+        let gw = make_gateway_with_annotation("default", "default/my-stream");
+        let result = validate_gateway_stream_plugin_ref(&gw, &runtime);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("default/my-stream"));
+    }
+
+    #[test]
+    fn validate_stream_plugin_ref_fallback_to_gateway_ns() {
+        let runtime = ControllerRuntime::default();
+        let gw = make_gateway_with_annotation("my-ns", "my-stream");
+        let result = validate_gateway_stream_plugin_ref(&gw, &runtime);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("my-ns/my-stream"));
+    }
+
+    #[test]
+    fn parse_stream_plugin_ref_with_slash() {
+        let (ns, name) = parse_stream_plugin_ref("other-ns/my-plugin", "default");
+        assert_eq!(ns, "other-ns");
+        assert_eq!(name, "my-plugin");
+    }
+
+    #[test]
+    fn parse_stream_plugin_ref_without_slash_uses_gateway_ns() {
+        let (ns, name) = parse_stream_plugin_ref("my-plugin", "default");
+        assert_eq!(ns, "default");
+        assert_eq!(name, "my-plugin");
+    }
+
+    #[test]
+    fn parse_stream_plugin_ref_multi_slash_name_becomes_remainder() {
+        let (ns, name) = parse_stream_plugin_ref("a/b/c", "default");
+        assert_eq!(ns, "a");
+        assert_eq!(name, "b/c");
+    }
+
+    fn listener_with_ca_refs(refs: Vec<(&str, &str)>) -> GatewayListener {
+        let ca_refs = refs
+            .into_iter()
+            .map(|(ns, name)| SecretObjectReference {
+                group: None,
+                kind: Some("Secret".to_string()),
+                name: name.to_string(),
+                namespace: Some(ns.to_string()),
+            })
+            .collect();
+        GatewayListener {
+            name: "https".to_string(),
+            hostname: None,
+            port: 443,
+            protocol: "HTTPS".to_string(),
+            tls: Some(GatewayTLSConfig {
+                mode: Some(GatewayTlsMode::Terminate),
+                certificate_refs: None,
+                options: None,
+                secrets: None,
+                frontend_validation: Some(FrontendTLSValidation {
+                    ca_certificate_refs: Some(ca_refs),
+                    mode: None,
+                }),
+                resolved_frontend_ca_secrets: None,
+            }),
+            allowed_routes: None,
+        }
+    }
 
     #[test]
     fn gateway_service_lookup_prefers_fixed_edgion_gateway_service() {
@@ -1528,5 +1739,66 @@ mod tests {
             candidates,
             vec![("edgion-system".to_string(), GATEWAY_NAME.to_string())]
         );
+    }
+
+    #[test]
+    fn has_all_ca_refs_invalid_returns_false_when_no_refs_configured() {
+        let listener = listener_with_ca_refs(vec![]);
+        assert!(!has_all_ca_refs_invalid(&listener, &[]));
+    }
+
+    #[test]
+    fn has_all_ca_refs_invalid_does_not_double_count_multi_error_ref() {
+        // refA produces both InvalidCACertificateRef AND CACertRefNotPermitted;
+        // refB is fully valid (no errors). Old logic would count 2 errors >= 2 refs
+        // and incorrectly return true.
+        let listener = listener_with_ca_refs(vec![("ns-a", "ref-a"), ("ns-b", "ref-b")]);
+        let errors = vec![
+            GatewayResolvedRefsError::InvalidCACertificateRef {
+                namespace: "ns-a".to_string(),
+                name: "ref-a".to_string(),
+                reason: "missing required key 'ca.crt'".to_string(),
+            },
+            GatewayResolvedRefsError::CACertRefNotPermitted {
+                from_namespace: "gw-ns".to_string(),
+                namespace: "ns-a".to_string(),
+                name: "ref-a".to_string(),
+            },
+        ];
+        assert!(!has_all_ca_refs_invalid(&listener, &errors));
+    }
+
+    #[test]
+    fn has_all_ca_refs_invalid_returns_true_when_every_ref_invalid() {
+        let listener = listener_with_ca_refs(vec![("ns-a", "ref-a"), ("ns-b", "ref-b")]);
+        let errors = vec![
+            GatewayResolvedRefsError::InvalidCACertificateRef {
+                namespace: "ns-a".to_string(),
+                name: "ref-a".to_string(),
+                reason: "Secret not found".to_string(),
+            },
+            GatewayResolvedRefsError::CACertRefNotPermitted {
+                from_namespace: "gw-ns".to_string(),
+                namespace: "ns-b".to_string(),
+                name: "ref-b".to_string(),
+            },
+        ];
+        assert!(has_all_ca_refs_invalid(&listener, &errors));
+    }
+
+    #[test]
+    fn has_all_ca_refs_invalid_counts_invalid_kind_as_one_distinct_ref() {
+        let listener = listener_with_ca_refs(vec![("ns-a", "ref-a"), ("ns-b", "ref-b")]);
+        let errors = vec![
+            GatewayResolvedRefsError::InvalidCACertificateKind {
+                kind: "BogusKind".to_string(),
+            },
+            GatewayResolvedRefsError::InvalidCACertificateRef {
+                namespace: "ns-b".to_string(),
+                name: "ref-b".to_string(),
+                reason: "ConfigMap has no data".to_string(),
+            },
+        ];
+        assert!(has_all_ca_refs_invalid(&listener, &errors));
     }
 }

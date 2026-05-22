@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: tcp-cross-ns-allowed
+  namespace: app
+spec:
+  parentRefs:
+    - name: tcp-refgrant-gateway
+      namespace: edgion-test
+      sectionName: tcp
+  rules:
+    - backendRefs:
+        - name: tcp-refgrant-svc
+          namespace: backend
+          port: 30010
+          weight: 100

@@ -43,6 +43,14 @@ impl PluginMetaDataRefManager {
             .unwrap_or_default()
     }
 
+    /// Remove the entire forward-direction entry for a PM key.
+    ///
+    /// Call this when the PM itself is deleted so stale ep_keys do not linger
+    /// and get spuriously requeued if the PM key is later reused.
+    pub fn remove_pm(&self, pm_key: &str) {
+        self.refs.write().remove(pm_key);
+    }
+
     /// Clear all refs (for reset).
     pub fn clear_all(&self) {
         self.refs.write().clear();

@@ -113,6 +113,14 @@ pub fn parse_bandwidth_rate(rate: &str) -> Option<u64> {
     Some((num * multiplier as f64) as u64)
 }
 
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for BandwidthLimitConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.get_validation_error().map(str::to_owned)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

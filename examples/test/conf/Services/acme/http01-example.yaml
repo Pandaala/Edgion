@@ -31,11 +31,10 @@ spec:
   # Challenge configuration
   challenge:
     type: http-01
-    http01:
-      # The Gateway that will serve HTTP-01 challenge responses
-      gatewayRef:
-        name: my-gateway
-        namespace: default
+    # The Gateway that will serve HTTP-01 challenge responses
+    gatewayRef:
+      name: my-gateway
+      namespace: default
 
   # Certificate renewal settings
   renewal:

@@ -54,8 +54,8 @@ pub fn sync_lb_policies_for_routes(routes: &HashMap<String, HTTPRoute>) {
                     ParsedLBPolicy::Ewma => LbPolicy::Ewma,
                 };
 
-                let service_namespace = backend_ref.namespace.as_deref().unwrap_or(route_namespace);
-                let service_key = format!("{}/{}", service_namespace, backend_ref.name);
+                let ns = backend_ref.namespace.as_deref().unwrap_or(route_namespace);
+                let service_key = format!("{}/{}", ns, backend_ref.name);
 
                 // Add to route_service_policies map
                 route_service_policies

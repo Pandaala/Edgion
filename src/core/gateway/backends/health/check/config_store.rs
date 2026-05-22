@@ -83,14 +83,6 @@ impl HealthCheckConfigStore {
         self.service_configs.load().keys().cloned().collect()
     }
 
-    pub fn endpoint_slice_keys(&self) -> Vec<String> {
-        self.endpoint_slice_configs.load().keys().cloned().collect()
-    }
-
-    pub fn endpoint_keys(&self) -> Vec<String> {
-        self.endpoint_configs.load().keys().cloned().collect()
-    }
-
     pub fn set_service_config(&self, service_key: &str, config: Option<ActiveHealthCheckConfig>) {
         let mut new_map = (**self.service_configs.load()).clone();
         match config {
@@ -130,10 +122,36 @@ impl HealthCheckConfigStore {
         self.endpoint_configs.store(Arc::new(new_map));
     }
 
+    /// Number of unique service keys configured (across all three source maps).
+    /// Not atomically consistent across the three layers; safe for leak-detection
+    /// use after a quiesced wipe.
+    pub fn count(&self) -> usize {
+        self.keys().len()
+    }
+
+    /// Unique service keys currently configured across all source maps (snapshot).
+    /// Not atomically consistent across the three layers; safe for leak-detection
+    /// use after a quiesced wipe.
+    pub fn keys(&self) -> Vec<String> {
+        self.all_configured_services()
+    }
+
     pub fn remove_service(&self, service_key: &str) {
         self.set_service_config(service_key, None);
         self.set_endpoint_slice_config(service_key, None);
         self.set_endpoint_config(service_key, None);
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+
+    #[test]
+    fn empty_store_reports_zero() {
+        let store = HealthCheckConfigStore::new();
+        assert_eq!(store.count(), 0);
+        assert!(store.keys().is_empty());
     }
 }
 

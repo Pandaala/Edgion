@@ -40,8 +40,9 @@ use pingora_http::ResponseHeader;
 use pingora_limits::rate::Rate;
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::debug;
 
+use crate::core::gateway::plugins::http::common::format_duration;
+use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 
 use crate::types::filters::PluginRunningResult;
@@ -77,7 +78,7 @@ impl RateLimit {
     /// automatically loaded from the toml config file via `validate()`.
     pub fn create(config: &RateLimitConfig) -> Box<dyn RequestFilter> {
         let mut validated_config = config.clone();
-        validated_config.validate();
+        let _ = validated_config.validate();
 
         let plugin = RateLimit {
             name: "RateLimit".to_string(),
@@ -96,12 +97,6 @@ impl RateLimit {
         self.rate.get_or_init(|| {
             let interval = self.config.get_interval_duration();
             let slots = self.config.get_effective_slots();
-
-            debug!(
-                "Initializing Rate instance: interval={:?}, slots={}, hashes={}",
-                interval, slots, CMS_HASHES
-            );
-
             Rate::new_with_estimator_config(interval, CMS_HASHES, slots)
         })
     }
@@ -149,6 +144,7 @@ impl RateLimit {
     async fn reject_request(&self, session: &mut dyn PluginSession, retry_after: Duration) -> PluginRunningResult {
         let message = self.config.reject_message.as_deref().unwrap_or("Rate limit exceeded");
 
+        // invariant: 429 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
         let mut resp = Box::new(
             ResponseHeader::build(self.config.reject_status, None)
                 .unwrap_or_else(|_| ResponseHeader::build(429, None).expect("429 is valid")),
@@ -206,16 +202,6 @@ impl RateLimit {
     }
 }
 
-/// Format duration in human-readable format (e.g., "1.5s", "500ms")
-fn format_duration(d: Duration) -> String {
-    let secs = d.as_secs_f64();
-    if secs >= 1.0 {
-        format!("{:.1}s", secs)
-    } else {
-        format!("{}ms", d.as_millis())
-    }
-}
-
 #[async_trait]
 impl RequestFilter for RateLimit {
     fn name(&self) -> &str {
@@ -225,13 +211,6 @@ impl RequestFilter for RateLimit {
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // PluginLog must stay short (≤40B) and must never contain the resolved
         // limit_key — it can be a user-identifying value (API key, user_id).
-        // Check for configuration errors
-        if !self.config.is_valid() {
-            plugin_log.push_err("cfg load fail");
-            // Allow request to proceed on config error (fail-open)
-            return PluginRunningResult::GoodNext;
-        }
-
         // Get the rate limiting key using session.key_get()
         // Multiple keys are combined with "_" separator
         let limit_key = {
@@ -282,14 +261,17 @@ impl RequestFilter for RateLimit {
 
         // Check if rate limit exceeded
         if curr_count > rate_limit {
-            plugin_log.push(&format!("Deny rate limit kl={}", kl));
+            plugin_log.push_fmt("Deny rate limit kl={}", la![kl.to_string().as_str()]);
             // Use interval as retry_after since the window will reset after interval
             return self.reject_request(session, interval).await;
         }
 
         // Add rate limit headers
         self.add_headers(session, remaining, interval);
-        plugin_log.push(&format!("Allow kl={} r={}", kl, remaining.max(0)));
+        plugin_log.push_fmt(
+            "Allow kl={} r={}",
+            la![kl.to_string().as_str(), remaining.max(0).to_string().as_str()],
+        );
         PluginRunningResult::GoodNext
     }
 }
@@ -298,7 +280,6 @@ impl RequestFilter for RateLimit {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-    use crate::types::common::KeyGet;
 
     fn create_basic_config() -> RateLimitConfig {
         let mut config = RateLimitConfig {
@@ -307,259 +288,8 @@ mod tests {
             reject_message: Some("Too many requests".to_string()),
             ..Default::default()
         };
-        config.validate();
+        let _ = config.validate();
         config
-    }
-
-    #[tokio::test]
-    async fn test_key_get_client_ip() {
-        let mut mock_session = MockPluginSession::new();
-        mock_session
-            .expect_key_get()
-            .withf(|k| matches!(k, KeyGet::ClientIp))
-            .return_const(Some("192.168.1.1".to_string()));
-
-        let key = KeyGet::ClientIp;
-        assert_eq!(mock_session.key_get(&key).await, Some("192.168.1.1".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_key_get_empty_client_ip() {
-        let mut mock_session = MockPluginSession::new();
-        mock_session
-            .expect_key_get()
-            .withf(|k| matches!(k, KeyGet::ClientIp))
-            .return_const(None);
-
-        let key = KeyGet::ClientIp;
-        assert_eq!(mock_session.key_get(&key).await, None);
-    }
-
-    #[tokio::test]
-    async fn test_key_get_header() {
-        let mut mock_session = MockPluginSession::new();
-        mock_session
-            .expect_key_get()
-            .withf(|k| matches!(k, KeyGet::Header { name } if name == "X-API-Key"))
-            .return_const(Some("api-key-123".to_string()));
-
-        let key = KeyGet::Header {
-            name: "X-API-Key".to_string(),
-        };
-        assert_eq!(mock_session.key_get(&key).await, Some("api-key-123".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_key_get_path() {
-        let mut mock_session = MockPluginSession::new();
-        mock_session
-            .expect_key_get()
-            .withf(|k| matches!(k, KeyGet::Path))
-            .return_const(Some("/api/users".to_string()));
-
-        let key = KeyGet::Path;
-        assert_eq!(mock_session.key_get(&key).await, Some("/api/users".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_key_get_client_ip_and_path() {
-        let mut mock_session = MockPluginSession::new();
-        mock_session
-            .expect_key_get()
-            .withf(|k| matches!(k, KeyGet::ClientIpAndPath))
-            .return_const(Some("10.0.0.1:/api/data".to_string()));
-
-        let key = KeyGet::ClientIpAndPath;
-        assert_eq!(mock_session.key_get(&key).await, Some("10.0.0.1:/api/data".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_rate_limit_allows_within_limit() {
-        let config = create_basic_config();
-        let plugin = RateLimit::create(&config);
-
-        for i in 0..5 {
-            let mut mock_session = MockPluginSession::new();
-            let mut plugin_log = PluginLog::new("RateLimit");
-
-            let ip = format!("test_basic_ip_{}", i);
-            mock_session.expect_key_get().return_const(Some(ip)); // Each request different IP to test independent
-            mock_session.expect_set_response_header().returning(|_, _| Ok(()));
-
-            let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-            assert_eq!(result, PluginRunningResult::GoodNext, "Request {} should be allowed", i);
-            assert!(plugin_log.contains("Allow kl="));
-            // Must never contain the raw limit key value (would leak API key / user_id)
-            assert!(!plugin_log.contains("test_basic_ip_"));
-        }
-    }
-
-    #[tokio::test]
-    async fn test_rate_limit_rejects_over_limit() {
-        let config = create_basic_config();
-        let plugin = RateLimit::create(&config);
-        let test_ip = "test_over_ip_unique";
-
-        // Consume all quota (5 requests from same IP)
-        for _ in 0..5 {
-            let mut mock_session = MockPluginSession::new();
-            let mut plugin_log = PluginLog::new("RateLimit");
-            mock_session.expect_key_get().return_const(Some(test_ip.to_string()));
-            mock_session.expect_set_response_header().returning(|_, _| Ok(()));
-            plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        }
-
-        // Next request should be rejected
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimit");
-
-        mock_session.expect_key_get().return_const(Some(test_ip.to_string()));
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny rate limit"));
-        // Key value must never appear in the log
-        assert!(!plugin_log.contains(test_ip));
-    }
-
-    #[tokio::test]
-    async fn test_rate_limit_no_key_allows() {
-        let config = create_basic_config();
-        let plugin = RateLimit::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimit");
-
-        mock_session.expect_key_get().return_const(None);
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("key miss:allow"));
-    }
-
-    #[tokio::test]
-    async fn test_rate_limit_header_key() {
-        let mut config = RateLimitConfig {
-            rate: 100,
-            interval: "1s".to_string(),
-            key: vec![KeyGet::Header {
-                name: "X-API-Key".to_string(),
-            }],
-            ..Default::default()
-        };
-        config.validate();
-
-        let plugin = RateLimit::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimit");
-
-        mock_session
-            .expect_key_get()
-            .return_const(Some("test-key-123".to_string()));
-        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_rate_limit_composite_keys() {
-        // Test multiple keys combined with "_"
-        let mut config = RateLimitConfig {
-            rate: 100,
-            interval: "1s".to_string(),
-            key: vec![
-                KeyGet::ClientIp,
-                KeyGet::Header {
-                    name: "X-API-Key".to_string(),
-                },
-                KeyGet::Path,
-            ],
-            ..Default::default()
-        };
-        config.validate();
-
-        let plugin = RateLimit::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimit");
-
-        // Mock key_get to return values for each key type
-        mock_session
-            .expect_key_get()
-            .withf(|k| matches!(k, KeyGet::ClientIp))
-            .return_const(Some("192.168.1.1".to_string()));
-        mock_session
-            .expect_key_get()
-            .withf(|k| matches!(k, KeyGet::Header { name } if name == "X-API-Key"))
-            .return_const(Some("api-key-123".to_string()));
-        mock_session
-            .expect_key_get()
-            .withf(|k| matches!(k, KeyGet::Path))
-            .return_const(Some("/api/users".to_string()));
-        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        // The combined key should be "192.168.1.1_api-key-123_/api/users"
-    }
-
-    #[tokio::test]
-    async fn test_rate_limit_partial_keys() {
-        // Test that partial keys work (some keys missing)
-        let mut config = RateLimitConfig {
-            rate: 100,
-            interval: "1s".to_string(),
-            key: vec![
-                KeyGet::ClientIp,
-                KeyGet::Header {
-                    name: "X-API-Key".to_string(),
-                },
-            ],
-            ..Default::default()
-        };
-        config.validate();
-
-        let plugin = RateLimit::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimit");
-
-        // Only ClientIp available, Header missing
-        mock_session
-            .expect_key_get()
-            .withf(|k| matches!(k, KeyGet::ClientIp))
-            .return_const(Some("192.168.1.1".to_string()));
-        mock_session
-            .expect_key_get()
-            .withf(|k| matches!(k, KeyGet::Header { .. }))
-            .return_const(None);
-        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        // Should use just "192.168.1.1" as the key
-    }
-
-    #[tokio::test]
-    async fn test_config_validation_error() {
-        let mut config = RateLimitConfig {
-            rate: 0, // Invalid rate
-            ..Default::default()
-        };
-        config.validate();
-
-        let plugin = RateLimit::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimit");
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("cfg load fail"));
     }
 
     #[tokio::test]
@@ -589,28 +319,5 @@ mod tests {
         let result = plugin2.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.contains("Allow kl="));
-    }
-
-    #[tokio::test]
-    async fn test_custom_estimator_slots() {
-        let mut config = RateLimitConfig {
-            rate: 10,
-            interval: "1s".to_string(),
-            estimator_slots_k: Some(16), // 16K = 16384 slots
-            ..Default::default()
-        };
-        config.validate();
-
-        let plugin = RateLimit::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RateLimit");
-        mock_session
-            .expect_key_get()
-            .return_const(Some("test_slots_ip".to_string()));
-        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
     }
 }

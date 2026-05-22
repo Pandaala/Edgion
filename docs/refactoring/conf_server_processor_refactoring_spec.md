@@ -104,9 +104,6 @@ pub struct ConfigSyncServer {
     /// Server instance ID
     server_id: RwLock<String>,
     
-    /// Endpoint mode
-    endpoint_mode: RwLock<Option<EndpointMode>>,
-    
     /// Watch objects by kind (从 ProcessorRegistry 注册)
     watch_objects: RwLock<HashMap<String, Arc<dyn WatchObj>>>,
 }
@@ -567,9 +564,6 @@ pub struct ConfigSyncServer {
     /// Server instance ID
     server_id: RwLock<String>,
     
-    /// Endpoint mode
-    endpoint_mode: RwLock<Option<EndpointMode>>,
-    
     /// Watch objects by kind (由 Processor 注册)
     watch_objects: RwLock<HashMap<String, Arc<dyn WatchObj>>>,
 }
@@ -578,7 +572,6 @@ impl ConfigSyncServer {
     pub fn new() -> Self {
         Self {
             server_id: RwLock::new(uuid::Uuid::new_v4().to_string()),
-            endpoint_mode: RwLock::new(None),
             watch_objects: RwLock::new(HashMap::new()),
         }
     }
@@ -640,16 +633,6 @@ impl ConfigSyncServer {
     /// 获取 server_id
     pub fn server_id(&self) -> String {
         self.server_id.read().unwrap().clone()
-    }
-    
-    /// 设置 endpoint_mode
-    pub fn set_endpoint_mode(&self, mode: EndpointMode) {
-        *self.endpoint_mode.write().unwrap() = Some(mode);
-    }
-    
-    /// 获取 endpoint_mode
-    pub fn endpoint_mode(&self) -> Option<EndpointMode> {
-        self.endpoint_mode.read().unwrap().clone()
     }
 }
 ```

@@ -24,7 +24,7 @@ Edgion uses a **single source of truth + macro generation** architecture:
 
 - Always use the "latest/most stable version" as the storage version. Old versions serve only as input formats, uniformly converting to the new version/internal model. "Downgrading" writes back to old versions is prohibited.
 - Gateway API GA resources (Gateway/GatewayClass/HTTPRoute/GRPCRoute, etc.) stay at `v1` unless upstream publishes a new major version with a clear migration path.
-- Resources in Alpha/Beta (e.g., BackendTLSPolicy currently at `v1alpha3`, needing compatibility with historical `v1alpha2`) are recommended to:
+- Resources in Alpha/Beta (for example Gateway API Experimental resources such as `XBackendTrafficPolicy`) are recommended to:
   - CRD multi-version: storage = latest, old versions marked as served.
   - Use Conversion Webhook when possible, with API Server handling unified conversion; otherwise watch multiple versions in the controller and convert to a single internal model.
   - New fields should have safe defaults when converting from old versions; renames/type changes need explicit mapping with logging.

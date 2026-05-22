@@ -1,49 +1,54 @@
-# CORS `*.domain` 简写仅匹配 HTTPS（已修复）
+---
+name: subdomain-wildcard-https-only
+description: Use when reviewing CORS allow_origins wildcard shorthand findings; documents that *.domain matches HTTPS only (by design) and why reverting to https?:// is not accepted.
+---
 
-## 结论
+# CORS `*.domain` Shorthand Matches HTTPS Only (Fixed)
 
-`CorsConfig.allow_origins` 的 `*.example.com` 简写**仅匹配 `https://` origin**。这是 2026-04-21 修复 M13 后的明确语义——之前版本允许 `http://`，属 Edgion 自创便利语法糖的意外行为。**不应**把简写改回 `https?://` 以"兼容 http"——operator 若需 http 匹配应显式使用 `allow_origins_by_regex`。
+## Conclusion
 
-## 原因
+The `*.example.com` shorthand of `CorsConfig.allow_origins` **matches only `https://` origins**. This is the explicit semantic after the 2026-04-21 fix to M13 — earlier versions allowed `http://`, an unintentional behavior of Edgion's bespoke convenience syntactic sugar. The shorthand **should not** be reverted to `https?://` to "be compatible with http" — operators needing http matching should explicitly use `allow_origins_by_regex`.
 
-1. **`*.domain` 简写是 Edgion 自创的便利语法糖**，不是行业惯例（Traefik / Envoy / Kong 都让 operator 自写 regex）；既然是 Edgion 自己定义的语法糖，语义就应该符合 operator 心理模型
-2. **Operator 直觉是 HTTPS**：几乎所有现代 CORS 生产配置针对 https 前端；写 `*.example.com` 时的默认期待是 https 范畴
-3. **http scheme 允许扩大攻击面**：
-   - 子域接管：未认领的子域（如 `dev-api.example.com` 指向已下线服务）被攻击者用 HTTP 服务填补 → 跨域读取 API 响应
-   - 遗留 http 子域：企业内网常有测试/legacy 环境在 http 暴露，被 operator 无意识纳入 CORS 白名单
-4. **显式 regex 作为逃生门**：需要 http 匹配的场景（本地 dev、遗留内部服务）仍可用 `allow_origins_by_regex: ["^https?://[^/]+\\.example\\.com$"]` 显式声明
-5. **浏览器安全趋势**：`SameSite=None` 要求 `Secure`；mixed content 限制；COOP/COEP 需安全上下文——业界方向是 HTTPS-only CORS
+## Reasons
 
-## 判定规则
+1. **`*.domain` shorthand is Edgion's bespoke convenience syntactic sugar**, not industry convention (Traefik / Envoy / Kong all let the operator write the regex); since it is a syntactic sugar Edgion defined itself, the semantics should match the operator's mental model
+2. **Operator intuition is HTTPS**: nearly all modern CORS production configs target https frontends; the default expectation when writing `*.example.com` is the https scope
+3. **Allowing the http scheme expands the attack surface**:
+   - Subdomain takeover: an unclaimed subdomain (e.g., `dev-api.example.com` pointing to a decommissioned service) is filled by an attacker with an HTTP service → cross-origin reads of API responses
+   - Legacy http subdomains: enterprise intranets often have test/legacy environments exposed over http; would be unintentionally included by the operator in the CORS allowlist
+4. **Explicit regex as escape hatch**: scenarios needing http matching (local dev, legacy internal services) can still use `allow_origins_by_regex: ["^https?://[^/]+\\.example\\.com$"]` to declare explicitly
+5. **Browser security trends**: `SameSite=None` requires `Secure`; mixed content restrictions; COOP/COEP requires secure context — the industry direction is HTTPS-only CORS
 
-当 review / 审计报告出现以下模式时，按"已修复 + 设计意图"关闭：
+## Decision Rule
 
-1. "CORS `*.domain` 简写不支持 http，operator 配置失效"
-2. "建议回退为 `https?://` 以保持向后兼容"
-3. "应新增 `allowHttpSubdomainWildcard: bool` 配置"
+When a review/audit report contains the following patterns, close as "fixed + design intent":
 
-验证三点再关闭：
+1. "CORS `*.domain` shorthand does not support http; operator config is ineffective"
+2. "Recommend reverting to `https?://` for backward compatibility"
+3. "Should add an `allowHttpSubdomainWildcard: bool` config"
 
-- `cors.rs:167` 与 `cors.rs:180` 的正则仍是 `^https://[^/]+\.{}$`（非 `https?://`）
-- `test_subdomain_wildcard` 测试仍 assert `http://test.example.com` **不**被允许
-- `test_subdomain_wildcard_http_origins_via_regex` 仍存在，证明显式 regex 是已文档化的逃生门
+Verify three points before closing:
 
-三点满足 → 按设计意图关闭，指向 `tasks/security-audit/02-access-control.md` 的 M13 FIXED 决策。
+- The regex at `cors.rs:167` and `cors.rs:180` is still `^https://[^/]+\.{}$` (not `https?://`)
+- The `test_subdomain_wildcard` test still asserts `http://test.example.com` is **not** allowed
+- `test_subdomain_wildcard_http_origins_via_regex` still exists, demonstrating that explicit regex is the documented escape hatch
 
-## 例外场景（需重评）
+All three satisfied → close per design intent; point to the M13 FIXED decision in `tasks/security-audit/02-access-control.md`.
 
-- 如果浏览器 CORS 规范回退到鼓励 http（极不可能）→ 重评
-- 如果 Edgion 主动添加 `allowHttpSubdomainWildcard` 配置字段 → 本规则需同步更新
-- 如果出现 operator 大规模反馈"迁移成本不可接受" → 考虑加新配置字段 opt-in
+## Exceptional Scenarios (need reassessment)
 
-## 背景记录
+- If browser CORS specs revert to encouraging http (extremely unlikely) → reassess
+- If Edgion proactively adds an `allowHttpSubdomainWildcard` config field → this rule needs sync update
+- If large-scale operator feedback "migration cost is unacceptable" appears → consider adding a new opt-in config field
 
-- 决策日期：2026-04-21
-- 决策来源：`tasks/security-audit/02-access-control.md` M13 条目（Option A — 代码修复，破坏性）
-- 本次 MEDIUM 审计中**第一个代码层破坏性修复**——与 M4/M8 doc-only 形成对照：
-  - **doc-only 适用**：行业主流默认一致，改默认会与行业背离
-  - **代码修复适用**：Edgion 自创语法糖的意外行为，不是行业惯例
-- 其他同批次 review 判定：
-  - `forward-auth/default-header-forwarding.md`（M7，NOT-AN-ISSUE，与 Traefik/Envoy 一致）
-  - `oidc/nonce-pkce-defaults.md`（M8，doc-only，与主流网关一致）
-  - 本文件（M13，代码修复，Edgion 独有语法糖）
+## Background Notes
+
+- Decision date: 2026-04-21
+- Decision source: `tasks/security-audit/02-access-control.md` M13 entry (Option A — code fix, breaking)
+- The **first code-layer breaking fix** in this MEDIUM audit batch — contrasts with M4/M8 doc-only:
+  - **doc-only applies**: industry mainstream defaults are consistent; changing the default would diverge from the industry
+  - **code fix applies**: unintentional behavior of Edgion's bespoke syntactic sugar; not industry convention
+- Other review decisions in the same batch:
+  - `forward-auth/default-header-forwarding.md` (M7, NOT-AN-ISSUE, aligned with Traefik/Envoy)
+  - `oidc/nonce-pkce-defaults.md` (M8, doc-only, aligned with mainstream gateways)
+  - This file (M13, code fix, Edgion-unique syntactic sugar)

@@ -1,144 +1,193 @@
 ---
 name: gateway-downstream-tls
-description: 下游 TLS（客户端→网关）：Pingora Listener TLS 回调、证书选择、客户端证书验证。
+description: Downstream TLS (client→gateway) — Pingora Listener TLS callbacks, certificate selection, client certificate verification.
 ---
 
-# 下游 TLS（客户端→网关）
+# Downstream TLS (client→gateway)
 
-## 概述
+## Overview
 
-下游 TLS 处理客户端到 Gateway 的 TLS 握手。核心实现在 `TlsCallback` 结构中，它实现了 Pingora 的 `TlsAccept` trait，在 TLS 握手的关键阶段注入自定义逻辑。
+Downstream TLS handles the TLS handshake from clients to the Gateway. The core implementation is the `TlsCallback` struct, which implements Pingora's `TlsAccept` trait and injects custom logic at key stages of the TLS handshake.
 
-## Pingora TLS 回调
+## Pingora TLS callbacks
 
-`TlsCallback` 实现 `TlsAccept` trait 的两个回调：
+`TlsCallback` implements two callbacks of the `TlsAccept` trait, plus an additional early callback registered through BoringSSL FFI. There are 4 ssl.log write stages, fired in BoringSSL state-machine order:
 
-### certificate_callback
+| # | Stage | Trigger location (`tls_pingora.rs`) | Normal / failure path |
+|---|-------|------------------------------------|------------------------|
+| 1 | `select_certificate_callback` (early cb) | The `set_select_certificate_callback` closure in `new_tls_settings_with_callback` | Failure: each of `no SNI` / `min ver: ...` / `cert not found` calls `log_ssl` once and returns `Err(SelectCertError::ERROR)` so BoringSSL aborts; on `store_ssl_ctx` failure, fail-closed (store_ssl_ctx itself logs ssl, select_cb just returns Err); on success, after `store_ssl_ctx` saves the snapshot, return `Ok(())` |
+| 2 | `certificate_callback` (cert_cb) | `TlsAccept::certificate_callback` | Failure (apply set `err_log`): `log_ssl` immediately and skip `finalize_ssl_ctx`; ex_data stays null; BoringSSL aborts naturally because cert wasn't installed. On success, `finalize_ssl_ctx` stamps `tls_id` + `store_ssl_ctx` for stage 3 |
+| 3 | `handshake_complete_callback` | `TlsAccept::handshake_complete_callback` | Handshake success → `log_ssl` once; failed handshakes never reach this stage |
+| 4 | `free_ssl_ctx` (FFI release fallback) | `ssl_ctx_ex_data::free_ssl_ctx` | Only when ex_data is non-null (select_cb already stored a snapshot) AND `tls_id.is_none()` (finalize did not run): logs ssl belatedly with `err_log = "early abort"` if empty. Covers the early-abort case where "select_cb hit but BoringSSL terminates during version negotiation" |
 
-在 TLS 握手期间被调用（ClientHello 处理后），负责：
+**Core principle**: each stage logs ssl on failure at the time of failure plus aborts (no propagation to later stages); on success, do not log — let a later stage with more complete fields (`tls_id`, `handshake_complete_time`, `client_cert_info`, etc.) emit the log. A connection produces at most one ssl.log entry.
 
-1. **SNI 解析**：
-   - 从 `ssl.servername(NameType::HOST_NAME)` 获取 SNI。
-   - 若无 SNI，检查 `EdgionGatewayConfig` 的 `security_protect.fallback_sni` 配置。
-   - 两者均无则记录 `"no SNI"` 错误并中止。
+### select_certificate_callback (early callback, introduced in Phase 1)
 
-2. **证书匹配与应用**（`match_and_apply_cert`）：
-   - Layer 1：`TlsCertMatcher::match_sni(key: &ListenerKey, sni)` 查找 EdgionTls。
-   - Layer 2：`GatewayTlsMatcher::match_sni(key: &ListenerKey, sni)` 查找 Gateway TLS。
-   - 匹配成功后应用证书和私钥到 SSL 连接。
+Registration site: in `new_tls_settings_with_callback`, calls BoringSSL `SSL_CTX_set_select_certificate_cb` directly via `TlsSettings: DerefMut<SslAcceptorBuilder>` — no pingora patch required.
 
-3. **SslCtx 存储**：
-   - 创建 `SslCtx`（per-connection TLS 上下文），包含 `TlsConnMeta` 元信息。
-   - 通过 BoringSSL `SSL_set_ex_data` 将 `SslCtx` 附加到 SSL 对象上。
-   - 生成 `tls_id`（时间戳 + 随机数的十六进制标识符）用于日志关联。
+Trigger: BoringSSL `handshake_server.cc:694`, **earlier** than the version range freeze at `L710`. This is the only true effective point for `min_tls_version`.
+
+Responsibilities:
+
+1. **SNI resolution**: extract the SNI from ClientHello (`ch.servername(NameType::HOST_NAME)`); if missing, fall back to `EdgionGatewayConfig.security_protect.fallback_sni`; if both are missing → `err_log = "no SNI"` + `log_ssl` + return Err.
+2. **Layer 1 match**: `TlsCertMatcher::match_sni(listener_key, sni)` — query EdgionTls. On hit:
+   - Set `is_mtls = et.is_mtls_enabled()` (true only for Mutual / OptionalMutual; Terminate is not mTLS).
+   - If `et.spec.min_tls_version` is set → `ssl.set_min_proto_version(...)` per-connection. On failure, fail-closed: `err_log = "min ver: ..."` + `log_ssl` + return Err.
+3. **Layer 2 match** (when Layer 1 misses): `GatewayTlsMatcher::match_sni` — query Gateway listener TLS.
+4. **Write snapshot**: write the match result (`Arc<EdgionTls>` or `GatewayTlsEntry` + the resolved SNI) into SSL ex_data via `store_ssl_ctx`. On `store_ssl_ctx` failure it has already done `log_ssl` once internally; select_cb returns Err directly (fail-closed), keeping at most one ssl.log per connection.
+5. **Both miss**: `err_log = "cert not found"` + `log_ssl` + return Err.
+6. **Success**: return Ok, allowing the handshake to proceed to cert_cb.
+
+Why `min_tls_version` cannot be set in cert_cb: BoringSSL `handshake_server.cc:710` makes it explicit — the version range is frozen immediately after select_cb; by the time cert_cb (`L759`) runs, it can no longer be modified.
+
+### certificate_callback (cert_cb, handshake_server.cc:759)
+
+Invoked during the TLS handshake (after version negotiation, before cipher-suite negotiation).
+
+cert_cb is a **pure snapshot consumer** — all SNI resolution, Layer 1 (EdgionTls) match, Layer 2 (GatewayTls) match, and `fallback_sni` application happen in select_cb in one pass. select_cb fail-closes on `store_ssl_ctx` failure by returning Err and BoringSSL aborts, so cert_cb does not fire. Therefore once cert_cb runs the snapshot must exist and must record exactly one hit (EdgionTls or GatewayTls).
+
+Responsibilities:
+
+1. **Take snapshot**: `take_ssl_ctx` consumes the snapshot written into ex_data by select_cb (auto-clears the slot). Returning None is unreachable in theory (violates the select_cb contract); if it happens, write `err_log = "no snapshot"` + `log_ssl` and exit, treating it as a BoringSSL state-machine violation.
+
+2. **Apply certificate** (two mutually exclusive fast paths):
+   - Snapshot has `matched_edgion_tls` → `apply_edgion_tls_cert`.
+   - Snapshot has `matched_gateway_tls` → `apply_gateway_tls_cert`.
+   - Both None in the snapshot (theoretically unreachable) → write `err_log = "snapshot empty"` + `log_ssl` and exit.
+
+3. **Log failure on the spot**: if `apply_*_cert` set `err_log` during cert/key load, install, or mTLS configuration, cert_cb calls `log_ssl` immediately and **skips finalize**. ex_data stays null (cleared by the entry-time `take_ssl_ctx`); BoringSSL aborts the handshake because the certificate was not installed; `free_ssl_ctx` sees a null ptr and returns directly — single ssl.log emitted.
+
+4. **Wrap up after success**: after a successful apply, call `finalize_ssl_ctx` to stamp `tls_id` (a hex identifier composed of timestamp + random number) and write the updated `SslCtx` back to ex_data via `store_ssl_ctx` for `handshake_complete_callback` to consume.
+
+Principle: **log on failure at the time of failure plus abort, with no propagation**. A connection produces at most one ssl.log entry.
 
 ### handshake_complete_callback
 
-TLS 握手完成后被调用，负责：
+Invoked after the TLS handshake completes; responsible for:
 
-1. 通过 `SSL_get_ex_data` 取回 `SslCtx`。
-2. 若为 mTLS 连接且配置了客户端证书暴露，提取客户端证书信息。
-3. 记录握手完成时间。
-4. 输出 SSL 日志。
-5. 返回 `Arc<TlsConnMeta>` 作为连接 digest 的扩展数据，供后续 HTTP/TLS 代理访问。
+1. Retrieving `SslCtx` via `SSL_get_ex_data`.
+2. If the connection is mTLS and client-certificate exposure is configured, extract client certificate info.
+3. Record the handshake completion time.
+4. Output the SSL log.
+5. Return `Arc<TlsConnMeta>` as digest extension data for subsequent HTTP/TLS proxy access.
 
-## 证书选择逻辑
+## Certificate selection logic
 
-### EdgionTls 证书应用
+### Apply EdgionTls certificate
 
-`apply_edgion_tls_cert` 处理 EdgionTls 资源的证书：
+`apply_edgion_tls_cert` handles certificates from EdgionTls resources:
 
-1. 从 `EdgionTls` 提取 cert PEM 和 key PEM。
-2. 解析为 `X509` 和 `PKey`，通过 Pingora TLS 扩展 API 设置到 SSL 连接。
-3. 可选配置：
-   - **mTLS**（`configure_mtls`）：设置 CA 证书存储、验证模式、验证深度。
-   - **最低 TLS 版本**（`configure_min_tls_version`）：TLS 1.0 ~ 1.3。
-   - **密码套件**（`configure_ciphers`）：通过 BoringSSL FFI 设置。
+1. Extract cert PEM and key PEM from `EdgionTls`.
+2. Parse into `X509` and `PKey` and set them on the SSL connection via the Pingora TLS extension API.
+3. Optional configuration (only items effective inside cert_cb timing):
+   - **mTLS** (`configure_mtls`): set the CA certificate store, verify mode, and verify depth.
+   - **Cipher suite** (`configure_ciphers`): set the TLS1.2 cipher list via BoringSSL FFI (still works in cert_cb because BoringSSL selects the cipher only after cert_cb — `handshake_server.cc:810`).
 
-### Gateway TLS 证书应用
+> **The effective point of `min_tls_version` has moved to `select_certificate_callback`** (see the previous section). By the time cert_cb runs, BoringSSL has frozen the version range; calling `set_min_proto_version` here is silently ineffective, so `apply_edgion_tls_cert` no longer handles this field.
 
-`apply_gateway_tls_cert` 处理 Gateway Listener 的 TLS 证书：
+### Apply Gateway TLS certificate
 
-1. 从 `GatewayTlsEntry` 的内联 `secrets` 获取 Secret（优先）。
-2. 回退到从全局 SecretStore 按 `certificateRefs` 查找 Secret。
-3. 从 Secret 的 `data["tls.crt"]` 和 `data["tls.key"]` 提取证书和私钥。
-4. 解析并设置到 SSL 连接。
-5. 若 `frontend_validation` 存在，调用 `configure_gateway_frontend_mtls()` 配置客户端证书验证。
+`apply_gateway_tls_cert` handles certificates for Gateway Listeners:
 
-## Gateway frontendValidation（标准 mTLS）
+1. Collect **every** Secret: prefer `GatewayTlsEntry`'s inline `secrets` (resolved by the controller from all `certificateRefs`); fall back to `resolve_secrets_from_store_or_error`, which resolves *all* `certificateRefs` from the global SecretStore.
+2. Select the cert matching the client (`select_gateway_secret`). **BoringSSL exposes only a single certificate slot per `SSL` (unlike OpenSSL's per-key-type slots), so a dual-cert listener (RSA + ECDSA) cannot rely on the library to auto-pick — we select explicitly.** ECDSA is preferred only when **(a) the negotiated version is TLS 1.3** (`negotiated_is_tls13`, via the safe `SslRef::version2()`) **and (b)** the client advertised an ECDSA `signature_algorithm` (`client_supports_ecdsa`, FFI `SSL_get0_peer_verify_algorithms` + `SSL_get_signature_algorithm_key_type`); then the ECDSA cert is served, otherwise the first RSA cert. The TLS 1.3 gate is required because in TLS 1.2 the cert key type also constrains the usable cipher suites (ECDHE-ECDSA vs ECDHE-RSA) — selecting ECDSA purely from sigalgs there could break a client that offered only ECDHE-RSA ciphers, so TLS 1.2 keeps legacy first-cert behavior. TLS 1.3 decouples auth from the cipher, making sigalg-based selection safe. This mirrors BoringSSL's / Envoy's own selection. With a single cert it is a no-op. The pure selection rule is factored into `pick_secret_index` (unit-tested).
+3. Extract the certificate and private key from the selected Secret's `data["tls.crt"]` and `data["tls.key"]` and set them on the SSL connection (`apply_secret_to_ssl`). A bad/missing cert fails the handshake (fail-closed) instead of being silently dropped.
+4. If `frontend_validation` is present, call `configure_gateway_frontend_mtls()` to configure client certificate verification.
 
-Gateway API 标准的前端客户端证书验证，通过 `spec.tls.frontend` 配置。与 EdgionTls `client_auth` 完全独立。
+> **Why not iterate `SSL_use_certificate` per cert?** On OpenSSL that populates separate RSA/ECDSA slots; on BoringSSL each call *replaces* the single slot (last-wins), so iterating would serve only one key type. Explicit ClientHello-driven selection is the BoringSSL-correct approach.
 
-### 验证模式
+## Gateway frontendValidation (standard mTLS)
 
-| 模式 | 行为 | 实现 |
-|------|------|------|
-| `AllowValidOnly`（默认） | 必须提供匹配 CA 签发的有效证书 | `PEER \| FAIL_IF_NO_PEER_CERT` |
-| `AllowInsecureFallback` | 有效/无效/缺失证书均放行 | 自定义 verify callback 始终返回 1（boringssl FFI） |
+Gateway API standard frontend client certificate validation, configured via `spec.tls.frontend`. Completely independent of EdgionTls `client_auth`.
 
-### 配置流程（`configure_gateway_frontend_mtls`）
+### Verify modes
 
-1. 从 `resolved_frontend_ca_secrets` 提取 CA 证书（key: `ca.crt`），构建 `X509Store`。
-2. 根据 `mode` 选择 verify mode：AllowValidOnly 用标准 SSL verify，AllowInsecureFallback 用 `boring_sys::SSL_set_verify` + `insecure_fallback_verify_cb`。
-3. 设置 `verify_depth(10)`。
+| Mode | Behavior | Implementation |
+|------|----------|----------------|
+| `AllowValidOnly` (default) | A certificate signed by the matching CA is required and must be valid | `PEER \| FAIL_IF_NO_PEER_CERT` |
+| `AllowInsecureFallback` | Valid / invalid / missing certificates all pass | Custom verify callback always returns 1 (boringssl FFI) |
 
-per-listener 配置由 Controller 合并到每个 listener 的 `GatewayTlsConfig` 中，Gateway 侧无需额外处理。
+### Configuration flow (`configure_gateway_frontend_mtls`)
 
-## EdgionTls mTLS 客户端验证
+1. Extract CA certificates from `resolved_frontend_ca_secrets` (key: `ca.crt`) and build an `X509Store`.
+2. Pick a verify mode based on `mode`: AllowValidOnly uses standard SSL verify; AllowInsecureFallback uses `boring_sys::SSL_set_verify` + `insecure_fallback_verify_cb`.
+3. Set `verify_depth(10)`.
 
-当 EdgionTls 配置了 `spec.client_auth` 时，`configure_mtls` 启用客户端证书验证：
+The Controller merges per-listener configuration into each listener's `GatewayTlsConfig`; no extra processing is needed on the Gateway side.
 
-### 验证模式
+## EdgionTls mTLS client verification
 
-| 模式 | SslVerifyMode | 说明 |
-|------|--------------|------|
-| `Terminate` | 无验证 | 忽略客户端证书，仅终止 TLS |
-| `Mutual` | `PEER + FAIL_IF_NO_PEER_CERT` | 必须提供有效客户端证书 |
-| `OptionalMutual` | `PEER` | 有证书则验证，无证书也放行 |
+When EdgionTls has `spec.client_auth` configured, `configure_mtls` enables client certificate verification:
 
-### 配置流程
+### Verify modes
 
-1. 从 EdgionTls 获取 CA 证书 PEM，构建 `X509Store`。
-2. 设置验证深度（`verify_depth`，范围 1-9）。
-3. 若配置了 `allowed_sans` 或 `allowed_cns`，设置自定义验证回调（`set_mtls_verify_callback`）进行白名单校验。
-4. 否则使用标准 OpenSSL/BoringSSL 验证链。
+| Mode | SslVerifyMode | Description |
+|------|---------------|-------------|
+| `Terminate` | No verification | Ignores the client certificate and only terminates TLS |
+| `Mutual` | `PEER + FAIL_IF_NO_PEER_CERT` | A valid client certificate is required |
+| `OptionalMutual` | `PEER` | Verifies if a certificate is present; passes without one |
 
-### 客户端证书信息提取
+### Configuration flow
 
-握手完成后，`extract_client_cert_info` 从 SSL 连接中提取客户端证书信息：
+1. Get the CA certificate PEM from EdgionTls and build an `X509Store`.
+2. Set the verify depth (`verify_depth`, range 1–9).
+3. If `allowed_sans` or `allowed_cns` is configured, set a custom verify callback (`set_mtls_verify_callback`) for allowlist checks.
+4. Otherwise use the standard OpenSSL/BoringSSL verification chain.
 
-- Subject DN（Distinguished Name）
-- Common Name（CN）
-- Subject Alternative Names（DNS、IP、Email、URI）
-- SHA256 指纹
+### Client certificate info extraction
 
-提取的 `ClientCertInfo` 存储在 `TlsConnMeta.client_cert_info` 中，可供插件和访问日志使用。
+After the handshake completes, `extract_client_cert_info` extracts client-certificate info from the SSL connection:
 
-## SslCtx 与 ex_data
+- Subject DN (Distinguished Name).
+- Common Name (CN).
+- Subject Alternative Names (DNS, IP, Email, URI).
+- SHA256 fingerprint.
 
-per-connection TLS 上下文通过 BoringSSL ex_data 机制在回调之间传递：
+The extracted `ClientCertInfo` is stored in `TlsConnMeta.client_cert_info` and is available to plugins and the access log.
+
+## SslCtx and ex_data
+
+Per-connection TLS context is passed between callbacks via the BoringSSL ex_data mechanism:
 
 ```
-certificate_callback          handshake_complete_callback
-       │                                │
-       ├── SslCtx::new()                ├── take_ssl_ctx(ssl)
-       ├── ... 填充数据 ...             ├── 提取客户端证书
-       └── store_ssl_ctx(ssl, ctx)      └── 返回 Arc<TlsConnMeta>
+select_certificate_callback   certificate_callback          handshake_complete_callback
+       │                              │                                │
+       ├── SslCtx::new()              ├── take_ssl_ctx(ssl)            ├── take_ssl_ctx(ssl)
+       ├── Layer 1 match              │   (consume snapshot)           ├── extract client cert
+       ├── set_min_proto_version      ├── apply cert/mtls/ciphers      ├── stamp handshake_complete_time
+       └── store_ssl_ctx(ssl, ctx)    ├── finalize_ssl_ctx (tls_id)    └── log_ssl + return Arc<TlsConnMeta>
+                                      └── store_ssl_ctx(ssl, ctx)
+                                              │
+                                      (if handshake aborted, on SSL destruction)
+                                      free_ssl_ctx → tls_id.is_none()?
+                                              → log_ssl "early abort"
 ```
 
-- `SSL_get_ex_new_index`：注册自定义 ex_data 索引（全局一次）。
-- `SSL_set_ex_data`：存储 `Box<SslCtx>` 指针。
-- `SSL_get_ex_data`：取回并转移所有权。
-- 注册的 `free_ssl_ctx` 回调在 SSL 对象销毁时释放未被取回的 SslCtx。
+- `SSL_get_ex_new_index`: register a custom ex_data index (once globally) and a `free_ssl_ctx` release callback at the same time.
+- `SSL_set_ex_data` / `store_ssl_ctx`: store a `Box<SslCtx>` pointer (select_cb and cert_cb each write once).
+- `SSL_get_ex_data` / `take_ssl_ctx`: consume-style reads that transfer ownership (cert_cb and handshake_complete_cb each take once).
+- `free_ssl_ctx`: invoked by BoringSSL when the SSL object is destroyed. Frees an SslCtx that was not consumed and, when `tls_id.is_none()` (`finalize_ssl_ctx` didn't run), emits an `"early abort"` audit log (see the section below).
 
-非 BoringSSL 构建中，ex_data 操作为空操作，`handshake_complete_callback` 返回基础 `TlsConnMeta`。
+In non-BoringSSL builds, ex_data operations are no-ops, and `handshake_complete_callback` returns a basic `TlsConnMeta`.
 
-## 关键源文件
+## Early-abort audit (introduced in Task 10)
 
-| 文件 | 职责 |
-|------|------|
-| `src/core/gateway/tls/runtime/gateway/tls_pingora.rs` | TlsCallback、SslCtx、证书应用 |
-| `src/core/gateway/tls/store/cert_matcher.rs` | TlsCertMatcher（EdgionTls listener+SNI 匹配） |
-| `src/core/gateway/runtime/matching/tls.rs` | GatewayTlsMatcher（Gateway 回退匹配） |
-| `src/core/gateway/tls/runtime/backend/cert_extractor.rs` | 客户端证书信息提取 |
-| `src/core/gateway/tls/boringssl/mtls_verify_callback.rs` | BoringSSL mTLS 验证回调 |
+When a connection is terminated by BoringSSL after `select_certificate_callback` but before `certificate_callback` (typical case: min_tls_version rejecting a TLS1.2 client via alert protocol_version), the regular ssl.log path (cert_cb → finalize_ssl_ctx → handshake_complete_callback → log_ssl) does not fire.
+
+To complete the audit, `mod ssl_ctx_ex_data::free_ssl_ctx` (the memory-release callback registered with BoringSSL via `SSL_get_ex_new_index`) checks `tls_id.is_none()` on SSL object destruction — meaning `finalize_ssl_ctx` did not run — and pushes `"early abort"` into err_log (without overriding a more specific err_log) before calling `log_ssl`.
+
+Implementation notes:
+- The whole callback body is wrapped in `std::panic::catch_unwind` to prevent panics from crossing FFI (same pattern as `mtls_verify_callback.rs`).
+- Sets `"early abort"` only when `meta.err_log.is_none()`, preserving more specific causes set by upstream stages such as select_cb (e.g., `"min ver: ..."`).
+- This path is available only on the boringssl backend (depends on the ex_data mechanism).
+
+## Key source files
+
+| File | Responsibility |
+|------|----------------|
+| `src/core/gateway/tls/runtime/gateway/tls_pingora.rs` | TlsCallback, SslCtx, certificate application |
+| `src/core/gateway/tls/store/cert_matcher.rs` | TlsCertMatcher (EdgionTls listener+SNI matching) |
+| `src/core/gateway/runtime/matching/tls.rs` | GatewayTlsMatcher (Gateway fallback matching) |
+| `src/core/gateway/tls/runtime/backend/cert_extractor.rs` | Client certificate info extraction |
+| `src/core/gateway/tls/boringssl/mtls_verify_callback.rs` | BoringSSL mTLS verification callback |

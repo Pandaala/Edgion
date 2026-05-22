@@ -1,3 +1,8 @@
+---
+name: handler-requeue-rule
+description: Use when reviewing ProcessorHandler implementations; enforces that any handler calling lookup_gateway() in parse() must also implement on_change() with update_gateway_route_index() and on_delete() cleanup.
+---
+
 # Handler Requeue Rule
 
 > Confirmed 2026-03-17 based on actual bug fix in `edgion_tls.rs`.
@@ -50,7 +55,7 @@ fires change detection (`hostnames_changed=true`) but `get_routes_for_gateway()`
 returns empty because no routes have registered yet. The one-time post-init
 requeue ensures all registered routes get reprocessed with the Gateway in cache.
 
-See also: `skills/01-architecture/10-requeue-mechanism.md` for the full map.
+See also: `skills/01-architecture/01-controller/06-requeue-mechanism.md` for the full map.
 
 ## Also applies to Secret references
 

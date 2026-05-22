@@ -2,55 +2,55 @@
 name: local-build
 description: Use when compiling Edgion locally, choosing a build mode, locating build artifacts, or debugging local build failures and feature combinations.
 ---
-# 本地编译
+# Local Build
 
-用于回答这些问题：
+Use this skill to answer:
 
-- 现在本地应该跑 `cargo check`、`cargo build` 还是 `cargo build --release`
-- 二进制和 examples 会产出到哪里
-- 切换 allocator / TLS backend 时怎么编
-- 本地编译为什么缺依赖、链接失败或交叉编译失败
+- Whether to run `cargo check`, `cargo build`, or `cargo build --release` locally right now
+- Where binaries and examples are produced
+- How to compile when switching the allocator / TLS backend
+- Why local builds fail with missing dependencies, link errors, or cross-compilation failures
 
-## 先看这几个事实
+## Facts to check first
 
-- 默认 features 是 `allocator-jemalloc` + `boringssl`
-- proto 编译来自仓库根的 `build.rs`，因此本地需要可用的 `protoc`
-- Docker 构建环境已经显式安装了这些依赖，可作为本地依赖的可信参考：
+- The default features are `allocator-jemalloc` + `boringssl`
+- proto compilation comes from the repository root `build.rs`, so a working `protoc` is required locally
+- The Docker build environment explicitly installs the following dependencies; treat it as a trustworthy reference for local dependencies:
   - `cmake`
   - `protobuf-compiler`
   - `pkg-config`
   - `libssl-dev`
   - `libclang-dev`
-- CI 交叉编译 `aarch64-unknown-linux-gnu` 时会额外安装 `gcc-aarch64-linux-gnu` / `g++-aarch64-linux-gnu`
+- For CI cross-compiling `aarch64-unknown-linux-gnu`, `gcc-aarch64-linux-gnu` / `g++-aarch64-linux-gnu` are also installed
 
-## 最常用命令
+## Most-used commands
 
 ```bash
-# 最快的语义检查
+# Fastest semantic check
 cargo check
 
-# 默认开发构建
+# Default development build
 cargo build
 
-# 发布构建
+# Release build
 cargo build --release
 
-# 常用二进制
+# Common binaries
 cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-cli
 
-# 常用 examples
+# Common examples
 cargo build --release --example test_server --example test_client
 ```
 
-## Feature 组合
+## Feature combinations
 
-常用组合：
+Common combinations:
 
 ```bash
-# 默认：jemalloc + boringssl
+# Default: jemalloc + boringssl
 cargo build
 
-# rustls 实验构建
+# rustls experimental build
 cargo build --release --no-default-features --features "allocator-jemalloc,rustls"
 
 # mimalloc + boringssl
@@ -60,29 +60,29 @@ cargo build --release --no-default-features --features "allocator-mimalloc,borin
 cargo build --release --no-default-features --features "allocator-system,boringssl"
 ```
 
-更详细的 feature 语义见：
+For more detailed feature semantics:
 
 - [../../02-features/01-binary-and-deployment/02-feature-flags.md](../../02-features/01-binary-and-deployment/02-feature-flags.md)
 
-## 编译产物在哪
+## Where the build artifacts go
 
-| 构建方式 | 产物位置 |
-|---------|----------|
+| Build mode | Artifact location |
+|------------|-------------------|
 | `cargo build` | `target/debug/` |
 | `cargo build --release` | `target/release/` |
 | `cargo build --target <triple> --release` | `target/<triple>/release/` |
 | `cargo build --example <name> --release` | `target/release/examples/` |
 
-常见文件：
+Common files:
 
 - `target/debug/edgion-gateway`
 - `target/release/edgion-controller`
 - `target/release/edgion-cli`
 - `target/release/examples/test_server`
 
-## 交叉编译
+## Cross-compilation
 
-CI 当前对 ARM64 Linux 的做法：
+What CI currently does for ARM64 Linux:
 
 ```bash
 rustup target add aarch64-unknown-linux-gnu
@@ -90,28 +90,28 @@ cargo build --release --target aarch64-unknown-linux-gnu \
   --bin edgion-gateway --bin edgion-controller --bin edgion-cli
 ```
 
-如果是 Debian/Ubuntu 风格环境，通常还需要：
+In Debian/Ubuntu-style environments you typically also need:
 
 ```bash
 sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 ```
 
-## 常见失败与优先排查
+## Common failures and where to look first
 
-| 现象 | 先看什么 |
-|------|----------|
-| `protoc` / protobuf 相关错误 | 是否安装了 `protobuf-compiler`，以及 `build.rs` 会不会被执行 |
-| BoringSSL 构建失败 | 是否安装了 `cmake`；当前 feature 是否启用了 `boringssl` |
-| OpenSSL / `pkg-config` / `ssl` 链接失败 | 是否安装了 `pkg-config`、`libssl-dev` 或对应平台 OpenSSL 开发包 |
-| ARM64 交叉编译失败 | 是否安装了 `aarch64` 交叉编译器，并设置好 target |
-| 编出来了但 Gateway TLS 路径不可用 | 是否误用了 `rustls` 组合；当前 Gateway TLS runtime 仍主要依赖 `boringssl` / `openssl` |
+| Symptom | Where to look first |
+|---------|---------------------|
+| `protoc` / protobuf-related errors | Whether `protobuf-compiler` is installed, and whether `build.rs` actually runs |
+| BoringSSL build failure | Whether `cmake` is installed; whether `boringssl` is enabled in the current features |
+| OpenSSL / `pkg-config` / `ssl` link failure | Whether `pkg-config`, `libssl-dev`, or the platform-equivalent OpenSSL development package is installed |
+| ARM64 cross-compilation failure | Whether the `aarch64` cross compiler is installed and the target is set up correctly |
+| Build succeeds but the Gateway TLS path is unavailable | Whether you mistakenly used the `rustls` combination; the Gateway TLS runtime currently still depends mainly on `boringssl` / `openssl` |
 
-## 需要一个干净、可复现的构建环境时
+## When you need a clean, reproducible build environment
 
-优先看：
+Look at:
 
 - `docker/Dockerfile.builder`
 - `docker/Dockerfile`
 - `.github/workflows/build-image.yml`
 
-这三处基本就是当前项目对“构建依赖最小集合”和“交叉编译做法”的真实落地。
+These three are the project's actual ground truth for "the minimum set of build dependencies" and "how cross-compilation is done".

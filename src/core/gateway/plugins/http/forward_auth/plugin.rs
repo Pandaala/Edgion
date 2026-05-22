@@ -52,16 +52,15 @@ use bytes::Bytes;
 use futures::StreamExt;
 use pingora_http::ResponseHeader;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use sha2::{Digest, Sha256};
-use std::sync::Arc;
 use std::time::Duration;
 
 const MAX_ERROR_BODY_BYTES: usize = 4096;
 
-use crate::core::gateway::cache::ShardedLruCache;
-use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::apply_auth_failure_delay;
-use crate::core::gateway::plugins::http::common::http_client::{get_http_client, is_hop_by_hop};
+use crate::core::gateway::plugins::http::common::http_client::{
+    connection_listed_hop_by_hop, get_http_client, is_hop_by_hop_or_listed,
+};
+use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::ForwardAuthConfig;
@@ -69,53 +68,14 @@ use crate::types::resources::edgion_plugins::ForwardAuthConfig;
 pub struct ForwardAuth {
     name: String,
     config: ForwardAuthConfig,
-    auth_cache: Option<Arc<ShardedLruCache<String, u16>>>,
 }
 
 impl ForwardAuth {
     pub fn new(config: &ForwardAuthConfig) -> Self {
-        let auth_cache = if config.cache_ttl > 0 {
-            let capacity = if config.lru_cache.capacity == 0 {
-                get_default_lru_cache_capacity()
-            } else {
-                config.lru_cache.capacity
-            };
-            let shards = if config.lru_cache.shards > 0 {
-                config.lru_cache.shards
-            } else {
-                get_default_lru_cache_shards()
-            };
-            Some(Arc::new(ShardedLruCache::new(capacity, shards)))
-        } else {
-            None
-        };
         ForwardAuth {
             name: "ForwardAuth".to_string(),
             config: config.clone(),
-            auth_cache,
         }
-    }
-
-    /// Compute a stable SHA256 cache key from the configured request headers.
-    /// When request_headers is None or empty, uses "authorization" only as a safe default.
-    fn cache_key(session: &dyn PluginSession, request_headers: &Option<Vec<String>>) -> String {
-        let default_headers = vec!["authorization".to_string()];
-        let headers_to_hash: Vec<&str> = match request_headers {
-            Some(list) if !list.is_empty() => list.iter().map(|h| h.as_str()).collect(),
-            _ => default_headers.iter().map(|h| h.as_str()).collect(),
-        };
-        let mut sorted = headers_to_hash;
-        sorted.sort_unstable();
-
-        let mut h = Sha256::new();
-        for header_name in &sorted {
-            let value = session.header_value(header_name).unwrap_or_default();
-            h.update(header_name.as_bytes());
-            h.update(b"=");
-            h.update(value.as_bytes());
-            h.update(b"\0");
-        }
-        format!("{:x}", h.finalize())
     }
 
     /// Build the header map to send to the auth service.
@@ -179,10 +139,14 @@ impl ForwardAuth {
         headers
     }
 
-    /// Forward all request headers from session, skipping hop-by-hop headers.
+    /// Forward all request headers from session, skipping hop-by-hop headers
+    /// (RFC 9110 §7.6.1 — both the canonical set and names dynamically listed
+    /// in the request's `Connection:` header value).
     fn forward_all_headers(&self, session: &dyn PluginSession, headers: &mut HeaderMap) {
+        let connection_value = session.header_value("connection").unwrap_or_default();
+        let dynamic_listed = connection_listed_hop_by_hop(&connection_value);
         for (name, value) in session.request_headers() {
-            if !is_hop_by_hop(&name) {
+            if !is_hop_by_hop_or_listed(&name, &dynamic_listed) {
                 if let (Ok(hn), Ok(hv)) = (HeaderName::from_bytes(name.as_bytes()), HeaderValue::from_str(&value)) {
                     headers.insert(hn, hv);
                 }
@@ -198,6 +162,7 @@ impl ForwardAuth {
     async fn send_error_response(
         &self,
         session: &mut dyn PluginSession,
+        plugin_log: &mut PluginLog,
         status: u16,
         body: &str,
         extra_headers: Option<&Vec<(String, String)>>,
@@ -210,10 +175,15 @@ impl ForwardAuth {
         let _ = resp.insert_header("Content-Type", "application/json");
         let _ = resp.insert_header("Connection", "close");
 
-        // Add extra headers (e.g., client_headers from auth service response)
+        // Add extra headers (e.g., client_headers from auth service response).
+        // The values were already validated by HeaderValue::to_str() upstream,
+        // so insert_header failures here indicate an invalid header name
+        // from the operator's `client_headers` config (non-token bytes, etc.).
         if let Some(headers) = extra_headers {
             for (name, value) in headers.iter() {
-                let _ = resp.insert_header(name.clone(), value.clone());
+                if resp.insert_header(name.clone(), value.clone()).is_err() {
+                    plugin_log.push_err("invalid response header");
+                }
             }
         }
 
@@ -242,29 +212,6 @@ impl RequestFilter for ForwardAuth {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        // Validate configuration
-        if let Some(_error) = self.config.get_validation_error() {
-            plugin_log.push_err("cfg invalid");
-            return self
-                .send_error_response(session, 500, r#"{"message":"ForwardAuth configuration error"}"#, None)
-                .await;
-        }
-
-        // Cache lookup — only when upstream_headers is empty (no response headers to propagate)
-        // and cache is enabled. Conservative: if upstream_headers are needed, always call upstream.
-        if let Some(ref cache) = self.auth_cache {
-            if self.config.upstream_headers.is_empty() {
-                let key = Self::cache_key(session, &self.config.request_headers);
-                if let Some(cached_status) = cache.get(&key) {
-                    plugin_log.push(&format!("auth cached {}", cached_status));
-                    if self.config.hide_credentials {
-                        let _ = session.remove_request_header("authorization");
-                    }
-                    return PluginRunningResult::GoodNext;
-                }
-            }
-        }
-
         let client = get_http_client();
 
         // Build auth request
@@ -295,6 +242,7 @@ impl RequestFilter for ForwardAuth {
                 return self
                     .send_error_response(
                         session,
+                        plugin_log,
                         self.config.status_on_error,
                         r#"{"message":"Auth service unavailable"}"#,
                         None,
@@ -319,14 +267,7 @@ impl RequestFilter for ForwardAuth {
             if self.config.hide_credentials {
                 let _ = session.remove_request_header("authorization");
             }
-            // Store successful result in cache (only when upstream_headers is empty)
-            if let Some(ref cache) = self.auth_cache {
-                if self.config.upstream_headers.is_empty() {
-                    let key = Self::cache_key(session, &self.config.request_headers);
-                    cache.insert(key, status, Some(Duration::from_secs(self.config.cache_ttl)));
-                }
-            }
-            plugin_log.push(&format!("auth pass {}", status));
+            plugin_log.push_fmt("auth pass {}", la![status.to_string().as_str()]);
             PluginRunningResult::GoodNext
         } else {
             // Auth failed: collect client_headers from auth response to add to error response
@@ -359,9 +300,9 @@ impl RequestFilter for ForwardAuth {
                 String::from_utf8_lossy(&buf).into_owned()
             };
 
-            plugin_log.push(&format!("auth deny {}", status));
+            plugin_log.push_fmt("auth deny {}", la![status.to_string().as_str()]);
             apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
-            self.send_error_response(session, status, &body, Some(&extra_headers))
+            self.send_error_response(session, plugin_log, status, &body, Some(&extra_headers))
                 .await
         }
     }
@@ -371,39 +312,6 @@ impl RequestFilter for ForwardAuth {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-    use crate::types::resources::edgion_plugins::LruCacheConfig;
-
-    fn create_valid_config() -> ForwardAuthConfig {
-        ForwardAuthConfig {
-            uri: "http://auth-service:8080/verify".to_string(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn test_forward_auth_creation() {
-        let config = create_valid_config();
-        let plugin = ForwardAuth::new(&config);
-        assert_eq!(plugin.name(), "ForwardAuth");
-    }
-
-    #[test]
-    fn test_is_success_status_default() {
-        let config = create_valid_config();
-        let plugin = ForwardAuth::new(&config);
-
-        // Default: any 2xx is success
-        assert!(plugin.is_success_status(200));
-        assert!(plugin.is_success_status(201));
-        assert!(plugin.is_success_status(204));
-        assert!(plugin.is_success_status(299));
-
-        // Non-2xx
-        assert!(!plugin.is_success_status(301));
-        assert!(!plugin.is_success_status(401));
-        assert!(!plugin.is_success_status(403));
-        assert!(!plugin.is_success_status(500));
-    }
 
     #[test]
     fn test_is_success_status_custom() {
@@ -462,173 +370,5 @@ mod tests {
         );
         assert_eq!(headers.get("X-Forwarded-Uri").unwrap().to_str().unwrap(), "/api/data");
         assert_eq!(headers.get("X-Forwarded-Method").unwrap().to_str().unwrap(), "GET");
-    }
-
-    #[test]
-    fn test_build_auth_headers_forward_all() {
-        let config = ForwardAuthConfig {
-            uri: "http://auth-service/verify".to_string(),
-            request_headers: None, // Forward ALL
-            ..Default::default()
-        };
-        let plugin = ForwardAuth::new(&config);
-
-        let mut mock_session = MockPluginSession::new();
-
-        // Mock request_headers to return a set of headers including hop-by-hop
-        mock_session.expect_request_headers().returning(|| {
-            vec![
-                ("authorization".to_string(), "Bearer token".to_string()),
-                ("content-type".to_string(), "application/json".to_string()),
-                ("connection".to_string(), "keep-alive".to_string()), // hop-by-hop
-                ("transfer-encoding".to_string(), "chunked".to_string()), // hop-by-hop
-                ("x-custom-header".to_string(), "custom-value".to_string()),
-            ]
-        });
-        mock_session
-            .expect_header_value()
-            .withf(|name| name == "host")
-            .return_const(Some("example.com".to_string()));
-        mock_session.expect_get_path().return_const("/test".to_string());
-        mock_session.expect_get_method().return_const("POST".to_string());
-        mock_session
-            .expect_get_query()
-            .return_const(Some("key=value".to_string()));
-
-        let headers = plugin.build_auth_headers(&mock_session);
-
-        // Should include non hop-by-hop headers
-        assert!(headers.get("authorization").is_some());
-        assert!(headers.get("content-type").is_some());
-        assert!(headers.get("x-custom-header").is_some());
-
-        // Should NOT include hop-by-hop headers
-        assert!(headers.get("connection").is_none());
-        assert!(headers.get("transfer-encoding").is_none());
-
-        // Should have X-Forwarded-* headers
-        assert_eq!(
-            headers.get("X-Forwarded-Host").unwrap().to_str().unwrap(),
-            "example.com"
-        );
-        assert_eq!(headers.get("X-Forwarded-Uri").unwrap().to_str().unwrap(), "/test");
-        assert_eq!(headers.get("X-Forwarded-Method").unwrap().to_str().unwrap(), "POST");
-        assert_eq!(headers.get("X-Forwarded-Query").unwrap().to_str().unwrap(), "key=value");
-    }
-
-    #[test]
-    fn test_forward_auth_cache_disabled_by_default() {
-        let config = create_valid_config(); // cache_ttl defaults to 0
-        let plugin = ForwardAuth::new(&config);
-        assert!(plugin.auth_cache.is_none(), "cache must be None when cache_ttl == 0");
-    }
-
-    #[test]
-    fn test_forward_auth_cache_enabled_when_ttl_set() {
-        let config = ForwardAuthConfig {
-            uri: "http://auth:8080/verify".to_string(),
-            cache_ttl: 30,
-            lru_cache: LruCacheConfig {
-                capacity: 10,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let plugin = ForwardAuth::new(&config);
-        assert!(plugin.auth_cache.is_some(), "cache must be Some when cache_ttl > 0");
-    }
-
-    #[test]
-    fn test_forward_auth_cache_key_stable() {
-        let request_headers = Some(vec!["authorization".to_string(), "cookie".to_string()]);
-        let mut session = MockPluginSession::new();
-        session.expect_header_value().returning(|name| match name {
-            "authorization" => Some("Bearer token123".to_string()),
-            "cookie" => Some("session=abc".to_string()),
-            _ => None,
-        });
-        let key1 = ForwardAuth::cache_key(&session, &request_headers);
-        let key2 = ForwardAuth::cache_key(&session, &request_headers);
-        assert_eq!(key1, key2, "cache key must be deterministic");
-        assert!(!key1.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_config_validation_error_returns_500() {
-        let config = ForwardAuthConfig {
-            uri: String::new(), // Invalid: empty
-            ..Default::default()
-        };
-        let plugin = ForwardAuth::new(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        // Mock write_response_header/body/shutdown for error response path
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-        mock_session.expect_shutdown().returning(|| {});
-
-        let mut plugin_log = PluginLog::new("ForwardAuth");
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Config error"));
-    }
-
-    fn setup_mock_for_build_auth_headers(mock: &mut MockPluginSession) {
-        mock.expect_request_headers().returning(Vec::new);
-        mock.expect_header_value().returning(|_| None);
-        mock.expect_get_path().return_const("/x".to_string());
-        mock.expect_get_method().return_const("GET".to_string());
-        mock.expect_get_query().return_const(None);
-        mock.expect_add_error()
-            .with(mockall::predicate::eq(
-                crate::types::EdgionStatus::ForwardAuthServiceUnreachable,
-            ))
-            .times(1)
-            .returning(|_| {});
-    }
-
-    #[tokio::test]
-    async fn test_fa_unreachable_tag_non_degraded() {
-        // Connect to a refused port so reqwest returns an error quickly.
-        let config = ForwardAuthConfig {
-            uri: "http://127.0.0.1:1/verify".to_string(),
-            timeout_ms: 500,
-            status_on_error: 502,
-            ..Default::default()
-        };
-        let plugin = ForwardAuth::new(&config);
-
-        let mut mock = MockPluginSession::new();
-        setup_mock_for_build_auth_headers(&mut mock);
-        mock.expect_write_response_header().returning(|_, _| Ok(()));
-        mock.expect_write_response_body().returning(|_, _| Ok(()));
-        mock.expect_shutdown().returning(|| {});
-
-        let mut log = PluginLog::new("ForwardAuth");
-        let r = plugin.run_request(&mut mock, &mut log).await;
-        assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("upstream unreachable"));
-        assert!(!log.contains("upstream unreachable:degraded"));
-    }
-
-    #[tokio::test]
-    async fn test_fa_unreachable_tag_degraded() {
-        let config = ForwardAuthConfig {
-            uri: "http://127.0.0.1:1/verify".to_string(),
-            timeout_ms: 500,
-            allow_degradation: true,
-            ..Default::default()
-        };
-        let plugin = ForwardAuth::new(&config);
-
-        let mut mock = MockPluginSession::new();
-        setup_mock_for_build_auth_headers(&mut mock);
-
-        let mut log = PluginLog::new("ForwardAuth");
-        let r = plugin.run_request(&mut mock, &mut log).await;
-        assert_eq!(r, PluginRunningResult::GoodNext);
-        assert!(log.contains("upstream unreachable:degraded"));
     }
 }

@@ -14,6 +14,8 @@ CORS (Cross-Origin Resource Sharing) is a browser security mechanism that contro
 - Without CORS configuration, the browser blocks frontend access to the API
 - After configuring CORS, the browser allows cross-origin access
 
+> **Note:** CORS does not apply to WebSocket — browsers do not enforce the same-origin policy on WS connections, so Edgion forwards WS handshakes transparently and does not validate the `Origin` header; enforce any WebSocket origin allowlist in your backend service.
+
 ## Quick Start
 
 ### Simplest Configuration (Development Environment)

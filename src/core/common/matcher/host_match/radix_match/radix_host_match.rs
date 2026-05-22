@@ -46,12 +46,6 @@ impl<T> RadixHostMatchEngine<T> {
         &self.tree
     }
 
-    /// Export all RadixHost instances (clones Arc pointers for efficiency)
-    /// This is useful for incremental updates where most hosts remain unchanged
-    pub fn export_hosts(&self) -> Vec<RadixHost<T>> {
-        self.hosts.clone()
-    }
-
     /// Match a hostname and return the matched runtime.
     ///
     /// The caller MUST pass a pre-normalized (lowercased) hostname.
@@ -66,60 +60,25 @@ impl<T> RadixHostMatchEngine<T> {
     pub fn match_host(&self, hostname: &str) -> Option<Arc<T>> {
         let reversed = RadixHost::<T>::reverse_hostname(hostname);
 
-        tracing::trace!("========== Radix Host Matching ==========");
-        tracing::trace!(
-            "Request Hostname: '{}', Reversed: '{}', Available hosts: {}",
-            hostname,
-            reversed,
-            self.hosts.len()
-        );
-
-        // Get all matching prefixes (returns shortest to longest)
-        tracing::trace!("[Step 1] Searching in radix tree...");
         let all_values = self.tree.match_all_prefixes(&reversed);
 
         if all_values.is_empty() {
-            tracing::trace!("No match found in radix tree");
             return None;
         }
 
-        tracing::trace!(
-            "Found {} value(s), checking from longest to shortest...",
-            all_values.len()
-        );
-
         // Iterate from longest to shortest (reverse order since API returns shortest to longest)
-        let mut match_count = 0;
         for &tree_value in all_values.iter().rev() {
-            match_count += 1;
-            tracing::trace!("  [Match #{}] Checking tree value: {}", match_count, tree_value);
-
             if let Some(host_indices) = self.tree_value_to_host_idx.get(&tree_value) {
-                tracing::trace!("    -> {} host(s) for this value", host_indices.len());
                 for &host_idx in host_indices {
                     if let Some(radix_host) = self.hosts.get(host_idx) {
-                        tracing::trace!(
-                            "      Testing: original='{}', radix_key='{}', is_wildcard={}",
-                            radix_host.original,
-                            radix_host.radix_key,
-                            radix_host.is_wildcard
-                        );
                         if radix_host.matches_reversed(&reversed) {
-                            tracing::trace!("      Matched!");
                             return Some(radix_host.runtime.clone());
-                        } else {
-                            tracing::trace!("      Pattern did not match");
                         }
                     }
                 }
             }
         }
 
-        if match_count == 0 {
-            tracing::trace!("No matches found");
-        } else {
-            tracing::trace!("Checked {} match(es), none matched", match_count);
-        }
         None
     }
 

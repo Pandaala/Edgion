@@ -9,3 +9,11 @@ use serde::{Deserialize, Serialize};
 /// for debugging purposes. No configuration is required - simply enable the plugin.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct DebugAccessLogToHeaderConfig {}
+
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for DebugAccessLogToHeaderConfig {
+    fn validation_error(&self) -> Option<String> {
+        None
+    }
+}

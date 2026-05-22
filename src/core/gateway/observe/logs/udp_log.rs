@@ -37,7 +37,7 @@ impl UdpLogEntry {
         upstream_addr: Option<String>,
         session_start: Instant,
     ) -> Self {
-        let session_duration_ms = session_start.elapsed().as_millis() as u64;
+        let session_duration_ms = Instant::now().saturating_duration_since(session_start).as_millis() as u64;
 
         Self {
             ts: chrono::Utc::now().timestamp_millis(),

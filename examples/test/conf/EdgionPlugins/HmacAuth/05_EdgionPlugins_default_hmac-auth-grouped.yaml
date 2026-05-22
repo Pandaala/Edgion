@@ -1,0 +1,30 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: hmac-auth-grouped
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: HmacAuth
+      config:
+        secretGroups:
+          - name: partner-a
+            secretRefs:
+              - name: hmac-credentials-partner-a
+                namespace: edgion-default
+          - name: partner-b
+            secretRefs:
+              - name: hmac-credentials-partner-b
+                namespace: edgion-default
+        algorithms:
+          - hmac-sha256
+        clockSkew: 300
+        enforceHeaders:
+          - "@request-target"
+          - host
+          - date
+        realm: "edgion"
+        upstreamHeaderFields:
+          - X-Consumer-Username
+          - X-Customer-ID

@@ -1,0 +1,36 @@
+# HTTPRoute with an ExtensionRef filter targeting an unsupported kind.
+#
+# The rule's filter list contains an `ExtensionRef` whose `kind` is neither
+# `EdgionPlugins` nor a recognized LBPolicy kind. The controller's preparse
+# step (extension_ref_unsupported_kind_reason in http_route.rs) flags the rule
+# at build time: its index goes into `invalid_rule_indices` and the HTTPRoute
+# gets a `PartiallyInvalid=True` condition whose message names the bad kind.
+#
+# The route is parented to the shared edgion-plugins-gateway (port 31180),
+# the same gateway used by other ExtensionRef-based scenarios.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: unsupported-extension-ref-kind-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "unsupported-extension-ref-kind.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: "/unsupported-kind"
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: NotAPlugin
+            name: x
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

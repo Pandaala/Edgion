@@ -5,83 +5,115 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 
 # Edgion Skills
 
-> Rust + Pingora + Gateway API 的 Kubernetes 网关。Controller–Gateway 分离，gRPC 配置同步。
-> 支持 HTTP/1.1、HTTP/2、gRPC、TCP、UDP、TLS、WebSocket，含插件系统、负载均衡、TLS/mTLS。
+> Kubernetes gateway built on Rust + Pingora + Gateway API. Controller–Gateway separation with gRPC config sync.
+> Supports HTTP/1.1, HTTP/2, gRPC, TCP, UDP, TLS, WebSocket, and includes a plugin system, load balancing, and TLS/mTLS.
 
-## 导航规则
+## Navigation rules
 
-1. **渐进式披露**：本文件 → 分类 SKILL.md → 具体文件。只加载当前任务需要的最小子树。
-2. **三层定位**：
-   - **理解架构**（内部怎么实现） → `01-architecture/`
-   - **查功能/配置**（怎么用/怎么配） → `02-features/`
-   - **写代码**（编码规范） → `03-coding/`
-3. **跨领域任务**：修改一个资源的 Handler 通常需要 architecture（理解处理流程）→ features（功能/Schema 参考）→ coding（编码约束）→ testing（验证），按需逐层加载。
-4. **资源相关任务**——两个目录按编号对齐，职责互补：
-   - [01-architecture/05-resources/](01-architecture/05-resources/SKILL.md) — **内部实现**：Handler 流程、requeue 关联、匹配引擎、源码位置
-   - [02-features/03-resources/](02-features/03-resources/SKILL.md) — **外部契约**：YAML Schema、字段类型与默认值、配置示例
-   - 改代码通常两边都要看：02 查 Schema 确认字段定义，01 查实现确认处理逻辑
+1. **Progressive disclosure**: this file → category SKILL.md → specific files. Only load the smallest subtree the current task needs.
+2. **Three-layer locator**:
+   - **Understand the architecture** (how it's implemented internally) → `01-architecture/`
+   - **Look up features / config** (how to use / how to configure) → `02-features/`
+   - **Write code** (coding conventions) → `03-coding/`
+3. **Cross-domain tasks**: modifying a resource Handler typically requires architecture (understand the processing flow) → features (feature/Schema reference) → coding (coding constraints) → testing (verification), loaded layer by layer as needed.
+4. **Resource-related tasks** — the two directories are aligned by number with complementary responsibilities:
+   - [01-architecture/05-resources/](01-architecture/05-resources/SKILL.md) — **internal implementation**: Handler flow, requeue links, matching engine, source locations
+   - [02-features/03-resources/](02-features/03-resources/SKILL.md) — **external contract**: YAML Schema, field types and default values, configuration examples
+   - When changing code you typically need both: check 02 to confirm field definitions in the Schema, check 01 to confirm processing logic in the implementation
 
-## 快速定位
+## File extensions
 
-| 你想了解… | 直接入口 |
+- `*.skill` — invokable workflow with a step-numbered structure. Must carry YAML frontmatter (`name:`, `description:`). Loaded as a slash command or by name (see `~/.claude/commands/fix-issue.md` for a working example).
+- `SKILL.md` — directory entry point. Routes to sub-files; not invoked directly.
+- `*.md` — reference or decision-rule document. Loaded on demand by an upstream skill via "first read X" hints.
+- Workflow appendix files use the `<workflow>_<role>.md` shape (e.g., `new_feature_work_flow_templates.md`); they are referenced from the parent `.skill` and not loaded independently.
+
+## Quick locator
+
+| What you want to learn | Direct entry |
 |-----------|---------|
-| **系统架构** — Controller/Gateway/Ctl 三 bin 关系、内部模块、开发指南 | [01-architecture/SKILL.md](01-architecture/SKILL.md) |
-| **二进制启动与部署** — CLI 参数、部署模式 | [02-features/01-binary-and-deployment/](02-features/01-binary-and-deployment/SKILL.md) |
-| **TOML 配置 Schema** — Controller/Gateway 配置 | [02-features/02-config/](02-features/02-config/SKILL.md) |
-| **资源功能 Schema** — Gateway/Route/TLS/Plugin/Backend/LinkSys | [02-features/03-resources/](02-features/03-resources/SKILL.md) |
-| **可观测性** — Access Log、Metrics、协议日志 | [02-features/04-observability/](02-features/04-observability/SKILL.md) |
-| **注解参考** — 所有 edgion.io/* 键 | [02-features/05-annotations/](02-features/05-annotations/SKILL.md) |
-| **编码规范** — 日志 ID、日志安全、可观测性 | [03-coding/SKILL.md](03-coding/SKILL.md) |
-| **集成测试** — 架构、运行、新增用例 | [05-testing/01-integration-testing.md](05-testing/01-integration-testing.md) |
-| **全局 Review** — 安全/正确性/可观测性检查清单 + 已关闭误报条目 | [10-fully-review/SKILL.md](10-fully-review/SKILL.md) |
-| **用户文档规范** — 撰写/审阅 docs/ 文档的写作规范 | [11-doc/SKILL.md](11-doc/SKILL.md) |
-| **CI/发布自动化** — GitHub Release、tag 推送、Docker 镜像、发布说明文件位置 | [09-misc/cicd/02-github-workflow.md](09-misc/cicd/02-github-workflow.md) |
-| **Center 联邦持久化** — SQLite `controllers` 表、CenterDb、database 配置（PM 数据已改用反向 Watch，无 SQLite 缓存） | [09-misc/center-db.md](09-misc/center-db.md) |
-| **Center 反向 Watch 架构** — CenterWatchCache、CenterMetaDataStore、federation gRPC 双向流 PM 数据流 | [09-misc/center-db.md#pluginmetadata-数据流反向-watch-架构](09-misc/center-db.md) |
-| **开发部署热替换** — 原生镜像 + shell loop + 交叉编译 + kubectl cp | [09-misc/03-dev-deploy-hot-replace.md](09-misc/03-dev-deploy-hot-replace.md) |
+| **System architecture** — relationship between the four Controller/Gateway/Center/Ctl binaries, internal modules, development guides | [01-architecture/SKILL.md](01-architecture/SKILL.md) |
+| **Binary startup and deployment** — CLI arguments, deployment modes | [02-features/01-binary-and-deployment/](02-features/01-binary-and-deployment/SKILL.md) |
+| **TOML config Schema** — Controller/Gateway configuration | [02-features/02-config/](02-features/02-config/SKILL.md) |
+| **Resource feature Schema** — Gateway/Route/TLS/Plugin/Backend/LinkSys | [02-features/03-resources/](02-features/03-resources/SKILL.md) |
+| **Observability** — Access Log, Metrics, protocol logs | [02-features/04-observability/](02-features/04-observability/SKILL.md) |
+| **Annotation reference** — all edgion.io/* keys | [02-features/05-annotations/](02-features/05-annotations/SKILL.md) |
+| **Coding conventions** — log IDs, log safety, observability | [03-coding/SKILL.md](03-coding/SKILL.md) |
+| **Grouped-list design pattern** — `*_groups` schema, rolling-upgrade serde, first-wins, group-in-ok-log iron rule | [01-architecture/00-common/04-grouped-list-pattern.md](01-architecture/00-common/04-grouped-list-pattern.md) |
+| **Integration testing** — architecture, running, adding test cases | [05-testing/01-integration-testing.md](05-testing/01-integration-testing.md) |
+| **Global review** — security/correctness/observability checklists + closed false-positive entries | [10-fully-review/SKILL.md](10-fully-review/SKILL.md) |
+| **User documentation conventions** — writing conventions for authoring/reviewing docs/ documentation | [11-doc/SKILL.md](11-doc/SKILL.md) |
+| **Pre-commit / local checks** (fmt + check + clippy + check-agent-docs) | [09-misc/SKILL.md](09-misc/SKILL.md) |
+| **GitHub Actions / Docker / Release** — tag pushes, Docker images, release-notes files | [09-misc/cicd/02-github-workflow.md](09-misc/cicd/02-github-workflow.md) |
+| **Center architecture** — federation gRPC, reverse Watch, CenterWatchCache, CenterMetaDataStore, SQLite persistence | [01-architecture/06-center/SKILL.md](01-architecture/06-center/SKILL.md) |
+| **Dev-deployment hot-swap** — native image + shell loop + cross-compilation + kubectl cp | [09-misc/03-dev-deploy-hot-replace.md](09-misc/03-dev-deploy-hot-replace.md) |
 
-> 架构内部细粒度定位（Controller/Gateway/Link/资源/插件开发/路由匹配等）见 [01-architecture/SKILL.md](01-architecture/SKILL.md)。
+> For finer-grained locators inside the architecture (Controller/Gateway/Link/resources/plugin development/route matching, etc.) see [01-architecture/SKILL.md](01-architecture/SKILL.md).
 
-## 关键约束（必读，违反会引入运行时 bug）
+## Task locator (what do you want to do?)
 
-> 这里只列"非显而易见、代码本身看不出来、犯过错"的约束。
+Verbed entries for the most common developer workflows. The Quick locator above answers "where is X documented?"; this table answers "I want to do Y, where do I start?".
 
-| 约束 | 位置 | 详情 |
+| Task | Entry point |
+|------|-------------|
+| Add a new resource type | [01-architecture/01-controller/09-add-new-resource/00-guide.md](01-architecture/01-controller/09-add-new-resource/00-guide.md) |
+| Develop a new HTTP plugin | [01-architecture/02-gateway/12-edgion-plugin-dev.md](01-architecture/02-gateway/12-edgion-plugin-dev.md) |
+| Develop a new Stream plugin | [01-architecture/02-gateway/13-stream-plugin-dev.md](01-architecture/02-gateway/13-stream-plugin-dev.md) |
+| Debug a runtime issue (404 / 421 / 502 / 503 / Unknown kind) | [06-tracing/00-debugging.md](06-tracing/00-debugging.md) |
+| Debug a Controller → Gateway sync issue | [01-architecture/03-controller-gateway-link/SKILL.md](01-architecture/03-controller-gateway-link/SKILL.md) |
+| Add a new edgion.io/* annotation | [02-features/05-annotations/00-annotations-overview.md](02-features/05-annotations/00-annotations-overview.md) |
+| Run pre-commit / local checks (fmt + check + clippy + check-agent-docs) | [09-misc/SKILL.md](09-misc/SKILL.md) |
+| Review a PR (per-feature) | [04-review/SKILL.md](04-review/SKILL.md) |
+| Run a global codebase review | [10-fully-review/SKILL.md](10-fully-review/SKILL.md) |
+
+## Symptom locator
+
+| Symptom | Where |
+|---------|-------|
+| Gateway logs `Unknown kind` after Controller restart | [01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md](01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md) |
+| Routing returns 404 / 421 / 502 / 503 | [06-tracing/00-debugging.md](06-tracing/00-debugging.md) |
+
+## Key constraints (must read; violations introduce runtime bugs)
+
+> Only "non-obvious, not visible from the code itself, and previously got wrong" constraints are listed here.
+
+| Constraint | Location | Details |
 |------|------|------|
-| **PluginConditions regex 必须在 preparse compile** | `conditions/types.rs`, `edgion_plugins/mod.rs` | `compiled_regex` 是 `#[serde(skip)]`，反序列化后为 None。必须在 `EdgionPlugins::preparse()` 阶段调用 `compile_conditions()` 完成编译，否则每请求触发 `Regex::new()`。新增带 regex 的条件类型时，同步在 `Condition::compile()` 加 match 臂。详见 [05-plugin-system.md §条件执行](01-architecture/02-gateway/05-plugin-system.md) |
-| **gRPC H2 grpc-status 必须放 trailers** | Pingora H2 响应路径 | 放在 response headers 里 tonic 会返回 Internal(13)，必须放 trailers |
-| **数据面请求/连接热路径禁止 tracing** | `skills/03-coding/01-log-safety.md` 铁律 3 | 请求/连接处理路径只能用 access log / `PluginLog` / `ctx.err_log` / Metrics，任何 `tracing::` 宏（含 `debug!`）都禁止。例外：配置加载路径、进程启动/关闭、`pg_logging.rs` access log 发送失败。插件 `run_request` / `run_upstream_response` / TLS proxy / stream proxy 全部适用。 |
+| **PluginConditions regex must be compiled in preparse** | `conditions/types.rs`, `edgion_plugins/mod.rs` | `compiled_regex` is `#[serde(skip)]` and is None after deserialization. `compile_conditions()` must be invoked during the `EdgionPlugins::preparse()` phase to finish compilation, otherwise `Regex::new()` is triggered on every request. When adding a new condition type with a regex, also extend the match arm in `Condition::compile()`. See [05-plugin-system.md §Condition execution](01-architecture/02-gateway/05-plugin-system.md) for details. |
+| **gRPC H2 grpc-status must be placed in trailers** | Pingora H2 response path | Placing it in response headers causes tonic to return Internal(13); it must go in trailers. |
+| **Tracing is forbidden on the data-plane request/connection hot path** | `skills/03-coding/01-log-safety.md` iron rule 3 | The request/connection processing path may only use access log / `PluginLog` / `ctx.err_log` / Metrics; any `tracing::` macro (including `debug!`) is forbidden. Exceptions: configuration loading paths, process startup/shutdown, and access-log send failures in `pg_logging.rs`. Applies to plugin `run_request` / `run_upstream_response` / TLS proxy / stream proxy across the board. |
+| **No PluginLog in the `UpstreamResponseBodyFilter` body phase** | `traits/upstream_response_body_filter.rs`, `conditions/evaluator.rs` | The trait signature deliberately omits `&mut PluginLog`; the body phase is invoked once per chunk, and any heap allocation per chunk (PluginLog / String / Vec) accumulates as O(chunks×plugins). When adding a new body-phase filter / wrapper, do not write logs; condition evaluation should use the `evaluate_sync_silent` chain rather than `evaluate_detail_sync`, and ExtensionRef should go through `resolve_runtime_silent`. A long-stream memory leak (issue g2-001) was once introduced because ExtensionRef accidentally called `start_edgion_plugins_log`. See [05-plugin-system.md §No PluginLog in body phase](01-architecture/02-gateway/05-plugin-system.md) for details. |
+| **`ConfHandler.partial_update` MUST produce a real incremental diff, never merge-into-full-then-full-set** | [`01-architecture/02-gateway/11-conf-handler-guidelines.md:30`](01-architecture/02-gateway/11-conf-handler-guidelines.md) | The trait signature compiles a "merge + full rebuild" body, but doing so loses updates. If incremental is not yet implemented, mark with `// TODO: incremental rebuild` rather than emulating via full_set. |
+| **ConfHandler logs MUST NOT contain Secret / TLS resource bodies** | [`01-architecture/02-gateway/11-conf-handler-guidelines.md:52-54`](01-architecture/02-gateway/11-conf-handler-guidelines.md) | Logs may record metadata (key name, counts, affected scope) and error messages only. The full spec must never appear in any log line. |
 
-## 目录总览
+## Common practice notes
 
-| # | 目录 | 用途 |
+> Project-wide norms — not hard rules like the table above. Prefer these defaults; deviate with reason and document it.
+
+- **Graceful degrade over panic in long-running paths** — in data-plane filters and control-plane reconcile loops, an unreachable "should-not-happen" branch should normally return a safe default and leave an observability trail (`plugin_log.push_err(...)` on the data plane, `tracing::warn!`/`error!` on the control plane), not `panic!` / `debug_assert!(false, ...)` / `unreachable!()`. Exceptions: startup/init, exhaustive-match dead arms, data-corruption fail-fast. See [03-coding/02-rust-coding-rules.md §Rule 5](03-coding/02-rust-coding-rules.md). Cross-codebase audit: `tasks/todo/graceful-degrade-audit.md`.
+
+## Directory overview
+
+| # | Directory | Purpose |
 |---|------|------|
-| 01 | [architecture/](01-architecture/SKILL.md) | 系统架构 + 开发指南：Controller、Gateway、gRPC 同步、资源处理、插件/资源/连接器开发 |
-| 02 | [features/](02-features/SKILL.md) | 功能与配置参考：二进制部署、配置 Schema、资源功能 Schema、可观测性、注解 |
-| 03 | [coding/](03-coding/SKILL.md) | 编码规范：日志 ID、日志安全、可观测性（Access Log / Metrics / Tracing） |
-| 04 | [review/](04-review/SKILL.md) | Review 沉淀：误报判定、可观测性审查 |
-| 05 | [testing/](05-testing/SKILL.md) | 测试：单元测试、集成测试、K8s 测试、专项测试 |
-| 06 | [tracing/](06-tracing/SKILL.md) | 调试：Admin API、edgion-cli、常见问题 |
-| 07 | [tasks/](07-tasks/SKILL.md) | 任务管理：目录规则、模板、生命周期阶段、完成检查清单 |
-| 08 | [kubernetes/](08-kubernetes/SKILL.md) | Kubernetes 相关：Gateway API 兼容性、API 版本升级策略 |
-| 09 | [misc/](09-misc/) | 杂项（TLS 排查等） |
-| 10 | [fully-review/](10-fully-review/SKILL.md) | 全局 Review 指南：各维度检查清单、安全误判规则、已关闭条目 |
-| 11 | [11-doc/](11-doc/SKILL.md) | 用户文档规范：目录结构、写作风格、页面模板、多语言、版本管理、Review 检查清单 |
+| 01 | [architecture/](01-architecture/SKILL.md) | System architecture + development guides: Controller, Gateway, gRPC sync, resource processing, plugin/resource/connector development |
+| 02 | [features/](02-features/SKILL.md) | Feature and configuration reference: binary deployment, configuration Schema, resource feature Schema, observability, annotations |
+| 03 | [coding/](03-coding/SKILL.md) | Coding conventions: log IDs, log safety, observability (Access Log / Metrics / Tracing) |
+| 04 | [review/](04-review/SKILL.md) | Review notes: false-positive determinations, observability audits |
+| 05 | [testing/](05-testing/SKILL.md) | Testing: unit tests, integration tests, K8s tests, special-purpose tests |
+| 06 | [tracing/](06-tracing/SKILL.md) | Debugging — symptom-to-tool guide: Admin API, edgion-cli, common runtime issues (not distributed tracing) |
+| 07 | [tasks/](07-tasks/SKILL.md) | Task management: directory rules, templates, lifecycle phases, completion checklists |
+| 08 | [kubernetes/](08-kubernetes/SKILL.md) | Kubernetes-related: Gateway API compatibility, API version upgrade strategy |
+| 09 | [misc/](09-misc/SKILL.md) | Miscellaneous (TLS troubleshooting, etc.) |
+| 10 | [fully-review/](10-fully-review/SKILL.md) | Global review guide: per-dimension checklists, security misjudgement rules, closed entries |
+| 11 | [11-doc/](11-doc/SKILL.md) | User documentation conventions: directory layout, writing style, page templates, multilingual, version management, review checklist |
 
-## 开发生命周期速查
+## Development lifecycle
 
-任务按阶段推进，每阶段加载对应 skills（详见 [07-tasks/SKILL.md](07-tasks/SKILL.md)）：
+See [`07-tasks/SKILL.md`](07-tasks/SKILL.md) for the full lifecycle phase table (Analysis → Design → Implementation → Test → Review).
 
-| Phase | 做什么 | 加载 |
-|-------|--------|------|
-| 1 Analysis | 需求分析、影响评估 | `01-architecture/` |
-| 2 Design | 方案设计、Schema 确认 | `01-architecture/`, `02-features/` |
-| 3 Implementation | 编码 | `01-architecture/`（开发指南）, `02-features/`（配置 Schema）, `03-coding/` |
-| 4 Testing | 测试验证 | `05-testing/` |
-| 5 Review | 代码审查 | `04-review/`, `10-fully-review/`（全局 review 或评审 AI 报告时） |
+## User documentation
 
-## 用户文档
+Located under `docs/`, organized by language (en, zh-CN, ja). The complete directory tree is in [docs/DIRECTORY.md](../docs/DIRECTORY.md).
 
-位于 `docs/`，按语言分目录（en、zh-CN、ja）。完整目录树见 [docs/DIRECTORY.md](../docs/DIRECTORY.md)。
-
-撰写或审阅用户文档时，遵循 [11-doc/SKILL.md](11-doc/SKILL.md) 中的写作规范。
+When authoring or reviewing user documentation, follow the writing conventions in [11-doc/SKILL.md](11-doc/SKILL.md).

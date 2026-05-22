@@ -2,85 +2,85 @@
 name: debugging-and-troubleshooting
 description: Day-to-day development debugging guide for Edgion. Use when local code changes break routing, plugins, sync, readiness, or runtime behavior and you need a fast workflow using keep-alive integration runs, Admin API, edgion-cli, access-log store, metrics, and resource_diff.
 ---
-# 调试与排障
+# Debugging and troubleshooting
 
-> 面向日常开发排障，不是“怎么写测试”，而是“代码改完后现在到底坏在哪一层”。
-> 如果问题明显集中在 TLS Gateway，请优先补读 [../09-misc/debugging-tls-gateway.md](../09-misc/debugging-tls-gateway.md)。
+> Aimed at daily development troubleshooting — not "how to write tests" but "after this code change, which layer is now broken".
+> If the issue is clearly concentrated in TLS Gateway, also read [../09-misc/debugging-tls-gateway.md](../09-misc/debugging-tls-gateway.md) first.
 
-## 先选调试入口
+## Pick the debugging entry point first
 
-### 1. 配置 / 同步链路问题
+### 1. Configuration / sync chain issues
 
-症状：
-- `edgion-cli apply` 成功，但 Gateway 没生效
-- Controller `ready` 一直不通过
-- Gateway `ready` 一直不通过
-- 改了 YAML，但 `server` / `client` 视图不一致
+Symptoms:
+- `edgion-cli apply` succeeds but the Gateway doesn't react
+- Controller `ready` never passes
+- Gateway `ready` never passes
+- YAML changed but `server` / `client` views are inconsistent
 
-优先使用：
+Use first:
 - `edgion-cli --target center/server/client`
 - `examples/resource_diff`
 - Controller/Gateway Admin API
 
-### 2. 路由 / 插件运行时问题
+### 2. Routing / plugin runtime issues
 
-症状：
-- 返回 404 / 421 / 502 / 503
-- 插件没执行、顺序不对、条件没命中
-- 路由命中了错误的 Gateway / Listener / Backend
+Symptoms:
+- 404 / 421 / 502 / 503 returned
+- Plugin not executed, in the wrong order, or condition not hit
+- Route hit the wrong Gateway / Listener / Backend
 
-优先使用：
+Use first:
 - Access Log Store
 - Gateway Admin API
-- Gateway 日志和 `store-stats`
+- Gateway logs and `store-stats`
 
-### 3. 负载均衡 / 统计行为问题
+### 3. Load-balancing / statistical-behavior issues
 
-症状：
-- 流量分布不均
-- 一致性哈希不稳定
-- 重试次数和预期不符
+Symptoms:
+- Uneven traffic distribution
+- Unstable consistent hashing
+- Retry count differs from expectation
 
-优先使用：
+Use first:
 - `http://127.0.0.1:5901/metrics`
 - `MetricsClient`
 - `resource_diff`
 
-## 最快的本地调试方式
+## Fastest local debugging
 
-### 保留现场跑单个用例
+### Preserve the scene and run a single case
 
 ```bash
 ./examples/test/scripts/integration/run_integration.sh --keep-alive -r <Resource> -i <Item>
 ```
 
-适合：
-- 先用仓库现成测试配置把现场拉起来
-- 测完后保留 controller / gateway / test_server 进程和日志目录
-- 再手工 `curl`、`edgion-cli`、查日志
+Good for:
+- Bringing up the scene with the repo's existing test config
+- Keeping controller / gateway / test_server processes and log directories after the run
+- Then manually `curl`, `edgion-cli`, and read logs
 
-### 跳过编译快速迭代
+### Skip compile for fast iteration
 
 ```bash
 ./examples/test/scripts/integration/run_integration.sh --no-prepare --keep-alive -r <Resource> -i <Item>
 ```
 
-### 手工启动完整测试环境
+### Manually start the full test environment
 
 ```bash
 ./examples/test/scripts/utils/start_all_with_conf.sh
 ```
 
-这会：
-- 创建 `integration_testing/testing_YYYYMMDD_HHMMSS/`
-- 导出 `EDGION_WORK_DIR`
-- 启动 `test_server`
-- 启动 controller
-- 载入 base config 与 suite config
-- 启动 gateway
-- 最后执行一次 `resource_diff`
+This will:
+- Create `integration_testing/testing_YYYYMMDD_HHMMSS/`
+- Export `EDGION_WORK_DIR`
+- Start `test_server`
+- Start the controller
+- Load base config and suite config
+- Start the gateway
+- Finally run `resource_diff` once
 
-## 第一步：看服务是否真的活着
+## Step 1: confirm the services are actually alive
 
 ### Controller
 
@@ -99,14 +99,14 @@ curl -sf http://127.0.0.1:5900/api/v1/server-info
 curl -sf http://127.0.0.1:5901/health
 ```
 
-当前实现里要特别记住：
-- Gateway Admin API 端口当前固定是 `5900`
-- Gateway Metrics API 端口当前固定是 `5901`
-- `gateway.admin_listen` 字段目前存在于配置结构里，但启动逻辑还没有真正用它
+Things to remember about the current implementation:
+- The Gateway Admin API port is currently fixed at `5900`
+- The Gateway Metrics API port is currently fixed at `5901`
+- The `gateway.admin_listen` field exists in the config struct, but the startup logic does not use it yet
 
-## 第二步：用 center / server / client 三视图定位问题层次
+## Step 2: use the center / server / client three views to locate the issue layer
 
-`edgion-cli` 的三种 target 非常适合快速定位：
+The three `edgion-cli` targets are great for fast localization:
 
 ```bash
 ./target/debug/edgion-cli get httproute -n default
@@ -114,22 +114,22 @@ curl -sf http://127.0.0.1:5901/health
 ./target/debug/edgion-cli -t client get httproute -n default
 ```
 
-判断规则：
+Decision rules:
 
-| 现象 | 大概率问题层 |
+| Symptom | Probable issue layer |
 |------|--------------|
-| `center` 没有资源 | 配置没真正 apply 进去，或 kind / namespace / name 用错 |
-| `center` 有，`server` 没有 | Controller `ProcessorHandler` 校验 / preparse / parse / requeue 链路 |
-| `server` 有，`client` 没有 | gRPC sync、`no_sync_kinds`、Gateway readiness、watch/list 过程 |
-| `client` 有，但流量行为不对 | Gateway `ConfHandler`、运行时 store、route/plugin/tls/backend 逻辑 |
+| `center` has no resource | Config not really applied, or wrong kind / namespace / name |
+| `center` has it, `server` doesn't | Controller `ProcessorHandler` validation / preparse / parse / requeue chain |
+| `server` has it, `client` doesn't | gRPC sync, `no_sync_kinds`, Gateway readiness, watch/list flow |
+| `client` has it, but traffic behavior is wrong | Gateway `ConfHandler`, runtime store, route/plugin/tls/backend logic |
 
-如果是批量核对，直接跑：
+For batch comparison, just run:
 
 ```bash
 ./target/debug/examples/resource_diff
 ```
 
-或指定地址：
+Or specify the addresses:
 
 ```bash
 ./target/debug/examples/resource_diff \
@@ -137,9 +137,9 @@ curl -sf http://127.0.0.1:5901/health
   --gateway-url http://127.0.0.1:5900
 ```
 
-## 第三步：看关键 Admin API
+## Step 3: check key Admin APIs
 
-### Controller 侧
+### Controller side
 
 - `/api/v1/server-info`
 - `/api/v1/reload`
@@ -148,7 +148,7 @@ curl -sf http://127.0.0.1:5901/health
 - `/configserver/{kind}/list`
 - `/configserver/{kind}?name=...&namespace=...`
 
-示例（Controller 侧所有端点在启用认证时均需 Bearer token；未登录请先 `edgion-cli login` 或从 `~/.edgion/token` 取 token）：
+Examples (all Controller-side endpoints require a Bearer token when authentication is enabled; if not logged in, run `edgion-cli login` first or read the token from `~/.edgion/token`):
 
 ```bash
 TOKEN=$(cat ~/.edgion/token)
@@ -156,41 +156,41 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5800/configserver/htt
 curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:5800/configserver/httproute?namespace=default&name=my-route" | jq .
 ```
 
-### Gateway 侧
+### Gateway side
 
 - `/api/v1/server-info`
 - `/configclient/{kind}/list`
 - `/configclient/{kind}?name=...&namespace=...`
 - `/api/v1/debug/store-stats`
 
-示例：
+Examples:
 
 ```bash
 curl -s http://127.0.0.1:5900/configclient/httproute/list | jq .
 curl -s http://127.0.0.1:5900/api/v1/debug/store-stats | jq .
 ```
 
-`store-stats` 特别适合看：
-- route manager 里到底有没有对象
-- TLS store / plugin store / backend policy store 有没有泄漏或残留
+`store-stats` is especially good for seeing:
+- Whether objects are in the route manager
+- Whether the TLS store / plugin store / backend policy store has leaks or residue
 
-## 第四步：抓 Access Log Store，看插件和路由实际执行了什么
+## Step 4: capture Access Log Store to see what plugins and routes actually executed
 
-前提：Gateway 必须带 `--integration-testing-mode` 启动。
+Prerequisite: the Gateway must start with `--integration-testing-mode`.
 
-### 直接用 HTTP 请求抓
+### Capture by direct HTTP request
 
-1. 请求时带：
-   - `x-trace-id: <唯一值>`
+1. Send the request with:
+   - `x-trace-id: <unique value>`
    - `access_log: test_store`
-2. 再去查：
+2. Then query:
 
 ```bash
 curl -s http://127.0.0.1:5900/api/v1/testing/status | jq .
 curl -s http://127.0.0.1:5900/api/v1/testing/access-log/<trace-id> | jq .
 ```
 
-### 你应该重点看这些字段
+### Focus on these fields
 
 - `request_info.host`
 - `request_info.path`
@@ -199,30 +199,30 @@ curl -s http://127.0.0.1:5900/api/v1/testing/access-log/<trace-id> | jq .
 - `stage_logs`
 - `errors`
 
-如果是插件问题，`stage_logs` 最有用；如果是上游问题，优先看 `backend.upstreams` 和 `errors`。
+For plugin issues, `stage_logs` is the most useful; for upstream issues, look first at `backend.upstreams` and `errors`.
 
-代码侧现成客户端在：
+A ready-made client on the code side:
 - `examples/code/client/access_log_client.rs`
 
-## 第五步：看 Metrics
+## Step 5: check Metrics
 
-Metrics 服务在：
+The metrics service is at:
 
 ```bash
 curl -s http://127.0.0.1:5901/metrics
 ```
 
-适合验证：
-- 负载均衡分布
-- 一致性哈希
-- 重试与上游请求次数
-- 日志丢弃计数
+Good for verifying:
+- Load-balancing distribution
+- Consistent hashing
+- Retry and upstream request counts
+- Log-drop counters
 
-如果问题是“统计行为不符合预期”，优先走 metrics，不要只看单次响应。
+For "statistical behavior is wrong" issues, prefer metrics rather than just looking at a single response.
 
-## 第六步：看日志目录和关键文件
+## Step 6: check log directories and key files
 
-集成测试现场最常用的是：
+In an integration test scene, the most commonly used are:
 
 - `${EDGION_WORK_DIR}/logs/gateway.log`
 - `${EDGION_WORK_DIR}/logs/controller.log`
@@ -230,79 +230,79 @@ curl -s http://127.0.0.1:5901/metrics
 - `${EDGION_WORK_DIR}/logs/ssl.log`
 - `${EDGION_WORK_DIR}/logs/tls_access.log`
 
-如果是 `run_integration.sh` 生成的现场，优先看：
+For a scene generated by `run_integration.sh`, look first at:
 
 - `integration_testing/<timestamp>/logs/`
 - `integration_testing/<timestamp>/test_logs/`
 - `integration_testing/<timestamp>/report.log`
 
-## 第七步：远程 K8s 集群现场（不重建镜像）
+## Step 7: remote K8s cluster scene (without rebuilding the image)
 
-适合这种场景：
-- 问题只在远程集群复现
-- 不想每次都 rebuild 镜像 + rollout
-- 需要把本地刚编译的 `edgion-gateway` / `edgion-controller` 快速塞进现有 Pod 验证
+Suitable when:
+- The issue only reproduces in the remote cluster
+- You don't want to rebuild + rollout images every time
+- You need to push a freshly compiled local `edgion-gateway` / `edgion-controller` into an existing Pod for quick verification
 
-### 7.1 先记住两个前提
+### 7.1 Two prerequisites
 
-- **binary target 必须和节点架构一致**。例如远程集群是 `linux/amd64`，就用 `x86_64-unknown-linux-gnu`；如果是别的架构，替换成对应 target。
-- **PID 1 往往不是业务进程，而是 shell loop**。不要 kill PID 1，否则容器会用镜像里的旧 binary 重新起来，热替换结果会丢。
+- **The binary target must match the node architecture**. For example, if the remote cluster is `linux/amd64`, use `x86_64-unknown-linux-gnu`; for other architectures, swap to the appropriate target.
+- **PID 1 is often not the business process but a shell loop**. Do not kill PID 1, otherwise the container will restart with the old binary from the image and the hot replacement is lost.
 
-### 7.2 热替换 Pod 里的 binary
+### 7.2 Hot-replace the binary inside the Pod
 
-两个常见事实：
-- `/usr/local/bin/` 通常是镜像内 root 拥有的原始 binary，不适合覆盖
-- `/usr/local/edgion/` 是运行时覆盖位；如果这里有同名 binary，entrypoint loop 会优先执行它
+Two common facts:
+- `/usr/local/bin/` is usually the original binary owned by root in the image and is not suitable to overwrite
+- `/usr/local/edgion/` is the runtime override location; if a binary with the same name lives here, the entrypoint loop runs it preferentially
 
 ```bash
 NS="edgion-system"
 POD="edgion-gateway-xxxxx"
-BIN="edgion-gateway"   # 或 edgion-controller
+BIN="edgion-gateway"   # or edgion-controller
 LOCAL="target/x86_64-unknown-linux-gnu/release/$BIN"
 
-# 1. 先把 binary 拷进 Pod 临时目录
+# 1. Copy the binary into a temp dir in the Pod
 kubectl cp "$LOCAL" "$NS/$POD:/tmp/$BIN" -c "$BIN"
 
-# 2. 挪到运行时覆盖路径
+# 2. Move it to the runtime-override path
 kubectl exec -n "$NS" "$POD" -c "$BIN" -- sh -c \
   "rm -f /usr/local/edgion/$BIN && \
    cp /tmp/$BIN /usr/local/edgion/$BIN && \
    chmod +x /usr/local/edgion/$BIN"
 
-# 3. 杀掉业务子进程，让 shell loop 用新 binary 拉起
+# 3. Kill the business child process so the shell loop relaunches with the new binary
 PID=$(kubectl exec -n "$NS" "$POD" -c "$BIN" -- \
   pgrep -f "/usr/local/edgion/$BIN" | grep -v '^1$' | head -1)
 kubectl exec -n "$NS" "$POD" -c "$BIN" -- kill -9 "$PID"
 ```
 
-常见坑：
-- `Text file busy`：先 `rm -f` 再 `cp`
-- `Permission denied`：说明你写到了 `/usr/local/bin/`，应该改写 `/usr/local/edgion/`
-- 日志还是旧报错：多半是旧子进程没杀掉，或在 `cp` 和 `kill` 之间又跑了一次旧 binary
+Common pitfalls:
+- `Text file busy`: `rm -f` first, then `cp`
+- `Permission denied`: you wrote to `/usr/local/bin/`; switch to `/usr/local/edgion/`
+- Logs still show the old error: most likely an old child process wasn't killed, or the old binary ran once between `cp` and `kill`
 
-### 7.3 快速确认新 binary 确实生效
+### 7.3 Quickly confirm the new binary is in effect
 
 ```bash
 kubectl exec -n "$NS" "$POD" -c "$BIN" -- /usr/local/edgion/$BIN --version
 kubectl exec -n "$NS" "$POD" -c "$BIN" -- md5sum /usr/local/edgion/$BIN
 ```
 
-如果只是确认某段旧错误字符串已经消失，也可以在本地先查：
+To confirm a specific old error string has disappeared, you can also check locally first:
 
 ```bash
 strings "$LOCAL" | rg "expected error text"
 ```
 
-### 7.4 在 Pod 里看端口和日志
+### 7.4 Check ports and logs inside the Pod
 
-先查现在到底绑定了哪些端口：
+First check which ports are currently bound:
 
 ```bash
 kubectl exec -n "$NS" "$POD" -c edgion-gateway -- \
   cat /proc/$(pgrep -f edgion-gateway | grep -v '^1$' | head -1)/net/tcp
 ```
 
-集群内日志路径通常在：
+In-cluster log paths are usually at:
 
 ```text
 /usr/local/edgion/logs/
@@ -320,39 +320,39 @@ kubectl exec -n "$NS" "$POD" -c edgion-gateway -- \
 kubectl logs -n "$NS" "$POD" -c edgion-gateway --since=120s
 ```
 
-这里要区分：
-- `kubectl logs` 看的主要是 PID 1 shell loop 的 stdout/stderr，适合看启动报错、`anyhow::bail!`、`[restart]`
-- 结构化 tracing、TLS access、证书错误，优先看 `/usr/local/edgion/logs/*`
+Distinguish:
+- `kubectl logs` mostly shows the stdout/stderr of the PID 1 shell loop — good for startup errors, `anyhow::bail!`, `[restart]`
+- For structured tracing, TLS access, and certificate errors, look at `/usr/local/edgion/logs/*` first
 
-### 7.5 如果是在排 Gateway API conformance
+### 7.5 If you are debugging Gateway API conformance
 
-- in-cluster runner 用法看 [../08-kubernetes/01-gateway-api/02-conformance-testing.md](../08-kubernetes/01-gateway-api/02-conformance-testing.md)
-- TLS conformance / 预绑定 listener / 失败模式看 [../08-kubernetes/01-gateway-api/06-conformance-debug-cookbook.md](../08-kubernetes/01-gateway-api/06-conformance-debug-cookbook.md)
+- For in-cluster runner usage see [../08-kubernetes/01-gateway-api/02-conformance-testing.md](../08-kubernetes/01-gateway-api/02-conformance-testing.md)
+- For TLS conformance / pre-bound listeners / failure modes see [../08-kubernetes/01-gateway-api/06-conformance-debug-cookbook.md](../08-kubernetes/01-gateway-api/06-conformance-debug-cookbook.md)
 
-## 常见症状速查
+## Common-symptom quick lookup
 
-| 症状 | 先看哪里 |
+| Symptom | Look here first |
 |------|---------|
-| `edgion-cli apply` 成功但 Gateway 没变化 | 三视图对比 + `resource_diff` |
-| Controller `ready` 不通过 | `gatewayclass` / `gateway` / `processor` 日志，必要时看 `/api/v1/server-info` |
-| Gateway `ready` 不通过 | `client` 侧缓存、`supported_kinds`、`server_id`、watch/list 日志 |
-| 404 / no match | `configclient` 资源、`store-stats`、Access Log `matched_route` |
-| 502 / 503 | `Service` / `EndpointSlice` / `Endpoint`、backend store、metrics、上游日志 |
-| 插件没执行 | Access Log Store 的 `stage_logs` |
-| TLS 握手或证书问题 | `ssl.log`、`tls_access.log`、[../09-misc/debugging-tls-gateway.md](../09-misc/debugging-tls-gateway.md) |
+| `edgion-cli apply` succeeds but Gateway doesn't change | Three-view comparison + `resource_diff` |
+| Controller `ready` doesn't pass | `gatewayclass` / `gateway` / `processor` logs; if needed, `/api/v1/server-info` |
+| Gateway `ready` doesn't pass | `client`-side cache, `supported_kinds`, `server_id`, watch/list logs |
+| 404 / no match | `configclient` resources, `store-stats`, Access Log `matched_route` |
+| 502 / 503 | `Service` / `EndpointSlice` / `Endpoint`, backend store, metrics, upstream logs |
+| Plugin not executed | `stage_logs` of the Access Log Store |
+| TLS handshake or certificate issue | `ssl.log`, `tls_access.log`, [../09-misc/debugging-tls-gateway.md](../09-misc/debugging-tls-gateway.md) |
 
-## 如果是配置层面的问题
+## If it is a configuration-layer issue
 
-很多“为什么改了 TOML / work_dir / conf_dir 没生效”的问题，本质上不是调试，而是配置层次没选对。
-这类问题优先转去：
+Many "why my TOML / work_dir / conf_dir change didn't take effect" issues are not about debugging but about choosing the wrong configuration layer.
+For those, jump to:
 
 - [../02-features/02-config/SKILL.md](../02-features/02-config/SKILL.md)
 
-## 代码入口速查
+## Code entry-point quick reference
 
-- Controller Admin API：`src/core/controller/api/`
-- Gateway Admin API：`src/core/gateway/api/mod.rs`
-- `edgion-cli`：`src/core/ctl/cli/`
-- Gateway 启动入口：`src/core/gateway/cli/mod.rs`
-- Controller 启动入口：`src/core/controller/cli/mod.rs`
-- 资源同步核对工具：`examples/code/validator/resource_diff.rs`
+- Controller Admin API: `src/core/controller/api/`
+- Gateway Admin API: `src/core/gateway/api/mod.rs`
+- `edgion-cli`: `src/core/ctl/cli/`
+- Gateway startup entry: `src/core/gateway/cli/mod.rs`
+- Controller startup entry: `src/core/controller/cli/mod.rs`
+- Resource sync verification tool: `examples/code/validator/resource_diff.rs`

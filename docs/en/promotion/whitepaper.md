@@ -361,7 +361,7 @@ Key mechanisms:
 - **Short-circuit interruption.** If any plugin returns `ErrResponse` or `ErrTerminateRequest`, the plugin chain is immediately interrupted and no subsequent plugins are executed. This allows authentication plugins to be placed at the head of the chain so that unauthenticated requests never reach downstream business plugins.
 - **Conditional execution.** Each plugin entry supports a `conditions` configuration; at runtime, conditions are evaluated before executing the plugin (based on request method, path, header, cookie, etc.), and the plugin is skipped if conditions are not met. This is equivalent to adding a preceding `if` check to each plugin.
 - **Enable/disable.** Each plugin entry supports an `enabled` field; plugins set to false are completely skipped when building the PluginRuntime.
-- **Nested references.** Through the `ExtensionRef` mechanism, one EdgionPlugins can reference another EdgionPlugins resource to enable reuse of plugin configurations. The runtime uses `push_plugin_ref` / `has_plugin_ref` for circular reference detection to prevent infinite recursion.
+- **Cross-route reuse.** Multiple HTTPRoutes / GRPCRoutes can reference the same EdgionPlugins resource via `ExtensionRef` (the Gateway API standard filter), sharing one plugin chain configuration across routes. This model parallels Envoy ECDS: reuse is expressed as "multiple Routes referencing the same resource", while the filter chain itself remains a flat list rather than a graph.
 
 ### 5.4 Panic Isolation
 
@@ -482,7 +482,7 @@ Edgion maintains independent log channels and log files for each protocol Listen
 | TLS | `tls_log` | `init_tls_logger` | `edgion_tls_log_dropped_total` |
 | UDP | `udp_log` | `init_udp_logger` | `edgion_udp_log_dropped_total` |
 
-This isolation design ensures that a write bottleneck in one protocol's log channel does not cascade and affect other protocols. Slow TCP log writes will not cause HTTP access log drops. Each log channel has an independent buffer (`LogBuffer`/`ULogBuffer`) using `SmallVec` for stack allocation, reducing heap memory pressure.
+This isolation design ensures that a write bottleneck in one protocol's log channel does not cascade and affect other protocols. Slow TCP log writes will not cause HTTP access log drops. Each log channel has an independent buffer using `SmallVec` for stack allocation, reducing heap memory pressure.
 
 ### 6.4 Async Channel Dispatch
 

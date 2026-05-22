@@ -1,15 +1,15 @@
 ---
 name: edgion-tls-features
-description: EdgionTls CRD 完整 Schema：mTLS 双向认证、TLS 版本控制、密码套件、OCSP、会话管理。
+description: Full EdgionTls CRD schema: mTLS mutual authentication, TLS version control, cipher suites, OCSP, session management.
 ---
 
-# EdgionTls 资源
+# EdgionTls Resource
 
 > API: `edgion.io/v1` | Scope: Namespaced
 
-EdgionTls 是 Edgion 的扩展 TLS 配置资源，提供超越 Gateway 内置 `tls.certificateRefs` 的高级 TLS 功能。
+EdgionTls is Edgion's extended TLS configuration resource, providing advanced TLS features beyond the Gateway built-in `tls.certificateRefs`.
 
-## 完整 Schema
+## Full Schema
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -18,39 +18,39 @@ metadata:
   name: my-tls
   namespace: default
   annotations:
-    edgion.io/expose-client-cert: "true"          # 暴露客户端证书信息到请求头
+    edgion.io/expose-client-cert: "true"          # Expose client certificate information to request headers
 spec:
-  parentRefs:                                      # 挂载到 Gateway Listener
+  parentRefs:                                      # Attach to Gateway Listener
     - name: my-gateway
       sectionName: https
 
-  hosts:                                           # 必填：适用的主机名列表
+  hosts:                                           # Required: list of applicable hostnames
     - "api.example.com"
     - "*.example.com"
 
-  secretRef:                                       # 必填：TLS 证书 Secret 引用
+  secretRef:                                       # Required: TLS certificate Secret reference
     name: my-cert-secret
-    namespace: cert-ns                             # 跨命名空间需 ReferenceGrant
+    namespace: cert-ns                             # Cross-namespace requires ReferenceGrant
 
-  clientAuth:                                      # mTLS 客户端认证配置
+  clientAuth:                                      # mTLS client authentication configuration
     mode: Mutual                                   # Terminate | Mutual | OptionalMutual
-    caSecretRef:                                   # mode=Mutual/OptionalMutual 时必填
+    caSecretRef:                                   # Required when mode=Mutual/OptionalMutual
       name: ca-cert-secret
       namespace: cert-ns
-    verifyDepth: 1                                 # 证书链验证深度（1-9，默认 1）
-    allowedSans:                                   # SAN 白名单
+    verifyDepth: 1                                 # Certificate chain verification depth (1-9, default 1)
+    allowedSans:                                   # SAN allowlist
       - "client.example.com"
-    allowedCns:                                    # CN 白名单
+    allowedCns:                                    # CN allowlist
       - "My Client"
 
-  minTlsVersion: Tls12                             # 最低 TLS 版本
+  minTlsVersion: Tls12                             # Minimum TLS version
 
-  ciphers:                                         # OpenSSL 格式密码套件列表
+  ciphers:                                         # OpenSSL-format cipher suite list
     - "ECDHE-ECDSA-AES256-GCM-SHA384"
     - "ECDHE-RSA-AES256-GCM-SHA384"
 
-  extend:                                          # 扩展/实验性 TLS 配置
-    preferServerCiphers: true                      # 优先使用服务端密码套件顺序
+  extend:                                          # Extended/experimental TLS configuration
+    preferServerCiphers: true                      # Prefer the server-side cipher suite order
 
     ocspStapling:                                  # OCSP Stapling
       enabled: true
@@ -67,7 +67,7 @@ spec:
       maxEntries: 10000
       ttlSeconds: 3600
 
-    revocationCheck:                               # 证书吊销检查
+    revocationCheck:                               # Certificate revocation check
       mode: ocsp                                   # off | ocsp | crl
       failOpen: false
 
@@ -76,94 +76,94 @@ spec:
       rejectOnReplay: true
 ```
 
-## spec 字段详解
+## spec Field Details
 
-### 基础字段
+### Basic Fields
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `parentRefs` | `Vec<ParentReference>` | 否 | 挂载到 Gateway Listener |
-| `hosts` | `Vec<String>` | 是 | 适用的主机名列表 |
-| `secretRef` | `SecretObjectReference` | 是 | TLS 证书 Secret 引用 |
-| `minTlsVersion` | `TlsVersion?` | 否 | 最低 TLS 版本 |
-| `ciphers` | `Vec<String>?` | 否 | OpenSSL 格式密码套件 |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `parentRefs` | `Vec<ParentReference>` | No | Attach to Gateway Listener |
+| `hosts` | `Vec<String>` | Yes | List of applicable hostnames |
+| `secretRef` | `SecretObjectReference` | Yes | TLS certificate Secret reference |
+| `minTlsVersion` | `TlsVersion?` | No | Minimum TLS version |
+| `ciphers` | `Vec<String>?` | No | OpenSSL-format cipher suites |
 
-### TlsVersion 枚举
+### TlsVersion Enum
 
-| 值 | 说明 |
-|----|------|
-| `Tls10` | TLS 1.0（不推荐） |
-| `Tls11` | TLS 1.1（不推荐） |
-| `Tls12` | TLS 1.2（推荐最低版本） |
+| Value | Description |
+|-------|-------------|
+| `Tls10` | TLS 1.0 (not recommended) |
+| `Tls11` | TLS 1.1 (not recommended) |
+| `Tls12` | TLS 1.2 (recommended minimum version) |
 | `Tls13` | TLS 1.3 |
 
-### clientAuth — mTLS 配置
+### clientAuth — mTLS Configuration
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `mode` | `ClientAuthMode` | `Terminate` | 认证模式 |
-| `caSecretRef` | `SecretObjectReference?` | — | CA 证书 Secret（Mutual/OptionalMutual 必填） |
-| `verifyDepth` | `u8` | `1` | 证书链验证深度（1-9） |
-| `allowedSans` | `Vec<String>?` | — | Subject Alternative Name 白名单 |
-| `allowedCns` | `Vec<String>?` | — | Common Name 白名单 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | `ClientAuthMode` | `Terminate` | Authentication mode |
+| `caSecretRef` | `SecretObjectReference?` | — | CA certificate Secret (required for Mutual/OptionalMutual) |
+| `verifyDepth` | `u8` | `1` | Certificate chain verification depth (1-9) |
+| `allowedSans` | `Vec<String>?` | — | Subject Alternative Name allowlist |
+| `allowedCns` | `Vec<String>?` | — | Common Name allowlist |
 
-**ClientAuthMode 枚举**:
+**ClientAuthMode enum**:
 
-| 值 | 说明 |
-|----|------|
-| `Terminate` | 单向 TLS：仅验证服务端证书（默认） |
-| `Mutual` | 双向 TLS：必须提供有效客户端证书 |
-| `OptionalMutual` | 可选双向 TLS：客户端证书可选，提供则验证 |
+| Value | Description |
+|-------|-------------|
+| `Terminate` | One-way TLS: only verifies the server certificate (default) |
+| `Mutual` | Mutual TLS: a valid client certificate must be provided |
+| `OptionalMutual` | Optional mutual TLS: the client certificate is optional but verified when provided |
 
-### extend — 扩展 TLS 配置
+### extend — Extended TLS Configuration
 
 #### ocspStapling
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `enabled` | `bool` | `false` | 启用 OCSP Stapling |
-| `refreshIntervalSeconds` | `u64?` | — | OCSP 响应刷新间隔 |
-| `failOpen` | `bool` | `false` | OCSP 不可用时是否放行 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `false` | Enable OCSP Stapling |
+| `refreshIntervalSeconds` | `u64?` | — | OCSP response refresh interval |
+| `failOpen` | `bool` | `false` | Whether to allow when OCSP is unavailable |
 
 #### sessionTicket
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `enabled` | `bool` | `false` | 启用 Session Ticket |
-| `lifetimeSeconds` | `u64?` | — | Ticket 生命周期 |
-| `rotationIntervalSeconds` | `u64?` | — | 密钥轮转间隔 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `false` | Enable Session Ticket |
+| `lifetimeSeconds` | `u64?` | — | Ticket lifetime |
+| `rotationIntervalSeconds` | `u64?` | — | Key rotation interval |
 
 #### sessionCache
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `enabled` | `bool` | `false` | 启用 Session Cache |
-| `maxEntries` | `u64?` | — | 最大缓存条目数 |
-| `ttlSeconds` | `u64?` | — | 条目 TTL |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `false` | Enable Session Cache |
+| `maxEntries` | `u64?` | — | Maximum cache entries |
+| `ttlSeconds` | `u64?` | — | Entry TTL |
 
 #### revocationCheck
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
 | `mode` | `RevocationMode` | `Off` | `Off` / `Ocsp` / `Crl` |
-| `failOpen` | `bool` | `false` | 吊销数据不可用时放行 |
+| `failOpen` | `bool` | `false` | Allow when revocation data is unavailable |
 
 #### earlyData (TLS 1.3 0-RTT)
 
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `enabled` | `bool` | `false` | 启用 0-RTT |
-| `rejectOnReplay` | `bool` | `false` | 检测到重放时拒绝 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `false` | Enable 0-RTT |
+| `rejectOnReplay` | `bool` | `false` | Reject when replay is detected |
 
-## 与 Gateway TLS 的关系
+## Relationship to Gateway TLS
 
-| 功能 | Gateway `tls` | EdgionTls |
-|------|--------------|-----------|
-| 基础证书绑定 | ✅ certificateRefs | ✅ secretRef |
-| mTLS 客户端认证 | ❌ | ✅ clientAuth |
-| TLS 版本控制 | ❌ | ✅ minTlsVersion |
-| 密码套件控制 | ❌ | ✅ ciphers |
+| Feature | Gateway `tls` | EdgionTls |
+|---------|---------------|-----------|
+| Basic certificate binding | ✅ certificateRefs | ✅ secretRef |
+| mTLS client authentication | ❌ | ✅ clientAuth |
+| TLS version control | ❌ | ✅ minTlsVersion |
+| Cipher suite control | ❌ | ✅ ciphers |
 | OCSP Stapling | ❌ | ✅ extend.ocspStapling |
-| Session 管理 | ❌ | ✅ extend.sessionTicket/sessionCache |
+| Session management | ❌ | ✅ extend.sessionTicket/sessionCache |
 
-使用 EdgionTls 时，设置 Gateway Listener 的 `tls.options.edgion.io/cert-provider: "edgion-tls"`。
+When using EdgionTls, set `tls.options.edgion.io/cert-provider: "edgion-tls"` on the Gateway Listener.

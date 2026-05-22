@@ -88,7 +88,7 @@ impl RegexRoutesEngine {
         ctx: &EdgionHttpContext,
         index: &GatewayInfoIndex,
     ) -> Result<Option<RouteMatchResult>, EdError> {
-        let path = session.req_header().uri.path();
+        let path = ctx.path();
 
         if let Some(ref regex_set) = self.regex_set {
             let matches: Vec<usize> = regex_set.matches(path).into_iter().collect();
@@ -183,6 +183,7 @@ mod tests {
             plugin_runtime: Arc::new(PluginRuntime::new()),
             parsed_timeouts: None,
             parsed_retry: None,
+            parsed_forward_raw_path: None,
         });
 
         let regex = Regex::new(regex_pattern).unwrap_or_else(|_| panic!("Invalid regex pattern: {}", regex_pattern));

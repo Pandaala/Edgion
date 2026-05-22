@@ -280,6 +280,7 @@ spec:
 - `verifyDepth: 1` - 只验证直接签发（默认）
 - `verifyDepth: 2` - 支持一层中间 CA
 - `verifyDepth: 3` - 支持两层中间 CA
+- CA Secret 的 `ca.crt` 可以包含多张证书的 PEM bundle（根证书加一张或多张中间证书）；bundle 中的每一张证书都会被加入客户端信任库。
 
 ---
 
@@ -300,12 +301,15 @@ spec:
     name: wildcard-tls
 ```
 
-**覆盖范围**：
+**覆盖范围**（RFC 6125 §6.4.3 — 通配符仅匹配单标签）：
 - ✅ `v1.api.example.com`
 - ✅ `v2.api.example.com`
 - ✅ `dashboard.admin.example.com`
 - ✅ `example.com`
-- ❌ `api.example.com`（通配符不覆盖基础域名）
+
+**不覆盖**：
+- `api.example.com` — 通配符不覆盖基础域名本身
+- `deep.sub.api.example.com` — 多级子域名超出 RFC 6125 单标签限制；Gateway API 路由匹配接受该主机名，但符合 RFC 6125 的客户端 TLS 库会拒绝握手，因为 `*.api.example.com` 仅覆盖一个标签
 
 ---
 

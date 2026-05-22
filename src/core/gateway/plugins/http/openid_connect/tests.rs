@@ -1,4 +1,4 @@
-use super::{DiscoveryDocument, IntrospectionCacheEntry, JwksState, OidcSessionCookie, OpenidConnect};
+use super::{DiscoveryDocument, IntrospectionCacheEntry, OidcSessionCookie, OpenidConnect};
 use crate::core::gateway::plugins::http::common::http_client::get_http_client_with_ssl_verify;
 use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
 use crate::core::gateway::plugins::runtime::PluginLog;
@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn base_config() -> OpenidConnectConfig {
     OpenidConnectConfig {
@@ -28,30 +28,6 @@ fn test_introspection_cache_entry_has_no_expires_at() {
         claims: serde_json::json!({"sub": "test"}),
         // If expires_at still exists, this will fail to compile with "missing field"
     };
-}
-
-#[test]
-fn test_can_refresh_min_interval() {
-    let now = Instant::now();
-    assert!(OpenidConnect::can_refresh(None, now, Duration::from_secs(10)));
-    assert!(!OpenidConnect::can_refresh(
-        Some(now),
-        now + Duration::from_secs(5),
-        Duration::from_secs(10)
-    ));
-    assert!(OpenidConnect::can_refresh(
-        Some(now),
-        now + Duration::from_secs(12),
-        Duration::from_secs(10)
-    ));
-}
-
-#[test]
-fn test_jwks_state_default_is_empty() {
-    let state = JwksState::default();
-    assert!(state.set.is_none());
-    assert!(state.expires_at.is_none());
-    assert!(state.last_refresh_at.is_none());
 }
 
 #[tokio::test]
@@ -102,16 +78,19 @@ async fn test_unauth_action_auth_without_token_redirects_to_idp() {
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
 
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
-    *plugin.discovery_doc.write().await = Some(DiscoveryDocument {
-        issuer: "https://idp.example.com".to_string(),
-        jwks_uri: "https://idp.example.com/jwks".to_string(),
-        authorization_endpoint: Some("https://idp.example.com/authorize".to_string()),
-        token_endpoint: None,
-        introspection_endpoint: None,
-        userinfo_endpoint: None,
-        end_session_endpoint: None,
-        revocation_endpoint: None,
-    });
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: "https://idp.example.com".to_string(),
+            jwks_uri: "https://idp.example.com/jwks".to_string(),
+            authorization_endpoint: Some("https://idp.example.com/authorize".to_string()),
+            token_endpoint: None,
+            introspection_endpoint: None,
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
 
     let mut session = MockPluginSession::new();
     let mut log = PluginLog::new("OpenidConnect");
@@ -162,16 +141,19 @@ async fn test_unauth_action_auth_with_nonce_redirects_with_nonce_param() {
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
 
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
-    *plugin.discovery_doc.write().await = Some(DiscoveryDocument {
-        issuer: "https://idp.example.com".to_string(),
-        jwks_uri: "https://idp.example.com/jwks".to_string(),
-        authorization_endpoint: Some("https://idp.example.com/authorize".to_string()),
-        token_endpoint: None,
-        introspection_endpoint: None,
-        userinfo_endpoint: None,
-        end_session_endpoint: None,
-        revocation_endpoint: None,
-    });
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: "https://idp.example.com".to_string(),
+            jwks_uri: "https://idp.example.com/jwks".to_string(),
+            authorization_endpoint: Some("https://idp.example.com/authorize".to_string()),
+            token_endpoint: None,
+            introspection_endpoint: None,
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
 
     let mut session = MockPluginSession::new();
     let mut log = PluginLog::new("OpenidConnect");
@@ -213,16 +195,19 @@ async fn test_authorization_params_appends_non_reserved_params() {
     ]));
 
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
-    *plugin.discovery_doc.write().await = Some(DiscoveryDocument {
-        issuer: "https://idp.example.com".to_string(),
-        jwks_uri: "https://idp.example.com/jwks".to_string(),
-        authorization_endpoint: Some("https://idp.example.com/authorize".to_string()),
-        token_endpoint: None,
-        introspection_endpoint: None,
-        userinfo_endpoint: None,
-        end_session_endpoint: None,
-        revocation_endpoint: None,
-    });
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: "https://idp.example.com".to_string(),
+            jwks_uri: "https://idp.example.com/jwks".to_string(),
+            authorization_endpoint: Some("https://idp.example.com/authorize".to_string()),
+            token_endpoint: None,
+            introspection_endpoint: None,
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
 
     let mut session = MockPluginSession::new();
     let mut log = PluginLog::new("OpenidConnect");
@@ -325,16 +310,19 @@ async fn test_logout_prefers_end_session_endpoint_when_cached() {
     cfg.post_logout_redirect_uri = Some("/after-logout".to_string());
 
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
-    *plugin.discovery_doc.write().await = Some(DiscoveryDocument {
-        issuer: "https://idp.example.com".to_string(),
-        jwks_uri: "https://idp.example.com/jwks".to_string(),
-        authorization_endpoint: Some("https://idp.example.com/authorize".to_string()),
-        token_endpoint: None,
-        introspection_endpoint: None,
-        userinfo_endpoint: None,
-        end_session_endpoint: Some("https://idp.example.com/logout".to_string()),
-        revocation_endpoint: None,
-    });
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: "https://idp.example.com".to_string(),
+            jwks_uri: "https://idp.example.com/jwks".to_string(),
+            authorization_endpoint: Some("https://idp.example.com/authorize".to_string()),
+            token_endpoint: None,
+            introspection_endpoint: None,
+            userinfo_endpoint: None,
+            end_session_endpoint: Some("https://idp.example.com/logout".to_string()),
+            revocation_endpoint: None,
+        })
+        .await;
 
     let mut session = MockPluginSession::new();
     let mut log = PluginLog::new("OpenidConnect");
@@ -370,16 +358,19 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
     cfg.post_logout_redirect_uri = Some("/after-logout".to_string());
 
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
-    *plugin.discovery_doc.write().await = Some(DiscoveryDocument {
-        issuer: "https://idp.example.com".to_string(),
-        jwks_uri: "https://idp.example.com/jwks".to_string(),
-        authorization_endpoint: Some("https://idp.example.com/authorize".to_string()),
-        token_endpoint: None,
-        introspection_endpoint: None,
-        userinfo_endpoint: None,
-        end_session_endpoint: Some("https://idp.example.com/logout".to_string()),
-        revocation_endpoint: None,
-    });
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: "https://idp.example.com".to_string(),
+            jwks_uri: "https://idp.example.com/jwks".to_string(),
+            authorization_endpoint: Some("https://idp.example.com/authorize".to_string()),
+            token_endpoint: None,
+            introspection_endpoint: None,
+            userinfo_endpoint: None,
+            end_session_endpoint: Some("https://idp.example.com/logout".to_string()),
+            revocation_endpoint: None,
+        })
+        .await;
 
     let now = OpenidConnect::now_unix_secs();
     let session_cookie_payload = OidcSessionCookie {
@@ -562,16 +553,19 @@ async fn test_run_request_uses_cached_session_access_token_when_cookie_token_mis
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
-    *plugin.discovery_doc.write().await = Some(DiscoveryDocument {
-        issuer: "https://idp.example.com".to_string(),
-        jwks_uri: "https://idp.example.com/jwks".to_string(),
-        authorization_endpoint: None,
-        token_endpoint: None,
-        introspection_endpoint: Some("https://idp.example.com/introspect".to_string()),
-        userinfo_endpoint: None,
-        end_session_endpoint: None,
-        revocation_endpoint: None,
-    });
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: "https://idp.example.com".to_string(),
+            jwks_uri: "https://idp.example.com/jwks".to_string(),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            introspection_endpoint: Some("https://idp.example.com/introspect".to_string()),
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
 
     let now = OpenidConnect::now_unix_secs();
     let token = "cached-access-token";
@@ -628,16 +622,19 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
-    *plugin.discovery_doc.write().await = Some(DiscoveryDocument {
-        issuer: "https://idp.example.com".to_string(),
-        jwks_uri: "https://idp.example.com/jwks".to_string(),
-        authorization_endpoint: None,
-        token_endpoint: None,
-        introspection_endpoint: Some("https://idp.example.com/introspect".to_string()),
-        userinfo_endpoint: None,
-        end_session_endpoint: None,
-        revocation_endpoint: None,
-    });
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: "https://idp.example.com".to_string(),
+            jwks_uri: "https://idp.example.com/jwks".to_string(),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            introspection_endpoint: Some("https://idp.example.com/introspect".to_string()),
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
 
     let now = OpenidConnect::now_unix_secs();
     let refreshed_token = "refreshed-access-token";
@@ -710,27 +707,34 @@ fn test_looks_like_jwt() {
 
 #[test]
 fn test_should_auto_fallback_to_introspection() {
-    assert!(OpenidConnect::should_auto_fallback_to_introspection(&(
-        401,
-        "Invalid token format".to_string()
-    )));
-    assert!(!OpenidConnect::should_auto_fallback_to_introspection(&(
-        401,
-        "Invalid token signature".to_string()
-    )));
-    assert!(!OpenidConnect::should_auto_fallback_to_introspection(&(
-        502,
-        "Invalid token format".to_string()
-    )));
+    assert!(OpenidConnect::should_auto_fallback_to_introspection(
+        &super::OidcVerifyError::InvalidFormat
+    ));
+    assert!(!OpenidConnect::should_auto_fallback_to_introspection(
+        &super::OidcVerifyError::Other {
+            status: 401,
+            message: "Invalid token signature".to_string()
+        }
+    ));
+    assert!(!OpenidConnect::should_auto_fallback_to_introspection(
+        &super::OidcVerifyError::Other {
+            status: 502,
+            message: "Invalid token format".to_string()
+        }
+    ));
 }
 
 #[test]
 fn test_is_refresh_wait_timeout() {
-    assert!(OpenidConnect::is_refresh_wait_timeout(&(
-        502,
-        "Token refresh singleflight wait timeout".to_string()
-    )));
-    assert!(!OpenidConnect::is_refresh_wait_timeout(&(502, "other".to_string())));
+    assert!(OpenidConnect::is_refresh_wait_timeout(
+        &super::OidcVerifyError::RefreshSingleflightTimeout
+    ));
+    assert!(!OpenidConnect::is_refresh_wait_timeout(
+        &super::OidcVerifyError::Other {
+            status: 502,
+            message: "other".to_string()
+        }
+    ));
 }
 
 #[test]
@@ -764,6 +768,19 @@ fn test_validate_claims_from_value_checks_issuer_and_audience() {
 }
 
 #[test]
+fn test_validate_claims_from_value_returns_expired_when_exp_passed() {
+    let mut cfg = base_config();
+    cfg.clock_skew_seconds = 0;
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let now = OpenidConnect::now_unix_secs();
+    let claims = json!({ "exp": now.saturating_sub(10) });
+    assert_eq!(
+        plugin.validate_claims_from_value(&claims, None),
+        Err(super::OidcVerifyError::Expired)
+    );
+}
+
+#[test]
 fn test_validate_required_scopes_only_applies_to_bearer_only_mode() {
     let mut cfg = base_config();
     cfg.required_scopes = Some(vec!["api:read".to_string()]);
@@ -777,7 +794,10 @@ fn test_validate_required_scopes_only_applies_to_bearer_only_mode() {
     let plugin_bearer = OpenidConnect::new(&cfg_bearer, "default".to_string());
     assert_eq!(
         plugin_bearer.validate_required_scopes(&json!({})),
-        Err((403, "Insufficient scope".to_string()))
+        Err(super::OidcVerifyError::Other {
+            status: 403,
+            message: "Insufficient scope".to_string()
+        })
     );
 }
 
@@ -892,9 +912,9 @@ async fn test_verify_token_auto_falls_back_to_introspection_cache_on_invalid_jwt
     cfg.introspection_cache_ttl = 60;
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
-    {
-        let mut discovery = plugin.discovery_doc.write().await;
-        *discovery = Some(DiscoveryDocument {
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
             issuer: "https://issuer.example.com".to_string(),
             jwks_uri: "https://issuer.example.com/jwks".to_string(),
             authorization_endpoint: None,
@@ -903,8 +923,8 @@ async fn test_verify_token_auto_falls_back_to_introspection_cache_on_invalid_jwt
             userinfo_endpoint: None,
             end_session_endpoint: None,
             revocation_endpoint: None,
-        });
-    }
+        })
+        .await;
 
     let token = "bad.header.payload";
     let now = OpenidConnect::now_unix_secs();
@@ -943,10 +963,7 @@ async fn test_refresh_singleflight_wait_timeout() {
     let result = plugin
         .try_refresh_session_token_singleflight(lock_key, &mut cookie)
         .await;
-    assert_eq!(
-        result,
-        Err((502, "Token refresh singleflight wait timeout".to_string()))
-    );
+    assert_eq!(result, Err(super::OidcVerifyError::RefreshSingleflightTimeout));
 }
 
 #[tokio::test]
@@ -993,7 +1010,7 @@ async fn test_refresh_singleflight_wait_timeout_uses_recent_cached_result() {
 }
 
 #[tokio::test]
-async fn test_try_get_recent_refresh_result_prunes_expired() {
+async fn test_try_get_recent_refresh_result_returns_none_after_ttl() {
     let cfg = base_config();
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
     let lock_key = "refresh-cache-key";
@@ -1007,18 +1024,15 @@ async fn test_try_get_recent_refresh_result_prunes_expired() {
         id_token: None,
         refresh_token: Some("refresh-token".to_string()),
     };
-    plugin.put_refresh_result(lock_key, payload).await;
-
-    {
-        let mut map = plugin.refresh_singleflight_results.lock().await;
-        if let Some(entry) = map.get_mut(lock_key) {
-            entry.at = Instant::now() - Duration::from_secs(6);
-        }
-    }
+    // Force a short TTL so the entry expires before we read it back; LRU lazy-expiry
+    // is what `try_get_recent_refresh_result` now relies on for the freshness window.
+    // 100ms gives plenty of margin on a loaded CI runner without dragging out the suite.
+    plugin
+        .refresh_singleflight_results
+        .insert(lock_key.to_string(), payload, Some(Duration::from_millis(10)));
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     assert!(plugin.try_get_recent_refresh_result(lock_key).await.is_none());
-    let map = plugin.refresh_singleflight_results.lock().await;
-    assert!(!map.contains_key(lock_key));
 }
 
 #[test]
@@ -1156,16 +1170,19 @@ async fn test_fetch_userinfo_json_returns_none_without_userinfo_endpoint() {
     let mut cfg = base_config();
     cfg.set_userinfo_header = true;
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
-    *plugin.discovery_doc.write().await = Some(DiscoveryDocument {
-        issuer: "https://idp.example.com".to_string(),
-        jwks_uri: "https://idp.example.com/jwks".to_string(),
-        authorization_endpoint: None,
-        token_endpoint: None,
-        introspection_endpoint: None,
-        userinfo_endpoint: None,
-        end_session_endpoint: None,
-        revocation_endpoint: None,
-    });
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: "https://idp.example.com".to_string(),
+            jwks_uri: "https://idp.example.com/jwks".to_string(),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            introspection_endpoint: None,
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
 
     assert_eq!(plugin.fetch_userinfo_json("access-token").await, None);
 }
@@ -1219,4 +1236,65 @@ async fn test_remove_cached_access_token() {
 
     // No-op on empty string
     oidc.remove_cached_access_token("").await; // should not panic
+}
+
+// ── Group I: load-time path normalization ─────────────────────────────────────
+
+#[test]
+fn config_logout_path_normalized_at_load() {
+    let cfg = OpenidConnectConfig {
+        discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+        client_id: "client".to_string(),
+        bearer_only: true,
+        verification_mode: VerificationMode::JwksOnly,
+        logout_path: "/auth//logout".to_string(),
+        ..Default::default()
+    };
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    // Double-slash must be collapsed at construction time.
+    assert_eq!(plugin.config.logout_path, "/auth/logout");
+}
+
+#[test]
+fn config_logout_path_already_normalized_unchanged() {
+    let cfg = OpenidConnectConfig {
+        discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+        client_id: "client".to_string(),
+        bearer_only: true,
+        verification_mode: VerificationMode::JwksOnly,
+        logout_path: "/auth/logout".to_string(),
+        ..Default::default()
+    };
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    assert_eq!(plugin.config.logout_path, "/auth/logout");
+}
+
+#[test]
+fn callback_path_normalized_for_path_only_redirect_uri() {
+    let cfg = OpenidConnectConfig {
+        discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+        client_id: "client".to_string(),
+        bearer_only: true,
+        verification_mode: VerificationMode::JwksOnly,
+        redirect_uri: Some("/auth//oidc//callback".to_string()),
+        ..Default::default()
+    };
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    // callback_path() normalizes on the fly — double-slashes must be collapsed.
+    assert_eq!(plugin.callback_path(), "/auth/oidc/callback");
+}
+
+#[test]
+fn callback_path_normalized_for_absolute_url_redirect_uri() {
+    let cfg = OpenidConnectConfig {
+        discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+        client_id: "client".to_string(),
+        bearer_only: true,
+        verification_mode: VerificationMode::JwksOnly,
+        redirect_uri: Some("https://app.example.com/auth//callback".to_string()),
+        ..Default::default()
+    };
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    // The URL parser extracts the path; normalize_config_path then collapses it.
+    assert_eq!(plugin.callback_path(), "/auth/callback");
 }

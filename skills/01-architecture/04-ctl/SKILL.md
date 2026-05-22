@@ -1,44 +1,44 @@
 ---
 name: ctl-architecture
-description: edgion-cli CLI 工具架构：三种 Target 模式、子命令、输出格式、HTTP 客户端。
+description: edgion-cli CLI tool architecture — three target modes, subcommands, output formats, HTTP client.
 ---
 
-# 04 Ctl 架构（edgion-cli）
+# 04 Ctl architecture (edgion-cli)
 
-> edgion-cli 是 Edgion 的命令行管理工具，通过 HTTP API 与 Controller/Gateway 交互。
-> 支持三种 Target 模式，可对比 center/server/client 三级缓存排查同步问题。
+> edgion-cli is Edgion's command-line management tool, interacting with Controller/Gateway via HTTP API.
+> Supports three target modes; can compare the three-tier center/server/client cache for sync troubleshooting.
 
-## 文件清单
+## File index
 
-| 文件 | 主题 | 推荐阅读场景 |
+| File | Topic | Recommended reading scenario |
 |------|------|-------------|
-| [00-overview.md](00-overview.md) | 总览 + Target 模式 + API 路由 | 了解 ctl 设计和调试方法 |
-| [01-commands.md](01-commands.md) | 子命令详解 | 使用/扩展 ctl 命令 |
+| [00-overview.md](00-overview.md) | Overview + target modes + API routes | Understanding ctl design and debugging methods |
+| [01-commands.md](01-commands.md) | Subcommand details | Using/extending ctl commands |
 
-## 快速参考
+## Quick reference
 
 ```bash
-# 查看 center（ConfCenter API）中的所有 HTTPRoute
+# View all HTTPRoutes in center (ConfCenter API)
 edgion-cli get httproute
 
-# 查看 server（Controller 缓存）中的 HTTPRoute
+# View HTTPRoutes in server (Controller cache)
 edgion-cli -t server get httproute
 
-# 查看 client（Gateway 缓存）中的 HTTPRoute
+# View HTTPRoutes in client (Gateway cache)
 edgion-cli -t client get httproute
 
-# 对比 center 和 client，排查同步问题
+# Compare center and client to troubleshoot sync issues
 edgion-cli get httproute -o json > center.json
 edgion-cli -t client get httproute -o json > client.json
 diff center.json client.json
 
-# 应用配置
+# Apply configuration
 edgion-cli apply -f config.yaml
 edgion-cli apply -f config-dir/
 
-# 重载所有资源
+# Reload all resources
 edgion-cli reload
 
-# 生成 conf_sync gRPC mTLS 证书
+# Generate conf_sync gRPC mTLS certificates
 edgion-cli gen-certs --output file --output-dir certs/grpc/
 ```

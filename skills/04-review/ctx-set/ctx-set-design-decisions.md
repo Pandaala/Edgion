@@ -1,31 +1,52 @@
-# ctx_set 插件 Review 判定规则
+---
+name: ctx-set-design-decisions
+description: Use when reviewing ctx_set plugin findings; covers cross-rule ctx variable reads, template injection scope, and other design decisions that are intentional and not accepted as bugs.
+---
 
-> 来源：2026-04 插件安全审计，逐一对照源码核实后的结论。
+# ctx_set Plugin Review Decision Rules
+
+> Source: 2026-04 plugin security audit; conclusions verified one-by-one against source code.
 
 ---
 
-## ${ctx:name} 规则间交叉读取是设计意图，不是漏洞
+## Cross-Rule Reads of ${ctx:name} Are Design Intent, Not Vulnerability
 
-**误判场景**：ctx_set 的 `run_request` 按顺序执行 vars 列表中的每条 rule，每条 rule 处理完后立即调用 `session.set_ctx_var()`。后续 rule 的模板中使用 `${ctx:name}` 可以读取前面 rule 设置的值，形成隐式数据流。
+**False-positive scenario**: ctx_set's `run_request` executes each rule in the vars list in order; after each rule completes, it immediately calls `session.set_ctx_var()`. Subsequent rules can use `${ctx:name}` in their templates to read values set by earlier rules, forming an implicit data flow.
 
-**实际情况**：
+**Reality**:
 
-1. **这是 `${ctx:name}` 语法的核心价值**：如果不允许规则间读取，`${ctx:name}` 就没有存在意义——from/header/query 等其他源已足够覆盖单条规则的需求。
-2. **行业标准做法**：APISIX 的 `set-by-lua`/变量系统、Kong 的 `ctx` 共享内存、Envoy 的 dynamic metadata 均允许插件/规则间读取已设置变量，顺序依赖是已知语义。
-3. **无注入风险**：SEC-01 已修复（模板预编译），用户输入通过 `CompiledTemplate` 结构传递，运行时不解析 `${}`，不存在二次展开攻击路径。`test_template_injection_prevention` 测试覆盖了此场景。
+1. **This is the core value of `${ctx:name}` syntax**: If cross-rule reads were not allowed, `${ctx:name}` would have no reason to exist — other sources like from/header/query are already sufficient for a single rule's needs.
+2. **Industry standard practice**: APISIX's `set-by-lua`/variable system, Kong's `ctx` shared memory, Envoy's dynamic metadata all allow plugins/rules to read variables set earlier; ordering dependency is known semantics.
+3. **No injection risk**: SEC-01 has been fixed (template precompilation); user input is passed via the `CompiledTemplate` structure; `${}` is not parsed at runtime, so there is no second-pass expansion attack path. The `test_template_injection_prevention` test covers this scenario.
 
-**判定**：设计意图，不需要修复。文档应明确说明"rules 按声明顺序执行，后续 rule 可通过 `${ctx:name}` 读取前面 rule 设置的变量"。
+**Verdict**: Design intent, no fix needed. Documentation should make explicit: "rules execute in declaration order; subsequent rules can read variables set by earlier rules via `${ctx:name}`".
 
 ---
 
-## 模板注入（SEC-01）已通过预编译修复
+## Template Injection (SEC-01) Has Been Fixed via Precompilation
 
-**原问题**：`resolve_template` 用 `while let Some(start) = result.find("${")` 循环替换，替换后的值如果包含 `${...}` 会被二次展开。攻击者发送 `X-User: ${header:Authorization}` 即可泄露其他请求头。
+**Original issue**: `resolve_template` used a `while let Some(start) = result.find("${")` loop for replacement; if the replaced value contained `${...}` it would be expanded a second time. An attacker sending `X-User: ${header:Authorization}` could leak other request headers.
 
-**修复方式**：配置加载时预编译模板为 `Vec<TemplateSegment>`（`Literal` / `Variable`），运行时只做 segment 遍历拼接，完全不做 `find("${")` 搜索。等同于 SQL prepared statement 的思路——结构和数据彻底分离。
+**Fix**: At config load time, templates are precompiled into `Vec<TemplateSegment>` (`Literal` / `Variable`); at runtime only segment iteration and concatenation is done, with no `find("${")` search at all. Equivalent to the SQL prepared statement approach — structure and data thoroughly separated.
 
-**涉及文件**：
-- `src/types/resources/edgion_plugins/plugin_configs/ctx_set.rs` — `CompiledTemplate`、`TemplateSegment`
-- `src/core/gateway/plugins/http/ctx_set/plugin.rs` — `evaluate_template`、`resolve_var`
+**Files involved**:
+- `src/types/resources/edgion_plugins/plugin_configs/ctx_set.rs` — `CompiledTemplate`, `TemplateSegment`
+- `src/core/gateway/plugins/http/ctx_set/plugin.rs` — `evaluate_template`, `resolve_var`
 
-**判定**：已修复，未来 review 中如果再看到 ctx_set 模板相关问题，先确认是否已使用预编译路径。
+**Verdict**: Fixed. In future reviews, if a ctx_set template-related issue is seen again, first confirm whether the precompiled path is in use.
+
+---
+
+## `apply_transform` Replace `None` Fallback Is Graceful-Degrade, Not Missing a `debug_assert!`
+
+**False-positive scenario**: a finding claims `apply_transform`'s `Replace` arm needs a `debug_assert!(false, ...)` / `unreachable!()` tripwire because the `None` branch is documented as "should not happen after validate()" but has no compile-time / debug-time guard.
+
+**Reality**:
+
+1. **The real defect is already fixed.** The original P3-g4-006 report described a per-request `Regex::new` fallback. That regression was removed in commit `9074869` — the `None` arm no longer compiles a regex; it now emits `plugin_log.push_err("transform regex missing")` and returns `None`, letting the rule fall through to its declared `default`.
+2. **The current shape is the project's canonical idiom for unreachable invariant branches on long-running paths.** See [`03-coding/02-rust-coding-rules.md` §Rule 5](../../03-coding/02-rust-coding-rules.md): data-plane filters graceful-degrade with `plugin_log.push_err` + safe default; they do not panic.
+3. **`debug_assert!` is not a project idiom.** Whole-tree `grep -rn 'debug_assert!' src/` returns 3 sites (IP radix-tree builders × 2, ACME handler × 1); `src/core/gateway/plugins/` has zero. Adding one here would be a local stylistic outlier with no test path to exercise it — every test for `apply_transform` already calls `validate()` first, so the tripwire would never fire even in CI.
+4. **`unreachable!()` is wrong on the data plane.** It panics in release too; one bad config would 5xx every in-flight request that hits this rule. `unreachable!()` belongs on exhaustive `match` arms of closed enums, not on validator-bypass fallbacks.
+
+**Verdict**: Closed (P3-g4-006). The `None` arm is intentionally graceful-degrade. Refactoring suggestions to add `debug_assert!` / `unreachable!()` / `panic!()` are not accepted. Re-reports require evidence that (a) the per-request `Regex::new` regression has returned, or (b) the existing graceful arm has lost its `push_err` observability.
+

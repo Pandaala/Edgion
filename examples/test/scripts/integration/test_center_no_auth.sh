@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Center 无认证配置启动的集成测试。
+# Integration test for Center starting up without authentication configuration.
 #
-# 验证 Center 在 TOML/YAML 既无 [local_auth] 也无 [auth] 时：
-# 1. 启动成功（不 panic、不 exit）
-# 2. /health 返回 200
-# 3. /api/v1/auth/status 返回 200
-# 4. /api/v1/controllers (或任意业务路径) 无 token 返回 503
-#    (middleware 的 fail-close 分支——require_auth=true + no provider ready → 503)
-# 5. 启动日志中有 WARN "No authentication configured"
+# Verifies that, when the Center has neither [local_auth] nor [auth] in TOML/YAML:
+# 1. Startup succeeds (no panic, no exit)
+# 2. /health returns 200
+# 3. /api/v1/auth/status returns 200
+# 4. /api/v1/controllers (or any business path) without a token returns 503
+#    (middleware fail-close branch: require_auth=true + no provider ready -> 503)
+# 5. Startup log contains the WARN "No authentication configured"
 #
 
 set -euo pipefail
@@ -17,7 +17,37 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 TMPDIR=$(mktemp -d)
 
-# 极简 Center 配置，无 auth / local_auth 段
+# Generate a CA + center server cert so the center can start with real mTLS.
+# No controller connects in this test; the certs only need to allow startup.
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout "$TMPDIR/ca.key" \
+  -out    "$TMPDIR/ca.crt" \
+  -days   30 \
+  -subj   "/CN=Edgion No-Auth Test CA/O=EdgionTest" \
+  2>/dev/null
+
+openssl req -newkey rsa:2048 -nodes \
+  -keyout "$TMPDIR/server.key" \
+  -out    "$TMPDIR/server.csr" \
+  -subj   "/CN=edgion-center/O=EdgionTest" \
+  2>/dev/null
+
+cat > "$TMPDIR/server.ext" <<EOF
+subjectAltName=IP:127.0.0.1,DNS:localhost
+extendedKeyUsage=serverAuth
+EOF
+
+openssl x509 -req \
+  -in     "$TMPDIR/server.csr" \
+  -CA     "$TMPDIR/ca.crt" \
+  -CAkey  "$TMPDIR/ca.key" \
+  -CAcreateserial \
+  -out    "$TMPDIR/server.crt" \
+  -days   30 \
+  -extfile "$TMPDIR/server.ext" \
+  2>/dev/null
+
+# Minimal Center configuration, no auth / local_auth section
 cat > "$TMPDIR/center.yaml" <<EOF
 server:
   http_addr: "127.0.0.1:58100"
@@ -27,12 +57,19 @@ database:
 sync:
   command_timeout_secs: 30
 grpc_security:
-  skip_tls: true
+  active: fed
+  certs:
+    - name: fed
+      cert: $TMPDIR/server.crt
+      key: $TMPDIR/server.key
+      ca: $TMPDIR/ca.crt
+peer_identity:
+  trust_domain: "edgion.io"
 EOF
 
 cd "$REPO_ROOT"
 
-# 端口预检：避免上一次遗留进程或并行 CI 占用导致启动失败时报错不清晰。
+# Port precheck: avoid unclear startup errors caused by leftover processes or parallel CI holding the port.
 for port in 58100 58110; do
     if lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
         echo "FAIL: port $port already in use; stop the conflicting process or rerun later"
@@ -41,7 +78,7 @@ for port in 58100 58110; do
     fi
 done
 
-# 确保 edgion-center 已构建
+# Make sure edgion-center has been built
 if [ ! -x "$REPO_ROOT/target/debug/edgion-center" ]; then
     echo "Building edgion-center..."
     cargo build --bin edgion-center
@@ -57,7 +94,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# 等 HTTP 端口就绪
+# Wait for the HTTP port to become ready
 READY=false
 for _ in $(seq 1 20); do
     if curl -sf http://127.0.0.1:58100/health > /dev/null 2>&1; then
@@ -95,7 +132,7 @@ if [ "$STATUS" != "200" ]; then
 fi
 
 echo "[3/4] Testing business route returns 503 (fail-close via 503)..."
-# Center 的业务路径：/api/v1/controllers 无 token 应该 503（not 200 not 401）
+# Center business path: /api/v1/controllers without a token should return 503 (not 200, not 401)
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:58100/api/v1/controllers)
 if [ "$STATUS" != "503" ]; then
     echo "FAIL: business route /api/v1/controllers returned $STATUS (expected 503 fail-close)"

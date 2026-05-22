@@ -1,3 +1,8 @@
+---
+name: route-architecture-consistency
+description: Use when reviewing route implementation changes across TCP, UDP, TLS, HTTP, and gRPC; provides the cross-type consistency checklist and architecture comparison matrix.
+---
+
 # Route Architecture Consistency Review
 
 Cross-route consistency checklist and reference for TCP, UDP, TLS, HTTP, and gRPC
@@ -105,7 +110,7 @@ Every route handler (`ProcessorHandler<T>`) must implement:
 | `update_status` | `set_parent_conditions_full` per parent, `retain_current_parent_statuses`, clear when `parent_refs` is None |
 
 **Critical rule:** Any handler that calls `lookup_gateway()` in `parse()` MUST
-register in `gateway_route_index` via `on_change()`. See `skills/08-kubernetes/01-gateway-api/SKILL.md`..
+register in `gateway_route_index` via `on_change()`. See `skills/08-kubernetes/01-gateway-api/SKILL.md`.
 
 ### Controller Handler Comparison
 

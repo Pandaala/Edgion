@@ -1,65 +1,65 @@
 ---
 name: resource-grpc-route
-description: GRPCRoute 资源：gRPC Service/Method 匹配、gRPC-Web、与 HTTPRoute 的关系。
+description: GRPCRoute resource — gRPC Service/Method matching, gRPC-Web, and the relationship to HTTPRoute.
 ---
 
-# GRPCRoute 资源
+# GRPCRoute resource
 
-> **通用流程**: 参见 [00-resource-flow.md](00-resource-flow.md)
+> **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-GRPCRoute 定义 gRPC 层的路由规则。其 Controller 侧处理逻辑与 HTTPRoute 高度一致（共享 route_utils 工具函数），主要区别在于 Gateway 侧的匹配方式：使用 gRPC Service 名和 Method 名进行匹配，而非 HTTP 路径。
+GRPCRoute defines gRPC-layer routing rules. Its Controller-side processing is highly aligned with HTTPRoute (sharing route_utils helper functions); the main difference is the matching method on the Gateway side: it matches by gRPC service name and method name rather than by HTTP path.
 
-## 源码位置
+## Source code locations
 
 - Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/grpc_route.rs`
 - Gateway ConfHandler: `src/core/gateway/routes/grpc/conf_handler_impl.rs`
-- 路由管理器: `src/core/gateway/routes/grpc/routes_mgr.rs`
-- 匹配单元: `src/core/gateway/routes/grpc/match_unit.rs`
-- 类型定义: `src/types/resources/grpc_route.rs`
+- Route manager: `src/core/gateway/routes/grpc/routes_mgr.rs`
+- Match unit: `src/core/gateway/routes/grpc/match_unit.rs`
+- Type definitions: `src/types/resources/grpc_route.rs`
 
-## Controller 侧处理
+## Controller-side processing
 
 ### validate
 
-1. 调用 `validate_grpc_route_if_enabled()`（当前为空操作，跨命名空间校验由 parse 阶段的 `ref_denied` 处理）
-2. 调用 `validate_backend_refs()` 校验所有 backendRef
+1. Calls `validate_grpc_route_if_enabled()` (currently a no-op; cross-namespace validation is handled via `ref_denied` in the parse stage)
+2. Calls `validate_backend_refs()` to validate all backendRefs
 
 ### parse
 
-与 HTTPRoute 处理模式完全一致：
-1. 记录跨命名空间引用到 CrossNsRefManager
-2. 注册 Service 引用到 ServiceRefManager
-3. 清除并重算 `resolved_listeners`（通过 `resolve_listener_keys()` 从 parentRef 解析 `Vec<ListenerKey>`）
-4. 解析 `resolved_hostnames`（路由 hostnames 与 Gateway Listener hostnames 的交集）
-5. 标记被拒绝的跨命名空间 backendRef（设置 `ref_denied`）
+Identical pattern to HTTPRoute:
+1. Record cross-namespace references in CrossNsRefManager
+2. Register Service references in ServiceRefManager
+3. Clear and recompute `resolved_listeners` (resolve `Vec<ListenerKey>` from parentRef via `resolve_listener_keys()`)
+4. Resolve `resolved_hostnames` (intersection of route hostnames with Gateway Listener hostnames)
+5. Mark rejected cross-namespace backendRefs (set `ref_denied`)
 
 ### on_change
 
-与 HTTPRoute 相同：注册 GatewayRouteIndex，更新 AttachedRouteTracker，必要时 requeue 父 Gateway。
+Same as HTTPRoute: register in GatewayRouteIndex, update AttachedRouteTracker, requeue the parent Gateway when needed.
 
 ### on_delete
 
-与 HTTPRoute 相同：清除所有引用和索引注册。
+Same as HTTPRoute: clear all reference and index registrations.
 
 ### update_status
 
-与 HTTPRoute 相同：为每个 parentRef 生成 RouteParentStatus，设置 Accepted 和 ResolvedRefs Conditions。
+Same as HTTPRoute: produce a RouteParentStatus for each parentRef and set the Accepted and ResolvedRefs Conditions.
 
-## Gateway 侧处理
+## Gateway-side processing
 
-GRPCRoute 的 ConfHandler 将路由编译到 `GlobalGrpcRouteManagers`：
+GRPCRoute's ConfHandler compiles routes into `GlobalGrpcRouteManagers`:
 
-1. **preparse**：在路由缓存中调用 `route.preparse()` 构建运行时结构
-2. **路由单元**：每条规则编译为 `GrpcRouteRuleUnit`，包含 `GrpcMatchInfo`（service、method、headers 匹配）
-3. **域名匹配**：使用 resolved_hostnames（优先）或 spec.hostnames 作为匹配域名，无 hostname 时使用 `*` 全匹配
-4. **per-listener 管理**：根据 resolved_listeners 注册到对应 `ListenerKey` 的路由管理器，变更时仅重建受影响 listener 的路由表
-5. **gRPC-Web 支持**：通过 content-type 检测自动支持 gRPC-Web 协议
+1. **preparse**: in the route cache, call `route.preparse()` to build runtime structures
+2. **Route units**: each rule is compiled into a `GrpcRouteRuleUnit` containing `GrpcMatchInfo` (service, method, header matching)
+3. **Domain matching**: use resolved_hostnames (preferred) or spec.hostnames as the match domain; with no hostname, use `*` (wildcard)
+4. **Per-listener management**: based on resolved_listeners, register into the route manager of the corresponding `ListenerKey`; on change, only rebuild the route table for the affected listeners
+5. **gRPC-Web support**: automatically supports the gRPC-Web protocol via content-type detection
 
-## 跨资源关联
+## Cross-resource relationships
 
-| 关联方向 | 目标资源 | 关联机制 | 说明 |
+| Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
-| GRPCRoute → Gateway | Gateway | parentRef | 路由挂载到 Gateway 的 Listener |
-| GRPCRoute → Service | Service | backendRef | 路由的后端目标服务 |
-| GRPCRoute → EdgionPlugins | EdgionPlugins | ExtensionRef filter | 通过 ExtensionRef 引用插件配置 |
-| GRPCRoute ← ReferenceGrant | ReferenceGrant | 跨命名空间 backendRef | 控制跨命名空间后端引用的授权 |
+| GRPCRoute → Gateway | Gateway | parentRef | Route attaches to the Gateway's Listener |
+| GRPCRoute → Service | Service | backendRef | Route's backend target service |
+| GRPCRoute → EdgionPlugins | EdgionPlugins | ExtensionRef filter | Plugin configuration referenced via ExtensionRef |
+| GRPCRoute ← ReferenceGrant | ReferenceGrant | cross-namespace backendRef | Authorizes cross-namespace backend references |

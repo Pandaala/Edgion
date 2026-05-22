@@ -1,0 +1,16 @@
+# $arg_<name> in header context: must always url_encode the (decoded) value,
+# regardless of input. Verifies Fix 3 of unified-query-string-cache.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: proxy-rewrite-header-arg
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        headers:
+          set:
+            - name: X-Arg-Id
+              value: "$arg_id"

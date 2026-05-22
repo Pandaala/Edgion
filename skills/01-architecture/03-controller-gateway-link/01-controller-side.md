@@ -1,55 +1,54 @@
 ---
 name: link-controller-side
-description: Controller 侧 gRPC 实现：ConfigSyncServer、ConfigSyncGrpcServer、ConfigSyncServerProvider、WatchObj trait、ClientRegistry。
+description: Controller-side gRPC implementation — ConfigSyncServer, ConfigSyncGrpcServer, ConfigSyncServerProvider, WatchObj trait, ClientRegistry.
 ---
 
-# Controller 侧实现
+# Controller-side implementation
 
-Controller 通过 `ConfigSyncServer` + `ConfigSyncGrpcServer` 对外提供 gRPC 配置同步服务。ResourceProcessor 将处理后的资源写入 `ServerCache<T>`，ServerCache 实现 `WatchObj` trait 提供统一的 list/watch 接口，ConfigSyncServer 聚合所有 WatchObj 并通过 gRPC 暴露给 Gateway。
+The Controller exposes the gRPC config sync service via `ConfigSyncServer` + `ConfigSyncGrpcServer`. ResourceProcessor writes processed resources into `ServerCache<T>`; ServerCache implements the `WatchObj` trait to provide a uniform list/watch interface; ConfigSyncServer aggregates all WatchObjs and exposes them to the Gateway over gRPC.
 
 ## ConfigSyncServer
 
-gRPC 配置同步服务器的核心状态管理器，持有所有资源的 WatchObj 并提供统一的 list/watch API。
+The core state manager of the gRPC config sync server. It holds the WatchObj for every resource and provides a unified list/watch API.
 
 ```rust
 pub struct ConfigSyncServer {
-    server_id: RwLock<String>,                              // 服务器实例 ID（毫秒时间戳）
-    endpoint_mode: RwLock<Option<EndpointMode>>,             // 端点发现模式
-    watch_objects: RwLock<HashMap<String, Arc<dyn WatchObj>>>, // 按 kind 注册的 WatchObj
-    client_registry: Arc<ClientRegistry>,                    // 已连接 Gateway 实例注册表
+    server_id: RwLock<String>,                              // Server instance ID (millisecond timestamp)
+    watch_objects: RwLock<HashMap<String, Arc<dyn WatchObj>>>, // WatchObjs registered by kind
+    client_registry: Arc<ClientRegistry>,                    // Registry of connected Gateway instances
 }
 ```
 
 ### server_id
 
-启动时生成的毫秒时间戳字符串，用于客户端检测服务器重启。当 Gateway 收到的 `server_id` 与之前不同时，触发全量 relist。重链接（relink）时调用 `regenerate_server_id()` 生成新 ID。
+A millisecond-timestamp string generated at startup, used by clients to detect server restarts. When the `server_id` Gateway sees changes, it triggers a full relist. On relink the `regenerate_server_id()` call generates a new ID.
 
-### WatchObj 注册
+### WatchObj registration
 
-ResourceProcessor 初始化时通过 `register_watch_obj(kind, Arc<ServerCache<T>>)` 向 ConfigSyncServer 注册。所有注册完成且就绪后（`is_all_ready()` 返回 true），gRPC 服务开始对外提供数据。
+When ResourceProcessor initializes, it registers with ConfigSyncServer via `register_watch_obj(kind, Arc<ServerCache<T>>)`. Once all registrations are complete and ready (`is_all_ready()` returns true), the gRPC service starts serving data.
 
-### list/watch 操作
+### list/watch operations
 
-| 操作 | 流程 |
+| Operation | Flow |
 |------|------|
-| `list(kind)` | 查找 WatchObj → `list_json()` → 返回 `ListDataSimple { data, sync_version, server_id }` |
-| `watch(kind, client_id, ...)` | 查找 WatchObj → `watch_json()` → 启动转换任务附加 server_id → 返回 `mpsc::Receiver<EventDataSimple>` |
+| `list(kind)` | Look up WatchObj → `list_json()` → return `ListDataSimple { data, sync_version, server_id }` |
+| `watch(kind, client_id, ...)` | Look up WatchObj → `watch_json()` → start a conversion task that attaches server_id → return an `mpsc::Receiver<EventDataSimple>` |
 
-Watch 操作启动一个 tokio 任务，将 `WatchResponseSimple` 转换为 `EventDataSimple`（附加 server_id），确保客户端能检测服务器重启。
+The watch operation spawns a tokio task that converts `WatchResponseSimple` into `EventDataSimple` (attaching server_id), ensuring clients can detect server restarts.
 
-### 状态管理
+### State management
 
-| 方法 | 说明 |
+| Method | Description |
 |------|------|
-| `is_all_ready()` | 所有 WatchObj 均已就绪 |
-| `not_ready_kinds()` | 返回尚未就绪的 kind 列表 |
-| `set_all_not_ready()` | 重链接时标记所有缓存未就绪 |
-| `clear_all()` | 清空所有缓存数据 |
-| `reset_for_relink()` | 完整重置：set_all_not_ready + clear_all + regenerate_server_id |
+| `is_all_ready()` | All WatchObjs are ready |
+| `not_ready_kinds()` | Returns the list of kinds that are not yet ready |
+| `set_all_not_ready()` | Marks all caches not-ready on relink |
+| `clear_all()` | Clears all cache data |
+| `reset_for_relink()` | Full reset: set_all_not_ready + clear_all + regenerate_server_id |
 
 ## ConfigSyncGrpcServer
 
-实现 `ConfigSync` proto service 的 gRPC 服务层，负责接收 Gateway 的 gRPC 调用并路由到 ConfigSyncServer。
+The gRPC service layer that implements the `ConfigSync` proto service; receives Gateway gRPC calls and routes them to ConfigSyncServer.
 
 ```rust
 pub struct ConfigSyncGrpcServer {
@@ -57,22 +56,22 @@ pub struct ConfigSyncGrpcServer {
 }
 ```
 
-ConfigSyncGrpcServer 不直接持有 ConfigSyncServer，而是通过 `ConfigSyncServerProvider` trait 动态获取最新实例，以支持 reload 场景下的服务器实例切换。
+ConfigSyncGrpcServer does not hold ConfigSyncServer directly; instead it dynamically obtains the latest instance through the `ConfigSyncServerProvider` trait, in order to support server-instance switching during reload.
 
-### 4 个 RPC 实现
+### 4 RPC implementations
 
-| RPC | 实现逻辑 |
+| RPC | Implementation |
 |-----|---------|
-| `GetServerInfo` | 返回 server_id、endpoint_mode、supported_kinds（所有已注册的 WatchObj kind） |
-| `List` | 校验 expected_server_id → 查找对应 kind 的 WatchObj → 调用 `list_json()` → 返回 ListResponse |
-| `Watch` | 校验 expected_server_id → 查找 WatchObj → 调用 `watch_json()` → 返回 streaming WatchResponse |
-| `WatchServerMeta` | 注册 Gateway 实例到 ClientRegistry → 推送 gateway_instance_count 变更事件流 |
+| `GetServerInfo` | Returns server_id and supported_kinds (kinds of all registered WatchObjs) |
+| `List` | Validate expected_server_id → look up the WatchObj for the kind → call `list_json()` → return ListResponse |
+| `Watch` | Validate expected_server_id → look up the WatchObj → call `watch_json()` → return a streaming WatchResponse |
+| `WatchServerMeta` | Register the Gateway instance into ClientRegistry → push gateway_instance_count change-event stream |
 
-当 `expected_server_id` 与当前 `server_id` 不匹配时，返回 `WATCH_ERR_SERVER_ID_MISMATCH` 错误，通知 Gateway 重新同步。
+When `expected_server_id` does not match the current `server_id`, returns a `WATCH_ERR_SERVER_ID_MISMATCH` error to inform Gateway to re-sync.
 
 ## ConfigSyncServerProvider
 
-Provider trait，允许 gRPC 服务动态获取最新的 ConfigSyncServer 实例。
+A provider trait that lets the gRPC service dynamically obtain the latest ConfigSyncServer instance.
 
 ```rust
 pub trait ConfigSyncServerProvider: Send + Sync {
@@ -80,15 +79,15 @@ pub trait ConfigSyncServerProvider: Send + Sync {
 }
 ```
 
-这种设计解决了 reload 场景下的服务器实例切换问题：Controller 执行 reload 时会创建新的 ConfigSyncServer 实例（新的 server_id、新的 WatchObj 集合），而 gRPC 服务层通过 provider 透明地切换到新实例，无需重启 gRPC 服务。
+This design solves server-instance switching during reload: when Controller performs a reload, it creates a new ConfigSyncServer instance (new server_id, new WatchObj set), while the gRPC service layer transparently switches to the new instance through the provider, without restarting the gRPC service.
 
-返回 `None` 表示 ConfigSyncServer 尚未就绪（如 Controller 正在初始化或 reload 中），gRPC 层返回 `Status::unavailable`。
+A `None` return indicates that ConfigSyncServer is not yet ready (e.g., Controller is initializing or reloading); the gRPC layer returns `Status::unavailable`.
 
-## 注册时序要求
+## Registration timing requirement
 
-ConfigSyncServer 必须等待所有分阶段处理器（phased processors）完成注册后才能发布。
+ConfigSyncServer must wait for all phased processors to finish registration before it can be published.
 
-在 Kubernetes 模式下，Phase 1 基础资源（Gateway、Service、Endpoints 等）先于 Phase 2 路由/TLS/插件资源启动。如果在 Phase 1 就绪后立即发布 ConfigSyncServer，Gateway 可能收到不完整的 `supported_kinds`，导致对 Phase 2 资源的 List 调用返回错误：
+In Kubernetes mode, Phase 1 base resources (Gateway, Service, Endpoints, etc.) start before Phase 2 route/TLS/plugin resources. If ConfigSyncServer is published immediately after Phase 1 is ready, Gateway might receive an incomplete `supported_kinds` and List calls for Phase 2 resources will return errors:
 
 ```
 Failed to list resources: Unknown kind: HTTPRoute
@@ -96,11 +95,11 @@ Failed to list resources: Unknown kind: GRPCRoute
 Failed to list resources: Unknown kind: EdgionTls
 ```
 
-这属于控制面就绪性问题，而非资源类型不支持。Gateway 可能仍然使用之前缓存的快照继续服务流量。
+This is a control-plane readiness issue, not an unsupported resource type. Gateway may continue serving traffic with the previously cached snapshot.
 
 ## WatchObj trait
 
-对象安全（object-safe）的 list/watch 接口，由 `ServerCache<T>` 实现，使 ConfigSyncServer 能以统一方式管理不同类型的缓存。
+An object-safe list/watch interface implemented by `ServerCache<T>`, allowing ConfigSyncServer to manage caches of different types uniformly.
 
 ```rust
 pub trait WatchObj: Send + Sync {
@@ -115,29 +114,29 @@ pub trait WatchObj: Send + Sync {
 }
 ```
 
-所有方法涉及 JSON 序列化，因此使用 trait object 是合理的——序列化开销远大于虚调用开销。
+All methods involve JSON serialization, so using a trait object is reasonable — the serialization overhead far exceeds virtual call overhead.
 
-| 方法 | 说明 |
+| Method | Description |
 |------|------|
-| `kind_name()` | 返回资源类型名称（如 "Gateway"、"HTTPRoute"） |
-| `list_json()` | 返回全量资源的 JSON 字符串 + 当前 sync_version |
-| `watch_json()` | 启动 watcher 任务，返回 `mpsc::Receiver` 持续接收变更事件流 |
-| `is_ready()` | 缓存是否已完成初始化 |
-| `set_ready()` / `set_not_ready()` | 切换就绪状态 |
-| `clear()` | 清空缓存数据 |
+| `kind_name()` | Returns the resource type name (e.g., "Gateway", "HTTPRoute") |
+| `list_json()` | Returns the full resources as a JSON string + the current sync_version |
+| `watch_json()` | Spawns a watcher task and returns an `mpsc::Receiver` to continuously receive change events |
+| `is_ready()` | Whether the cache has finished initialization |
+| `set_ready()` / `set_not_ready()` | Toggle readiness state |
+| `clear()` | Clears the cache data |
 
 ## ClientRegistry
 
-追踪已连接的 Gateway 实例，维护 gateway_instance_count 信息。
+Tracks connected Gateway instances and maintains gateway_instance_count information.
 
-主要用途：
-- **集群级限流**：Gateway 通过 WatchServerMeta 接收 `gateway_instance_count`，用于计算集群级别的限流配额（单实例配额 = 集群总配额 / 实例数）
-- **实例监控**：Controller 可查看当前连接的 Gateway 实例列表及其状态
-- **变更通知**：当 Gateway 实例上线/下线时，通过 WatchServerMeta 流推送更新的 `gateway_instance_count` 给所有已连接的 Gateway
+Main uses:
+- **Cluster-level rate limiting**: Gateway receives `gateway_instance_count` via WatchServerMeta to compute cluster-level rate-limit quotas (per-instance quota = total cluster quota / instance count)
+- **Instance monitoring**: Controller can view the list of currently connected Gateway instances and their state
+- **Change notification**: when Gateway instances come online/offline, push an updated `gateway_instance_count` to all connected Gateways via the WatchServerMeta stream
 
-## ServerCache 集成
+## ServerCache integration
 
-ResourceProcessor 是 ServerCache 的数据源，完整的数据流：
+ResourceProcessor is the data source for ServerCache. The full data flow:
 
 ```
 K8s API / FileSystem
@@ -146,38 +145,38 @@ K8s API / FileSystem
   ConfCenter (watcher)
         │
         ▼
-  ResourceProcessor.process_resource()    ← 11 步处理流水线
+  ResourceProcessor.process_resource()    ← 11-step processing pipeline
         │
         ▼
-  ServerCache.apply_change()              ← 分配 sync_version，写入 EventStore
+  ServerCache.apply_change()              ← assigns sync_version, writes to EventStore
         │
         ▼
-  Notify.notify_waiters()                 ← 唤醒所有 watcher 任务
+  Notify.notify_waiters()                 ← wakes all watcher tasks
         │
         ▼
-  Watcher Task → mpsc::channel            ← 发送增量事件
+  Watcher Task → mpsc::channel            ← sends incremental events
         │
         ▼
-  ConfigSyncServer.watch()                ← 附加 server_id
+  ConfigSyncServer.watch()                ← attaches server_id
         │
         ▼
-  gRPC Stream → Gateway                  ← Gateway 实例接收配置变更
+  gRPC Stream → Gateway                  ← Gateway instance receives configuration changes
 ```
 
-ServerCache 的详细实现（EventStore、环形缓冲区、sync_version 机制）见 [01-controller/07-cache-server.md](../01-controller/07-cache-server.md)。
+The detailed implementation of ServerCache (EventStore, ring buffer, sync_version mechanism) is documented in [01-controller/07-cache-server.md](../01-controller/07-cache-server.md).
 
-## 模块结构
+## Module structure
 
 ```
 src/core/controller/conf_sync/
 ├── conf_server/
-│   ├── mod.rs                  # 模块导出
-│   ├── config_sync_server.rs   # ConfigSyncServer 核心逻辑
+│   ├── mod.rs                  # Module exports
+│   ├── config_sync_server.rs   # ConfigSyncServer core logic
 │   ├── grpc_server.rs          # ConfigSyncGrpcServer + ConfigSyncServerProvider
-│   ├── client_registry.rs      # ClientRegistry 实现
+│   ├── client_registry.rs      # ClientRegistry implementation
 │   └── traits.rs               # WatchObj trait + WatchResponseSimple
 └── cache_server/
-    ├── cache.rs                # ServerCache<T> 泛型缓存
-    ├── store.rs                # EventStore<T> 环形事件缓冲区
-    └── types.rs                # WatcherEvent 等类型定义
+    ├── cache.rs                # ServerCache<T> generic cache
+    ├── store.rs                # EventStore<T> ring event buffer
+    └── types.rs                # WatcherEvent and other type definitions
 ```

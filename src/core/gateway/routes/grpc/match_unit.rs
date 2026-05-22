@@ -79,19 +79,21 @@ pub struct GrpcMatchInfo {
     pub sv: u64,
     /// Matched item (contains service/method in matched.method)
     pub matched: GRPCRouteMatch,
-    /// Pre-compiled regex patterns for header matching (index corresponds to matched.headers)
-    /// None if match_type is not RegularExpression or if compilation failed
+    /// Pre-compiled regex patterns for header matching (index corresponds to matched.headers).
+    /// None if match_type is not RegularExpression or if compilation failed.
+    /// `Regex` is internally Arc-like; the surrounding `GrpcRouteRuleUnit` is shared via
+    /// outer `Arc<GrpcRouteRuleUnit>`, so no extra `Arc` wrapper is needed.
     #[serde(skip)]
     #[schemars(skip)]
-    pub compiled_header_regexes: Vec<Option<Arc<Regex>>>,
+    pub compiled_header_regexes: Vec<Option<Regex>>,
     /// Pre-compiled regex for service name matching (when match_type is RegularExpression)
     #[serde(skip)]
     #[schemars(skip)]
-    pub compiled_service_regex: Option<Arc<Regex>>,
+    pub compiled_service_regex: Option<Regex>,
     /// Pre-compiled regex for method name matching (when match_type is RegularExpression)
     #[serde(skip)]
     #[schemars(skip)]
-    pub compiled_method_regex: Option<Arc<Regex>>,
+    pub compiled_method_regex: Option<Regex>,
 }
 
 impl GrpcMatchInfo {
@@ -112,7 +114,7 @@ impl GrpcMatchInfo {
                     // Only compile if match_type is RegularExpression
                     if header_match.match_type.as_deref() == Some("RegularExpression") {
                         match Regex::new(&header_match.value) {
-                            Ok(re) => Some(Arc::new(re)),
+                            Ok(re) => Some(re),
                             Err(e) => {
                                 tracing::warn!(
                                     route = %format!("{}/{}", route_ns, route_name),
@@ -139,12 +141,12 @@ impl GrpcMatchInfo {
         use crate::types::resources::grpc_route::GRPCMethodMatchType;
         let (compiled_service_regex, compiled_method_regex) = if let Some(ref method_match) = matched.method {
             let is_regex = method_match.match_type.as_ref() == Some(&GRPCMethodMatchType::RegularExpression);
-            let compile = |field: &Option<String>, label: &str| -> Option<Arc<Regex>> {
+            let compile = |field: &Option<String>, label: &str| -> Option<Regex> {
                 if !is_regex {
                     return None;
                 }
                 field.as_ref().and_then(|pattern| match Regex::new(pattern) {
-                    Ok(re) => Some(Arc::new(re)),
+                    Ok(re) => Some(re),
                     Err(e) => {
                         tracing::warn!(
                             route = %format!("{}/{}", route_ns, route_name),
@@ -246,12 +248,15 @@ impl GrpcRouteRuleUnit {
         Ok(Some(matched_gi))
     }
 
-    /// Match gRPC header
-    /// Uses pre-compiled regex if provided, otherwise falls back to runtime compilation
+    /// Match gRPC header.
+    ///
+    /// Controller validates regex patterns at preparse (see ref_grant/validator.rs::check_regex_pattern),
+    /// so a missing `compiled_regex` here means controller validation gap or compile-time
+    /// invariant violation — fail-closed instead of recompiling on every request.
     fn match_header(
         req_header: &pingora_http::RequestHeader,
         header_match: &crate::types::GRPCHeaderMatch,
-        compiled_regex: Option<&Arc<Regex>>,
+        compiled_regex: Option<&Regex>,
     ) -> Result<bool, EdError> {
         let header_value = match req_header.headers.get(&header_match.name) {
             Some(value) => value.to_str().unwrap_or(""),
@@ -262,16 +267,10 @@ impl GrpcRouteRuleUnit {
 
         match match_type {
             "Exact" => Ok(header_value == header_match.value),
-            "RegularExpression" => {
-                // Use pre-compiled regex if available
-                if let Some(regex) = compiled_regex {
-                    Ok(regex.is_match(header_value))
-                } else {
-                    let re = Regex::new(&header_match.value)
-                        .map_err(|e| EdError::RouteMatchError(format!("Invalid regex: {}", e)))?;
-                    Ok(re.is_match(header_value))
-                }
-            }
+            "RegularExpression" => match compiled_regex {
+                Some(regex) => Ok(regex.is_match(header_value)),
+                None => Ok(false),
+            },
             _ => Ok(header_value == header_match.value),
         }
     }

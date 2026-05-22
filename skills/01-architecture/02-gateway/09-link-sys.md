@@ -1,32 +1,32 @@
 ---
 name: gateway-link-sys
-description: LinkSys 外部系统集成：5 个 provider、LinkSysStore 管理、DataSender 抽象、ConfHandler 资源更新。
+description: LinkSys external system integration — 5 providers, LinkSysStore management, DataSender abstraction, ConfHandler resource updates.
 ---
 
-# LinkSys 外部系统集成
+# LinkSys external system integration
 
-> LinkSys 是 Edgion 与外部存储/服务集成的统一框架。
-> 通过 LinkSys CRD 资源声明外部系统连接，Gateway 自动管理客户端生命周期。
+> LinkSys is Edgion's unified framework for integrating with external storage / services.
+> External system connections are declared via the LinkSys CRD resource; the Gateway manages client lifecycles automatically.
 
-## 5 个 Provider
+## 5 providers
 
-| Provider | 模块 | 客户端类型 | 连接方式 | 核心功能 |
-|----------|------|------------|----------|----------|
-| Elasticsearch | `providers/elasticsearch/` | `EsLinkClient` | HTTP bulk API | 批量索引（bulk indexing）、数据发送 |
-| Etcd | `providers/etcd/` | `EtcdLinkClient` | gRPC (v3 API) | KV 存储读写 |
-| Redis | `providers/redis/` | `RedisLinkClient` | standalone/sentinel/cluster (fred) | 数据读写、分布式限流支持 |
-| Webhook | `providers/webhook/` | WebhookManager | HTTP | 外部服务调用、KeyGet::Webhook 解析 |
-| LocalFile | `providers/local_file/` | `LocalFileWriter` | 本地文件 I/O | 文件日志（支持 daily/hourly 轮转） |
+| Provider | Module | Client type | Connection method | Core capabilities |
+|----------|--------|-------------|-------------------|-------------------|
+| Elasticsearch | `providers/elasticsearch/` | `EsLinkClient` | HTTP bulk API | Bulk indexing, data send |
+| Etcd | `providers/etcd/` | `EtcdLinkClient` | gRPC (v3 API) | KV read/write |
+| Redis | `providers/redis/` | `RedisLinkClient` | standalone / sentinel / cluster (fred) | Data read/write, distributed rate limiting support |
+| Webhook | `providers/webhook/` | WebhookManager | HTTP | External service calls, KeyGet::Webhook resolution |
+| LocalFile | `providers/local_file/` | `LocalFileWriter` | Local file I/O | File logging (supports daily / hourly rotation) |
 
 ### Elasticsearch
 
 ```
 providers/elasticsearch/
-├── client.rs          # EsLinkClient（连接管理、健康检查）
-├── bulk.rs            # Bulk API 批量操作
-├── data_sender.rs     # DataSender<String> 实现
-├── config_mapping.rs  # 配置映射
-├── ops.rs             # ES 操作封装
+├── client.rs          # EsLinkClient (connection management, health check)
+├── bulk.rs            # Bulk API batch operations
+├── data_sender.rs     # DataSender<String> implementation
+├── config_mapping.rs  # configuration mapping
+├── ops.rs             # ES operation wrappers
 └── mod.rs
 ```
 
@@ -34,25 +34,25 @@ providers/elasticsearch/
 
 ```
 providers/redis/
-├── client.rs          # RedisLinkClient（fred 客户端封装）
-├── data_sender.rs     # DataSender<String> 实现
-├── config_mapping.rs  # 配置映射（standalone/sentinel/cluster）
-├── ops.rs             # Redis 操作封装
+├── client.rs          # RedisLinkClient (fred client wrapper)
+├── data_sender.rs     # DataSender<String> implementation
+├── config_mapping.rs  # configuration mapping (standalone / sentinel / cluster)
+├── ops.rs             # Redis operation wrappers
 └── mod.rs
 ```
 
-支持三种部署模式：
-- **Standalone** — 单节点 Redis
-- **Sentinel** — 哨兵高可用
-- **Cluster** — Redis Cluster 分片
+Three deployment modes are supported:
+- **Standalone** — single-node Redis.
+- **Sentinel** — sentinel-based high availability.
+- **Cluster** — Redis Cluster sharding.
 
 ### Etcd
 
 ```
 providers/etcd/
-├── client.rs          # EtcdLinkClient（etcd-client 封装）
-├── config_mapping.rs  # 配置映射
-├── ops.rs             # Etcd 操作封装
+├── client.rs          # EtcdLinkClient (etcd-client wrapper)
+├── config_mapping.rs  # configuration mapping
+├── ops.rs             # Etcd operation wrappers
 └── mod.rs
 ```
 
@@ -60,10 +60,10 @@ providers/etcd/
 
 ```
 providers/webhook/
-├── manager.rs         # WebhookManager（管理 webhook 实例）
-├── runtime.rs         # Webhook 运行时
-├── resolver.rs        # KeyGet::Webhook 解析器
-├── health.rs          # 健康检查
+├── manager.rs         # WebhookManager (manages webhook instances)
+├── runtime.rs         # webhook runtime
+├── resolver.rs        # KeyGet::Webhook resolver
+├── health.rs          # health check
 └── mod.rs
 ```
 
@@ -71,19 +71,19 @@ providers/webhook/
 
 ```
 providers/local_file/
-├── data_sender_impl.rs  # DataSender<String> 实现
-├── rotation.rs          # 日志轮转（daily/hourly + 过期清理）
+├── data_sender_impl.rs  # DataSender<String> implementation
+├── rotation.rs          # log rotation (daily / hourly + expired-file cleanup)
 └── mod.rs
 ```
 
-特点：
-- 使用后台线程写入（避免阻塞 tokio runtime）
-- `SyncSender<String>` 队列，队列大小默认 `available_cpu_cores * 10,000`
-- `LogType` 枚举区分日志类型（Access/Ssl/Tcp/Tls/Udp），用于指标统计
+Characteristics:
+- Uses a background thread to write (avoids blocking the tokio runtime).
+- `SyncSender<String>` queue with default size `available_cpu_cores * 10,000`.
+- `LogType` enum distinguishes log types (Access / Ssl / Tcp / Tls / Udp), used for metric stats.
 
 ## LinkSysStore
 
-`LinkSysStore` 是所有 LinkSys 资源的统一管理中心：
+`LinkSysStore` is the unified management hub for all LinkSys resources:
 
 ```rust
 pub struct LinkSysStore {
@@ -91,39 +91,39 @@ pub struct LinkSysStore {
 }
 ```
 
-操作：
-- `replace_all(data)` — 全量替换（full sync），原子更新 + 异步分发到各 provider manager
-- `update(add_or_update, remove)` — 增量更新（partial sync）
-- `get(key)` / `contains(key)` / `count()` — 查询
+Operations:
+- `replace_all(data)` — full replace (full sync), atomic update + async dispatch to each provider manager.
+- `update(add_or_update, remove)` — incremental update (partial sync).
+- `get(key)` / `contains(key)` / `count()` — queries.
 
-全局单例：`get_global_link_sys_store()`
+Global singleton: `get_global_link_sys_store()`.
 
-### 运行时客户端存储
+### Runtime client store
 
-每种需要持久连接的 provider 有独立的 ArcSwap 运行时 store：
+Each provider that requires a persistent connection has its own ArcSwap runtime store:
 
-| Provider | 全局 Store | 获取函数 |
-|----------|------------|----------|
+| Provider | Global store | Accessor |
+|----------|--------------|----------|
 | Redis | `REDIS_RUNTIME: ArcSwap<HashMap<String, Arc<RedisLinkClient>>>` | `get_redis_client(name)` |
 | Etcd | `ETCD_RUNTIME: ArcSwap<HashMap<String, Arc<EtcdLinkClient>>>` | `get_etcd_client(name)` |
 | Elasticsearch | `ES_RUNTIME: ArcSwap<HashMap<String, Arc<EsLinkClient>>>` | `get_es_client(name)` |
-| Webhook | `WebhookManager`（内部管理） | 通过 `get_webhook_manager()` |
+| Webhook | `WebhookManager` (managed internally) | via `get_webhook_manager()` |
 
-key 格式：`"namespace/name"`
+Key format: `"namespace/name"`.
 
-### 客户端生命周期
+### Client lifecycle
 
-full_set/partial_update 时的处理流程：
-1. 根据 `SystemConfig` 类型分发到对应 provider
-2. 创建新客户端实例
-3. 先存入 runtime store（确保 `get_*_client()` 立即返回新客户端）
-4. 后台 tokio::spawn 初始化连接
-5. 后台 tokio::spawn 关闭旧客户端
-6. 删除时从所有 provider 的 store 中尝试移除（因为删除事件不携带类型信息）
+Processing flow during full_set / partial_update:
+1. Dispatch to the corresponding provider based on the `SystemConfig` type.
+2. Create a new client instance.
+3. Insert into the runtime store first (ensures `get_*_client()` returns the new client immediately).
+4. Initialize the connection in the background via `tokio::spawn`.
+5. Shut down the old client in the background via `tokio::spawn`.
+6. On deletion, attempt removal from every provider's store (because the delete event does not carry type information).
 
 ## DataSender
 
-通用的数据发送 trait，泛型支持不同载荷类型：
+A general-purpose data-sending trait, generic over the payload type:
 
 ```rust
 #[async_trait]
@@ -135,12 +135,12 @@ pub trait DataSender<T>: Send + Sync where T: Send + 'static {
 }
 ```
 
-- `DataSender<String>` — 文本日志（LocalFile、ES、Redis）
-- 支持 FailedCache 模式：ES 不可用时缓存到 LocalFile/Redis，恢复后重放
+- `DataSender<String>` — text logs (LocalFile, ES, Redis).
+- Supports the FailedCache pattern: when ES is unavailable, cache to LocalFile / Redis and replay after recovery.
 
 ## ConfHandler
 
-`ConfHandler<LinkSys>` 实现将配置同步系统与 LinkSysStore 连接：
+`ConfHandler<LinkSys>` connects the configuration sync system with LinkSysStore:
 
 ```rust
 impl ConfHandler<LinkSys> for Arc<LinkSysStore> {
@@ -149,30 +149,30 @@ impl ConfHandler<LinkSys> for Arc<LinkSysStore> {
 }
 ```
 
-- `create_link_sys_handler()` — 创建 handler 注册到 ConfigClient
+- `create_link_sys_handler()` — create a handler and register it with ConfigClient.
 
-## 使用场景
+## Use cases
 
-- **AccessLog 输出** — AccessLogger 注册 LocalFileWriter 或 ES DataSender
-- **分布式限流** — `rate_limit_redis` 插件通过 `get_redis_client()` 获取 Redis 客户端
-- **外部认证** — Webhook provider 支持 KeyGet::Webhook 解析（key_auth 等插件）
-- **自定义集成** — 通过 LinkSys CRD 声明连接，业务逻辑获取客户端使用
+- **AccessLog output** — AccessLogger registers a LocalFileWriter or an ES DataSender.
+- **Distributed rate limiting** — the `rate_limit_redis` plugin obtains a Redis client via `get_redis_client()`.
+- **External authentication** — the Webhook provider supports KeyGet::Webhook resolution (used by plugins such as key_auth).
+- **Custom integrations** — declare a connection via the LinkSys CRD; business logic obtains the client and uses it.
 
-## 目录布局
+## Directory layout
 
 ```
 src/core/gateway/link_sys/
-├── mod.rs                    # 模块导出
-├── providers/                # 5 个 provider 实现
-│   ├── elasticsearch/        # ES 批量索引
-│   ├── etcd/                 # Etcd v3 客户端
-│   ├── redis/                # Redis 多模式客户端
-│   ├── webhook/              # HTTP Webhook
-│   ├── local_file/           # 本地文件写入 + 轮转
+├── mod.rs                    # module exports
+├── providers/                # implementations of 5 providers
+│   ├── elasticsearch/        # ES bulk indexing
+│   ├── etcd/                 # Etcd v3 client
+│   ├── redis/                # Redis multi-mode client
+│   ├── webhook/              # HTTP webhook
+│   ├── local_file/           # local-file writes + rotation
 │   └── mod.rs
-└── runtime/                  # 运行时框架
-    ├── store.rs              # LinkSysStore + 各 provider 运行时 store
-    ├── data_sender.rs        # DataSender trait 定义
-    ├── conf_handler.rs       # ConfHandler<LinkSys> 实现
+└── runtime/                  # runtime framework
+    ├── store.rs              # LinkSysStore + per-provider runtime stores
+    ├── data_sender.rs        # DataSender trait definition
+    ├── conf_handler.rs       # ConfHandler<LinkSys> implementation
     └── mod.rs
 ```

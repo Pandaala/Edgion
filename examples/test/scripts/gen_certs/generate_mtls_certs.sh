@@ -62,6 +62,7 @@ all_required_certs_exist() {
         "nonmatching-client.crt"
         "nonmatching-client.key"
         "chain-client-bundle.crt"
+        "chain-client.crt"
         "chain-client.key"
         "client-ca.crt"
         "intermediate-ca.crt"
@@ -73,6 +74,28 @@ all_required_certs_exist() {
     local cert_file
     for cert_file in "${cert_files[@]}"; do
         if [ ! -f "$CERTS_DIR/$cert_file" ]; then
+            return 1
+        fi
+    done
+    return 0
+}
+
+# Verify the server cert's SANs match what the script generates.
+# This catches the case where the SAN list was updated but old cert files still exist.
+mtls_server_cert_sans_valid() {
+    local expected_sans=(
+        "mtls.example.com"
+        "mtls-optional.example.com"
+        "mtls-san.example.com"
+        "mtls-chain.example.com"
+        "mtls-terminate.example.com"
+    )
+    local san_output
+    san_output=$(openssl x509 -in "$CERTS_DIR/mtls-server.crt" -noout -text 2>/dev/null)
+    local san
+    for san in "${expected_sans[@]}"; do
+        if ! echo "$san_output" | grep -q "DNS:$san"; then
+            log_warning "mtls-server.crt is missing SAN: $san — regenerating cert set."
             return 1
         fi
     done
@@ -337,7 +360,7 @@ EOF
         -out "$TEMP_DIR/mtls-server.crt" \
         -days 365 \
         -subj "/CN=mtls.example.com" \
-        -addext "subjectAltName=DNS:mtls.example.com,DNS:mtls-optional.example.com,DNS:mtls-san.example.com,DNS:mtls-chain.example.com" \
+        -addext "subjectAltName=DNS:mtls.example.com,DNS:mtls-optional.example.com,DNS:mtls-san.example.com,DNS:mtls-chain.example.com,DNS:mtls-terminate.example.com" \
         2>/dev/null
 
     # Step 7: FrontendValidation server cert (self-signed, SAN includes fv-mtls.example.com)
@@ -356,6 +379,7 @@ EOF
     cp "$TEMP_DIR/nonmatching-client.crt" "$CERTS_DIR/"
     cp "$TEMP_DIR/nonmatching-client.key" "$CERTS_DIR/"
     cp "$TEMP_DIR/chain-client-bundle.crt" "$CERTS_DIR/"
+    cp "$TEMP_DIR/chain-client.crt" "$CERTS_DIR/"
     cp "$TEMP_DIR/chain-client.key" "$CERTS_DIR/"
     cp "$TEMP_DIR/client-ca.crt" "$CERTS_DIR/"
     cp "$TEMP_DIR/intermediate-ca.crt" "$CERTS_DIR/"
@@ -414,7 +438,7 @@ log_info "runtime mTLS secret dir: $MTLS_SECRET_DIR"
 log_info "runtime BackendTLS secret dir: $BACKEND_TLS_SECRET_DIR"
 log_info "runtime HeaderCertAuth secret dir: $HEADER_CERT_AUTH_SECRET_DIR"
 
-if all_required_certs_exist; then
+if all_required_certs_exist && mtls_server_cert_sans_valid; then
     log_info "Found existing mTLS cert set, reusing it."
 else
     generate_mtls_certs

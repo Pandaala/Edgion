@@ -1,19 +1,59 @@
 //! Basic Auth plugin configuration
 
-use super::lru_cache_config::LruCacheConfig;
+use std::collections::{HashMap, HashSet};
+
+use crate::types::resources::common::group_name::default_group_name;
 use crate::types::resources::gateway::SecretObjectReference;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+
+/// A named group of Secret references whose users all carry this group's
+/// name in `ResolvedBasicAuthUser.group`. Used for audit / tenant
+/// attribution in PluginLog.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BasicAuthSecretGroup {
+    /// Group name; charset = Kubernetes label-value
+    /// (`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`, <=63 chars).
+    /// Surfaces in PluginLog as `group=<name>`.
+    pub name: String,
+
+    /// Human-readable description (not used by runtime).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Secret references for this group. Must be non-empty at preparse.
+    /// Each Secret is `type: kubernetes.io/basic-auth` with `username` +
+    /// `password` fields (1 Secret = 1 user).
+    pub secret_refs: Vec<SecretObjectReference>,
+}
+
+/// Resolved BasicAuth user (controller-populated). The `password` field
+/// holds either plaintext or htpasswd-format hash as stored in the Secret;
+/// gateway's `load_users()` pre-hashes plaintext to `{SHA}<base64>` at
+/// plugin construction.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedBasicAuthUser {
+    /// Password value as stored in Secret (plaintext or pre-hashed).
+    pub password: String,
+
+    /// Group this user originated from. Always set by controller in
+    /// current versions; `#[serde(default)]` provides a fallback so that
+    /// Gateway-new / Controller-old rolling upgrades don't break
+    /// deserialization (lesson L2).
+    #[serde(default = "default_group_name")]
+    pub group: String,
+}
 
 /// Basic Auth plugin configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BasicAuthConfig {
-    /// References to Kubernetes Secrets (type: kubernetes.io/basic-auth)
-    /// Each Secret should contain username and password fields
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub secret_refs: Option<Vec<SecretObjectReference>>,
+    /// Named groups of Secret references. Optional so anonymous-only
+    /// deployments remain valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_groups: Option<Vec<BasicAuthSecretGroup>>,
 
     /// Hide Authorization header from upstream
     #[serde(default)]
@@ -25,22 +65,6 @@ pub struct BasicAuthConfig {
     #[serde(default)]
     pub auth_failure_delay_ms: u64,
 
-    /// LRU cache TTL in seconds for successful authentications.
-    /// Default: 300 (5 minutes). Set to 0 to disable caching entirely.
-    #[serde(default = "default_basic_auth_cache_ttl")]
-    pub cache_ttl: u64,
-
-    /// LRU cache configuration (capacity and sharding).
-    /// Omit or set fields to 0 to use global defaults.
-    #[serde(default)]
-    pub lru_cache: LruCacheConfig,
-
-    /// Enable singleflight deduplication for concurrent bcrypt verifications.
-    /// Only applies to bcrypt hashes (passwords starting with `$2`).
-    /// Default: true.
-    #[serde(default = "default_basic_auth_singleflight")]
-    pub singleflight: bool,
-
     /// Realm for WWW-Authenticate header
     #[serde(default = "default_realm")]
     pub realm: String,
@@ -50,64 +74,71 @@ pub struct BasicAuthConfig {
     pub anonymous: Option<String>,
 
     /// Resolved users from Secret refs (controller populated).
-    /// Key: username, value: password/hash.
+    /// Key: username, value: ResolvedBasicAuthUser (password + group).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
-    pub resolved_users: Option<HashMap<String, String>>,
-
-    /// Validation error cache.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
+    pub resolved_users: Option<HashMap<String, ResolvedBasicAuthUser>>,
 }
 
 fn default_realm() -> String {
     "API Gateway".to_string()
 }
 
-fn default_basic_auth_cache_ttl() -> u64 {
-    300
-}
-
-fn default_basic_auth_singleflight() -> bool {
-    true
-}
-
 impl Default for BasicAuthConfig {
     fn default() -> Self {
         Self {
-            secret_refs: None,
+            secret_groups: None,
             hide_credentials: false,
             auth_failure_delay_ms: 0,
-            cache_ttl: default_basic_auth_cache_ttl(),
-            lru_cache: LruCacheConfig::default(),
-            singleflight: default_basic_auth_singleflight(),
             realm: default_realm(),
             anonymous: None,
             resolved_users: None,
-            validation_error: None,
         }
     }
 }
 
 impl BasicAuthConfig {
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
-    }
-
     pub fn detect_validation_error(&self) -> Option<String> {
         if self.realm.trim().is_empty() {
             return Some("realm cannot be empty".to_string());
         }
-        if self.secret_refs.as_ref().is_some_and(|refs| refs.is_empty()) {
-            return Some("secretRefs cannot be empty when provided".to_string());
+
+        // Validate secret_groups structure (cross-group username uniqueness
+        // is checked at controller resolve time, not here).
+        if let Some(groups) = &self.secret_groups {
+            if groups.is_empty() {
+                return Some("secretGroups cannot be empty when present".to_string());
+            }
+            let mut seen: HashSet<&str> = HashSet::new();
+            for g in groups {
+                if let Err(e) = crate::types::resources::common::group_name::validate_group_name(&g.name) {
+                    return Some(format!("secretGroups: {}", e));
+                }
+                if !seen.insert(g.name.as_str()) {
+                    return Some(format!("duplicate group name '{}'", g.name));
+                }
+                if g.secret_refs.is_empty() {
+                    return Some(format!("group '{}' has no secretRefs", g.name));
+                }
+            }
         }
-        let has_secret_refs = self.secret_refs.as_ref().is_some_and(|v| !v.is_empty());
+
+        // Final gate: anonymous or groups required
+        let has_secret_groups = self.secret_groups.as_ref().is_some_and(|v| !v.is_empty());
         let has_resolved = self.resolved_users.as_ref().is_some_and(|v| !v.is_empty());
-        if self.anonymous.is_none() && !has_secret_refs && !has_resolved {
-            return Some("secretRefs (or resolvedUsers) is required when anonymous is not set".to_string());
+        if self.anonymous.is_none() && !has_secret_groups && !has_resolved {
+            return Some("secretGroups (or resolvedUsers) is required when anonymous is not set".to_string());
         }
+
         None
+    }
+}
+
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for BasicAuthConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.detect_validation_error()
     }
 }
 
@@ -119,7 +150,9 @@ mod tests {
     #[test]
     fn test_detect_validation_error_requires_creds_or_anonymous() {
         let cfg = BasicAuthConfig::default();
-        assert!(cfg.detect_validation_error().is_some_and(|e| e.contains("secretRefs")));
+        assert!(cfg
+            .detect_validation_error()
+            .is_some_and(|e| e.contains("secretGroups")));
     }
 
     #[test]
@@ -130,27 +163,121 @@ mod tests {
 
     #[test]
     fn test_detect_validation_error_allows_resolved_users() {
+        use super::ResolvedBasicAuthUser;
         let cfg = BasicAuthConfig {
-            resolved_users: Some(HashMap::from([("alice".to_string(), "pass".to_string())])),
+            resolved_users: Some(HashMap::from([(
+                "alice".to_string(),
+                ResolvedBasicAuthUser {
+                    password: "pass".to_string(),
+                    group: "default".to_string(),
+                },
+            )])),
             ..Default::default()
         };
         assert!(cfg.detect_validation_error().is_none());
     }
 
-    #[test]
-    fn test_basic_auth_cache_config_defaults() {
-        let cfg = BasicAuthConfig::default();
-        assert_eq!(cfg.cache_ttl, 300);
-        assert_eq!(cfg.lru_cache.capacity, 0);
-        assert!(cfg.singleflight);
+    use crate::types::resources::edgion_plugins::plugin_configs::BasicAuthSecretGroup;
+    use crate::types::resources::gateway::SecretObjectReference;
+
+    fn make_sor(name: &str) -> SecretObjectReference {
+        SecretObjectReference {
+            group: None,
+            kind: None,
+            name: name.to_string(),
+            namespace: None,
+        }
     }
 
     #[test]
-    fn test_basic_auth_cache_disabled_when_ttl_zero() {
+    fn test_validate_secret_groups_empty() {
         let cfg = BasicAuthConfig {
-            cache_ttl: 0,
+            secret_groups: Some(vec![]),
+            anonymous: None,
             ..Default::default()
         };
-        assert_eq!(cfg.cache_ttl, 0);
+        assert_eq!(
+            cfg.detect_validation_error().unwrap(),
+            "secretGroups cannot be empty when present"
+        );
+    }
+
+    #[test]
+    fn test_validate_secret_groups_duplicate_name() {
+        let cfg = BasicAuthConfig {
+            secret_groups: Some(vec![
+                BasicAuthSecretGroup {
+                    name: "a".into(),
+                    description: None,
+                    secret_refs: vec![make_sor("s1")],
+                },
+                BasicAuthSecretGroup {
+                    name: "a".into(),
+                    description: None,
+                    secret_refs: vec![make_sor("s2")],
+                },
+            ]),
+            anonymous: None,
+            ..Default::default()
+        };
+        assert!(cfg
+            .detect_validation_error()
+            .unwrap()
+            .contains("duplicate group name 'a'"));
+    }
+
+    #[test]
+    fn test_validate_secret_groups_invalid_name() {
+        let cfg = BasicAuthConfig {
+            secret_groups: Some(vec![BasicAuthSecretGroup {
+                name: "-bad".into(),
+                description: None,
+                secret_refs: vec![make_sor("s")],
+            }]),
+            anonymous: None,
+            ..Default::default()
+        };
+        assert!(cfg
+            .detect_validation_error()
+            .unwrap()
+            .contains("must start with alphanumeric"));
+    }
+
+    #[test]
+    fn test_validate_secret_groups_empty_refs() {
+        let cfg = BasicAuthConfig {
+            secret_groups: Some(vec![BasicAuthSecretGroup {
+                name: "a".into(),
+                description: None,
+                secret_refs: vec![],
+            }]),
+            anonymous: None,
+            ..Default::default()
+        };
+        assert!(cfg
+            .detect_validation_error()
+            .unwrap()
+            .contains("group 'a' has no secretRefs"));
+    }
+
+    #[test]
+    fn test_dual_group_yaml_deserializes() {
+        let yaml = r#"
+secretGroups:
+  - name: partner-a
+    secretRefs:
+      - name: secret-a
+        namespace: edgion-default
+  - name: partner-b
+    secretRefs:
+      - name: secret-b
+        namespace: edgion-default
+realm: "Dynamic Partner API"
+"#;
+        let cfg: BasicAuthConfig = serde_yaml::from_str(yaml).unwrap();
+        let groups = cfg.secret_groups.unwrap();
+        assert_eq!(groups.len(), 2, "should parse 2 groups, got {}", groups.len());
+        assert_eq!(groups[0].name, "partner-a");
+        assert_eq!(groups[1].name, "partner-b");
     }
 }

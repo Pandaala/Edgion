@@ -3,10 +3,8 @@
 //! Used by both the Controller's PluginMetadataHandler and Center's CenterMetaDataStore
 //! to parse raw PluginMetaData resources into typed cluster/service route entries.
 
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_route_table::{
-    ClusterRegionRouteEntry, ServiceRegionRouteEntry,
-};
 use crate::types::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
+use crate::types::resources::plugin_metadata::{ClusterRegionRouteEntry, ServiceRegionRouteEntry};
 use crate::types::resources::plugin_metadata::{MetaDataEntry, PluginMetaData};
 
 /// The result of parsing a PluginMetaData resource for RegionRoute purposes.
@@ -72,7 +70,7 @@ pub fn parse_region_route(pm: &PluginMetaData) -> ParsedRegionRoute {
 mod tests {
     use super::*;
     use crate::types::resources::plugin_metadata::{
-        ClusterRegionRouteConfig, KeyListData, KeyMatchMode, MetaDataEntry, MetaDataItem, PluginMetaDataSpec,
+        ClusterRegionRouteConfig, KeyGroup, KeyListData, KeyMatchMode, MetaDataEntry, MetaDataItem, PluginMetaDataSpec,
         ServiceRegionRouteConfig,
     };
 
@@ -153,12 +151,16 @@ mod tests {
             PluginMetaDataSpec {
                 metadata: MetaDataEntry::KeyList(KeyListData {
                     match_mode: KeyMatchMode::Exact,
-                    items: vec![MetaDataItem {
-                        key: "test-key".to_string(),
-                        code: None,
-                        priority: None,
-                        id: None,
-                        behavior: None,
+                    items: vec![KeyGroup {
+                        name: "default".to_string(),
+                        description: None,
+                        items: vec![MetaDataItem {
+                            key: "test-key".to_string(),
+                            code: None,
+                            priority: None,
+                            id: None,
+                            behavior: None,
+                        }],
                     }],
                 }),
             },

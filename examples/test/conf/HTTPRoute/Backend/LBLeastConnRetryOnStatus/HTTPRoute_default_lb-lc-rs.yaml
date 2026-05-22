@@ -1,0 +1,36 @@
+# g1-007 regression: LeastConn + retry-on-503 + 2 endpoints.
+# Exercises begin_upstream_attempt cleanup (finalize_attempt Discard on lb_committed)
+# AND the final logging cleanup (finalize_attempt Settle on lb_committed).
+# After the refactor, both cleanup paths go through lb::finalize_attempt;
+# the retry intermediate state neither over- nor under-decrements the LeastConn count.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lb-lc-rs
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: lb-lc-rs-gateway
+      namespace: edgion-test
+  hostnames:
+    - "lb-lc-rs.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      retry:
+        attempts: 3
+        codes: [503]
+      timeouts:
+        request: 10s
+        backendRequest: 3s
+      backendRefs:
+        - name: lb-lc-rs-service
+          port: 8080
+          filters:
+            - type: ExtensionRef
+              extensionRef:
+                group: edgion.io
+                kind: LBPolicyLeastConn
+                name: default

@@ -76,7 +76,7 @@ spec:
 - 默认按客户端 IP 限流
 - 默认算法为 SlidingWindow（滑动窗口）
 - 默认 Redis 故障时放行请求（fail-open）
-- 默认返回 `X-RateLimit-*` 响应头
+- 默认返回 `X-RateLimit-Limit` 和 `X-RateLimit-Remaining` 响应头；`X-RateLimit-Reset` 仅在拒绝（429）响应中返回（见下方 HeaderNames）
 - 默认拒绝状态码为 429
 
 ---
@@ -120,7 +120,7 @@ spec:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `rate` | Integer | —（必填） | 时间窗口内允许的最大请求数（或消耗单位数），必须 > 0 |
-| `interval` | String | —（必填） | 时间窗口，如 `"1s"`、`"1m"`、`"1h"`、`"1d"`。最小 100ms |
+| `interval` | String | —（必填） | 时间窗口，如 `"1s"`、`"1m"`、`"1h"`、`"1d"`，也支持组合格式如 `"1h30m"`。最小 100ms |
 | `algorithm` | Enum | `SlidingWindow` | 限流算法。可选值见下表 |
 
 #### 算法说明
@@ -171,7 +171,7 @@ key:
 |------|------|--------|------|
 | `limit` | String | 无 | 速率上限头名称（默认 `X-RateLimit-Limit`） |
 | `remaining` | String | 无 | 剩余配额头名称（默认 `X-RateLimit-Remaining`） |
-| `reset` | String | 无 | 窗口重置时间头名称（默认 `X-RateLimit-Reset`） |
+| `reset` | String | 无 | 窗口重置时间头名称（默认 `X-RateLimit-Reset`）。仅在拒绝（429）响应中返回——Redis Lua 脚本不会为放行的请求返回窗口重置时间戳 |
 | `retryIn` | String | 无 | 人类可读的重试时间（如 `"1.5s"`） |
 
 ---

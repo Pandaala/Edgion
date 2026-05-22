@@ -1,110 +1,135 @@
-# Edgion — AI Agent 项目指令
+# Edgion — AI Agent Project Guide
 
-## 项目概要
+## Project Overview
 
-Edgion 是一个基于 Rust + Pingora 的 Kubernetes 网关，采用 Controller–Gateway 分离架构，gRPC 配置同步。
-支持 HTTP/1.1、HTTP/2、gRPC、TCP、UDP、TLS、WebSocket，含插件系统、负载均衡、TLS/mTLS。
+Edgion is a Kubernetes gateway built on Rust + Pingora, using a Controller–Gateway split architecture with gRPC-based configuration sync.
+It supports HTTP/1.1, HTTP/2, gRPC, TCP, UDP, TLS, and WebSocket, and includes a plugin system, load balancing, and TLS/mTLS.
 
-**四个二进制**：Controller（K8s 资源处理）、Gateway（数据面代理）、edgion-cli（CLI 调试工具）、Center（联邦中心）。
+**Four binaries**: Controller (handles K8s resources), Gateway (data-plane proxy), edgion-cli (CLI debugging tool), Center (federation center).
 
-**Feature Flags**（互斥，构建时注意）：
-- TLS 后端：`boringssl`（默认）| `openssl` | `rustls`
-- 内存分配器：`allocator-jemalloc`（默认）| `allocator-mimalloc` | `allocator-system`
+**Feature Flags** (mutually exclusive — pay attention at build time):
+- TLS backend: `boringssl` (default) | `rustls`
+- Memory allocator: `allocator-jemalloc` (default) | `allocator-mimalloc` | `allocator-system`
 
-## 知识体系
+## Knowledge System
 
-当任务需要项目上下文时，从 `skills/SKILL.md` 开始，**按需渐进加载**，不要一次全部读取。
+When a task needs project context, start from `skills/SKILL.md` and **load progressively on demand** — do not read everything at once. The detailed AI Agent collaboration guide lives in this file (`AGENTS.md`); `CLAUDE.md` is a symlink to it.
 
-### Skills 导航规则
+### Skills navigation rules
 
-1. **渐进式加载**：`skills/SKILL.md` → 分类 SKILL.md → 具体文件。只加载当前任务需要的最小子树。
-2. **快速定位优先**：`skills/SKILL.md` 有快速定位表，按关键词直接给出最短路径，优先使用它而不是逐级浏览。
-3. **三层定位**：理解架构 → `01-architecture/`；查功能/配置 Schema → `02-features/`；写代码 → `01-architecture/`（开发指南）+ `03-coding/`。
-4. **资源相关任务**：先到 `01-architecture/05-resources/SKILL.md` 找架构文档，再到 `02-features/` 查功能 Schema。通常两边都要看。
-5. **`docs/` 不是起点**：`docs/` 面向人类用户，`skills/` 面向 AI 和开发者。
+1. **Progressive loading**: `skills/SKILL.md` → category `SKILL.md` → specific files. Load only the smallest subtree the current task needs.
+2. **Quick lookup first**: `skills/SKILL.md` has a quick-lookup table that maps keywords to the shortest path. Prefer it over walking the tree level by level.
+3. **Three-layer lookup**: To understand architecture → `01-architecture/`; to look up a feature / configuration schema → `02-features/`; to write code → `01-architecture/` (development guides) + `03-coding/`.
+4. **Resource-related tasks**: First go to `01-architecture/05-resources/SKILL.md` for the architecture documents, then to `02-features/` for the feature schema. You typically need to consult both sides.
+5. **`docs/` is not a starting point**: `docs/` targets human users; `skills/` targets AI agents and developers.
 
-### 任务生命周期
+### Task lifecycle
 
-任务模板、生命周期阶段、阶段→Skills 映射、裁剪规则统一见 `skills/07-tasks/SKILL.md`。
+The task templates, lifecycle stages, stage→Skills mapping, and trimming rules are all consolidated in `skills/07-tasks/SKILL.md`.
 
-## 常见工作流
+## Common workflows
 
-- **新功能（需架构上下文）**：
-  1. `skills/SKILL.md` → `skills/01-architecture/SKILL.md` → 仅加载直接相关的架构文件
-  2. `skills/02-features/SKILL.md`（功能/配置 Schema 参考）
-  3. `skills/05-testing/SKILL.md`（验证）
+- **New feature (needs architecture context)**:
+  1. `skills/SKILL.md` → `skills/01-architecture/SKILL.md` → load only the directly related architecture files
+  2. `skills/02-features/SKILL.md` (feature / configuration schema reference)
+  3. `skills/05-testing/SKILL.md` (verification)
 
-- **添加新资源类型**：
+- **Add a new resource type**:
   1. `skills/01-architecture/01-controller/09-add-new-resource/00-guide.md`
-  2. 选择最接近的模式参考（`route-like`、`controller-only`、`plugin-like`、`cluster-scoped`）
+  2. Pick the closest pattern reference (`route-like`, `controller-only`, `plugin-like`, `cluster-scoped`)
   3. `skills/01-architecture/00-common/03-resource-system.md`
   4. `skills/01-architecture/01-controller/03-config-center/SKILL.md`
-  5. `skills/05-testing/00-integration-testing.md`
+  5. `skills/05-testing/01-integration-testing.md`
 
-- **添加/调试 HTTP 插件**：
+- **Add / debug an HTTP plugin**:
   1. `skills/01-architecture/02-gateway/12-edgion-plugin-dev.md`
   2. `skills/03-coding/observability/00-access-log.md`
-  3. `skills/05-testing/00-integration-testing.md`
+  3. `skills/05-testing/01-integration-testing.md` (includes the "dynamic (hot reload) testing" section — if your plugin supports hot reload, add a dynamic scenario)
 
-- **添加/调试 Stream 插件**：
+- **Add / debug a Stream plugin**:
   1. `skills/01-architecture/02-gateway/13-stream-plugin-dev.md`
   2. `skills/02-features/05-annotations/00-annotations-overview.md`
-  3. `skills/05-testing/00-integration-testing.md`
+  3. `skills/05-testing/01-integration-testing.md` (includes the "dynamic (hot reload) testing" section — a stream scenario template is not yet provided; you can extend the HTTP scenario as a reference)
 
-- **调试路由/TLS/同步问题**：
+- **Debug routing / TLS / sync issues**:
   1. `skills/05-testing/SKILL.md`
-  2. Controller 重启/Gateway 日志 `Unknown kind` → `skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md`
-  3. Controller↔Gateway gRPC 同步 → `skills/01-architecture/03-controller-gateway-link/SKILL.md`
-  4. Gateway API 语义 → `skills/08-kubernetes/01-gateway-api/SKILL.md`
-  5. TLS 网关路由 → `skills/09-misc/debugging-tls-gateway.md`
+  2. Controller restart / Gateway log `Unknown kind` → `skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md`
+  3. Controller↔Gateway gRPC sync → `skills/01-architecture/03-controller-gateway-link/SKILL.md`
+  4. Gateway API semantics → `skills/08-kubernetes/01-gateway-api/SKILL.md`
+  5. TLS gateway routing → `skills/09-misc/debugging-tls-gateway.md`
 
-- **了解配置和路径行为**：
+- **Understand configuration and path behavior**:
   1. `skills/02-features/02-config/SKILL.md`
-  2. 加载 Controller、Gateway 或 `EdgionGatewayConfig` 对应的配置 Schema 文件
-  3. 相对路径行为 → `docs/zh-CN/dev-guide/work-directory.md`
+  2. Load the configuration schema file for Controller, Gateway, or `EdgionGatewayConfig` as needed
+  3. Relative path behavior → `docs/en/dev-guide/work-directory.md`
 
-- **修改 `edgion.io/*` 注解**：
+- **Modify `edgion.io/*` annotations**:
   1. `skills/02-features/05-annotations/00-annotations-overview.md`
-  2. 加载对应的 `metadata.annotations`、`options` 或保留/仅测试键参考
-  3. 更新过时示例，不要向前复制遗留键
+  2. Load the corresponding `metadata.annotations`, `options`, or reserved / test-only key references
+  3. Update stale examples; do not forward-port legacy keys
 
-- **CI/发布自动化**：
-  1. `skills/09-misc/02-github-workflow.md`
-  2. `skills/09-misc/00-local-build.md`
-  3. `skills/09-misc/01-docker-build.md`
+- **CI / release automation**:
+  1. `skills/09-misc/cicd/02-github-workflow.md`
+  2. `skills/09-misc/cicd/00-local-build.md`
+  3. `skills/09-misc/cicd/01-docker-build.md`
 
-- **撰写/审阅用户文档**：
-  1. `skills/11-doc/SKILL.md`（入口，按需加载具体规范文件）
-  2. 页面模板 → `skills/11-doc/02-page-template.md`
-  3. Review 检查清单 → `skills/11-doc/05-review-checklist.md`
-
-## 常用命令
+## Common commands
 
 ```bash
-# 全量检查
+# Full check
 cargo check --all-targets
 cargo fmt --all -- --check
 cargo clippy --all-targets
 cargo test --all
 make check-agent-docs
 
-# 定向集成测试
+# Targeted integration test
 ./examples/test/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
 
-# 完整集成测试
+# Full integration test
 ./examples/test/scripts/integration/run_integration.sh
 ```
 
-## 编码约束
+## Pre-commit checks (trigger phrases)
 
-- 语言：Rust，遵循项目现有风格
-- 提交前确保 `cargo check`、`cargo fmt --check`、`cargo clippy` 通过
-- 日志 ID、可观测性规范见 `skills/03-coding/`
-- 不要引入安全漏洞（注入、XSS 等 OWASP Top 10）
-- 改动最小化，不做未被要求的重构或功能添加
+When the user says "run check", "check the code", "format the code", "run CI", "pre-commit check", or anything similar, run the following in order:
 
-## 知识源规则
+1. **Format**: `cargo fmt --all` (apply directly — not `--check`)
+2. **Compile check**: `cargo check --all-targets`
+3. **Lint**: `cargo clippy --all-targets`
+4. **Doc consistency**: `make check-agent-docs`
 
-- `skills/` 是面向任务的知识层（AI 和开发者）
-- `docs/` 是面向人类的文档层
-- 不要在两者间重复详细内容，选择一个规范来源并链接
+Steps 2/3/4 may run in parallel. If any step fails, report the error immediately and try to fix it; after fixing, re-run that step. Once all pass, summarize the result.
+
+> `cargo test --all` takes a long time and is not part of the quick check by default. Run it only when the user explicitly asks.
+
+## Coding constraints
+
+- Language: Rust; follow the project's existing style.
+- Before committing, ensure `cargo check`, `cargo fmt --check`, and `cargo clippy` all pass.
+- Log ID and observability conventions are in `skills/03-coding/`.
+- Do not introduce security vulnerabilities (injection, XSS, and other OWASP Top 10).
+- Keep changes minimal — do not refactor or add features that were not requested.
+- **Written content language**: everything written to disk must be English (code, comments, doc comments, TODO/FIXME, log/error literals, commit messages, `skills/` and `docs/en/` documentation). The only exception is Chinese user-facing documentation under `docs/zh/`.
+- **No smuggling past the English-only lint**: judge by runtime meaning, not source bytes. If a value's decoded form lands on a blocked codepoint, it's smuggling — whether spelled as `\u{...}`, YAML/JSON `\uXXXX`, percent-encoded UTF-8 (`%E4%B8%AD`, `%D1%80`, ...), runtime byte/hex/base64 construction, or `include_bytes!` / external file. Use an English equivalent that exercises the same code path: percent-decoding can be tested with a space (`hello world` ↔ `hello%20world`) or reserved char (`foo&bar` ↔ `foo%26bar`); multi-byte UTF-8 coverage with lint-permitted chars (`é`, `ñ`, `€`, `©`, `π`).
+
+## Git constraints
+
+- **Do not run `git commit` or `git push` on your own**: After completing code changes, report what changed and wait for the user's explicit instruction before committing.
+
+## Authentication system
+
+- **Controller default behavior**: When `[local_auth]` is not configured, a random password is auto-generated and stored in the `edgion-admin-credentials` Secret (namespace: `edgion-system`). Both K8s mode and local mode are supported.
+- **Center default behavior**: **No auto-generation**. The operator must provide either `[local_auth]` or `[auth]`. If neither is provided, the server still starts; `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain accessible, but all business routes reject with 503 (fail-close via `initializing_response`, not panic/exit). See `skills/02-features/02-config/03-auth-bootstrap.md` for details.
+- **View the password**: `cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
+- **API authentication**: Bearer token or httpOnly Cookie.
+- **CLI authentication**: `edgion-cli login`, or auto-login by detecting the configuration file.
+- **Authentication endpoints**: `/api/v1/auth/login`, `/api/v1/auth/logout`, `/api/v1/auth/status`, `/api/v1/auth/me`.
+- **Module locations**: `src/core/common/local_auth/`, `src/core/common/unified_auth/`, `src/core/common/api/compose.rs`.
+- **Configuration**: the `[local_auth]` TOML section (optional; see `skills/02-features/02-config/00-controller-config.md`).
+
+## Knowledge source rules
+
+- `skills/` is the task-oriented knowledge layer (for AI agents and developers).
+- `docs/` is the human-facing documentation layer.
+- Do not duplicate detailed content between the two — pick one canonical source and link to it.

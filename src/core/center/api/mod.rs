@@ -6,7 +6,6 @@
 //!   GET  /api/v1/server-info                              → {"mode":"center"}
 //!   GET  /api/v1/controllers                              → list all controller summaries
 //!   GET  /api/v1/clusters                                 → list distinct cluster names
-//!   GET  /api/v1/resources                                → list resource keys (query: cluster=, kind=)
 //!   POST /api/v1/controllers/{id}/reload                  → send reload command
 //!   GET  /api/v1/center/cluster-region-routes                      → aggregated ClusterRegionRoute list from MetaDataStore
 //!   GET  /api/v1/center/service-region-routes                      → aggregated ServiceRegionRoute list from MetaDataStore
@@ -28,13 +27,13 @@
 //!   ANY  /api/v1/proxy/{controller_id}/*rest                       → proxy HTTP request to controller
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{any, delete, get, patch, post},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::sync::Arc;
 
 mod consistency_handlers;
@@ -64,6 +63,22 @@ pub struct ApiState {
     /// MetaDataStore is cleaned via `sync_client.plugin_metadata.remove_controller`
     /// (triggers `CenterConfHandler::controller_removed`), not directly.
     pub registry: ControllerRegistry,
+    /// True when the database was explicitly configured (`database.enabled = true`).
+    /// Used by the `/ready` probe: if the DB was required but failed to open
+    /// (`db` is `None`), Center is not ready to serve DB-backed requests.
+    pub db_required: bool,
+}
+
+impl ApiState {
+    /// Returns `true` when Center is ready to handle all API requests.
+    ///
+    /// Center is considered not ready when the database was explicitly
+    /// configured (`database.enabled = true`) but failed to open at startup,
+    /// leaving DB-backed endpoints (`list_admin_controllers`,
+    /// `delete_admin_controller`) permanently unavailable.
+    pub fn is_ready(&self) -> bool {
+        !self.db_required || self.db.is_some()
+    }
 }
 
 pub fn router(state: ApiState) -> Router {
@@ -80,7 +95,6 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/server-info", get(server_info))
         .route("/api/v1/controllers", get(list_controllers))
         .route("/api/v1/clusters", get(list_clusters))
-        .route("/api/v1/resources", get(list_resources))
         .route("/api/v1/controllers/{id}/reload", post(reload_controller))
         // MetaDataStore-backed RegionRoute endpoints
         .route(
@@ -158,11 +172,24 @@ pub fn router(state: ApiState) -> Router {
 }
 
 async fn health_check() -> impl IntoResponse {
-    Json(ApiResponse::success("ok".to_string()))
+    Json(ApiResponse::ok_body("ok".to_string()))
 }
 
-async fn ready_check() -> impl IntoResponse {
-    Json(ApiResponse::success("ok".to_string()))
+/// Readiness check endpoint - returns 200 OK only when Center is fully operational.
+///
+/// Returns 503 when `database.enabled = true` but the SQLite database failed to open
+/// at startup, leaving DB-backed endpoints permanently degraded.
+async fn ready_check(State(state): State<ApiState>) -> impl IntoResponse {
+    if state.is_ready() {
+        (StatusCode::OK, Json(ApiResponse::ok_body("ok".to_string())))
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::<String>::err_body(
+                "database required but unavailable; Center is not ready".to_string(),
+            )),
+        )
+    }
 }
 
 #[derive(Serialize)]
@@ -171,13 +198,21 @@ struct ServerInfoResponse {
 }
 
 async fn server_info() -> impl IntoResponse {
-    Json(ApiResponse::success(ServerInfoResponse {
+    Json(ApiResponse::ok_body(ServerInfoResponse {
         mode: "center".to_string(),
     }))
 }
 
 async fn list_controllers(State(state): State<ApiState>) -> impl IntoResponse {
-    let summaries = state.aggregator.controller_summaries();
+    // The aggregator owns stats (key_count, stats_updated_secs_ago) but not
+    // session liveness. Fill in `last_seen_secs_ago` from the fed_sync
+    // registry here so we keep the aggregator independent of the registry.
+    let mut summaries = state.aggregator.controller_summaries();
+    for s in summaries.iter_mut() {
+        if let Some(session) = state.registry.get_session(&s.controller_id) {
+            s.last_seen_secs_ago = Some(session.last_seen.elapsed().as_secs());
+        }
+    }
     Json(ListResponse::success(summaries))
 }
 
@@ -189,55 +224,6 @@ async fn list_clusters(State(state): State<ApiState>) -> impl IntoResponse {
     Json(ListResponse::success(clusters))
 }
 
-#[derive(Deserialize)]
-struct ResourceQuery {
-    cluster: Option<String>,
-    kind: Option<String>,
-}
-
-/// Serializable DTO for prost-generated ResourceKey (prost types don't impl serde::Serialize).
-#[derive(serde::Serialize)]
-struct ResourceKeyDto {
-    kind: String,
-    namespace: String,
-    name: String,
-    resource_version: String,
-    labels: std::collections::HashMap<String, String>,
-    annotations: std::collections::HashMap<String, String>,
-}
-
-impl From<crate::core::common::fed_sync::proto::ResourceKey> for ResourceKeyDto {
-    fn from(k: crate::core::common::fed_sync::proto::ResourceKey) -> Self {
-        Self {
-            kind: k.kind,
-            namespace: k.namespace,
-            name: k.name,
-            resource_version: k.resource_version,
-            labels: k.labels,
-            annotations: k.annotations,
-        }
-    }
-}
-
-async fn list_resources(State(state): State<ApiState>, Query(params): Query<ResourceQuery>) -> impl IntoResponse {
-    // Default view excludes offline controllers: their snapshots are stale and
-    // would mislead consumers into thinking the resources are still live.
-    // Operators wanting the raw persisted record can hit `GET /api/v1/center/admin/controllers`.
-    let keys = match &params.cluster {
-        Some(c) => state.aggregator.list_online_keys_by_cluster(c),
-        None => state.aggregator.list_online_keys(),
-    };
-    let keys: Vec<ResourceKeyDto> = match &params.kind {
-        Some(k) => keys
-            .into_iter()
-            .filter(|key| &key.kind == k)
-            .map(ResourceKeyDto::from)
-            .collect(),
-        None => keys.into_iter().map(ResourceKeyDto::from).collect(),
-    };
-    Json(ListResponse::success(keys))
-}
-
 async fn reload_controller(State(state): State<ApiState>, Path(id_raw): Path<String>) -> impl IntoResponse {
     let id = id_raw.replace('~', "/");
     match state
@@ -245,10 +231,10 @@ async fn reload_controller(State(state): State<ApiState>, Path(id_raw): Path<Str
         .send_command(&id, Command::Reload(ReloadCommand {}))
         .await
     {
-        Ok(resp) if resp.success => (StatusCode::OK, Json(ApiResponse::success("ok".to_string()))),
+        Ok(resp) if resp.success => (StatusCode::OK, Json(ApiResponse::ok_body("ok".to_string()))),
         Ok(resp) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<String>::error(resp.message)),
+            Json(ApiResponse::<String>::err_body(resp.message)),
         ),
         Err(e) => {
             let status = if e.to_string().contains("timed out") {
@@ -256,7 +242,7 @@ async fn reload_controller(State(state): State<ApiState>, Path(id_raw): Path<Str
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             };
-            (status, Json(ApiResponse::<String>::error(e.to_string())))
+            (status, Json(ApiResponse::<String>::err_body(e.to_string())))
         }
     }
 }
@@ -318,7 +304,7 @@ async fn delete_admin_controller(State(state): State<ApiState>, Path(id_raw): Pa
     let Some(db) = &state.db else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiResponse::<String>::error("Database not enabled".to_string())),
+            Json(ApiResponse::<String>::err_body("Database not enabled".to_string())),
         )
             .into_response();
     };
@@ -344,15 +330,15 @@ async fn delete_admin_controller(State(state): State<ApiState>, Path(id_raw): Pa
     let db2 = db.clone();
     let id_for_db = id.clone();
     match tokio::task::spawn_blocking(move || db2.delete_controller(&id_for_db)).await {
-        Ok(Ok(())) => Json(ApiResponse::success("ok".to_string())).into_response(),
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<String>::error(e.to_string())),
+            Json(ApiResponse::<String>::err_body(e.to_string())),
         )
             .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<String>::error(e.to_string())),
+            Json(ApiResponse::<String>::err_body(e.to_string())),
         )
             .into_response(),
     }
@@ -412,7 +398,7 @@ async fn metadata_store_status(State(state): State<ApiState>) -> impl IntoRespon
             controller_count: v.controllers.len(),
         })
         .collect();
-    Json(ApiResponse::success(MetaDataStoreStatus {
+    Json(ApiResponse::ok_body(MetaDataStoreStatus {
         cluster_routes,
         service_routes,
     }))
@@ -474,7 +460,7 @@ async fn proxy_handler(
                 .status(status)
                 .header("content-type", "application/json")
                 .body(axum::body::Body::from(
-                    serde_json::to_vec(&ApiResponse::<()>::error(message)).unwrap_or_default(),
+                    serde_json::to_vec(&ApiResponse::<()>::err_body(message)).unwrap_or_default(),
                 ))
                 .unwrap_or_else(|_| {
                     axum::http::Response::builder()

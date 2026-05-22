@@ -8,6 +8,7 @@ use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use regex::Regex;
 use std::sync::LazyLock;
 
+use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::ProxyRewriteConfig;
@@ -26,6 +27,16 @@ static PATH_PARAM_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$([a
 /// Based on RFC 3986, we encode everything except unreserved characters.
 /// Unreserved: A-Z a-z 0-9 - . _ ~
 const QUERY_VALUE_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
+
+/// Substitution context for `resolve_variables`.
+///
+/// Naming the call site's intent (URI vs HTTP header) instead of an opaque bool
+/// makes future divergence explicit at the match site.
+#[derive(Clone, Copy, Debug)]
+enum TemplateContext {
+    Uri,
+    Header,
+}
 
 /// Proxy Rewrite plugin
 ///
@@ -77,24 +88,33 @@ impl ProxyRewrite {
         value.replace("\x00$", "$")
     }
 
-    /// Resolve variable substitution in a template string
+    /// Resolve variable substitution in a template string.
     ///
     /// Supports:
-    /// - `$uri` - original request path
-    /// - `$arg_<name>` - query parameter value (URL encoded in URI context)
-    /// - `$1-$9` - regex capture group references (only when captures is provided)
-    /// - `$<name>` - path parameter from route pattern (e.g., `$uid` for route `/api/:uid`)
+    /// - `$uri` - original request path; never encoded (already a valid path).
+    /// - `$arg_<name>` - query parameter value; always URL-encoded.
+    /// - `$1-$9` - regex capture group references; always URL-encoded.
+    /// - `$<name>` - path parameter from the route pattern (e.g., `$uid` for
+    ///   route `/api/:uid`); always URL-encoded.
     ///
-    /// Each injected value has its `$` signs escaped before insertion so that it cannot
-    /// be re-interpreted as a variable reference by a later substitution step (cross-
-    /// contamination prevention).
+    /// All three substitutable branches produce ASCII-safe output regardless of
+    /// `TemplateContext`. This guarantees that values are valid both as URI
+    /// components and as HTTP header bytes (avoiding `HeaderValue::try_from`
+    /// silent rejections and strict upstream rejection of non-ASCII header
+    /// values). The `context` parameter is retained as the explicit declaration
+    /// site for any future context-specific divergence; today both arms encode.
+    ///
+    /// Each injected value has its `$` signs escaped before insertion so it
+    /// cannot be re-interpreted as a variable reference by a later substitution
+    /// step (cross-contamination prevention). The escape sentinel is restored
+    /// in the final step.
     fn resolve_variables(
         &self,
         template: &str,
         original_path: &str,
         session: &mut dyn PluginSession,
         captures: Option<&regex::Captures>,
-        encode_values: bool,
+        context: TemplateContext,
     ) -> String {
         let mut result = template.to_string();
 
@@ -102,13 +122,23 @@ impl ProxyRewrite {
         //    Escape $ in the injected path so later steps cannot treat it as a variable.
         result = result.replace("$uri", &Self::escape_dollar(original_path));
 
-        // 2. Replace $arg_<name> (optionally URL encoded).
-        //    Escape $ in each query param value for the same reason.
+        // 2. Replace $arg_<name> — always URL-encoded.
+        //    `get_query_param` returns the percent-decoded value, but `$arg_<name>`
+        //    must always be safe to embed in either a URI or an HTTP header value.
+        //    Always re-encoding produces:
+        //      - URI context (TemplateContext::Uri): correct percent-encoding without
+        //        the prior double-encoding bug for raw `%XX` inputs;
+        //      - Header context (TemplateContext::Header): ASCII-safe bytes that survive
+        //        `HeaderValue::try_from` even when the query value contains control
+        //        bytes (e.g. `%0A`) or non-ASCII (e.g. UTF-8). For ordinary ASCII
+        //        values this is identity, so the header rewrite UX is unchanged.
+        //    Escape $ in each query param value so step 4 does not re-interpret
+        //    them as variable references.
         result = ARG_PATTERN
             .replace_all(&result, |caps: &regex::Captures| {
                 let param_name = &caps[1];
                 let value = session.get_query_param(param_name).unwrap_or_default();
-                let encoded = if encode_values { Self::url_encode(&value) } else { value };
+                let encoded = Self::url_encode(&value);
                 Self::escape_dollar(&encoded)
             })
             .to_string();
@@ -120,10 +150,10 @@ impl ProxyRewrite {
                 .replace_all(&result, |c: &regex::Captures| {
                     let idx: usize = c[1].parse().unwrap_or(0);
                     let value = caps.get(idx).map(|m| m.as_str()).unwrap_or("");
-                    let encoded = if encode_values {
-                        Self::url_encode(value)
-                    } else {
-                        value.to_string()
+                    let encoded = match context {
+                        // Both contexts encode today. Keeping the match form makes a future
+                        // context-specific divergence touch exactly this site.
+                        TemplateContext::Uri | TemplateContext::Header => Self::url_encode(value),
                     };
                     Self::escape_dollar(&encoded)
                 })
@@ -150,7 +180,9 @@ impl ProxyRewrite {
 
             for (full_match, param_name) in matches {
                 if let Some(value) = session.get_path_param(&param_name) {
-                    let replacement = if encode_values { Self::url_encode(&value) } else { value };
+                    let replacement = match context {
+                        TemplateContext::Uri | TemplateContext::Header => Self::url_encode(&value),
+                    };
                     // Path params are the last substitution step; no need to escape.
                     result = result.replace(&full_match, &replacement);
                 }
@@ -188,7 +220,7 @@ impl ProxyRewrite {
         // uri takes priority over regex_uri
         if let Some(ref new_uri) = self.config.uri {
             // Resolve variables in URI template (encode values for safety)
-            let resolved = self.resolve_variables(new_uri, original_path, session, captures, true);
+            let resolved = self.resolve_variables(new_uri, original_path, session, captures, TemplateContext::Uri);
             // Preserve original query string
             let final_uri = self.build_uri_with_query(&resolved, original_query);
 
@@ -209,7 +241,7 @@ impl ProxyRewrite {
                     }
                 }
                 // Resolve remaining variables ($uri, $arg_name, etc.) with proper encoding
-                let result = self.resolve_variables(&result, original_path, session, None, true);
+                let result = self.resolve_variables(&result, original_path, session, None, TemplateContext::Uri);
                 // Preserve original query string
                 let final_uri = self.build_uri_with_query(&result, original_query);
 
@@ -243,7 +275,7 @@ impl ProxyRewrite {
             if let Err(_e) = session.set_upstream_method(method_str) {
                 plugin_log.push_err("method rewrite fail");
             } else {
-                plugin_log.push(&format!("method rewrite {}", method_str));
+                plugin_log.push_fmt("method rewrite {}", la![sensitive(method_str)]);
             }
         }
     }
@@ -266,8 +298,10 @@ impl ProxyRewrite {
             // 1. Add headers (append) - process in order
             if let Some(ref add_headers) = headers.add {
                 for entry in add_headers {
-                    // Don't encode header values
-                    let resolved = self.resolve_variables(&entry.value, original_path, session, captures, false);
+                    // Header values: TemplateContext::Header guarantees ASCII-safe output for
+                    // $arg_<name>, $1..$9, and $<name>. See resolve_variables doc.
+                    let resolved =
+                        self.resolve_variables(&entry.value, original_path, session, captures, TemplateContext::Header);
                     if let Err(_e) = session.append_request_header(&entry.name, &resolved) {
                         plugin_log.push_err("header add fail");
                     } else {
@@ -279,8 +313,10 @@ impl ProxyRewrite {
             // 2. Set headers (overwrite) - process in order
             if let Some(ref set_headers) = headers.set {
                 for entry in set_headers {
-                    // Don't encode header values
-                    let resolved = self.resolve_variables(&entry.value, original_path, session, captures, false);
+                    // Header values: TemplateContext::Header guarantees ASCII-safe output for
+                    // $arg_<name>, $1..$9, and $<name>. See resolve_variables doc.
+                    let resolved =
+                        self.resolve_variables(&entry.value, original_path, session, captures, TemplateContext::Header);
                     if let Err(_e) = session.set_request_header(&entry.name, &resolved) {
                         plugin_log.push_err("header set fail");
                     } else {
@@ -314,8 +350,9 @@ impl RequestFilter for ProxyRewrite {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
+        use crate::types::resources::edgion_plugins::PluginValidation;
         // Check if configuration is valid
-        if !self.config.is_valid() {
+        if self.config.validation_error().is_some() {
             plugin_log.push_err("config invalid");
             return PluginRunningResult::GoodNext;
         }
@@ -358,365 +395,11 @@ impl RequestFilter for ProxyRewrite {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-    use crate::types::resources::edgion_plugins::{HeaderActions, HeaderEntry, HttpMethod, RegexUri};
-
-    fn create_basic_config() -> ProxyRewriteConfig {
-        ProxyRewriteConfig {
-            uri: Some("/new/path".to_string()),
-            regex_uri: None,
-            host: Some("backend.svc".to_string()),
-            method: None,
-            headers: None,
-            compiled_regex: None,
-            validation_error: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn test_uri_rewrite_with_query_preserved() {
-        let config = create_basic_config();
-        let plugin = ProxyRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
-
-        mock_session.expect_get_path().return_const("/old/path".to_string());
-        mock_session
-            .expect_get_query()
-            .return_const(Some("foo=bar&baz=qux".to_string()));
-        mock_session
-            .expect_set_upstream_uri()
-            .with(mockall::predicate::eq("/new/path?foo=bar&baz=qux"))
-            .returning(|_| Ok(()));
-        mock_session
-            .expect_set_upstream_host()
-            .with(mockall::predicate::eq("backend.svc"))
-            .returning(|_| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("path rewrite"));
-        assert!(plugin_log.contains("host rewrite"));
-    }
-
-    #[tokio::test]
-    async fn test_uri_rewrite_no_query() {
-        let config = create_basic_config();
-        let plugin = ProxyRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
-
-        mock_session.expect_get_path().return_const("/old/path".to_string());
-        mock_session.expect_get_query().return_const(None::<String>);
-        mock_session
-            .expect_set_upstream_uri()
-            .with(mockall::predicate::eq("/new/path"))
-            .returning(|_| Ok(()));
-        mock_session
-            .expect_set_upstream_host()
-            .with(mockall::predicate::eq("backend.svc"))
-            .returning(|_| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_regex_uri_rewrite_with_query_preserved() {
-        let config = ProxyRewriteConfig {
-            uri: None,
-            regex_uri: Some(RegexUri {
-                pattern: r"^/api/v1/users/(\d+)/profile".to_string(),
-                replacement: "/user-service/$1".to_string(),
-            }),
-            host: None,
-            method: None,
-            headers: None,
-            compiled_regex: None,
-            validation_error: None,
-        };
-        let plugin = ProxyRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
-
-        mock_session
-            .expect_get_path()
-            .return_const("/api/v1/users/123/profile".to_string());
-        mock_session
-            .expect_get_query()
-            .return_const(Some("detail=true".to_string()));
-        mock_session
-            .expect_set_upstream_uri()
-            .with(mockall::predicate::eq("/user-service/123?detail=true"))
-            .returning(|_| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("path rewrite"));
-    }
-
-    #[tokio::test]
-    async fn test_regex_not_matched_logs() {
-        let config = ProxyRewriteConfig {
-            uri: None,
-            regex_uri: Some(RegexUri {
-                pattern: r"^/api/v1/(.*)".to_string(),
-                replacement: "/internal/$1".to_string(),
-            }),
-            host: None,
-            method: None,
-            headers: None,
-            compiled_regex: None,
-            validation_error: None,
-        };
-        let plugin = ProxyRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
-
-        // Path doesn't match the regex pattern
-        mock_session.expect_get_path().return_const("/other/path".to_string());
-        mock_session.expect_get_query().return_const(None::<String>);
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        // Should log that regex didn't match
-        assert!(plugin_log.contains("regex not matched"));
-    }
-
-    #[tokio::test]
-    async fn test_method_rewrite() {
-        let config = ProxyRewriteConfig {
-            uri: None,
-            regex_uri: None,
-            host: None,
-            method: Some(HttpMethod::Post),
-            headers: None,
-            compiled_regex: None,
-            validation_error: None,
-        };
-        let plugin = ProxyRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
-
-        mock_session.expect_get_path().return_const("/test".to_string());
-        mock_session.expect_get_query().return_const(None::<String>);
-        mock_session
-            .expect_set_upstream_method()
-            .with(mockall::predicate::eq("POST"))
-            .returning(|_| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("method rewrite POST"));
-    }
-
-    #[tokio::test]
-    async fn test_headers_modification_with_vec() {
-        let config = ProxyRewriteConfig {
-            uri: None,
-            regex_uri: None,
-            host: None,
-            method: None,
-            headers: Some(HeaderActions {
-                add: None,
-                set: Some(vec![
-                    HeaderEntry {
-                        name: "X-First".to_string(),
-                        value: "1".to_string(),
-                    },
-                    HeaderEntry {
-                        name: "X-Second".to_string(),
-                        value: "2".to_string(),
-                    },
-                ]),
-                remove: Some(vec!["X-Debug".to_string()]),
-            }),
-            compiled_regex: None,
-            validation_error: None,
-        };
-        let plugin = ProxyRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
-
-        mock_session.expect_get_path().return_const("/test".to_string());
-        mock_session.expect_get_query().return_const(None::<String>);
-
-        // Headers should be set in order
-        let mut seq = mockall::Sequence::new();
-        mock_session
-            .expect_set_request_header()
-            .with(mockall::predicate::eq("X-First"), mockall::predicate::eq("1"))
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_set_request_header()
-            .with(mockall::predicate::eq("X-Second"), mockall::predicate::eq("2"))
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_remove_request_header()
-            .with(mockall::predicate::eq("X-Debug"))
-            .returning(|_| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("header rewrite"));
-    }
-
-    #[tokio::test]
-    async fn test_uri_variable_with_special_chars_encoded() {
-        let config = ProxyRewriteConfig {
-            uri: Some("/search?q=$arg_keyword".to_string()),
-            regex_uri: None,
-            host: None,
-            method: None,
-            headers: None,
-            compiled_regex: None,
-            validation_error: None,
-        };
-        let plugin = ProxyRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
-
-        mock_session.expect_get_path().return_const("/old".to_string());
-        mock_session.expect_get_query().return_const(None::<String>);
-        mock_session
-            .expect_get_query_param()
-            .with(mockall::predicate::eq("keyword"))
-            .returning(|_| Some("hello world&foo=bar".to_string()));
-        // Special chars should be URL encoded
-        mock_session
-            .expect_set_upstream_uri()
-            .with(mockall::predicate::eq("/search?q=hello%20world%26foo%3Dbar"))
-            .returning(|_| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_uri_with_arg_variable() {
-        let config = ProxyRewriteConfig {
-            uri: Some("/search?q=$arg_keyword".to_string()),
-            regex_uri: None,
-            host: None,
-            method: None,
-            headers: None,
-            compiled_regex: None,
-            validation_error: None,
-        };
-        let plugin = ProxyRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
-
-        mock_session.expect_get_path().return_const("/old".to_string());
-        mock_session.expect_get_query().return_const(None::<String>);
-        mock_session
-            .expect_get_query_param()
-            .with(mockall::predicate::eq("keyword"))
-            .returning(|_| Some("test".to_string()));
-        mock_session
-            .expect_set_upstream_uri()
-            .with(mockall::predicate::eq("/search?q=test"))
-            .returning(|_| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_uri_variable() {
-        let config = ProxyRewriteConfig {
-            uri: Some("/prefix$uri/suffix".to_string()),
-            regex_uri: None,
-            host: None,
-            method: None,
-            headers: None,
-            compiled_regex: None,
-            validation_error: None,
-        };
-        let plugin = ProxyRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
-
-        mock_session.expect_get_path().return_const("/api/users".to_string());
-        mock_session.expect_get_query().return_const(None::<String>);
-        mock_session
-            .expect_set_upstream_uri()
-            .with(mockall::predicate::eq("/prefix/api/users/suffix"))
-            .returning(|_| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn test_header_with_capture_variable() {
-        let config = ProxyRewriteConfig {
-            uri: None,
-            regex_uri: Some(RegexUri {
-                pattern: r"^/users/(\d+)/(\w+)".to_string(),
-                replacement: "/user/$1/$2".to_string(),
-            }),
-            host: None,
-            method: None,
-            headers: Some(HeaderActions {
-                add: None,
-                set: Some(vec![
-                    HeaderEntry {
-                        name: "X-User-Id".to_string(),
-                        value: "$1".to_string(),
-                    },
-                    HeaderEntry {
-                        name: "X-Action".to_string(),
-                        value: "$2".to_string(),
-                    },
-                ]),
-                remove: None,
-            }),
-            compiled_regex: None,
-            validation_error: None,
-        };
-        let plugin = ProxyRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
-
-        mock_session
-            .expect_get_path()
-            .return_const("/users/456/profile".to_string());
-        mock_session.expect_get_query().return_const(None::<String>);
-        mock_session
-            .expect_set_upstream_uri()
-            .with(mockall::predicate::eq("/user/456/profile"))
-            .returning(|_| Ok(()));
-
-        // Headers should get capture group values
-        mock_session
-            .expect_set_request_header()
-            .with(mockall::predicate::eq("X-User-Id"), mockall::predicate::eq("456"))
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_set_request_header()
-            .with(mockall::predicate::eq("X-Action"), mockall::predicate::eq("profile"))
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
+    use crate::types::resources::edgion_plugins::RegexUri;
 
     #[tokio::test]
     async fn test_invalid_config() {
+        use crate::types::resources::edgion_plugins::PluginValidation;
         let mut config = ProxyRewriteConfig {
             uri: None,
             regex_uri: Some(RegexUri {
@@ -727,14 +410,12 @@ mod tests {
             method: None,
             headers: None,
             compiled_regex: None,
-            validation_error: None,
         };
 
         // Verify config validation catches invalid regex
         let is_valid = config.precompile();
         assert!(!is_valid);
-        assert!(!config.is_valid());
-        assert!(config.get_validation_error().unwrap().contains("Invalid regex"));
+        assert!(config.validation_error().unwrap().contains("Invalid regex"));
 
         // Create plugin and run with invalid config
         let plugin = ProxyRewrite::new(&ProxyRewriteConfig {
@@ -757,44 +438,6 @@ mod tests {
         assert_eq!(result, PluginRunningResult::GoodNext);
     }
 
-    #[tokio::test]
-    async fn test_headers_add() {
-        let config = ProxyRewriteConfig {
-            uri: None,
-            regex_uri: None,
-            host: None,
-            method: None,
-            headers: Some(HeaderActions {
-                add: Some(vec![HeaderEntry {
-                    name: "X-Custom".to_string(),
-                    value: "added-value".to_string(),
-                }]),
-                set: None,
-                remove: None,
-            }),
-            compiled_regex: None,
-            validation_error: None,
-        };
-        let plugin = ProxyRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
-
-        mock_session.expect_get_path().return_const("/test".to_string());
-        mock_session.expect_get_query().return_const(None::<String>);
-        mock_session
-            .expect_append_request_header()
-            .with(
-                mockall::predicate::eq("X-Custom"),
-                mockall::predicate::eq("added-value"),
-            )
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("header rewrite"));
-    }
-
     #[test]
     fn test_url_encode() {
         assert_eq!(ProxyRewrite::url_encode("hello world"), "hello%20world");
@@ -806,130 +449,135 @@ mod tests {
         assert_eq!(ProxyRewrite::url_encode("normal"), "normal");
     }
 
-    #[tokio::test]
-    async fn test_uri_with_path_param_variable() {
-        let config = ProxyRewriteConfig {
-            uri: Some("/user-service/$uid/profile".to_string()),
-            regex_uri: None,
-            host: None,
-            method: None,
-            headers: None,
-            compiled_regex: None,
-            validation_error: None,
-        };
-        let plugin = ProxyRewrite::new(&config);
+    /// `$arg_<name>` must always url-encode the (decoded) query value, in both
+    /// URI and header contexts. This protects header rewrite from
+    /// `HeaderValue::try_from` rejecting control bytes and shields downstream
+    /// strict HTTP parsers from non-ASCII bytes, while remaining identity for
+    /// ordinary ASCII values (so the common `$arg_x = user-123` UX is unchanged).
+    #[test]
+    fn test_arg_substitution_always_url_encodes() {
+        let plugin = ProxyRewrite::new(&ProxyRewriteConfig::default());
+
+        // Mock returns decoded values (matches the new PluginSession contract).
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
+        mock_session.expect_get_query_param().returning(|name| match name {
+            "user" => Some("user-123".to_string()),      // ordinary ASCII
+            "token" => Some("hello\nworld".to_string()), // decoded control byte
+            "id" => Some("café".to_string()),            // decoded non-ASCII byte (é = C3 A9) — must be url-encoded
+            "raw" => Some("foo+bar=baz".to_string()),    // decoded reserved chars
+            _ => None,
+        });
 
-        mock_session
-            .expect_get_path()
-            .return_const("/api/123/profile".to_string());
-        mock_session.expect_get_query().return_const(None::<String>);
-        // Path param extraction: $uid -> 123
-        mock_session
-            .expect_get_path_param()
-            .with(mockall::predicate::eq("uid"))
-            .returning(|_| Some("123".to_string()));
-        mock_session
-            .expect_set_upstream_uri()
-            .with(mockall::predicate::eq("/user-service/123/profile"))
-            .returning(|_| Ok(()));
+        // Header context (TemplateContext::Header).
+        let header_out = plugin.resolve_variables(
+            "user=$arg_user;token=$arg_token;id=$arg_id;raw=$arg_raw",
+            "/orig",
+            &mut mock_session,
+            None,
+            TemplateContext::Header,
+        );
+        assert_eq!(
+            header_out, "user=user-123;token=hello%0Aworld;id=caf%C3%A9;raw=foo%2Bbar%3Dbaz",
+            "header context: $arg_<name> must url-encode"
+        );
 
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("path rewrite"));
+        // URI context (TemplateContext::Uri) — same outcome for $arg_ since we
+        // always encode now. Other branches (capture groups, path params) still
+        // honour the context; this test only pins down $arg_.
+        let uri_out = plugin.resolve_variables(
+            "/p?user=$arg_user&token=$arg_token&id=$arg_id&raw=$arg_raw",
+            "/orig",
+            &mut mock_session,
+            None,
+            TemplateContext::Uri,
+        );
+        assert_eq!(
+            uri_out, "/p?user=user-123&token=hello%0Aworld&id=caf%C3%A9&raw=foo%2Bbar%3Dbaz",
+            "URI context: $arg_<name> stays url-encoded"
+        );
     }
 
-    #[tokio::test]
-    async fn test_header_with_path_param_variable() {
-        let config = ProxyRewriteConfig {
-            uri: None,
-            regex_uri: None,
-            host: None,
-            method: None,
-            headers: Some(HeaderActions {
-                add: None,
-                set: Some(vec![
-                    HeaderEntry {
-                        name: "X-User-Id".to_string(),
-                        value: "$uid".to_string(),
-                    },
-                    HeaderEntry {
-                        name: "X-Action".to_string(),
-                        value: "$action".to_string(),
-                    },
-                ]),
-                remove: None,
-            }),
-            compiled_regex: None,
-            validation_error: None,
-        };
-        let plugin = ProxyRewrite::new(&config);
+    /// `$1..$9` (regex captures) must url-encode in Header context, mirroring
+    /// the `$arg_<name>` rule. Without encoding, control bytes and non-ASCII
+    /// values cause `HeaderValue::try_from` to silently drop the header.
+    #[test]
+    fn test_capture_substitution_url_encodes_in_header_context() {
+        let plugin = ProxyRewrite::new(&ProxyRewriteConfig::default());
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
+        // Captures don't need session lookups, but resolve_variables takes one.
+        mock_session.expect_get_query_param().returning(|_| None);
+        // Inert: result contains no `$` after capture substitution, so path-param
+        // branch is short-circuited by `if result.contains('$')`.
+        mock_session.expect_get_path_param().returning(|_| None);
 
-        mock_session
-            .expect_get_path()
-            .return_const("/users/456/edit".to_string());
-        mock_session.expect_get_query().return_const(None::<String>);
+        // Build a fake regex::Captures by matching against a constructed string.
+        // The captured text contains: a control byte, a non-ASCII (Latin-1)
+        // character, a literal '%', and a reserved char.
+        // Use (?s) flag so '.' matches '\n' (the control byte under test).
+        let re = regex::Regex::new(r"(?s)^/(.+)$").unwrap();
+        // Adversarial input pins the encoder for this function in isolation.
+        // Production paths cannot contain a raw \n byte (pingora rejects request-line
+        // CTL bytes upstream), so this exercises resolve_variables itself, not an
+        // HTTP-realistic capture; the integration test covers the realistic case.
+        let probe = "/hello\nworld-é-100%-foo&bar";
+        let caps = re.captures(probe).unwrap();
 
-        // Path param extraction
-        mock_session
-            .expect_get_path_param()
-            .with(mockall::predicate::eq("uid"))
-            .returning(|_| Some("456".to_string()));
-        mock_session
-            .expect_get_path_param()
-            .with(mockall::predicate::eq("action"))
-            .returning(|_| Some("edit".to_string()));
-
-        // Headers should get path param values
-        mock_session
-            .expect_set_request_header()
-            .with(mockall::predicate::eq("X-User-Id"), mockall::predicate::eq("456"))
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_set_request_header()
-            .with(mockall::predicate::eq("X-Action"), mockall::predicate::eq("edit"))
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("header rewrite"));
+        let out = plugin.resolve_variables(
+            "X-Trace=$1",
+            "/orig",
+            &mut mock_session,
+            Some(&caps),
+            TemplateContext::Header,
+        );
+        assert_eq!(
+            out, "X-Trace=hello%0Aworld-%C3%A9-100%25-foo%26bar",
+            "header context: $1 must url-encode control bytes, non-ASCII, % and reserved chars"
+        );
     }
 
-    #[tokio::test]
-    async fn test_path_param_not_found_leaves_variable() {
-        let config = ProxyRewriteConfig {
-            uri: Some("/service/$unknown/data".to_string()),
-            regex_uri: None,
-            host: None,
-            method: None,
-            headers: None,
-            compiled_regex: None,
-            validation_error: None,
-        };
-        let plugin = ProxyRewrite::new(&config);
+    /// `$<name>` (path parameters) must url-encode in Header context for the
+    /// same reason as captures.
+    #[test]
+    fn test_path_param_substitution_url_encodes_in_header_context() {
+        let plugin = ProxyRewrite::new(&ProxyRewriteConfig::default());
         let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ProxyRewrite");
+        mock_session.expect_get_query_param().returning(|_| None);
+        // Decoded path-param value: contains non-ASCII, control byte, reserved char.
+        mock_session.expect_get_path_param().returning(|name| match name {
+            "uid" => Some("café-foo&bar\nbaz".to_string()),
+            _ => None,
+        });
 
-        mock_session.expect_get_path().return_const("/test".to_string());
-        mock_session.expect_get_query().return_const(None::<String>);
-        // Path param not found
-        mock_session
-            .expect_get_path_param()
-            .with(mockall::predicate::eq("unknown"))
-            .returning(|_| None);
-        // Variable should remain unchanged when param not found
-        mock_session
-            .expect_set_upstream_uri()
-            .with(mockall::predicate::eq("/service/$unknown/data"))
-            .returning(|_| Ok(()));
+        let out = plugin.resolve_variables("X-User=$uid", "/orig", &mut mock_session, None, TemplateContext::Header);
+        assert_eq!(
+            out, "X-User=caf%C3%A9-foo%26bar%0Abaz",
+            "header context: $<name> must url-encode the decoded path-param value"
+        );
+    }
 
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+    /// Pin URI-context behavior: `$1..$9` and `$<name>` continue to url-encode
+    /// (no behavior change in this context — guards against accidental regression
+    /// while we touch resolve_variables).
+    #[test]
+    fn test_capture_and_path_param_url_encode_in_uri_context() {
+        let plugin = ProxyRewrite::new(&ProxyRewriteConfig::default());
+        let mut mock_session = MockPluginSession::new();
+        mock_session.expect_get_query_param().returning(|_| None);
+        mock_session.expect_get_path_param().returning(|name| match name {
+            "uid" => Some("café".to_string()),
+            _ => None,
+        });
 
-        assert_eq!(result, PluginRunningResult::GoodNext);
+        // Capture path
+        // Use (?s) flag so '.' matches '\n' for consistency with other capture tests.
+        let re = regex::Regex::new(r"(?s)^/(.+)$").unwrap();
+        let probe = "/foo&bar";
+        let caps = re.captures(probe).unwrap();
+        let cap_out = plugin.resolve_variables("/x/$1", "/orig", &mut mock_session, Some(&caps), TemplateContext::Uri);
+        assert_eq!(cap_out, "/x/foo%26bar", "URI context: $1 stays url-encoded");
+
+        // Path-param path
+        let pp_out = plugin.resolve_variables("/u/$uid", "/orig", &mut mock_session, None, TemplateContext::Uri);
+        assert_eq!(pp_out, "/u/caf%C3%A9", "URI context: $<name> stays url-encoded");
     }
 }

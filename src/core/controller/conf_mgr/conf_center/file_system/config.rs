@@ -6,8 +6,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::core::controller::conf_mgr::conf_center::common::EndpointMode;
-
 /// FileSystem configuration center settings
 ///
 /// Used when running in file-based mode where configuration is stored as
@@ -18,28 +16,24 @@ use crate::core::controller::conf_mgr::conf_center::common::EndpointMode;
 /// ```yaml
 /// type: file_system
 /// conf_dir: /etc/edgion/conf
-/// endpoint_mode: endpoint_slice
+/// poll_interval_ms: 500
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FileSystemConfig {
     /// Directory containing configuration YAML files
     pub conf_dir: PathBuf,
-
-    /// Endpoint discovery mode
-    ///
-    /// In file system mode, this determines which endpoint resource type to use:
-    /// - Endpoint: Use Endpoints resources
-    /// - EndpointSlice: Use EndpointSlice resources (recommended)
-    /// - Auto: Same as EndpointSlice in file system mode
-    #[serde(default)]
-    pub endpoint_mode: EndpointMode,
+    /// Polling interval in milliseconds for the file watcher.
+    /// When absent the watcher uses its built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_interval_ms: Option<u64>,
 }
 
 impl Default for FileSystemConfig {
     fn default() -> Self {
         Self {
             conf_dir: PathBuf::from("conf"),
-            endpoint_mode: EndpointMode::default(),
+            poll_interval_ms: None,
         }
     }
 }
@@ -49,24 +43,13 @@ impl FileSystemConfig {
     pub fn new(conf_dir: PathBuf) -> Self {
         Self {
             conf_dir,
-            endpoint_mode: EndpointMode::default(),
+            poll_interval_ms: None,
         }
-    }
-
-    /// Create with custom endpoint mode
-    pub fn with_endpoint_mode(mut self, mode: EndpointMode) -> Self {
-        self.endpoint_mode = mode;
-        self
     }
 
     /// Get the configuration directory
     pub fn conf_dir(&self) -> &PathBuf {
         &self.conf_dir
-    }
-
-    /// Get the endpoint mode
-    pub fn endpoint_mode(&self) -> EndpointMode {
-        self.endpoint_mode
     }
 }
 
@@ -78,7 +61,7 @@ mod tests {
     fn test_file_system_config_default() {
         let config = FileSystemConfig::default();
         assert_eq!(config.conf_dir, PathBuf::from("conf"));
-        assert!(config.endpoint_mode.is_auto());
+        assert_eq!(config.poll_interval_ms, None);
     }
 
     #[test]
@@ -88,32 +71,53 @@ mod tests {
     }
 
     #[test]
-    fn test_file_system_config_builder() {
-        let config =
-            FileSystemConfig::new(PathBuf::from("/etc/edgion/conf")).with_endpoint_mode(EndpointMode::EndpointSlice);
-        assert_eq!(config.endpoint_mode, EndpointMode::EndpointSlice);
-    }
-
-    #[test]
     fn test_file_system_config_serialize() {
         let config = FileSystemConfig {
             conf_dir: PathBuf::from("/etc/edgion/conf"),
-            endpoint_mode: EndpointMode::EndpointSlice,
+            poll_interval_ms: None,
         };
 
         let yaml = serde_yaml::to_string(&config).unwrap();
         assert!(yaml.contains("conf_dir:"));
-        assert!(yaml.contains("endpoint_mode: endpoint_slice"));
     }
 
     #[test]
     fn test_file_system_config_deserialize() {
         let yaml = r#"
 conf_dir: /etc/edgion/conf
-endpoint_mode: endpoint
 "#;
         let config: FileSystemConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.conf_dir, PathBuf::from("/etc/edgion/conf"));
-        assert!(config.endpoint_mode.is_endpoint());
+    }
+
+    #[test]
+    fn test_file_system_config_rejects_unknown_fields() {
+        // Stale TOML/YAML with endpoint_mode must be rejected
+        let yaml = r#"
+conf_dir: /etc/edgion/conf
+endpoint_mode: endpoint_slice
+"#;
+        let result: Result<FileSystemConfig, _> = serde_yaml::from_str(yaml);
+        assert!(result.is_err(), "endpoint_mode is a removed field and must be rejected");
+    }
+
+    #[test]
+    fn test_file_system_config_poll_interval_ms_roundtrip() {
+        let yaml = "conf_dir: /tmp/conf\npoll_interval_ms: 500\n";
+        let config: FileSystemConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.poll_interval_ms, Some(500));
+
+        let serialized = serde_yaml::to_string(&config).unwrap();
+        assert!(serialized.contains("poll_interval_ms: 500"));
+    }
+
+    #[test]
+    fn test_file_system_config_poll_interval_ms_absent() {
+        let yaml = "conf_dir: /tmp/conf\n";
+        let config: FileSystemConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.poll_interval_ms, None);
+
+        let serialized = serde_yaml::to_string(&config).unwrap();
+        assert!(!serialized.contains("poll_interval_ms"));
     }
 }

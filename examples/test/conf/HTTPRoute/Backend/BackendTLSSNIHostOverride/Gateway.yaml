@@ -1,0 +1,17 @@
+# BackendTLSSNIHostOverride Gateway
+# HTTP listener — client-to-gateway is plain HTTP.
+# Gateway-to-backend uses TLS; BackendTLSPolicy controls the SNI sent upstream.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: btls-sni-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31385
+      allowedRoutes:
+        namespaces:
+          from: All

@@ -32,10 +32,6 @@ pub struct RegionRouteConfig {
     /// it in turn references the ClusterRegionRoute PluginMetaData via its clusterRef.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_region_route_ref: Option<String>,
-
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 /// Cluster definition
@@ -183,15 +179,32 @@ impl RegionRouteConfig {
         // No local validation needed — PluginMetaData chain resolution handles all checks.
     }
 
-    /// Return a cached validation error set by the Controller, if any.
-    ///
-    /// `validation_error` is `#[serde(skip)]` so it is never serialized/deserialized.
-    /// On the Controller side the field is no longer written (validation is done via
-    /// status conditions in `preparse()`). On the Gateway side this method is checked
-    /// at plugin-build time; it will always return `None` because the field is never set
-    /// after deserialization. Kept for API compatibility with the plugin_runtime dispatch
-    /// table in `plugin_runtime.rs`.
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
+    /// Stateless field-level validation.
+    /// Returns None — region_route validation is handled by
+    /// PluginMetaData chain resolution at preparse time.
+    fn check_fields(&self) -> Option<String> {
+        None
+    }
+}
+
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for RegionRouteConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.check_fields()
+    }
+}
+
+#[cfg(test)]
+mod validation_trait_tests {
+    use super::*;
+    use crate::types::resources::edgion_plugins::PluginValidation;
+
+    #[test]
+    fn validation_error_returns_none_for_default_config() {
+        // region_route relies on PluginMetaData chain resolution for all checks;
+        // the trait method must return None and must not panic.
+        let config = RegionRouteConfig::default();
+        assert_eq!(config.validation_error(), None);
     }
 }

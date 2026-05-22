@@ -1,0 +1,18 @@
+# TLS 1.2 EdgionTls bound to the SAME listener as cipher-strict.
+# Verifies per-SNI minVersion policy: same port, different SNI, different policy.
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: cipher-permissive
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: cipher-gateway
+      namespace: edgion-test
+      sectionName: https-strict
+  hosts:
+    - cipher-permissive.wildcard.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test
+  minTlsVersion: TLS1_2

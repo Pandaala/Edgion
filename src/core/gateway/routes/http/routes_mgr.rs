@@ -10,7 +10,7 @@ use crate::types::err::EdError;
 use crate::types::HTTPRoute;
 use crate::types::ListenerKey;
 use crate::types::{HTTPBackendRef, HTTPRouteRule};
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -189,20 +189,20 @@ pub struct DomainRouteRules {
     /// Wildcard domain matching (e.g., "*.example.com")
     /// Uses RadixHostMatchEngine for wildcard support
     /// None if no wildcard domains are configured
-    pub(crate) wildcard_engine: ArcSwap<Option<RadixHostMatchEngine<RouteRules>>>,
+    pub(crate) wildcard_engine: ArcSwapOption<RadixHostMatchEngine<RouteRules>>,
 
     /// Catch-all routes from HTTPRoutes with no spec.hostnames.
     /// Stored separately from exact_domain_map to avoid mixing fallback
     /// semantics with exact-match semantics.
-    pub(crate) catch_all_routes: ArcSwap<Option<Arc<RouteRules>>>,
+    pub(crate) catch_all_routes: ArcSwapOption<RouteRules>,
 }
 
 impl DomainRouteRules {
     pub fn new() -> Self {
         Self {
             exact_domain_map: ArcSwap::from_pointee(HashMap::new()),
-            wildcard_engine: ArcSwap::from_pointee(None),
-            catch_all_routes: ArcSwap::from_pointee(None),
+            wildcard_engine: ArcSwapOption::empty(),
+            catch_all_routes: ArcSwapOption::empty(),
         }
     }
 
@@ -237,14 +237,14 @@ impl DomainRouteRules {
         }
 
         // Step 2: Try wildcard domain match (O(log n))
-        if let Some(ref engine) = wildcard_engine.as_ref() {
+        if let Some(engine) = wildcard_engine.as_ref() {
             if let Some(route_rules) = engine.match_host(hostname) {
                 return route_rules.match_route(session, ctx, index);
             }
         }
 
         // Step 3: Try catch-all routes (from HTTPRoutes with no spec.hostnames)
-        if let Some(ref catch_all) = **self.catch_all_routes.load() {
+        if let Some(catch_all) = self.catch_all_routes.load().as_ref() {
             return catch_all.match_route(session, ctx, index);
         }
 
@@ -337,6 +337,13 @@ impl GlobalHttpRouteManagers {
     pub fn rebuild_all_listener_managers(&self) {
         // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
         let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
+        // Physical listener keys the request path reads from; routes whose
+        // resolved_listeners are not among these are unreachable.
+        tracing::debug!(
+            component = "global_http_route_managers",
+            listener_keys = ?pgis.all_listener_keys(),
+            "Per-listener route manager rebuild: known listener keys"
+        );
         for key in pgis.all_listener_keys() {
             self.get_or_create_listener_manager(&key);
         }
@@ -419,6 +426,28 @@ impl GlobalHttpRouteManagers {
             }
         }
 
+        // Sweep orphan entries: a partial update only touches affected listeners,
+        // but earlier rebuild_all calls may have pre-created by_listener entries
+        // for listeners that no longer appear in PGIS and are not referenced by
+        // any current route. Without this sweep, those entries (and their stale
+        // route tables) leak indefinitely — they are never the target of a
+        // subsequent partial update.
+        let route_referenced: HashSet<ListenerKey> = self
+            .route_cache
+            .iter()
+            .flat_map(|e| resolved_listeners_for_route(e.value()).to_vec())
+            .collect();
+        let orphans: Vec<ListenerKey> = self
+            .by_listener
+            .iter()
+            .filter(|e| !route_referenced.contains(e.key()) && !active_listeners.contains(e.key()))
+            .map(|e| e.key().clone())
+            .collect();
+        for key in &orphans {
+            self.by_listener.remove(key);
+        }
+        removed_stale += orphans.len();
+
         tracing::info!(
             component = "global_http_route_managers",
             affected = affected_listeners.len(),
@@ -435,6 +464,15 @@ impl GlobalHttpRouteManagers {
             let route_key = entry.key().clone();
             let route = entry.value().clone();
             let listeners = resolved_listeners_for_route(&route);
+
+            // Listener keys this route is bucketed under, from the
+            // controller-computed spec.resolved_listeners.
+            tracing::debug!(
+                component = "global_http_route_managers",
+                route = %route_key,
+                resolved_listeners = ?listeners,
+                "Bucketing HTTPRoute by resolved_listeners"
+            );
 
             if listeners.is_empty() {
                 tracing::warn!(route = %route_key, "HTTPRoute has no resolved_listeners, skipping");
@@ -465,7 +503,7 @@ impl GlobalHttpRouteManagers {
             let exact_map = table.exact_domain_map.load();
             total_exact_domains += exact_map.len();
             let wc = table.wildcard_engine.load();
-            total_wildcard_domains += wc.as_ref().as_ref().map_or(0, |e| e.host_count());
+            total_wildcard_domains += wc.as_ref().map_or(0, |e| e.host_count());
             if table.catch_all_routes.load().is_some() {
                 total_catch_all = true;
             }

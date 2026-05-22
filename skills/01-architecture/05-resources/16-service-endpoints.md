@@ -1,86 +1,88 @@
 ---
 name: resource-service-endpoints
-description: Service + EndpointSlice + Endpoint 资源：后端发现、级联 requeue、两种端点模式。
+description: Service + EndpointSlice + Endpoint resources — backend discovery, cascading requeue, two endpoint modes.
 ---
 
-# Service + EndpointSlice + Endpoint 资源
+> **Status: partially removed**. The `Endpoints` resource handler was removed in commit `43acc97` (2026-05-06); backend discovery now uses EndpointSlice/Service exclusively. The Endpoints-related content below is preserved for historical context.
 
-> **通用流程**: 参见 [00-resource-flow.md](00-resource-flow.md)
+# Service + EndpointSlice + Endpoint resources
 
-这三种 Kubernetes 核心资源共同构成后端服务发现机制。Service 定义逻辑服务，EndpointSlice（优先）和 Endpoint（遗留）提供实际的后端 Pod IP 和端口。
+> **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-## 源码位置
+These three Kubernetes core resources together form the backend service-discovery mechanism. Service defines the logical service; EndpointSlice (preferred) and Endpoint (legacy) provide the actual backend Pod IPs and ports.
+
+## Source code locations
 
 - Controller Handlers:
   - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/service.rs`
   - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/endpoint_slice.rs`
-  - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/endpoints.rs`
+  - Endpoints handler — formerly at `controller/conf_mgr/sync_runtime/resource_processor/handlers/endpoints.rs`; removed in commit `43acc97`, 2026-05-06
 - Gateway ConfHandlers:
   - `src/core/gateway/backends/discovery/services/conf_handler_impl.rs`
   - `src/core/gateway/backends/discovery/endpoint_slice/conf_handler_impl.rs`
-  - `src/core/gateway/backends/discovery/endpoint/conf_handler_impl.rs`
+  - Endpoint ConfHandler — formerly at `gateway/backends/discovery/endpoint/conf_handler_impl.rs`; removed in commit `43acc97`, 2026-05-06
 
 ## Service
 
-### Controller 侧处理
+### Controller-side processing
 
 #### parse
 
-无特殊处理逻辑，直接透传。
+No special handling; passes through directly.
 
 #### on_change / on_delete
 
-通过 `ServiceRefManager` 触发级联 requeue：查找所有以此 Service 作为 backendRef 的路由资源（HTTPRoute、GRPCRoute、TCPRoute、TLSRoute、UDPRoute），逐一 requeue。这确保：
-- Service 创建时：之前 ResolvedRefs=False 的路由重新校验变为 True
-- Service 删除时：路由的 ResolvedRefs 从 True 变为 False
-- Service 更新时：路由重新解析后端配置
+Triggers cascading requeue via `ServiceRefManager`: looks up all route resources (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute) using this Service as a backendRef and requeues them one by one. This ensures:
+- On Service creation: routes that previously had ResolvedRefs=False are revalidated to True
+- On Service deletion: route ResolvedRefs goes from True to False
+- On Service update: routes re-resolve their backend configuration
 
-### Gateway 侧处理
+### Gateway-side processing
 
-Service 同步到 Gateway 后用于后端发现的元数据（端口映射、协议等）。
+After Service is synced to the Gateway side, it is used as backend-discovery metadata (port mapping, protocol, etc.).
 
-## EndpointSlice（优先模式）
+## EndpointSlice (preferred mode)
 
-### Controller 侧处理
-
-#### parse
-
-无特殊处理逻辑，直接透传。EndpointSlice 数据在 Gateway 侧消费。
-
-### Gateway 侧处理
-
-EndpointSlice 是 Kubernetes 推荐的端点发现机制，提供 Service 的后端 Pod 地址列表。Gateway 侧从 EndpointSlice 构建负载均衡目标池，用于请求转发时的后端选择和健康检查目标列表。
-
-## Endpoint（遗留模式）
-
-### Controller 侧处理
+### Controller-side processing
 
 #### parse
 
-无特殊处理逻辑，直接透传。
+No special handling; passes through directly. EndpointSlice data is consumed on the Gateway side.
 
-### Gateway 侧处理
+### Gateway-side processing
 
-Endpoint 是 Kubernetes 遗留的端点发现机制。当 EndpointSlice 不可用时回退使用。功能与 EndpointSlice 等价，但性能和扩展性较差（不支持分片）。
+EndpointSlice is the Kubernetes-recommended endpoint-discovery mechanism, providing the backend Pod address list for a Service. The Gateway side builds the load-balancing target pool from EndpointSlice for backend selection during request forwarding and for the health-check target list.
 
-## ServiceRefManager 机制
+## Endpoint (legacy mode)
 
-路由资源（HTTPRoute 等）在 parse 阶段通过 `register_service_backend_refs()` 将 backendRef 中的 Service 引用注册到 ServiceRefManager。Service 变更时，ServiceHandler 调用 `get_service_ref_manager().get_refs()` 获取依赖列表并 requeue。
+### Controller-side processing
 
-注册生命周期：
-- 路由 parse 时注册
-- 路由 delete 时通过 `clear_service_backend_refs()` 清除
-- 路由 update 时先清除旧注册再注册新引用
+#### parse
 
-## 跨资源关联
+No special handling; passes through directly.
 
-| 关联方向 | 目标资源 | 关联机制 | 说明 |
+### Gateway-side processing
+
+Endpoint is the legacy Kubernetes endpoint-discovery mechanism. Used as a fallback when EndpointSlice is unavailable. Functionally equivalent to EndpointSlice but with worse performance and scalability (no sharding support).
+
+## ServiceRefManager mechanism
+
+During parse, route resources (e.g., HTTPRoute) register Service references from backendRefs into ServiceRefManager via `register_service_backend_refs()`. When a Service changes, ServiceHandler obtains the dependency list via `get_service_ref_manager().get_refs()` and requeues them.
+
+Registration lifecycle:
+- Routes register during parse
+- Routes clear via `clear_service_backend_refs()` on delete
+- On route updates, old registrations are cleared and new references are registered
+
+## Cross-resource relationships
+
+| Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
-| Service ← HTTPRoute | HTTPRoute | backendRef + ServiceRefManager | Service 变更 requeue 路由 |
-| Service ← GRPCRoute | GRPCRoute | backendRef + ServiceRefManager | 同上 |
-| Service ← TCPRoute | TCPRoute | backendRef + ServiceRefManager | 同上 |
-| Service ← TLSRoute | TLSRoute | backendRef + ServiceRefManager | 同上 |
-| Service ← UDPRoute | UDPRoute | backendRef + ServiceRefManager | 同上 |
-| Service ← BackendTLSPolicy | BackendTLSPolicy | targetRef | 策略绑定目标 |
-| EndpointSlice → Service | Service | kubernetes.io/service-name label | 关联到 Service |
-| Endpoint → Service | Service | 同名 | 与 Service 同名关联 |
+| Service ← HTTPRoute | HTTPRoute | backendRef + ServiceRefManager | Service changes requeue routes |
+| Service ← GRPCRoute | GRPCRoute | backendRef + ServiceRefManager | Same as above |
+| Service ← TCPRoute | TCPRoute | backendRef + ServiceRefManager | Same as above |
+| Service ← TLSRoute | TLSRoute | backendRef + ServiceRefManager | Same as above |
+| Service ← UDPRoute | UDPRoute | backendRef + ServiceRefManager | Same as above |
+| Service ← BackendTLSPolicy | BackendTLSPolicy | targetRef | Policy binding target |
+| EndpointSlice → Service | Service | kubernetes.io/service-name label | Associated to a Service |
+| Endpoint → Service | Service | same name | Associated to the Service with the same name |

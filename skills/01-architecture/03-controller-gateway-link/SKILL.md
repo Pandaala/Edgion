@@ -1,22 +1,22 @@
 ---
 name: controller-gateway-link
-description: Controller↔Gateway 双向 gRPC 同步架构：ConfigSync 协议、Watch/List 机制、两侧实现。
+description: Bidirectional gRPC sync architecture between Controller and Gateway — ConfigSync protocol, Watch/List mechanism, implementation on both sides.
 ---
 
 # 03 Controller↔Gateway Link
 
-> Controller 和 Gateway 之间通过 gRPC 双向通信实现配置同步。
-> Gateway 作为客户端连接 Controller，通过 List 获取全量、Watch 获取增量。
+> Controller and Gateway communicate via bidirectional gRPC for configuration sync.
+> Gateway connects to Controller as a client, fetching the full state via List and incremental updates via Watch.
 
-## 文件清单
+## File index
 
-| 文件 | 主题 | 推荐阅读场景 |
+| File | Topic | Recommended reading scenario |
 |------|------|-------------|
-| [00-overview.md](00-overview.md) | ConfigSync gRPC 协议总览 | 理解同步协议设计、Proto 定义、版本追踪 |
-| [01-controller-side.md](01-controller-side.md) | Controller 侧 gRPC 服务端 | 调试 ConfigSyncServer、WatchObj、ClientRegistry |
-| [02-gateway-side.md](02-gateway-side.md) | Gateway 侧 gRPC 客户端 | 调试 ConfigSyncClient、ClientCache、ConfHandler |
+| [00-overview.md](00-overview.md) | ConfigSync gRPC protocol overview | Understanding the sync protocol design, Proto definitions, version tracking |
+| [01-controller-side.md](01-controller-side.md) | Controller-side gRPC server | Debugging ConfigSyncServer, WatchObj, ClientRegistry |
+| [02-gateway-side.md](02-gateway-side.md) | Gateway-side gRPC client | Debugging ConfigSyncClient, ClientCache, ConfHandler |
 
-## 架构总览
+## Architecture overview
 
 ```
   Controller                                          Gateway
@@ -30,15 +30,19 @@ description: Controller↔Gateway 双向 gRPC 同步架构：ConfigSync 协议�
 │  ├── WatchObj (per-kind)│──────────────►│             └── ConfHandler
 │  └── ClientRegistry    │                │                         │
 │                         │   WatchMeta    │                         │
-│  server_id (per-start)  │──────────────►│  检测 server_id 变化    │
-│                         │                │  → 触发全量 relist      │
+│  server_id (per-start)  │──────────────►│  Detects server_id change
+│                         │                │  → triggers full relist │
 └─────────────────────────┘                └─────────────────────────┘
 ```
 
-## 核心概念
+## Core concepts
 
-- **ConfigSync 协议**：定义了 4 个 RPC 方法（GetServerInfo、List、Watch、WatchServerMeta），Gateway 通过这些方法与 Controller 同步资源配置。
-- **版本追踪**：`sync_version`（单调递增）和 `server_id`（UUID）配合使用，实现增量同步和 Controller 重启检测。
-- **不同步资源**：`ReferenceGrant` 和 `Secret` 是 `no_sync_kinds`，仅在 Controller 侧使用，不发送到 Gateway。
-- **通道安全（mTLS）**：可选的 `conf_sync_security` 配置，为 gRPC 通道启用双向 TLS 认证，支持多套命名证书集（`[[conf_sync_security.certs]]`）和 `active` 字段切换，也向后兼容旧版 `[conf_sync_security.tls]` 单套格式。证书通过 `edgion-cli gen-certs --cert-name <name>` 生成。详见 [00-overview.md § 通道安全](00-overview.md#通道安全mtls)。
-- **模块分布**：`common/conf_sync`（Proto + 共享 traits）、`common/config`（TLS 配置结构）、`controller/conf_sync`（服务端）、`gateway/conf_sync`（客户端）、`ctl/certs`（证书生成）。
+- **ConfigSync protocol**: defines 4 RPC methods (GetServerInfo, List, Watch, WatchServerMeta) that Gateway uses to sync resource configuration with Controller.
+- **Version tracking**: `sync_version` (monotonically increasing) and `server_id` (UUID) are used together to enable incremental sync and Controller-restart detection.
+- **Non-synced resources**: `ReferenceGrant` and `Secret` are `no_sync_kinds`; they are used only on the Controller side and are not sent to the Gateway.
+- **Channel security (mTLS)**: optional `conf_sync_security` configuration enables mutual TLS authentication on the gRPC channel, supporting multiple named certificate sets (`[[conf_sync_security.certs]]`) selected by an `active` field, while remaining backward compatible with the legacy single-set `[conf_sync_security.tls]` format. Certificates are generated via `edgion-cli gen-certs --cert-name <name>`. See [00-overview.md § Channel security](00-overview.md) for details.
+- **Module distribution**: `common/conf_sync` (Proto + shared traits), `common/config` (TLS configuration structs), `controller/conf_sync` (server side), `gateway/conf_sync` (client side), `ctl/certs` (certificate generation).
+
+## Testing infrastructure
+
+- **Wipe-all test path**: `POST controller /api/v1/admin/wipe-all` (testing-mode only) deletes all 21 kinds in tier order, used together with `cache_residue` to verify leaks. See [05-testing/02-cache-residue-detection.md](../../05-testing/02-cache-residue-detection.md) for details.

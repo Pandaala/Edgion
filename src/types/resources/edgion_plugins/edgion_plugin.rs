@@ -12,7 +12,7 @@ use super::plugin_configs::{
     RequestRestrictionConfig, ResponseRewriteConfig,
 };
 use crate::types::resources::http_route::{
-    HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter, LocalObjectReference,
+    HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter,
 };
 
 /// Plugin enum for all supported plugin types
@@ -34,8 +34,6 @@ pub enum EdgionPlugin {
     UrlRewrite(HTTPURLRewriteFilter),
     /// Request mirror filter
     RequestMirror(HTTPRequestMirrorFilter),
-    /// Extension reference filter
-    ExtensionRef(LocalObjectReference),
 
     // ========== Custom Edgion plugins ==========
     /// Basic Authentication filter
@@ -111,7 +109,6 @@ impl EdgionPlugin {
             EdgionPlugin::RequestRedirect(_) => "RequestRedirect",
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
-            EdgionPlugin::ExtensionRef(_) => "ExtensionRef",
             EdgionPlugin::BasicAuth(_) => "BasicAuth",
             EdgionPlugin::Cors(_) => "Cors",
             EdgionPlugin::Csrf(_) => "Csrf",
@@ -140,6 +137,64 @@ impl EdgionPlugin {
             EdgionPlugin::DynamicExternalUpstream(_) => "DynamicExternalUpstream",
             EdgionPlugin::Dsl(_) => "Dsl",
             EdgionPlugin::RegionRoute(_) => "RegionRoute",
+        }
+    }
+
+    /// Stateless validation entry point for any plugin variant.
+    ///
+    /// This is the canonical preparse-time validation accessor. New variants
+    /// MUST be added here; the exhaustive match guarantees compile-time coverage.
+    pub fn validation_error(&self) -> Option<String> {
+        use crate::types::resources::edgion_plugins::PluginValidation;
+        match self {
+            // Bucket 1 — Pattern A (check_fields)
+            EdgionPlugin::CtxSet(c) => c.validation_error(),
+            EdgionPlugin::DirectEndpoint(c) => c.validation_error(),
+            EdgionPlugin::RegionRoute(c) => c.validation_error(),
+            EdgionPlugin::DynamicInternalUpstream(c) => c.validation_error(),
+            EdgionPlugin::DynamicExternalUpstream(c) => c.validation_error(),
+            EdgionPlugin::KeyAuth(c) => c.validation_error(),
+            EdgionPlugin::ResponseRewrite(c) => c.validation_error(),
+            EdgionPlugin::ProxyRewrite(c) => c.validation_error(),
+            EdgionPlugin::RequestRestriction(c) => c.validation_error(),
+            EdgionPlugin::RateLimit(c) => c.validation_error(),
+            EdgionPlugin::RateLimitRedis(c) => c.validation_error(),
+
+            // Bucket 2 — Pattern B (validate().err())
+            EdgionPlugin::Mock(c) => c.validation_error(),
+            EdgionPlugin::Csrf(c) => c.validation_error(),
+
+            // Bucket 3 — Pattern C (detect_validation_error)
+            EdgionPlugin::BasicAuth(c) => c.validation_error(),
+            EdgionPlugin::JweDecrypt(c) => c.validation_error(),
+            EdgionPlugin::HmacAuth(c) => c.validation_error(),
+            EdgionPlugin::HeaderCertAuth(c) => c.validation_error(),
+
+            // Bucket 4 — stateless get_validation_error
+            EdgionPlugin::ForwardAuth(c) => c.validation_error(),
+            EdgionPlugin::OpenidConnect(c) => c.validation_error(),
+            EdgionPlugin::BandwidthLimit(c) => c.validation_error(),
+            EdgionPlugin::LdapAuth(c) => c.validation_error(),
+
+            // Bucket 5 — new field checks
+            EdgionPlugin::AllEndpointStatus(c) => c.validation_error(),
+
+            // Bucket 6 — DSL
+            EdgionPlugin::Dsl(c) => c.validation_error(),
+
+            // Bucket 7 — no preparse validation
+            EdgionPlugin::Cors(c) => c.validation_error(),
+            EdgionPlugin::IpRestriction(c) => c.validation_error(),
+            EdgionPlugin::RealIp(c) => c.validation_error(),
+            EdgionPlugin::JwtAuth(c) => c.validation_error(),
+            EdgionPlugin::DebugAccessLogToHeader(c) => c.validation_error(),
+
+            // Bucket 8 — Gateway API filter variants (foreign types, no trait impl)
+            EdgionPlugin::RequestHeaderModifier(_)
+            | EdgionPlugin::ResponseHeaderModifier(_)
+            | EdgionPlugin::RequestRedirect(_)
+            | EdgionPlugin::UrlRewrite(_)
+            | EdgionPlugin::RequestMirror(_) => None,
         }
     }
 }

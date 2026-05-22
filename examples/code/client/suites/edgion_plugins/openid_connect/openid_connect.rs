@@ -164,15 +164,31 @@ impl OpenidConnectTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     };
 
-                    if response.status().as_u16() == 403 {
+                    if response.status().as_u16() != 403 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 403, got {}", response.status().as_u16()),
+                        );
+                    }
+                    // Active token lacking scope -> RFC 6750 §3.1: challenge SHOULD carry
+                    // error="insufficient_scope".
+                    let www_auth = response
+                        .headers()
+                        .get("WWW-Authenticate")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("");
+                    if www_auth.contains(r#"error="insufficient_scope""#) {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "Insufficient scope rejected with 403".to_string(),
+                            format!("403 with WWW-Authenticate: {}", www_auth),
                         )
                     } else {
                         TestResult::failed(
                             start.elapsed(),
-                            format!("Expected 403, got {}", response.status().as_u16()),
+                            format!(
+                                "Expected error=\"insufficient_scope\" in WWW-Authenticate, got: {}",
+                                www_auth
+                            ),
                         )
                     }
                 })

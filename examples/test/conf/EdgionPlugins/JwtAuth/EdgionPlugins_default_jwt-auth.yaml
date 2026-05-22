@@ -8,12 +8,17 @@ spec:
     - enable: true
       type: JwtAuth
       config:
-        secretRef:
-          name: jwt-secret
-          namespace: edgion-default
+        issuerGroups:
+          - name: default
+            issuers:
+              - "https://test.example"
+            secretRefs:
+              - name: jwt-secret
+                namespace: edgion-default
         algorithm: HS256
         header: authorization
         query: jwt
+        allowTokenInQuery: true
         cookie: jwt
         keyClaimName: key
         hideCredentials: false

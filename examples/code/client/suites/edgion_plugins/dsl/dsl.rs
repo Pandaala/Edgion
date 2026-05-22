@@ -308,7 +308,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 4: Set Request Header ====================
+    // ==================== Scenario 4: Set Request Header ====================
 
     fn test_set_request_header_with_user_id() -> TestCase {
         TestCase::new(
@@ -389,7 +389,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 5: Deny by Header ====================
+    // ==================== Scenario 5: Deny by Header ====================
 
     fn test_deny_by_header_blocked() -> TestCase {
         TestCase::new(
@@ -456,7 +456,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 6: Cookie Read ====================
+    // ==================== Scenario 6: Cookie Read ====================
 
     fn test_cookie_read_present() -> TestCase {
         TestCase::new(
@@ -535,7 +535,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 7: Ctx Chain ====================
+    // ==================== Scenario 7: Ctx Chain ====================
 
     fn test_ctx_chain_with_tenant() -> TestCase {
         TestCase::new(
@@ -622,7 +622,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 8: Multi Header Ops ====================
+    // ==================== Scenario 8: Multi Header Ops ====================
 
     fn test_multi_header_ops() -> TestCase {
         TestCase::new(
@@ -677,7 +677,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 9: URI Rewrite ====================
+    // ==================== Scenario 9: URI Rewrite ====================
 
     fn test_uri_rewrite_v1() -> TestCase {
         TestCase::new(
@@ -759,7 +759,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 10: SHA256 Sign ====================
+    // ==================== Scenario 10: SHA256 Sign ====================
 
     fn test_sha256_sign() -> TestCase {
         TestCase::new(
@@ -801,7 +801,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 11: Regex Extract ====================
+    // ==================== Scenario 11: Regex Extract ====================
 
     fn test_regex_extract_chrome() -> TestCase {
         TestCase::new(
@@ -877,7 +877,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 12: Response Inject ====================
+    // ==================== Scenario 12: Response Inject ====================
 
     fn test_response_inject() -> TestCase {
         TestCase::new(
@@ -926,7 +926,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 13: Resp Status Conditional ====================
+    // ==================== Scenario 13: Resp Status Conditional ====================
 
     fn test_resp_status_404() -> TestCase {
         TestCase::new(
@@ -1006,7 +1006,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 14: Deny with Body ====================
+    // ==================== Scenario 14: Deny with Body ====================
 
     fn test_deny_with_body_no_auth() -> TestCase {
         TestCase::new(
@@ -1105,7 +1105,7 @@ impl DslTestSuite {
             },
         )
     }
-    // ==================== 场景 15: Range Iterate ====================
+    // ==================== Scenario 15: Range Iterate ====================
 
     fn test_range_iterate() -> TestCase {
         TestCase::new(
@@ -1153,7 +1153,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 16: Regex Replace ====================
+    // ==================== Scenario 16: Regex Replace ====================
 
     fn test_regex_replace_versioned_path() -> TestCase {
         TestCase::new(
@@ -1226,7 +1226,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 17: Trim + Split ====================
+    // ==================== Scenario 17: Trim + Split ====================
 
     fn test_trim_split_with_admin() -> TestCase {
         TestCase::new(
@@ -1316,7 +1316,7 @@ impl DslTestSuite {
         )
     }
 
-    // ==================== 场景 18: Break + Continue ====================
+    // ==================== Scenario 18: Break + Continue ====================
 
     fn test_break_continue() -> TestCase {
         TestCase::new(
@@ -1361,11 +1361,11 @@ impl DslTestSuite {
     }
     // ==================== Test 19: Terminate ====================
 
-    /// Test: X-Terminate: true → connection reset (no valid HTTP response)
+    /// Test: X-Terminate: true → 502 Bad Gateway via terminate_with_fallback runtime fallback
     fn test_terminate_connection_reset() -> TestCase {
         TestCase::new(
             "dsl_terminate_connection_reset",
-            "DSL: X-Terminate: true → connection reset / error",
+            "DSL: terminate() → 502 Bad Gateway (terminate_with_fallback runtime fallback)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -1379,29 +1379,28 @@ impl DslTestSuite {
                         .await;
                     match response {
                         Ok(resp) => {
-                            // terminate() should cause a connection reset, not a normal response.
-                            // If we get a response, it means terminate() didn't work as expected.
                             let status = resp.status().as_u16();
-                            // Some implementations may return 502/503 instead of a connection reset
-                            if status == 502 || status == 503 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Gateway returned {} (terminate intercepted upstream)", status),
-                                )
+                            let elapsed = start.elapsed();
+                            if status == 502 {
+                                if elapsed.as_millis() >= 1000 {
+                                    TestResult::failed(
+                                        elapsed,
+                                        format!("Got 502 but took {}ms (expected <1000ms)", elapsed.as_millis()),
+                                    )
+                                } else {
+                                    TestResult::passed_with_message(
+                                        elapsed,
+                                        format!("502 in {}ms (terminate_with_fallback fired)", elapsed.as_millis()),
+                                    )
+                                }
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected connection error or 502/503, got HTTP {}", status),
-                                )
+                                TestResult::failed(elapsed, format!("Expected 502, got HTTP {}", status))
                             }
                         }
-                        Err(_e) => {
-                            // Connection error is the expected behavior for terminate()
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                "Connection reset as expected (terminate)".to_string(),
-                            )
-                        }
+                        Err(e) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 502 response, got connection error: {}", e),
+                        ),
                     }
                 })
             },
@@ -1582,6 +1581,255 @@ impl DslTestSuite {
         )
     }
 
+    // ==================== Scenario 24: http.call ====================
+    // DSL source:
+    //   let http_resp = http.call("GET", "http://127.0.0.1:30001/health", nil, 2000)
+    //   if http_resp["status"] == 200 {
+    //     resp.set_header("X-Call-Result", "ok")
+    //   } else {
+    //     resp.set_header("X-Call-Result", "fail")
+    //   }
+
+    /// Test: DSL calls backend /health, status 200 → X-Call-Result: ok in response headers
+    fn test_http_call_success() -> TestCase {
+        TestCase::new(
+            "dsl_http_call_success",
+            "DSL http.call: backend /health returns 200 → X-Call-Result: ok in response header",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-http-call/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-http-call.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let call_result = resp
+                                .headers()
+                                .get("x-call-result")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 200 && call_result == "ok" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "X-Call-Result: ok in response header".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} X-Call-Result='{}'", status, call_result),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== Scenario 25: redis.* builtins ====================
+
+    /// Test 25a: redis.set + redis.get round-trip.
+    /// The DSL script sets a key and reads it back; X-Redis-Status: ok and
+    /// X-Redis-Value: hello-from-dsl must appear in the response headers.
+    fn test_redis_roundtrip() -> TestCase {
+        TestCase::new(
+            "dsl_redis_roundtrip",
+            "DSL redis.*: set+get round-trip → X-Redis-Status: ok, X-Redis-Value: hello-from-dsl",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-redis/roundtrip/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "dsl-redis.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let headers = resp.headers().clone();
+                            let redis_status = headers
+                                .get("x-redis-status")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let redis_value = headers.get("x-redis-value").and_then(|v| v.to_str().ok()).unwrap_or("");
+                            if status == 200 && redis_status == "ok" && redis_value == "hello-from-dsl" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "X-Redis-Status: ok, X-Redis-Value: hello-from-dsl".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} X-Redis-Status='{}' X-Redis-Value='{}'",
+                                        status, redis_status, redis_value
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test 25b: redis.incr counter — counter always returns 1 after del+incr, X-Redis-Status: ok.
+    fn test_redis_incr() -> TestCase {
+        TestCase::new(
+            "dsl_redis_incr",
+            "DSL redis.*: incr counter on first request → X-Redis-Counter: 1, X-Redis-Status: ok",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-redis/incr/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "dsl-redis.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let headers = resp.headers().clone();
+                            let redis_status = headers
+                                .get("x-redis-status")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let counter_str = headers
+                                .get("x-redis-counter")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("0");
+                            let counter: i64 = counter_str.parse().unwrap_or(-1);
+                            if status == 200 && redis_status == "ok" && counter >= 1 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("X-Redis-Counter: {}, X-Redis-Status: ok", counter),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} X-Redis-Status='{}' X-Redis-Counter='{}'",
+                                        status, redis_status, counter_str
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test 25c: redis.hset + redis.hgetall hash round-trip.
+    fn test_redis_hash() -> TestCase {
+        TestCase::new(
+            "dsl_redis_hash",
+            "DSL redis.*: hset+hgetall round-trip → X-Redis-Status: ok, X-Redis-Hash-Field1: value1",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-redis/hash/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "dsl-redis.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let headers = resp.headers().clone();
+                            let redis_status = headers
+                                .get("x-redis-status")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            let field1 = headers
+                                .get("x-redis-hash-field1")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            if status == 200 && redis_status == "ok" && field1 == "value1" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "X-Redis-Status: ok, X-Redis-Hash-Field1: value1".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "status={} X-Redis-Status='{}' X-Redis-Hash-Field1='{}'",
+                                        status, redis_status, field1
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test 25d: link declared in linkSysRefs but backing LinkSys resource does not exist.
+    /// redis.get returns ok=false (link not ready); the script's else branch fires and sets
+    /// X-Redis-Status: not-found-or-missing-client, then falls through — fail-open, 200.
+    fn test_redis_missing_ref() -> TestCase {
+        TestCase::new(
+            "dsl_redis_missing_ref",
+            "DSL redis.*: link not ready → ok=false, fail-open, request passes through",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-redis/missing-ref/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "dsl-redis.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let redis_status = resp
+                                .headers()
+                                .get("x-redis-status")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            // The link "not-ready-redis" is declared in linkSysRefs but the backing
+                            // LinkSys resource does not exist. redis.get returns ok=false with
+                            // error="link 'not-ready-redis' not ready". The script's else branch
+                            // fires and sets "not-found-or-missing-client"; request passes through.
+                            if status == 200 && redis_status == "not-found-or-missing-client" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "fail-open: request passed through with expected header".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} X-Redis-Status='{}'", status, redis_status),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     // ==================== Test 22: HMAC Verify ====================
 
     /// Test: no X-Signature → 401 missing signature
@@ -1734,6 +1982,276 @@ impl DslTestSuite {
             },
         )
     }
+
+    // ==================== Scenario 26: Path Parameter ====================
+    // DSL source:
+    //   let uid = req.path_param("uid")
+    //   if uid != nil { resp.set_header("X-Path-Uid", uid) }
+    //   let item = req.path_param("item")
+    //   if item != nil { resp.set_header("X-Path-Item", item) }
+    //   let missing = req.path_param("missing")
+    //   if missing == nil { resp.set_header("X-Path-Missing", "nil") }
+    //
+    // Route: /test/dsl-path-param/users/:uid/items/:item (PathPrefix)
+    // Request: /test/dsl-path-param/users/42/items/book-7
+    // Expected: X-Path-Uid=42, X-Path-Item=book-7, X-Path-Missing=nil
+
+    fn test_dsl_path_param_extracts_values() -> TestCase {
+        TestCase::new(
+            "dsl_path_param_extracts_values",
+            "DSL: req.path_param(\"uid\")/path_param(\"item\") returns extracted values",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!(
+                        "http://{}:31180/test/dsl-path-param/users/42/items/book-7",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-path-param.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let uid = resp
+                                .headers()
+                                .get("x-path-uid")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            let item = resp
+                                .headers()
+                                .get("x-path-item")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            let missing = resp
+                                .headers()
+                                .get("x-path-missing")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            if status == 200 && uid == "42" && item == "book-7" && missing == "nil" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("uid={} item={} missing={}", uid, item, missing),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} uid='{}' item='{}' missing='{}'", status, uid, item, missing),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// PathPrefix segment-boundary regression guard.
+    ///
+    /// Route is `PathPrefix /test/dsl-path-param/users/:uid/items/:item` and
+    /// the request appends `/extra` after the matched prefix. The radix
+    /// matcher must still bind `:item=book-7` (not `book-7/extra`), and the
+    /// route must still match (i.e. PathPrefix allows further suffix segments
+    /// beyond the template).
+    // ==================== Scenario 27: cached_query freeze (unified-query-string-cache) ====================
+
+    /// Verify cached_query is frozen at entry: even if a DSL set_uri rewrites
+    /// the URI to a different query, req.query("name") read afterwards must
+    /// still return the entry-time value. test_server's /request-header-test
+    /// echoes incoming request headers in the response body, so we look for
+    /// "X-Captured-Name: BEFORE_REWRITE".
+    fn test_freeze_query_param() -> TestCase {
+        TestCase::new(
+            "dsl_freeze_query_param",
+            "DSL: cached_query stays at entry value after req.set_uri",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!(
+                        "http://{}:31180/test/dsl-freeze-query?name=BEFORE_REWRITE",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-freeze-query.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+                            let body = resp.text().await.unwrap_or_default();
+                            // header_echo_handler renders headers as "  Name: value\n" lines
+                            if body.contains("X-Captured-Name: BEFORE_REWRITE") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "cached_query frozen to entry value after set_uri".to_string(),
+                                )
+                            } else if body.contains("X-Captured-Name: AFTER_REWRITE") {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    "REGRESSION: cached_query read live URI after set_uri (entry freeze broken)"
+                                        .to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("X-Captured-Name not in echoed headers; body=\n{}", body),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_dsl_path_param_prefix_extension() -> TestCase {
+        TestCase::new(
+            "dsl_path_param_prefix_extension",
+            "DSL: PathPrefix `:item` binds the segment, not the trailing suffix",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!(
+                        "http://{}:31180/test/dsl-path-param/users/42/items/book-7/extra",
+                        ctx.target_host
+                    );
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-path-param.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let uid = resp
+                                .headers()
+                                .get("x-path-uid")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            let item = resp
+                                .headers()
+                                .get("x-path-item")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            if status == 200 && uid == "42" && item == "book-7" {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("uid={} item={} (suffix /extra ignored)", uid, item),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("status={} uid='{}' item='{}'", status, uid, item),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== Scenario 28: time_format ApiError — deny vs ignore ====================
+    // DSL source (both variants): time_format(0, "%Q") triggers ApiError (invalid chrono specifier).
+    // deny policy  → gateway returns 500 "DSL execution error".
+    // ignore policy → gateway passes request to upstream, which replies 200.
+
+    /// Test: time_format with invalid specifier under errorPolicy:deny → 500
+    fn test_time_format_deny_returns_500() -> TestCase {
+        TestCase::new(
+            "dsl_time_format_deny_returns_500",
+            "DSL: time_format(%Q) ApiError under deny policy returns 500",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-time-format-deny/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-time-format-deny.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let body = resp.text().await.unwrap_or_default();
+                            if status == 500 && body.contains("DSL execution error") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "500 with DSL execution error body".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected 500 with 'DSL execution error', got status={} body={}",
+                                        status, body
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Test: time_format with invalid specifier under default (ignore) policy → 200 from upstream
+    fn test_time_format_ignore_passes_through() -> TestCase {
+        TestCase::new(
+            "dsl_time_format_ignore_passes_through",
+            "DSL: time_format(%Q) ApiError under ignore policy passes through to upstream (200)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/test/dsl-time-format-ignore/api", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-time-format-ignore.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            // Execution aborted before resp.set_header — do not assert X-Time-Format.
+                            if status == 200 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "upstream replied 200; ApiError was ignored".to_string(),
+                                )
+                            } else {
+                                let body = resp.text().await.unwrap_or_default();
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 200 from upstream, got status={} body={}", status, body),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for DslTestSuite {
@@ -1752,7 +2270,7 @@ impl TestSuite for DslTestSuite {
             // Scenario 3: Path deny (blocked / allowed)
             Self::test_deny_path_blocked(),
             Self::test_deny_path_allowed(),
-            // 新场景
+            // Additional scenarios
             Self::test_set_request_header_with_user_id(),
             Self::test_set_request_header_without_user_id(),
             Self::test_deny_by_header_blocked(),
@@ -1793,6 +2311,21 @@ impl TestSuite for DslTestSuite {
             Self::test_hmac_verify_missing_sig(),
             Self::test_hmac_verify_invalid_sig(),
             Self::test_hmac_verify_valid_sig(),
+            // Scenario 24: http.call — real external HTTP call from DSL script
+            Self::test_http_call_success(),
+            // Scenario 25: redis.* builtins — LinkSys-backed Redis operations
+            Self::test_redis_roundtrip(),
+            Self::test_redis_incr(),
+            Self::test_redis_hash(),
+            Self::test_redis_missing_ref(),
+            // Scenario 26: Path parameter extraction (`:uid`, `:item`)
+            Self::test_dsl_path_param_extracts_values(),
+            Self::test_dsl_path_param_prefix_extension(),
+            // Scenario 27: cached_query freeze (unified-query-string-cache)
+            Self::test_freeze_query_param(),
+            // Scenario 28: time_format ApiError path — deny vs ignore error policy
+            Self::test_time_format_deny_returns_500(),
+            Self::test_time_format_ignore_passes_through(),
         ]
     }
 }

@@ -6,10 +6,10 @@
 //! - [`TlsConfig`] — on/off switch, certs sub-object, `insecureSkipVerify`.
 //! - [`TlsCerts`] — CA + client cert + `secretRef` (+ resolved `Secret`).
 //!
-//! Design decisions (see `tasks/fix-change/R1-unify-tls-types.md`):
+//! Design decisions:
 //!
 //! - Inline private key (`clientKey`) is **not allowed** — `deny_unknown_fields`
-//!   rejects it at YAML parse time, per D2 ("no inline sensitive material").
+//!   rejects it at YAML parse time ("no inline sensitive material" rule).
 //!   Client private key MUST be provided through `secretRef` pointing at a
 //!   `kubernetes.io/tls` or `Opaque` Secret (key: `tls.key`).
 //! - `ca_cert` / `client_cert` inline PEM is still allowed (public material).
@@ -33,7 +33,7 @@ use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::SecretReference;
+use super::SecretObjectReference;
 
 /// TLS configuration shared by all LinkSys backend connections.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -80,13 +80,14 @@ pub struct TlsCerts {
     /// Recommended secret type: `kubernetes.io/tls` with keys `tls.crt` /
     /// `tls.key`; optional `ca.crt`. `Opaque` is also accepted for compatibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_ref: Option<SecretReference>,
+    pub secret_ref: Option<SecretObjectReference>,
 
     /// Resolved Secret object (filled by Controller, never from user YAML).
     ///
     /// Serialized to the Gateway via conf_sync. Not persisted back into the K8s
     /// `spec` (the controller only patches `status`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub secret: Option<Secret>,
 }
 
@@ -126,7 +127,7 @@ clientCert: "-----BEGIN CERTIFICATE-----"
 clientKey: "-----BEGIN PRIVATE KEY-----"
 "#;
         let r: Result<TlsCerts, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline clientKey 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline clientKey must be rejected by deny_unknown_fields");
     }
 
     #[test]
@@ -141,7 +142,9 @@ clientKey: "-----BEGIN PRIVATE KEY-----"
         let certs = TlsCerts {
             ca_cert: None,
             client_cert: None,
-            secret_ref: Some(SecretReference {
+            secret_ref: Some(SecretObjectReference {
+                group: None,
+                kind: None,
                 name: "my-tls".to_string(),
                 namespace: None,
             }),
@@ -168,6 +171,6 @@ clientKey: "-----BEGIN PRIVATE KEY-----"
             secret: None,
         };
         let yaml = serde_yaml::to_string(&certs).expect("serialize");
-        assert!(!yaml.contains("secret:"), "secret=None 时不应出现在 YAML 中: {yaml}");
+        assert!(!yaml.contains("secret:"), "secret=None must not appear in YAML: {yaml}");
     }
 }

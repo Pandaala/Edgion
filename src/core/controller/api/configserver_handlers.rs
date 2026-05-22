@@ -40,7 +40,7 @@ pub async fn get_resource(
     Query(query): Query<ResourceQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, StatusCode> {
     let Some(name) = query.name else {
-        return Ok(Json(ApiResponse::error("Missing required parameter: name".to_string())));
+        return Err(StatusCode::BAD_REQUEST);
     };
 
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -52,7 +52,7 @@ pub async fn get_resource(
     };
 
     match resource {
-        Some(r) => Ok(Json(ApiResponse::success(r))),
-        None => Ok(Json(ApiResponse::error(format!("{} not found", kind_str)))),
+        Some(r) => Ok(Json(ApiResponse::ok_body(r))),
+        None => Err(StatusCode::NOT_FOUND),
     }
 }

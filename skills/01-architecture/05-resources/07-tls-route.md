@@ -1,64 +1,64 @@
 ---
 name: resource-tls-route
-description: TLSRoute 资源：TLS SNI 路由、passthrough/terminate 模式、per-listener 路由表。
+description: TLSRoute resource — TLS SNI routing, passthrough/terminate modes, per-listener route table.
 ---
 
-# TLSRoute 资源
+# TLSRoute resource
 
-> **通用流程**: 参见 [00-resource-flow.md](00-resource-flow.md)
+> **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-TLSRoute 定义 TLS 层的路由规则，支持 TLS passthrough 和 terminate 模式。通过 SNI（Server Name Indication）进行路由匹配，每个端口维护独立的路由表。
+TLSRoute defines TLS-layer routing rules, supporting both TLS passthrough and terminate modes. Routing matches by SNI (Server Name Indication); each port maintains its own route table.
 
-## 源码位置
+## Source code locations
 
 - Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/tls_route.rs`
 - Gateway ConfHandler: `src/core/gateway/routes/tls/conf_handler_impl.rs`
-- 路由管理器: `src/core/gateway/routes/tls/routes_mgr.rs`（GlobalTlsRouteManagers）
-- 类型定义: `src/types/resources/tls_route.rs`
+- Route manager: `src/core/gateway/routes/tls/routes_mgr.rs` (GlobalTlsRouteManagers)
+- Type definitions: `src/types/resources/tls_route.rs`
 
-## Controller 侧处理
+## Controller-side processing
 
 ### validate
 
-1. 调用 `validate_tls_route_if_enabled()`（当前为空操作，跨命名空间校验由 parse 阶段的 `ref_denied` 处理）
-2. 调用 `validate_backend_refs()` 校验所有 backendRef
+1. Calls `validate_tls_route_if_enabled()` (currently a no-op; cross-namespace validation is handled via `ref_denied` in the parse stage)
+2. Calls `validate_backend_refs()` to validate all backendRefs
 
 ### parse
 
-1. 记录跨命名空间引用到 CrossNsRefManager
-2. 注册 Service 引用到 ServiceRefManager
-3. 标记被拒绝的跨命名空间 backendRef
-4. 清除并重算 `resolved_listeners`：通过 `resolve_listener_keys()` 从 parentRef 解析 `Vec<ListenerKey>`，遵循 Gateway API 规范：
-   - 总是查找 Gateway 获取地址和协议（不再有只取 parentRef.port 的快速路径）
-   - sectionName + port 同时存在时，校验两者一致性
-   - 都未指定 → 挂载到父 Gateway 的所有 Listener（受 allowedRoutes 命名空间策略约束）
-5. 若 resolved_listeners 为 None，记录 debug 日志
+1. Record cross-namespace references in CrossNsRefManager
+2. Register Service references in ServiceRefManager
+3. Mark rejected cross-namespace backendRefs
+4. Clear and recompute `resolved_listeners`: resolve `Vec<ListenerKey>` from parentRef via `resolve_listener_keys()`, following the Gateway API spec:
+   - Always look up the Gateway to obtain address and protocol (the parentRef.port-only fast path no longer exists)
+   - When sectionName + port are both present, validate consistency between them
+   - If neither is specified → attach to all of the parent Gateway's Listeners (subject to the allowedRoutes namespace policy)
+5. If resolved_listeners is None, log a debug message
 
 ### on_change
 
-注册到 GatewayRouteIndex，更新 AttachedRouteTracker，必要时 requeue 父 Gateway。
+Register into GatewayRouteIndex, update AttachedRouteTracker, and requeue the parent Gateway when needed.
 
 ### on_delete
 
-清除 CrossNsRefManager、ServiceRefManager、GatewayRouteIndex、AttachedRouteTracker 注册。
+Clear registrations in CrossNsRefManager, ServiceRefManager, GatewayRouteIndex, and AttachedRouteTracker.
 
 ### update_status
 
-为每个 parentRef 生成 RouteParentStatus。TLSRoute 会传递 route_hostnames 用于 hostname 交集检查（SNI 匹配需要）。
+Produce a RouteParentStatus for each parentRef. TLSRoute passes route_hostnames for hostname-intersection checks (required for SNI matching).
 
-## Gateway 侧处理
+## Gateway-side processing
 
-TLSRoute 的 ConfHandler 将路由编译到 `GlobalTlsRouteManagers`：
+TLSRoute's ConfHandler compiles routes into `GlobalTlsRouteManagers`:
 
-1. **路由初始化**：调用 `initialize_route()` 验证路由数据
-2. **per-listener 管理**：根据 resolved_listeners 注册到对应 `ListenerKey` 的路由管理器
-3. **SNI 匹配**：根据 spec.hostnames 进行 TLS SNI 匹配，支持通配符域名
-4. **增量更新**：partial_update 时收集受影响 listener（旧 listener + 新 listener），仅重建受影响 listener 的路由表
+1. **Route initialization**: call `initialize_route()` to validate the route data
+2. **Per-listener management**: based on resolved_listeners, register into the route manager of the corresponding `ListenerKey`
+3. **SNI matching**: match TLS SNI against spec.hostnames, supporting wildcard domains
+4. **Incremental updates**: partial_update collects affected listeners (old + new) and rebuilds only those listeners' route tables
 
-## 跨资源关联
+## Cross-resource relationships
 
-| 关联方向 | 目标资源 | 关联机制 | 说明 |
+| Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
-| TLSRoute → Gateway | Gateway | parentRef | 路由挂载到 Gateway 的 TLS 协议 Listener |
-| TLSRoute → Service | Service | backendRef | TLS 连接转发的后端目标 |
-| TLSRoute ← ReferenceGrant | ReferenceGrant | 跨命名空间 backendRef | 控制跨命名空间后端引用的授权 |
+| TLSRoute → Gateway | Gateway | parentRef | Route attaches to the Gateway's TLS-protocol Listener |
+| TLSRoute → Service | Service | backendRef | Backend target for TLS-connection forwarding |
+| TLSRoute ← ReferenceGrant | ReferenceGrant | cross-namespace backendRef | Authorizes cross-namespace backend references |

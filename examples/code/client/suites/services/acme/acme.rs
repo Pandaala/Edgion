@@ -286,16 +286,39 @@ impl AcmeTestSuite {
 // ============================================================================
 
 /// Check that Pebble is reachable.
+///
+/// Uses the same CA-pinning path as `AcmeClient::new_with_ca` instead of
+/// `danger_accept_invalid_certs`. The project's reqwest is built with
+/// `rustls-tls-webpki-roots` only — Pebble's minica self-signed cert is not in
+/// the Mozilla root set, and `danger_accept_invalid_certs` over rustls + HTTP/2
+/// fails fast (~10ms) before a real reachability probe runs. Loading Pebble's
+/// minica CA bundle mirrors the path the issuance tests rely on.
 async fn ensure_pebble_ready() -> bool {
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .build()
-        .unwrap();
+    // Pin Pebble's minica CA so rustls-tls-webpki-roots accepts the self-signed
+    // cert (matches the AcmeClient probe path). `danger_accept_invalid_certs`
+    // over rustls + HTTP/2 fails fast (~10ms) and never reaches the server.
+    let ca_path = match download_pebble_tls_ca().await {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let ca_pem = match std::fs::read(&ca_path) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let cert = match reqwest::Certificate::from_pem(&ca_pem) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let client = match reqwest::Client::builder().add_root_certificate(cert).build() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
 
-    match client.get(PEBBLE_DIR).send().await {
-        Ok(resp) => resp.status().is_success(),
-        Err(_) => false,
-    }
+    // Reachability == server responded. Pebble's `/dir` rejects bare GET with
+    // `400 Bad Request` (it expects an ACME-formed request); any HTTP response
+    // means TLS handshake + connection both succeeded, which is what
+    // "pebble_ready" actually wants to assert.
+    client.get(PEBBLE_DIR).send().await.is_ok()
 }
 
 /// Download Pebble's minica TLS root CA certificate from the running container.

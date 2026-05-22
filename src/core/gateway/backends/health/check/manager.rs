@@ -3,29 +3,27 @@ use super::config_store::{get_hc_config_store, HealthCheckConfigStore};
 use super::probes::{build_http_probe_client, probe_grpc, probe_http, probe_http_with_client, probe_tcp};
 use super::status_store::{get_health_status_store, HealthStatusStore};
 use crate::core::common::utils::duration::parse_duration;
-use crate::core::controller::conf_mgr::conf_center::EndpointMode;
-use crate::core::gateway::backends::discovery::endpoint::get_endpoint_roundrobin_store;
 use crate::core::gateway::backends::discovery::endpoint_slice::get_roundrobin_store;
-use crate::core::gateway::backends::try_get_global_endpoint_mode;
 use crate::types::resources::health_check::{ActiveHealthCheckConfig, HealthCheckType};
 use parking_lot::RwLock;
 use pingora_load_balancing::Backend;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
-/// Maximum number of health check tasks that can run their probe loop
-/// concurrently. Tasks beyond this limit wait for a permit before
-/// starting their next probe cycle, providing natural backpressure
-/// without dropping or delaying individual tasks.
-const MAX_CONCURRENT_PROBE_CYCLES: usize = 50;
+/// Maximum number of individual backend probes that may be in flight
+/// concurrently across all health check tasks. Each probe acquires a
+/// permit only for the duration of its single probe call and releases it
+/// immediately after, so the limit bounds total in-flight probes rather
+/// than whole probe cycles — a service with many backends cannot hold a
+/// permit for its entire cycle and starve unrelated services' probes.
+const MAX_CONCURRENT_PROBES: usize = 50;
 
-static PROBE_SEMAPHORE: LazyLock<Arc<Semaphore>> =
-    LazyLock::new(|| Arc::new(Semaphore::new(MAX_CONCURRENT_PROBE_CYCLES)));
+static PROBE_SEMAPHORE: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(MAX_CONCURRENT_PROBES)));
 
 static HEALTH_CHECK_MANAGER: LazyLock<Arc<HealthCheckManager>> = LazyLock::new(|| Arc::new(HealthCheckManager::new()));
 
@@ -74,13 +72,13 @@ impl HealthCheckManager {
     }
 
     fn upsert_task(&self, service_key: String, config: ActiveHealthCheckConfig) {
-        self.cancel_task(&service_key);
-
         let Ok(runtime_handle) = tokio::runtime::Handle::try_current() else {
             tracing::warn!(
                 service = %service_key,
                 "No active Tokio runtime, skip starting health check task"
             );
+            // No new task to spawn, but still drop any existing one for this key.
+            self.cancel_task(&service_key);
             return;
         };
 
@@ -90,7 +88,16 @@ impl HealthCheckManager {
             health_check_loop(task_service_key, config, health_store).await;
         });
 
-        self.tasks.write().insert(service_key, handle);
+        // Atomically swap the per-service handle: the single write-locked insert
+        // is the linearization point, and the displaced handle (if any) is always
+        // aborted. This prevents concurrent reconcile_service calls for the same
+        // key (Service vs EndpointSlice handlers run on independent tasks) from
+        // overwriting a freshly spawned handle without aborting it, which would
+        // leak the orphaned health-check task.
+        let previous = self.tasks.write().insert(service_key, handle);
+        if let Some(old) = previous {
+            old.abort();
+        }
     }
 
     fn remove_task(&self, service_key: &str) {
@@ -146,8 +153,6 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
     loop {
         ticker.tick().await;
 
-        let _permit = semaphore.acquire().await.expect("probe semaphore closed");
-
         let backends = get_service_backends(&service_key);
         let hashes: Vec<u64> = backends.iter().map(backend_hash).collect();
         health_store.register_service(&service_key, hashes);
@@ -170,6 +175,12 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
                 continue;
             };
 
+            // Acquire a probe permit per individual backend probe (not per cycle)
+            // so the global cap bounds total in-flight probes. The permit is held
+            // only for this single probe call and released immediately after, so a
+            // service with many backends interleaves fairly with other services
+            // instead of monopolizing one permit for its entire cycle.
+            let permit = semaphore.acquire().await.expect("probe semaphore closed");
             let result = match config.r#type {
                 HealthCheckType::Http => {
                     match http_client.as_ref() {
@@ -216,6 +227,7 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
                 HealthCheckType::Tcp => probe_tcp(*addr, config.port, timeout).await,
                 HealthCheckType::Grpc => probe_grpc(*addr, config.port, &grpc_service_name, timeout).await,
             };
+            drop(permit);
 
             health_store.record_check(
                 &service_key,
@@ -253,24 +265,15 @@ fn derive_startup_jitter(service_key: &str, max_jitter: Duration) -> Duration {
     Duration::from_millis(offset_ms)
 }
 
+/// Returns the set of backends for a service, sourced exclusively from the
+/// EndpointSlice discovery store. The store already deduplicates and orders
+/// its result, so no further dedup is needed here.
 fn get_service_backends(service_key: &str) -> Vec<Backend> {
-    let mode = try_get_global_endpoint_mode().unwrap_or(EndpointMode::EndpointSlice);
-    let mut backends: BTreeSet<Backend> = BTreeSet::new();
-
-    match mode {
-        EndpointMode::EndpointSlice => {
-            backends.extend(get_roundrobin_store().get_backends_for_service(service_key));
-        }
-        EndpointMode::Endpoint => {
-            backends.extend(get_endpoint_roundrobin_store().get_backends_for_service(service_key));
-        }
-        EndpointMode::Both | EndpointMode::Auto => {
-            backends.extend(get_roundrobin_store().get_backends_for_service(service_key));
-            backends.extend(get_endpoint_roundrobin_store().get_backends_for_service(service_key));
-        }
-    }
-
-    backends.into_iter().collect()
+    get_roundrobin_store()
+        .get_backends_for_service(service_key)
+        .into_iter()
+        .map(|b| b.into_inner())
+        .collect()
 }
 
 #[cfg(test)]

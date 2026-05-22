@@ -38,29 +38,35 @@ impl RequestFilter for RequestHeaderModifierFilter {
         "RequestHeaderModifier"
     }
 
-    async fn run_request(&self, session: &mut dyn PluginSession, _log: &mut PluginLog) -> PluginRunningResult {
-        self.modify_headers(session)
+    async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        self.modify_headers(session, log)
     }
 }
 
 impl RequestHeaderModifierFilter {
-    fn modify_headers(&self, session: &mut dyn PluginSession) -> PluginRunningResult {
+    fn modify_headers(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         // Set headers - overwrite existing
         if let Some(headers) = &self.config.set {
             for h in headers {
-                let _ = session.set_request_header(&h.name, &h.value);
+                if session.set_request_header(&h.name, &h.value).is_err() {
+                    log.push_err("set req hdr fail");
+                }
             }
         }
         // Add headers - append to existing
         if let Some(headers) = &self.config.add {
             for h in headers {
-                let _ = session.append_request_header(&h.name, &h.value);
+                if session.append_request_header(&h.name, &h.value).is_err() {
+                    log.push_err("add req hdr fail");
+                }
             }
         }
         // Remove headers
         if let Some(names) = &self.config.remove {
             for name in names {
-                let _ = session.remove_request_header(name);
+                if session.remove_request_header(name).is_err() {
+                    log.push_err("remove req hdr fail");
+                }
             }
         }
         PluginRunningResult::GoodNext

@@ -3,10 +3,10 @@ use crate::types::prelude_resources::*;
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header::LOCATION, HeaderMap, HeaderValue, StatusCode},
     response::Json,
 };
-use k8s_openapi::api::core::v1::{ConfigMap, Endpoints, Secret, Service};
+use k8s_openapi::api::core::v1::{ConfigMap, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ pub struct PaginationQuery {
 }
 
 impl PaginationQuery {
-    fn into_list_options(self) -> Option<ListOptions> {
+    pub(super) fn into_list_options(self) -> Option<ListOptions> {
         if self.limit.is_some() || self.continue_token.is_some() {
             Some(ListOptions {
                 limit: self.limit.unwrap_or(0),
@@ -73,12 +73,12 @@ pub async fn get_namespaced(
     resource.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
-/// Create a namespace-scoped resource
+/// Create a namespace-scoped resource.
 pub async fn create_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns)): Path<(String, String)>,
     body: Bytes,
-) -> Result<Json<ApiResponse<String>>, StatusCode> {
+) -> Result<(StatusCode, HeaderMap, Json<ApiResponse<String>>), StatusCode> {
     tracing::info!(
         component = "unified_api",
         event = "create_request",
@@ -180,15 +180,6 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::Endpoint => {
-            let endpoint: Endpoints = parse_resource_and_update_version(&content, !is_k8s)?;
-            validate_resource(state.schema_validator.as_ref(), kind, &endpoint, is_k8s)?;
-            let json_content = serde_json::to_string(&endpoint).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            writer
-                .create_one(kind.as_str(), Some(&ns), &name, json_content)
-                .await
-                .map_err(map_writer_error)?;
-        }
         crate::types::ResourceKind::EdgionTls => {
             let tls: EdgionTls = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &tls, is_k8s)?;
@@ -288,7 +279,8 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        _ => return Err(StatusCode::NOT_IMPLEMENTED),
+        // 400, not 501: unknown kind is a client error; 501 is reserved for unknown HTTP methods.
+        _ => return Err(StatusCode::BAD_REQUEST),
     }
 
     tracing::info!(
@@ -301,7 +293,16 @@ pub async fn create_namespaced(
         "Resource created successfully"
     );
 
-    Ok(Json(ApiResponse::success(format!("{} created", kind_str))))
+    let location = format!("/api/v1/namespaced/{}/{}/{}", kind_str, ns, name);
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = HeaderValue::try_from(location) {
+        headers.insert(LOCATION, v);
+    }
+    Ok((
+        StatusCode::CREATED,
+        headers,
+        Json(ApiResponse::ok_body(format!("{} created", kind_str))),
+    ))
 }
 
 /// Update a namespace-scoped resource
@@ -384,15 +385,6 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::Endpoint => {
-            let endpoint: Endpoints = parse_resource_and_update_version(&content, !is_k8s)?;
-            validate_resource(state.schema_validator.as_ref(), kind, &endpoint, is_k8s)?;
-            let json_content = serde_json::to_string(&endpoint).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
-                .await
-                .map_err(map_writer_error)?;
-        }
         crate::types::ResourceKind::EdgionTls => {
             let tls: EdgionTls = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &tls, is_k8s)?;
@@ -492,7 +484,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        _ => return Err(StatusCode::NOT_IMPLEMENTED),
+        _ => return Err(StatusCode::BAD_REQUEST),
     }
 
     tracing::info!(
@@ -505,14 +497,14 @@ pub async fn update_namespaced(
         "Resource updated successfully"
     );
 
-    Ok(Json(ApiResponse::success(format!("{} updated", kind_str))))
+    Ok(Json(ApiResponse::ok_body(format!("{} updated", kind_str))))
 }
 
-/// Delete a namespace-scoped resource
+/// Delete a namespace-scoped resource.
 pub async fn delete_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns, name)): Path<(String, String, String)>,
-) -> Result<Json<ApiResponse<String>>, StatusCode> {
+) -> Result<StatusCode, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let is_k8s = state.is_k8s_mode();
@@ -534,5 +526,29 @@ pub async fn delete_namespaced(
         "Resource deleted successfully"
     );
 
-    Ok(Json(ApiResponse::success(format!("{} deleted", kind_str))))
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// List metadata-only keys for a kind across all namespaces (keys endpoint)
+pub async fn list_all_namespaces_keys(
+    State(state): State<Arc<AdminState>>,
+    Path(kind_str): Path<String>,
+    Query(pagination): Query<PaginationQuery>,
+) -> Result<Json<ListResponse<crate::core::controller::conf_mgr::conf_center::traits::ResourceKey>>, StatusCode> {
+    let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let (data, continue_token) = state.center_list_keys(kind, pagination.into_list_options()).await?;
+    Ok(Json(ListResponse::success_with_token(data, continue_token)))
+}
+
+/// List metadata-only keys for a kind scoped to a namespace (keys endpoint)
+pub async fn list_namespaced_keys(
+    State(state): State<Arc<AdminState>>,
+    Path((kind_str, ns)): Path<(String, String)>,
+    Query(pagination): Query<PaginationQuery>,
+) -> Result<Json<ListResponse<crate::core::controller::conf_mgr::conf_center::traits::ResourceKey>>, StatusCode> {
+    let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let (data, continue_token) = state
+        .center_list_keys_namespaced(kind, &ns, pagination.into_list_options())
+        .await?;
+    Ok(Json(ListResponse::success_with_token(data, continue_token)))
 }

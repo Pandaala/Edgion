@@ -5,9 +5,28 @@ pub use compose::compose_admin_routes;
 pub use types::{ApiResponse, ListResponse};
 
 use axum::{
+    http::{header, HeaderValue, Response},
+    middleware::Next,
     routing::{get, post},
     Router,
 };
+
+/// Inject `Cache-Control: no-store` on every admin API response.
+///
+/// Private caches (browsers, local proxies) are NOT bound by RFC 9111 §3.5's
+/// prohibition on storing responses with an `Authorization` header, so the
+/// server must make its intent explicit. Applied as the outermost layer in
+/// `compose_admin_routes` so it fires unconditionally on every response path.
+pub(crate) async fn cache_control_no_store_middleware(
+    request: axum::extract::Request,
+    next: Next,
+) -> Response<axum::body::Body> {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
 
 /// Merge `GET /api/v1/auth/status` into the router, computed per-request
 /// from the shared `UnifiedAuthState`. The handler re-reads `ArcSwapOption`
@@ -25,7 +44,7 @@ pub(crate) fn add_auth_status_route(
         "/api/v1/auth/status",
         axum::routing::get(move || {
             let state = unified_state.clone();
-            async move { axum::Json(ApiResponse::success(state.build_status())) }
+            async move { axum::Json(ApiResponse::ok_body(state.build_status())) }
         }),
     );
     router.merge(status_router)

@@ -4,6 +4,7 @@
 //! Handlers are stateless and only define processing logic - state management
 //! is handled by ResourceProcessor.
 
+pub mod auth_spec;
 mod backend_tls_policy;
 mod configmap;
 mod edgion_acme;
@@ -12,7 +13,6 @@ mod edgion_plugins;
 mod edgion_stream_plugins;
 mod edgion_tls;
 mod endpoint_slice;
-mod endpoints;
 mod gateway;
 mod gateway_class;
 mod grpc_route;
@@ -20,6 +20,7 @@ pub(crate) mod hostname_resolution;
 mod http_route;
 mod link_sys;
 mod plugin_metadata;
+mod plugins;
 mod reference_grant;
 pub(crate) mod route_utils;
 mod secret;
@@ -36,7 +37,6 @@ pub use edgion_plugins::EdgionPluginsHandler;
 pub use edgion_stream_plugins::EdgionStreamPluginsHandler;
 pub use edgion_tls::EdgionTlsHandler;
 pub use endpoint_slice::EndpointSliceHandler;
-pub use endpoints::EndpointsHandler;
 pub use gateway::GatewayHandler;
 pub use gateway_class::GatewayClassHandler;
 pub use grpc_route::GrpcRouteHandler;

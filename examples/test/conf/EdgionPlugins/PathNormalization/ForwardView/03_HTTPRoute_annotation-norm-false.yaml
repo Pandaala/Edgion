@@ -1,0 +1,45 @@
+# PathNormalization Scenario 03 — ForwardView (annotation: forward-raw-path = "false")
+#
+# Host: path-fwd-norm.example.com
+# Gateway: reuses edgion-plugins-gateway (edgion-test namespace)
+#
+# Annotation edgion.io/forward-raw-path: "false" explicitly forces the gateway to
+# forward the normalized path to upstream.  This annotation overrides both:
+#   - The global forward_normalized_path = false TOML setting (if set)
+#   - The region_route plugin's preserve_raw_path = true (if attached)
+#
+# In a scenario where region_route is also configured with preserve_raw_path = true,
+# this annotation takes precedence and the upstream still receives the normalized path.
+# The region_route interaction is documented here for awareness; the fixture does not
+# attach a region_route plugin because no standalone region_route fixture is required
+# for this per-route annotation test.
+#
+# TC-C manual verification:
+#   curl -i -H "Host: path-fwd-norm.example.com" \
+#     "http://127.0.0.1:31180/%61pi/data?x=1"
+#   # Expected: backend echoes Path: /api/data (normalized, annotation forces it)
+#
+# Automated test: /%61pi/data routes to PathPrefix /api → 200
+# (normalization enables route match; echo path assertion verifies normalized forwarding)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: forward-view-norm-override
+  namespace: edgion-default
+  annotations:
+    edgion.io/forward-raw-path: "false"
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "path-fwd-norm.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

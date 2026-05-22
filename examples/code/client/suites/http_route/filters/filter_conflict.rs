@@ -123,6 +123,52 @@ impl FilterConflictTestSuite {
             },
         )
     }
+
+    fn test_redirect_only_preserves_query() -> TestCase {
+        TestCase::new(
+            "redirect_only_preserves_query",
+            "RequestRedirect must preserve the request query string in the Location header",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let client = reqwest::Client::builder()
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build()
+                        .unwrap();
+
+                    let request = client
+                        .get(format!("{}/redirect-only?returnTo=/dashboard&page=1", ctx.http_url()))
+                        .header("Host", "filter-conflict.example.com");
+
+                    match request.send().await {
+                        Ok(response) => {
+                            if response.status().as_u16() != 302 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 302, got {}", response.status().as_u16()),
+                                );
+                            }
+                            match response.headers().get("location").and_then(|l| l.to_str().ok()) {
+                                Some(location) if location.contains("returnTo=/dashboard") && location.contains("page=1") => {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        format!("Query string preserved in Location: {}", location),
+                                    )
+                                }
+                                Some(location) => TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Query string dropped from Location: {}", location),
+                                ),
+                                None => TestResult::failed(start.elapsed(), "Missing Location header".to_string()),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -140,6 +186,7 @@ impl TestSuite for FilterConflictTestSuite {
             Self::test_rewrite_only_proxies(),
             Self::test_conflict_rule_skipped(),
             Self::test_redirect_only_works(),
+            Self::test_redirect_only_preserves_query(),
         ]
     }
 }

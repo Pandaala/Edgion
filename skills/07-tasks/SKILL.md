@@ -1,172 +1,197 @@
 ---
 name: 07-tasks
-description: 在仓库 tasks/ 目录下创建、更新或继续任务时使用此 skill。涵盖任务结构、文档集、生命周期阶段、状态跟踪和任务模板。
+description: Use this skill when creating, updating, or continuing tasks under the repository's tasks/ directory. Covers task structure, document set, lifecycle phases, status tracking, and task templates.
 ---
 
-# 任务管理
+# Task management
 
-当工作需要记录到 `tasks/` 时使用此 skill。
+Use this skill when work needs to be recorded under `tasks/`.
 
-## 快速入口
+## Quick entry points
 
-| 场景 | 直接入口 |
+| Scenario | Direct entry |
 |------|----------|
-| 新功能完整交付工作流（分析 → 设计 → 设计复审 → 实现 → 代码复审 → 测试补强 → 全量验证 → 总结） | [new_feature_work_flow.skill](new_feature_work_flow.skill) |
-| 新功能工作流输出模板 | [new_feature_work_flow_templates.md](new_feature_work_flow_templates.md) |
-| 新功能工作流 subagent 契约 | [new_feature_work_flow_subagents.md](new_feature_work_flow_subagents.md) |
+| End-to-end new-feature workflow (analysis → design → design review → implementation → code review → test reinforcement → full validation → summary) | [new_feature_work_flow.skill](new_feature_work_flow.skill) |
+| Output templates for the new-feature workflow | [new_feature_work_flow_templates.md](new_feature_work_flow_templates.md) |
+| Subagent contracts for the new-feature workflow | [new_feature_work_flow_subagents.md](new_feature_work_flow_subagents.md) |
 
-## 目录规则
+## Directory rules
 
-- `tasks/working/` — 进行中的工作
-- `tasks/todo/` — 待办 / 想法
-- `tasks/done/` — 已完成归档
-- 每个活跃任务有独立目录，使用 kebab-case 命名（如 `log-tracing-optimization`）
+The `tasks/` layout has two independent axes:
 
-## 任务文档集
+**Lifecycle axis** — tracks active work:
+- `tasks/todo/` — ideas / not yet started
+- `tasks/pending/` — work in progress or pending start
+- Acceptance happens via a GitHub PR. There is no separate `done/` directory; completed work is archived by git history once the branch is merged.
 
-每个任务目录包含以下文档，按需创建（仅主任务文件为必需）：
+**Review-batch axis** — global review passes:
+- `tasks/review-N-<slug>/` (e.g., `review-2/`, `review-dead-code/`) — one file per finding from a global review pass; consumed by `04-review/fix-review-issue.skill`; finding files are deleted as each issue is closed.
+
+Task granularity is flexible: a single file `<task-name>.md` or a separate directory works. Use kebab-case for names (e.g., `log-tracing-optimization`); for complex tasks (multi-document set), use a directory.
+
+## Task profiles
+
+Real tasks come in four shapes. Pick the closest profile when creating a new task folder; the prescribed-document set below applies only to `feature` tasks.
+
+| Profile | Required files | Optional files | When to use | Example |
+|---------|----------------|----------------|-------------|---------|
+| `feature` | `<name>.md` (Meta + scope) | Full 7-doc set: `00-context.md` ... `07-changelog.md` | Multi-module changes, new features, design needed | `tasks/todo/doc-standards-alignment/` |
+| `investigation` | `README.md` | `01-...07-` numbered reports; optional `issues/` pool | Pure research, competitor analysis, scoping work | `tasks/todo/dsl-vm-rhai-research/` |
+| `review-batch` | `INDEX.md` | One file per finding: `<area>-NN-<slug>.md` | Output of a global review pass; consumed by `04-review/fix-review-issue.skill` | `tasks/review-2/`, `tasks/review-dead-code/` |
+| `docs` / `single-file` | `<name>.md` | none | Small docs alignment, single-feature TODO, hotfix tracking | `tasks/pending/cel-validation-rules.md` |
+
+The phase pruning table below applies primarily to `feature` profile. For `investigation`, skip phases 4 (Test) and 5 (Review) — the deliverable is the report, not code. For `review-batch`, the entire batch is itself a workflow output; no per-finding phases.
+
+## Task document set
+
+> The document set below describes the **feature** profile's recommended files. Other profiles use fewer documents — see Task profiles above.
+
+
+Each task directory contains the following documents, created on demand (only the main task file is required):
 
 ```text
-tasks/working/<task-name>/
-├── <task-name>.md              # [必需] 主任务文件：元信息、需求、范围、AI 引导摘要
-├── 00-context.md               # [推荐] 关联 Skills 索引：本任务涉及的 skills 路径列表
-├── 01-design.md                # [推荐] 总设计文档：架构方案、接口定义、数据流
-├── 02-implementation.md        # [推荐] 实现与测试：代码方案、测试策略、覆盖率评估
-├── 03-subtasks.md              # [按需] 子任务拆分与进度跟踪
-├── 04-todo.md                  # [按需] 待办事项：零散的待处理项
-├── 05-issues.md                # [按需] 关键问题：阻塞项、无法立即解决的 critical issue
-├── 06-decisions.md             # [按需] 决策记录：重要决策及其原因
-└── 07-changelog.md             # [按需] 变更日志：关键里程碑和变更记录
+tasks/pending/<task-name>/
+├── <task-name>.md              # [required] Main task file: meta, requirements, scope, AI guide summary
+├── 00-context.md               # [recommended] Related Skills index: list of skill paths used by this task
+├── 01-design.md                # [recommended] Design doc: architecture, interfaces, data flow
+├── 02-implementation.md        # [recommended] Implementation and tests: code plan, test strategy, coverage assessment
+├── 03-subtasks.md              # [as needed] Subtask breakdown and progress tracking
+├── 04-todo.md                  # [as needed] To-do items: scattered open items
+├── 05-issues.md                # [as needed] Key issues: blockers, critical issues that can't be solved immediately
+├── 06-decisions.md             # [as needed] Decision log: important decisions and reasons
+└── 07-changelog.md             # [as needed] Changelog: key milestones and change records
 ```
 
-| 文件 | 作用 | 何时创建 | 备注 |
+| File | Purpose | When to create | Notes |
 |------|------|----------|------|
-| `<task-name>.md` | 任务入口，元信息 + AI 引导摘要 | 任务开始时，必需 | AI 首次接手先读此文件 |
-| `00-context.md` | 列出本任务涉及的 skills 路径，方便 AI 编码时快速定位 | 进入实现阶段前 | 推荐，确保 AI 有路径可循 |
-| `01-design.md` | 架构方案、接口设计、数据流、配置变更 | 设计阶段 | 大型任务的技术蓝图 |
-| `02-implementation.md` | 代码方案 + 测试策略 + 覆盖率评估（合并，因二者紧密关联） | 实现阶段 | 推荐 |
-| `03-subtasks.md` | 子任务拆分 + 每个子任务状态跟踪 | 改动超过 3 模块或 5 文件时 | 含状态、分支、产出字段 |
-| `04-todo.md` | 零散待处理项，不构成独立子任务 | 按需 | 与 `03-subtasks.md` 区别：无明确产出 |
-| `05-issues.md` | 当前无法立即解决的阻塞项 / critical issue | 发现阻塞时立即创建 | 按需；含严重度、临时方案、需要字段 |
-| `06-decisions.md` | 重要技术决策与权衡取舍 | 决策较多时从主文件溢出 | 按需 |
-| `07-changelog.md` | 关键里程碑记录 | 长周期任务 | 短任务无需 |
+| `<task-name>.md` | Task entry, meta + AI guide summary | Required when task starts | AI reads this file first when picking up the task |
+| `00-context.md` | List skill paths used by the task so AI can locate quickly during coding | Before entering the implementation phase | Recommended; ensures AI has paths to follow |
+| `01-design.md` | Architecture, interface design, data flow, config changes | Design phase | Technical blueprint for large tasks |
+| `02-implementation.md` | Code plan + test strategy + coverage assessment (merged because they are tightly coupled) | Implementation phase | Recommended |
+| `03-subtasks.md` | Subtask breakdown + per-subtask status | When changes exceed 3 modules or 5 files | Includes status, branch, output fields |
+| `04-todo.md` | Scattered open items that don't form a separate subtask | As needed | Difference from `03-subtasks.md`: no clear deliverable |
+| `05-issues.md` | Blockers / critical issues that can't be solved right now | Create as soon as a blocker is found | As needed; includes severity, workaround, and required fields |
+| `06-decisions.md` | Important technical decisions and trade-offs | When the main file overflows with decisions | As needed |
+| `07-changelog.md` | Key milestones | Long-running tasks | Not needed for short tasks |
 
-## 主任务文件模板
+## Main task file template
 
 ```markdown
-# <任务标题>
+# <Task title>
 
-## 元信息
+## Meta
 
-| 键 | 值 |
+| Key | Value |
 |-----|-------|
-| 创建日期 | YYYY-MM-DD |
-| 状态 | pending / in-progress / completed / blocked |
-| 类型 | feature / bugfix / refactor / docs / config |
-| 优先级 | P0 / P1 / P2 / P3 |
-| Issue | #xxx 或 N/A |
+| Created | YYYY-MM-DD |
+| Status | pending / in-progress / completed / blocked |
+| Type | feature / bugfix / refactor / docs / config |
+| Priority | P0 / P1 / P2 / P3 |
+| Issue | #xxx or N/A |
 
-## AI 引导摘要
+## AI guide summary
 
-> 一段话说明：这个任务要做什么、为什么做、核心难点是什么。
-> AI 首次接手时读这段即可理解任务全貌。
+> One paragraph stating: what this task does, why, and the core difficulty.
+> AI reads this paragraph first to understand the whole task.
 
-## 需求
+## Requirements
 
-（原始需求，原文或摘要）
+(Original requirements, verbatim or summarized)
 
-## 范围
+## Scope
 
-### 包含
+### In scope
 - ...
 
-### 不包含
+### Out of scope
 - ...
 
-## 文档索引
+## Document index
 
-| 文档 | 状态 | 说明 |
+| Document | Status | Notes |
 |------|------|------|
-| 00-context.md | ✅ | 关联 Skills 索引 |
-| 01-design.md | ✅ | 总设计 |
-| 02-implementation.md | 🔄 | 实现与测试 |
-| 03-subtasks.md | 🔄 | 子任务进度 |
-| 04-todo.md | — | 未创建 |
-| 05-issues.md | ⚠️ | 有 1 个未解决 |
-| 06-decisions.md | — | 未创建 |
-| 07-changelog.md | — | 未创建 |
+| 00-context.md | done | Related skills index |
+| 01-design.md | done | Overall design |
+| 02-implementation.md | in-progress | Implementation and tests |
+| 03-subtasks.md | in-progress | Subtask progress |
+| 04-todo.md | — | Not created |
+| 05-issues.md | warning | 1 unresolved |
+| 06-decisions.md | — | Not created |
+| 07-changelog.md | — | Not created |
 
-## 影响模块
+## Affected modules
 
-| 模块 | 影响 |
+| Module | Impact |
 |--------|--------|
 
-## 决策记录
+## Decision log
 
-| 日期 | 决策 | 原因 |
+| Date | Decision | Reason |
 |------|----------|--------|
 ```
 
-## 生命周期阶段
+## Lifecycle phases
 
-| 阶段 | 目的 | 加载 Skills | 产出文档 |
+| Phase | Purpose | Skills to load | Documents produced |
 |-------|---------|-------------|----------|
-| 1 分析 | 理解需求，识别影响模块 | `01-architecture/SKILL.md` | `00-context.md` |
-| 2 设计 | 定义接口、数据流、配置变更 | `01-architecture/`、`02-features/SKILL.md` | `01-design.md` |
-| 3 实现 | 按设计编码 | `01-architecture/`（开发指南）、`02-features/`（配置 Schema）、`03-coding/SKILL.md` | `02-implementation.md`、`03-subtasks.md` |
-| 4 审查 | 代码审查 | `04-review/SKILL.md` | `06-decisions.md` |
-| 5 测试 | 验证正确性 | `05-testing/SKILL.md` | 更新 `02-implementation.md` 测试覆盖率 |
+| 1 Analysis | Understand requirements, identify affected modules | `01-architecture/SKILL.md` | `00-context.md` |
+| 2 Design | Define interfaces, data flow, config changes | `01-architecture/`, `02-features/SKILL.md` | `01-design.md` |
+| 3 Implementation | Code per the design | `01-architecture/` (dev guide), `02-features/` (config schema), `03-coding/SKILL.md` | `02-implementation.md`, `03-subtasks.md` |
+| 4 Test | Verify correctness | `05-testing/SKILL.md` | Update test coverage in `02-implementation.md` |
+| 5 Review | Code review | `04-review/SKILL.md` | `06-decisions.md` |
 
-### 阶段裁剪
+### Phase pruning
 
-| 任务类型 | 必需阶段 | 可跳过 |
+| Task type | Required phases | May skip |
 |-----------|----------------|----------|
-| 新功能 | 全部 | — |
-| Bug 修复 | 1、3、5 | 2（若方案明显）、4 |
-| 重构 | 1、2、3、4 | 5（若无外部变更） |
-| 仅文档 | 3 | 1、2、4、5 |
-| 配置变更 | 1、3、5 | 2、4 |
+| New feature | All | — |
+| Bug fix | 1, 3, 4 | 2 (if the fix is obvious), 5 |
+| Refactor | 1, 2, 3, 5 | 4 (if no external change) |
+| Docs only | 3 | 1, 2, 4, 5 |
+| Config change | 1, 3, 4 | 2, 5 |
+| Investigation-only | 1, 2 | 3 (Implementation), 4 (Test) ✗, 5 (Review) ✗ — deliverable is the report |
+| Hotfix | 1, 3, 4, 5 | 2 may collapse into 1 if the fix is self-contained |
 
-## 文档创建规则
+## Document creation rules
 
-1. **按需创建**：只创建当前阶段需要的文档，不要预创建空文件
-2. **主文件先行**：任何任务至少有主任务文件 `<task-name>.md`
-3. **context 优先**：进入实现阶段前，`00-context.md` 应该就绪，确保 AI 有路径可循
-4. **子任务阈值**：预估改动超过 3 个模块或 5 个文件时，创建 `03-subtasks.md` 拆分
-5. **issue 即时记录**：发现阻塞问题立即写入 `05-issues.md`，不要等到后面才补
+1. **Create on demand**: only create documents for the current phase; do not pre-create empty files
+2. **Main file first**: every task has at least the main task file `<task-name>.md`
+3. **Context first**: before entering the implementation phase, `00-context.md` should be ready so AI has paths to follow
+4. **Subtask threshold**: when changes are estimated to exceed 3 modules or 5 files, create `03-subtasks.md` to break them down
+5. **Record issues immediately**: write blockers into `05-issues.md` as soon as they appear; don't defer
 
-## 状态值
+## Status values
 
-- `pending` — 未开始
-- `in-progress` — 进行中
-- `completed` — 已完成
-- `blocked` — 等待依赖
-- `skipped` — 跳过（需注明原因）
+- `pending` — not started
+- `in-progress` — in progress
+- `completed` — completed
+- `blocked` — waiting for a dependency
+- `skipped` — skipped (must state the reason)
 
-## 实现步骤检查点
+## Implementation-step checkpoints
 
-- [ ] 遵循 `skills/03-coding/00-logging-and-tracing-ids.md`
-- [ ] 遵循 `skills/03-coding/01-log-safety.md`
-- [ ] `cargo fmt --all -- --check` 通过
-- [ ] `cargo clippy --all-targets` 无警告
+- [ ] Follows `skills/03-coding/00-logging-and-tracing-ids.md`
+- [ ] Follows `skills/03-coding/01-log-safety.md`
+- [ ] `cargo fmt --all -- --check` passes
+- [ ] `cargo clippy --all-targets` is warning-free
 
-## 任务完成检查清单
+## Task-completion checklist
 
-| 产出 | 目标位置 | 时机 |
+| Output | Target location | When |
 |--------|--------|------|
-| 可复用模式 | `skills/` | 具有通用性的方案 |
-| 审查结论 | `skills/04-review/` | 项目特定的可复用发现 |
-| 用户文档 | `docs/en/`、`docs/zh-CN/` | 用户可见的行为变更 |
-| 架构决策 | `skills/01-architecture/` | 系统设计变更 |
-| 新资源/插件文档 | `docs/*/dev-guide/` | 新增资源或插件 |
+| Reusable patterns | `skills/` | Solution is generally applicable |
+| Review findings | `skills/04-review/` | Project-specific reusable findings |
+| User docs | `docs/en/`, `docs/zh-CN/` | User-visible behavior change |
+| Architecture decision | `skills/01-architecture/` | System-design change |
+| New resource/plugin docs | `docs/*/dev-guide/` | New resource or plugin added |
 
-## 默认工作流
+## Default workflow
 
-1. 检查任务是否已存在于 `tasks/working/` 或 `tasks/todo/`
-2. 创建任务目录和主任务文件
-3. 创建 `00-context.md`，列出相关 skills 路径
-4. 新功能任务优先使用 [new_feature_work_flow.skill](new_feature_work_flow.skill) 作为执行模板
-5. 按生命周期阶段推进，按需创建对应文档
-6. 发现阻塞问题立即写入 `05-issues.md`
-7. 随工作推进更新主任务文件中的文档索引和状态
-8. 任务完成后执行完成检查清单，归档到 `tasks/done/`
+1. Check whether the task already exists under `tasks/pending/` or `tasks/todo/`
+2. Create the task directory or single file and write the main task file
+3. Create `00-context.md` listing related skill paths
+4. For new-feature tasks, prefer [new_feature_work_flow.skill](new_feature_work_flow.skill) as the execution template
+5. Advance through the lifecycle phases, creating documents on demand
+6. Write blockers into `05-issues.md` as soon as they appear
+7. Update the document index and status in the main task file as work progresses
+8. Open a GitHub PR for acceptance when the implementation is ready; the branch is archived in git history once merged

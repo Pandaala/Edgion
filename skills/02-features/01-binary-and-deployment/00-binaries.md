@@ -1,27 +1,28 @@
 ---
 name: binaries
-description: 三个 bin 的入口点、CLI 参数完整参考、work_dir 优先级规则。
+description: Entry points of the four binaries, full CLI argument reference, work_dir priority rules.
 ---
 
-# 二进制入口与 CLI 参数
+# Binary Entry Points and CLI Arguments
 
-## 概览
+## Overview
 
-| Binary | 用途 | 默认端口 | 入口 |
-|--------|------|---------|------|
-| `edgion-controller` | 控制面：资源接收/校验/处理/分发 | gRPC `:50051`, Admin `:5800` | `src/bin/edgion_controller.rs` |
-| `edgion-gateway` | 数据面：高性能代理（基于 Pingora） | Admin `:5900`, Metrics `:5901` | `src/bin/edgion_gateway.rs` |
-| `edgion-cli` | CLI 工具：资源 CRUD 和运维 | — | `src/bin/edgion_cli.rs` |
+| Binary | Purpose | Default Ports | Entry |
+|--------|---------|---------------|-------|
+| `edgion-controller` | Control plane: resource ingestion/validation/processing/distribution | gRPC `:50051`, Admin `:5800` | `src/bin/edgion_controller.rs` |
+| `edgion-gateway` | Data plane: high-performance proxy (based on Pingora) | Admin `:5900`, Metrics `:5901` | `src/bin/edgion_gateway.rs` |
+| `edgion-cli` | CLI tool: resource CRUD and operations | — | `src/bin/edgion_ctl.rs` |
+| `edgion-center` | Federation center: aggregates resources across federated controllers, serves Center API | — | `src/bin/edgion_center.rs` |
 
-三个 bin 都采用**薄入口点**模式 — `src/bin/*.rs` 只做最少的工作：安装 rustls 加密提供程序 → 解析参数 → `run()`。
+All four binaries follow the **thin entry point** pattern — `src/bin/*.rs` does the minimum amount of work: install the rustls crypto provider → parse arguments → `run()`.
 
-## work_dir 优先级
+## work_dir Priority
 
 ```
 CLI --work-dir > ENV EDGION_WORK_DIR > YAML config > Default (".")
 ```
 
-所有配置中的相对路径都基于 `work_dir` 解析。
+All relative paths in configuration are resolved against `work_dir`.
 
 ---
 
@@ -31,28 +32,28 @@ CLI --work-dir > ENV EDGION_WORK_DIR > YAML config > Default (".")
 edgion-controller [OPTIONS]
 ```
 
-### 参数 Schema
+### Argument Schema
 
-| 参数 | 短 | 类型 | 默认值 | 说明 |
-|------|---|------|--------|------|
-| `--work-dir` | `-w` | `PathBuf` | `"."` | 工作目录 |
-| `--config-file` | `-c` | `String` | `config/edgion-controller.yaml` | YAML 配置文件路径 |
-| `--conf-dir` | — | `PathBuf` | — | FileSystem 模式的配置目录（覆盖 TOML 中 conf_center.conf_dir） |
-| `--test-mode` | — | `bool` | `false` | 启用测试模式（endpoint_mode=Both + metrics 测试功能） |
-| `--grpc-listen` | — | `String` | `0.0.0.0:50051` | gRPC 监听地址 |
-| `--admin-listen` | — | `String` | `0.0.0.0:5800` | Admin HTTP API 地址 |
-| `--log-dir` | — | `String` | `logs` | 日志目录 |
-| `--log-level` | — | `String` | `info` | 日志级别：trace/debug/info/warn/error |
-| `--json-format` | — | `bool` | `false` | JSON 格式日志 |
-| `--console` | — | `bool` | `true` | 控制台输出 |
+| Argument | Short | Type | Default | Description |
+|----------|-------|------|---------|-------------|
+| `--work-dir` | `-w` | `PathBuf` | `"."` | Working directory |
+| `--config-file` | `-c` | `String` | `config/edgion-controller.yaml` | YAML configuration file path |
+| `--conf-dir` | — | `PathBuf` | — | Configuration directory for FileSystem mode (overrides conf_center.conf_dir in TOML) |
+| `--test-mode` | — | `bool` | `false` | Enable test mode (metrics testing features) |
+| `--grpc-listen` | — | `String` | `0.0.0.0:50051` | gRPC listen address |
+| `--admin-listen` | — | `String` | `0.0.0.0:5800` | Admin HTTP API address |
+| `--log-dir` | — | `String` | `logs` | Log directory |
+| `--log-level` | — | `String` | `info` | Log level: trace/debug/info/warn/error |
+| `--json-format` | — | `bool` | `false` | JSON-formatted log |
+| `--console` | — | `bool` | `true` | Console output |
 
-### 启动示例
+### Startup Examples
 
 ```bash
-# FileSystem 模式（本地开发）
+# FileSystem mode (local development)
 edgion-controller -w /opt/edgion --conf-dir config/resources
 
-# K8s 模式（生产）
+# K8s mode (production)
 edgion-controller -c config/edgion-controller-k8s.yaml
 ```
 
@@ -64,33 +65,33 @@ edgion-controller -c config/edgion-controller-k8s.yaml
 edgion-gateway [OPTIONS]
 ```
 
-### 参数 Schema
+### Argument Schema
 
-| 参数 | 短 | 类型 | 默认值 | 说明 |
-|------|---|------|--------|------|
-| `--work-dir` | `-w` | `PathBuf` | `"."` | 工作目录 |
-| `--config-file` | `-c` | `String` | `config/edgion-gateway.yaml` | YAML 配置文件路径 |
-| `--server-addr` | — | `String` | **必填** | Controller gRPC 地址（如 `http://127.0.0.1:50051`） |
-| `--admin-listen` | — | `String` | — | Admin API 地址（注意：当前固定为 `:5900`） |
-| `--threads` | — | `usize` | CPU 核心数 | Pingora 工作线程数 |
-| `--work-stealing` | — | `bool` | `true` | Tokio 任务窃取 |
-| `--grace-period` | — | `u64` | `30` | 优雅关闭等待秒数 |
-| `--graceful-shutdown-timeout` | — | `u64` | `10` | 关闭超时秒数 |
-| `--upstream-keepalive-pool-size` | — | `usize` | `128` | 上游连接池大小 |
-| `--downstream-keepalive-request-limit` | — | `u32` | `1000` | 下游每连接最大请求数（0=无限） |
-| `--error-log` | — | `String` | — | Pingora 错误日志路径 |
-| `--log-dir` | — | `String` | `logs` | 系统日志目录 |
-| `--log-level` | — | `String` | `info` | 日志级别 |
-| `--json-format` | — | `bool` | `false` | JSON 格式日志 |
-| `--integration-testing-mode` | — | `bool` | `false` | 集成测试模式（**禁止生产使用**） |
+| Argument | Short | Type | Default | Description |
+|----------|-------|------|---------|-------------|
+| `--work-dir` | `-w` | `PathBuf` | `"."` | Working directory |
+| `--config-file` | `-c` | `String` | `config/edgion-gateway.yaml` | YAML configuration file path |
+| `--server-addr` | — | `String` | **Required** | Controller gRPC address (e.g., `http://127.0.0.1:50051`) |
+| `--admin-listen` | — | `String` | — | Admin API address (note: currently fixed at `:5900`) |
+| `--threads` | — | `usize` | CPU core count | Pingora worker thread count |
+| `--work-stealing` | — | `bool` | `true` | Tokio task stealing |
+| `--grace-period` | — | `u64` | `30` | Graceful shutdown wait time in seconds |
+| `--graceful-shutdown-timeout` | — | `u64` | `10` | Shutdown timeout in seconds |
+| `--upstream-keepalive-pool-size` | — | `usize` | `128` | Upstream connection pool size |
+| `--downstream-keepalive-request-limit` | — | `u32` | `1000` | Maximum requests per downstream connection (0 = unlimited) |
+| `--error-log` | — | `String` | — | Pingora error log path |
+| `--log-dir` | — | `String` | `logs` | System log directory |
+| `--log-level` | — | `String` | `info` | Log level |
+| `--json-format` | — | `bool` | `false` | JSON-formatted log |
+| `--integration-testing-mode` | — | `bool` | `false` | Integration testing mode (**must not be used in production**) |
 
-### 启动示例
+### Startup Examples
 
 ```bash
-# 连接本地 Controller
+# Connect to a local Controller
 edgion-gateway --server-addr http://127.0.0.1:50051
 
-# 生产部署
+# Production deployment
 edgion-gateway -c config/edgion-gateway.yaml --server-addr http://controller:50051 --threads 8
 ```
 
@@ -102,64 +103,64 @@ edgion-gateway -c config/edgion-gateway.yaml --server-addr http://controller:500
 edgion-cli [OPTIONS] <COMMAND>
 ```
 
-### 全局参数
+### Global Arguments
 
-| 参数 | 短 | 类型 | 默认值 | 说明 |
-|------|---|------|--------|------|
-| `--target` | `-t` | `center\|server\|client` | `center` | 目标 API |
-| `--server` | — | `String` | — | 服务地址（如 `http://localhost:5800`） |
-| `--socket` | — | `PathBuf` | — | Unix socket 路径 |
+| Argument | Short | Type | Default | Description |
+|----------|-------|------|---------|-------------|
+| `--target` | `-t` | `center\|server\|client` | `center` | Target API |
+| `--server` | — | `String` | — | Service address (e.g., `http://localhost:5800`) |
+| `--socket` | — | `PathBuf` | — | Unix socket path |
 
-### Target 模式
+### Target Modes
 
-| Target | 连接端口 | 操作 | 典型场景 |
-|--------|---------|------|---------|
-| `center` | Controller `:5800` | 完整 CRUD | 资源管理（默认） |
-| `server` | Controller `:5800` | 只读查询 | 查看 ServerCache 状态 |
-| `client` | Gateway `:5900` | 只读查询 | 查看 Gateway 侧缓存 |
+| Target | Connection Port | Operations | Typical Scenario |
+|--------|-----------------|------------|------------------|
+| `center` | Controller `:5800` | Full CRUD | Resource management (default) |
+| `server` | Controller `:5800` | Read-only query | Inspect ServerCache state |
+| `client` | Gateway `:5900` | Read-only query | Inspect Gateway-side cache |
 
-### 子命令
+### Subcommands
 
 ```bash
-# 应用资源
+# Apply resources
 edgion-cli apply -f route.yaml
-edgion-cli apply -f config/resources/    # 目录
+edgion-cli apply -f config/resources/    # Directory
 
-# 查询资源
-edgion-cli get httproute                 # 列出所有
+# Query resources
+edgion-cli get httproute                 # List all
 edgion-cli get httproute my-route -n default -o yaml
 
-# 删除资源
+# Delete resources
 edgion-cli delete httproute my-route -n default
 edgion-cli delete -f route.yaml
 
-# 重载
+# Reload
 edgion-cli reload
 
-# 查看 Gateway 侧缓存
+# Inspect Gateway-side cache
 edgion-cli -t client --server http://localhost:5900 get httproute
 ```
 
-### 子命令参数 Schema
+### Subcommand Argument Schemas
 
 **apply**:
-| 参数 | 短 | 类型 | 说明 |
-|------|---|------|------|
-| `--file` | `-f` | `String` | 文件或目录路径 |
-| `--dry-run` | — | `bool` | 模拟执行，不实际变更 |
+| Argument | Short | Type | Description |
+|----------|-------|------|-------------|
+| `--file` | `-f` | `String` | File or directory path |
+| `--dry-run` | — | `bool` | Simulate execution; no actual changes |
 
 **get**:
-| 参数 | 位置 | 类型 | 说明 |
-|------|------|------|------|
-| `kind` | 1st | `String` | 资源类型（如 httproute、gateway） |
-| `name` | 2nd | `String?` | 资源名称（省略则列出全部） |
-| `--namespace` / `-n` | — | `String?` | 命名空间 |
-| `--output` / `-o` | — | `String` | 输出格式：table/json/yaml/wide |
+| Argument | Position | Type | Description |
+|----------|----------|------|-------------|
+| `kind` | 1st | `String` | Resource type (e.g., httproute, gateway) |
+| `name` | 2nd | `String?` | Resource name (omit to list all) |
+| `--namespace` / `-n` | — | `String?` | Namespace |
+| `--output` / `-o` | — | `String` | Output format: table/json/yaml/wide |
 
 **delete**:
-| 参数 | 位置 | 类型 | 说明 |
-|------|------|------|------|
-| `kind` | 1st | `String?` | 资源类型 |
-| `name` | 2nd | `String?` | 资源名称 |
-| `--namespace` / `-n` | — | `String?` | 命名空间 |
-| `--file` / `-f` | — | `String?` | 按文件删除 |
+| Argument | Position | Type | Description |
+|----------|----------|------|-------------|
+| `kind` | 1st | `String?` | Resource type |
+| `name` | 2nd | `String?` | Resource name |
+| `--namespace` / `-n` | — | `String?` | Namespace |
+| `--file` / `-f` | — | `String?` | Delete by file |

@@ -2,6 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::types::common::KeyGet;
+use crate::types::resources::edgion_plugins::PluginValidation;
 
 /// DynamicInternalUpstream plugin configuration
 ///
@@ -72,11 +73,6 @@ pub struct DynamicInternalUpstreamConfig {
     /// Default: false
     #[serde(default)]
     pub debug_header: bool,
-
-    // === Validation cache ===
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 
     // === Compiled regex cache ===
     #[serde(skip)]
@@ -171,48 +167,51 @@ impl Default for DynamicInternalUpstreamConfig {
             on_no_match: DynUpstreamOnNoMatch::default(),
             on_invalid: DynUpstreamOnInvalid::default(),
             debug_header: false,
-            validation_error: None,
             compiled_regex: None,
         }
     }
 }
 
 impl DynamicInternalUpstreamConfig {
-    /// Validate and pre-compile regex at parse time
+    /// Pre-compile regex at parse time when fields are valid.
+    /// Field-level errors are surfaced via the `PluginValidation` trait.
     pub fn validate(&mut self) {
-        if let Some(ref extract) = self.extract {
-            match regex::Regex::new(&extract.regex) {
-                Ok(re) => self.compiled_regex = Some(re),
-                Err(e) => {
-                    self.validation_error = Some(format!("Invalid extract regex: {}", e));
-                    return;
-                }
-            }
+        if self.check_fields().is_some() {
+            return;
         }
-
-        // Validate rules if provided
-        if let Some(ref rules) = self.rules {
-            if rules.is_empty() {
-                self.validation_error = Some("Rules list is empty; omit 'rules' for direct mode".to_string());
-                return;
-            }
-            for (i, rule) in rules.iter().enumerate() {
-                if rule.value.is_empty() {
-                    self.validation_error = Some(format!("Rule[{}]: value cannot be empty", i));
-                    return;
-                }
-                if rule.backend_ref.name.is_empty() {
-                    self.validation_error = Some(format!("Rule[{}]: backendRef.name cannot be empty", i));
-                    return;
-                }
+        if let Some(ref extract) = self.extract {
+            if let Ok(re) = regex::Regex::new(&extract.regex) {
+                self.compiled_regex = Some(re);
             }
         }
     }
 
-    /// Return validation error if config is invalid.
-    /// Called during preparse for status reporting.
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
+    /// Check all validation rules without mutating self.
+    ///
+    /// Returns `Some(error)` if any field is invalid, `None` if all checks pass.
+    /// Used by both `validate()` and the `PluginValidation` trait impl.
+    pub fn check_fields(&self) -> Option<String> {
+        if let Some(ref extract) = self.extract {
+            if let Err(e) = regex::Regex::new(&extract.regex) {
+                return Some(format!("Invalid extract regex: {}", e));
+            }
+        }
+
+        if let Some(ref rules) = self.rules {
+            if rules.is_empty() {
+                return Some("Rules list is empty; omit 'rules' for direct mode".to_string());
+            }
+            for (i, rule) in rules.iter().enumerate() {
+                if rule.value.is_empty() {
+                    return Some(format!("Rule[{}]: value cannot be empty", i));
+                }
+                if rule.backend_ref.name.is_empty() {
+                    return Some(format!("Rule[{}]: backendRef.name cannot be empty", i));
+                }
+            }
+        }
+
+        None
     }
 
     /// Check if this config uses direct mode (no rules)
@@ -242,5 +241,107 @@ impl DynamicInternalUpstreamConfig {
                 None
             }
         }
+    }
+}
+
+impl PluginValidation for DynamicInternalUpstreamConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.check_fields()
+    }
+}
+
+#[cfg(test)]
+mod validation_trait_tests {
+    use super::*;
+    use crate::types::resources::edgion_plugins::PluginValidation;
+
+    /// Verify that `PluginValidation::validation_error()` works WITHOUT a prior `validate()` call.
+    /// The trait impl calls `check_fields()` directly, so no mutable state is required.
+    #[test]
+    fn validation_error_returns_field_error_without_validate_call() {
+        // Empty rules list is invalid; the trait reports the error directly.
+        let config = DynamicInternalUpstreamConfig {
+            rules: Some(vec![]),
+            ..Default::default()
+        };
+        let result = PluginValidation::validation_error(&config);
+        assert_eq!(
+            result.as_deref(),
+            Some("Rules list is empty; omit 'rules' for direct mode")
+        );
+    }
+
+    /// Default config (direct mode, no extract, no rules) must be valid.
+    #[test]
+    fn default_config_is_valid() {
+        let config = DynamicInternalUpstreamConfig::default();
+        assert!(PluginValidation::validation_error(&config).is_none());
+    }
+
+    /// Invalid regex in extract must surface the correct error prefix.
+    #[test]
+    fn invalid_regex_returns_error() {
+        let config = DynamicInternalUpstreamConfig {
+            extract: Some(DynUpstreamExtract {
+                regex: "[invalid".to_string(),
+                group: 1,
+            }),
+            ..Default::default()
+        };
+        let result = PluginValidation::validation_error(&config);
+        assert!(result.is_some());
+        assert!(
+            result.as_deref().unwrap().starts_with("Invalid extract regex:"),
+            "unexpected error: {:?}",
+            result
+        );
+    }
+
+    /// Rule with empty value must produce the correct indexed error.
+    #[test]
+    fn rule_with_empty_value_returns_error() {
+        let config = DynamicInternalUpstreamConfig {
+            rules: Some(vec![DynUpstreamRule {
+                value: "".to_string(),
+                backend_ref: DynUpstreamTarget {
+                    name: "svc".to_string(),
+                    namespace: None,
+                },
+            }]),
+            ..Default::default()
+        };
+        let result = PluginValidation::validation_error(&config);
+        assert_eq!(result.as_deref(), Some("Rule[0]: value cannot be empty"));
+    }
+
+    /// Rule with empty backend_ref name must produce the correct indexed error.
+    #[test]
+    fn rule_with_empty_backend_ref_name_returns_error() {
+        let config = DynamicInternalUpstreamConfig {
+            rules: Some(vec![DynUpstreamRule {
+                value: "premium".to_string(),
+                backend_ref: DynUpstreamTarget {
+                    name: "".to_string(),
+                    namespace: None,
+                },
+            }]),
+            ..Default::default()
+        };
+        let result = PluginValidation::validation_error(&config);
+        assert_eq!(result.as_deref(), Some("Rule[0]: backendRef.name cannot be empty"));
+    }
+
+    /// validate() on a valid config with regex must compile the regex.
+    #[test]
+    fn validate_compiles_regex_on_valid_config() {
+        let mut config = DynamicInternalUpstreamConfig {
+            extract: Some(DynUpstreamExtract {
+                regex: r"group=(\w+)".to_string(),
+                group: 1,
+            }),
+            ..Default::default()
+        };
+        config.validate();
+        assert!(config.compiled_regex.is_some());
     }
 }

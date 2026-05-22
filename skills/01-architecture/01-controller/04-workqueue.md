@@ -1,215 +1,215 @@
 ---
 name: controller-workqueue
-description: Workqueue 内部机制：去重、dirty requeue、指数退避、延迟入队、TriggerChain 环检测。
+description: Workqueue internals — dedup, dirty requeue, exponential backoff, delayed enqueue, TriggerChain cycle detection.
 ---
 
-# Workqueue 机制
+# Workqueue Mechanism
 
-## 设计理念
+## Design
 
-Workqueue 采用 Go controller-runtime 风格设计，每种资源类型拥有独立的队列实例，提供：
+The Workqueue follows a Go controller-runtime style design. Each resource type owns its own queue instance, and provides:
 
-- **去重**：同一 key 在队列中仅存在一次
-- **Dirty requeue**：处理期间允许重新入队，不丢失更新
-- **指数退避**：失败重试时延迟递增
-- **延迟入队**：跨资源 requeue 的合并调度
-- **TriggerChain**：级联因果追踪与环检测
+- **Dedup**: the same key exists in the queue at most once
+- **Dirty requeue**: re-enqueueing during processing is allowed; updates are not lost
+- **Exponential backoff**: increasing delay on retry after failure
+- **Delayed enqueue**: coalesced scheduling for cross-resource requeue
+- **TriggerChain**: cascade causality tracking and cycle detection
 
-源文件：`src/core/controller/conf_mgr/sync_runtime/workqueue.rs`
+Source file: `src/core/controller/conf_mgr/sync_runtime/workqueue.rs`
 
-## 数据结构
+## Data Structures
 
-### Workqueue 核心字段
+### Workqueue Core Fields
 
 ```text
 Workqueue
-├── name: String                          // 队列名称（日志和指标使用）
-├── tx: mpsc::Sender<WorkItem>            // 就绪队列发送端
-├── rx: Mutex<mpsc::Receiver<WorkItem>>   // 就绪队列接收端（Mutex 保证单消费者）
-├── pending: Arc<DashSet<String>>         // 就绪队列中的 key 集合（去重用）
-├── scheduled: Arc<DashSet<String>>       // 延迟队列中的 key 集合（去重用）
-├── delay_tx: mpsc::Sender<DelayedItem>   // 延迟队列发送端
-├── config: WorkqueueConfig               // 配置
-└── metrics: Arc<WorkqueueMetrics>        // 指标
+├── name: String                          // queue name (used in logs and metrics)
+├── tx: mpsc::Sender<WorkItem>            // ready-queue sender
+├── rx: Mutex<mpsc::Receiver<WorkItem>>   // ready-queue receiver (Mutex enforces single consumer)
+├── pending: Arc<DashSet<String>>         // set of keys in the ready queue (for dedup)
+├── scheduled: Arc<DashSet<String>>       // set of keys in the delay queue (for dedup)
+├── delay_tx: mpsc::Sender<DelayedItem>   // delay-queue sender
+├── config: WorkqueueConfig               // configuration
+└── metrics: Arc<WorkqueueMetrics>        // metrics
 ```
 
-就绪队列使用 `mpsc::channel`（有界，容量由 `config.capacity` 控制）。延迟队列通过独立的 `mpsc::channel` 接收延迟项，在后台任务中使用 `BinaryHeap`（最小堆，按 `ready_at` 排序）管理定时。
+The ready queue uses `mpsc::channel` (bounded, capacity controlled by `config.capacity`). The delay queue receives delayed items through a separate `mpsc::channel` and uses a `BinaryHeap` (min-heap ordered by `ready_at`) in a background task to manage timers.
 
 ### WorkItem
 
 ```rust
 pub struct WorkItem {
-    pub key: String,                // "namespace/name"（命名空间级）或 "name"（集群级）
-    pub enqueue_time: Instant,      // 入队时间
-    pub trigger_chain: TriggerChain, // 级联追踪链
+    pub key: String,                // "namespace/name" (namespaced) or "name" (cluster-scoped)
+    pub enqueue_time: Instant,      // enqueue time
+    pub trigger_chain: TriggerChain, // cascade trace chain
 }
 ```
 
-两种构造方式：
-- `WorkItem::new(key)` — 原始事件，空链
-- `WorkItem::with_chain(key, chain)` — 跨资源 requeue，携带因果链
+Two construction methods:
+- `WorkItem::new(key)` — original event, empty chain
+- `WorkItem::with_chain(key, chain)` — cross-resource requeue, carrying a causality chain
 
 ## WorkqueueConfig
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `capacity` | `usize` | 5000 | 有界通道容量 |
-| `default_requeue_delay` | `Duration` | 100ms | 跨资源 requeue 默认延迟 |
-| `max_trigger_cycles` | `usize` | 5 | 同一 (kind, key) 在触发链中最大出现次数 |
-| `max_trigger_depth` | `usize` | 20 | 触发链最大总深度（安全网） |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `capacity` | `usize` | 5000 | Bounded channel capacity |
+| `default_requeue_delay` | `Duration` | 100ms | Default delay for cross-resource requeue |
+| `max_trigger_cycles` | `usize` | 5 | Maximum number of times the same (kind, key) may appear in a trigger chain |
+| `max_trigger_depth` | `usize` | 20 | Maximum total depth of a trigger chain (safety net) |
 
-> **注意**：指数退避重试（`requeue_with_backoff`）已被移除。状态写入失败（如 K8s API 短暂不可用）是自愈的：watcher 断连重连后会触发全量缓存重建，重新处理并重写所有状态。在这一层准确区分暂时性与永久性失败并不实际。
+> **Note**: exponential-backoff retry (`requeue_with_backoff`) has been removed. Status-write failures (e.g., transient K8s API unavailability) are self-healing: when the watcher reconnects after a disconnect, a full cache rebuild is triggered, which reprocesses everything and rewrites all statuses. Accurately distinguishing transient and permanent failures at this layer is impractical.
 
-## 去重机制
+## Dedup Mechanism
 
-**两个集合独立去重，互不感知**：
+**The two sets dedup independently and do not observe each other**:
 
-- `enqueue()` 只检查 `pending`：
+- `enqueue()` checks only `pending`:
 
 ```text
 enqueue("ns/my-route"):
-  pending 已包含 "ns/my-route"?
-    ├─ 是 → 跳过，返回 false
-    └─ 否 → 插入 pending → 发送到 mpsc → 返回 true
+  pending already contains "ns/my-route"?
+    ├─ yes → skip, return false
+    └─ no  → insert into pending → send to mpsc → return true
 ```
 
-- `enqueue_after()` 只检查 `scheduled`（不检查 `pending`）：
+- `enqueue_after()` checks only `scheduled` (does not check `pending`):
 
 ```text
 enqueue_after("ns/my-route", 100ms, chain):
-  scheduled 已包含 "ns/my-route"?
-    ├─ 是 → 跳过，返回 false
-    └─ 否 → 插入 scheduled → 发送到 delay heap → 返回 true
+  scheduled already contains "ns/my-route"?
+    ├─ yes → skip, return false
+    └─ no  → insert into scheduled → send to delay heap → return true
 ```
 
-因此，同一 key 可以同时存在于 `pending` 和 `scheduled`（两者并行进行）。延迟项到期时，delay loop 会检查 `pending` 进行二次去重：若 `pending.insert` 失败（已有立即处理项），则静默丢弃延迟版本。
+Therefore, the same key can simultaneously exist in both `pending` and `scheduled` (the two paths run in parallel). When the delayed item expires, the delay loop performs a second dedup check against `pending`: if `pending.insert` fails (an immediate item is already present), the delayed version is silently dropped.
 
-这一设计是有意为之：处理是幂等的，多处理一次不影响正确性；强制跨集合互斥反而会增加锁争用和误跳过。
+This design is deliberate: processing is idempotent, so processing once more does not affect correctness; forcing cross-set mutual exclusion would only increase lock contention and false skips.
 
-当队列深度达到容量 80% 时打印告警日志（每 500 项一次）。
+When the queue depth reaches 80% of capacity, a warning log is printed (once per 500 items).
 
-## Dirty Requeue 模式
+## Dirty Requeue Pattern
 
-关键设计：**不追踪 "processing" 状态**。key 在 `dequeue()` 时立即从 `pending` 移除，而非在处理完成后移除。
+Key design point: **no "processing" state is tracked**. A key is removed from `pending` immediately upon `dequeue()`, not when processing finishes.
 
 ```text
-时间线：
+Timeline:
   t1: enqueue("ns/a")    → pending = {"ns/a"}
-  t2: dequeue()           → pending = {}          // 立即移除
-  t3: (处理中) enqueue("ns/a") → pending = {"ns/a"}  // 允许重新入队
+  t2: dequeue()           → pending = {}          // removed immediately
+  t3: (during processing) enqueue("ns/a") → pending = {"ns/a"}  // re-enqueue allowed
   t4: done("ns/a")        → (no-op)
-  t5: dequeue()           → pending = {}          // 处理最新版本
+  t5: dequeue()           → pending = {}          // process the latest version
 ```
 
-这保证了处理期间发生的更新不会丢失：即使当前正在处理某个 key，新的变更仍能入队并在之后被处理。
+This guarantees that updates arriving during processing are not lost: even if a key is currently being processed, new changes can still be enqueued and processed afterwards.
 
-`done()` 方法当前是 no-op（仅记录日志），保留 API 兼容性。
+The `done()` method is currently a no-op (only logs); the API is preserved for compatibility.
 
-## 延迟入队（enqueue_after）
+## Delayed Enqueue (enqueue_after)
 
-用于跨资源 requeue 的合并调度。当资源 A 变更需要触发资源 B 重新处理时，通过延迟入队合并短时间内的多次触发：
+Used for coalesced scheduling of cross-resource requeue. When a change to resource A needs to trigger reprocessing of resource B, delayed enqueue coalesces multiple triggers within a short time window:
 
 ```text
 enqueue_after("ns/gateway-1", 100ms, chain):
-  scheduled 已包含 "ns/gateway-1"?
-    ├─ 是 → 跳过（scheduled 级去重）
-    └─ 否 → 插入 scheduled → 发送 DelayedItem 到 delay_tx
+  scheduled already contains "ns/gateway-1"?
+    ├─ yes → skip (scheduled-level dedup)
+    └─ no  → insert into scheduled → send DelayedItem to delay_tx
 ```
 
-后台 delay loop 任务管理 `BinaryHeap<DelayedItem>`（按 `ready_at` 最小堆排序）：
+A background delay-loop task manages a `BinaryHeap<DelayedItem>` (min-heap ordered by `ready_at`):
 
 ```text
 loop {
-    if heap 为空 → 阻塞等待 delay_rx.recv()
+    if heap is empty → block waiting on delay_rx.recv()
     else {
         tokio::select! {
-            sleep(下一个到期时间) => {
-                弹出所有已到期项 → 检查 pending 去重 → 发送到就绪队列
+            sleep(next due time) => {
+                pop all due items → check pending dedup → send to ready queue
             }
             delay_rx.recv() => {
-                新延迟项推入 heap
+                push the new delayed item into the heap
             }
         }
     }
 }
 ```
 
-延迟项到期后，从 `scheduled` 移除、检查 `pending` 避免重复、插入 `pending` 后发送到就绪队列。
+Once a delayed item is due, it is removed from `scheduled`, checked against `pending` to avoid duplicates, inserted into `pending`, and sent to the ready queue.
 
-## TriggerChain：级联因果追踪
+## TriggerChain — Cascade Causality Tracking
 
-TriggerChain 类似 HTTP 的 `X-Forwarded-For`，记录引发级联 requeue 的资源路径：
+TriggerChain is similar to HTTP's `X-Forwarded-For`; it records the resource path that caused a cascading requeue:
 
 ```rust
 pub struct TriggerChain {
-    pub sources: SmallVec<[TriggerSource; 4]>,  // 栈上优化，<=4 跳无堆分配
+    pub sources: SmallVec<[TriggerSource; 4]>,  // stack-optimized; ≤4 hops have no heap allocation
 }
 
 pub struct TriggerSource {
-    pub kind: &'static str,   // 例如 "HTTPRoute"、"Gateway"
-    pub key: String,           // 例如 "default/my-route"
+    pub kind: &'static str,   // e.g. "HTTPRoute", "Gateway"
+    pub key: String,           // e.g. "default/my-route"
 }
 ```
 
-### 链的构建
+### Building the Chain
 
-每个 ResourceProcessor 处理完成后，在 requeue 下游资源前调用 `chain.extend(kind, key)` 追加自身信息：
+After each ResourceProcessor finishes processing, before requeueing downstream resources it calls `chain.extend(kind, key)` to append its own info:
 
 ```text
-原始事件: Secret/default/tls-cert 变更
-  → 触发 Gateway/default/gw-1 requeue，chain = [Secret/default/tls-cert]
-    → 触发 HTTPRoute/default/route-1 requeue，chain = [Secret/default/tls-cert → Gateway/default/gw-1]
+Original event: Secret/default/tls-cert changed
+  → triggers requeue of Gateway/default/gw-1, chain = [Secret/default/tls-cert]
+    → triggers requeue of HTTPRoute/default/route-1, chain = [Secret/default/tls-cert → Gateway/default/gw-1]
 ```
 
-### 环检测
+### Cycle Detection
 
-入队前通过 `would_exceed_cycle_limit()` 检查目标 (kind, key) 在链中的出现次数：
+Before enqueue, `would_exceed_cycle_limit()` checks how many times the target (kind, key) appears in the chain:
 
 ```text
 chain.occurrence_count(target_kind, target_key) >= max_trigger_cycles?
-  ├─ 是 → 终止级联，不入队
-  └─ 否 → 正常入队
+  ├─ yes → terminate the cascade, do not enqueue
+  └─ no  → enqueue normally
 ```
 
-`max_trigger_cycles` 默认为 5，`max_trigger_depth` 默认为 20（总深度安全网）。
+`max_trigger_cycles` defaults to 5, `max_trigger_depth` defaults to 20 (total-depth safety net).
 
-示例：如果 `HTTPRoute/default/route-1` 在链中已出现 5 次，再次尝试 requeue 该资源时将被阻止，防止无限循环。
+Example: if `HTTPRoute/default/route-1` has already appeared 5 times in the chain, the next attempt to requeue this resource is blocked, preventing an infinite loop.
 
-## Worker 生命周期
+## Worker Lifecycle
 
-Worker 是消费 Workqueue 的异步任务，每个 `ResourceController` 拥有一个 worker：
+A worker is the async task that consumes the Workqueue. Each `ResourceController` has one worker:
 
 ```text
-ResourceController 事件循环:
-  Event::Applied(obj) → processor.process_init_item() (初始化阶段)
+ResourceController event loop:
+  Event::Applied(obj) → processor.process_init_item() (init phase)
   Event::InitDone     → processor.on_init_done()
-                        worker_handle = spawn_worker(processor, ...)  // 此时才启动 worker
-  Event::Applied(obj) → processor.process_work_item() (运行时阶段，由 worker 驱动)
+                        worker_handle = spawn_worker(processor, ...)  // the worker is started here
+  Event::Applied(obj) → processor.process_work_item() (runtime phase, driven by the worker)
 ```
 
-**worker 仅在 `InitDone` 之后启动**。初始化阶段（LIST 回放）期间，事件由事件循环同步处理；`InitDone` 标志 LIST 完成后，spawn worker 开始从 Workqueue 消费并异步处理增量事件。
+**The worker starts only after `InitDone`**. During the init phase (LIST replay), events are processed synchronously by the event loop; once `InitDone` marks the LIST complete, the worker is spawned and starts consuming the Workqueue, processing incremental events asynchronously.
 
-这一设计确保：
+This design ensures that:
 
-- 初始化阶段按序处理全量数据，不会因并发导致中间状态
-- 运行时阶段通过 Workqueue 解耦事件接收与处理，支持去重和退避
+- During the init phase, the full data set is processed in order without intermediate states caused by concurrency
+- During the runtime phase, the Workqueue decouples event reception from processing, supporting dedup and backoff
 
-## 指标（WorkqueueMetrics）
+## Metrics (WorkqueueMetrics)
 
-| 指标 | 类型 | 说明 |
-|------|------|------|
-| `adds_total` | AtomicU64 | 入队总次数 |
-| `retries_total` | AtomicU64 | 重试总次数 |
-| `depth` | AtomicU64 | 当前队列深度 |
-| `delayed_total` | AtomicU64 | 延迟入队总次数 |
+| Metric | Type | Description |
+|--------|------|-------------|
+| `adds_total` | AtomicU64 | Total number of enqueue operations |
+| `retries_total` | AtomicU64 | Total number of retries |
+| `depth` | AtomicU64 | Current queue depth |
+| `delayed_total` | AtomicU64 | Total number of delayed enqueues |
 
-所有指标使用 `Ordering::Relaxed` 原子操作，适合监控但不提供严格一致性。
+All metrics use `Ordering::Relaxed` atomic operations — fine for monitoring but not strictly consistent.
 
-## 关键源文件
+## Key Source Files
 
-| 文件 | 职责 |
-|------|------|
-| `src/core/controller/conf_mgr/sync_runtime/workqueue.rs` | Workqueue 完整实现 |
-| `src/core/controller/conf_mgr/sync_runtime/resource_processor/processor.rs` | ResourceProcessor，使用 Workqueue |
-| `src/core/controller/conf_mgr/conf_center/kubernetes/resource_controller.rs` | K8s ResourceController，spawn_worker |
-| `src/core/controller/conf_mgr/conf_center/file_system/resource_controller.rs` | 文件系统 ResourceController，spawn_worker |
+| File | Responsibility |
+|------|----------------|
+| `src/core/controller/conf_mgr/sync_runtime/workqueue.rs` | Full Workqueue implementation |
+| `src/core/controller/conf_mgr/sync_runtime/resource_processor/processor.rs` | ResourceProcessor; uses Workqueue |
+| `src/core/controller/conf_mgr/conf_center/kubernetes/resource_controller.rs` | K8s ResourceController, spawn_worker |
+| `src/core/controller/conf_mgr/conf_center/file_system/resource_controller.rs` | File-system ResourceController, spawn_worker |

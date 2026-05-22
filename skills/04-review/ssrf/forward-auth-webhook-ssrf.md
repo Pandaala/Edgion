@@ -1,46 +1,46 @@
 ---
 name: forward-auth-webhook-ssrf
-description: ForwardAuth / Webhook SSRF finding 判定规则。审查"uri 字段无内网 IP 过滤，可探测元数据服务"类 finding 时先读此文件。
+description: Decision rule for ForwardAuth / Webhook SSRF findings. Read this file first when reviewing "uri field lacks internal IP filtering, can probe metadata service" findings.
 ---
 
 # ForwardAuth / Webhook SSRF — NOT-AN-ISSUE
 
-## 结论
+## Conclusion
 
-ForwardAuth `uri` 和 Webhook `uri` 缺乏内网 IP 过滤**不构成可修复的安全问题**，判定为 NOT-AN-ISSUE。不接受"加私有 IP 阻断列表"或"加 SSRF 防护库"类修复建议。
+The lack of internal IP filtering on the ForwardAuth `uri` and Webhook `uri` **does not constitute a fixable security issue**; classified as NOT-AN-ISSUE. Fix suggestions of the form "add a private-IP block list" or "add an SSRF protection library" are not accepted.
 
-## 核心理由
+## Core Rationale
 
-**1. 代码层修复与合法用例根本冲突**
+**1. Code-layer fixes fundamentally conflict with legitimate use cases**
 
-ForwardAuth 的设计目标就是调用内网认证服务。RFC 1918 私有地址（`10/8`、`172.16/12`、`192.168/16`）是 Kubernetes 集群内 auth service 的正常地址，不能阻断。`169.254.0.0/16`（云 IMDS）是可阻断的字面量 IP，但：
-- 覆盖面极窄（只防直接写 IP 的低级攻击）
-- 防不了 DNS rebinding 和域名形式（如 `metadata.google.internal`）
-- 性价比不足以引入阻断逻辑
+ForwardAuth is designed precisely to call internal auth services. RFC 1918 private addresses (`10/8`, `172.16/12`, `192.168/16`) are normal addresses for in-cluster auth services in Kubernetes and cannot be blocked. `169.254.0.0/16` (cloud IMDS) is a literal IP that could be blocked, but:
+- Coverage is very narrow (only blocks low-level direct-IP attacks)
+- Cannot defend against DNS rebinding or hostname forms (e.g., `metadata.google.internal`)
+- Not cost-effective enough to justify introducing blocking logic
 
-**2. 威胁模型要求高权限前置**
+**2. Threat model requires high-privilege precondition**
 
-利用此路径需要：
-- ForwardAuth：写 HTTPRoute 或 EdgionPlugin CRD 权限（namespace admin 级别）
-- Webhook：写 LinkSys CRD 权限（集群级资源，更高权限）
+Exploiting this path requires:
+- ForwardAuth: write permission to HTTPRoute or EdgionPlugin CRDs (namespace-admin level)
+- Webhook: write permission to LinkSys CRD (cluster-scoped resource, higher privilege)
 
-拥有这些权限的攻击者已能做更大危害的事（重路由流量、注入后端、读取 Secret 等）。SSRF 不是边界突破点，而是已破坏边界内的横向移动。RBAC 是正确的防线，不是代码层 IP 过滤。
+An attacker with these permissions can already do far more harmful things (reroute traffic, inject backends, read Secrets, etc.). SSRF is not a boundary breakthrough but lateral movement inside an already-broken boundary. RBAC is the correct defense, not code-layer IP filtering.
 
-**3. 行业对照**
+**3. Industry comparison**
 
-Traefik `forwardAuth`、Envoy `ext_authz`、APISIX `forward-auth` 均不做 URI 层 SSRF 过滤，一致依赖 RBAC + 网络策略。
+Traefik `forwardAuth`, Envoy `ext_authz`, APISIX `forward-auth` all do not perform URI-layer SSRF filtering and consistently rely on RBAC + network policy.
 
-## 正确的防御层
+## The Correct Defense Layers
 
-- K8s NetworkPolicy：限制 Gateway Pod 可以访问的目标 IP/Port
-- RBAC：控制谁能写 HTTPRoute、LinkSys CRD
-- 云侧：启用 IMDSv2（需要 PUT Token，GET 直接访问返回 401）
+- K8s NetworkPolicy: limits target IPs/Ports the Gateway Pod can access
+- RBAC: controls who can write HTTPRoute, LinkSys CRDs
+- Cloud side: enable IMDSv2 (requires PUT Token; direct GET returns 401)
 
-这些是运维/部署层控制，不是网关代码层的责任。
+These are operations/deployment-layer controls, not the gateway code-layer's responsibility.
 
-## 不接受的修复建议
+## Fix Suggestions Not Accepted
 
-- 加私有 CIDR 阻断列表（和合法用例冲突）
-- 引入 `ssrf-guard` 或类似库（过度，且无法解决 DNS rebinding）
-- 将 `169.254.x.x` 单独阻断（覆盖面太窄，且可被 DNS 绕过，性价比不足）
-- 要求 `uri` 字段必须通过 DNS 解析后再校验（破坏配置校验的静态性，引入启动期 DNS 依赖）
+- Add a private CIDR block list (conflicts with legitimate use cases)
+- Introduce `ssrf-guard` or similar library (overkill, and cannot solve DNS rebinding)
+- Block `169.254.x.x` separately (coverage too narrow, can be DNS-bypassed, not cost-effective)
+- Require `uri` field to be DNS-resolved and validated (breaks the static nature of config validation; introduces startup-time DNS dependency)

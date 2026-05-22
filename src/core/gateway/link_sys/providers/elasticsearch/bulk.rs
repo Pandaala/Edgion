@@ -131,7 +131,7 @@ pub async fn bulk_ingest_loop(
 /// Flush a batch of documents to ES via Bulk API.
 ///
 /// Handles retries with exponential backoff.
-/// On permanent failure, logs error (TODO: integrate FailedCache).
+/// On permanent failure, logs error and drops the batch.
 async fn flush_batch(
     client: &Client,
     endpoint: &str,
@@ -169,7 +169,6 @@ async fn flush_batch(
                                     .filter(|item| item.index.as_ref().map(|i| i.status >= 400).unwrap_or(false))
                                     .count();
                                 tracing::warn!("ES [{}] bulk: {}/{} items failed", name, failed_count, docs.len());
-                                // TODO: Collect failed items and send to FailedCache
                             } else {
                                 tracing::debug!("ES [{}] bulk: {} items indexed successfully", name, docs.len());
                             }
@@ -190,7 +189,6 @@ async fn flush_batch(
                 } else {
                     // 4xx: client error, don't retry
                     tracing::error!("ES [{}] bulk: client error {}", name, status);
-                    // TODO: Send to FailedCache
                     return;
                 }
             }
@@ -210,7 +208,6 @@ async fn flush_batch(
                 config.max_retries,
                 docs.len()
             );
-            // TODO: Send to FailedCache (LocalFileWriter or Redis)
             return;
         }
 

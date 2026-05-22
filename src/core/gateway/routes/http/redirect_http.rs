@@ -8,10 +8,32 @@ use http::StatusCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_http::ResponseHeader;
 use pingora_proxy::{ProxyHttp, Session};
+use serde::Serialize;
 use std::sync::Arc;
 use std::time::Instant;
 
 use crate::core::gateway::observe::AccessLogger;
+use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
+
+#[derive(Serialize)]
+struct RedirectRequestInfo<'a> {
+    #[serde(rename = "client-addr")]
+    client_addr: &'a str,
+    host: &'a str,
+    path: &'a str,
+    status: u16,
+}
+
+#[derive(Serialize)]
+struct RedirectLogEntry<'a> {
+    ts: i64,
+    #[serde(rename = "type")]
+    log_type: &'static str,
+    request_info: RedirectRequestInfo<'a>,
+    redirect_url: &'a str,
+    latency_ms: u64,
+    error: Option<String>,
+}
 
 /// Context for HTTP redirect - tracks request metadata for access logging
 pub struct RedirectContext {
@@ -37,14 +59,23 @@ pub struct EdgionHttpRedirectProxy {
     pub https_port: u16,
     /// Access logger for recording redirect events
     pub access_logger: Arc<AccessLogger>,
+    /// Carries `SecurityProtectConfig.reject_duplicate_host` so the redirect
+    /// listener applies the same RFC 9110 §7.2 host smuggling defense as the
+    /// main proxy path.
+    pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
 }
 
 impl EdgionHttpRedirectProxy {
     /// Create a new HTTP to HTTPS redirect handler
-    pub fn new(https_port: u16, access_logger: Arc<AccessLogger>) -> Self {
+    pub fn new(
+        https_port: u16,
+        access_logger: Arc<AccessLogger>,
+        edgion_gateway_config: Arc<EdgionGatewayConfig>,
+    ) -> Self {
         Self {
             https_port,
             access_logger,
+            edgion_gateway_config,
         }
     }
 
@@ -55,8 +86,9 @@ impl EdgionHttpRedirectProxy {
     /// * `uri` - The request URI path and query string
     #[inline]
     fn build_redirect_url_from_parts(&self, host: &str, uri: &str) -> String {
-        // Remove port from host if present (we'll add the HTTPS port)
-        let host_without_port = host.split(':').next().unwrap_or(host);
+        // Remove port from host if present (we'll add the HTTPS port).
+        // IPv6-aware: `[::1]:8443` → `[::1]` (brackets preserved for the redirect URL).
+        let host_without_port = crate::core::common::utils::net::host_without_port(host);
 
         // Build redirect URL
         if self.https_port == 443 {
@@ -98,6 +130,28 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
         ctx.client_addr = session.client_addr().map(|a| a.to_string()).unwrap_or_default();
 
         let req_header = session.req_header();
+
+        // RFC 9110 §7.2 — duplicate Host header rejection. Mirrors the data-plane
+        // proxy gate in `pg_request_filter::build_request_metadata` so attackers
+        // cannot smuggle a Host through the HTTP→HTTPS redirect listener (which
+        // would otherwise echo the attacker-controlled first Host into the 301
+        // `Location:` URL).
+        let reject_duplicate_host = self
+            .edgion_gateway_config
+            .spec
+            .security_protect
+            .as_ref()
+            .map(|s| s.reject_duplicate_host)
+            .unwrap_or(true);
+        if reject_duplicate_host && req_header.headers.get_all("host").iter().count() > 1 {
+            ctx.status = 400;
+            let mut resp = ResponseHeader::build(StatusCode::BAD_REQUEST, Some(2))?;
+            resp.insert_header("Content-Length", "0")?;
+            resp.insert_header("Connection", "close")?;
+            session.write_response_header(Box::new(resp), true).await?;
+            return Ok(true);
+        }
+
         ctx.host = req_header
             .headers
             .get("host")
@@ -132,47 +186,54 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
     where
         Self::CTX: Send + Sync,
     {
-        let latency_ms = ctx.start_time.elapsed().as_millis() as u64;
+        let latency_ms = Instant::now().saturating_duration_since(ctx.start_time).as_millis() as u64;
         let error_msg = e.map(|err| err.to_string());
 
-        let log_entry = serde_json::json!({
-            "ts": chrono::Utc::now().timestamp_millis(),
-            "type": "redirect",
-            "request_info": {
-                "client-addr": ctx.client_addr,
-                "host": ctx.host,
-                "path": ctx.path,
-                "status": ctx.status,
+        let entry = RedirectLogEntry {
+            ts: chrono::Utc::now().timestamp_millis(),
+            log_type: "redirect",
+            request_info: RedirectRequestInfo {
+                client_addr: &ctx.client_addr,
+                host: &ctx.host,
+                path: &ctx.path,
+                status: ctx.status,
             },
-            "redirect_url": ctx.redirect_url,
-            "latency_ms": latency_ms,
-            "error": error_msg,
-        });
+            redirect_url: &ctx.redirect_url,
+            latency_ms,
+            error: error_msg,
+        };
 
-        self.access_logger.send(log_entry.to_string()).await;
+        if let Ok(s) = serde_json::to_string(&entry) {
+            self.access_logger.send(s).await;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::resources::edgion_gateway_config::EdgionGatewayConfigSpec;
 
     fn test_access_logger() -> Arc<AccessLogger> {
         Arc::new(AccessLogger::new())
     }
 
+    fn test_gateway_config() -> Arc<EdgionGatewayConfig> {
+        Arc::new(EdgionGatewayConfig::new("test", EdgionGatewayConfigSpec::default()))
+    }
+
     #[test]
     fn test_redirect_creation() {
-        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger());
+        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), test_gateway_config());
         assert_eq!(redirect.https_port, 443);
 
-        let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger());
+        let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger(), test_gateway_config());
         assert_eq!(redirect.https_port, 8443);
     }
 
     #[test]
     fn test_build_redirect_url_default_port() {
-        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger());
+        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), test_gateway_config());
 
         // Simple path
         assert_eq!(
@@ -195,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_build_redirect_url_custom_port() {
-        let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger());
+        let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger(), test_gateway_config());
 
         // Simple path
         assert_eq!(
@@ -218,7 +279,7 @@ mod tests {
 
     #[test]
     fn test_build_redirect_url_special_cases() {
-        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger());
+        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), test_gateway_config());
 
         // IPv4 address
         assert_eq!(
@@ -253,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_new_ctx() {
-        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger());
+        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), test_gateway_config());
         let _ctx = redirect.new_ctx(); // Should not panic
     }
 }

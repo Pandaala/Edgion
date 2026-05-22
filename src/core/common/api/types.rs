@@ -11,7 +11,7 @@ pub struct ApiResponse<T> {
 }
 
 impl<T> ApiResponse<T> {
-    pub fn success(data: T) -> Self {
+    pub fn ok_body(data: T) -> Self {
         Self {
             success: true,
             data: Some(data),
@@ -19,7 +19,7 @@ impl<T> ApiResponse<T> {
         }
     }
 
-    pub fn error(message: String) -> Self {
+    pub fn err_body(message: String) -> Self {
         Self {
             success: false,
             data: None,

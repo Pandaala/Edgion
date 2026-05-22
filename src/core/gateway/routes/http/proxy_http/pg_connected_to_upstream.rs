@@ -5,6 +5,7 @@ use crate::types::EdgionHttpContext;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::Digest;
 use pingora_proxy::Session;
+use std::time::Instant;
 
 #[inline]
 pub async fn connected_to_upstream(
@@ -34,28 +35,14 @@ pub async fn connected_to_upstream(
         }
     }
 
-    // Record connection time (time from start_time to connection established)
-    // P0-07: upstream borrow ends at block exit so we can write ctx.leastconn_incremented_backend after
-    let leastconn_backend = if let Some(upstream) = ctx.get_current_upstream_mut() {
-        let ct = upstream.start_time.elapsed().as_millis() as u64;
+    // Record connection time and commit LB per-attempt state.
+    // Both read and write are on the same upstream entry — no borrow escape needed.
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        let ct = Instant::now()
+            .saturating_duration_since(upstream.start_time)
+            .as_millis() as u64;
         upstream.ct = Some(ct);
-
-        if let (Some(service_key), Some(addr), Some(crate::types::ParsedLBPolicy::LeastConn)) = (
-            upstream.service_key.as_deref(),
-            upstream.lb_backend_addr.as_ref(),
-            &upstream.lb_policy,
-        ) {
-            crate::core::gateway::lb::runtime_state::increment(service_key, addr);
-            Some((service_key.to_string(), addr.clone()))
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-    // upstream borrow dropped here — safe to write ctx
-    if let Some(backend) = leastconn_backend {
-        ctx.leastconn_incremented_backend = Some(backend);
+        crate::core::gateway::lb::commit_attempt(upstream);
     }
 
     // For gRPC-Web or WebSocket, log connection establishment immediately

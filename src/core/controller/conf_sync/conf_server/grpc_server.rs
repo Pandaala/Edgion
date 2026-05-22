@@ -49,25 +49,6 @@ impl ConfigSyncGrpcServer {
         }
     }
 
-    /// Create a new gRPC server with a static ConfigSyncServer (for tests/debugging only).
-    ///
-    /// Uses an inert `CancellationToken` that is never cancelled — stream tasks will only
-    /// exit on client disconnect or runtime shutdown. For production, use `new()` with a
-    /// real token bridged to the shutdown signal.
-    #[allow(dead_code)]
-    pub fn with_static_server(server: Arc<ConfigSyncServer>) -> Self {
-        struct StaticProvider(Arc<ConfigSyncServer>);
-        impl ConfigSyncServerProvider for StaticProvider {
-            fn config_sync_server(&self) -> Option<Arc<ConfigSyncServer>> {
-                Some(self.0.clone())
-            }
-        }
-        Self {
-            provider: Arc::new(StaticProvider(server)),
-            shutdown_token: CancellationToken::new(),
-        }
-    }
-
     /// Get the current ConfigSyncServer, returns error if not available
     #[allow(clippy::result_large_err)]
     fn get_server(&self) -> Result<Arc<ConfigSyncServer>, Status> {
@@ -81,9 +62,8 @@ impl ConfigSyncGrpcServer {
         ConfigSyncService::new(self)
     }
 
-    /// Start the gRPC server on the given address
-    pub async fn serve(self, addr: std::net::SocketAddr, security: &ConfSyncSecurityConfig) -> anyhow::Result<()> {
-        let service = self.into_service();
+    /// Build a tonic Server with shared HTTP/2 keepalive and conf_sync mTLS settings applied.
+    async fn build_server(security: &ConfSyncSecurityConfig) -> anyhow::Result<tonic::transport::Server> {
         let mut builder = tonic::transport::Server::builder()
             .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
             .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)));
@@ -105,7 +85,13 @@ impl ConfigSyncGrpcServer {
             }
         }
 
-        builder.add_service(service).serve(addr).await?;
+        Ok(builder)
+    }
+
+    /// Start the gRPC server on the given address
+    pub async fn serve(self, addr: std::net::SocketAddr, security: &ConfSyncSecurityConfig) -> anyhow::Result<()> {
+        let mut builder = Self::build_server(security).await?;
+        builder.add_service(self.into_service()).serve(addr).await?;
         Ok(())
     }
 
@@ -116,27 +102,7 @@ impl ConfigSyncGrpcServer {
         security: &ConfSyncSecurityConfig,
         shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> anyhow::Result<()> {
-        let service = self.into_service();
-        let mut builder = tonic::transport::Server::builder()
-            .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
-            .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)));
-
-        if let Some(tls) = security.resolve_active_tls() {
-            if tls.skip_tls {
-                tracing::error!(
-                    component = "grpc_server",
-                    "conf_sync mTLS skip_tls=true: starting WITHOUT TLS. INSECURE, emergency use only!"
-                );
-                crate::core::common::observe::system_metrics::mark_system_error(
-                    crate::core::common::observe::system_metrics::components::CONF_SYNC_SERVER,
-                    crate::core::common::observe::system_metrics::reasons::SKIP_TLS,
-                );
-            } else {
-                let server_tls = crate::core::common::grpc_tls::load_server_tls(tls).await?;
-                builder = builder.tls_config(server_tls)?;
-                tracing::info!(component = "grpc_server", "conf_sync mTLS enabled for gRPC server");
-            }
-        }
+        let mut builder = Self::build_server(security).await?;
 
         tracing::info!(
             component = "grpc_server",
@@ -145,35 +111,11 @@ impl ConfigSyncGrpcServer {
         );
 
         builder
-            .add_service(service)
+            .add_service(self.into_service())
             .serve_with_shutdown(addr, shutdown_signal)
             .await?;
 
         tracing::info!(component = "grpc_server", "gRPC server stopped");
-
-        Ok(())
-    }
-
-    /// Start the gRPC server with reflection support.
-    /// NOTE: This method does NOT support mTLS. Use `serve()` or `serve_with_shutdown()`
-    /// for production deployments that require TLS.
-    #[allow(dead_code)]
-    pub async fn serve_with_reflection(
-        self,
-        addr: std::net::SocketAddr,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let service = self.into_service();
-        let reflection_service = tonic_reflection::server::Builder::configure()
-            .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!("config_sync_descriptor"))
-            .build_v1()?;
-
-        tonic::transport::Server::builder()
-            .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
-            .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)))
-            .add_service(service)
-            .add_service(reflection_service)
-            .serve(addr)
-            .await?;
 
         Ok(())
     }
@@ -187,23 +129,16 @@ impl ConfigSync for ConfigSyncGrpcServer {
     ) -> Result<Response<ServerInfoResponse>, Status> {
         let server = self.get_server()?;
 
-        let endpoint_mode = server
-            .endpoint_mode()
-            .map(|m| format!("{:?}", m))
-            .unwrap_or_else(|| "Auto".to_string());
-
         let supported_kinds = server.all_kinds();
 
         tracing::debug!(
             component = "grpc_server",
-            endpoint_mode = %endpoint_mode,
             supported_kinds = ?supported_kinds,
             "GetServerInfo request"
         );
 
         Ok(Response::new(ServerInfoResponse {
             server_id: server.server_id(),
-            endpoint_mode,
             supported_kinds,
         }))
     }
@@ -339,7 +274,15 @@ impl ConfigSync for ConfigSyncGrpcServer {
                                     break;
                                 }
                             }
-                            None => break, // Stream ended
+                            None => {
+                                tracing::warn!(
+                                    component = "grpc_server",
+                                    kind = %shutdown_kind,
+                                    client_id = %shutdown_client_id,
+                                    "watch event receiver closed unexpectedly — upstream channel dropped"
+                                );
+                                break;
+                            }
                         }
                     }
                     // Periodically check if server_id changed (reload completed)
@@ -464,6 +407,19 @@ impl ConfigSync for ConfigSyncGrpcServer {
                             registry.unregister(&client_id);
                             break;
                         }
+                    }
+                    // Detect client disconnect even when no count-change event fires.
+                    // Without this, a hard-killed gateway (no graceful FIN) would remain
+                    // registered until the next count-change event, inflating the divisor
+                    // used by cluster-scoped rate limits on the surviving gateways.
+                    _ = tx.closed() => {
+                        tracing::info!(
+                            component = "grpc_server",
+                            client_id = %client_id,
+                            "WatchServerMeta receiver closed, unregistering"
+                        );
+                        registry.unregister(&client_id);
+                        break;
                     }
                     // Periodically check if server_id changed (controller reload / leader switch)
                     _ = check_interval.tick() => {

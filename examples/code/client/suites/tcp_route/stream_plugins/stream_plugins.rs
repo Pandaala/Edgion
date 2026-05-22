@@ -14,6 +14,7 @@
 // Port allocation (from ports.json "TCPRoute/StreamPlugins"):
 // - 31274 (tcp): allow-localhost filter (regression test for IP extraction)
 // - 31275 (tcp_filtered): deny-all filter
+// - 31273 (tcp_fail_close): TCPRoute references missing ESP (fail-close contract)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::{Duration, Instant};
@@ -235,6 +236,58 @@ impl TcpStreamPluginsTestSuite {
             },
         )
     }
+
+    /// Test: TCPRoute referencing a non-existent EdgionStreamPlugins must
+    /// fail-close (reject the connection) rather than silently admit traffic.
+    /// Locks in the fail-close contract introduced in the gateway TCP path.
+    fn test_missing_esp_fail_close() -> TestCase {
+        TestCase::new(
+            "tcp_stream_plugin_missing_esp_fail_close",
+            "TCPRoute referencing a non-existent EdgionStreamPlugins must fail-close",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    // Dedicated listener wired in 03_Gateway.yaml + 06_TCPRoute_fail_close.yaml.
+                    // Port comes from ports.json TCPRoute/StreamPlugins.tcp_fail_close.
+                    let addr = format!("{}:{}", ctx.target_host, 31273);
+                    let test_data = b"Hello FailClose";
+
+                    match tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await {
+                        Ok(Ok(mut stream)) => {
+                            // TCP handshake may succeed; the proxy rejects after accept.
+                            let _ = stream.write_all(test_data).await;
+                            let mut buf = vec![0u8; 1024];
+                            match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
+                                Ok(Ok(0)) => TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Connection closed by gateway (EOF) — fail-close on missing ESP".to_string(),
+                                ),
+                                Ok(Ok(n)) => TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected fail-close (no proxy) but received {} bytes — missing ESP was admitted",
+                                        n
+                                    ),
+                                ),
+                                Ok(Err(_e)) => TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Connection rejected (read error) — fail-close on missing ESP".to_string(),
+                                ),
+                                Err(_) => TestResult::failed(
+                                    start.elapsed(),
+                                    "Read timed out — gateway did not fail-close on missing ESP".to_string(),
+                                ),
+                            }
+                        }
+                        Ok(Err(_)) | Err(_) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Connection refused/dropped — fail-close on missing ESP".to_string(),
+                        ),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for TcpStreamPluginsTestSuite {
@@ -248,6 +301,7 @@ impl TestSuite for TcpStreamPluginsTestSuite {
             Self::test_deny_all_connection(),
             Self::test_deny_all_multiple(),
             Self::test_short_name_annotation(),
+            Self::test_missing_esp_fail_close(),
         ]
     }
 }

@@ -1,4 +1,7 @@
+use crate::core::gateway::backends::EdgionService;
+use crate::core::gateway::lb::edgion_backend::EdgionBackend;
 use crate::core::gateway::observe::logs::LogBuffer;
+use crate::core::gateway::plugins::runtime::PluginRuntime;
 use crate::core::gateway::plugins::{EdgionPluginsLog, StageLogs};
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
 use crate::core::gateway::routes::HttpRouteRuleUnit;
@@ -8,6 +11,7 @@ use crate::types::resources::http_route_preparse::ParsedLBPolicy;
 use crate::types::{EdgionStatus, GRPCBackendRef, HTTPBackendRef, HTTPRouteMatch};
 use bytes::Bytes;
 use pingora_core::protocols::l4::socket::SocketAddr;
+use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -79,14 +83,21 @@ impl fmt::Display for MatchInfo {
 #[derive(Debug, Clone, Serialize)]
 pub struct ClientCertInfo {
     /// Certificate subject DN (Distinguished Name)
+    #[serde(serialize_with = "crate::types::sensitive::masked::serialize")]
     pub subject: String,
     /// Subject Alternative Names (SANs) from certificate
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        serialize_with = "crate::types::sensitive::masked_vec::serialize"
+    )]
     pub sans: Vec<String>,
     /// Common Name (CN) extracted from subject
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::sensitive::masked_opt::serialize"
+    )]
     pub cn: Option<String>,
-    /// Certificate fingerprint (SHA256 hex)
+    /// Certificate fingerprint (SHA256 hex) — not PII
     pub fingerprint: String,
 }
 
@@ -210,13 +221,19 @@ impl fmt::Display for NormalizedHostname {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RequestInfo {
     /// TCP client IP address (direct connection, immutable)
-    #[serde(rename = "client-addr")]
+    #[serde(
+        rename = "client-addr",
+        serialize_with = "crate::types::sensitive::masked::serialize"
+    )]
     pub client_addr: String,
     /// TCP client port (direct connection, 0 if unknown)
     #[serde(rename = "client-port")]
     pub client_port: u16,
     /// Real client address (extracted from headers if behind trusted proxy)
-    #[serde(rename = "remote-addr")]
+    #[serde(
+        rename = "remote-addr",
+        serialize_with = "crate::types::sensitive::masked::serialize"
+    )]
     pub remote_addr: String,
     /// Trace ID from x-trace-id header
     #[serde(rename = "x-trace-id")]
@@ -225,17 +242,42 @@ pub struct RequestInfo {
     /// Construct via `NormalizedHostname::new()` — never apply `to_lowercase()` again.
     #[serde(rename = "host")]
     pub hostname: NormalizedHostname,
-    /// Request path from URI
-    pub path: String,
+    /// Snapshot of req_header().uri.path() at request entry. Frozen for the request lifetime.
+    /// Source for `request_path()` / `request_uri()` views.
+    /// Not serialized into access_log directly; surfaced via the optional
+    /// `request_uri` field on `AccessLogEntry` when `include_raw_uri` is on.
+    #[serde(skip)]
+    pub entry_raw_path: String,
+
+    /// Snapshot of req_header().uri.query() at request entry. Frozen for the request lifetime.
+    /// Source for `request_uri()` view.
+    /// Not serialized into access_log directly; surfaced via the optional
+    /// `request_uri` field on `AccessLogEntry` when `include_raw_uri` is on.
+    #[serde(skip)]
+    pub entry_raw_query: Option<String>,
+
+    /// Cache of normalized current path. Populated at entry from entry_raw_path,
+    /// refreshed by session_adapter::set_upstream_uri after rewrite.
+    /// Source for `path()` / `uri()` views.
+    /// Serializes as JSON field "path" for backward-compatible access_log output.
+    #[serde(rename = "path", serialize_with = "crate::types::sensitive::masked::serialize")]
+    pub normalized_current_path: String,
     /// Response status code (e.g., 200, 400, 404, 500)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
     /// Original X-Forwarded-For header value (before appending client IP)
-    #[serde(rename = "x-forwarded-for", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "x-forwarded-for",
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::sensitive::masked_opt::serialize"
+    )]
     pub x_forwarded_for: Option<String>,
     /// SNI (Server Name Indication) from TLS handshake
     /// Only present for HTTPS connections; HTTP connections will have None
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::sensitive::masked_opt::serialize"
+    )]
     pub sni: Option<String>,
     /// Auto-discovered protocol (e.g., "grpc", "grpc-web", "websocket")
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -275,6 +317,14 @@ pub struct RequestInfo {
     /// Used as a guard to prevent double-write across error response paths.
     #[serde(skip)]
     pub response_committed: bool,
+
+    /// Parsed `grpc-timeout` deadline (`start_time + value`). Populated by
+    /// `pg_request_filter::build_request_metadata` when the request carries
+    /// a syntactically valid header. `None` when no header, malformed
+    /// header, or non-gRPC request — callers fall back to route-level
+    /// `request_timeout` semantics.
+    #[serde(skip)]
+    pub grpc_client_deadline: Option<Instant>,
 }
 
 /// Backend TLS connection information
@@ -330,15 +380,17 @@ pub struct UpstreamInfo {
     /// Error messages collected during upstream attempts
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub err: Vec<String>,
-    /// Backend socket address used for the actual peer connection (may be
-    /// rewritten by resolve_target_port for multi-port Services).
-    #[serde(skip)]
-    pub backend_addr: Option<SocketAddr>,
     /// Canonical backend address used by the LB selection algorithm, before
     /// any target-port rewrite. Runtime-state accounting must use this key
     /// so that selection reads and request-completion writes are consistent.
     #[serde(skip)]
     pub lb_backend_addr: Option<SocketAddr>,
+    /// Live `EdgionBackend` shared with the `ServiceSelectorCell` snapshot.
+    /// Set by `build_peer_from_lb_selection`; read by `connected_to_upstream`
+    /// to call `inc_conn()` and by `lb_runtime_cleanup` to call `dec_conn()` /
+    /// `update_ewma()`. None for SP-target or bypass paths.
+    #[serde(skip)]
+    pub lb_edgion_backend: Option<Arc<EdgionBackend>>,
     /// Service key (`"namespace/name"`) that owns this backend, needed by
     /// service-scoped LB runtime state.
     #[serde(skip)]
@@ -349,6 +401,15 @@ pub struct UpstreamInfo {
     /// Backend TLS connection information
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls: Option<BackendTlsInfo>,
+    /// LB per-attempt commit state. `Some` only when this attempt reached
+    /// `connected_to_upstream` AND its policy needs per-attempt accounting
+    /// (LeastConn / EWMA). Consumed by `finalize_attempt`:
+    ///   - `pg_upstream_peer::begin_upstream_attempt` on retry → FinalizeMode::Discard
+    ///   - `pg_logging::lb_runtime_cleanup` at request end    → FinalizeMode::Settle
+    /// Backend reference is read from `lb_edgion_backend` on this same entry;
+    /// do NOT duplicate the Arc here.
+    #[serde(skip)]
+    pub lb_committed: Option<crate::core::gateway::lb::LbCommit>,
 }
 
 impl UpstreamInfo {
@@ -361,11 +422,40 @@ impl UpstreamInfo {
     }
 }
 
-/// Backend context containing service info and upstream attempt history
+/// Bypass-path tag set when a plugin staged a non-default backend selection.
+/// `None` on `BackendContext.source` means the default K8s resource-selected path
+/// (the common case — emitting nothing in access log keeps the JSON quiet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackendSource {
+    /// DirectEndpoint bypass (plugin-staged exact IP).
+    DirectEndpoint,
+    /// ExternalJump bypass (plugin-staged external domain, DNS-resolved at runtime).
+    ExternalJump,
+}
+
+/// Backend context containing service info and upstream attempt history.
+///
+/// `rsc` and `service_key` are `None` for the bypass paths (DirectEndpoint / ExternalJump),
+/// which don't correspond to a K8s-selected backend resource. `source` is `Some` only on
+/// those bypass paths; `None` on the default K8s resource path. `upstreams` is always
+/// populated as attempts happen.
 #[derive(Debug, Clone, Serialize)]
 pub struct BackendContext {
-    /// Resource identifier (kind="Service")
-    pub rsc: Rsc,
+    /// Bypass-path tag — `None` on the default K8s resource path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<BackendSource>,
+    /// Resource identifier (kind="Service") — `None` on bypass paths.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rsc: Option<Rsc>,
+    /// LB store index key `"namespace/name"` — `None` on bypass paths (no LB).
+    #[serde(skip)]
+    pub service_key: Option<String>,
+    /// Routing path (ClusterIP / Endpoint / EPS / ExternalName).
+    /// `None` for ExternalJump (DNS-resolved external domain — none of the K8s
+    /// service-routing modes apply). `Some` for the default path and DirectEndpoint.
+    #[serde(skip)]
+    pub service_kind: Option<EdgionService>,
     /// List of upstream connection attempts (for retry tracking and access log)
     pub upstreams: Vec<UpstreamInfo>,
     /// Current upstream index (for status updates)
@@ -420,6 +510,19 @@ pub struct ExternalJumpPreset {
     pub use_tls: bool,
     /// TLS SNI (Server Name Indication)
     pub sni: String,
+    /// True when this jump represents gateway-to-gateway forwarding (e.g.,
+    /// `region_route` cross-region traffic). The upstream gateway will run its
+    /// own path normalization, so the path should be forwarded raw to avoid
+    /// double-normalization conflicts.
+    ///
+    /// Set to `true` only by plugins that route traffic to another Edgion-like
+    /// gateway. Plugins that target a regular external server (e.g.,
+    /// `dynamic_external_upstream`) should set `false` so the global
+    /// `forward_normalized_path` / per-route annotation policy applies.
+    ///
+    /// Default `false`: a future plugin that forgets to set this explicitly
+    /// will not silently degrade to raw-forwarding behavior.
+    pub preserve_raw_path: bool,
 }
 
 /// Stored direct endpoint info (lightweight, survives retries via Clone)
@@ -438,6 +541,37 @@ pub struct DirectEndpointPreset {
     /// Index of the matched backend_ref in route_unit.rule.backend_refs
     /// Used to pre-select the correct backend_ref for logging and metrics
     pub backend_ref_idx: usize,
+}
+
+/// Mutually-exclusive upstream-jump slot — exactly one variant lives per request.
+///
+/// - `Direct`: bypass LB, peer built from a static IP. Carries `backend_ref`
+///   (boxed to keep the enum's stack footprint small — `HTTPBackendRef` is the
+///   heaviest variant by far) so the setter can co-write `selected_backend`
+///   (peer-construction reads service metadata from `selected_backend`; see
+///   `try_direct_endpoint_peer`).
+/// - `Internal`: LB-input modifier. Dispatch falls through to `select_http_backend`,
+///   which uses the carried preset to look up a named `BackendRef` before LB.
+/// - `External`: bypass LB, peer built from a domain (DNS-resolved at runtime).
+#[derive(Debug, Clone)]
+pub enum UpstreamJumpTarget {
+    Direct {
+        preset: DirectEndpointPreset,
+        backend_ref: Box<HTTPBackendRef>,
+    },
+    Internal(InternalJumpPreset),
+    External(ExternalJumpPreset),
+}
+
+/// Outcome of `EdgionHttpContext::try_set_jump` / `PluginSession::set_upstream_jump`.
+///
+/// First-write-wins: once the slot is set, subsequent calls return `Rejected` and
+/// the context is left untouched. Plugin call sites switch on this to log the
+/// rejection on their own `PluginLog` line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetJumpOutcome {
+    Set,
+    Rejected,
 }
 
 /// Snapshot of mirror config for request runtime.
@@ -471,6 +605,41 @@ pub enum MirrorState {
     Abandoned,
 }
 
+/// A response-header mutation queued by a plugin in a stage where the real
+/// `ResponseHeader` is not yet available (typically `request_filter`).
+///
+/// Drained onto the real `ResponseHeader` at the upstream-response stage
+/// (`run_upstream_response_plugins_sync`) and at request-stage termination
+/// points that build their own response (`ErrResponse`, gRPC errors).
+#[derive(Debug, Clone)]
+pub enum PendingHeaderOp {
+    Set { name: String, value: String },
+    Append { name: String, value: String },
+    Remove { name: String },
+}
+
+impl PendingHeaderOp {
+    /// Apply this queued operation to a real ResponseHeader.
+    ///
+    /// `insert_header` / `append_header` errors (invalid header value bytes,
+    /// e.g. control chars) are intentionally swallowed: dropping a malformed
+    /// queued op silently is preferable to failing the entire response, and
+    /// matches the behavior of the pre-tagged-queue implementation.
+    pub fn apply(self, response_header: &mut ResponseHeader) {
+        match self {
+            PendingHeaderOp::Set { name, value } => {
+                let _ = response_header.insert_header(name, value);
+            }
+            PendingHeaderOp::Append { name, value } => {
+                let _ = response_header.append_header(name, value);
+            }
+            PendingHeaderOp::Remove { name } => {
+                response_header.remove_header(&name);
+            }
+        }
+    }
+}
+
 pub struct EdgionHttpContext {
     /// Request start time for latency calculation
     pub start_time: Instant,
@@ -480,6 +649,9 @@ pub struct EdgionHttpContext {
 
     /// Request information (hostname, path, x-trace-id)
     pub request_info: RequestInfo,
+
+    /// Informational statuses collected during request processing
+    pub info: Vec<EdgionStatus>,
 
     /// Error codes collected during request processing
     pub edgion_status: Vec<EdgionStatus>,
@@ -509,9 +681,6 @@ pub struct EdgionHttpContext {
     /// Pending EdgionPlugins logs (collected during current stage, merged at stage end)
     pub pending_edgion_plugins_logs: Vec<EdgionPluginsLog>,
 
-    /// Tracking stack for nested plugin references to prevent cycles
-    pub plugin_ref_stack: Vec<String>,
-
     /// Plugin running result
     pub plugin_running_result: PluginRunningResult,
 
@@ -539,24 +708,63 @@ pub struct EdgionHttpContext {
     /// - Some(HashMap): already extracted (may be empty if no params or no match)
     pub path_params: Option<HashMap<String, String>>,
 
-    /// Direct endpoint set by DirectEndpoint plugin in request_filter stage.
-    pub direct_endpoint: Option<DirectEndpointPreset>,
+    /// Lazily-built per-request decoded query parameter map.
+    /// Initialized on first access via `cached_query()`. Shared between
+    /// route deep-match and `PluginSession::get_query_param` so the same
+    /// query string is parsed (and url-decoded) at most once per request.
+    /// `std::sync::OnceLock` is used (not `OnceCell`) because Pingora requires
+    /// the per-request CTX type to be `Send + Sync`; per-request access is
+    /// still single-threaded so `&self` init-once is sufficient.
+    /// Field is named `_cell` to disambiguate from the `cached_query()` method
+    /// and prevent accidental in-crate access that would bypass the helper's
+    /// entry-snapshot semantics.
+    pub(crate) cached_query_cell: std::sync::OnceLock<HashMap<String, String>>,
 
-    /// Internal jump target set by DynamicInternalUpstream plugin in request_filter stage.
-    /// When present, select_http_backend() finds the matching BackendRef by name
-    /// instead of using weighted round-robin selection.
-    /// Normal LB within the selected service's endpoints still applies.
-    pub internal_jump: Option<InternalJumpPreset>,
+    /// Unified upstream-jump slot. Set by request-stage plugins via
+    /// `PluginSession::set_upstream_jump`. First-write-wins; subsequent setter
+    /// calls are rejected (see `SetJumpOutcome`). Replaces the legacy
+    /// `direct_endpoint` / `internal_jump` / `external_jump` triplet.
+    pub jump: Option<UpstreamJumpTarget>,
 
-    /// External jump target set by DynamicExternalUpstream plugin in request_filter stage.
-    /// When present, upstream_peer_http() resolves the domain and builds
-    /// HttpPeer from this info, bypassing normal select_http_backend().
-    /// Host header override is applied separately via set_upstream_host()
-    /// during request_filter.
-    pub external_jump: Option<ExternalJumpPreset>,
+    /// True when `req_header.uri` is already in its upstream-forwarded final form;
+    /// further writes are forbidden.
+    ///
+    /// Set in exactly two locations (matching the §9 Rule 2 lint allowlist):
+    ///   1. `session_adapter::set_upstream_uri` — set after rewrite-class plugin writes
+    ///   2. `pg_upstream_peer::upstream_peer_http` single-point decision block —
+    ///      set after the default-normalized vs raw decision is finalized
+    ///
+    /// Set at most once per request lifecycle. Covers:
+    ///   - rewrite plugin "final form" semantics
+    ///   - single-point decision idempotency (retries don't re-decide)
+    ///   - mirror / fan-out consumers see consistent `req_header.uri`
+    pub uri_finalized: bool,
 
-    /// Response headers to add (queued from request stage)
-    pub response_headers_to_add: Vec<(String, String)>,
+    /// Response-header mutations queued by plugins running before the real
+    /// `ResponseHeader` is available (typically request stage). Drained onto
+    /// the real `ResponseHeader` at four sites:
+    ///   1. `run_upstream_response_plugins_sync` — applied before any
+    ///      response-stage plugin runs, so they can further mutate the
+    ///      already-merged headers.
+    ///   2. `ErrResponse` request-stage termination handler (HTTP route) —
+    ///      applied after runtime defaults (`content-type: text/plain`,
+    ///      `content-length`) so plugin Set ops override defaults. The gRPC
+    ///      branch dispatches to `send_grpc_error_direct` instead and lets
+    ///      that site handle the drain; on that branch the user-provided
+    ///      `body` is forwarded as the `grpc-message` trailer (with the
+    ///      `http_to_grpc_status` default message as fallback when `body`
+    ///      is `None`).
+    ///   3. `send_grpc_error_direct` — applied before re-asserting
+    ///      `content-type: application/grpc` so the gRPC contract value
+    ///      cannot be overwritten by a queued Set.
+    ///   4. `send_grpc_error_three_frame` — same pattern as (3), reached when
+    ///      a plugin calls `write_response_header` directly with a non-200
+    ///      status on a gRPC route.
+    ///
+    /// Each entry carries an explicit op (Set/Append/Remove) so semantics
+    /// are preserved across the deferral — without this tag, an `Append`
+    /// would silently degrade to `Set` at drain time.
+    pub pending_response_header_ops: Vec<PendingHeaderOp>,
 
     /// Per-request mirror state for RequestMirror plugin.
     pub mirror_state: Option<MirrorState>,
@@ -569,11 +777,40 @@ pub struct EdgionHttpContext {
     /// When Some, try_get_peer will route directly to this addr instead of running LB.
     pub sp_target_addr: Option<std::net::SocketAddr>,
 
-    /// P0-07: 上一次成功 increment 的 LeastConn backend (service_key, lb_addr)。
-    /// 由 connected_to_upstream 在 increment 后写入。
-    /// 由 update_peer_metrics 在 push_upstream 之前 take() + decrement()，
-    /// 确保 retry 中间 backend 计数不泄漏。
-    pub leastconn_incremented_backend: Option<(String, pingora_core::protocols::l4::socket::SocketAddr)>,
+    /// Per-Gateway operator override for loopback upstream addresses.
+    /// Link-local / metadata ranges are never allowed by this switch.
+    pub allow_loopback_upstream: bool,
+
+    /// Snapshot of resolved global plugin runtimes for this request, taken at
+    /// `request_filter` entry. Each entry is one EdgionPlugins resource;
+    /// per-stage bucketing is handled by `PluginRuntime`'s internal stage Vecs.
+    /// `None` until resolve runs; `Some` with empty Vec if config has no
+    /// `global_plugins_ref` or all refs are dangling.
+    ///
+    /// Populated by `pg_request_filter` (early stage), read by:
+    ///   - Step-2 global iteration in `pg_request_filter`
+    ///   - global iteration in `pg_upstream_response_filter` (sync)
+    ///   - global iteration in `pg_upstream_response_body_filter` (per-chunk hot path)
+    ///   - global iteration in `pg_response_filter` (async)
+    ///
+    /// `Arc<Vec<...>>` lets call sites `Arc::clone` once to release the borrow on
+    /// `ctx` before iterating, avoiding `&ctx` / `&mut ctx` conflicts when running
+    /// plugins.
+    pub resolved_global_plugins: Option<Arc<Vec<Arc<PluginRuntime>>>>,
+
+    /// Resolved targets of every ExtensionRef in the matched route's filter list,
+    /// indexed by `ExtensionRefFilter.index` (assigned at route build time by
+    /// `PluginRuntime::from_httproute_filters_for_rule` /
+    /// `from_grpcroute_filters_for_rule`).
+    ///
+    /// Slot value `None` = dangling ref (target not in plugin store at resolve
+    /// time); the slot is preserved so the index continues to align with
+    /// `ExtensionRefFilter.index`.
+    /// Outer `None` = resolve has not run yet.
+    ///
+    /// Populated by `pg_request_filter`, read by `ExtensionRefFilter::prepare_execution`
+    /// via `PluginSession::resolved_route_ext_ref(index)` (added in Task 4).
+    pub resolved_route_ext_refs: Option<Arc<Vec<Option<Arc<PluginRuntime>>>>>,
 }
 
 impl Default for EdgionHttpContext {
@@ -583,11 +820,26 @@ impl Default for EdgionHttpContext {
 }
 
 impl EdgionHttpContext {
+    /// Drain queued response-header ops onto the given real `ResponseHeader`,
+    /// preserving each op's original semantics (Set/Append/Remove). Called
+    /// from drain points: upstream-response stage and request-stage termination
+    /// paths that build their own response (ErrResponse, gRPC errors).
+    pub fn drain_pending_response_header_ops(&mut self, response_header: &mut ResponseHeader) {
+        if self.pending_response_header_ops.is_empty() {
+            return;
+        }
+        let ops = std::mem::take(&mut self.pending_response_header_ops);
+        for op in ops {
+            op.apply(response_header);
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             start_time: Instant::now(),
             gateway_info: GatewayInfo::default(),
             request_info: RequestInfo::default(),
+            info: Vec::with_capacity(3),
             edgion_status: Vec::with_capacity(5),
             route_unit: None,
             selected_backend: None,
@@ -597,7 +849,6 @@ impl EdgionHttpContext {
             backend_context: None,
             stage_logs: Vec::with_capacity(3),
             pending_edgion_plugins_logs: Vec::new(),
-            plugin_ref_stack: Vec::new(),
             plugin_running_result: PluginRunningResult::Nothing,
             try_cnt: 0,
             retry_on_status: false,
@@ -605,14 +856,16 @@ impl EdgionHttpContext {
             hash_key: None,
             ctx_map: HashMap::new(),
             path_params: None,
-            direct_endpoint: None,
-            internal_jump: None,
-            external_jump: None,
-            response_headers_to_add: Vec::new(),
+            cached_query_cell: std::sync::OnceLock::new(),
+            jump: None,
+            uri_finalized: false,
+            pending_response_header_ops: Vec::new(),
             mirror_state: None,
             sp_state: SessionPersistenceState::Inactive,
             sp_target_addr: None,
-            leastconn_incremented_backend: None,
+            allow_loopback_upstream: false,
+            resolved_global_plugins: None,
+            resolved_route_ext_refs: None,
         }
     }
 
@@ -621,14 +874,123 @@ impl EdgionHttpContext {
         self.edgion_status.push(err_code);
     }
 
-    /// Initialize backend context with name and namespace (call once)
-    pub fn init_backend_context(&mut self, name: String, namespace: String) {
+    /// Add an informational status to the context
+    pub fn add_info(&mut self, info_code: EdgionStatus) {
+        self.info.push(info_code);
+    }
+
+    /// Get (and lazily build) the per-request decoded query parameter map.
+    ///
+    /// Callers should pass `self.request_info.entry_raw_query.as_deref()` —
+    /// the entry-time frozen query — so the cache is order-independent: any
+    /// reader (route matcher or plugin) sees the same client-sent query
+    /// regardless of whether an earlier plugin called `set_upstream_uri` and
+    /// rewrote the live URI.
+    ///
+    /// `raw_query` is consulted only on first access. Subsequent calls return
+    /// the already-cached map regardless of the argument.
+    ///
+    /// Decoding follows `HttpRouteRuleUnit::parse_query_string` — `%XX`
+    /// percent-decoded and `+` translated to space, matching what the route
+    /// matcher sees in `queryParams`.
+    pub fn cached_query(&self, raw_query: Option<&str>) -> &HashMap<String, String> {
+        self.cached_query_cell
+            .get_or_init(|| raw_query.map(HttpRouteRuleUnit::parse_query_string).unwrap_or_default())
+    }
+
+    /// Resolve the route-level `request_timeout`, preferring HTTP `route_unit`
+    /// over `grpc_route_unit`. Returns `None` when neither side resolves to a
+    /// concrete duration (either side may have `parsed_timeouts = None`, or have
+    /// `request_timeout` set to `Unset`/`Disabled`, both of which yield `None`
+    /// from `as_duration()`).
+    ///
+    /// The fallback is applied at the resolved `Duration` level — not at the
+    /// `parsed_timeouts` level — so that an HTTP route with `parsed_timeouts`
+    /// present but `request_timeout` not configured correctly falls through to
+    /// the gRPC side.
+    #[inline]
+    pub fn request_timeout(&self) -> Option<Duration> {
+        self.route_unit
+            .as_ref()
+            .and_then(|u| u.rule.parsed_timeouts.as_ref())
+            .and_then(|t| t.request_timeout.as_duration())
+            .or_else(|| {
+                self.grpc_route_unit
+                    .as_ref()
+                    .and_then(|u| u.rule.parsed_timeouts.as_ref())
+                    .and_then(|t| t.request_timeout.as_duration())
+            })
+    }
+
+    /// True when a route-level `request_timeout` is set and `start_time`
+    /// has already exceeded it. Returns `false` when no timeout is configured.
+    #[inline]
+    pub fn request_timeout_exceeded(&self) -> bool {
+        self.request_timeout()
+            .is_some_and(|t| Instant::now().saturating_duration_since(self.start_time) >= t)
+    }
+
+    /// Remaining wall-clock time before the client-supplied `grpc-timeout`
+    /// deadline expires. Returns `None` when no `grpc-timeout` header was
+    /// parsed, and `Some(Duration::ZERO)` when the deadline has already
+    /// passed.
+    #[inline]
+    pub fn grpc_remaining(&self) -> Option<Duration> {
+        self.request_info
+            .grpc_client_deadline
+            .map(|d| d.saturating_duration_since(Instant::now()))
+    }
+
+    /// True when a `grpc-timeout` deadline was parsed for this request and
+    /// `Instant::now()` is already past it.
+    #[inline]
+    pub fn grpc_deadline_exceeded(&self) -> bool {
+        self.grpc_remaining().is_some_and(|r| r.is_zero())
+    }
+
+    /// Resolve the retry `attempts` cap with field-level fallback between
+    /// HTTP and gRPC route units.
+    #[inline]
+    pub fn retry_attempts(&self) -> Option<u32> {
+        self.route_unit
+            .as_ref()
+            .and_then(|u| u.rule.parsed_retry.as_ref())
+            .and_then(|r| r.attempts)
+            .or_else(|| {
+                self.grpc_route_unit
+                    .as_ref()
+                    .and_then(|u| u.rule.parsed_retry.as_ref())
+                    .and_then(|r| r.attempts)
+            })
+    }
+
+    /// Resolve the retry `backoff` base duration with field-level fallback
+    /// between HTTP and gRPC route units.
+    #[inline]
+    pub fn retry_backoff(&self) -> Option<Duration> {
+        self.route_unit
+            .as_ref()
+            .and_then(|u| u.rule.parsed_retry.as_ref())
+            .and_then(|r| r.backoff)
+            .or_else(|| {
+                self.grpc_route_unit
+                    .as_ref()
+                    .and_then(|u| u.rule.parsed_retry.as_ref())
+                    .and_then(|r| r.backoff)
+            })
+    }
+
+    /// Initialize backend context for the resource-selected path (HTTP/gRPC backend ref).
+    /// `source` stays `None` — this is the default path, no bypass tag needed.
+    /// Bypass paths (DirectEndpoint / ExternalJump) construct `BackendContext` directly
+    /// at the call site (in `try_direct_endpoint_peer` / `try_external_jump_peer`)
+    /// and set their own `Some(source)` tag.
+    pub fn init_backend_context(&mut self, rsc: Rsc, service_key: String, service_kind: EdgionService) {
         self.backend_context = Some(BackendContext {
-            rsc: Rsc {
-                kind: "Service".to_string(),
-                ns: namespace,
-                name,
-            },
+            source: None,
+            rsc: Some(rsc),
+            service_key: Some(service_key),
+            service_kind: Some(service_kind),
             upstreams: Vec::new(),
             current_upstream_id: None,
         });
@@ -649,11 +1011,12 @@ impl EdgionHttpContext {
                 response_body_size: None,
                 start_time: std::time::Instant::now(),
                 err: Vec::new(),
-                backend_addr: None,
                 lb_backend_addr: None,
+                lb_edgion_backend: None,
                 service_key: None,
                 lb_policy: None,
                 tls: None,
+                lb_committed: None,
             });
             bc.current_upstream_id = Some(bc.upstreams.len() - 1);
         }
@@ -671,26 +1034,6 @@ impl EdgionHttpContext {
         self.backend_context
             .as_ref()
             .and_then(|bc| bc.current_upstream_id.and_then(|id| bc.upstreams.get(id)))
-    }
-
-    /// Push a plugin reference path onto the stack
-    pub fn push_plugin_ref(&mut self, key: String) {
-        self.plugin_ref_stack.push(key);
-    }
-
-    /// Pop a plugin reference path from the stack
-    pub fn pop_plugin_ref(&mut self) {
-        self.plugin_ref_stack.pop();
-    }
-
-    /// Current depth of nested plugin references
-    pub fn plugin_ref_depth(&self) -> usize {
-        self.plugin_ref_stack.len()
-    }
-
-    /// Whether the stack already contains the given reference key (for cycle detection)
-    pub fn has_plugin_ref(&self, key: &str) -> bool {
-        self.plugin_ref_stack.iter().any(|k| k == key)
     }
 
     // ========== Context variable methods ==========
@@ -713,5 +1056,381 @@ impl EdgionHttpContext {
     /// Check if a context variable exists
     pub fn has_ctx_var(&self, key: &str) -> bool {
         self.ctx_map.contains_key(key)
+    }
+
+    // ===== URI/path canonical accessors =====
+    // See docs/superpowers/specs/2026-04-26-uri-normalization-design.md §3.2
+
+    /// Current normalized path. Reflects post-rewrite state (cache refreshed by
+    /// session_adapter::set_upstream_uri after each rewrite). Default view for
+    /// routing matchers, ACL plugins, access_log.
+    pub fn path(&self) -> &str {
+        &self.request_info.normalized_current_path
+    }
+
+    /// Entry-time raw path. Frozen for the request lifetime.
+    /// Use for audit, security investigation, special raw-form deny rules.
+    pub fn request_path(&self) -> &str {
+        &self.request_info.entry_raw_path
+    }
+
+    /// Current query string (passthrough; never normalized).
+    pub fn query<'a>(&self, req_header: &'a pingora_http::RequestHeader) -> Option<&'a str> {
+        req_header.uri.query()
+    }
+
+    /// Current normalized full URI (current path + current query).
+    pub fn uri(&self, req_header: &pingora_http::RequestHeader) -> String {
+        compose_uri(self.path(), self.query(req_header))
+    }
+
+    /// Entry-time raw full URI (entry raw path + entry raw query). Frozen.
+    pub fn request_uri(&self) -> String {
+        compose_uri(
+            &self.request_info.entry_raw_path,
+            self.request_info.entry_raw_query.as_deref(),
+        )
+    }
+
+    /// Refresh `normalized_current_path` from current `req_header.uri.path()`.
+    /// Called by session_adapter::set_upstream_uri after rewrite, or by entry filter.
+    /// Business code should NOT call this directly.
+    pub fn refresh_normalized_path(
+        &mut self,
+        req_header: &pingora_http::RequestHeader,
+        cfg: &crate::core::gateway::path_normalization::PathNormalizationConfig,
+    ) {
+        let raw = req_header.uri.path();
+        self.request_info.normalized_current_path =
+            match crate::core::gateway::path_normalization::normalize_path(raw, cfg) {
+                Some(s) => s,
+                None => raw.to_string(),
+            };
+    }
+
+    /// First-write-wins setter for the unified upstream-jump slot. Returns
+    /// `Set` on the first successful write, `Rejected` on every subsequent
+    /// call. On `Direct` success, co-writes `selected_backend` so the
+    /// peer-construction path can derive service metadata; on `Rejected`,
+    /// `selected_backend` is NOT touched (see Risk #1 in the spec).
+    pub fn try_set_jump(&mut self, target: UpstreamJumpTarget) -> SetJumpOutcome {
+        if self.jump.is_some() {
+            return SetJumpOutcome::Rejected;
+        }
+        if let UpstreamJumpTarget::Direct { backend_ref, .. } = &target {
+            self.selected_backend = Some(backend_ref.as_ref().clone());
+        }
+        self.jump = Some(target);
+        SetJumpOutcome::Set
+    }
+}
+
+fn compose_uri(path: &str, query: Option<&str>) -> String {
+    match query {
+        Some(q) if !q.is_empty() => format!("{}?{}", path, q),
+        _ => path.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod sensitive_tests {
+    use super::*;
+    use crate::types::sensitive::SENSITIVE_MODE;
+    use std::sync::atomic::Ordering;
+    use std::sync::Mutex;
+
+    static MODE_LOCK: Mutex<()> = Mutex::new(());
+
+    struct ModeGuard<'a> {
+        prev: u8,
+        // Held purely for RAII: serializes tests that mutate SENSITIVE_MODE.
+        _lock: std::sync::MutexGuard<'a, ()>,
+    }
+    impl Drop for ModeGuard<'_> {
+        fn drop(&mut self) {
+            SENSITIVE_MODE.store(self.prev, Ordering::SeqCst);
+        }
+    }
+    fn set_mode(mode: u8) -> ModeGuard<'static> {
+        let guard = MODE_LOCK.lock().unwrap();
+        let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
+        ModeGuard { prev, _lock: guard }
+    }
+
+    #[test]
+    fn test_client_cert_info_wrap_mode() {
+        let _g = set_mode(2);
+        let cert = ClientCertInfo {
+            subject: "CN=alice@example.com".to_string(),
+            sans: vec!["alice@example.com".to_string()],
+            cn: Some("alice@example.com".to_string()),
+            fingerprint: "abc123".to_string(),
+        };
+        let json = serde_json::to_string(&cert).unwrap();
+        assert!(
+            json.contains("<E>CN=alice@example.com</E>"),
+            "subject not wrapped: {}",
+            json
+        );
+        assert!(json.contains("<E>alice@example.com</E>"), "sans not wrapped: {}", json);
+        assert!(json.contains("abc123"), "fingerprint should not be wrapped: {}", json);
+    }
+
+    #[test]
+    fn test_client_cert_info_off_mode() {
+        let _g = set_mode(0);
+        let cert = ClientCertInfo {
+            subject: "CN=alice@example.com".to_string(),
+            sans: vec![],
+            cn: None,
+            fingerprint: "abc123".to_string(),
+        };
+        let json = serde_json::to_string(&cert).unwrap();
+        assert!(
+            json.contains("CN=alice@example.com"),
+            "subject should be plain in off mode: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_request_info_wrap_mode() {
+        let _g = set_mode(2);
+        let ri = RequestInfo {
+            client_addr: "127.0.0.1".to_string(),
+            remote_addr: "10.0.0.1".to_string(),
+            entry_raw_path: "/api/users/alice".to_string(),
+            normalized_current_path: "/api/users/alice".to_string(),
+            x_forwarded_for: Some("203.0.113.5, 10.0.0.1".to_string()),
+            sni: Some("example.com".to_string()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&ri).unwrap();
+        assert!(json.contains("<E>127.0.0.1</E>"), "client_addr: {}", json);
+        assert!(json.contains("<E>10.0.0.1</E>"), "remote_addr: {}", json);
+        assert!(json.contains("<E>/api/users/alice</E>"), "path: {}", json);
+        assert!(json.contains("<E>203.0.113.5, 10.0.0.1</E>"), "xff: {}", json);
+        assert!(json.contains("<E>example.com</E>"), "sni: {}", json);
+    }
+
+    #[test]
+    fn test_request_info_replace_mode() {
+        let _g = set_mode(1);
+        let ri = RequestInfo {
+            client_addr: "127.0.0.1".to_string(),
+            remote_addr: "10.0.0.1".to_string(),
+            entry_raw_path: "/api/users/alice".to_string(),
+            normalized_current_path: "/api/users/alice".to_string(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&ri).unwrap();
+        assert!(!json.contains("127.0.0.1"), "client_addr leaked: {}", json);
+        assert!(!json.contains("10.0.0.1"), "remote_addr leaked: {}", json);
+        assert!(!json.contains("/api/users/alice"), "path leaked: {}", json);
+        assert!(json.contains("***"), "replace_with not found: {}", json);
+    }
+}
+
+#[cfg(test)]
+mod path_view_tests {
+    use super::*;
+    use pingora_http::RequestHeader;
+
+    fn make_ctx(entry_path: &str, entry_query: Option<&str>) -> EdgionHttpContext {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.entry_raw_path = entry_path.to_string();
+        ctx.request_info.entry_raw_query = entry_query.map(str::to_string);
+        let path_cfg = crate::core::gateway::path_normalization::PathNormalizationConfig::default();
+        ctx.request_info.normalized_current_path =
+            match crate::core::gateway::path_normalization::normalize_path(entry_path, &path_cfg) {
+                Some(s) => s,
+                None => entry_path.to_string(),
+            };
+        ctx
+    }
+
+    #[test]
+    fn path_returns_normalized_current() {
+        let ctx = make_ctx("/%61dmin", None);
+        assert_eq!(ctx.path(), "/admin");
+    }
+
+    #[test]
+    fn request_path_returns_entry_raw() {
+        let ctx = make_ctx("/%61dmin", None);
+        assert_eq!(ctx.request_path(), "/%61dmin");
+    }
+
+    #[test]
+    fn request_uri_composes_entry() {
+        let ctx = make_ctx("/%61dmin", Some("x=1"));
+        assert_eq!(ctx.request_uri(), "/%61dmin?x=1");
+    }
+
+    #[test]
+    fn refresh_after_rewrite() {
+        let mut ctx = make_ctx("/api/old", None);
+        let req = RequestHeader::build("GET", b"/api/new", None).unwrap();
+        let path_cfg = crate::core::gateway::path_normalization::PathNormalizationConfig::default();
+        ctx.refresh_normalized_path(&req, &path_cfg);
+        assert_eq!(ctx.path(), "/api/new");
+        assert_eq!(ctx.request_path(), "/api/old");
+    }
+}
+
+#[cfg(test)]
+mod jump_tests {
+    use super::*;
+
+    fn fresh_ctx() -> EdgionHttpContext {
+        EdgionHttpContext::new()
+    }
+
+    fn sample_internal() -> InternalJumpPreset {
+        InternalJumpPreset {
+            backend_ref_name: "svc-a".to_string(),
+            backend_ref_namespace: None,
+        }
+    }
+
+    fn sample_external() -> ExternalJumpPreset {
+        ExternalJumpPreset {
+            domain: "api.example.com".to_string(),
+            port: 443,
+            use_tls: true,
+            sni: "api.example.com".to_string(),
+            preserve_raw_path: false,
+        }
+    }
+
+    fn sample_direct() -> (DirectEndpointPreset, Box<HTTPBackendRef>) {
+        use crate::types::resources::http_route_preparse::BackendExtensionInfo;
+        let preset = DirectEndpointPreset {
+            addr: "10.0.0.1:8080".parse().unwrap(),
+            use_tls: false,
+            sni: String::new(),
+            backend_ref_idx: 0,
+        };
+        let backend_ref = HTTPBackendRef {
+            name: "direct-svc".to_string(),
+            namespace: None,
+            port: Some(8080),
+            weight: Some(1),
+            group: None,
+            kind: None,
+            filters: None,
+            extension_info: BackendExtensionInfo::default(),
+            plugin_runtime: Arc::new(PluginRuntime::new()),
+            backend_tls_policy: None,
+            ref_denied: None,
+        };
+        (preset, Box::new(backend_ref))
+    }
+
+    #[test]
+    fn first_internal_write_returns_set() {
+        let mut ctx = fresh_ctx();
+        let outcome = ctx.try_set_jump(UpstreamJumpTarget::Internal(sample_internal()));
+        assert_eq!(outcome, SetJumpOutcome::Set);
+        assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::Internal(_))));
+        assert!(
+            ctx.selected_backend.is_none(),
+            "Internal must NOT co-write selected_backend"
+        );
+    }
+
+    #[test]
+    fn first_external_write_returns_set() {
+        let mut ctx = fresh_ctx();
+        let outcome = ctx.try_set_jump(UpstreamJumpTarget::External(sample_external()));
+        assert_eq!(outcome, SetJumpOutcome::Set);
+        assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::External(_))));
+        assert!(
+            ctx.selected_backend.is_none(),
+            "External must NOT co-write selected_backend"
+        );
+    }
+
+    #[test]
+    fn first_direct_write_co_writes_selected_backend() {
+        let mut ctx = fresh_ctx();
+        let (preset, backend_ref) = sample_direct();
+        let outcome = ctx.try_set_jump(UpstreamJumpTarget::Direct {
+            preset,
+            backend_ref: backend_ref.clone(),
+        });
+        assert_eq!(outcome, SetJumpOutcome::Set);
+        assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::Direct { .. })));
+        assert_eq!(
+            ctx.selected_backend.as_ref().map(|b| b.name.as_str()),
+            Some("direct-svc"),
+            "Direct success must co-write selected_backend"
+        );
+    }
+
+    #[test]
+    fn second_write_returns_rejected_and_does_not_mutate_ctx() {
+        let mut ctx = fresh_ctx();
+        let first = ctx.try_set_jump(UpstreamJumpTarget::External(sample_external()));
+        assert_eq!(first, SetJumpOutcome::Set);
+        let selected_before_name = ctx.selected_backend.as_ref().map(|b| b.name.clone());
+
+        let (preset, backend_ref) = sample_direct();
+        let second = ctx.try_set_jump(UpstreamJumpTarget::Direct { preset, backend_ref });
+        assert_eq!(second, SetJumpOutcome::Rejected);
+
+        assert!(matches!(ctx.jump, Some(UpstreamJumpTarget::External(_))));
+        assert_eq!(
+            ctx.selected_backend.as_ref().map(|b| b.name.as_str()),
+            selected_before_name.as_deref(),
+            "selected_backend must not change on rejected second write"
+        );
+    }
+
+    #[test]
+    fn second_direct_write_after_internal_does_not_leak_backend() {
+        let mut ctx = fresh_ctx();
+        ctx.try_set_jump(UpstreamJumpTarget::Internal(sample_internal()));
+        assert!(ctx.selected_backend.is_none());
+
+        let (preset, backend_ref) = sample_direct();
+        let outcome = ctx.try_set_jump(UpstreamJumpTarget::Direct { preset, backend_ref });
+        assert_eq!(outcome, SetJumpOutcome::Rejected);
+        assert!(
+            ctx.selected_backend.is_none(),
+            "Rejected Direct must NOT touch selected_backend"
+        );
+    }
+}
+
+#[cfg(test)]
+mod cached_query_tests {
+    use super::*;
+
+    #[test]
+    fn cached_query_initializes_lazily_and_caches() {
+        let ctx = EdgionHttpContext::new();
+        // First access triggers parse. The space in `hello world` is percent-
+        // encoded as `%20`, so the decoded value exercises url-decode.
+        let first = ctx.cached_query(Some("name=hello%20world&n=1")) as *const _;
+        // Second access with a *different* raw_query must still return the
+        // already-cached HashMap — init-once semantics, not "re-parse".
+        let second = ctx.cached_query(Some("name=changed&n=2")) as *const _;
+        assert_eq!(first, second, "cached_query must be init-once per request");
+
+        // Verify decoded values (route-matcher-compatible).
+        let map = ctx.cached_query(Some("ignored=value"));
+        assert_eq!(map.get("name"), Some(&"hello world".to_string()));
+        assert_eq!(map.get("n"), Some(&"1".to_string()));
+    }
+
+    #[test]
+    fn cached_query_handles_none_raw() {
+        let ctx = EdgionHttpContext::new();
+        let map = ctx.cached_query(None);
+        assert!(map.is_empty(), "None raw_query yields empty cache");
+        // Subsequent call with Some(...) must NOT replace the cached empty map.
+        let map2 = ctx.cached_query(Some("a=1"));
+        assert!(map2.is_empty(), "OnceLock already initialized to empty");
     }
 }

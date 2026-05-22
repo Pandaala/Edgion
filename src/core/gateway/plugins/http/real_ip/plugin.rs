@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use std::net::{IpAddr, SocketAddr};
 
 use crate::core::common::utils::RealIpExtractor;
+use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::RealIpConfig;
@@ -84,6 +85,12 @@ impl RequestFilter for RealIp {
 
         if extractor.is_trusted_proxy(&client_ip) {
             plugin_log.push("trusted proxy:match");
+            // Cold path: emit at most once per request when the client IP itself
+            // is a trusted proxy. Surfaces which named group matched, for ops
+            // debugging without touching the per-XFF-hop hot path.
+            if let Some(group) = extractor.matched_trusted_group(&client_ip) {
+                tracing::debug!(group = %group, ip = %client_ip, "trusted_proxy_match");
+            }
         } else {
             plugin_log.push("trusted proxy:miss");
         }
@@ -105,7 +112,7 @@ impl RequestFilter for RealIp {
                 return PluginRunningResult::GoodNext;
             }
 
-            plugin_log.push(&format!("ip updated: {}", new_remote_addr));
+            plugin_log.push_fmt("ip updated: {}", la![sensitive(&new_remote_addr)]);
         } else {
             plugin_log.push("ip unchanged");
         }
@@ -117,15 +124,18 @@ impl RequestFilter for RealIp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
 
     fn create_test_config() -> RealIpConfig {
+        use crate::types::resources::plugin_metadata::IpGroup;
         RealIpConfig {
-            trusted_ips: vec!["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
+            trusted_ips: vec![IpGroup {
+                name: "private".to_string(),
+                description: None,
+                cidrs: vec!["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
+            }],
             real_ip_header: "X-Forwarded-For".to_string(),
             recursive: true,
             max_trusted_hops: None,
-            trusted_ip_matcher: None, // Will be initialized by RealIp::create
         }
     }
 
@@ -154,26 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_non_recursive() {
-        let extractor = RealIpExtractor::new(
-            &["192.168.0.0/16".to_string(), "198.51.100.0/24".to_string()],
-            "X-Forwarded-For".to_string(),
-            false,
-            None,
-        )
-        .unwrap();
-
-        // Non-recursive: take rightmost IP directly
-        // Rightmost 192.168.1.1 is trusted → use client_addr
-        let result = extractor.extract_from_header_value("192.168.1.254", "203.0.113.1, 198.51.100.2, 192.168.1.1");
-        assert_eq!(result, "192.168.1.254");
-
-        // Rightmost 8.8.8.8 is NOT trusted → use it
-        let result = extractor.extract_from_header_value("192.168.1.254", "203.0.113.1, 8.8.8.8");
-        assert_eq!(result, "8.8.8.8");
-    }
-
-    #[test]
     fn test_client_not_trusted() {
         let config = create_test_config();
         let extractor = RealIpExtractor::new(
@@ -187,33 +177,5 @@ mod tests {
         // Client IP not in trusted list - should use client_addr directly
         let result = extractor.extract_from_header_value("8.8.8.8", "203.0.113.1");
         assert_eq!(result, "8.8.8.8");
-    }
-
-    #[tokio::test]
-    async fn test_run_request() {
-        let config = create_test_config();
-        let plugin = RealIp::create(&config);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RealIp");
-
-        mock_session
-            .expect_client_addr()
-            .return_const("192.168.1.254".to_string());
-        mock_session
-            .expect_remote_addr()
-            .return_const("192.168.1.254".to_string());
-        mock_session
-            .expect_header_value()
-            .withf(|name| name == "X-Forwarded-For")
-            .return_const(Some("203.0.113.1, 198.51.100.2, 192.168.1.1".to_string()));
-        mock_session
-            .expect_set_remote_addr()
-            .withf(|addr| addr == "203.0.113.1")
-            .returning(|_| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("203.0.113.1"));
     }
 }

@@ -1,0 +1,17 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: btls-sni-service-a
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: btls-sni-service-a
+addressType: IPv4
+ports:
+  - name: https
+    port: 30026
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true

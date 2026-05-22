@@ -1,0 +1,22 @@
+# HTTPRoute for SNI host override suite — route B.
+# Client-facing hostname: host-b.example.com (the Host header the test client sends).
+# Gateway-to-backend SNI:  hostname-b.example.com (set by BackendTLSPolicy_b).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: btls-sni-route-b
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: btls-sni-gateway
+      namespace: edgion-test
+  hostnames:
+    - "host-b.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: btls-sni-service-b
+          port: 30026

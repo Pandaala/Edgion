@@ -1,28 +1,28 @@
 ---
 name: gateway-tls-route
-description: TLS 路由：SNI 匹配、per-listener 路由表、TLS 代理实现。
+description: TLS route — SNI matching, per-listener route table, TLS proxy implementation.
 ---
 
-# TLS 路由
+# TLS route
 
-## 概述
+## Overview
 
-TLSRoute 实现了 Gateway API 的 TLS 透传路由功能。与 TCPRoute 不同，TLSRoute 在 TLS 握手阶段利用 SNI（Server Name Indication）进行基于主机名的路由，将 TLS 连接原样透传到后端（不终止 TLS）。
+TLSRoute implements the TLS passthrough routing capability of the Gateway API. Unlike TCPRoute, TLSRoute uses SNI (Server Name Indication) during the TLS handshake to do hostname-based routing and forwards the TLS connection unchanged to the backend (without terminating TLS).
 
-## 模块结构
+## Module structure
 
 ```
 src/core/gateway/routes/tls/
-├── mod.rs                  # 模块入口与类型导出
-├── conf_handler_impl.rs    # ConfHandler<TLSRoute> 实现
+├── mod.rs                  # module entry and type exports
+├── conf_handler_impl.rs    # ConfHandler<TLSRoute> implementation
 ├── routes_mgr.rs           # TlsRouteManager / GlobalTlsRouteManagers
-├── gateway_tls_routes.rs   # TlsRouteTable：per-listener TLS 路由表（SNI 索引）
-└── proxy.rs                # EdgionTlsTcpProxy：TLS 透传代理实现
+├── gateway_tls_routes.rs   # TlsRouteTable: per-listener TLS route table (SNI-indexed)
+└── proxy.rs                # EdgionTlsTcpProxy: TLS passthrough proxy implementation
 ```
 
-## SNI 匹配
+## SNI matching
 
-`TlsRouteTable` 使用 `HashHost` 数据结构实现基于 SNI 的主机名匹配：
+`TlsRouteTable` uses the `HashHost` data structure to perform hostname matching by SNI:
 
 ```rust
 pub struct TlsRouteTable {
@@ -31,63 +31,63 @@ pub struct TlsRouteTable {
 }
 ```
 
-匹配优先级：
+Match priority:
 
-1. **精确主机名匹配**：`HashHost` 精确查找，O(1)。
-2. **通配主机名匹配**：`HashHost` 内部处理 `*.example.com` 通配，自动返回最具体的通配匹配。
-3. **Catch-all**：无 `spec.hostnames` 的路由作为回退。
+1. **Exact hostname match**: `HashHost` exact lookup, O(1).
+2. **Wildcard hostname match**: `HashHost` handles wildcards such as `*.example.com` internally and returns the most specific wildcard match.
+3. **Catch-all**: routes without `spec.hostnames` serve as a fallback.
 
-`TlsRouteTable::from_routes` 构建过程：
+`TlsRouteTable::from_routes` build process:
 
-1. 遍历所有路由，按 `spec.hostnames` 分桶（转为小写）。
-2. 无 hostname 的路由归入 `catch_all_routes`。
-3. 将分桶结果插入 `HashHost` 匹配器。
+1. Iterate all routes and bucket by `spec.hostnames` (lowercased).
+2. Routes without a hostname go into `catch_all_routes`.
+3. Insert the bucketed result into the `HashHost` matcher.
 
-## Per-listener 路由管理
+## Per-listener route management
 
-`GlobalTlsRouteManagers` 遵循统一的 per-listener 管理模式：
+`GlobalTlsRouteManagers` follows the unified per-listener management pattern:
 
 ```
 GlobalTlsRouteManagers
-├── route_cache: DashMap<String, Arc<TLSRoute>>        # 全局路由缓存
+├── route_cache: DashMap<String, Arc<TLSRoute>>        # global route cache
 └── by_listener: DashMap<ListenerKey, Arc<TlsRouteManager>>
     └── TlsRouteManager
-        └── route_table: ArcSwap<TlsRouteTable>        # per-listener 快照
+        └── route_table: ArcSwap<TlsRouteTable>        # per-listener snapshot
 ```
 
-### Listener 分桶
+### Listener bucketing
 
-通过 `resolved_listeners`（Controller 预计算）将路由分配到对应 listener。无 `resolved_listeners` 的路由会打印警告并跳过。
+Routes are distributed to the matching listener via `resolved_listeners` (Controller-precomputed). Routes without `resolved_listeners` log a warning and are skipped.
 
-### 重建策略
+### Rebuild strategy
 
-- `rebuild_all_listener_managers`：全量重建所有 listener，清理无路由的过期 listener。
-- `rebuild_affected_listener_managers`：仅重建受影响 listener（增量更新时使用）。
+- `rebuild_all_listener_managers`: full rebuild of all listeners; cleans up stale listeners with no routes.
+- `rebuild_affected_listener_managers`: rebuild only affected listeners (used by incremental updates).
 
-## TLS 透传代理
+## TLS passthrough proxy
 
-`EdgionTlsTcpProxy` 是 TLS 透传代理的核心实现：
+`EdgionTlsTcpProxy` is the core implementation of the TLS passthrough proxy:
 
-- 持有 `Arc<TlsRouteManager>`，通过 `load_route_table()` 获取当前路由快照。
-- 在 TLS 握手阶段从 ClientHello 中提取 SNI。
-- 调用 `TlsRouteTable::match_route(sni_hostname)` 选择路由。
-- 从路由的 `backend_refs` 中选择后端，建立上游 TCP 连接。
-- 双向透传 TLS 流量，不终止 TLS。
+- Holds an `Arc<TlsRouteManager>` and gets the current snapshot via `load_route_table()`.
+- Extracts the SNI from ClientHello during the TLS handshake.
+- Calls `TlsRouteTable::match_route(sni_hostname)` to select a route.
+- Selects a backend from the route's `backend_refs` and establishes an upstream TCP connection.
+- Forwards TLS traffic transparently in both directions; TLS is not terminated.
 
-## 与 TLS 子系统的关系
+## Relationship with the TLS subsystem
 
-TLSRoute 和 TLS 子系统（`tls/` 模块）服务于不同场景：
+TLSRoute and the TLS subsystem (the `tls/` module) serve different scenarios:
 
-- **TLSRoute**：TLS 透传（Passthrough），Gateway 不终止 TLS，按 SNI 路由到后端。
-- **TLS 子系统**：TLS 终止（Terminate），Gateway 终止 TLS 握手，解密后按 HTTP/gRPC 路由处理。
+- **TLSRoute**: TLS passthrough — the Gateway does not terminate TLS and routes by SNI to the backend.
+- **TLS subsystem**: TLS termination — the Gateway terminates the TLS handshake, decrypts, and routes by HTTP/gRPC.
 
-两者在同一端口上可以共存：Gateway Listener 的 `tls.mode` 决定使用哪种模式。
+They can coexist on the same port — the Gateway Listener's `tls.mode` determines which mode is used.
 
-## 关键源文件
+## Key source files
 
-| 文件 | 职责 |
-|------|------|
-| `src/core/gateway/routes/tls/routes_mgr.rs` | GlobalTlsRouteManagers、TlsRouteManager |
-| `src/core/gateway/routes/tls/gateway_tls_routes.rs` | TlsRouteTable（SNI 匹配） |
+| File | Responsibility |
+|------|----------------|
+| `src/core/gateway/routes/tls/routes_mgr.rs` | GlobalTlsRouteManagers, TlsRouteManager |
+| `src/core/gateway/routes/tls/gateway_tls_routes.rs` | TlsRouteTable (SNI matching) |
 | `src/core/gateway/routes/tls/proxy.rs` | EdgionTlsTcpProxy |
-| `src/core/gateway/routes/tls/conf_handler_impl.rs` | ConfHandler<TLSRoute> 实现 |
+| `src/core/gateway/routes/tls/conf_handler_impl.rs` | ConfHandler<TLSRoute> implementation |

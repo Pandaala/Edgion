@@ -71,7 +71,7 @@ impl TestContext {
         // Configure HTTP client to accept self-signed certificates for HTTPS testing
         // IMPORTANT: Disable system proxy to ensure direct connections to localhost
         let mut client_builder = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(5))
             .danger_accept_invalid_certs(true)
             .no_proxy(); // Disable proxy to connect directly to Gateway
 

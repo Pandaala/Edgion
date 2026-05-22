@@ -4,15 +4,65 @@
 //! message. Used by TLS Passthrough mode to route connections based on SNI
 //! without performing a full TLS handshake.
 
-/// Maximum bytes to read from the stream for ClientHello parsing.
-/// A typical ClientHello is 200-500 bytes; 4096 covers even large ones
-/// with many cipher suites and extensions.
-pub const MAX_CLIENT_HELLO_LEN: usize = 4096;
+/// Upper bound on bytes drained from the stream while accumulating a
+/// ClientHello record.
+///
+/// Set to 16 KiB — the TLSPlaintext fragment ceiling from RFC 8446 §5.1
+/// (`2^14`); this also matches `SSL3_RT_MAX_PLAIN_LENGTH`. The buffer
+/// includes the 5-byte record header, so the largest record we can actually
+/// admit is `16384 - 5 = 16379` fragment bytes — well above any realistic
+/// ClientHello (typically 200-500 bytes, up to a few KiB with many cipher
+/// suites, post-quantum key exchange, and numerous extensions).
+pub const MAX_CLIENT_HELLO_LEN: usize = 16384;
+
+/// Result of probing whether a buffer already holds a complete TLS Handshake
+/// record. Callers use this to decide whether to read more bytes from the
+/// downstream before invoking [`extract_sni`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum RecordCompleteness {
+    /// Buffer already contains a full record; `record_end` is the byte offset
+    /// just past the record (`buf[..record_end]` is the complete record).
+    Complete { record_end: usize },
+    /// First byte (if any) is consistent with a TLS Handshake record but the
+    /// declared length has not yet arrived. Caller should read more bytes.
+    NeedMore,
+    /// First byte is present and definitively not a TLS Handshake record
+    /// (ContentType != 0x16). Caller should drop the connection.
+    NotTlsHandshake,
+}
+
+/// Probe whether `buf` already contains a complete TLS Handshake record.
+///
+/// This is the cheap pre-check called in a read loop: callers accumulate bytes
+/// until this returns [`RecordCompleteness::Complete`] (then they invoke
+/// [`extract_sni`]) or [`RecordCompleteness::NotTlsHandshake`] (then they
+/// close the connection). A returned [`RecordCompleteness::NeedMore`] means
+/// the record length is either unknown yet (< 5 bytes seen) or known but more
+/// bytes are still in flight.
+pub fn client_hello_record_complete(buf: &[u8]) -> RecordCompleteness {
+    if buf.is_empty() {
+        return RecordCompleteness::NeedMore;
+    }
+    if buf[0] != 0x16 {
+        return RecordCompleteness::NotTlsHandshake;
+    }
+    if buf.len() < 5 {
+        return RecordCompleteness::NeedMore;
+    }
+    let record_len = u16::from_be_bytes([buf[3], buf[4]]) as usize;
+    let record_end = 5 + record_len;
+    if buf.len() < record_end {
+        return RecordCompleteness::NeedMore;
+    }
+    RecordCompleteness::Complete { record_end }
+}
 
 /// Extract the SNI hostname from a raw TLS ClientHello message buffer.
 ///
-/// Returns `None` if the buffer is not a valid ClientHello, is truncated,
-/// or does not contain an SNI extension.
+/// The caller is expected to have ensured the buffer holds a complete record
+/// (see [`client_hello_record_complete`]). Returns `None` when the buffer is
+/// not a valid ClientHello or does not contain an SNI extension; the function
+/// never proceeds against a truncated record.
 pub fn extract_sni(buf: &[u8]) -> Option<String> {
     // TLS Record Header: ContentType(1) + Version(2) + Length(2)
     if buf.len() < 5 {
@@ -25,9 +75,10 @@ pub fn extract_sni(buf: &[u8]) -> Option<String> {
     let record_len = u16::from_be_bytes([buf[3], buf[4]]) as usize;
     let record_end = 5 + record_len;
     if buf.len() < record_end {
-        // Allow parsing with whatever we have, but cap at buf.len()
+        // Truncated record — refuse rather than guess at clamped bytes.
+        return None;
     }
-    let handshake = &buf[5..buf.len().min(record_end)];
+    let handshake = &buf[5..record_end];
 
     // Handshake Header: Type(1) + Length(3)
     if handshake.len() < 4 {
@@ -219,6 +270,94 @@ mod tests {
         // Truncate at various points
         assert_eq!(extract_sni(&buf[..3]), None);
         assert_eq!(extract_sni(&buf[..10]), None);
+        // Truncated mid-record (full header but short fragment) must also
+        // refuse parsing rather than clamping to whatever bytes are present.
+        assert_eq!(extract_sni(&buf[..buf.len() - 1]), None);
+    }
+
+    #[test]
+    fn test_record_complete_states() {
+        // Empty buffer: caller must keep reading.
+        assert_eq!(client_hello_record_complete(&[]), RecordCompleteness::NeedMore);
+
+        // First byte not 0x16: cannot become a TLS Handshake record.
+        assert_eq!(
+            client_hello_record_complete(&[0x17, 0x03, 0x03, 0x00, 0x05]),
+            RecordCompleteness::NotTlsHandshake
+        );
+
+        // First byte 0x16 but header not yet complete (< 5 bytes).
+        assert_eq!(
+            client_hello_record_complete(&[0x16, 0x03, 0x01]),
+            RecordCompleteness::NeedMore
+        );
+
+        // Header announces record_len=3000 but only 1500 bytes arrived.
+        let mut short = vec![0x16, 0x03, 0x01, 0x0b, 0xb8]; // 0x0bb8 = 3000
+        short.extend(std::iter::repeat_n(0u8, 1500 - 5));
+        assert_eq!(client_hello_record_complete(&short), RecordCompleteness::NeedMore);
+
+        // Buffer is exactly the record, no trailing byte.
+        let buf = build_client_hello("example.com");
+        match client_hello_record_complete(&buf) {
+            RecordCompleteness::Complete { record_end } => {
+                assert_eq!(record_end, buf.len());
+            }
+            other => panic!("expected Complete (exact), got {other:?}"),
+        }
+
+        // Buffer contains the full record and one extra trailing byte.
+        let mut with_tail = buf.clone();
+        with_tail.push(0xaa);
+        match client_hello_record_complete(&with_tail) {
+            RecordCompleteness::Complete { record_end } => {
+                assert_eq!(record_end, buf.len());
+            }
+            other => panic!("expected Complete (with tail), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_extract_sni_refuses_truncated_record_with_parseable_prefix() {
+        // Regression test for the pre-fix clamping behavior. Take a valid
+        // ClientHello, then inflate the declared record length by +500 bytes
+        // without changing the buffer contents — so the buffer still holds
+        // an end-to-end parseable SNI extension, but the record header now
+        // claims the record continues past the buffer end.
+        //
+        // Pre-fix behavior: the parser clamped to `buf.len()` and parsed
+        // the slice. Because the buffer DOES contain a complete SNI
+        // extension (only the declared length is a lie), the old code
+        // returned `Some("example.com")` — a wrong answer derived from
+        // a record that hadn't fully arrived on the wire.
+        //
+        // Post-fix behavior: extract_sni refuses the record as truncated
+        // (RFC 8446 §5.1, RFC 6066 §3) and returns None.
+        let mut buf = build_client_hello("example.com");
+        let original_len = u16::from_be_bytes([buf[3], buf[4]]);
+        let inflated = original_len + 500;
+        buf[3] = (inflated >> 8) as u8;
+        buf[4] = (inflated & 0xff) as u8;
+
+        // Sanity: completeness probe agrees the record header now claims
+        // more bytes than have arrived, so this is a "need more bytes"
+        // state — not a NotTlsHandshake or Complete state.
+        assert!(matches!(
+            client_hello_record_complete(&buf),
+            RecordCompleteness::NeedMore
+        ));
+        assert_eq!(extract_sni(&buf), None);
+    }
+
+    #[test]
+    fn test_extract_sni_refuses_truncated_3000_byte_record() {
+        // Header declares 3000 bytes of fragment but only 1500 arrived
+        // and the payload is all-zero (i.e. not even a ClientHello body).
+        // The parser must return None — covers the "truncated header" path
+        // even when no exploit payload is present.
+        let mut short = vec![0x16, 0x03, 0x01, 0x0b, 0xb8];
+        short.extend(std::iter::repeat_n(0u8, 1500 - 5));
+        assert_eq!(extract_sni(&short), None);
     }
 
     #[test]

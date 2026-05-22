@@ -5,10 +5,31 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::types::common::KeyGet;
+use crate::types::resources::common::group_name::default_group_name;
+use crate::types::resources::edgion_plugins::plugin_validation::PluginValidation;
 use crate::types::resources::gateway::SecretObjectReference;
+
+/// A named group of Secret references whose keys all carry this group's
+/// name in `KeyMetadata.group`. Used for audit / tenant attribution in
+/// PluginLog.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyAuthSecretGroup {
+    /// Group name. Charset: Kubernetes label-value
+    /// (`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`, <=63 chars).
+    /// Surfaces in PluginLog as `group=<name>`.
+    pub name: String,
+
+    /// Human-readable description (not used by runtime).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Secret references for this group. Must be non-empty.
+    pub secret_refs: Vec<SecretObjectReference>,
+}
 
 /// Key Auth plugin configuration
 ///
@@ -65,10 +86,13 @@ pub struct KeyAuthConfig {
     #[serde(default = "default_key_field")]
     pub key_field: String,
 
-    /// Secret references containing API keys
-    /// Each Secret should contain a 'keys.yaml' field with key entries
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub secret_refs: Option<Vec<SecretObjectReference>>,
+    /// Named groups of Secret references. Optional so anonymous-only
+    /// deployments (no keys) remain valid.
+    ///
+    /// Each group's `secret_refs` are resolved and merged into a single
+    /// runtime key map; the resulting `KeyMetadata.group` records origin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_groups: Option<Vec<KeyAuthSecretGroup>>,
 
     // === Upstream Headers ===
     /// Whitelist: Secret fields to add as upstream headers
@@ -83,19 +107,19 @@ pub struct KeyAuthConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_keys: Option<HashMap<String, KeyMetadata>>,
-
-    // === Validation fields ===
-    /// Validation error message (populated during preparse)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
-/// API Key metadata containing headers to forward to upstream
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// API Key metadata attached to a resolved key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyMetadata {
-    /// Headers to forward to upstream (field_name -> value)
+    /// Headers to forward to upstream (field_name -> value).
     pub headers: HashMap<String, String>,
+
+    /// Group this key originated from. Always set by controller in current
+    /// versions. `#[serde(default)]` lets Gateway-new / Controller-old
+    /// rolling upgrades deserialize old payloads (fallback `"default"`).
+    #[serde(default = "default_group_name")]
+    pub group: String,
 }
 
 // === Default value functions ===
@@ -128,37 +152,17 @@ impl Default for KeyAuthConfig {
             anonymous: None,
             realm: default_realm(),
             key_field: default_key_field(),
-            secret_refs: None,
+            secret_groups: None,
             upstream_header_fields: vec![],
             resolved_keys: None,
-            validation_error: None,
         }
     }
 }
 
 impl KeyAuthConfig {
-    /// Validate configuration and return true if valid
-    pub fn validate(&mut self) -> bool {
-        match self.validate_and_check() {
-            Ok(()) => {
-                self.validation_error = None;
-                true
-            }
-            Err(e) => {
-                self.validation_error = Some(e);
-                false
-            }
-        }
-    }
-
-    /// Check if configuration is valid
-    pub fn is_valid(&self) -> bool {
-        self.validation_error.is_none()
-    }
-
-    /// Get validation error message
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
+    /// Validate configuration. Returns `Err(message)` if invalid.
+    pub fn validate(&self) -> Result<(), String> {
+        self.validate_and_check()
     }
 
     /// Internal validation logic
@@ -203,7 +207,32 @@ impl KeyAuthConfig {
             return Err("realm cannot be empty".to_string());
         }
 
+        // Validate secret_groups structure (cross-group raw-key uniqueness
+        // is checked at controller resolve time, not here).
+        if let Some(groups) = &self.secret_groups {
+            if groups.is_empty() {
+                return Err("secret_groups cannot be empty when present".to_string());
+            }
+            let mut seen: HashSet<&str> = HashSet::new();
+            for g in groups {
+                crate::types::resources::common::group_name::validate_group_name(&g.name)
+                    .map_err(|e| format!("secret_groups: {}", e))?;
+                if !seen.insert(g.name.as_str()) {
+                    return Err(format!("duplicate group name '{}'", g.name));
+                }
+                if g.secret_refs.is_empty() {
+                    return Err(format!("group '{}' has no secretRefs", g.name));
+                }
+            }
+        }
+
         Ok(())
+    }
+}
+
+impl PluginValidation for KeyAuthConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.validate_and_check().err()
     }
 }
 
@@ -231,7 +260,7 @@ mod tests {
         assert_eq!(config.key_field, "key");
         assert!(!config.hide_credentials);
         assert!(config.anonymous.is_none());
-        assert!(config.secret_refs.is_none());
+        assert!(config.secret_groups.is_none());
         assert!(config.upstream_header_fields.is_empty());
         assert!(config.resolved_keys.is_none());
     }
@@ -302,84 +331,67 @@ realm: "Production API"
         assert_eq!(config.realm, "Production API");
     }
 
-    #[test]
-    fn test_key_metadata_default() {
-        let metadata = KeyMetadata::default();
-        assert!(metadata.headers.is_empty());
-    }
-
     // Validation tests
 
     #[test]
     fn test_validate_default_config() {
-        let mut config = KeyAuthConfig::default();
-        assert!(config.validate());
-        assert!(config.is_valid());
-        assert!(config.get_validation_error().is_none());
+        let config = KeyAuthConfig::default();
+        assert!(config.validate().is_ok());
     }
 
     #[test]
     fn test_validate_empty_key_sources() {
-        let mut config = KeyAuthConfig {
+        let config = KeyAuthConfig {
             key_sources: vec![],
             ..Default::default()
         };
-        assert!(!config.validate());
-        assert!(!config.is_valid());
         assert_eq!(
-            config.get_validation_error(),
-            Some("key_sources cannot be empty - at least one key source must be specified")
+            config.validate().unwrap_err(),
+            "key_sources cannot be empty - at least one key source must be specified"
         );
     }
 
     #[test]
     fn test_validate_empty_name_in_key_source() {
-        let mut config = KeyAuthConfig {
+        let config = KeyAuthConfig {
             key_sources: vec![KeyGet::Header { name: "".to_string() }],
             ..Default::default()
         };
-        assert!(!config.validate());
-        assert_eq!(
-            config.get_validation_error(),
-            Some("key_sources[0]: name cannot be empty")
-        );
+        assert_eq!(config.validate().unwrap_err(), "key_sources[0]: name cannot be empty");
     }
 
     #[test]
     fn test_validate_unsupported_key_source() {
-        let mut config = KeyAuthConfig {
+        let config = KeyAuthConfig {
             key_sources: vec![KeyGet::ClientIp],
             ..Default::default()
         };
-        assert!(!config.validate());
-        let error = config.get_validation_error().unwrap();
+        let error = config.validate().unwrap_err();
         assert!(error.contains("unsupported source type"));
         assert!(error.contains("clientIp"));
     }
 
     #[test]
     fn test_validate_empty_key_field() {
-        let mut config = KeyAuthConfig {
+        let config = KeyAuthConfig {
             key_field: "".to_string(),
             ..Default::default()
         };
-        assert!(!config.validate());
-        assert_eq!(config.get_validation_error(), Some("key_field cannot be empty"));
+        assert_eq!(config.validate().unwrap_err(), "key_field cannot be empty");
     }
 
     #[test]
     fn test_validate_empty_realm() {
-        let mut config = KeyAuthConfig {
+        let config = KeyAuthConfig {
             realm: "".to_string(),
             ..Default::default()
         };
-        assert!(!config.validate());
-        assert_eq!(config.get_validation_error(), Some("realm cannot be empty"));
+        assert_eq!(config.validate().unwrap_err(), "realm cannot be empty");
     }
 
     #[test]
     fn test_validate_valid_custom_config() {
-        let mut config = KeyAuthConfig {
+        let config = KeyAuthConfig {
             key_sources: vec![
                 KeyGet::Header {
                     name: "X-API-Key".to_string(),
@@ -395,7 +407,96 @@ realm: "Production API"
             realm: "My API".to_string(),
             ..Default::default()
         };
-        assert!(config.validate());
-        assert!(config.is_valid());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_secret_groups_empty() {
+        let config = KeyAuthConfig {
+            secret_groups: Some(vec![]),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.validate().unwrap_err(),
+            "secret_groups cannot be empty when present"
+        );
+    }
+
+    #[test]
+    fn test_validate_secret_groups_duplicate_name() {
+        let config = KeyAuthConfig {
+            secret_groups: Some(vec![
+                KeyAuthSecretGroup {
+                    name: "a".into(),
+                    description: None,
+                    secret_refs: vec![SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "s1".into(),
+                        namespace: None,
+                    }],
+                },
+                KeyAuthSecretGroup {
+                    name: "a".into(),
+                    description: None,
+                    secret_refs: vec![SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "s2".into(),
+                        namespace: None,
+                    }],
+                },
+            ]),
+            ..Default::default()
+        };
+        assert!(config.validate().unwrap_err().contains("duplicate group name 'a'"));
+    }
+
+    #[test]
+    fn test_validate_secret_groups_invalid_name() {
+        let config = KeyAuthConfig {
+            secret_groups: Some(vec![KeyAuthSecretGroup {
+                name: "-bad".into(),
+                description: None,
+                secret_refs: vec![SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "s".into(),
+                    namespace: None,
+                }],
+            }]),
+            ..Default::default()
+        };
+        assert!(config.validate().unwrap_err().contains("must start with alphanumeric"));
+    }
+
+    #[test]
+    fn test_validate_secret_groups_empty_refs() {
+        let config = KeyAuthConfig {
+            secret_groups: Some(vec![KeyAuthSecretGroup {
+                name: "a".into(),
+                description: None,
+                secret_refs: vec![],
+            }]),
+            ..Default::default()
+        };
+        assert!(config.validate().unwrap_err().contains("group 'a' has no secretRefs"));
+    }
+}
+
+#[cfg(test)]
+mod validation_trait_tests {
+    use super::*;
+
+    #[test]
+    fn validation_error_returns_field_error_without_validate_call() {
+        let config = KeyAuthConfig {
+            key_sources: vec![],
+            ..Default::default()
+        };
+        assert_eq!(
+            config.validation_error(),
+            Some("key_sources cannot be empty - at least one key source must be specified".to_string())
+        );
     }
 }

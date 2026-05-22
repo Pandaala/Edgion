@@ -10,8 +10,11 @@ use tokio::sync::{mpsc, Semaphore};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 
+use crate::core::gateway::backends::{
+    resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr,
+};
 use crate::core::gateway::observe::metrics::record_mirror_metric;
-use crate::core::gateway::plugins::http::common::http_client::is_hop_by_hop;
+use crate::core::gateway::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::http_route::HTTPRequestMirrorFilter;
@@ -111,7 +114,7 @@ impl RequestMirrorPlugin {
         }
     }
 
-    fn resolve_target(&self) -> Result<(String, String), String> {
+    fn resolve_target(&self, allow_loopback_upstream: bool) -> Result<(String, String), String> {
         let port = self
             .config
             .backend_ref
@@ -123,35 +126,36 @@ impl RequestMirrorPlugin {
         if self.config.backend_ref.name.is_empty() {
             return Err("backend_ref.name is required for RequestMirror".to_string());
         }
-        let ns = self
-            .config
-            .backend_ref
-            .namespace
-            .clone()
-            .unwrap_or_else(|| "default".to_string());
         // TODO(Phase 2): Use BackendTLSPolicy to determine TLS instead of port heuristic.
         let scheme = if port == 443 { "https" } else { "http" };
 
+        // namespace is always Some here: filled in from default_namespace at construction time.
+        let ns = self.config.backend_ref.namespace.as_deref().unwrap_or_default();
         let service_key = format!("{}/{}", ns, self.config.backend_ref.name);
 
-        // Use the gateway's standard backend resolution which respects EndpointMode,
-        // performs round-robin LB across endpoints, and honours health checks.
-        if let Some(backend) = crate::core::gateway::backends::select_roundrobin_backend(&service_key) {
-            let target = format!("{}", backend.addr);
+        // Use the gateway's standard backend resolution and selector cache.
+        if let Some(backend) = select_roundrobin_backend_key(&service_key) {
+            let mut addr = backend.inner().addr.clone();
+            resolve_target_port_key(&mut addr, Some(port), &service_key);
+            if validate_endpoint_backend_addr(&addr, allow_loopback_upstream).is_err() {
+                return Err("mirror backend resolved to loopback/link-local/metadata address (rejected)".to_string());
+            }
+            let target = format!("{}", addr);
             return Ok((target.clone(), format!("{scheme}://{target}")));
         }
 
-        // Fallback to Kubernetes DNS when the endpoint store has no data yet
-        // (e.g. startup race, or the Service hasn't been synced).
-        let host = format!("{}.{}.svc.cluster.local", self.config.backend_ref.name, ns);
-        let target = format!("{}:{}", host, port);
-        Ok((target, format!("{scheme}://{host}:{port}")))
+        Err("mirror backend has no selectable endpoint".to_string())
     }
 
     fn build_headers(&self, session: &dyn PluginSession, target: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
+        let connection_value = session.header_value("connection").unwrap_or_default();
+        let dynamic_listed = connection_listed_hop_by_hop(&connection_value);
         for (name, value) in session.request_headers() {
-            if is_hop_by_hop(&name) || name.eq_ignore_ascii_case("expect") || name.eq_ignore_ascii_case("host") {
+            if is_hop_by_hop_or_listed(&name, &dynamic_listed)
+                || name.eq_ignore_ascii_case("expect")
+                || name.eq_ignore_ascii_case("host")
+            {
                 continue;
             }
             if let (Ok(hn), Ok(hv)) = (HeaderName::from_bytes(name.as_bytes()), HeaderValue::from_str(&value)) {
@@ -187,7 +191,7 @@ impl RequestFilter for RequestMirrorPlugin {
             }
         };
 
-        let (target, base_url) = match self.resolve_target() {
+        let (target, base_url) = match self.resolve_target(session.ctx().allow_loopback_upstream) {
             Ok(v) => v,
             Err(_e) => {
                 log.push_err("mirror resolve error");
@@ -293,7 +297,7 @@ impl RequestFilter for RequestMirrorPlugin {
                     x_trace_id,
                     target,
                     status,
-                    begin.elapsed().as_millis() as u64,
+                    Instant::now().saturating_duration_since(begin).as_millis() as u64,
                     bytes_sent.load(Ordering::Relaxed),
                     chunks_sent.load(Ordering::Relaxed),
                     error,

@@ -1,0 +1,33 @@
+# EWMA LB basic distribution — 3 endpoints, no retry.
+# Exercises commit_attempt (LbCommit::Ewma) at connect and
+# finalize_attempt(Settle) at request end.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lb-ewma
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: lb-ewma-gateway
+      namespace: edgion-test
+  hostnames:
+    - "lb-ewma.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      retry:
+        attempts: 0
+      timeouts:
+        request: 5s
+        backendRequest: 4s
+      backendRefs:
+        - name: lb-ewma-service
+          port: 8080
+          filters:
+            - type: ExtensionRef
+              extensionRef:
+                group: edgion.io
+                kind: LBPolicyEwma
+                name: default

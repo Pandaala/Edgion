@@ -2,7 +2,7 @@
 
 This document lists all built-in functions in EdgionDSL, organized by category. Each function includes its full signature, parameter descriptions, return values, constraints, and usage examples.
 
-**Type overview**: EdgionDSL has 5 runtime types: `Str` (string), `Int` (64-bit integer), `Bool` (boolean), `Nil` (null/missing), and `List` (a list of strings; cannot be constructed directly by user code).
+**Type overview**: EdgionDSL has 6 runtime types: `Str` (string), `Int` (64-bit integer), `Bool` (boolean), `Nil` (null/missing), `List` (a list of strings; cannot be constructed directly by user code), and `Map` (an ordered string-keyed map; returned by `http.call()` and constructible via `{key: expr}` literals).
 
 **Phase overview**: Some functions are only valid in specific execution phases. `req.*` write operations and `grpc_error()` are only meaningful in the request phase; `resp.*` read and write operations are only valid in the response phase.
 
@@ -23,6 +23,7 @@ This document lists all built-in functions in EdgionDSL, organized by category. 
 - [Time](#time)
 - [JSON](#json)
 - [Network](#network)
+- [Redis (redis.*)](#redis-redis)
 - [Control Flow Functions](#control-flow-functions)
 - [Other Utilities](#other-utilities)
 
@@ -1249,7 +1250,7 @@ Finds the first match of a regular expression in a string and returns the matche
 
 **Return value**: First matched substring, or `nil`
 
-**Constraints**: The regular expression string must be at most 1024 bytes; an invalid regular expression triggers a runtime error.
+**Constraints**: The pattern must be a string literal. Both the 1024-byte length limit and regex syntax are validated at compile time.
 
 **Example**:
 ```
@@ -1277,7 +1278,7 @@ Replaces all occurrences of the regular expression match in a string with the sp
 
 **Return value**: Replaced string
 
-**Constraints**: The regular expression string must be at most 1024 bytes; an invalid regular expression triggers a runtime error.
+**Constraints**: The pattern must be a string literal. Both the 1024-byte length limit and regex syntax are validated at compile time.
 
 **Example**:
 ```
@@ -1321,7 +1322,7 @@ Formats a Unix timestamp as a string. The format string uses the `chrono` crate 
 
 **Return value**: Formatted time string
 
-**Constraints**: The format string must be at most 256 bytes; a runtime error is triggered if it exceeds this limit.
+**Constraints**: The format string must be at most 256 bytes; a runtime error is triggered if it exceeds this limit. An invalid format specifier (e.g. an unknown `%X`) also raises a runtime error rather than returning a string.
 
 **Common format characters**:
 - `%Y` — 4-digit year
@@ -1377,6 +1378,308 @@ if payload != nil {
 ---
 
 ## Network
+
+### http.call
+
+**Signature**: `http.call(method, url, body [, timeout_ms [, headers]])` → `Map`
+
+Sends an outbound HTTP request from the gateway to an arbitrary HTTP/HTTPS endpoint. The call is synchronous from the script's perspective and returns when a response is received or the timeout expires.
+
+**Parameters**:
+- `method` (Str) — HTTP method, e.g. `"GET"`, `"POST"`, `"PUT"`
+- `url` (Str) — Full URL including scheme and host, e.g. `"https://api.example.com/v1/check"`
+- `body` (Str | Nil) — Request body; pass `nil` for no body
+- `timeout_ms` (Int, optional) — Per-request timeout in milliseconds; capped to `httpMaxTimeoutMs` (default 5000)
+- `headers` (Map, optional) — Additional request headers as a `Map` of string key-value pairs
+
+**Return value**: A `Map` with the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | Int | HTTP response status code; `0` if the request failed (timeout, connection error, SSRF block, etc.) |
+| `body` | Str | Response body as UTF-8 text; empty string if the call failed or the body is empty |
+| `headers` | Map | Response headers; each key is the lowercase header name, each value is the last header value for that name |
+
+**This function never raises a runtime error.** Network failures, timeouts, and SSRF blocks all return `status = 0` with an empty body.
+
+**Constraints**:
+- Only `http` and `https` URL schemes are accepted; other schemes (e.g. `file://`, `ftp://`) return `status = 0`.
+- When `httpBlockPrivateIps: true`, requests to loopback, private, and link-local addresses return `status = 0`.
+- The response body is truncated at `httpMaxResponseBodyBytes` (default 1 MiB).
+- The response `headers` Map is silently truncated to the first `max_map_size` entries (SSRF / large-response-header guard); the call still succeeds.
+- The actual timeout applied is `min(timeout_ms, httpMaxTimeoutMs)`.
+- At most 10 redirects are followed (global client setting).
+
+**Configuration fields** (inside `config`):
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `httpMaxTimeoutMs` | Integer | `5000` | Hard cap on per-call timeout (ms) |
+| `httpMaxResponseBodyBytes` | Integer | `1048576` | Maximum response body size (bytes); body is truncated if exceeded |
+| `httpBlockPrivateIps` | Boolean | `false` | Block outbound calls to private/loopback/link-local IP addresses (SSRF guard) |
+
+**Example — call a health endpoint and branch on status**:
+```
+let r = http.call("GET", "http://internal-service/health", nil, 1000)
+if r["status"] == 200 {
+  req.set_header("X-Backend-Healthy", "true")
+} else {
+  return deny(503, "backend unavailable")
+}
+```
+
+**Example — POST JSON with custom headers**:
+```
+let hdrs = {"Content-Type": "application/json", "X-Api-Key": req.header("X-Api-Key")}
+let r = http.call("POST", "https://auth.example.com/verify", "{\"token\":\"abc\"}", 2000, hdrs)
+if r["status"] != 200 {
+  return deny(401, "auth check failed")
+}
+```
+
+**Example — read a response header**:
+```
+let r = http.call("GET", "https://api.example.com/quota", nil, 2000)
+let remaining = r["headers"]["x-ratelimit-remaining"]
+if remaining != nil {
+  resp.set_header("X-Quota-Remaining", remaining)
+}
+```
+
+---
+
+## Redis (redis.*)
+
+All `redis.*` functions are backed by a pre-configured LinkSys Redis connection pool. The connection pool is resolved at request time via the `linkSysRefs` config field. Each `redis.*` call takes a `link` (the alias name) as its first argument to identify which connection to use.
+
+**Error contract**: Every `redis.*` function returns a `Map { ok: Bool, value: <type>, error: Str | Nil }`. The function **never raises a runtime error** and **never panics**. Script authors decide how to handle failures (fail-open, fail-close, or graceful degradation).
+
+- `ok: true` — The operation succeeded; `value` holds the result; `error` is `nil`.
+- `ok: false` — A Redis connection or operation error occurred; `value` is `nil`; `error` holds the error message.
+- When the `link` parameter does not match any alias in `linkSysRefs`, returns `ok: false, error: "link 'x' not found in linkSysRefs"`.
+- When the specified link exists but is not yet ready, returns `ok: false, error: "link 'x' not ready"`.
+
+**Configuration field** (inside `config`):
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `linkSysRefs` | Vec<{namespace, name}> | Required when `redis.*` is used | List of LinkSys Redis resource references. Each element has `namespace` and `name` fields; the `name` is the alias used in `redis.*` calls. Configuring this field is mandatory if any `redis.*` builtin appears in the script; a missing `linkSysRefs` causes the plugin to fail at load time. |
+
+### redis.get
+
+**Signature**: `redis.get(link, key)` → `Map { ok: Bool, value: Str | Nil, error: Str | Nil }`
+
+Reads the value of a string key. Returns `value: nil` when the key does not exist.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+
+**Example — fail-close**:
+```
+let r = redis.get("cache", "feature:dark-mode")
+if !r["ok"] {
+  log_warn("redis error: " + r["error"])
+  return deny(503, "service unavailable")
+}
+if r["value"] == "on" {
+  req.set_header("X-Feature-Dark-Mode", "true")
+}
+```
+
+---
+
+### redis.set
+
+**Signature**: `redis.set(link, key, value)` or `redis.set(link, key, value, ttl_ms)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+Sets a string key. Optionally sets a TTL in milliseconds.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+- `value` (Str) — Value to store
+- `ttl_ms` (Int, optional) — Time-to-live in milliseconds; `nil` or `0` means no expiry
+
+**Example**:
+```
+let r = redis.set("cache", "session:" + req.header("X-Session-Id"), "active", 300000)
+if !r["ok"] {
+  log_warn("redis set failed: " + r["error"])
+}
+```
+
+---
+
+### redis.del
+
+**Signature**: `redis.del(link, key)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+Deletes a key. Returns `value: true` if the key was deleted, `value: false` if the key did not exist.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+
+---
+
+### redis.exists
+
+**Signature**: `redis.exists(link, key)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+Checks whether a key exists. Returns `value: true` if the key exists, `value: false` otherwise.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+
+---
+
+### redis.ttl
+
+**Signature**: `redis.ttl(link, key)` → `Map { ok: Bool, value: Int, error: Str | Nil }`
+
+Returns the remaining time-to-live of a key in seconds.
+
+| `value` | Meaning |
+|---------|---------|
+| `>= 0` | Remaining TTL in seconds |
+| `-1` | Key exists but has no expiry |
+| `-2` | Key does not exist |
+
+`ok: false` is returned only on a connection error.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+
+---
+
+### redis.expire
+
+**Signature**: `redis.expire(link, key, seconds)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+Sets a TTL on an existing key. Returns `value: true` if the timeout was set, `value: false` if the key does not exist.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+- `seconds` (Int) — TTL in seconds
+
+---
+
+### redis.incr
+
+**Signature**: `redis.incr(link, key)` → `Map { ok: Bool, value: Int, error: Str | Nil }`
+
+Atomically increments the integer value of a key by 1. Creates the key with value `1` if it does not exist.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+
+**Example — simple rate limiting**:
+```
+let r = redis.incr("cache", "rate:" + req.client_ip)
+if !r["ok"] {
+  log_warn("redis error: " + r["error"])
+  return deny(503, "service unavailable")
+}
+if r["value"] > 100 {
+  return deny(429, "rate limit exceeded")
+}
+```
+
+---
+
+### redis.incr_by
+
+**Signature**: `redis.incr_by(link, key, delta)` → `Map { ok: Bool, value: Int, error: Str | Nil }`
+
+Atomically increments the integer value of a key by `delta`. `delta` may be negative (acts as DECRBY).
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Redis key name
+- `delta` (Int) — Amount to add (may be negative)
+
+---
+
+### redis.hget
+
+**Signature**: `redis.hget(link, key, field)` → `Map { ok: Bool, value: Str | Nil, error: Str | Nil }`
+
+Gets the value of a hash field. Returns `value: nil` when the key or field does not exist.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Hash key name
+- `field` (Str) — Field name
+
+---
+
+### redis.hset
+
+**Signature**: `redis.hset(link, key, field, value)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+Sets a field in a hash. Returns `value: true` on success.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Hash key name
+- `field` (Str) — Field name
+- `value` (Str) — Field value
+
+---
+
+### redis.hdel
+
+**Signature**: `redis.hdel(link, key, field)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+Deletes a field from a hash. Returns `value: true` if the field existed and was deleted, `value: false` otherwise.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Hash key name
+- `field` (Str) — Field name
+
+---
+
+### redis.hgetall
+
+**Signature**: `redis.hgetall(link, key)` → `Map { ok: Bool, value: Map, error: Str | Nil }`
+
+Gets all fields and values of a hash. Returns an empty `Map` when the key does not exist. `ok: false` is returned on a connection error, or when the hash contains more entries than the `max_map_size` limit (in which case the oversize `Map` is not constructed and `error` describes the actual size and limit).
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Hash key name
+
+**Example**:
+```
+let r = redis.hgetall("cache", "user:config:1234")
+if r["ok"] {
+  let theme = r["value"]["theme"]
+  if theme != nil {
+    resp.set_header("X-User-Theme", theme)
+  }
+}
+```
+
+---
+
+### redis.hexists
+
+**Signature**: `redis.hexists(link, key, field)` → `Map { ok: Bool, value: Bool, error: Str | Nil }`
+
+Checks whether a field exists in a hash. Returns `value: true` if the field exists, `value: false` otherwise.
+
+**Parameters**:
+- `link` (Str) — Alias name from `linkSysRefs[].name`
+- `key` (Str) — Hash key name
+- `field` (Str) — Field name
+
+---
 
 ### ip_in_cidr
 
@@ -1507,7 +1810,7 @@ Generates an integer sequence from `start` (inclusive) to `end` (exclusive), wit
 
 **Return value**: List of numeric strings
 
-**Constraints**: At most 1000 elements are generated; any beyond that are truncated (i.e. if `end - start > 1000`, only the first 1000 are returned).
+**Constraints**: At most `min(max_list_len, 1000)` elements are generated (where `max_list_len` is the per-plugin VM limit, default 1024); any beyond that are silently truncated.
 
 **Example**:
 ```
@@ -1646,6 +1949,7 @@ if sig == nil {
 | `time_now()` | Time | `Int` | 0 |
 | `time_format(timestamp, format)` | Time | `Str` | 2 |
 | `json_get(json_str, path)` | JSON | `Str\|Int\|Bool\|Nil` | 2 |
+| `http.call(method, url, body [, timeout_ms [, headers]])` | Network | `Map` | 2–5 |
 | `ip_in_cidr(ip, cidr)` | Network | `Bool` | 2 |
 | `uuid()` | Utility | `Str` | 0 |
 | `range(start, end)` | Utility | `List` | 2 |

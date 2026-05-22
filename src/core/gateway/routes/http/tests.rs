@@ -168,7 +168,6 @@ mod route_matching_tests {
             let wildcard_engine = domain_routes.wildcard_engine.load();
             wildcard_engine
                 .as_ref()
-                .as_ref()
                 .and_then(|engine| engine.match_host(hostname))
                 .is_some()
         } else {
@@ -197,15 +196,12 @@ mod route_matching_tests {
         let exact_map = domain_routes.exact_domain_map.load();
         let route_rules = if let Some(route_rules) = exact_map.get(&hostname.to_lowercase()) {
             Some(route_rules.clone())
-        } else if let Some(ref catch_all) = **domain_routes.catch_all_routes.load() {
-            Some(catch_all.clone())
+        } else if let Some(catch_all) = domain_routes.catch_all_routes.load_full() {
+            Some(catch_all)
         } else {
             // Try wildcard engine
             let wildcard_engine = domain_routes.wildcard_engine.load();
-            wildcard_engine
-                .as_ref()
-                .as_ref()
-                .and_then(|engine| engine.match_host(hostname))
+            wildcard_engine.as_ref().and_then(|engine| engine.match_host(hostname))
         };
 
         if let Some(route_rules) = route_rules {

@@ -27,6 +27,7 @@ pub struct AllEndpointStatusConfig {
     /// Default: 2000 (2 seconds). Maximum: 5000 (5 seconds).
     /// Enforced ceiling for security — prevents slow backends from blocking.
     #[serde(default = "default_timeout_ms")]
+    #[schemars(range(min = 1))]
     pub timeout_ms: u64,
 
     /// Wall-clock timeout for the entire fan-out operation in milliseconds.
@@ -35,6 +36,7 @@ pub struct AllEndpointStatusConfig {
     /// will be cancelled when this deadline is reached. Remaining endpoints
     /// are reported as "wall timeout exceeded".
     #[serde(default = "default_wall_timeout_ms")]
+    #[schemars(range(min = 1))]
     pub wall_timeout_ms: u64,
 
     /// Maximum number of endpoints to query.
@@ -42,6 +44,7 @@ pub struct AllEndpointStatusConfig {
     /// Enforced ceiling for security — prevents large fan-out attacks.
     /// Most services have fewer than 20 pods; raise only when needed.
     #[serde(default = "default_max_endpoints")]
+    #[schemars(range(min = 1))]
     pub max_endpoints: usize,
 
     /// Maximum response body size per endpoint in bytes.
@@ -55,6 +58,7 @@ pub struct AllEndpointStatusConfig {
     /// Maximum number of concurrent requests to endpoints.
     /// Default: 10. Controls the fan-out parallelism.
     #[serde(default = "default_concurrency_limit")]
+    #[schemars(range(min = 1))]
     pub concurrency_limit: usize,
 
     /// Whether to include response headers in the aggregated result.
@@ -73,11 +77,6 @@ pub struct AllEndpointStatusConfig {
     /// Common override: "/health" or "/healthz".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path_override: Option<String>,
-
-    // === Validation cache ===
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 fn default_timeout_ms() -> u64 {
@@ -107,16 +106,32 @@ impl Default for AllEndpointStatusConfig {
             include_response_headers: false,
             method_override: None,
             path_override: None,
-            validation_error: None,
         }
     }
 }
 
 impl AllEndpointStatusConfig {
     /// Return validation error if config is invalid.
-    /// Called during preparse for status reporting.
-    pub fn get_validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
+    /// Checks all fields eagerly — no cached state.
+    pub fn get_validation_error(&self) -> Option<String> {
+        if self.timeout_ms == 0 {
+            return Some("timeoutMs must be > 0".to_string());
+        }
+        if self.wall_timeout_ms == 0 {
+            return Some("wallTimeoutMs must be > 0".to_string());
+        }
+        if self.max_endpoints == 0 {
+            return Some("maxEndpoints must be > 0".to_string());
+        }
+        if self.concurrency_limit == 0 {
+            return Some("concurrencyLimit must be > 0".to_string());
+        }
+        if let Some(ref path) = self.path_override {
+            if !path.starts_with('/') {
+                return Some("pathOverride must start with '/'".to_string());
+            }
+        }
+        None
     }
 
     /// Clamp timeout_ms to security ceiling.
@@ -137,6 +152,14 @@ impl AllEndpointStatusConfig {
     /// Clamp max_body_size to security ceiling.
     pub fn effective_max_body_size(&self) -> usize {
         self.max_body_size.min(MAX_BODY_SIZE_LIMIT)
+    }
+}
+
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for AllEndpointStatusConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.get_validation_error()
     }
 }
 
@@ -212,5 +235,79 @@ mod tests {
             ..Default::default()
         }; // 1MB
         assert_eq!(config.effective_max_body_size(), 16 * 1024);
+    }
+
+    // --- validation tests ---
+
+    #[test]
+    fn test_validation_default_config_is_valid() {
+        let config = AllEndpointStatusConfig::default();
+        assert!(config.get_validation_error().is_none());
+    }
+
+    #[test]
+    fn test_validation_timeout_ms_zero() {
+        let config = AllEndpointStatusConfig {
+            timeout_ms: 0,
+            ..Default::default()
+        };
+        assert_eq!(config.get_validation_error(), Some("timeoutMs must be > 0".to_string()));
+    }
+
+    #[test]
+    fn test_validation_wall_timeout_ms_zero() {
+        let config = AllEndpointStatusConfig {
+            wall_timeout_ms: 0,
+            ..Default::default()
+        };
+        assert_eq!(
+            config.get_validation_error(),
+            Some("wallTimeoutMs must be > 0".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validation_max_endpoints_zero() {
+        let config = AllEndpointStatusConfig {
+            max_endpoints: 0,
+            ..Default::default()
+        };
+        assert_eq!(
+            config.get_validation_error(),
+            Some("maxEndpoints must be > 0".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validation_concurrency_limit_zero() {
+        let config = AllEndpointStatusConfig {
+            concurrency_limit: 0,
+            ..Default::default()
+        };
+        assert_eq!(
+            config.get_validation_error(),
+            Some("concurrencyLimit must be > 0".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validation_path_override_missing_slash() {
+        let config = AllEndpointStatusConfig {
+            path_override: Some("health".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.get_validation_error(),
+            Some("pathOverride must start with '/'".to_string()),
+        );
+    }
+
+    #[test]
+    fn test_validation_path_override_with_slash_is_valid() {
+        let config = AllEndpointStatusConfig {
+            path_override: Some("/health".to_string()),
+            ..Default::default()
+        };
+        assert!(config.get_validation_error().is_none());
     }
 }

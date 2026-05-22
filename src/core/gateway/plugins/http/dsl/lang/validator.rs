@@ -25,6 +25,8 @@ pub struct ValidationLimits {
     pub max_const_pool_bytes: usize,
     /// Max loop nesting depth (default: 8)
     pub max_loop_depth: usize,
+    /// Max MakeMap operand — mirrors VmLimits::max_map_size (default: 512)
+    pub max_map_size: usize,
 }
 
 impl Default for ValidationLimits {
@@ -36,6 +38,7 @@ impl Default for ValidationLimits {
             max_string_const_len: 4_096,
             max_const_pool_bytes: 32_768,
             max_loop_depth: 8,
+            max_map_size: 512,
         }
     }
 }
@@ -108,8 +111,13 @@ impl Validator {
                             MAX_REGEX_PATTERN_LEN
                         )));
                     }
-                    // 5. Regex syntax validation
-                    if let Err(e) = regex::Regex::new(pattern) {
+                    // 5. Regex syntax validation — bound DFA memory so a malicious
+                    // bytecode payload cannot exhaust memory at validation time.
+                    if let Err(e) = regex::RegexBuilder::new(pattern)
+                        .size_limit(1 << 20)
+                        .dfa_size_limit(1 << 20)
+                        .build()
+                    {
                         errors.push(ValidationError::new(format!(
                             "invalid regex constant[{}] '{}': {}",
                             i, pattern, e
@@ -137,6 +145,11 @@ impl Validator {
                             "LoadConst at instruction {} references constant {} but pool size is {}",
                             i, idx, const_count
                         )));
+                    } else if matches!(script.constants[*idx as usize], Constant::Regex(_)) {
+                        errors.push(ValidationError::new(format!(
+                            "LoadConst at instruction {} references constant {} (Regex) which cannot be used as a value",
+                            i, idx
+                        )));
                     }
                 }
                 OpCode::Matches(idx) => {
@@ -157,12 +170,13 @@ impl Validator {
             use super::compiler::builtin_expected_argc;
             for (i, op) in script.code.iter().enumerate() {
                 if let OpCode::CallBuiltin(builtin_id, argc) = op {
-                    let expected = builtin_expected_argc(builtin_id);
-                    if *argc as usize != expected {
-                        errors.push(ValidationError::new(format!(
-                            "CallBuiltin {:?} at instruction {} expects {} arg(s), bytecode says {}",
-                            builtin_id, i, expected, argc
-                        )));
+                    if let Some(expected) = builtin_expected_argc(builtin_id) {
+                        if *argc as usize != expected {
+                            errors.push(ValidationError::new(format!(
+                                "CallBuiltin {:?} at instruction {} expects {} arg(s), bytecode says {}",
+                                builtin_id, i, expected, argc
+                            )));
+                        }
                     }
                 }
             }
@@ -200,13 +214,22 @@ impl Validator {
             }
         }
 
-        // 9. LoopInit / LoopEnd balance check
+        // 9. LoopInit / LoopEnd balance check + observed max depth
+        //
+        // Re-derive the maximum loop nesting depth directly from the opcode stream rather than
+        // trusting `script.max_loop_depth`. The bytecode field is operator-supplied (via the
+        // `bytecode:` config knob) and an adversary can declare `max_loop_depth: 0` while shipping
+        // arbitrarily-nested LoopInit/LoopEnd pairs, which the runtime would then execute.
+        let mut loop_depth: i32 = 0;
+        let mut max_observed_depth: i32 = 0;
         {
-            let mut loop_depth: i32 = 0;
             for (i, op) in script.code.iter().enumerate() {
                 match op {
                     OpCode::LoopInit => {
                         loop_depth += 1;
+                        if loop_depth > max_observed_depth {
+                            max_observed_depth = loop_depth;
+                        }
                     }
                     OpCode::LoopEnd => {
                         loop_depth -= 1;
@@ -236,12 +259,35 @@ impl Validator {
             }
         }
 
-        // 10. Loop nesting depth
-        if script.max_loop_depth as usize > self.limits.max_loop_depth {
+        // 10. Loop nesting depth — check the depth observed in the opcode stream, not the
+        // self-declared field. Also reject scripts whose declared `max_loop_depth` understates
+        // the real depth, so dishonest hand-crafted payloads fail loudly.
+        let observed_depth = max_observed_depth.max(0) as usize;
+        if observed_depth > self.limits.max_loop_depth {
             errors.push(ValidationError::new(format!(
                 "loop nesting too deep: {} (max {})",
-                script.max_loop_depth, self.limits.max_loop_depth
+                observed_depth, self.limits.max_loop_depth
             )));
+        }
+        if (script.max_loop_depth as usize) < observed_depth {
+            errors.push(ValidationError::new(format!(
+                "declared max_loop_depth {} is less than observed depth {}",
+                script.max_loop_depth, observed_depth
+            )));
+        }
+
+        // 11. MakeMap operand check — catches oversized map literals from source and
+        // rejects injected bytecode payloads (e.g. MakeMap(65535)) before they reach
+        // the Gateway runtime.
+        for (i, op) in script.code.iter().enumerate() {
+            if let OpCode::MakeMap(n) = op {
+                if (*n as usize) > self.limits.max_map_size {
+                    errors.push(ValidationError::new(format!(
+                        "MakeMap at instruction {} requires {} entries but limit is {}",
+                        i, n, self.limits.max_map_size
+                    )));
+                }
+            }
         }
 
         errors
@@ -278,8 +324,10 @@ pub fn compile_dsl_source(source: &str, validation_limits: &ValidationLimits) ->
     // Step 1: Parse
     let program = parse_program(source).map_err(|e| vec![e.to_string()])?;
 
-    // Step 2: Compile
-    let script = Compiler::new().compile(&program).map_err(|e| vec![e.to_string()])?;
+    // Step 2: Compile (embed source for PC → source correlation in runtime debug logs)
+    let script = Compiler::new()
+        .compile_with_source(&program, source)
+        .map_err(|e| vec![e.to_string()])?;
 
     // Step 3: Validate
     let errors = Validator::new(validation_limits.clone()).validate(&script);
@@ -331,6 +379,217 @@ mod tests {
         let script = CompiledScript::deserialize_base64(&bytecode_b64).unwrap();
         assert!(!script.code.is_empty());
         assert_eq!(script.local_count, 1);
+    }
+
+    #[test]
+    fn test_compile_with_source_embeds_original_text() {
+        let source = r#"let x = 42"#;
+        let program = parse_program(source).unwrap();
+        let script = Compiler::new().compile_with_source(&program, source).unwrap();
+        assert_eq!(script.source.as_deref(), Some(source));
+    }
+
+    #[test]
+    fn test_compile_without_source_leaves_field_none() {
+        // Existing call sites using Compiler::compile (e.g. compiler/* unit tests)
+        // must continue to produce CompiledScript::source = None.
+        let program = parse_program("let x = 42").unwrap();
+        let script = Compiler::new().compile(&program).unwrap();
+        assert!(script.source.is_none());
+        // Verify `#[serde(skip_serializing_if = "Option::is_none")]` keeps the
+        // field out of the JSON payload when source is absent.
+        let json = serde_json::to_string(&script).unwrap();
+        assert!(
+            !json.contains("\"source\""),
+            "expected `source` to be omitted from JSON when None, got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_dishonest_max_loop_depth() {
+        // Hand-crafted bytecode declares max_loop_depth=0 but actually nests LoopInit pairs
+        // beyond the configured limit. Mimics an operator-supplied `bytecode:` payload.
+        let limits = ValidationLimits {
+            max_loop_depth: 2,
+            ..Default::default()
+        };
+        let mut code = Vec::new();
+        for _ in 0..5 {
+            code.push(OpCode::LoopInit);
+        }
+        for _ in 0..5 {
+            code.push(OpCode::LoopEnd);
+        }
+        code.push(OpCode::ReturnNext);
+        let script = CompiledScript {
+            version: BYTECODE_VERSION,
+            code,
+            constants: vec![],
+            local_count: 0,
+            max_loop_depth: 0, // dishonest — real depth is 5
+            source: None,
+            source_map: None,
+        };
+        let errors = Validator::new(limits).validate(&script);
+        let joined = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("|");
+        assert!(
+            joined.contains("loop nesting too deep"),
+            "expected observed-depth limit error, got: {}",
+            joined
+        );
+        assert!(
+            joined.contains("declared max_loop_depth"),
+            "expected declared/observed mismatch error, got: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_validate_accepts_honest_loop_depth() {
+        let limits = ValidationLimits::default();
+        let script = CompiledScript {
+            version: BYTECODE_VERSION,
+            code: vec![
+                OpCode::LoopInit,
+                OpCode::LoopInit,
+                OpCode::LoopEnd,
+                OpCode::LoopEnd,
+                OpCode::ReturnNext,
+            ],
+            constants: vec![],
+            local_count: 0,
+            max_loop_depth: 2,
+            source: None,
+            source_map: None,
+        };
+        let errors = Validator::new(limits).validate(&script);
+        assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+    }
+
+    #[test]
+    fn test_validate_rejects_loadconst_regex() {
+        // Hand-crafted bytecode: LoadConst(0) where constants[0] is a Regex.
+        // The validator must reject this because Regex constants cannot be used as values.
+        let script = CompiledScript {
+            version: BYTECODE_VERSION,
+            code: vec![OpCode::LoadConst(0), OpCode::ReturnNext],
+            constants: vec![Constant::Regex("\\d+".to_string())],
+            local_count: 0,
+            max_loop_depth: 0,
+            source: None,
+            source_map: None,
+        };
+        let errors = Validator::new(ValidationLimits::default()).validate(&script);
+        let joined = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("|");
+        assert!(
+            joined.contains("(Regex) which cannot be used as a value"),
+            "expected LoadConst-Regex error, got: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_regex_opcode_oob_index() {
+        // All three regex opcodes must reject an out-of-bounds constant index.
+        for code in [
+            vec![OpCode::Matches(5), OpCode::ReturnNext],
+            vec![OpCode::RegexFind(5), OpCode::ReturnNext],
+            vec![OpCode::RegexReplace(5), OpCode::ReturnNext],
+        ] {
+            let script = CompiledScript {
+                version: BYTECODE_VERSION,
+                code,
+                constants: vec![Constant::Regex("\\d+".to_string())],
+                local_count: 0,
+                max_loop_depth: 0,
+                source: None,
+                source_map: None,
+            };
+            let errors = Validator::new(ValidationLimits::default()).validate(&script);
+            let joined = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("|");
+            assert!(
+                joined.contains("but pool size is"),
+                "expected out-of-bounds error, got: {}",
+                joined
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_rejects_regex_opcode_non_regex_constant() {
+        // All three regex opcodes must reject a valid index that points to a non-Regex constant.
+        for code in [
+            vec![OpCode::Matches(0), OpCode::ReturnNext],
+            vec![OpCode::RegexFind(0), OpCode::ReturnNext],
+            vec![OpCode::RegexReplace(0), OpCode::ReturnNext],
+        ] {
+            let script = CompiledScript {
+                version: BYTECODE_VERSION,
+                code,
+                constants: vec![Constant::Str("not-a-regex".to_string())],
+                local_count: 0,
+                max_loop_depth: 0,
+                source: None,
+                source_map: None,
+            };
+            let errors = Validator::new(ValidationLimits::default()).validate(&script);
+            let joined = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("|");
+            assert!(
+                joined.contains("which is not a Regex"),
+                "expected non-Regex error, got: {}",
+                joined
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_rejects_loadconst_regex_non_zero_index() {
+        // Regex at index 1 in a mixed pool — verifies the type-check branch fires
+        // independently of the bounds-check branch (which only triggers when idx >= pool_size).
+        // Guards against an accidental idx == 0 short-circuit regression.
+        let script = CompiledScript {
+            version: BYTECODE_VERSION,
+            code: vec![OpCode::LoadConst(1), OpCode::ReturnNext],
+            constants: vec![Constant::Str("normal".to_string()), Constant::Regex("\\w+".to_string())],
+            local_count: 0,
+            max_loop_depth: 0,
+            source: None,
+            source_map: None,
+        };
+        let errors = Validator::new(ValidationLimits::default()).validate(&script);
+        let joined = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("|");
+        assert!(
+            joined.contains("references constant 1 (Regex) which cannot be used as a value"),
+            "expected LoadConst-Regex error at non-zero index, got: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_oversized_makemap() {
+        // Hand-crafted bytecode: MakeMap(n) where n exceeds max_map_size.
+        // The validator must catch injected oversized map operands before they reach the runtime.
+        let limits = ValidationLimits {
+            max_map_size: 4,
+            ..Default::default()
+        };
+        let script = CompiledScript {
+            version: BYTECODE_VERSION,
+            code: vec![OpCode::MakeMap(5), OpCode::ReturnNext],
+            constants: vec![],
+            local_count: 0,
+            max_loop_depth: 0,
+            source: None,
+            source_map: None,
+        };
+        let errors = Validator::new(limits).validate(&script);
+        let joined = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("|");
+        assert!(
+            joined.contains("MakeMap at instruction 0 requires 5 entries but limit is 4"),
+            "expected MakeMap limit error, got: {}",
+            joined
+        );
     }
 
     #[test]

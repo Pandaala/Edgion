@@ -48,11 +48,13 @@ pub struct TLSRouteSpec {
     /// Pre-computed listener keys from parentRef resolution (set by Controller).
     /// Used by Gateway to bind this route to per-listener route tables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub resolved_listeners: Option<Vec<ListenerKey>>,
 
     /// Effective hostnames after intersecting route hostnames with listener hostnames.
     /// Set by Controller; used by Gateway for route matching instead of raw `hostnames`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub effective_hostnames: Option<Vec<String>>,
 }
 
@@ -160,6 +162,7 @@ pub struct TLSBackendRef {
     /// Set by Controller when this backend's cross-namespace reference
     /// is not permitted (no matching ReferenceGrant).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub ref_denied: Option<RefDenied>,
 }
 

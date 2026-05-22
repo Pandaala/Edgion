@@ -3,11 +3,11 @@
 // Required config files (in examples/conf/):
 // - HTTPRoute_default_timeout-backend.yaml    # backend timeout test route
 // - HTTPRoute_default_timeout-client.yaml     # client timeout test route
-// - EdgionPlugins_default_timeout-debug.yaml  # Debugconfig
+// - EdgionPlugins_default_timeout-debug.yaml  # Debug config
 // - EndpointSlice_edge_test-http.yaml         # HTTP backend service discovery
 // - Service_edge_test-http.yaml               # HTTP service definition
 // - Gateway_edge_example-gateway.yaml         # Gateway config
-// - EdgionGatewayConfig__example-gateway.yaml # GatewayConfig（client.readTimeout: 60s）
+// - EdgionGatewayConfig__example-gateway.yaml # GatewayConfig (client.readTimeout: 60s)
 // - GatewayClass__public-gateway.yaml         # GatewayClass config
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -84,7 +84,7 @@ impl TimeoutTestSuite {
     fn test_backend_request_timeout() -> TestCase {
         TestCase::new(
             "backend_request_timeout",
-            "Test backend request timeout（2s delay vs 1s timeout）",
+            "Test backend request timeout (2s delay vs 1s timeout)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -141,7 +141,7 @@ impl TimeoutTestSuite {
     fn test_client_read_timeout_499() -> TestCase {
         TestCase::new(
             "client_read_timeout_499",
-            "Test client disconnect returns499（reqwest timeout1s，server delay3s）",
+            "Test client disconnect returns 499 (reqwest timeout 1s, server delay 3s)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -206,7 +206,7 @@ impl TimeoutTestSuite {
         )
     }
 
-    /// RED: request timeout 端到端强制 — 路由设 request: "1s"，后端延迟 3s，期望 504
+    /// RED: end-to-end enforcement of request timeout — route sets request: "1s", backend delays 3s, expect 504.
     fn test_request_timeout_enforced() -> TestCase {
         TestCase::new(
             "request_timeout_enforced",
@@ -256,7 +256,7 @@ impl TimeoutTestSuite {
         )
     }
 
-    /// RED: "0s" 禁用后端超时 — backendRequest: "0s" 时后端延迟 2s 应正常返回 200
+    /// RED: "0s" disables backend timeout — with backendRequest: "0s", a 2s backend delay should still return 200.
     fn test_backend_request_disabled() -> TestCase {
         TestCase::new(
             "backend_request_disabled",
@@ -290,7 +290,7 @@ impl TimeoutTestSuite {
         )
     }
 
-    /// RED: "0s" 禁用请求超时 — request: "0s" 时后端延迟 2s 应正常返回 200
+    /// RED: "0s" disables request timeout — with request: "0s", a 2s backend delay should still return 200.
     fn test_request_timeout_disabled() -> TestCase {
         TestCase::new(
             "request_timeout_disabled",
@@ -327,7 +327,7 @@ impl TimeoutTestSuite {
     fn test_client_read_timeout() -> TestCase {
         TestCase::new(
             "client_read_timeout",
-            "Test client read timeout（3sdelay，framework5s timeout，observe gateway behavior）",
+            "Test client read timeout (3s delay, framework 5s timeout, observe gateway behavior)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();

@@ -13,6 +13,7 @@ use crate::core::gateway::runtime::server::server_header::ServerHeaderOpts;
 use crate::types::{EdgionGatewayConfig, EdgionHttpContext, Listener, ListenerKey};
 
 // Sub-modules
+pub mod global_plugins_resolve;
 pub mod parse_timeout;
 pub mod preflight_handler;
 
@@ -29,10 +30,12 @@ mod pg_request_body_filter;
 mod pg_request_filter;
 mod pg_response_filter;
 mod pg_upstream_peer;
+mod pg_upstream_request_filter;
 mod pg_upstream_response_body_filter;
 mod pg_upstream_response_filter;
 
 // Re-exports
+pub use global_plugins_resolve::{resolve_global_plugins, resolve_route_ext_refs};
 pub use parse_timeout::{ParsedBackendTimeout, ParsedClientTimeout, ParsedTimeouts};
 pub use preflight_handler::PreflightHandler;
 
@@ -108,6 +111,18 @@ impl ProxyHttp for EdgionHttpProxy {
         Self::CTX: Send + Sync,
     {
         pg_request_body_filter::request_body_filter(self, session, body, end_of_stream, ctx).await
+    }
+
+    async fn upstream_request_filter(
+        &self,
+        session: &mut Session,
+        upstream_request: &mut pingora_http::RequestHeader,
+        ctx: &mut Self::CTX,
+    ) -> pingora_core::Result<()>
+    where
+        Self::CTX: Send + Sync,
+    {
+        pg_upstream_request_filter::upstream_request_filter(self, session, upstream_request, ctx).await
     }
 
     async fn upstream_response_filter(

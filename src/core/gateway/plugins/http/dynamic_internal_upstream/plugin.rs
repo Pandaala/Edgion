@@ -5,7 +5,7 @@ use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{
     DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch, DynamicInternalUpstreamConfig,
 };
-use crate::types::InternalJumpPreset;
+use crate::types::{InternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 
 pub struct DynamicInternalUpstream {
     name: String,
@@ -36,13 +36,7 @@ impl RequestFilter for DynamicInternalUpstream {
             return PluginRunningResult::GoodNext;
         }
 
-        // 1. Check config validation
-        if let Some(_err) = self.config.get_validation_error() {
-            log.push("config error");
-            return PluginRunningResult::GoodNext; // Fail-open on config error
-        }
-
-        // 2. Extract raw routing key via KeyGet
+        // 1. Extract raw routing key via KeyGet
         let raw_value = match session.key_get(&self.config.from).await {
             Some(v) if !v.is_empty() => v,
             _ => {
@@ -62,7 +56,7 @@ impl RequestFilter for DynamicInternalUpstream {
             }
         };
 
-        // 3. Apply regex extraction if configured
+        // 2. Apply regex extraction if configured
         let routing_key = if let Some(ref extract) = self.config.extract {
             if let Some(ref regex) = self.config.compiled_regex {
                 match regex.captures(&raw_value).and_then(|c| c.get(extract.group)) {
@@ -90,7 +84,7 @@ impl RequestFilter for DynamicInternalUpstream {
             raw_value
         };
 
-        // 4. Resolve routing key → target backend_ref (name, namespace)
+        // 3. Resolve routing key → target backend_ref (name, namespace)
         let (target_name, target_namespace) = match self.config.resolve_target(&routing_key) {
             Some((name, ns)) => (name.to_string(), ns.map(|s| s.to_string())),
             None => {
@@ -111,7 +105,7 @@ impl RequestFilter for DynamicInternalUpstream {
             }
         };
 
-        // 5. Pre-validate that target backend_ref exists in route's backend_refs
+        // 4. Pre-validate that target backend_ref exists in route's backend_refs
         let ctx = session.ctx();
         let route_unit = match ctx.route_unit.as_ref() {
             Some(unit) => unit,
@@ -153,16 +147,22 @@ impl RequestFilter for DynamicInternalUpstream {
             };
         }
 
-        // 6. Build InternalJumpPreset and set in context
+        // 5. Build InternalJumpPreset and set in context
         let info = InternalJumpPreset {
             backend_ref_name: target_name.clone(),
             backend_ref_namespace: target_namespace.clone(),
         };
-        session.set_internal_jump(info);
+        match session.set_upstream_jump(UpstreamJumpTarget::Internal(info)) {
+            SetJumpOutcome::Set => {
+                log.push("upstream selected");
+            }
+            SetJumpOutcome::Rejected => {
+                log.push("jump locked, rejected");
+                return PluginRunningResult::GoodNext;
+            }
+        }
 
-        log.push("upstream selected");
-
-        // 7. Optionally set debug request header (sent to upstream for tracing)
+        // 6. Optionally set debug request header (sent to upstream for tracing)
         if self.config.debug_header {
             let header_value = match &target_namespace {
                 Some(ns) => format!("{}/{}", ns, target_name),

@@ -1,0 +1,15 @@
+# Service A for BackendTLSSNIHostOverride suite.
+# Both service-a and service-b point to the same backend port (30026) but have
+# separate BackendTLSPolicy objects so the Gateway sends different SNI per policy.
+apiVersion: v1
+kind: Service
+metadata:
+  name: btls-sni-service-a
+  namespace: edgion-test
+spec:
+  ports:
+    - name: https
+      port: 30026
+      protocol: TCP
+      targetPort: 30026
+  type: ClusterIP

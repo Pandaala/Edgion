@@ -1,146 +1,156 @@
 ---
 name: gateway-route-matching
-description: 路由匹配总览：多级流水线（Listener→Domain→Path→DeepMatch）、per-listener 隔离、注册流程、原子切换。
+description: Route matching overview — multi-stage pipeline (Listener→Domain→Path→DeepMatch), per-listener isolation, registration flow, atomic swap.
 ---
 
-# 路由匹配总览
+# Route matching overview
 
-## 多级匹配流水线
+## File list
 
-请求到达 Gateway 后，路由匹配按以下层级依次执行：
+| File | Topic |
+|------|-------|
+| [01-http-route.md](01-http-route.md) | HTTP route engine — RadixPath, RegexSet, ConfHandler, proxy implementation, LB policy sync |
+| [02-grpc-route.md](02-grpc-route.md) | gRPC route engine — Service/Method matching, gRPC-Web support, HTTP pipeline integration |
+| [03-tcp-route.md](03-tcp-route.md) | TCP route — per-listener route table, TCP proxy implementation, ConfHandler |
+| [04-tls-route.md](04-tls-route.md) | TLS route — SNI matching, per-listener route table, TLS passthrough proxy implementation |
+| [05-udp-route.md](05-udp-route.md) | UDP route — per-listener route table, stateless proxy, ConfHandler |
+
+## Multi-stage matching pipeline
+
+After a request reaches the Gateway, route matching proceeds through these layers in order:
 
 ```mermaid
 flowchart LR
-    A["Listener"] --> B["Domain (精确/通配/catch-all)"]
-    B --> C["Path (regex/radix)"]
+    A["Listener"] --> B["Domain (exact / wildcard / catch-all)"]
+    B --> C["Path (regex / radix)"]
     C --> D["Deep match"]
 ```
 
-1. **Listener 隔离**：根据连接到达的监听地址和协议（`ListenerKey`，格式 `"{addr}/{protocol}"`），选择对应的 per-listener 路由表。
-2. **Domain 匹配**：在 `DomainRouteRules` 中按主机名查找 `RouteRules`。
-3. **Path 匹配**：在 `RouteRules` 中先尝试 regex 引擎，再尝试 radix 引擎。
-4. **Deep match**：对候选路由执行 Gateway/Listener 约束、HTTP method、headers、query params 精确校验。
+1. **Listener isolation**: based on the connection's listening address and protocol (`ListenerKey`, formatted as `"{addr}/{protocol}"`), pick the corresponding per-listener route table.
+2. **Domain match**: look up `RouteRules` by hostname in `DomainRouteRules`.
+3. **Path match**: try the regex engine first within `RouteRules`, then the radix engine.
+4. **Deep match**: run Gateway/Listener constraints, HTTP method, headers, and query-param exact checks against candidate routes.
 
-## Per-listener 隔离
+## Per-listener isolation
 
-每个 listener 拥有独立的路由表，由 `GlobalHttpRouteManagers` 管理：
+Each listener owns an independent route table, managed by `GlobalHttpRouteManagers`:
 
 ```
 GlobalHttpRouteManagers
-├── route_cache: DashMap<String, HTTPRoute>                    # 全局路由缓存
+├── route_cache: DashMap<String, HTTPRoute>                    # global route cache
 └── by_listener: DashMap<ListenerKey, Arc<HttpPortRouteManager>>
     └── HttpPortRouteManager
-        └── route_table: ArcSwap<DomainRouteRules>             # per-listener 快照
+        └── route_table: ArcSwap<DomainRouteRules>             # per-listener snapshot
 ```
 
-- `route_cache` 保存所有 HTTPRoute 的规范副本（`resource_key -> HTTPRoute`）。
-- `by_listener` 为每个 `ListenerKey` 维护一个 `HttpPortRouteManager`，其中的 `ArcSwap<DomainRouteRules>` 支持无锁读。
-- 路由表更新时，仅受影响的 listener 会被重建；其他 listener 不受干扰。
-- `pg_request_filter` 在每个请求中通过 `load_route_table()` 获取当前快照，整个请求生命周期内引用不变。
+- `route_cache` holds the canonical copy of every HTTPRoute (`resource_key -> HTTPRoute`).
+- `by_listener` keeps an `HttpPortRouteManager` per `ListenerKey`; the `ArcSwap<DomainRouteRules>` inside enables lock-free reads.
+- When the route table is updated, only affected listeners are rebuilt; other listeners are not disturbed.
+- `pg_request_filter` calls `load_route_table()` per request to obtain the current snapshot, and the reference stays stable for the entire request lifetime.
 
-其他协议（gRPC / TCP / TLS / UDP）的全局管理器遵循相同的 `Global*RouteManagers → per-listener manager → ArcSwap` 模式。
+The global managers for other protocols (gRPC / TCP / TLS / UDP) follow the same `Global*RouteManagers → per-listener manager → ArcSwap` pattern.
 
-## Domain 匹配
+## Domain match
 
-`DomainRouteRules` 内部包含三级域名查找结构：
+`DomainRouteRules` contains a three-tier hostname lookup structure:
 
-| 层级 | 数据结构 | 复杂度 | 说明 |
-|------|----------|--------|------|
-| 精确匹配 | `ArcSwap<HashMap<String, Arc<RouteRules>>>` | O(1) | 主机名小写后直接 HashMap 查找 |
-| 通配匹配 | `ArcSwap<Option<RadixHostMatchEngine<RouteRules>>>` | O(log n) | `*.example.com` 类通配域名，使用 RadixHostMatchEngine |
-| Catch-all | `ArcSwap<Option<Arc<RouteRules>>>` | O(1) | HTTPRoute 未指定 `spec.hostnames` 时的回退 |
+| Tier | Data structure | Complexity | Description |
+|------|----------------|------------|-------------|
+| Exact match | `ArcSwap<HashMap<String, Arc<RouteRules>>>` | O(1) | Hostname is lowercased and looked up directly in the HashMap |
+| Wildcard match | `ArcSwap<Option<RadixHostMatchEngine<RouteRules>>>` | O(log n) | Wildcard hostnames such as `*.example.com`, using RadixHostMatchEngine |
+| Catch-all | `ArcSwap<Option<Arc<RouteRules>>>` | O(1) | Fallback when an HTTPRoute does not specify `spec.hostnames` |
 
-匹配优先级严格按 Gateway API 规范：精确 > 通配 > catch-all。
+The match priority strictly follows the Gateway API spec: exact > wildcard > catch-all.
 
-## Path 匹配
+## Path match
 
-每个 `RouteRules` 内部持有两个引擎：
+Each `RouteRules` holds two engines internally:
 
-### RadixRouteMatchEngine（Exact / Prefix）
+### RadixRouteMatchEngine (Exact / Prefix)
 
-- 基于 radix tree（`RadixTreeBuilder` + `RadixTree`），所有路由在初始化时一次性插入、冻结为不可变树。
-- 单次 `match_all_ext` 调用遍历树，返回所有候选及其 `MatchKind`（`FullyConsumed` / `SegmentBoundary` / `PartialSegment`）。
-- Exact 路由仅接受 `FullyConsumed`；Prefix 路由接受 `FullyConsumed` 或 `SegmentBoundary`（拒绝 `/v2` 匹配 `/v2example` 这类部分段匹配）。
-- 候选按 `priority_weight` 降序排列后依次执行 deep match。
+- Based on a radix tree (`RadixTreeBuilder` + `RadixTree`); all routes are inserted at initialization and frozen into an immutable tree.
+- A single `match_all_ext` traversal returns all candidates with their `MatchKind` (`FullyConsumed` / `SegmentBoundary` / `PartialSegment`).
+- Exact routes accept only `FullyConsumed`; Prefix routes accept `FullyConsumed` or `SegmentBoundary` (rejecting partial-segment matches like `/v2` matching `/v2example`).
+- Candidates are sorted by `priority_weight` in descending order, then deep-matched in turn.
 
-### RegexRoutesEngine（RegularExpression）
+### RegexRoutesEngine (RegularExpression)
 
-- 使用 `regex::RegexSet` 对所有正则模式做一次性批量匹配，性能 O(M)（M 为路径长度），与路由数量无关。
-- 路由按正则模式长度降序排列（越长越优先）。
-- 匹配顺序：regex 引擎先于 radix 引擎执行。
+- Uses `regex::RegexSet` to batch-match all regex patterns at once, with O(M) complexity (M is path length), independent of route count.
+- Routes are sorted by regex pattern length in descending order (longer patterns are preferred).
+- Match order: regex engine runs before the radix engine.
 
-## RadixPath 优先级
+## RadixPath priority
 
-`RadixPath` 的 `priority_weight` 计算公式（按 Gateway API spec 使用字符数）：
+`RadixPath`'s `priority_weight` formula (uses character count per the Gateway API spec):
 
 ```
 priority_weight = path_char_count * 4 + type_bonus
 ```
 
-`type_bonus` 取值：
+`type_bonus` values:
 
-| 类型 | is_prefix | has_params | type_bonus |
+| Type | is_prefix | has_params | type_bonus |
 |------|-----------|------------|------------|
-| 静态精确 | false | false | 3 |
-| 参数精确 | false | true | 2 |
-| 静态前缀 | true | false | 1 |
-| 参数前缀 | true | true | 0 |
+| Static exact | false | false | 3 |
+| Param exact | false | true | 2 |
+| Static prefix | true | false | 1 |
+| Param prefix | true | true | 0 |
 
-排序规则：更高 `priority_weight` 优先；同权时按 `MatchSpecificity::cmp_precedence()` 执行完整的 Gateway API 优先级链：method match → header count → query param count → creation timestamp → route namespace/name 字母序 → rule/match index。
+Sort rules: higher `priority_weight` wins; on a tie, the full Gateway API priority chain runs via `MatchSpecificity::cmp_precedence()` — method match → header count → query param count → creation timestamp → route namespace/name lexicographic order → rule/match index.
 
-示例：`/api/users`（静态精确，10 chars，weight=43）优先于 `/api/users`（静态前缀，weight=41）。同路径同类型时，有 method 匹配的路由优先于无 method 的。
+Example: `/api/users` (static exact, 10 chars, weight = 43) wins over `/api/users` (static prefix, weight = 41). For the same path and type, a route with method match wins over a route without.
 
 ## Deep match
 
-路由候选通过路径匹配后，`deep_match_common` 执行以下精确校验：
+After path matching, candidate routes go through `deep_match_common` for exact validation:
 
-1. **Gateway/Listener 约束**（`check_gateway_listener_match`）：
-   - 验证 parentRef 的 namespace + name 匹配 Gateway。
-   - 验证 sectionName 匹配 Listener（如指定）。
-   - 验证请求主机名匹配 Listener hostname（HTTP Listener Isolation）。
-   - 若同端口存在更具体的 Listener 也匹配该主机名，则拒绝（防止模糊匹配）。
-   - 验证 AllowedRoutes（namespace 限制 + kind 限制）。
-2. **HTTP Method**：`match_item.method` 与请求 method 对比。
-3. **Headers**：所有 header 匹配条件必须全部满足（AND 逻辑），支持 `Exact` 和 `RegularExpression`（预编译 regex）。
-4. **Query Params**：所有 query param 匹配条件必须全部满足（AND 逻辑），支持 `Exact` 和 `RegularExpression`。
+1. **Gateway/Listener constraints** (`check_gateway_listener_match`):
+   - Verify that the parentRef's namespace + name match the Gateway.
+   - Verify that sectionName matches the Listener (if specified).
+   - Verify that the request hostname matches the Listener hostname (HTTP Listener Isolation).
+   - Reject if a more specific Listener on the same port also matches the hostname (prevents fuzzy matching).
+   - Verify AllowedRoutes (namespace and kind restrictions).
+2. **HTTP method**: `match_item.method` is compared with the request method.
+3. **Headers**: all header match conditions must be satisfied (AND logic); supports `Exact` and `RegularExpression` (precompiled regex).
+4. **Query params**: all query-param match conditions must be satisfied (AND logic); supports `Exact` and `RegularExpression`.
 
-## 路由注册流程
+## Route registration flow
 
 ```mermaid
 flowchart TD
-    A["Controller 推送 HTTPRoute"] --> B["ConfHandler&lt;HTTPRoute&gt;::full_set / partial_update"]
-    B --> C["route_cache 更新 (DashMap insert/remove)"]
-    C --> D["sync_lb_policies_for_routes (同步 LB 策略到全局 PolicyStore)"]
+    A["Controller pushes HTTPRoute"] --> B["ConfHandler&lt;HTTPRoute&gt;::full_set / partial_update"]
+    B --> C["route_cache update (DashMap insert/remove)"]
+    C --> D["sync_lb_policies_for_routes (sync LB policies into the global PolicyStore)"]
     D --> E["rebuild_all_listener_managers / rebuild_affected_listener_managers"]
-    E --> F["bucket_routes_by_listener (按 resolved_listeners 分桶)"]
-    F -->|"resolved_listeners 为空"| F1["skip + warn"]
-    E --> G["对每个受影响 listener"]
+    E --> F["bucket_routes_by_listener (bucket by resolved_listeners)"]
+    F -->|"resolved_listeners empty"| F1["skip + warn"]
+    E --> G["For each affected listener"]
     G --> G1["parse_http_routes_to_domain_rules"]
     G1 --> G1a["filter_accepted_parent_refs"]
     G1 --> G1b["get_effective_hostnames"]
-    G1 --> G1c["分流: regex routes vs normal routes"]
+    G1 --> G1c["split: regex routes vs normal routes"]
     G --> G2["build_domain_route_rules_from_routes"]
-    G2 --> G2a["RadixRouteMatchEngine::build (radix tree 冻结)"]
-    G2 --> G2b["RegexRoutesEngine::build (RegexSet 编译)"]
-    G2 --> G2c["RadixHostMatchEngine 初始化 (通配域名)"]
-    G --> G3["HttpPortRouteManager::store_route_table (ArcSwap 原子切换)"]
-    E --> H["清理无路由且无活跃 Listener 的过期 listener"]
+    G2 --> G2a["RadixRouteMatchEngine::build (radix tree freeze)"]
+    G2 --> G2b["RegexRoutesEngine::build (RegexSet compile)"]
+    G2 --> G2c["RadixHostMatchEngine init (wildcard hostnames)"]
+    G --> G3["HttpPortRouteManager::store_route_table (ArcSwap atomic swap)"]
+    E --> H["Clean up stale listeners with no routes and no active Listener"]
 ```
 
-整个更新过程中，已有请求持有旧快照引用，不会被中断。新请求自动获取最新快照。
+Throughout the update, in-flight requests hold the old snapshot reference and are not interrupted. New requests automatically pick up the latest snapshot.
 
-## 多 Gateway Listener 共享
+## Multi-Gateway Listener sharing
 
-当多个 Gateway 的 Listener 绑定到同一个地址/协议组合（同一 `ListenerKey`）时，所有 Gateway 的路由会合并到同一个 per-listener `DomainRouteRules` 中。在 deep match 阶段，`check_gateway_listener_match` 通过遍历 `gateway_infos`（来自 `ListenerGatewayInfoStore`）来验证每条路由是否属于当前请求所匹配的 Gateway/Listener，从而实现逻辑上的 Listener 隔离。
+When listeners from multiple Gateways bind to the same address/protocol combination (the same `ListenerKey`), all Gateways' routes are merged into the same per-listener `DomainRouteRules`. During deep match, `check_gateway_listener_match` walks `gateway_infos` (from `ListenerGatewayInfoStore`) to verify that each route belongs to the Gateway/Listener matched by the current request, achieving logical Listener isolation.
 
-## 关键源文件
+## Key source files
 
-| 文件 | 职责 |
-|------|------|
-| `src/core/gateway/routes/http/routes_mgr.rs` | `GlobalHttpRouteManagers`、`DomainRouteRules`、`RouteRules` |
-| `src/core/gateway/routes/http/conf_handler_impl.rs` | `ConfHandler<HTTPRoute>` 实现、路由解析与构建 |
+| File | Responsibility |
+|------|----------------|
+| `src/core/gateway/routes/http/routes_mgr.rs` | `GlobalHttpRouteManagers`, `DomainRouteRules`, `RouteRules` |
+| `src/core/gateway/routes/http/conf_handler_impl.rs` | `ConfHandler<HTTPRoute>` implementation, route parsing and construction |
 | `src/core/gateway/routes/http/match_engine/radix_route_match.rs` | `RadixRouteMatchEngine` |
 | `src/core/gateway/routes/http/match_engine/regex_routes_engine.rs` | `RegexRoutesEngine` |
-| `src/core/gateway/routes/http/match_engine/radix_path.rs` | `RadixPath` 优先级计算 |
-| `src/core/gateway/routes/http/match_unit.rs` | `HttpRouteRuleUnit`、`deep_match_common` |
-| `src/core/gateway/runtime/matching/route.rs` | `check_gateway_listener_match`、`hostname_matches_listener` |
+| `src/core/gateway/routes/http/match_engine/radix_path.rs` | `RadixPath` priority calculation |
+| `src/core/gateway/routes/http/match_unit.rs` | `HttpRouteRuleUnit`, `deep_match_common` |
+| `src/core/gateway/runtime/matching/route.rs` | `check_gateway_listener_match`, `hostname_matches_listener` |

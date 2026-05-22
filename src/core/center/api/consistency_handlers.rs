@@ -13,9 +13,7 @@ use axum::Json;
 use serde::Serialize;
 
 use crate::core::common::observe::fed_metrics;
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_route_table::{
-    ClusterRegionRouteEntry, ServiceRegionRouteEntry,
-};
+use crate::types::resources::plugin_metadata::{ClusterRegionRouteEntry, ServiceRegionRouteEntry};
 
 use super::ApiState;
 

@@ -1,0 +1,22 @@
+# The edgion-plugins-gateway is the shared Gateway used by ExtensionRef-based
+# HTTPRoute scenarios. Defined here so this suite is self-contained when run
+# in isolation via -r HTTPRoute -i DanglingExtensionRef.
+#
+# The same resource is defined in EdgionPlugins/base/Gateway.yaml; loading
+# both is idempotent (same name/namespace/spec).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: edgion-plugins-gateway
+  namespace: edgion-test
+  annotations:
+    edgion.io/metrics-test-type: "latency"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31180
+      allowedRoutes:
+        namespaces:
+          from: All

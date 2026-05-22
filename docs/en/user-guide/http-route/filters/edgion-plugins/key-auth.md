@@ -49,8 +49,10 @@ spec:
         keySources:
           - type: header
             name: "X-API-Key"
-        secretRefs:
-          - name: api-keys
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: api-keys
 ```
 
 ---
@@ -65,7 +67,7 @@ spec:
 | `anonymous` | String | No | none | Anonymous username; unauthenticated requests pass through |
 | `realm` | String | No | `"API Gateway"` | Authentication realm name |
 | `keyField` | String | No | `"key"` | Field name storing the key value in Secret |
-| `secretRefs` | Array | Yes | none | Kubernetes Secret references |
+| `secretGroups` | Array | No | none | Named groups of Kubernetes Secret references (see below) |
 | `upstreamHeaderFields` | Array | No | `[]` | Extra headers to forward upstream (from key metadata) |
 
 ### KeySource Sub-fields
@@ -74,6 +76,14 @@ spec:
 |-----------|------|----------|-------------|
 | `type` | String | Yes | Source type: `header` / `query` / `cookie` / `ctx` |
 | `name` | String | Yes | Source name (header name, query param name, etc.) |
+
+### KeyAuthSecretGroup Sub-fields
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | String | Yes | Group name. Charset: `^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`, max 63 chars. Surfaces in PluginLog as `group=<name>`. |
+| `description` | String | No | Human-readable description (not used by runtime) |
+| `secretRefs` | Array | Yes | Secret references for this group; must be non-empty |
 
 ---
 
@@ -89,8 +99,10 @@ requestPlugins:
       keySources:
         - type: header
           name: "X-API-Key"
-      secretRefs:
-        - name: api-keys
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-keys
       hideCredentials: true
 ```
 
@@ -113,8 +125,10 @@ requestPlugins:
           name: api_key
         - type: cookie
           name: api_key
-      secretRefs:
-        - name: api-keys
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-keys
 ```
 
 ### Scenario 3: Anonymous Access
@@ -127,8 +141,10 @@ requestPlugins:
       keySources:
         - type: header
           name: "X-API-Key"
-      secretRefs:
-        - name: api-keys
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-keys
       anonymous: "guest"
 ```
 
@@ -142,13 +158,51 @@ requestPlugins:
       keySources:
         - type: header
           name: "X-API-Key"
-      secretRefs:
-        - name: api-keys
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-keys
       upstreamHeaderFields:
         - "X-Consumer-Username"
         - "X-Customer-ID"
         - "X-User-Tier"
 ```
+
+### Scenario 5: Organize Keys by Group (Multi-tenant)
+
+`secretGroups` lets you organize Secrets from different partners or tenants into named groups. The originating group of each resolved key is recorded in the access log for audit and attribution.
+
+```yaml
+requestPlugins:
+  - enable: true
+    type: KeyAuth
+    config:
+      keySources:
+        - type: header
+          name: "X-API-Key"
+      realm: "Partner API"
+      keyField: "key"
+      secretGroups:
+        - name: partner-a
+          description: "Partner A API keys"
+          secretRefs:
+            - name: api-keys-partner-a
+              namespace: edgion-default
+        - name: partner-b
+          description: "Partner B API keys"
+          secretRefs:
+            - name: api-keys-partner-b
+              namespace: edgion-default
+      upstreamHeaderFields:
+        - "X-Consumer-Username"
+        - "X-Customer-ID"
+```
+
+**Access log output**: On successful authentication, PluginLog records the group:
+- With username header: `OK group=partner-a user <masked>`
+- Without username header: `OK group=partner-a`
+
+Failure branches (`Deny bad key`, `Deny no key`) and anonymous pass-through (`Allow anon`) intentionally omit `group=` to avoid leaking multi-tenant topology to unauthenticated callers.
 
 ---
 
@@ -158,6 +212,7 @@ requestPlugins:
 - With `hideCredentials: true`, the source used for authentication is removed from the request
 - In `anonymous` mode, requests without a key still pass through with `X-Anonymous-Consumer: true`
 - Keys are stored in the `keys.yaml` field of Kubernetes Secrets as a YAML array
+- When the same raw key appears in multiple groups, the first group wins; a warning is logged with both group names
 
 ---
 
@@ -222,8 +277,10 @@ spec:
             name: "X-API-Key"
           - type: query
             name: api_key
-        secretRefs:
-          - name: api-keys
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: api-keys
         hideCredentials: true
         realm: "Protected API"
 ---

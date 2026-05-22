@@ -4,6 +4,7 @@ use crate::types::resources::http_route::SessionPersistenceType;
 use crate::types::{EdgionHttpContext, SessionPersistenceState};
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
+use std::time::Instant;
 
 #[inline]
 pub fn upstream_response_filter(
@@ -25,7 +26,7 @@ pub fn upstream_response_filter(
                 .and_then(|ru| ru.rule.session_persistence.clone());
 
             if let Some(sp) = sp_config {
-                // Use ip:port from current upstream (set by push_upstream in update_peer_metrics)
+                // Use ip:port from current upstream (backfilled by backfill_upstream_addr)
                 let backend_addr = ctx.get_current_upstream().and_then(|u| match (&u.ip, u.port) {
                     (Some(ip), Some(port)) => Some(format!("{}:{}", ip, port)),
                     _ => None,
@@ -60,7 +61,9 @@ pub fn upstream_response_filter(
 
     // Record header time (time from this upstream's start_time to receiving response header)
     if let Some(upstream) = ctx.get_current_upstream_mut() {
-        let ht = upstream.start_time.elapsed().as_millis() as u64;
+        let ht = Instant::now()
+            .saturating_duration_since(upstream.start_time)
+            .as_millis() as u64;
         upstream.ht = Some(ht);
         upstream.status = Some(status_code);
     }
@@ -75,17 +78,20 @@ pub fn upstream_response_filter(
                         .attempts
                         .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
 
-                    // Check request timeout
-                    let timeout_exceeded = route_unit
+                    // Check request timeout. Either the route-level
+                    // `request_timeout` or a client-supplied `grpc-timeout`
+                    // having expired disqualifies a status-code retry.
+                    let request_timeout_exceeded = route_unit
                         .rule
                         .parsed_timeouts
                         .as_ref()
                         .and_then(|t| t.request_timeout.as_duration())
-                        .map(|timeout| ctx.start_time.elapsed() >= timeout)
+                        .map(|timeout| Instant::now().saturating_duration_since(ctx.start_time) >= timeout)
                         .unwrap_or(false);
+                    let deadline_exceeded = request_timeout_exceeded || ctx.grpc_deadline_exceeded();
 
                     let buffer_ok = !session.as_ref().retry_buffer_truncated();
-                    if ctx.try_cnt <= max_retries && !timeout_exceeded && buffer_ok {
+                    if ctx.try_cnt <= max_retries && !deadline_exceeded && buffer_ok {
                         ctx.retry_on_status = true;
                         return Err(pingora_core::Error::explain(
                             pingora_core::ErrorType::HTTPStatus(status_code),
@@ -122,6 +128,17 @@ pub fn upstream_response_filter(
         backend
             .plugin_runtime
             .run_upstream_response_plugins_sync(session, ctx, upstream_response);
+    }
+
+    // Run global plugins (D3-A gap fill from unified snapshot Phase 2).
+    // Order: route → backend → global (onion: response stages go inner → outer).
+    if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(std::sync::Arc::clone) {
+        for runtime in plugins.iter() {
+            if runtime.upstream_response_plugins_count() == 0 {
+                continue;
+            }
+            runtime.run_upstream_response_plugins_sync(session, ctx, upstream_response);
+        }
     }
 
     Ok(())

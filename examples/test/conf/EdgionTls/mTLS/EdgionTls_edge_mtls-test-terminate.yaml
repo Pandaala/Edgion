@@ -1,0 +1,27 @@
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: mtls-test-terminate
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: mtls-test-gateway
+      namespace: edgion-test
+      sectionName: https-mtls
+  hosts:
+    - mtls-terminate.example.com
+  secretRef:
+    name: mtls-server
+    namespace: edgion-test
+  clientAuth:
+    # Terminate mode: TLS termination only, no client certificate verification.
+    # Differs from Mutual / OptionalMutual: the server does not request a
+    # client cert, and is_mtls is recorded as false in ssl.log / tls.log /
+    # plugin context (per is_mtls_enabled() semantics).
+    mode: Terminate
+    # No caSecretRef on purpose: Terminate never reads or installs a client CA
+    # store, so a valid config can omit it. This config is the regression guard
+    # for F-001 — configure_mtls must return before ca_cert_pem() for Terminate,
+    # otherwise every handshake to this SNI would fail with "CA secret not
+    # loaded by controller".
+    verifyDepth: 1

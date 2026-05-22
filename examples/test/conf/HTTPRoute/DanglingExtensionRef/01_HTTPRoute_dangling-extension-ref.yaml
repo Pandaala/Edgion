@@ -1,0 +1,40 @@
+# HTTPRoute with a dangling ExtensionRef filter.
+#
+# The ExtensionRef points to EdgionPlugins "no-such-plugin", which is
+# intentionally not installed. At route build time, the route's resolved
+# ext_ref slot for this filter is None. When a request hits this route, the
+# rule-scope ExtensionRefFilter sees `index = Some(0)` but
+# `session.resolved_route_ext_ref(0)` returns None — prepare_execution pushes
+# "extension ref not found" to the per-execution PluginLog and returns
+# ErrTerminateRequest. Since this fires on the async Request stage, the
+# filter writes a 500 response with body `{"message":"plugin reference error"}`
+# (see write_extension_ref_error_response in extension_ref.rs).
+#
+# The route is parented to the shared edgion-plugins-gateway (port 31180),
+# the same gateway used by other ExtensionRef-based scenarios.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dangling-extension-ref-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dangling-extension-ref.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: "/dangling"
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: no-such-plugin
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

@@ -98,16 +98,22 @@ where
 
     /// Cleanup on delete
     ///
-    /// Called when a resource is deleted.
-    /// Used to clean up SecretRefManager registrations, etc.
+    /// Called **before** the resource is removed from `ServerCache`. The cached
+    /// object is passed in for cleanup (e.g., SecretRefManager registrations).
+    /// Lookups via `ServerCache` at this point will still see the old value;
+    /// the entry is removed in the next step after this returns.
     ///
     /// Default: no-op
     async fn on_delete(&self, _obj: &K, _ctx: &HandlerContext) {}
 
     /// Post-change processing
     ///
-    /// Called after a resource is saved to cache.
+    /// Called **before** the processed resource is saved to `ServerCache`.
     /// Used for cascading operations (e.g., Secret change triggers Gateway requeue).
+    ///
+    /// Cross-resource lookups inside `on_change` MUST use `RawStore` (via
+    /// `ProcessorObj::get_raw_any`) rather than `ServerCache`, because the
+    /// current resource has not yet been written to cache at this point.
     ///
     /// Default: no-op
     async fn on_change(&self, _obj: &K, _ctx: &HandlerContext) {}
@@ -137,18 +143,4 @@ where
     ///
     /// Default: no-op (for resources without status like Secret, Service)
     fn update_status(&self, _obj: &mut K, _ctx: &HandlerContext, _validation_errors: &[String]) {}
-}
-
-/// Default handler that passes through all resources unchanged
-///
-/// Useful for resources that don't need special processing.
-#[allow(dead_code)]
-pub struct DefaultHandler;
-
-#[async_trait::async_trait]
-impl<K> ProcessorHandler<K> for DefaultHandler
-where
-    K: Resource + Clone + Send + Sync + 'static,
-{
-    // All methods use default implementations
 }

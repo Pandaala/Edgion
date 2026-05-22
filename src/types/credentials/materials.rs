@@ -26,7 +26,7 @@
 //!   heap copies that are dropped normally, without zeroization.
 //!
 //! Treat `Zeroizing` here as **defense-in-depth, not a strict end-to-end
-//! guarantee**. See `tasks/fix-change/M1-zeroize-scope-documentation.md`.
+//! guarantee**.
 
 use zeroize::Zeroizing;
 
@@ -54,6 +54,12 @@ pub struct BearerMaterial {
 #[derive(Clone, Debug)]
 pub struct HmacMaterial {
     pub key: String,
+}
+
+/// Webhook API Key auth.
+#[derive(Clone, Debug)]
+pub struct WebhookApiKeyMaterial {
+    pub api_key: String,
 }
 
 /// ACME account credentials: a JSON-serialized `instant_acme::AccountCredentials`
@@ -144,6 +150,7 @@ mod tests {
         assert_send_sync::<EsApiKeyMaterial>();
         assert_send_sync::<BearerMaterial>();
         assert_send_sync::<HmacMaterial>();
+        assert_send_sync::<WebhookApiKeyMaterial>();
         assert_send_sync::<AcmeAccountMaterial>();
         assert_send_sync::<TlsMaterial>();
     }

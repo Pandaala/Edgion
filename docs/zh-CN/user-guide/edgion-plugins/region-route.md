@@ -218,21 +218,21 @@ region_hash = zlib.crc32(account_id.encode()) % 1000  # modulo 与配置保持�
 
 ## Access Log 字段
 
-插件向请求 plugin log 写入条目（100 字节上限，条目均简短）：
+插件向请求 plugin log 写入条目（128 字节 tier-1 上限，条目均简短）：
 
 | 日志条目 | 含义 |
 |---------|------|
-| `direct=ohio(from:hdr:X-Direct-Region);` | 从 header 读到 direct override，路由到 ohio |
-| `direct unknown 'foo', fallthrough;` | 未知 region 名，落入下一规则 |
-| `match=hdr:X-Account-Id→virginia;` | key 命中 matchMap，路由到 virginia |
-| `match=hdr:X-Account-Id no conf;` | key 不在 matchMap，落入下一规则 |
-| `hash_pass=342 from:cookie:x_region_hash;` | 从 cookie 读到预计算 hash |
-| `key=hdr:X-Account-Id hash=342;` | 从 header 计算得到 hash（不记录原始值） |
-| `redirect ohio→virginia;` | failoverTo 静态重定向生效 |
-| `local, pass;` | 目标等于 myRegion，本地放行 |
-| `err:failoverTo invalid;` | failoverTo 配置无效（未找到/自指/循环），降级处理 |
-| `→virginia 127.0.0.1:30001;` | 实际跳转目标（region，host:port） |
-| `key missing, pass;` | 取不到 key，放行 |
+| `direct=ohio(from:hdr:X-Direct-Region)` | 从 header 读到 direct override，路由到 ohio |
+| `direct unknown 'foo', fallthrough` | 未知 region 名，落入下一规则 |
+| `match=hdr:X-Account-Id→virginia` | key 命中 matchMap，路由到 virginia |
+| `match=hdr:X-Account-Id no conf` | key 不在 matchMap，落入下一规则 |
+| `hash_pass=342 from:cookie:x_region_hash` | 从 cookie 读到预计算 hash |
+| `key=hdr:X-Account-Id hash=342` | 从 header 计算得到 hash（不记录原始值） |
+| `redirect ohio→virginia` | failoverTo 静态重定向生效 |
+| `local, pass` | 目标等于 myRegion，本地放行 |
+| `err: failover to invalid` | failoverTo 配置无效（未找到/自指/循环），降级处理 |
+| `→virginia 127.0.0.1:30001` | 实际跳转目标（region，host:port） |
+| `key missing, pass` | 取不到 key，放行 |
 
 ## myRegion 与 failoverTo
 
@@ -255,9 +255,9 @@ region_hash = zlib.crc32(account_id.encode()) % 1000  # modulo 与配置保持�
 - **结合 myRegion 使用**：若重定向目标等于 `myRegion`，重定向后的流量也会本地放行。
 
 约束：
-- 目标必须是合法的 region 名称，否则该条重定向静默忽略（access log 记录 `err:failoverTo invalid;`）。
+- 目标必须是合法的 region 名称，否则该条重定向静默忽略（access log 记录 `err: failover to invalid`）。
 - 只做一层重定向，不链式追踪。
-- 不允许自指或循环（运行时静默忽略，记录 `err:failoverTo invalid;`）。
+- 不允许自指或循环（运行时静默忽略，记录 `err: failover to invalid`）。
 
 ## 注意事项
 

@@ -1,107 +1,107 @@
 ---
 name: controller-cache-server
-description: ServerCache + EventStore：泛型内存缓存、环形事件缓冲区、单调递增 sync_version、WatchObj trait、ConfigSyncServer 架构。
+description: ServerCache + EventStore — generic in-memory cache, ring event buffer, monotonically increasing sync_version, WatchObj trait, ConfigSyncServer architecture.
 ---
 
-# CacheServer（内存缓存与配置同步）
+# CacheServer (In-memory Cache and Configuration Sync)
 
-ServerCache 和 EventStore 构成 Controller 的内存缓存层，ResourceProcessor 将处理后的资源写入 ServerCache，ServerCache 通过事件通知机制推送变更给 gRPC watcher 客户端（即 Gateway 实例）。
+ServerCache and EventStore form the Controller's in-memory cache layer. The ResourceProcessor writes processed resources into ServerCache, which then pushes changes to gRPC watcher clients (Gateway instances) via an event-notification mechanism.
 
 ## ServerCache\<T\>
 
-泛型内存缓存，每种资源类型一个实例，由对应的 `ResourceProcessor<K>` 创建和持有。
+A generic in-memory cache, one instance per resource type, created and held by the corresponding `ResourceProcessor<K>`.
 
 ```rust
 pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {
-    ready: RwLock<bool>,                          // 初始化完成标志
-    store: Arc<RwLock<EventStore<T>>>,             // 事件存储
-    watchers: RwLock<Vec<WatchClient<T>>>,          // 待处理的 watch 请求
-    notify: Arc<Notify>,                            // 广播通知（唤醒所有 watcher 任务）
+    ready: RwLock<bool>,                          // initialization-complete flag
+    store: Arc<RwLock<EventStore<T>>>,             // event store
+    watchers: RwLock<Vec<WatchClient<T>>>,          // pending watch requests
+    notify: Arc<Notify>,                            // broadcast notification (wakes all watcher tasks)
 }
 ```
 
-### 生命周期
+### Lifecycle
 
-1. **创建**: `ServerCache::new(capacity)` — 初始化环形缓冲区，状态为未就绪
-2. **初始化写入**: `apply_change(InitAdd, resource)` — 同步写入 EventStore（不触发 watcher 通知）
-3. **就绪标记**: `set_ready()` — 标记缓存已就绪，允许 gRPC 客户端连接
-4. **运行时写入**: `apply_change(EventUpdate/EventDelete, resource)` — 写入事件并通知所有 watcher
-5. **重链接**: `clear()` + `set_not_ready()` — 清空数据，等待新的初始化
+1. **Create**: `ServerCache::new(capacity)` — initializes the ring buffer; state is not-ready
+2. **Init writes**: `apply_change(InitAdd, resource)` — synchronously writes to EventStore (does not trigger watcher notifications)
+3. **Mark ready**: `set_ready()` — marks the cache as ready, allowing gRPC clients to connect
+4. **Runtime writes**: `apply_change(EventUpdate/EventDelete, resource)` — writes the event and notifies all watchers
+5. **Relink**: `clear()` + `set_not_ready()` — clears data and waits for a fresh initialization
 
-### 数据操作
+### Data Operations
 
-| 方法 | 说明 |
+| Method | Description |
 |---|---|
-| `list()` / `list_owned()` | 返回所有资源的快照和当前 sync_version |
-| `get_by_key(key)` | 按 "namespace/name" 键获取单个资源 |
-| `watch(client_id, client_name, from_version)` | 启动 watcher 任务，返回 mpsc::Receiver 持续接收变更 |
-| `apply_change(change, resource)` | 根据 ResourceChange 类型执行对应操作 |
+| `list()` / `list_owned()` | Return a snapshot of all resources and the current sync_version |
+| `get_by_key(key)` | Get a single resource by `"namespace/name"` key |
+| `watch(client_id, client_name, from_version)` | Start a watcher task; returns an mpsc::Receiver that continuously delivers changes |
+| `apply_change(change, resource)` | Perform the corresponding operation based on the ResourceChange type |
 
 ### sync_version
 
-sync_version 是全局单调递增的版本号（通过 `utils::next_resource_version()` 生成），独立于 K8s resourceVersion。每次写入操作分配新版本号，用于：
+`sync_version` is a globally monotonically increasing version number (produced by `utils::next_resource_version()`), independent of the K8s `resourceVersion`. Each write assigns a new version, which is used for:
 
-- Watcher 增量同步：客户端报告 `from_version`，服务端返回该版本之后的所有事件
-- 过期检测：客户端版本太旧（事件已被环形缓冲区覆盖）时返回 `TooOldVersion` 错误
-- 乱序防护：低于当前 sync_version 的事件直接丢弃（Stage A 保护）
+- Watcher incremental sync: the client reports `from_version`; the server returns all events newer than that version
+- Stale detection: when the client version is too old (events have already been overwritten in the ring buffer), a `TooOldVersion` error is returned
+- Out-of-order protection: events with a version below the current `sync_version` are dropped (Stage A protection)
 
-### Watcher 任务
+### Watcher Tasks
 
-`start_watcher_task()` 为每个 watch 请求启动独立的 tokio 任务：
+`start_watcher_task()` spawns an independent tokio task per watch request:
 
 ```
 loop {
-    1. 从 EventStore 获取 from_version 之后的事件
-    2. 若有新事件 → 发送给客户端，更新 from_version
-    3. 若版本跳跃但无事件 → 事件丢失，发送 WATCH_ERR_EVENTS_LOST 错误
-    4. 若无新事件 → 等待 notify.notified() 或 sender.closed()
+    1. Fetch events newer than from_version from EventStore
+    2. If new events exist → send to client, advance from_version
+    3. If the version skipped but no events were available → events were lost; send WATCH_ERR_EVENTS_LOST
+    4. If no new events → wait on notify.notified() or sender.closed()
 }
 ```
 
-watcher 任务退出条件：接收端断开（gRPC 连接关闭）、EventStore 返回错误、或事件丢失。
+Watcher exit conditions: receiver disconnects (gRPC connection closed), EventStore returns an error, or events were lost.
 
 ## EventStore\<T\>
 
-环形事件缓冲区，存储最近的资源变更事件，同时维护全量资源快照。
+A ring buffer of recent resource-change events that also maintains a full resource snapshot.
 
 ```rust
 pub struct EventStore<T> {
-    capacity: usize,                    // 环形缓冲区容量（最小 10，默认 200）
-    cache: Vec<Option<WatcherEvent<T>>>, // 环形缓冲区
-    start_index: usize,                 // 有效事件起始位置
-    end_index: usize,                   // 下一个写入位置
-    sync_version: u64,                  // 当前最大版本号
-    expire_sync_version: u64,           // 已过期的最小版本号
-    data: HashMap<String, T>,           // 全量资源快照（key → 最新资源）
+    capacity: usize,                    // ring-buffer capacity (min 10, default 200)
+    cache: Vec<Option<WatcherEvent<T>>>, // ring buffer
+    start_index: usize,                 // start of valid events
+    end_index: usize,                   // next write position
+    sync_version: u64,                  // current maximum version
+    expire_sync_version: u64,           // smallest expired version
+    data: HashMap<String, T>,           // full resource snapshot (key → latest resource)
 }
 ```
 
-### 事件类型
+### Event Types
 
-`WatcherEvent<T>` 包含三种类型：`Add`、`Update`、`Delete`，每个事件携带 `sync_version` 和资源数据。
+`WatcherEvent<T>` has three variants — `Add`, `Update`, `Delete` — each carrying the `sync_version` and resource data.
 
-### 环形缓冲区机制
+### Ring-buffer Mechanics
 
-- 写入时 `end_index` 递增，当缓冲区满时 `start_index` 递增（覆盖最旧事件）
-- 被覆盖事件的 `sync_version` 记录到 `expire_sync_version`
-- 客户端请求 `from_version < expire_sync_version` 时返回 `TooOldVersion` 错误，触发客户端全量重新同步
+- On write, `end_index` advances; when the buffer is full, `start_index` advances (overwriting the oldest event)
+- The `sync_version` of an overwritten event is recorded as `expire_sync_version`
+- When a client requests `from_version < expire_sync_version`, a `TooOldVersion` error is returned, triggering a full client re-sync
 
-### 乱序防护（Stage A）
+### Out-of-order Protection (Stage A)
 
-`apply_event()` 在写入前检查：若 `incoming_sync_version < current_sync_version`，则丢弃该事件并记录警告。这防止 tokio 调度器重排序导致旧数据覆盖新数据。
+Before writing, `apply_event()` checks: if `incoming_sync_version < current_sync_version`, the event is dropped and a warning is logged. This prevents stale data from overwriting newer data due to tokio scheduler reordering.
 
-### 查询接口
+### Query Interface
 
-| 方法 | 说明 |
+| Method | Description |
 |---|---|
-| `get_events_from_sync_version(from)` | 返回 from 之后的所有事件 + 当前版本号 |
-| `snapshot_owned()` | 返回全量资源快照（克隆） |
-| `get_by_key(key)` | 按键获取单个资源 |
-| `init_add(version, resource)` | 初始化阶段写入（不进入环形缓冲区） |
+| `get_events_from_sync_version(from)` | Return all events newer than `from` plus the current version |
+| `snapshot_owned()` | Return a full resource snapshot (cloned) |
+| `get_by_key(key)` | Get a single resource by key |
+| `init_add(version, resource)` | Init-phase write (does not enter the ring buffer) |
 
 ## WatchObj trait
 
-对象安全（object-safe）的 list/watch 接口，由 `ServerCache<T>` 实现，使 `ConfigSyncServer` 能以统一方式管理不同类型的缓存。
+An object-safe list/watch interface implemented by `ServerCache<T>`, allowing `ConfigSyncServer` to manage caches of different types uniformly.
 
 ```rust
 pub trait WatchObj: Send + Sync {
@@ -116,49 +116,48 @@ pub trait WatchObj: Send + Sync {
 }
 ```
 
-所有方法涉及序列化（JSON），因此使用 trait object 是合理的——序列化开销远大于虚调用开销。`ServerCache<T>` 通过 `list_json()` 返回 JSON 字符串 + sync_version，通过 `watch_json()` 返回 `WatchResponseSimple`（JSON 字符串形式的事件流）。
+All methods involve serialization (JSON), so a trait object is a reasonable choice — serialization overhead is far greater than virtual-dispatch overhead. `ServerCache<T>` returns a JSON string + `sync_version` from `list_json()` and a `WatchResponseSimple` (event stream as JSON strings) from `watch_json()`.
 
 ## ConfigSyncServer
 
-gRPC 配置同步服务器，持有所有 WatchObj 并提供统一的 list/watch API。
+The gRPC configuration sync server. It owns all WatchObjs and provides a unified list/watch API.
 
 ```rust
 pub struct ConfigSyncServer {
-    server_id: RwLock<String>,                              // 服务器实例 ID（毫秒时间戳）
-    endpoint_mode: RwLock<Option<EndpointMode>>,             // 端点发现模式
-    watch_objects: RwLock<HashMap<String, Arc<dyn WatchObj>>>, // 按 kind 注册的 WatchObj
-    client_registry: Arc<ClientRegistry>,                    // 已连接 Gateway 实例注册表
+    server_id: RwLock<String>,                              // server instance ID (millisecond timestamp)
+    watch_objects: RwLock<HashMap<String, Arc<dyn WatchObj>>>, // WatchObjs registered by kind
+    client_registry: Arc<ClientRegistry>,                    // registry of connected Gateway instances
 }
 ```
 
 ### server_id
 
-启动时生成的毫秒时间戳字符串，用于客户端检测服务器重启。当 Gateway 收到的 `server_id` 与之前不同时，触发全量 relist。重链接（relink）时调用 `regenerate_server_id()` 生成新 ID。
+A millisecond-timestamp string generated at startup, used by clients to detect server restarts. When the Gateway sees a `server_id` different from the previous one, it triggers a full re-list. On relink, `regenerate_server_id()` produces a new ID.
 
-### WatchObj 注册
+### WatchObj Registration
 
-ResourceProcessor 初始化时通过 `register_watch_obj(kind, Arc<ServerCache<T>>)` 向 ConfigSyncServer 注册。所有注册完成且就绪后（`is_all_ready()` 返回 true），gRPC 服务开始对外提供数据。
+The ResourceProcessor registers itself during initialization via `register_watch_obj(kind, Arc<ServerCache<T>>)`. Once all registrations complete and they are ready (`is_all_ready()` returns true), the gRPC service starts serving data.
 
-### list/watch 操作
+### list/watch Operations
 
-| 操作 | 流程 |
+| Operation | Flow |
 |---|---|
-| `list(kind)` | 查找 WatchObj → 调用 `list_json()` → 返回 `ListDataSimple { data, sync_version, server_id }` |
-| `watch(kind, client_id, ...)` | 查找 WatchObj → 调用 `watch_json()` → 启动转换任务附加 server_id → 返回 `mpsc::Receiver<EventDataSimple>` |
+| `list(kind)` | Look up the WatchObj → call `list_json()` → return `ListDataSimple { data, sync_version, server_id }` |
+| `watch(kind, client_id, ...)` | Look up the WatchObj → call `watch_json()` → start a transformation task that attaches `server_id` → return `mpsc::Receiver<EventDataSimple>` |
 
-watch 操作会启动一个 tokio 任务，将 `WatchResponseSimple` 转换为 `EventDataSimple`（附加 server_id），确保客户端能检测服务器重启。
+The watch operation spawns a tokio task that converts `WatchResponseSimple` to `EventDataSimple` (attaching `server_id`) so clients can detect server restarts.
 
-### 状态管理
+### State Management
 
-| 方法 | 说明 |
+| Method | Description |
 |---|---|
-| `is_all_ready()` | 所有 WatchObj 均已就绪 |
-| `not_ready_kinds()` | 返回尚未就绪的 kind 列表 |
-| `set_all_not_ready()` | 重链接时标记所有缓存未就绪 |
-| `clear_all()` | 清空所有缓存数据 |
-| `reset_for_relink()` | 完整重置：set_all_not_ready + clear_all + regenerate_server_id |
+| `is_all_ready()` | All WatchObjs are ready |
+| `not_ready_kinds()` | Return the list of kinds that are not yet ready |
+| `set_all_not_ready()` | Mark all caches as not-ready on relink |
+| `clear_all()` | Clear data in all caches |
+| `reset_for_relink()` | Full reset: set_all_not_ready + clear_all + regenerate_server_id |
 
-## 完整数据流
+## Full Data Flow
 
 ```
 K8s API / FileSystem
@@ -167,20 +166,20 @@ K8s API / FileSystem
   ConfCenter (watcher)
         │
         ▼
-  ResourceProcessor.process_resource()    ← 11 步处理流水线
+  ResourceProcessor.process_resource()    ← 11-step processing pipeline
         │
         ▼
-  ServerCache.apply_change()              ← 分配 sync_version，写入 EventStore
+  ServerCache.apply_change()              ← assign sync_version, write to EventStore
         │
         ▼
-  Notify.notify_waiters()                 ← 唤醒所有 watcher 任务
+  Notify.notify_waiters()                 ← wake all watcher tasks
         │
         ▼
-  Watcher Task → mpsc::channel            ← 发送增量事件
+  Watcher Task → mpsc::channel            ← send incremental events
         │
         ▼
-  ConfigSyncServer.watch()                ← 附加 server_id
+  ConfigSyncServer.watch()                ← attach server_id
         │
         ▼
-  gRPC Stream → Gateway                  ← Gateway 实例接收配置变更
+  gRPC Stream → Gateway                  ← Gateway instance receives configuration changes
 ```

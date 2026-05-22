@@ -36,11 +36,21 @@ impl ServiceLbPolicy {
         Self { policies, route_refs }
     }
 
-    /// Add a route reference and merge policies
+    /// Add a route reference and merge policies.
+    ///
+    /// Semantics: **union with dedup**, NOT last-write-wins. When multiple HTTPRoutes
+    /// reference the same service with different LB policies, the service's effective
+    /// policy list is the union of all referencing routes' policies. Once a policy is
+    /// added it persists until the last route referencing it is removed (see
+    /// `remove_by_route`); a route updating its own policy does not remove the prior
+    /// policy from the list.
+    ///
+    /// This is intentional: a service shared across routes should honor every route's
+    /// declared policy, and the LB layer picks the appropriate one per request rather
+    /// than the policy store arbitrating between them.
     pub fn add_route_ref(&mut self, route_key: String, new_policies: Vec<LbPolicy>) {
         self.route_refs.insert(route_key);
 
-        // Merge new policies (dedup)
         for policy in new_policies {
             if !self.policies.contains(&policy) {
                 self.policies.push(policy);

@@ -1,0 +1,40 @@
+# Path Normalization Scenario 03 — TC-D: rewrite filter overrides annotation
+#
+# This route has BOTH:
+#   - Gateway API URLRewrite filter that rewrites /api → /rewritten
+#   - edgion.io/forward-raw-path: "true" annotation (would force raw forward)
+#
+# Spec §14 priority: channel 0 (ctx.uri_finalized) > channel 1 (annotation).
+# When the URLRewrite filter executes, it calls session.set_upstream_uri()
+# which sets uri_finalized = true. The single-point decision then SKIPS
+# the block entirely — the rewrite result is the terminal form.
+#
+# Expected: upstream receives /rewritten/data (rewrite wins, annotation ignored).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: forward-view-rewrite-vs-annotation
+  namespace: edgion-default
+  annotations:
+    # Annotation says "force raw forward" but rewrite filter takes priority.
+    edgion.io/forward-raw-path: "true"
+spec:
+  hostnames: [path-fwd-rewrite.example.com]
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  rules:
+    - filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /rewritten
+      matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

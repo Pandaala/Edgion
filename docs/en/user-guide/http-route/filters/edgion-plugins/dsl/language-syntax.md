@@ -6,7 +6,7 @@ This document describes the complete syntax specification for EdgionDSL. EdgionD
 
 ## 1. Type System
 
-EdgionDSL has five built-in value types:
+EdgionDSL has six built-in value types:
 
 | Type | Description | Example Literals |
 |------|-------------|-----------------|
@@ -15,8 +15,11 @@ EdgionDSL has five built-in value types:
 | `Bool` | Boolean value | `true`, `false` |
 | `Nil` | Null value, representing "no value" | `nil` |
 | `List` | A read-only list of strings used for iteration | Returned by APIs such as `req.header_names()` |
+| `Map` | A key-value map with `String` keys and any-type values | `{"key": "value"}`, `{"status": 200}` |
 
 The `List` type is used exclusively as an iteration container. It cannot be constructed from a literal and cannot be directly compared to other types.
+
+The `Map` type holds an ordered set of key-value pairs. Keys are always `String`; values can be any DSL type including nested `Map`. Map values are read via index access (`map["key"]`). Maps are currently returned by `http.call()` and cannot be constructed with arbitrary nesting in literals, but a flat map literal `{key: expr, ...}` is supported.
 
 ### 1.1 Type Conversion
 
@@ -28,6 +31,7 @@ When calling `to_string(val)`, or when implicit conversion is triggered during s
 | `Bool` | `true` → `"true"`, `false` → `"false"` |
 | `Nil` | `"nil"` |
 | `List` | `"[list]"` (fixed string, contents not expanded) |
+| `Map` | `"[map]"` (fixed string, contents not expanded) |
 | `String` | Unchanged |
 
 ```dsl
@@ -300,7 +304,7 @@ for i in range(0, 10) {
 }
 ```
 
-`range(start, end)` generates at most **1000 elements**. Requesting more than 1000 elements produces a runtime error.
+`range(start, end)` generates at most `min(max_list_len, 1000)` elements (where `max_list_len` is the per-plugin VM limit, default 1024). Any elements beyond that cap are silently truncated.
 
 ### 4.4 while (Conditional Loop)
 
@@ -499,7 +503,50 @@ Raw string literals and multi-line literal syntax are not supported. For complex
 
 ---
 
-## 8. Comments
+## 8. Map Literals and Index Access
+
+### 8.1 Map Literals
+
+A flat map (string keys, any-type values) can be constructed with a `{key: expr, ...}` literal. Keys must be string literals; values can be any expression:
+
+```dsl
+let hdrs = {"Content-Type": "application/json", "X-Api-Key": "secret"}
+let meta = {"retries": 3, "enabled": true}
+```
+
+Map literals are primarily used to pass the optional `headers` argument to `http.call()`.
+
+### 8.2 Index Access
+
+Use `expr[key]` to read a value from a `Map` or a `List`:
+
+- **Map**: `key` must be a `String` expression. Returns `nil` if the key is absent.
+- **List**: index access on `List` is not supported directly — iterate with `for...in` instead.
+
+```dsl
+let r = http.call("GET", "https://api.example.com/status", nil)
+
+// Read a top-level field
+let code = r["status"]          // Int
+
+// Read a nested map field (response headers are returned as a Map)
+let ct = r["headers"]["content-type"]   // Str | Nil
+
+if code == 200 {
+  req.set_header("X-Backend-Ok", "true")
+}
+```
+
+`len()` works on `Map` and returns the number of entries:
+
+```dsl
+let m = {"a": 1, "b": 2, "c": 3}
+let n = len(m)    // 3
+```
+
+---
+
+## 9. Comments
 
 EdgionDSL supports single-line comments, starting with `//` and extending to the end of the line:
 
@@ -522,7 +569,7 @@ Block comments (`/* ... */`) are not supported.
 
 ---
 
-## 9. Complete Examples
+## 10. Complete Examples
 
 ### Example 1: Multi-Condition Request Validation
 

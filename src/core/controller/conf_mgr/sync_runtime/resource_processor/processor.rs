@@ -9,6 +9,7 @@
 use parking_lot::RwLock;
 use std::any::Any;
 use std::fmt::Debug;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use kube::Resource;
@@ -46,8 +47,8 @@ use crate::types::ResourceMeta;
 
 use super::context::HandlerContext;
 use super::handler::{ProcessResult, ProcessorHandler};
+use super::make_resource_key;
 use super::raw_store::RawStore;
-use super::{make_resource_key, SecretRefManager};
 use crate::core::controller::conf_mgr::sync_runtime::workqueue::{TriggerChain, Workqueue, WorkqueueConfig};
 
 /// Result of status extraction
@@ -59,6 +60,18 @@ enum StatusExtractResult {
     Empty,
     /// Serialization failed
     SerializationError,
+}
+
+impl StatusExtractResult {
+    /// Short tag for debug logging that avoids printing the full status JSON
+    /// (which may contain resource names in condition messages).
+    fn digest_for_log(&self) -> String {
+        match self {
+            StatusExtractResult::Present(s) => format!("present({} bytes)", s.len()),
+            StatusExtractResult::Empty => "empty".to_string(),
+            StatusExtractResult::SerializationError => "error".to_string(),
+        }
+    }
 }
 
 /// Extract status field from a resource as JSON string for comparison
@@ -170,6 +183,14 @@ pub trait ProcessorObj: Send + Sync {
     /// List all resource keys in cache
     fn list_keys(&self) -> Vec<String>;
 
+    /// Number of resources currently held in cache. Must be O(1).
+    fn store_size(&self) -> usize;
+
+    /// Returns true (and clears the flag) if the processor's resource count has
+    /// changed since the last call. Used by fed_sync stats coalescing to decide
+    /// whether to push a fresh StatsReport.
+    fn take_stats_dirty(&self) -> bool;
+
     /// Check if a resource exists in cache by key
     fn contains_key(&self, key: &str) -> bool;
 
@@ -197,9 +218,6 @@ where
     /// Work queue for runtime event processing
     workqueue: Arc<Workqueue>,
 
-    /// Secret reference manager (shared across all processors)
-    secret_ref_manager: Arc<SecretRefManager>,
-
     /// Processing handler (resource-specific logic)
     handler: Arc<dyn ProcessorHandler<K>>,
 
@@ -216,6 +234,11 @@ where
 
     /// Shared controller runtime (stores, registries, etc.)
     runtime: Arc<ControllerRuntime>,
+
+    /// Set whenever cache content changes; consumed by fed_sync stats push.
+    /// Initialized to `true` so the first stats coalescing tick after
+    /// fed_client startup emits an initial report.
+    stats_dirty: Arc<AtomicBool>,
 }
 
 impl<K> ResourceProcessor<K>
@@ -227,7 +250,6 @@ where
         kind: &'static str,
         capacity: usize,
         handler: Arc<dyn ProcessorHandler<K>>,
-        secret_ref_manager: Arc<SecretRefManager>,
         runtime: Arc<ControllerRuntime>,
     ) -> Self {
         let cache = Arc::new(ServerCache::new(capacity as u32));
@@ -244,12 +266,12 @@ where
             kind,
             cache,
             workqueue,
-            secret_ref_manager,
             handler,
             metadata_filter: RwLock::new(None),
             namespace_filter: RwLock::new(None),
             raw_store: RwLock::new(None),
             runtime,
+            stats_dirty: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -258,7 +280,6 @@ where
         kind: &'static str,
         capacity: usize,
         handler: Arc<dyn ProcessorHandler<K>>,
-        secret_ref_manager: Arc<SecretRefManager>,
         workqueue_config: WorkqueueConfig,
         runtime: Arc<ControllerRuntime>,
     ) -> Self {
@@ -269,12 +290,12 @@ where
             kind,
             cache,
             workqueue,
-            secret_ref_manager,
             handler,
             metadata_filter: RwLock::new(None),
             namespace_filter: RwLock::new(None),
             raw_store: RwLock::new(None),
             runtime,
+            stats_dirty: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -327,6 +348,10 @@ where
     ///
     /// Returns WorkItemResult for status persistence handling by caller.
     pub async fn on_init_apply(&self, obj: K, existing_status_json: Option<String>) -> WorkItemResult<K> {
+        // Reconstruct the resource_version floor from persisted rv before init proceeds.
+        let rv = crate::types::resource::meta::extract_version(obj.meta());
+        crate::core::common::utils::bump_resource_version_floor(rv);
+
         let ctx = self.create_context(TriggerChain::default());
         self.process_resource(obj, &ctx, true, existing_status_json).await
     }
@@ -371,6 +396,7 @@ where
     /// Save resource to cache with an optional pre-assigned sync_version
     pub fn save(&self, obj: K, sv: Option<u64>) {
         self.cache.apply_change(ResourceChange::EventUpdate, obj, sv);
+        self.stats_dirty.store(true, Ordering::Relaxed);
     }
 
     /// Remove resource from cache by key with an optional pre-assigned sync_version
@@ -378,6 +404,7 @@ where
         // Get the cached object first to properly delete
         if let Some(cached) = self.cache.get_by_key(key) {
             self.cache.apply_change(ResourceChange::EventDelete, cached, sv);
+            self.stats_dirty.store(true, Ordering::Relaxed);
         }
     }
 
@@ -436,7 +463,6 @@ where
     /// Create handler context with trigger chain for cascade tracking
     fn create_context(&self, trigger_chain: TriggerChain) -> HandlerContext {
         HandlerContext::new(
-            self.secret_ref_manager.clone(),
             self.metadata_filter.read().clone(),
             self.namespace_filter.read().clone(),
             trigger_chain,
@@ -565,8 +591,8 @@ where
                 if status_changed {
                     tracing::debug!(
                         kind = self.kind,
-                        old = ?old_status,
-                        new = ?new_status,
+                        old = %old_status.digest_for_log(),
+                        new = %new_status.digest_for_log(),
                         "Status semantically changed, will persist"
                     );
                 } else {
@@ -578,8 +604,8 @@ where
                     }
                     tracing::debug!(
                         kind = self.kind,
-                        old = ?old_status,
-                        new = ?new_status,
+                        old = %old_status.digest_for_log(),
+                        new = %new_status.digest_for_log(),
                         "Status unchanged by semantic diff, skipping persist"
                     );
                 }
@@ -611,6 +637,7 @@ where
                 let obj_for_result = parsed_obj.clone();
                 if is_init {
                     self.cache.apply_change(ResourceChange::InitAdd, parsed_obj, Some(sv));
+                    self.stats_dirty.store(true, Ordering::Relaxed);
                 } else {
                     self.save(parsed_obj, Some(sv));
                 }
@@ -691,6 +718,7 @@ where
 
     fn clear(&self) {
         WatchObj::clear(self.cache.as_ref());
+        self.stats_dirty.store(true, Ordering::Relaxed);
     }
 
     fn set_namespace_filter_vec(&self, filter: Option<Vec<String>>) {
@@ -707,6 +735,15 @@ where
 
     fn list_keys(&self) -> Vec<String> {
         self.cache.list_keys()
+    }
+
+    fn store_size(&self) -> usize {
+        self.cache.len()
+    }
+
+    fn take_stats_dirty(&self) -> bool {
+        // swap-style: returns previous value while resetting to false.
+        self.stats_dirty.swap(false, Ordering::Relaxed)
     }
 
     fn contains_key(&self, key: &str) -> bool {
@@ -732,9 +769,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::handler::DefaultHandler;
     use kube::api::ObjectMeta;
     use serde::{Deserialize, Serialize};
+
+    struct TestHandler;
+
+    #[async_trait::async_trait]
+    impl<K> ProcessorHandler<K> for TestHandler where K: kube::Resource + Clone + Send + Sync + 'static {}
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestResource {
@@ -786,14 +827,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_processor_basic() {
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let handler = Arc::new(DefaultHandler);
+        let handler = Arc::new(TestHandler);
 
         let processor = ResourceProcessor::<TestResource>::new(
             "TestResource",
             100,
             handler,
-            secret_ref_manager,
             Arc::new(ControllerRuntime::default()),
         );
 
@@ -806,14 +845,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_processor_init_apply() {
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let handler = Arc::new(DefaultHandler);
+        let handler = Arc::new(TestHandler);
 
         let processor = ResourceProcessor::<TestResource>::new(
             "TestResource",
             100,
             handler,
-            secret_ref_manager,
             Arc::new(ControllerRuntime::default()),
         );
 
@@ -839,6 +876,45 @@ mod tests {
         let cached = processor.get("default/test");
         assert!(cached.is_some());
         assert_eq!(cached.unwrap().spec, "test spec");
+    }
+
+    #[tokio::test]
+    async fn test_processor_init_apply_bumps_resource_version_floor() {
+        use crate::core::common::utils::next_resource_version;
+
+        let handler = Arc::new(TestHandler);
+        let processor = ResourceProcessor::<TestResource>::new(
+            "TestResource",
+            100,
+            handler,
+            Arc::new(ControllerRuntime::default()),
+        );
+
+        // Pick an rv that is guaranteed higher than the current process-wide floor.
+        let baseline = next_resource_version();
+        let high_rv = baseline + 1_000_000;
+
+        let resource = TestResource {
+            metadata: ObjectMeta {
+                name: Some("test".to_string()),
+                namespace: Some("default".to_string()),
+                resource_version: Some(high_rv.to_string()),
+                ..Default::default()
+            },
+            spec: "test spec".to_string(),
+        };
+
+        processor.on_init();
+        let result = processor.on_init_apply(resource, None).await;
+        assert!(matches!(result, WorkItemResult::Processed { .. }));
+
+        let after = next_resource_version();
+        assert!(
+            after > high_rv,
+            "on_init_apply should bump the floor above the resource's rv (after={}, high_rv={})",
+            after,
+            high_rv
+        );
     }
 
     #[test]

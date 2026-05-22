@@ -13,7 +13,7 @@ const LEGACY_BYTECODE_VERSION: u16 = 0;
 const MAX_DECODED_BYTECODE_LEN: usize = 256 * 1024;
 
 /// Single VM instruction
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum OpCode {
     // ===== Stack Operations =====
     /// Push constant from pool by index
@@ -70,7 +70,7 @@ pub enum OpCode {
     /// Stack: [s] → [match_str | Nil]
     RegexFind(u16),
     /// regex_replace(s, literal_pattern, replacement) — pattern pre-compiled
-    /// Stack: [s, replacement] → [result_str]
+    /// Stack: [s, replacement] → [result_str | Nil]  (Nil when s is not a Str)
     RegexReplace(u16),
 
     // ===== Control Flow =====
@@ -85,11 +85,15 @@ pub enum OpCode {
     /// Clean up loop counter at end of loop
     LoopEnd,
 
-    // ===== List Operations (internal, for for-in) =====
-    /// Pop (list, index), push list[index]
-    ListGet,
+    // ===== Index Operations (for-in iteration + expr[key] access) =====
+    /// Pop (container, index), push container[index]; List (Int key) or Map (Str key)
+    IndexGet,
     /// Pop list, push len
     ListLen,
+
+    // ===== Map Operations =====
+    /// Pop 2n values (interleaved key:Str, val:Value pairs deepest-first), push Value::Map
+    MakeMap(u16),
 
     // ===== Built-in Calls =====
     /// Call builtin function with arg count
@@ -124,6 +128,8 @@ pub enum BuiltinId {
     ReqScheme,
     ReqHost,
     ReqUri,
+    ReqRequestPath,
+    ReqRequestUri,
     ReqContentType,
     ReqHasHeader,
 
@@ -180,8 +186,6 @@ pub enum BuiltinId {
     Sha256,
     Md5,
     TimeNow,
-    RegexFind,
-    RegexReplace,
     Range,
     Trim,
     Split,
@@ -197,6 +201,41 @@ pub enum BuiltinId {
     Join,
     LogWarn,
     LogError,
+    /// `log_fmt(template_literal, sensitive_arg1, sensitive_arg2, ...)` — variadic.
+    /// Argument count is carried by the `CallBuiltin(_, argc)` opcode itself.
+    LogFmt,
+
+    // External capabilities
+    /// `http.call(method, url, body [, timeout_ms [, headers_map]])` → Map
+    HttpCall,
+
+    // Redis builtins — backed by LinkSys Redis connection pool
+    /// `redis.get(link, key)` → Map { ok: Bool, value: Str|Nil, error: Str|Nil }
+    RedisGet,
+    /// `redis.set(link, key, value)` or `redis.set(link, key, value, ttl_ms)` → Map { ok: Bool, value: Bool, error: Str|Nil }
+    RedisSet,
+    /// `redis.del(link, key)` → Map { ok: Bool, value: Bool, error: Str|Nil }
+    RedisDel,
+    /// `redis.exists(link, key)` → Map { ok: Bool, value: Bool, error: Str|Nil }
+    RedisExists,
+    /// `redis.ttl(link, key)` → Map { ok: Bool, value: Int, error: Str|Nil }. Returns -1 if key has no expiry, -2 if key does not exist.
+    RedisTtl,
+    /// `redis.expire(link, key, seconds)` → Map { ok: Bool, value: Bool, error: Str|Nil }
+    RedisExpire,
+    /// `redis.incr(link, key)` → Map { ok: Bool, value: Int, error: Str|Nil }
+    RedisIncr,
+    /// `redis.incr_by(link, key, delta)` → Map { ok: Bool, value: Int, error: Str|Nil }
+    RedisIncrBy,
+    /// `redis.hget(link, key, field)` → Map { ok: Bool, value: Str|Nil, error: Str|Nil }
+    RedisHGet,
+    /// `redis.hset(link, key, field, value)` → Map { ok: Bool, value: Bool, error: Str|Nil }
+    RedisHSet,
+    /// `redis.hdel(link, key, field)` → Map { ok: Bool, value: Bool, error: Str|Nil }
+    RedisHDel,
+    /// `redis.hgetall(link, key)` → Map { ok: Bool, value: Map, error: Str|Nil }
+    RedisHGetAll,
+    /// `redis.hexists(link, key, field)` → Map { ok: Bool, value: Bool, error: Str|Nil }
+    RedisHExists,
 }
 
 /// Constant pool entry
@@ -219,6 +258,12 @@ pub struct CompiledScript {
     pub max_loop_depth: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// Run-length encoded mapping from instruction PC to source line.
+    /// Each entry `(count, line)` means the next `count` opcodes originate from `line`.
+    /// Absent for legacy v=1 payloads that were compiled before this field existed —
+    /// in that case `line_of()` returns `None` and callers degrade to no line info.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_map: Option<Vec<(u16, u32)>>,
 }
 
 fn default_bytecode_version() -> u16 {
@@ -266,6 +311,20 @@ impl CompiledScript {
         }
         Ok(script)
     }
+
+    /// Look up the source line that produced the instruction at `pc`.
+    /// Returns `None` when no `source_map` is attached (legacy payloads) or `pc` is past the end.
+    pub fn line_of(&self, pc: usize) -> Option<u32> {
+        let runs = self.source_map.as_ref()?;
+        let mut covered: usize = 0;
+        for (count, line) in runs {
+            covered += *count as usize;
+            if pc < covered {
+                return Some(*line);
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]
@@ -280,16 +339,68 @@ mod tests {
             local_count: 0,
             max_loop_depth: 0,
             source: None,
+            source_map: None,
         }
     }
 
     #[test]
     fn test_bytecode_roundtrip_with_version() {
+        // Roundtrip with source_map absent.
         let script = minimal_script();
         let b64 = script.serialize_base64().expect("serialize should succeed");
         let decoded = CompiledScript::deserialize_base64(&b64).expect("deserialize should succeed");
         assert_eq!(decoded.version, BYTECODE_VERSION);
         assert_eq!(decoded.code, vec![OpCode::ReturnNext]);
+        assert!(decoded.source_map.is_none());
+
+        // Absent source_map must be omitted from the JSON payload (skip_serializing_if).
+        let json = serde_json::to_string(&script).expect("json encode");
+        assert!(!json.contains("source_map"));
+
+        // Roundtrip with source_map present.
+        let with_map = CompiledScript {
+            source_map: Some(vec![(2, 1), (1, 2)]),
+            ..minimal_script()
+        };
+        let b64 = with_map.serialize_base64().expect("serialize should succeed");
+        let decoded = CompiledScript::deserialize_base64(&b64).expect("deserialize should succeed");
+        assert_eq!(decoded.source_map.as_deref(), Some(&[(2u16, 1u32), (1, 2)][..]));
+    }
+
+    #[test]
+    fn test_legacy_payload_decodes_without_source_map() {
+        // A v=1 JSON predating source_map must decode to `Some(_)` source_map == None.
+        use base64::Engine;
+        let legacy = serde_json::json!({
+            "version": BYTECODE_VERSION,
+            "code": ["ReturnNext"],
+            "constants": [],
+            "local_count": 0,
+            "max_loop_depth": 0
+        });
+        let bytes = serde_json::to_vec(&legacy).expect("json encode");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let decoded = CompiledScript::deserialize_base64(&encoded).expect("legacy payload should decode");
+        assert!(decoded.source_map.is_none());
+        assert_eq!(decoded.line_of(0), None);
+    }
+
+    #[test]
+    fn test_line_of_walks_rle_runs() {
+        let script = CompiledScript {
+            source_map: Some(vec![(3, 10), (2, 11), (1, 12)]),
+            ..minimal_script()
+        };
+        // PCs 0..3 → line 10
+        assert_eq!(script.line_of(0), Some(10));
+        assert_eq!(script.line_of(2), Some(10));
+        // PCs 3..5 → line 11
+        assert_eq!(script.line_of(3), Some(11));
+        assert_eq!(script.line_of(4), Some(11));
+        // PC 5 → line 12
+        assert_eq!(script.line_of(5), Some(12));
+        // Past the end → None
+        assert_eq!(script.line_of(6), None);
     }
 
     #[test]

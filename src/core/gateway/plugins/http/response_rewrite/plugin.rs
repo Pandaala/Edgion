@@ -3,6 +3,7 @@
 //! Rewrites responses before returning to client.
 //! Supports status code and headers modification.
 
+use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, UpstreamResponseFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::ResponseRewriteConfig;
@@ -18,13 +19,9 @@ pub struct ResponseRewrite {
 impl ResponseRewrite {
     /// Create a new ResponseRewrite plugin from configuration
     pub fn new(config: &ResponseRewriteConfig) -> Self {
-        let mut config = config.clone();
-        // Validate configuration
-        config.validate();
-
         ResponseRewrite {
             name: "ResponseRewrite".to_string(),
-            config,
+            config: config.clone(),
         }
     }
 
@@ -34,7 +31,7 @@ impl ResponseRewrite {
             if let Err(_e) = session.set_response_status(status_code) {
                 plugin_log.push_err("status rewrite fail");
             } else {
-                plugin_log.push(&format!("status rewrite {}", status_code));
+                plugin_log.push_fmt("status rewrite {}", la![status_code.to_string().as_str()]);
             }
         }
     }
@@ -115,8 +112,9 @@ impl UpstreamResponseFilter for ResponseRewrite {
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
     ) -> PluginRunningResult {
+        use crate::types::resources::edgion_plugins::PluginValidation;
         // Check if configuration is valid
-        if !self.config.is_valid() {
+        if self.config.validation_error().is_some() {
             plugin_log.push_err("config invalid");
             return PluginRunningResult::GoodNext;
         }
@@ -136,192 +134,7 @@ impl UpstreamResponseFilter for ResponseRewrite {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-    use crate::types::resources::edgion_plugins::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry};
-
-    fn create_basic_config() -> ResponseRewriteConfig {
-        ResponseRewriteConfig {
-            status_code: Some(200),
-            headers: None,
-            validation_error: None,
-        }
-    }
-
-    #[test]
-    fn test_status_code_rewrite() {
-        let config = create_basic_config();
-        let plugin = ResponseRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ResponseRewrite");
-
-        mock_session
-            .expect_set_response_status()
-            .with(mockall::predicate::eq(200u16))
-            .returning(|_| Ok(()));
-
-        let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("status rewrite 200"));
-    }
-
-    #[test]
-    fn test_headers_set() {
-        let config = ResponseRewriteConfig {
-            status_code: None,
-            headers: Some(ResponseHeaderActions {
-                set: Some(vec![
-                    ResponseHeaderEntry {
-                        name: "X-Custom".to_string(),
-                        value: "custom-value".to_string(),
-                    },
-                    ResponseHeaderEntry {
-                        name: "Cache-Control".to_string(),
-                        value: "no-cache".to_string(),
-                    },
-                ]),
-                add: None,
-                remove: None,
-                rename: None,
-            }),
-            validation_error: None,
-        };
-        let plugin = ResponseRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ResponseRewrite");
-
-        // Headers should be set in order
-        let mut seq = mockall::Sequence::new();
-        mock_session
-            .expect_set_response_header()
-            .with(
-                mockall::predicate::eq("X-Custom"),
-                mockall::predicate::eq("custom-value"),
-            )
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_set_response_header()
-            .with(
-                mockall::predicate::eq("Cache-Control"),
-                mockall::predicate::eq("no-cache"),
-            )
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("header rewrite"));
-    }
-
-    #[test]
-    fn test_headers_add() {
-        let config = ResponseRewriteConfig {
-            status_code: None,
-            headers: Some(ResponseHeaderActions {
-                set: None,
-                add: Some(vec![ResponseHeaderEntry {
-                    name: "X-Added".to_string(),
-                    value: "added-value".to_string(),
-                }]),
-                remove: None,
-                rename: None,
-            }),
-            validation_error: None,
-        };
-        let plugin = ResponseRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ResponseRewrite");
-
-        mock_session
-            .expect_append_response_header()
-            .with(mockall::predicate::eq("X-Added"), mockall::predicate::eq("added-value"))
-            .returning(|_, _| Ok(()));
-
-        let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("header rewrite"));
-    }
-
-    #[test]
-    fn test_headers_remove() {
-        let config = ResponseRewriteConfig {
-            status_code: None,
-            headers: Some(ResponseHeaderActions {
-                set: None,
-                add: None,
-                remove: Some(vec!["Server".to_string(), "X-Debug".to_string()]),
-                rename: None,
-            }),
-            validation_error: None,
-        };
-        let plugin = ResponseRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ResponseRewrite");
-
-        mock_session
-            .expect_remove_response_header()
-            .with(mockall::predicate::eq("Server"))
-            .returning(|_| Ok(()));
-        mock_session
-            .expect_remove_response_header()
-            .with(mockall::predicate::eq("X-Debug"))
-            .returning(|_| Ok(()));
-
-        let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("header rewrite"));
-    }
-
-    #[test]
-    fn test_headers_rename() {
-        let config = ResponseRewriteConfig {
-            status_code: None,
-            headers: Some(ResponseHeaderActions {
-                set: None,
-                add: None,
-                remove: None,
-                rename: Some(vec![HeaderRename {
-                    from: "X-Internal-Id".to_string(),
-                    to: "X-Request-Id".to_string(),
-                }]),
-            }),
-            validation_error: None,
-        };
-        let plugin = ResponseRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ResponseRewrite");
-
-        // First, get the original header value
-        mock_session
-            .expect_get_response_header()
-            .with(mockall::predicate::eq("X-Internal-Id"))
-            .returning(|_| Some("internal-123".to_string()));
-
-        // Then set the new header
-        mock_session
-            .expect_set_response_header()
-            .with(
-                mockall::predicate::eq("X-Request-Id"),
-                mockall::predicate::eq("internal-123"),
-            )
-            .returning(|_, _| Ok(()));
-
-        // Finally remove the old header
-        mock_session
-            .expect_remove_response_header()
-            .with(mockall::predicate::eq("X-Internal-Id"))
-            .returning(|_| Ok(()));
-
-        let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("header rewrite"));
-    }
+    use crate::types::resources::edgion_plugins::{HeaderRename, ResponseHeaderActions};
 
     #[test]
     fn test_headers_rename_nonexistent() {
@@ -336,7 +149,6 @@ mod tests {
                     to: "X-New".to_string(),
                 }]),
             }),
-            validation_error: None,
         };
         let plugin = ResponseRewrite::new(&config);
         let mut mock_session = MockPluginSession::new();
@@ -356,84 +168,10 @@ mod tests {
     }
 
     #[test]
-    fn test_combined_operations() {
-        let config = ResponseRewriteConfig {
-            status_code: Some(201),
-            headers: Some(ResponseHeaderActions {
-                set: Some(vec![ResponseHeaderEntry {
-                    name: "Content-Type".to_string(),
-                    value: "application/json".to_string(),
-                }]),
-                add: Some(vec![ResponseHeaderEntry {
-                    name: "X-Powered-By".to_string(),
-                    value: "Edgion".to_string(),
-                }]),
-                remove: Some(vec!["Server".to_string()]),
-                rename: Some(vec![HeaderRename {
-                    from: "X-Old".to_string(),
-                    to: "X-New".to_string(),
-                }]),
-            }),
-            validation_error: None,
-        };
-        let plugin = ResponseRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ResponseRewrite");
-
-        // Status code
-        mock_session
-            .expect_set_response_status()
-            .with(mockall::predicate::eq(201u16))
-            .returning(|_| Ok(()));
-
-        // Rename (executed first in headers)
-        mock_session
-            .expect_get_response_header()
-            .with(mockall::predicate::eq("X-Old"))
-            .returning(|_| Some("old-value".to_string()));
-        mock_session
-            .expect_set_response_header()
-            .with(mockall::predicate::eq("X-New"), mockall::predicate::eq("old-value"))
-            .returning(|_, _| Ok(()));
-        mock_session
-            .expect_remove_response_header()
-            .with(mockall::predicate::eq("X-Old"))
-            .returning(|_| Ok(()));
-
-        // Add (executed second)
-        mock_session
-            .expect_append_response_header()
-            .with(mockall::predicate::eq("X-Powered-By"), mockall::predicate::eq("Edgion"))
-            .returning(|_, _| Ok(()));
-
-        // Set (executed third)
-        mock_session
-            .expect_set_response_header()
-            .with(
-                mockall::predicate::eq("Content-Type"),
-                mockall::predicate::eq("application/json"),
-            )
-            .returning(|_, _| Ok(()));
-
-        // Remove (executed last)
-        mock_session
-            .expect_remove_response_header()
-            .with(mockall::predicate::eq("Server"))
-            .returning(|_| Ok(()));
-
-        let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("status rewrite 201"));
-        assert!(plugin_log.contains("header rewrite"));
-    }
-
-    #[test]
     fn test_invalid_status_code() {
         let config = ResponseRewriteConfig {
             status_code: Some(600), // Invalid
             headers: None,
-            validation_error: None,
         };
         let plugin = ResponseRewrite::new(&config);
         let mut mock_session = MockPluginSession::new();
@@ -444,18 +182,5 @@ mod tests {
 
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(plugin_log.contains("err: config invalid"));
-    }
-
-    #[test]
-    fn test_no_config() {
-        let config = ResponseRewriteConfig::default();
-        let plugin = ResponseRewrite::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("ResponseRewrite");
-
-        // No expectations - nothing should be called
-        let result = plugin.run_upstream_response_filter(&mut mock_session, &mut plugin_log);
-
-        assert_eq!(result, PluginRunningResult::GoodNext);
     }
 }

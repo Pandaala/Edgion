@@ -133,9 +133,13 @@ impl CenterApi for EtcdStorage {
     ) -> Result<(), ConfWriterError> {
         let key = self.build_key(kind, namespace, name);
 
-        // Check existence first
-        let existing = self.client.get_string(&key).await.map_err(Self::map_err)?;
-        if existing.is_some() {
+        let created = self
+            .client
+            .txn_put_if_absent(&key, content.into_bytes())
+            .await
+            .map_err(Self::map_err)?;
+
+        if !created {
             return Err(ConfWriterError::AlreadyExists(format!(
                 "{}/{}/{}",
                 kind,
@@ -143,8 +147,6 @@ impl CenterApi for EtcdStorage {
                 name
             )));
         }
-
-        self.client.put_string(&key, &content).await.map_err(Self::map_err)?;
 
         tracing::info!(
             component = "etcd_storage",
@@ -166,9 +168,13 @@ impl CenterApi for EtcdStorage {
     ) -> Result<(), ConfWriterError> {
         let key = self.build_key(kind, namespace, name);
 
-        // Check existence first
-        let existing = self.client.get_string(&key).await.map_err(Self::map_err)?;
-        if existing.is_none() {
+        let updated = self
+            .client
+            .txn_put_if_exists(&key, content.into_bytes())
+            .await
+            .map_err(Self::map_err)?;
+
+        if !updated {
             return Err(ConfWriterError::NotFound(format!(
                 "{}/{}/{}",
                 kind,
@@ -176,8 +182,6 @@ impl CenterApi for EtcdStorage {
                 name
             )));
         }
-
-        self.client.put_string(&key, &content).await.map_err(Self::map_err)?;
 
         tracing::info!(
             component = "etcd_storage",

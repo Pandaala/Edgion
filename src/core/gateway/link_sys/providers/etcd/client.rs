@@ -16,7 +16,10 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::RwLock;
 
+use async_trait::async_trait;
+
 use crate::core::gateway::link_sys::credential::CredentialState;
+use crate::core::gateway::link_sys::lifecycle::LinkSysLifecycle;
 use crate::types::credentials::materials::BasicAuthMaterial;
 use crate::types::resources::link_sys::etcd::EtcdClientConfig;
 
@@ -265,6 +268,17 @@ impl EtcdLinkClient {
         *guard = None;
         self.healthy.store(false, Ordering::Relaxed);
         Ok(())
+    }
+}
+
+#[async_trait]
+impl LinkSysLifecycle for EtcdLinkClient {
+    async fn init(&self) -> anyhow::Result<()> {
+        EtcdLinkClient::init(self).await
+    }
+
+    async fn shutdown(&self) -> anyhow::Result<()> {
+        EtcdLinkClient::shutdown(self).await
     }
 }
 

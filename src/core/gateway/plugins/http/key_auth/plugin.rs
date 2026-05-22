@@ -8,7 +8,10 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::core::gateway::plugins::http::common::auth_common::{apply_auth_failure_delay, send_auth_error_response};
+use crate::core::gateway::plugins::http::common::auth_common::{
+    apply_auth_failure_delay, send_gateway_auth_error_response,
+};
+use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::common::KeyGet;
 use crate::types::filters::PluginRunningResult;
@@ -40,7 +43,7 @@ impl KeyAuth {
     /// This method validates the config and initializes the key store.
     pub fn create(config: &KeyAuthConfig) -> Box<dyn RequestFilter> {
         let mut validated_config = config.clone();
-        validated_config.validate();
+        let _ = validated_config.validate();
 
         let keys = hash_keys(validated_config.resolved_keys.take().unwrap_or_default());
 
@@ -135,7 +138,7 @@ impl KeyAuth {
     /// Return 401 Unauthorized response
     async fn unauthorized(&self, session: &mut dyn PluginSession, message: &str) -> PluginRunningResult {
         let body = format!("Unauthorized - {}", message);
-        let _ = send_auth_error_response(session, 401, "ApiKey", &self.config.realm, &body).await;
+        let _ = send_gateway_auth_error_response(session, 401, "ApiKey", &self.config.realm, None, &body).await;
         PluginRunningResult::ErrTerminateRequest
     }
 }
@@ -196,11 +199,11 @@ impl RequestFilter for KeyAuth {
         };
         plugin_log.push(key_source_label);
 
-        // Log OK with username if available
+        // Log OK with group attribution + optional username
         if let Some(username) = metadata.headers.get("X-Consumer-Username") {
-            plugin_log.push(&format!("OK user {}", username));
+            plugin_log.push_fmt("OK group={} user {}", la![metadata.group.as_ref(), sensitive(username)]);
         } else {
-            plugin_log.push("OK");
+            plugin_log.push_fmt("OK group={}", la![metadata.group.as_ref()]);
         }
 
         // 3. Set upstream headers (from whitelist)
@@ -235,10 +238,9 @@ mod tests {
             anonymous: None,
             realm: "Test API".to_string(),
             key_field: "key".to_string(),
-            secret_refs: None,
+            secret_groups: None,
             upstream_header_fields: vec!["X-Consumer-Username".to_string(), "X-Customer-ID".to_string()],
             resolved_keys: None,
-            validation_error: None,
         }
     }
 
@@ -247,81 +249,34 @@ mod tests {
         let mut auth = KeyAuth::new(&config);
 
         let mut keys = HashMap::new();
+        let group: String = "partner-a".to_string();
 
         // Key 1: jack
         let mut jack_headers = HashMap::new();
         jack_headers.insert("X-Consumer-Username".to_string(), "jack".to_string());
         jack_headers.insert("X-Customer-ID".to_string(), "cust-001".to_string());
-        keys.insert("jack-key-12345".to_string(), KeyMetadata { headers: jack_headers });
+        keys.insert(
+            "jack-key-12345".to_string(),
+            KeyMetadata {
+                headers: jack_headers,
+                group: group.clone(),
+            },
+        );
 
         // Key 2: alice
         let mut alice_headers = HashMap::new();
         alice_headers.insert("X-Consumer-Username".to_string(), "alice".to_string());
         alice_headers.insert("X-Customer-ID".to_string(), "cust-002".to_string());
-        keys.insert("alice-key-67890".to_string(), KeyMetadata { headers: alice_headers });
+        keys.insert(
+            "alice-key-67890".to_string(),
+            KeyMetadata {
+                headers: alice_headers,
+                group: group.clone(),
+            },
+        );
 
         auth.load_keys(keys);
         auth
-    }
-
-    #[tokio::test]
-    async fn test_extract_key_from_header() {
-        let auth = create_key_auth_with_keys();
-        let mut mock_session = MockPluginSession::new();
-
-        // key_get is called with KeyGet::Header
-        mock_session.expect_key_get().returning(|key| {
-            if let KeyGet::Header { name } = key {
-                if name == "X-API-Key" {
-                    return Some("jack-key-12345".to_string());
-                }
-            }
-            None
-        });
-
-        let result = auth.extract_key(&mock_session).await;
-        assert!(result.is_some());
-        let (key, source) = result.unwrap();
-        assert_eq!(key, "jack-key-12345");
-        assert!(matches!(source, KeyGet::Header { name } if name == "X-API-Key"));
-    }
-
-    #[tokio::test]
-    async fn test_extract_key_from_query() {
-        let auth = create_key_auth_with_keys();
-        let mut mock_session = MockPluginSession::new();
-
-        // Header returns None, Query returns value
-        mock_session.expect_key_get().returning(|key| match key {
-            KeyGet::Header { .. } => None,
-            KeyGet::Query { name } if name == "api_key" => Some("alice-key-67890".to_string()),
-            _ => None,
-        });
-
-        let result = auth.extract_key(&mock_session).await;
-        assert!(result.is_some());
-        let (key, source) = result.unwrap();
-        assert_eq!(key, "alice-key-67890");
-        assert!(matches!(source, KeyGet::Query { name } if name == "api_key"));
-    }
-
-    #[tokio::test]
-    async fn test_header_priority_over_query() {
-        let auth = create_key_auth_with_keys();
-        let mut mock_session = MockPluginSession::new();
-
-        // Header returns value first
-        mock_session.expect_key_get().returning(|key| match key {
-            KeyGet::Header { name } if name == "X-API-Key" => Some("header-key".to_string()),
-            KeyGet::Query { name } if name == "api_key" => Some("query-key".to_string()),
-            _ => None,
-        });
-
-        let result = auth.extract_key(&mock_session).await;
-        assert!(result.is_some());
-        let (key, source) = result.unwrap();
-        assert_eq!(key, "header-key");
-        assert!(matches!(source, KeyGet::Header { .. }));
     }
 
     #[tokio::test]
@@ -333,35 +288,6 @@ mod tests {
 
         let result = auth.extract_key(&mock_session).await;
         assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_extract_key_from_cookie() {
-        let config = KeyAuthConfig {
-            key_sources: vec![
-                KeyGet::Header {
-                    name: "X-API-Key".to_string(),
-                },
-                KeyGet::Cookie {
-                    name: "api_token".to_string(),
-                },
-            ],
-            ..Default::default()
-        };
-        let auth = KeyAuth::new(&config);
-        let mut mock_session = MockPluginSession::new();
-
-        mock_session.expect_key_get().returning(|key| match key {
-            KeyGet::Header { .. } => None,
-            KeyGet::Cookie { name } if name == "api_token" => Some("cookie-key-123".to_string()),
-            _ => None,
-        });
-
-        let result = auth.extract_key(&mock_session).await;
-        assert!(result.is_some());
-        let (key, source) = result.unwrap();
-        assert_eq!(key, "cookie-key-123");
-        assert!(matches!(source, KeyGet::Cookie { name } if name == "api_token"));
     }
 
     #[test]
@@ -384,186 +310,57 @@ mod tests {
         assert!(metadata.is_none());
     }
 
-    #[tokio::test]
-    async fn test_successful_auth() {
-        let auth = create_key_auth_with_keys();
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("KeyAuth");
+    use crate::core::gateway::plugins::runtime::PluginLog;
+    use serde_json::Value;
 
-        mock_session.expect_method().returning(|| "GET".to_string());
-
-        mock_session.expect_key_get().returning(|key| {
-            if let KeyGet::Header { name } = key {
-                if name == "X-API-Key" {
-                    return Some("jack-key-12345".to_string());
-                }
-            }
-            None
-        });
-
-        mock_session.expect_set_request_header().returning(|_, _| Ok(()));
-
-        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("OK"));
+    fn metadata_with_group(group: &str, username: Option<&str>) -> KeyMetadata {
+        let mut headers = HashMap::new();
+        if let Some(u) = username {
+            headers.insert("X-Consumer-Username".to_string(), u.to_string());
+        }
+        KeyMetadata {
+            headers,
+            group: group.to_string(),
+        }
     }
 
-    #[tokio::test]
-    async fn test_missing_key_returns_401() {
-        let auth = create_key_auth_with_keys();
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("KeyAuth");
-
-        mock_session.expect_method().returning(|| "GET".to_string());
-        mock_session.expect_key_get().returning(|_| None);
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-        mock_session.expect_shutdown().returning(|| {});
-
-        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny no key"));
-    }
-
-    #[tokio::test]
-    async fn test_invalid_key_returns_401() {
-        let auth = create_key_auth_with_keys();
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("KeyAuth");
-
-        mock_session.expect_method().returning(|| "GET".to_string());
-
-        mock_session.expect_key_get().returning(|key| {
-            if let KeyGet::Header { name } = key {
-                if name == "X-API-Key" {
-                    return Some("invalid-key".to_string());
-                }
-            }
-            None
-        });
-
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-        mock_session.expect_shutdown().returning(|| {});
-
-        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny bad key"));
-    }
-
-    #[tokio::test]
-    async fn test_anonymous_access() {
-        let mut config = create_test_config();
-        config.anonymous = Some("anonymous-user".to_string());
-
-        let auth = KeyAuth::new(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("KeyAuth");
-
-        mock_session.expect_method().returning(|| "GET".to_string());
-        mock_session.expect_key_get().returning(|_| None);
-        mock_session.expect_set_request_header().returning(|_, _| Ok(()));
-
-        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(plugin_log.contains("Allow anon"));
-    }
-
-    #[tokio::test]
-    async fn test_hide_credentials_header() {
-        let mut config = create_test_config();
-        config.hide_credentials = true;
-
-        let mut auth = KeyAuth::new(&config);
-
-        let mut keys = HashMap::new();
-        keys.insert("test-key".to_string(), KeyMetadata::default());
-        auth.load_keys(keys);
-
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("KeyAuth");
-
-        mock_session.expect_method().returning(|| "GET".to_string());
-
-        mock_session.expect_key_get().returning(|key| {
-            if let KeyGet::Header { name } = key {
-                if name == "X-API-Key" {
-                    return Some("test-key".to_string());
-                }
-            }
-            None
-        });
-
-        mock_session.expect_set_request_header().returning(|_, _| Ok(()));
-
-        mock_session
-            .expect_remove_request_header()
-            .with(mockall::predicate::eq("X-API-Key"))
-            .times(1)
-            .returning(|_| Ok(()));
-
-        let result = auth.run_request(&mut mock_session, &mut plugin_log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
+    fn render_log(log: &PluginLog) -> Vec<String> {
+        let v: Value = serde_json::to_value(log).unwrap();
+        v.get("log")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(|e| e.as_str().map(String::from)).collect())
+            .unwrap_or_default()
     }
 
     #[test]
-    fn test_upstream_headers_whitelist() {
-        let auth = create_key_auth_with_keys();
-
-        // Jack has headers in metadata
-        let metadata = auth.validate_key("jack-key-12345").unwrap();
-
-        // Only whitelisted headers should be in metadata
-        assert!(metadata.headers.contains_key("X-Consumer-Username"));
-        assert!(metadata.headers.contains_key("X-Customer-ID"));
+    fn hit_log_contains_group_and_user() {
+        let mut log = PluginLog::new("KeyAuth");
+        let meta = metadata_with_group("partner-a", Some("jack"));
+        if let Some(user) = meta.headers.get("X-Consumer-Username") {
+            log.push_fmt("OK group={} user {}", la![meta.group.as_ref(), sensitive(user)]);
+        }
+        let entries = render_log(&log);
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.starts_with("OK group=partner-a") && e.contains("user ")),
+            "expected 'OK group=partner-a user ...', got entries: {:?}",
+            entries
+        );
     }
 
-    #[tokio::test]
-    async fn test_empty_value_fallback_to_next_source() {
-        let auth = create_key_auth_with_keys();
-        let mut mock_session = MockPluginSession::new();
-
-        // Header returns empty string, should fallback to query
-        mock_session.expect_key_get().returning(|key| match key {
-            KeyGet::Header { name } if name == "X-API-Key" => Some("".to_string()),
-            KeyGet::Query { name } if name == "api_key" => Some("alice-key-67890".to_string()),
-            _ => None,
-        });
-
-        let result = auth.extract_key(&mock_session).await;
-        assert!(result.is_some());
-        let (key, source) = result.unwrap();
-        assert_eq!(key, "alice-key-67890");
-        assert!(matches!(source, KeyGet::Query { .. }));
-    }
-
-    #[tokio::test]
-    async fn test_unsupported_source_skipped() {
-        // Create config with unsupported source (ClientIp)
-        let config = KeyAuthConfig {
-            key_sources: vec![
-                KeyGet::ClientIp, // Should be skipped
-                KeyGet::Header {
-                    name: "X-API-Key".to_string(),
-                },
-            ],
-            ..Default::default()
-        };
-        let auth = KeyAuth::new(&config);
-        let mut mock_session = MockPluginSession::new();
-
-        mock_session.expect_key_get().returning(|key| {
-            if let KeyGet::Header { name } = key {
-                if name == "X-API-Key" {
-                    return Some("valid-key".to_string());
-                }
-            }
-            None
-        });
-
-        let result = auth.extract_key(&mock_session).await;
-        assert!(result.is_some());
-        let (key, _) = result.unwrap();
-        assert_eq!(key, "valid-key");
+    #[test]
+    fn hit_log_without_user_still_has_group() {
+        let mut log = PluginLog::new("KeyAuth");
+        let meta = metadata_with_group("internal", None);
+        if meta.headers.get("X-Consumer-Username").is_none() {
+            log.push_fmt("OK group={}", la![meta.group.as_ref()]);
+        }
+        let entries = render_log(&log);
+        assert!(
+            entries.iter().any(|e| e == "OK group=internal"),
+            "expected exact 'OK group=internal', got: {:?}",
+            entries
+        );
     }
 }

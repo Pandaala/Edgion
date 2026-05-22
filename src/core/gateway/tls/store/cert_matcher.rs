@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::core::common::matcher::HashHost;
 use crate::types::listener_key::ListenerKey;
 use crate::types::EdgionTls;
@@ -45,11 +43,16 @@ impl TlsCertMatcher {
     }
 
     /// Match SNI against certificates for a specific listener.
+    ///
+    /// Uses RFC 6125 §6.4.3 single-label wildcard semantics — a cert registered for
+    /// `*.example.com` matches SNI `foo.example.com` but NOT `a.b.example.com`. Route
+    /// matching at `TlsRouteTable::match_route` keeps multi-label semantics per Gateway
+    /// API §4.3 — the two layers diverge deliberately.
     pub fn match_sni(&self, key: &ListenerKey, sni: &str) -> Option<Arc<EdgionTls>> {
         let snapshot = self.data.load();
 
         if let Some(host_matcher) = snapshot.listener_matcher.get(key) {
-            if let Some(tls_list) = host_matcher.get(sni) {
+            if let Some(tls_list) = host_matcher.get_rfc6125(sni) {
                 if let Some(first) = tls_list.first() {
                     return Some(first.clone());
                 }
@@ -70,13 +73,6 @@ pub static TLS_CERT_MATCHER: LazyLock<TlsCertMatcher> = LazyLock::new(TlsCertMat
 
 pub fn get_tls_cert_matcher() -> &'static TlsCertMatcher {
     &TLS_CERT_MATCHER
-}
-
-pub fn set_tls_cert_matcher(
-    listener_matcher: HashMap<ListenerKey, HashHost<Vec<Arc<EdgionTls>>>>,
-) -> anyhow::Result<()> {
-    get_tls_cert_matcher().set(listener_matcher);
-    Ok(())
 }
 
 pub fn match_sni(key: &ListenerKey, sni: &str) -> Option<Arc<EdgionTls>> {

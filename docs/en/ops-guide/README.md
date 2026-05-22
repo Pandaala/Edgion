@@ -40,6 +40,10 @@ This section is intended for operators, covering Gateway deployment, configurati
 - [Gateway Configuration](./configuration/gateway-config.md): Gateway TOML process configuration parameters.
 - [EdgionGatewayConfig](./configuration/edgion-gateway-config.md): GatewayClass-level runtime configuration (timeouts, real IP, global plugins, etc.).
 
+### Federation
+
+- [Federation RBAC](./federation-rbac.md): Authorize Center operations on the Controller — built-in default, examples, and security notes.
+
 ### Operations Tools
 
 - [edgion-cli](./edgion-cli.md): Resource management and debugging CLI.

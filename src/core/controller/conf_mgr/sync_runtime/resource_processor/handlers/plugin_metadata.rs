@@ -12,14 +12,11 @@
 //! - On update_status: set `Accepted` (from preparse errors) and `ResolvedRefs`
 //!   (from ServiceRegionRoute.clusterRef resolution) conditions per Gateway API conventions.
 
-use chrono::Utc;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
-
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::region_route_table::{
     ClusterRegionRouteEntry, ServiceRegionRouteEntry,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_utils::{
-    condition_reasons, condition_types, ResolvedRefsError,
+    condition_false, condition_reasons, condition_true, condition_types, update_condition, ResolvedRefsError,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
@@ -178,13 +175,14 @@ impl ProcessorHandler<PluginMetaData> for PluginMetadataHandler {
         );
         ctx.runtime()
             .plugin_metadata_store
-            .update(Default::default(), &[key].into_iter().collect());
+            .update(Default::default(), &[key.clone()].into_iter().collect());
 
         remove_from_region_route_tables(pm, ctx);
         ctx.runtime()
             .plugin_metadata_refs
             .clear_refs_from(&Self::self_ref_key(pm));
         requeue_pm_referrers(pm, ctx).await;
+        ctx.runtime().plugin_metadata_refs.remove_pm(&key);
     }
 
     fn update_status(&self, pm: &mut PluginMetaData, ctx: &HandlerContext, validation_errors: &[String]) {
@@ -193,24 +191,24 @@ impl ProcessorHandler<PluginMetaData> for PluginMetadataHandler {
         // Compute both conditions first (both need immutable access to `pm` / `ctx`),
         // then apply them in a single mutable-borrow scope on `pm.status`.
         let accepted = if validation_errors.is_empty() {
-            k8s_condition_true(
+            condition_true(
                 condition_types::ACCEPTED,
                 condition_reasons::ACCEPTED,
                 "Resource accepted",
                 generation,
             )
         } else {
-            k8s_condition_false(
+            condition_false(
                 condition_types::ACCEPTED,
                 condition_reasons::INVALID,
-                &validation_errors.join("; "),
+                validation_errors.join("; "),
                 generation,
             )
         };
 
         let resolved_errors = resolve_refs(pm, ctx);
         let resolved_refs = if resolved_errors.is_empty() {
-            k8s_condition_true(
+            condition_true(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::RESOLVED_REFS,
                 "All references resolved",
@@ -223,12 +221,12 @@ impl ProcessorHandler<PluginMetaData> for PluginMetadataHandler {
                 .map(|e| e.message())
                 .collect::<Vec<_>>()
                 .join("; ");
-            k8s_condition_false(condition_types::RESOLVED_REFS, reason, &message, generation)
+            condition_false(condition_types::RESOLVED_REFS, reason, message, generation)
         };
 
         let status = pm.status.get_or_insert_with(PluginMetaDataStatus::default);
-        update_k8s_condition(&mut status.conditions, accepted);
-        update_k8s_condition(&mut status.conditions, resolved_refs);
+        update_condition(&mut status.conditions, accepted);
+        update_condition(&mut status.conditions, resolved_refs);
     }
 }
 
@@ -257,44 +255,4 @@ fn resolve_refs(pm: &PluginMetaData, ctx: &HandlerContext) -> Vec<ResolvedRefsEr
         }
     }
     errors
-}
-
-/// Create a k8s_openapi Condition with True status
-fn k8s_condition_true(type_: &str, reason: &str, message: &str, observed_generation: Option<i64>) -> Condition {
-    Condition {
-        type_: type_.to_string(),
-        status: "True".to_string(),
-        reason: reason.to_string(),
-        message: message.to_string(),
-        last_transition_time: Time(Utc::now()),
-        observed_generation,
-    }
-}
-
-/// Create a k8s_openapi Condition with False status
-fn k8s_condition_false(type_: &str, reason: &str, message: &str, observed_generation: Option<i64>) -> Condition {
-    Condition {
-        type_: type_.to_string(),
-        status: "False".to_string(),
-        reason: reason.to_string(),
-        message: message.to_string(),
-        last_transition_time: Time(Utc::now()),
-        observed_generation,
-    }
-}
-
-/// Update or insert a k8s_openapi Condition (only bump `last_transition_time` on status flip).
-fn update_k8s_condition(conditions: &mut Vec<Condition>, new_condition: Condition) {
-    if let Some(existing) = conditions.iter_mut().find(|c| c.type_ == new_condition.type_) {
-        let status_changed = existing.status != new_condition.status;
-        existing.status = new_condition.status;
-        existing.reason = new_condition.reason;
-        existing.message = new_condition.message;
-        existing.observed_generation = new_condition.observed_generation;
-        if status_changed {
-            existing.last_transition_time = new_condition.last_transition_time;
-        }
-    } else {
-        conditions.push(new_condition);
-    }
 }

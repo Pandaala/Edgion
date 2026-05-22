@@ -1,33 +1,21 @@
 ---
 name: gateway-backends
-description: 后端发现与健康检查：三种发现源、BackendStore、健康检查系统、BackendTLSPolicy、预热与端点验证。
+description: Backend discovery and health checks — three discovery sources, BackendStore, the health-check system, BackendTLSPolicy, preload, and endpoint validation.
 ---
 
-# 后端发现与健康检查
+# Backend discovery and health checks
 
-> 后端模块负责从 Kubernetes 获取 Service 对应的实际 Pod 端点，
-> 并通过健康检查系统自动剔除不健康的后端、恢复健康的后端。
+> The backend module is responsible for fetching the actual Pod endpoints behind a Service from Kubernetes,
+> and for using the health-check system to automatically eject unhealthy backends and reinstate healthy ones.
 
-## 三种发现源
+## Discovery sources
 
-| 发现源 | 模块 | K8s 资源 | 适用场景 |
-|--------|------|----------|----------|
-| Endpoint | `discovery/endpoint/` | `Endpoints` | 传统模式（K8s < 1.21） |
-| EndpointSlice | `discovery/endpoint_slice/` | `EndpointSlice` | 推荐模式（K8s >= 1.21），支持更大规模集群 |
-| Service | `discovery/services/` | `Service` | Service 元数据存储（ClusterIP、端口映射） |
+| Source | Module | K8s resource | Description |
+|--------|--------|--------------|-------------|
+| EndpointSlice | `discovery/endpoint_slice/` | `EndpointSlice` | Backend endpoint discovery |
+| Service | `discovery/services/` | `Service` | Service metadata storage (ClusterIP, port mapping) |
 
-### EndpointMode 配置
-
-通过 `GLOBAL_ENDPOINT_MODE`（OnceLock，启动时初始化）控制使用哪种发现源：
-
-| 模式 | 说明 |
-|------|------|
-| `EndpointSlice` | 仅使用 EndpointSlice |
-| `Endpoint` | 仅使用 Endpoint |
-| `Both` | 同时使用两者 |
-| `Auto` | 自动选择（等同 EndpointSlice） |
-
-### 发现数据流
+### Discovery data flow
 
 ```
 Controller (K8s Watch)
@@ -38,166 +26,161 @@ Controller (K8s Watch)
   │                                    └── RoundRobin Store (DashMap)
   │                                         └── Pingora LoadBalancer (per service_key)
   │
-  ├── ConfHandler<Endpoint>       →  EndpointStore
-  │                                    └── RoundRobin Store (DashMap)
-  │
   └── ConfHandler<Service>        →  ServiceStore (DashMap)
-                                       └── Service 元数据（ports、annotations）
+                                       └── Service metadata (ports, annotations)
 ```
 
-每个发现源实现：
-- `conf_handler_impl.rs` — ConfHandler trait 实现，处理 full_set/partial_update
-- `discovery_impl.rs` — 发现逻辑，将 K8s 资源转换为 Pingora Backend 列表
-- `*_store.rs` — 数据存储（EpSliceStore/EndpointStore/ServiceStore）
+Each discovery source implements:
+- `conf_handler_impl.rs` — ConfHandler trait implementation, handling full_set / partial_update.
+- `discovery_impl.rs` — discovery logic, converting K8s resources into a Pingora Backend list.
+- `*_store.rs` — data store (EpSliceStore / ServiceStore).
 
-## 健康检查系统
+## Health-check system
 
-### 组件结构
+### Component layout
 
 ```
 health/
 ├── check/
-│   ├── manager.rs        # HealthCheckManager — 管理每个 service 的检查任务
-│   ├── probes.rs         # 探针实现（HTTP/TCP）
-│   ├── config_store.rs   # HealthCheckConfigStore — 健康检查配置存储
-│   ├── status_store.rs   # HealthStatusStore — 健康状态存储
-│   └── annotation.rs     # Service annotation 解析
+│   ├── manager.rs        # HealthCheckManager — manages a check task per service
+│   ├── probes.rs         # Probe implementations (HTTP/TCP)
+│   ├── config_store.rs   # HealthCheckConfigStore — health-check configuration store
+│   ├── status_store.rs   # HealthStatusStore — health status store
+│   └── annotation.rs     # Service annotation parsing
 └── mod.rs
 ```
 
 ### HealthCheckManager
 
-- 全局单例（`HEALTH_CHECK_MANAGER`，LazyLock）
-- 每个 service 维护一个后台 tokio task（`JoinHandle<()>`）
-- `reconcile_service(service_key)` — 根据配置创建/更新/删除检查任务
-- 配置来源优先级：HealthCheckConfigStore 中的解析结果（annotation 或 CRD）
-- 无配置时删除任务并注销健康状态
+- Global singleton (`HEALTH_CHECK_MANAGER`, LazyLock).
+- Maintains one background tokio task (`JoinHandle<()>`) per service.
+- `reconcile_service(service_key)` — creates/updates/deletes the check task based on configuration.
+- Configuration source priority: parsed result in HealthCheckConfigStore (annotation or CRD).
+- Without configuration, deletes the task and unregisters health status.
 
-### 探针类型
+### Probe types
 
-| 类型 | 函数 | 说明 |
-|------|------|------|
-| HTTP | `probe_http()` / `probe_http_with_client()` | HTTP GET 检查，支持自定义 client |
-| TCP | `probe_tcp()` | TCP 连接检查 |
-| gRPC | `probe_grpc()` | gRPC Health Check Protocol（grpc.health.v1.Health/Check），手写 prost 结构体实现，无需 proto 文件 |
+| Type | Function | Description |
+|------|----------|-------------|
+| HTTP | `probe_http()` / `probe_http_with_client()` | HTTP GET check, supports a custom client |
+| TCP | `probe_tcp()` | TCP connection check |
+| gRPC | `probe_grpc()` | gRPC Health Check Protocol (grpc.health.v1.Health/Check), implemented with hand-written prost structs, no proto file needed |
 
-### 健康状态
+### Health status
 
-- `HealthStatusStore` 存储每个 service 下各 backend 的健康状态
-- 不健康的后端在 LB 选择时被过滤（通过 `health_filter` 回调）
-- 后端恢复健康后自动重新加入选择池
-- `unregister_service()` 在删除检查配置时清理状态
+- `HealthStatusStore` stores the health status of each backend per service.
+- Unhealthy backends are filtered out during LB selection (via the `health_filter` callback).
+- Backends are automatically re-added to the selection pool after recovery.
+- `unregister_service()` cleans up state when the check configuration is removed.
 
 ### backend_hash
 
-用于健康状态和熔断器状态键的计算：对 Backend 的 `addr` 进行 DefaultHasher 哈希。
+Used to compute the key for health status and circuit-breaker state: a DefaultHasher hash of the Backend's `addr`.
 
-## 熔断器（Circuit Breaker）
+## Circuit Breaker
 
-被动逐出机制，防止级联故障。参考 Envoy `outlier_detection` 精简版。
+Passive ejection mechanism to prevent cascading failures. References a slimmed-down version of Envoy's `outlier_detection`.
 
-### 组件结构
+### Component layout
 
 ```
 circuit_breaker/
-├── config.rs     # CircuitBreakerConfig — 配置结构体 + annotation 解析
-├── store.rs      # CircuitBreakerStore — DashMap 逐出状态存储
+├── config.rs     # CircuitBreakerConfig — config struct + annotation parsing
+├── store.rs      # CircuitBreakerStore — DashMap-based ejection state store
 └── mod.rs
 ```
 
-### 核心机制
+### Core mechanics
 
-- **连续失败计数**：连接失败 / 代理错误 / 上游 5xx 各算一次，非 5xx 响应重置计数
-- **自动逐出**：连续失败达到阈值后标记 `ejected_at`，LB 选择时跳过
-- **自动恢复**：`is_ejected()` 检查时发现冷却到期，自动清除逐出状态
-- **最大逐出比例**：防止所有后端同时被逐出（0 = 不限制）
+- **Consecutive failure counting**: connect failures / proxy errors / upstream 5xx each count as one; non-5xx responses reset the counter.
+- **Auto ejection**: once consecutive failures hit the threshold, mark `ejected_at`; LB selection skips the backend.
+- **Auto recovery**: when `is_ejected()` is checked and the cooldown has expired, the ejection state is cleared automatically.
+- **Maximum ejection ratio**: prevents all backends from being ejected at once (0 = no limit).
 
-### 数据存储
+### Data store
 
-`CircuitBreakerStore`（全局 LazyLock 单例）：
-- 外层 `DashMap<String, Arc<ServiceCbState>>`：service_key → 配置 + 端点状态
-- 内层 `DashMap<u64, EndpointState>`：backend_hash → 连续失败数 + 逐出时间
-- `record_success` 直接删除 entry（不是重置为 0），防止内存增长
-- 未配置 CB 的 service 无 entry，`has_service()` 返回 false 立即跳过
+`CircuitBreakerStore` (global LazyLock singleton):
+- Outer `DashMap<String, Arc<ServiceCbState>>`: service_key → configuration + endpoint state.
+- Inner `DashMap<u64, EndpointState>`: backend_hash → consecutive-failure count + ejection time.
+- `record_success` deletes the entry directly (not reset to 0) to prevent memory growth.
+- Services without CB configuration have no entry; `has_service()` returns false and skips immediately.
 
-### 失败计数 Hook
+### Failure-counting hooks
 
-| Hook | 文件 | 触发条件 |
-|------|------|----------|
-| `fail_to_connect` | `pg_fail_to_connect.rs` | 连接失败 |
-| `error_while_proxy` | `pg_error_while_proxy.rs` | 代理错误（非 retry-on-status） |
-| `upstream_response_filter` | `pg_upstream_response_filter.rs` | 5xx 记录失败，非 5xx 记录成功 |
+| Hook | File | Trigger |
+|------|------|---------|
+| `fail_to_connect` | `pg_fail_to_connect.rs` | Connection failed |
+| `error_while_proxy` | `pg_error_while_proxy.rs` | Proxy error (non retry-on-status) |
+| `upstream_response_filter` | `pg_upstream_response_filter.rs` | 5xx records failure, non-5xx records success |
 
-### LB 集成
+### LB integration
 
-`is_backend_healthy()` 在健康检查之后增加 CB 逐出检查，所有 LB 算法自动生效。
+`is_backend_healthy()` adds a CB ejection check after the health check; it applies automatically to all LB algorithms.
 
-### 生命周期
+### Lifecycle
 
-- Service 同步时解析 `edgion.io/circuit-breaker` annotation → `set_service_config`
-- EP/EPS `cleanup_removed_backends` 时 → `remove_backend` 清理逐出状态
-- Service 删除时 → `remove_service` 清理整个 CB 配置
+- During Service sync, parse the `edgion.io/circuit-breaker` annotation → `set_service_config`.
+- During EP/EPS `cleanup_removed_backends` → `remove_backend` cleans ejection state.
+- On Service deletion → `remove_service` clears the entire CB configuration.
 
-### Prometheus 指标
+### Prometheus metrics
 
-| 指标 | 类型 | Label | 埋点 |
-|------|------|-------|------|
-| `edgion_circuit_breaker_ejections_total` | Counter | `service` | 逐出成功时 |
-| `edgion_circuit_breaker_ejected_endpoints` | Gauge | `service` | 逐出 +1，恢复/清理 -1 |
-| `edgion_circuit_breaker_rejections_total` | Counter | `service` | LB 选择命中逐出后端时 |
+| Metric | Type | Label | Recorded when |
+|--------|------|-------|---------------|
+| `edgion_circuit_breaker_ejections_total` | Counter | `service` | An ejection succeeds |
+| `edgion_circuit_breaker_ejected_endpoints` | Gauge | `service` | +1 on ejection, -1 on recovery / cleanup |
+| `edgion_circuit_breaker_rejections_total` | Counter | `service` | LB selection hits an ejected backend |
 
 ## BackendTLSPolicy
 
-管理上游 mTLS 配置，存储在 `BackendTLSPolicyStore`：
+Manages upstream mTLS configuration, stored in `BackendTLSPolicyStore`:
 
 ```
 policy/
 ├── backend_tls/
-│   ├── backend_tls_policy_store.rs  # BackendTLSPolicyStore (存储 + 查询)
-│   ├── conf_handler_impl.rs         # ConfHandler 实现
+│   ├── backend_tls_policy_store.rs  # BackendTLSPolicyStore (storage + queries)
+│   ├── conf_handler_impl.rs         # ConfHandler implementation
 │   └── mod.rs
 └── mod.rs
 ```
 
-- 通过 `get_global_backend_tls_policy_store()` 获取全局实例
-- 在 `upstream_peer` 阶段查询 service 对应的 TLS 策略
-- 配置 HttpPeer 的 TLS 连接参数（CA 证书、客户端证书/密钥）
-- Secret key 常量：`CA_CERT`、`CERT`、`KEY`
+- Get the global instance via `get_global_backend_tls_policy_store()`.
+- During the `upstream_peer` phase, look up the TLS policy for the service.
+- Configure the HttpPeer's TLS connection parameters (CA certificate, client certificate / key).
+- Secret key constants: `CA_CERT`, `CERT`, `KEY`.
 
-## LB 预热（Preload）
+## LB preload
 
-`preload_load_balancers()` 在所有配置同步完成后调用：
+`preload_load_balancers()` is invoked after all configuration sync completes:
 
-1. 遍历所有路由类型（HTTP/gRPC/TCP/UDP/TLS），收集 (service_key, lb_policy) 对
-2. HashSet 去重
-3. 根据 EndpointMode 选择 store（EndpointSlice 或 Endpoint）
-4. 调用 `get_or_create()` 预创建 RoundRobin LB 实例
-5. 日志记录预热结果（total, success, skipped）
+1. Iterate all route kinds (HTTP/gRPC/TCP/UDP/TLS) and collect (service_key, lb_policy) pairs.
+2. Deduplicate using HashSet.
+3. Pre-create RoundRobin LB instances by calling `get_or_create()` on the EndpointSlice store.
+4. Log the preload result (total, success, skipped).
 
-## 端点验证
+## Endpoint validation
 
-`validate_endpoint_in_route()` 提供安全验证：
+`validate_endpoint_in_route()` provides a security check:
 
-- 验证目标 IP 是否是 route 的 BackendRef 中的合法端点
-- 防止 SSRF 攻击：确保只能路由到 route 已授权的端点
-- 参数：目标 IP、可选端口、route 的 backend_refs、route namespace
-- 返回：`Ok((backend_ref_index, port))` 或 `Err(reason)`
-- 被 `DirectEndpoint` 和 `DynamicInternalUpstream` 等插件使用
+- Verifies that the target IP is a legitimate endpoint within the route's BackendRefs.
+- Prevents SSRF: ensures requests can only be routed to endpoints the route has authorized.
+- Parameters: target IP, optional port, the route's backend_refs, the route's namespace.
+- Returns: `Ok((backend_ref_index, port))` or `Err(reason)`.
+- Used by plugins such as `DirectEndpoint` and `DynamicInternalUpstream`.
 
-## 目录布局
+## Directory layout
 
 ```
 src/core/gateway/backends/
-├── mod.rs                    # 模块导出 + EndpointMode 管理
-├── discovery/                # 后端发现
-│   ├── endpoint/             # Endpoint 发现
-│   ├── endpoint_slice/       # EndpointSlice 发现（推荐）
-│   └── services/             # Service 元数据
-├── health/                   # 健康检查
-│   └── check/                # 检查系统
-├── circuit_breaker/          # 熔断器（被动逐出）
-├── policy/                   # 后端策略
-│   └── backend_tls/          # BackendTLSPolicy（上游 mTLS）
-├── preload.rs                # LB 预热
-└── validation.rs             # 端点验证（防 SSRF）
+├── mod.rs                    # module exports
+├── discovery/                # backend discovery
+│   ├── endpoint_slice/       # EndpointSlice discovery
+│   └── services/             # Service metadata
+├── health/                   # health checks
+│   └── check/                # check system
+├── circuit_breaker/          # circuit breaker (passive ejection)
+├── policy/                   # backend policies
+│   └── backend_tls/          # BackendTLSPolicy (upstream mTLS)
+├── preload.rs                # LB preload
+└── validation.rs             # endpoint validation (SSRF prevention)
 ```

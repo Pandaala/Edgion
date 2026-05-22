@@ -1,4 +1,7 @@
 // HMAC Auth Plugin Test Suite
+// - 04_Secret_default_hmac-credentials-grouped.yaml         # Two grouped Secrets
+// - 05_EdgionPlugins_default_hmac-auth-grouped.yaml         # HmacAuth with partner-a + partner-b
+// - 06_HTTPRoute_default_hmac-auth-grouped.yaml             # Route for grouped test
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -16,6 +19,11 @@ const ANON_HOST: &str = "hmac-auth-anonymous.example.com";
 const VALID_USERNAME: &str = "alice";
 const VALID_SECRET: &[u8] = b"alice-hmac-secret-key-must-be-at-least-32-bytes-long";
 const BAD_SECRET: &[u8] = b"alice-hmac-secret-key-invalid-for-signature-tests";
+const GROUPED_HOST: &str = "hmac-auth-grouped.example.com";
+const GROUPED_USER_PARTNER_A: &str = "partner-a-user";
+const GROUPED_SECRET_PARTNER_A: &[u8] = b"partner-a-secret-key-at-least-32-bytes-long-padding";
+const GROUPED_USER_PARTNER_B: &str = "partner-b-user";
+const GROUPED_SECRET_PARTNER_B: &[u8] = b"partner-b-secret-key-at-least-32-bytes-long-padding";
 
 fn build_signing_string(method: &str, path: &str, query: Option<&str>, host: &str, date: &str) -> String {
     let mut request_target = path.to_string();
@@ -293,6 +301,98 @@ impl HmacAuthTestSuite {
             },
         )
     }
+
+    fn test_grouped_partner_a_returns_200() -> TestCase {
+        TestCase::new(
+            "grouped_partner_a_returns_200",
+            "Signed request for partner-a user returns 200",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = &ctx.http_client;
+                    let url = format!("{}/health", ctx.http_url());
+                    let date = Utc::now().to_rfc2822();
+                    let auth = build_authorization(
+                        GROUPED_USER_PARTNER_A,
+                        GROUPED_SECRET_PARTNER_A,
+                        "GET",
+                        "/health",
+                        GROUPED_HOST,
+                        &date,
+                    );
+
+                    let result = client
+                        .get(&url)
+                        .header("host", GROUPED_HOST)
+                        .header("date", &date)
+                        .header("Authorization", auth)
+                        .send()
+                        .await;
+
+                    match result {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 200 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "partner-a signed request accepted".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_grouped_partner_b_returns_200() -> TestCase {
+        TestCase::new(
+            "grouped_partner_b_returns_200",
+            "Signed request for partner-b user returns 200",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = &ctx.http_client;
+                    let url = format!("{}/health", ctx.http_url());
+                    let date = Utc::now().to_rfc2822();
+                    let auth = build_authorization(
+                        GROUPED_USER_PARTNER_B,
+                        GROUPED_SECRET_PARTNER_B,
+                        "GET",
+                        "/health",
+                        GROUPED_HOST,
+                        &date,
+                    );
+
+                    let result = client
+                        .get(&url)
+                        .header("host", GROUPED_HOST)
+                        .header("date", &date)
+                        .header("Authorization", auth)
+                        .send()
+                        .await;
+
+                    match result {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 200 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "partner-b signed request accepted".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for HmacAuthTestSuite {
@@ -308,6 +408,8 @@ impl TestSuite for HmacAuthTestSuite {
             Self::test_upstream_headers_forwarded(),
             Self::test_hide_credentials_removes_auth_header(),
             Self::test_anonymous_access_without_auth(),
+            Self::test_grouped_partner_a_returns_200(),
+            Self::test_grouped_partner_b_returns_200(),
         ]
     }
 }

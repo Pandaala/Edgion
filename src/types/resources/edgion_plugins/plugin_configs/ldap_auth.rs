@@ -35,7 +35,10 @@ pub struct LdapAuthConfig {
     /// LDAP attribute for username binding (for example: uid, cn)
     pub attribute: String,
 
-    /// Custom bind DN template, must contain {username}
+    /// Custom bind DN template, must contain `{username}`.
+    /// The `{username}` placeholder is escaped per RFC 4514 (DN context)
+    /// before substitution, so the template itself supplies the DN structure
+    /// and the user-supplied value cannot inject DN metacharacters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bind_dn_template: Option<String>,
 
@@ -88,11 +91,6 @@ pub struct LdapAuthConfig {
     /// Header set to true for anonymous requests
     #[serde(default = "default_anonymous_header")]
     pub anonymous_header: String,
-
-    // === Validation ===
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
 }
 
 fn default_ldap_port() -> u16 {
@@ -153,7 +151,6 @@ impl Default for LdapAuthConfig {
             keepalive: default_keepalive(),
             credential_identifier_header: default_credential_identifier_header(),
             anonymous_header: default_anonymous_header(),
-            validation_error: None,
         }
     }
 }
@@ -186,6 +183,14 @@ impl LdapAuthConfig {
         }
 
         None
+    }
+}
+
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for LdapAuthConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.get_validation_error().map(str::to_owned)
     }
 }
 

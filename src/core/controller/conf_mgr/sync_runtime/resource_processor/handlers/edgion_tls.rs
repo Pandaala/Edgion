@@ -178,16 +178,23 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             }
         }
 
-        // 3. Resolve listener keys from parentRefs for per-listener route isolation
+        // 3. Resolve listener keys from parentRefs for per-listener route isolation.
+        // Defensive filter: EdgionTls only makes sense on HTTPS/TLS listeners.
+        // A Gateway is not expected to mix TLS-capable and non-TLS listeners, but
+        // we keep this local check so the resolved spec stays clean even if upstream
+        // Gateway validation ever lets a mixed configuration through.
         let resource_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
         tls.spec.resolved_listeners = None;
         if let Some(parent_refs) = &tls.spec.parent_refs {
-            let listener_keys = super::route_utils::resolve_listener_keys(
+            let listener_keys: Vec<_> = super::route_utils::resolve_listener_keys(
                 parent_refs,
                 resource_ns,
                 tls.metadata.namespace.as_deref(),
                 ctx.runtime(),
-            );
+            )
+            .into_iter()
+            .filter(|k| matches!(k.protocol(), "HTTPS" | "TLS"))
+            .collect();
             if !listener_keys.is_empty() {
                 tracing::debug!(
                     edgion_tls = %resource_ref.key(),
@@ -242,22 +249,17 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 
         let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
 
-        // Check Secret resolution for ResolvedRefs condition
-        let secret_ns = tls
-            .spec
-            .secret_ref
-            .namespace
-            .as_ref()
-            .or(tls.metadata.namespace.as_ref());
-        let secret_resolved = ctx
-            .runtime()
-            .secret_store
-            .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
-            .is_some();
-
-        let resolved_refs_errors: Vec<ResolvedRefsError> = if secret_resolved {
+        // parse() already resolved secret_ref -> spec.secret; reuse that result
+        // instead of querying secret_store a second time.
+        let resolved_refs_errors: Vec<ResolvedRefsError> = if tls.spec.secret.is_some() {
             vec![]
         } else {
+            let secret_ns = tls
+                .spec
+                .secret_ref
+                .namespace
+                .as_ref()
+                .or(tls.metadata.namespace.as_ref());
             vec![ResolvedRefsError::SecretNotFound {
                 namespace: secret_ns.map(|s| s.as_str()).unwrap_or("default").to_string(),
                 name: tls.spec.secret_ref.name.clone(),
@@ -322,17 +324,17 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::SecretRefManager;
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
+    use crate::types::prelude_resources::Gateway;
     use crate::types::resources::common::ParentReference;
-    use crate::types::resources::gateway::SecretObjectReference;
+    use crate::types::resources::gateway::{GatewaySpec, Listener as GatewayListener, SecretObjectReference};
     use kube::api::ObjectMeta;
     use std::sync::Arc;
 
     fn make_ctx() -> HandlerContext {
         use crate::core::controller::conf_mgr::ControllerRuntime;
         HandlerContext::new(
-            Arc::new(SecretRefManager::new()),
             None,
             None,
             TriggerChain::default(),
@@ -340,6 +342,64 @@ mod tests {
             20,
             Arc::new(ControllerRuntime::default()),
         )
+    }
+
+    struct NoopHandler;
+
+    #[async_trait::async_trait]
+    impl ProcessorHandler<Gateway> for NoopHandler {}
+
+    fn make_https_gateway(ns: &str, name: &str) -> Gateway {
+        Gateway {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(ns.to_string()),
+                ..Default::default()
+            },
+            spec: GatewaySpec {
+                gateway_class_name: "test".to_string(),
+                listeners: Some(vec![GatewayListener {
+                    name: "https".to_string(),
+                    hostname: None,
+                    port: 443,
+                    protocol: "HTTPS".to_string(),
+                    tls: None,
+                    allowed_routes: None,
+                }]),
+                addresses: None,
+                tls: None,
+            },
+            status: None,
+        }
+    }
+
+    fn make_ctx_with_gateways(gateways: &[(&str, &str)]) -> HandlerContext {
+        use crate::core::controller::conf_mgr::ControllerRuntime;
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let store = Arc::new(LocalRawStore::<Gateway>::new());
+
+        for (ns, name) in gateways {
+            let key = format!("{}/{}", ns, name);
+            store.upsert(key, Arc::new(make_https_gateway(ns, name)));
+        }
+
+        // ResourceProcessor::new spawns a Tokio background task (Workqueue delay loop),
+        // so we need a Tokio runtime for initialization even though the test itself is sync.
+        // The spawned task is only needed for requeue operations; get_raw_any is sync-safe.
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let processor = rt.block_on(async {
+            Arc::new(ResourceProcessor::<Gateway>::new(
+                "Gateway",
+                100,
+                Arc::new(NoopHandler),
+                runtime.clone(),
+            ))
+        });
+        processor.set_raw_store(store);
+        runtime.processor_registry.register(processor);
+
+        HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime)
     }
 
     fn make_tls(parent_refs: Option<Vec<ParentReference>>, secret_name: &str) -> EdgionTls {
@@ -384,7 +444,7 @@ mod tests {
     #[test]
     fn test_update_status_with_validation_errors_sets_accepted_false() {
         let handler = EdgionTlsHandler::default();
-        let ctx = make_ctx();
+        let ctx = make_ctx_with_gateways(&[("test-ns", "my-gateway")]);
         let parent_refs = vec![make_parent_ref("my-gateway", "test-ns")];
         let mut tls = make_tls(Some(parent_refs), "missing-secret");
 
@@ -407,7 +467,7 @@ mod tests {
     #[test]
     fn test_update_status_no_errors_sets_accepted_true() {
         let handler = EdgionTlsHandler::default();
-        let ctx = make_ctx();
+        let ctx = make_ctx_with_gateways(&[("test-ns", "my-gateway")]);
         let parent_refs = vec![make_parent_ref("my-gateway", "test-ns")];
         let mut tls = make_tls(Some(parent_refs), "existing-secret");
 
@@ -446,7 +506,7 @@ mod tests {
     #[test]
     fn test_update_status_multiple_parents_all_get_validation_errors() {
         let handler = EdgionTlsHandler::default();
-        let ctx = make_ctx();
+        let ctx = make_ctx_with_gateways(&[("test-ns", "gw-1"), ("test-ns", "gw-2")]);
         let parent_refs = vec![make_parent_ref("gw-1", "test-ns"), make_parent_ref("gw-2", "test-ns")];
         let mut tls = make_tls(Some(parent_refs), "bad-secret");
 
@@ -467,7 +527,7 @@ mod tests {
     #[test]
     fn test_update_status_updates_existing_parent_status() {
         let handler = EdgionTlsHandler::default();
-        let ctx = make_ctx();
+        let ctx = make_ctx_with_gateways(&[("test-ns", "my-gw")]);
         let parent_refs = vec![make_parent_ref("my-gw", "test-ns")];
         let mut tls = make_tls(Some(parent_refs.clone()), "test-secret");
 
@@ -577,15 +637,7 @@ mod tests {
         secrets.insert("test-ns/test-secret".to_string(), secret);
         runtime.secret_store.replace_all(secrets);
 
-        HandlerContext::new(
-            Arc::new(SecretRefManager::new()),
-            None,
-            None,
-            TriggerChain::default(),
-            3,
-            20,
-            runtime,
-        )
+        HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime)
     }
 
     #[test]

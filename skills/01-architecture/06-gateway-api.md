@@ -1,108 +1,108 @@
 ---
 name: gateway-api-conformance
-description: Gateway API v1.5.0 合规性：支持的资源、Edgion 扩展 CRD、一致性测试、扩展点。
+description: Gateway API v1.5.0 conformance — supported resources, Edgion extension CRDs, conformance testing, extension points.
 ---
 
-# Gateway API 合规性
+# Gateway API Conformance
 
-Edgion 实现了 Kubernetes Gateway API v1.5.0 规范，支持 HTTP、gRPC、TCP、TLS 和 UDP 路由协议。在标准 Gateway API 基础上，Edgion 通过自定义 CRD 和注解提供扩展功能。
+Edgion implements the Kubernetes Gateway API v1.5.0 specification, supporting HTTP, gRPC, TCP, TLS, and UDP routing protocols. On top of standard Gateway API, Edgion provides extension functionality through custom CRDs and annotations.
 
-## 支持的 Gateway API 资源
+## Supported Gateway API Resources
 
-| 资源 | API Group | Channel | 说明 |
+| Resource | API Group | Channel | Description |
 |------|-----------|---------|------|
-| **GatewayClass** | gateway.networking.k8s.io/v1 | Standard | 定义 Gateway 实现类，Edgion 的 controllerName 为 `edgion.io/gateway-controller` |
-| **Gateway** | gateway.networking.k8s.io/v1 | Standard | 定义监听器、端口、TLS 配置，一个 Gateway 对应一组逻辑入口 |
-| **HTTPRoute** | gateway.networking.k8s.io/v1 | Standard | HTTP 路由规则：主机名匹配、路径匹配、Header 匹配、请求重定向/重写/镜像 |
-| **GRPCRoute** | gateway.networking.k8s.io/v1 | Standard | gRPC 路由规则：Service/Method 匹配、Header 匹配 |
-| **TCPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | TCP 四层路由，按端口转发到后端 |
-| **TLSRoute** | gateway.networking.k8s.io/v1（v1alpha3 兼容） | Standard / Experimental 安装清单下 served versions 可能不同 | TLS passthrough 路由，按 SNI 匹配后直接转发加密流量 |
-| **UDPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | UDP 路由，按端口转发 |
-| **ReferenceGrant** | gateway.networking.k8s.io/v1 (v1beta1 兼容) | Standard | 跨命名空间引用授权，仅在 Controller 侧使用（no_sync_kinds） |
-| **BackendTLSPolicy** | gateway.networking.k8s.io/v1（v1alpha3 兼容） | Standard / Experimental 安装清单下 served versions 可能不同 | 后端 TLS 策略，配置 Gateway→Backend 的 mTLS |
+| **GatewayClass** | gateway.networking.k8s.io/v1 | Standard | Defines the Gateway implementation class; Edgion's controllerName is `edgion.io/gateway-controller` |
+| **Gateway** | gateway.networking.k8s.io/v1 | Standard | Defines listeners, ports, and TLS configuration; one Gateway corresponds to one logical entry point |
+| **HTTPRoute** | gateway.networking.k8s.io/v1 | Standard | HTTP routing rules: hostname matching, path matching, header matching, request redirect/rewrite/mirror |
+| **GRPCRoute** | gateway.networking.k8s.io/v1 | Standard | gRPC routing rules: Service/Method matching, header matching |
+| **TCPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | TCP layer-4 routing, forwarded by port to backends |
+| **TLSRoute** | gateway.networking.k8s.io/v1 (v1alpha3 compatible) | Standard / Experimental — served versions may differ between install manifests | TLS passthrough routing, forwards encrypted traffic directly after SNI matching |
+| **UDPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | UDP routing, forwarded by port |
+| **ReferenceGrant** | gateway.networking.k8s.io/v1 (v1beta1 compatible) | Standard | Cross-namespace reference authorization, used only on the Controller side (no_sync_kinds) |
+| **BackendTLSPolicy** | gateway.networking.k8s.io/v1 (v1alpha3 compatible) | Standard / Experimental — served versions may differ between install manifests | Backend TLS policy, configures Gateway→Backend mTLS |
 
-## CRD 安装
+## CRD Installation
 
-Gateway API 标准 CRD 通过官方 YAML 安装：
+Standard Gateway API CRDs are installed via the official YAML:
 
 ```bash
-# 安装 Standard channel CRDs
+# Install Standard channel CRDs
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/standard-install.yaml
 
-# 安装 Experimental channel CRDs（包含 TCPRoute、UDPRoute，以及部分资源的旧 served 版本）
+# Install Experimental channel CRDs (includes TCPRoute, UDPRoute, and older served versions of some resources)
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/experimental-install.yaml
 ```
 
-Edgion 扩展 CRD 通过 Edgion 自有的部署清单安装。
+Edgion extension CRDs are installed via Edgion's own deployment manifest.
 
-## Edgion 扩展 CRD
+## Edgion Extension CRDs
 
-| 资源 | API Group | 说明 |
+| Resource | API Group | Description |
 |------|-----------|------|
-| **EdgionGatewayConfig** | edgion.io/v1alpha1 | 全局/per-Gateway 配置：超时、缓冲区大小、日志级别、全局插件 |
-| **EdgionPlugins** | edgion.io/v1alpha1 | HTTP 插件集合：可通过 HTTPRoute/GRPCRoute 的 ExtensionRef 引用 |
-| **EdgionStreamPlugins** | edgion.io/v1alpha1 | TCP/UDP 流插件集合：连接级别过滤（IP 黑白名单等） |
-| **EdgionTls** | edgion.io/v1alpha1 | TLS 证书和密钥资源：替代标准 Secret，支持文件路径引用和内联证书 |
-| **PluginMetaData** | edgion.io/v1alpha1 | 插件元数据：描述插件能力、参数 schema、版本信息 |
-| **LinkSys** | edgion.io/v1alpha1 | 外部系统集成：ES、Redis、Etcd、Webhook、File 等数据源连接配置 |
-| **EdgionAcme** | edgion.io/v1alpha1 | ACME 自动证书签发配置：Let's Encrypt 集成，仅在 Leader Controller 上执行 |
+| **EdgionGatewayConfig** | edgion.io/v1alpha1 | Global / per-Gateway configuration: timeouts, buffer sizes, log levels, global plugins |
+| **EdgionPlugins** | edgion.io/v1alpha1 | HTTP plugin collection: referenceable via the ExtensionRef of HTTPRoute/GRPCRoute |
+| **EdgionStreamPlugins** | edgion.io/v1alpha1 | TCP/UDP stream plugin collection: connection-level filters (IP allow/deny lists, etc.) |
+| **EdgionTls** | edgion.io/v1alpha1 | TLS certificate and key resource: an alternative to standard Secret, supports file path references and inline certificates |
+| **PluginMetaData** | edgion.io/v1alpha1 | Plugin metadata: describes plugin capabilities, parameter schema, and version information |
+| **LinkSys** | edgion.io/v1alpha1 | External system integration: connection configuration for ES, Redis, Etcd, Webhook, File, and other data sources |
+| **EdgionAcme** | edgion.io/v1alpha1 | ACME automatic certificate issuance configuration: Let's Encrypt integration, executed only on the Leader Controller |
 
-## 一致性测试
+## Conformance Testing
 
-Edgion 使用官方 `sigs.k8s.io/gateway-api` v1.5.0 提供的 Go 测试套件进行一致性测试。
+Edgion uses the official Go test suite from `sigs.k8s.io/gateway-api/conformance` v1.5.1 for conformance testing.
 
-### 运行方式
+### How to Run
 
 ```bash
-# 进入一致性测试目录
+# Enter the conformance test directory
 cd examples/gateway-api-conformance
 
-# 运行一致性测试（需要 K8s 集群已部署 Edgion）
+# Run the conformance tests (requires a K8s cluster with Edgion deployed)
 go test -v -run TestConformance ./...
 ```
 
-### 测试覆盖
+### Test Coverage
 
-一致性测试验证以下核心行为：
-- GatewayClass 和 Gateway 的创建与状态更新
-- HTTPRoute 路由匹配（主机名、路径、Header）
-- HTTPRoute 过滤器（RequestRedirect、RequestHeaderModifier、URLRewrite）
-- GRPCRoute 路由匹配（Service、Method）
-- 跨命名空间引用（ReferenceGrant）
-- TLS 终止和 TLS passthrough
-- BackendTLSPolicy 后端 mTLS
+Conformance tests verify the following core behaviors:
+- Creation and status updates of GatewayClass and Gateway
+- HTTPRoute route matching (hostname, path, Header)
+- HTTPRoute filters (RequestRedirect, RequestHeaderModifier, URLRewrite)
+- GRPCRoute route matching (Service, Method)
+- Cross-namespace references (ReferenceGrant)
+- TLS termination and TLS passthrough
+- BackendTLSPolicy backend mTLS
 
-## 多版本兼容提示
+## Multi-version Compatibility Notes
 
-Gateway API 同一 release 下，`standard-install.yaml` 与 `experimental-install.yaml` 对同一资源暴露的 served versions 可能不同。
+Within a single Gateway API release, `standard-install.yaml` and `experimental-install.yaml` may expose different served versions for the same resource.
 
-实务建议：
+Practical recommendations:
 
-- controller 优先 watch 最新稳定版本
-- 旧版本仅作为 fallback 输入版本
-- 依赖 API Server 的多版本 CRD 转换时，不要为同一资源默认同时起多个版本 watcher
+- The controller should prefer to watch the latest stable version
+- Older versions serve only as fallback input versions
+- When relying on the API Server's multi-version CRD conversion, do not start watchers on multiple versions of the same resource by default
 
-## 扩展点
+## Extension Points
 
-Edgion 通过以下机制扩展标准 Gateway API：
+Edgion extends standard Gateway API through the following mechanisms:
 
-### 1. 注解（Annotations）
+### 1. Annotations
 
-使用 `edgion.io/*` 前缀的注解在标准资源上添加 Edgion 特定行为：
+Use annotations with the `edgion.io/*` prefix to add Edgion-specific behavior to standard resources:
 
-| 注解 | 适用资源 | 说明 |
+| Annotation | Applicable Resources | Description |
 |------|---------|------|
-| `edgion.io/edgion-plugins` | HTTPRoute, GRPCRoute | 引用 EdgionPlugins 资源名称 |
-| `edgion.io/edgion-stream-plugins` | Gateway | 引用 EdgionStreamPlugins 资源名称 |
-| `edgion.io/edgion-gateway-config` | Gateway | 引用 EdgionGatewayConfig 资源名称 |
-| `edgion.io/edgion-tls` | Gateway | 引用 EdgionTls 资源名称（替代 Secret） |
-| `edgion.io/link-sys` | Gateway | 引用 LinkSys 资源名称 |
+| `edgion.io/edgion-plugins` | HTTPRoute, GRPCRoute | References an EdgionPlugins resource by name |
+| `edgion.io/edgion-stream-plugins` | Gateway | References an EdgionStreamPlugins resource by name |
+| `edgion.io/edgion-gateway-config` | Gateway | References an EdgionGatewayConfig resource by name |
+| `edgion.io/edgion-tls` | Gateway | References an EdgionTls resource by name (alternative to Secret) |
+| `edgion.io/link-sys` | Gateway | References a LinkSys resource by name |
 
-完整注解列表见 `skills/02-features/05-annotations/00-annotations-overview.md`。
+For the full list of annotations, see `skills/02-features/05-annotations/00-annotations-overview.md`.
 
-### 2. ExtensionRef 过滤器
+### 2. ExtensionRef Filter
 
-HTTPRoute 和 GRPCRoute 支持通过 `ExtensionRef` 类型的 filter 引用 Edgion 扩展资源：
+HTTPRoute and GRPCRoute support referencing Edgion extension resources via `ExtensionRef`-type filters:
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -117,10 +117,10 @@ spec:
             name: my-plugins
 ```
 
-### 3. 自定义 CRD
+### 3. Custom CRDs
 
-上述 Edgion 扩展 CRD 表中列出的所有资源都是标准 Gateway API 之外的扩展。它们通过注解或 ExtensionRef 与标准资源关联，遵循 Gateway API 的扩展性设计原则。
+All resources listed in the Edgion extension CRDs table above are extensions beyond standard Gateway API. They are associated with standard resources via annotations or ExtensionRef, following the extensibility design principles of Gateway API.
 
-## Gateway API 兼容性说明
+## Gateway API Compatibility Notes
 
-更详细的兼容性说明、有意偏差和已知限制，请参见 `skills/08-kubernetes/01-gateway-api/SKILL.md`。
+For more detailed compatibility notes, intentional deviations, and known limitations, see `skills/08-kubernetes/01-gateway-api/SKILL.md`.

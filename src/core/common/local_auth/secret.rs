@@ -122,19 +122,18 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
 
 /// Build a K8s Secret YAML with stringData (plaintext, K8s base64-encodes on apply).
 fn build_secret_yaml(username: &str, password: &str, jwt_secret: &str, namespace: &str) -> String {
-    format!(
-        r#"apiVersion: v1
-kind: Secret
-metadata:
-  name: {}
-  namespace: {}
-type: Opaque
-stringData:
-  username: "{}"
-  password: "{}"
-  jwt_secret: "{}""#,
-        ADMIN_SECRET_NAME, namespace, username, password, jwt_secret
-    )
+    let doc = serde_json::json!({
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": { "name": ADMIN_SECRET_NAME, "namespace": namespace },
+        "type": "Opaque",
+        "stringData": {
+            "username": username,
+            "password": password,
+            "jwt_secret": jwt_secret,
+        },
+    });
+    serde_yaml::to_string(&doc).expect("admin secret YAML serialize")
 }
 
 /// Generate a random alphanumeric string using a CSPRNG.

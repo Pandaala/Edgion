@@ -1,23 +1,23 @@
 ---
 name: kubernetes-resource-controller
-description: Kubernetes ResourceController 生命周期：Reflector 监听、Init/Runtime 阶段、ResourceProcessor 11 步流水线、Status 回写、410 Gone 处理。
+description: Kubernetes ResourceController lifecycle — Reflector watching, Init/Runtime phases, ResourceProcessor 11-step pipeline, status writeback, 410 Gone handling.
 ---
 
-# ResourceController 生命周期
+# ResourceController Lifecycle
 
-每种 K8s 资源类型由一个独立的 `ResourceController<K>` 管理，所有实例完全独立并行运行。
+Each K8s resource type is managed by a dedicated `ResourceController<K>`. All instances run independently and in parallel.
 
-## 架构概览
+## Architecture Overview
 
 ```
 KubernetesController.run()
 ├── spawn::<HTTPRoute, _>(handler)      → ResourceController<HTTPRoute>
 ├── spawn::<Gateway, _>(handler)        → ResourceController<Gateway>
 ├── spawn::<Service, _>(handler)        → ResourceController<Service>
-└── ... (~20 种资源类型，全部独立)
+└── ... (~20 resource types, all independent)
 ```
 
-每个 ResourceController 的内部结构：
+Internal structure of a ResourceController:
 
 ```
 ResourceController<K>
@@ -25,106 +25,106 @@ ResourceController<K>
 ├── client: kube::Client
 ├── watcher_config: watcher::Config
 ├── api_scope: ApiScope                  # Namespaced(watch_mode) | ClusterScoped
-├── processor: Arc<ResourceProcessor<K>> # 持有 ServerCache + Workqueue + Handler
+├── processor: Arc<ResourceProcessor<K>> # holds ServerCache + Workqueue + Handler
 ├── namespace_filter: Option<Vec<String>>
 ├── shutdown_signal: Option<ShutdownSignal>
 ├── relink_signal: Option<RelinkSignalSender>
 └── leader_handle: Option<LeaderHandle>
 ```
 
-启动步骤：
-1. 创建 `ResourceProcessor<K>`（含 `ServerCache<K>` + `Workqueue`）
-2. 注册到 `PROCESSOR_REGISTRY`
-3. 调用 `run_namespaced()` 或 `run_cluster_scoped()` → `run_with_api(api)`
-4. 进入 Init 阶段 → Runtime 阶段
+Startup steps:
+1. Create `ResourceProcessor<K>` (containing `ServerCache<K>` + `Workqueue`)
+2. Register it into `PROCESSOR_REGISTRY`
+3. Call `run_namespaced()` or `run_cluster_scoped()` → `run_with_api(api)`
+4. Enter the Init phase → Runtime phase
 
-## Init 阶段（Steps 1-6）
+## Init Phase (Steps 1-6)
 
 ```
 run_with_api(api)
 │
-├── Step 1: 创建 Reflector store + watcher stream，注入 KubeRawStore
+├── Step 1: Create the Reflector store + watcher stream and inject KubeRawStore
 │   store, writer = reflector::store()
-│   processor.set_raw_store(KubeRawStore::new(store.clone()))  # ← 立即注入，早于任何 InitApply
+│   processor.set_raw_store(KubeRawStore::new(store.clone()))  # ← injected immediately, before any InitApply
 │   watcher_stream = watcher(api, watcher_config)
-│   stream = reflector(writer, watcher_stream)  # 合并后的事件流
+│   stream = reflector(writer, watcher_stream)  # merged event stream
 │
 ├── Step 2: Event::Init
-│   └── processor.on_init()                     # 标记初始化开始
+│   └── processor.on_init()                     # mark initialization started
 │       └── init_timer = InitSyncTimer::start()
 │
-├── Step 3-5: Event::InitApply(obj)  (重复 N 次，每个 LIST 结果一次)
-│   ├── namespace_filter 检查
+├── Step 3-5: Event::InitApply(obj)  (repeated N times, once per LIST result)
+│   ├── namespace_filter check
 │   ├── processor.on_init_apply(obj, None)
-│   │   └── 完整的 ResourceProcessor 11 步流水线
+│   │   └── Full ResourceProcessor 11-step pipeline
 │   ├── init_count += 1
 │   └── if status_changed && can_write_status:
-│       └── persist_k8s_status()                # Leader 守卫
+│       └── persist_k8s_status()                # leader guard
 │
 └── Step 6: Event::InitDone
-    ├── processor.on_init_done()                # 标记 ready
-    └── spawn_worker()                          # 启动 Workqueue Worker
+    ├── processor.on_init_done()                # mark ready
+    └── spawn_worker()                          # start Workqueue worker
 ```
 
-Init 阶段处理 K8s API 的 LIST 结果，每个对象触发 `InitApply`。
-此阶段的 status 回写是同步的（在事件循环中直接 await），因为 worker 尚未启动。
+The Init phase processes K8s API LIST results; each object triggers `InitApply`.
+Status writebacks during this phase are synchronous (awaited directly inside the event loop) since the worker is not yet started.
 
-## Runtime 阶段（Steps 7-8）
+## Runtime Phase (Steps 7-8)
 
 ```
 Step 7-8: Runtime Phase (WATCH)
 ├── Event::Apply(obj)
-│   ├── namespace_filter 检查
+│   ├── namespace_filter check
 │   ├── processor.on_apply(obj)       → enqueue key
-│   └── (特殊情况：init_done 之前到达的 Apply 直接处理 + status 写入)
+│   └── (special case: Apply arriving before init_done is processed directly + status written)
 │
 ├── Event::Delete(obj)
 │   └── processor.on_delete(obj)      → enqueue key
 │
 └── Worker loop (spawn_worker):
-    ├── dequeue work item             # 阻塞等待，key 从 pending 释放
+    ├── dequeue work item             # blocks; key released from pending
     ├── get obj from reflector store
     ├── processor.process_work_item(obj, store)
     └── if status_changed && can_write_status:
-        └── persist_k8s_status()      # Leader 守卫
+        └── persist_k8s_status()      # leader guard
 ```
 
-Runtime 阶段使用 Go operator 风格的 workqueue：所有事件（Apply/Delete）先 enqueue key，
-由 worker 统一 dequeue 处理。worker 从 reflector store 获取最新对象状态，
-因此即使多个事件在短时间内到达，也只会处理一次最新状态。
+The Runtime phase uses a Go-operator-style workqueue: every event (Apply/Delete) first enqueues a key,
+then the worker uniformly dequeues and processes it. The worker fetches the latest object state from the reflector store,
+so even if multiple events arrive in a short window, only the latest state is processed once.
 
-> **KubeRawStore 说明**：`KubeRawStore` 包装的是 reflector `Store<K>`（内部为 `Arc<DashMap>`），
-> 与 `writer` 共享同一份底层数据，clone 只复制 Arc 指针，无额外内存开销。
-> 包含所有 K8s 对象，不受 `gatewayClassName` 等 handler filter 影响，
-> 供 `lookup_gateway` / `lookup_service_cluster_ip` 等跨资源查询使用。
+> **KubeRawStore note**: `KubeRawStore` wraps the reflector's `Store<K>` (internally an `Arc<DashMap>`),
+> sharing the same underlying data with `writer`. Cloning only copies the Arc pointer — no extra memory cost.
+> It contains every K8s object, unaffected by handler filters such as `gatewayClassName`,
+> and is used by cross-resource lookups like `lookup_gateway` / `lookup_service_cluster_ip`.
 
-## ResourceProcessor 11 步流水线
+## ResourceProcessor 11-step Pipeline
 
-每个资源经过完整的处理管线（`process_resource`）：
+Each resource goes through the full processing pipeline (`process_resource`):
 
 ```
 process_resource(obj):
-├── Step 1.  Namespace filter check      — 多命名空间模式下过滤不相关命名空间
-├── Step 2.  Handler filter              — 业务过滤（如 gateway_class 匹配）
-├── Step 3.  Clean metadata              — 移除 managedFields、blocked annotations
-├── Step 4.  Validate                    — Schema + 语义校验，收集错误
-├── Step 5.  Preparse                    — 构建运行时结构（如解析 host/path 匹配规则）
-├── Step 6.  Parse                       — 解析引用、更新缓存（Secret/Service ref 注册）
-├── Step 7.  Extract old status          — 从当前对象提取旧 status（用于变更比较）
-├── Step 8.  Update status               — 计算新 status（Gateway API conditions）
-├── Step 9.  Check if status changed     — 比较序列化 JSON 字符串
-├── Step 10. on_change                   — 通知依赖资源（跨资源 requeue）
-└── Step 11. Save to ServerCache         — 存入 gRPC 同步缓存
+├── Step 1.  Namespace filter check      — In multi-namespace mode, filter out unrelated namespaces
+├── Step 2.  Handler filter              — Business filter (e.g. gateway_class match)
+├── Step 3.  Clean metadata              — Remove managedFields, blocked annotations
+├── Step 4.  Validate                    — Schema + semantic validation; collect errors
+├── Step 5.  Preparse                    — Build runtime structures (e.g. parse host/path matching rules)
+├── Step 6.  Parse                       — Resolve references, update caches (Secret/Service ref registration)
+├── Step 7.  Extract old status          — Extract the old status from the current object (for change comparison)
+├── Step 8.  Update status               — Compute the new status (Gateway API conditions)
+├── Step 9.  Check if status changed     — Compare serialized JSON strings
+├── Step 10. on_change                   — Notify dependent resources (cross-resource requeue)
+└── Step 11. Save to ServerCache         — Save into the gRPC sync cache
 ```
 
-Step 4-6 由 `ProcessorHandler<K>` trait 的具体实现负责，每种资源类型有独立的 Handler。
-Step 7-9 使用统一的 status 提取和比较逻辑。
-Step 10 的跨资源 requeue 通过 `PROCESSOR_REGISTRY.requeue()` 实现。
-Step 11 写入 `ServerCache` 后，gRPC Watch 流会自动推送变更给 Gateway。
+Steps 4-6 are the responsibility of the concrete `ProcessorHandler<K>` implementation; each resource type has its own Handler.
+Steps 7-9 use unified status extraction and comparison logic.
+Cross-resource requeue in Step 10 is implemented via `PROCESSOR_REGISTRY.requeue()`.
+After Step 11 writes to `ServerCache`, the gRPC Watch stream automatically pushes the change to the Gateway.
 
-## persist_k8s_status — Status 回写
+## persist_k8s_status — Status Writeback
 
-通过 K8s API 的 status subresource 回写 status：
+Status is written back via the K8s API status subresource:
 
 ```rust
 async fn persist_k8s_status<K>(
@@ -136,13 +136,13 @@ async fn persist_k8s_status<K>(
 ) -> Result<(), kube::Error>
 ```
 
-使用 `DynamicObject` + JSON Merge Patch 写入 `/status` subresource。
-选择 `DynamicObject` 而非泛型 `Api<K>` 是为了避免 Scope 泛型约束问题
-（同一函数需要处理 Namespaced 和 ClusterScoped 资源）。
+Uses `DynamicObject` + JSON Merge Patch to write the `/status` subresource.
+`DynamicObject` is chosen over a generic `Api<K>` to avoid Scope generic-constraint issues
+(the same function must handle both Namespaced and ClusterScoped resources).
 
-### Leader 守卫
+### Leader Guard
 
-所有 `persist_k8s_status()` 调用均受 `leader_handle` 守卫：
+Every `persist_k8s_status()` call is gated by `leader_handle`:
 
 ```rust
 let can_write_status = leader_handle.as_ref().is_none_or(|h| h.is_leader());
@@ -151,51 +151,50 @@ if status_changed && can_write_status {
 }
 ```
 
-三个检查点一致应用此逻辑：
+The same logic is applied at three checkpoints:
 
-| 检查点 | 位置 | 说明 |
-|--------|------|------|
-| Init phase | `Event::InitApply` 处理 | LIST 结果的 status 回写 |
-| Init edge case | `Event::Apply` 在 init_done 前到达 | 竞态条件下的 status 回写 |
-| Runtime worker | `spawn_worker` work item 处理 | 常规运行时 status 回写 |
+| Checkpoint | Location | Description |
+|------------|----------|-------------|
+| Init phase | `Event::InitApply` processing | Status writeback for LIST results |
+| Init edge case | `Event::Apply` arriving before init_done | Status writeback under race conditions |
+| Runtime worker | Work-item processing in `spawn_worker` | Regular runtime status writeback |
 
-当 `leader_handle` 为 `None`（FileSystem 模式）时，`is_none_or` 返回 `true`，始终允许写入。
+When `leader_handle` is `None` (FileSystem mode), `is_none_or` returns `true` and writes are always allowed.
 
-### Status 变更检测
+### Status Change Detection
 
-通过比较序列化后的 JSON 字符串判断 status 是否变化：
+Status changes are determined by comparing the serialized JSON strings:
 
 ```rust
 enum StatusExtractResult {
-    Present(String),       // status 字段存在且有值，包含序列化 JSON
-    Empty,                 // status 为 null 或空
-    SerializationError,    // 序列化失败
+    Present(String),       // status field is present and non-null; contains serialized JSON
+    Empty,                 // status is null or empty
+    SerializationError,    // serialization failed
 }
 ```
 
-只有 status 实际变化时才触发 K8s API 调用，避免不必要的 patch 请求。
-比较使用 JSON 字符串而非结构体 PartialEq，因为不同资源类型的 status 结构不同，
-统一使用 JSON 序列化后的字符串比较是最通用的方案。
+Only an actual status change triggers a K8s API call, avoiding unnecessary patch requests.
+The comparison uses JSON strings rather than struct PartialEq, because different resource types have different status structures, and a unified JSON-string comparison is the most general approach.
 
-## Workqueue 机制
+## Workqueue Mechanism
 
-### 结构
+### Structure
 
 ```rust
 pub struct Workqueue {
     kind: &'static str,
-    queue: Mutex<VecDeque<WorkItem>>,       // FIFO 队列
-    pending: Mutex<HashMap<String, PendingItem>>,  // 去重 set
-    notify: Notify,                         // 唤醒 worker
+    queue: Mutex<VecDeque<WorkItem>>,       // FIFO queue
+    pending: Mutex<HashMap<String, PendingItem>>,  // dedup set
+    notify: Notify,                         // wake the worker
     config: WorkqueueConfig,
 }
 ```
 
-### 去重
+### Dedup
 
 ```
 enqueue("default/my-route"):
-├── if "default/my-route" in pending → skip（已在队列中）
+├── if "default/my-route" in pending → skip (already queued)
 └── else → add to pending + push to queue + notify worker
 ```
 
@@ -204,29 +203,29 @@ enqueue("default/my-route"):
 ```
 dequeue():
 ├── pop from queue
-├── remove from pending    ← key 在此处释放
+├── remove from pending    ← key released here
 └── return WorkItem
 
-# 处理 "default/my-route" 期间：
-# 如果 K8s 发送该 key 的新事件 → enqueue 成功
-# 因为 key 已从 pending 中移除
+# While processing "default/my-route":
+# If K8s sends a new event for that key → enqueue succeeds
+# Because the key has been removed from pending
 ```
 
 ### WorkqueueConfig
 
 ```rust
 pub struct WorkqueueConfig {
-    pub default_requeue_delay: Duration, // 跨资源 requeue 延迟
-    pub max_trigger_cycles: usize,       // 触发链最大深度
-    pub max_trigger_depth: usize,        // 触发链最大总长度（安全上限）
+    pub default_requeue_delay: Duration, // delay for cross-resource requeue
+    pub max_trigger_cycles: usize,       // max trigger-chain cycle count
+    pub max_trigger_depth: usize,        // max trigger-chain total length (safety cap)
 }
 ```
 
-> **不做指数退避重试**：status 写入失败（如 K8s API 短暂不可用）依赖 watcher 重连后的全量重建自愈，无法可靠区分瞬时抖动与永久失败，显式重试价值有限。
+> **No exponential-backoff retry**: status-write failures (such as transient K8s API unavailability) rely on a full rebuild after the watcher reconnects to self-heal. Reliably distinguishing transient jitter from permanent failure is impossible, so explicit retry has limited value.
 
-### TriggerChain（级联追踪）
+### TriggerChain (Cascade Tracking)
 
-跨资源 requeue 携带 `TriggerChain` 以检测循环和控制深度：
+Cross-resource requeue carries a `TriggerChain` to detect cycles and bound depth:
 
 ```rust
 pub struct TriggerChain {
@@ -234,39 +233,38 @@ pub struct TriggerChain {
 }
 ```
 
-每次跨资源 requeue 时扩展链，检测是否超过 `max_trigger_cycles` 或形成循环。
-超过限制时停止传播并记录警告日志。
+The chain is extended on each cross-resource requeue, and is checked against `max_trigger_cycles` or for cycles.
+Once the limit is exceeded, propagation stops and a warning is logged.
 
-## 410 Gone 处理
+## 410 Gone Handling
 
-当 K8s API server 的 watch bookmark 过期时，watcher 收到 410 Gone 错误，
-导致 Reflector 自动重连并重新 LIST。
+When the K8s API server's watch bookmark expires, the watcher receives a 410 Gone error,
+causing the Reflector to reconnect and re-LIST.
 
-`ResourceController` 检测到 `Event::Init` 在 `init_done = true` 之后再次出现，
-判定为 watcher 重连：
+`ResourceController` detects `Event::Init` reappearing after `init_done = true` and treats this as a watcher reconnect:
 
 ```rust
 Event::Init => {
     if init_done {
         // Watcher reconnecting (possible 410 Gone)
         relink_signal.try_send(RelinkReason::WatcherReconnected);
-        break;  // 退出当前 ResourceController
+        break;  // exit the current ResourceController
     }
 }
 ```
 
-发送 `RelinkReason::WatcherReconnected` 信号后，上层 `KubernetesController` 收到
-`ControllerExit(Relink)` 事件，触发整个 Controller 的完整重建：
-清空 `PROCESSOR_REGISTRY` → 重新创建所有 `ResourceController` → 重新 LIST + WATCH。
+After sending the `RelinkReason::WatcherReconnected` signal, the upper-level `KubernetesController` receives a `ControllerExit(Relink)` event,
+triggering a full Controller rebuild:
+clear `PROCESSOR_REGISTRY` → recreate every `ResourceController` → re-LIST + WATCH.
 
-这是一个保守但安全的策略：任何一个资源的 watcher 重连都触发全量重建，
-避免部分 cache 与 K8s API 不一致的风险。
+This is a conservative but safe strategy: any single resource's watcher reconnect triggers a full rebuild,
+avoiding the risk of partial cache being out of sync with the K8s API.
 
-## 关键文件
+## Key Files
 
 - `src/core/controller/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `ResourceController<K>`, `ApiScope`, `RelinkReason`
 - `src/core/controller/conf_mgr/sync_runtime/resource_processor/processor.rs` — `ResourceProcessor<K>`, `ProcessorObj` trait
 - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handler.rs` — `ProcessorHandler<K>` trait
 - `src/core/controller/conf_mgr/sync_runtime/workqueue.rs` — `Workqueue`, `WorkItem`, `WorkqueueConfig`
 - `src/core/controller/conf_mgr/processor_registry.rs` — `PROCESSOR_REGISTRY`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/status.rs` — `persist_k8s_status`
+- `src/core/controller/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `persist_k8s_status` (inlined; `status.rs` was removed)

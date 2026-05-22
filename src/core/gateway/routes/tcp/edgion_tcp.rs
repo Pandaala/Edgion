@@ -10,7 +10,9 @@ use pingora_core::protocols::Stream;
 use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
-use crate::core::gateway::backends::select_roundrobin_backend;
+use crate::core::gateway::backends::{
+    resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr,
+};
 use crate::core::gateway::observe::{log_tcp, TcpLogEntry};
 use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult};
@@ -39,6 +41,7 @@ pub enum TcpStatus {
     PluginDenied,
     NoBackendSelected,
     NoBackendResolved,
+    UnsafeUpstreamAddress,
     UpstreamConnectionFailed,
     UpstreamReadError,
     UpstreamWriteError,
@@ -110,23 +113,16 @@ impl EdgionTcpProxy {
         };
 
         // 3. Execute stream plugins (dynamic lookup from StreamPluginStore)
-        if let Some(store_key) = &rule.stream_plugin_store_key {
-            if let Ok(client_ip) = ctx.client_addr.parse() {
-                let store = get_global_stream_plugin_store();
-                if let Some(resource) = store.get(store_key) {
-                    let runtime = &resource.spec.stream_plugin_runtime;
-                    if !runtime.is_empty() {
-                        let stream_ctx = StreamContext::new(client_ip, self.listener_port);
-                        match runtime.run(&stream_ctx).await {
-                            StreamPluginResult::Allow => {}
-                            StreamPluginResult::Deny(_) => {
-                                ctx.status = TcpStatus::PluginDenied;
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
+        if let StreamPluginCheck::Deny = check_stream_plugins(
+            rule.stream_plugin_store_key.as_deref(),
+            &ctx.client_addr,
+            self.listener_port,
+            &self.listener_key,
+        )
+        .await
+        {
+            ctx.status = TcpStatus::PluginDenied;
+            return;
         }
 
         // 4. Select backend
@@ -139,14 +135,11 @@ impl EdgionTcpProxy {
         };
 
         // 5. Resolve backend address via EndpointSlice
-        let namespace = backend_ref
-            .namespace
-            .as_deref()
-            .or_else(|| tcp_route.metadata.namespace.as_deref())
-            .unwrap_or("default");
-        let service_key = format!("{}/{}", namespace, &backend_ref.name);
+        let route_ns = tcp_route.metadata.namespace.as_deref().unwrap_or("default");
+        let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
+        let service_key = format!("{}/{}", backend_ns, backend_ref.name);
 
-        let backend = match select_roundrobin_backend(&service_key) {
+        let backend = match select_roundrobin_backend_key(&service_key) {
             Some(backend) => backend,
             None => {
                 ctx.status = TcpStatus::NoBackendResolved;
@@ -155,12 +148,14 @@ impl EdgionTcpProxy {
         };
 
         // 6. Build upstream address
-        let mut upstream_addr = backend.addr;
-        if let Some(port) = backend_ref.port {
-            upstream_addr.set_port(port as u16);
-        }
+        let mut upstream_addr = backend.inner().addr.clone();
+        resolve_target_port_key(&mut upstream_addr, backend_ref.port, &service_key);
         let upstream_addr_str = upstream_addr.to_string();
         ctx.upstream_addr = Some(upstream_addr_str.clone());
+        if validate_endpoint_backend_addr(&upstream_addr, self.allow_loopback_upstream()).is_err() {
+            ctx.status = TcpStatus::UnsafeUpstreamAddress;
+            return;
+        }
 
         // 7. Connect to upstream
         let peer = BasicPeer::new(&upstream_addr_str);
@@ -196,10 +191,6 @@ impl EdgionTcpProxy {
                                 ctx.status = TcpStatus::UpstreamWriteError;
                                 break;
                             }
-                            if (upstream.flush().await).is_err() {
-                                ctx.status = TcpStatus::UpstreamWriteError;
-                                break;
-                            }
                         }
                         Err(_) => {
                             ctx.status = TcpStatus::DownstreamReadError;
@@ -218,6 +209,7 @@ impl EdgionTcpProxy {
                                 ctx.status = TcpStatus::DownstreamWriteError;
                                 break;
                             }
+                            // Listener streams buffer writes; flush client-facing bytes promptly.
                             if (downstream.flush().await).is_err() {
                                 ctx.status = TcpStatus::DownstreamWriteError;
                                 break;
@@ -236,5 +228,125 @@ impl EdgionTcpProxy {
     async fn log_connection(&self, ctx: &TcpContext) {
         let log_entry = TcpLogEntry::from_context(ctx);
         log_tcp(&log_entry).await;
+    }
+
+    fn allow_loopback_upstream(&self) -> bool {
+        self.edgion_gateway_config
+            .spec
+            .security_protect
+            .as_ref()
+            .map(|s| s.allow_loopback_upstream)
+            .unwrap_or(false)
+    }
+}
+
+/// Outcome of section-3 stream plugin enforcement on a TCP connection.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum StreamPluginCheck {
+    /// Connection may proceed to backend selection.
+    Allow,
+    /// Connection must be rejected. Caller sets `TcpStatus::PluginDenied`.
+    Deny,
+}
+
+/// Stage-1 stream plugin enforcement for TCPRoute.
+///
+/// Fail-close: if a rule references an `EdgionStreamPlugins` (ESP) resource
+/// but the policy cannot be evaluated (client IP unparseable, ESP missing
+/// from the global store), reject the connection rather than admitting it.
+/// Silently admitting traffic past a configured allowlist would be a
+/// security bypass. Startup-time sync race is gated by
+/// `ConfigClient::is_ready()` before listeners bind, so reaching the
+/// missing-ESP branch implies misconfiguration or hot-delete.
+///
+/// Pass-through cases (return `Allow`):
+/// - rule has no `stream_plugin_store_key` (no ESP attached);
+/// - ESP exists but its runtime is empty (operator intent: declare an ESP
+///   with no rules to act as a no-op).
+pub(crate) async fn check_stream_plugins(
+    store_key: Option<&str>,
+    client_addr: &str,
+    listener_port: u16,
+    listener_key: &ListenerKey,
+) -> StreamPluginCheck {
+    let Some(store_key) = store_key else {
+        return StreamPluginCheck::Allow;
+    };
+
+    let Ok(client_ip) = client_addr.parse() else {
+        tracing::warn!(
+            listener = %listener_key,
+            store_key = %store_key,
+            client_addr = %client_addr,
+            "TCP stream plugin: client address unparseable; rejecting (fail-close)"
+        );
+        return StreamPluginCheck::Deny;
+    };
+
+    let store = get_global_stream_plugin_store();
+    let Some(resource) = store.get(store_key) else {
+        tracing::warn!(
+            listener = %listener_key,
+            store_key = %store_key,
+            "TCP stream plugin: resource not found in store; rejecting (fail-close)"
+        );
+        return StreamPluginCheck::Deny;
+    };
+
+    let runtime = &resource.spec.stream_plugin_runtime;
+    if runtime.is_empty() {
+        // Empty runtime is operator intent — pass through silently.
+        return StreamPluginCheck::Allow;
+    }
+
+    let stream_ctx = StreamContext::new(client_ip, listener_port);
+    match runtime.run(&stream_ctx).await {
+        StreamPluginResult::Allow => StreamPluginCheck::Allow,
+        StreamPluginResult::Deny(_) => StreamPluginCheck::Deny,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_listener_key() -> ListenerKey {
+        let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 9000);
+        ListenerKey::new(addr, "TCP")
+    }
+
+    #[tokio::test]
+    async fn fail_close_when_store_key_missing_in_tcp() {
+        // Rule references an ESP but the global store does not contain it.
+        // Must reject (fail-close).
+        let store = get_global_stream_plugin_store();
+        let key = "default/__tcp_fail_close_missing__";
+        assert!(store.get(key).is_none(), "test precondition: key must not be in store");
+
+        let result = check_stream_plugins(Some(key), "127.0.0.1", 9000, &test_listener_key()).await;
+        assert_eq!(result, StreamPluginCheck::Deny, "missing ESP must fail-close");
+    }
+
+    #[tokio::test]
+    async fn fail_close_when_tcp_client_addr_unparseable() {
+        // Rule references an ESP but client_addr is not a valid IP literal
+        // (e.g. peer addr extraction returned "unknown"). Must reject.
+        let result = check_stream_plugins(Some("default/something"), "unknown", 9000, &test_listener_key()).await;
+        assert_eq!(
+            result,
+            StreamPluginCheck::Deny,
+            "unparseable client addr must fail-close"
+        );
+    }
+
+    #[tokio::test]
+    async fn pass_through_when_store_key_none() {
+        // No ESP attached at all — section 3 is a no-op. Must allow.
+        let result = check_stream_plugins(None, "127.0.0.1", 9000, &test_listener_key()).await;
+        assert_eq!(
+            result,
+            StreamPluginCheck::Allow,
+            "rule with no store_key must pass through"
+        );
     }
 }

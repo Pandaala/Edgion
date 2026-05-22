@@ -1,61 +1,61 @@
 ---
 name: resource-tcp-route
-description: TCPRoute 资源：L4 TCP 路由、per-listener 路由表、first-match 语义。
+description: TCPRoute resource — L4 TCP routing, per-listener route table, first-match semantics.
 ---
 
-# TCPRoute 资源
+# TCPRoute resource
 
-> **通用流程**: 参见 [00-resource-flow.md](00-resource-flow.md)
+> **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-TCPRoute 定义 L4 TCP 层的路由规则，将 TCP 连接转发到后端 Service。TCPRoute 工作在端口级别，每个端口维护独立的路由表，采用 first-match 语义。
+TCPRoute defines L4 TCP-layer routing rules, forwarding TCP connections to backend Services. TCPRoute operates at the port level: each port maintains its own route table, with first-match semantics.
 
-## 源码位置
+## Source code locations
 
 - Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/tcp_route.rs`
 - Gateway ConfHandler: `src/core/gateway/routes/tcp/conf_handler_impl.rs`
-- 路由管理器: `src/core/gateway/routes/tcp/routes_mgr.rs`
-- 类型定义: `src/types/resources/tcp_route.rs`
+- Route manager: `src/core/gateway/routes/tcp/routes_mgr.rs`
+- Type definitions: `src/types/resources/tcp_route.rs`
 
-## Controller 侧处理
+## Controller-side processing
 
 ### validate
 
-1. 调用 `validate_tcp_route_if_enabled()`（当前为空操作，跨命名空间校验由 parse 阶段的 `ref_denied` 处理）
-2. 调用 `validate_backend_refs()` 校验所有 backendRef
+1. Calls `validate_tcp_route_if_enabled()` (currently a no-op; cross-namespace validation is handled via `ref_denied` in the parse stage)
+2. Calls `validate_backend_refs()` to validate all backendRefs
 
 ### parse
 
-1. 记录跨命名空间引用到 CrossNsRefManager
-2. 注册 Service 引用到 ServiceRefManager
-3. 标记被拒绝的跨命名空间 backendRef（设置 `ref_denied`）
-4. 清除并重算 `resolved_listeners`：通过 `resolve_listener_keys()` 从 parentRef 解析 `Vec<ListenerKey>`（总是查找 Gateway 获取地址和协议，sectionName+port 同时存在时校验一致性），受 allowedRoutes 命名空间策略约束
-5. 若 resolved_listeners 为 None，记录 debug 日志（Gateway 可能尚未到达）
+1. Record cross-namespace references in CrossNsRefManager
+2. Register Service references in ServiceRefManager
+3. Mark rejected cross-namespace backendRefs (set `ref_denied`)
+4. Clear and recompute `resolved_listeners`: resolve `Vec<ListenerKey>` from parentRef via `resolve_listener_keys()` (always look up the Gateway to obtain address and protocol; when sectionName+port are both present, validate consistency), subject to the allowedRoutes namespace policy
+5. If resolved_listeners is None, log a debug message (the Gateway may not have arrived yet)
 
 ### on_change
 
-注册到 GatewayRouteIndex（Gateway 变更时 requeue），更新 AttachedRouteTracker，必要时 requeue 父 Gateway。
+Register into GatewayRouteIndex (Gateway changes trigger requeue), update AttachedRouteTracker, and requeue the parent Gateway when needed.
 
 ### on_delete
 
-清除 CrossNsRefManager、ServiceRefManager、GatewayRouteIndex、AttachedRouteTracker 注册。
+Clear registrations in CrossNsRefManager, ServiceRefManager, GatewayRouteIndex, and AttachedRouteTracker.
 
 ### update_status
 
-为每个 parentRef 生成 RouteParentStatus，设置 Accepted 和 ResolvedRefs Conditions。TCPRoute 不传递 route_hostnames（TCP 无域名概念）。
+Produce a RouteParentStatus for each parentRef and set the Accepted and ResolvedRefs Conditions. TCPRoute does not pass route_hostnames (TCP has no domain concept).
 
-## Gateway 侧处理
+## Gateway-side processing
 
-TCPRoute 的 ConfHandler 将路由编译到 `GlobalTcpRouteManagers`：
+TCPRoute's ConfHandler compiles routes into `GlobalTcpRouteManagers`:
 
-1. **路由初始化**：调用 `initialize_route()` 验证并准备路由数据
-2. **per-listener 管理**：根据 resolved_listeners 注册到对应 `ListenerKey` 的路由管理器
-3. **全量/增量更新**：full_set 时清空并重建所有路由缓存和 listener 管理器；partial_update 时收集受影响的 listener（旧 listener + 新 listener），仅重建这些 listener 的路由表
-4. **first-match 语义**：同一端口上多个 TCPRoute 时按注册顺序匹配第一个
+1. **Route initialization**: call `initialize_route()` to validate and prepare the route data
+2. **Per-listener management**: based on resolved_listeners, register into the route manager of the corresponding `ListenerKey`
+3. **Full / incremental updates**: full_set clears and rebuilds all route caches and listener managers; partial_update collects affected listeners (old + new) and rebuilds only those listeners' route tables
+4. **First-match semantics**: when multiple TCPRoutes are on the same port, match the first one in registration order
 
-## 跨资源关联
+## Cross-resource relationships
 
-| 关联方向 | 目标资源 | 关联机制 | 说明 |
+| Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
-| TCPRoute → Gateway | Gateway | parentRef | 路由挂载到 Gateway 的 TCP 协议 Listener |
-| TCPRoute → Service | Service | backendRef | TCP 连接转发的后端目标 |
-| TCPRoute ← ReferenceGrant | ReferenceGrant | 跨命名空间 backendRef | 控制跨命名空间后端引用的授权 |
+| TCPRoute → Gateway | Gateway | parentRef | Route attaches to the Gateway's TCP-protocol Listener |
+| TCPRoute → Service | Service | backendRef | Backend target for TCP-connection forwarding |
+| TCPRoute ← ReferenceGrant | ReferenceGrant | cross-namespace backendRef | Authorizes cross-namespace backend references |

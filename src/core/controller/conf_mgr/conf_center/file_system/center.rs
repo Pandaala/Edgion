@@ -7,16 +7,18 @@
 //! The only FileSystem-specific work is creating `FileSystemController` per iteration.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
 
 use super::config::FileSystemConfig;
 use super::controller::FileSystemController;
+use super::path_registry::PathRegistry;
 use super::storage::FileSystemStorage;
-use crate::core::controller::conf_mgr::conf_center::non_kube_common::{resolve_endpoint_mode, CenterBase};
+use crate::core::controller::conf_mgr::conf_center::non_kube_common::CenterBase;
 use crate::core::controller::conf_mgr::conf_center::traits::{
-    impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult,
+    impl_center_api_delegate, CenterApi, CenterLifeCycle, ConfWriterError, ListOptions, ListResult, ResourceKey,
 };
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownHandle;
 use crate::core::controller::conf_mgr::ControllerRuntime;
@@ -31,6 +33,8 @@ pub struct FileSystemCenter {
     config: FileSystemConfig,
     /// Writer for CRUD operations (delegate)
     writer: FileSystemStorage,
+    /// Shared path registry — single instance owned here; cloned into storage and controller
+    registry: Arc<PathRegistry>,
     /// Shared lifecycle base (handles, runtime)
     base: CenterBase,
 }
@@ -45,11 +49,13 @@ impl FileSystemCenter {
             "Creating FileSystemCenter"
         );
 
-        let writer = FileSystemStorage::new(config.conf_dir());
+        let registry = Arc::new(PathRegistry::new());
+        let writer = FileSystemStorage::new(config.conf_dir()).with_registry(registry.clone());
 
         Ok(Self {
             config,
             writer,
+            registry,
             base: CenterBase::new(),
         })
     }
@@ -57,6 +63,11 @@ impl FileSystemCenter {
     /// Get the configuration
     pub fn config(&self) -> &FileSystemConfig {
         &self.config
+    }
+
+    /// Get the shared path registry
+    pub fn registry(&self) -> &Arc<PathRegistry> {
+        &self.registry
     }
 }
 
@@ -89,19 +100,20 @@ impl CenterLifeCycle for FileSystemCenter {
         );
 
         // Inject conf_writer into runtime so handlers can auto-create resources (e.g. PluginMetaData).
-        let writer_arc: Arc<dyn CenterApi + Send + Sync> = Arc::new(FileSystemStorage::new(self.config.conf_dir()));
+        let writer_arc: Arc<dyn CenterApi + Send + Sync> =
+            Arc::new(FileSystemStorage::new(self.config.conf_dir()).with_registry(self.registry.clone()));
         self.base.runtime().set_conf_writer(writer_arc);
 
-        let endpoint_mode = resolve_endpoint_mode(self.config.endpoint_mode());
         let conf_dir = self.config.conf_dir().clone();
+        let registry = self.registry.clone();
+        let poll_interval_override = self.config.poll_interval_ms.map(Duration::from_millis);
 
         self.base
             .run_lifecycle(
                 shutdown_handle,
-                endpoint_mode,
                 "file_system_center",
-                |shutdown, runtime, error_tx| {
-                    let ctrl = FileSystemController::new(conf_dir.clone(), endpoint_mode);
+                move |shutdown, runtime, error_tx| {
+                    let ctrl = FileSystemController::new(conf_dir.clone(), registry.clone(), poll_interval_override);
                     tokio::spawn(async move {
                         if let Err(e) = ctrl.run(shutdown, runtime).await {
                             tracing::error!(
@@ -139,6 +151,10 @@ impl CenterLifeCycle for FileSystemCenter {
 
     fn runtime(&self) -> Arc<ControllerRuntime> {
         self.base.runtime()
+    }
+
+    fn conf_dir_registry(&self) -> Option<Arc<super::path_registry::PathRegistry>> {
+        Some(self.registry.clone())
     }
 }
 

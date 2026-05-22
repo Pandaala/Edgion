@@ -17,17 +17,17 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_types, resolved_refs_condition, update_condition, HandlerContext,
     ProcessResult, ProcessorHandler, ResolvedRefsError, ResourceRef,
 };
-use crate::types::credentials::resolvers::{
-    BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver, TlsCertsResolver,
-};
+use crate::core::gateway::backends::service_kind::EdgionService;
 use crate::types::credentials::SecretMaterialResolver;
 use crate::types::prelude_resources::LinkSys;
-use crate::types::resources::common::{SecretReference, TlsConfig};
-use crate::types::resources::link_sys::elasticsearch::ElasticsearchAuth;
-use crate::types::resources::link_sys::webhook::WebhookAuth;
+use crate::types::resources::common::SecretObjectReference;
+use crate::types::resources::link_sys::webhook::WebhookTarget;
 use crate::types::resources::link_sys::{LinkSysStatus, SystemConfig};
+
+use super::auth_spec::{AuthSpec, TlsSpec};
 use crate::types::ResourceKind;
 use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::api::discovery::v1::EndpointSlice;
 
 /// LinkSys handler
 pub struct LinkSysHandler;
@@ -47,9 +47,9 @@ impl Default for LinkSysHandler {
 /// Translate a pipeline `ResolveOutcome<T>` into `Result<T, ResolvedRefsError>`.
 ///
 /// Cross-namespace denial maps to the Gateway-API standard `RefNotPermitted`
-/// (not a dedicated `ReferenceGrantMissing` reason) — see M6 problem F: the
-/// pipeline cannot distinguish "no grant yet" from "grant denies", so a more
-/// specific reason would promise operators a signal we cannot deliver.
+/// (not a dedicated `ReferenceGrantMissing` reason): the pipeline cannot
+/// distinguish "no grant yet" from "grant denies", so a more specific reason
+/// would promise operators a signal we cannot deliver.
 fn outcome_to_result<T>(outcome: ResolveOutcome<T>) -> Result<T, ResolvedRefsError> {
     match outcome {
         ResolveOutcome::Ok(t) => Ok(t),
@@ -102,7 +102,7 @@ fn apply_resolved_refs_condition(ls: &mut LinkSys, generation: Option<i64>, erro
 ///   justified. `RefNotPermitted` is intentionally *not* in this bucket even
 ///   though "operator forgot Grant" is an edit-to-fix case, because the
 ///   pipeline cannot distinguish "forgot to create Grant" from "deliberately
-///   denied". See M6/F.
+///   denied".
 fn needs_operator_secret_edit(err: &ResolvedRefsError) -> bool {
     matches!(
         err,
@@ -125,8 +125,11 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
             ls.metadata.name.clone().unwrap_or_default(),
         );
 
-        // Clear old references first (for update scenario)
+        // Clear old references first (for update scenario).
+        // Both managers must be cleared so that changing target type (e.g. Service → Uri)
+        // does not leave stale registrations that trigger spurious requeues.
         ctx.secret_ref_manager().clear_resource_refs(&owner);
+        ctx.runtime().service_ref_mgr.clear_resource_refs(&owner);
 
         let errors = resolve_for_spec(ctx, &owner, &mut ls.spec.config).await;
         let generation = ls.metadata.generation;
@@ -138,10 +141,9 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
                 // help. The spec is still pushed to the Gateway via conf_sync
                 // with `auth.secret` / `tls.certs.secret` left as `None`
                 // (partially resolved when only one side failed). Gateway
-                // must refuse to build / keep a client on this input — see
-                //   * tasks/fix-change/I4-*.md (provider empty-credential fallback)
-                //   * tasks/fix-change/I5-*.md (dispatch builds client even when pending)
-                // Until I4/I5 land, this path widens the exposure of those bugs.
+                // providers must check `CredentialState::is_buildable` and
+                // refuse to build a client on `Pending` / `Invalid` material;
+                // see `core::gateway::link_sys::credential` for the contract.
                 tracing::warn!(
                     link_sys = %owner.key(),
                     ?err,
@@ -168,9 +170,10 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
             ls.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&owner);
+        ctx.runtime().service_ref_mgr.clear_resource_refs(&owner);
         tracing::debug!(
             link_sys = %owner.key(),
-            "Cleared SecretRefManager references on LinkSys delete"
+            "Cleared SecretRefManager and ServiceRefManager references on LinkSys delete"
         );
     }
 
@@ -201,122 +204,156 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
 // Helper functions: resolve Secret per auth variant and inject into spec
 // ============================================================================
 
+async fn drive_standard<A: AuthSpec, T: TlsSpec>(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    auth: Option<&mut A>,
+    tls: Option<&mut T>,
+) -> Vec<ResolvedRefsError> {
+    let mut errs = Vec::new();
+    if let Some(a) = auth {
+        if let Some(e) = a.resolve(ctx, owner).await {
+            errs.push(e);
+        }
+    }
+    if let Some(t) = tls {
+        if let Some(e) = t.resolve(ctx, owner).await {
+            errs.push(e);
+        }
+    }
+    errs
+}
+
 /// Attempt to resolve every Secret reference inside `config` and attach the
 /// resolved Secret onto the corresponding `auth.secret` / `tls.certs.secret`
 /// field. Returns the collected `ResolvedRefsError`s (empty on full success).
 ///
-/// **Multi-error collection** (M7): auth and tls are resolved independently —
+/// **Multi-error collection**: auth and tls are resolved independently —
 /// a failure on one side does not short-circuit the other. This matches the
 /// Gateway-API convention where `ResolvedRefs.message` aggregates all broken
 /// refs and `reason` is picked deterministically via
 /// `pick_resolved_refs_reason`'s priority table. Without this, an operator
 /// who mistypes both Secret names only sees the auth error first, then has
-/// to reconcile again to discover the tls error — and the M6 priority table
+/// to reconcile again to discover the tls error — and the priority table
 /// effectively never fires because the slice always has one element.
 ///
 /// Leaving `secret: None` on the unresolved field is safe: gateway providers
-/// only build a client when `ResolvedRefs=True` (see I4/I5), so partially
-/// resolved spec never reaches a live client.
+/// only build a client when `CredentialState::is_buildable` returns true, so
+/// a partially resolved spec never reaches a live client.
 async fn resolve_for_spec(
     ctx: &HandlerContext,
     owner: &ResourceRef,
     config: &mut SystemConfig,
 ) -> Vec<ResolvedRefsError> {
-    let mut errors = Vec::new();
     match config {
-        SystemConfig::Redis(r) => {
-            if let Some(auth) = &mut r.auth {
-                match resolve_one(ctx, owner, &auth.secret_ref, &BasicAuthResolver).await {
-                    Ok(s) => auth.secret = s,
-                    Err(e) => errors.push(e),
-                }
-            }
-            if let Some(e) = resolve_tls(ctx, owner, r.tls.as_mut()).await {
-                errors.push(e);
-            }
-        }
-        SystemConfig::Etcd(e) => {
-            if let Some(auth) = &mut e.auth {
-                match resolve_one(ctx, owner, &auth.secret_ref, &BasicAuthResolver).await {
-                    Ok(s) => auth.secret = s,
-                    Err(err) => errors.push(err),
-                }
-            }
-            if let Some(err) = resolve_tls(ctx, owner, e.tls.as_mut()).await {
-                errors.push(err);
-            }
-        }
-        SystemConfig::Elasticsearch(es) => {
-            if let Some(auth) = &mut es.auth {
-                let res = match auth {
-                    ElasticsearchAuth::Basic { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &BasicAuthResolver).await.map(|s| *secret = s)
-                    }
-                    ElasticsearchAuth::ApiKey { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &EsApiKeyResolver).await.map(|s| *secret = s)
-                    }
-                    ElasticsearchAuth::Bearer { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &BearerResolver).await.map(|s| *secret = s)
-                    }
-                };
-                if let Err(e) = res {
-                    errors.push(e);
-                }
-            }
-            if let Some(e) = resolve_tls(ctx, owner, es.tls.as_mut()).await {
-                errors.push(e);
-            }
-        }
+        SystemConfig::Redis(r) => drive_standard(ctx, owner, r.auth.as_mut(), r.tls.as_mut()).await,
+        SystemConfig::Etcd(e) => drive_standard(ctx, owner, e.auth.as_mut(), e.tls.as_mut()).await,
+        SystemConfig::Elasticsearch(es) => drive_standard(ctx, owner, es.auth.as_mut(), es.tls.as_mut()).await,
         SystemConfig::Webhook(w) => {
-            if let Some(auth) = &mut w.auth {
-                let res = match auth {
-                    WebhookAuth::Basic { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &BasicAuthResolver).await.map(|s| *secret = s)
+            let errors = drive_standard(ctx, owner, w.auth.as_mut(), w.tls.as_mut()).await;
+
+            if let WebhookTarget::Service {
+                name,
+                namespace,
+                port,
+                kind,
+                endpoints,
+                ..
+            } = &mut w.target
+            {
+                if matches!(
+                    EdgionService::from_kind(kind.as_ref()),
+                    EdgionService::Service | EdgionService::ServiceEndpointSlice
+                ) {
+                    let ns = namespace.as_deref().or(owner.namespace.as_deref()).unwrap_or("default");
+                    let svc_key = format!("{ns}/{name}");
+
+                    ctx.runtime().service_ref_mgr.add_ref(svc_key.clone(), owner.clone());
+
+                    *endpoints = resolve_endpoints(ctx, ns, name, *port);
+
+                    if endpoints.is_empty() {
+                        tracing::debug!(
+                            link_sys = %owner.key(),
+                            service = %svc_key,
+                            "Webhook service endpoints not yet available (EndpointSlice pending)"
+                        );
                     }
-                    WebhookAuth::Bearer { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &BearerResolver).await.map(|s| *secret = s)
-                    }
-                    WebhookAuth::Hmac { secret_ref, secret } => {
-                        resolve_one(ctx, owner, secret_ref, &HmacResolver).await.map(|s| *secret = s)
-                    }
-                };
-                if let Err(e) = res {
-                    errors.push(e);
                 }
             }
-            if let Some(e) = resolve_tls(ctx, owner, w.tls.as_mut()).await {
-                errors.push(e);
-            }
+            errors
         }
-        SystemConfig::Kafka(_) => {}
-    }
-    errors
-}
-
-/// Resolve `tls.certs.secretRef` (if present) into `tls.certs.secret` using the
-/// shared `TlsCertsResolver`. Returns `Some(error)` on failure; `None` when
-/// there is nothing to resolve or resolution succeeded.
-async fn resolve_tls(
-    ctx: &HandlerContext,
-    owner: &ResourceRef,
-    tls: Option<&mut TlsConfig>,
-) -> Option<ResolvedRefsError> {
-    let tls = tls?;
-    let certs = tls.certs.as_mut()?;
-    let secret_ref = certs.secret_ref.as_ref()?;
-    match resolve_one(ctx, owner, secret_ref, &TlsCertsResolver).await {
-        Ok(s) => {
-            certs.secret = s;
-            None
-        }
-        Err(e) => Some(e),
+        SystemConfig::Kafka(_) => Vec::new(),
     }
 }
 
-async fn resolve_one<R: SecretMaterialResolver>(
+/// Collect ready pod IP:port strings for a Service from cached EndpointSlice objects.
+fn resolve_endpoints(ctx: &HandlerContext, namespace: &str, svc_name: &str, port: Option<i32>) -> Vec<String> {
+    let Some(proc) = ctx.runtime().processor_registry.get("EndpointSlice") else {
+        return vec![];
+    };
+    proc.list_keys()
+        .into_iter()
+        .filter_map(|key| {
+            let any = proc.get_raw_any(&key)?;
+            any.downcast::<EndpointSlice>().ok()
+        })
+        .filter(|eps| {
+            eps.metadata.namespace.as_deref() == Some(namespace)
+                && eps
+                    .metadata
+                    .labels
+                    .as_ref()
+                    .and_then(|l| l.get("kubernetes.io/service-name"))
+                    .map(|s| s == svc_name)
+                    .unwrap_or(false)
+        })
+        .flat_map(|eps| extract_ready_ips(&eps, port))
+        .collect()
+}
+
+/// Extract `"ip:port"` strings for ready endpoints from a single EndpointSlice.
+fn extract_ready_ips(eps: &EndpointSlice, port: Option<i32>) -> Vec<String> {
+    let target_port = port;
+    let ports = eps.ports.as_deref().unwrap_or(&[]);
+    if target_port.is_none() && ports.len() > 1 {
+        tracing::debug!(
+            eps = eps.metadata.name.as_deref().unwrap_or(""),
+            port_count = ports.len(),
+            "Webhook service target has no port specified; selecting first available EndpointSlice port"
+        );
+    }
+    let ep_port = ports
+        .iter()
+        .find(|p| target_port.is_none() || p.port == target_port)
+        .and_then(|p| p.port);
+    let Some(ep_port) = ep_port else {
+        return vec![];
+    };
+
+    // IPv6 literals must be bracketed in an authority (RFC 3986); the downstream
+    // webhook provider builds `{scheme}://{ep}` and feeds it to reqwest. Mirror the
+    // EndpointSlice discovery path (`discovery_impl.rs`) which branches on address_type.
+    let is_ipv6 = eps.address_type == "IPv6";
+    eps.endpoints
+        .iter()
+        .filter(|ep| ep.conditions.as_ref().and_then(|c| c.ready).unwrap_or(false))
+        .flat_map(|ep| {
+            ep.addresses.iter().map(move |ip| {
+                if is_ipv6 {
+                    format!("[{ip}]:{ep_port}")
+                } else {
+                    format!("{ip}:{ep_port}")
+                }
+            })
+        })
+        .collect()
+}
+
+pub(super) async fn resolve_one<R: SecretMaterialResolver>(
     ctx: &HandlerContext,
     owner: &ResourceRef,
-    secret_ref: &SecretReference,
+    secret_ref: &SecretObjectReference,
     resolver: &R,
 ) -> Result<Option<Secret>, ResolvedRefsError> {
     let outcome = resolve_secret(ctx, owner, "edgion.io", "LinkSys", secret_ref, resolver).await;
@@ -330,11 +367,12 @@ async fn resolve_one<R: SecretMaterialResolver>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{condition_reasons, SecretRefManager};
+    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::condition_reasons;
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
     use crate::types::credentials::resolvers::{BasicAuthResolver, EsApiKeyResolver};
-    use crate::types::resources::common::Condition;
+    use crate::types::resources::common::{Condition, SecretSlot};
+    use crate::types::resources::link_sys::elasticsearch::ElasticsearchAuth;
     use crate::types::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
     use crate::types::resources::link_sys::LinkSysSpec;
     use k8s_openapi::api::core::v1::Secret;
@@ -350,16 +388,7 @@ mod tests {
     fn make_ctx(secrets: HashMap<String, Secret>) -> (HandlerContext, Arc<ControllerRuntime>) {
         let runtime = Arc::new(ControllerRuntime::default());
         runtime.secret_store.replace_all(secrets);
-        let secret_ref_manager = Arc::new(SecretRefManager::new());
-        let ctx = HandlerContext::new(
-            secret_ref_manager,
-            None,
-            None,
-            TriggerChain::default(),
-            5,
-            20,
-            runtime.clone(),
-        );
+        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
         (ctx, runtime)
     }
 
@@ -393,11 +422,15 @@ mod tests {
                 config: SystemConfig::Redis(RedisClientConfig {
                     endpoints: vec!["redis://localhost:6379".to_string()],
                     auth: Some(RedisAuth {
-                        secret_ref: SecretReference {
-                            name: secret_name.to_string(),
-                            namespace: secret_ns.map(|s| s.to_string()),
+                        slot: crate::types::resources::common::SecretSlot {
+                            secret_ref: SecretObjectReference {
+                                group: None,
+                                kind: None,
+                                name: secret_name.to_string(),
+                                namespace: secret_ns.map(|s| s.to_string()),
+                            },
+                            secret: None,
                         },
-                        secret: None,
                     }),
                     db: None,
                     timeout: None,
@@ -425,11 +458,15 @@ mod tests {
                 config: SystemConfig::Elasticsearch(ElasticsearchClientConfig {
                     endpoints: vec!["http://localhost:9200".to_string()],
                     auth: Some(ElasticsearchAuth::ApiKey {
-                        secret_ref: SecretReference {
-                            name: secret_name.to_string(),
-                            namespace: None,
+                        slot: SecretSlot {
+                            secret_ref: SecretObjectReference {
+                                group: None,
+                                kind: None,
+                                name: secret_name.to_string(),
+                                namespace: None,
+                            },
+                            secret: None,
                         },
-                        secret: None,
                     }),
                     tls: None,
                     timeout: None,
@@ -463,7 +500,7 @@ mod tests {
                     SystemConfig::Redis(r) => r.auth.as_ref().expect("auth should be present"),
                     _ => panic!("expected Redis"),
                 };
-                let secret = auth.secret.as_ref().expect("secret should be attached");
+                let secret = auth.slot.secret.as_ref().expect("secret should be attached");
                 // parse material from embedded secret via resolver
                 let data = secret.data.as_ref().expect("secret data");
                 let m = BasicAuthResolver.parse(data).expect("parse material");
@@ -491,7 +528,7 @@ mod tests {
                     SystemConfig::Redis(r) => r.auth.as_ref().expect("auth should be present"),
                     _ => panic!("expected Redis"),
                 };
-                assert!(auth.secret.is_none(), "secret should be None while pending");
+                assert!(auth.slot.secret.is_none(), "secret should be None while pending");
                 let refs = ctx.secret_ref_manager().get_refs("default/missing-secret");
                 let owner = ResourceRef::new(
                     ResourceKind::LinkSys,
@@ -526,10 +563,10 @@ mod tests {
                     SystemConfig::Elasticsearch(es) => es.auth.as_ref().expect("auth"),
                     _ => panic!("expected Elasticsearch"),
                 };
-                let ElasticsearchAuth::ApiKey { secret, .. } = auth else {
+                let ElasticsearchAuth::ApiKey { slot } = auth else {
                     panic!("expected ApiKey variant");
                 };
-                let data = secret.as_ref().expect("secret").data.as_ref().expect("data");
+                let data = slot.secret.as_ref().expect("secret").data.as_ref().expect("data");
                 let m = EsApiKeyResolver.parse(data).expect("parse");
                 assert_eq!(m.api_key_id, "abc123");
                 assert_eq!(m.api_key_secret, "secretXYZ");
@@ -581,12 +618,12 @@ mod tests {
                     _ => panic!("expected Redis"),
                 };
                 assert!(
-                    auth.secret.is_none(),
+                    auth.slot.secret.is_none(),
                     "secret must not be embedded while cross-ns reference is not permitted"
                 );
                 let rr = find_cond(&ls, condition_types::RESOLVED_REFS).expect("ResolvedRefs");
                 assert_eq!(rr.status, "False");
-                // M6/F: cross-ns denial collapses onto the Gateway-API standard
+                // Cross-ns denial collapses onto the Gateway-API standard
                 // `RefNotPermitted` reason — the pipeline cannot distinguish
                 // "no grant yet" from "grant denies", and the upstream spec
                 // explicitly uses a single reason for both.
@@ -613,9 +650,9 @@ mod tests {
         }
     }
 
-    /// Regression for I3: after a successful parse leaves `ResolvedRefs=True`,
-    /// a subsequent parse against a broken Secret must flip the condition to
-    /// `False` with the correct reason — not silently retain `True`.
+    /// After a successful parse leaves `ResolvedRefs=True`, a subsequent parse
+    /// against a broken Secret must flip the condition to `False` with the
+    /// correct reason — not silently retain `True`.
     ///
     /// The real flow re-parses on Secret changes (wakeup via SecretRefManager);
     /// here we simulate it by swapping the Secret in the store between two
@@ -680,19 +717,20 @@ mod tests {
                 assert_eq!(rr.reason, condition_reasons::MISSING_KEYS);
                 assert!(rr.message.contains("password"), "message should mention missing key");
                 // Invalid data must NOT leave a stale Secret embedded on spec
-                // (otherwise Gateway could race and use bad material before
-                // I4/I5 land; see comment in `parse`).
+                // — defence-in-depth so Gateway providers (which already gate
+                // on `CredentialState::is_buildable`) never see bad material
+                // even if a future change widens dispatch.
                 let auth = match &ls.spec.config {
                     SystemConfig::Redis(r) => r.auth.as_ref().expect("auth"),
                     _ => panic!("expected Redis"),
                 };
-                assert!(auth.secret.is_none(), "secret must not be attached on Invalid");
+                assert!(auth.slot.secret.is_none(), "secret must not be attached on Invalid");
             }
             ProcessResult::Skip { reason } => panic!("expected Continue so status persists, got Skip: {reason}"),
         }
     }
 
-    /// `DecodeError` variant of I2/I3: the Secret has the required key but the
+    /// `DecodeError` variant: the Secret has the required key but the
     /// value is not UTF-8, so `BasicAuthResolver::parse` surfaces
     /// `ResolveError::DecodeError`, which pipeline maps to
     /// `InvalidCredentialError::DecodeError`.
@@ -726,13 +764,13 @@ mod tests {
                     SystemConfig::Redis(r) => r.auth.as_ref().expect("auth"),
                     _ => panic!("expected Redis"),
                 };
-                assert!(auth.secret.is_none(), "secret must not be attached on DecodeError");
+                assert!(auth.slot.secret.is_none(), "secret must not be attached on DecodeError");
             }
             ProcessResult::Skip { reason } => panic!("expected Continue so status persists, got Skip: {reason}"),
         }
     }
 
-    /// `InvalidSecretType` variant of I2/I3: the Secret data is fine, but its
+    /// `InvalidSecretType` variant: the Secret data is fine, but its
     /// `type` is not in `BasicAuthResolver::allowed_secret_types()`
     /// (`kubernetes.io/basic-auth`, `Opaque`, or missing).
     ///
@@ -764,7 +802,10 @@ mod tests {
                     SystemConfig::Redis(r) => r.auth.as_ref().expect("auth"),
                     _ => panic!("expected Redis"),
                 };
-                assert!(auth.secret.is_none(), "secret must not be attached on InvalidSecretType");
+                assert!(
+                    auth.slot.secret.is_none(),
+                    "secret must not be attached on InvalidSecretType"
+                );
             }
             ProcessResult::Skip { reason } => panic!("expected Continue so status persists, got Skip: {reason}"),
         }
@@ -892,7 +933,9 @@ mod tests {
                 certs: Some(TlsCerts {
                     ca_cert: None,
                     client_cert: None,
-                    secret_ref: Some(SecretReference {
+                    secret_ref: Some(SecretObjectReference {
+                        group: None,
+                        kind: None,
                         name: "redis-tls".to_string(),
                         namespace: None,
                     }),
@@ -921,9 +964,9 @@ mod tests {
         assert_eq!(rr.status, "True");
     }
 
-    /// M7 regression: `resolve_for_spec` must NOT short-circuit on the first
-    /// auth failure — tls must also be resolved so both errors land in the
-    /// same `ResolvedRefs` condition.
+    /// Multi-error regression: `resolve_for_spec` must NOT short-circuit on
+    /// the first auth failure — tls must also be resolved so both errors land
+    /// in the same `ResolvedRefs` condition.
     ///
     /// Setup:
     /// - auth.secretRef points to a non-existent Secret → `SecretNotFound`
@@ -962,11 +1005,15 @@ mod tests {
         ls.spec.config = SystemConfig::Redis(RedisClientConfig {
             endpoints: vec!["rediss://localhost:6380".to_string()],
             auth: Some(RedisAuth {
-                secret_ref: SecretReference {
-                    name: "missing-auth".to_string(),
-                    namespace: None,
+                slot: crate::types::resources::common::SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "missing-auth".to_string(),
+                        namespace: None,
+                    },
+                    secret: None,
                 },
-                secret: None,
             }),
             db: None,
             timeout: None,
@@ -978,7 +1025,9 @@ mod tests {
                 certs: Some(TlsCerts {
                     ca_cert: None,
                     client_cert: None,
-                    secret_ref: Some(SecretReference {
+                    secret_ref: Some(SecretObjectReference {
+                        group: None,
+                        kind: None,
                         name: "redis-tls-bad-type".to_string(),
                         namespace: None,
                     }),
@@ -999,7 +1048,7 @@ mod tests {
         match &ls.spec.config {
             SystemConfig::Redis(r) => {
                 assert!(
-                    r.auth.as_ref().unwrap().secret.is_none(),
+                    r.auth.as_ref().unwrap().slot.secret.is_none(),
                     "auth.secret must remain None when auth resolution failed"
                 );
                 assert!(
@@ -1015,7 +1064,7 @@ mod tests {
         // `InvalidSecretType` (priority 2) wins over `SecretNotFound`
         // (priority 5) per `pick_resolved_refs_reason`. If this flips back
         // to `SecretNotFound`, it means the Redis branch short-circuited on
-        // auth again — M7 regression.
+        // auth again — multi-error aggregation regression.
         assert_eq!(
             rr.reason,
             condition_reasons::INVALID_SECRET_TYPE,
@@ -1037,8 +1086,8 @@ mod tests {
         );
     }
 
-    /// Regression test for C1: verify that LinkSys.spec survives a JSON round-trip
-    /// and preserves the embedded Secret (mimics conf_sync over gRPC).
+    /// Verify that LinkSys.spec survives a JSON round-trip and preserves the
+    /// embedded Secret (mimics conf_sync over gRPC).
     #[tokio::test]
     async fn test_spec_serde_round_trip_preserves_secret() {
         let (key, secret) = make_secret("default", "redis-creds", &[("password", b"s3cr3t")]);
@@ -1057,10 +1106,147 @@ mod tests {
             SystemConfig::Redis(r) => r.auth.as_ref().expect("auth"),
             _ => panic!("expected Redis"),
         };
-        let data = auth.secret.as_ref().expect("secret").data.as_ref().expect("data");
+        let data = auth.slot.secret.as_ref().expect("secret").data.as_ref().expect("data");
         let m = BasicAuthResolver.parse(data).expect("parse material");
         assert_eq!(m.password, "s3cr3t");
         let rr = find_cond(&ls, condition_types::RESOLVED_REFS).expect("ResolvedRefs");
         assert_eq!(rr.status, "True");
+    }
+
+    fn make_webhook_link_sys(ns: &str, name: &str, svc_name: &str, svc_ns: Option<&str>) -> LinkSys {
+        use crate::types::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
+        LinkSys {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(ns.to_string()),
+                generation: Some(1),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                config: SystemConfig::Webhook(WebhookServiceConfig {
+                    target: WebhookTarget::Service {
+                        name: svc_name.to_string(),
+                        namespace: svc_ns.map(str::to_string),
+                        port: Some(8080),
+                        group: None,
+                        kind: None,
+                        endpoints: vec![],
+                    },
+                    ..Default::default()
+                }),
+            },
+            status: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_webhook_service_target_registers_service_ref() {
+        let (ctx, runtime) = make_ctx(HashMap::new());
+        let handler = LinkSysHandler::new();
+        let ls = make_webhook_link_sys("default", "my-wh", "auth-svc", None);
+
+        let result = handler.parse(ls, &ctx).await;
+        assert!(matches!(result, ProcessResult::Continue(_)));
+
+        // "default/auth-svc" should now be registered in service_ref_mgr.
+        let refs = runtime.service_ref_mgr.get_refs("default/auth-svc");
+        let owner = ResourceRef::new(ResourceKind::LinkSys, Some("default".to_string()), "my-wh".to_string());
+        assert!(refs.contains(&owner), "service_ref_mgr must contain owner after parse");
+    }
+
+    #[tokio::test]
+    async fn test_webhook_service_target_clears_stale_ref_on_target_change() {
+        let (ctx, runtime) = make_ctx(HashMap::new());
+        let handler = LinkSysHandler::new();
+
+        // First parse: Service target.
+        let ls_svc = make_webhook_link_sys("default", "my-wh", "auth-svc", None);
+        handler.parse(ls_svc, &ctx).await;
+
+        let refs = runtime.service_ref_mgr.get_refs("default/auth-svc");
+        let owner = ResourceRef::new(ResourceKind::LinkSys, Some("default".to_string()), "my-wh".to_string());
+        assert!(refs.contains(&owner), "should be registered after first parse");
+
+        // Second parse: Uri target (user switched webhook type).
+        let ls_uri = LinkSys {
+            metadata: ObjectMeta {
+                name: Some("my-wh".to_string()),
+                namespace: Some("default".to_string()),
+                generation: Some(2),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                config: SystemConfig::Webhook(crate::types::resources::link_sys::webhook::WebhookServiceConfig {
+                    target: crate::types::resources::link_sys::webhook::WebhookTarget::Uri {
+                        uri: "http://external.example.com/hook".to_string(),
+                    },
+                    ..Default::default()
+                }),
+            },
+            status: None,
+        };
+        handler.parse(ls_uri, &ctx).await;
+
+        // Stale registration must be gone after switching to Uri target.
+        let refs = runtime.service_ref_mgr.get_refs("default/auth-svc");
+        assert!(
+            !refs.contains(&owner),
+            "stale service_ref_mgr registration must be cleared when target changes to Uri"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_on_delete_clears_service_ref_manager() {
+        let (ctx, runtime) = make_ctx(HashMap::new());
+        let handler = LinkSysHandler::new();
+        let ls = make_webhook_link_sys("default", "my-wh", "auth-svc", None);
+
+        handler.parse(ls.clone(), &ctx).await;
+
+        let owner = ResourceRef::new(ResourceKind::LinkSys, Some("default".to_string()), "my-wh".to_string());
+        assert!(
+            runtime.service_ref_mgr.get_refs("default/auth-svc").contains(&owner),
+            "should be registered before delete"
+        );
+
+        handler.on_delete(&ls, &ctx).await;
+
+        assert!(
+            !runtime.service_ref_mgr.get_refs("default/auth-svc").contains(&owner),
+            "service_ref_mgr should be cleared on delete"
+        );
+    }
+
+    #[test]
+    fn test_extract_ready_ips_brackets_ipv6() {
+        use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort};
+
+        let make_eps = |address_type: &str, addr: &str| EndpointSlice {
+            address_type: address_type.to_string(),
+            endpoints: vec![Endpoint {
+                addresses: vec![addr.to_string()],
+                conditions: Some(EndpointConditions {
+                    ready: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ports: Some(vec![EndpointPort {
+                port: Some(8080),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+
+        // IPv6 endpoints must be bracketed so the downstream `{scheme}://{ep}` URL is valid.
+        assert_eq!(
+            extract_ready_ips(&make_eps("IPv6", "fd00::1"), Some(8080)),
+            vec!["[fd00::1]:8080".to_string()]
+        );
+        // IPv4 endpoints are unchanged.
+        assert_eq!(
+            extract_ready_ips(&make_eps("IPv4", "10.0.0.5"), Some(8080)),
+            vec!["10.0.0.5:8080".to_string()]
+        );
     }
 }

@@ -373,6 +373,17 @@ impl Condition {
             _ => Ok(()),
         }
     }
+
+    /// Clear regex patterns so the uncompiled-regex runtime guard cannot fire.
+    /// Called after a compile failure to prevent per-request push_err flooding.
+    pub fn clear_regex(&mut self) {
+        match self {
+            Condition::KeyMatch(c) => c.regex = None,
+            Condition::Include(c) => c.regex = None,
+            Condition::Exclude(c) => c.regex = None,
+            _ => {}
+        }
+    }
 }
 
 impl PluginConditions {
@@ -400,15 +411,30 @@ impl PluginConditions {
 
     /// Compile all conditions in this PluginConditions instance.
     /// Should be called once after deserialization (during preparse).
+    ///
+    /// Compiles every condition independently (no early-return on first error).
+    /// On failure, clears the failing condition's `regex` field so the runtime
+    /// "uncompiled regex" guard is never reached; returns the first error found.
     pub fn compile(&mut self) -> Result<(), regex::Error> {
+        let mut first_err: Option<regex::Error> = None;
         for conds in [&mut self.skip, &mut self.run] {
             if let Some(conditions) = conds {
                 for c in conditions {
-                    c.compile()?;
+                    if let Err(e) = c.compile() {
+                        // Prevent per-request push_err flooding: clear the regex so
+                        // the uncompiled-regex guard in evaluator.rs is never triggered.
+                        c.clear_regex();
+                        if first_err.is_none() {
+                            first_err = Some(e);
+                        }
+                    }
                 }
             }
         }
-        Ok(())
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 }
 
@@ -677,6 +703,49 @@ mod tests {
         assert!(regex.is_match("/debug/pprof"));
         assert!(regex.is_match("/metrics/prometheus"));
         assert!(!regex.is_match("/api/v1/users"));
+    }
+
+    #[test]
+    fn test_plugin_conditions_compile_all_independent() {
+        // Two skip conditions: one invalid regex, one valid regex.
+        // compile() must return Err (first error) AND still compile the valid condition,
+        // while clearing the invalid condition's regex to prevent per-request push_err.
+        let invalid = Condition::KeyMatch(KeyMatchCondition {
+            key: KeyGet::Path,
+            value: None,
+            values: None,
+            regex: Some(vec!["[invalid".to_string()]), // unclosed bracket → invalid
+            values_set: None,
+            compiled_regex: None,
+        });
+        let valid = Condition::KeyMatch(KeyMatchCondition {
+            key: KeyGet::Path,
+            value: None,
+            values: None,
+            regex: Some(vec![r"^/api/.*".to_string()]),
+            values_set: None,
+            compiled_regex: None,
+        });
+        let mut conds = PluginConditions::default();
+        conds.skip = Some(vec![invalid, valid]);
+
+        let result = conds.compile();
+        assert!(result.is_err(), "should return the first regex compile error");
+
+        let skip = conds.skip.as_ref().unwrap();
+        // Invalid condition: regex cleared, compiled_regex still None
+        if let Condition::KeyMatch(c) = &skip[0] {
+            assert!(c.regex.is_none(), "failed condition's regex must be cleared");
+            assert!(c.compiled_regex.is_none());
+        } else {
+            panic!("expected KeyMatch");
+        }
+        // Valid condition: compiled successfully despite the earlier failure
+        if let Condition::KeyMatch(c) = &skip[1] {
+            assert!(c.compiled_regex.is_some(), "valid condition must be compiled");
+        } else {
+            panic!("expected KeyMatch");
+        }
     }
 
     #[test]

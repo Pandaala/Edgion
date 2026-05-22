@@ -35,6 +35,101 @@ pub struct ConfEntry {
     pub content: String, // Raw YAML content
 }
 
+/// Metadata-only key for a Kubernetes-shaped resource. Mirrors `PartialObjectMetadata`.
+///
+/// Returned by [`CenterApi::list_keys_by_kind`] and the namespaced variant.
+/// Frontend reads `record.metadata.name` etc., same path as full objects.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceKey {
+    pub kind: String,
+    pub api_version: String,
+    pub metadata: ResourceKeyMeta,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ResourceKeyMeta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(default)]
+    pub name: String,
+    #[serde(rename = "creationTimestamp", skip_serializing_if = "Option::is_none")]
+    pub creation_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub labels: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub annotations: std::collections::BTreeMap<String, String>,
+    #[serde(rename = "resourceVersion", skip_serializing_if = "Option::is_none")]
+    pub resource_version: Option<String>,
+}
+
+/// Annotation key for the multi-KB blob the K8s apiserver attaches on
+/// `kubectl apply -f`. Both the trait-default projection (FS / Etcd) and
+/// the K8s `project_partial_meta_to_key` (kubernetes/storage.rs) strip it on
+/// the way out so the metadata-only response stays small.
+pub(super) const LAST_APPLIED_KEY: &str = "kubectl.kubernetes.io/last-applied-configuration";
+
+/// Project a fully-loaded `ConfEntry` into a metadata-only `ResourceKey`.
+///
+/// The helper parses ONLY the `apiVersion` + `metadata` block of the entry's
+/// content (YAML preferred, JSON fallback), drops the
+/// `kubectl.kubernetes.io/last-applied-configuration` annotation (multi-KB
+/// blob attached on `kubectl apply -f`), and falls back to the `ConfEntry`'s
+/// authoritative `name` / `namespace` when the parsed metadata is missing
+/// them.
+///
+/// Returns `None` if the content is neither valid YAML nor valid JSON —
+/// callers using `filter_map` will silently skip such entries instead of
+/// failing the whole list.
+pub(super) fn project_conf_entry_to_key(kind: &str, entry: &ConfEntry) -> Option<ResourceKey> {
+    #[derive(Deserialize)]
+    struct Partial {
+        #[serde(rename = "apiVersion", default)]
+        api_version: Option<String>,
+        #[serde(default)]
+        metadata: Option<ResourceKeyMeta>,
+    }
+
+    let partial: Partial = serde_yaml::from_str(&entry.content)
+        .or_else(|_| serde_json::from_str(&entry.content))
+        .ok()?;
+
+    let mut meta = partial.metadata.unwrap_or_default();
+    meta.annotations.remove(LAST_APPLIED_KEY);
+
+    if meta.namespace.is_none() {
+        meta.namespace = entry.namespace.clone();
+    }
+    if meta.name.is_empty() {
+        meta.name = entry.name.clone();
+    }
+
+    Some(ResourceKey {
+        kind: kind.to_string(),
+        api_version: partial.api_version.unwrap_or_default(),
+        metadata: meta,
+    })
+}
+
+/// Project a `ListResult<ConfEntry>` into a `ListResult<ResourceKey>` by
+/// applying [`project_conf_entry_to_key`] to each entry. Invalid entries are
+/// silently dropped (via `filter_map`); `continue_token` passes through.
+///
+/// This is the shared body of the trait-default `list_keys_by_kind*` impls
+/// AND the unit test that verifies the chain — keeping them on one code path
+/// prevents the test from drifting away from the production logic.
+pub(super) fn project_conf_entry_list(kind: &str, full: ListResult<ConfEntry>) -> ListResult<ResourceKey> {
+    let items = full
+        .items
+        .iter()
+        .filter_map(|e| project_conf_entry_to_key(kind, e))
+        .collect();
+    ListResult {
+        items,
+        continue_token: full.continue_token,
+    }
+}
+
 /// List options for pagination (K8s style)
 ///
 /// When `None` is passed to list methods, all items are returned.
@@ -47,11 +142,12 @@ pub struct ListOptions {
     pub continue_token: Option<String>,
 }
 
-/// Result of a list operation with pagination support
+/// Result of a list operation with pagination support.
+///
+/// Default `T = ConfEntry` keeps existing callers source-compatible.
 #[derive(Debug, Clone)]
-pub struct ListResult {
-    /// List of configuration entries
-    pub items: Vec<ConfEntry>,
+pub struct ListResult<T = ConfEntry> {
+    pub items: Vec<T>,
     /// Token for fetching next page (None if this is the last page)
     pub continue_token: Option<String>,
 }
@@ -77,6 +173,12 @@ pub enum ConfWriterError {
 
     #[error("Internal error: {0}")]
     InternalError(String),
+
+    #[error("Not supported: {0}")]
+    NotSupported(String),
+
+    #[error("Stale pagination: {0}")]
+    StalePagination(String),
 
     // ---- infrastructure variants: preserve #[source] for error chain ----
     /// IO error. `context` names the operation; `std::io::ErrorKind` is
@@ -195,6 +297,35 @@ pub trait CenterApi: Send + Sync {
     /// # Arguments
     /// * `opts` - Pagination options. `None` returns all items, `Some(opts)` applies pagination.
     async fn list_all(&self, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError>;
+
+    /// List keys (metadata-only) by kind, across all namespaces / cluster-scoped.
+    ///
+    /// Default implementation delegates to [`get_list_by_kind`] and projects
+    /// the result via [`project_conf_entry_list`]. Backends with a native
+    /// metadata-only path (e.g. K8s `Api::list_metadata`) override this for
+    /// efficiency; FS / Etcd inherit the default.
+    async fn list_keys_by_kind(
+        &self,
+        kind: &str,
+        opts: Option<ListOptions>,
+    ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
+        let full = self.get_list_by_kind(kind, opts).await?;
+        Ok(project_conf_entry_list(kind, full))
+    }
+
+    /// List keys (metadata-only) by kind within a single namespace.
+    ///
+    /// Default implementation delegates to [`get_list_by_kind_ns`] and projects
+    /// the result via [`project_conf_entry_list`].
+    async fn list_keys_by_kind_ns(
+        &self,
+        kind: &str,
+        namespace: &str,
+        opts: Option<ListOptions>,
+    ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
+        let full = self.get_list_by_kind_ns(kind, namespace, opts).await?;
+        Ok(project_conf_entry_list(kind, full))
+    }
 }
 
 // ============================================================================
@@ -245,6 +376,14 @@ pub trait CenterLifeCycle: Send + Sync {
 
     /// Get the ControllerRuntime for this center
     fn runtime(&self) -> Arc<ControllerRuntime>;
+
+    /// Return the FileSystem ConfCenter's PathRegistry, if applicable.
+    /// Default `None` for backends that don't track on-disk paths.
+    fn conf_dir_registry(
+        &self,
+    ) -> Option<Arc<crate::core::controller::conf_mgr::conf_center::file_system::PathRegistry>> {
+        None
+    }
 }
 
 // ============================================================================
@@ -354,7 +493,239 @@ macro_rules! impl_center_api_delegate {
             async fn list_all(&self, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
                 self.$field.list_all(opts).await
             }
+
+            async fn list_keys_by_kind(
+                &self,
+                kind: &str,
+                opts: Option<ListOptions>,
+            ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
+                self.$field.list_keys_by_kind(kind, opts).await
+            }
+
+            async fn list_keys_by_kind_ns(
+                &self,
+                kind: &str,
+                namespace: &str,
+                opts: Option<ListOptions>,
+            ) -> Result<ListResult<ResourceKey>, ConfWriterError> {
+                self.$field.list_keys_by_kind_ns(kind, namespace, opts).await
+            }
         }
     };
 }
 pub(crate) use impl_center_api_delegate;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resource_key_meta_is_constructible() {
+        let _meta = ResourceKeyMeta {
+            namespace: Some("ns".to_string()),
+            name: "n".to_string(),
+            creation_timestamp: None,
+            labels: Default::default(),
+            annotations: Default::default(),
+            resource_version: Some("1".to_string()),
+        };
+        let _key = ResourceKey {
+            kind: "HTTPRoute".to_string(),
+            api_version: "gateway.networking.k8s.io/v1".to_string(),
+            metadata: _meta,
+        };
+    }
+
+    #[test]
+    fn list_result_default_param_is_conf_entry() {
+        let r: ListResult = ListResult {
+            items: Vec::<ConfEntry>::new(),
+            continue_token: None,
+        };
+        assert!(r.items.is_empty());
+    }
+
+    #[test]
+    fn list_result_can_hold_resource_keys() {
+        let r: ListResult<ResourceKey> = ListResult {
+            items: Vec::new(),
+            continue_token: Some("tok".to_string()),
+        };
+        assert_eq!(r.continue_token.as_deref(), Some("tok"));
+    }
+
+    #[test]
+    fn not_supported_displays() {
+        let e = ConfWriterError::NotSupported("foo".to_string());
+        assert_eq!(format!("{e}"), "Not supported: foo");
+    }
+
+    #[test]
+    fn stale_pagination_displays() {
+        let e = ConfWriterError::StalePagination("token expired".to_string());
+        assert_eq!(format!("{e}"), "Stale pagination: token expired");
+    }
+
+    /// Locks in the JSON wire shape: ResourceKey must emit `apiVersion`
+    /// (camelCase), matching the Dashboard TS interface and the K8s
+    /// convention. Without `#[serde(rename_all = "camelCase")]` serde
+    /// emits the raw `api_version`, which silently breaks consumers.
+    #[test]
+    fn resource_key_serializes_camel_case_fields() {
+        let key = ResourceKey {
+            kind: "HTTPRoute".to_string(),
+            api_version: "gateway.networking.k8s.io/v1".to_string(),
+            metadata: ResourceKeyMeta {
+                name: "r".to_string(),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+        };
+        let json = serde_json::to_string(&key).expect("serialize");
+        assert!(
+            json.contains("\"apiVersion\":\"gateway.networking.k8s.io/v1\""),
+            "expected camelCase apiVersion, got: {json}"
+        );
+        assert!(
+            !json.contains("api_version"),
+            "must not leak snake_case api_version, got: {json}"
+        );
+    }
+
+    #[test]
+    fn project_conf_entry_to_key_strips_spec_and_status() {
+        let entry = ConfEntry {
+            kind: "HTTPRoute".to_string(),
+            namespace: Some("default".to_string()),
+            name: "r1".to_string(),
+            content: r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+spec:
+  rules: [{ matches: [{ path: { type: PathPrefix, value: /a } }] }]
+status:
+  parents: []
+"#
+            .to_string(),
+        };
+        let key = project_conf_entry_to_key("HTTPRoute", &entry).expect("project");
+        assert_eq!(key.kind, "HTTPRoute");
+        assert_eq!(key.api_version, "gateway.networking.k8s.io/v1");
+        assert_eq!(key.metadata.name, "r1");
+        assert_eq!(key.metadata.namespace.as_deref(), Some("default"));
+        let json = serde_json::to_string(&key).expect("serialize");
+        assert!(!json.contains("\"spec\""), "spec leaked: {json}");
+        assert!(!json.contains("\"status\""), "status leaked: {json}");
+    }
+
+    #[test]
+    fn project_conf_entry_to_key_filters_last_applied_annotation() {
+        let entry = ConfEntry {
+            kind: "HTTPRoute".to_string(),
+            namespace: Some("default".to_string()),
+            name: "r1".to_string(),
+            content: r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: '{"huge":"yaml"}'
+    edgion.io/enable-http: "true"
+"#
+            .to_string(),
+        };
+        let key = project_conf_entry_to_key("HTTPRoute", &entry).expect("project");
+        assert!(
+            !key.metadata
+                .annotations
+                .contains_key("kubectl.kubernetes.io/last-applied-configuration"),
+            "last-applied leaked"
+        );
+        assert_eq!(
+            key.metadata
+                .annotations
+                .get("edgion.io/enable-http")
+                .map(String::as_str),
+            Some("true"),
+            "other annotations must pass through"
+        );
+    }
+
+    #[test]
+    fn project_conf_entry_to_key_falls_back_to_entry_name_namespace() {
+        let entry = ConfEntry {
+            kind: "HTTPRoute".to_string(),
+            namespace: Some("override-ns".to_string()),
+            name: "override-name".to_string(),
+            content: r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  labels:
+    app: demo
+"#
+            .to_string(),
+        };
+        let key = project_conf_entry_to_key("HTTPRoute", &entry).expect("project");
+        assert_eq!(key.metadata.name, "override-name");
+        assert_eq!(key.metadata.namespace.as_deref(), Some("override-ns"));
+    }
+
+    #[test]
+    fn project_conf_entry_to_key_handles_invalid_content() {
+        let entry = ConfEntry {
+            kind: "HTTPRoute".to_string(),
+            namespace: None,
+            name: "x".to_string(),
+            content: "::: not a valid document :::".to_string(),
+        };
+        assert!(project_conf_entry_to_key("HTTPRoute", &entry).is_none());
+    }
+
+    /// Direct test of the `list_keys_by_kind` default impl logic.
+    ///
+    /// Mocking the full `CenterApi` trait (to test through async dispatch)
+    /// requires ~50 lines of `unimplemented!()` boilerplate per method, which
+    /// is more noise than signal. Instead this calls
+    /// [`project_conf_entry_list`] — the SAME helper the default impl invokes
+    /// — so the production and test code paths execute identical instructions.
+    /// If the default impl ever stops calling `project_conf_entry_list` (e.g.
+    /// switches to `.map().flatten()`), this test would not catch it; for
+    /// that level of regression guard, the integration scripts
+    /// `list-keys-{fs,etcd}.sh` exercise the trait dispatch end-to-end.
+    #[test]
+    fn list_keys_default_impl_logic_filters_invalid_and_passes_continue_token() {
+        let entries = vec![
+            ConfEntry {
+                kind: "HTTPRoute".to_string(),
+                namespace: Some("ns".to_string()),
+                name: "good".to_string(),
+                content: "apiVersion: v1\nkind: HTTPRoute\nmetadata:\n  name: good\n  namespace: ns\n".to_string(),
+            },
+            ConfEntry {
+                kind: "HTTPRoute".to_string(),
+                namespace: Some("ns".to_string()),
+                name: "bad".to_string(),
+                content: "::: not valid :::".to_string(),
+            },
+        ];
+        let full: ListResult<ConfEntry> = ListResult {
+            items: entries,
+            continue_token: Some("tok-42".to_string()),
+        };
+
+        // Call the same shared helper the default impl uses
+        let projected = project_conf_entry_list("HTTPRoute", full);
+
+        // Invalid entry filtered out
+        assert_eq!(projected.items.len(), 1, "invalid YAML must be filter-mapped out");
+        assert_eq!(projected.items[0].metadata.name, "good");
+        // continue_token passes through unchanged
+        assert_eq!(projected.continue_token.as_deref(), Some("tok-42"));
+    }
+}

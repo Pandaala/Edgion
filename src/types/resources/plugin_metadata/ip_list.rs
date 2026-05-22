@@ -1,17 +1,44 @@
 //! IP list metadata
 //!
-//! A list of IP addresses or CIDR ranges for IP-based filtering.
+//! A grouped list of IP addresses or CIDR ranges for IP-based filtering.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// A list of IP addresses or CIDR ranges.
+use crate::types::resources::plugin_metadata::IpGroup;
+
+/// A grouped list of IP addresses or CIDR ranges.
 ///
-/// Used by plugins like IpRestriction to reference external IP allowlists
-/// or blocklists by PluginMetaData name.
+/// `items` is required and must be non-empty. Each `IpGroup` carries its
+/// own name (for log/observability) and `cidrs` (non-empty). Groups are
+/// merged at runtime into a single `IpRadixMatcher`; longest-prefix match
+/// selects the matched group when subnets overlap across groups.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IpListData {
-    /// IP addresses or CIDR ranges (e.g. "192.168.1.0/24", "10.0.0.0/8", "2001:db8::/32")
-    pub items: Vec<String>,
+    pub items: Vec<IpGroup>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::common::matcher::ip_cidr_helpers::validate_groups_structure;
+
+    #[test]
+    fn empty_items_validation_errs() {
+        let data = IpListData { items: vec![] };
+        assert!(validate_groups_structure(&data.items).is_err());
+    }
+
+    #[test]
+    fn single_group_valid() {
+        let data = IpListData {
+            items: vec![IpGroup {
+                name: "default".into(),
+                description: None,
+                cidrs: vec!["10.0.0.0/8".into()],
+            }],
+        };
+        assert!(validate_groups_structure(&data.items).is_ok());
+    }
 }

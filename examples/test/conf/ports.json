@@ -1,5 +1,5 @@
 {
-  "current_max": 31338,
+  "current_max": 31387,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -13,6 +13,9 @@
     },
     "HTTPRoute/Backend/LBConsistentHash": {
       "http": 31121
+    },
+    "HTTPRoute/Backend/LBLeastConn": {
+      "http": 31122
     },
     "HTTPRoute/Backend/WeightedBackend": {
       "http": 31130
@@ -46,6 +49,9 @@
     },
     "HTTPRoute/Protocol/H2C": {
       "http": 31081
+    },
+    "HTTPRoute/Protocol/H2TrailerMalformed": {
+      "http": 31082
     },
     "GRPCRoute/Basic": {
       "grpc": 31050
@@ -85,10 +91,17 @@
       "https": 31110
     },
     "EdgionTls/cipher": {
-      "https": 31195
+      "https": 31195,
+      "https_strict": 31197
+    },
+    "EdgionTls/fallback_sni": {
+      "https": 31198
     },
     "EdgionTls/port_only": {
       "https": 31285
+    },
+    "EdgionTls/sni_collision": {
+      "https": 31390
     },
     "Gateway/TLS/GatewayTLS": {
       "https": 31220
@@ -111,7 +124,8 @@
     },
     "TCPRoute/StreamPlugins": {
       "tcp": 31274,
-      "tcp_filtered": 31275
+      "tcp_filtered": 31275,
+      "tcp_fail_close": 31273
     },
     "Gateway/AllowedRoutes/Selector": {
       "http": 31276
@@ -184,6 +198,45 @@
     },
     "TCPRoute/GlobalConnectionIpRestriction": {
       "tcp": 31296
+    },
+    "HTTPRoute/Backend/DnsResolutionFailure": {
+      "http": 31339
+    },
+    "Status/RefGrant/TCPRouteCrossNsSvc": {
+      "tcp": 31341
+    },
+    "Status/RefGrant/TLSRouteCrossNsSvc": {
+      "tls": 31342
+    },
+    "Status/RefGrant": {
+      "http": 31386
+    },
+    "Status/ObservedGeneration/HighFrequency": {
+      "http": 31381
+    },
+    "Status/BackendTLSPolicy/RefFlap": {
+      "http": 31382
+    },
+    "HTTPRoute/Backend/SessionPersistenceBackendChange": {
+      "http": 31383
+    },
+    "HTTPRoute/Backend/LBLeastConnRetryOnStatus": {
+      "http": 31124
+    },
+    "HTTPRoute/Backend/LBEwma": {
+      "http": 31125
+    },
+    "HTTPRoute/Backend/LBEwmaRetryOnStatus": {
+      "http": 31126
+    },
+    "HTTPRoute/Backend/H2BackendMtlsPersistence": {
+      "http": 31384
+    },
+    "HTTPRoute/Backend/BackendTLSSNIHostOverride": {
+      "http": 31385
+    },
+    "EdgionTls/wildcard_single_label": {
+      "https": 31387
     }
   }
 }

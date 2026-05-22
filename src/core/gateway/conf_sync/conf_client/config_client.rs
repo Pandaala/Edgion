@@ -1,13 +1,13 @@
 use crate::core::common::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispatcher, ResourceChange};
 use crate::core::common::conf_sync::types::ListData;
-use crate::core::gateway::backends::{create_endpoint_handler, create_ep_slice_handler, create_service_handler};
+use crate::core::gateway::backends::{create_ep_slice_handler, create_service_handler};
 use crate::core::gateway::conf_sync::cache_client::{ClientCache, DynClientCache};
 use crate::core::gateway::routes::create_route_manager_handler;
 use crate::types::prelude_resources::*;
 use crate::types::resource_defs::get_resource_info;
 use crate::types::{all_resource_type_names, GatewayBaseConf, ResourceKind, ResourceMeta};
 use anyhow::Result;
-use k8s_openapi::api::core::v1::{Endpoints, Service};
+use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use kube::Resource;
 use parking_lot::RwLock;
@@ -29,7 +29,6 @@ pub struct ConfigClient {
     link_sys: ClientCache<LinkSys>,
     services: ClientCache<Service>,
     endpoint_slices: ClientCache<EndpointSlice>,
-    endpoints: ClientCache<Endpoints>,
     edgion_tls: ClientCache<EdgionTls>,
     edgion_plugins: ClientCache<EdgionPlugins>,
     edgion_stream_plugins: ClientCache<EdgionStreamPlugins>,
@@ -63,11 +62,6 @@ impl ConfigClient {
         let endpoint_slices_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let ep_slice_handler = create_ep_slice_handler();
         endpoint_slices_cache.set_conf_processor(ep_slice_handler);
-
-        // Register EndpointHandler as the handler for Endpoints resources
-        let endpoints_cache = ClientCache::new(client_id.clone(), client_name.clone());
-        let endpoint_handler = create_endpoint_handler();
-        endpoints_cache.set_conf_processor(endpoint_handler);
 
         // Register PluginStore as the handler for EdgionPlugins resources
         let plugins_cache = ClientCache::new(client_id.clone(), client_name.clone());
@@ -148,7 +142,6 @@ impl ConfigClient {
             },
             services: services_cache,
             endpoint_slices: endpoint_slices_cache,
-            endpoints: endpoints_cache,
             edgion_tls: edgion_tls_cache,
             edgion_plugins: plugins_cache,
             edgion_stream_plugins: stream_plugins_cache,
@@ -277,11 +270,6 @@ impl ConfigClient {
         &self.endpoint_slices
     }
 
-    /// Get endpoints cache for direct access
-    pub fn endpoints(&self) -> &ClientCache<Endpoints> {
-        &self.endpoints
-    }
-
     /// Get edgion_tls cache for direct access
     pub fn edgion_tls(&self) -> &ClientCache<EdgionTls> {
         &self.edgion_tls
@@ -348,7 +336,6 @@ impl ConfigClient {
             ResourceKind::LinkSys => Some(&self.link_sys),
             ResourceKind::Service => Some(&self.services),
             ResourceKind::EndpointSlice => Some(&self.endpoint_slices),
-            ResourceKind::Endpoint => Some(&self.endpoints),
             ResourceKind::EdgionTls => Some(&self.edgion_tls),
             ResourceKind::EdgionAcme => Some(&self.edgion_acme),
             ResourceKind::EdgionPlugins => Some(&self.edgion_plugins),
@@ -419,7 +406,6 @@ impl ConfigClient {
             ResourceKind::LinkSys => self.link_sys.list().to_json("LinkSys")?,
             ResourceKind::Service => self.services.list().to_json("Service")?,
             ResourceKind::EndpointSlice => self.endpoint_slices.list().to_json("EndpointSlice")?,
-            ResourceKind::Endpoint => self.endpoints.list().to_json("Endpoints")?,
             ResourceKind::EdgionTls => self.edgion_tls.list().to_json("EdgionTls")?,
             ResourceKind::EdgionPlugins => self.edgion_plugins.list().to_json("EdgionPlugins")?,
             ResourceKind::EdgionStreamPlugins => self.edgion_stream_plugins.list().to_json("EdgionStreamPlugins")?,
@@ -531,6 +517,60 @@ impl ConfigClient {
     pub fn trigger_endpoint_slice_update_event(&self, key: &str) {
         self.endpoint_slices.trigger_update_event_by_key(key);
     }
+
+    /// Per-kind entry counts for all 17 ClientCaches. Used by store-stats leak detection.
+    ///
+    /// Covers every kind that ConfigClient actually caches on the Gateway side.
+    /// Omitted (not cached on Gateway): Secret, ConfigMap, ReferenceGrant, Endpoint (removed).
+    pub fn client_cache_stats(&self) -> std::collections::BTreeMap<String, usize> {
+        let mut out = std::collections::BTreeMap::new();
+        out.insert("HTTPRoute".to_string(), self.routes().len());
+        out.insert("GRPCRoute".to_string(), self.grpc_routes().len());
+        out.insert("TCPRoute".to_string(), self.tcp_routes().len());
+        out.insert("UDPRoute".to_string(), self.udp_routes().len());
+        out.insert("TLSRoute".to_string(), self.tls_routes().len());
+        out.insert("Service".to_string(), self.services().len());
+        out.insert("EndpointSlice".to_string(), self.endpoint_slices().len());
+        out.insert("EdgionTls".to_string(), self.edgion_tls().len());
+        out.insert("EdgionAcme".to_string(), self.edgion_acme().len());
+        out.insert("EdgionPlugins".to_string(), self.edgion_plugins().len());
+        out.insert("EdgionStreamPlugins".to_string(), self.edgion_stream_plugins().len());
+        out.insert("BackendTLSPolicy".to_string(), self.backend_tls_policies().len());
+        out.insert("PluginMetaData".to_string(), self.plugin_metadata().len());
+        out.insert("LinkSys".to_string(), self.link_sys().len());
+        out.insert("GatewayClass".to_string(), self.gateway_classes().len());
+        out.insert("Gateway".to_string(), self.gateways().len());
+        out.insert("EdgionGatewayConfig".to_string(), self.edgion_gateway_configs().len());
+        out
+    }
+
+    /// Per-kind sample keys (capped at `max`). Used by leak detection diagnostic report.
+    ///
+    /// Returns an empty Vec for any kind not cached on Gateway (Secret, ConfigMap, ReferenceGrant).
+    #[allow(dead_code)] // Consumed by validator binary (Task 15/16); allow until then.
+    pub fn client_cache_keys(&self, kind: &str, max: usize) -> Vec<String> {
+        let all = match kind {
+            "HTTPRoute" => self.routes().keys(),
+            "GRPCRoute" => self.grpc_routes().keys(),
+            "TCPRoute" => self.tcp_routes().keys(),
+            "UDPRoute" => self.udp_routes().keys(),
+            "TLSRoute" => self.tls_routes().keys(),
+            "Service" => self.services().keys(),
+            "EndpointSlice" => self.endpoint_slices().keys(),
+            "EdgionTls" => self.edgion_tls().keys(),
+            "EdgionAcme" => self.edgion_acme().keys(),
+            "EdgionPlugins" => self.edgion_plugins().keys(),
+            "EdgionStreamPlugins" => self.edgion_stream_plugins().keys(),
+            "BackendTLSPolicy" => self.backend_tls_policies().keys(),
+            "PluginMetaData" => self.plugin_metadata().keys(),
+            "LinkSys" => self.link_sys().keys(),
+            "GatewayClass" => self.gateway_classes().keys(),
+            "Gateway" => self.gateways().keys(),
+            "EdgionGatewayConfig" => self.edgion_gateway_configs().keys(),
+            _ => Vec::new(),
+        };
+        all.into_iter().take(max).collect()
+    }
 }
 
 pub struct ListDataSimple {
@@ -551,7 +591,7 @@ impl ConfigClientEventDispatcher for ConfigClient {
             tracing::error!(
                 component = "config_client",
                 change = ?change,
-                data_preview = &data[..data.len().min(200)],
+                data_preview = &data[..data.floor_char_boundary(200)],
                 "Failed to determine resource type"
             );
             return;
@@ -563,7 +603,7 @@ impl ConfigClientEventDispatcher for ConfigClient {
                 change = ?change,
                 kind = kind,
                 error = %err,
-                data_preview = &data[..data.len().min(200)],
+                data_preview = &data[..data.floor_char_boundary(200)],
                 "Failed to parse resource"
             );
         };
@@ -583,7 +623,7 @@ impl ConfigClientEventDispatcher for ConfigClient {
                 tracing::warn!(
                     component = "config_client",
                     change = ?change,
-                    data_preview = &data[..data.len().min(200)],
+                    data_preview = &data[..data.floor_char_boundary(200)],
                     "Unspecified resource kind, skipping"
                 );
             }
@@ -601,7 +641,6 @@ impl ConfigClientEventDispatcher for ConfigClient {
             ResourceKind::PluginMetaData => apply_change!(PluginMetaData, plugin_metadata, "PluginMetaData"),
             ResourceKind::Service => apply_change!(Service, services, "Service"),
             ResourceKind::EndpointSlice => apply_change!(EndpointSlice, endpoint_slices, "EndpointSlice"),
-            ResourceKind::Endpoint => apply_change!(Endpoints, endpoints, "Endpoints"),
             ResourceKind::EdgionTls => apply_change!(EdgionTls, edgion_tls, "EdgionTls"),
             ResourceKind::EdgionPlugins => apply_change!(EdgionPlugins, edgion_plugins, "EdgionPlugins"),
             ResourceKind::EdgionStreamPlugins => {
@@ -657,5 +696,31 @@ mod tests {
 
         // Other caches remain not ready, but should not block.
         assert!(client.is_ready().is_ok());
+    }
+
+    #[test]
+    fn client_cache_stats_all_zero_initially() {
+        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let _enter = rt.enter();
+        let client = ConfigClient::new("cid".to_string(), "cname".to_string());
+        let stats = client.client_cache_stats();
+        // 17: Secret, ConfigMap, and ReferenceGrant have no ClientCache on the gateway side;
+        // Endpoint (legacy) has been removed.
+        assert_eq!(stats.len(), 17, "expected 17 gateway-side ClientCache kinds");
+        for (kind, count) in &stats {
+            assert_eq!(*count, 0, "kind {kind} should start empty");
+        }
+        // Cross-check: every kind reported by stats must be reachable via client_cache_keys.
+        // Catches future divergence if a new kind is added to stats but not keys.
+        for kind in stats.keys() {
+            let sample = client.client_cache_keys(kind, 5);
+            assert!(
+                sample.is_empty(),
+                "kind {} reported in stats but client_cache_keys returned non-empty for empty store",
+                kind
+            );
+        }
+        // Unknown kind returns empty vec (no panic).
+        assert!(client.client_cache_keys("UnknownKind", 10).is_empty());
     }
 }

@@ -12,10 +12,17 @@
 //! Runtime clients are stored in separate ArcSwap stores for typed access.
 
 pub mod credential;
+pub mod health;
+pub mod lifecycle;
 pub mod providers;
 pub mod runtime;
 pub mod tls;
 
+pub use health::LinkSysHealth;
+
+pub use providers::webhook::{
+    get_webhook_call_handle, WebhookCallError, WebhookCallHandle, WebhookCallRequest, WebhookCallResult,
+};
 pub use providers::{LocalFileWriter, LogType};
 pub use runtime::{
     create_link_sys_handler, get_es_client, get_etcd_client, get_global_link_sys_store, get_redis_client, DataSender,

@@ -1,123 +1,123 @@
-# 文档版本管理规范
+# Documentation Versioning and Changelog
 
-## 文档更新触发规则
+## When documentation must be updated
 
-### 必须更新文档的变更
+### Changes that require a documentation update
 
-| 变更类型 | 说明 | 更新目标 |
-|----------|------|----------|
-| 新功能 | 添加新插件、新资源类型、新配置选项 | 新建文档页 |
-| 行为变更 | 修改默认值、改变匹配逻辑、改变错误处理方式 | 更新受影响的文档页 |
-| 配置 Schema 变更 | 添加/删除/重命名字段 | 更新参数表 |
-| 新注解 | 添加 `edgion.io/*` 注解 | 更新注解参考文档 |
-| CLI 变更 | 新命令、参数变更 | 更新 edgion-cli 文档 |
+| Change type | Description | Update target |
+|-------------|-------------|---------------|
+| New feature | Add a new plugin, resource type, or configuration option | New documentation page |
+| Behavior change | Change defaults, change matching logic, change error handling | Update affected pages |
+| Configuration schema change | Add / remove / rename fields | Update parameter table |
+| New annotation | Add an `edgion.io/*` annotation | Update the annotation reference |
+| CLI change | New command, parameter change | Update edgion-cli docs |
 
-### 不需要更新文档的变更
+### Changes that do not require a documentation update
 
-| 变更类型 | 说明 |
-|----------|------|
-| 内部重构 | 不改变外部行为的代码重构 |
-| 性能优化 | 不改变配置或行为的优化（除非用户需要知道） |
-| Bug 修复 | 修复的是"本来就该这么工作"的行为 |
-| 测试变更 | 只改测试代码 |
+| Change type | Description |
+|-------------|-------------|
+| Internal refactor | Code refactor that doesn't change external behavior |
+| Performance optimization | Optimizations that don't change configuration or behavior (unless users need to know) |
+| Bug fix | Fixes for behavior that "should have worked this way all along" |
+| Test changes | Test-only code changes |
 
-### 灰色地带
+### Gray area
 
-Bug 修复如果改变了用户可感知的行为（比如之前某个配置被忽略，现在生效了），需要在相关文档中说明。
+If a bug fix changes behavior that users could have observed (for example, a configuration that was previously ignored now takes effect), explain it in the relevant documentation.
 
-## Breaking Change 标注
+## Breaking change callouts
 
-当功能出现不兼容变更时，在受影响的文档页中添加告警：
+When a feature has an incompatible change, add an alert to the affected documentation page:
 
 ```markdown
 > ⚠️ **Breaking Change (v0.X)**
 > 
-> 从 v0.X 起，`old_field` 已重命名为 `new_field`。旧字段名将在 v0.Y 移除。
+> Starting from v0.X, `old_field` has been renamed to `new_field`. The old field name will be removed in v0.Y.
 ```
 
-### 标注规则
+### Callout rules
 
-- 放在文档页顶部（一级标题之后，概述之前）
-- 注明版本号
-- 说明变更内容和迁移方式
-- 注明旧行为的移除时间线（如果有）
-- 变更完全落地后（旧行为移除），移除告警
+- Place at the top of the page (after the H1, before the overview)
+- Note the version number
+- Describe what changed and how to migrate
+- Note the timeline for removing the old behavior (if any)
+- Once the change has fully landed (old behavior removed), remove the alert
 
-## 功能弃用标注
+## Feature deprecation callouts
 
-### 参数弃用
+### Parameter deprecation
 
-在参数表中标注弃用状态：
+Mark deprecated parameters in the parameter table:
 
 ```markdown
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `old_field` | String | — | ⚠️ **已弃用**，使用 `new_field` 代替。将在 v0.Y 移除 |
-| `new_field` | String | — | 替代 `old_field` 的新字段 |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `old_field` | String | — | ⚠️ **Deprecated**, use `new_field` instead. Will be removed in v0.Y |
+| `new_field` | String | — | The new field replacing `old_field` |
 ```
 
-### 功能弃用
+### Feature deprecation
 
-整个功能弃用时，在文档页顶部添加：
+When an entire feature is deprecated, add the following to the top of the page:
 
 ```markdown
-> ⚠️ **已弃用**
+> ⚠️ **Deprecated**
 > 
-> 此功能已弃用，将在 v0.Y 移除。请迁移到新功能（链接到替代功能文档）。
+> This feature is deprecated and will be removed in v0.Y. Please migrate to the new feature (link to the replacement documentation).
 ```
 
-### 弃用生命周期
+### Deprecation lifecycle
 
 ```
-v0.X: 标记弃用（文档标注 + 日志告警）
+v0.X: Mark as deprecated (doc callout + log warning)
   ↓
-v0.X+1~2: 保持兼容，鼓励迁移
+v0.X+1~2: Maintain compatibility, encourage migration
   ↓
-v0.Y: 移除旧功能 + 移除弃用标注 + 更新迁移文档
+v0.Y: Remove the old feature + remove deprecation callouts + update migration documentation
 ```
 
-## 版本敏感内容
+## Version-sensitive content
 
-### 最低版本标注
+### Minimum-version callouts
 
-当某个功能有最低版本要求时：
+When a feature has a minimum version requirement:
 
 ```markdown
 ## Session Persistence
 
-> 需要 Edgion ≥ v0.5。
+> Requires Edgion ≥ v0.5.
 ```
 
-### 版本差异
+### Behavior differences across versions
 
-当不同版本行为不同时，用 blockquote 标注：
+When behavior differs across versions, use a blockquote:
 
 ```markdown
-> **版本差异**
-> - v0.4 及之前：`timeout` 默认值为 `30s`
-> - v0.5 起：`timeout` 默认值改为 `60s`
+> **Version differences**
+> - v0.4 and earlier: `timeout` defaults to `30s`
+> - v0.5 and later: `timeout` defaults to `60s`
 ```
 
-## 与 Release Notes 的关系
+## Relationship with Release Notes
 
-| 内容 | Release Notes | 文档 |
-|------|--------------|------|
-| "什么变了" | ✅ 重点 | 仅标注 Breaking Change |
-| "怎么用" | 简要提及 | ✅ 重点 |
-| "怎么迁移" | 简要提及 | ✅ 详细步骤 |
-| 完整变更列表 | ✅ | 不需要 |
+| Content | Release Notes | Documentation |
+|---------|---------------|---------------|
+| "What changed" | ✅ Focus | Only Breaking Change callouts |
+| "How to use" | Brief mention | ✅ Focus |
+| "How to migrate" | Brief mention | ✅ Detailed steps |
+| Full change list | ✅ | Not needed |
 
-Release Notes 链接到文档获取详细使用指南，文档链接到 Release Notes 了解完整变更列表。
+Release Notes link to documentation for detailed usage guides; documentation links to Release Notes for the full change list.
 
-## PR 中的文档更新
+## Documentation updates in PRs
 
-### 检查清单
+### Checklist
 
-代码 PR 如果涉及用户可见的变更，提交前确认：
+For code PRs that introduce user-visible changes, confirm before submitting:
 
-- [ ] 对应的文档页已更新
-- [ ] 参数表与代码中的 Schema 一致
-- [ ] YAML 示例仍然有效
-- [ ] zh-CN 和 en 都已更新（或标注 `[i18n-sync-needed]`）
-- [ ] 如有 Breaking Change，已添加告警标注
-- [ ] DIRECTORY.md 已更新（如果新增/删除/移动文档）
+- [ ] The corresponding documentation page is updated
+- [ ] The parameter table matches the schema in code
+- [ ] YAML examples still work
+- [ ] zh-CN and en are both updated (or marked `[i18n-sync-needed]`)
+- [ ] If there is a Breaking Change, the alert callout has been added
+- [ ] DIRECTORY.md is updated (if documents were added / removed / moved)

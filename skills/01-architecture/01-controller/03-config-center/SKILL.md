@@ -1,32 +1,32 @@
 ---
 name: config-center
-description: 配置中心子系统：ConfCenter trait 抽象、FileSystemCenter 和 KubernetesCenter 两种实现、统一的 Workqueue + ResourceProcessor 流水线。
+description: ConfigCenter subsystem — ConfCenter trait abstraction, FileSystemCenter and KubernetesCenter implementations, unified Workqueue + ResourceProcessor pipeline.
 ---
 
-# 03 配置中心
+# 03 ConfigCenter
 
-> 配置中心是 Controller 的核心子系统，负责从不同来源接收资源配置。
-> 两种后端共享相同的 Workqueue + ResourceProcessor 流水线，仅事件源和持久化方式不同。
+> The ConfigCenter is a core Controller subsystem responsible for receiving resource configuration from various sources.
+> Both backends share the same Workqueue + ResourceProcessor pipeline; only the event source and persistence layer differ.
 
-## ConfCenter trait 抽象
+## ConfCenter Trait Abstraction
 
-配置中心通过 `ConfCenter` trait 定义统一接口，包含两组能力：
+The ConfigCenter defines a unified interface via the `ConfCenter` trait, which contains two groups of capabilities:
 
-- **CenterApi** — 资源 CRUD 操作：`get_one`、`set_one`、`create_one`、`update_one`、`list`
-- **CenterLifeCycle** — 生命周期管理：`start`、`ready check`、`reload`、`shutdown`
+- **CenterApi** — resource CRUD operations: `get_one`, `set_one`, `create_one`, `update_one`, `list`
+- **CenterLifeCycle** — lifecycle management: `start`, `ready check`, `reload`, `shutdown`
 
-无论底层是文件系统还是 Kubernetes API，上层的 Workqueue 和 ResourceProcessor 流水线完全一致。事件源产生的资源变更统一进入 Workqueue 去重和退避，再由 ResourceProcessor 执行校验、预解析、处理和分发。
+Whether the underlying backend is the file system or the Kubernetes API, the upper-layer Workqueue and ResourceProcessor pipeline is identical. Resource changes from the event source enter the Workqueue uniformly for dedup and backoff, then the ResourceProcessor performs validation, preparse, processing, and dispatch.
 
-## 文件清单
+## File List
 
-| 文件 | 主题 | 推荐阅读场景 |
-|------|------|-------------|
-| [00-overview.md](00-overview.md) | ConfCenter trait 架构 | 理解配置中心抽象设计 |
-| [01-file-system.md](01-file-system.md) | FileSystemCenter 实现 | 本地开发/调试模式 |
-| [02-kubernetes/](02-kubernetes/SKILL.md) | Kubernetes 配置中心 | 生产环境、HA、Leader 选举 |
-| （etcd 无独立文档） | EtcdCenter 实现 | 非 K8s 生产环境，单 Controller 部署 |
+| File | Topic | Recommended reading scenario |
+|------|-------|------------------------------|
+| [00-overview.md](00-overview.md) | ConfCenter trait architecture | Understanding the ConfigCenter abstraction design |
+| [01-file-system.md](01-file-system.md) | FileSystemCenter implementation | Local development / debugging mode |
+| [02-kubernetes/](02-kubernetes/SKILL.md) | Kubernetes ConfigCenter | Production environments, HA, leader election |
+| (etcd has no standalone document) | EtcdCenter implementation | Non-K8s production, single-Controller deployment |
 
-## 架构对比
+## Architecture Comparison
 
 ```
 ConfCenter trait
@@ -34,12 +34,11 @@ ConfCenter trait
 └── CenterLifeCycle (start, ready check, reload, shutdown)
 
 FileSystemCenter      KubernetesCenter         EtcdCenter
-├── 本地 YAML 文件     ├── K8s API Server        ├── etcd KV 存储
-├── inotify 文件监听   ├── Reflector 监听         ├── etcd watch 事件
-├── .status 文件       ├── Status Subresource    ├── 无状态持久化
-├── 无 Leader 选举     ├── Lease-based 选举       ├── 无 Leader 选举
-└── 适用：开发/测试    └── 适用：生产 K8s         └── 适用：非 K8s 生产
+├── Local YAML files  ├── K8s API Server        ├── etcd KV store
+├── inotify watching  ├── Reflector watch        ├── etcd watch events
+├── .status files     ├── Status subresource    ├── No status persistence
+├── No leader elect   ├── Lease-based election  ├── No leader election
+└── Use: dev/test     └── Use: production K8s   └── Use: non-K8s production
 ```
 
-**EtcdCenter 设计约束**：`EtcdStorage` 的 `create_one`/`update_one` 是非原子的 check-then-write，
-设计前提是**单 Controller 独占 etcd**，不支持多 Controller 并发写入同一 etcd 实例。
+**EtcdCenter design constraint**: `EtcdStorage::create_one`/`update_one` are non-atomic check-then-write operations. The design assumes **a single Controller exclusively owns etcd**; concurrent writes from multiple Controllers to the same etcd instance are not supported.

@@ -3,17 +3,16 @@
 //! Handles EdgionStreamPlugins resources with Gateway API standard status management.
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_utils::{
-    condition_reasons, ResolvedRefsError,
+    condition_false, condition_reasons, condition_true, update_condition, ResolvedRefsError,
 };
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_types, HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
 };
 use crate::types::prelude_resources::{EdgionStreamPlugins, PluginMetaData};
-use crate::types::resources::edgion_stream_plugins::{EdgionStreamPlugin, EdgionStreamPluginsStatus};
+use crate::types::resources::edgion_stream_plugins::{
+    EdgionStreamPlugin, EdgionStreamPluginsStatus, TlsRouteStreamPlugin,
+};
 use crate::types::resources::plugin_metadata::MetaDataEntry;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
-use k8s_openapi::chrono::Utc;
 
 const SELF_KIND: &str = "EdgionStreamPlugins";
 
@@ -75,23 +74,54 @@ impl Default for EdgionStreamPluginsHandler {
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
     fn preparse(&self, esp: &mut EdgionStreamPlugins, _ctx: &HandlerContext) -> Vec<String> {
-        let Some(plugins) = esp.spec.plugins.as_ref() else {
-            return Vec::new();
-        };
-
         let mut errors = Vec::new();
-        for (idx, entry) in plugins.iter().enumerate() {
+
+        // Both stages validate disabled entries with `is_enabled()` skipped, mirroring the
+        // runtime builders (`from_stream_plugins` / `from_entries`) which never construct a
+        // disabled plugin — a parked broken config must not flip `Accepted` to False.
+        //
+        // The structural `validate_and_init()` call reruns exactly what the data-plane plugin
+        // does at construction. Both stage plugins (`StreamIpRestriction::new`,
+        // `TlsRouteIpRestriction::new`) fail closed on an invalid config — every connection
+        // denied — but without surfacing the error here the CR keeps a healthy-looking
+        // `Accepted=True`, i.e. a silent blackhole. Emitting a non-legacy error makes
+        // `update_status` set `Accepted=False` with the `Invalid` reason.
+
+        // Stage 1: ConnectionFilter plugins (pre-TLS, inline L4 `ConnectionIpRestrictionRules`).
+        for (idx, entry) in esp.spec.plugins.iter().flatten().enumerate() {
+            if !entry.is_enabled() {
+                continue;
+            }
             if let EdgionStreamPlugin::IpRestriction(rules) = &entry.plugin {
                 let legacy = rules.legacy_http_fields();
                 if !legacy.is_empty() {
                     errors.push(format!(
-                        "{}IpRestriction[{}]: legacy HTTP fields {:?} detected on L4 config; \
+                        "{}plugins[{}] (IpRestriction): legacy HTTP fields {:?} detected on L4 config; \
                          remove them and use only allow/deny/defaultAction (see {})",
                         LEGACY_SCHEMA_MARKER, idx, legacy, MIGRATION_DOC_PATH
                     ));
+                    continue;
+                }
+                if let Err(e) = rules.clone().validate_and_init() {
+                    errors.push(format!("plugins[{idx}] (IpRestriction): {e}"));
                 }
             }
         }
+
+        // Stage 2: TlsRoute plugins (post-handshake, HTTP-layer `IpRestrictionConfig`).
+        for (idx, entry) in esp.spec.tls_route_plugins.iter().flatten().enumerate() {
+            if !entry.is_enabled() {
+                continue;
+            }
+            match &entry.plugin {
+                TlsRouteStreamPlugin::IpRestriction(config) => {
+                    if let Err(e) = config.clone().validate_and_init() {
+                        errors.push(format!("tlsRoutePlugins[{idx}] (IpRestriction): {e}"));
+                    }
+                }
+            }
+        }
+
         errors
     }
 
@@ -107,10 +137,15 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         ProcessResult::Continue(esp)
     }
 
+    async fn on_change(&self, esp: &EdgionStreamPlugins, ctx: &HandlerContext) {
+        requeue_referencing_gateways(esp, ctx).await;
+    }
+
     async fn on_delete(&self, esp: &EdgionStreamPlugins, ctx: &HandlerContext) {
         ctx.runtime()
             .plugin_metadata_refs
             .clear_refs_from(&Self::self_ref_key(esp));
+        requeue_referencing_gateways(esp, ctx).await;
     }
 
     fn update_status(&self, esp: &mut EdgionStreamPlugins, ctx: &HandlerContext, validation_errors: &[String]) {
@@ -118,7 +153,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
 
         // Accepted: preparse/validate errors (with legacy-schema reason mapping).
         let accepted = if validation_errors.is_empty() {
-            k8s_condition_true(
+            condition_true(
                 condition_types::ACCEPTED,
                 condition_reasons::ACCEPTED,
                 "Resource accepted",
@@ -136,14 +171,14 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                 .map(|e| e.strip_prefix(LEGACY_SCHEMA_MARKER).unwrap_or(e))
                 .collect::<Vec<_>>()
                 .join("; ");
-            k8s_condition_false(condition_types::ACCEPTED, reason, &message, generation)
+            condition_false(condition_types::ACCEPTED, reason, message, generation)
         };
 
         // ResolvedRefs: each GlobalConnectionIpRestriction plugin_metadata_ref must
         // resolve to an existing PluginMetaData of the matching variant type.
         let resolved_errors = resolve_refs(esp, ctx);
         let resolved_refs = if resolved_errors.is_empty() {
-            k8s_condition_true(
+            condition_true(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::RESOLVED_REFS,
                 "All references resolved",
@@ -156,14 +191,38 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                 .map(|e| e.message())
                 .collect::<Vec<_>>()
                 .join("; ");
-            k8s_condition_false(condition_types::RESOLVED_REFS, reason, &message, generation)
+            condition_false(condition_types::RESOLVED_REFS, reason, message, generation)
         };
 
         let status = esp
             .status
             .get_or_insert_with(|| EdgionStreamPluginsStatus { conditions: vec![] });
-        update_k8s_condition(&mut status.conditions, accepted);
-        update_k8s_condition(&mut status.conditions, resolved_refs);
+        update_condition(&mut status.conditions, accepted);
+        update_condition(&mut status.conditions, resolved_refs);
+    }
+}
+
+/// Requeue all Gateways that reference this EdgionStreamPlugins via
+/// `edgion.io/edgion-stream-plugins` annotation.
+async fn requeue_referencing_gateways(esp: &EdgionStreamPlugins, ctx: &HandlerContext) {
+    let Some(esp_name) = esp.metadata.name.as_deref().filter(|n| !n.is_empty()) else {
+        return;
+    };
+    let esp_key = format!(
+        "{}/{}",
+        esp.metadata.namespace.as_deref().unwrap_or("default"),
+        esp_name
+    );
+    let refs = ctx.runtime().stream_plugin_ref_mgr.get_refs(&esp_key);
+    if !refs.is_empty() {
+        tracing::info!(
+            esp_key = %esp_key,
+            ref_count = refs.len(),
+            "EdgionStreamPlugins changed, requeuing referencing Gateways"
+        );
+    }
+    for gw_ref in refs {
+        ctx.requeue("Gateway", gw_ref.resource_key()).await;
     }
 }
 
@@ -187,50 +246,9 @@ fn resolve_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<Resolved
     errors
 }
 
-/// Create a k8s_openapi Condition with True status
-fn k8s_condition_true(type_: &str, reason: &str, message: &str, observed_generation: Option<i64>) -> Condition {
-    Condition {
-        type_: type_.to_string(),
-        status: "True".to_string(),
-        reason: reason.to_string(),
-        message: message.to_string(),
-        last_transition_time: Time(Utc::now()),
-        observed_generation,
-    }
-}
-
-/// Create a k8s_openapi Condition with False status
-fn k8s_condition_false(type_: &str, reason: &str, message: &str, observed_generation: Option<i64>) -> Condition {
-    Condition {
-        type_: type_.to_string(),
-        status: "False".to_string(),
-        reason: reason.to_string(),
-        message: message.to_string(),
-        last_transition_time: Time(Utc::now()),
-        observed_generation,
-    }
-}
-
-/// Update or insert a k8s_openapi Condition
-fn update_k8s_condition(conditions: &mut Vec<Condition>, new_condition: Condition) {
-    if let Some(existing) = conditions.iter_mut().find(|c| c.type_ == new_condition.type_) {
-        let status_changed = existing.status != new_condition.status;
-        existing.status = new_condition.status;
-        existing.reason = new_condition.reason;
-        existing.message = new_condition.message;
-        existing.observed_generation = new_condition.observed_generation;
-        if status_changed {
-            existing.last_transition_time = new_condition.last_transition_time;
-        }
-    } else {
-        conditions.push(new_condition);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::SecretRefManager;
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
     use crate::types::prelude_resources::EdgionStreamPlugins;
@@ -238,7 +256,6 @@ mod tests {
 
     fn make_ctx() -> HandlerContext {
         HandlerContext::new(
-            Arc::new(SecretRefManager::new()),
             None,
             None,
             TriggerChain::default(),
@@ -259,7 +276,9 @@ spec:
   plugins:
     - type: IpRestriction
       config:
-        allow: ["10.0.0.0/8"]
+        allow:
+          - name: default
+            cidrs: ["10.0.0.0/8"]
         ipSource: RemoteAddr
         message: blocked
         status: 403
@@ -278,7 +297,9 @@ spec:
   plugins:
     - type: IpRestriction
       config:
-        allow: ["10.0.0.0/8"]
+        allow:
+          - name: default
+            cidrs: ["10.0.0.0/8"]
         defaultAction: deny
 "#;
         serde_yaml::from_str(yaml).unwrap()
@@ -299,6 +320,116 @@ spec:
         assert!(e.contains("message"));
         assert!(e.contains("status"));
         assert!(e.contains(MIGRATION_DOC_PATH));
+    }
+
+    fn invalid_esp() -> EdgionStreamPlugins {
+        // Structurally invalid: IpRestriction with neither `allow` nor `deny`.
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: invalid
+  namespace: default
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        defaultAction: deny
+"#;
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn preparse_rejects_structurally_invalid_config() {
+        let handler = EdgionStreamPluginsHandler::new();
+        let mut esp = invalid_esp();
+        let errors = handler.preparse(&mut esp, &make_ctx());
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected one structural validation error; got: {errors:?}"
+        );
+        let e = &errors[0];
+        assert!(
+            !e.starts_with(LEGACY_SCHEMA_MARKER),
+            "structural error must not carry the legacy marker so update_status uses the Invalid reason; got: {e}"
+        );
+        assert!(e.contains("plugins[0] (IpRestriction)"));
+        assert!(e.contains("allow") && e.contains("deny"));
+    }
+
+    #[test]
+    fn preparse_rejects_invalid_tls_route_plugin() {
+        // Stage 2 has the same silent-blackhole risk as Stage 1: an invalid
+        // tlsRoutePlugins config fails closed at L4 but must surface as Accepted=False.
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: invalid-tls
+  namespace: default
+spec:
+  tlsRoutePlugins:
+    - type: IpRestriction
+      config:
+        defaultAction: deny
+"#;
+        let mut esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let handler = EdgionStreamPluginsHandler::new();
+        let errors = handler.preparse(&mut esp, &make_ctx());
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected one Stage 2 validation error; got: {errors:?}"
+        );
+        let e = &errors[0];
+        assert!(!e.starts_with(LEGACY_SCHEMA_MARKER));
+        assert!(e.contains("tlsRoutePlugins[0] (IpRestriction)"), "got: {e}");
+    }
+
+    #[test]
+    fn preparse_skips_disabled_plugins() {
+        // A parked (disabled) broken config must not flip Accepted to False, matching the
+        // runtime builders which never construct a disabled plugin.
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: disabled
+  namespace: default
+spec:
+  plugins:
+    - enable: false
+      type: IpRestriction
+      config:
+        defaultAction: deny
+  tlsRoutePlugins:
+    - enable: false
+      type: IpRestriction
+      config:
+        defaultAction: deny
+"#;
+        let mut esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let handler = EdgionStreamPluginsHandler::new();
+        let errors = handler.preparse(&mut esp, &make_ctx());
+        assert!(errors.is_empty(), "disabled plugins must be skipped; got: {errors:?}");
+    }
+
+    #[test]
+    fn update_status_maps_structural_error_to_invalid_reason() {
+        let handler = EdgionStreamPluginsHandler::new();
+        let mut esp = invalid_esp();
+        let errors = handler.preparse(&mut esp, &make_ctx());
+        handler.update_status(&mut esp, &make_ctx(), &errors);
+
+        let status = esp.status.as_ref().expect("status populated");
+        let accepted = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Accepted")
+            .expect("Accepted condition present");
+        assert_eq!(accepted.status, "False");
+        assert_eq!(accepted.reason, "Invalid");
     }
 
     #[test]

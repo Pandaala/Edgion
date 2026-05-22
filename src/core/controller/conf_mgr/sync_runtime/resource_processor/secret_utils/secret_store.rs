@@ -61,6 +61,11 @@ impl SecretStore {
         tracing::debug!(component = "secret_store", "Updated secrets in store");
     }
 
+    /// Number of secrets currently in the store.
+    pub fn count(&self) -> usize {
+        self.secrets.read().len()
+    }
+
     /// Create a key from namespace and name
     fn make_key(namespace: Option<&str>, name: &str) -> String {
         match namespace {
@@ -101,6 +106,17 @@ pub fn get_secret(namespace: Option<&str>, name: &str) -> Option<Secret> {
 /// Backward compatibility alias for get_secret
 pub fn get_secret_by_name(namespace: Option<&str>, name: &str) -> Option<Secret> {
     get_secret(namespace, name)
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+
+    #[test]
+    fn empty_store_reports_zero() {
+        let store = SecretStore::new();
+        assert_eq!(store.count(), 0);
+    }
 }
 
 #[cfg(test)]

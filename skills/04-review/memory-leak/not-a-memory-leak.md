@@ -1,25 +1,30 @@
-# 非内存泄漏场景
+---
+name: not-a-memory-leak
+description: Use when reviewing a flagged memory leak in long-running code paths; lists patterns (lazy cleanup, intentional caches, capped buffers) that are accepted tradeoffs rather than bugs.
+---
 
-## 辅助 LB Store 懒创建后的陈旧条目
+# Non-Memory-Leak Scenarios
 
-适用位置：
+## Stale Entries After Lazy Creation in Auxiliary LB Stores
+
+Applicable locations:
 
 - `src/core/gateway/backends/discovery/endpoint_slice/`
 - `src/core/gateway/backends/discovery/endpoint/`
 
-判定结论：
+Verdict:
 
-`RoundRobin`、`ConsistentHash`、`LeastConn`、`EWMA` 四类 LB store 中，某个 service 在历史上用过的可选算法 LB 实例，即使后续 route 改了 LB 策略，也可能继续留在对应 store 中。这个现象在 Edgion 当前设计下不视为内存泄漏。
+For the four LB store types `RoundRobin`, `ConsistentHash`, `LeastConn`, `EWMA`, an LB instance for an alternative algorithm that a service used historically may continue to remain in the corresponding store even after the route's LB policy has changed. Under Edgion's current design this phenomenon is not regarded as a memory leak.
 
-简要原因：
+Brief reasons:
 
-- 这些实例始终由全局 store 强引用，属于可达的 runtime cache，不是失去引用却无法释放的对象
-- 项目早期设计本来就是为每个 service 预建全部 LB；后续改为按需创建，只是优化创建时机，不改变单 service 的容量上界
-- 单个 service 的此类实例数量有固定上界，最多对应 4 种算法，不会因策略反复切换而无限增长
-- 当 service/endpoint 数据真正消失时，相关 LB 条目会随着共享数据层缺失而被删除
+- These instances are always strongly referenced by the global store, qualifying as a reachable runtime cache rather than objects that have lost references but cannot be released
+- The early project design originally pre-built all LB algorithms for each service; the later change to on-demand creation only optimizes creation timing and does not change the per-service capacity upper bound
+- The number of such instances per service has a fixed upper bound — at most one for each of 4 algorithms — and will not grow unboundedly with repeated policy switches
+- When a service/endpoint's data truly disappears, the related LB entries are deleted along with the missing shared data layer
 
-review 处理建议：
+Review handling recommendations:
 
-- 不要将该场景标记为“内存泄漏”或“高危 leak”
-- 如需指出，可表述为“懒创建后的有界陈旧实例保留”或“可选优化项”
-- 只有当设计目标明确变为“仅保留当前仍被 route 引用的算法实例”时，才应按行为偏差继续讨论
+- Do not mark this scenario as "memory leak" or "high-severity leak"
+- If pointing it out, phrase it as "bounded stale instances retained after lazy creation" or "optional optimization"
+- Only when the design goal explicitly becomes "retain only algorithm instances still referenced by routes" should this be discussed further as a behavior deviation

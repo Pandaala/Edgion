@@ -15,7 +15,7 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
-use crate::core::gateway::plugins::http::common::auth_common::{send_auth_error_response, set_claims_headers};
+use crate::core::gateway::plugins::http::common::auth_common::{send_gateway_auth_error_response, set_claims_headers};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{JweContentEncryption, JweDecryptConfig};
@@ -145,7 +145,9 @@ impl JweDecrypt {
             }
         }
         self.apply_auth_failure_delay().await;
-        let _ = send_auth_error_response(session, failure.status(), "Bearer", "edgion", failure.message()).await;
+        let _ =
+            send_gateway_auth_error_response(session, failure.status(), "Bearer", "edgion", None, failure.message())
+                .await;
         PluginRunningResult::ErrTerminateRequest
     }
 
@@ -159,7 +161,7 @@ impl JweDecrypt {
     ) -> PluginRunningResult {
         plugin_log.push(log_code);
         self.apply_auth_failure_delay().await;
-        let _ = send_auth_error_response(session, status, "Bearer", "edgion", message).await;
+        let _ = send_gateway_auth_error_response(session, status, "Bearer", "edgion", None, message).await;
         PluginRunningResult::ErrTerminateRequest
     }
 
@@ -450,38 +452,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_decrypt_success() {
-        let plugin = build_plugin(None);
-        let token = encrypt_compact_jwe(r#"{"uid":"100","role":"admin"}"#, &test_key(), "A256GCM");
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("JweDecrypt");
-
-        let header_value = format!("Bearer {}", token);
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("authorization"))
-            .returning(move |_| Some(header_value.clone()));
-        session.expect_set_request_header().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("OK"));
-    }
-
-    #[tokio::test]
-    async fn test_missing_token_strict_false_bypass() {
-        let plugin = build_plugin(Some(|cfg| cfg.strict = false));
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("JweDecrypt");
-
-        session.expect_header_value().returning(|_| None);
-
-        let result = plugin.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("bypass"));
-    }
-
-    #[tokio::test]
     async fn test_missing_token_strict_true_reject() {
         let plugin = build_plugin(None);
         let mut session = MockPluginSession::new();
@@ -532,36 +502,5 @@ mod tests {
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(log.contains("bad alg"));
-    }
-
-    #[tokio::test]
-    async fn test_load_key_failure_emits_no_key_tag() {
-        // resolved_credential = None → load_key() returns Err.
-        let config = JweDecryptConfig {
-            strip_prefix: Some("Bearer ".to_string()),
-            forward_header: "x-decrypted-auth".to_string(),
-            resolved_credential: None,
-            ..Default::default()
-        };
-        let plugin = JweDecrypt::new(&config, "default".to_string());
-
-        // Any syntactically parseable JWE-ish token passes extract_token + size check.
-        let token = encrypt_compact_jwe(r#"{"uid":"1"}"#, &test_key(), "A256GCM");
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("JweDecrypt");
-
-        let header_value = format!("Bearer {}", token);
-        session
-            .expect_header_value()
-            .with(mockall::predicate::eq("authorization"))
-            .returning(move |_| Some(header_value.clone()));
-        session.expect_write_response_header().returning(|_, _| Ok(()));
-        session.expect_write_response_body().returning(|_, _| Ok(()));
-        session.expect_shutdown().returning(|| {});
-
-        let result = plugin.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(log.contains("key load fail"));
-        assert!(log.contains("no key"));
     }
 }

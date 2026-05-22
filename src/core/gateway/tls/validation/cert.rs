@@ -52,6 +52,15 @@ pub enum CertValidationError {
     },
     /// Certificate SAN does not match declared hosts
     SanMismatch { declared: Vec<String>, actual: Vec<String> },
+    /// No hosts declared in `spec.hosts`; certificate SAN cannot be validated.
+    /// Without a declared host, SAN matching would be vacuously satisfied, so this is
+    /// reported as a configuration error (defense-in-depth; the CRD schema normally
+    /// enforces non-empty hosts).
+    NoHostsDeclared,
+    /// Declared host is not a valid wildcard pattern (RFC 6125 §6.4.3 / RFC 5280 §4.2.1.6:
+    /// only a single, left-most-label asterisk is permitted; multi-label wildcards such as
+    /// `*.*.example.com` are explicitly forbidden)
+    InvalidSanPattern { pattern: String },
     /// Private key does not match certificate public key
     KeyMismatch(String),
     /// mTLS: CA Secret reference is required when mode is Mutual/OptionalMutual
@@ -94,6 +103,20 @@ impl fmt::Display for CertValidationError {
             Self::SanMismatch { declared, actual } => {
                 write!(f, "SAN mismatch (declared: {:?}, actual: {:?})", declared, actual)
             }
+            Self::NoHostsDeclared => {
+                write!(
+                    f,
+                    "No hosts declared in spec.hosts; certificate SAN cannot be validated"
+                )
+            }
+            Self::InvalidSanPattern { pattern } => {
+                write!(
+                    f,
+                    "Pattern '{}' is not a valid wildcard per RFC 6125 §6.4.3 / RFC 5280 §4.2.1.6 \
+                     (only a single leftmost asterisk is allowed)",
+                    pattern
+                )
+            }
             Self::KeyMismatch(msg) => write!(f, "Key mismatch: {}", msg),
             Self::MtlsCaSecretRefRequired => {
                 write!(f, "mTLS: caSecretRef is required when mode is Mutual or OptionalMutual")
@@ -134,7 +157,53 @@ impl fmt::Display for CertValidationError {
 /// 8. allowed_sans patterns are valid (if configured)
 /// 9. allowed_cns patterns are valid (if configured)
 pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
+    use crate::types::resources::edgion_tls::TlsVersion;
+
     let mut errors = Vec::new();
+
+    // RFC 8996 formally deprecates TLS 1.0/1.1. We deliberately keep them as an
+    // operator opt-in escape hatch (do NOT reject), but surface a config-time
+    // warning so the downgrade is not silent. This runs on the config-load path
+    // (not the data plane), once per apply.
+    // See skills/04-review/rfc-divergence/tls-02-deprecated-tls-version-admission.md
+    if let Some(v @ (TlsVersion::Tls10 | TlsVersion::Tls11)) = tls.spec.min_tls_version {
+        tracing::warn!(
+            component = "tls_validation",
+            name = tls.metadata.name.as_deref().unwrap_or_default(),
+            version = ?v,
+            "EdgionTls min_tls_version is deprecated by RFC 8996; consider TLS 1.2+ \
+             (connections still accepted — operator opt-in)"
+        );
+    }
+
+    // `extend.revocationCheck` (RFC 5280 §6.3 CRL / RFC 6960 OCSP) and
+    // `extend.ocspStapling` are reserved schema with no runtime implementation: the
+    // gateway performs NO revocation lookups or OCSP stapling regardless of these
+    // settings. We deliberately keep the fields (reserved for a future release; do NOT
+    // hard-reject, which would take down a working TLS listener over a no-op field) but
+    // surface a config-time warning so a compliance-minded operator does not silently
+    // believe revocation is enforced. This runs on the config-load path (not the data
+    // plane), once per apply.
+    // See skills/04-review/rfc-divergence/tls-07-revocation-config-not-implemented.md
+    if let Some(extend) = &tls.spec.extend {
+        use crate::types::resources::edgion_tls::RevocationMode;
+        let revocation_requested = extend
+            .revocation_check
+            .as_ref()
+            .is_some_and(|rc| rc.mode != RevocationMode::Off);
+        let stapling_requested = extend.ocsp_stapling.as_ref().is_some_and(|s| s.enabled);
+        if revocation_requested || stapling_requested {
+            tracing::warn!(
+                component = "tls_validation",
+                name = tls.metadata.name.as_deref().unwrap_or_default(),
+                revocation_check = revocation_requested,
+                ocsp_stapling = stapling_requested,
+                "EdgionTls revocationCheck/ocspStapling is configured but NOT implemented; \
+                 the gateway performs no OCSP/CRL revocation checks or OCSP stapling \
+                 regardless of this setting (reserved schema; config still accepted)"
+            );
+        }
+    }
 
     if tls.spec.secret.is_none() {
         errors.push(CertValidationError::SecretNotFound);
@@ -168,11 +237,32 @@ pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
 
     check_chain_expiration(&cert_pem, &mut errors);
 
+    // A genuinely empty `spec.hosts` is a latent misconfiguration: with no declared host,
+    // SAN matching is vacuously satisfied (the loop in check_san_matches never runs and it
+    // returns Ok). The CRD schema enforces non-empty hosts and the matcher skips no-host
+    // certs, so this guard is defense-in-depth for a schema-bypass / future-optional-field
+    // scenario. This is intentionally keyed on `spec.hosts`, NOT on `valid_hosts` below:
+    // `valid_hosts` is also empty when every declared host is an invalid wildcard, but that
+    // case is already reported via InvalidSanPattern and must not double-report here.
+    if tls.spec.hosts.is_empty() {
+        errors.push(CertValidationError::NoHostsDeclared);
+    }
+
+    // Detect structurally-invalid wildcard patterns up front. Without this they would fall
+    // through to a generic SanMismatch, leaving the operator chasing a phantom certificate
+    // problem instead of seeing that the wildcard syntax itself is unsupported. Only the
+    // valid hosts are then checked against the certificate SAN.
+    let (valid_hosts, invalid_patterns): (Vec<String>, Vec<String>) =
+        tls.spec.hosts.iter().cloned().partition(|h| is_valid_san_pattern(h));
+    for pattern in invalid_patterns {
+        errors.push(CertValidationError::InvalidSanPattern { pattern });
+    }
+
     // X509Certificate<'_> borrows from der_data, so we re-parse here rather than returning
     // the cert from parse_leaf_cert (which would require a self-referential struct).
     match X509Certificate::from_der(&der_data) {
         Ok((_, leaf_cert)) => {
-            if let Err(e) = check_san_matches(&leaf_cert, &tls.spec.hosts) {
+            if let Err(e) = check_san_matches(&leaf_cert, &valid_hosts) {
                 errors.push(e);
             }
         }
@@ -338,7 +428,10 @@ fn check_san_matches(cert: &X509Certificate, declared_hosts: &[String]) -> Resul
         }
     }
 
-    // Check if all declared hosts are covered by certificate
+    // Check if all declared hosts are covered by certificate.
+    // An empty `declared_hosts` here means every host in spec.hosts was an invalid wildcard
+    // (already reported as InvalidSanPattern by the caller), so returning Ok avoids double-
+    // reporting. A genuinely empty spec.hosts is caught upstream as NoHostsDeclared.
     let mut missing_hosts = Vec::new();
     for declared_host in declared_hosts {
         let covered = if let Ok(declared_ip) = declared_host.parse::<std::net::IpAddr>() {
@@ -367,6 +460,23 @@ fn check_san_matches(cert: &X509Certificate, declared_hosts: &[String]) -> Resul
 /// Check if a declared host is covered by certificate SAN list
 fn is_host_covered(declared: &str, san_list: &[String]) -> bool {
     san_list.iter().any(|san| super::matches_host_pattern(declared, san))
+}
+
+/// Whether a declared host is a valid SAN pattern under RFC 6125 §6.4.3 / RFC 5280 §4.2.1.6.
+///
+/// A host with no `*` is always valid. A wildcard host is valid only when it is exactly
+/// `*.<suffix>` where `<suffix>` is non-empty and contains no further `*` — i.e. a single,
+/// left-most-label asterisk. Multi-label wildcards (`*.*.example.com`), partial-label
+/// wildcards (`foo*.example.com`), and non-leftmost wildcards (`a.*.example.com`) are
+/// rejected; these are exactly the patterns `matches_host_pattern` cannot match.
+fn is_valid_san_pattern(host: &str) -> bool {
+    if !host.contains('*') {
+        return true;
+    }
+    match host.strip_prefix("*.") {
+        Some(suffix) => !suffix.is_empty() && !suffix.contains('*'),
+        None => false,
+    }
 }
 
 /// Check if private key is valid and matches the certificate's public key
@@ -545,6 +655,106 @@ mod tests {
         // No match
         assert!(!is_host_covered("other.com", &san_list));
         assert!(!is_host_covered("api.example.com", &san_list)); // Wildcard doesn't cover base
+    }
+
+    #[test]
+    fn test_is_valid_san_pattern() {
+        // No wildcard: always valid
+        assert!(is_valid_san_pattern("example.com"));
+        assert!(is_valid_san_pattern("api.staging.example.com"));
+
+        // Single leftmost-label wildcard: valid
+        assert!(is_valid_san_pattern("*.example.com"));
+        assert!(is_valid_san_pattern("*.staging.example.com"));
+
+        // Multi-label wildcard: invalid (RFC 6125 §6.4.3 explicitly forbidden)
+        assert!(!is_valid_san_pattern("*.*.example.com"));
+        assert!(!is_valid_san_pattern("*.*.*.example.com"));
+
+        // Non-leftmost / partial-label wildcard: invalid
+        assert!(!is_valid_san_pattern("a.*.example.com"));
+        assert!(!is_valid_san_pattern("foo*.example.com"));
+
+        // Degenerate wildcards: invalid
+        assert!(!is_valid_san_pattern("*."));
+        assert!(!is_valid_san_pattern("*"));
+    }
+
+    #[test]
+    fn test_validate_cert_reports_invalid_san_pattern() {
+        // A multi-star declared host must surface as InvalidSanPattern, not a generic
+        // SanMismatch, so operators see the real problem (unsupported wildcard syntax).
+        let (cert_pem, key_pem) = make_cert_with_sans(vec!["example.com"], vec![]);
+        let tls = create_test_tls(
+            Some(&cert_pem),
+            Some(&key_pem),
+            vec!["*.*.staging.example.com".to_string()],
+        );
+
+        let result = validate_cert(&tls);
+        assert!(!result.is_valid, "multi-star host should be invalid");
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::InvalidSanPattern { pattern } if pattern == "*.*.staging.example.com")),
+            "should report InvalidSanPattern, got: {:?}",
+            result.errors
+        );
+        // The invalid pattern must NOT also produce a SanMismatch for the same host.
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
+            "invalid pattern should not also report SanMismatch, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_validate_cert_reports_no_hosts_declared() {
+        // An EdgionTls with empty spec.hosts must report NoHostsDeclared rather than
+        // silently passing SAN validation (the empty-loop vacuous-pass guard).
+        let (cert_pem, key_pem) = make_cert_with_sans(vec!["example.com"], vec![]);
+        let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec![]);
+
+        let result = validate_cert(&tls);
+        assert!(!result.is_valid, "empty hosts should be invalid");
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::NoHostsDeclared)),
+            "should report NoHostsDeclared, got: {:?}",
+            result.errors
+        );
+        // Empty hosts must NOT spuriously also produce a SanMismatch.
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::SanMismatch { .. })),
+            "empty hosts should not also report SanMismatch, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_validate_cert_single_wildcard_not_flagged() {
+        // A valid single-label wildcard host that the cert covers must not be flagged.
+        let (cert_pem, key_pem) = make_cert_with_sans(vec!["*.example.com"], vec![]);
+        let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["*.example.com".to_string()]);
+
+        let result = validate_cert(&tls);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CertValidationError::InvalidSanPattern { .. })),
+            "valid single-label wildcard should not be flagged, got: {:?}",
+            result.errors
+        );
     }
 
     #[test]
@@ -734,7 +944,7 @@ mod tests {
 
     #[test]
     fn test_expired_cert_is_invalid() {
-        // 证书昨天就过期了
+        // Cert expired yesterday
         let (cert_pem, key_pem) = make_cert_with_validity(-30, -1);
         let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
 
@@ -752,7 +962,7 @@ mod tests {
 
     #[test]
     fn test_not_yet_valid_cert_is_invalid() {
-        // 证书明天才生效
+        // Cert becomes valid tomorrow
         let (cert_pem, key_pem) = make_cert_with_validity(1, 365);
         let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
 
@@ -770,12 +980,12 @@ mod tests {
 
     #[test]
     fn test_valid_cert_passes_expiry_check() {
-        // 证书昨天生效，一年后过期
+        // Cert valid since yesterday, expires in one year
         let (cert_pem, key_pem) = make_cert_with_validity(-1, 365);
         let tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
 
         let result = validate_cert(&tls);
-        // 只验证没有 CertExpired 错误
+        // Only assert that there is no CertExpired error
         assert!(
             !result
                 .errors
@@ -948,6 +1158,61 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, CertValidationError::CertParseError(_))),
             "single cert should still work, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_deprecated_min_tls_version_is_not_rejected() {
+        use crate::types::resources::edgion_tls::TlsVersion;
+
+        // RFC 8996 divergence: TLS 1.0/1.1 stay admissible as an operator opt-in
+        // escape hatch. Setting them must emit a warn but must NOT invalidate the
+        // resource. This test guards the "do not hard-reject" decision.
+        let (cert_pem, key_pem) = make_cert_with_validity(-1, 365);
+        let mut tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
+        tls.spec.min_tls_version = Some(TlsVersion::Tls10);
+
+        let result = validate_cert(&tls);
+        assert!(
+            result.is_valid,
+            "deprecated min_tls_version (TLS 1.0) must not be rejected, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_unimplemented_revocation_config_is_not_rejected() {
+        use crate::types::resources::edgion_tls::{
+            EdgionTlsExtend, OcspStaplingConfig, RevocationCheckConfig, RevocationMode,
+        };
+
+        // tls-07 divergence: revocationCheck/ocspStapling are reserved-but-unimplemented
+        // schema. Setting them must emit a config-time warn but must NOT invalidate the
+        // resource (hard-rejecting would take down a working TLS listener over a no-op
+        // field). This test guards the "do not hard-reject" decision.
+        let (cert_pem, key_pem) = make_cert_with_validity(-1, 365);
+        let mut tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
+        tls.spec.extend = Some(EdgionTlsExtend {
+            prefer_server_ciphers: false,
+            ocsp_stapling: Some(OcspStaplingConfig {
+                enabled: true,
+                refresh_interval_seconds: None,
+                fail_open: false,
+            }),
+            session_ticket: None,
+            session_cache: None,
+            revocation_check: Some(RevocationCheckConfig {
+                mode: RevocationMode::Ocsp,
+                fail_open: false,
+            }),
+            early_data: None,
+        });
+
+        let result = validate_cert(&tls);
+        assert!(
+            result.is_valid,
+            "unimplemented revocationCheck/ocspStapling must not be rejected, got: {:?}",
             result.errors
         );
     }

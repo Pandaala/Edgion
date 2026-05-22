@@ -24,6 +24,10 @@ path = "src/bin/edgion_ctl.rs"
 name = "edgion-center"
 path = "src/bin/edgion_center.rs"
 
+[[bin]]
+name = "cache_residue"
+path = "examples/code/validator/cache_residue.rs"
+
 [[example]]
 name = "build_test_proto"
 path = "examples/code/build_test_proto.rs"
@@ -111,6 +115,7 @@ prost = "0.13"
 
 # File system monitoring
 notify = "8.2"
+walkdir = "2"
 futures = "0.3.31"
 
 # HTTP server
@@ -127,6 +132,7 @@ dashmap = "6.1"
 regex = "1.12"
 rand = "0.9"
 smallvec = "1.15"
+indexmap = "2"
 nom = "7"
 bcrypt = "0.18"
 sha2 = "0.10"
@@ -185,7 +191,6 @@ instant-acme = "0.8.4"
 rcgen = { version = "0.14.7", features = ["x509-parser"] }
 time = { version = "0.3", features = ["std"] }
 sha1 = "0.10.6"
-async_singleflight = "0.6"
 # Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 pingora-ketama = "0.8.0"
@@ -196,6 +201,7 @@ tonic-build = "0.12"
 
 [dev-dependencies]
 tempfile = "3"
+h2 = "0.4"
 tokio-tungstenite = "0.28"
 base64 = "0.22"
 tonic-build = "0.12"
@@ -208,3 +214,4 @@ proxy-header = "0.1.2"
 tower = "0.5"
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
 wiremock = "0.6"
+proptest = "1"

@@ -40,7 +40,25 @@ LDAP_COMPOSE_DIR=""
 LDAP_COMPOSE_FILE=""
 LDAP_SERVICE_REQUIRED=false
 LDAP_SERVICE_STARTED=false
+
+# Redis integration dependency (used by EdgionPlugins/Dsl, EdgionPlugins/RateLimitRedis,
+# and any LinkSys Redis test driven by the main runner). The bundled docker-compose
+# matches examples/test/conf/LinkSys/Redis (host 127.0.0.1, port 16379, password
+# edgion-test-pwd). When the runner starts Redis itself, cleanup() stops it; an
+# externally-managed Redis is left untouched.
+REDIS_COMPOSE_DIR=""
+REDIS_COMPOSE_FILE=""
+REDIS_SERVICE_REQUIRED=false
+REDIS_SERVICE_STARTED=false
+REDIS_HOST="127.0.0.1"
+REDIS_PORT=16379
+REDIS_PASSWORD="edgion-test-pwd"
+REDIS_CONTAINER_NAME="edgion-test-redis"
+
 CONTROLLER_GRPC_PORT=50051
+
+# Whether to skip cache residue detection after tests
+SKIP_RESIDUE_CHECK="${SKIP_RESIDUE_CHECK:-false}"
 
 # =============================================================================
 # Log functions
@@ -55,6 +73,10 @@ log_success() {
 
 log_error() {
     echo -e "${RED}[✗]${NC} $1"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[!]${NC} $1"
 }
 
 log_section() {
@@ -119,6 +141,61 @@ check_docker_environment_ready() {
     return 0
 }
 
+# Loopback aliases required by HTTPRoute/Backend/LB* tests on macOS.
+# Linux routes 127.0.0.0/8 to lo by default; macOS needs explicit lo0 aliases or
+# packets to 127.0.0.2 / 127.0.0.3 are silently dropped (test_server bound to
+# 0.0.0.0 still won't see them). Aliases also do not survive reboots, so we
+# detect missing ones every run.
+REQUIRED_LO_ALIASES=("127.0.0.2" "127.0.0.3" "127.0.0.4")
+
+ensure_loopback_aliases() {
+    if [ "$(uname -s)" != "Darwin" ]; then
+        return 0
+    fi
+
+    local missing=()
+    local lo_inet
+    lo_inet=$(ifconfig lo0 2>/dev/null | awk '/inet /{print $2}')
+    for ip in "${REQUIRED_LO_ALIASES[@]}"; do
+        if ! grep -qx "$ip" <<< "$lo_inet"; then
+            missing+=("$ip")
+        fi
+    done
+
+    if [ "${#missing[@]}" -eq 0 ]; then
+        log_success "lo0 aliases present (${REQUIRED_LO_ALIASES[*]})"
+        return 0
+    fi
+
+    log_error "lo0 is missing required aliases on macOS: ${missing[*]}"
+    echo ""
+    echo "  HTTPRoute/Backend/LB* tests use 127.0.0.2 / 127.0.0.3 / 127.0.0.4 as"
+    echo "  distinct LB endpoints. macOS does not auto-route 127/8 to lo0 like"
+    echo "  Linux, so without these aliases connections silently time out."
+    echo ""
+    echo "  Run once now (aliases reset on reboot):"
+    for ip in "${missing[@]}"; do
+        echo "    sudo ifconfig lo0 alias ${ip} up"
+    done
+    echo ""
+    echo "  Or make them persistent with launchd:"
+    echo "    sudo tee /Library/LaunchDaemons/com.edgion.lo-alias.plist >/dev/null <<'EOF'"
+    echo "    <?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+    echo "    <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyLists-1.0.dtd\">"
+    echo "    <plist version=\"1.0\"><dict>"
+    echo "      <key>Label</key><string>com.edgion.lo-alias</string>"
+    echo "      <key>ProgramArguments</key><array>"
+    echo "        <string>/bin/sh</string><string>-c</string>"
+    echo "        <string>$(printf '/sbin/ifconfig lo0 alias %s up; ' "${REQUIRED_LO_ALIASES[@]}")</string>"
+    echo "      </array>"
+    echo "      <key>RunAtLoad</key><true/>"
+    echo "    </dict></plist>"
+    echo "    EOF"
+    echo "    sudo launchctl load /Library/LaunchDaemons/com.edgion.lo-alias.plist"
+    echo ""
+    return 1
+}
+
 ensure_nofile_limit() {
     local required="${1:-65535}"
     local soft hard
@@ -163,6 +240,35 @@ ensure_nofile_limit() {
     return 0
 }
 
+# Verify exactly one edgion-gateway process is owned by the current user.
+# Multiple processes mean a violation of the "shared Gateway" principle:
+# new suites must reuse the main Gateway started by start_all_with_conf.sh,
+# not spawn their own. Independent-topology scripts (test_file_watcher.sh,
+# test_resource_abnormal_metrics.sh, run_conf_sync_mtls_test.sh, etc.) run
+# outside this entry point and are not subject to this check.
+# See skills/05-testing/01-integration-testing.md "Gateway / Controller reuse principle".
+check_single_gateway_process() {
+    local pids count
+    pids=$(pgrep -u "$USER" edgion-gateway 2>/dev/null || true)
+    if [ -z "$pids" ]; then
+        log_error "No edgion-gateway process found after start. Check start_all_with_conf.sh logs."
+        return 1
+    fi
+    count=$(echo "$pids" | wc -l | tr -d ' ')
+    if [ "$count" -gt 1 ]; then
+        log_error "Detected ${count} edgion-gateway processes — violates the shared-Gateway principle"
+        log_error "Integration suites must reuse the main Gateway. See:"
+        log_error "  skills/05-testing/01-integration-testing.md (Gateway / Controller reuse principle)"
+        log_error "Offending PIDs:"
+        for pid in $pids; do
+            ps -o pid=,command= -p "$pid" 2>/dev/null | sed 's/^/  /' >&2 || true
+        done
+        return 1
+    fi
+    log_success "Single edgion-gateway process verified (pid=${pids})"
+    return 0
+}
+
 # =============================================================================
 # Report functions
 # =============================================================================
@@ -182,12 +288,15 @@ report_test() {
     local result=$2
     local duration=$3
     
-    ((TOTAL_TESTS++))
+    # Pre-increment everywhere: under `set -e`, post-increment on a counter at 0
+    # returns the pre-value (0), which bash treats as failure and aborts the script.
+    # Pre-increment returns the post-value (>=1), so set -e never fires.
+    ((++TOTAL_TESTS))
     if [ "$result" = "PASS" ]; then
-        ((PASSED_TESTS++))
+        ((++PASSED_TESTS))
         echo "[PASS] ${name} (${duration}s)" >> "$REPORT_FILE"
     else
-        ((FAILED_TESTS++))
+        ((++FAILED_TESTS))
         echo "[FAIL] ${name} (${duration}s)" >> "$REPORT_FILE"
     fi
 }
@@ -212,81 +321,32 @@ finalize_report() {
 }
 
 # =============================================================================
-# Dynamic Test function
+# Dynamic Scenarios function (scenario-driven replacement of run_dynamic_tests)
 # =============================================================================
-run_dynamic_tests() {
-    local stage=${1:-0}  # 0=，1=，2=
-    local edgion_cli="${PROJECT_ROOT}/target/debug/edgion-cli"
-    local conf_dir="${PROJECT_ROOT}/examples/test/conf"
-    local controller_url="http://127.0.0.1:5800"
-    local gateway_url="http://127.0.0.1:5900"
+run_dynamic_scenarios() {
+    local test_client="${PROJECT_ROOT}/target/debug/examples/test_client"
 
-    log_section "🔄 Gateway "
+    log_section "🔄 Dynamic Scenarios"
 
-    if [ $stage -eq 0 ] || [ $stage -eq 1 ]; then
-        log_info ">>>  1/2: "
-
-        # （）
-        run_test "Dynamic_Initial_Phase" \
-            "${PROJECT_ROOT}/target/debug/examples/test_client \
-             -g -r Gateway -i Dynamic --phase initial" || test_failed=true
-
-        log_success ""
+    if [ ! -x "$test_client" ]; then
+        log_error "test_client binary not found: $test_client"
+        return 1
     fi
 
-    if [ $stage -eq 0 ]; then
-        log_section "📦 "
-
-        # 1.
-        log_info "Applying updates from DynamicTest/updates/..."
-        "${edgion_cli}" --server "${controller_url}" \
-            apply -f "${conf_dir}/Gateway/DynamicTest/updates/" || {
-            log_error "Failed to apply dynamic updates"
-            return 1
-        }
-
-        # 2.
-        if [ -f "${conf_dir}/Gateway/DynamicTest/delete/resources_to_delete.txt" ]; then
-            log_info "Deleting resources..."
-            while IFS= read -r resource; do
-                [ -z "$resource" ] || [[ "$resource" =~ ^# ]] && continue
-                # : Kind/Namespace/Name
-                IFS='/' read -r kind namespace name <<< "$resource"
-                if [ -n "$kind" ] && [ -n "$namespace" ] && [ -n "$name" ]; then
-                    log_info "Deleting: $kind/$namespace/$name"
-                    "${edgion_cli}" --server "${controller_url}" delete "$kind" "$name" -n "$namespace" || true
-                fi
-            done < "${conf_dir}/Gateway/DynamicTest/delete/resources_to_delete.txt"
-        fi
-        
-        # 3. （2）
-        log_info "Verifying resource synchronization..."
-        run_test "Resource_Diff_After_Dynamic_Update" \
-            "${PROJECT_ROOT}/target/debug/examples/resource_diff \
-             --controller-url ${controller_url} \
-             --gateway-url ${gateway_url}" || {
-            log_info "Resource sync has some issues (non-blocking, continuing...)"
-        }
-        
-        # 4. 
-        log_info "Waiting 3s for configuration to take effect..."
-        sleep 3
-        
-        log_success ""
+    local ids
+    ids=$("$test_client" --list-dynamic-scenarios 2>/dev/null || true)
+    if [ -z "$ids" ]; then
+        log_info "No dynamic scenarios registered (--list-dynamic-scenarios returned empty)"
+        return 0
     fi
-    
-    if [ $stage -eq 0 ] || [ $stage -eq 2 ]; then
-        log_info ">>>  2/2: "
-        
-        # （）
-        run_test "Dynamic_After_Update_Phase" \
-            "${PROJECT_ROOT}/target/debug/examples/test_client \
-             -g -r Gateway -i Dynamic --phase update" || test_failed=true
-        
-        log_success ""
-    fi
-    
-    log_section "✅ "
+
+    local scenario
+    for scenario in $ids; do
+        run_test "Dyn_${scenario}" \
+            "${test_client} -g --dynamic-scenario ${scenario}" || test_failed=true
+    done
+
+    log_success "Dynamic scenarios finished"
 }
 
 # =============================================================================
@@ -299,10 +359,17 @@ cleanup() {
             log_info "Stopping OpenLDAP test service..."
             docker compose -f "${LDAP_COMPOSE_FILE}" down --timeout 5 >/dev/null 2>&1 || true
         fi
+        if $REDIS_SERVICE_STARTED; then
+            log_info "Stopping Redis test service..."
+            docker compose -f "${REDIS_COMPOSE_FILE}" down --timeout 5 >/dev/null 2>&1 || true
+        fi
         "${UTILS_DIR}/kill_all.sh" 2>&1 || true
     else
         if $LDAP_SERVICE_STARTED; then
             log_info "OpenLDAP test service still running (keep-alive mode): ${LDAP_COMPOSE_FILE}"
+        fi
+        if $REDIS_SERVICE_STARTED; then
+            log_info "Redis test service still running (keep-alive mode): ${REDIS_COMPOSE_FILE}"
         fi
     fi
 }
@@ -429,6 +496,177 @@ start_ldap_service_if_needed() {
 }
 
 # =============================================================================
+# Redis integration dependency
+# =============================================================================
+# Triggered by EdgionPlugins/Dsl, EdgionPlugins/RateLimitRedis, or the default
+# full sweep. The runner first probes whether Redis is already reachable on
+# 127.0.0.1:16379; if not, it tries to start the bundled docker-compose
+# stack (matches examples/test/conf/LinkSys/Redis); if Docker is unavailable
+# the runner aborts with platform-specific install hints.
+is_redis_service_required() {
+    local explicit_suites="$1"
+
+    # Default full sweep (no -r/-i) covers DSL + RateLimitRedis + LinkSys/Redis.
+    if [ -z "$G_RESOURCE" ]; then
+        return 0
+    fi
+
+    if [ "$G_RESOURCE" = "EdgionPlugins" ]; then
+        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Dsl" ] || [ "$G_ITEM" = "RateLimitRedis" ]; then
+            return 0
+        fi
+    fi
+
+    if [ "$G_RESOURCE" = "LinkSys" ]; then
+        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Redis" ]; then
+            return 0
+        fi
+    fi
+
+    case ",${explicit_suites}," in
+        *,EdgionPlugins/Dsl,*|*,EdgionPlugins/RateLimitRedis,*|*,LinkSys/Redis,*)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+# Probe whether Redis is reachable. Order of attempts:
+#   1) host redis-cli (most accurate — verifies AUTH);
+#   2) running edgion-test-redis container with `docker exec`;
+#   3) bare TCP connect to host:port (port-open is treated as good enough —
+#      a wrong-password Redis at this port would still produce non-PONG and
+#      surface as a normal test failure, which is the same signal the operator
+#      would have seen pre-change).
+probe_redis_ready() {
+    local host=$1 port=$2 password=$3
+
+    if command -v redis-cli >/dev/null 2>&1; then
+        if redis-cli -h "$host" -p "$port" -a "$password" --no-auth-warning ping 2>/dev/null \
+            | grep -q '^PONG$'; then
+            return 0
+        fi
+    fi
+
+    if command -v docker >/dev/null 2>&1; then
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$REDIS_CONTAINER_NAME"; then
+            if docker exec "$REDIS_CONTAINER_NAME" \
+                redis-cli -a "$password" ping 2>/dev/null | grep -q '^PONG$'; then
+                return 0
+            fi
+        fi
+    fi
+
+    if (exec 3<>"/dev/tcp/${host}/${port}") 2>/dev/null; then
+        exec 3<&- 3>&- 2>/dev/null || true
+        return 0
+    fi
+
+    return 1
+}
+
+print_redis_install_hints() {
+    cat <<EOF
+
+Edgion integration tests require a Redis instance reachable at
+  ${REDIS_HOST}:${REDIS_PORT}  (password: ${REDIS_PASSWORD})
+
+This matches the LinkSys fixture in examples/test/conf/LinkSys/Redis
+(consumed by EdgionPlugins/Dsl, EdgionPlugins/RateLimitRedis, and the
+LinkSys Redis suite).
+
+Recommended (any platform with Docker):
+  cd ${REDIS_COMPOSE_DIR}
+  docker compose up -d
+  # the runner will detect and reuse it on the next invocation
+
+Manual install:
+  macOS (Homebrew):
+    brew install redis
+    redis-server --port ${REDIS_PORT} --requirepass ${REDIS_PASSWORD} --daemonize yes
+  Debian / Ubuntu:
+    sudo apt-get install -y redis-server
+    redis-server --port ${REDIS_PORT} --requirepass ${REDIS_PASSWORD} --daemonize yes
+  RHEL / CentOS / Fedora:
+    sudo dnf install -y redis      # or: sudo yum install -y redis
+    redis-server --port ${REDIS_PORT} --requirepass ${REDIS_PASSWORD} --daemonize yes
+  Windows (WSL2):
+    use the Linux instructions inside your WSL distro, or run Docker Desktop:
+    docker run -d --name ${REDIS_CONTAINER_NAME} -p ${REDIS_PORT}:6379 \\
+        redis:7-alpine redis-server --requirepass ${REDIS_PASSWORD}
+
+After Redis is reachable, re-run the same integration test command.
+
+EOF
+}
+
+# Build the command line for the LinkSys/Redis assertions driver.
+# Lifecycle deletion (test 10 — delete the redis-test LinkSys CRD and verify
+# the runtime client is removed) is included by default. It is safe in the
+# normal test order: LinkSys_Redis runs after every EdgionPlugins/Status/
+# LinkSys_Status suite that depends on default/redis-test, and the driver
+# re-applies the CRD at the end as a safety net.
+linksys_redis_cmd() {
+    echo "bash ${SCRIPT_DIR}/link_sys/redis_assertions.sh --include-lifecycle"
+}
+
+start_redis_service_if_needed() {
+    if ! $REDIS_SERVICE_REQUIRED; then
+        return 0
+    fi
+
+    REDIS_COMPOSE_DIR="${PROJECT_ROOT}/examples/test/conf/Services/redis"
+    REDIS_COMPOSE_FILE="${REDIS_COMPOSE_DIR}/docker-compose.yaml"
+
+    log_section "Redis dependency: ensure Redis is available"
+
+    if probe_redis_ready "$REDIS_HOST" "$REDIS_PORT" "$REDIS_PASSWORD"; then
+        log_success "Redis already reachable at ${REDIS_HOST}:${REDIS_PORT} (reusing it)"
+        return 0
+    fi
+
+    log_info "Redis not reachable at ${REDIS_HOST}:${REDIS_PORT} — attempting to start it"
+
+    if ! command -v docker >/dev/null 2>&1 \
+        || ! docker info >/dev/null 2>&1 \
+        || ! docker compose version >/dev/null 2>&1; then
+        log_error "Redis is required but not running, and Docker is unavailable on this host."
+        print_redis_install_hints
+        return 1
+    fi
+
+    if [ ! -f "${REDIS_COMPOSE_FILE}" ]; then
+        log_error "Redis compose file not found: ${REDIS_COMPOSE_FILE}"
+        return 1
+    fi
+
+    local compose_output=""
+    compose_output=$(docker compose -f "${REDIS_COMPOSE_FILE}" up -d 2>&1) || {
+        log_error "Failed to start Redis via docker compose"
+        echo "$compose_output"
+        print_redis_install_hints
+        return 1
+    }
+
+    local elapsed=0
+    local timeout=30
+    while [ $elapsed -lt $timeout ]; do
+        if probe_redis_ready "$REDIS_HOST" "$REDIS_PORT" "$REDIS_PASSWORD"; then
+            REDIS_SERVICE_STARTED=true
+            log_success "Redis is ready (started via docker, waited ${elapsed}s)"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    log_error "Redis container did not become ready within ${timeout}s"
+    docker compose -f "${REDIS_COMPOSE_FILE}" logs --no-color --tail=80 || true
+    return 1
+}
+
+# =============================================================================
 # Get server_id from controller
 # =============================================================================
 get_controller_server_id() {
@@ -454,6 +692,49 @@ get_gateway_server_id() {
         server_id="unknown"
     fi
     echo "$server_id"
+}
+
+# =============================================================================
+# Verify all `role="..."` label values in /metrics are in the expected whitelist.
+# Defends against cardinality explosion from typos / new roles introduced unintentionally.
+# Returns 0 on success, 1 on bad label found.
+# =============================================================================
+verify_metrics_labels() {
+    local endpoint=$1 component=$2
+    local body
+    body=$(curl -sf -m 5 "$endpoint" 2>/dev/null)
+    if [ -z "$body" ]; then
+        log_warn "[$component] /metrics not reachable: $endpoint (skipping label check)"
+        return 0
+    fi
+
+    # Extract all role="..." label values, dedup
+    local roles
+    roles=$(echo "$body" | grep -oE 'role="[^"]+"' | sort -u)
+
+    if [ -z "$roles" ]; then
+        log_info "[$component] /metrics has no role= labels (no federation metrics emitted yet — OK)"
+        return 0
+    fi
+
+    local bad=0
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        case "$line" in
+            'role="center"'|'role="controller"')
+                ;;
+            *)
+                log_error "[$component] /metrics has unexpected role label: $line (allowed: center, controller)"
+                bad=1
+                ;;
+        esac
+    done <<< "$roles"
+
+    if [ $bad -ne 0 ]; then
+        return 1
+    fi
+    log_info "[$component] /metrics role labels validated: $(echo "$roles" | tr '\n' ' ')"
+    return 0
 }
 
 # =============================================================================
@@ -488,11 +769,11 @@ show_help() {
     echo "  --no-start             Skip start step"
     echo "  --keep-alive           Keep services running after end (default will stop)"
     echo "  --full-test            Run all tests including slow tests (timeout, etc.)"
-    echo "  --dynamic-test         Run Gateway dynamic configuration tests"
-    echo "  --dynamic-stage <NUM>  Dynamic test stage: 1=initial, 2=update, 0=both (default: 0)"
     echo "  --controller-grpc-port <port>  Override controller/gateway gRPC sync port (default: 50051)"
     echo "  --suites <list>        Specify test suites to load (comma separated)"
     echo "  --with-reload          Run tests twice with reload in between (verify server_id changes)"
+    echo "  --skip-residue-check   Skip cache residue detection after tests (also set via SKIP_RESIDUE_CHECK=true)"
+    echo "                         Set RESIDUE_MODE=warn env to log leaks without failing the build (default: fail — leaks are errors)"
     echo "  -h, --help             Show help"
     echo ""
     echo "Examples:"
@@ -512,8 +793,6 @@ show_help() {
 # Global variables for test context (set by main, used by run_all_tests)
 G_RESOURCE=""
 G_ITEM=""
-G_DYNAMIC_TEST=false
-G_DYNAMIC_STAGE=0
 
 # =============================================================================
 # Run all tests function (can be called multiple times)
@@ -546,6 +825,7 @@ run_all_tests() {
                     run_test "HTTPRoute_Filters" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters" || test_failed=true
                     run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/WebSocket" || test_failed=true
                     run_test "HTTPRoute_Protocol_H2C" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/H2C" || test_failed=true
+                    run_test "HTTPRoute_Protocol_H2TrailerMalformed" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/H2TrailerMalformed" || test_failed=true
                     run_test "HTTPRoute_MultiPort" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i MultiPort" || test_failed=true
                 else
                     # Run specified sub-item test
@@ -630,10 +910,13 @@ run_all_tests() {
                     fi
                     run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
                     run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
+                    run_test "EdgionPlugins_RateLimitRedis" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
                     run_test "EdgionPlugins_RealIp" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RealIp" || test_failed=true
                     run_test "EdgionPlugins_RequestMirror" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestMirror" || test_failed=true
                     run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
                     run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
+                    run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
+                    run_test "EdgionPlugins_PathNormalization_ForwardView" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
                     run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
                     run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
                     run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
@@ -669,6 +952,7 @@ run_all_tests() {
                     run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
                     run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
                     run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
+                    run_test "EdgionTls_fallback_sni" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i fallback_sni" || test_failed=true
                     run_test "EdgionTls_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i BothAbsentParentRef" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
@@ -678,6 +962,8 @@ run_all_tests() {
             Status)
                 if [ -z "$G_ITEM" ]; then
                     run_test "Status_RefGrant" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant" || test_failed=true
+                    run_test "Status_RefGrant_TCPRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant/TCPRouteCrossNsSvc" || test_failed=true
+                    run_test "Status_RefGrant_TLSRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant/TLSRouteCrossNsSvc" || test_failed=true
                     run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
                     run_test "Status_GatewayFrontendValidation" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i GatewayFrontendValidation" || test_failed=true
                     run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSListenerMode" || test_failed=true
@@ -690,6 +976,9 @@ run_all_tests() {
             "LinkSys")
                 if [ -z "$G_ITEM" ]; then
                     run_test "LinkSys_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i Status" || test_failed=true
+                    run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
+                elif [ "$G_ITEM" = "Redis" ]; then
+                    run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "LinkSys_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i ${G_ITEM}" || test_failed=true
@@ -722,6 +1011,8 @@ run_all_tests() {
         run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-match" || test_failed=true
         run_test "HTTPRoute_Backend_LBRoundRobin" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-rr" || test_failed=true
         run_test "HTTPRoute_Backend_LBConsistentHash" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-ch" || test_failed=true
+        run_test "HTTPRoute_Backend_LBLeastConn" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-lc" || test_failed=true
+        run_test "HTTPRoute_Backend_LBLeastConnRetryOnStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-lc-rs" || test_failed=true
         run_test "HTTPRoute_Backend_WeightedBackend" "${PROJECT_ROOT}/target/debug/examples/test_client -g weighted-backend" || test_failed=true
         run_test "HTTPRoute_Backend_HealthCheck" "${PROJECT_ROOT}/target/debug/examples/test_client -g health-check" || test_failed=true
         if ! should_skip_test "HTTPRoute_Backend_Timeout"; then
@@ -737,8 +1028,11 @@ run_all_tests() {
         run_test "HTTPRoute_Backend_RetryOnStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/RetryOnStatus" || test_failed=true
         run_test "HTTPRoute_Backend_CircuitBreaker" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/CircuitBreaker" || test_failed=true
         run_test "HTTPRoute_Backend_SessionPersistence" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/SessionPersistence" || test_failed=true
+        run_test "HTTPRoute_Backend_H2BackendMtlsPersistence" "${PROJECT_ROOT}/target/debug/examples/test_client -g h2-mtls-sp" || test_failed=true
+        run_test "HTTPRoute_Backend_BackendTLSSNIHostOverride" "${PROJECT_ROOT}/target/debug/examples/test_client -g btls-sni" || test_failed=true
         run_test "HTTPRoute_Backend_PartiallyInvalid" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/PartiallyInvalid" || test_failed=true
         run_test "HTTPRoute_Backend_GrpcHealthCheck" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/GrpcHealthCheck" || test_failed=true
+        run_test "HTTPRoute_Backend_DnsResolutionFailure" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/DnsResolutionFailure" || test_failed=true
         run_test "HTTPRoute_Filters_Redirect" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-redirect" || test_failed=true
         run_test "HTTPRoute_Filters_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-security" || test_failed=true
         run_test "HTTPRoute_Filters_HeaderModifier" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters/HeaderModifier" || test_failed=true
@@ -787,10 +1081,13 @@ run_all_tests() {
         fi
         run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
         run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
+        run_test "EdgionPlugins_RateLimitRedis" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
         run_test "EdgionPlugins_RealIp" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RealIp" || test_failed=true
         run_test "EdgionPlugins_RequestMirror" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestMirror" || test_failed=true
         run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
         run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
+        run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
+        run_test "EdgionPlugins_PathNormalization_ForwardView" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
         run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
         run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
         run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
@@ -827,15 +1124,19 @@ run_all_tests() {
         run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
         run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
         run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
+        run_test "EdgionTls_fallback_sni" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i fallback_sni" || test_failed=true
         run_test "EdgionTls_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i BothAbsentParentRef" || test_failed=true
         
         # Controller Status Tests
         run_test "Status_RefGrant" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant" || test_failed=true
+        run_test "Status_RefGrant_TCPRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant/TCPRouteCrossNsSvc" || test_failed=true
+        run_test "Status_RefGrant_TLSRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant/TLSRouteCrossNsSvc" || test_failed=true
         run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
         run_test "Status_GatewayFrontendValidation" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i GatewayFrontendValidation" || test_failed=true
         run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSListenerMode" || test_failed=true
         run_test "Status_TLSRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSRoute" || test_failed=true
         run_test "LinkSys_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i Status" || test_failed=true
+        run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
 
         # Controller Resource-Abnormal Metric (standalone shell test; slow, runs its own controller with tick_secs=30)
         if $FULL_TEST; then
@@ -844,17 +1145,15 @@ run_all_tests() {
             log_info "Skipping slow test: ResourceAbnormalMetrics (use --full-test to run)"
         fi
 
-        # Gateway Dynamic Tests (if enabled)
-        if $G_DYNAMIC_TEST; then
-            run_dynamic_tests $G_DYNAMIC_STAGE
-        fi
+        # Dynamic scenarios (always run as part of full test cycle)
+        run_dynamic_scenarios
     fi
-    
-    # Run dynamic tests for Gateway resource (if specified and enabled)
-    if [ -n "$G_RESOURCE" ] && [ "$G_RESOURCE" = "Gateway" ] && $G_DYNAMIC_TEST; then
-        run_dynamic_tests $G_DYNAMIC_STAGE
+
+    # Run dynamic scenarios when narrow scope = Gateway or Status
+    if [ -n "$G_RESOURCE" ] && [ "$G_RESOURCE" = "Gateway" ]; then
+        run_dynamic_scenarios
     fi
-    
+
     if $test_failed; then
         return 1
     fi
@@ -866,7 +1165,13 @@ main() {
     local do_start=true
     local suites=""
     local with_reload=false
-    
+
+    # Coverage mode notification (heavy lifting done by prepare.sh / start_all.sh)
+    if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
+        log_info "Coverage mode: profraw will accumulate under target/"
+        log_info "Run 'make coverage-report' after this completes to generate HTML"
+    fi
+
     # Parse args
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -895,14 +1200,6 @@ main() {
                 FULL_TEST=true
                 shift
                 ;;
-            --dynamic-test)
-                G_DYNAMIC_TEST=true
-                shift
-                ;;
-            --dynamic-stage)
-                G_DYNAMIC_STAGE=$2
-                shift 2
-                ;;
             --controller-grpc-port)
                 CONTROLLER_GRPC_PORT="$2"
                 shift 2
@@ -913,6 +1210,10 @@ main() {
                 ;;
             --with-reload)
                 with_reload=true
+                shift
+                ;;
+            --skip-residue-check)
+                SKIP_RESIDUE_CHECK=true
                 shift
                 ;;
             -h|--help)
@@ -939,7 +1240,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/AllEndpointStatus"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/AllEndpointStatus"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth"
                 fi
@@ -956,6 +1257,19 @@ main() {
                 suites="${base_suites},Status/${G_ITEM}"
             else
                 suites="${base_suites},Status/RefGrant,Status/BackendTLSPolicy,Status/GatewayFrontendValidation,Status/TLSListenerMode,Status/TLSRoute"
+            fi
+        elif [ "$G_RESOURCE" = "LinkSys" ]; then
+            # LinkSys/Redis assertions hit /api/v1/testing/link-sys/redis/* on the
+            # Gateway admin port (covered by base) AND drive real proxy traffic
+            # through edgion-plugins-gateway against the rate-limit-redis-* plugins
+            # — load EdgionPlugins/base + RateLimitRedis so test 9 has its plugins.
+            local linksys_extras="EdgionPlugins/base,EdgionPlugins/RateLimitRedis"
+            if [ -z "$G_ITEM" ]; then
+                suites="${base_suites},LinkSys/Status,LinkSys/Redis,${linksys_extras}"
+            elif [ "$G_ITEM" = "Redis" ]; then
+                suites="${base_suites},LinkSys/Redis,${linksys_extras}"
+            else
+                suites="${base_suites},LinkSys/${G_ITEM}"
             fi
         elif [ -n "$G_ITEM" ]; then
             if [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "TLS/BackendTLS" ]; then
@@ -978,7 +1292,11 @@ main() {
     if is_ldap_service_required "$suites"; then
         LDAP_SERVICE_REQUIRED=true
     fi
-    
+
+    if is_redis_service_required "$suites"; then
+        REDIS_SERVICE_REQUIRED=true
+    fi
+
     echo ""
     echo -e "${BLUE}========================================${NC}"
     echo -e "${BLUE}Edgion Integration Test${NC}"
@@ -1002,8 +1320,33 @@ main() {
     
     cd "$PROJECT_ROOT"
 
+    # =============================================================================
+    # Pre-flight Check 0: Only English letter scripts allowed outside docs/ and tasks/
+    # =============================================================================
+    log_section "Pre-flight Check: English-Only Lint"
+    if ! "${PROJECT_ROOT}/scripts/check_english_only.sh"; then
+        log_error "English-only check failed — translate offending text to English before running integration tests"
+        exit 1
+    fi
+    log_success "English-only check passed"
+
+    # =============================================================================
+    # Pre-flight Check 1: Agent-doc validation (links, frontmatter, indexes, ...)
+    # =============================================================================
+    log_section "Pre-flight Check: Agent-doc Validation"
+    if ! python3 "${PROJECT_ROOT}/tools/validate_agent_docs.py"; then
+        log_error "Agent-doc validation failed — fix doc consistency issues before running integration tests"
+        exit 1
+    fi
+    log_success "Agent-doc validation passed"
+
     if ! ensure_nofile_limit "$REQUIRED_NOFILE"; then
         log_error "File descriptor limit check failed"
+        exit 1
+    fi
+
+    if ! ensure_loopback_aliases; then
+        log_error "Loopback alias check failed"
         exit 1
     fi
 
@@ -1015,6 +1358,11 @@ main() {
     # Step 0: Start external dependencies when needed
     if ! start_ldap_service_if_needed; then
         log_error "Failed to start external LDAP dependency"
+        exit 1
+    fi
+
+    if ! start_redis_service_if_needed; then
+        log_error "Failed to start external Redis dependency"
         exit 1
     fi
 
@@ -1096,7 +1444,12 @@ main() {
             log_info "Using existing work directory: ${WORK_DIR}"
         fi
     fi
-    
+
+    # Enforce shared-Gateway principle: exactly one edgion-gateway process.
+    if ! check_single_gateway_process; then
+        exit 1
+    fi
+
     # Create test log directory
     TEST_LOG_DIR="${WORK_DIR}/test_logs"
     mkdir -p "$TEST_LOG_DIR"
@@ -1244,13 +1597,118 @@ main() {
     
     # Finalize report
     finalize_report
-    
+
+    # =============================================================================
+    # Final Step: Metrics Label Whitelist
+    # =============================================================================
+    log_section "Final Step: Metrics Label Whitelist"
+    if ! verify_metrics_labels "http://127.0.0.1:5800/metrics" "controller"; then
+        log_error "Metrics label validation FAILED"
+        test_failed=true
+    fi
+
+    # =============================================================================
+    # Final Step: Cache Residue Detection (leak detection across all scenarios)
+    # =============================================================================
+    if [ "$SKIP_RESIDUE_CHECK" != "true" ]; then
+        log_section "Final Step: Cache Residue Detection"
+
+        local residue_bin="${PROJECT_ROOT}/target/debug/cache_residue"
+        if [ ! -x "$residue_bin" ]; then
+            log_warn "cache_residue binary not built; building now..."
+            (cd "$PROJECT_ROOT" && cargo build --bin cache_residue) || {
+                log_error "cache_residue build failed — skipping leak check"
+                # do not fail the run on missing binary; fall through
+                residue_bin=""
+            }
+        fi
+
+        if [ -n "$residue_bin" ] && [ -x "$residue_bin" ]; then
+            # Always invoke validator with --mode fail so exit 1 unambiguously means
+            # "residue detected". Shell-side RESIDUE_MODE then decides whether to
+            # block the build (default: fail — opt out with RESIDUE_MODE=warn).
+            local residue_mode="${RESIDUE_MODE:-fail}"
+            "$residue_bin" \
+                --controller-addr "http://127.0.0.1:5800" \
+                --gateway-addr    "http://127.0.0.1:5900" \
+                --timeout-secs 30 \
+                --mode fail
+            local rc=$?
+
+            if [ $rc -eq 0 ]; then
+                log_success "Cache residue check passed (no leaks)"
+            elif [ $rc -eq 1 ]; then
+                if [ "$residue_mode" = "fail" ]; then
+                    log_error "Cache residue detected (RESIDUE_MODE=fail) — see report above"
+                    ((++FAILED_TESTS))
+                    test_failed=true
+                else
+                    log_warn "Cache residue detected (RESIDUE_MODE=warn — not failing build); see report above"
+                fi
+            elif [ $rc -eq 2 ]; then
+                log_error "cache_residue infrastructure error (rc=2)"
+                ((++FAILED_TESTS))
+                test_failed=true
+            else
+                log_error "cache_residue unexpected exit code: $rc"
+                ((++FAILED_TESTS))
+                test_failed=true
+            fi
+        fi
+    fi
+
     if $test_failed; then
         log_error "Some tests failed"
         log_info "View detailed logs: ${TEST_LOG_DIR}"
+        # Enumerate failures: each *.log under TEST_LOG_DIR, scan for "✗" lines
+        # plus the next non-blank line (typically the failure detail).
+        if [ -d "${TEST_LOG_DIR}" ]; then
+            local found_any=false
+            for log_file in "${TEST_LOG_DIR}"/*.log; do
+                [ -f "$log_file" ] || continue
+                # Capture failure markers from BOTH suite tests (✗ <name>) and
+                # dynamic scenarios (Error: ...). For ✗ lines also pick up the
+                # immediately following indented detail line.
+                local extracted
+                extracted=$(awk '
+                    /✗ / {
+                        print "    " $0
+                        getline next_line
+                        if (next_line ~ /^[[:space:]]+[^[:space:]]/) print "      " next_line
+                        next
+                    }
+                    /^Error:/ {
+                        # Dynamic-scenario failure: print the line, capped to keep
+                        # the summary readable. Full detail still in the log file.
+                        line = $0
+                        if (length(line) > 600) line = substr(line, 1, 600) "..."
+                        print "    " line
+                        next
+                    }
+                ' "$log_file" 2>/dev/null)
+                if [ -n "$extracted" ]; then
+                    if ! $found_any; then
+                        log_error "Failed tests:"
+                        found_any=true
+                    fi
+                    echo "  --- $(basename "${log_file%.log}") ---"
+                    echo "$extracted"
+                fi
+            done
+            # Also surface YAML load failures (config rejected before tests ran).
+            local load_log="${WORK_DIR}/logs/load_config.log"
+            if [ -f "$load_log" ]; then
+                local load_failures
+                load_failures=$(grep -E "(Loadfailed|Load failed|partialconfigLoadfailed)" "$load_log" 2>/dev/null | head -10)
+                if [ -n "$load_failures" ]; then
+                    log_error "Config load failures (see ${load_log}):"
+                    echo "$load_failures" | sed 's/^/  /'
+                fi
+            fi
+        fi
         exit 1
     fi
-    
+
     # Completed
     log_section "Test completed"
     log_success "All tests passed!"

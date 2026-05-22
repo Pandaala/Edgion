@@ -114,6 +114,36 @@ impl ProcessorRegistry {
             .collect()
     }
 
+    /// Walk all processors. If any has a dirty stats flag, take a snapshot of
+    /// every processor's `store_size` and return a per-kind map + total.
+    ///
+    /// Returns `None` when no processor is dirty (nothing changed since last
+    /// call), so the caller can skip emitting a redundant StatsReport.
+    ///
+    /// All dirty flags are cleared as a side effect.
+    pub fn collect_stats_if_dirty(&self) -> Option<(HashMap<String, u32>, u32)> {
+        let processors = self.processors.read();
+        // First pass: determine if any processor is dirty, clearing flags as we go.
+        let mut any_dirty = false;
+        for p in processors.values() {
+            if p.take_stats_dirty() {
+                any_dirty = true;
+            }
+        }
+        if !any_dirty {
+            return None;
+        }
+        // Second pass: snapshot per-kind store sizes for the report.
+        let mut per_kind: HashMap<String, u32> = HashMap::with_capacity(processors.len());
+        let mut total: u32 = 0;
+        for (kind, p) in processors.iter() {
+            let size = p.store_size() as u32;
+            per_kind.insert((*kind).to_string(), size);
+            total = total.saturating_add(size);
+        }
+        Some((per_kind, total))
+    }
+
     /// Get all WatchObjs for ConfigSyncServer registration
     ///
     /// Returns a HashMap that can be passed to ConfigSyncServer::register_all()
@@ -207,14 +237,14 @@ impl ProcessorRegistry {
             if pending.is_empty() {
                 tracing::info!(
                     component = "processor_registry",
-                    elapsed_ms = start.elapsed().as_millis(),
+                    elapsed_ms = std::time::Instant::now().saturating_duration_since(start).as_millis(),
                     kinds = ?kinds,
                     "All specified resource kinds are ready"
                 );
                 return true;
             }
 
-            let elapsed = start.elapsed();
+            let elapsed = std::time::Instant::now().saturating_duration_since(start);
             if elapsed >= timeout {
                 tracing::warn!(
                     component = "processor_registry",

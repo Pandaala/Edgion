@@ -1,12 +1,10 @@
 //! Etcd client configuration types
 
-use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::common::SecretReference;
-use crate::types::resources::common::TlsConfig;
+use crate::types::resources::common::{SecretSlot, TlsConfig};
 
 /// Etcd client configuration
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -67,15 +65,10 @@ pub struct EtcdClientConfig {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EtcdAuth {
-    /// Secret reference for credentials (required).
-    /// The referenced Secret should contain `username` and `password` keys.
-    #[serde(rename = "secretRef")]
-    pub secret_ref: SecretReference,
-
-    /// Resolved Secret object (filled by controller, not from YAML).
-    /// Serialized to the Gateway via conf_sync; never persisted into K8s `spec`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret: Option<Secret>,
+    /// Embedded Secret slot (`secretRef` + resolved `secret`).
+    /// `#[serde(flatten)]` keeps the YAML form unchanged at the parent level.
+    #[serde(flatten)]
+    pub slot: SecretSlot,
 }
 
 /// Etcd timeout configuration (in milliseconds)
@@ -214,8 +207,8 @@ spec:
         let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
 
         let auth = etcd_config.auth.as_ref().expect("Auth should be present");
-        assert_eq!(auth.secret_ref.name, "etcd-creds");
-        assert_eq!(auth.secret_ref.namespace.as_deref(), Some("credentials"));
+        assert_eq!(auth.slot.secret_ref.name, "etcd-creds");
+        assert_eq!(auth.slot.secret_ref.namespace.as_deref(), Some("credentials"));
     }
 
     #[test]
@@ -278,7 +271,7 @@ spec:
         let r: Result<LinkSys, _> = serde_yaml::from_str(yaml);
         assert!(
             r.is_err(),
-            "inline clientKey 必须被 TlsCerts 的 deny_unknown_fields 拒绝"
+            "inline clientKey must be rejected by TlsCerts' deny_unknown_fields"
         );
     }
 
@@ -419,11 +412,15 @@ spec:
                 config: SystemConfig::Etcd(EtcdClientConfig {
                     endpoints: vec!["http://etcd:2379".to_string()],
                     auth: Some(EtcdAuth {
-                        secret_ref: SecretReference {
-                            name: "etcd-creds".to_string(),
-                            namespace: None,
+                        slot: crate::types::resources::common::SecretSlot {
+                            secret_ref: crate::types::resources::common::SecretObjectReference {
+                                group: None,
+                                kind: None,
+                                name: "etcd-creds".to_string(),
+                                namespace: None,
+                            },
+                            secret: None,
                         },
-                        secret: None,
                     }),
                     tls: None,
                     timeout: Some(EtcdTimeout {
@@ -483,8 +480,8 @@ spec:
         let etcd_config = link_sys.spec.config.as_etcd().expect("Etcd config should be present");
 
         let auth = etcd_config.auth.as_ref().expect("Auth should be present");
-        assert_eq!(auth.secret_ref.name, "etcd-creds");
-        assert_eq!(auth.secret_ref.namespace.as_deref(), Some("test"));
+        assert_eq!(auth.slot.secret_ref.name, "etcd-creds");
+        assert_eq!(auth.slot.secret_ref.namespace.as_deref(), Some("test"));
 
         let tls = etcd_config.tls.as_ref().expect("TLS should be present");
         let tls_certs = tls.certs.as_ref().expect("TLS certs should be present");
@@ -496,13 +493,29 @@ spec:
     fn etcd_auth_rejects_inline_password() {
         let yaml = "secretRef:\n  name: e\npassword: leaked";
         let r: Result<EtcdAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline password 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline password must be rejected by deny_unknown_fields");
     }
 
     #[test]
     fn etcd_auth_rejects_inline_username() {
         let yaml = "secretRef:\n  name: e\nusername: admin";
         let r: Result<EtcdAuth, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline username 必须被 deny_unknown_fields 拒绝");
+        assert!(r.is_err(), "inline username must be rejected by deny_unknown_fields");
+    }
+
+    #[test]
+    fn etcd_auth_yaml_roundtrip_unchanged() {
+        let yaml = "secretRef:\n  name: etcd-creds\n  namespace: default";
+        let auth: super::EtcdAuth = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(auth.slot.secret_ref.name, "etcd-creds");
+        assert_eq!(auth.slot.secret_ref.namespace.as_deref(), Some("default"));
+        assert!(auth.slot.secret.is_none());
+    }
+
+    #[test]
+    fn etcd_auth_rejects_unknown_field() {
+        let yaml = "secretRef:\n  name: x\nbogus: 1";
+        let r: Result<super::EtcdAuth, _> = serde_yaml::from_str(yaml);
+        assert!(r.is_err());
     }
 }

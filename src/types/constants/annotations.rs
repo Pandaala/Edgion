@@ -21,6 +21,14 @@ pub mod edgion {
     /// Value: "v2" to enable PP2.
     pub const PROXY_PROTOCOL: &str = "edgion.io/proxy-protocol";
 
+    /// Per-route opt-out / opt-in for upstream path forwarding view.
+    /// Three-state on HTTPRoute.metadata.annotations:
+    ///   "true"  — force raw forward (overrides global forward_normalized_path / region_route default)
+    ///   "false" — force normalized forward (overrides region_route's preserve_raw_path)
+    ///   absent  — fall through to default flow
+    /// Invalid values are logged at INFO and treated as absent.
+    pub const FORWARD_RAW_PATH: &str = "edgion.io/forward-raw-path";
+
     /// Max upstream connect retries for TLS/TCP routes.
     /// Value: unsigned integer string (default: 1, i.e. no retry).
     /// Gateway API TLSRoute has no retry spec, so this is Edgion-specific.
@@ -46,10 +54,4 @@ pub mod edgion {
     /// When global `requireSniHostMatch` is false, set this to "true" on a Gateway
     /// to enable listener-level 421 detection for that Gateway's HTTPS listeners.
     pub const REQUIRE_SNI_HOST_MATCH: &str = "edgion.io/require-sni-host-match";
-}
-
-/// Standard Kubernetes annotations
-pub mod k8s {
-    /// Last applied configuration (used by kubectl apply)
-    pub const LAST_APPLIED_CONFIG: &str = "kubectl.kubernetes.io/last-applied-configuration";
 }

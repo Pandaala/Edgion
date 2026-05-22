@@ -3,9 +3,13 @@
 //! Extracted from `src/types/resources/edgion_plugins/plugin_configs/ip_restriction.rs`
 //! so both HTTP and L4 IP-restriction paths can share validation logic.
 
+use std::collections::HashSet;
 use std::net::IpAddr;
 
 use crate::core::common::matcher::ip_radix_tree::IpRadixMatcher;
+use crate::types::resources::plugin_metadata::IpGroup;
+
+pub use crate::types::resources::common::group_name::validate_group_name;
 
 /// Validate IP address or CIDR range format.
 pub fn validate_ip_or_cidr(ip_str: &str) -> Result<(), String> {
@@ -45,16 +49,52 @@ pub fn to_cidr_format(ip_str: &str) -> Result<String, String> {
     }
 }
 
-/// Build an `IpRadixMatcher` from a list of IP / CIDR strings.
-/// Validates each entry and inserts in order. Returns error on first invalid entry or build failure.
-pub fn build_radix_matcher(cidrs: &[String]) -> Result<IpRadixMatcher, String> {
+/// Lightweight validation of an `IpGroup` list:
+/// - name charset/length per K8s label-value rules
+/// - name uniqueness within the list
+/// - per-group `cidrs` non-empty
+/// - each CIDR parses as IPv4/IPv6
+/// - cross-group exact-duplicate CIDR detection (after normalisation)
+///
+/// Does NOT build a matcher. Suitable for admission-webhook hot path.
+pub fn validate_groups_structure(groups: &[IpGroup]) -> Result<(), String> {
+    if groups.is_empty() {
+        return Err("group list is empty".to_string());
+    }
+    let mut seen_names: HashSet<&str> = HashSet::new();
+    let mut seen_cidrs: HashSet<String> = HashSet::new();
+    for g in groups {
+        validate_group_name(&g.name)?;
+        if !seen_names.insert(g.name.as_str()) {
+            return Err(format!("duplicate group name '{}'", g.name));
+        }
+        if g.cidrs.is_empty() {
+            return Err(format!("group '{}' has no cidrs", g.name));
+        }
+        for cidr in &g.cidrs {
+            validate_ip_or_cidr(cidr).map_err(|e| format!("group '{}': {}", g.name, e))?;
+            let norm = to_cidr_format(cidr).map_err(|e| format!("group '{}': {}", g.name, e))?;
+            if !seen_cidrs.insert(norm.clone()) {
+                return Err(format!("duplicate CIDR '{}' across groups", norm));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Full build: run `validate_groups_structure` first, then construct the
+/// matcher. Error messages are identical between the two paths for the
+/// same invalid input.
+pub fn build_grouped_matcher(groups: &[IpGroup]) -> Result<IpRadixMatcher, String> {
+    validate_groups_structure(groups)?;
     let mut builder = IpRadixMatcher::builder();
-    for ip_str in cidrs {
-        validate_ip_or_cidr(ip_str)?;
-        let cidr_str = to_cidr_format(ip_str)?;
-        builder
-            .insert(&cidr_str, true)
-            .map_err(|e| format!("Invalid IP/CIDR '{}': {}", ip_str, e))?;
+    for g in groups {
+        for cidr in &g.cidrs {
+            let norm = to_cidr_format(cidr).map_err(|e| format!("group '{}': {}", g.name, e))?;
+            builder
+                .insert(&norm, &g.name)
+                .map_err(|e| format!("group '{}': {}", g.name, e))?;
+        }
     }
     builder
         .build()
@@ -64,6 +104,7 @@ pub fn build_radix_matcher(cidrs: &[String]) -> Result<IpRadixMatcher, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::resources::plugin_metadata::IpGroup;
 
     #[test]
     fn validate_ipv4_single_ok() {
@@ -107,15 +148,137 @@ mod tests {
     }
 
     #[test]
-    fn build_matcher_hits_and_misses() {
-        let m = build_radix_matcher(&["192.168.1.0/24".to_string(), "10.0.0.1".to_string()]).unwrap();
-        assert_eq!(m.match_ip(&"192.168.1.50".parse().unwrap()), Some(true));
-        assert_eq!(m.match_ip(&"10.0.0.1".parse().unwrap()), Some(true));
-        assert_eq!(m.match_ip(&"8.8.8.8".parse().unwrap()), None);
+    fn validate_structure_ok() {
+        let groups = vec![IpGroup {
+            name: "office".to_string(),
+            description: None,
+            cidrs: vec!["10.0.0.0/8".to_string()],
+        }];
+        assert!(validate_groups_structure(&groups).is_ok());
     }
 
     #[test]
-    fn build_matcher_bad_cidr_errs() {
-        assert!(build_radix_matcher(&["bogus".to_string()]).is_err());
+    fn validate_structure_empty_errs() {
+        assert!(validate_groups_structure(&[]).is_err());
+    }
+
+    #[test]
+    fn validate_structure_duplicate_name_errs() {
+        let groups = vec![
+            IpGroup {
+                name: "a".into(),
+                description: None,
+                cidrs: vec!["10.0.0.0/8".into()],
+            },
+            IpGroup {
+                name: "a".into(),
+                description: None,
+                cidrs: vec!["192.168.0.0/16".into()],
+            },
+        ];
+        let err = validate_groups_structure(&groups).unwrap_err();
+        assert!(err.contains("duplicate group name"));
+    }
+
+    #[test]
+    fn validate_structure_duplicate_cidr_errs() {
+        let groups = vec![
+            IpGroup {
+                name: "a".into(),
+                description: None,
+                cidrs: vec!["10.0.0.0/8".into()],
+            },
+            IpGroup {
+                name: "b".into(),
+                description: None,
+                cidrs: vec!["10.0.0.0/8".into()],
+            },
+        ];
+        let err = validate_groups_structure(&groups).unwrap_err();
+        assert!(err.contains("duplicate CIDR"));
+    }
+
+    #[test]
+    fn validate_structure_bad_name_charset_errs() {
+        let groups = vec![IpGroup {
+            name: "bad name!".into(),
+            description: None,
+            cidrs: vec!["10.0.0.0/8".into()],
+        }];
+        assert!(validate_groups_structure(&groups).is_err());
+    }
+
+    #[test]
+    fn validate_structure_long_name_errs() {
+        let long = "a".repeat(64);
+        let groups = vec![IpGroup {
+            name: long,
+            description: None,
+            cidrs: vec!["10.0.0.0/8".into()],
+        }];
+        assert!(validate_groups_structure(&groups).is_err());
+    }
+
+    #[test]
+    fn validate_structure_empty_cidrs_errs() {
+        let groups = vec![IpGroup {
+            name: "a".into(),
+            description: None,
+            cidrs: vec![],
+        }];
+        assert!(validate_groups_structure(&groups).is_err());
+    }
+
+    #[test]
+    fn build_grouped_hits_label() {
+        let groups = vec![IpGroup {
+            name: "office".into(),
+            description: None,
+            cidrs: vec!["10.0.0.0/8".into()],
+        }];
+        let m = build_grouped_matcher(&groups).unwrap();
+        let ip: std::net::IpAddr = "10.1.2.3".parse().unwrap();
+        assert_eq!(m.matched_group(&ip), Some("office"));
+    }
+
+    #[test]
+    fn validate_structure_single_char_name_ok() {
+        let groups = vec![IpGroup {
+            name: "a".into(),
+            description: None,
+            cidrs: vec!["10.0.0.0/8".into()],
+        }];
+        assert!(validate_groups_structure(&groups).is_ok());
+    }
+
+    #[test]
+    fn validate_structure_two_char_name_ok() {
+        let groups = vec![IpGroup {
+            name: "ab".into(),
+            description: None,
+            cidrs: vec!["10.0.0.0/8".into()],
+        }];
+        assert!(validate_groups_structure(&groups).is_ok());
+    }
+
+    #[test]
+    fn build_grouped_subnet_overlap_picks_longer_prefix() {
+        let groups = vec![
+            IpGroup {
+                name: "wide".into(),
+                description: None,
+                cidrs: vec!["10.0.0.0/8".into()],
+            },
+            IpGroup {
+                name: "narrow".into(),
+                description: None,
+                cidrs: vec!["10.0.0.0/24".into()],
+            },
+        ];
+        let m = build_grouped_matcher(&groups).unwrap();
+        let ip: std::net::IpAddr = "10.0.0.5".parse().unwrap();
+        assert_eq!(m.matched_group(&ip), Some("narrow"));
+        let outside: std::net::IpAddr = "10.5.0.0".parse().unwrap();
+        assert_eq!(m.matched_group(&outside), Some("wide"));
     }
 }

@@ -1,0 +1,24 @@
+# EdgionTls SNI collision - OLDER resource (creationTimestamp 2020-01-01).
+# Per the tls-F007 precedence rule, the resource with the OLDER creationTimestamp
+# wins the hostname collision, so its certificate (RSA edge-tls, CN=test.example.com)
+# must be served on the wire for SNI gateway-tls.test.com.
+#
+# Host is gateway-tls.test.com because it is the ONLY SAN that BOTH reused certs
+# carry (edge-tls and edge-tls-ecdsa); a host outside a cert's SAN is rejected by
+# cert validation, which would drop the resource before any collision can occur.
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: edgiontls-sni-collision-older
+  namespace: edgion-test
+  creationTimestamp: "2020-01-01T00:00:00Z"
+spec:
+  parentRefs:
+    - name: edgiontls-sni-collision-gateway
+      namespace: edgion-test
+      sectionName: https
+  hosts:
+    - gateway-tls.test.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

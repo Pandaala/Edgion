@@ -311,6 +311,102 @@ impl LdapAuthTestSuite {
         )
     }
 
+    /// A username containing a space (e.g. AD-style sAMAccountName "John Smith")
+    /// must authenticate end-to-end. The previous allowlist rejected anything
+    /// outside `[a-zA-Z0-9.@\-_]`; the current RFC 4514 escape path allows it.
+    fn test_username_with_space_authenticates() -> TestCase {
+        TestCase::new(
+            "username_with_space_authenticates",
+            "Username containing a space (AD sAMAccountName style) authenticates via RFC 4514 escape",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/headers", ctx.http_url());
+                    let auth = Self::encode_header("ldap", "John Smith", "spaceuser-pw");
+
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", BASE_HOST)
+                        .header("Authorization", auth)
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+
+                            let body = resp.text().await.unwrap_or_default().to_lowercase();
+                            if body.contains("x-credential-identifier") && body.contains("john smith") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Space-containing username authenticated end-to-end".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Missing credential header for space-containing user: {}", body),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// A username containing a RFC 4514 metacharacter ('+') must authenticate
+    /// end-to-end. This exercises the actual escape path: the Gateway emits
+    /// `uid=alice\2bwork,...` via ldap3::dn_escape, and OpenLDAP must normalize
+    /// the hex escape back to the original entry. If escape round-tripping
+    /// against the real LDAP server ever regresses, this case will catch it.
+    fn test_username_with_plus_authenticates() -> TestCase {
+        TestCase::new(
+            "username_with_plus_authenticates",
+            "Username containing '+' authenticates via RFC 4514 hex escape round-trip",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/headers", ctx.http_url());
+                    let auth = Self::encode_header("ldap", "alice+work", "plususer-pw");
+
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", BASE_HOST)
+                        .header("Authorization", auth)
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+
+                            let body = resp.text().await.unwrap_or_default().to_lowercase();
+                            if body.contains("x-credential-identifier") && body.contains("alice+work") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Username with '+' authenticated via hex-escape round-trip".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Missing credential header for '+'-containing user: {}", body),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     /// headerType=basic should accept Basic scheme and authenticate.
     fn test_basic_scheme_header_type() -> TestCase {
         TestCase::new(
@@ -364,6 +460,8 @@ impl TestSuite for LdapAuthTestSuite {
             Self::test_proxy_authorization_priority(),
             Self::test_basic_scheme_header_type(),
             Self::test_hide_credentials_removes_authorization(),
+            Self::test_username_with_space_authenticates(),
+            Self::test_username_with_plus_authenticates(),
         ]
     }
 }

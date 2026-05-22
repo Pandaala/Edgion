@@ -45,7 +45,6 @@ mod controller;
 mod leader_election;
 mod namespace;
 mod resource_controller;
-pub mod status;
 mod storage;
 mod version_detection;
 
@@ -55,12 +54,11 @@ pub use controller::{ControllerExitReason, KubernetesController};
 pub use leader_election::{LeaderElection, LeaderHandle};
 pub use namespace::NamespaceWatchMode;
 pub use resource_controller::{RelinkReason, RelinkSignalSender, ResourceController};
-pub use status::{create_shared_handler, KubernetesStatusHandler, SharedStatusHandler};
 pub use storage::KubernetesStorage;
 pub use version_detection::{
-    detect_backend_tls_policy_version, detect_endpoint_mode, detect_reference_grant_version, detect_tls_route_version,
-    probe_backend_tls_policy_version, probe_tls_route_version, resolve_endpoint_mode, BackendTLSPolicyVersion,
-    ReferenceGrantVersion, TLSRouteVersion,
+    detect_backend_tls_policy_version, detect_reference_grant_version, detect_tls_route_version,
+    probe_backend_tls_policy_version, probe_tls_route_version, BackendTLSPolicyVersion, ReferenceGrantVersion,
+    TLSRouteVersion,
 };
 
 // Re-export types from sync_runtime

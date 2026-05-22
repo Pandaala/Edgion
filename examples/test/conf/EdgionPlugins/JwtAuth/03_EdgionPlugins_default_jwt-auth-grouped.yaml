@@ -1,0 +1,26 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: jwt-auth-grouped
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: JwtAuth
+      config:
+        issuerGroups:
+          - name: partner-a
+            issuers:
+              - "https://a.example"
+            secretRefs:
+              - name: jwt-creds-partner-a
+                namespace: edgion-default
+          - name: partner-b
+            issuers:
+              - "https://b.example"
+            secretRefs:
+              - name: jwt-creds-partner-b
+                namespace: edgion-default
+        algorithm: HS256
+        header: authorization
+        keyClaimName: key

@@ -1,0 +1,18 @@
+# Scenario: plugin entry with an invalid alias (contains a space)
+# Expect: Accepted=False/Invalid, message contains "alias"
+#
+# The plugin config itself (Cors) is valid; the failure is purely the
+# entry-level alias rule (^[a-zA-Z0-9._-]{1,32}$). Per design, the bad
+# alias is dropped at runtime so the entry still wraps and runs, but
+# the preparse error surfaces in the resource status.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ep-validation-alias-invalid
+  namespace: default
+spec:
+  requestPlugins:
+    - alias: "with space"
+      enable: true
+      type: Cors
+      config: {}

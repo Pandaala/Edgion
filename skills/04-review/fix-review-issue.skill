@@ -1,0 +1,389 @@
+---
+name: fix-review-issue
+description: Use when the user says "review issue", "handle issue", "next issue", "close issue", or invokes /fix-issue — to process a single finding from any tasks/review-*/ directory. Equivalent phrases in other languages also trigger this skill.
+---
+
+# Review Issue Fix Workflow
+
+## Iron Law
+
+```
+NO FIX WITHOUT VERDICT + SCOPE CONFIRMED FIRST
+NO CLOSE WITHOUT A STEP 5 SUBAGENT REVIEW
+```
+
+Violating the letter of these gates is violating the spirit of the workflow. The gates exist because review-issue fixes are the highest-volume code-change surface in this project and the easiest place for scope creep, missed regressions, and "I'm sure it's fine" shortcuts to leak in.
+
+**Hard gates** (each one MUST be reached, presented to the user, and confirmed before proceeding past it):
+
+1. Step 1 — Verdict + Value verdict, presented in the template, waiting for user confirmation
+2. Step 1 — Scope gate (✅ verdicts only), if any wide-impact condition triggers
+3. Step 2 — Fix Impact panel, with a pause if complexity is `complex` or new-issue risk is `medium`
+4. Step 5 — Mandatory subagent review (no exceptions, including for `trivial` and `📝` verdicts)
+
+## Red Flags — STOP if you catch yourself thinking any of these
+
+- "This issue is trivial, I can skip the Step 1 presentation"
+- "I already understand it, no need to wait for user confirmation on the Verdict"
+- "While I'm in this file I'll also clean up the nearby thing"
+- "Step 5 review is overkill for a 1-line change / a comment-only change"
+- "cargo check passed, that's good enough — skipping clippy"
+- "The Suggested fix in the issue file is obviously right, no need for impact analysis"
+- "Scope gate is paranoid here, I'll just proceed"
+
+All of these mean: **return to the gate you skipped and run it properly.**
+
+## Communication rules (enforced throughout)
+
+1. **Match the user's language for narrative text** (explanations, prompts, summaries). Code, file paths, error messages, and quoted source text remain in their original language. Section headings inside the templates below may be left as-is or translated to match the user's language.
+2. **Every response must end with a status line:**
+   ```
+   --- Current position: Step X — <step name> ---
+   ```
+   Replace X with the current step number (Pre-flight = 0, Step 1–6 as numbered). If pausing for user input, append `(awaiting confirmation)`.
+
+## When to use
+
+- Processing a specific issue file from any `tasks/review-*/` directory
+- Or picking the next pending file when no specific issue is given
+
+---
+
+## Pre-flight
+
+### P0 — Determine the issue directory (`ISSUE_DIR`)
+
+Parse the invocation arguments:
+
+| Argument form | Action |
+|---|---|
+| Looks like a path (contains `/`) | Use it directly as `ISSUE_DIR` |
+| Looks like an issue ID (e.g. `c1-012`, `g3-016`) | `grep -r "<id>" tasks/` to find the file; infer `ISSUE_DIR` from its parent directory |
+| Both a path and an issue ID | Use the path as `ISSUE_DIR`, use the ID to select the file within it |
+| No argument | List candidate directories: `find tasks -mindepth 1 -maxdepth 1 -type d -name "review-*"`. If exactly one exists, use it. If multiple exist, present the list and ask the user which to use. |
+
+Record the resolved `ISSUE_DIR` and confirm it to the user before continuing.
+
+### P1 — Pick the target file
+
+- If the user named a specific issue ID or filename, locate that file under `ISSUE_DIR`.
+- Otherwise: `ls <ISSUE_DIR>` → sort alphabetically → pick the first file.
+
+### P2 — Read the issue file completely.
+
+### P3 — Load review knowledge if applicable.
+
+- Load `skills/04-review/SKILL.md`.
+- If the finding touches a topic covered there (memory leak, RwLock, observability, concurrency, etc.) load that sub-file before proceeding.
+
+---
+
+## Step 1 — Validate: is this really a problem?
+
+Check the issue against:
+- Existing `skills/04-review/` entries that classify the pattern as a false positive or accepted tradeoff.
+- The `Disposition` field in the issue file (`confirmed`, `confirmed-downgraded`, or similar).
+- Current source code state — the file may already be fixed.
+
+**Present to the user (mandatory pause before proceeding):**
+
+```
+## Issue <ID>: <title>
+File: <file:line>
+Disposition: <value from issue file>
+
+### What is wrong
+<1–3 plain-English sentences describing the concrete defect>
+
+### Fix Value
+Trigger frequency : almost never | low | medium | hot path
+Real-world harm   : negligible | minor (noise / slight perf hit) | moderate (observable error / resource leak) | severe (data corruption / crash)
+Fix cost          : tiny (1–5 lines) | small (single file) | medium (multi-file) | large (cross-module)
+Risk introduced   : none | low | medium
+Value verdict     : 🔴 Not worth fixing (harm tiny, cost/risk out of proportion)
+                    🟡 Optional fix (improvement but not urgent)
+                    🟢 Worth fixing (clear benefit, controlled cost)
+
+### Verdict
+✅ Real issue — needs a code fix
+📝 Doc / comment only — no behavior change needed
+⚠️  Accepted tradeoff — close without code change; add 04-review entry to prevent re-reporting
+❌ Already fixed or false positive — close without change
+```
+
+Relationship between Value verdict and Verdict:
+- Value verdict 🔴 → regardless of whether Verdict is ✅ or 📝, recommend downgrading to ⚠️ or ❌ and explain the reasoning to the user
+- Value verdict 🟡 → keep the Verdict but mark "low priority, may skip" in Step 2
+- Value verdict 🟢 → proceed with the normal flow
+
+Wait for the user to confirm or correct the verdict before proceeding.
+- Verdict ❌ → skip to Step 6 (close without any change).
+- Verdict ⚠️ → go to Step 4b only (add a `skills/04-review/` entry), then skip to Step 6.
+- Verdict 📝 → go to Step 4 (doc/comment work + side-effect checks), then Step 5 (review), then Step 6.
+- Verdict ✅ → continue to scope gate below.
+
+### Scope gate (✅ verdict only)
+
+Do a quick preliminary scope assessment **before** any code analysis:
+
+- Does the fix touch a public API, a shared data structure, or a core abstraction?
+- Does it affect behavior across more than 2–3 unrelated modules or resource types?
+- Does it require coordinated changes to multiple layers (controller + gateway + types, etc.)?
+
+If **any** of the above is "yes", **pause and present to the user:**
+
+```
+### Scope Alert — wide-impact fix
+<brief reason: e.g. "changes SecretRefManager public API, affects 4+ handlers">
+
+This fix is too broad for the current workflow (designed for narrow, low-risk changes).
+
+Options:
+A) Promote to a proper task — create tasks/todo/<id>-<slug>.md and handle via the
+   brainstorming workflow when ready (recommended)
+B) Narrow the scope — fix only <minimal safe subset> now, record the remainder as a
+   follow-up todo
+C) Proceed anyway — only if you are confident the blast radius is bounded
+```
+
+Wait for the user's choice:
+- **A (promote)**: create `tasks/todo/<id>-<slug>.md` with the issue summary and a link to
+  the original review file; delete `<ISSUE_DIR>/<filename>.md` (it is now tracked as a task);
+  stop here — do not proceed to Step 2.
+- **B (narrow)**: record the narrowed scope explicitly, then continue to Step 2 with that
+  scope as the hard boundary.
+- **C (proceed)**: continue to Step 2 with a note to be extra cautious.
+
+If **none** of the above conditions apply, continue to Step 2 without pausing.
+
+---
+
+## Step 2 — Fix impact analysis
+
+Before writing any code:
+
+1. **Root-cause check**: is the location named in the issue the actual origin of the defect, or just where the symptom surfaces? If symptom-only, trace upstream (callers, the value's source, the lifecycle that produces it) until you reach the real origin. Decide the fix location based on the origin, not the symptom — fixing at the symptom hides the bug for the next caller. If the issue file's `Suggested fix` targets a symptom, note this in the panel below and propose the upstream fix instead.
+2. Search callers / usages of the affected symbol across the codebase.
+3. Identify:
+   - **Blast radius**: how many files are touched? Is any on the data-plane hot path?
+   - **Behavior change**: does the fix change observable behavior (API, logs, metrics, semantics)?
+   - **New issue risk**: can the fix introduce lock ordering issues, API contract breaks, or regressions?
+4. Classify complexity:
+   - **Trivial** — 1–5 lines, 1 file, no API change, no behavior change → main agent implements directly.
+   - **Moderate** — multi-file or minor behavior change → main agent implements carefully with search-before-edit.
+   - **Complex** — cross-module, public API change, hot-path touch, or high regression risk → spawn an implementation subagent.
+
+**Present to the user:**
+
+```
+### Fix Impact
+Root cause     : <symptom-only | origin-confirmed> — <where the origin is, if different from issue location>
+Blast radius   : <N file(s)> — <hot-path | controller-plane | init-only | test-only>
+Behavior change: <yes / no> — <brief reason>
+New issue risk : <none | low | medium> — <brief reason>
+Complexity     : trivial | moderate | complex
+Implementation : main agent | subagent
+```
+
+Pause here if complexity is **complex**, new issue risk is **medium**, or root cause is `symptom-only` — confirm with the user before proceeding.
+
+---
+
+## Step 3 — Implement the fix
+
+First, determine the implementation strategy based on the Step 2 complexity rating:
+
+| Complexity | Strategy |
+|---|---|
+| Trivial | 3A — main agent, single pass |
+| Moderate | 3A — main agent, single pass |
+| Complex, can be parallelized | 3B — split into independent sub-tasks, spawn parallel subagents |
+| Complex, must be sequential | 3C — split into ordered sub-steps, execute one at a time with checkpoints |
+
+---
+
+### 3A — Main agent (trivial / moderate)
+
+- Apply the minimal change described in the issue file's "Suggested fix" section.
+- Do not refactor, clean up, or expand scope beyond what the issue requires.
+- Code must be in English. Add a comment only when the WHY is non-obvious.
+- For multi-file changes: search for all call sites first, then edit.
+
+---
+
+### 3B — Parallel subagents (complex, independent sub-tasks)
+
+Use when the fix naturally splits into parts that touch different files/modules with no shared state.
+
+**Before spawning**: decompose and present to the user:
+
+```
+### Implementation Split Plan
+Sub-task 1: <description> — files: <list>
+Sub-task 2: <description> — files: <list>
+...
+Mode: parallel (no shared state)
+```
+
+Spawn one `Agent` subagent per sub-task. Each subagent brief must include:
+- Its specific sub-task description and file ownership
+- Explicit list of files it must NOT touch
+- The global scope constraints (English only, no unrelated refactor, no API changes unless required)
+- Output template: files modified / assumptions / unhandled edge cases
+
+After all subagents return:
+- Verify no two subagents modified overlapping files.
+- Verify each reported diff matches expectations.
+- If any subagent went out of scope, revert its change and redo that sub-task manually.
+
+---
+
+### 3C — Sequential sub-steps (complex, ordered)
+
+Use when sub-tasks have dependencies (e.g., change a type first, then update all callers).
+
+**Before starting**: decompose and present to the user:
+
+```
+### Implementation Split Plan
+Sub-step 1: <description> — files: <list>
+Sub-step 2: <description> — files: <list> (depends on step 1)
+...
+Mode: sequential, verify after each step
+```
+
+Execute each sub-step in order:
+1. Implement the sub-step (main agent or single subagent).
+2. Run `cargo check --all-targets` — must pass before proceeding to the next sub-step.
+3. If the check fails: fix the error in the current sub-step before moving on.
+4. Proceed to the next sub-step only after the check passes.
+
+After all sub-steps complete, continue to Step 4.
+
+---
+
+## Step 4 — Side effects: docs, skills & integration tests
+
+Run after Step 3 for all ✅ code fixes. Also the primary work for 📝 verdicts.
+
+### 4a. User documentation (`docs/`)
+
+Ask: does the fix change user-visible behavior, a configuration field, a default value, or a public API?
+
+- If **yes**: find the relevant page(s) under `docs/en/` and update them. Check whether the corresponding `docs/zh/` page also needs updating (update if straightforward; otherwise add a `<!-- TODO: sync zh -->` comment).
+- If **no**: note "docs not affected" and continue.
+
+### 4b. Skills knowledge base (`skills/`)
+
+Ask: does the fix resolve a pattern that could be re-reported in a future review?
+
+- If **yes**: add a short entry to the appropriate file under `skills/04-review/` (or create a new sub-file) explaining why the old behavior was a defect and how it was fixed. Follow the format of existing files in that directory. This is also the primary action for ⚠️ accepted-tradeoff verdicts.
+- Ask: does the fix change a design decision, architectural constraint, or coding rule documented in `skills/`? If so, update that skill file.
+- Check `skills/SKILL.md` "Key constraints" table — if the fix touches a listed constraint, update the table entry.
+
+### 4c. Integration tests (`examples/test/`)
+
+Ask: is there an existing integration test scenario that covers the fixed code path?
+
+- Run a quick search: `grep -r "<relevant keyword>" examples/test/` to find related scenarios.
+- If an existing scenario covers this path, verify conceptually that it would still pass.
+- If the fix is **behavioral** (changes observable output, status conditions, error handling, metrics) and no existing test covers it: add a new integration test scenario following `skills/05-testing/01-integration-testing.md`. If a hot-reload path was changed, also add a dynamic scenario per the instructions in that file.
+- If the fix is **non-behavioral** (code clarity, dead code removal, comment only): note "integration test not needed" and continue.
+
+### 📝 verdict path
+
+For a doc/comment-only verdict, Step 4 is the full implementation:
+- 4a applies if the comment belongs in `docs/`.
+- 4b applies if the comment goes in `skills/04-review/` (accepted tradeoff).
+- Otherwise: add the explanatory comment directly to the source file at the indicated location.
+
+---
+
+## Step 5 — Subagent review (mandatory)
+
+**Always spawn a review subagent**, even for trivial changes.
+
+Brief the subagent:
+
+```
+Task: review a code fix for correctness and regressions. Research only — do not modify any files.
+
+Original issue: <ID> — <title>
+Files changed: <list>
+
+Fix summary:
+<1–3 sentences describing what was changed>
+
+Please:
+1. Read the changed files in full.
+2. Check all callers / usages of the modified symbols.
+3. Verify the fix correctly addresses the original issue.
+4. Look for regressions, edge cases, or new bugs introduced by the fix.
+
+Report format:
+## Review Result
+Verdict: LGTM | Issues Found
+
+### Issues Found (if any)
+- [severity] <issue>: <location> — <explanation>
+
+### Edge Cases Checked
+- <what you checked and the conclusion>
+```
+
+If the subagent reports **Issues Found**:
+- Fix each issue.
+- Re-run the review subagent on the updated code.
+- Repeat until LGTM.
+
+---
+
+## Step 6 — Close the issue
+
+Run in sequence:
+
+1. `cargo check --all-targets` — must pass.
+2. `cargo clippy --all-targets` — must pass with no new warnings.
+
+If both pass:
+- Delete the issue file: `rm <ISSUE_DIR>/<filename>`
+- Report to the user:
+  ```
+  Closed: <ISSUE_DIR>/<filename>
+  Fix summary: <1–2 sentences>
+  Files changed: <list>
+  ```
+- Do NOT run `git commit` — wait for the user's explicit instruction.
+
+If checks fail: fix the errors and re-run checks before deleting the file.
+
+---
+
+## Common Rationalizations
+
+When tempted to skip a step, check this table first:
+
+| Excuse | Reality |
+|---|---|
+| "This issue is trivial, skip Step 1 presentation" | Even 1-line fixes can have a 🔴 Value verdict (cost > benefit). The template is 30 seconds. |
+| "I already know the verdict, no need to wait for user" | The user owns the disposition. Your draft is input, not the decision. |
+| "Suggested fix in the issue file is obviously right" | Suggested fixes are reviewer guesses, often symptom-level. Run the Step 2 root-cause check anyway. |
+| "Scope gate is paranoid for this one" | If you spent ≥3 seconds wondering whether to trigger it, trigger it and let the user choose A/B/C. |
+| "While I'm in this file I'll fix the nearby thing too" | Out-of-scope edits are the #1 source of regressions in this project. Record it as a new todo, don't bundle. |
+| "Step 5 review is overkill for a 1-line / comment-only change" | Step 5 is mandatory. No exceptions for trivial or 📝 verdicts. The Iron Law says so. |
+| "Subagent review just said LGTM, I can skip the cargo checks" | Step 6 cargo check + clippy run on real compiler output. Subagents read code, they don't compile it. |
+| "cargo check passed, clippy is probably fine" | Step 6 requires both. Clippy catches a different class of defect. |
+| "Reverting subagent's out-of-scope change is wasteful, I'll keep it since it's already done" | Keeping out-of-scope work means the diff no longer matches what the user approved in Step 2. Revert. |
+| "User said 'go ahead' once, I can skip future confirmation prompts" | Approval is per-gate, not blanket. Each presented panel needs its own confirmation. |
+
+If your reasoning matches any row: **stop, return to the skipped gate, run it properly.**
+
+---
+
+## Key constraints (apply throughout)
+
+- **English only** in all source content (code, comments, error strings, doc comments).
+- **Minimal scope** — fix only what the issue describes; resist the urge to clean up nearby code.
+- **No behavior changes** beyond what the fix requires.
+- **Hot-path prohibition** — do not add `tracing::` calls on the request/connection processing path.
+- **Do not commit** — report changes and wait for the user's instruction.

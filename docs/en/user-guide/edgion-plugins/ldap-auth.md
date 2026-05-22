@@ -31,6 +31,10 @@ Use cases:
 4. Build Bind DN:
    - Default: `{attribute}={username},{baseDn}`
    - Template: `bindDnTemplate` replaces `{username}`
+   - `{username}` is treated as a DN attribute value and escaped per RFC 4514
+     (special characters like `, + " \ < > ; =` and leading `#` / surrounding spaces
+     are escaped to their `\HH` hex form). The template must therefore describe a
+     DN; using it as a search-filter template is not supported.
 5. LDAP Simple Bind verification
 6. On success, inject upstream headers and continue forwarding
 
@@ -142,6 +146,8 @@ When allowing anonymous access, the following headers are injected:
 - Enable `hideCredentials: true` to prevent credentials from being passed to upstream
 - Set a reasonable `cacheTtl` (e.g., 60–300 seconds) to balance performance and credential revocation latency
 - Enable account lockout and brute-force protection policies on the LDAP server
+
+> **Accepted tradeoff — cache-hit timing.** A cached credential returns faster than an uncached one (which performs a full LDAP bind). This timing difference only reveals *cache state* (whether an exact `(username, password)` pair was authenticated recently); credential validity is already conveyed by the `200`/`401` status, and triggering a cache hit requires already knowing the full valid credential. No response jitter is added — it would penalize every legitimate authenticated request. Operators who must hide cache membership can set `cacheTtl: 0` to disable caching, and can stack the `RateLimit` plugin to throttle probing.
 
 ## Related Documentation
 

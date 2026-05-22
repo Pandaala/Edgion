@@ -52,16 +52,62 @@ async fn apply_directory(client: &EdgionClient, dir: &Path, dry_run: bool) -> Re
     Ok(())
 }
 
-/// Apply a single YAML file
+/// Split a YAML stream on top-level `---` separators. Returns each non-empty document.
+fn split_yaml_docs(content: &str) -> Vec<String> {
+    let mut docs = Vec::new();
+    let mut current = String::new();
+    for line in content.lines() {
+        if line.trim_start().starts_with("---") && line.trim_start().trim_start_matches('-').trim().is_empty() {
+            if !current.trim().is_empty() {
+                docs.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push_str(line);
+            current.push('\n');
+        }
+    }
+    if !current.trim().is_empty() {
+        docs.push(current);
+    }
+    docs
+}
+
+/// Apply a YAML file (supports multi-document YAML separated by `---`).
 async fn apply_file(client: &EdgionClient, file: &Path, dry_run: bool) -> Result<()> {
-    // Read file content
     let content = fs::read_to_string(file)
         .await
         .with_context(|| format!("Failed to read file: {}", file.display()))?;
 
+    let docs = split_yaml_docs(&content);
+    if docs.is_empty() {
+        anyhow::bail!("Empty YAML file: {}", file.display());
+    }
+    for (idx, doc) in docs.iter().enumerate() {
+        apply_doc(client, file, doc, idx + 1, docs.len(), dry_run).await?;
+    }
+    Ok(())
+}
+
+/// Apply a single document (parsed from one YAML stream entry).
+async fn apply_doc(
+    client: &EdgionClient,
+    file: &Path,
+    content: &str,
+    doc_idx: usize,
+    doc_total: usize,
+    dry_run: bool,
+) -> Result<()> {
+    let suffix = if doc_total > 1 {
+        format!(" (doc {}/{})", doc_idx, doc_total)
+    } else {
+        String::new()
+    };
+
     // Extract metadata
-    let metadata = extract_resource_metadata(&content)
-        .with_context(|| format!("Failed to parse metadata from {}", file.display()))?;
+    let metadata = extract_resource_metadata(content)
+        .with_context(|| format!("Failed to parse metadata from {}{}", file.display(), suffix))?;
+
+    let content = content.to_string();
 
     let kind = metadata.kind.as_ref().context("Missing 'kind' field in resource")?;
     // Convert kind to lowercase for API compatibility
@@ -104,4 +150,85 @@ async fn apply_file(client: &EdgionClient, file: &Path, dry_run: bool) -> Result
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::ctl::cli::{Cli, Commands};
+    use clap::Parser;
+
+    // ---- split_yaml_docs: pure function tests ----
+
+    #[test]
+    fn split_yaml_docs_single_document_returns_one() {
+        let input = "kind: HTTPRoute\nmetadata:\n  name: foo\n";
+        let docs = split_yaml_docs(input);
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].contains("kind: HTTPRoute"));
+    }
+
+    #[test]
+    fn split_yaml_docs_separator_splits_into_two() {
+        let input = "kind: A\n---\nkind: B\n";
+        let docs = split_yaml_docs(input);
+        assert_eq!(docs.len(), 2);
+        assert!(docs[0].contains("kind: A"));
+        assert!(docs[1].contains("kind: B"));
+    }
+
+    #[test]
+    fn split_yaml_docs_skips_empty_documents() {
+        // Leading separator yields no document before it; same for empty middle docs.
+        let input = "---\nkind: A\n---\n---\nkind: B\n";
+        let docs = split_yaml_docs(input);
+        assert_eq!(docs.len(), 2);
+    }
+
+    #[test]
+    fn split_yaml_docs_empty_input_returns_empty() {
+        assert!(split_yaml_docs("").is_empty());
+        assert!(split_yaml_docs("   \n   \n").is_empty());
+    }
+
+    #[test]
+    fn split_yaml_docs_ignores_dash_inside_value() {
+        // A dash sequence that is part of a value (has trailing content after dashes)
+        // must not be treated as a document separator.
+        let input = "kind: A\nkey: --not-a-separator\nmore: data\n";
+        let docs = split_yaml_docs(input);
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].contains("--not-a-separator"));
+    }
+
+    // ---- Cli parsing tests for the Apply subcommand ----
+
+    #[test]
+    fn cli_parses_apply_with_required_file_flag() {
+        let cli = Cli::try_parse_from(["edgion-cli", "apply", "--file", "config.yaml"])
+            .expect("apply with --file should parse");
+        match cli.command {
+            Commands::Apply { file, dry_run } => {
+                assert_eq!(file, "config.yaml");
+                assert!(!dry_run);
+            }
+            other => panic!("expected Apply, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cli_parses_apply_with_dry_run_flag() {
+        let cli = Cli::try_parse_from(["edgion-cli", "apply", "-f", "config.yaml", "--dry-run"])
+            .expect("apply --dry-run should parse");
+        match cli.command {
+            Commands::Apply { dry_run, .. } => assert!(dry_run),
+            _ => panic!("expected Apply"),
+        }
+    }
+
+    #[test]
+    fn cli_apply_without_file_flag_fails() {
+        let err = Cli::try_parse_from(["edgion-cli", "apply"]).expect_err("apply without --file should fail");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
 }

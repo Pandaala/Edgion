@@ -1,12 +1,17 @@
 //! Plugin runtime - manages plugin execution across different stages
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
+use crate::core::gateway::plugins::runtime::log::la;
+use crate::core::gateway::runtime::server::http_to_grpc_status;
 use crate::types::filters::PluginRunningResult;
 use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
+use crate::types::resources::edgion_plugins::CorsConfig;
+use crate::types::resources::http_route_preparse::is_lb_policy_kind;
 use crate::types::resources::{
     EdgionPlugin, GRPCRouteFilter, GRPCRouteFilterType, HTTPRouteFilter, HTTPRouteFilterType,
 };
@@ -20,6 +25,7 @@ use super::conditional_filter::{
     ConditionalUpstreamResponseFilter,
 };
 use super::log::{PluginLog, StageLogs};
+use super::reject_filter::RejectFilter;
 use super::session_adapter::PingoraSessionAdapter;
 use super::traits::{
     PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
@@ -52,7 +58,6 @@ use crate::core::gateway::plugins::http::region_route::RegionRoute;
 use crate::core::gateway::plugins::http::request_mirror::RequestMirrorPlugin;
 use crate::core::gateway::plugins::http::request_restriction::RequestRestriction;
 use crate::core::gateway::plugins::http::response_rewrite::ResponseRewrite;
-use crate::core::gateway::plugins::runtime::gateway_api_filters::extension_ref::DEFAULT_PLUGIN_REF_DEPTH;
 use crate::core::gateway::plugins::runtime::gateway_api_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, GapiCorsFilter, RequestHeaderModifierFilter,
     RequestRedirectFilter, ResponseHeaderModifierFilter, URLRewriteFilter,
@@ -67,29 +72,54 @@ pub struct PluginRuntime {
     upstream_response_body_plugins: Vec<Box<dyn UpstreamResponseBodyFilter>>,
     /// Plugins for response_filter stage (async)
     upstream_response_async_plugins: Vec<Box<dyn UpstreamResponse>>,
+    /// (namespace, name) of every ExtensionRef in this runtime, in build order.
+    /// Position == index assigned via `ExtensionRefFilter::set_index`. Empty
+    /// when this runtime is built via the backend-scope path
+    /// (`from_httproute_filters_for_backend` / `from_grpcroute_filters_for_backend`),
+    /// because backend-scope ExtensionRefFilters keep `index = None` and use
+    /// the legacy direct-store-lookup path.
+    ext_ref_keys: Vec<(String, String)>,
+    /// Pre-resolved Arc to the first enabled `EdgionPlugin::Cors` config in
+    /// `request_plugins`. Built once at preparse so the global CORS preflight
+    /// handler (`pg_request_filter::extract_cors_config_from_route_filters`)
+    /// can return an Arc clone instead of deep-cloning the full `CorsConfig`
+    /// per OPTIONS preflight. Hot-reload semantics are preserved: every
+    /// `EdgionPlugins` update rebuilds this runtime, producing a new Arc that
+    /// the plugin store swaps in atomically.
+    cors_config: Option<Arc<CorsConfig>>,
+    /// Names of plugins whose config failed `validation_error()` while building
+    /// this runtime. Such plugins are NOT constructed (an invalid config must
+    /// never run in the request path). `seal_fail_closed` consumes this list to
+    /// prepend a single request-stage `RejectFilter`, so the whole route fails
+    /// closed with 500 instead of silently dropping the misconfigured plugin.
+    invalid_plugins: Vec<&'static str>,
 }
 
 /// Result of attempting to build a stage-specific filter from an EdgionPlugin.
 ///
 /// Distinguishes "plugin variant does not belong to this stage" (a configuration
-/// error surfaced to status.conditions) from "plugin is applicable but construction
-/// declined" (already captured by `get_plugin_validation_error`).
+/// error surfaced to status.conditions) from "plugin is applicable but the
+/// constructor declined to build it". The declined case is NOT assumed to be
+/// covered by `EdgionPlugin::validation_error` — the builders record it
+/// independently so the route still seals fail-closed.
 enum CreateResult<T> {
     /// Plugin variant is applicable to this stage. `Some` on success, `None` if
-    /// the inner constructor returned None (e.g. DSL compile failure — already
-    /// reported through `get_plugin_validation_error`).
+    /// the inner constructor declined to build a filter (e.g. DSL VM init
+    /// failure). The builders treat `None` as fail-closed and record the plugin
+    /// in `invalid_plugins` regardless of whether `EdgionPlugin::validation_error`
+    /// also caught the same config.
     Ok(Option<T>),
     /// Plugin variant does not belong to this stage (config error).
     WrongStage,
 }
 
-impl Clone for PluginRuntime {
-    fn clone(&self) -> Self {
-        // PluginRuntime is rebuilt from edgion_plugins during pre_parse, so clone creates empty runtime on purpose.
-        Self::new()
-    }
-}
-
+// Intentionally no `impl Clone for PluginRuntime`: a Clone impl would have to
+// either deep-clone trait-object plugin chains (impossible without a per-plugin
+// Clone bound) or silently return an empty runtime — the latter is a footgun
+// that a misuse like `runtime_arc.as_ref().clone()` would silently strip the
+// entire plugin chain from the request path with no compile-time or runtime
+// signal. Sharing is done via `Arc<PluginRuntime>`; rebuild via the `from_*`
+// constructors.
 impl std::fmt::Debug for PluginRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PluginRuntime")
@@ -103,6 +133,7 @@ impl std::fmt::Debug for PluginRuntime {
                 "upstream_response_async_plugins_count",
                 &self.upstream_response_async_plugins.len(),
             )
+            .field("invalid_plugins", &self.invalid_plugins)
             .finish()
     }
 }
@@ -120,16 +151,79 @@ impl PluginRuntime {
             upstream_response_plugins: vec![],
             upstream_response_body_plugins: vec![],
             upstream_response_async_plugins: vec![],
+            ext_ref_keys: Vec::new(),
+            cors_config: None,
+            invalid_plugins: Vec::new(),
         }
     }
 
-    pub fn from_httproute_filters(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
+    /// Prepend a fail-closed `RejectFilter` to the request stage when any plugin
+    /// in this runtime had an invalid config (recorded in `invalid_plugins`).
+    ///
+    /// Called once by `EdgionPlugins::preparse` after all four `add_from_*`
+    /// builders have run. A single request-stage gate covers invalid plugins
+    /// from *every* stage: the request stage always runs before upstream is
+    /// contacted, so rejecting there also pre-empts a broken response/body-stage
+    /// plugin. An in-slot reject per stage is not viable — the response/body
+    /// stages cannot emit a clean 500 (see `check_response_stage_terminate`).
+    /// The reject runs before any other plugin, so a request through a
+    /// misconfigured EdgionPlugins is rejected with 500 before reaching upstream.
+    pub fn seal_fail_closed(&mut self) {
+        if self.invalid_plugins.is_empty() {
+            return;
+        }
+        let reject = RejectFilter::new(std::mem::take(&mut self.invalid_plugins));
+        self.request_plugins.insert(0, Box::new(reject));
+    }
+
+    /// Static list of (namespace, name) for every ExtensionRef in this runtime,
+    /// in the order they were added. Position == `ExtensionRefFilter.index`.
+    /// Populated only by `from_httproute_filters_for_rule` /
+    /// `from_grpcroute_filters_for_rule`. Returns an empty slice for backend-scope.
+    pub fn ext_ref_keys(&self) -> &[(String, String)] {
+        &self.ext_ref_keys
+    }
+
+    /// Pre-resolved CORS config for the global preflight handler hot path.
+    ///
+    /// Returns `Some(Arc::clone)` of the first enabled `EdgionPlugin::Cors`
+    /// entry in `request_plugins` if any, populated at preparse via
+    /// `add_from_request_filters`. Cloning the returned `Arc` is cheap; the
+    /// underlying `CorsConfig` is not deep-cloned per call.
+    pub fn cors_config_arc(&self) -> Option<Arc<CorsConfig>> {
+        self.cors_config.clone()
+    }
+
+    /// Build a runtime for a route rule. Assigns ExtensionRef indices for the
+    /// per-request resolve cache and records (ns, name) in `ext_ref_keys`.
+    pub fn from_httproute_filters_for_rule(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
         let mut runtime = Self::new();
-        runtime.add_from_httproute_filters(filters, namespace);
+        runtime.add_from_httproute_filters_inner(filters, namespace, true);
         runtime
     }
 
+    /// Build a runtime for a backend reference. ExtensionRef filters retain
+    /// `index = None` and fall back to direct global store lookup at exec time
+    /// (no per-request resolve cache for backend scope yet).
+    pub fn from_httproute_filters_for_backend(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
+        let mut runtime = Self::new();
+        runtime.add_from_httproute_filters_inner(filters, namespace, false);
+        runtime
+    }
+
+    /// Deprecated: prefer `from_httproute_filters_for_rule` or `_for_backend`
+    /// to make the scope explicit. Defaults to rule-scope behavior.
+    #[deprecated(note = "use from_httproute_filters_for_rule or from_httproute_filters_for_backend")]
+    pub fn from_httproute_filters(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
+        Self::from_httproute_filters_for_rule(filters, namespace)
+    }
+
+    #[deprecated(note = "use from_httproute_filters_for_rule or _for_backend wrappers")]
     pub fn add_from_httproute_filters(&mut self, filters: &[HTTPRouteFilter], namespace: &str) {
+        self.add_from_httproute_filters_inner(filters, namespace, true);
+    }
+
+    fn add_from_httproute_filters_inner(&mut self, filters: &[HTTPRouteFilter], namespace: &str, assign_indices: bool) {
         for filter in filters {
             match filter.filter_type {
                 HTTPRouteFilterType::RequestHeaderModifier => {
@@ -162,13 +256,15 @@ impl PluginRuntime {
                 }
                 HTTPRouteFilterType::CORS => {
                     if let Some(config) = &filter.cors {
-                        match GapiCorsFilter::try_new(config.clone()) {
-                            Ok(cors_filter) => {
-                                self.add_request_filter(Box::new(cors_filter));
-                            }
-                            Err(e) => {
-                                tracing::error!("CORS filter config rejected: {}", e);
-                            }
+                        // try_new validation failures are reported via the controller:
+                        // bad configs flag the rule in HTTPRoute.spec.invalid_rule_indices
+                        // and surface as PartiallyInvalid status (see http_route handler's
+                        // find_invalid_rule_details). Silently drop here — the affected
+                        // rule is excluded from the data-plane route table so this filter
+                        // would never be invoked anyway.
+                        if let Ok(cors_filter) = GapiCorsFilter::try_new(config.clone()) {
+                            self.add_request_filter(Box::new(cors_filter.clone()));
+                            self.add_upstream_response_filter(Box::new(cors_filter));
                         }
                     }
                 }
@@ -179,8 +275,20 @@ impl PluginRuntime {
                 }
                 HTTPRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
-                        let max_depth = filter.extension_ref_max_depth.unwrap_or(DEFAULT_PLUGIN_REF_DEPTH);
-                        let ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), max_depth);
+                        // LBPolicy ExtensionRefs are not plugins; they are consumed by
+                        // `BackendExtensionInfo` / `parse_lb_policy`. Do not build an
+                        // ExtensionRefFilter for them — skipping here means
+                        // `ExtensionRefFilter::prepare_execution`'s `Err(())` only ever
+                        // sees genuinely-unsupported kinds.
+                        if is_lb_policy_kind(&ext_ref.kind) {
+                            continue;
+                        }
+                        let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
+                        if assign_indices {
+                            let idx = self.ext_ref_keys.len();
+                            self.ext_ref_keys.push((namespace.to_string(), ext_ref.name.clone()));
+                            ext_filter.set_index(idx);
+                        }
                         self.add_request_filter(Box::new(ext_filter.clone()));
                         self.add_upstream_response_filter(Box::new(ext_filter.clone()));
                         self.add_upstream_response_body_filter(Box::new(ext_filter));
@@ -190,13 +298,35 @@ impl PluginRuntime {
         }
     }
 
-    pub fn from_grpcroute_filters(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
+    /// Build a runtime for a gRPC route rule. Assigns ExtensionRef indices for
+    /// the per-request resolve cache and records (ns, name) in `ext_ref_keys`.
+    pub fn from_grpcroute_filters_for_rule(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
         let mut runtime = Self::new();
-        runtime.add_from_grpcroute_filters(filters, namespace);
+        runtime.add_from_grpcroute_filters_inner(filters, namespace, true);
         runtime
     }
 
+    /// Build a runtime for a gRPC backend reference. ExtensionRef filters retain
+    /// `index = None` and fall back to direct global store lookup at exec time.
+    pub fn from_grpcroute_filters_for_backend(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
+        let mut runtime = Self::new();
+        runtime.add_from_grpcroute_filters_inner(filters, namespace, false);
+        runtime
+    }
+
+    /// Deprecated: prefer `from_grpcroute_filters_for_rule` or `_for_backend`
+    /// to make the scope explicit. Defaults to rule-scope behavior.
+    #[deprecated(note = "use from_grpcroute_filters_for_rule or from_grpcroute_filters_for_backend")]
+    pub fn from_grpcroute_filters(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
+        Self::from_grpcroute_filters_for_rule(filters, namespace)
+    }
+
+    #[deprecated(note = "use from_grpcroute_filters_for_rule or _for_backend wrappers")]
     pub fn add_from_grpcroute_filters(&mut self, filters: &[GRPCRouteFilter], namespace: &str) {
+        self.add_from_grpcroute_filters_inner(filters, namespace, true);
+    }
+
+    fn add_from_grpcroute_filters_inner(&mut self, filters: &[GRPCRouteFilter], namespace: &str, assign_indices: bool) {
         for filter in filters {
             match filter.filter_type {
                 GRPCRouteFilterType::RequestHeaderModifier => {
@@ -213,8 +343,20 @@ impl PluginRuntime {
                 }
                 GRPCRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
-                        let max_depth = filter.extension_ref_max_depth.unwrap_or(DEFAULT_PLUGIN_REF_DEPTH);
-                        let ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), max_depth);
+                        // LBPolicy ExtensionRefs are not plugins; they are consumed by
+                        // `BackendExtensionInfo` / `parse_lb_policy`. Do not build an
+                        // ExtensionRefFilter for them — skipping here means
+                        // `ExtensionRefFilter::prepare_execution`'s `Err(())` only ever
+                        // sees genuinely-unsupported kinds.
+                        if is_lb_policy_kind(&ext_ref.kind) {
+                            continue;
+                        }
+                        let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
+                        if assign_indices {
+                            let idx = self.ext_ref_keys.len();
+                            self.ext_ref_keys.push((namespace.to_string(), ext_ref.name.clone()));
+                            ext_filter.set_index(idx);
+                        }
                         self.add_request_filter(Box::new(ext_filter.clone()));
                         self.add_upstream_response_filter(Box::new(ext_filter.clone()));
                         self.add_upstream_response_body_filter(Box::new(ext_filter));
@@ -228,7 +370,8 @@ impl PluginRuntime {
     /// Add request filters from entries (only enabled)
     ///
     /// Filters are wrapped with ConditionalRequestFilter to support condition-based execution.
-    /// Gateway API filters (via add_from_httproute_filters) are NOT wrapped to maintain compatibility.
+    /// Gateway API filters (via add_from_httproute_filters_inner — invoked through
+    /// `from_httproute_filters_for_rule` / `_for_backend`) are NOT wrapped to maintain compatibility.
     ///
     /// # Arguments
     /// * `entries` - The request filter entries
@@ -241,27 +384,68 @@ impl PluginRuntime {
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
-                // Collect validation errors from plugin configs
-                if let Some(error) = Self::get_plugin_validation_error(&entry.plugin) {
+                // Reject plugins whose config fails validation: record the name,
+                // surface the error, and skip construction so an invalid config
+                // can never run in the request path. `seal_fail_closed` later
+                // turns a non-empty `invalid_plugins` into a fail-closed 500.
+                if let Some(error) = entry.plugin.validation_error() {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
+                    self.invalid_plugins.push(plugin_name);
+                    continue;
                 }
+
+                // Cache the first enabled CORS config so the global preflight
+                // handler can fetch it without deep-cloning per request. Mirrors
+                // the `find_map` semantics previously used in
+                // `pg_request_filter::extract_cors_config_from_route_filters`.
+                if self.cors_config.is_none() {
+                    if let EdgionPlugin::Cors(cfg) = &entry.plugin {
+                        self.cors_config = Some(Arc::new(cfg.clone()));
+                    }
+                }
+
+                // Validate optional entry-level alias. On failure, surface
+                // the error and drop the alias so an unvalidated value never
+                // reaches the access log.
+                let entry_alias = match entry.validate_alias() {
+                    None => entry.alias.clone(),
+                    Some(err) => {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, err));
+                        None
+                    }
+                };
 
                 match Self::create_request_filter_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
                         // Wrap with ConditionalRequestFilter to support condition evaluation
-                        let conditional_filter = ConditionalRequestFilter::new(filter, entry.conditions.clone());
+                        let conditional_filter =
+                            ConditionalRequestFilter::with_alias(filter, entry.conditions.clone(), entry_alias);
                         self.add_request_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
-                        // Applicable stage but constructor declined — already reported via get_plugin_validation_error.
+                        // Applicable stage but the constructor declined to build the
+                        // plugin (e.g. DSL VM init failure). `Ok(None)` means
+                        // "should have run but did not" — always fail-closed.
+                        // Record it so `seal_fail_closed` fires.
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "requestPlugins[{}] ({}): plugin construction failed",
+                            index, plugin_name
+                        ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                     CreateResult::WrongStage => {
+                        // A plugin placed in the wrong stage array is a misconfiguration:
+                        // fail closed alongside validation_error failures rather than
+                        // silently no-op'ing.
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
                             "requestPlugins[{}] ({}): plugin is not valid for request stage",
                             index, plugin_name
                         ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                 }
             }
@@ -285,31 +469,67 @@ impl PluginRuntime {
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
-                // Collect validation errors from plugin configs
-                if let Some(error) = Self::get_plugin_validation_error(&entry.plugin) {
+                // Reject plugins whose config fails validation: record the name,
+                // surface the error, and skip construction so an invalid config
+                // can never run in the request path. `seal_fail_closed` later
+                // turns a non-empty `invalid_plugins` into a fail-closed 500.
+                if let Some(error) = entry.plugin.validation_error() {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!(
                         "upstreamResponseFilterPlugins[{}] ({}): {}",
                         index, plugin_name, error
                     ));
+                    self.invalid_plugins.push(plugin_name);
+                    continue;
                 }
+
+                // Validate optional entry-level alias. On failure, surface
+                // the error and drop the alias so an unvalidated value never
+                // reaches the access log.
+                let entry_alias = match entry.validate_alias() {
+                    None => entry.alias.clone(),
+                    Some(err) => {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponseFilterPlugins[{}] ({}): {}",
+                            index, plugin_name, err
+                        ));
+                        None
+                    }
+                };
 
                 match Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
                         // Wrap with ConditionalUpstreamResponseFilter to support condition evaluation
-                        let conditional_filter =
-                            ConditionalUpstreamResponseFilter::new(filter, entry.conditions.clone());
+                        let conditional_filter = ConditionalUpstreamResponseFilter::with_alias(
+                            filter,
+                            entry.conditions.clone(),
+                            entry_alias,
+                        );
                         self.add_upstream_response_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
-                        // Applicable stage but constructor declined — already reported via get_plugin_validation_error.
+                        // Applicable stage but the constructor declined to build the
+                        // plugin (e.g. DSL VM init failure). `Ok(None)` means
+                        // "should have run but did not" — always fail-closed.
+                        // Record it so `seal_fail_closed` fires.
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponseFilterPlugins[{}] ({}): plugin construction failed",
+                            index, plugin_name
+                        ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                     CreateResult::WrongStage => {
+                        // A plugin placed in the wrong stage array is a misconfiguration:
+                        // fail closed alongside validation_error failures rather than
+                        // silently no-op'ing.
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
                             "upstreamResponseFilterPlugins[{}] ({}): plugin is not valid for upstream response filter stage",
                             index, plugin_name
                         ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                 }
             }
@@ -329,30 +549,61 @@ impl PluginRuntime {
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
-                // Collect validation errors from plugin configs
-                if let Some(error) = Self::get_plugin_validation_error(&entry.plugin) {
+                // Reject plugins whose config fails validation: record the name,
+                // surface the error, and skip construction so an invalid config
+                // can never run in the request path. `seal_fail_closed` later
+                // turns a non-empty `invalid_plugins` into a fail-closed 500.
+                if let Some(error) = entry.plugin.validation_error() {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!(
                         "upstreamResponsePlugins[{}] ({}): {}",
                         index, plugin_name, error
                     ));
+                    self.invalid_plugins.push(plugin_name);
+                    continue;
                 }
+
+                // Validate optional entry-level alias. On failure, surface
+                // the error and drop the alias so an unvalidated value never
+                // reaches the access log.
+                let entry_alias = match entry.validate_alias() {
+                    None => entry.alias.clone(),
+                    Some(err) => {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!("upstreamResponsePlugins[{}] ({}): {}", index, plugin_name, err));
+                        None
+                    }
+                };
 
                 match Self::create_upstream_response_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
                         // Wrap with ConditionalUpstreamResponse to support condition evaluation
-                        let conditional_filter = ConditionalUpstreamResponse::new(filter, entry.conditions.clone());
+                        let conditional_filter =
+                            ConditionalUpstreamResponse::with_alias(filter, entry.conditions.clone(), entry_alias);
                         self.add_upstream_response(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
-                        // Applicable stage but constructor declined — already reported via get_plugin_validation_error.
+                        // Applicable stage but the constructor declined to build the
+                        // plugin (e.g. DSL VM init failure). `Ok(None)` means
+                        // "should have run but did not" — always fail-closed.
+                        // Record it so `seal_fail_closed` fires.
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponsePlugins[{}] ({}): plugin construction failed",
+                            index, plugin_name
+                        ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                     CreateResult::WrongStage => {
+                        // A plugin placed in the wrong stage array is a misconfiguration:
+                        // fail closed alongside validation_error failures rather than
+                        // silently no-op'ing.
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
                             "upstreamResponsePlugins[{}] ({}): plugin is not valid for upstream response stage",
                             index, plugin_name
                         ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                 }
             }
@@ -376,31 +627,67 @@ impl PluginRuntime {
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
-                // Collect validation errors from plugin configs
-                if let Some(error) = Self::get_plugin_validation_error(&entry.plugin) {
+                // Reject plugins whose config fails validation: record the name,
+                // surface the error, and skip construction so an invalid config
+                // can never run in the request path. `seal_fail_closed` later
+                // turns a non-empty `invalid_plugins` into a fail-closed 500.
+                if let Some(error) = entry.plugin.validation_error() {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!(
                         "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
                         index, plugin_name, error
                     ));
+                    self.invalid_plugins.push(plugin_name);
+                    continue;
                 }
+
+                // Validate optional entry-level alias. On failure, surface
+                // the error and drop the alias so an unvalidated value never
+                // reaches the access log.
+                let entry_alias = match entry.validate_alias() {
+                    None => entry.alias.clone(),
+                    Some(err) => {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
+                            index, plugin_name, err
+                        ));
+                        None
+                    }
+                };
 
                 match Self::create_upstream_response_body_filter_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
                         // Wrap with ConditionalUpstreamResponseBodyFilter to support condition evaluation
-                        let conditional_filter =
-                            ConditionalUpstreamResponseBodyFilter::new(filter, entry.conditions.clone());
+                        let conditional_filter = ConditionalUpstreamResponseBodyFilter::with_alias(
+                            filter,
+                            entry.conditions.clone(),
+                            entry_alias,
+                        );
                         self.add_upstream_response_body_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
-                        // Applicable stage but constructor declined — already reported via get_plugin_validation_error.
+                        // Applicable stage but the constructor declined to build the
+                        // plugin (e.g. DSL VM init failure). `Ok(None)` means
+                        // "should have run but did not" — always fail-closed.
+                        // Record it so `seal_fail_closed` fires.
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponseBodyFilterPlugins[{}] ({}): plugin construction failed",
+                            index, plugin_name
+                        ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                     CreateResult::WrongStage => {
+                        // A plugin placed in the wrong stage array is a misconfiguration:
+                        // fail closed alongside validation_error failures rather than
+                        // silently no-op'ing.
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
                             "upstreamResponseBodyFilterPlugins[{}] ({}): plugin is not valid for upstream response body filter stage",
                             index, plugin_name
                         ));
+                        self.invalid_plugins.push(plugin_name);
                     }
                 }
             }
@@ -430,9 +717,7 @@ impl PluginRuntime {
                 config.clone(),
                 namespace.to_string(),
             )))),
-            EdgionPlugin::BasicAuth(config) => {
-                CreateResult::Ok(Some(Box::new(BasicAuth::new(config, namespace.to_string()))))
-            }
+            EdgionPlugin::BasicAuth(config) => CreateResult::Ok(Some(Box::new(BasicAuth::new(config)))),
             EdgionPlugin::Cors(config) => CreateResult::Ok(Some(Box::new(Cors::new(config)))),
             EdgionPlugin::Csrf(config) => CreateResult::Ok(Some(Box::new(Csrf::new(config)))),
             EdgionPlugin::IpRestriction(config) => CreateResult::Ok(Some(IpRestriction::create(config))),
@@ -467,11 +752,6 @@ impl PluginRuntime {
             EdgionPlugin::OpenidConnect(config) => {
                 CreateResult::Ok(Some(Box::new(OpenidConnect::new(config, namespace.to_string()))))
             }
-            EdgionPlugin::ExtensionRef(ext_ref) => {
-                let ext_filter =
-                    ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
-                CreateResult::Ok(Some(Box::new(ext_filter)))
-            }
             EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config(config)),
             EdgionPlugin::RegionRoute(config) => CreateResult::Ok(Some(RegionRoute::create(config, namespace))),
             // Response-stage only — not applicable to request filters
@@ -485,7 +765,7 @@ impl PluginRuntime {
     /// Create an UpstreamResponseFilter instance from EdgionPlugin enum
     fn create_upstream_response_filter_from_edgion(
         plugin: &EdgionPlugin,
-        namespace: &str,
+        _namespace: &str,
     ) -> CreateResult<Box<dyn UpstreamResponseFilter>> {
         match plugin {
             EdgionPlugin::ResponseHeaderModifier(config) => {
@@ -495,11 +775,6 @@ impl PluginRuntime {
                 CreateResult::Ok(Some(Box::new(DebugAccessLogToHeaderFilter::new(config))))
             }
             EdgionPlugin::ResponseRewrite(config) => CreateResult::Ok(Some(Box::new(ResponseRewrite::new(config)))),
-            EdgionPlugin::ExtensionRef(ext_ref) => {
-                let ext_filter =
-                    ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
-                CreateResult::Ok(Some(Box::new(ext_filter)))
-            }
             EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config_response(config)),
             // Request-stage or other-stage plugins — not applicable to upstream response filters
             EdgionPlugin::RequestHeaderModifier(_)
@@ -546,15 +821,10 @@ impl PluginRuntime {
     /// Create an UpstreamResponseBodyFilter instance from EdgionPlugin enum
     fn create_upstream_response_body_filter_from_edgion(
         plugin: &EdgionPlugin,
-        namespace: &str,
+        _namespace: &str,
     ) -> CreateResult<Box<dyn UpstreamResponseBodyFilter>> {
         match plugin {
             EdgionPlugin::BandwidthLimit(config) => CreateResult::Ok(Some(BandwidthLimit::create(config))),
-            EdgionPlugin::ExtensionRef(ext_ref) => {
-                let ext_filter =
-                    ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone(), DEFAULT_PLUGIN_REF_DEPTH);
-                CreateResult::Ok(Some(Box::new(ext_filter)))
-            }
             // Not body-filter plugins
             EdgionPlugin::RequestHeaderModifier(_)
             | EdgionPlugin::ResponseHeaderModifier(_)
@@ -591,59 +861,6 @@ impl PluginRuntime {
         }
     }
 
-    /// Get validation error from a plugin config (if any)
-    fn get_plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
-        match plugin {
-            EdgionPlugin::BasicAuth(config) => config
-                .get_validation_error()
-                .map(|s| s.to_string())
-                .or_else(|| config.detect_validation_error()),
-            EdgionPlugin::RateLimit(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::RateLimitRedis(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::CtxSet(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::DirectEndpoint(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::RequestRestriction(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::ProxyRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::ResponseRewrite(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::KeyAuth(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::LdapAuth(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::ForwardAuth(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::OpenidConnect(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::JweDecrypt(config) => config
-                .get_validation_error()
-                .map(|s| s.to_string())
-                .or_else(|| config.detect_validation_error()),
-            EdgionPlugin::HmacAuth(config) => config
-                .get_validation_error()
-                .map(|s| s.to_string())
-                .or_else(|| config.detect_validation_error()),
-            EdgionPlugin::HeaderCertAuth(config) => config
-                .get_validation_error()
-                .map(|s| s.to_string())
-                .or_else(|| config.detect_validation_error()),
-            EdgionPlugin::BandwidthLimit(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::AllEndpointStatus(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::DynamicInternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::DynamicExternalUpstream(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::Dsl(config) => config.get_validation_error_owned(),
-            EdgionPlugin::RegionRoute(config) => config.get_validation_error().map(|s| s.to_string()),
-            EdgionPlugin::Mock(config) => config.validate().err(),
-            // These plugins have no preparse validation
-            EdgionPlugin::RequestHeaderModifier(_)
-            | EdgionPlugin::ResponseHeaderModifier(_)
-            | EdgionPlugin::RequestRedirect(_)
-            | EdgionPlugin::UrlRewrite(_)
-            | EdgionPlugin::RequestMirror(_)
-            | EdgionPlugin::ExtensionRef(_)
-            | EdgionPlugin::Cors(_)
-            | EdgionPlugin::Csrf(_)
-            | EdgionPlugin::IpRestriction(_)
-            | EdgionPlugin::JwtAuth(_)
-            | EdgionPlugin::DebugAccessLogToHeader(_)
-            | EdgionPlugin::RealIp(_) => None,
-        }
-    }
-
     /// Get plugin type name for error messages
     fn get_plugin_name(plugin: &EdgionPlugin) -> &'static str {
         match plugin {
@@ -676,7 +893,6 @@ impl PluginRuntime {
             EdgionPlugin::AllEndpointStatus(_) => "AllEndpointStatus",
             EdgionPlugin::DynamicInternalUpstream(_) => "DynamicInternalUpstream",
             EdgionPlugin::DynamicExternalUpstream(_) => "DynamicExternalUpstream",
-            EdgionPlugin::ExtensionRef(_) => "ExtensionRef",
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
             EdgionPlugin::Dsl(_) => "Dsl",
@@ -755,18 +971,22 @@ impl PluginRuntime {
             return;
         }
 
+        // Snapshot before `ctx` is borrowed by `session_adapter`. Set in
+        // `pg_request_filter` and not mutated during plugin execution.
+        let is_grpc_request = ctx.request_info.is_grpc_request;
         let mut filter_logs = Vec::with_capacity(self.request_plugins.len());
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
         for filter in &self.request_plugins {
-            let mut plugin_log = PluginLog::new(filter.name());
+            let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
             let start = std::time::Instant::now();
 
             let result = filter.run_request(&mut session_adapter, &mut plugin_log).await;
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
             if plugin_log.refer_to.is_none() {
-                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+                plugin_log.time_cost =
+                    Some(std::time::Instant::now().saturating_duration_since(start).as_micros() as u64);
             }
             filter_logs.push(plugin_log);
 
@@ -774,12 +994,29 @@ impl PluginRuntime {
                 session_adapter.set_terminate();
                 break;
             } else if let PluginRunningResult::ErrResponse { status, body } = result {
-                if let Ok(status_code) = http::StatusCode::from_u16(status) {
+                if is_grpc_request {
+                    // gRPC route: route to the gRPC-native error path. The
+                    // HTTP-style resp built below would otherwise be discarded
+                    // by `write_response_header`'s gRPC re-route (see
+                    // `send_grpc_error_three_frame`), losing any queued
+                    // response-header ops. `send_grpc_error_direct` drains
+                    // those ops itself and re-asserts the gRPC content-type
+                    // contract.
+                    let (grpc_status, default_msg) = http_to_grpc_status(status);
+                    let message = body.as_deref().or(Some(default_msg));
+                    let _ = session_adapter.send_grpc_error_direct(grpc_status, message).await;
+                } else if let Ok(status_code) = http::StatusCode::from_u16(status) {
                     if let Ok(mut resp) = ResponseHeader::build(status_code, Some(2)) {
                         let _ = resp.insert_header("content-type", "text/plain");
                         let body_bytes = body.map(bytes::Bytes::from);
                         let len = body_bytes.as_ref().map(|b| b.len()).unwrap_or(0);
                         let _ = resp.insert_header("content-length", len.to_string());
+                        // Apply queued ops AFTER defaults so plugin-set values
+                        // (e.g. Mock's Content-Type) override the runtime defaults.
+                        // Plugins must not queue Content-Length: the runtime computes
+                        // it from `body` above, and a queued Set("Content-Length", ...)
+                        // would silently desync framing from the actual body length.
+                        session_adapter.drain_pending_response_header_ops(&mut resp);
 
                         let _ = session_adapter
                             .write_response_header(Box::new(resp), body_bytes.is_none())
@@ -815,16 +1052,10 @@ impl PluginRuntime {
         ctx: &mut EdgionHttpContext,
         response_header: &mut ResponseHeader,
     ) {
-        // Apply queued response headers from request stage
-        // Use a temporary vector to avoid borrowing issues if we iterate ctx directly while modifying response_header
-        // But ctx and response_header are separate arguments.
-        // wait, drain requires &mut ctx.
-        if !ctx.response_headers_to_add.is_empty() {
-            let headers = std::mem::take(&mut ctx.response_headers_to_add);
-            for (name, value) in headers {
-                let _ = response_header.insert_header(name, value);
-            }
-        }
+        // Apply queued response-header ops from request stage. Each op carries
+        // its own kind (Set/Append/Remove) so semantics are preserved across
+        // the deferral.
+        ctx.drain_pending_response_header_ops(response_header);
 
         if self.upstream_response_plugins.is_empty() {
             return;
@@ -834,14 +1065,15 @@ impl PluginRuntime {
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
         for filter in &self.upstream_response_plugins {
-            let mut plugin_log = PluginLog::new(filter.name());
+            let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
             let start = std::time::Instant::now();
 
             let result = filter.run_upstream_response_filter(&mut session_adapter, &mut plugin_log);
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
             if plugin_log.refer_to.is_none() {
-                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+                plugin_log.time_cost =
+                    Some(std::time::Instant::now().saturating_duration_since(start).as_micros() as u64);
             }
 
             let should_terminate = check_response_stage_terminate(&result, &mut plugin_log);
@@ -866,9 +1098,10 @@ impl PluginRuntime {
     /// an optional Duration for bandwidth throttling. When multiple plugins return
     /// a duration, the largest (most restrictive) one wins.
     ///
-    /// NOTE: Unlike other stages, this does NOT log per-chunk execution to avoid
-    /// excessive logging overhead (body filter is called for every chunk).
-    /// The first invocation logs stage info only.
+    /// Body filters do not produce per-chunk PluginLog entries (see
+    /// `UpstreamResponseBodyFilter` trait docs): a long stream would emit
+    /// thousands of identical entries, so the trait omits the log argument and
+    /// no PluginLog is allocated here per chunk.
     ///
     /// # Arguments
     /// * `s` - The Pingora session (for condition evaluation)
@@ -891,32 +1124,16 @@ impl PluginRuntime {
         }
 
         let mut max_delay: Option<Duration> = None;
+        let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
-        // Create a session adapter for condition evaluation
-        // Use a scoped borrow to avoid lifetime issues with ctx
-        {
-            let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
-
-            for filter in &self.upstream_response_body_plugins {
-                let mut plugin_log = PluginLog::new(filter.name());
-
-                let delay = filter.run_upstream_response_body_filter(
-                    body,
-                    end_of_stream,
-                    &mut session_adapter,
-                    &mut plugin_log,
-                );
-
-                // Take the largest delay (most restrictive rate limit)
-                if let Some(d) = delay {
-                    max_delay = Some(match max_delay {
-                        Some(current) => current.max(d),
-                        None => d,
-                    });
-                }
+        for filter in &self.upstream_response_body_plugins {
+            if let Some(d) = filter.run_upstream_response_body_filter(body, end_of_stream, &mut session_adapter) {
+                max_delay = Some(match max_delay {
+                    Some(current) => current.max(d),
+                    None => d,
+                });
             }
         }
-        // session_adapter dropped here, ctx borrow released
 
         max_delay
     }
@@ -936,7 +1153,7 @@ impl PluginRuntime {
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
         for filter in &self.upstream_response_async_plugins {
-            let mut plugin_log = PluginLog::new(filter.name());
+            let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
             let start = std::time::Instant::now();
 
             let result = filter
@@ -945,7 +1162,8 @@ impl PluginRuntime {
 
             // Skip time_cost for ExtensionRef (identified by refer_to being set)
             if plugin_log.refer_to.is_none() {
-                plugin_log.time_cost = Some(start.elapsed().as_micros() as u64);
+                plugin_log.time_cost =
+                    Some(std::time::Instant::now().saturating_duration_since(start).as_micros() as u64);
             }
 
             let should_terminate = check_response_stage_terminate(&result, &mut plugin_log);
@@ -974,13 +1192,233 @@ fn check_response_stage_terminate(result: &PluginRunningResult, plugin_log: &mut
     match result {
         PluginRunningResult::ErrTerminateRequest => true,
         PluginRunningResult::ErrResponse { status, .. } => {
-            plugin_log.push(&format!("deny response {}", status));
+            plugin_log.push_fmt("deny response {}", la![status.to_string().as_str()]);
             true
         }
         PluginRunningResult::ErrGrpcError { grpc_status, .. } => {
-            plugin_log.push(&format!("deny grpc {}", grpc_status));
+            plugin_log.push_fmt("deny grpc {}", la![grpc_status.to_string().as_str()]);
             true
         }
         PluginRunningResult::Nothing | PluginRunningResult::GoodNext => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::resources::{EdgionPlugin, KeyAuthConfig, RequestFilterEntry};
+
+    #[test]
+    fn add_from_request_filters_reports_alias_validation_error_and_threads_alias() {
+        let mut runtime = PluginRuntime::new();
+
+        let mut bad_entry = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
+        bad_entry.alias = Some("with space".to_string());
+
+        let mut good_entry = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
+        good_entry.alias = Some("auth-internal".to_string());
+
+        let entries = vec![bad_entry, good_entry];
+        let errors = runtime.add_from_request_filters(&entries, "default");
+
+        // The bad alias surfaces as a validation error referencing the index and the alias rule.
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("requestPlugins[0]") && e.contains("alias")),
+            "expected alias error for index 0, got: {:?}",
+            errors
+        );
+
+        // Both entries are still wrapped (we surface errors but don't drop the entry).
+        let mut iter = runtime.request_plugins_iter();
+        let first = iter.next().expect("first wrapper");
+        // Bad alias is dropped on validation failure so an unvalidated value never reaches the access log.
+        assert_eq!(first.alias(), None, "bad alias must be dropped (validation refused)");
+        let second = iter.next().expect("second wrapper");
+        assert_eq!(second.alias(), Some("auth-internal"));
+    }
+
+    #[test]
+    fn invalid_plugin_config_is_skipped_and_sealed_fail_closed() {
+        use crate::types::resources::edgion_plugins::ForwardAuthConfig;
+
+        let mut runtime = PluginRuntime::new();
+
+        // Entry 0: invalid config (empty uri fails ForwardAuthConfig validation).
+        let invalid = RequestFilterEntry::new(EdgionPlugin::ForwardAuth(ForwardAuthConfig {
+            uri: String::new(),
+            ..Default::default()
+        }));
+        // Entry 1: valid config.
+        let valid = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
+
+        let entries = vec![invalid, valid];
+        let errors = runtime.add_from_request_filters(&entries, "default");
+
+        // The invalid plugin is reported against its index.
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("requestPlugins[0]") && e.contains("ForwardAuth")),
+            "expected ForwardAuth validation error for index 0, got: {:?}",
+            errors
+        );
+
+        // The invalid plugin is NOT constructed: only the valid entry is in the chain.
+        assert_eq!(
+            runtime.request_plugins_count(),
+            1,
+            "invalid plugin must be skipped, not constructed"
+        );
+
+        // Sealing prepends a fail-closed RejectFilter so the route returns 500.
+        runtime.seal_fail_closed();
+        assert_eq!(runtime.request_plugins_count(), 2, "RejectFilter must be prepended");
+        let first = runtime.request_plugins_iter().next().expect("reject filter");
+        assert_eq!(first.name(), "RejectInvalidConfig");
+    }
+
+    #[test]
+    fn seal_fail_closed_is_noop_when_all_plugins_valid() {
+        let mut runtime = PluginRuntime::new();
+        let entries = vec![RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()))];
+        runtime.add_from_request_filters(&entries, "default");
+
+        runtime.seal_fail_closed();
+        assert_eq!(
+            runtime.request_plugins_count(),
+            1,
+            "no RejectFilter when every plugin config is valid"
+        );
+    }
+
+    #[test]
+    fn invalid_response_stage_plugin_seals_request_stage_fail_closed() {
+        use crate::types::resources::edgion_plugins::{BandwidthLimitConfig, UpstreamResponseBodyFilterEntry};
+
+        let mut runtime = PluginRuntime::new();
+
+        // BandwidthLimit is a body-stage plugin; an empty rate fails its validation.
+        let invalid = UpstreamResponseBodyFilterEntry::new(EdgionPlugin::BandwidthLimit(BandwidthLimitConfig {
+            rate: String::new(),
+            rate_bytes_per_second: None,
+        }));
+        let errors = runtime.add_from_upstream_response_body_filters(&[invalid], "default");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("upstreamResponseBodyFilterPlugins[0]") && e.contains("BandwidthLimit")),
+            "expected BandwidthLimit validation error, got: {:?}",
+            errors
+        );
+
+        // The invalid body-stage plugin is skipped, and nothing is in the request stage yet.
+        assert_eq!(runtime.upstream_response_body_plugins_count(), 0);
+        assert_eq!(runtime.request_plugins_count(), 0);
+
+        // Sealing puts the RejectFilter on the REQUEST stage even though the
+        // invalid plugin was a body-stage plugin: the request stage runs before
+        // upstream is contacted, so this is the only gate that guarantees a 500.
+        runtime.seal_fail_closed();
+        assert_eq!(
+            runtime.request_plugins_count(),
+            1,
+            "request-stage RejectFilter must cover body-stage invalid configs"
+        );
+        let first = runtime.request_plugins_iter().next().expect("reject filter");
+        assert_eq!(first.name(), "RejectInvalidConfig");
+    }
+
+    #[test]
+    fn dsl_construction_failure_seals_fail_closed() {
+        use crate::types::resources::edgion_plugins::DslConfig;
+
+        let mut runtime = PluginRuntime::new();
+
+        // A DSL config whose source fails to build.
+        let bad_dsl = RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+            name: "bad".to_string(),
+            source: Some("this is not valid dsl @@@".to_string()),
+            bytecode: None,
+            ..Default::default()
+        }));
+
+        runtime.add_from_request_filters(&[bad_dsl], "default");
+
+        // A DSL config that fails to build (whether caught by `validation_error()`
+        // or by the `Ok(None)` constructor-declined arm) must leave the route
+        // sealed fail-closed — assert the end state: a RejectFilter is prepended.
+        runtime.seal_fail_closed();
+        assert_eq!(
+            runtime.request_plugins_count(),
+            1,
+            "DSL construction failure must seal fail-closed: a RejectFilter must be prepended"
+        );
+        let first = runtime.request_plugins_iter().next().expect("reject filter");
+        assert_eq!(first.name(), "RejectInvalidConfig");
+    }
+}
+
+#[cfg(test)]
+mod ext_ref_index_tests {
+    use super::*;
+    use crate::types::resources::LocalObjectReference;
+
+    fn make_ext_ref_filter(name: &str) -> HTTPRouteFilter {
+        make_ext_ref_filter_with_kind("EdgionPlugins", name)
+    }
+
+    fn make_ext_ref_filter_with_kind(kind: &str, name: &str) -> HTTPRouteFilter {
+        HTTPRouteFilter {
+            filter_type: HTTPRouteFilterType::ExtensionRef,
+            request_header_modifier: None,
+            response_header_modifier: None,
+            request_redirect: None,
+            url_rewrite: None,
+            request_mirror: None,
+            cors: None,
+            external_auth: None,
+            extension_ref: Some(LocalObjectReference {
+                group: "edgion.io".into(),
+                kind: kind.into(),
+                name: name.into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn rule_scope_assigns_sequential_indices() {
+        let filters = vec![make_ext_ref_filter("p1"), make_ext_ref_filter("p2")];
+        let rt = PluginRuntime::from_httproute_filters_for_rule(&filters, "ns1");
+        let keys = rt.ext_ref_keys();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], ("ns1".to_string(), "p1".to_string()));
+        assert_eq!(keys[1], ("ns1".to_string(), "p2".to_string()));
+    }
+
+    #[test]
+    fn backend_scope_does_not_collect_keys() {
+        let filters = vec![make_ext_ref_filter("p1")];
+        let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1");
+        assert!(rt.ext_ref_keys().is_empty());
+    }
+
+    #[test]
+    fn lb_policy_extension_ref_does_not_build_a_filter() {
+        // An LBPolicy ExtensionRef is not a plugin reference — it is consumed by
+        // BackendExtensionInfo / parse_lb_policy. The plugin runtime must NOT
+        // build an ExtensionRefFilter for it; otherwise every request through
+        // the backend hits prepare_execution's `Err(())` and 500s.
+        let filters = vec![make_ext_ref_filter_with_kind(
+            "LBPolicyConsistentHash",
+            "header.x-user-id",
+        )];
+        let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1");
+        assert_eq!(
+            rt.request_plugins_count(),
+            0,
+            "LBPolicy ExtensionRef must not build an ExtensionRefFilter"
+        );
     }
 }

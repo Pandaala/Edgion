@@ -28,13 +28,11 @@ data:
       gateway_address: PLACEHOLDER_WILL_BE_PATCHED
       # Empty watch_namespaces = watch all namespaces.
       # Conformance tests create resources in gateway-conformance-* namespaces.
-      endpoint_mode: both
-
       leader_election:
         lease_name: edgion-controller-leader
         lease_namespace: edgion-system
         lease_duration_secs: 15
-        renew_period_secs: 10
+        renew_deadline_secs: 10
         retry_period_secs: 2
 
       metadata_filter:

@@ -9,6 +9,7 @@
 //!   - catch_unwind for fault isolation
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,7 @@ use smallvec::SmallVec;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession};
 use crate::types::filters::PluginRunningResult;
 
+use super::super::runtime::DslRuntime;
 use super::bytecode::*;
 use super::error::RuntimeError;
 use super::value::Value;
@@ -49,6 +51,14 @@ pub struct VmLimits {
     /// Max string length from concatenation (default: 8192)
     #[serde(default = "default_max_string_len")]
     pub max_string_len: usize,
+
+    /// Max number of elements in a List value (default: 1024)
+    #[serde(default = "default_max_list_len")]
+    pub max_list_len: usize,
+
+    /// Max number of entries in a Map value (default: 512)
+    #[serde(default = "default_max_map_size")]
+    pub max_map_size: usize,
 }
 
 fn default_max_steps() -> u32 {
@@ -66,6 +76,12 @@ fn default_max_stack_depth() -> usize {
 fn default_max_string_len() -> usize {
     8192
 }
+fn default_max_list_len() -> usize {
+    1024
+}
+fn default_max_map_size() -> usize {
+    512
+}
 
 impl Default for VmLimits {
     fn default() -> Self {
@@ -75,6 +91,8 @@ impl Default for VmLimits {
             max_call_count: 500,
             max_stack_depth: 128,
             max_string_len: 8192,
+            max_list_len: 1024,
+            max_map_size: 512,
         }
     }
 }
@@ -171,7 +189,10 @@ impl VmState {
 /// VM instance — created per-script, reused across requests
 pub struct Vm {
     script: CompiledScript,
+    // Parallel to script.constants: Some for pre-compiled Regex entries, None for others.
     regex_cache: Vec<Option<regex::Regex>>,
+    // Parallel to script.constants: Some for Str entries, None for Int/Regex.
+    const_str_cache: Vec<Option<Arc<str>>>,
     pub(crate) limits: VmLimits,
 }
 
@@ -179,31 +200,46 @@ impl Vm {
     /// Create a new VM with pre-compiled regex cache
     pub fn new(script: CompiledScript, limits: VmLimits) -> Result<Self, RuntimeError> {
         let mut regex_cache = Vec::with_capacity(script.constants.len());
+        let mut const_str_cache = Vec::with_capacity(script.constants.len());
         for constant in &script.constants {
             match constant {
                 Constant::Regex(pattern) => {
-                    let re = regex::Regex::new(pattern).map_err(|e| RuntimeError::RegexError {
-                        message: format!("failed to compile regex '{}': {}", pattern, e),
-                    })?;
+                    // Cap DFA memory per pattern to bound worst-case allocation when
+                    // loading bytecode with up to max_constants regex entries.
+                    let re = regex::RegexBuilder::new(pattern)
+                        .size_limit(1 << 20)
+                        .dfa_size_limit(1 << 20)
+                        .build()
+                        .map_err(|e| RuntimeError::RegexError {
+                            message: format!("failed to compile regex '{}': {}", pattern, e),
+                        })?;
                     regex_cache.push(Some(re));
+                    const_str_cache.push(None);
                 }
-                _ => {
+                Constant::Str(s) => {
                     regex_cache.push(None);
+                    const_str_cache.push(Some(Arc::from(s.as_str())));
+                }
+                Constant::Int(_) => {
+                    regex_cache.push(None);
+                    const_str_cache.push(None);
                 }
             }
         }
         Ok(Self {
             script,
             regex_cache,
+            const_str_cache,
             limits,
         })
     }
 
     /// Execute script with a PluginSession. Returns Ok(result) or Err(runtime error).
-    pub fn execute(
+    pub async fn execute(
         &self,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
+        runtime: &DslRuntime,
     ) -> Result<PluginRunningResult, RuntimeError> {
         let mut state = VmState::new(self.script.local_count, &self.limits);
 
@@ -214,7 +250,7 @@ impl Vm {
                 return Ok(PluginRunningResult::GoodNext);
             }
 
-            let opcode = self.script.code[state.pc].clone();
+            let opcode = self.script.code[state.pc];
             state.pc += 1;
 
             match opcode {
@@ -232,9 +268,21 @@ impl Vm {
                             ),
                         })?;
                     let value = match constant {
-                        Constant::Str(s) => Value::Str(s.clone()),
+                        Constant::Str(_) => Value::Str(Arc::clone(
+                            self.const_str_cache[idx as usize]
+                                .as_ref()
+                                .expect("Vm::new fills const_str_cache for every Constant::Str index; outer bounds guard at ok_or_else validated idx"),
+                        )),
                         Constant::Int(n) => Value::Int(*n),
-                        Constant::Regex(_) => Value::Nil, // regex itself is not a value
+                        Constant::Regex(_) => {
+                            return Err(RuntimeError::Internal {
+                                message: format!(
+                                    "LoadConst at pc {} references constant {} (Regex) which cannot be used as a value",
+                                    state.pc - 1,
+                                    idx
+                                ),
+                            });
+                        }
                     };
                     state.push(value, self.limits.max_stack_depth)?;
                 }
@@ -282,7 +330,10 @@ impl Vm {
                                     limit: self.limits.max_string_len,
                                 });
                             }
-                            Value::Str(format!("{}{}", a, b))
+                            let mut result = String::with_capacity(new_len);
+                            result.push_str(a);
+                            result.push_str(b);
+                            Value::Str(result.into())
                         }
                         (Value::Str(a), _) => {
                             let b_str = b.into_string();
@@ -293,7 +344,10 @@ impl Vm {
                                     limit: self.limits.max_string_len,
                                 });
                             }
-                            Value::Str(format!("{}{}", a, b_str))
+                            let mut result = String::with_capacity(new_len);
+                            result.push_str(a);
+                            result.push_str(&b_str);
+                            Value::Str(result.into())
                         }
                         (_, Value::Str(b)) => {
                             let a_str = a.into_string();
@@ -304,7 +358,10 @@ impl Vm {
                                     limit: self.limits.max_string_len,
                                 });
                             }
-                            Value::Str(format!("{}{}", a_str, b))
+                            let mut result = String::with_capacity(new_len);
+                            result.push_str(&a_str);
+                            result.push_str(b);
+                            Value::Str(result.into())
                         }
                         _ => {
                             return Err(RuntimeError::TypeError {
@@ -483,7 +540,7 @@ impl Vm {
                     let prefix = state.pop()?;
                     let s = state.pop()?;
                     let result = match (&s, &prefix) {
-                        (Value::Str(s), Value::Str(p)) => s.starts_with(p.as_str()),
+                        (Value::Str(s), Value::Str(p)) => s.starts_with(p.as_ref()),
                         _ => false, // Nil-friendly: returns false
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
@@ -492,7 +549,7 @@ impl Vm {
                     let suffix = state.pop()?;
                     let s = state.pop()?;
                     let result = match (&s, &suffix) {
-                        (Value::Str(s), Value::Str(p)) => s.ends_with(p.as_str()),
+                        (Value::Str(s), Value::Str(p)) => s.ends_with(p.as_ref()),
                         _ => false,
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
@@ -501,7 +558,7 @@ impl Vm {
                     let substr = state.pop()?;
                     let s = state.pop()?;
                     let result = match (&s, &substr) {
-                        (Value::Str(s), Value::Str(p)) => s.contains(p.as_str()),
+                        (Value::Str(s), Value::Str(p)) => s.contains(p.as_ref()),
                         _ => false,
                     };
                     state.push(Value::Bool(result), self.limits.max_stack_depth)?;
@@ -510,11 +567,12 @@ impl Vm {
                     let s = state.pop()?;
                     let result = match &s {
                         Value::Str(s) => {
-                            if let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) {
-                                re.is_match(s)
-                            } else {
-                                false
-                            }
+                            let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) else {
+                                return Err(RuntimeError::Internal {
+                                    message: format!("regex_cache[{}] missing or invalid", regex_idx),
+                                });
+                            };
+                            re.is_match(s)
                         }
                         _ => false,
                     };
@@ -525,19 +583,20 @@ impl Vm {
                     // Nil-friendly: non-Str input returns Nil, consistent with Matches.
                     let result = match s {
                         Value::Str(s) => {
-                            if let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) {
-                                if let Some(m) = re.find(&s) {
-                                    let found = m.as_str();
-                                    if found.len() > self.limits.max_string_len {
-                                        return Err(RuntimeError::StringTooLong {
-                                            len: found.len(),
-                                            limit: self.limits.max_string_len,
-                                        });
-                                    }
-                                    Value::Str(found.to_string())
-                                } else {
-                                    Value::Nil
+                            let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) else {
+                                return Err(RuntimeError::Internal {
+                                    message: format!("regex_cache[{}] missing or invalid", regex_idx),
+                                });
+                            };
+                            if let Some(m) = re.find(&s) {
+                                let found = m.as_str();
+                                if found.len() > self.limits.max_string_len {
+                                    return Err(RuntimeError::StringTooLong {
+                                        len: found.len(),
+                                        limit: self.limits.max_string_len,
+                                    });
                                 }
+                                Value::Str(Arc::from(found))
                             } else {
                                 Value::Nil
                             }
@@ -548,15 +607,21 @@ impl Vm {
                 }
                 OpCode::RegexReplace(regex_idx) => {
                     let replacement = state.pop()?.into_string();
-                    let s = state.pop()?.into_string();
-                    let result = if let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) {
-                        // Cow::Borrowed means nothing matched — reuse the already-owned String.
-                        match re.replace_all(&s, replacement.as_str()) {
-                            Cow::Borrowed(_) => s,
-                            Cow::Owned(o) => o,
-                        }
-                    } else {
-                        s
+                    let s = state.pop()?;
+                    // Nil-friendly: non-Str input returns Nil, consistent with RegexFind.
+                    let Value::Str(s) = s else {
+                        state.push(Value::Nil, self.limits.max_stack_depth)?;
+                        continue;
+                    };
+                    let Some(Some(re)) = self.regex_cache.get(regex_idx as usize) else {
+                        return Err(RuntimeError::Internal {
+                            message: format!("regex_cache[{}] missing or invalid", regex_idx),
+                        });
+                    };
+                    // Cow::Borrowed means nothing matched — clone the Arc to avoid allocation.
+                    let result: Arc<str> = match re.replace_all(&s, replacement.as_str()) {
+                        Cow::Borrowed(_) => Arc::clone(&s),
+                        Cow::Owned(o) => Arc::from(o.as_str()),
                     };
                     if result.len() > self.limits.max_string_len {
                         return Err(RuntimeError::StringTooLong {
@@ -639,26 +704,61 @@ impl Vm {
                     };
                     state.push(Value::Int(len), self.limits.max_stack_depth)?;
                 }
-                OpCode::ListGet => {
+                OpCode::IndexGet => {
                     let idx = state.pop()?;
-                    let list = state.pop()?;
-                    let val = match (&list, &idx) {
+                    let container = state.pop()?;
+                    let val = match (&container, &idx) {
                         (Value::List(l), Value::Int(i)) => {
                             if *i < 0 {
                                 Value::Nil
                             } else {
-                                l.get(*i as usize).cloned().map(Value::Str).unwrap_or(Value::Nil)
+                                l.get(*i as usize)
+                                    .map(|s| Value::Str(Arc::clone(s)))
+                                    .unwrap_or(Value::Nil)
                             }
                         }
+                        (Value::Map(m), Value::Str(k)) => m.get(k.as_ref()).cloned().unwrap_or(Value::Nil),
                         _ => Value::Nil,
                     };
                     state.push(val, self.limits.max_stack_depth)?;
                 }
 
+                // ===== Map Operations =====
+                OpCode::MakeMap(n) => {
+                    use indexmap::IndexMap;
+                    let count = n as usize;
+                    // Defense-in-depth: the validator already rejects oversized MakeMap at
+                    // compile time, but injected or hand-crafted bytecode bypasses that path.
+                    if count > self.limits.max_map_size {
+                        return Err(RuntimeError::MapTooLarge {
+                            size: count,
+                            limit: self.limits.max_map_size,
+                        });
+                    }
+                    let mut map: IndexMap<String, Value> = IndexMap::with_capacity(count);
+                    let mut pairs: Vec<(Value, Value)> = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        let val = state.pop()?;
+                        let key = state.pop()?;
+                        pairs.push((key, val));
+                    }
+                    for (k, v) in pairs.into_iter().rev() {
+                        let key_str = k.into_string();
+                        map.insert(key_str, v);
+                    }
+                    state.push(Value::Map(Box::new(map)), self.limits.max_stack_depth)?;
+                }
+
                 // ===== Builtin Calls =====
                 OpCode::CallBuiltin(id, argc) => {
                     state.tick_call()?;
-                    let result = self.call_builtin(id, argc, &mut state, session, log)?;
+                    let result = if id == BuiltinId::HttpCall {
+                        self.call_builtin_http(argc, &mut state, runtime).await?
+                    } else if is_redis_builtin(id) {
+                        self.call_builtin_redis(id, argc, &mut state, runtime).await?
+                    } else {
+                        self.call_builtin(id, argc, &mut state, session, log)?
+                    };
                     state.push(result, self.limits.max_stack_depth)?;
                 }
 
@@ -690,7 +790,6 @@ impl Vm {
                     });
                 }
                 OpCode::ReturnTerminate => {
-                    log.push("Deny dsl terminate");
                     return Ok(PluginRunningResult::ErrTerminateRequest);
                 }
                 OpCode::ReturnGrpcError => {
@@ -721,23 +820,58 @@ impl Vm {
     }
 }
 
+/// Returns true for all `redis.*` builtin IDs that require async dispatch.
+#[inline]
+fn is_redis_builtin(id: BuiltinId) -> bool {
+    matches!(
+        id,
+        BuiltinId::RedisGet
+            | BuiltinId::RedisSet
+            | BuiltinId::RedisDel
+            | BuiltinId::RedisExists
+            | BuiltinId::RedisTtl
+            | BuiltinId::RedisExpire
+            | BuiltinId::RedisIncr
+            | BuiltinId::RedisIncrBy
+            | BuiltinId::RedisHGet
+            | BuiltinId::RedisHSet
+            | BuiltinId::RedisHDel
+            | BuiltinId::RedisHGetAll
+            | BuiltinId::RedisHExists
+    )
+}
+
 // ==================== Safe Execution Wrapper ====================
 
 /// Execute DSL script with full safety guarantees.
 ///
 /// Any error (runtime error, panic, etc.) is handled according to
 /// the configured error policy.
-pub fn execute_safe(
+pub async fn execute_safe(
     vm: &Vm,
     session: &mut dyn PluginSession,
     log: &mut PluginLog,
     error_policy: &DslErrorPolicy,
+    runtime: &DslRuntime,
 ) -> PluginRunningResult {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| vm.execute(session, log)));
+    use futures::FutureExt;
+    let result = std::panic::AssertUnwindSafe(vm.execute(session, log, runtime))
+        .catch_unwind()
+        .await;
 
     match result {
         Ok(Ok(running_result)) => {
-            log.push("dsl match");
+            match &running_result {
+                // `Nothing` is unreachable for DSL scripts (the VM only ever
+                // returns GoodNext / ErrResponse / ErrTerminateRequest /
+                // ErrGrpcError); folded into the allow case for completeness.
+                PluginRunningResult::GoodNext | PluginRunningResult::Nothing => log.push("OK; "),
+                PluginRunningResult::ErrResponse { status, .. } => log.push(&format!("Deny {status}; ")),
+                PluginRunningResult::ErrTerminateRequest => log.push("Deny terminate; "),
+                PluginRunningResult::ErrGrpcError { grpc_status, .. } => {
+                    log.push(&format!("Deny grpc {grpc_status}; "))
+                }
+            };
             running_result
         }
         Ok(Err(runtime_err)) => {
@@ -750,6 +884,8 @@ pub fn execute_safe(
                 RuntimeError::CallLimitExceeded { .. } => "call limit exceeded",
                 RuntimeError::StackOverflow { .. } => "stack overflow",
                 RuntimeError::StringTooLong { .. } => "string too long",
+                RuntimeError::ListTooLong { .. } => "list too long",
+                RuntimeError::MapTooLarge { .. } => "map too large",
                 RuntimeError::UndefinedLocal { .. } => "undefined local",
                 RuntimeError::ApiError { .. } => "api error",
                 RuntimeError::RegexError { .. } => "regex error",
@@ -776,5 +912,162 @@ fn apply_error_policy(policy: &DslErrorPolicy) -> PluginRunningResult {
             status: *status,
             body: body.clone(),
         },
+    }
+}
+
+// ==================== Test helpers (cfg(test) only) ====================
+
+#[cfg(test)]
+impl Vm {
+    /// Expose the internal const_str_cache for alignment invariant tests.
+    pub(crate) fn const_str_cache_ref(&self) -> &[Option<Arc<str>>] {
+        &self.const_str_cache
+    }
+}
+
+// ==================== VM unit tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a minimal CompiledScript with the given constants and no real code.
+    fn script_with_constants(constants: Vec<Constant>) -> CompiledScript {
+        CompiledScript {
+            version: super::super::bytecode::BYTECODE_VERSION,
+            code: vec![OpCode::ReturnNext],
+            constants,
+            local_count: 0,
+            max_loop_depth: 0,
+            source: None,
+            source_map: None,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Group C — const_str_cache alignment invariant
+    // -----------------------------------------------------------------------
+
+    /// Empty constant pool: cache length is 0, no panics.
+    #[test]
+    fn test_const_str_cache_empty_pool() {
+        let script = script_with_constants(vec![]);
+        let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
+        assert_eq!(vm.const_str_cache_ref().len(), 0);
+    }
+
+    /// Mixed pool: cache is parallel to constants; only Str slots are Some.
+    #[test]
+    fn test_const_str_cache_alignment() {
+        let constants = vec![
+            Constant::Str("hello".to_string()),
+            Constant::Int(42),
+            Constant::Str("world".to_string()),
+        ];
+        let script = script_with_constants(constants.clone());
+        let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
+        let cache = vm.const_str_cache_ref();
+
+        // Length must match the constant pool exactly.
+        assert_eq!(
+            cache.len(),
+            constants.len(),
+            "cache length must equal constant pool size"
+        );
+
+        // Index 0: Str("hello") → Some("hello")
+        assert!(cache[0].is_some(), "Str constant at index 0 should be Some");
+        assert_eq!(
+            cache[0].as_deref(),
+            Some("hello"),
+            "Str constant content mismatch at index 0"
+        );
+
+        // Index 1: Int(42) → None
+        assert!(cache[1].is_none(), "Int constant at index 1 should be None");
+
+        // Index 2: Str("world") → Some("world")
+        assert!(cache[2].is_some(), "Str constant at index 2 should be Some");
+        assert_eq!(
+            cache[2].as_deref(),
+            Some("world"),
+            "Str constant content mismatch at index 2"
+        );
+    }
+
+    /// Regex constants must produce None in the str cache and Some in regex_cache.
+    #[test]
+    fn test_const_str_cache_regex_is_none() {
+        let constants = vec![
+            Constant::Str("prefix".to_string()),
+            Constant::Regex("\\d+".to_string()),
+            Constant::Int(0),
+            Constant::Str("suffix".to_string()),
+        ];
+        let script = script_with_constants(constants.clone());
+        let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
+        let cache = vm.const_str_cache_ref();
+
+        assert_eq!(cache.len(), constants.len());
+
+        // Str slots
+        assert!(cache[0].is_some());
+        assert_eq!(cache[0].as_deref(), Some("prefix"));
+        assert!(cache[3].is_some());
+        assert_eq!(cache[3].as_deref(), Some("suffix"));
+
+        // Regex slot → None in str cache
+        assert!(cache[1].is_none(), "Regex constant should be None in const_str_cache");
+
+        // Int slot → None
+        assert!(cache[2].is_none(), "Int constant should be None in const_str_cache");
+    }
+
+    /// All-Str pool: every slot is Some with the correct content.
+    #[test]
+    fn test_const_str_cache_all_str() {
+        let strings = ["alpha", "beta", "gamma", "delta"];
+        let constants: Vec<Constant> = strings.iter().map(|s| Constant::Str(s.to_string())).collect();
+        let script = script_with_constants(constants);
+        let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
+        let cache = vm.const_str_cache_ref();
+
+        assert_eq!(cache.len(), strings.len());
+        for (i, expected) in strings.iter().enumerate() {
+            assert!(cache[i].is_some(), "index {} should be Some", i);
+            assert_eq!(cache[i].as_deref(), Some(*expected), "content mismatch at index {}", i);
+        }
+    }
+
+    /// All-Int pool: every slot is None.
+    #[test]
+    fn test_const_str_cache_all_int() {
+        let constants = vec![Constant::Int(1), Constant::Int(2), Constant::Int(3)];
+        let script = script_with_constants(constants.clone());
+        let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
+        let cache = vm.const_str_cache_ref();
+
+        assert_eq!(cache.len(), constants.len());
+        for (i, entry) in cache.iter().enumerate() {
+            assert!(entry.is_none(), "Int constant at index {} should be None", i);
+        }
+    }
+
+    /// Arc content equality: two Vm instances built from the same script
+    /// must produce independently-owned but content-equal Arcs.
+    #[test]
+    fn test_const_str_cache_arc_content_equality() {
+        let constants = vec![Constant::Str("shared".to_string())];
+        let script1 = script_with_constants(constants.clone());
+        let script2 = script_with_constants(constants);
+        let vm1 = Vm::new(script1, VmLimits::default()).expect("vm1 creation failed");
+        let vm2 = Vm::new(script2, VmLimits::default()).expect("vm2 creation failed");
+
+        let arc1 = vm1.const_str_cache_ref()[0].as_ref().unwrap();
+        let arc2 = vm2.const_str_cache_ref()[0].as_ref().unwrap();
+
+        // Content must match even though the Arcs are independent allocations.
+        assert_eq!(arc1.as_ref(), arc2.as_ref(), "Arc content should be equal");
+        // Pointer identity is NOT asserted — they are independent Vms.
     }
 }

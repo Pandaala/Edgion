@@ -1,6 +1,6 @@
 # Edgion
 
-[中文](docs/zh-CN/README.md) | English
+[Chinese](docs/zh-CN/README.md) | English
 
 ## What is Edgion?
 
@@ -10,7 +10,7 @@ A high-performance API Gateway built on [Pingora](https://github.com/cloudflare/
 
 - **Rust-native performance** — Built on Cloudflare's Pingora and Tokio. Memory-safe, no GC pauses, predictable latency under load.
 - **Gateway API support** — Native implementation of the Kubernetes Gateway API standard. Runs in Kubernetes or standalone mode from the same binary.
-  - `v1` GA: GatewayClass · Gateway · HTTPRoute · GRPCRoute · TLSRoute · ReferenceGrant
+  - `v1` GA: GatewayClass · Gateway · HTTPRoute · GRPCRoute · TLSRoute · ReferenceGrant · BackendTLSPolicy
   - `v1alpha2` Experimental: TCPRoute · UDPRoute
 - **Multi-protocol** — HTTP/1.1, HTTP/2, gRPC, TCP, UDP, WebSocket, SNI proxy.
 - **Dynamic hot reload** — Every change to routes, backends, plugins, or certificates propagates across all gateways instantly. No restart.
@@ -29,7 +29,7 @@ A high-performance API Gateway built on [Pingora](https://github.com/cloudflare/
   - Flexible output: local file or remote Kafka / Elasticsearch
 - **Kubernetes-free deployment** — Runs standalone on bare-metal or VMs. Local file or etcd as the config backend — no Kubernetes required.
 - **Federated cluster design** — A stateless Center connects multiple Controllers across regions, enabling cluster-wide and region-level advanced routing control.
-- For full documentation, see [English Docs](docs/en/README.md) · [中文文档](docs/zh-CN/README.md).
+- For full documentation, see [English Docs](docs/en/README.md) · [Chinese Docs](docs/zh-CN/README.md).
 
 ## Architecture
 
@@ -43,6 +43,7 @@ Edgion implements the Kubernetes Gateway API spec. Currently supports **v1.5.1**
 - [`v1.GRPCRoute`](docs/en/user-guide/grpc-route/overview.md)
 - [`v1.TLSRoute`](docs/en/ops-guide/gateway/tls/tls-termination.md)
 - [`v1.ReferenceGrant`](docs/en/ops-guide/infrastructure/reference-grant.md)
+- [`v1.BackendTLSPolicy`](docs/en/user-guide/http-route/backends/backend-tls.md)
 - [`v1alpha2.TCPRoute`](docs/en/user-guide/tcp-route/overview.md)
 - [`v1alpha2.UDPRoute`](docs/en/user-guide/udp-route/overview.md)
 
@@ -130,6 +131,78 @@ graph TD
     C3 --> G8[...]
 ```
 
+## Configuration Examples
+
+A minimal end-to-end setup: route HTTPS traffic, enforce JWT authentication and rate limiting, and attach a TLS certificate — each as a standalone Kubernetes resource.
+
+### HTTPRoute — path-based routing
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-api
+  namespace: default
+spec:
+  parentRefs:
+    - name: my-gateway
+  hostnames:
+    - "api.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: api-plugins
+      backendRefs:
+        - name: api-service
+          port: 8080
+```
+
+### EdgionPlugins — JWT auth + rate limiting
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: api-plugins
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: JwtAuth
+      config:
+        secret: "your-jwt-secret"
+    - enable: true
+      type: RateLimit
+      config:
+        key:
+          - type: clientIp
+        limit: 100
+        window: "60s"
+```
+
+### EdgionTls — HTTPS certificate binding
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: api-tls
+  namespace: default
+spec:
+  hosts:
+    - "api.example.com"
+  secretRef:
+    name: api-tls-secret   # kubernetes.io/tls Secret
+    namespace: default
+```
+
 ## Plugins
 
 ### Built-in Plugins
@@ -162,19 +235,57 @@ Edgion takes a different approach. The DSL plugin runs scripts in a **sandboxed 
 | `maxStackDepth` | 128 | Call stack depth |
 | `maxStringLen` | 8,192 | String length |
 
-Scripts can be deployed as source code or pre-compiled to **bytecode** (Base64) for faster startup and obfuscation. A minimal example:
+Scripts can be deployed as source code or pre-compiled to **bytecode** (Base64) for faster startup and obfuscation.
+
+**Request phase — enforce an API token:**
 
 ```yaml
-requestPlugins:
-  - enable: true
-    type: Dsl
-    config:
-      name: "require-api-token"
-      source: |
-        let token = req.header("X-Api-Token")
-        if token == nil {
-          return deny(403, "missing X-Api-Token header")
-        }
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: require-token
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "require-api-token"
+        errorPolicy: Deny
+        source: |
+          let token = req.header("X-Api-Token")
+          if token == nil {
+            return deny(401, "missing X-Api-Token header")
+          }
+          ctx.set("api_token", token)
+          return next()
+```
+
+**Request phase — inject routing tag from query param:**
+
+```yaml
+        source: |
+          let region = req.query("region")
+          if region != nil {
+            req.set_header("X-Route-Region", region)
+          }
+          return next()
+```
+
+**Response phase — append upstream timing header:**
+
+```yaml
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "add-timing-header"
+        source: |
+          let token = ctx.get("api_token")
+          if token != nil {
+            resp.set_header("X-Authenticated-Token", token)
+          }
+          return next()
 ```
 
 For full DSL API reference and advanced usage, see the [DSL Plugin Documentation](docs/en/user-guide/http-route/filters/edgion-plugins/dsl/README.md).

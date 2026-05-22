@@ -3,80 +3,90 @@ name: coding-standards
 description: Coding standards skill for Edgion. Use when reviewing or writing code that touches logging, tracing IDs, log safety, access logs, metrics, structured tracing, or shared project-wide implementation rules.
 ---
 
-# 编码规范 — Coding Standards
+# Coding Standards
 
-> Edgion 项目通用编码规范。覆盖日志与 ID 传播、敏感信息防泄漏、控制面/数据面日志分离、可观测性设计（Access Log / Metrics / 控制面 Tracing）。
-> 本规范是强制性的，新代码 **必须** 遵守，存量代码在改动时逐步对齐。
+> Edgion project-wide coding standards. Covers logging and ID propagation, sensitive-information leakage prevention, control-plane / data-plane log separation, and observability design (Access Log / Metrics / control-plane Tracing).
+> These standards are mandatory. New code **must** comply; existing code is brought into alignment incrementally as it is modified.
 
-## 核心原则
+## Core principles
 
-1. **Access Log 单条还原** — 一条 access log 包含足够信息定位问题，无需翻其他日志
-2. **只记关键节点** — 记录最终决策和异常路径，不记过程和中间状态
-3. **避免 Metrics 爆炸** — 无 Histogram、严控 Label 基数、统一管理
-4. **数据面零 tracing** — 数据面热路径禁止任何 `tracing::*` 宏
+1. **Single-line access log reconstruction** — one access log entry contains enough information to locate a problem without flipping through other logs
+2. **Record only key checkpoints** — record final decisions and exception paths; do not record process steps or intermediate state
+3. **Avoid metrics explosion** — no histograms, strict label cardinality, unified management
+4. **Zero tracing on the data plane** — `tracing::*` macros are forbidden on the data-plane hot path
 
-## 信息分层
+## Information layering
 
-| 层次 | 工具 | 目标受众 | 保留时间 |
+| Layer | Tool | Target audience | Retention |
 |------|------|---------|---------|
-| 请求粒度 | access log（JSON） | 运维排障、审计 | 天~周 |
-| 系统事件 | `tracing::info/warn/error` | 开发调试、告警 | 小时~天 |
-| 性能聚合 | Prometheus metrics | SRE、Grafana | 月 |
+| Request granularity | access log (JSON) | ops troubleshooting, audit | days~weeks |
+| System events | `tracing::info/warn/error` | developer debugging, alerts | hours~days |
+| Performance aggregation | Prometheus metrics | SRE, Grafana | months |
 
-## 文件清单
+## File list
 
-### 日志与安全
+### Logging and safety
 
-| 文件 | 主题 |
+| File | Topic |
 |------|------|
-| [00-logging-and-tracing-ids.md](00-logging-and-tracing-ids.md) | 日志 ID 传播：rv / sv / key_name 三元组，确保控制面→数据面可关联 |
-| [01-log-safety.md](01-log-safety.md) | 日志安全：敏感信息不入日志、配置不泄漏、数据面禁用 tracing |
+| [00-logging-and-tracing-ids.md](00-logging-and-tracing-ids.md) | Log ID propagation: rv / sv / key_name triple, ensures control plane → data plane correlation |
+| [01-log-safety.md](01-log-safety.md) | Log safety: no sensitive info in logs, no config leakage, tracing forbidden on data plane |
 
-### Rust 编码规范
+### Rust coding rules
 
-| 文件 | 主题 |
+| File | Topic |
 |------|------|
-| [02-rust-coding-rules.md](02-rust-coding-rules.md) | Rust 编码规范：import 短路径、unwrap 禁令、Clone 审慎、错误信息可操作性 |
+| [02-rust-coding-rules.md](02-rust-coding-rules.md) | Rust coding rules: short import paths, unwrap ban, judicious Clone, actionable error messages |
 
-### 可观测性 — [observability/](observability/)
+### Observability — [observability/](observability/)
 
-| 文件 | 主题 |
+| File | Topic |
 |------|------|
-| [observability/00-access-log.md](observability/00-access-log.md) | Access Log 设计：字段结构、PluginLog 格式（含 `push_err` 错误条目 API）、常见场景速查 |
-| [observability/01-metrics.md](observability/01-metrics.md) | Metrics 规范：添加步骤、Label 约束、Test Metrics、禁止事项 |
-| [observability/02-tracing-and-logging.md](observability/02-tracing-and-logging.md) | 控制面日志：结构化 Tracing、Level 选择、错误上下文、instrument 命名 |
+| [observability/00-access-log.md](observability/00-access-log.md) | Access Log design: field structure, PluginLog format (including `push_err` error-entry API), common-scenario quick reference |
+| [observability/01-metrics.md](observability/01-metrics.md) | Metrics rules: how to add, label constraints, Test Metrics, prohibitions |
+| [observability/02-tracing-and-logging.md](observability/02-tracing-and-logging.md) | Control-plane logging: structured Tracing, level selection, error context, instrument naming |
 
-## 提交前自检清单
+## Pre-commit self-check list
 
-### 日志安全
-- [ ] 新增的 `tracing::info!/warn!/error!` 是否在数据面热路径？如果是，改为 ctx-based
-- [ ] 日志中是否包含 Secret / Token / 密钥等敏感数据？
-- [ ] 日志中是否包含完整的 resource spec / backend 地址？如果是，降级到 debug
-- [ ] 控制面新增日志是否包含 `kind` + `name/namespace` + `rv`？
-- [ ] 如果资源已同步到数据面，access log 中是否有 `sv`？
+### Log safety
+- [ ] Are newly added `tracing::info!/warn!/error!` calls on the data-plane hot path? If so, switch to ctx-based
+- [ ] Do logs contain sensitive data such as Secret / Token / keys?
+- [ ] Do logs contain a full resource spec / backend address? If so, downgrade to debug
+- [ ] Do new control-plane logs include `kind` + `name/namespace` + `rv`?
+- [ ] If the resource has been synced to the data plane, is `sv` present in the access log?
 
-### Rust 编码
-- [ ] 是否有超过 2 层的 `crate::` 路径内联？应提取为 `use` 导入
-- [ ] 是否有裸 `unwrap()`？应改为 `?` / `expect("reason")` / `match`
-- [ ] `expect()` 消息是否解释了为什么不会 panic？
-- [ ] 是否有不必要的 `.clone()`？能否用引用或 `Arc` 替代？
-- [ ] 错误信息是否包含足够上下文？
+### Rust coding
+- [ ] Any inline `crate::` path more than 2 segments deep? Extract to a `use` import
+- [ ] Any bare `unwrap()`? Switch to `?` / `expect("reason")` / `match`
+- [ ] Do `expect()` messages explain why panic is impossible?
+- [ ] Any unnecessary `.clone()`? Can a reference or `Arc` be used instead?
+- [ ] Do error messages carry enough context?
 
-### 可观测性
-- [ ] PluginLog 每条 ≤ 40 字节，以 `; ` 结尾
-- [ ] 错误路径走 `plugin_log.push_err("<static kind>")`，不是 `push(&format!("err: {}", e))`（避免 token / claim 泄漏）
-- [ ] 没有把调试信息写进 PluginLog（应用 `tracing::debug!`）
-- [ ] 新增 metrics 通过 `GatewayMetrics` struct 管理，不直接用 `metrics::counter!()` 宏
-- [ ] 新增 metrics 无 Histogram 类型
-- [ ] Label 值域有限（≤ 数十个），无高基数 label
-- [ ] Gauge 的所有 +1 路径都有对应的 -1
-- [ ] Access log 新增字段确实有排障价值
-- [ ] tracing 日志有 `component` 字段，error/warn 有足够定位上下文
-- [ ] 热路径上的 observability 操作是低开销的
-- [ ] `ctx_map` 中新增的 key 是否可能包含敏感信息？如果是，需要做过滤
-- [ ] 插件 stage_logs 中是否记录了完整 username / token？应只记录前缀
+### Observability
+- [ ] Each PluginLog entry ≤ 40 bytes, ending with `; `
+- [ ] Error paths go through `plugin_log.push_err("<static kind>")`, not `push(&format!("err: {}", e))` (avoids token / claim leakage)
+- [ ] No debug information written into PluginLog (use `tracing::debug!` instead)
+- [ ] New metrics are managed via the `GatewayMetrics` struct, not the `metrics::counter!()` macro directly
+- [ ] No Histogram type for new metrics
+- [ ] Label value domain is bounded (≤ tens), no high-cardinality labels
+- [ ] Every +1 path on a Gauge has a matching -1
+- [ ] New access log fields actually carry troubleshooting value
+- [ ] Tracing logs include a `component` field; error/warn carry enough context to locate the issue
+- [ ] Observability operations on hot paths are low-overhead
+- [ ] Do new keys added to `ctx_map` potentially contain sensitive information? If so, filter them
+- [ ] Do plugin stage_logs record full username / token? Record only a prefix
 
-## 与其他 Skills 的关系
+### DSL plugin implementation — [dsl/](dsl/)
 
-- **review/** — Review 时引用本规范作为判定标准，包含可观测性审查清单
-- **01-architecture/** — 架构设计中的数据面/控制面分离决定了日志边界
+> See [dsl/SKILL.md](dsl/SKILL.md) for the sub-directory index and cross-links to the DSL engine architecture, URI normalization, and the Value-type design memo.
+
+| File | Topic |
+|------|------|
+| [dsl/builtins-path.md](dsl/builtins-path.md) | DSL path/URI variable reference: `req.path`, `req.uri`, `req.query`, and the difference between them |
+| [dsl/http-call.md](dsl/http-call.md) | `http.call()` builtin: async outbound HTTP, `Value::Map`, SSRF guard, config fields, test patterns |
+| [dsl/redis-builtin.md](dsl/redis-builtin.md) | `redis.*` builtins: async LinkSys Redis interaction, named alias lookup, return `Map {ok, value, error}` |
+
+## Relation to other Skills
+
+- **review/** — Review uses these standards as the criteria, including the observability review checklist
+- **01-architecture/** — The data-plane / control-plane split in the architecture defines the logging boundary

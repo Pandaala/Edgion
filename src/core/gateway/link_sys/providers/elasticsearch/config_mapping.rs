@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use reqwest::{Certificate, Client, ClientBuilder, Identity};
+use reqwest::{Client, ClientBuilder};
 use std::time::Duration;
 
 use crate::core::gateway::link_sys::credential::{CredentialState, ResolvedCredential};
@@ -32,11 +32,14 @@ const MAX_BATCH_SIZE: usize = 5_000;
 const MAX_FLUSH_INTERVAL_MS: u64 = 60_000; // 1 minute
 const MAX_BULK_BODY_BYTES: usize = 50 * 1024 * 1024; // 50MB
 const MAX_BULK_RETRIES: u32 = 10;
+const MAX_CHANNEL_SIZE: usize = 100_000;
+const MIN_CHANNEL_SIZE: usize = 1;
 const DEFAULT_BATCH_SIZE: usize = 500;
 const DEFAULT_FLUSH_INTERVAL_MS: u64 = 5_000;
 const DEFAULT_BULK_BODY_BYTES: usize = 10 * 1024 * 1024; // 10MB
 const DEFAULT_BULK_RETRIES: u32 = 3;
 const DEFAULT_BACKOFF_MS: u64 = 1_000;
+const DEFAULT_CHANNEL_SIZE: usize = 10_000;
 const DEFAULT_INDEX_PREFIX: &str = "edgion-logs";
 const DEFAULT_DATE_PATTERN: &str = "%Y.%m.%d";
 
@@ -60,120 +63,98 @@ pub fn build_es_client(
     auth: &CredentialState<ResolvedCredential>,
 ) -> Result<(Client, HeaderMap)> {
     let mut builder = ClientBuilder::new();
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-    // ── Connection pool ────────────────────────────────────────────
+    builder = apply_pool(builder, crd);
+    builder = apply_timeouts(builder, crd);
+    apply_auth(&mut headers, crd, auth)?;
+    builder = builder.default_headers(headers.clone());
+    builder = apply_tls(builder, crd)?;
+
+    let client = builder.build().context("failed to build reqwest client")?;
+    Ok((client, headers))
+}
+
+fn apply_pool(builder: ClientBuilder, crd: &ElasticsearchClientConfig) -> ClientBuilder {
     let idle_per_host = crd
         .pool
         .as_ref()
         .and_then(|p| p.max_idle_per_host)
         .map(|n| n.min(MAX_IDLE_PER_HOST))
         .unwrap_or(DEFAULT_IDLE_PER_HOST);
-    builder = builder.pool_max_idle_per_host(idle_per_host);
-
     let idle_timeout = crd
         .pool
         .as_ref()
         .and_then(|p| p.idle_timeout)
         .unwrap_or(DEFAULT_IDLE_TIMEOUT_MS);
-    builder = builder.pool_idle_timeout(Duration::from_millis(idle_timeout));
+    builder
+        .pool_max_idle_per_host(idle_per_host)
+        .pool_idle_timeout(Duration::from_millis(idle_timeout))
+}
 
-    // ── Timeouts ───────────────────────────────────────────────────
+fn apply_timeouts(builder: ClientBuilder, crd: &ElasticsearchClientConfig) -> ClientBuilder {
     let connect_timeout = crd
         .timeout
         .as_ref()
         .and_then(|t| t.connect)
         .map(|ms| ms.min(MAX_CONNECT_TIMEOUT_MS))
         .unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS);
-    builder = builder.connect_timeout(Duration::from_millis(connect_timeout));
-
     let request_timeout = crd
         .timeout
         .as_ref()
         .and_then(|t| t.request)
         .map(|ms| ms.min(MAX_REQUEST_TIMEOUT_MS))
         .unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS);
-    builder = builder.timeout(Duration::from_millis(request_timeout));
+    builder
+        .connect_timeout(Duration::from_millis(connect_timeout))
+        .timeout(Duration::from_millis(request_timeout))
+}
 
-    // ── Default headers ────────────────────────────────────────────
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-
-    // ── Authentication: secretRef in CRD; material carried by CredentialState ──
-    //
-    // `resolved_state` picks the resolver by auth variant, so a `Resolved`
-    // value always matches the CRD's auth kind. The match on `Resolved` below
-    // rejects the HMAC variant (which is only produced for Webhook auth), but
-    // that arm is unreachable for a well-formed ES config — it exists so the
-    // match is exhaustive over `ResolvedCredential`.
-    if crd.auth.is_some() {
-        let auth_header = match auth {
-            CredentialState::Resolved(ResolvedCredential::Basic(m)) => {
-                let u = m.username.as_deref().unwrap_or("");
-                let encoded = BASE64.encode(format!("{}:{}", u, m.password.as_str()));
-                format!("Basic {}", encoded)
-            }
-            CredentialState::Resolved(ResolvedCredential::EsApiKey(m)) => {
-                let encoded = BASE64.encode(format!("{}:{}", m.api_key_id, m.api_key_secret));
-                format!("ApiKey {}", encoded)
-            }
-            CredentialState::Resolved(ResolvedCredential::Bearer(m)) => {
-                format!("Bearer {}", m.token)
-            }
-            CredentialState::Resolved(ResolvedCredential::Hmac(_)) => anyhow::bail!(
-                "Elasticsearch auth does not support HMAC material (internal bug: resolver selected wrong variant)"
-            ),
-            CredentialState::Pending => anyhow::bail!(
-                "Elasticsearch auth is configured via secretRef but credential material \
-                 has not been resolved yet; refusing to build client without credentials"
-            ),
-            CredentialState::Invalid(reason) => {
-                anyhow::bail!("Elasticsearch credential material is invalid: {reason}");
-            }
-            CredentialState::NotRequired => anyhow::bail!(
-                "Elasticsearch auth configured in CRD but credential state is NotRequired (internal bug)"
-            ),
-        };
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&auth_header).context("invalid auth header value")?,
-        );
+fn apply_auth(
+    headers: &mut HeaderMap,
+    crd: &ElasticsearchClientConfig,
+    auth: &CredentialState<ResolvedCredential>,
+) -> Result<()> {
+    if crd.auth.is_none() {
+        return Ok(());
     }
+    let resolved = crate::core::gateway::link_sys::credential::require_resolved(auth, "Elasticsearch")?;
+    let auth_header = match resolved {
+        ResolvedCredential::Basic(m) => {
+            let u = m.username.as_deref().unwrap_or("");
+            format!("Basic {}", BASE64.encode(format!("{}:{}", u, m.password.as_str())))
+        }
+        ResolvedCredential::EsApiKey(m) => {
+            format!(
+                "ApiKey {}",
+                BASE64.encode(format!("{}:{}", m.api_key_id, m.api_key_secret))
+            )
+        }
+        ResolvedCredential::Bearer(m) => format!("Bearer {}", m.token),
+        ResolvedCredential::Hmac(_) => anyhow::bail!(
+            "Elasticsearch auth does not support HMAC material (internal bug: resolver selected wrong variant)"
+        ),
+        ResolvedCredential::WebhookApiKey(_) => anyhow::bail!(
+            "Elasticsearch auth does not support WebhookApiKey material (internal bug: resolver selected wrong variant)"
+        ),
+    };
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&auth_header).context("invalid auth header value")?,
+    );
+    Ok(())
+}
 
-    builder = builder.default_headers(headers.clone());
-
-    // ── TLS ────────────────────────────────────────────────────────
+fn apply_tls(builder: ClientBuilder, crd: &ElasticsearchClientConfig) -> Result<ClientBuilder> {
+    let mut builder = builder;
     if let Some(tls) = &crd.tls {
-        if let Some(true) = tls.insecure_skip_verify {
-            let is_prod = std::env::var("EDGION_ENV")
-                .map(|v| v.eq_ignore_ascii_case("production"))
-                .unwrap_or(false);
-            if is_prod {
-                anyhow::bail!(
-                    "Elasticsearch insecure_skip_verify cannot be enabled in production (EDGION_ENV=production). \
-                     Use a proper CA certificate or disable TLS verification only in non-production environments."
-                );
-            }
-            tracing::warn!(
-                "ES client: TLS certificate verification disabled — insecure! Not allowed when EDGION_ENV=production"
-            );
-            builder = builder.danger_accept_invalid_certs(true);
-        }
-
-        // CA + client mTLS from inline PEM and/or embedded K8s Secret.
-        if let Some(material) = tls_helper::build_material(tls) {
-            if let Some(ca_pem) = &material.ca_pem {
-                let cert = Certificate::from_pem(ca_pem).context("invalid ES CA certificate PEM")?;
-                builder = builder.add_root_certificate(cert);
-            }
-            if let Some(combined) = tls_helper::combined_identity_pem(&material) {
-                let identity = Identity::from_pem(combined.as_slice()).context("invalid ES client identity PEM")?;
-                builder = builder.identity(identity);
-            }
+        if tls.enabled {
+            builder = tls_helper::apply_insecure_skip_verify(builder, tls, "Elasticsearch")?;
+            builder = tls_helper::apply_to_reqwest_builder(builder, tls, "Elasticsearch")?;
         }
     }
-
-    let client = builder.build().context("failed to build reqwest client")?;
-    Ok((client, headers))
+    Ok(builder)
 }
 
 // ============================================================================
@@ -188,6 +169,10 @@ pub struct EsBulkConfig {
     pub max_retries: u32,
     pub backoff: Duration,
     pub max_body_bytes: usize,
+    /// Capacity of the producer→bulk-loop mpsc channel; clamped to
+    /// `[MIN_CHANNEL_SIZE, MAX_CHANNEL_SIZE]` so an operator-supplied 0 cannot
+    /// produce a rendezvous channel that would deadlock on every send.
+    pub channel_size: usize,
     pub index_prefix: String,
     pub date_pattern: String,
 }
@@ -217,6 +202,10 @@ impl EsBulkConfig {
                 .and_then(|b| b.max_body_bytes)
                 .map(|s| s.min(MAX_BULK_BODY_BYTES))
                 .unwrap_or(DEFAULT_BULK_BODY_BYTES),
+            channel_size: bulk
+                .and_then(|b| b.channel_size)
+                .map(|s| s.clamp(MIN_CHANNEL_SIZE, MAX_CHANNEL_SIZE))
+                .unwrap_or(DEFAULT_CHANNEL_SIZE),
             index_prefix: index
                 .and_then(|i| i.prefix.clone())
                 .unwrap_or_else(|| DEFAULT_INDEX_PREFIX.to_string()),
@@ -254,14 +243,18 @@ mod tests {
     }
 
     fn basic_auth_crd() -> ElasticsearchClientConfig {
-        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
         ElasticsearchClientConfig {
             auth: Some(ElasticsearchAuth::Basic {
-                secret_ref: SecretReference {
-                    name: "es-creds".to_string(),
-                    namespace: None,
+                slot: SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "es-creds".to_string(),
+                        namespace: None,
+                    },
+                    secret: None,
                 },
-                secret: None,
             }),
             ..Default::default()
         }
@@ -290,14 +283,18 @@ mod tests {
 
     #[test]
     fn test_build_es_client_api_key_auth() {
-        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
         let crd = ElasticsearchClientConfig {
             auth: Some(ElasticsearchAuth::ApiKey {
-                secret_ref: SecretReference {
-                    name: "es-api-key".to_string(),
-                    namespace: None,
+                slot: SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "es-api-key".to_string(),
+                        namespace: None,
+                    },
+                    secret: None,
                 },
-                secret: None,
             }),
             ..Default::default()
         };
@@ -348,14 +345,18 @@ mod tests {
 
     #[test]
     fn test_build_es_client_bearer_auth() {
-        use crate::types::resources::common::SecretReference;
+        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
         let crd = ElasticsearchClientConfig {
             auth: Some(ElasticsearchAuth::Bearer {
-                secret_ref: SecretReference {
-                    name: "es-token".to_string(),
-                    namespace: None,
+                slot: SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "es-token".to_string(),
+                        namespace: None,
+                    },
+                    secret: None,
                 },
-                secret: None,
             }),
             ..Default::default()
         };
@@ -386,12 +387,41 @@ mod tests {
                 max_retries: Some(100), // Over max
                 backoff_ms: None,
                 max_body_bytes: None,
+                channel_size: Some(1_000_000), // Over max
             }),
             ..Default::default()
         };
         let config = EsBulkConfig::from_crd(&crd);
         assert_eq!(config.batch_size, MAX_BATCH_SIZE);
         assert_eq!(config.max_retries, MAX_BULK_RETRIES);
+        assert_eq!(config.channel_size, MAX_CHANNEL_SIZE);
+    }
+
+    /// Operator-supplied 0 must clamp up to `MIN_CHANNEL_SIZE`; tokio's
+    /// `mpsc::channel(0)` would otherwise create a rendezvous channel that
+    /// requires a paired receive call and stalls every producer.
+    #[test]
+    fn test_bulk_config_channel_size_clamped_to_min() {
+        let crd = ElasticsearchClientConfig {
+            bulk: Some(EsBulk {
+                batch_size: None,
+                flush_interval: None,
+                max_retries: None,
+                backoff_ms: None,
+                max_body_bytes: None,
+                channel_size: Some(0),
+            }),
+            ..Default::default()
+        };
+        let config = EsBulkConfig::from_crd(&crd);
+        assert_eq!(config.channel_size, MIN_CHANNEL_SIZE);
+    }
+
+    #[test]
+    fn test_bulk_config_channel_size_default() {
+        let crd = ElasticsearchClientConfig::default();
+        let config = EsBulkConfig::from_crd(&crd);
+        assert_eq!(config.channel_size, DEFAULT_CHANNEL_SIZE);
     }
 
     #[test]
@@ -402,6 +432,7 @@ mod tests {
             max_retries: 3,
             backoff: Duration::from_secs(1),
             max_body_bytes: 10 * 1024 * 1024,
+            channel_size: DEFAULT_CHANNEL_SIZE,
             index_prefix: "test-logs".to_string(),
             date_pattern: "%Y.%m.%d".to_string(),
         };
@@ -409,6 +440,44 @@ mod tests {
         assert!(name.starts_with("test-logs-"));
         // Format: test-logs-YYYY.MM.DD (20 chars)
         assert_eq!(name.len(), "test-logs-2026.02.11".len());
+    }
+
+    /// P1-02: `tls.enabled = false` must NOT inject TLS material or honour
+    /// `insecure_skip_verify`. Without this gate ES diverges from Redis/Etcd
+    /// and would `bail!` on `insecure_skip_verify: true` in production even
+    /// though the operator has not opted into TLS.
+    ///
+    /// Serialised via `link_sys::tls::ENV_TEST_MUTEX` because this test
+    /// mutates `EDGION_ENV` (a process-global table) and would race against
+    /// the `apply_insecure_skip_verify_prod_bails_nonprod_accepts` test in
+    /// the same test binary otherwise.
+    #[test]
+    fn test_tls_disabled_ignores_insecure_skip_verify_even_in_prod() {
+        use crate::types::resources::common::TlsConfig;
+
+        let _env_guard = crate::core::gateway::link_sys::tls::ENV_TEST_MUTEX.lock();
+
+        let crd = ElasticsearchClientConfig {
+            tls: Some(TlsConfig {
+                enabled: false,
+                certs: None,
+                insecure_skip_verify: Some(true),
+            }),
+            ..Default::default()
+        };
+        let prior = std::env::var("EDGION_ENV").ok();
+        // Simulate production: would bail if the `enabled` gate were missing.
+        std::env::set_var("EDGION_ENV", "production");
+        let result = build_es_client(&crd, &no_auth());
+        match prior {
+            Some(v) => std::env::set_var("EDGION_ENV", v),
+            None => std::env::remove_var("EDGION_ENV"),
+        }
+        assert!(
+            result.is_ok(),
+            "tls.enabled=false must skip insecure_skip_verify handling, got: {:?}",
+            result.err()
+        );
     }
 
     #[test]

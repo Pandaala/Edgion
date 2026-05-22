@@ -1,11 +1,10 @@
 //! Configuration for EdgionDSL plugin
 
-use parking_lot::Mutex;
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::lang::validator::{compile_dsl_source, ValidationLimits};
+use crate::types::resources::edgion_plugins::plugin_configs::LinkSysRef;
+
 use super::lang::vm::DslErrorPolicy;
 
 /// DSL plugin configuration — stored in EdgionPlugin enum
@@ -27,7 +26,7 @@ use super::lang::vm::DslErrorPolicy;
 ///   maxSteps: 10000
 ///   errorPolicy: deny
 /// ```
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DslConfig {
     /// Script name (for logging and identification)
@@ -63,143 +62,58 @@ pub struct DslConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_string_len: Option<usize>,
 
+    /// Max number of elements in a List value (default: 1024)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_list_len: Option<usize>,
+
+    /// Max number of entries in a Map value (default: 512)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_map_size: Option<usize>,
+
     /// Error handling policy (default: ignore = fail-open)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_policy: Option<DslErrorPolicy>,
 
-    // === Validation cache (runtime only) ===
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub validation_error: Option<String>,
+    /// Max timeout for http.call in milliseconds (default: 5000, hard ceiling)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_max_timeout_ms: Option<u64>,
 
-    /// Cached compiled bytecode (base64) from validation phase.
-    /// Avoids double compilation: validate_source_compilation() compiles once,
-    /// plugin.rs::resolve_script() reuses this cache.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub(crate) compiled_bytecode_cache: Mutex<Option<String>>,
-}
+    /// Max response body size for http.call in bytes (default: 1048576 = 1 MB)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_max_response_body_bytes: Option<usize>,
 
-impl Default for DslConfig {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            source: None,
-            bytecode: None,
-            max_steps: None,
-            max_loop_iterations: None,
-            max_call_count: None,
-            max_stack_depth: None,
-            max_string_len: None,
-            error_policy: None,
-            validation_error: None,
-            compiled_bytecode_cache: Mutex::new(None),
-        }
-    }
-}
+    /// When true, http.call rejects URLs whose host is a private/loopback IP literal
+    /// (covers 127.x, 10.x, 172.16-31.x, 192.168.x, 169.254.x, ::1, fc00::/7, fe80::/10).
+    /// Hostname-based SSRF still requires network-level egress controls. (default: false)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_block_private_ips: Option<bool>,
 
-impl Clone for DslConfig {
-    fn clone(&self) -> Self {
-        Self {
-            name: self.name.clone(),
-            source: self.source.clone(),
-            bytecode: self.bytecode.clone(),
-            max_steps: self.max_steps,
-            max_loop_iterations: self.max_loop_iterations,
-            max_call_count: self.max_call_count,
-            max_stack_depth: self.max_stack_depth,
-            max_string_len: self.max_string_len,
-            error_policy: self.error_policy.clone(),
-            validation_error: self.validation_error.clone(),
-            // Cache is not cloned — re-compilation will happen if needed
-            compiled_bytecode_cache: Mutex::new(None),
-        }
-    }
+    /// LinkSys resources accessible to `redis.*` builtins in this script.
+    /// Each entry's `name` is the alias used as the first argument to redis.* calls.
+    /// Names must be unique within this list; allowed chars: a-z 0-9 - _
+    #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "linkSysRefs")]
+    pub linksys_refs: Vec<LinkSysRef>,
 }
 
 impl DslConfig {
-    /// Return validation error if config is invalid (structural checks only).
-    /// For other plugins that call this with `Option<&str>` convention.
-    pub fn get_validation_error(&self) -> Option<&str> {
-        if let Some(ref err) = self.validation_error {
-            return Some(err.as_str());
-        }
-        if self.name.is_empty() {
-            return Some("dsl plugin name is required");
-        }
-        if self.source.is_none() && self.bytecode.is_none() {
-            return Some("either source or bytecode must be provided");
-        }
-        if let Some(steps) = self.max_steps {
-            if steps == 0 || steps > 1_000_000 {
-                return Some("maxSteps must be between 1 and 1000000");
+    /// Validate linkSysRefs: names must be unique and contain only [a-z0-9_-].
+    pub fn validate(&self) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        for r in &self.linksys_refs {
+            if r.name.is_empty() {
+                return Err("linkSysRefs: name must not be empty".to_string());
+            }
+            if !r
+                .name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+            {
+                return Err(format!("linkSysRefs: invalid name '{}' (allowed: a-z 0-9 - _)", r.name));
+            }
+            if !seen.insert(r.name.as_str()) {
+                return Err(format!("linkSysRefs: duplicate name '{}'", r.name));
             }
         }
-        if let Some(loop_iter) = self.max_loop_iterations {
-            if loop_iter == 0 || loop_iter > 100_000 {
-                return Some("maxLoopIterations must be between 1 and 100000");
-            }
-        }
-        if let Some(calls) = self.max_call_count {
-            if calls == 0 || calls > 100_000 {
-                return Some("maxCallCount must be between 1 and 100000");
-            }
-        }
-        if let Some(depth) = self.max_stack_depth {
-            if depth == 0 || depth > 1024 {
-                return Some("maxStackDepth must be between 1 and 1024");
-            }
-        }
-        if let Some(len) = self.max_string_len {
-            if len == 0 || len > 1_048_576 {
-                return Some("maxStringLen must be between 1 and 1048576");
-            }
-        }
-        // Validate DenyWith status range
-        if let Some(DslErrorPolicy::DenyWith { status, .. }) = &self.error_policy {
-            if *status < 100 || *status > 599 {
-                return Some("errorPolicy denyWith status must be between 100 and 599");
-            }
-        }
-        None
-    }
-
-    /// Return validation error as an owned String.
-    /// This performs structural validation AND source compilation validation.
-    /// Called from runtime.rs for DSL plugins specifically.
-    pub fn get_validation_error_owned(&self) -> Option<String> {
-        // Structural checks first (reuse the static method)
-        if let Some(err) = self.get_validation_error() {
-            return Some(err.to_string());
-        }
-        // Validate source compilation (dynamic error)
-        if let Some(err) = self.validate_source_compilation() {
-            return Some(err);
-        }
-        None
-    }
-
-    /// Validate that the source code compiles successfully.
-    /// On success, caches compiled bytecode for later use.
-    /// Returns error description or None if valid.
-    pub fn validate_source_compilation(&self) -> Option<String> {
-        if let Some(source) = &self.source {
-            match compile_dsl_source(source, &ValidationLimits::default()) {
-                Err(errs) => {
-                    return Some(format!("DSL compile errors: {}", errs.join("; ")));
-                }
-                Ok(bytecode_b64) => {
-                    // Cache compiled bytecode to avoid double compilation
-                    let mut cache = self.compiled_bytecode_cache.lock();
-                    *cache = Some(bytecode_b64);
-                }
-            }
-        }
-        None
-    }
-
-    /// Read the cached compiled bytecode (if any) without consuming it.
-    pub(crate) fn get_compiled_bytecode(&self) -> Option<String> {
-        self.compiled_bytecode_cache.lock().clone()
+        Ok(())
     }
 }

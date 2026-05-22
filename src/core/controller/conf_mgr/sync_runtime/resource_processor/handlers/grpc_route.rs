@@ -13,8 +13,9 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
 };
 use crate::types::prelude_resources::GRPCRoute;
 use crate::types::resources::common::RefDenied;
-use crate::types::resources::grpc_route::GRPCRouteStatus;
+use crate::types::resources::grpc_route::{GRPCRouteFilter, GRPCRouteFilterType, GRPCRouteStatus};
 use crate::types::resources::http_route::RouteParentStatus;
+use crate::types::resources::http_route_preparse::is_lb_policy_kind;
 use crate::types::ResourceKind;
 
 /// GRPCRoute handler
@@ -265,8 +266,6 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
             Some(invalid_indices.clone())
         };
 
-        let _all_rules_invalid = total_rules > 0 && valid_rules == 0;
-
         let status = route.status.get_or_insert_with(|| GRPCRouteStatus { parents: vec![] });
         let route_hostnames = route.spec.hostnames.as_ref();
 
@@ -303,7 +302,11 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                         controller_name: self.controller_name.clone(),
                         conditions,
                     });
-                    &mut status.parents.last_mut().unwrap().conditions
+                    &mut status
+                        .parents
+                        .last_mut()
+                        .expect("just pushed; Vec is non-empty")
+                        .conditions
                 };
 
                 // Set PartiallyInvalid condition
@@ -353,7 +356,6 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::controller::conf_mgr::sync_runtime::resource_processor::SecretRefManager;
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
     use serde_json::json;
@@ -361,7 +363,6 @@ mod tests {
 
     fn make_ctx() -> HandlerContext {
         HandlerContext::new(
-            Arc::new(SecretRefManager::new()),
             None,
             None,
             TriggerChain::default(),
@@ -402,6 +403,171 @@ mod tests {
             "stale or user-provided resolvedListeners must be cleared when current parentRefs cannot be resolved"
         );
     }
+
+    fn route_with_rules(rules: serde_json::Value) -> GRPCRoute {
+        serde_json::from_value(json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": { "name": "t", "namespace": "default" },
+            "spec": { "rules": rules }
+        }))
+        .expect("route should deserialize")
+    }
+
+    #[test]
+    fn duplicate_request_header_modifier_marks_rule_invalid() {
+        let route = route_with_rules(json!([
+            {
+                "filters": [
+                    { "type": "RequestHeaderModifier", "requestHeaderModifier": { "set": [] } },
+                    { "type": "RequestHeaderModifier", "requestHeaderModifier": { "remove": ["x"] } }
+                ]
+            }
+        ]));
+        assert_eq!(super::find_invalid_rule_indices(&route, "default"), vec![0]);
+    }
+
+    #[test]
+    fn duplicate_response_header_modifier_marks_rule_invalid() {
+        let route = route_with_rules(json!([
+            {
+                "filters": [
+                    { "type": "ResponseHeaderModifier", "responseHeaderModifier": { "set": [] } },
+                    { "type": "ResponseHeaderModifier", "responseHeaderModifier": { "remove": ["x"] } }
+                ]
+            }
+        ]));
+        assert_eq!(super::find_invalid_rule_indices(&route, "default"), vec![0]);
+    }
+
+    #[test]
+    fn duplicate_filter_in_backend_ref_marks_rule_invalid() {
+        let route = route_with_rules(json!([
+            {
+                "backendRefs": [
+                    {
+                        "name": "svc-a",
+                        "filters": [
+                            { "type": "RequestHeaderModifier", "requestHeaderModifier": { "set": [] } },
+                            { "type": "RequestHeaderModifier", "requestHeaderModifier": { "remove": ["x"] } }
+                        ]
+                    }
+                ]
+            }
+        ]));
+        assert_eq!(super::find_invalid_rule_indices(&route, "default"), vec![0]);
+    }
+
+    #[test]
+    fn repeated_request_mirror_and_extension_ref_are_allowed() {
+        // RequestMirror and ExtensionRef are explicitly allowed to appear multiple times.
+        // ExtensionRef filters must point at a supported kind (EdgionPlugins) to be valid.
+        let route = route_with_rules(json!([
+            {
+                "filters": [
+                    { "type": "RequestMirror", "requestMirror": { "backendRef": { "name": "mirror-a" } } },
+                    { "type": "RequestMirror", "requestMirror": { "backendRef": { "name": "mirror-b" } } },
+                    { "type": "ExtensionRef", "extensionRef": { "group": "edgion.io", "kind": "EdgionPlugins", "name": "a" } },
+                    { "type": "ExtensionRef", "extensionRef": { "kind": "EdgionPlugins", "name": "b" } }
+                ]
+            }
+        ]));
+        assert!(super::find_invalid_rule_indices(&route, "default").is_empty());
+    }
+
+    #[test]
+    fn extension_ref_unsupported_kind_marks_rule_invalid() {
+        let route: GRPCRoute = serde_json::from_value(json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": { "name": "r", "namespace": "default" },
+            "spec": {
+                "rules": [{
+                    "filters": [{
+                        "type": "ExtensionRef",
+                        "extensionRef": { "group": "edgion.io", "kind": "NotAPlugin", "name": "x" }
+                    }]
+                }]
+            }
+        }))
+        .expect("route should deserialize");
+        assert_eq!(super::find_invalid_rule_indices(&route, "default"), vec![0]);
+    }
+
+    #[test]
+    fn extension_ref_unsupported_kind_on_backend_ref_marks_rule_invalid() {
+        // The backendRef-level ExtensionRef check must also flag the rule invalid.
+        let route: GRPCRoute = serde_json::from_value(json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": { "name": "r", "namespace": "default" },
+            "spec": {
+                "rules": [{
+                    "backendRefs": [{
+                        "name": "svc-a",
+                        "filters": [{
+                            "type": "ExtensionRef",
+                            "extensionRef": { "group": "edgion.io", "kind": "NotAPlugin", "name": "x" }
+                        }]
+                    }]
+                }]
+            }
+        }))
+        .expect("route should deserialize");
+        assert_eq!(super::find_invalid_rule_indices(&route, "default"), vec![0]);
+    }
+
+    #[test]
+    fn extension_ref_lb_policy_on_backend_ref_not_flagged() {
+        // An LBPolicy ExtensionRef on a backendRef is a recognized second use of
+        // the ExtensionRef filter type (load-balancing policy, consumed by
+        // BackendExtensionInfo). It must NOT be flagged by the unsupported-kind
+        // gate.
+        let route: GRPCRoute = serde_json::from_value(json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": { "name": "r", "namespace": "default" },
+            "spec": {
+                "rules": [{
+                    "backendRefs": [{
+                        "name": "svc-a",
+                        "filters": [{
+                            "type": "ExtensionRef",
+                            "extensionRef": { "group": "edgion.io", "kind": "LBPolicyConsistentHash", "name": "header.x-user-id" }
+                        }]
+                    }]
+                }]
+            }
+        }))
+        .expect("route should deserialize");
+        assert!(
+            super::find_invalid_rule_indices(&route, "default").is_empty(),
+            "LBPolicy backendRef ExtensionRef must not be flagged invalid"
+        );
+    }
+
+    #[test]
+    fn cross_level_dup_documents_intentional_conservative_scope() {
+        // GRPC spec does not define cross-level (rule + backend) duplicate as conflict.
+        // Same single-instance filter type appearing once in rule and once in backend is allowed.
+        // This test pins the intentional scope choice — do not relax it without revisiting spec.
+        let route = route_with_rules(json!([
+            {
+                "filters": [
+                    { "type": "RequestHeaderModifier", "requestHeaderModifier": { "set": [] } }
+                ],
+                "backendRefs": [
+                    {
+                        "name": "svc-a",
+                        "filters": [
+                            { "type": "RequestHeaderModifier", "requestHeaderModifier": { "remove": ["x"] } }
+                        ]
+                    }
+                ]
+            }
+        ]));
+        assert!(super::find_invalid_rule_indices(&route, "default").is_empty());
+    }
 }
 
 /// Extract (group, kind, namespace, name) tuples from all backend refs for shared validation.
@@ -439,12 +605,100 @@ fn collect_ref_denied_list(route: &GRPCRoute) -> Vec<Option<&RefDenied>> {
     list
 }
 
-/// Find rule indices where ALL backend refs are invalid.
+/// Check if a filter list has the same single-instance filter type more than once.
+///
+/// Per Gateway API spec for GRPCRoute, "specifying the same filter multiple times
+/// is not supported unless explicitly indicated in the filter."
+/// `RequestMirror` and `ExtensionRef` are explicitly allowed to repeat;
+/// `RequestHeaderModifier` and `ResponseHeaderModifier` are not.
+fn has_duplicate_filter_conflict(filters: Option<&Vec<GRPCRouteFilter>>) -> bool {
+    let Some(filters) = filters else { return false };
+    let mut seen_request_header = false;
+    let mut seen_response_header = false;
+    for f in filters {
+        match f.filter_type {
+            GRPCRouteFilterType::RequestHeaderModifier => {
+                if seen_request_header {
+                    return true;
+                }
+                seen_request_header = true;
+            }
+            GRPCRouteFilterType::ResponseHeaderModifier => {
+                if seen_response_header {
+                    return true;
+                }
+                seen_response_header = true;
+            }
+            GRPCRouteFilterType::RequestMirror | GRPCRouteFilterType::ExtensionRef => {}
+        }
+    }
+    false
+}
+
+/// True if any `ExtensionRef` filter in the list points at a kind that is not
+/// recognized.
+///
+/// `ExtensionRef` has two recognized uses:
+/// - `EdgionPlugins` (group empty or `edgion.io`) — a plugin reference.
+/// - The LBPolicy kinds (`LBPolicyConsistentHash` / `LBPolicyLeastConn` /
+///   `LBPolicyEwma`) — a load-balancing-policy reference on `backendRefs[].filters`,
+///   consumed by `BackendExtensionInfo` / `parse_lb_policy`. These are exempt
+///   from this gate (an LBPolicy ExtensionRef placed at rule-level is a silent
+///   no-op).
+///
+/// Anything else is a static config error; the gRPC side has no reason-string
+/// plumbing, so this only contributes the rule index to `invalid_rule_indices`.
+fn has_unsupported_extension_ref(filters: Option<&Vec<GRPCRouteFilter>>) -> bool {
+    let Some(filters) = filters else { return false };
+    for f in filters {
+        if f.filter_type != GRPCRouteFilterType::ExtensionRef {
+            continue;
+        }
+        if let Some(ext) = f.extension_ref.as_ref() {
+            let group_ok = ext.group.is_empty() || ext.group == "edgion.io";
+            let recognized = (group_ok && ext.kind == "EdgionPlugins") || is_lb_policy_kind(&ext.kind);
+            if !recognized {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Find rule indices where the rule is invalid.
+///
+/// A rule is invalid if it (or any of its backend refs) has a duplicate single-instance
+/// filter type within a single filter list. Rules with invalid backends (non-Service kind
+/// or non-existent) are NOT marked as invalid here — the Gateway still registers them so
+/// requests match and get an error response (per Gateway API spec).
+///
+/// Scope: dup-same-type detection is conservatively limited to within a single filter list
+/// (rule.filters or one backend_ref.filters). Cross-level same-type (e.g. one
+/// RequestHeaderModifier on the rule + one on a backend) is not flagged because the
+/// Gateway API spec does not define it as a conflict for GRPCRoute. Note: GRPCRoute also
+/// has no mutually-exclusive filter pair like HTTPRoute's URLRewrite + RequestRedirect.
 fn find_invalid_rule_indices(route: &GRPCRoute, _route_ns: &str) -> Vec<usize> {
-    // Currently GRPCRoute has no filter conflict detection.
-    // Rules with invalid backends (non-Service kind or non-existent) are NOT
-    // marked as invalid. The Gateway should still register these rules so
-    // requests match and get an error response (per Gateway API spec).
-    let _ = route;
-    Vec::new()
+    let mut invalid_indices = Vec::new();
+    if let Some(rules) = &route.spec.rules {
+        for (idx, rule) in rules.iter().enumerate() {
+            if has_duplicate_filter_conflict(rule.filters.as_ref()) {
+                invalid_indices.push(idx);
+                continue;
+            }
+            if has_unsupported_extension_ref(rule.filters.as_ref()) {
+                invalid_indices.push(idx);
+                continue;
+            }
+            if let Some(backend_refs) = &rule.backend_refs {
+                let backend_conflict = backend_refs.iter().any(|br| {
+                    has_duplicate_filter_conflict(br.filters.as_ref())
+                        || has_unsupported_extension_ref(br.filters.as_ref())
+                });
+                if backend_conflict {
+                    invalid_indices.push(idx);
+                }
+            }
+        }
+    }
+    invalid_indices
 }

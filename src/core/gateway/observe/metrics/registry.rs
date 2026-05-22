@@ -49,12 +49,13 @@ pub mod names {
     pub const CONN_IP_RESTRICTION_EVENTS_TOTAL: &str = "edgion_conn_ip_restriction_events_total";
     // RoundRobin selector: backend count > u16::MAX truncation
     pub const RR_SELECTOR_TRUNCATED_TOTAL: &str = "edgion_rr_selector_truncated_total";
-    // Elasticsearch DataSender: per-send outcome (ok / failed_fallback / failed_no_cache)
-    pub const LINK_SYS_ES_SEND_TOTAL: &str = "edgion_link_sys_es_send_total";
+    // Elasticsearch bulk producer: increments each time the producer→bulk-loop
+    // mpsc channel is full at submit time (signal to raise `bulk.channelSize`).
+    pub const LINK_SYS_ES_BULK_CHANNEL_FULL_TOTAL: &str = "edgion_link_sys_es_bulk_channel_full_total";
     // LDAP auth plugin: error counter by kind (unreachable / timeout / bind_fail)
     pub const LDAP_AUTH_ERRORS_TOTAL: &str = "edgion_ldap_auth_errors_total";
-    // LDAP auth plugin: cache hit ratio gauge (0.0–1.0), updated every 30 s
-    pub const LDAP_CACHE_HIT_RATE: &str = "edgion_ldap_cache_hit_rate";
+    // Webhook key resolver: per-resolve failure counter by reason
+    pub const WEBHOOK_RESOLVE_ERRORS_TOTAL: &str = "edgion_webhook_resolve_errors_total";
 }
 
 /// Global metrics singleton
@@ -447,8 +448,8 @@ pub fn record_acme_challenge_lookup(result: &'static str) {
 /// Record a `GlobalConnectionIpRestriction` stream plugin decision event.
 ///
 /// `result` must be one of:
-/// - `"fail_open_pm_missing"` — referenced PluginMetadata not found; connection allowed
-/// - `"fail_open_profile_missing"` — active profile not present in PM; connection allowed
+/// - `"fail_closed_pm_missing"` — referenced PluginMetadata not found; connection denied
+/// - `"fail_closed_profile_missing"` — active profile not present in PM; connection denied
 /// - `"denied"` — client IP blocked by active profile rules
 ///
 /// Low, fixed cardinality — safe as a label.
@@ -456,16 +457,15 @@ pub fn record_conn_ip_restriction_event(result: &'static str) {
     counter!(names::CONN_IP_RESTRICTION_EVENTS_TOTAL, "result" => result).increment(1);
 }
 
-/// Record the outcome of an Elasticsearch DataSender send attempt.
+/// Record an Elasticsearch bulk channel "full" event.
 ///
-/// `result` must be one of:
-/// - `"ok"` — shipped directly to ES
-/// - `"failed_fallback"` — ES unavailable, successfully routed to `FailedCache`
-/// - `"failed_no_cache"` — ES unavailable and no `FailedCache` configured (log dropped)
-///
-/// Fixed cardinality — safe as a label.
-pub fn record_link_sys_es_send(result: &'static str) {
-    counter!(names::LINK_SYS_ES_SEND_TOTAL, "result" => result).increment(1);
+/// Fires when the producer→bulk-loop mpsc channel is at capacity at submit
+/// time. Current behaviour is to fall back to an awaiting send (so the access
+/// log path backpressures rather than drops); the counter exists so operators
+/// can detect that they should raise `bulk.channelSize` before the backpressure
+/// becomes visible at the request layer.
+pub fn record_link_sys_es_bulk_channel_full() {
+    counter!(names::LINK_SYS_ES_BULK_CHANNEL_FULL_TOTAL).increment(1);
 }
 
 /// Record a `RoundRobinSelector` backend-count truncation.
@@ -486,15 +486,12 @@ pub fn record_ldap_auth_error(kind: &'static str) {
     counter!(names::LDAP_AUTH_ERRORS_TOTAL, "kind" => kind).increment(1);
 }
 
-/// Set the LDAP auth cache hit rate gauge (0.0–1.0).
+/// Record a webhook key-resolver failure.
 ///
-/// Called from a per-plugin background task every 30 s; not on the hot path.
-///
-/// Note: this gauge has no instance label. When multiple LDAP plugin instances are
-/// active, each background task writes to the same gauge and the last writer wins.
-/// The metric is only interpretable when a single LDAP plugin instance is running.
-pub fn set_ldap_cache_hit_rate(ratio: f64) {
-    gauge!(names::LDAP_CACHE_HIT_RATE).set(ratio);
+/// `reason` must be one of: `"not_found"`, `"unhealthy"`, `"rate_limited"`,
+/// `"status_error"`, `"call_failed"`. Fixed cardinality — safe as a label.
+pub fn record_webhook_resolve_error(reason: &'static str) {
+    counter!(names::WEBHOOK_RESOLVE_ERRORS_TOTAL, "reason" => reason).increment(1);
 }
 
 #[cfg(test)]

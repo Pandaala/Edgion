@@ -47,13 +47,6 @@ pub struct ConsistencyResult {
     pub conflicts: Vec<String>,
 }
 
-fn split_pm_key(key: &str) -> (String, String) {
-    let mut parts = key.splitn(2, '/');
-    let ns = parts.next().unwrap_or("").to_string();
-    let name = parts.next().unwrap_or("").to_string();
-    (ns, name)
-}
-
 fn online_controllers(state: &ApiState) -> Vec<String> {
     state
         .aggregator
@@ -68,21 +61,18 @@ fn online_controllers(state: &ApiState) -> Vec<String> {
 pub async fn list_global_ip_restrictions(
     State(state): State<ApiState>,
 ) -> Json<ApiResponse<Vec<CenterGlobalIpRestrictionView>>> {
-    let raw = state.metadata_store.list_global_ip_restrictions();
+    let entries = state.metadata_store.list_global_ip_restrictions();
     let online = online_controllers(&state);
-    let items: Vec<_> = raw
+    let items: Vec<_> = entries
         .into_iter()
-        .map(|(pm_key, per_ctrl)| {
-            let (namespace, name) = split_pm_key(&pm_key);
-            CenterGlobalIpRestrictionView {
-                namespace,
-                name,
-                controllers: per_ctrl,
-                online_controller_ids: online.clone(),
-            }
+        .map(|e| CenterGlobalIpRestrictionView {
+            namespace: e.namespace,
+            name: e.name,
+            controllers: e.controllers,
+            online_controller_ids: online.clone(),
         })
         .collect();
-    Json(ApiResponse::success(items))
+    Json(ApiResponse::ok_body(items))
 }
 
 /// `GET /api/v1/center/global-connection-ip-restrictions/{ns}/{name}`
@@ -94,14 +84,14 @@ pub async fn get_global_ip_restriction(
     let Some(per_ctrl) = state.metadata_store.get_global_ip_restriction(&pm_key) else {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(ApiResponse::error(format!(
+            Json(ApiResponse::err_body(format!(
                 "GlobalConnectionIpRestriction {}/{} not found",
                 ns, name
             ))),
         ));
     };
     let online = online_controllers(&state);
-    Ok(Json(ApiResponse::success(CenterGlobalIpRestrictionView {
+    Ok(Json(ApiResponse::ok_body(CenterGlobalIpRestrictionView {
         namespace: ns,
         name,
         controllers: per_ctrl,
@@ -113,12 +103,11 @@ pub async fn get_global_ip_restriction(
 pub async fn global_ip_restrictions_consistency(
     State(state): State<ApiState>,
 ) -> Json<ApiResponse<Vec<ConsistencyResult>>> {
-    let raw = state.metadata_store.list_global_ip_restrictions();
-    let items: Vec<_> = raw
+    let entries = state.metadata_store.list_global_ip_restrictions();
+    let items: Vec<_> = entries
         .into_iter()
-        .map(|(pm_key, per_ctrl)| {
-            let (namespace, name) = split_pm_key(&pm_key);
-            let hashes: HashSet<String> = per_ctrl.values().map(|e| e.content_hash.clone()).collect();
+        .map(|e| {
+            let hashes: HashSet<&str> = e.controllers.values().map(|c| c.content_hash.as_str()).collect();
             let consistent = hashes.len() <= 1;
             // v1: report whole-entry mismatch; per-field conflicts left to v2
             let conflicts = if consistent {
@@ -127,15 +116,15 @@ pub async fn global_ip_restrictions_consistency(
                 vec!["contentHash".to_string()]
             };
             ConsistencyResult {
-                namespace,
-                name,
+                namespace: e.namespace,
+                name: e.name,
                 consistent,
-                controller_count: per_ctrl.len(),
+                controller_count: e.controllers.len(),
                 conflicts,
             }
         })
         .collect();
-    Json(ApiResponse::success(items))
+    Json(ApiResponse::ok_body(items))
 }
 
 // =====================================================================
@@ -229,6 +218,18 @@ fn partition(results: Vec<ControllerOpResult>) -> (Vec<ControllerOpResult>, Vec<
     (success, failed)
 }
 
+/// Map a fan-out outcome to an HTTP status. When every target failed (success
+/// empty, failed non-empty) we surface `502 Bad Gateway` so automated callers
+/// can gate retries on the status line without parsing the nested body. Any
+/// partial success — and the zero-target case — stays `200 OK`.
+fn fanout_status(success: &[ControllerOpResult], failed: &[ControllerOpResult]) -> StatusCode {
+    if success.is_empty() && !failed.is_empty() {
+        StatusCode::BAD_GATEWAY
+    } else {
+        StatusCode::OK
+    }
+}
+
 // =====================================================================
 // POST /api/v1/center/global-connection-ip-restrictions
 // =====================================================================
@@ -248,22 +249,16 @@ pub struct CreateRequest {
 pub async fn create_global_ip_restriction(
     State(state): State<ApiState>,
     Json(req): Json<CreateRequest>,
-) -> Json<ApiResponse<FanOutResponse>> {
-    // Early validation: catch malformed data before fan-out.
+) -> (StatusCode, Json<ApiResponse<FanOutResponse>>) {
+    // Early validation: bad request body must surface as HTTP 400 so automated
+    // callers can rely on the status code instead of inspecting nested fields.
     {
         let mut cloned = req.data.clone();
         if let Err(e) = cloned.validate_and_init() {
-            let single = ControllerOpResult {
-                controller_id: "<validation>".to_string(),
-                detail: None,
-                error: Some(format!("invalid PM data: {}", e)),
-                status_code: Some(400),
-            };
-            return Json(ApiResponse::success(FanOutResponse {
-                success: vec![],
-                failed: vec![single],
-                warnings: vec![],
-            }));
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::err_body(format!("invalid PM data: {}", e))),
+            );
         }
     }
 
@@ -276,11 +271,53 @@ pub async fn create_global_ip_restriction(
     let path = format!("/api/v1/namespaced/pluginmetadata/{}", req.namespace);
     let results = fan_out_http(&state, targets, "POST", path, body).await;
     let (success, failed) = partition(results);
-    Json(ApiResponse::success(FanOutResponse {
-        success,
-        failed,
-        warnings,
-    }))
+    let status = fanout_status(&success, &failed);
+    (
+        status,
+        Json(ApiResponse::ok_body(FanOutResponse {
+            success,
+            failed,
+            warnings,
+        })),
+    )
+}
+
+/// Extract [`GlobalConnectionIpRestrictionData`] from a Controller GET response body.
+///
+/// The Controller stores and returns PluginMetaData as:
+/// `{"spec": {"metadata": {"config": <GlobalConnectionIpRestrictionData>}}}`
+fn extract_pm_data(v: &serde_json::Value) -> Result<GlobalConnectionIpRestrictionData, String> {
+    let config = v
+        .pointer("/spec/metadata/config")
+        .ok_or_else(|| "missing /spec/metadata/config in Controller PM response".to_string())?;
+    serde_json::from_value(config.clone()).map_err(|e| format!("failed to deserialize PM config: {e}"))
+}
+
+/// Fetch live PM data from a specific Controller via GET.
+///
+/// Returns `Err((status_code, message))` on any failure so the caller can build a
+/// `ControllerOpResult` with the correct `controller_id` and forward the reason to the client.
+async fn fetch_live_pm_data(
+    proxy: &crate::core::center::proxy::ProxyForwarder,
+    cid: &str,
+    path: &str,
+) -> Result<GlobalConnectionIpRestrictionData, (u16, String)> {
+    match proxy
+        .forward(cid, "GET".to_string(), path.to_string(), HashMap::new(), vec![])
+        .await
+    {
+        Ok(r) if r.status_code == 200 => {
+            let v = serde_json::from_slice::<serde_json::Value>(&r.body)
+                .map_err(|e| (502u16, format!("Controller returned non-JSON body: {e}")))?;
+            extract_pm_data(&v).map_err(|e| (502u16, format!("GET PM from controller: {e}")))
+        }
+        Ok(r) if r.status_code == 404 => Err((404, "PM not found on this controller".to_string())),
+        Ok(r) => Err((
+            r.status_code as u16,
+            format!("GET PM from controller returned HTTP {}", r.status_code),
+        )),
+        Err((_, msg)) => Err((502, format!("GET PM from controller failed: {msg}"))),
+    }
 }
 
 fn build_pm_json(ns: &str, name: &str, data: &GlobalConnectionIpRestrictionData) -> String {
@@ -314,20 +351,16 @@ pub async fn update_global_ip_restriction(
     State(state): State<ApiState>,
     Path((ns, name)): Path<(String, String)>,
     Json(req): Json<UpdateRequest>,
-) -> Json<ApiResponse<FanOutResponse>> {
+) -> (StatusCode, Json<ApiResponse<FanOutResponse>>) {
+    // Early validation: bad request body must surface as HTTP 400 so automated
+    // callers can rely on the status code instead of inspecting nested fields.
     {
         let mut cloned = req.data.clone();
         if let Err(e) = cloned.validate_and_init() {
-            return Json(ApiResponse::success(FanOutResponse {
-                success: vec![],
-                failed: vec![ControllerOpResult {
-                    controller_id: "<validation>".to_string(),
-                    detail: None,
-                    error: Some(format!("invalid PM data: {}", e)),
-                    status_code: Some(400),
-                }],
-                warnings: vec![],
-            }));
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::err_body(format!("invalid PM data: {}", e))),
+            );
         }
     }
     let (targets, warnings) = resolve_targets(&state, &req.controllers);
@@ -335,11 +368,15 @@ pub async fn update_global_ip_restriction(
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
     let results = fan_out_http(&state, targets, "PUT", path, body).await;
     let (success, failed) = partition(results);
-    Json(ApiResponse::success(FanOutResponse {
-        success,
-        failed,
-        warnings,
-    }))
+    let status = fanout_status(&success, &failed);
+    (
+        status,
+        Json(ApiResponse::ok_body(FanOutResponse {
+            success,
+            failed,
+            warnings,
+        })),
+    )
 }
 
 // =====================================================================
@@ -357,16 +394,20 @@ pub async fn delete_global_ip_restriction(
     State(state): State<ApiState>,
     Path((ns, name)): Path<(String, String)>,
     Json(req): Json<DeleteRequest>,
-) -> Json<ApiResponse<FanOutResponse>> {
+) -> (StatusCode, Json<ApiResponse<FanOutResponse>>) {
     let (targets, warnings) = resolve_targets(&state, &req.controllers);
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
     let results = fan_out_http(&state, targets, "DELETE", path, vec![]).await;
     let (success, failed) = partition(results);
-    Json(ApiResponse::success(FanOutResponse {
-        success,
-        failed,
-        warnings,
-    }))
+    let status = fanout_status(&success, &failed);
+    (
+        status,
+        Json(ApiResponse::ok_body(FanOutResponse {
+            success,
+            failed,
+            warnings,
+        })),
+    )
 }
 
 // =====================================================================
@@ -385,30 +426,29 @@ pub async fn patch_enable(
     State(state): State<ApiState>,
     Path((ns, name)): Path<(String, String)>,
     Json(req): Json<PatchEnableRequest>,
-) -> Json<ApiResponse<FanOutResponse>> {
+) -> (StatusCode, Json<ApiResponse<FanOutResponse>>) {
     let (targets, warnings) = resolve_targets(&state, &req.controllers);
-    let pm_key = format!("{}/{}", ns, name);
-    let per_ctrl = state
-        .metadata_store
-        .get_global_ip_restriction(&pm_key)
-        .unwrap_or_default();
 
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
     let futs = targets.into_iter().map(|cid| {
-        let base = per_ctrl.get(&cid).cloned();
         let proxy = state.proxy.clone();
         let ns = ns.clone();
         let name = name.clone();
         let path = path.clone();
         let enable = req.enable;
         async move {
-            let Some(base) = base else {
-                return ControllerOpResult {
-                    controller_id: cid,
-                    detail: None,
-                    error: Some("PM not found on this controller".to_string()),
-                    status_code: Some(404),
-                };
+            // GET live data from the Controller to avoid clobbering concurrent writes
+            // with a stale Center-cache snapshot.
+            let base = match fetch_live_pm_data(&proxy, &cid, &path).await {
+                Ok(d) => d,
+                Err((code, msg)) => {
+                    return ControllerOpResult {
+                        controller_id: cid,
+                        detail: None,
+                        error: Some(msg),
+                        status_code: Some(code),
+                    }
+                }
             };
             let data = GlobalConnectionIpRestrictionData {
                 enable,
@@ -419,6 +459,9 @@ pub async fn patch_enable(
             let body = build_pm_json(&ns, &name, &data).into_bytes();
             let mut headers = HashMap::new();
             headers.insert("content-type".to_string(), "application/json".to_string());
+            // NOTE: There is still a TOCTOU window between the GET above and this PUT.
+            // A concurrent write between the two calls means the last writer wins silently.
+            // Eliminating this would require Controller-side ETag/resourceVersion support.
             match proxy.forward(&cid, "PUT".to_string(), path, headers, body).await {
                 Ok(r) if r.status_code >= 200 && r.status_code < 300 => ControllerOpResult {
                     controller_id: cid,
@@ -447,11 +490,15 @@ pub async fn patch_enable(
         fed_metrics::labels::fanout_op::PATCH_ENABLE,
         fanout_result_label(success.len(), failed.len()),
     );
-    Json(ApiResponse::success(FanOutResponse {
-        success,
-        failed,
-        warnings,
-    }))
+    let status = fanout_status(&success, &failed);
+    (
+        status,
+        Json(ApiResponse::ok_body(FanOutResponse {
+            success,
+            failed,
+            warnings,
+        })),
+    )
 }
 
 // =====================================================================
@@ -470,30 +517,30 @@ pub async fn patch_active_profile(
     State(state): State<ApiState>,
     Path((ns, name)): Path<(String, String)>,
     Json(req): Json<PatchActiveProfileRequest>,
-) -> Json<ApiResponse<FanOutResponse>> {
+) -> (StatusCode, Json<ApiResponse<FanOutResponse>>) {
     let (targets, warnings) = resolve_targets(&state, &req.controllers);
-    let pm_key = format!("{}/{}", ns, name);
-    let per_ctrl = state
-        .metadata_store
-        .get_global_ip_restriction(&pm_key)
-        .unwrap_or_default();
 
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
     let futs = targets.into_iter().map(|cid| {
-        let base = per_ctrl.get(&cid).cloned();
         let proxy = state.proxy.clone();
         let ns = ns.clone();
         let name = name.clone();
         let path = path.clone();
         let active_profile = req.active_profile.clone();
         async move {
-            let Some(base) = base else {
-                return ControllerOpResult {
-                    controller_id: cid,
-                    detail: None,
-                    error: Some("PM not found on this controller".to_string()),
-                    status_code: Some(404),
-                };
+            // GET live data from the Controller to avoid clobbering concurrent writes
+            // with a stale Center-cache snapshot. Profile existence is validated against
+            // the live state for the same reason.
+            let base = match fetch_live_pm_data(&proxy, &cid, &path).await {
+                Ok(d) => d,
+                Err((code, msg)) => {
+                    return ControllerOpResult {
+                        controller_id: cid,
+                        detail: None,
+                        error: Some(msg),
+                        status_code: Some(code),
+                    }
+                }
             };
             if !base.profiles.contains_key(&active_profile) {
                 return ControllerOpResult {
@@ -512,6 +559,9 @@ pub async fn patch_active_profile(
             let body = build_pm_json(&ns, &name, &data).into_bytes();
             let mut headers = HashMap::new();
             headers.insert("content-type".to_string(), "application/json".to_string());
+            // NOTE: There is still a TOCTOU window between the GET above and this PUT.
+            // A concurrent write between the two calls means the last writer wins silently.
+            // Eliminating this would require Controller-side ETag/resourceVersion support.
             match proxy.forward(&cid, "PUT".to_string(), path, headers, body).await {
                 Ok(r) if r.status_code >= 200 && r.status_code < 300 => ControllerOpResult {
                     controller_id: cid,
@@ -540,11 +590,15 @@ pub async fn patch_active_profile(
         fed_metrics::labels::fanout_op::PATCH_PROFILE,
         fanout_result_label(success.len(), failed.len()),
     );
-    Json(ApiResponse::success(FanOutResponse {
-        success,
-        failed,
-        warnings,
-    }))
+    let status = fanout_status(&success, &failed);
+    (
+        status,
+        Json(ApiResponse::ok_body(FanOutResponse {
+            success,
+            failed,
+            warnings,
+        })),
+    )
 }
 
 // =====================================================================
@@ -566,35 +620,43 @@ pub async fn sync_global_ip_restriction(
     State(state): State<ApiState>,
     Path((ns, name)): Path<(String, String)>,
     Json(req): Json<SyncRequest>,
-) -> Json<ApiResponse<FanOutResponse>> {
+) -> (StatusCode, Json<ApiResponse<FanOutResponse>>) {
     let pm_key = format!("{}/{}", ns, name);
     let per_ctrl = match state.metadata_store.get_global_ip_restriction(&pm_key) {
         Some(m) => m,
         None => {
-            return Json(ApiResponse::success(FanOutResponse {
-                success: vec![],
-                failed: vec![ControllerOpResult {
-                    controller_id: "<lookup>".to_string(),
-                    detail: None,
-                    error: Some("PM not found".to_string()),
-                    status_code: Some(404),
-                }],
-                warnings: vec![],
-            }));
+            // 404, not 502: Center is the authoritative origin here; no upstream gateway involved.
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::ok_body(FanOutResponse {
+                    success: vec![],
+                    failed: vec![ControllerOpResult {
+                        controller_id: "<lookup>".to_string(),
+                        detail: None,
+                        error: Some("PM not found".to_string()),
+                        status_code: Some(404),
+                    }],
+                    warnings: vec![],
+                })),
+            );
         }
     };
 
     let Some(source_entry) = per_ctrl.get(&req.source_controller) else {
-        return Json(ApiResponse::success(FanOutResponse {
-            success: vec![],
-            failed: vec![ControllerOpResult {
-                controller_id: req.source_controller.clone(),
-                detail: None,
-                error: Some("source controller does not have this PM".to_string()),
-                status_code: Some(404),
-            }],
-            warnings: vec![],
-        }));
+        // 404: source controller has no entry for this PM (not-found, not a gateway failure).
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::ok_body(FanOutResponse {
+                success: vec![],
+                failed: vec![ControllerOpResult {
+                    controller_id: req.source_controller.clone(),
+                    detail: None,
+                    error: Some("source controller does not have this PM".to_string()),
+                    status_code: Some(404),
+                }],
+                warnings: vec![],
+            })),
+        );
     };
 
     // Resolve targets: "all" = all online except source.
@@ -617,9 +679,79 @@ pub async fn sync_global_ip_restriction(
     let path = format!("/api/v1/namespaced/pluginmetadata/{}/{}", ns, name);
     let results = fan_out_http(&state, targets, "PUT", path, body).await;
     let (success, failed) = partition(results);
-    Json(ApiResponse::success(FanOutResponse {
-        success,
-        failed,
-        warnings,
-    }))
+    let status = fanout_status(&success, &failed);
+    (
+        status,
+        Json(ApiResponse::ok_body(FanOutResponse {
+            success,
+            failed,
+            warnings,
+        })),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::resources::plugin_metadata::ProfileRules;
+
+    fn make_pm_json(data: &GlobalConnectionIpRestrictionData) -> serde_json::Value {
+        serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "PluginMetaData",
+            "metadata": { "name": "test", "namespace": "default" },
+            "spec": {
+                "metadata": {
+                    "type": "GlobalConnectionIpRestriction",
+                    "config": serde_json::to_value(data).unwrap()
+                }
+            }
+        })
+    }
+
+    fn sample_data() -> GlobalConnectionIpRestrictionData {
+        GlobalConnectionIpRestrictionData {
+            enable: true,
+            active_profile: "prod".to_string(),
+            profiles: {
+                let mut m = std::collections::HashMap::new();
+                m.insert(
+                    "prod".to_string(),
+                    ProfileRules {
+                        allow: None,
+                        deny: None,
+                        default_action: Default::default(),
+                        allow_matcher: None,
+                        deny_matcher: None,
+                    },
+                );
+                m
+            },
+            description: Some("test desc".to_string()),
+        }
+    }
+
+    #[test]
+    fn extract_pm_data_success() {
+        let v = make_pm_json(&sample_data());
+        let got = extract_pm_data(&v).expect("should parse valid PM JSON");
+        assert!(got.enable);
+        assert_eq!(got.active_profile, "prod");
+        assert!(got.profiles.contains_key("prod"));
+        assert_eq!(got.description.as_deref(), Some("test desc"));
+    }
+
+    #[test]
+    fn extract_pm_data_missing_spec() {
+        let v = serde_json::json!({ "apiVersion": "edgion.io/v1", "kind": "PluginMetaData" });
+        assert!(extract_pm_data(&v).is_err());
+    }
+
+    #[test]
+    fn extract_pm_data_invalid_config() {
+        let v = serde_json::json!({
+            "spec": { "metadata": { "config": "not-an-object" } }
+        });
+        assert!(extract_pm_data(&v).is_err());
+    }
 }

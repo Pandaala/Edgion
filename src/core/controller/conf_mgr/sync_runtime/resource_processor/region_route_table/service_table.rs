@@ -5,29 +5,9 @@
 //! `ref_plugins` and `cluster_pm_ref` are updated by EdgionPlugins handlers.
 
 use parking_lot::RwLock;
-use serde::Serialize;
 use std::collections::HashMap;
 
-use crate::types::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
-use crate::types::resources::plugin_metadata::ServiceRegionDef;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RefPluginEntry {
-    pub kind: String,
-    pub namespace: String,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServiceRegionRouteEntry {
-    pub pm_namespace: String,
-    pub pm_name: String,
-    pub cluster_pm_ref: Option<PluginMetaDataRef>,
-    pub regions: Vec<ServiceRegionDef>,
-    pub ref_plugins: Vec<RefPluginEntry>,
-}
+pub use crate::types::resources::plugin_metadata::{RefPluginEntry, ServiceRegionRouteEntry};
 
 pub struct RegionRouteServiceTable {
     data: RwLock<HashMap<String, ServiceRegionRouteEntry>>,

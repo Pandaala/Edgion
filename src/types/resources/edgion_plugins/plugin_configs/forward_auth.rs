@@ -4,7 +4,6 @@
 //! If the auth service responds with 2xx, the request is forwarded to upstream.
 //! Otherwise, the auth service's response is returned to the client.
 
-use super::lru_cache_config::LruCacheConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -115,17 +114,6 @@ pub struct ForwardAuthConfig {
     /// Default: 0 (no delay).
     #[serde(default)]
     pub auth_failure_delay_ms: u64,
-
-    /// Result cache TTL in seconds. Default: 0 (disabled).
-    /// Only 2xx responses (per `is_success_status`) are cached.
-    /// Non-2xx responses are never cached.
-    #[serde(default)]
-    pub cache_ttl: u64,
-
-    /// LRU cache configuration (capacity and sharding).
-    /// Omit or set fields to 0 to use global defaults.
-    #[serde(default)]
-    pub lru_cache: LruCacheConfig,
 }
 
 fn default_method() -> String {
@@ -154,8 +142,6 @@ impl Default for ForwardAuthConfig {
             status_on_error: default_status_on_error(),
             hide_credentials: false,
             auth_failure_delay_ms: 0,
-            cache_ttl: 0,
-            lru_cache: LruCacheConfig::default(),
         }
     }
 }
@@ -187,6 +173,14 @@ impl ForwardAuthConfig {
             return Some("statusOnError must be between 200 and 599");
         }
         None
+    }
+}
+
+use crate::types::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for ForwardAuthConfig {
+    fn validation_error(&self) -> Option<String> {
+        self.get_validation_error().map(str::to_owned)
     }
 }
 

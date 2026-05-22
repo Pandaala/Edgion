@@ -84,12 +84,13 @@ rate_limit:
   max_estimator_slots_k: 1024     # CMS 最大精度上限
   gateway_instance_count: 1       # 集群限流：实例数（无 Controller 推送时的静态 fallback）
 
-# ─── 插件元数据 ────────────────────────────────────────────────────
+# ─── 日志脱敏（默认关闭）──────────────────────────────────────────
 
-plugin_metadata:
-  # 注意：设置此字段会完全替换默认列表，不是追加。
-  # 如需保留默认保护，须手动包含全部默认关键词再加上自定义词。
-  ctx_log_denylist: [auth, pass, claim, payload, token, secret, credential]
+access_log_sensitive:
+  mode: off                        # off | replace | wrap
+  # replace_with: "***"            # mode=replace 时的替换字符串
+  # wrap_prefix: "<E>"             # mode=wrap 时的前缀
+  # wrap_suffix: "</E>"            # mode=wrap 时的后缀
 ```
 
 ## 配置参数
@@ -169,18 +170,32 @@ plugin_metadata:
 | `max_estimator_slots_k` | `Integer` | `1024` | CMS 最大 slot 数上限 |
 | `gateway_instance_count` | `Integer` | `1` | Gateway 实例数，集群限流时作为分母，**集群部署时必须设置正确值** |
 
-### [plugin_metadata]
+### [access_log_sensitive]
+
+控制 access log、ssl.log、plugin log 中已标注敏感字段的脱敏行为。**默认关闭**——所有敏感字段以明文输出，与历史行为一致。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `ctx_log_denylist` | `Array<String>` | `["auth","pass","claim","payload","token","secret","credential"]` | ctx key 中包含这些子串（大小写不敏感）的条目不写入 access log |
+| `mode` | `Enum` | `"off"` | 脱敏模式：`"off"`（关闭，明文）/ `"replace"`（整体替换）/ `"wrap"`（包裹标记） |
+| `replace_with` | `String` | `"***"` | `mode=replace` 时整体替换敏感值的字符串 |
+| `wrap_prefix` | `String` | `"<E>"` | `mode=wrap` 时附加在敏感值前的前缀 |
+| `wrap_suffix` | `String` | `"</E>"` | `mode=wrap` 时附加在敏感值后的后缀 |
 
-**重要：** 在配置文件中设置此字段会**完全替换**默认列表，而非追加。如需保留默认保护，须手动包含所有默认关键词再加上自定义词。
+**三种模式的行为差异**（以 `client_addr=1.2.3.4` 为例）：
 
-过滤规则（满足其一则跳过）：
+| 模式 | 输出 | 用途 |
+|------|------|------|
+| `off` | `"1.2.3.4"` | 默认，明文，便于运维和调试 |
+| `replace` | `"***"` | 完全屏蔽敏感值，最强保护 |
+| `wrap` | `"<E>1.2.3.4</E>"` | 保留原值，但标记敏感片段，便于下游日志系统识别后做二次脱敏或审计 |
 
-1. Key 以 `_` 开头（plugin 内部私有约定）
-2. Key 包含 `ctx_log_denylist` 中任意子串（大小写不敏感）
+**生效范围**：
+
+- **access log**：`client_addr`、`remote_addr`、`path`、`x_forwarded_for`、`sni`、客户端证书的 `subject`/`sans`/`cn`
+- **plugin log**：插件代码中通过 `sensitive(...)` 标注的参数；DSL 脚本里 `log_warn(value)` / `log_error(value)` 的用户参数
+- **ssl.log**：mTLS 白名单校验失败时错误信息里的客户端证书字段
+
+**注意**：Wrap 模式自定义前后缀时，建议总长度（`wrap_prefix.len() + wrap_suffix.len()`）不超过 36 字节，否则会压缩 plugin log 单条目可写长度。
 
 ## 常见配置场景
 
@@ -216,13 +231,26 @@ rate_limit:
   gateway_instance_count: 3   # 部署了 3 个 Gateway 副本
 ```
 
-### 扩展敏感字段屏蔽列表
+### 启用日志脱敏
+
+合规场景下需要保护用户 IP、路径等敏感字段时，使用 `replace` 模式整体屏蔽：
 
 ```yaml
-plugin_metadata:
-  # 保留全部默认关键词，追加 "tenant"
-  ctx_log_denylist: [auth, pass, claim, payload, token, secret, credential, tenant]
+access_log_sensitive:
+  mode: replace
+  replace_with: "***"
 ```
+
+如需保留原值同时为下游审计系统打标，使用 `wrap` 模式：
+
+```yaml
+access_log_sensitive:
+  mode: wrap
+  wrap_prefix: "<sens>"
+  wrap_suffix: "</sens>"
+```
+
+输出示例：`"client-addr": "<sens>1.2.3.4</sens>"`，下游可通过正则识别 `<sens>...</sens>` 区间做二次处理。
 
 ### 启用 mTLS 连接 Controller
 

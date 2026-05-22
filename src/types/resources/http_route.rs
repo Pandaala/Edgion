@@ -43,16 +43,19 @@ pub struct HTTPRouteSpec {
     /// Controller-resolved effective hostnames (intersection of route hostnames and listener hostnames).
     /// Set by the controller ProcessorHandler; the data plane uses these directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub resolved_hostnames: Option<Vec<String>>,
 
     /// Pre-computed listener keys from parentRef resolution (set by Controller).
     /// Used by Gateway to bind this route to per-listener route tables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub resolved_listeners: Option<Vec<ListenerKey>>,
 
     /// Controller-identified invalid rule indices.
     /// Gateway skips these rules during route compilation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub invalid_rule_indices: Option<Vec<usize>>,
 
     /// Rules defines the HTTP routing rules
@@ -117,6 +120,19 @@ pub struct HTTPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub parsed_retry: Option<ParsedRouteRetry>,
+
+    /// Pre-parsed `edgion.io/forward-raw-path` annotation from parent HTTPRoute.metadata.
+    ///   - `None` — annotation absent (default flow)
+    ///   - `Some(true)` — annotation `"true"` (force raw forward)
+    ///   - `Some(false)` — annotation `"false"` (force normalized forward, overrides
+    ///     region_route's `preserve_raw_path`)
+    ///
+    /// Parsed in `http_route_preparse.rs` at HTTPRoute load time and copied to
+    /// every rule under that route. Invalid annotation values are logged at INFO
+    /// and treated as `None`.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub parsed_forward_raw_path: Option<bool>,
 }
 
 impl Clone for HTTPRouteRule {
@@ -135,6 +151,7 @@ impl Clone for HTTPRouteRule {
             plugin_runtime: self.plugin_runtime.clone(),
             parsed_timeouts: self.parsed_timeouts.clone(),
             parsed_retry: self.parsed_retry.clone(),
+            parsed_forward_raw_path: self.parsed_forward_raw_path,
         }
     }
 }
@@ -151,6 +168,7 @@ impl fmt::Debug for HTTPRouteRule {
             .field("session_persistence", &self.session_persistence)
             .field("lb", &"<skipped>")
             .field("plugin_runtime", &self.plugin_runtime)
+            .field("parsed_forward_raw_path", &self.parsed_forward_raw_path)
             .finish()
     }
 }
@@ -182,7 +200,24 @@ pub struct HTTPPathMatch {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub match_type: Option<String>,
 
-    /// Value of the HTTP path to match_engine against
+    /// Value of the HTTP path to match against.
+    ///
+    /// For `Exact` and `PathPrefix` types the value may also contain named
+    /// path parameters using the `:name` syntax (Edgion extension to the
+    /// Gateway API spec). Examples:
+    ///   - `/users/:id` — captures `id` for the second segment
+    ///   - `/api/:version/users/:uid/posts/:postId` — captures multiple
+    ///   - `::literal` — escape: literal `:literal` segment, not a parameter
+    ///
+    /// Captured values are exposed at runtime through the DSL builtin
+    /// `req.path_param("name")` and via `$name` template substitution in the
+    /// `ProxyRewrite` plugin (URI and header values). They are not consumed
+    /// by Gateway API standard filters (`URLRewrite`, `RequestRedirect`,
+    /// `RequestHeaderModifier`, ...), which keep their literal-string
+    /// semantics defined by the spec.
+    ///
+    /// `RegularExpression` paths do not participate in `:name` extraction;
+    /// use regex capture groups (`$1`-`$9`) in `ProxyRewrite` for that case.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
 }
@@ -269,6 +304,7 @@ pub struct HTTPBackendRef {
     /// When present, Gateway will reject requests to this backend
     /// and log the denial details to access log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub ref_denied: Option<RefDenied>,
 }
 
@@ -311,10 +347,6 @@ pub struct HTTPRouteFilter {
     /// ExtensionRef is an optional, implementation-specific extension to the "filter" behavior
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension_ref: Option<LocalObjectReference>,
-
-    /// Max depth for nested ExtensionRef plugin resolution (default 5)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extension_ref_max_depth: Option<usize>,
 }
 
 /// HTTPRouteFilterType identifies a type of HTTPRoute filter
@@ -699,6 +731,7 @@ pub struct HTTPRouteTimeouts {
     /// Gateway API v1.4 standard field
     /// Format: Duration (e.g., "10s", "1m", "500ms")
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub request: Option<String>,
 
     /// BackendRequest specifies a timeout for an individual request from the gateway
@@ -706,6 +739,7 @@ pub struct HTTPRouteTimeouts {
     /// sent from the gateway to when the full response has been received from the backend.
     /// Format: Duration (e.g., "10s", "1m", "500ms")
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub backend_request: Option<String>,
 }
 
@@ -723,6 +757,7 @@ pub struct HTTPRouteRetry {
     /// retry attempts and is represented in Gateway API Duration formatting.
     /// Format: Duration (e.g., "10ms", "1s")
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub backoff: Option<String>,
 
     /// Codes specifies the HTTP response status codes that a Gateway should
@@ -746,6 +781,7 @@ pub struct SessionPersistence {
     /// session, regardless of activity.
     /// Format: Duration (e.g., "1h", "24h")
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub absolute_timeout: Option<String>,
 
     /// IdleTimeout defines the idle timeout of the persistent session.
@@ -753,6 +789,7 @@ pub struct SessionPersistence {
     /// IdleTimeout, the session becomes invalid.
     /// Format: Duration (e.g., "30m", "1h")
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub idle_timeout: Option<String>,
 
     /// Type defines the type of session persistence such as through

@@ -1,0 +1,12 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: observed-gen-highfreq-class
+  generation: 1
+spec:
+  controllerName: edgion.io/gateway-controller
+  description: "GatewayClass for high-frequency observedGeneration testing"
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: example-gateway

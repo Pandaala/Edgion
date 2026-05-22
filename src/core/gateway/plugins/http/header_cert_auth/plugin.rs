@@ -16,37 +16,48 @@ use x509_parser::parse_x509_certificate;
 use x509_parser::pem::Pem;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
-use crate::core::gateway::plugins::http::common::auth_common::send_auth_error_response;
+use crate::core::gateway::plugins::http::common::auth_common::send_gateway_auth_error_response;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::ctx::ClientCertInfo;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig};
 
+/// Pre-parsed CA entry kept in the trust pool.
+///
+/// `subject_der` is the DER-encoded `subject` Name, used for O(1) byte
+/// comparison against a leaf's `issuer` Name on every request. `cert_der`
+/// retains the full CA DER so that on issuer match we can parse it once and
+/// hand the SPKI to `verify_signature`.
+struct ParsedCa {
+    subject_der: Vec<u8>,
+    cert_der: Vec<u8>,
+}
+
 /// Header Cert Auth request plugin.
 pub struct HeaderCertAuth {
     name: String,
     config: HeaderCertAuthConfig,
-    ca_certs_der: Vec<Vec<u8>>,
+    ca_pool: Vec<ParsedCa>,
 }
 
 impl HeaderCertAuth {
     /// Create plugin instance.
     pub fn new(config: &HeaderCertAuthConfig, plugin_namespace: String) -> Self {
-        let ca_certs_der = Self::load_ca_certs(config, &plugin_namespace);
+        let ca_pool = Self::load_ca_certs(config, &plugin_namespace);
         Self {
             name: "HeaderCertAuth".to_string(),
             config: config.clone(),
-            ca_certs_der,
+            ca_pool,
         }
     }
 
-    fn load_ca_certs(config: &HeaderCertAuthConfig, plugin_namespace: &str) -> Vec<Vec<u8>> {
-        let mut out = Vec::new();
+    fn load_ca_certs(config: &HeaderCertAuthConfig, plugin_namespace: &str) -> Vec<ParsedCa> {
+        let mut raw_ders: Vec<Vec<u8>> = Vec::new();
 
         if let Some(secrets) = &config.resolved_ca_secrets {
             for secret in secrets {
                 if let Some(raw) = Self::read_ca_pem_from_secret(secret) {
-                    out.extend(Self::parse_ca_bundle_to_der(&raw));
+                    raw_ders.extend(Self::parse_ca_bundle_to_der(&raw));
                 }
             }
         } else {
@@ -56,25 +67,29 @@ impl HeaderCertAuth {
                     continue;
                 };
                 if let Some(raw) = Self::read_ca_pem_from_secret(&secret) {
-                    out.extend(Self::parse_ca_bundle_to_der(&raw));
+                    raw_ders.extend(Self::parse_ca_bundle_to_der(&raw));
                 }
             }
         }
 
         // CA validity is checked only here at init; leaf validity is checked per-request.
-        // Dropping expired or unparseable CAs now prevents them from ever being used.
-        out.retain(|der| match parse_x509_certificate(der) {
-            Ok((_, cert)) if cert.validity().is_valid() => true,
-            Ok(_) => {
-                tracing::warn!(component = "header_cert_auth", namespace = %plugin_namespace, "Dropping expired CA cert from trust pool");
-                false
+        // Drop expired or unparseable CAs and extract subject DER for fast per-request matching.
+        let mut pool: Vec<ParsedCa> = Vec::with_capacity(raw_ders.len());
+        for cert_der in raw_ders {
+            match parse_x509_certificate(&cert_der) {
+                Ok((_, cert)) if cert.validity().is_valid() => {
+                    let subject_der = cert.subject().as_raw().to_vec();
+                    pool.push(ParsedCa { subject_der, cert_der });
+                }
+                Ok(_) => {
+                    tracing::warn!(component = "header_cert_auth", namespace = %plugin_namespace, "Dropping expired CA cert from trust pool");
+                }
+                Err(_) => {
+                    tracing::warn!(component = "header_cert_auth", namespace = %plugin_namespace, "Dropping unparseable CA cert DER from trust pool");
+                }
             }
-            Err(_) => {
-                tracing::warn!(component = "header_cert_auth", namespace = %plugin_namespace, "Dropping unparseable CA cert DER from trust pool");
-                false
-            }
-        });
-        out
+        }
+        pool
     }
 
     fn read_ca_pem_from_secret(secret: &k8s_openapi::api::core::v1::Secret) -> Option<Vec<u8>> {
@@ -206,7 +221,7 @@ impl HeaderCertAuth {
     }
 
     fn verify_against_ca(&self, cert_pem: &[u8]) -> Result<(), &'static str> {
-        if self.ca_certs_der.is_empty() {
+        if self.ca_pool.is_empty() {
             return Err("no-ca-configured");
         }
 
@@ -216,14 +231,17 @@ impl HeaderCertAuth {
             return Err("expired-leaf-cert");
         }
 
-        for ca_der in &self.ca_certs_der {
-            let Ok((_, ca)) = parse_x509_certificate(ca_der) else {
-                continue;
-            };
-            if leaf.issuer() != ca.subject() {
+        let issuer_raw = leaf.issuer().as_raw();
+        for ca in &self.ca_pool {
+            if issuer_raw != ca.subject_der.as_slice() {
                 continue;
             }
-            if leaf.verify_signature(Some(ca.public_key())).is_ok() {
+            // CA DER was successfully parsed at init; re-parse here only on issuer match
+            // to obtain a borrowed SubjectPublicKeyInfo for signature verification.
+            let Ok((_, ca_cert)) = parse_x509_certificate(&ca.cert_der) else {
+                continue;
+            };
+            if leaf.verify_signature(Some(ca_cert.public_key())).is_ok() {
                 return Ok(());
             }
         }
@@ -329,11 +347,12 @@ impl HeaderCertAuth {
     ) -> PluginRunningResult {
         plugin_log.push_err(detail);
         self.apply_auth_failure_delay().await;
-        let _ = send_auth_error_response(
+        let _ = send_gateway_auth_error_response(
             session,
             self.config.error_status,
             "TLSCert",
             "edgion",
+            None,
             &self.config.error_message,
         )
         .await;
@@ -438,7 +457,7 @@ mod tests {
 
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
-        assert!(log.contains("OK"));
+        assert!(log.contains("cert verify:ok"));
     }
 
     #[tokio::test]
@@ -459,5 +478,118 @@ mod tests {
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert!(log.contains("Allow anonymous"));
+    }
+
+    // Generate a CA cert + a leaf cert signed by that CA, both PEM-encoded.
+    fn make_ca_and_leaf(
+        ca_not_before_days: i64,
+        ca_not_after_days: i64,
+        leaf_not_before_days: i64,
+        leaf_not_after_days: i64,
+    ) -> (String, String) {
+        use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
+
+        let now = ::time::OffsetDateTime::now_utc();
+
+        let ca_key = KeyPair::generate().expect("CA key gen failed");
+        let mut ca_params = CertificateParams::new(vec!["Edgion Test CA".to_string()]).expect("CA params failed");
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params.not_before = now + ::time::Duration::days(ca_not_before_days);
+        ca_params.not_after = now + ::time::Duration::days(ca_not_after_days);
+        let ca_cert = ca_params.self_signed(&ca_key).expect("CA self-sign failed");
+        let ca_issuer = Issuer::from_params(&ca_params, &ca_key);
+
+        let leaf_key = KeyPair::generate().expect("leaf key gen failed");
+        let mut leaf_params = CertificateParams::new(vec!["leaf.example.com".to_string()]).expect("leaf params failed");
+        leaf_params.not_before = now + ::time::Duration::days(leaf_not_before_days);
+        leaf_params.not_after = now + ::time::Duration::days(leaf_not_after_days);
+        let leaf_cert = leaf_params.signed_by(&leaf_key, &ca_issuer).expect("leaf sign failed");
+
+        (ca_cert.pem(), leaf_cert.pem())
+    }
+
+    fn make_ca_secret(ca_pem: &str) -> k8s_openapi::api::core::v1::Secret {
+        let mut data = std::collections::BTreeMap::new();
+        data.insert(
+            "ca.crt".to_string(),
+            k8s_openapi::ByteString(ca_pem.as_bytes().to_vec()),
+        );
+        k8s_openapi::api::core::v1::Secret {
+            data: Some(data),
+            ..Default::default()
+        }
+    }
+
+    fn header_mode_plugin_with_ca(secrets: Vec<k8s_openapi::api::core::v1::Secret>) -> HeaderCertAuth {
+        let config = HeaderCertAuthConfig {
+            mode: CertSourceMode::Header,
+            resolved_ca_secrets: Some(secrets),
+            ..Default::default()
+        };
+        HeaderCertAuth::new(&config, "default".to_string())
+    }
+
+    #[test]
+    fn test_verify_against_ca_succeeds_with_matching_ca() {
+        let (ca_pem, leaf_pem) = make_ca_and_leaf(-1, 30, -1, 30);
+        let plugin = header_mode_plugin_with_ca(vec![make_ca_secret(&ca_pem)]);
+        assert!(plugin.verify_against_ca(leaf_pem.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_verify_against_ca_rejects_issuer_mismatch() {
+        // Trusted CA in pool, but leaf is signed by a different (untrusted) CA.
+        let (trusted_ca_pem, _) = make_ca_and_leaf(-1, 30, -1, 30);
+        let (_, foreign_leaf_pem) = make_ca_and_leaf(-1, 30, -1, 30);
+        let plugin = header_mode_plugin_with_ca(vec![make_ca_secret(&trusted_ca_pem)]);
+        assert_eq!(
+            plugin.verify_against_ca(foreign_leaf_pem.as_bytes()).unwrap_err(),
+            "ca-verification-failed"
+        );
+    }
+
+    #[test]
+    fn test_verify_against_ca_rejects_expired_leaf() {
+        let (ca_pem, expired_leaf_pem) = make_ca_and_leaf(-30, 30, -30, -1);
+        let plugin = header_mode_plugin_with_ca(vec![make_ca_secret(&ca_pem)]);
+        assert_eq!(
+            plugin.verify_against_ca(expired_leaf_pem.as_bytes()).unwrap_err(),
+            "expired-leaf-cert"
+        );
+    }
+
+    #[test]
+    fn test_verify_against_ca_no_ca_when_pool_empty() {
+        let (_, leaf_pem) = make_ca_and_leaf(-1, 30, -1, 30);
+        let config = HeaderCertAuthConfig {
+            mode: CertSourceMode::Header,
+            ..Default::default()
+        };
+        let plugin = HeaderCertAuth::new(&config, "default".to_string());
+        assert_eq!(
+            plugin.verify_against_ca(leaf_pem.as_bytes()).unwrap_err(),
+            "no-ca-configured"
+        );
+    }
+
+    #[test]
+    fn test_verify_against_ca_matches_non_first_ca_in_pool() {
+        // Pool contains [foreign_ca, trusted_ca]; leaf is signed by trusted_ca.
+        // Exercises the loop iterating past a non-matching CA before hitting the match.
+        let (foreign_ca_pem, _) = make_ca_and_leaf(-1, 30, -1, 30);
+        let (trusted_ca_pem, leaf_pem) = make_ca_and_leaf(-1, 30, -1, 30);
+        let plugin = header_mode_plugin_with_ca(vec![make_ca_secret(&foreign_ca_pem), make_ca_secret(&trusted_ca_pem)]);
+        assert!(plugin.verify_against_ca(leaf_pem.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_load_ca_certs_drops_expired_ca_at_init() {
+        // Expired CA should be filtered out at init; pool becomes empty.
+        let (expired_ca_pem, leaf_pem) = make_ca_and_leaf(-30, -1, -1, 30);
+        let plugin = header_mode_plugin_with_ca(vec![make_ca_secret(&expired_ca_pem)]);
+        assert_eq!(
+            plugin.verify_against_ca(leaf_pem.as_bytes()).unwrap_err(),
+            "no-ca-configured"
+        );
     }
 }

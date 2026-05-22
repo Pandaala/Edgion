@@ -12,6 +12,7 @@
 use async_trait::async_trait;
 use tokio::time::{sleep, Duration};
 
+use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::MockConfig;
@@ -55,7 +56,7 @@ impl RequestFilter for Mock {
 
         if self.config.terminate {
             // Return mock response (terminates request, no upstream call)
-            plugin_log.push(&format!("mock served {}", self.config.status_code));
+            plugin_log.push_fmt("mock served {}", la![self.config.status_code.to_string().as_str()]);
             PluginRunningResult::ErrResponse {
                 status: self.config.status_code,
                 body: self.config.body.clone(),

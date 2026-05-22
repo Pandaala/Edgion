@@ -31,12 +31,30 @@ use crate::types::filters::PluginRunningResult;
 pub struct ConditionalRequestFilter {
     inner: Box<dyn RequestFilter>,
     conditions: Option<PluginConditions>,
+    alias: Option<String>,
 }
 
 impl ConditionalRequestFilter {
     /// Create a new conditional request filter
     pub fn new(inner: Box<dyn RequestFilter>, conditions: Option<PluginConditions>) -> Self {
-        Self { inner, conditions }
+        Self {
+            inner,
+            conditions,
+            alias: None,
+        }
+    }
+
+    /// Create a wrapper that also carries an operator-defined alias.
+    pub fn with_alias(
+        inner: Box<dyn RequestFilter>,
+        conditions: Option<PluginConditions>,
+        alias: Option<String>,
+    ) -> Self {
+        Self {
+            inner,
+            conditions,
+            alias,
+        }
     }
 
     /// Create a wrapper without conditions (always runs)
@@ -52,11 +70,15 @@ impl RequestFilter for ConditionalRequestFilter {
         self.inner.name()
     }
 
+    fn alias(&self) -> Option<&str> {
+        self.alias.as_deref()
+    }
+
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         // Check conditions before running
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let eval = conditions.evaluate_detail(session).await;
+                let eval = conditions.evaluate_detail(session, log).await;
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
                         log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
@@ -77,12 +99,30 @@ impl RequestFilter for ConditionalRequestFilter {
 pub struct ConditionalUpstreamResponseFilter {
     inner: Box<dyn UpstreamResponseFilter>,
     conditions: Option<PluginConditions>,
+    alias: Option<String>,
 }
 
 impl ConditionalUpstreamResponseFilter {
     /// Create a new conditional upstream response filter
     pub fn new(inner: Box<dyn UpstreamResponseFilter>, conditions: Option<PluginConditions>) -> Self {
-        Self { inner, conditions }
+        Self {
+            inner,
+            conditions,
+            alias: None,
+        }
+    }
+
+    /// Create a wrapper that also carries an operator-defined alias.
+    pub fn with_alias(
+        inner: Box<dyn UpstreamResponseFilter>,
+        conditions: Option<PluginConditions>,
+        alias: Option<String>,
+    ) -> Self {
+        Self {
+            inner,
+            conditions,
+            alias,
+        }
     }
 
     /// Create a wrapper without conditions (always runs)
@@ -97,6 +137,10 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
         self.inner.name()
     }
 
+    fn alias(&self) -> Option<&str> {
+        self.alias.as_deref()
+    }
+
     fn run_upstream_response_filter(
         &self,
         session: &mut dyn PluginSession,
@@ -105,7 +149,7 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
         // Check conditions before running (sync version for sync filter context)
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let eval = conditions.evaluate_detail_sync(session);
+                let eval = conditions.evaluate_detail_sync(session, log);
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
                         log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
@@ -131,12 +175,30 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
 pub struct ConditionalUpstreamResponseBodyFilter {
     inner: Box<dyn UpstreamResponseBodyFilter>,
     conditions: Option<PluginConditions>,
+    alias: Option<String>,
 }
 
 impl ConditionalUpstreamResponseBodyFilter {
     /// Create a new conditional upstream response body filter
     pub fn new(inner: Box<dyn UpstreamResponseBodyFilter>, conditions: Option<PluginConditions>) -> Self {
-        Self { inner, conditions }
+        Self {
+            inner,
+            conditions,
+            alias: None,
+        }
+    }
+
+    /// Create a wrapper that also carries an operator-defined alias.
+    pub fn with_alias(
+        inner: Box<dyn UpstreamResponseBodyFilter>,
+        conditions: Option<PluginConditions>,
+        alias: Option<String>,
+    ) -> Self {
+        Self {
+            inner,
+            conditions,
+            alias,
+        }
     }
 
     /// Create a wrapper without conditions (always runs)
@@ -151,29 +213,27 @@ impl UpstreamResponseBodyFilter for ConditionalUpstreamResponseBodyFilter {
         self.inner.name()
     }
 
+    fn alias(&self) -> Option<&str> {
+        self.alias.as_deref()
+    }
+
     fn run_upstream_response_body_filter(
         &self,
         body: &Option<bytes::Bytes>,
         end_of_stream: bool,
         session: &mut dyn PluginSession,
-        log: &mut PluginLog,
     ) -> Option<Duration> {
-        // Check conditions before running (sync version for sync filter context)
+        // Body stage runs per chunk and does not surface PluginLog entries, so we
+        // use the log-less evaluate variant. Skip-cause is intentionally not
+        // recorded; emitting it per chunk would explode log volume.
         if let Some(conditions) = &self.conditions {
-            if conditions.should_evaluate() {
-                let eval = conditions.evaluate_detail_sync(session);
-                if eval.result == EvaluationResult::Skip {
-                    if let Some(cond) = eval.matched {
-                        log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
-                    }
-                    return None;
-                }
+            if conditions.should_evaluate() && conditions.evaluate_sync(session) == EvaluationResult::Skip {
+                return None;
             }
         }
 
-        // Conditions satisfied or none defined, run the inner filter
         self.inner
-            .run_upstream_response_body_filter(body, end_of_stream, session, log)
+            .run_upstream_response_body_filter(body, end_of_stream, session)
     }
 }
 
@@ -183,12 +243,30 @@ impl UpstreamResponseBodyFilter for ConditionalUpstreamResponseBodyFilter {
 pub struct ConditionalUpstreamResponse {
     inner: Box<dyn UpstreamResponse>,
     conditions: Option<PluginConditions>,
+    alias: Option<String>,
 }
 
 impl ConditionalUpstreamResponse {
     /// Create a new conditional upstream response handler
     pub fn new(inner: Box<dyn UpstreamResponse>, conditions: Option<PluginConditions>) -> Self {
-        Self { inner, conditions }
+        Self {
+            inner,
+            conditions,
+            alias: None,
+        }
+    }
+
+    /// Create a wrapper that also carries an operator-defined alias.
+    pub fn with_alias(
+        inner: Box<dyn UpstreamResponse>,
+        conditions: Option<PluginConditions>,
+        alias: Option<String>,
+    ) -> Self {
+        Self {
+            inner,
+            conditions,
+            alias,
+        }
     }
 
     /// Create a wrapper without conditions (always runs)
@@ -204,11 +282,15 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
         self.inner.name()
     }
 
+    fn alias(&self) -> Option<&str> {
+        self.alias.as_deref()
+    }
+
     async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         // Check conditions before running
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
-                let eval = conditions.evaluate_detail(session).await;
+                let eval = conditions.evaluate_detail(session, log).await;
                 if eval.result == EvaluationResult::Skip {
                     if let Some(cond) = eval.matched {
                         log.set_cond_skip(format!("{}:{},{}", eval.action, cond.cond_type(), cond.cond_detail()));
@@ -524,5 +606,17 @@ mod tests {
         );
         assert_eq!(c3.cond_type(), "prob");
         assert_eq!(c3.cond_detail(), "10%");
+    }
+
+    #[test]
+    fn conditional_request_filter_returns_alias_when_set() {
+        let inner = MockRequestFilter::new("KeyAuth");
+        let with_alias = ConditionalRequestFilter::with_alias(Box::new(inner), None, Some("auth-internal".to_string()));
+        assert_eq!(with_alias.alias(), Some("auth-internal"));
+        assert_eq!(with_alias.name(), "KeyAuth");
+
+        let inner2 = MockRequestFilter::new("KeyAuth");
+        let no_alias = ConditionalRequestFilter::new(Box::new(inner2), None);
+        assert_eq!(no_alias.alias(), None);
     }
 }
