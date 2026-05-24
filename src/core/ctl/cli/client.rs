@@ -79,6 +79,47 @@ impl EdgionClient {
         })
     }
 
+    /// Create a client that uses `bearer` as a static `Authorization: Bearer` token.
+    ///
+    /// Unlike `new`, this constructor:
+    /// - does NOT call `read_token()` (the file-cached session token is ignored)
+    /// - does NOT perform `/auth/me` validation
+    ///
+    /// The caller is responsible for skipping `ensure_auth`. Validation is lazy:
+    /// the first real API call returns 401 (unknown token) or 403 (insufficient permission).
+    pub fn with_static_bearer(
+        target: TargetType,
+        server: Option<String>,
+        socket: Option<PathBuf>,
+        bearer: &str,
+    ) -> Result<Self> {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(5))
+            .pool_max_idle_per_host(0)
+            .build()
+            .context("Failed to create HTTP client")?;
+
+        let base_url = server.unwrap_or_else(|| {
+            let port = match target {
+                TargetType::Center => DEFAULT_PORT_CENTER,
+                TargetType::Server => DEFAULT_PORT_SERVER,
+                TargetType::Client => DEFAULT_PORT_CLIENT,
+            };
+            format!("http://localhost:{}", port)
+        });
+
+        Ok(Self {
+            client,
+            base_url,
+            target,
+            socket_path: socket,
+            // Wrap in Zeroizing so the credential is wiped on drop.
+            token: Some(Zeroizing::new(bearer.to_string())),
+            controller_config: None,
+        })
+    }
+
     /// Ensure we have a valid token. Called before first API request.
     /// Flow: (1) query auth/status, (2) dispatch on AuthStatus, (3) auto-login if needed.
     pub async fn ensure_auth(&mut self) -> Result<()> {
@@ -125,6 +166,17 @@ impl EdgionClient {
 
         let has_local = status.active_providers.iter().any(|p| p == "local");
         let has_oidc = status.active_providers.iter().any(|p| p == "oidc");
+        let has_cli = status.active_providers.iter().any(|p| p == "cli");
+
+        // If the only active provider is "cli" and we arrive at ensure_auth, it
+        // means neither --token nor EDGION_TOKEN was supplied. Emit a clear,
+        // actionable message instead of the generic "no known provider" bail.
+        if has_cli && !has_local && !has_oidc {
+            bail!(
+                "this controller requires a cli token; pass --token <TOKEN> or set the EDGION_TOKEN environment variable"
+            );
+        }
+
         if !has_local && !has_oidc {
             bail!(
                 "/auth/status reported Ready but no known provider in active_providers: {:?}",
@@ -221,6 +273,15 @@ impl EdgionClient {
     /// Get the base URL for connection hints
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// Return the active bearer token string for test inspection.
+    ///
+    /// Only available in test builds so the credential is never exposed in
+    /// production code.
+    #[cfg(test)]
+    pub fn token_for_test(&self) -> Option<&str> {
+        self.token.as_ref().map(|t| t.as_str())
     }
 
     /// Build full URL for API endpoint
@@ -649,5 +710,64 @@ mod ensure_auth_tests {
     async fn ensure_auth_bails_on_unreachable() {
         let mut client = make_client("http://127.0.0.1:1".to_string());
         assert!(client.ensure_auth().await.is_err());
+    }
+
+    /// When the only active provider is "cli" and no token was supplied (i.e. we
+    /// reached `ensure_auth`), the error must be actionable — not the generic
+    /// "no known provider" message.
+    #[tokio::test]
+    async fn ensure_auth_cli_only_provider_emits_clear_error() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "success": true,
+            "data": {
+                "auth_required": true,
+                "active_providers": ["cli"],
+                "status": "ready"
+            }
+        });
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let mut client = make_client(server.uri());
+        let r = client.ensure_auth().await;
+        assert!(r.is_err(), "cli-only provider must bail");
+        let msg = format!("{:?}", r.unwrap_err()).to_lowercase();
+        assert!(
+            msg.contains("cli token") || msg.contains("edgion_token"),
+            "error must mention cli token / EDGION_TOKEN: {msg}"
+        );
+        // Must NOT say "no known provider" (the generic message)
+        assert!(
+            !msg.contains("no known provider"),
+            "must not use generic message: {msg}"
+        );
+    }
+
+    /// `with_static_bearer` stores the supplied token and does not read the
+    /// file-cached token.
+    #[test]
+    fn with_static_bearer_sets_token() {
+        let c =
+            EdgionClient::with_static_bearer(crate::core::ctl::cli::TargetType::Center, None, None, "edg_testtoken")
+                .expect("constructor");
+        // The stored token must be the supplied bearer, not None
+        assert_eq!(c.token_for_test(), Some("edg_testtoken"));
+    }
+
+    /// `with_static_bearer` uses the supplied base_url and the token is set.
+    #[test]
+    fn with_static_bearer_uses_supplied_url() {
+        let c = EdgionClient::with_static_bearer(
+            crate::core::ctl::cli::TargetType::Center,
+            Some("http://localhost:9999".to_string()),
+            None,
+            "edg_abc",
+        )
+        .expect("constructor");
+        assert_eq!(c.base_url(), "http://localhost:9999");
+        assert_eq!(c.token_for_test(), Some("edg_abc"));
     }
 }

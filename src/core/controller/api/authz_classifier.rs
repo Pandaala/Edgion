@@ -8,7 +8,7 @@
 
 use http::Method;
 
-use crate::core::common::authz::Verb;
+use crate::core::controller::authz::Verb;
 use crate::types::ResourceKind;
 
 /// Normalize a wire kind param to the canonical kind string, falling back to the
@@ -97,7 +97,7 @@ pub fn classify(method: &Method, matched_path: Option<&str>, kind_param: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::common::authz::Verb;
+    use crate::core::controller::authz::Verb;
     use http::Method;
 
     // helper: (verb, normalized kind) or None (=> deny)

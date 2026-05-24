@@ -14,7 +14,7 @@ pub struct AdminState {
     /// Path to the controller config YAML, for re-reading `[center]` on reload.
     pub config_file: Option<String>,
     /// Shared authorizer (hot-swappable Center policy) used by reload.
-    pub authorizer: Arc<crate::core::common::authz::Authorizer>,
+    pub authorizer: Arc<crate::core::controller::authz::Authorizer>,
     /// Notifies the federation supervisor of `[center]` changes on reload.
     pub center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
 }

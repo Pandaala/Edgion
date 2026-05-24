@@ -57,6 +57,13 @@ use crate::core::common::jwt_common::{
 // Public types
 // ---------------------------------------------------------------------------
 
+/// Marker inserted by a trusted upstream pre-authn layer (e.g. the Controller's
+/// cli-token middleware) to indicate this request is ALREADY authenticated.
+/// `unified_auth` skips its own checks when this marker is present. This carries
+/// NO authz concept — `unified_auth` must never import the authz engine.
+#[derive(Clone, Copy)]
+pub struct AuthBypass;
+
 /// Indicates which authentication provider successfully validated the token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -282,12 +289,14 @@ fn initializing_response() -> Response {
 /// - The three public auth endpoints `/api/v1/auth/login`, `/api/v1/auth/logout`,
 ///   and `/api/v1/auth/status` (exact match; note: `/api/v1/auth/me` is NOT
 ///   skipped — it requires a valid token)
-/// - When `state.require_auth == false` (operator did not configure auth)
+///
+/// Authentication is always required. No-auth mode (`require_auth == false`) was
+/// removed; `require_auth` is forced to `true` unconditionally at startup.
 ///
 /// # Fail-close behavior
 ///
-/// When `state.require_auth == true` but neither provider is currently ready
-/// (e.g. Secret fetch still in flight), returns 503 with `Retry-After: 10`.
+/// When neither provider is currently ready (e.g. Secret fetch still in flight),
+/// returns 503 with `Retry-After: 10`.
 ///
 /// # Validation order
 ///
@@ -316,8 +325,9 @@ pub async fn unified_auth_middleware(
         return next.run(request).await;
     }
 
-    // Operator did not configure authentication — legitimate no-auth mode.
-    if !state.require_auth {
+    // A trusted upstream pre-authn layer (e.g. cli-token middleware) has already
+    // authenticated this request and injected `AuthBypass`. Skip our own checks.
+    if request.extensions().get::<AuthBypass>().is_some() {
         return next.run(request).await;
     }
 
@@ -643,11 +653,11 @@ mod tests {
         assert!(state.local.load().is_some());
     }
 
+    /// The require_auth flag is stored as-is in UnifiedAuthState; production code
+    /// always passes true (no-auth mode was removed), but the field itself is not
+    /// hard-coded so existing call sites can still construct states for testing.
     #[test]
     fn require_auth_flag_propagates() {
-        let state_no = UnifiedAuthState::from_configs(None, None, false, "test").unwrap();
-        assert!(!state_no.require_auth);
-
         let state_yes = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
         assert!(state_yes.require_auth);
     }
@@ -678,9 +688,13 @@ mod tests {
         assert_eq!(retry.to_str().unwrap(), "10");
     }
 
+    /// Authentication is mandatory — a tokenless request to a business route must return 401.
+    /// (Previously asserted 200 pass-through when require_auth=false; that no-auth mode
+    /// has been removed.)
     #[tokio::test]
-    async fn middleware_passthrough_when_require_auth_false() {
-        let state = UnifiedAuthState::from_configs(None, None, false, "test").unwrap();
+    async fn middleware_rejects_unauthenticated_when_no_token() {
+        let cfg = valid_local_cfg();
+        let state = UnifiedAuthState::from_configs(None, Some(&cfg), true, "test").unwrap();
         let app = router_with_state(state);
         let resp = app
             .oneshot(
@@ -692,7 +706,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -980,5 +994,43 @@ mod tests {
             resp.headers().get("www-authenticate").is_none(),
             "WWW-Authenticate must not be added to non-401 responses"
         );
+    }
+
+    /// Helper that builds a `require_auth=true` state backed by a valid local provider.
+    fn new_state_with_local() -> Arc<UnifiedAuthState> {
+        UnifiedAuthState::from_configs(None, Some(&valid_local_cfg()), true, "test").unwrap()
+    }
+
+    /// A request carrying `AuthBypass` in its extensions must reach the handler
+    /// WITHOUT a token, even when `require_auth=true` and a local provider is ready.
+    /// This proves that the cli-token pre-authn layer can skip `unified_auth`.
+    #[tokio::test]
+    async fn auth_bypass_marker_skips_authn() {
+        let state = new_state_with_local();
+        let app = axum::Router::new()
+            .route("/x", axum::routing::get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                unified_auth_middleware,
+            ))
+            // Outer layer injects AuthBypass before unified_auth sees the request.
+            .layer(axum::middleware::from_fn(
+                |mut req: http::Request<axum::body::Body>, next: axum::middleware::Next| async move {
+                    req.extensions_mut()
+                        .insert(crate::core::common::unified_auth::AuthBypass);
+                    next.run(req).await
+                },
+            ));
+        let resp = tower::ServiceExt::oneshot(
+            app,
+            http::Request::builder()
+                .uri("/x")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        // AuthBypass was present → unified_auth skipped → handler reached → 200 despite no token.
+        assert_eq!(resp.status(), http::StatusCode::OK);
     }
 }

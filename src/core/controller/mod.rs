@@ -1,4 +1,5 @@
 pub mod api;
+pub mod authz;
 pub mod cli;
 pub mod conf_mgr;
 pub mod conf_sync;

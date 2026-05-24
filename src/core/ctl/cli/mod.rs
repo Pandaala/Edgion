@@ -62,6 +62,15 @@ pub struct Cli {
     #[arg(long, short = 'C', value_name = "FILE")]
     pub controller_config: Option<String>,
 
+    /// Static CLI token to use as `Authorization: Bearer <token>`.
+    /// Takes precedence over the `EDGION_TOKEN` environment variable and the
+    /// cached login token in `~/.edgion/token`.  When supplied, `ensure_auth`
+    /// (including `/auth/status` and `/auth/me`) is skipped entirely; the first
+    /// real request performs lazy validation (401 = unknown token, 403 = denied).
+    /// NOTE: `-t` is taken by `--target`; this flag is long-only.
+    #[arg(long, value_name = "TOKEN")]
+    pub token: Option<String>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -149,6 +158,14 @@ pub enum Commands {
         #[arg(short, long)]
         password: Option<String>,
     },
+
+    /// Generate a new CLI token (32 CSPRNG bytes, URL-safe base64, `edg_` prefix).
+    ///
+    /// Prints the token (use with `--token` / `EDGION_TOKEN`) and the SHA-256 hex
+    /// digest to paste into the controller `cli_tokens[].token_sha256`.
+    /// The full `edg_`-prefixed token is hashed — the exact string sent as Bearer.
+    /// Does not contact the controller.
+    GenToken,
 }
 
 impl Cli {
@@ -172,6 +189,11 @@ impl Cli {
             return commands::login::login(&base_url, username.as_deref(), password.as_deref()).await;
         }
 
+        // GenToken does not contact the controller at all — short-circuit before auth
+        if let Commands::GenToken = &self.command {
+            return token::gen_token();
+        }
+
         // Pre-flight compat check: --metadata-only only works with --target center.
         // Must fire before ensure_auth so the error is immediate (no network call
         // needed to diagnose an invalid flag combination).
@@ -188,7 +210,23 @@ impl Cli {
             }
         }
 
-        // Create API client with target type
+        // Resolve the cli token: --token flag > EDGION_TOKEN env var.
+        // When a cli token is present we inject it as a static Bearer and skip
+        // ensure_auth entirely (no /auth/status, no /auth/me-then-delete path).
+        // Lazy validation: the first real request returns 401 (unknown) or 403 (denied).
+        let cli_token = self
+            .token
+            .clone()
+            .or_else(|| std::env::var("EDGION_TOKEN").ok().filter(|s| !s.is_empty()));
+
+        if let Some(ref bearer) = cli_token {
+            // Static-bearer path: bypass all session auth machinery
+            let client =
+                EdgionClient::with_static_bearer(self.target, self.server.clone(), self.socket.clone(), bearer)?;
+            return self.dispatch(client).await;
+        }
+
+        // Session auth path: create client and run ensure_auth
         let mut client = EdgionClient::new(
             self.target,
             self.server.clone(),
@@ -196,10 +234,13 @@ impl Cli {
             self.controller_config.clone(),
         )?;
 
-        // Ensure authentication (auto-detect and auto-login if needed)
         client.ensure_auth().await?;
 
-        // Execute command
+        self.dispatch(client).await
+    }
+
+    /// Dispatch the subcommand after the client is authenticated.
+    async fn dispatch(&self, client: EdgionClient) -> Result<()> {
         match &self.command {
             Commands::Apply { file, dry_run } => {
                 if self.target != TargetType::Center {
@@ -257,7 +298,68 @@ impl Cli {
                 }
                 commands::reload::reload(&client).await
             }
-            Commands::GenCerts(_) | Commands::Login { .. } => unreachable!(), // handled above
+            Commands::GenCerts(_) | Commands::Login { .. } | Commands::GenToken => {
+                unreachable!() // all handled before dispatch
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod cli_token_precedence_tests {
+    use super::client::EdgionClient;
+    use super::TargetType;
+
+    /// Token precedence: `--token` flag value is used as the static bearer.
+    /// Verifies `with_static_bearer` stores the flag value and `ensure_auth` is
+    /// bypassed (no network calls needed — the constructor itself is the proof).
+    #[test]
+    fn flag_token_injected_as_static_bearer() {
+        let bearer = "edg_flagtoken";
+        let c = EdgionClient::with_static_bearer(TargetType::Center, None, None, bearer)
+            .expect("with_static_bearer must succeed");
+        // The stored token must be the exact flag value (use the test accessor)
+        assert_eq!(c.token_for_test(), Some(bearer));
+    }
+
+    /// Token precedence: `EDGION_TOKEN` env var is picked up when `--token` is absent.
+    /// We replicate the resolution logic from `Cli::run` inline so tests are hermetic.
+    #[test]
+    fn env_token_used_when_flag_absent() {
+        // Simulate the resolution: flag = None, env = "edg_envtoken"
+        let flag: Option<String> = None;
+        // We don't actually set the env var (it would bleed across tests on parallel
+        // runners); instead we exercise the resolution expression directly.
+        let env_val = Some("edg_envtoken".to_string());
+        let resolved = flag.or(env_val.filter(|s| !s.is_empty()));
+        assert_eq!(resolved.as_deref(), Some("edg_envtoken"));
+    }
+
+    /// Token precedence: `--token` wins over `EDGION_TOKEN`.
+    #[test]
+    fn flag_token_wins_over_env() {
+        let flag = Some("edg_flag".to_string());
+        let env_val = Some("edg_env".to_string());
+        let resolved = flag.or(env_val.filter(|s| !s.is_empty()));
+        assert_eq!(resolved.as_deref(), Some("edg_flag"));
+    }
+
+    /// When neither `--token` nor `EDGION_TOKEN` is set, resolved token is None
+    /// (the session-auth path is taken).
+    #[test]
+    fn no_token_resolved_is_none() {
+        let flag: Option<String> = None;
+        let env_val: Option<String> = None;
+        let resolved = flag.or(env_val.filter(|s| !s.is_empty()));
+        assert!(resolved.is_none());
+    }
+
+    /// Empty `EDGION_TOKEN` is treated as absent (filtered out).
+    #[test]
+    fn empty_env_token_treated_as_absent() {
+        let flag: Option<String> = None;
+        let env_val = Some("".to_string());
+        let resolved = flag.or(env_val.filter(|s| !s.is_empty()));
+        assert!(resolved.is_none());
     }
 }

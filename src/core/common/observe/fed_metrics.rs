@@ -53,7 +53,8 @@ pub mod names {
     pub const SESSION_TAKEOVER_TOTAL: &str = "edgion_fed_session_takeover_total";
     /// Counter: RBAC denials on the Controller admin-API federation path.
     /// Labels: `verb` (closed set from `Verb::as_str()` + "unknown"),
-    /// `kind` (known ResourceKind, "*", "RegionRoute", or "unknown" — never raw input).
+    /// `kind` (known ResourceKind, "*", "RegionRoute", or "unknown" — never raw input),
+    /// `source` ("center" | "cli_token" | "unknown" — identifies the auth path).
     pub const RBAC_DENIED_TOTAL: &str = "edgion_fed_rbac_denied_total";
     /// Gauge: federation kill-switch state. 1.0 = enabled, 0.0 = disabled.
     /// Emitted by the supervisor on each start/stop transition.
@@ -111,6 +112,18 @@ pub mod labels {
         pub const NO_SPIFFE_SAN: &str = "no_spiffe_san";
         pub const MULTI_SAN: &str = "multi_san";
         pub const PARSE_ERROR: &str = "parse_error";
+    }
+    /// Bounded source values for `record_rbac_denied`. Identifies which
+    /// authentication path originated the denied request.
+    ///
+    /// - `center`: denied on the federation gRPC path (Center identity).
+    /// - `cli_token`: denied on the local admin API via a cli token.
+    /// - `unknown`: denied before a source could be determined (missing route,
+    ///   AuthBypass-without-Role invariant violation, or unclassified origin).
+    pub mod rbac_source {
+        pub const CENTER: &str = "center";
+        pub const CLI_TOKEN: &str = "cli_token";
+        pub const UNKNOWN: &str = "unknown";
     }
 }
 
@@ -219,10 +232,19 @@ pub fn record_ready_gate_wait(seconds: f64) {
 /// the literal `"unknown"`. `kind` must be a bounded value (a known ResourceKind
 /// short name, `"*"`, `"RegionRoute"`, or `"unknown"`) — the caller is
 /// responsible for bounding via `bounded_kind_label` before reaching here.
-/// Never pass raw user input as either label.
+/// `source` must be one of the three bounded values in `labels::rbac_source`:
+/// `"center"`, `"cli_token"`, or `"unknown"`. Never pass raw user input as any
+/// label — in particular, do NOT use the token name as a label value (use a
+/// structured log field instead).
 #[inline]
-pub fn record_rbac_denied(verb: &str, kind: &str) {
-    counter!(names::RBAC_DENIED_TOTAL, "verb" => verb.to_string(), "kind" => kind.to_string()).increment(1);
+pub fn record_rbac_denied(verb: &str, kind: &str, source: &str) {
+    counter!(
+        names::RBAC_DENIED_TOTAL,
+        "verb" => verb.to_string(),
+        "kind" => kind.to_string(),
+        "source" => source.to_string()
+    )
+    .increment(1);
 }
 
 /// Set the federation kill-switch state gauge.
@@ -353,6 +375,9 @@ mod tests {
             ("fanout_result::OK", fanout_result::OK),
             ("fanout_result::PARTIAL", fanout_result::PARTIAL),
             ("fanout_result::FAIL", fanout_result::FAIL),
+            ("rbac_source::CENTER", rbac_source::CENTER),
+            ("rbac_source::CLI_TOKEN", rbac_source::CLI_TOKEN),
+            ("rbac_source::UNKNOWN", rbac_source::UNKNOWN),
         ];
         for (origin, value) in cases {
             assert_label_value_charset(value, origin);
@@ -465,6 +490,11 @@ mod tests {
             &[fanout_result::OK, fanout_result::PARTIAL, fanout_result::FAIL],
             &["ok", "partial", "fail"],
         );
+        check(
+            "rbac_source",
+            &[rbac_source::CENTER, rbac_source::CLI_TOKEN, rbac_source::UNKNOWN],
+            &["center", "cli_token", "unknown"],
+        );
     }
 
     #[test]
@@ -516,7 +546,7 @@ mod rbac_metric_tests {
         }
     }
 
-    /// `record_rbac_denied` must not panic for any bounded (verb, kind) pair,
+    /// `record_rbac_denied` must not panic for any bounded (verb, kind, source) triple,
     /// including the sentinel "unknown" values used for unclassified requests.
     #[test]
     fn rbac_denied_counter_increments_without_panic() {
@@ -540,10 +570,18 @@ mod rbac_metric_tests {
         ];
         // Bounded kind values: known kinds, synthetic labels, "unknown".
         let kinds = ["Secret", "PluginMetaData", "HTTPRoute", "RegionRoute", "*", "unknown"];
+        // Bounded source values from labels::rbac_source.
+        let sources = [
+            labels::rbac_source::CENTER,
+            labels::rbac_source::CLI_TOKEN,
+            labels::rbac_source::UNKNOWN,
+        ];
         for verb in verbs {
             for kind in kinds {
-                // Must not panic; the metrics crate no-op recorder handles absent recorder.
-                record_rbac_denied(verb, kind);
+                for source in sources {
+                    // Must not panic; the metrics crate no-op recorder handles absent recorder.
+                    record_rbac_denied(verb, kind, source);
+                }
             }
         }
     }
@@ -555,5 +593,20 @@ mod rbac_metric_tests {
         record_kill_switch_state(false);
         // Toggle back to enabled to leave gauge in a known state.
         record_kill_switch_state(true);
+    }
+
+    /// Task 7: `record_rbac_denied` with the `source` label must not panic for
+    /// the cli_token source, confirming the three bounded source values are usable.
+    #[test]
+    fn rbac_denied_with_source_label_increments_without_panic() {
+        use super::labels::rbac_source;
+        // The canonical Task-7 case: a cli token denied on Secret.
+        record_rbac_denied("get", "Secret", rbac_source::CLI_TOKEN);
+        record_rbac_denied("list", "PluginMetaData", rbac_source::CENTER);
+        record_rbac_denied("unknown", "unknown", rbac_source::UNKNOWN);
+        // All three bounded source values work.
+        for source in [rbac_source::CENTER, rbac_source::CLI_TOKEN, rbac_source::UNKNOWN] {
+            record_rbac_denied("watch", "HTTPRoute", source);
+        }
     }
 }

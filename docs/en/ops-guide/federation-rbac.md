@@ -249,6 +249,158 @@ canonical PascalCase Kind name. Lowercase or alias spellings (e.g.,
 form: `PluginMetaData`, `HTTPRoute`, `GRPCRoute`, `RegionRoute`, `Service`,
 `EdgionTls`, etc.
 
+---
+
+## CLI Token RBAC
+
+CLI tokens let `edgion-cli` (or any HTTP client) call the Controller Admin API
+with a **static Bearer token** carrying fine-grained RBAC permissions, without
+interactive login. This is the recommended path for CI pipelines, automation
+scripts, and service accounts that must call the Admin API non-interactively.
+
+The authorization model is identical to [Center RBAC](#how-it-works): each
+token carries a `[center].rbac`-style `FedRbacConfig` (same `verbs × kinds`
+taxonomy, same default-deny behavior, same canonical-casing rules). See the
+[verb and kind reference](#how-it-works) above for the full list of verbs and
+the casing rules.
+
+### Minting a token
+
+```bash
+# 1. Generate a new token (32 CSPRNG bytes, URL-safe base64, edg_ prefix)
+edgion-cli gen-token
+```
+
+Output:
+
+```
+Token (use with --token or EDGION_TOKEN):
+  edg_<base64url>
+
+SHA-256 (paste into controller cli_tokens[].token_sha256):
+  <64 lowercase hex chars>
+```
+
+The SHA-256 is computed over the **full `edg_`-prefixed token** — the exact
+string sent as `Authorization: Bearer <token>`. This is the value to paste into
+the config.
+
+### Controller configuration
+
+Add a `cli_tokens` block to the Controller TOML (can coexist with `[center]`,
+`[local_auth]`, and `[auth]`):
+
+```yaml
+cli_tokens:
+  # Read-only — safe for monitoring pipelines
+  - name: monitor-bot
+    token_sha256: "<SHA-256 from gen-token>"
+    rbac:
+      allow:
+        # Enumerate concrete kinds; NEVER use kinds: ["*"] with read verbs.
+        - verbs: [get, list]
+          kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service,
+                  EdgionGatewayConfig, EdgionTls, PluginMetaData]
+
+  # Scoped read-write — manages plugin metadata and triggers reload
+  - name: plugin-manager
+    token_sha256: "<SHA-256 from gen-token>"
+    rbac:
+      allow:
+        - verbs: [get, list, watch, create, update, delete]
+          kinds: [PluginMetaData]
+        # reload is write-only; kinds: ["*"] is safe here (no read surface)
+        - verbs: [reload]
+          kinds: ["*"]
+```
+
+Hot-reload (no restart required):
+
+```bash
+edgion-cli reload
+# or: POST /api/v1/reload
+```
+
+### Using a CLI token
+
+```bash
+# Via flag (long-only; -t is taken by --target)
+edgion-cli --token edg_<base64url> get httproute
+
+# Via environment variable (preferred for CI — avoids token in shell history)
+export EDGION_TOKEN=edg_<base64url>
+edgion-cli get httproute -n production
+```
+
+Precedence: `--token` > `EDGION_TOKEN` > cached login token (`~/.edgion/token`).
+
+When a token is supplied, `ensure_auth` (including `/auth/status` and `/auth/me`)
+is skipped entirely. Validation is lazy: the first real request returns
+`401 Unauthorized` (unknown token) or `403 Forbidden` (permission denied).
+
+### Security notes
+
+**1. Wide verb grants equal Superuser.**
+A token whose `rbac` grants `verbs: ["*"]` on the full admin router — including
+`reload`, `failover`, `acme-trigger`, `server-info`, and `diagnostics` — is
+effectively a Superuser. Grant the minimum set of verbs the consumer actually
+needs.
+
+**2. Wildcard read exposes credential material.**
+There is no server-side `Secret` backstop on the cli-token path. Using
+`kinds: ["*"]` with `get`, `list`, or `list-keys` lets the token read `Secret`
+and `EdgionTls` private-key material via the blind proxy. Always enumerate
+concrete kinds for any read grant. See the [wildcard-read security note](#wildcard-read-exposes-credential-material) above.
+
+**3. Verb and kind strings are canonical-cased.**
+Verb strings are matched case-insensitively (`get`, `GET`, and `Get` all work).
+Kind strings are matched **case-sensitively** against the canonical PascalCase
+Kind name. A miscased kind (e.g. `pluginmetadata`) silently never matches any
+request. Always use canonical PascalCase: `PluginMetaData`, `HTTPRoute`, `Service`, etc.
+
+**4. Token rotation.**
+Replace `token_sha256` in the config and apply via `POST /api/v1/reload`. The
+new hash takes effect immediately for all subsequent requests; old tokens are
+rejected from that point forward. Distribute the new `edg_` token to the
+consumer before or concurrently with the reload.
+
+**5. `--token` and `EDGION_TOKEN` are intended for CI/automation.**
+They do **not** touch `~/.edgion/token` (no caching — they are ephemeral
+per-invocation). The cached login token is unaffected. Prefer `EDGION_TOKEN`
+over `--token` to avoid leaking the token in shell history or process listings.
+
+**6. Migration: no-auth mode was removed.**
+Deployments that previously relied on `local_auth.enabled: false` (or
+`auth.enabled: false`) to bypass authentication must now configure at least one
+auth provider. See
+[No-Auth Mode Removed](../../../skills/02-features/02-config/03-auth-bootstrap.md)
+for the upgrade path.
+
+**7. `list-keys` reveals resource names.**
+The `list-keys` verb exposes resource names (and namespace/kind metadata) even
+when full `get` or `list` access is not granted. If the existence of resource
+names is sensitive, treat `list-keys` as a read grant and enumerate kinds
+explicitly rather than using `kinds: ["*"]`.
+
+**8. `EDGION_TOKEN` / `--token` do not use the cached session token.**
+These paths bypass `ensure_auth` entirely and do not read from or write to
+`~/.edgion/token`. Each invocation is fully stateless with respect to the
+local token cache.
+
+**9. Integration-test carve-outs are test-only.**
+The `wipe-all` and `debug` verbs, and the integration-testing-mode flag, are
+test-only entry points that bypass normal RBAC checks entirely when enabled.
+They **must never be enabled in production**. CLI token policy does not govern
+these paths — they are guarded by the `--integration-testing-mode` startup flag
+on the Controller process, not by the RBAC engine.
+
+### Configuration schema reference
+
+See `skills/02-features/02-config/00-controller-config.md` (`[cli_tokens]`) for
+the full field reference and a two-token example.
+
+---
+
 ## Reference
 
 - Controller configuration schema: `skills/02-features/02-config/00-controller-config.md`

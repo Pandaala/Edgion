@@ -137,16 +137,20 @@ kubectl annotate edgionacme example-acme -n default edgion.io/trigger="$(date +%
 
 ### Method 2: Admin API
 
-The Controller's Admin API provides a dedicated trigger endpoint:
+The Controller's Admin API provides a dedicated trigger endpoint.
+
+> **Authentication required**: all Controller Admin API calls must include a Bearer token. Set `EDGION_TOKEN` to a token generated with `edgion-cli gen-token`, or use `edgion-cli acme trigger` directly. See [Federation RBAC — CLI Token RBAC](../../federation-rbac.md#cli-token-rbac) for token setup.
 
 ```bash
-curl -X POST "http://<controller-admin>:8080/api/v1/services/acme/<namespace>/<name>/trigger"
+curl -X POST "http://<controller-admin>:8080/api/v1/services/acme/<namespace>/<name>/trigger" \
+  -H "Authorization: Bearer $EDGION_TOKEN"
 ```
 
 Example: Trigger the ACME flow for `example-acme` in the `default` namespace:
 
 ```bash
-curl -X POST "http://localhost:8080/api/v1/services/acme/default/example-acme/trigger"
+curl -X POST "http://localhost:8080/api/v1/services/acme/default/example-acme/trigger" \
+  -H "Authorization: Bearer $EDGION_TOKEN"
 ```
 
 Response example:

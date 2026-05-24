@@ -42,7 +42,7 @@ This section is intended for operators, covering Gateway deployment, configurati
 
 ### Federation
 
-- [Federation RBAC](./federation-rbac.md): Authorize Center operations on the Controller — built-in default, examples, and security notes.
+- [Federation RBAC](./federation-rbac.md): Authorize Center operations on the Controller — built-in default, examples, and security notes. Also covers [CLI Token RBAC](./federation-rbac.md#cli-token-rbac) (static Bearer tokens for CI/automation).
 
 ### Operations Tools
 

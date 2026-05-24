@@ -2,6 +2,7 @@
 pub(crate) mod authz_classifier;
 // pub(crate): authz_layer and inject_center_identity are used at the fed spawn site (Task 6).
 pub(crate) mod authz_middleware;
+pub(crate) mod cli_token_middleware;
 mod cluster_handlers;
 mod common;
 mod configserver_handlers;
@@ -15,6 +16,7 @@ mod wipe_handlers;
 use crate::core::common::api::{self, ApiResponse};
 use crate::core::controller::conf_mgr::{ConfMgr, SchemaValidator};
 use axum::{
+    body::Body,
     extract::{Path, Request, State},
     http::{header, HeaderValue, StatusCode},
     middleware::Next,
@@ -25,6 +27,70 @@ use axum::{
 use serde::Serialize;
 use std::sync::Arc;
 use types::AdminState;
+
+/// Controller-side middleware that augments `/api/v1/auth/status` responses with
+/// the `"cli"` active provider when at least one cli token is registered.
+///
+/// The `/api/v1/auth/status` handler is mounted by the shared `compose_admin_routes`
+/// and calls `UnifiedAuthState::build_status()`, which knows only about OIDC and
+/// local providers. The `Authorizer` (which knows about cli tokens) lives in
+/// `AdminState`, not in `UnifiedAuthState`. Modifying `unified_auth` to accept an
+/// authz resolver would violate the invariant that `unified_auth` never imports the
+/// authz engine. Instead, this middleware intercepts the status response on the
+/// Controller side and appends `"cli"` when `cli_tokens_present()` is true.
+///
+/// For other paths this is a transparent pass-through with no body buffering.
+async fn cli_auth_status_augment(
+    State(authorizer): State<Arc<crate::core::controller::authz::Authorizer>>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    // Only act on the exact auth/status path; pass everything else straight through.
+    let is_status = req.uri().path() == "/api/v1/auth/status";
+    let resp = next.run(req).await;
+
+    if !is_status || !authorizer.cli_tokens_present() {
+        return resp;
+    }
+
+    // Deserialize the JSON body, append "cli" to active_providers, re-serialize.
+    // If anything fails (body read, parse, serialize) return the original response
+    // unmodified -- this must never 500 on its own.
+    let (parts, body) = resp.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 1 << 20).await else {
+        // Body read failed: reconstruct original response with empty body (best-effort).
+        return Response::from_parts(parts, Body::empty());
+    };
+
+    let mut value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => {
+            // Not JSON (unexpected) -- return as-is.
+            return Response::from_parts(parts, Body::from(bytes));
+        }
+    };
+
+    // Append "cli" to data.active_providers if present and not already listed.
+    if let Some(providers) = value
+        .get_mut("data")
+        .and_then(|d| d.get_mut("active_providers"))
+        .and_then(|p| p.as_array_mut())
+    {
+        if !providers.iter().any(|v| v.as_str() == Some("cli")) {
+            providers.push(serde_json::Value::String("cli".to_string()));
+        }
+    }
+
+    let Ok(new_bytes) = serde_json::to_vec(&value) else {
+        return Response::from_parts(parts, Body::from(bytes));
+    };
+
+    let mut resp = Response::from_parts(parts, Body::from(new_bytes));
+    // Re-set Content-Type (it may have been set to application/json already).
+    resp.headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    resp
+}
 
 /// Reject admin write requests with `503 Service Unavailable` while the
 /// controller is still in init / reload. Mounted on the write subset of
@@ -99,18 +165,19 @@ async fn get_server_info(
     }
 }
 
-/// Re-read `[center]` from the config file on disk, swap the authz policy, and
-/// notify the federation supervisor. Called from `reload_all_resources` BEFORE
-/// `request_reload()` so the newer/stricter policy is live before any reloaded
-/// handler runs.
+/// Re-read `[center]` and `cli_tokens` from the config file on disk, atomically
+/// swap the authz policy + cli_tokens map, and notify the federation supervisor.
+/// Called from `reload_all_resources` BEFORE `request_reload()` so the
+/// newer/stricter policy is live before any reloaded handler runs.
 ///
 /// On load error: logs a warning and keeps the current policy -- on load error
 /// we keep the current policy and still proceed to `request_reload()`. Note that
 /// the current policy might already be deny-all, so this is NOT fail-open.
 ///
-/// If the loaded config has no `[center]` section, the policy and supervisor are
-/// left UNCHANGED (to disable the Center connection, set `center.enabled = false`;
-/// removing the `[center]` section does not deny-all a running Center).
+/// `cli_tokens` rebuild is NOT gated on `[center]` presence: cli tokens are
+/// independent of the federation center, so a center-less deployment can still
+/// hot-reload them. When `[center]` is absent the center policy defaults to
+/// deny-all via `authorizer.apply(deny_all, cli_map)`.
 ///
 /// Factored out for unit-testability; the handler calls this and then
 /// `request_reload()`.
@@ -132,15 +199,17 @@ fn apply_center_reload(state: &AdminState) {
                 component = "admin_api",
                 path = %path,
                 error = %e,
-                "reload: failed to re-read [center]; keeping current policy"
+                "reload: failed to re-read config; keeping current policy"
             );
             return;
         }
     };
 
-    if let Some(center) = full.center {
-        // 1) Swap policy FIRST so the new/stricter rule is live before any
-        //    reloaded handler runs.
+    // --- 1) Resolve new center policy (if [center] is present) ---
+    // When [center] is absent the center policy falls back to deny-all.
+    // The center_reload_tx is only notified when [center] is explicitly present,
+    // so the supervisor is not disturbed by center-less configs.
+    let (new_center_policy, center_for_supervisor) = if let Some(center) = full.center {
         if let Some(rbac) = &center.rbac {
             if let Err(e) = rbac.validate() {
                 tracing::warn!(
@@ -149,15 +218,30 @@ fn apply_center_reload(state: &AdminState) {
                     "invalid center.rbac rule; it will not match any request"
                 );
             }
+            // Lint the operator-supplied center RBAC policy (the built-in default is
+            // known-good and does not need linting).
+            crate::core::controller::authz::lint::lint_rbac_policy(rbac, "reload", "center");
         }
         let policy = crate::core::controller::fed_sync::default_policy::center_policy_from(center.rbac.as_ref());
-        // This handler is the SINGLE policy writer on the reload path.
-        // The supervisor (run_supervisor) consumes the channel value for
-        // lifecycle decisions only (start/stop/restart); it does NOT call
-        // swap_policy_from on reload, so there is no second, unordered writer.
-        state.authorizer.swap_policy(policy);
-        // 2) Notify the supervisor so it can restart the client if any
-        //    lifecycle field (enabled/address/name/cluster) changed.
+        (policy, Some(center))
+    } else {
+        (crate::core::controller::authz::CenterPolicy::deny_all(), None)
+    };
+
+    // --- 2) Rebuild cli_tokens map ---
+    // Uses the shared lint pass: per-entry shape validation, GLOBAL dedup
+    // (no silent last-wins on duplicate name/hash), advisory WARNs for
+    // unknown/non-canonical kinds, unknown verbs, and dangerous grants.
+    // Map key = token_sha256 VERBATIM (already a hash; do NOT re-hash).
+    let cli_map = crate::core::controller::authz::lint::build_cli_token_map(&full.cli_tokens, "reload");
+
+    // --- 3) Atomically apply center policy + cli_tokens in a single write ---
+    // This is the SINGLE writer on the reload path (supervisor reads channel for
+    // lifecycle only; it does NOT call swap_policy separately).
+    state.authorizer.apply(new_center_policy, cli_map);
+
+    // --- 4) Notify supervisor when [center] is present ---
+    if let Some(center) = center_for_supervisor {
         let _ = state.center_reload_tx.send(center);
     }
 }
@@ -238,7 +322,7 @@ pub fn create_admin_router(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
     config_file: Option<String>,
-    authorizer: Arc<crate::core::common::authz::Authorizer>,
+    authorizer: Arc<crate::core::controller::authz::Authorizer>,
     center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
 ) -> Router {
     let admin_state = Arc::new(AdminState {
@@ -379,7 +463,7 @@ pub async fn serve(
     require_auth: bool,
     needs_retry: bool,
     config_file: Option<String>,
-    authorizer: Arc<crate::core::common::authz::Authorizer>,
+    authorizer: Arc<crate::core::controller::authz::Authorizer>,
     center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
 ) -> anyhow::Result<()> {
     serve_with_shutdown(
@@ -408,7 +492,7 @@ pub async fn serve_with_shutdown(
     require_auth: bool,
     needs_retry: bool,
     config_file: Option<String>,
-    authorizer: Arc<crate::core::common::authz::Authorizer>,
+    authorizer: Arc<crate::core::controller::authz::Authorizer>,
     center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
@@ -432,25 +516,43 @@ pub async fn serve_with_shutdown(
     //
     // Axum route_layers are applied LIFO: the last `.route_layer()` call becomes
     // the outermost wrapper (runs first). To achieve:
-    //   unified_auth (outermost, from compose_admin_routes)
-    //     -> assign_superuser (runs before authz)
-    //       -> authz_layer (innermost route_layer, classifies + enforces)
-    //         -> handler
+    //   assign_superuser_if_no_role (runs before authz)
+    //     -> authz_layer (innermost route_layer, classifies + enforces)
+    //       -> handler
     //
-    // We must add authz_layer first, then assign_superuser on top.
+    // We must add authz_layer first, then assign_superuser_if_no_role on top.
+    // `authorizer.clone()` is required here: `authorizer` is moved into the
+    // business route_layer, and the outer cli-pre `.layer()` below needs its own
+    // Arc clone — without clone() this would be a borrow-after-move.
     let business = base_router
         .route_layer(axum::middleware::from_fn_with_state(
-            authorizer,
+            authorizer.clone(),
             authz_middleware::authz_layer,
         ))
-        .route_layer(axum::middleware::from_fn(
-            authz_middleware::assign_superuser_if_authenticated,
-        ));
+        .route_layer(axum::middleware::from_fn(authz_middleware::assign_superuser_if_no_role));
 
     // The composition order is fixed inside compose_admin_routes (see its doc).
-    // unified_auth is added as .layer() inside compose_admin_routes, making it
-    // the outermost layer -- it runs before the route_layers above.
-    let app = api::compose_admin_routes(business, auth_state.clone(), local_auth_intent);
+    // compose_admin_routes adds unified_auth and then a cache-control layer; both
+    // wrap the route_layers above and run before authz_layer/assign on each request.
+    let composed = api::compose_admin_routes(business, auth_state.clone(), local_auth_intent);
+
+    // Wrap the composed result with cli-token pre-authn as the outermost layer.
+    // This only ADDS authentication (injects Role + AuthBypass for known cli tokens);
+    // it does not add new routes, so compose's "final router" contract is satisfied.
+    let app = composed
+        .layer(axum::middleware::from_fn_with_state(
+            authorizer.clone(),
+            cli_token_middleware::cli_token_pre_authn,
+        ))
+        // Augment /api/v1/auth/status responses with "cli" active_provider when
+        // cli tokens are registered. This is Controller-side only and does not
+        // touch shared unified_auth code (which must never import authz).
+        // TODO: if compose ever exposes a provider-augmentation hook, migrate this
+        // interceptor to that hook and remove the body-rewriting approach.
+        .layer(axum::middleware::from_fn_with_state(
+            authorizer,
+            cli_auth_status_augment,
+        ));
 
     if needs_retry {
         let auth_state_for_retry = auth_state.clone();
@@ -505,14 +607,8 @@ mod auth_status_tests {
 
     #[test]
     fn build_auth_status_non_ready_states() {
-        // When auth is not required: Disabled, auth_required == false, providers empty
-        let state = UnifiedAuthState::from_configs(None, None, false, "test").unwrap();
-        let resp = state.build_status();
-        assert!(!resp.auth_required);
-        assert!(resp.active_providers.is_empty());
-        assert_eq!(resp.status, AuthStatus::Disabled);
-
         // When auth is required but no provider configured: Initializing, auth_required == true, providers empty
+        // (The Disabled status is unreachable since require_auth is always true in production.)
         let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
         let resp = state.build_status();
         assert!(resp.auth_required);
@@ -541,7 +637,7 @@ mod auth_status_tests {
 #[cfg(test)]
 mod reload_center_tests {
     use super::*;
-    use crate::core::common::authz::{Authorizer, CenterPolicy, Role, Verb};
+    use crate::core::controller::authz::{Authorizer, CenterPolicy, Verb};
     use std::io::Write;
     use std::sync::Arc;
 
@@ -612,7 +708,7 @@ center:
         assert!(
             !state
                 .authorizer
-                .authorize(&Role::Center, Verb::Get, "PluginMetaData")
+                .authorize(&state.authorizer.center_role(), Verb::Get, "PluginMetaData")
                 .allowed(),
             "pre-condition: deny-all should deny"
         );
@@ -627,7 +723,7 @@ center:
         assert!(
             state
                 .authorizer
-                .authorize(&Role::Center, Verb::Get, "PluginMetaData")
+                .authorize(&state.authorizer.center_role(), Verb::Get, "PluginMetaData")
                 .allowed(),
             "post: authorizer must allow get/PluginMetaData after policy swap"
         );
@@ -635,7 +731,7 @@ center:
         assert!(
             !state
                 .authorizer
-                .authorize(&Role::Center, Verb::Delete, "PluginMetaData")
+                .authorize(&state.authorizer.center_role(), Verb::Delete, "PluginMetaData")
                 .allowed(),
             "post: delete/PluginMetaData must remain denied"
         );
@@ -662,7 +758,7 @@ center:
         assert!(
             !state
                 .authorizer
-                .authorize(&Role::Center, Verb::Get, "PluginMetaData")
+                .authorize(&state.authorizer.center_role(), Verb::Get, "PluginMetaData")
                 .allowed(),
             "policy must remain deny-all when config file is missing"
         );
@@ -690,7 +786,7 @@ center:
         assert!(
             !state
                 .authorizer
-                .authorize(&Role::Center, Verb::Get, "PluginMetaData")
+                .authorize(&state.authorizer.center_role(), Verb::Get, "PluginMetaData")
                 .allowed(),
             "policy must remain deny-all when no [center] section present"
         );
@@ -732,7 +828,7 @@ center:
         assert!(
             !state
                 .authorizer
-                .authorize(&Role::Center, Verb::Get, "PluginMetaData")
+                .authorize(&state.authorizer.center_role(), Verb::Get, "PluginMetaData")
                 .allowed(),
             "policy must be unchanged (deny-all) when config_file is None"
         );
@@ -740,6 +836,137 @@ center:
         assert!(
             !rx.has_changed().expect("channel not closed"),
             "supervisor channel must NOT be notified when config_file is None"
+        );
+    }
+
+    /// Reload that adds a cli_token makes `authorizer.cli_lookup(tok)` resolve afterward.
+    ///
+    /// Also verifies that cli_tokens are hot-reloaded independently of `[center]`:
+    /// the config written here has a cli_tokens entry but NO [center] section.
+    #[tokio::test]
+    async fn reload_cli_token_added_resolves_after_reload() {
+        use crate::core::controller::authz::sha256_hex;
+
+        let tmp_cfg = tempfile::NamedTempFile::new().expect("named tempfile");
+        let cfg_path = tmp_cfg.path().to_str().expect("path str").to_string();
+
+        // Raw token value (not pre-hashed); the config stores sha256_hex(tok).
+        let raw_token = "test-cli-token-abc123";
+        let token_hash = sha256_hex(raw_token);
+
+        let yaml = format!(
+            r#"
+cli_tokens:
+  - name: reload-bot
+    token_sha256: "{}"
+    rbac:
+      allow:
+        - verbs: [get, list]
+          kinds: [PluginMetaData]
+"#,
+            token_hash
+        );
+        std::fs::write(&cfg_path, yaml.as_bytes()).expect("write config");
+
+        let (state, mut rx, _tmp_data) = make_reload_state(&cfg_path).await;
+        rx.borrow_and_update();
+
+        // Before reload: no cli tokens registered.
+        assert!(
+            state.authorizer.cli_lookup(raw_token).is_none(),
+            "before reload: no cli token"
+        );
+        assert!(
+            !state.authorizer.cli_tokens_present(),
+            "before reload: cli_tokens_present must be false"
+        );
+
+        apply_center_reload(&state);
+
+        // After reload: cli_lookup resolves and role is correct.
+        let (role, name) = state
+            .authorizer
+            .cli_lookup(raw_token)
+            .expect("after reload: cli_lookup must hit");
+        assert_eq!(name, "reload-bot");
+        assert!(
+            state.authorizer.authorize(&role, Verb::Get, "PluginMetaData").allowed(),
+            "after reload: get/PluginMetaData must be allowed"
+        );
+        assert!(
+            !state
+                .authorizer
+                .authorize(&role, Verb::Delete, "PluginMetaData")
+                .allowed(),
+            "after reload: delete must remain denied"
+        );
+        assert!(
+            state.authorizer.cli_tokens_present(),
+            "after reload: cli_tokens_present must be true"
+        );
+
+        // No [center] section => supervisor channel must NOT be notified.
+        assert!(
+            !rx.has_changed().expect("channel not closed"),
+            "supervisor must NOT be notified when no [center] section is present"
+        );
+    }
+
+    /// Startup drop-invalid: a cli_token with a bad token_sha256 is dropped,
+    /// valid entries are still loaded.
+    #[tokio::test]
+    async fn reload_cli_token_drop_invalid_keeps_valid() {
+        use crate::core::controller::authz::sha256_hex;
+
+        let tmp_cfg = tempfile::NamedTempFile::new().expect("named tempfile");
+        let cfg_path = tmp_cfg.path().to_str().expect("path str").to_string();
+
+        let valid_raw = "valid-token-xyz";
+        let valid_hash = sha256_hex(valid_raw);
+
+        // One valid entry + one invalid entry (bad hash).
+        let yaml = format!(
+            r#"
+cli_tokens:
+  - name: valid-bot
+    token_sha256: "{}"
+    rbac:
+      allow:
+        - verbs: [get]
+          kinds: [PluginMetaData]
+  - name: bad-bot
+    token_sha256: "notahexhash"
+    rbac:
+      allow:
+        - verbs: [get]
+          kinds: [PluginMetaData]
+"#,
+            valid_hash
+        );
+        std::fs::write(&cfg_path, yaml.as_bytes()).expect("write config");
+
+        let (state, mut rx, _tmp_data) = make_reload_state(&cfg_path).await;
+        rx.borrow_and_update();
+
+        apply_center_reload(&state);
+
+        // valid-bot must resolve; bad-bot must be dropped.
+        assert!(
+            state.authorizer.cli_lookup(valid_raw).is_some(),
+            "valid-bot must resolve after reload"
+        );
+        assert!(
+            state.authorizer.cli_lookup("notahexhash").is_none(),
+            "bad-bot must be dropped"
+        );
+        assert!(
+            state.authorizer.cli_tokens_present(),
+            "at least one valid entry => present"
+        );
+
+        assert!(
+            !rx.has_changed().expect("channel not closed"),
+            "no [center] section => supervisor not notified"
         );
     }
 }

@@ -57,6 +57,10 @@ REDIS_CONTAINER_NAME="edgion-test-redis"
 
 CONTROLLER_GRPC_PORT=50051
 
+# Controller admin token — populated lazily by ensure_ctrl_admin_token()
+# using the auto-generated Secret written by the Controller to WORK_DIR/config/.
+CTRL_ADMIN_TOKEN=""
+
 # Whether to skip cache residue detection after tests
 SKIP_RESIDUE_CHECK="${SKIP_RESIDUE_CHECK:-false}"
 
@@ -84,6 +88,45 @@ log_section() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${BLUE}$1${NC}"
     echo -e "${BLUE}========================================${NC}"
+}
+
+# =============================================================================
+# Controller admin authentication
+# =============================================================================
+# The Controller auto-generates admin credentials and writes them to
+# WORK_DIR/config/Secret_edgion-system_edgion-admin-credentials.yaml (or a
+# subdirectory).  ensure_ctrl_admin_token() reads that file, logs in, and
+# stores the JWT in CTRL_ADMIN_TOKEN for subsequent admin API calls.
+ensure_ctrl_admin_token() {
+    if [ -n "$CTRL_ADMIN_TOKEN" ]; then
+        return 0
+    fi
+    local config_dir="${WORK_DIR}/config"
+    local secret_file=""
+    local waited=0
+    while [ $waited -lt 15 ]; do
+        secret_file=$(find "$config_dir" -name 'Secret_edgion-system_edgion-admin-credentials.yaml' -type f 2>/dev/null | head -1)
+        if [ -n "$secret_file" ]; then
+            break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if [ -z "$secret_file" ]; then
+        log_error "Admin Secret not generated under $config_dir — cannot obtain admin token"
+        return 1
+    fi
+    local pass
+    pass=$(awk '/^[[:space:]]+password:/ {print $2; exit}' "$secret_file" | tr -d '"')
+    CTRL_ADMIN_TOKEN=$(curl -s -H "Content-Type: application/json" \
+        -d "{\"username\":\"admin\",\"password\":\"${pass}\"}" \
+        "http://127.0.0.1:5800/api/v1/auth/login" \
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('token',''))" 2>/dev/null || true)
+    if [ -z "$CTRL_ADMIN_TOKEN" ]; then
+        log_error "Controller admin login failed"
+        return 1
+    fi
+    log_info "Controller admin token obtained"
 }
 
 # =============================================================================
@@ -671,8 +714,10 @@ start_redis_service_if_needed() {
 # =============================================================================
 get_controller_server_id() {
     local controller_url="${1:-http://127.0.0.1:5800}"
-    # Use the /api/v1/server-info endpoint to get server_id
-    local response=$(curl -s "${controller_url}/api/v1/server-info" 2>/dev/null)
+    # Controller admin API requires authentication; obtain a token first.
+    ensure_ctrl_admin_token || true
+    local response=$(curl -s -H "Authorization: Bearer ${CTRL_ADMIN_TOKEN}" \
+        "${controller_url}/api/v1/server-info" 2>/dev/null)
     local server_id=$(echo "$response" | grep -o '"server_id":"[^"]*"' | cut -d'"' -f4)
     if [ -z "$server_id" ]; then
         server_id="unknown"
@@ -685,7 +730,7 @@ get_controller_server_id() {
 # =============================================================================
 get_gateway_server_id() {
     local gateway_url="${1:-http://127.0.0.1:5810}"
-    # Use the /api/v1/server-info endpoint to get server_id
+    # Gateway admin API has no authentication — call tokenless.
     local response=$(curl -s "${gateway_url}/api/v1/server-info" 2>/dev/null)
     local server_id=$(echo "$response" | grep -o '"server_id":"[^"]*"' | cut -d'"' -f4)
     if [ -z "$server_id" ]; then
@@ -743,7 +788,11 @@ verify_metrics_labels() {
 trigger_reload() {
     local controller_url="${1:-http://127.0.0.1:5800}"
     log_info "Triggering reload via Admin API..."
-    local response=$(curl -s -X POST "${controller_url}/api/v1/reload" 2>/dev/null)
+    # Controller admin API requires authentication.
+    ensure_ctrl_admin_token || true
+    local response=$(curl -s -X POST \
+        -H "Authorization: Bearer ${CTRL_ADMIN_TOKEN}" \
+        "${controller_url}/api/v1/reload" 2>/dev/null)
     local success=$(echo "$response" | grep -o '"success":true' || echo "")
     if [ -n "$success" ]; then
         log_success "Reload triggered successfully"

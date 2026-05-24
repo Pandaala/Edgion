@@ -34,6 +34,18 @@ Controllers are the data sources.
 | [02-aggregator-and-watch-cache.md](02-aggregator-and-watch-cache.md) | `ResourceAggregator`, `CenterWatchCache`, `CenterMetaDataStore`, reverse-Watch data flow |
 | [03-persistence.md](03-persistence.md) | SQLite `controllers` table, `CenterDb`, configuration, Admin API |
 
+## Authentication note
+
+Center authentication is **mandatory** (no-auth mode removed 2026-05-24). Center has **no
+auto-generated credentials** — if neither `[local_auth]` nor `[auth]` is configured, all
+business routes return 503 fail-close at startup (a WARN is logged); `/health`, `/ready`,
+`/metrics`, and `/api/v1/auth/status` remain reachable. `enabled: false` is ignored with
+a WARN. Center has **no authz/RBAC engine**: the `(verb, kind)` authorization engine is
+Controller-private; Center is authentication-only (shared `unified_auth`).
+
+- Credential bootstrap details: [`../../02-features/02-config/03-auth-bootstrap.md`](../../02-features/02-config/03-auth-bootstrap.md)
+- Controller auth + authz engine: [`../01-controller/11-authentication-authorization.md`](../01-controller/11-authentication-authorization.md)
+
 ## See also
 
 - [`04-review/CLOSED-FINDINGS.md`](../../04-review/CLOSED-FINDINGS.md) — `common-center-03` row: validation caps confirmed fixed

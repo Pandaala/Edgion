@@ -209,6 +209,16 @@ const enSidebar = [
           { text: 'Secret Management', link: '/en/ops-guide/infrastructure/secret-management' },
         ],
       },
+      {
+        text: 'Configuration Reference',
+        collapsed: true,
+        items: [
+          { text: 'Controller Config', link: '/en/ops-guide/configuration/controller-config' },
+          { text: 'Gateway Config', link: '/en/ops-guide/configuration/gateway-config' },
+          { text: 'EdgionGatewayConfig CRD', link: '/en/ops-guide/configuration/edgion-gateway-config' },
+        ],
+      },
+      { text: 'Federation & RBAC', link: '/en/ops-guide/federation-rbac' },
       { text: 'Edgion CLI', link: '/en/ops-guide/edgion-cli' },
     ],
   },

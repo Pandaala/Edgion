@@ -71,6 +71,45 @@ A practical reading pattern is:
 - local integration and file-system mode: `examples/test/conf/`
 - process-level configuration: `config/*.yaml`
 
+## Admin API authentication
+
+Authentication is **mandatory** for the Controller and Center Admin APIs — all `/api/v1/*` business routes require a valid credential.
+
+### Controller
+
+The Controller is zero-config friendly: when no `[local_auth]` section is present, it **auto-generates** a random admin password and JWT secret and stores them in the `edgion-admin-credentials` Secret in the `edgion-system` namespace.
+
+Retrieve the generated password:
+
+**Kubernetes mode**:
+```bash
+kubectl -n edgion-system get secret edgion-admin-credentials \
+  -o jsonpath='{.data.password}' | base64 -d
+```
+
+**Local / file mode**:
+```bash
+cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
+```
+
+Alternatively, authenticate interactively:
+```bash
+edgion-cli login
+```
+
+The CLI also auto-logs-in by reading the local config file when the controller is running in the same environment.
+
+### Center
+
+Center has **no** auto-generation. The operator must provide either `[local_auth]` or `[auth]` in the Center configuration. If neither is configured:
+
+- `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain accessible.
+- All other business routes return **503 fail-close** until credentials are configured.
+
+Setting `enabled: false` is **ignored** with a WARN log — authentication cannot be disabled.
+
+For full configuration details see [`skills/02-features/02-config/03-auth-bootstrap.md`](../../../../skills/02-features/02-config/03-auth-bootstrap.md) and the [Controller Configuration reference](../ops-guide/configuration/controller-config.md#authentication).
+
 ## What to do next
 
 If deployment is done and you want the smallest usable object set, continue with:

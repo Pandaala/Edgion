@@ -218,13 +218,15 @@ Mapping from `ConfWriterError` to HTTP status codes:
 
 The Admin API integrates a unified authentication middleware that supports OIDC and local JWT modes.
 
+> This section covers **authentication** (who you are) only. For **authorization** (the `(verb, kind)` RBAC engine, the `Role` model, cli tokens, and the full middleware onion), see [11-authentication-authorization.md](11-authentication-authorization.md). Authentication is mandatory — no-auth mode was removed (2026-05-24).
+
 ### Authentication Middleware (unified_auth)
 
 Module location: `src/core/common/unified_auth/mod.rs`
 
 Request authentication order:
 
-1. Match against `skip_paths` (defaults: `/health`, `/ready`) → pass through directly
+1. Match against `skip_paths` (defaults: `/health`, `/ready`, `/metrics`) → pass through directly
 2. Public auth endpoints (`/api/v1/auth/*`) → pass through directly
 3. Try OIDC Bearer token validation (requires `[auth]` to be configured)
 4. Try local JWT (HS256) Bearer token validation

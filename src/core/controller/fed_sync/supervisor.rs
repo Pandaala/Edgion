@@ -13,9 +13,9 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::core::common::authz::Authorizer;
 use crate::core::common::config::CenterClientConfig;
 use crate::core::common::observe::fed_metrics;
+use crate::core::controller::authz::Authorizer;
 
 /// Maximum time to wait for the federation client task to exit on stop.
 const STOP_TIMEOUT_SECS: u64 = 10;
@@ -283,8 +283,8 @@ mod tests {
     //      unchanged) AND the authorizer policy is updated.
     //   2. `enabled` flip true->false stops the client; false->true restarts.
 
-    use crate::core::common::authz::{CenterPolicy, Decision, Role, Verb};
     use crate::core::common::config::{FedAllowRule, FedRbacConfig};
+    use crate::core::controller::authz::{CenterPolicy, Decision, Verb};
 
     /// Outcome of a single `run_supervisor` reload iteration.
     #[derive(Debug, PartialEq, Eq)]
@@ -348,7 +348,7 @@ mod tests {
         // Verify the authorizer reflects the new policy after a swap.
         let authorizer = Authorizer::new(CenterPolicy::deny_all());
         assert_eq!(
-            authorizer.authorize(&Role::Center, Verb::Get, "HttpRoute"),
+            authorizer.authorize(&authorizer.center_role(), Verb::Get, "HttpRoute"),
             Decision::Deny,
             "should be denied before policy swap"
         );
@@ -356,7 +356,7 @@ mod tests {
         swap_policy_from(&authorizer, &with_rbac);
 
         assert_eq!(
-            authorizer.authorize(&Role::Center, Verb::Get, "HttpRoute"),
+            authorizer.authorize(&authorizer.center_role(), Verb::Get, "HttpRoute"),
             Decision::Allow,
             "should be allowed after policy swap"
         );

@@ -35,6 +35,14 @@ CONTROLLER_ADMIN_PORT=5800
 GATEWAY_ADMIN_PORT=5810
 TEST_SERVER_HTTP_PORT=30001
 
+# Controller admin auth credentials (used by local_auth in the generated config)
+CTRL_AUTH_USER="admin"
+CTRL_AUTH_PASS="test-mtls-conf-sync-pass"
+CTRL_JWT_SECRET="test-mtls-jwt-secret-conf-sync"
+
+# Admin token (populated after login in start_mtls_environment)
+CTRL_ADMIN_TOKEN=""
+
 # Configurable
 DO_START=true
 DO_CLEANUP=true
@@ -58,6 +66,15 @@ log_section() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${BLUE}$1${NC}"
     echo -e "${BLUE}========================================${NC}"
+}
+
+# do_login URL USER PASS — returns JWT token string
+do_login() {
+    local url="$1" user="$2" pass="$3" resp
+    resp=$(curl -sf --max-time 10 -H "Content-Type: application/json" \
+        -d "{\"username\":\"${user}\",\"password\":\"${pass}\"}" \
+        "${url}/api/v1/auth/login" 2>/dev/null || true)
+    echo "$resp" | grep -o '"token":"[^"]*"' | head -1 | sed 's/"token":"//;s/"//'
 }
 
 # =============================================================================
@@ -265,11 +282,13 @@ conf_sync_security:
       key: certs/grpc/secondary/server.key
       ca: certs/grpc/secondary/ca.crt
 
-# Disable admin auth for this conf_sync test (it verifies conf_sync, not auth).
-# With local_auth.enabled=false, derive_require_auth() returns false (no-auth
-# mode), so /api/v1/server-info is reachable without a Bearer token.
+# Admin API authentication — authentication is mandatory; configure real credentials.
+# The test logs in after the Controller starts and passes a Bearer token to admin calls.
 local_auth:
-  enabled: false
+  enabled: true
+  username: "${CTRL_AUTH_USER}"
+  password: "${CTRL_AUTH_PASS}"
+  jwt_secret: "${CTRL_JWT_SECRET}"
 EOF
     log_success "Controller YAML (multi-cert): $controller_yaml"
 
@@ -416,8 +435,18 @@ EOF
         log_warn "Could not confirm mTLS log entry (may appear later)"
     fi
 
-    # ── 8. Wait for ConfigServer ready, load base config ──
+    # ── 8. Wait for ConfigServer ready, login, load base config ──
     wait_for_ready "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/ready" "controller ConfigServer" 30
+
+    log_section "Logging in to Controller admin API"
+    CTRL_ADMIN_TOKEN=$(do_login \
+        "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" \
+        "${CTRL_AUTH_USER}" "${CTRL_AUTH_PASS}")
+    if [ -z "$CTRL_ADMIN_TOKEN" ]; then
+        log_error "Controller admin login failed — check local_auth config"
+        exit 1
+    fi
+    log_success "Controller admin login successful"
 
     log_section "Loading base configuration via Admin API"
     local conf_src="${PROJECT_ROOT}/examples/test/conf/base"
@@ -553,8 +582,11 @@ test_gateway_ready() {
 # =============================================================================
 test_server_id_match() {
     local ctrl_id gw_id
-    ctrl_id=$(curl -sf "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/api/v1/server-info" 2>/dev/null \
+    # Controller admin API requires a Bearer token (auth is mandatory).
+    ctrl_id=$(curl -sf -H "Authorization: Bearer ${CTRL_ADMIN_TOKEN}" \
+        "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/api/v1/server-info" 2>/dev/null \
         | grep -o '"server_id":"[^"]*"' | cut -d'"' -f4)
+    # Gateway admin API has no auth — call tokenless.
     gw_id=$(curl -sf "http://127.0.0.1:${GATEWAY_ADMIN_PORT}/api/v1/server-info" 2>/dev/null \
         | grep -o '"server_id":"[^"]*"' | cut -d'"' -f4)
 

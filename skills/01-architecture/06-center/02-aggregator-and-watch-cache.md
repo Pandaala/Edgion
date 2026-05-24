@@ -114,7 +114,8 @@ CenterWatchCache<T>   (per-controller in-memory snapshot)
 CenterMetaDataStore   (global merged view across all controllers)
     │  list_*() / get_*()
     ▼
-HTTP Admin API handlers
+HTTP Admin API handlers   ← auth-gated (mandatory; 503 fail-close when unconfigured;
+                            see ../../02-features/02-config/03-auth-bootstrap.md)
 ```
 
 Center is the **watch issuer**; Controllers are the **watch servers**. This means:

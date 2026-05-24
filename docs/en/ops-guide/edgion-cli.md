@@ -19,8 +19,15 @@ edgion-cli [OPTIONS] <COMMAND>
 | `--target` | `-t` | Target API type | `center` |
 | `--server` | - | Server address | Auto-selected based on target |
 | `--socket` | - | Unix socket path | - |
+| `--token` | - | Static CLI token (long-only; `-t` is taken by `--target`) | - |
 | `--help` | `-h` | Show help information | - |
 | `--version` | `-V` | Show version information | - |
+
+`--token` accepts an `edg_`-prefixed token minted by `gen-token`. The environment
+variable `EDGION_TOKEN` is an alternative that avoids exposing the token in shell
+history. Precedence: `--token` > `EDGION_TOKEN` > cached login token.
+When either is set, `ensure_auth` (including `/auth/status` and `/auth/me`) is
+skipped; validation is lazy (401 = unknown token, 403 = permission denied).
 
 ## Target Types
 
@@ -211,6 +218,43 @@ edgion-cli gen-certs --output k8s
 ```
 
 After generating certificates, configure mTLS in your TOML files. See [Control Plane mTLS](infrastructure/mtls.md#control-plane-mtls-conf_sync-grpc) for details.
+
+### gen-token - Generate a Static CLI Token
+
+Generate a new role-scoped CLI token for use with the Controller Admin API.
+Does not require a running Controller. The output is the `edg_`-prefixed token
+and its SHA-256 hex digest.
+
+```bash
+edgion-cli gen-token
+```
+
+**Example output:**
+
+```
+Token (use with --token or EDGION_TOKEN):
+  edg_<URL-safe base64, 43 chars>
+
+SHA-256 (paste into controller cli_tokens[].token_sha256):
+  <64 lowercase hex chars>
+```
+
+**Workflow:**
+
+1. Run `edgion-cli gen-token` to mint a token.
+2. Paste the SHA-256 line into `cli_tokens[].token_sha256` in the Controller
+   configuration file.
+3. Hot-reload: `edgion-cli reload` (or `POST /api/v1/reload`).
+4. Distribute the `edg_...` token to the consumer via a secret manager or
+   environment variable — never in plaintext files or shell history.
+5. The consumer uses it via `--token edg_...` or `export EDGION_TOKEN=edg_...`.
+
+> **Security:** the SHA-256 is computed over the full `edg_`-prefixed token —
+> the exact string sent as the `Authorization: Bearer` value. Never store the raw
+> token in the controller config; only the SHA-256 digest goes there.
+
+For RBAC configuration, rotation instructions, and all security notes, see
+[CLI Token RBAC](federation-rbac.md#cli-token-rbac).
 
 ## Connection Configuration
 

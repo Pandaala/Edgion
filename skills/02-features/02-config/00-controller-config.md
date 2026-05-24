@@ -324,6 +324,52 @@ center:
 
 > **Kind casing:** `kinds` MUST use the canonical PascalCase resource Kind name (e.g. `PluginMetaData`, `HTTPRoute`, `RegionRoute`). Lowercase or alias spellings (e.g. `pluginmetadata`) are matched case-sensitively against the normalized request kind and will silently never match. Verbs are case-insensitive.
 
+## `[cli_tokens]` — Static CLI Tokens (Admin API Access)
+
+Static Bearer tokens that grant role-scoped access to the Controller Admin API. Each entry binds a token to a fine-grained RBAC policy using the same `(verb, kind)` model as `[center].rbac`. Tokens are never stored in plaintext — only their SHA-256 hex digest is persisted. Hot-reloadable.
+
+**Source:** `src/core/common/config/mod.rs` (`CliTokenConfig`).
+
+### Field Reference
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `String` | **Required** | Human-readable label used in audit/log fields. Must match `[A-Za-z0-9_.-]+`. |
+| `token_sha256` | `String` | **Required** | SHA-256 hex digest (64 lowercase hex chars) of the raw bearer token. Never store the token itself. Mint via `edgion-cli gen-token`. |
+| `rbac` | `FedRbacConfig` | deny-all | RBAC allow-rules for this token. Absent or empty ⇒ deny-all. Same `verbs × kinds` schema as `[center].rbac`. |
+
+### Config Example
+
+```yaml
+cli_tokens:
+  # Read-only token — safe for monitoring/CI pipelines that only inspect routes
+  - name: monitor-bot
+    # Mint the token with: edgion-cli gen-token
+    # Paste the SHA-256 line here; distribute the edg_… token to the consumer.
+    token_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    rbac:
+      allow:
+        # Enumerate concrete kinds; NEVER use kinds: ["*"] with read verbs
+        # (wildcard read exposes Secret and EdgionTls private-key material).
+        - verbs: [get, list]
+          kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service, EdgionGatewayConfig, EdgionTls]
+
+  # Scoped read-write token — manages plugin metadata and can trigger reload
+  - name: plugin-manager
+    token_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+    rbac:
+      allow:
+        - verbs: [get, list, watch, create, update, delete]
+          kinds: [PluginMetaData]
+        # reload is a write-only verb; kinds: ["*"] is safe here (no read surface)
+        - verbs: [reload]
+          kinds: ["*"]
+```
+
+> **Kind casing:** `kinds` MUST use the canonical PascalCase resource Kind name (e.g. `PluginMetaData`, `HTTPRoute`). Lowercase spellings silently never match.
+>
+> **Full operator guide:** see `docs/en/ops-guide/federation-rbac.md#cli-token-rbac` for the gen-token workflow, security notes, and rotation instructions.
+
 ## `[path_normalization]` — Path Normalization (Gateway-side configuration)
 
 Path normalization configuration is read on the Gateway side (`src/core/gateway/path_normalization/config.rs`); the Controller config does not directly own this section, but skills documentation records it here for unified reference.

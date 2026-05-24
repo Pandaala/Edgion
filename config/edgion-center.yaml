@@ -24,9 +24,10 @@ sync:
   ping_interval_secs: 30
 
 # ============================================================================
-# Admin API Authentication (optional)
+# Admin API Authentication
 # ============================================================================
-# Omit to disable auth (backward compatible).
+# Authentication is mandatory. Configure a `local_auth` or `auth` provider;
+# omitting one leaves business routes returning 503 until configured.
 #
 # auth:
 #   enabled: true

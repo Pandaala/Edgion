@@ -17,29 +17,17 @@ use tracing_appender::non_blocking::WorkerGuard;
 
 /// Derive whether the operator *expects* admin API authentication.
 ///
-/// Intent-based rather than assembly-based -- returns `true` in the Controller
-/// auto-generate fallback case (no `[auth]` and no `[local_auth]`) even though
-/// neither config segment is present, because the Controller will attempt to
-/// install credentials via K8s Secret.
+/// Authentication is mandatory; no-auth mode was removed. Returns `true` unconditionally.
 ///
-/// Rules:
-/// - `[auth].enabled == true` -> true
-/// - `[local_auth].enabled == true` (including `needs_generation()`) -> true
-/// - `[local_auth]` present with `enabled == false` -> that segment contributes false
-/// - Neither segment present -> true (Controller auto-generate fallback)
-/// - `[auth]` present + `[local_auth]` absent -> value of `[auth].enabled`
+/// The parameters are retained to avoid churning ~41 call sites; they are no
+/// longer used to compute the result. When `local_auth.enabled=false` or
+/// `auth.enabled=false` is present, a migration `tracing::warn!` is emitted
+/// at the call site (see `resolve_local_config` / the `run` method).
 pub(crate) fn derive_require_auth(
-    auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
-    local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
+    _auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
+    _local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
 ) -> bool {
-    let oidc_enabled = auth_config.is_some_and(|c| c.enabled);
-    let local_intent = match (local_auth_config, oidc_enabled) {
-        (Some(cfg), _) if cfg.enabled => true,
-        (Some(_), _) => false,
-        (None, false) => true,
-        (None, true) => false,
-    };
-    oidc_enabled || local_intent
+    true
 }
 
 /// Resolve the startup `LocalAuthConfig` for the Controller, tolerating a
@@ -235,7 +223,7 @@ impl EdgionControllerCli {
         require_auth: bool,
         needs_retry: bool,
         config_file: Option<String>,
-        authorizer: std::sync::Arc<crate::core::common::authz::Authorizer>,
+        authorizer: std::sync::Arc<crate::core::controller::authz::Authorizer>,
         center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
         shutdown_handle: ShutdownHandle,
     ) -> Result<()> {
@@ -472,7 +460,32 @@ impl EdgionControllerCli {
         }
         let initial_policy =
             crate::core::controller::fed_sync::default_policy::center_policy_from(initial_center_cfg.rbac.as_ref());
-        let authorizer = std::sync::Arc::new(crate::core::common::authz::Authorizer::new(initial_policy));
+        let authorizer = std::sync::Arc::new(crate::core::controller::authz::Authorizer::new(
+            crate::core::controller::authz::CenterPolicy::deny_all(),
+        ));
+
+        // 6c. Build the initial cli_tokens map from `config.cli_tokens`.
+        // Uses the shared lint pass which applies per-entry shape validation,
+        // GLOBAL dedup (no silent last-wins on duplicate name/hash), and emits
+        // advisory WARNs for unknown/non-canonical kinds, unknown verbs, and
+        // dangerous grants (Secret-read / wildcard-read).
+        // Map key = token_sha256 VERBATIM (already a hash; do NOT re-hash).
+        // Install both the center policy and the cli_tokens map atomically via
+        // `apply()` BEFORE the admin server starts serving so there is no window
+        // where cli tokens return 401.
+        {
+            // Lint the center RBAC policy when the operator explicitly supplied one
+            // (the built-in default policy is known-good; no need to lint it).
+            if let Some(rbac) = initial_center_cfg.rbac.as_ref() {
+                crate::core::controller::authz::lint::lint_rbac_policy(rbac, "startup", "center");
+            }
+
+            let cli_map = crate::core::controller::authz::lint::build_cli_token_map(&config.cli_tokens, "startup");
+
+            // Install center policy + cli_tokens atomically before admin server serves.
+            authorizer.apply(initial_policy, cli_map);
+        }
+
         // The original receiver is intentionally dropped here. The federation supervisor (Task 7)
         // will obtain its own receiver via `center_reload_tx.subscribe()`, which works even after
         // this initial receiver is dropped -- as long as the Sender is alive. The Sender lives for
@@ -516,7 +529,8 @@ impl EdgionControllerCli {
                     authorizer.clone(),
                     crate::core::controller::api::authz_middleware::authz_layer,
                 ))
-                .layer(axum::middleware::from_fn(
+                .layer(axum::middleware::from_fn_with_state(
+                    authorizer.clone(),
                     crate::core::controller::api::authz_middleware::inject_center_identity,
                 ));
             // IMPORTANT: Do NOT add any .route()/.merge() to fed_router AFTER this
@@ -573,6 +587,18 @@ impl EdgionControllerCli {
         let (local_auth_config, needs_retry) =
             resolve_local_config(&config, oidc_enabled_for_resolve, &*conf_mgr).await;
         let require_auth = derive_require_auth(auth_config.as_ref(), config.local_auth.as_ref());
+
+        // Migration WARN: if the operator explicitly disabled a provider, auth is still
+        // mandatory. This replaces the old no-auth mode that allowed pass-through.
+        let local_explicitly_disabled = config.local_auth.as_ref().is_some_and(|c| !c.enabled);
+        let oidc_explicitly_disabled = auth_config.as_ref().is_some_and(|c| !c.enabled);
+        if local_explicitly_disabled || oidc_explicitly_disabled {
+            tracing::warn!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                "auth `enabled: false` is no longer supported; authentication is mandatory. \
+                 Configure a real local_auth/auth provider. Ignoring the disable flag."
+            );
+        }
 
         Self::start_services(
             conf_mgr,
@@ -637,9 +663,11 @@ mod require_auth_tests {
     }
 
     #[test]
-    fn require_auth_local_disabled_no_oidc_false() {
+    fn require_auth_local_disabled_no_oidc_still_true() {
+        // Even when local_auth.enabled=false, authentication is mandatory.
+        // A migration WARN is emitted at startup; the disabled flag is ignored.
         let local = local_disabled();
-        assert!(!derive_require_auth(None, Some(&local)));
+        assert!(derive_require_auth(None, Some(&local)));
     }
 
     #[test]
@@ -666,13 +694,12 @@ mod require_auth_tests {
     }
 
     /// Double explicit opt-out: the operator explicitly disabled both sides.
-    /// require_auth must be false (respect the explicit intent). Guard: if
-    /// someone later simplifies the formula to "any None/disabled -> true",
-    /// it would break the no-auth mode.
+    /// Authentication is still mandatory; no-auth mode was removed. A migration
+    /// WARN is emitted at startup and the disabled flags are ignored.
     #[test]
-    fn require_auth_both_explicit_disabled_false() {
+    fn require_auth_both_explicit_disabled_still_true() {
         let oidc = oidc_disabled();
         let local = local_disabled();
-        assert!(!derive_require_auth(Some(&oidc), Some(&local)));
+        assert!(derive_require_auth(Some(&oidc), Some(&local)));
     }
 }

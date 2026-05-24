@@ -19,8 +19,16 @@ TLS posture for the gRPC port is governed by `grpc_security` in `CenterConfig`
 (`src/core/center/config/mod.rs:44-47`). Omitting that section keeps plaintext gRPC
 (backward compatible); setting it enables mTLS via `ConfSyncSecurityConfig`.
 The HTTP Admin API uses axum + `compose_admin_routes` and is protected by `local_auth`
-or OIDC `auth`; if neither is configured, all business routes return 503 (fail-close,
-`src/core/center/cli/mod.rs:189-191`).
+or OIDC `auth`. Authentication is **mandatory** — no-auth mode was removed 2026-05-24;
+`enabled: false` is now ignored with a startup WARN. Center has **no auto-generated
+credentials** (unlike Controller); if neither `[local_auth]` nor `[auth]` is configured,
+the server still starts but all business routes return 503 fail-close
+(`src/core/center/cli/mod.rs:215-225`). `/health`, `/ready`, `/metrics`, and
+`/api/v1/auth/status` remain reachable. Center has **no authz/RBAC engine** — the
+`(verb, kind)` authorization engine is Controller-private (`src/core/controller/authz/`);
+Center is authentication-only. See
+[`../../02-features/02-config/03-auth-bootstrap.md`](../../02-features/02-config/03-auth-bootstrap.md)
+for credential bootstrap details.
 
 ## Top-level module map
 

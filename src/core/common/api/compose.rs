@@ -151,28 +151,33 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
-    /// T5 -- when require_auth=false, business routes pass through (no OIDC, no local).
+    /// T5 -- a tokenless request to a business route returns 401 (auth is mandatory).
+    /// (Previously asserted 200 pass-through when require_auth=false; that no-auth
+    /// mode has been removed.)
     #[tokio::test]
-    async fn business_route_passes_when_require_auth_false() {
-        let state = UnifiedAuthState::from_configs(None, None, false, "test").unwrap();
-        let app = compose_admin_routes(dummy_business(), state, false);
+    async fn business_route_requires_auth_no_token() {
+        let state = new_state_with_local();
+        let app = compose_admin_routes(dummy_business(), state, true);
         let req = Request::builder().uri("/foo").body(Body::empty()).unwrap();
         let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     /// T6 -- every admin response carries `Cache-Control: no-store`.
     ///
     /// Verifies that the blanket middleware fires on:
-    ///   - an authenticated 200 response (business route with auth disabled),
+    ///   - the /api/v1/auth/status public endpoint (200 without auth — skip_path),
     ///   - a 401 rejection (auth required but no token supplied),
-    ///   - a public endpoint (/api/v1/auth/status) that returns 200 without auth.
+    ///   - a second /api/v1/auth/status request to confirm consistency.
     #[tokio::test]
     async fn all_responses_carry_cache_control_no_store() {
-        // Case A: auth disabled, business route → 200
-        let state_no_auth = UnifiedAuthState::from_configs(None, None, false, "test").unwrap();
-        let app_no_auth = compose_admin_routes(dummy_business(), state_no_auth, false);
-        let req = Request::builder().uri("/foo").body(Body::empty()).unwrap();
+        // Case A: public /api/v1/auth/status skip-path → 200 (no token needed)
+        let state_auth = new_state_with_local();
+        let app_no_auth = compose_admin_routes(dummy_business(), state_auth, true);
+        let req = Request::builder()
+            .uri("/api/v1/auth/status")
+            .body(Body::empty())
+            .unwrap();
         let resp = app_no_auth.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(

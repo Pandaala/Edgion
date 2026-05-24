@@ -234,8 +234,96 @@ conf_sync_security:
     ca: certs/grpc/ca.crt
 ```
 
+## Authentication
+
+Authentication is **mandatory** for the Controller Admin API. All requests to `/api/v1/*` routes require a valid Bearer token or session cookie. Unauthenticated requests are rejected with HTTP 401.
+
+> Zero-config still works: when `[local_auth]` is absent, the Controller auto-generates a random admin password and JWT secret and stores them in the `edgion-admin-credentials` Secret (`edgion-system` namespace). To retrieve the generated password:
+>
+> **Kubernetes mode**:
+> ```bash
+> kubectl -n edgion-system get secret edgion-admin-credentials \
+>   -o jsonpath='{.data.password}' | base64 -d
+> ```
+>
+> **Local / file mode**:
+> ```bash
+> cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
+> ```
+>
+> You can also authenticate interactively with `edgion-cli login`, or the CLI auto-logs-in by reading the config file.
+
+For the full bootstrap decision tree and Center auth behavior, see [`skills/02-features/02-config/03-auth-bootstrap.md`](../../../../skills/02-features/02-config/03-auth-bootstrap.md).
+
+### [local_auth]
+
+Built-in username/password authentication. Issues HS256 JWTs to authenticated clients. When absent on the Controller, credentials are auto-generated (see above).
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `username` | `String` | `"admin"` | Admin username |
+| `password` | `String` | _(auto-generated)_ | Admin password. Empty → auto-generated on Controller; must be set explicitly on Center |
+| `jwt_secret` | `String` | _(auto-generated)_ | JWT signing secret. Empty → auto-generated on Controller; must be set explicitly on Center |
+| `jwt_expiry_hours` | `Integer` | `24` | Issued token lifetime in hours |
+
+```yaml
+local_auth:
+  username: admin
+  password: "change-me"
+  jwt_secret: "a-long-random-signing-secret"
+  jwt_expiry_hours: 24
+```
+
+> **Center note**: Center has **no** auto-generation. If neither `[local_auth]` nor `[auth]` is configured, business routes return 503 (fail-close) while `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain accessible.
+
+### [auth] — OIDC
+
+Optional OIDC integration for the Admin API. Can coexist with `[local_auth]`; requests are attempted in the order OIDC → local.
+
+```yaml
+auth:
+  oidc:
+    issuer: "https://auth.example.com"
+    client_id: "edgion"
+    client_secret: "secret"
+    redirect_url: "https://controller.example.com/api/v1/auth/callback"
+```
+
+For the full OIDC field reference, see [`skills/02-features/02-config/00-controller-config.md`](../../../../skills/02-features/02-config/00-controller-config.md).
+
+### [cli_tokens] — Static CLI Tokens
+
+Static Bearer tokens for programmatic or CI access to the Admin API. Each token is bound to a fine-grained RBAC policy. Tokens are stored as SHA-256 hex digests (never plaintext). Hot-reloadable.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | `String` | Human-readable label for this token |
+| `token_sha256` | `String` | SHA-256 hex digest (64 lowercase hex chars) of the raw bearer token. Generate with `edgion-cli gen-token` |
+| `rbac` | Object | RBAC allow-rules (`verbs × kinds`). Absent or empty → deny-all |
+
+```yaml
+cli_tokens:
+  - name: "ci-readonly"
+    token_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    rbac:
+      rules:
+        - verbs: [get, list, watch]
+          kinds: ["*"]
+  - name: "deploy-bot"
+    token_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+    rbac:
+      rules:
+        - verbs: [get, list, create, update, delete]
+          kinds: [HTTPRoute, Service]
+```
+
+For the token generation workflow, rotation instructions, and the full security note list, see [**Federation RBAC — CLI Token RBAC**](../federation-rbac.md#cli-token-rbac).
+
+For the complete field reference (including `[center]`, `[center.rbac]`, all OIDC fields), see [`skills/02-features/02-config/00-controller-config.md`](../../../../skills/02-features/02-config/00-controller-config.md).
+
 ## Related Documentation
 
 - [Gateway Configuration](./gateway-config.md)
 - [EdgionGatewayConfig CRD](./edgion-gateway-config.md)
 - [Working Directory Behavior](../../dev-guide/work-directory.md)
+- [Federation RBAC](../federation-rbac.md)

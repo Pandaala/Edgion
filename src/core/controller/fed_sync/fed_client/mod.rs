@@ -14,7 +14,6 @@ use tokio::sync::{watch, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
-use crate::core::common::authz::{Authorizer, Role, Verb};
 use crate::core::common::config::CenterClientConfig;
 use crate::core::common::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
@@ -22,6 +21,7 @@ use crate::core::common::fed_sync::proto::{
     FedWatchEventResponse, FedWatchListResponse, HttpProxyResponse, Pong, RegisterRequest, StatsReport,
 };
 use crate::core::common::observe::fed_metrics;
+use crate::core::controller::authz::{Authorizer, Verb};
 use crate::core::controller::conf_mgr::ConfMgr;
 
 /// Minimum connection duration before backoff is reset.
@@ -602,9 +602,16 @@ async fn handle_center_message(
             // RBAC check: authorize Center for Watch on the normalized kind before
             // touching any store state. This check runs BEFORE the ConfigSyncServer
             // lookup so a denied request never touches internal state.
-            if !authorizer.authorize(&Role::Center, Verb::Watch, &kind).allowed() {
+            if !authorizer
+                .authorize(&authorizer.center_role(), Verb::Watch, &kind)
+                .allowed()
+            {
                 let kind_label = crate::core::controller::api::authz_classifier::bounded_kind_label(&kind);
-                crate::core::common::observe::fed_metrics::record_rbac_denied("watch", kind_label);
+                crate::core::common::observe::fed_metrics::record_rbac_denied(
+                    "watch",
+                    kind_label,
+                    crate::core::common::observe::fed_metrics::labels::rbac_source::CENTER,
+                );
                 // Mirror the existing watch-error frame shape: CtrlPayload::WatchEventResponse
                 // with a non-empty `error` field and all other fields defaulted to zero/empty.
                 // The Center interprets a non-empty `error` as a terminal error and re-watches.
@@ -844,8 +851,8 @@ mod tests {
     /// without starting any watch (active_watch_cancel remains None).
     #[tokio::test]
     async fn watch_request_denied_by_rbac_sends_forbidden_and_no_watch_started() {
-        use crate::core::common::authz::{Authorizer, CenterPolicy};
         use crate::core::common::fed_sync::proto::{controller_message::Payload as CtrlPayload, FedWatchRequest};
+        use crate::core::controller::authz::{Authorizer, CenterPolicy};
         use crate::core::controller::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig};
         use std::sync::Arc;
 

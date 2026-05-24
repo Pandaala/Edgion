@@ -195,6 +195,52 @@ conf_sync:
 #         kinds: ["*"]
 
 # ============================================================================
+# Static CLI Tokens (cli_tokens)
+# ============================================================================
+# Role-scoped Bearer tokens for the Controller Admin API.
+# Intended for CI/automation that must call the Admin API non-interactively.
+# Tokens are SHA-256-stored; the raw token is never persisted.
+#
+# Workflow:
+#   1. Run: edgion-cli gen-token
+#      The command prints an "edg_..." token and its SHA-256 digest.
+#   2. Paste the SHA-256 value into token_sha256 below.
+#   3. Distribute the "edg_..." token to the consumer (use --token or EDGION_TOKEN).
+#   4. Apply the config: POST /api/v1/reload  (hot-reloadable, no restart needed).
+#
+# RBAC rules use the same (verb, kind) model as [center].rbac.
+# See docs/en/ops-guide/federation-rbac.md#cli-token-rbac for the full guide.
+#
+# SECURITY — read before enabling:
+#   - NEVER use kinds: ["*"] with get / list / list-keys: exposes Secret and
+#     EdgionTls private-key material via the blind proxy. Enumerate concrete kinds.
+#   - verbs: ["*"] is equivalent to Superuser — grant narrowly.
+#   - Rotate by replacing token_sha256 + running reload (no restart).
+#   - --token / EDGION_TOKEN do NOT touch ~/.edgion/token (ephemeral per-invocation).
+#
+# cli_tokens:
+#   # Read-only token — safe for monitoring / read-only CI pipelines.
+#   - name: monitor-bot
+#     token_sha256: "<64 lowercase hex chars from edgion-cli gen-token>"
+#     rbac:
+#       allow:
+#         # Enumerate concrete kinds; do NOT use kinds: ["*"] with read verbs.
+#         - verbs: [get, list]
+#           kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service,
+#                   EdgionGatewayConfig, EdgionTls, PluginMetaData]
+#
+#   # Scoped read-write token — manages plugin metadata + reload only.
+#   - name: plugin-manager
+#     token_sha256: "<64 lowercase hex chars from edgion-cli gen-token>"
+#     rbac:
+#       allow:
+#         - verbs: [get, list, watch, create, update, delete]
+#           kinds: [PluginMetaData]
+#         # reload is write-only; kinds: ["*"] is safe here (no read surface).
+#         - verbs: [reload]
+#           kinds: ["*"]
+
+# ============================================================================
 # conf_sync Channel Security (mTLS)
 # ============================================================================
 # Omit this section entirely to keep plaintext gRPC (backward compatible).

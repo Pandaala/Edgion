@@ -23,6 +23,7 @@ description: edgion-controller control plane architecture — overall design, st
 | [08-acme-service.md](08-acme-service.md) | ACME certificate automation service | Modifying or debugging automatic certificate issuance and renewal |
 | [09-add-new-resource/](09-add-new-resource/00-guide.md) | Add-new-resource workflow + 4 template categories | When you need to add a new ResourceKind |
 | [10-status-management.md](10-status-management.md) | update_status implementation rules and pitfalls | Implementing or modifying CRD status writeback |
+| [11-authentication-authorization.md](11-authentication-authorization.md) | Authentication + authorization architecture (unified_auth / cli token / fed mTLS, the authz engine, the middleware onion, default Center policy) | Understanding or extending Controller auth/authz, adding cli tokens, debugging 401/403 |
 
 ## Architecture Overview
 

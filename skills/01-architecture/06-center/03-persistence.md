@@ -79,6 +79,8 @@ For detailed design, see the project design specs (if there is an ADR document, 
 
 ## Admin API
 
+> All Admin API endpoints are auth-gated (authentication is mandatory; 503 fail-close when unconfigured). See [`../../02-features/02-config/03-auth-bootstrap.md`](../../02-features/02-config/03-auth-bootstrap.md).
+
 All endpoints return 503 when `database.enabled = false`.
 
 | Method | Path | Description |

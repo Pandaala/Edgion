@@ -18,7 +18,7 @@ Center has no auto-generation capability. When neither `[local_auth]` nor `[auth
 - No auth provider is ready.
 - `unified_auth_middleware` takes the "fail-close" branch and returns `503 Service Unavailable` (with `Retry-After: 10`).
 - `/health`, `/ready`, `/metrics`, `/api/v1/auth/status` remain accessible (skip_paths + early-return paths).
-- The startup log prints WARN: `No authentication configured. Admin endpoints will return 503 until you configure [local_auth] or [auth] in your TOML.`
+- The startup log prints WARN: `No authentication configured. Admin endpoints will return 503 until you configure [local_auth] or [auth] in your YAML.`
 
 ## Controller: Reading the Auto-generated Credentials
 
@@ -85,32 +85,22 @@ Center starts successfully, but:
 
 The operator can supply the configuration and restart afterward.
 
-### Consequences of Explicitly Disabling All Providers (no-auth mode, **dangerous**)
+### No-Auth Mode Removed (as of 2026-05-24)
 
-If the operator **explicitly** sets all providers to `enabled: false`, for example:
+No-auth mode — setting `local_auth.enabled: false` (or `auth.enabled: false`) with the intent of bypassing authentication — is **no longer supported**. Authentication is mandatory.
 
-```yaml
-local_auth:
-  enabled: false
-auth:
-  enabled: false
-```
+The `enabled: false` flag is now **ignored** with a startup `WARN` log (not a hard error, to avoid CrashLoops on upgrade). The behavior after that warning depends on the component:
 
-Then:
-- `require_auth = false` (respecting the operator's opt-out intent).
-- `unified_auth_middleware` directly passes through all requests.
-- **All `/api/v1/*` business paths are accessible without a token** — the admin API is **completely open**.
-- Startup WARN: `Admin API is running in NO-AUTH mode: ...` (since 2026-04-20).
+| Scenario | Controller behavior | Center behavior |
+|----------|--------------------|----|
+| Config absent (no `local_auth` / `auth` section at all) | Auto-generates admin credentials — **never bricks** | Business routes return 503 until configured |
+| `local_auth.enabled: false` (explicit disable) | No provider is loaded → admin API returns 503 until reconfigured; emits startup WARN | Same: 503 fail-close until reconfigured; emits startup WARN |
+| `local_auth.enabled: true` (or section absent) | Normal operation | Normal operation |
 
-This is a legitimate "pure no-auth mode" (e.g., internal-network isolation + authentication handled by another gateway layer), but it is **very easy to trigger by mistake** (e.g., the operator wants to "temporarily disable local_auth and use OIDC only" but accidentally disables both). If your deployment really takes this path:
-
-1. Explicitly state in the deployment documentation that this is "no-auth mode, relying on layer X for authentication".
-2. Do not place this YAML on a Center exposed to the public internet.
-
-If you simply want to **switch** to OIDC-only, the correct approach is:
-- **Remove** the `local_auth` section entirely (or leave only `enabled: false`).
-- Configure the `auth` section with `enabled: true` + a valid discovery.
-- Then `oidc_intent = true`, `require_auth = true`, and the normal OIDC flow runs.
+**Upgrade path**: if you previously relied on `enabled: false` to "disable local_auth while using OIDC":
+- Remove the `local_auth` section entirely, or set `enabled: true` with valid credentials.
+- Configure the `auth` section with `enabled: true` + a valid OIDC discovery URL.
+- The `oidc_intent = true` path runs normally regardless of the `local_auth` field.
 
 ## K8s Deployment: Mounting Center YAML via Secret
 

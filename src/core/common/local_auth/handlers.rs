@@ -74,7 +74,10 @@ pub struct AuthStatusResponse {
     /// Whether the operator expects authentication to be enforced.
     pub auth_required: bool,
     /// Providers currently ready to validate requests. Possible values:
-    /// `"oidc"`, `"local"`. Empty when `status = initializing` or `disabled`.
+    /// `"oidc"`, `"local"`, `"cli"`. Empty when `status = initializing` or `disabled`.
+    /// The `"cli"` provider is added Controller-side when at least one cli token is
+    /// registered (see `Authorizer::cli_tokens_present`). It is not reported by the
+    /// shared `unified_auth::build_status` because `unified_auth` must not import authz.
     pub active_providers: Vec<String>,
     /// High-level readiness status. CLIs should dispatch on this, not on
     /// `active_providers` alone.

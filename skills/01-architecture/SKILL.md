@@ -56,6 +56,7 @@ flowchart TD
 |-----------|-----------|
 | Project at a glance, code organization, conventions shared by the four binaries | [00-common/](00-common/SKILL.md) |
 | How the Controller processes resources internally | [01-controller/](01-controller/SKILL.md) |
+| Controller authentication & authorization (admin login, cli tokens, RBAC, 401/403 debugging) | [01-controller/11-authentication-authorization.md](01-controller/11-authentication-authorization.md) |
 | How the Gateway processes requests | [02-gateway/](02-gateway/SKILL.md) |
 | How Controller and Gateway sync | [03-controller-gateway-link/](03-controller-gateway-link/SKILL.md) |
 | edgion-cli commands and target modes | [04-ctl/](04-ctl/SKILL.md) |
@@ -96,6 +97,7 @@ Internal architecture of the control plane, broken down by module:
 | ACME | Let's Encrypt automated certificates, Leader only |
 | Adding a new resource | workflow + 4 template categories (route-like / controller-only / plugin-like / cluster-scoped) |
 | Status management | update_status implementation conventions, known pitfalls |
+| Authentication & authorization | unified_auth, cli token RBAC, Role/Verb/CenterPolicy, middleware onion, default Center policy |
 
 ### [02-gateway/](02-gateway/SKILL.md) — edgion-gateway architecture
 
@@ -150,7 +152,7 @@ HTTP Admin API.
 
 | Module | Keywords |
 |--------|---------|
-| Overview | Deployment shape, ports, TLS posture, startup lifecycle, failure modes |
+| Overview | Deployment shape, ports, TLS posture, startup lifecycle, failure modes; mandatory auth + 503 fail-close if unconfigured; no auto-generated credentials; no authz engine (Controller-private) |
 | Federation gRPC server | `RegisterRequest` validation caps, bidirectional stream protocol, error handling |
 | Aggregator / watch cache | `ResourceAggregator`, `CenterWatchCache`, `CenterMetaDataStore`, reverse-Watch data flow |
 | Persistence | SQLite `controllers` table, `CenterDb`, Admin API, Docker build notes |

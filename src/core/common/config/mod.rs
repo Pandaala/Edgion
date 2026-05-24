@@ -199,6 +199,13 @@ pub struct EdgionControllerConfig {
     #[arg(skip)]
     #[serde(default)]
     pub local_auth: Option<crate::core::common::local_auth::LocalAuthConfig>,
+
+    /// Static cli tokens for role-scoped API access.
+    /// Each entry names a token (by its SHA-256 hex digest) and assigns it
+    /// a fine-grained RBAC policy. Hot-reloadable.
+    #[arg(skip)]
+    #[serde(default)]
+    pub cli_tokens: Vec<CliTokenConfig>,
 }
 
 /// Server configuration
@@ -652,6 +659,50 @@ impl EdgionControllerConfig {
         Ok(())
     }
 
+    /// Validate all `cli_tokens` entries.
+    ///
+    /// Per-entry checks:
+    /// - `name` must be non-empty and match `[A-Za-z0-9_.-]+`
+    /// - `name` must be unique across entries
+    /// - `token_sha256` must be exactly 64 lowercase hex characters
+    /// - `token_sha256` must be unique across entries (duplicate ⇒ same token reused)
+    /// - `rbac` must pass `FedRbacConfig::validate()`
+    ///
+    /// Returns the first error encountered, or `Ok(())` when all entries pass.
+    pub fn validate_cli_tokens(&self) -> Result<(), String> {
+        let mut names = std::collections::HashSet::new();
+        let mut hashes = std::collections::HashSet::new();
+        for t in &self.cli_tokens {
+            if t.name.is_empty()
+                || !t
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+            {
+                return Err(format!("cli_token name invalid: {:?}", t.name));
+            }
+            if !names.insert(t.name.as_str()) {
+                return Err(format!("duplicate cli_token name: {}", t.name));
+            }
+            if t.token_sha256.len() != 64
+                || !t
+                    .token_sha256
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            {
+                return Err(format!(
+                    "cli_token {} token_sha256 must be 64 lowercase hex chars",
+                    t.name
+                ));
+            }
+            if !hashes.insert(t.token_sha256.as_str()) {
+                return Err(format!("duplicate token_sha256 (name {})", t.name));
+            }
+            t.rbac.validate()?;
+        }
+        Ok(())
+    }
+
     /// Merge CLI config into file config (CLI takes precedence)
     fn merge(base: &mut Self, cli: &Self) {
         // Work directory: CLI value takes precedence if provided
@@ -753,6 +804,19 @@ impl EdgionControllerConfig {
             level: self.log_level(),
         }
     }
+}
+
+/// A single static cli token entry: maps a sha256-hashed token to an RBAC policy.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct CliTokenConfig {
+    /// Human-readable name for audit / log fields. Must match `[A-Za-z0-9_.-]+`.
+    pub name: String,
+    /// SHA-256 hex digest (64 lowercase hex chars) of the raw bearer token.
+    /// The actual token is never stored; only the digest is persisted.
+    pub token_sha256: String,
+    /// RBAC policy for this token. Absent ⇒ deny-all.
+    #[serde(default)]
+    pub rbac: FedRbacConfig,
 }
 
 /// Default-deny allowlist for Center (federation) operations.
@@ -1274,6 +1338,73 @@ metrics:
                 }
             }
         }
+    }
+
+    // ── Group I: cli_tokens parse + validate ─────────────────────────────────
+
+    #[test]
+    fn cli_tokens_parse_and_validate() {
+        let cfg: EdgionControllerConfig = serde_yaml::from_str(
+            "cli_tokens:\n  - name: bot\n    token_sha256: \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n    rbac:\n      allow:\n        - verbs: [get, list]\n          kinds: [PluginMetaData]\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.cli_tokens.len(), 1);
+        assert_eq!(cfg.cli_tokens[0].name, "bot");
+        assert!(cfg.validate_cli_tokens().is_ok());
+    }
+
+    #[test]
+    fn cli_tokens_validate_rejects_bad_hash_dup_name_dup_hash() {
+        let bad_hex = CliTokenConfig {
+            name: "a".into(),
+            token_sha256: "xyz".into(),
+            rbac: FedRbacConfig::default(),
+        };
+        assert!(EdgionControllerConfig {
+            cli_tokens: vec![bad_hex],
+            ..Default::default()
+        }
+        .validate_cli_tokens()
+        .is_err());
+
+        let h = "0".repeat(64);
+        let dup_name = vec![
+            CliTokenConfig {
+                name: "a".into(),
+                token_sha256: h.clone(),
+                rbac: FedRbacConfig::default(),
+            },
+            CliTokenConfig {
+                name: "a".into(),
+                token_sha256: "1".repeat(64),
+                rbac: FedRbacConfig::default(),
+            },
+        ];
+        assert!(EdgionControllerConfig {
+            cli_tokens: dup_name,
+            ..Default::default()
+        }
+        .validate_cli_tokens()
+        .is_err());
+
+        let dup_hash = vec![
+            CliTokenConfig {
+                name: "a".into(),
+                token_sha256: h.clone(),
+                rbac: FedRbacConfig::default(),
+            },
+            CliTokenConfig {
+                name: "b".into(),
+                token_sha256: h,
+                rbac: FedRbacConfig::default(),
+            },
+        ];
+        assert!(EdgionControllerConfig {
+            cli_tokens: dup_hash,
+            ..Default::default()
+        }
+        .validate_cli_tokens()
+        .is_err());
     }
 
     // ── Group H: CenterClientConfig enabled + rbac ───────────────────────────

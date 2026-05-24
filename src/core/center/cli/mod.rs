@@ -208,36 +208,30 @@ impl EdgionCenterCli {
 
         let http_handle = tokio::spawn(async move {
             let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
-            let oidc_intent = auth_config.as_ref().is_some_and(|c| c.enabled);
-            // Safe default: as long as the operator has not explicitly opted
-            // out (enabled=false), require auth. In the nothing_configured
-            // case, require_auth=true makes the middleware take the 503
-            // branch (rather than passthrough), preventing "no configuration"
-            // from leaving the admin API exposed.
-            let nothing_configured = local_auth_config.is_none() && auth_config.is_none();
-            let require_auth = local_auth_intent || oidc_intent || nothing_configured;
+            // Authentication is mandatory; no-auth mode was removed. require_auth is
+            // always true. In the nothing_configured case, the middleware takes the
+            // 503 fail-close branch preventing "no configuration" from leaving the
+            // admin API exposed.
+            let require_auth = true;
 
-            // Defensive observability: WARN on both scenarios where the
-            // admin API is not protected by a token.
-            // Scenario 1: nothing configured -- middleware takes the 503
-            //             fail-close branch.
-            // Scenario 2: operator explicitly set enabled=false on all
-            //             providers -- middleware passes through. (This is a
-            //             legitimate no-auth mode, but it is easy to do by
-            //             mistake, so WARN does not imply an error.)
+            let nothing_configured = local_auth_config.is_none() && auth_config.is_none();
+            // Scenario 1: nothing configured -- middleware takes the 503 fail-close branch.
             if nothing_configured {
                 tracing::warn!(
                     component = "center",
                     "No authentication configured. Admin endpoints will return 503 \
                      until you configure [local_auth] or [auth] in your YAML."
                 );
-            } else if !require_auth {
+            }
+            // Scenario 2: operator explicitly set enabled=false on a provider -- auth is
+            // still mandatory; this config is no longer supported and the flag is ignored.
+            let local_explicitly_disabled = local_auth_config.as_ref().is_some_and(|c| !c.enabled);
+            let oidc_explicitly_disabled = auth_config.as_ref().is_some_and(|c| !c.enabled);
+            if local_explicitly_disabled || oidc_explicitly_disabled {
                 tracing::warn!(
                     component = "center",
-                    "Admin API is running in NO-AUTH mode: all configured providers \
-                     have enabled=false. Admin endpoints are OPEN to unauthenticated \
-                     requests. Set enabled=true on [local_auth] or [auth] to restore \
-                     authentication."
+                    "auth `enabled: false` is no longer supported; authentication is mandatory. \
+                     Configure a real local_auth/auth provider. Ignoring the disable flag."
                 );
             }
 

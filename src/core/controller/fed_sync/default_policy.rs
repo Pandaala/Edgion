@@ -18,8 +18,8 @@
 //! When `center.rbac` is `Some(...)` the operator's config is used verbatim;
 //! the built-in default is NOT applied.
 
-use crate::core::common::authz::CenterPolicy;
 use crate::core::common::config::{FedAllowRule, FedRbacConfig};
+use crate::core::controller::authz::CenterPolicy;
 use crate::types::resource::kind::ResourceKind;
 
 // ---------------------------------------------------------------------------
@@ -161,15 +161,15 @@ pub(crate) fn center_policy_from(rbac: Option<&FedRbacConfig>) -> CenterPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::common::authz::{Authorizer, Decision, Role, Verb};
     use crate::core::common::config::FedAllowRule;
+    use crate::core::controller::authz::{Authorizer, Decision, Verb};
 
     fn az() -> Authorizer {
         Authorizer::new(default_center_policy())
     }
 
     fn allows(az: &Authorizer, verb: Verb, kind: &str) -> bool {
-        az.authorize(&Role::Center, verb, kind) == Decision::Allow
+        az.authorize(&az.center_role(), verb, kind) == Decision::Allow
     }
 
     // -- read permissions --
