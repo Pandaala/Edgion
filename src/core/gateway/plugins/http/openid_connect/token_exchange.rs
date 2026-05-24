@@ -105,7 +105,10 @@ impl OpenidConnect {
         if self.ensure_session_cookie_size_limit(&cookie).is_err() {
             return;
         }
-        let _ = session.set_response_header("Set-Cookie", &cookie);
+        // Append, not set: Set-Cookie is a multi-value header; insert_header would
+        // wipe every upstream/other-plugin Set-Cookie. append_header preserves them
+        // (RFC 6265 §3 / RFC 7230 §3.2.2 list-syntax exception).
+        let _ = session.append_response_header("Set-Cookie", &cookie);
     }
 
     pub(super) async fn exchange_code_for_token(

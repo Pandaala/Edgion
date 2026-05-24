@@ -23,6 +23,8 @@ pub struct TcpLogEntry {
     pub bytes_received: u64,
     pub status: String,
     pub connection_established: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deny_reason: Option<&'static str>,
 }
 
 impl TcpLogEntry {
@@ -43,6 +45,7 @@ impl TcpLogEntry {
             bytes_received: ctx.bytes_received,
             status,
             connection_established: ctx.connection_established,
+            deny_reason: ctx.deny_reason,
         }
     }
 
@@ -70,5 +73,52 @@ pub fn get_tcp_logger() -> Option<&'static Arc<AccessLogger>> {
 pub async fn log_tcp(entry: &TcpLogEntry) {
     if let Some(logger) = TCP_LOGGER.get() {
         let _ = logger.send(entry.to_json()).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::gateway::routes::tcp::edgion_tcp::TcpStatus;
+    use std::time::Instant;
+
+    fn denied_ctx(reason: Option<&'static str>) -> TcpContext {
+        TcpContext {
+            listener_port: 9000,
+            client_addr: "127.0.0.1".to_string(),
+            client_port: 50000,
+            upstream_addr: None,
+            start_time: Instant::now(),
+            bytes_sent: 0,
+            bytes_received: 0,
+            status: TcpStatus::PluginDenied,
+            connection_established: false,
+            deny_reason: reason,
+        }
+    }
+
+    #[test]
+    fn from_context_propagates_deny_reason_into_json() {
+        // A plugin-denied connection (connection_established = false) is still
+        // logged, and its bounded deny_reason must reach the JSON entry.
+        let entry = TcpLogEntry::from_context(&denied_ctx(Some("stream plugin resource not found")));
+        assert_eq!(entry.deny_reason, Some("stream plugin resource not found"));
+        assert!(
+            entry
+                .to_json()
+                .contains(r#""deny_reason":"stream plugin resource not found""#),
+            "deny_reason must be serialized into the TCP log JSON"
+        );
+    }
+
+    #[test]
+    fn from_context_omits_deny_reason_when_none() {
+        // Non-denied connections leave deny_reason None; serde must skip it.
+        let entry = TcpLogEntry::from_context(&denied_ctx(None));
+        assert_eq!(entry.deny_reason, None);
+        assert!(
+            !entry.to_json().contains("deny_reason"),
+            "deny_reason must be omitted from JSON when None"
+        );
     }
 }

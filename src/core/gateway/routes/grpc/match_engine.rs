@@ -230,7 +230,7 @@ impl GrpcMatchEngine {
         // Priority 1: Exact service + Exact method
         if let Some(routes) = self.exact_routes.get(service).and_then(|m| m.get(method)) {
             for route_unit in routes {
-                if let Some(matched_gi) = route_unit.deep_match(session, index, hostname)? {
+                if let Some(matched_gi) = try_route_deep_match_unit(route_unit, session, index, hostname) {
                     return Ok((route_unit.clone(), matched_gi));
                 }
             }
@@ -247,7 +247,7 @@ impl GrpcMatchEngine {
             }
             if let Some(ref re) = route_unit.matched_info.compiled_method_regex {
                 if re.is_match(&method) {
-                    if let Some(matched_gi) = route_unit.deep_match(session, index, hostname)? {
+                    if let Some(matched_gi) = try_route_deep_match_unit(route_unit, session, index, hostname) {
                         return Ok((route_unit.clone(), matched_gi));
                     }
                 }
@@ -266,7 +266,7 @@ impl GrpcMatchEngine {
                         .and_then(|m| m.method.as_ref())
                         .map_or(false, |m| m == &method);
                     if method_matches {
-                        if let Some(matched_gi) = route_unit.deep_match(session, index, hostname)? {
+                        if let Some(matched_gi) = try_route_deep_match_unit(route_unit, session, index, hostname) {
                             return Ok((route_unit.clone(), matched_gi));
                         }
                     }
@@ -287,7 +287,7 @@ impl GrpcMatchEngine {
                 .as_ref()
                 .map_or(false, |re| re.is_match(&method));
             if service_ok && method_ok {
-                if let Some(matched_gi) = route_unit.deep_match(session, index, hostname)? {
+                if let Some(matched_gi) = try_route_deep_match_unit(route_unit, session, index, hostname) {
                     return Ok((route_unit.clone(), matched_gi));
                 }
             }
@@ -296,7 +296,7 @@ impl GrpcMatchEngine {
         // Priority 5: Exact service only (method not specified)
         if let Some(routes) = self.service_routes.get(service) {
             for route_unit in routes {
-                if let Some(matched_gi) = route_unit.deep_match(session, index, hostname)? {
+                if let Some(matched_gi) = try_route_deep_match_unit(route_unit, session, index, hostname) {
                     return Ok((route_unit.clone(), matched_gi));
                 }
             }
@@ -306,7 +306,7 @@ impl GrpcMatchEngine {
         for route_unit in &self.regex_service_only {
             if let Some(ref re) = route_unit.matched_info.compiled_service_regex {
                 if re.is_match(&service) {
-                    if let Some(matched_gi) = route_unit.deep_match(session, index, hostname)? {
+                    if let Some(matched_gi) = try_route_deep_match_unit(route_unit, session, index, hostname) {
                         return Ok((route_unit.clone(), matched_gi));
                     }
                 }
@@ -315,12 +315,34 @@ impl GrpcMatchEngine {
 
         // Priority 7: Catch-all (sorted by specificity)
         for route_unit in &self.catch_all_routes {
-            if let Some(matched_gi) = route_unit.deep_match(session, index, hostname)? {
+            if let Some(matched_gi) = try_route_deep_match_unit(route_unit, session, index, hostname) {
                 return Ok((route_unit.clone(), matched_gi));
             }
         }
 
         Err(EdError::RouteNotFound())
+    }
+}
+
+/// Run `deep_match` for a single candidate, swallowing a deep-match error as "no
+/// match" so the caller continues to lower-priority buckets.
+///
+/// This mirrors the HTTP radix engine's `try_route_deep_match`
+/// (`routes/http/match_engine/radix_route_match.rs`), which treats a `deep_match`
+/// `Err` as "this candidate couldn't decide, try the next one" rather than
+/// aborting the whole match. Without this, a `deep_match` error on a single
+/// high-priority gRPC route would abort `match_route` entirely and mask any
+/// lower-priority bucket that could still produce a match.
+#[inline]
+fn try_route_deep_match_unit(
+    route_unit: &Arc<GrpcRouteRuleUnit>,
+    session: &Session,
+    index: &GatewayInfoIndex,
+    hostname: &str,
+) -> Option<GatewayInfo> {
+    match route_unit.deep_match(session, index, hostname) {
+        Ok(Some(gi)) => Some(gi),
+        Ok(None) | Err(_) => None,
     }
 }
 

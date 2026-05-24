@@ -495,7 +495,7 @@ async fn test_maybe_set_session_cookie_header_strips_access_token_and_caches_it(
     let captured_cookie_clone = captured_cookie.clone();
 
     let mut session = MockPluginSession::new();
-    session.expect_set_response_header().returning(move |name, value| {
+    session.expect_append_response_header().returning(move |name, value| {
         if name.eq_ignore_ascii_case("Set-Cookie") {
             *captured_cookie_clone.lock() = Some(value.to_string());
         }
@@ -689,7 +689,7 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
     });
     session.expect_header_value().returning(|_| None);
     session
-        .expect_set_response_header()
+        .expect_append_response_header()
         .withf(|name, _| name.eq_ignore_ascii_case("Set-Cookie"))
         .returning(|_, _| Ok(()));
 

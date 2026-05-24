@@ -374,7 +374,7 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispa
             component = "cache_server",
             event = "apply_change",
             change = ?change,
-            kind = std::any::type_name::<T>(),
+            kind = T::kind_name(),
             name = ?resource.name_any(),
             namespace = ?resource.namespace(),
             sync_version = sync_version,
@@ -386,7 +386,7 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispa
                 // Signal only: log initialization start
                 tracing::info!(
                     component = "cache_server",
-                    kind = std::any::type_name::<T>(),
+                    kind = T::kind_name(),
                     "Cache initialization started"
                 );
             }
@@ -399,7 +399,7 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispa
                 self.set_ready();
                 tracing::info!(
                     component = "cache_server",
-                    kind = std::any::type_name::<T>(),
+                    kind = T::kind_name(),
                     "Cache initialization done, marked as ready"
                 );
             }

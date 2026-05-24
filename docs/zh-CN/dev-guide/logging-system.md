@@ -267,6 +267,8 @@ pub struct TcpLogEntry {
     pub bytes_received: u64,
     pub status: String,
     pub connection_established: bool,
+    // Bounded fail-close / policy-deny reason; present only on denied connections.
+    pub deny_reason: Option<&'static str>,
 }
 ```
 
@@ -279,7 +281,7 @@ log_tcp(&log_entry).await;
 ```
 
 **记录时机**：
-- 仅当连接成功建立后（`connection_established = true`）才记录日志
+- 每个被接受的连接在结束时都会记录,无论成败 —— 失败连接与被 stream 插件拒绝的连接同样会记录（`connection_established` 区分是否真正连上了上游）
 - 记录完整的连接生命周期信息：建立、数据传输、关闭
 
 **日志内容**：
@@ -288,6 +290,7 @@ log_tcp(&log_entry).await;
 - 连接时长
 - 字节传输统计（发送/接收）
 - 连接状态（Success, UpstreamConnectionFailed, ReadError, WriteError 等）
+- 拒绝原因（`deny_reason`，仅当 stream 插件拒绝连接时出现;有界标签,无动态内容）
 
 ### UDP Logger
 

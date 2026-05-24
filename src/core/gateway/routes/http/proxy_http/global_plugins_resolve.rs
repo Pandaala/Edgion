@@ -1,10 +1,15 @@
 //! Per-request resolve helpers for global plugin refs and rule-level
 //! ExtensionRefs.
 //!
-//! Both helpers are pure: input refs/keys -> output Vec, with one
-//! `tracing::warn!` per dangling reference. They are called from
-//! `pg_request_filter` once per request to populate
+//! Both helpers are pure: input refs/keys -> output Vec. They are called
+//! from `pg_request_filter` once per request to populate
 //! `ctx.resolved_global_plugins` and `ctx.resolved_route_ext_refs`.
+//! Dangling references are silently dropped (global refs) or kept as a
+//! `None` placeholder (ext refs); they are intentionally NOT logged here
+//! because this is the data-plane hot path, where `tracing` is forbidden
+//! (see `skills/03-coding/01-log-safety.md` Iron Rule 3 — a single
+//! misconfigured ref would otherwise emit one warn per request, scaling
+//! the log volume with QPS).
 
 use std::sync::Arc;
 
@@ -13,29 +18,17 @@ use crate::core::gateway::plugins::runtime::PluginRuntime;
 use crate::types::resources::edgion_gateway_config::PluginReference;
 
 /// Resolve `EdgionGatewayConfig.spec.global_plugins_ref` to a Vec of plugin
-/// runtimes, preserving order. Dangling refs are warned once and dropped from
-/// the output.
-///
-/// `gateway_config_name` is for diagnostic logging — pass the
-/// `EdgionGatewayConfig` resource name so warnings are traceable to a
-/// specific config.
-pub fn resolve_global_plugins(refs: Option<&[PluginReference]>, gateway_config_name: &str) -> Vec<Arc<PluginRuntime>> {
+/// runtimes, preserving order. Dangling refs are silently dropped from the
+/// output — no logging, this runs on the data-plane hot path.
+pub fn resolve_global_plugins(refs: Option<&[PluginReference]>) -> Vec<Arc<PluginRuntime>> {
     let Some(refs) = refs else { return Vec::new() };
     let store = get_global_plugin_store();
     let mut out = Vec::with_capacity(refs.len());
     for r in refs {
         let ns = r.namespace.as_deref().unwrap_or("default");
         let key = format!("{}/{}", ns, r.name);
-        match store.get_plugin_runtime(&key) {
-            Some(rt) => out.push(rt),
-            None => {
-                tracing::warn!(
-                    gateway_config = %gateway_config_name,
-                    namespace = %ns,
-                    name = %r.name,
-                    "global_plugins_ref points to non-existent EdgionPlugins; skipping",
-                );
-            }
+        if let Some(rt) = store.get_plugin_runtime(&key) {
+            out.push(rt);
         }
     }
     out
@@ -44,28 +37,15 @@ pub fn resolve_global_plugins(refs: Option<&[PluginReference]>, gateway_config_n
 /// Resolve a rule's ExtensionRef keys (built by
 /// `PluginRuntime::ext_ref_keys()`) to positional Vec of resolved runtimes.
 ///
-/// `None` slots are dangling refs (warned once each); position is preserved
-/// because `ExtensionRefFilter.index` directly indexes into this Vec.
-///
-/// `route_name` is for diagnostic logging — pass the resource key
-/// (`namespace/name`) of the route that owns this rule.
-pub fn resolve_route_ext_refs(keys: &[(String, String)], route_name: &str) -> Vec<Option<Arc<PluginRuntime>>> {
+/// `None` slots are dangling refs; position is preserved because
+/// `ExtensionRefFilter.index` directly indexes into this Vec. Dangling refs
+/// are not logged here — this runs on the data-plane hot path.
+pub fn resolve_route_ext_refs(keys: &[(String, String)]) -> Vec<Option<Arc<PluginRuntime>>> {
     let store = get_global_plugin_store();
     let mut out = Vec::with_capacity(keys.len());
     for (ns, name) in keys {
         let key = format!("{}/{}", ns, name);
-        match store.get_plugin_runtime(&key) {
-            Some(rt) => out.push(Some(rt)),
-            None => {
-                tracing::warn!(
-                    route = %route_name,
-                    namespace = %ns,
-                    name = %name,
-                    "ExtensionRef target EdgionPlugins not found in store; using None placeholder",
-                );
-                out.push(None);
-            }
-        }
+        out.push(store.get_plugin_runtime(&key));
     }
     out
 }
@@ -135,7 +115,7 @@ mod tests {
     fn resolve_global_plugins_empty_when_none() {
         let _g = TEST_LOCK.lock();
         clear_store();
-        let resolved = resolve_global_plugins(None, "gw1");
+        let resolved = resolve_global_plugins(None);
         assert!(resolved.is_empty());
     }
 
@@ -149,7 +129,7 @@ mod tests {
             pref("p2", Some("ns1")), // dangling
             pref("p3", Some("ns1")),
         ];
-        let resolved = resolve_global_plugins(Some(&refs), "gw1");
+        let resolved = resolve_global_plugins(Some(&refs));
         assert_eq!(resolved.len(), 2, "dangling p2 should be dropped");
     }
 
@@ -158,7 +138,7 @@ mod tests {
         let _g = TEST_LOCK.lock();
         install_plugins(vec![("default", "global1")]);
         let refs = vec![pref("global1", None)];
-        let resolved = resolve_global_plugins(Some(&refs), "gw1");
+        let resolved = resolve_global_plugins(Some(&refs));
         assert_eq!(resolved.len(), 1);
     }
 
@@ -171,7 +151,7 @@ mod tests {
             ("ns1".to_string(), "missing".to_string()),
             ("ns1".to_string(), "p1".to_string()), // duplicate ok
         ];
-        let resolved = resolve_route_ext_refs(&keys, "route-x");
+        let resolved = resolve_route_ext_refs(&keys);
         assert_eq!(resolved.len(), 3);
         assert!(resolved[0].is_some());
         assert!(resolved[1].is_none(), "dangling slot must be None");
@@ -182,7 +162,7 @@ mod tests {
     fn resolve_route_ext_refs_empty_keys_yields_empty_vec() {
         let _g = TEST_LOCK.lock();
         clear_store();
-        let resolved = resolve_route_ext_refs(&[], "route-x");
+        let resolved = resolve_route_ext_refs(&[]);
         assert!(resolved.is_empty());
     }
 }

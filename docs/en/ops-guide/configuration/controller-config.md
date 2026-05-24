@@ -265,6 +265,7 @@ Built-in username/password authentication. Issues HS256 JWTs to authenticated cl
 | `password` | `String` | _(auto-generated)_ | Admin password. Empty → auto-generated on Controller; must be set explicitly on Center |
 | `jwt_secret` | `String` | _(auto-generated)_ | JWT signing secret. Empty → auto-generated on Controller; must be set explicitly on Center |
 | `jwt_expiry_hours` | `Integer` | `24` | Issued token lifetime in hours |
+| `cookie_secure` | `Boolean` | `true` | Emit the `Secure` attribute on the `edgion_token` auth cookie. Keep `true` for any TLS-fronted deployment so the bearer-equivalent cookie never traverses plaintext `http://`. Set `false` only for an explicit non-TLS dev/internal setup served over plain HTTP. |
 
 ```yaml
 local_auth:
@@ -272,6 +273,7 @@ local_auth:
   password: "change-me"
   jwt_secret: "a-long-random-signing-secret"
   jwt_expiry_hours: 24
+  cookie_secure: true
 ```
 
 > **Center note**: Center has **no** auto-generation. If neither `[local_auth]` nor `[auth]` is configured, business routes return 503 (fail-close) while `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain accessible.

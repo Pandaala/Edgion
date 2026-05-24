@@ -174,23 +174,14 @@ pub async fn request_filter(
     // Resolve once at request_filter entry; later stages read directly from
     // ctx without paying any format!() / store-lookup cost.
     if ctx.resolved_global_plugins.is_none() {
-        let gw_name = edgion_http
-            .edgion_gateway_config
-            .metadata
-            .name
-            .as_deref()
-            .unwrap_or("<unnamed>");
-        let resolved = resolve_global_plugins(
-            edgion_http.edgion_gateway_config.spec.global_plugins_ref.as_deref(),
-            gw_name,
-        );
+        let resolved = resolve_global_plugins(edgion_http.edgion_gateway_config.spec.global_plugins_ref.as_deref());
         ctx.resolved_global_plugins = Some(Arc::new(resolved));
     }
 
     if ctx.resolved_route_ext_refs.is_none() {
         let resolved = match (&ctx.route_unit, &ctx.grpc_route_unit) {
-            (Some(unit), _) => resolve_route_ext_refs(unit.rule.plugin_runtime.ext_ref_keys(), &unit.resource_key),
-            (_, Some(unit)) => resolve_route_ext_refs(unit.rule.plugin_runtime.ext_ref_keys(), &unit.resource_key),
+            (Some(unit), _) => resolve_route_ext_refs(unit.rule.plugin_runtime.ext_ref_keys()),
+            (_, Some(unit)) => resolve_route_ext_refs(unit.rule.plugin_runtime.ext_ref_keys()),
             _ => Vec::new(),
         };
         ctx.resolved_route_ext_refs = Some(Arc::new(resolved));

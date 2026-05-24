@@ -56,6 +56,17 @@ pub struct LocalAuthConfig {
     /// `/api/v1/auth/` prefix paths are always skipped regardless of this list.
     #[serde(default = "default_skip_paths")]
     pub skip_paths: Vec<String>,
+
+    /// Emit the `Secure` attribute on the `edgion_token` auth cookie. Default: true.
+    ///
+    /// The cookie is a bearer-equivalent JWT credential; with `Secure` the browser
+    /// never replays it over plaintext `http://`. Keep it `true` for any TLS-fronted
+    /// deployment. Set it to `false` only for an explicit non-TLS dev/internal setup
+    /// where the Admin API is served over plain HTTP (the browser would otherwise
+    /// refuse to store a `Secure` cookie). Mirrors the CSRF `cookieSecure` and OIDC
+    /// `sessionCookieSecure` plugin defaults.
+    #[serde(default = "default_cookie_secure")]
+    pub cookie_secure: bool,
 }
 
 impl Default for LocalAuthConfig {
@@ -67,6 +78,7 @@ impl Default for LocalAuthConfig {
             jwt_secret: String::new(), // empty = needs generation
             jwt_expiry_hours: 24,
             skip_paths: default_skip_paths(),
+            cookie_secure: default_cookie_secure(),
         }
     }
 }
@@ -105,4 +117,8 @@ impl LocalAuthConfig {
 
 fn default_skip_paths() -> Vec<String> {
     vec!["/health".to_string(), "/ready".to_string()]
+}
+
+fn default_cookie_secure() -> bool {
+    true
 }

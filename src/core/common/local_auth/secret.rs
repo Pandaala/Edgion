@@ -56,6 +56,7 @@ pub async fn ensure_admin_credentials<C: CenterApi>(center: &C) -> anyhow::Resul
                 jwt_secret,
                 jwt_expiry_hours: 24,
                 skip_paths: vec!["/health".to_string(), "/ready".to_string()],
+                cookie_secure: true,
             })
         }
         Err(e) => {
@@ -109,6 +110,7 @@ fn parse_secret_to_config(yaml: &str) -> anyhow::Result<LocalAuthConfig> {
         jwt_secret,
         jwt_expiry_hours: 24,
         skip_paths: vec!["/health".to_string(), "/ready".to_string()],
+        cookie_secure: true,
     })
 }
 

@@ -227,6 +227,7 @@ Built-in username/password authentication that issues HS256 JWTs. When **Control
 | `jwt_secret` | `String` | `""` | JWT signing secret (empty = needs auto-generation) |
 | `jwt_expiry_hours` | `u64` | `24` | Token expiration (hours) |
 | `skip_paths` | `Vec<String>` | `["/health", "/ready"]` | Path prefixes that skip authentication |
+| `cookie_secure` | `bool` | `true` | Emit `Secure` on the `edgion_token` cookie. `false` only for explicit non-TLS (plain HTTP) setups. Mirrors CSRF `cookieSecure` / OIDC `sessionCookieSecure`. |
 
 ```yaml
 local_auth:
@@ -235,6 +236,7 @@ local_auth:
   password: my-secure-password
   jwt_secret: my-jwt-signing-secret
   jwt_expiry_hours: 24
+  cookie_secure: true
 ```
 
 ### Auto-generated Credentials (Controller only)

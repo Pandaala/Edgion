@@ -74,6 +74,62 @@ impl CsrfTestSuite {
         )
     }
 
+    /// GET an upstream path that returns two Set-Cookie headers; the CSRF plugin
+    /// (safe method) appends its own. All three Set-Cookie values must survive.
+    /// Regression for the insert_header-clobbers-upstream-Set-Cookie bug, where
+    /// the queued CSRF cookie replaced every upstream Set-Cookie.
+    fn test_upstream_cookies_preserved() -> TestCase {
+        TestCase::new(
+            "upstream_set_cookies_preserved",
+            "CSRF cookie is appended without wiping the upstream's Set-Cookie values",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = std::time::Instant::now();
+                    // Upstream /multi-set-cookie returns upstream_a + upstream_b.
+                    let url = format!("{}/multi-set-cookie", ctx.http_url());
+
+                    let resp = match ctx.http_client.get(&url).header("host", HOST).send().await {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let status = resp.status().as_u16();
+                    if status != 200 {
+                        return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                    }
+
+                    // Collect ALL Set-Cookie values (get_all, not get → first only).
+                    let cookies: Vec<String> = resp
+                        .headers()
+                        .get_all("set-cookie")
+                        .iter()
+                        .filter_map(|v| v.to_str().ok())
+                        .map(String::from)
+                        .collect();
+
+                    let has_a = cookies.iter().any(|c| c.contains("upstream_a=aaa"));
+                    let has_b = cookies.iter().any(|c| c.contains("upstream_b=bbb"));
+                    let has_csrf = cookies.iter().any(|c| c.contains(TOKEN_HEADER));
+
+                    if has_a && has_b && has_csrf {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!("All three Set-Cookie values present ({} total)", cookies.len()),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected upstream_a + upstream_b + {} in Set-Cookie, got: {:?}",
+                                TOKEN_HEADER, cookies
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
     /// POST with valid CSRF token (header + cookie match, valid signature) → 200
     fn test_valid_csrf_token_passes() -> TestCase {
         TestCase::new(
@@ -320,6 +376,7 @@ impl TestSuite for CsrfTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_safe_method_sets_cookie(),
+            Self::test_upstream_cookies_preserved(),
             Self::test_valid_csrf_token_passes(),
             Self::test_missing_header_returns_401(),
             Self::test_missing_cookie_returns_401(),

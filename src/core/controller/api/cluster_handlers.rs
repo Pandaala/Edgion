@@ -122,6 +122,18 @@ pub async fn update_cluster(
     let writer = state.conf_center();
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
 
+    // The URL name is the authoritative storage key, but the body content is what
+    // gets persisted. Reject a body whose metadata.name contradicts the URL,
+    // otherwise the resource would be stored under the URL name while its content
+    // claims a different name, desynchronizing storage and the running cache. An
+    // absent body name defers to the URL value. (K8s API server rejects the same
+    // mismatch.)
+    if let Some(metadata) = crate::core::common::utils::extract_resource_metadata(&content) {
+        if metadata.name.is_some_and(|meta_name| meta_name != name) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
     // Parse, validate, and persist using update_one (fails if not exists)
     // In K8s mode: skip validation (K8s API Server validates) and don't update version
     // In non-K8s mode: validate and update resource version
@@ -205,4 +217,69 @@ pub async fn list_cluster_keys(
 
     let (data, continue_token) = state.center_list_keys(kind, pagination.into_list_options()).await?;
     Ok(Json(ListResponse::success_with_token(data, continue_token)))
+}
+
+#[cfg(test)]
+mod update_identity_tests {
+    use super::*;
+    use crate::core::controller::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, SchemaValidator};
+
+    /// Build a minimal FileSystem-backed AdminState (non-K8s mode, the mode in
+    /// which the URL-vs-body name desync is observable). The returned TempDir
+    /// must be kept alive for the storage path to stay valid.
+    async fn make_fs_state() -> (Arc<AdminState>, tempfile::TempDir) {
+        let tmp_data = tempfile::tempdir().expect("tempdir for conf data");
+        let fs_config = FileSystemConfig::new(tmp_data.path().to_path_buf());
+        let conf_mgr = Arc::new(
+            ConfMgr::create(ConfCenterConfig::FileSystem(fs_config))
+                .await
+                .expect("ConfMgr::create"),
+        );
+        let schema_validator = Arc::new(SchemaValidator::empty());
+        let (tx, _rx) = tokio::sync::watch::channel(crate::core::common::config::CenterClientConfig::default());
+        let authorizer = Arc::new(crate::core::controller::authz::Authorizer::new(
+            crate::core::controller::authz::CenterPolicy::deny_all(),
+        ));
+        let state = Arc::new(AdminState {
+            conf_mgr,
+            schema_validator,
+            config_file: None,
+            authorizer,
+            center_reload_tx: tx,
+        });
+        (state, tmp_data)
+    }
+
+    fn gateway_class_body(name: &str) -> Bytes {
+        Bytes::from(format!(
+            r#"{{"apiVersion":"gateway.networking.k8s.io/v1","kind":"GatewayClass","metadata":{{"name":"{name}"}},"spec":{{"controllerName":"edgion.io/gateway"}}}}"#
+        ))
+    }
+
+    #[tokio::test]
+    async fn update_cluster_rejects_mismatched_name() {
+        let (state, _tmp) = make_fs_state().await;
+        let result = update_cluster(
+            State(state),
+            Path(("GatewayClass".to_string(), "gc-a".to_string())),
+            gateway_class_body("gc-b"),
+        )
+        .await;
+        assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST));
+    }
+
+    #[tokio::test]
+    async fn update_cluster_matching_name_passes_guard() {
+        // Identity matches, so the guard must NOT reject; the request reaches the
+        // writer, which returns NotFound (404) for the absent resource -- proving
+        // the guard does not false-positive on a valid identity.
+        let (state, _tmp) = make_fs_state().await;
+        let result = update_cluster(
+            State(state),
+            Path(("GatewayClass".to_string(), "gc-a".to_string())),
+            gateway_class_body("gc-a"),
+        )
+        .await;
+        assert_eq!(result.err(), Some(StatusCode::NOT_FOUND));
+    }
 }

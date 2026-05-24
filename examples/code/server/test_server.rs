@@ -313,6 +313,7 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/multi-value-append-test", get(header_echo_handler))
         .route("/response-header-test", get(header_echo_handler))
         .route("/headers", get(headers_handler))
+        .route("/multi-set-cookie", get(multi_set_cookie_handler))
         .route("/auth-header-probe", get(auth_header_probe_handler))
         .route(
             "/webhook/resolve",
@@ -795,6 +796,18 @@ async fn webhook_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
         Json(body),
     )
         .into_response()
+}
+
+/// Upstream that emits TWO Set-Cookie headers, simulating an app that sets its
+/// own cookies. Used to verify the gateway preserves every upstream Set-Cookie
+/// when a plugin (e.g. CSRF) also queues its own Set-Cookie via append semantics.
+async fn multi_set_cookie_handler() -> impl IntoResponse {
+    use axum::http::{header::SET_COOKIE, HeaderMap, HeaderValue, StatusCode};
+
+    let mut headers = HeaderMap::new();
+    headers.append(SET_COOKIE, HeaderValue::from_static("upstream_a=aaa; Path=/"));
+    headers.append(SET_COOKIE, HeaderValue::from_static("upstream_b=bbb; Path=/"));
+    (StatusCode::OK, headers, "multi-set-cookie-ok")
 }
 
 /// Webhook resolve handler for body-text extraction testing.

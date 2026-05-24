@@ -25,6 +25,8 @@ pub struct LocalAuthState {
     pub jwt_expiry_hours: u64,
     /// Paths that bypass auth checks.
     pub skip_paths: HashSet<String>,
+    /// Emit the `Secure` attribute on the issued/cleared auth cookie.
+    pub cookie_secure: bool,
 }
 
 impl LocalAuthState {
@@ -41,6 +43,7 @@ impl LocalAuthState {
             jwt_secret: config.jwt_secret.clone(),
             jwt_expiry_hours: config.jwt_expiry_hours,
             skip_paths: config.skip_paths_set(),
+            cookie_secure: config.cookie_secure,
         })
     }
 }

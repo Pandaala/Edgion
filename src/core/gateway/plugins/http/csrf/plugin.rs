@@ -71,7 +71,10 @@ impl Csrf {
                     .http_only(false) // Intentionally false so JS can read to set header
                     .build();
 
-                if let Err(_e) = session.set_response_header("Set-Cookie", &cookie.to_string()) {
+                // Append, not set: Set-Cookie is a multi-value header (RFC 6265 §3 /
+                // RFC 7230 §3.2.2 list-syntax exception). insert_header would replace
+                // every upstream/other-plugin Set-Cookie; append_header preserves them.
+                if let Err(_e) = session.append_response_header("Set-Cookie", &cookie.to_string()) {
                     plugin_log.push("Token set failed");
                 } else {
                     plugin_log.push("Token set");
@@ -180,7 +183,7 @@ mod tests {
         let mut plugin_log = PluginLog::new("Csrf");
 
         mock_session.expect_method().returning(|| "GET".to_string());
-        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_append_response_header().returning(|_, _| Ok(()));
 
         let result = csrf.run_request(&mut mock_session, &mut plugin_log).await;
 
@@ -197,7 +200,7 @@ mod tests {
 
         mock_session.expect_method().returning(|| "GET".to_string());
         mock_session
-            .expect_set_response_header()
+            .expect_append_response_header()
             .withf(|name, value| name == "Set-Cookie" && value.contains("; Secure"))
             .returning(|_, _| Ok(()));
 
@@ -217,7 +220,7 @@ mod tests {
 
         mock_session.expect_method().returning(|| "GET".to_string());
         mock_session
-            .expect_set_response_header()
+            .expect_append_response_header()
             .withf(|name, value| name == "Set-Cookie" && !value.contains("; Secure"))
             .returning(|_, _| Ok(()));
 

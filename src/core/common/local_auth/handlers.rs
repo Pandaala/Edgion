@@ -161,9 +161,12 @@ pub async fn login_handler(State(state): State<Arc<UnifiedAuthState>>, Json(req)
                 username = %local_state.username,
                 "Login successful"
             );
+            // `Secure` keeps this bearer-equivalent JWT cookie off plaintext http://.
+            // Operator-configurable (default true) for non-TLS dev; see LocalAuthConfig.
+            let secure_attr = if local_state.cookie_secure { "; Secure" } else { "" };
             let cookie_value = format!(
-                "edgion_token={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
-                token, expiry_secs
+                "edgion_token={}; HttpOnly; SameSite=Strict; Path=/{}; Max-Age={}",
+                token, secure_attr, expiry_secs
             );
             let response = LoginResponse {
                 token,
@@ -204,10 +207,20 @@ pub async fn me_handler(
 
 /// POST /api/v1/auth/logout
 ///
-/// Clears the httpOnly auth cookie by setting Max-Age=0. Stateless — does not
-/// consult `LocalAuthState`, so no readiness guard is needed.
-pub async fn logout_handler() -> Response {
-    let cookie_value = "edgion_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0";
+/// Clears the httpOnly auth cookie by setting Max-Age=0. Reads `cookie_secure`
+/// from `LocalAuthState` so the clearing cookie carries the same `Secure`
+/// attribute as the login cookie — a `Secure` clearing cookie must not be sent
+/// when the login cookie was non-`Secure` (and vice versa), otherwise the
+/// browser would refuse the clear over plain HTTP. No readiness guard: logout
+/// must work regardless of provider state, so it falls back to secure-by-default
+/// when the local provider is not yet populated.
+pub async fn logout_handler(State(state): State<Arc<UnifiedAuthState>>) -> Response {
+    let cookie_secure = state.local.load_full().map(|s| s.cookie_secure).unwrap_or(true);
+    let secure_attr = if cookie_secure { "; Secure" } else { "" };
+    let cookie_value = format!(
+        "edgion_token=; HttpOnly; SameSite=Strict; Path=/{}; Max-Age=0",
+        secure_attr
+    );
     let mut resp = Json(ApiResponse::<()>::ok_body(())).into_response();
     resp.headers_mut()
         .insert(header::SET_COOKIE, cookie_value.parse().unwrap());
@@ -327,11 +340,37 @@ mod handler_tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
-    #[tokio::test]
-    async fn logout_sets_cookie_max_age_zero() {
-        use axum::routing::post;
-        // Logout is stateless — build a minimal router with just the logout route.
-        let app: axum::Router = axum::Router::new().route("/api/v1/auth/logout", post(logout_handler));
+    /// Run a successful login against `state` and return the `Set-Cookie` value.
+    async fn login_cookie(state: Arc<UnifiedAuthState>) -> String {
+        let app = app_with_unified(state);
+        let body = serde_json::json!({
+            "username":"admin",
+            "password":"a_long_enough_password_123"
+        })
+        .to_string();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v1/auth/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        resp.headers()
+            .get(axum::http::header::SET_COOKIE)
+            .expect("login must set a cookie")
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// Run logout against `state` and return the `Set-Cookie` value.
+    async fn logout_cookie(state: Arc<UnifiedAuthState>) -> String {
+        let app = app_with_unified(state);
         let resp = app
             .oneshot(
                 Request::builder()
@@ -343,15 +382,71 @@ mod handler_tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let cookie = resp
-            .headers()
+        resp.headers()
             .get(axum::http::header::SET_COOKIE)
             .expect("logout must set a cookie")
             .to_str()
-            .unwrap();
+            .unwrap()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn logout_sets_cookie_max_age_zero() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        state.update_local(LocalAuthState::from_config(&valid_local()));
+        let cookie = logout_cookie(state).await;
         assert!(
             cookie.contains("Max-Age=0"),
             "logout cookie should carry Max-Age=0 to clear client state: {cookie}"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_cookie_has_secure_by_default() {
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        state.update_local(LocalAuthState::from_config(&valid_local()));
+        let cookie = login_cookie(state).await;
+        assert!(
+            cookie.contains("; Secure"),
+            "login cookie must carry Secure by default: {cookie}"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_cookie_omits_secure_when_disabled() {
+        let mut cfg = valid_local();
+        cfg.cookie_secure = false;
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        state.update_local(LocalAuthState::from_config(&cfg));
+        let cookie = login_cookie(state).await;
+        // Match the exact attribute segment: the embedded JWT body could in
+        // principle contain the bare substring "Secure".
+        assert!(
+            !cookie.contains("; Secure"),
+            "login cookie must omit Secure when cookie_secure=false: {cookie}"
+        );
+    }
+
+    #[tokio::test]
+    async fn logout_cookie_secure_matches_config() {
+        // Secure by default.
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        state.update_local(LocalAuthState::from_config(&valid_local()));
+        let cookie = logout_cookie(state).await;
+        assert!(
+            cookie.contains("; Secure"),
+            "logout clearing cookie must carry Secure: {cookie}"
+        );
+
+        // Omitted when disabled, so the browser accepts the clear over plain HTTP.
+        let mut cfg = valid_local();
+        cfg.cookie_secure = false;
+        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
+        state.update_local(LocalAuthState::from_config(&cfg));
+        let cookie = logout_cookie(state).await;
+        assert!(
+            !cookie.contains("; Secure"),
+            "logout cookie must omit Secure when disabled: {cookie}"
         );
     }
 }

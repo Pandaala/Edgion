@@ -250,6 +250,8 @@ pub struct TcpLogEntry {
     pub bytes_received: u64,
     pub status: String,
     pub connection_established: bool,
+    // Bounded fail-close / policy-deny reason; present only on denied connections.
+    pub deny_reason: Option<&'static str>,
 }
 ```
 
@@ -262,8 +264,8 @@ log_tcp(&log_entry).await;
 ```
 
 **Logging timing**:
-- Only logs after connection is successfully established (`connection_established = true`)
-- Records complete connection lifecycle: establishment, data transfer, closure
+- Logs every accepted connection when it ends, regardless of outcome — failed and stream-plugin-denied connections are logged too (`connection_established` distinguishes whether the upstream was actually reached)
+- Records the complete connection lifecycle: establishment, data transfer, closure
 
 **Log content**:
 - Client info (address, port)
@@ -271,6 +273,7 @@ log_tcp(&log_entry).await;
 - Connection duration
 - Byte transfer statistics (sent/received)
 - Connection status (Success, UpstreamConnectionFailed, ReadError, WriteError, etc.)
+- Deny reason (`deny_reason`, present only when a stream plugin rejects the connection; bounded label, no dynamic content)
 
 ### UDP Logger
 

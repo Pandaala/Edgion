@@ -622,12 +622,16 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             (KeySet::ResponseHeader { name }, Some(v)) => self.set_response_header(name, &v),
             (KeySet::ResponseHeader { name }, None) => self.remove_response_header(name),
             (KeySet::Cookie { name }, Some(v)) => {
-                // Set cookie via Set-Cookie header
-                self.set_response_header("Set-Cookie", &format!("{}={}", name, v))
+                // Set cookie via Set-Cookie header. Append, not set: Set-Cookie is a
+                // multi-value header; insert_header would replace every upstream/
+                // other-plugin Set-Cookie (RFC 6265 §3 / RFC 7230 §3.2.2 exception).
+                self.append_response_header("Set-Cookie", &format!("{}={}", name, v))
             }
             (KeySet::Cookie { name }, None) => {
-                // Remove cookie by setting Max-Age=0
-                self.set_response_header("Set-Cookie", &format!("{}=; Max-Age=0", name))
+                // Remove cookie by setting Max-Age=0. Append so the deletion targets
+                // only this cookie name without wiping other Set-Cookie values; the
+                // queue drains after the upstream header, so this line wins per RFC 6265.
+                self.append_response_header("Set-Cookie", &format!("{}=; Max-Age=0", name))
             }
             (KeySet::Ctx { name }, Some(v)) => self.set_ctx_var(name, &v),
             (KeySet::Ctx { name }, None) => self.remove_ctx_var(name),

@@ -234,8 +234,12 @@ async fn flush_batch(
 /// ```
 pub fn build_ndjson_body(docs: &[String], index_name: &str) -> String {
     let mut body = String::with_capacity(docs.len() * 256);
+    // Build the index-action header via serde_json so any special characters in
+    // index_name (e.g. " or \) are correctly escaped and the NDJSON stays valid.
+    let header = serde_json::json!({ "index": { "_index": index_name } });
+    let header_line = serde_json::to_string(&header).unwrap_or_default();
     for doc in docs {
-        body.push_str(&format!(r#"{{"index":{{"_index":"{}"}}}}"#, index_name));
+        body.push_str(&header_line);
         body.push('\n');
         body.push_str(doc);
         body.push('\n');
@@ -265,6 +269,20 @@ mod tests {
         assert!(lines[1].contains("\"hello\""));
         assert!(lines[2].contains("\"index\""));
         assert!(lines[3].contains("\"world\""));
+    }
+
+    #[test]
+    fn test_ndjson_body_escapes_special_chars_in_index_name() {
+        // An index name containing JSON metacharacters must be escaped so the
+        // header line stays valid NDJSON instead of breaking the wire protocol.
+        let docs = vec![r#"{"message":"hello"}"#.to_string()];
+        let body = build_ndjson_body(&docs, r#"weird"name\with-meta"#);
+        let lines: Vec<&str> = body.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2);
+        // The header line must round-trip through serde_json with the exact name.
+        let header: serde_json::Value = serde_json::from_str(lines[0]).expect("header is valid JSON");
+        assert_eq!(header["index"]["_index"], r#"weird"name\with-meta"#);
+        assert_eq!(lines[1], r#"{"message":"hello"}"#);
     }
 
     #[test]
