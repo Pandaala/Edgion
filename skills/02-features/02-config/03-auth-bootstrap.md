@@ -24,6 +24,14 @@ Center has no auto-generation capability. When neither `[local_auth]` nor `[auth
 
 ### K8s Mode
 
+**RBAC prerequisite**: the Controller ServiceAccount must have
+`secrets: [get, list, watch, create]` (cluster-scope). The `create` verb is
+mandatory — without it the first-start auto-generation fails, the
+`secret_retry_loop` keeps retrying for up to 600 s, then calls
+`std::process::exit(1)` (see `src/core/common/local_auth/retry.rs`). Repo
+manifests in both `deploy/kubernetes/controller/rbac.yaml` and
+`examples/k8stest/kubernetes/controller/rbac.yaml` already include `create`.
+
 ```bash
 kubectl -n edgion-system get secret edgion-admin-credentials \
     -o jsonpath='{.data.password}' | base64 -d

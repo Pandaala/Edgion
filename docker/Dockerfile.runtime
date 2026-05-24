@@ -28,6 +28,7 @@ ARG EXTRA_PACKAGES=""
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    procps \
     && if [ -n "${EXTRA_PACKAGES}" ]; then apt-get install -y --no-install-recommends ${EXTRA_PACKAGES}; fi \
     && rm -rf /var/lib/apt/lists/*
 

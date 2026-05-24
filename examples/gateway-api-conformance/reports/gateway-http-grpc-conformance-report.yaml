@@ -1,5 +1,5 @@
 apiVersion: gateway.networking.k8s.io/v1
-date: "2026-04-13T05:46:17Z"
+date: "2026-05-23T01:21:15Z"
 gatewayAPIChannel: UNDEFINED
 gatewayAPIVersion: UNDEFINED
 implementation:
@@ -19,10 +19,12 @@ profiles:
       Passed: 33
       Skipped: 0
   extended:
-    result: success
+    failedTests:
+    - BackendTLSPolicy
+    result: failure
     statistics:
-      Failed: 0
-      Passed: 32
+      Failed: 1
+      Passed: 31
       Skipped: 0
     supportedFeatures:
     - BackendTLSPolicy
@@ -62,7 +64,7 @@ profiles:
     - HTTPRouteParentRefPort
     - ListenerSet
   name: GATEWAY-HTTP
-  summary: Core tests succeeded. Extended tests succeeded.
+  summary: Core tests succeeded. Extended tests failed with 1 test failures.
 - core:
     result: success
     statistics:

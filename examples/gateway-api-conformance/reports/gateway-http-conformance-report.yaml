@@ -1,0 +1,134 @@
+apiVersion: gateway.networking.k8s.io/v1
+date: "2026-05-23T01:33:42Z"
+gatewayAPIChannel: UNDEFINED
+gatewayAPIVersion: UNDEFINED
+implementation:
+  contact:
+  - '@edgion'
+  organization: Edgion
+  project: Edgion
+  url: https://github.com/edgion/edgion
+  version: dev
+kind: ConformanceReport
+mode: default
+profiles:
+- core:
+    result: partial
+    skippedTests:
+    - GatewayClassObservedGenerationBump
+    - GatewayInvalidRouteKind
+    - GatewayInvalidTLSConfiguration
+    - GatewayModifyListeners
+    - GatewayObservedGenerationBump
+    - GatewaySecretInvalidReferenceGrant
+    - GatewaySecretMissingReferenceGrant
+    - GatewaySecretReferenceGrantAllInNamespace
+    - GatewaySecretReferenceGrantSpecific
+    - GatewayWithAttachedRoutes
+    - HTTPRouteCrossNamespace
+    - HTTPRouteExactPathMatching
+    - HTTPRouteHTTPSListener
+    - HTTPRouteHeaderMatching
+    - HTTPRouteHostnameIntersection
+    - HTTPRouteInvalidBackendRefUnknownKind
+    - HTTPRouteInvalidCrossNamespaceBackendRef
+    - HTTPRouteInvalidCrossNamespaceParentRef
+    - HTTPRouteInvalidNonExistentBackendRef
+    - HTTPRouteInvalidParentRefNotMatchingSectionName
+    - HTTPRouteInvalidReferenceGrant
+    - HTTPRouteListenerHostnameMatching
+    - HTTPRouteMatching
+    - HTTPRouteMatchingAcrossRoutes
+    - HTTPRouteObservedGenerationBump
+    - HTTPRoutePartiallyInvalidViaInvalidReferenceGrant
+    - HTTPRoutePathMatchOrder
+    - HTTPRouteRedirectHostAndStatus
+    - HTTPRouteReferenceGrant
+    - HTTPRouteRequestHeaderModifier
+    - HTTPRouteServiceTypes
+    - HTTPRouteSimpleSameNamespace
+    - HTTPRouteWeight
+    statistics:
+      Failed: 0
+      Passed: 0
+      Skipped: 33
+  extended:
+    failedTests:
+    - BackendTLSPolicy
+    result: failure
+    skippedTests:
+    - BackendTLSPolicyConflictResolution
+    - BackendTLSPolicyInvalidCACertificateRef
+    - BackendTLSPolicyInvalidKind
+    - BackendTLSPolicyObservedGenerationBump
+    - BackendTLSPolicySANValidation
+    - GatewayHTTPListenerIsolation
+    - HTTPRoute303Redirect
+    - HTTPRoute307Redirect
+    - HTTPRoute308Redirect
+    - HTTPRouteBackendProtocolH2C
+    - HTTPRouteBackendProtocolWebSocket
+    - HTTPRouteBackendRequestHeaderModifier
+    - HTTPRouteCORS
+    - HTTPRouteCORSAllowCredentialsBehavior
+    - HTTPRouteHTTPSListenerDetectMisdirectedRequests
+    - HTTPRouteInvalidParentRefNotMatchingListenerPort
+    - HTTPRouteMethodMatching
+    - HTTPRouteNamedRule
+    - HTTPRouteQueryParamMatching
+    - HTTPRouteRedirectPath
+    - HTTPRouteRedirectPort
+    - HTTPRouteRedirectScheme
+    - HTTPRouteRequestHeaderModifierBackendWeights
+    - HTTPRouteRequestMirror
+    - HTTPRouteRequestMultipleMirrors
+    - HTTPRouteRequestPercentageMirror
+    - HTTPRouteResponseHeaderModifier
+    - HTTPRouteRewriteHost
+    - HTTPRouteRewritePath
+    - HTTPRouteTimeoutBackendRequest
+    - HTTPRouteTimeoutRequest
+    statistics:
+      Failed: 1
+      Passed: 0
+      Skipped: 31
+    supportedFeatures:
+    - BackendTLSPolicy
+    - BackendTLSPolicySANValidation
+    - GatewayHTTPListenerIsolation
+    - GatewayHTTPSListenerDetectMisdirectedRequests
+    - HTTPRoute303RedirectStatusCode
+    - HTTPRoute307RedirectStatusCode
+    - HTTPRoute308RedirectStatusCode
+    - HTTPRouteBackendProtocolH2C
+    - HTTPRouteBackendProtocolWebSocket
+    - HTTPRouteBackendRequestHeaderModification
+    - HTTPRouteBackendTimeout
+    - HTTPRouteCORS
+    - HTTPRouteDestinationPortMatching
+    - HTTPRouteHostRewrite
+    - HTTPRouteMethodMatching
+    - HTTPRouteNamedRouteRule
+    - HTTPRoutePathRedirect
+    - HTTPRoutePathRewrite
+    - HTTPRoutePortRedirect
+    - HTTPRouteQueryParamMatching
+    - HTTPRouteRequestMirror
+    - HTTPRouteRequestMultipleMirrors
+    - HTTPRouteRequestPercentageMirror
+    - HTTPRouteRequestTimeout
+    - HTTPRouteResponseHeaderModification
+    - HTTPRouteSchemeRedirect
+    unsupportedFeatures:
+    - GatewayAddressEmpty
+    - GatewayBackendClientCertificate
+    - GatewayFrontendClientCertificateValidation
+    - GatewayFrontendClientCertificateValidationInsecureFallback
+    - GatewayInfrastructurePropagation
+    - GatewayPort8080
+    - GatewayStaticAddresses
+    - HTTPRouteParentRefPort
+    - ListenerSet
+  name: GATEWAY-HTTP
+  summary: Core tests partially succeeded with 33 test skips. Extended tests failed
+    with 1 test failures.

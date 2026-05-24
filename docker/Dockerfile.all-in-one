@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
     nginx \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy pre-built backend binaries based on mode
