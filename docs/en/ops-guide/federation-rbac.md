@@ -114,7 +114,9 @@ center:
     allow:
       - verbs: [get, list, watch]
         kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service, PluginMetaData,
-                RegionRoute, EdgionGatewayConfig, EdgionTls]
+                EdgionGatewayConfig, EdgionTls]
+      - verbs: [get, list]
+        kinds: [RegionRoute]
 ```
 
 Note: enumerate concrete kinds explicitly. Do **not** use `kinds: ["*"]` with
@@ -122,8 +124,8 @@ read verbs — see [Security notes](#security-notes).
 
 ### 3. Region-route and IP-restriction management only
 
-Use when: Center manages region-routing and IP-restriction policy but should have
-no read access to other resources and no failover capability.
+Use when: Center manages region-routing and IP-restriction policy (including
+region-route failover) but should have no read access to other resources.
 
 ```yaml
 center:

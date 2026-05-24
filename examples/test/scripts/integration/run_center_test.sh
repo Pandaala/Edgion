@@ -27,32 +27,32 @@
 #                 kill-switch test: started with center.enabled=false, never connects
 #
 # Test cases — RegionRoute (6):
-#   1. watch_sync                  — watch-status shows both controllers with sync_version > 0
-#   2. metadata_store_cluster      — metadata-store clusterRoutes has controllerCount >= 2
-#   3. metadata_store_service      — metadata-store serviceRoutes has >= 3 entries
-#   4. failover_fanout             — POST failover, wait 2s, verify center + controller sides
-#   5. consistency_detect          — consistency endpoint detects regions.length conflict
-#   6. svc_consistency_ok          — service-region-routes consistency is all consistent
+#   1.   watch_sync                  — watch-status shows both controllers with sync_version > 0
+#   2.   metadata_store_cluster      — metadata-store clusterRoutes has controllerCount >= 2
+#   3.   metadata_store_service      — metadata-store serviceRoutes has >= 3 entries
+#   4.   failover_fanout             — POST failover, wait 2s, verify center + controller sides
+#   5.   consistency_detect          — consistency endpoint detects regions.length conflict
+#   6.   svc_consistency_ok          — service-region-routes consistency is all consistent
 #
 # Test cases — GlobalConnectionIpRestriction (8):
-#   7.  gcir_create_fanout         — POST creates GCIR PM on both controllers
-#   7b. gcir_create_validation_400 — POST with invalid body returns HTTP 400 + success=false
-#   8.  gcir_list_after_create     — GET list shows gcir-test with >= 2 controller entries
-#   9.  gcir_get_detail            — GET detail confirms fields on both controllers
-#   10. gcir_patch_enable          — PATCH /enable=false, verify all controllers disabled
-#   11. gcir_patch_active_profile  — PUT adds second profile, PATCH /active-profile switches
-#   12. gcir_consistency_ok        — GET /consistency reports gcir-test as consistent
-#   13. gcir_delete_fanout         — DELETE fan-out, verify gcir-test disappears
+#   7.   gcir_create_fanout         — POST creates GCIR PM on both controllers
+#   7b.  gcir_create_validation_400 — POST with invalid body returns HTTP 400 + success=false
+#   8.   gcir_list_after_create     — GET list shows gcir-test with >= 2 controller entries
+#   9.   gcir_get_detail            — GET detail confirms fields on both controllers
+#   10.  gcir_patch_enable          — PATCH /enable=false, verify all controllers disabled
+#   11.  gcir_patch_active_profile  — PUT adds second profile, PATCH /active-profile switches
+#   12.  gcir_consistency_ok        — GET /consistency reports gcir-test as consistent
+#   13.  gcir_delete_fanout         — DELETE fan-out, verify gcir-test disappears
 #
 # Test cases — Federation RBAC (5):
 #   4b2. rbac_default_allows_region_route_list — proxy GET /api/v1/cluster-region-routes returns
 #                                    200 (not 403) under the built-in default (get/list RegionRoute
 #                                    now included)
-#   14. rbac_default_deny_reload   — proxy POST /api/v1/reload is denied (verb=reload not in default)
-#   15. rbac_default_deny_secret   — proxy GET /api/v1/cluster/Secret is denied (Secret excluded)
-#   16. rbac_explicit_deny_all     — ctrl-silo with explicit empty rbac: write is denied even
+#   14.  rbac_default_deny_reload   — proxy POST /api/v1/reload is denied (verb=reload not in default)
+#   15.  rbac_default_deny_secret   — proxy GET /api/v1/cluster/Secret is denied (Secret excluded)
+#   16.  rbac_explicit_deny_all     — ctrl-silo with explicit empty rbac: write is denied even
 #                                    though the built-in default would allow it
-#   17. rbac_kill_switch_no_connect — ctrl-silo started with center.enabled=false never appears
+#   17.  rbac_kill_switch_no_connect — ctrl-silo started with center.enabled=false never appears
 #                                    in watch-status
 #
 # Usage:

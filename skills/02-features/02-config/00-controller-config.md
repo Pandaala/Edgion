@@ -266,7 +266,7 @@ Connects this Controller to a Federation Center. Omit this section entirely if y
 | `tag` | `Vec<String>` | `[]` | Arbitrary extension tags reported to Center. |
 | `ping_interval_secs` | `u64` | `30` | Heartbeat interval in seconds for the federation keep-alive ping. |
 | `security` | `ConfSyncSecurityConfig` | — | mTLS certificates for the gRPC channel (same format as `conf_sync_security`). Required -- federation fails closed without it. |
-| `rbac` | `FedRbacConfig?` | `null` | Default-deny RBAC for Center operations. **Absent => Center is authorized to do nothing.** |
+| `rbac` | `FedRbacConfig?` | `null` | RBAC for Center operations. **Absent => built-in default policy applies (read `get`/`list`/`watch`/`list-keys` on all ResourceKinds except `Secret`; write `create`/`update`/`delete` on `PluginMetaData`; `get`/`list`/`failover` on the synthetic `RegionRoute`). Present => the explicit rules fully override the default.** |
 
 ### `[center.rbac]` -- Federation RBAC
 
