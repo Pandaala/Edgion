@@ -11,27 +11,44 @@ pub use metrics::{get_alpha, set_alpha};
 #[cfg(test)]
 mod tests {
     //! Tests for the EWMA alpha parameter and the per-backend EWMA update
-    //! formula. Alpha lives behind a process-global atomic, so each test
-    //! restores the prior value to avoid leaking state across cases. The
-    //! `ewma_*` group runs sequentially within this module thanks to the
-    //! save/restore guard pattern below.
+    //! formula. Alpha lives behind a process-global atomic, so alpha-mutating
+    //! tests serialize on `ALPHA_TEST_LOCK` (held by `AlphaGuard`) and restore
+    //! the prior value on drop — otherwise they would observe each other's
+    //! writes under Rust's default parallel test execution.
     use super::*;
     use crate::core::gateway::lb::edgion_backend::{EdgionBackend, INITIAL_EWMA_US};
     use pingora_core::protocols::l4::socket::SocketAddr as PSocketAddr;
     use pingora_load_balancing::Backend;
+    use parking_lot::{Mutex, MutexGuard};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-    /// RAII guard that restores the global alpha on drop so tests do not leak
-    /// state into one another (Rust runs unit tests in parallel by default).
-    struct AlphaGuard(u32);
+    /// Serializes alpha-mutating tests: `ALPHA_PERCENT` is a process-wide
+    /// atomic, so without a lock two tests racing `set_alpha` observe each
+    /// other's writes (failures were ~50% under default parallel execution).
+    /// `parking_lot::Mutex` does not poison, so a deliberately-failing
+    /// assertion releases the lock cleanly without cascading to other tests.
+    static ALPHA_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// RAII guard that holds `ALPHA_TEST_LOCK` for the test's duration (so
+    /// alpha-mutating tests run serially) and restores the prior global alpha
+    /// on drop. Drop runs the restore before the lock field is released, so the
+    /// restore stays inside the critical section.
+    struct AlphaGuard {
+        prev: u32,
+        _lock: MutexGuard<'static, ()>,
+    }
     impl AlphaGuard {
         fn capture() -> Self {
-            Self(get_alpha())
+            let _lock = ALPHA_TEST_LOCK.lock();
+            Self {
+                prev: get_alpha(),
+                _lock,
+            }
         }
     }
     impl Drop for AlphaGuard {
         fn drop(&mut self) {
-            set_alpha(self.0);
+            set_alpha(self.prev);
         }
     }
 
@@ -144,5 +161,25 @@ mod tests {
             target,
             diff
         );
+    }
+
+    #[test]
+    fn ewma_update_does_not_overflow_on_extreme_sample() {
+        // Regression for lb-F001: the blend is computed via u128 intermediates,
+        // so an extreme latency sample (or stored EWMA) cannot overflow the
+        // u64 multiply. `u64::MAX / 50` exceeds u64::MAX / 100, so the old
+        // u64-only `alpha * latency_us` / `(100 - alpha) * current` products
+        // would have overflowed (panic in debug builds).
+        let _g = AlphaGuard::capture();
+        let huge = u64::MAX / 50;
+        let b = make_backend();
+        // alpha=100: result is the sample itself; exercises the alpha*latency term.
+        set_alpha(100);
+        b.update_ewma(huge);
+        assert_eq!(b.ewma(), huge);
+        // alpha=0: result keeps `current`; exercises the (100-alpha)*current term.
+        set_alpha(0);
+        b.update_ewma(0);
+        assert_eq!(b.ewma(), huge, "alpha=0 must preserve the extreme stored EWMA");
     }
 }

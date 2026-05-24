@@ -58,6 +58,7 @@ spec:
 - Weighted round-robin: higher `weight` means higher selection probability
 - Single atomic counter increment, lock-free selection
 - Supports backend health filtering and fallback
+- Weights are interpreted as a **ratio** — only the relative proportion between backends matters, not the absolute magnitude (`[2, 4]` behaves identically to `[1, 2]`). Very large weights are reduced/scaled internally, so the effective ratio resolution is about 1/10,000 (0.01%); this only affects splits finer than that, which is far below any practical canary configuration.
 
 ### ConsistentHash
 

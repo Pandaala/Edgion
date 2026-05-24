@@ -5,6 +5,56 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Upper bound on the precomputed smooth-sequence length.
+///
+/// The sequence is a `Box<[u16]>` (~2 bytes per entry) whose length equals the
+/// sum of the (normalized) weights, so this caps both the persistent allocation
+/// (~20 KB worst case) and the O(n) construction cost. 10_000 gives a weight-ratio
+/// resolution of 1/10_000 (0.01%), far finer than any realistic backend split.
+const MAX_SMOOTH_SEQUENCE_LEN: usize = 10_000;
+
+/// Greatest common divisor (Euclid's algorithm). `gcd(x, 0) == x`.
+fn gcd(mut a: usize, mut b: usize) -> usize {
+    while b != 0 {
+        let r = a % b;
+        a = b;
+        b = r;
+    }
+    a
+}
+
+/// Normalize weights so the precomputed smooth sequence stays bounded while
+/// preserving the traffic ratio. Smooth-WRR fairness depends only on the ratio
+/// between weights, not their absolute magnitude — without this an unclamped
+/// `BackendRef.weight` (up to `i32::MAX`) would make `generate_smooth_sequence`
+/// allocate O(sum of weights) memory, an OOM/DoS vector.
+///
+/// 1. Reduce by the greatest common divisor — lossless, collapses e.g. `[N, N]`
+///    to `[1, 1]` and `[100, 200]` to `[1, 2]`, so common-factor weights cost
+///    almost nothing regardless of magnitude.
+/// 2. If the total still exceeds `MAX_SMOOTH_SEQUENCE_LEN` (only reachable with
+///    adversarial coprime large weights), scale every positive weight down
+///    proportionally, keeping at least 1 so no backend drops out of the rotation.
+///
+/// Zero weights are left as zero (callers filter them out before selection).
+fn normalize_weights(mut weights: Vec<usize>) -> Vec<usize> {
+    let divisor = weights.iter().copied().filter(|&w| w > 0).reduce(gcd).unwrap_or(1).max(1);
+    if divisor > 1 {
+        for w in weights.iter_mut() {
+            *w /= divisor;
+        }
+    }
+
+    let total: usize = weights.iter().sum();
+    if total > MAX_SMOOTH_SEQUENCE_LEN {
+        for w in weights.iter_mut().filter(|w| **w > 0) {
+            *w = ((*w as u128 * MAX_SMOOTH_SEQUENCE_LEN as u128) / total as u128).max(1) as usize;
+        }
+    }
+
+    weights
+}
+
 /// Lock-free Smooth Weighted Round Robin selector
 ///
 /// Pre-computes a smooth sequence at construction time, then uses atomic counter
@@ -51,6 +101,10 @@ impl<T> WeightedRoundRobin<T> {
 
         let total_weight: usize = weights.iter().sum();
         assert!(total_weight > 0, "total weight must be greater than 0");
+
+        // Bound the precomputed sequence before expansion so a large (or
+        // unclamped attacker-controlled) weight cannot blow up the allocation.
+        let weights = normalize_weights(weights);
 
         // Pre-compute smooth sequence using Smooth WRR algorithm
         let sequence = Self::generate_smooth_sequence(&weights);
@@ -152,8 +206,93 @@ impl<T> WeightedRoundRobin<T> {
         &self.items
     }
 
-    /// Get the pre-computed sequence length (equals total weight).
+    /// Get the pre-computed sequence length (equals the sum of the normalized weights).
     pub fn sequence_len(&self) -> usize {
         self.sequence.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gcd_basic() {
+        assert_eq!(gcd(12, 8), 4);
+        assert_eq!(gcd(7, 0), 7);
+        assert_eq!(gcd(0, 5), 5);
+        assert_eq!(gcd(17, 13), 1); // coprime
+    }
+
+    #[test]
+    fn normalize_reduces_by_gcd_losslessly() {
+        // Common factor collapses to lowest terms; the ratio is preserved exactly.
+        assert_eq!(normalize_weights(vec![2, 4, 6]), vec![1, 2, 3]);
+        assert_eq!(normalize_weights(vec![100, 200]), vec![1, 2]);
+    }
+
+    #[test]
+    fn normalize_small_weights_unchanged() {
+        assert_eq!(normalize_weights(vec![3, 1, 2]), vec![3, 1, 2]);
+        assert_eq!(normalize_weights(vec![1, 1]), vec![1, 1]);
+    }
+
+    #[test]
+    fn normalize_preserves_zero_weights() {
+        // Zeros stay in place (callers filter them); GCD ignores them.
+        assert_eq!(normalize_weights(vec![0, 2, 4]), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn normalize_equal_huge_weights_collapse_to_ones() {
+        // The OOM attack input: two equal near-i32::MAX weights are a 1:1 split.
+        // GCD reduction alone bounds it to a 2-entry sequence (no scaling needed).
+        let w = normalize_weights(vec![i32::MAX as usize, i32::MAX as usize]);
+        assert_eq!(w, vec![1, 1]);
+    }
+
+    #[test]
+    fn normalize_coprime_huge_weights_scale_within_budget() {
+        // Coprime large weights cannot be GCD-reduced, so proportional scaling
+        // caps the total at the budget while keeping every backend present.
+        let a = 1_000_000_007usize; // prime
+        let b = 1_000_000_009usize; // prime, coprime with a
+        let w = normalize_weights(vec![a, b]);
+        let total: usize = w.iter().sum();
+        assert!(total <= MAX_SMOOTH_SEQUENCE_LEN + 2, "total {total} must be bounded");
+        assert!(w.iter().all(|&x| x >= 1), "no backend may drop out: {w:?}");
+        // Near-equal split: both land close to half the budget.
+        assert!(w[0] >= 4000 && w[1] >= 4000, "near-equal split preserved: {w:?}");
+    }
+
+    #[test]
+    fn new_bounds_sequence_for_coprime_huge_weights() {
+        // End-to-end: constructing a WRR with adversarial coprime weights must
+        // not allocate an O(sum-of-weights) sequence.
+        let a = 1_000_000_007usize;
+        let b = 1_000_000_009usize;
+        let wrr = WeightedRoundRobin::new(vec!["a", "b"], vec![a, b]);
+        assert!(
+            wrr.sequence_len() <= MAX_SMOOTH_SEQUENCE_LEN + 2,
+            "sequence must stay bounded, got {}",
+            wrr.sequence_len()
+        );
+    }
+
+    #[test]
+    fn new_huge_equal_weights_still_distribute_evenly() {
+        // After normalization the ratio is intact: a huge 1:1 split is still 1:1.
+        let wrr = WeightedRoundRobin::new(vec!["a", "b"], vec![i32::MAX as usize, i32::MAX as usize]);
+        let mut a = 0;
+        let mut b = 0;
+        for _ in 0..10 {
+            match *wrr.select() {
+                "a" => a += 1,
+                "b" => b += 1,
+                _ => unreachable!(),
+            }
+        }
+        assert_eq!(a, 5);
+        assert_eq!(b, 5);
     }
 }

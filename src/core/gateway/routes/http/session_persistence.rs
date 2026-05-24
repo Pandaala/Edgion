@@ -12,6 +12,19 @@ const DEFAULT_SESSION_NAME: &str = "edgion-session-affinity";
 /// Generate a session token from a backend address (ip:port).
 ///
 /// Returns a deterministic 8-character lowercase hex string (CRC32 hash).
+///
+/// Threat model: this token is a stickiness/performance hint, NOT a security
+/// boundary. It is a plain CRC32 of `IP:port` with no per-process secret and no
+/// MAC, so a client that knows a backend's `IP:port` can pre-compute the token
+/// and forge a cookie/header to pin its OWN requests to a chosen backend. This
+/// is self-affecting only: the token identifies a backend (not a user session),
+/// the affinity map is built solely from the service's real backends so a forged
+/// token can only select an existing backend (never inject an arbitrary address),
+/// and the resolved sticky target still passes SSRF validation on the upstream-peer
+/// path (`get_peer_with_sp_fallback` / `try_get_peer`). Do NOT repurpose session
+/// affinity as access
+/// control; if routing restrictions are ever required (e.g. tenant isolation by
+/// pod), replace CRC32 with an HMAC over a per-process/service secret.
 pub fn generate_session_token(backend_addr: &str) -> String {
     let hash = crc32fast::hash(backend_addr.as_bytes());
     format!("{:08x}", hash)

@@ -46,6 +46,15 @@ fn build_sp_affinity_map(
     for b in backends.iter().take(SP_AFFINITY_MAX_PER_SERVICE) {
         if let SocketAddr::Inet(addr) = b.addr {
             let addr_str = addr.to_string();
+            // Threat model: this CRC32 of `IP:port` (no secret, no MAC) is a
+            // stickiness hint, NOT a security boundary. A client that knows a
+            // backend's `IP:port` can forge the matching token to pin its own
+            // requests to that backend, but the map only ever holds the service's
+            // real backends, so a forged token can only pick an existing backend
+            // (never an arbitrary address) and only affects the forging client's
+            // own traffic. See `session_persistence::generate_session_token` for
+            // the full rationale. Use an HMAC over a secret if affinity is ever
+            // promoted to a routing restriction.
             let token = format!("{:08x}", crc32fast::hash(addr_str.as_bytes()));
             map.insert(token, addr);
         }

@@ -205,18 +205,17 @@ impl PolicyStore {
     pub fn remove_by_route(&self, route_key: &str) {
         let mut removed_services = Vec::new();
 
-        // Iterate through all entries and remove this route's references
+        // Iterate through all entries and remove this route's references.
+        // `retain` hands us `&mut V`, so we mutate `route_refs` in place via
+        // `remove_route_ref` — no clone needed. On the delete path the in-place
+        // mutation is discarded with the dropped entry; on the keep path it is
+        // retained, so the behavior matches a clone-then-write-back exactly.
         self.policies.retain(|service_key, policy| {
-            let mut entry = policy.clone();
-            let should_delete = entry.remove_route_ref(route_key);
-
-            if should_delete {
+            if policy.remove_route_ref(route_key) {
                 removed_services.push(service_key.clone());
-                false // Remove from map
+                false // Last reference removed — drop entry
             } else {
-                // Update the entry with modified route_refs
-                *policy = entry;
-                true // Keep in map
+                true // Still referenced — keep, already mutated in place
             }
         });
 

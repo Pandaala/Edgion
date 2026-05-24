@@ -61,6 +61,34 @@ fn build_addr_map(backends: &[Arc<EdgionBackend>]) -> HashMap<SocketAddr, Arc<Ed
         .collect()
 }
 
+/// Resolve the `pingora::Backend` chosen by an inner selector back to the live
+/// `Arc<EdgionBackend>` via the addr-keyed map. Non-Inet addresses (which the
+/// addr_map never contains) resolve to `None`. Does not re-apply the health
+/// filter: the chosen backend already passed it during the selector walk, so
+/// re-checking here would only open a TOCTOU window that could drop a valid pick.
+fn resolve_backend<'a>(
+    b: &Backend,
+    addr_map: &'a HashMap<SocketAddr, Arc<EdgionBackend>>,
+) -> Option<&'a Arc<EdgionBackend>> {
+    if let PSocketAddr::Inet(addr) = b.addr {
+        addr_map.get(&addr)
+    } else {
+        None
+    }
+}
+
+/// Candidate predicate for an inner selector: resolve the `Backend` through the
+/// addr-keyed map and apply the caller's combined active-health-check +
+/// circuit-breaker filter. Shared by both `RrCore` and `ChCore` so the two
+/// selection paths cannot drift apart.
+fn backend_passes_health(
+    b: &Backend,
+    addr_map: &HashMap<SocketAddr, Arc<EdgionBackend>>,
+    health_filter: &impl Fn(&EdgionBackend) -> bool,
+) -> bool {
+    resolve_backend(b, addr_map).is_some_and(|eb| health_filter(eb))
+}
+
 /// Round-robin core: holds the canonical `Arc<EdgionBackend>` list plus the
 /// pingora-backed weighted selector. The selector is materialized once at
 /// compile time from the EdgionBackend slice. A per-addr map resolves the
@@ -88,21 +116,10 @@ impl RrCore {
         if self.backends.is_empty() {
             return None;
         }
+        let addr_map = &self.addr_map;
         self.selector
-            .select(SELECT_MAX_ITERATIONS, |b| {
-                if let PSocketAddr::Inet(addr) = b.addr {
-                    self.addr_map.get(&addr).is_some_and(|eb| health_filter(eb))
-                } else {
-                    false
-                }
-            })
-            .and_then(|b| {
-                if let PSocketAddr::Inet(addr) = b.addr {
-                    self.addr_map.get(&addr).cloned()
-                } else {
-                    None
-                }
-            })
+            .select(SELECT_MAX_ITERATIONS, |b| backend_passes_health(b, addr_map, &health_filter))
+            .and_then(|b| resolve_backend(&b, addr_map).cloned())
     }
 }
 
@@ -116,7 +133,6 @@ pub struct ChCore {
     backends: Arc<Vec<Arc<EdgionBackend>>>,
     ring: ConsistentHashRing,
     rr_fallback: RrCore,
-    addr_map: HashMap<SocketAddr, Arc<EdgionBackend>>,
 }
 
 impl ChCore {
@@ -124,12 +140,10 @@ impl ChCore {
         let pingora_view: Vec<Backend> = backends.iter().map(|b| b.inner().clone()).collect();
         let ring = ConsistentHashRing::build(&pingora_view);
         let rr_fallback = RrCore::build(backends.clone());
-        let addr_map = build_addr_map(&backends);
         Self {
             backends,
             ring,
             rr_fallback,
-            addr_map,
         }
     }
 
@@ -137,21 +151,12 @@ impl ChCore {
         if self.backends.is_empty() {
             return None;
         }
+        // Reuse the addr_map owned by the fallback RrCore instead of holding a
+        // second identical copy: both are built from the same backend slice.
+        let addr_map = &self.rr_fallback.addr_map;
         self.ring
-            .select(hash_key, SELECT_MAX_ITERATIONS, |b| {
-                if let PSocketAddr::Inet(addr) = b.addr {
-                    self.addr_map.get(&addr).is_some_and(|eb| health_filter(eb))
-                } else {
-                    false
-                }
-            })
-            .and_then(|b| {
-                if let PSocketAddr::Inet(addr) = b.addr {
-                    self.addr_map.get(&addr).cloned()
-                } else {
-                    None
-                }
-            })
+            .select(hash_key, SELECT_MAX_ITERATIONS, |b| backend_passes_health(b, addr_map, &health_filter))
+            .and_then(|b| resolve_backend(&b, addr_map).cloned())
     }
 }
 

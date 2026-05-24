@@ -1,7 +1,7 @@
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_ketama::{Bucket, Continuum};
 use pingora_load_balancing::Backend;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Consistent hash ring wrapping `pingora_ketama::Continuum`.
 ///
@@ -58,7 +58,16 @@ impl ConsistentHashRing {
         }
 
         let mut idx = self.ring.node_idx(hash_key);
-        let mut seen = HashSet::new();
+        let mut seen = SeenSet::new(self.backends.len());
+        // Number of distinct backends reachable on the ring (unique Inet addrs).
+        let distinct_backends = self.addr_to_idx.len();
+        // Counts distinct-backend attempts, not raw ring steps. Duplicate virtual
+        // nodes of an already-seen backend make no health-check progress and must
+        // not consume the budget: otherwise a high-weight unhealthy backend whose
+        // ~160*weight vnodes cluster near the key can exhaust `max_iterations`
+        // before the walk ever reaches a healthy peer. Because `seen.insert`
+        // succeeds at most once per backend, `steps` equals the number of
+        // distinct backends evaluated so far.
         let mut steps = 0;
 
         loop {
@@ -70,22 +79,77 @@ impl ConsistentHashRing {
                 break;
             };
 
-            steps += 1;
-
             if let Some(&backend_idx) = self.addr_to_idx.get(addr) {
-                if seen.contains(&backend_idx) {
+                if !seen.insert(backend_idx) {
                     continue;
                 }
-                seen.insert(backend_idx);
+                steps += 1;
 
                 let backend = &self.backends[backend_idx];
                 if health_filter(backend) {
                     return Some(backend.clone());
                 }
+
+                // All distinct backends have been evaluated and none is healthy.
+                // Break instead of spinning over duplicate vnodes forever:
+                // `Continuum::get_addr` never returns `None` on a non-empty ring,
+                // so the distinct-backend count is the only progress guarantee.
+                if steps >= distinct_backends {
+                    break;
+                }
             }
         }
 
         None
+    }
+}
+
+/// Allocation-free (common case) tracker for backend indices already visited
+/// during a ring walk.
+///
+/// Backend indices are dense (`0..backends.len()`) and real deployments are
+/// O(10-100) backends, so a stack `u128` bitmask covers the common case with
+/// zero heap cost on the per-request hot path. Larger fleets fall back to a
+/// single `Vec<bool>` allocation (no rehashing), which still beats the old
+/// per-call `HashSet` that reallocated as it grew.
+enum SeenSet {
+    /// Bitmask for `backend_count <= 128`; bit `i` set means index `i` seen.
+    Bits(u128),
+    /// One-shot dense bitset for `backend_count > 128`.
+    Large(Vec<bool>),
+}
+
+impl SeenSet {
+    fn new(backend_count: usize) -> Self {
+        if backend_count <= 128 {
+            SeenSet::Bits(0)
+        } else {
+            SeenSet::Large(vec![false; backend_count])
+        }
+    }
+
+    /// Marks `idx` as seen. Returns `true` if it was newly inserted, `false`
+    /// if it had already been seen (mirrors `HashSet::insert` semantics).
+    fn insert(&mut self, idx: usize) -> bool {
+        match self {
+            // `Bits` is only constructed when `backend_count <= 128`, and every
+            // `idx` is a valid backend index (`< backend_count <= 128`), so the
+            // shift width is always in `0..128` and cannot overflow.
+            SeenSet::Bits(bits) => {
+                let mask = 1u128 << idx;
+                let newly = *bits & mask == 0;
+                *bits |= mask;
+                newly
+            }
+            SeenSet::Large(seen) => {
+                if seen[idx] {
+                    false
+                } else {
+                    seen[idx] = true;
+                    true
+                }
+            }
+        }
     }
 }
 
@@ -161,6 +225,45 @@ mod tests {
         let backends: Vec<Backend> = (1..=4).map(make_backend).collect();
         let ring = ConsistentHashRing::build(&backends);
         assert!(ring.select(b"key", 32, |_| false).is_none());
+    }
+
+    #[test]
+    fn high_weight_unhealthy_backend_does_not_starve_healthy_peers() {
+        // Regression for F-004: a high-weight unhealthy backend places ~160*weight
+        // virtual nodes on the ring. Previously every duplicate vnode it owned
+        // consumed the iteration budget, so the walk could exhaust the budget
+        // before reaching a distinct healthy peer and return None. With the fix,
+        // only distinct-backend attempts consume the budget, so a budget equal to
+        // the distinct-backend count always suffices to find a healthy peer.
+        let mut backends: Vec<Backend> = (1..=4).map(make_backend).collect();
+        backends[0].weight = 200; // dominates ~98% of the ring slots
+        let heavy_addr = backends[0].addr.clone();
+        let ring = ConsistentHashRing::build(&backends);
+
+        // With a budget equal to the number of distinct backends, the walk must
+        // still fall back to a healthy peer no matter how the heavy backend's
+        // duplicate vnodes cluster around the key.
+        for i in 0..32u32 {
+            let key = format!("f004-key-{i}");
+            let picked = ring
+                .select(key.as_bytes(), backends.len(), |b| b.addr != heavy_addr)
+                .expect("must fall back to a healthy peer within the distinct-backend budget");
+            assert_ne!(picked.addr, heavy_addr, "must not return the unhealthy heavy backend");
+        }
+    }
+
+    #[test]
+    fn all_unhealthy_with_heavy_backend_terminates() {
+        // Termination guard for F-004: because `Continuum::get_addr` never yields
+        // None on a non-empty ring, counting only distinct-backend attempts could
+        // spin forever once every backend has been seen-but-rejected. The
+        // distinct-backend break must stop the walk. A budget far larger than the
+        // backend count ensures it is the break (not the budget cap) that ends the
+        // loop; if the guard were missing this test would hang.
+        let mut backends: Vec<Backend> = (1..=4).map(make_backend).collect();
+        backends[0].weight = 200;
+        let ring = ConsistentHashRing::build(&backends);
+        assert!(ring.select(b"f004-key", 1_000_000, |_| false).is_none());
     }
 
     #[test]
@@ -276,6 +379,28 @@ mod tests {
             "heavy backend (w=10) should win majority, got {}/{}",
             heavy_hits,
             total
+        );
+    }
+
+    #[test]
+    fn large_backend_count_uses_vec_seen_path() {
+        // >128 backends forces SeenSet::Large (the Vec<bool> fallback). Verify
+        // selection stays correct and deterministic on that branch, and that
+        // the all-unhealthy walk still terminates with None (exercising both
+        // the newly-inserted and already-seen arms of the Large bitset).
+        let backends: Vec<Backend> = (1..=200).map(make_backend).collect();
+        let ring = ConsistentHashRing::build(&backends);
+
+        let key = b"large-fleet-key";
+        let first = ring.select(key, 256, |_| true).expect("healthy backend");
+        for _ in 0..10 {
+            let next = ring.select(key, 256, |_| true).expect("healthy backend");
+            assert_eq!(next.addr, first.addr, "ketama must be deterministic for the same key");
+        }
+
+        assert!(
+            ring.select(key, 256, |_| false).is_none(),
+            "all-unhealthy walk over a large fleet must terminate with None"
         );
     }
 }
