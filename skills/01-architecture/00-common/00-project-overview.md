@@ -35,7 +35,7 @@ flowchart TD
             ProxyHttp --- Logging
             StreamRoutes["TCP/UDP/TLS Routes"]
         end
-        AdminGw["Admin API (:5900)"]
+        AdminGw["Admin API (:5810 default)"]
         MetricsGw["Metrics API (:5901)"]
     end
 ```

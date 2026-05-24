@@ -35,7 +35,7 @@ spec:
           containerPort: 8443
           protocol: TCP
         - name: admin
-          containerPort: 5900
+          containerPort: 5810
           protocol: TCP
         - name: metrics
           containerPort: 5901
@@ -46,7 +46,7 @@ spec:
         readinessProbe:
           httpGet:
             path: /ready
-            port: 5900
+            port: 5810
             scheme: HTTP
           initialDelaySeconds: 10
           periodSeconds: 10

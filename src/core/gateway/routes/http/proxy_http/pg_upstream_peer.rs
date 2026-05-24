@@ -13,7 +13,6 @@ use crate::types::ctx::BackendSource;
 use crate::types::err::EdError;
 use crate::types::filters::PluginRunningResult;
 use crate::types::{EdgionHttpContext, EdgionStatus, SessionPersistenceState, UpstreamJumpTarget};
-use pingora_core::modules::http::grpc_web::GrpcWebBridge;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use pingora_core::upstreams::peer::Peer;
@@ -152,15 +151,7 @@ pub async fn upstream_peer_grpc(
         }
     }
 
-    // 2. Initialize GrpcWebBridge for gRPC-Web requests
-    // Standard gRPC requests don't need protocol conversion
-    if ctx.request_info.discover_protocol.as_deref() == Some("grpc-web") {
-        if let Some(grpc) = session.downstream_modules_ctx.get_mut::<GrpcWebBridge>() {
-            grpc.init();
-        }
-    }
-
-    // 3. Initialize backend context (unified logic)
+    // 2. Initialize backend context (unified logic)
     init_backend_context_if_needed(ctx)?;
 
     // 4. Push placeholder upstream so LB / TLS / CB writes during peer construction land on

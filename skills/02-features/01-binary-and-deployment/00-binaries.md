@@ -10,7 +10,7 @@ description: Entry points of the four binaries, full CLI argument reference, wor
 | Binary | Purpose | Default Ports | Entry |
 |--------|---------|---------------|-------|
 | `edgion-controller` | Control plane: resource ingestion/validation/processing/distribution | gRPC `:50051`, Admin `:5800` | `src/bin/edgion_controller.rs` |
-| `edgion-gateway` | Data plane: high-performance proxy (based on Pingora) | Admin `:5900`, Metrics `:5901` | `src/bin/edgion_gateway.rs` |
+| `edgion-gateway` | Data plane: high-performance proxy (based on Pingora) | Admin `:5810` (configurable), Metrics `:5901` | `src/bin/edgion_gateway.rs` |
 | `edgion-cli` | CLI tool: resource CRUD and operations | — | `src/bin/edgion_ctl.rs` |
 | `edgion-center` | Federation center: aggregates resources across federated controllers, serves Center API | — | `src/bin/edgion_center.rs` |
 
@@ -72,7 +72,7 @@ edgion-gateway [OPTIONS]
 | `--work-dir` | `-w` | `PathBuf` | `"."` | Working directory |
 | `--config-file` | `-c` | `String` | `config/edgion-gateway.yaml` | YAML configuration file path |
 | `--server-addr` | — | `String` | **Required** | Controller gRPC address (e.g., `http://127.0.0.1:50051`) |
-| `--admin-listen` | — | `String` | — | Admin API address (note: currently fixed at `:5900`) |
+| `--admin-listen` | — | `String` | `0.0.0.0:5810` | Admin API listen address (default: `0.0.0.0:5810`) |
 | `--threads` | — | `usize` | CPU core count | Pingora worker thread count |
 | `--work-stealing` | — | `bool` | `true` | Tokio task stealing |
 | `--grace-period` | — | `u64` | `30` | Graceful shutdown wait time in seconds |
@@ -117,7 +117,7 @@ edgion-cli [OPTIONS] <COMMAND>
 |--------|-----------------|------------|------------------|
 | `center` | Controller `:5800` | Full CRUD | Resource management (default) |
 | `server` | Controller `:5800` | Read-only query | Inspect ServerCache state |
-| `client` | Gateway `:5900` | Read-only query | Inspect Gateway-side cache |
+| `client` | Gateway `:5810` | Read-only query | Inspect Gateway-side cache |
 
 ### Subcommands
 
@@ -138,7 +138,7 @@ edgion-cli delete -f route.yaml
 edgion-cli reload
 
 # Inspect Gateway-side cache
-edgion-cli -t client --server http://localhost:5900 get httproute
+edgion-cli -t client --server http://localhost:5810 get httproute
 ```
 
 ### Subcommand Argument Schemas

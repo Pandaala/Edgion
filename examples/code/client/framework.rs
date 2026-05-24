@@ -186,9 +186,9 @@ impl TestContext {
         crate::metrics_helper::MetricsClient::from_host_port(&self.target_host, self.admin_port)
     }
 
-    /// Create an access log client for this context (Gateway Admin API port 5900)
+    /// Create an access log client for this context (Gateway Admin API port 5810)
     pub fn access_log_client(&self) -> crate::access_log_client::AccessLogClient {
-        crate::access_log_client::AccessLogClient::from_host_port(&self.target_host, 5900)
+        crate::access_log_client::AccessLogClient::from_host_port(&self.target_host, 5810)
     }
 
     /// Fetch backend metrics filtered by test_key

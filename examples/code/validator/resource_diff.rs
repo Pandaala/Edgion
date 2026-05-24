@@ -21,7 +21,7 @@ struct Args {
     controller_url: String,
 
     /// Gateway admin API URL
-    #[arg(long, default_value = "http://127.0.0.1:5900")]
+    #[arg(long, default_value = "http://127.0.0.1:5810")]
     gateway_url: String,
 
     /// Output format (text or json)

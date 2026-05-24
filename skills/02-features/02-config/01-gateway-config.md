@@ -23,7 +23,7 @@ work_dir: "."
 
 gateway:
   server_addr: "http://127.0.0.1:50051"   # Required: Controller gRPC address
-  admin_listen: "0.0.0.0:5900"            # Admin API (currently fixed at :5900)
+  admin_listen: "0.0.0.0:5810"            # Admin API listen address (default: 0.0.0.0:5810)
 
 # ─── gRPC channel security (optional mTLS) ───
 # conf_sync_security:
@@ -112,9 +112,7 @@ access_log_sensitive:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `server_addr` | `String` | **Required** | Controller gRPC address |
-| `admin_listen` | `String` | — | Admin API address (**Note**: the current code fixes this to `:5900`; this configuration does not yet take effect) |
-
-> Note: if you changed `gateway.admin_listen` and the port did not change, this is not an operator error — the current implementation has not yet wired up this field. Gateway Admin API is currently fixed at `5900`, and Gateway Metrics API is currently fixed at `5901`.
+| `admin_listen` | `String` | `0.0.0.0:5810` | Admin API listen address; default `0.0.0.0:5810`. The `admin_listen` field is now fully wired up. Gateway Metrics API remains fixed at `:5901`. |
 
 ### [conf_sync_security.tls]
 

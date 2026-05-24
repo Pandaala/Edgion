@@ -45,10 +45,10 @@ gateway:
   # : http://host:port  https://host:port
   server_addr: "http://127.0.0.1:50051"
 
-  # Admin HTTP server listen address (optional)
-  #
-  # In the current implementation the Gateway Admin API is still hard-coded to listen on 5900; this field is not yet wired up
-  # admin_listen: "0.0.0.0:8081"
+  # Admin HTTP server listen address (optional).
+  # The Gateway Admin API listens on this address; default is 0.0.0.0:5810.
+  # The Metrics API remains fixed at :5901 and is not affected by this field.
+  # admin_listen: "0.0.0.0:5810"
 
 logging:
   #

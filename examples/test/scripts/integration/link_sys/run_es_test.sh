@@ -50,7 +50,7 @@ GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.yaml"
 
 # ── Ports ───────────────────────────────────────────────────────────────────
 CONTROLLER_ADMIN_PORT=5800
-GATEWAY_ADMIN_PORT=5900
+GATEWAY_ADMIN_PORT=5810
 ES_PORT=19200
 
 CONTROLLER_URL="http://127.0.0.1:${CONTROLLER_ADMIN_PORT}"

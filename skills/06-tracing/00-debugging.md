@@ -93,16 +93,15 @@ curl -sf http://127.0.0.1:5800/api/v1/server-info
 ### Gateway
 
 ```bash
-curl -sf http://127.0.0.1:5900/health
-curl -sf http://127.0.0.1:5900/ready
-curl -sf http://127.0.0.1:5900/api/v1/server-info
+curl -sf http://127.0.0.1:5810/health
+curl -sf http://127.0.0.1:5810/ready
+curl -sf http://127.0.0.1:5810/api/v1/server-info
 curl -sf http://127.0.0.1:5901/health
 ```
 
-Things to remember about the current implementation:
-- The Gateway Admin API port is currently fixed at `5900`
-- The Gateway Metrics API port is currently fixed at `5901`
-- The `gateway.admin_listen` field exists in the config struct, but the startup logic does not use it yet
+Things to remember:
+- The Gateway Admin API default port is `5810`, configurable via `gateway.admin_listen` in the config file or `--admin-listen` on the command line
+- The Gateway Metrics API port is fixed at `5901`
 
 ## Step 2: use the center / server / client three views to locate the issue layer
 
@@ -134,7 +133,7 @@ Or specify the addresses:
 ```bash
 ./target/debug/examples/resource_diff \
   --controller-url http://127.0.0.1:5800 \
-  --gateway-url http://127.0.0.1:5900
+  --gateway-url http://127.0.0.1:5810
 ```
 
 ## Step 3: check key Admin APIs
@@ -166,8 +165,8 @@ curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:5800/configserver/ht
 Examples:
 
 ```bash
-curl -s http://127.0.0.1:5900/configclient/httproute/list | jq .
-curl -s http://127.0.0.1:5900/api/v1/debug/store-stats | jq .
+curl -s http://127.0.0.1:5810/configclient/httproute/list | jq .
+curl -s http://127.0.0.1:5810/api/v1/debug/store-stats | jq .
 ```
 
 `store-stats` is especially good for seeing:
@@ -186,8 +185,8 @@ Prerequisite: the Gateway must start with `--integration-testing-mode`.
 2. Then query:
 
 ```bash
-curl -s http://127.0.0.1:5900/api/v1/testing/status | jq .
-curl -s http://127.0.0.1:5900/api/v1/testing/access-log/<trace-id> | jq .
+curl -s http://127.0.0.1:5810/api/v1/testing/status | jq .
+curl -s http://127.0.0.1:5810/api/v1/testing/access-log/<trace-id> | jq .
 ```
 
 ### Focus on these fields

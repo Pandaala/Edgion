@@ -28,7 +28,7 @@ fn build_list_url_with_pagination(base: &str, limit: Option<u32>, continue_token
 /// Default server ports for different targets
 const DEFAULT_PORT_CENTER: u16 = 5800;
 const DEFAULT_PORT_SERVER: u16 = 5800;
-const DEFAULT_PORT_CLIENT: u16 = 5900;
+const DEFAULT_PORT_CLIENT: u16 = 5810;
 
 /// EdgionClient for interacting with Controller/Gateway APIs
 pub struct EdgionClient {

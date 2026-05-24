@@ -10,9 +10,9 @@ spec:
   selector:
     app: edgion-gateway
   ports:
-  - name: admin-5900
-    port: 5900
-    targetPort: 5900
+  - name: admin-5810
+    port: 5810
+    targetPort: 5810
     protocol: TCP
   - name: metrics-5901
     port: 5901

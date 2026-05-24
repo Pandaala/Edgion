@@ -2,7 +2,7 @@ work_dir: /usr/local/edgion
 
 gateway:
   server_addr: "http://127.0.0.1:50051"
-  admin_listen: "0.0.0.0:5900"
+  admin_listen: "0.0.0.0:5810"
 
 logging:
   log_dir: logs

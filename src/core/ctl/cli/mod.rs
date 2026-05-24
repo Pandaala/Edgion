@@ -45,7 +45,7 @@ pub struct Cli {
     /// Target API to connect to:
     /// - center: ConfCenter API (default, port 5800)
     /// - server: ConfigServer cache (port 5800)
-    /// - client: ConfigClient cache (port 5900)
+    /// - client: ConfigClient cache (port 5810)
     #[arg(long, short = 't', value_enum, default_value = "center")]
     pub target: TargetType,
 
@@ -165,7 +165,7 @@ impl Cli {
                     "http://localhost:{}",
                     match self.target {
                         TargetType::Center | TargetType::Server => 5800,
-                        TargetType::Client => 5900,
+                        TargetType::Client => 5810,
                     }
                 )
             });

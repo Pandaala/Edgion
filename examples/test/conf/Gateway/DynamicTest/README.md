@@ -120,7 +120,7 @@ done < examples/test/conf/Gateway/DynamicTest/delete/resources_to_delete.txt
 # Verify controller and gateway state stay in sync
 ./target/debug/examples/resource_diff \
     --controller-url http://127.0.0.1:5800 \
-    --gateway-url http://127.0.0.1:5900
+    --gateway-url http://127.0.0.1:5810
 
 # Give the runtime a moment to swap in the new config
 sleep 3

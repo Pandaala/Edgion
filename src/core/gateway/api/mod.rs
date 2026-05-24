@@ -1521,15 +1521,14 @@ pub async fn serve(config_client: Arc<ConfigClient>, port: u16) -> anyhow::Resul
     Ok(())
 }
 
-/// Serve the admin API on the specified port with graceful shutdown support
+/// Serve the admin API on the specified listen address with graceful shutdown support
 pub async fn serve_with_shutdown(
     config_client: Arc<ConfigClient>,
-    port: u16,
+    listen_addr: &str,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let app = create_admin_router(config_client);
-    let addr_str = format!("0.0.0.0:{}", port);
-    let addr: std::net::SocketAddr = addr_str.parse()?;
+    let addr: std::net::SocketAddr = listen_addr.parse()?;
 
     tracing::info!(
         component = "admin_api_gateway",

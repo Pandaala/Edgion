@@ -107,7 +107,7 @@ work_dir: "/usr/local/edgion"
 
 gateway:
   server_addr: "http://127.0.0.1:50051"   # Controller gRPC address
-  admin_listen: "0.0.0.0:5900"            # Gateway admin API
+  admin_listen: "0.0.0.0:5810"            # Gateway admin API
 
 logging:
   log_dir: logs
@@ -255,7 +255,7 @@ sudo systemctl enable --now edgion-controller edgion-gateway
 | Controller Admin | 5800 | Health check, config apply |
 | Gateway HTTP | 80 | Default HTTP listener |
 | Gateway HTTPS | 443 | Default HTTPS listener |
-| Gateway Admin | 5900 | Readiness, runtime info |
+| Gateway Admin | 5810 | Readiness, runtime info |
 | Gateway Metrics | 5901 | Prometheus metrics |
 
 ## Troubleshooting
@@ -265,7 +265,7 @@ sudo systemctl enable --now edgion-controller edgion-gateway
 curl http://127.0.0.1:5800/health
 
 # Check gateway readiness
-curl http://127.0.0.1:5900/ready
+curl http://127.0.0.1:5810/ready
 
 # View controller logs
 tail -f /usr/local/edgion/logs/edgion-controller.*.log

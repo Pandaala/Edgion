@@ -33,7 +33,7 @@ fi
 CONF_DIR="${PROJECT_ROOT}/examples/test/conf"
 EDGION_CLI="${BIN_DIR}/edgion-cli"
 CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:5800}"
-GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:5900}"
+GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:5810}"
 
 # =============================================================================
 # log

@@ -30,7 +30,7 @@ edgion-cli [OPTIONS] <COMMAND>
 |--------|----------|-------------|-------------------|-------------|
 | `center` | Controller/ConfCenter | 5800 | get, apply, delete, reload | Full CRUD operations |
 | `server` | Controller/ConfigServer | 5800 | get (read-only) | View ConfigServer cache |
-| `client` | Gateway/ConfigClient | 5900 | get (read-only) | View Gateway cache |
+| `client` | Gateway/ConfigClient | 5810 | get (read-only) | View Gateway cache |
 
 ### Usage Examples
 
@@ -46,7 +46,7 @@ edgion-cli -t server get httproute -n prod
 
 # client - view Gateway's ConfigClient cache
 edgion-cli -t client get httproute
-edgion-cli -t client --server http://gateway:5900 get service -n default
+edgion-cli -t client --server http://gateway:5810 get service -n default
 ```
 
 ## Command Reference
@@ -222,7 +222,7 @@ Based on the target type, `edgion-cli` uses the following default connections:
 |--------|----------------|
 | center | http://localhost:5800 |
 | server | http://localhost:5800 |
-| client | http://localhost:5900 |
+| client | http://localhost:5810 |
 
 ### Custom Connections
 
@@ -233,7 +233,7 @@ Use the `--server` option to specify a server address:
 edgion-cli --server http://controller.example.com:5800 get httproute
 
 # Connect to a remote Gateway
-edgion-cli -t client --server http://gateway.example.com:5900 get service
+edgion-cli -t client --server http://gateway.example.com:5810 get service
 ```
 
 ## Output Formats

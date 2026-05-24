@@ -13,7 +13,7 @@ External Service (Docker)          Controller (Admin :5800)
   e.g. Redis :16379                  ├─ Receives LinkSys YAML via edgion-cli
                                      └─ Syncs to Gateway via gRPC
                                    
-Gateway (Admin :5900)              Test Script (bash)
+Gateway (Admin :5810)              Test Script (bash)
   ├─ ConfHandler creates             ├─ Starts external service (Docker)
   │   runtime client                 ├─ Starts Controller + Gateway
   ├─ Exposes testing API             ├─ Loads LinkSys config via edgion-cli
@@ -341,7 +341,7 @@ docker exec edgion-test-redis redis-cli -a edgion-test-pwd ping
 curl -s http://127.0.0.1:5800/api/v1/namespaced/LinkSys/default | jq .
 
 # Check if Gateway received it
-curl -s "http://127.0.0.1:5900/configclient/LinkSys?namespace=default&name=redis-test" | jq .
+curl -s "http://127.0.0.1:5810/configclient/LinkSys?namespace=default&name=redis-test" | jq .
 
 # Check controller logs for errors
 grep -i "error\|warn\|reject" <work-dir>/logs/controller.log
@@ -354,10 +354,10 @@ grep -i "error\|warn\|reject" <work-dir>/logs/controller.log
 grep -i "link_sys\|redis\|RedisLinkClient" <work-dir>/logs/gateway.log
 
 # Check if client is registered
-curl -s http://127.0.0.1:5900/api/v1/testing/link-sys/redis/clients | jq .
+curl -s http://127.0.0.1:5810/api/v1/testing/link-sys/redis/clients | jq .
 
 # Try a direct PING
-curl -s http://127.0.0.1:5900/api/v1/testing/link-sys/redis/default_redis-test/ping | jq .
+curl -s http://127.0.0.1:5810/api/v1/testing/link-sys/redis/default_redis-test/ping | jq .
 ```
 
 ### 4. Config Mismatch
@@ -379,7 +379,7 @@ The testing endpoints are **only** available when Gateway runs with `--integrati
 
 ```bash
 # This should return a valid response
-curl -s http://127.0.0.1:5900/api/v1/testing/link-sys/redis/clients | jq .
+curl -s http://127.0.0.1:5810/api/v1/testing/link-sys/redis/clients | jq .
 
 # If it returns 404, Gateway is not in integration testing mode
 grep "integration_testing" <work-dir>/logs/gateway.log

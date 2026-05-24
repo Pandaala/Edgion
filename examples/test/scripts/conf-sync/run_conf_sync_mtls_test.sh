@@ -32,7 +32,7 @@ EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 # Ports — use different gRPC port to avoid conflict with plain-text tests
 CONTROLLER_GRPC_PORT="${EDGION_TEST_MTLS_GRPC_PORT:-50061}"
 CONTROLLER_ADMIN_PORT=5800
-GATEWAY_ADMIN_PORT=5900
+GATEWAY_ADMIN_PORT=5810
 TEST_SERVER_HTTP_PORT=30001
 
 # Configurable

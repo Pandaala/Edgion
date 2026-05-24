@@ -57,7 +57,8 @@ CONTROLLER_ADMIN_PORT=5800
 CONTROLLER_GRPC_PORT="${EDGION_TEST_CONTROLLER_GRPC_PORT:-50051}"
 # Gateway portuse http Testsuiteport（31000）
 GATEWAY_HTTP_PORT=31000
-GATEWAY_ADMIN_PORT=5900
+GATEWAY_ADMIN_PORT="${EDGION_TEST_GATEWAY_ADMIN_PORT:-5810}"
+export EDGION_GATEWAY_ADMIN_URL="http://127.0.0.1:${GATEWAY_ADMIN_PORT}"
 
 # LoadTestsuite（default，Loadall）
 SUITES=""
@@ -425,12 +426,13 @@ start_gateway() {
         --work-dir "${WORK_DIR}" \
         --server-addr "http://127.0.0.1:${CONTROLLER_GRPC_PORT}" \
         --integration-testing-mode \
+        --admin-listen "0.0.0.0:${GATEWAY_ADMIN_PORT}" \
         > "${LOG_DIR}/gateway.log" 2>&1 &
     
     local pid=$!
     echo $pid > "${PID_DIR}/gateway.pid"
     
-    # Wait for Gateway Admin port (always 5900, regardless of test suite listener ports)
+    # Wait for Gateway Admin port (default 5810, overridable via EDGION_TEST_GATEWAY_ADMIN_PORT)
     if ! wait_for_port $GATEWAY_ADMIN_PORT "edgion-gateway" $pid 30; then
         log_error "edgion-gateway Startfailed，viewlog: ${LOG_DIR}/gateway.log"
         tail -20 "${LOG_DIR}/gateway.log" 2>/dev/null || true

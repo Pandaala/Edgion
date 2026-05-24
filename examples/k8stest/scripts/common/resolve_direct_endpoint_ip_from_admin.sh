@@ -4,12 +4,12 @@ set -euo pipefail
 # Resolve a current backend Pod IP for DirectEndpoint tests from Gateway admin API.
 #
 # Env overrides:
-#   GATEWAY_ADMIN_URL   default: http://edgion-gateway.edgion-system.svc.cluster.local:5900
+#   GATEWAY_ADMIN_URL   default: http://edgion-gateway.edgion-system.svc.cluster.local:5810
 #   SERVICE_NAMESPACE   default: edgion-default
 #   SERVICE_NAME        default: direct-endpoint-backend
 #   SERVICE_PORT        default: 30001
 
-GATEWAY_ADMIN_URL="${GATEWAY_ADMIN_URL:-http://edgion-gateway.edgion-system.svc.cluster.local:5900}"
+GATEWAY_ADMIN_URL="${GATEWAY_ADMIN_URL:-http://edgion-gateway.edgion-system.svc.cluster.local:5810}"
 SERVICE_NAMESPACE="${SERVICE_NAMESPACE:-edgion-default}"
 SERVICE_NAME="${SERVICE_NAME:-direct-endpoint-backend}"
 SERVICE_PORT="${SERVICE_PORT:-30001}"

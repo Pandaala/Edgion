@@ -150,7 +150,9 @@ impl FilterConflictTestSuite {
                                 );
                             }
                             match response.headers().get("location").and_then(|l| l.to_str().ok()) {
-                                Some(location) if location.contains("returnTo=/dashboard") && location.contains("page=1") => {
+                                Some(location)
+                                    if location.contains("returnTo=/dashboard") && location.contains("page=1") =>
+                                {
                                     TestResult::passed_with_message(
                                         start.elapsed(),
                                         format!("Query string preserved in Location: {}", location),

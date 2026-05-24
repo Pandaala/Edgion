@@ -30,7 +30,7 @@ edgion-cli [OPTIONS] <COMMAND>
 |--------|------|----------|------------|------|
 | `center` | Controller/ConfCenter | 5800 | get, apply, delete, reload | 完整 CRUD 操作 |
 | `server` | Controller/ConfigServer | 5800 | get (只读) | 查看 ConfigServer 缓存 |
-| `client` | Gateway/ConfigClient | 5900 | get (只读) | 查看 Gateway 缓存 |
+| `client` | Gateway/ConfigClient | 5810 | get (只读) | 查看 Gateway 缓存 |
 
 ### 使用示例
 
@@ -46,7 +46,7 @@ edgion-cli -t server get httproute -n prod
 
 # client - 查看 Gateway 的 ConfigClient 缓存
 edgion-cli -t client get httproute
-edgion-cli -t client --server http://gateway:5900 get service -n default
+edgion-cli -t client --server http://gateway:5810 get service -n default
 ```
 
 ## 命令详解
@@ -222,7 +222,7 @@ edgion-cli gen-certs --output k8s
 |--------|----------|
 | center | http://localhost:5800 |
 | server | http://localhost:5800 |
-| client | http://localhost:5900 |
+| client | http://localhost:5810 |
 
 ### 自定义连接
 
@@ -233,7 +233,7 @@ edgion-cli gen-certs --output k8s
 edgion-cli --server http://controller.example.com:5800 get httproute
 
 # 连接到远程 Gateway
-edgion-cli -t client --server http://gateway.example.com:5900 get service
+edgion-cli -t client --server http://gateway.example.com:5810 get service
 ```
 
 ## 输出格式

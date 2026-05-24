@@ -59,7 +59,7 @@ Each protocol has an independent `routes_mgr` (route manager) and `route_table`,
 
 ```
 src/core/gateway/
-├── api/           # Admin API server (:5900), exposes runtime state queries
+├── api/           # Admin API server (default :5810, configurable via admin_listen), exposes runtime state queries
 ├── backends/      # Backend management
 │   ├── discovery/ # Backend discovery: Endpoint / EndpointSlice / Service stores
 │   ├── health/    # Health checks: annotation-driven probes, status store, manager scheduling

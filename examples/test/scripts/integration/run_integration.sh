@@ -684,7 +684,7 @@ get_controller_server_id() {
 # Get server_id from gateway (the server_id it received from controller)
 # =============================================================================
 get_gateway_server_id() {
-    local gateway_url="${1:-http://127.0.0.1:5900}"
+    local gateway_url="${1:-http://127.0.0.1:5810}"
     # Use the /api/v1/server-info endpoint to get server_id
     local response=$(curl -s "${gateway_url}/api/v1/server-info" 2>/dev/null)
     local server_id=$(echo "$response" | grep -o '"server_id":"[^"]*"' | cut -d'"' -f4)
@@ -825,6 +825,7 @@ run_all_tests() {
                     run_test "HTTPRoute_Filters" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters" || test_failed=true
                     run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/WebSocket" || test_failed=true
                     run_test "HTTPRoute_Protocol_H2C" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/H2C" || test_failed=true
+                    run_test "HTTPRoute_Protocol_GrpcWeb" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/GrpcWeb" || test_failed=true
                     run_test "HTTPRoute_Protocol_H2TrailerMalformed" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/H2TrailerMalformed" || test_failed=true
                     run_test "HTTPRoute_MultiPort" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i MultiPort" || test_failed=true
                 else
@@ -1493,7 +1494,7 @@ main() {
         # ========== Round 1: Initial tests ==========
         log_section "📋 Round 1: Initial tests (before reload)"
         
-        local gateway_url="http://127.0.0.1:5900"
+        local gateway_url="http://127.0.0.1:5810"
         
         # Get initial server_id from both Controller and Gateway
         local controller_id_before=$(get_controller_server_id "$controller_url")
@@ -1630,7 +1631,7 @@ main() {
             local residue_mode="${RESIDUE_MODE:-fail}"
             "$residue_bin" \
                 --controller-addr "http://127.0.0.1:5800" \
-                --gateway-addr    "http://127.0.0.1:5900" \
+                --gateway-addr    "http://127.0.0.1:5810" \
                 --timeout-secs 30 \
                 --mode fail
             local rc=$?

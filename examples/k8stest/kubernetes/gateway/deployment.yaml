@@ -56,7 +56,7 @@ spec:
           containerPort: 18443
           protocol: TCP
         - name: admin
-          containerPort: 5900
+          containerPort: 5810
           protocol: TCP
         - name: metrics
           containerPort: 5901

@@ -24,7 +24,7 @@ pub use http_route::{
     TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
-pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite, GrpcUnmatchedRouteTestSuite};
+pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite, GrpcUnmatchedRouteTestSuite, GrpcWebTestSuite};
 
 pub use tcp_route::{GcirEnforcementTestSuite, TcpStreamPluginsTestSuite, TcpTestSuite};
 

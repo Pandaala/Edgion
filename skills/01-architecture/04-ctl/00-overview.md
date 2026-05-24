@@ -13,14 +13,14 @@ edgion-cli is Edgion's command-line management tool, built on clap. It interacts
 |--------|---------|---------|------|--------|
 | **center** (default) | Controller Admin API | :5800 | Full CRUD + reload | ConfCenter (configuration center) |
 | **server** | Controller Admin API | :5800 | Read-only query | ServerCache (gRPC server-side cache) |
-| **client** | Gateway Admin API | :5900 | Read-only query | ClientCache (gRPC client-side cache) |
+| **client** | Gateway Admin API | :5810 | Read-only query | ClientCache (gRPC client-side cache) |
 
 ```
                     edgion-cli
                    ┌──────────┐
                    │ -t center│──── HTTP :5800 ──► Controller ConfCenter (read/write)
                    │ -t server│──── HTTP :5800 ──► Controller ServerCache (read-only)
-                   │ -t client│──── HTTP :5900 ──► Gateway    ClientCache (read-only)
+                   │ -t client│──── HTTP :5810 ──► Gateway    ClientCache (read-only)
                    └──────────┘
 ```
 
@@ -86,7 +86,7 @@ pub struct EdgionClient {
 
 ### Connection methods
 
-- **HTTP**: the default; the port is chosen based on target type (center/server → 5800, client → 5900)
+- **HTTP**: the default; the port is chosen based on target type (center/server → 5800, client → 5810)
 - **Unix Socket**: specified via the `--socket` argument, suitable for local communication on the same node
 
 ### Error handling

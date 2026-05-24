@@ -36,7 +36,7 @@ flowchart TD
         PingoraServer --- ProxyHttp
         PingoraServer --- StreamRoutes
         TLS["TLS subsystem\nDownstream TLS (client → gateway)\nUpstream TLS (gateway → backend mTLS)"]
-        GwServices["Admin API (:5900)\nMetrics (:5901)"]
+        GwServices["Admin API (:5810 default)\nMetrics (:5901)"]
     end
 
     subgraph CLI["edgion-cli (CLI tool)"]

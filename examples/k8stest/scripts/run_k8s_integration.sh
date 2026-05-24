@@ -22,7 +22,7 @@ STATE_NAMESPACE="${STATE_NAMESPACE:-edgion-system}"
 STATE_CONFIGMAP_NAME="${STATE_CONFIGMAP_NAME:-edgion-k8s-integration-state}"
 
 CONTROLLER_ADMIN_URL="${EDGION_CONTROLLER_ADMIN_URL:-http://edgion-controller.edgion-system.svc.cluster.local:5800}"
-GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://edgion-gateway.edgion-system.svc.cluster.local:5900}"
+GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://edgion-gateway.edgion-system.svc.cluster.local:5810}"
 
 START_FROM="${START_FROM:-}"
 ONLY_RESOURCE=""

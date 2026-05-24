@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing;
 
+/// Default admin API listen address (port 5810 avoids macOS Screen Sharing / VNC conflict on 5900)
+pub const DEFAULT_GATEWAY_ADMIN_LISTEN: &str = "0.0.0.0:5810";
+
 /// Edgion Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
 #[serde(default)]
@@ -795,6 +798,14 @@ impl EdgionGatewayConfig {
     /// Get admin_listen
     pub fn admin_listen(&self) -> Option<String> {
         self.gateway.admin_listen.clone()
+    }
+
+    /// Admin API listen address, falling back to the default when unset.
+    pub fn admin_listen_or_default(&self) -> String {
+        self.gateway
+            .admin_listen
+            .clone()
+            .unwrap_or_else(|| DEFAULT_GATEWAY_ADMIN_LISTEN.to_string())
     }
 
     /// Get log_dir with default fallback

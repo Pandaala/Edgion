@@ -11,7 +11,7 @@ work_dir: "."
 
 gateway:
   server_addr: "http://127.0.0.1:50051"  # Required: Controller gRPC address
-  admin_listen: "0.0.0.0:5900"           # Admin API (note: currently fixed at :5900, this field has no effect)
+  admin_listen: "0.0.0.0:5810"           # Admin API listen address (default: 0.0.0.0:5810)
 
 # ─── gRPC channel security (optional mTLS) ────────────────────────
 # conf_sync_security:
@@ -99,7 +99,7 @@ plugin_metadata:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `server_addr` | `String` | **Required** | Controller gRPC address, e.g. `http://127.0.0.1:50051` |
-| `admin_listen` | `String` | — | Admin API address (**note: currently fixed at `:5900`, this field has no effect**; Gateway Metrics API is fixed at `:5901`) |
+| `admin_listen` | `String` | `0.0.0.0:5810` | Admin API listen address; default `0.0.0.0:5810`. Gateway Metrics API remains fixed at `:5901`. |
 
 ### [conf_sync_security.tls]
 

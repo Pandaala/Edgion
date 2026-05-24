@@ -87,8 +87,10 @@ impl EdgionGatewayCli {
         tracing::info!("Health check manager initialized");
 
         // Spawn Admin API server with graceful shutdown
+        let admin_listen = config.admin_listen_or_default();
         let config_client_for_admin = config_client.clone();
         let mut admin_shutdown = shutdown_rx.clone();
+        let admin_listen_clone = admin_listen.clone();
         tokio::spawn(async move {
             let shutdown_future = async move {
                 while !*admin_shutdown.borrow() {
@@ -97,7 +99,9 @@ impl EdgionGatewayCli {
                     }
                 }
             };
-            if let Err(e) = api::serve_with_shutdown(config_client_for_admin, 5900, shutdown_future).await {
+            if let Err(e) =
+                api::serve_with_shutdown(config_client_for_admin, &admin_listen_clone, shutdown_future).await
+            {
                 tracing::error!(
                     component = "admin_api_gateway",
                     event = "server_error",
@@ -110,7 +114,7 @@ impl EdgionGatewayCli {
         tracing::info!(
             component = "admin_api_gateway",
             event = "server_spawned",
-            port = 5900,
+            listen = %admin_listen,
             "Gateway Admin API server spawned"
         );
 

@@ -234,6 +234,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Protocol" => "HTTPRoute/Protocol/WebSocket",
         "HTTPRoute/Protocol/WebSocket" => "HTTPRoute/Protocol/WebSocket",
         "HTTPRoute/Protocol/H2C" => "HTTPRoute/Protocol/H2C",
+        "HTTPRoute/Protocol/GrpcWeb" => "HTTPRoute/Protocol/GrpcWeb",
         "HTTPRoute/Protocol/H2TrailerMalformed" => "HTTPRoute/Protocol/H2TrailerMalformed",
         "HTTPRoute/MultiPort" => "HTTPRoute/MultiPort",
         // DanglingExtensionRef is parented to edgion-plugins-gateway (port 31180),
@@ -579,6 +580,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::H2cTestSuite));
+        }
+        "HTTPRoute/Protocol/GrpcWeb" => {
+            if !gateway {
+                eprintln!("Error: HTTPRoute/Protocol/GrpcWeb tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GrpcWebTestSuite));
         }
         "HTTPRoute/Protocol/H2TrailerMalformed" => {
             if !gateway {
@@ -1560,7 +1568,7 @@ async fn run_dynamic_scenario(cli: &Cli, sid: &str) -> Result<()> {
         conf_root,
         conf_path: scenario.conf_path.to_string(),
         controller_url: format!("http://127.0.0.1:{}", cli.admin_port),
-        gateway_url: "http://127.0.0.1:5900".to_string(),
+        gateway_url: "http://127.0.0.1:5810".to_string(),
         project_root,
     };
 

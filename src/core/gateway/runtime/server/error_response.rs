@@ -14,7 +14,10 @@
 use crate::core::gateway::runtime::server::server_header::ServerHeaderOpts;
 use crate::types::{EdgionHttpContext, EdgionStatus};
 use bytes::Bytes;
+use http::HeaderMap;
 use percent_encoding::{utf8_percent_encode, CONTROLS};
+use pingora_core::modules::http::grpc_web::GrpcWebBridge;
+use pingora_core::protocols::http::bridge::grpc_web::GrpcWebCtx;
 use pingora_core::protocols::http::HttpTask;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
@@ -43,19 +46,60 @@ async fn shutdown_after_error_response(session: &mut Session) {
 /// the plain `Session::write_response_header` drops `end_of_stream` before the H2 codec.
 pub(crate) async fn send_grpc_trailers_only_frame(
     session: &mut Session,
-    mut resp: ResponseHeader,
+    resp: ResponseHeader,
     grpc_status: u16,
     grpc_message: Option<&str>,
 ) -> pingora_core::Result<()> {
-    resp.insert_header("grpc-status", grpc_status.to_string())
-        .expect("u16 decimal string is always a valid HeaderValue");
-    if let Some(msg) = grpc_message {
-        resp.insert_header("grpc-message", percent_encode_grpc_message(msg))
-            .expect("percent-encoded grpc-message contains only ASCII, cannot fail");
+    // Read-only check of the grpc-web bridge state. For native gRPC the bridge is never
+    // init()'d, so it stays Disabled (!= Upgrade) and we take the unchanged native path
+    // below. Reading via get_mut + == does not mutate the bridge; the borrow is dropped
+    // before write_response_tasks.
+    let grpc_web_active = session
+        .downstream_modules_ctx
+        .get_mut::<GrpcWebBridge>()
+        .is_some_and(|b| **b == GrpcWebCtx::Upgrade);
+
+    if grpc_web_active {
+        // grpc-web: keep content-type = application/grpc on resp (the bridge's
+        // response_header_filter converts it to grpc-web and sets chunked, Upgrade ->
+        // Trailers). grpc-status / grpc-message go into the trailer, which the bridge's
+        // response_trailer_filter encodes into a 0x80 body frame (Trailers -> Done).
+        let mut trailers = HeaderMap::new();
+        trailers.insert(
+            "grpc-status",
+            grpc_status
+                .to_string()
+                .parse()
+                .expect("u16 decimal string is always a valid HeaderValue"),
+        );
+        if let Some(msg) = grpc_message {
+            trailers.insert(
+                "grpc-message",
+                percent_encode_grpc_message(msg)
+                    .parse()
+                    .expect("percent-encoded grpc-message contains only ASCII, cannot fail"),
+            );
+        }
+        session
+            .write_response_tasks(vec![
+                HttpTask::Header(Box::new(resp), false),
+                HttpTask::Trailer(Some(Box::new(trailers))),
+            ])
+            .await?;
+    } else {
+        // Native gRPC (and non-grpc): unchanged single-frame Trailers-Only — grpc-status /
+        // grpc-message as ordinary header fields in one HEADERS frame with END_STREAM=true.
+        let mut resp = resp;
+        resp.insert_header("grpc-status", grpc_status.to_string())
+            .expect("u16 decimal string is always a valid HeaderValue");
+        if let Some(msg) = grpc_message {
+            resp.insert_header("grpc-message", percent_encode_grpc_message(msg))
+                .expect("percent-encoded grpc-message contains only ASCII, cannot fail");
+        }
+        session
+            .write_response_tasks(vec![HttpTask::Header(Box::new(resp), true)])
+            .await?;
     }
-    session
-        .write_response_tasks(vec![HttpTask::Header(Box::new(resp), true)])
-        .await?;
     Ok(())
 }
 

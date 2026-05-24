@@ -11,7 +11,7 @@ data:
 
     gateway:
       server_addr: http://edgion-controller-leader.edgion-system.svc.cluster.local:50051
-      admin_listen: 0.0.0.0:5900
+      admin_listen: 0.0.0.0:5810
 
     logging:
       log_dir: logs

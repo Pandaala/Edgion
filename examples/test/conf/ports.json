@@ -50,6 +50,9 @@
     "HTTPRoute/Protocol/H2C": {
       "http": 31081
     },
+    "HTTPRoute/Protocol/GrpcWeb": {
+      "http": 31081
+    },
     "HTTPRoute/Protocol/H2TrailerMalformed": {
       "http": 31082
     },

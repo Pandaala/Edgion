@@ -195,7 +195,14 @@ mod tests {
     fn build_location_preserves_query_string() {
         let f = filter(Some("https"), None);
         assert_eq!(
-            f.build_location("http", Some("example.com"), "/login", Some("returnTo=/dashboard"), None, 80),
+            f.build_location(
+                "http",
+                Some("example.com"),
+                "/login",
+                Some("returnTo=/dashboard"),
+                None,
+                80
+            ),
             "https://example.com/login?returnTo=/dashboard"
         );
     }
