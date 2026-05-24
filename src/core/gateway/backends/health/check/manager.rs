@@ -65,7 +65,7 @@ impl HealthCheckManager {
                 );
             }
             None => {
-                self.remove_task(service_key);
+                self.cancel_task(service_key);
                 self.health_store.unregister_service(service_key);
             }
         }
@@ -98,10 +98,6 @@ impl HealthCheckManager {
         if let Some(old) = previous {
             old.abort();
         }
-    }
-
-    fn remove_task(&self, service_key: &str) {
-        self.cancel_task(service_key);
     }
 
     fn cancel_task(&self, service_key: &str) {

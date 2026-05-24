@@ -218,7 +218,7 @@ impl HttpRouteRuleUnit {
     }
 
     /// Simple URL decode (percent-encoding)
-    fn url_decode(s: &str) -> String {
+    pub(crate) fn url_decode(s: &str) -> String {
         let mut result = String::new();
         let mut byte_buf: Vec<u8> = Vec::new();
         let mut chars = s.chars();

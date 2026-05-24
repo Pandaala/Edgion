@@ -45,7 +45,7 @@ use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
 use std::sync::Arc;
 
-use selector::{extract_hash_key, is_backend_healthy, select_backend_by_policy, select_from_endpoint_slice};
+use selector::{extract_hash_key, is_backend_healthy, select_from_endpoint_slice};
 
 /// Internal: try to get peer, returns Result with EdgionStatus on error
 pub(crate) async fn try_get_peer(
@@ -107,7 +107,7 @@ pub(crate) async fn try_get_peer(
             }
 
             let backend = take_sp_target_or_select(ctx, &service_key, || {
-                select_backend_by_policy(&service_key, &lb_policy, session)
+                select_from_endpoint_slice(&service_key, &lb_policy, session)
             })?;
 
             build_peer_from_lb_selection(
@@ -342,20 +342,11 @@ fn build_peer_from_lb_selection(
         upstream.lb_edgion_backend = Some(backend);
         upstream.service_key = Some(service_key.to_string());
         upstream.lb_policy = lb_policy_clone;
-        // Write unconditionally so a TLS-then-plaintext fallback (e.g. SP-target
-        // unhealthy → normal LB picks a non-TLS endpoint, or `create_tls_peer`
-        // failed and the caller retries) cannot leave stale TLS metadata behind.
-        upstream.tls = if use_tls {
-            Some(crate::types::BackendTlsInfo {
-                sni: if sni.is_empty() { None } else { Some(sni.clone()) },
-                handshake_ok: None,
-                protocol: None,
-                cipher: None,
-            })
-        } else {
-            None
-        };
     }
+    // Write TLS metadata via the shared helper (writes unconditionally so a
+    // TLS-then-plaintext fallback cannot leave stale metadata behind). Kept
+    // outside the block above because the helper borrows `ctx` mutably.
+    record_tls_to_upstream(ctx, use_tls, &sni);
 
     let mut peer = create_tls_peer(peer_addr, backend_tls_policy, gateway_key_ref)?;
     apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);

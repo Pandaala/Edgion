@@ -33,6 +33,18 @@ struct ServiceCbState {
     eject_lock: std::sync::Mutex<()>,
 }
 
+impl ServiceCbState {
+    /// Single canonical construction site for a fresh per-service breaker state, so a
+    /// future field addition is made in one place rather than at every insert site.
+    fn new(config: CircuitBreakerConfig) -> Arc<Self> {
+        Arc::new(Self {
+            config,
+            endpoints: DashMap::new(),
+            eject_lock: std::sync::Mutex::new(()),
+        })
+    }
+}
+
 pub struct CircuitBreakerStore {
     services: DashMap<String, Arc<ServiceCbState>>,
 }
@@ -71,21 +83,13 @@ impl CircuitBreakerStore {
                         // `insert` swaps in the new state and returns the displaced one. Drop
                         // the entry guard first so the gauge drain (which never touches
                         // `self.services`) runs outside the held shard lock.
-                        let old_svc = occ.insert(Arc::new(ServiceCbState {
-                            config: cfg,
-                            endpoints: DashMap::new(),
-                            eject_lock: std::sync::Mutex::new(()),
-                        }));
+                        let old_svc = occ.insert(ServiceCbState::new(cfg));
                         drop(occ);
                         Self::drain_ejected_gauge(service_key, &old_svc);
                     }
                 }
                 dashmap::mapref::entry::Entry::Vacant(vac) => {
-                    vac.insert(Arc::new(ServiceCbState {
-                        config: cfg,
-                        endpoints: DashMap::new(),
-                        eject_lock: std::sync::Mutex::new(()),
-                    }));
+                    vac.insert(ServiceCbState::new(cfg));
                 }
             },
             None => {

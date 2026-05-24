@@ -79,14 +79,7 @@ fn build_client_cert_key(policy: &BackendTLSPolicy) -> Result<Option<Arc<CertKey
         return Ok(None);
     };
 
-    let data = secret.data.as_ref().ok_or(EdgionStatus::Unknown)?;
-    let cert_pem = data.get(CERT).ok_or(EdgionStatus::Unknown)?;
-    let key_pem = data.get(KEY).ok_or(EdgionStatus::Unknown)?;
-
-    let cert = X509::from_pem(cert_pem.0.as_slice()).map_err(|_| EdgionStatus::Unknown)?;
-    let key = PKey::private_key_from_pem(key_pem.0.as_slice()).map_err(|_| EdgionStatus::Unknown)?;
-
-    Ok(Some(Arc::new(CertKey::new(vec![cert], key))))
+    build_client_cert_key_from_secret(secret)
 }
 
 #[cfg(feature = "boringssl")]

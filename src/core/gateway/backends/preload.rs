@@ -19,11 +19,36 @@ use std::sync::Arc;
 pub fn preload_load_balancers(config_client: Arc<ConfigClient>) {
     let mut service_keys: HashSet<String> = HashSet::new();
 
-    collect_http_routes(&config_client, &mut service_keys);
-    collect_grpc_routes(&config_client, &mut service_keys);
-    collect_tcp_routes(&config_client, &mut service_keys);
-    collect_udp_routes(&config_client, &mut service_keys);
-    collect_tls_routes(&config_client, &mut service_keys);
+    // Collect backend service keys from every route type. All five Gateway API
+    // route kinds share the same `metadata.namespace` / `spec.rules` /
+    // `rule.backend_refs` / `br.{namespace,name}` shape but are distinct concrete
+    // types with no shared trait, so a local macro (mirroring `apply_change!` in
+    // `config_client.rs`) is the idiomatic way to avoid five identical bodies.
+    macro_rules! collect_routes {
+        ($list_method:ident) => {
+            for route in &config_client.$list_method().data {
+                let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
+                let Some(rules) = route.spec.rules.as_ref() else {
+                    continue;
+                };
+                for rule in rules {
+                    let Some(backend_refs) = rule.backend_refs.as_ref() else {
+                        continue;
+                    };
+                    for br in backend_refs {
+                        let ns = br.namespace.as_deref().unwrap_or(route_ns);
+                        service_keys.insert(format!("{}/{}", ns, br.name));
+                    }
+                }
+            }
+        };
+    }
+
+    collect_routes!(list_routes);
+    collect_routes!(list_grpc_routes);
+    collect_routes!(list_tcp_routes);
+    collect_routes!(list_udp_routes);
+    collect_routes!(list_tls_routes);
 
     let total = service_keys.len();
     let mut success = 0;
@@ -46,96 +71,6 @@ pub fn preload_load_balancers(config_client: Arc<ConfigClient>) {
     );
 }
 
-fn collect_http_routes(config_client: &ConfigClient, keys: &mut HashSet<String>) {
-    for route in &config_client.list_routes().data {
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        let Some(rules) = route.spec.rules.as_ref() else {
-            continue;
-        };
-        for rule in rules {
-            let Some(backend_refs) = rule.backend_refs.as_ref() else {
-                continue;
-            };
-            for br in backend_refs {
-                let ns = br.namespace.as_deref().unwrap_or(route_ns);
-                keys.insert(format!("{}/{}", ns, br.name));
-            }
-        }
-    }
-}
-
-fn collect_grpc_routes(config_client: &ConfigClient, keys: &mut HashSet<String>) {
-    for route in &config_client.list_grpc_routes().data {
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        let Some(rules) = route.spec.rules.as_ref() else {
-            continue;
-        };
-        for rule in rules {
-            let Some(backend_refs) = rule.backend_refs.as_ref() else {
-                continue;
-            };
-            for br in backend_refs {
-                let ns = br.namespace.as_deref().unwrap_or(route_ns);
-                keys.insert(format!("{}/{}", ns, br.name));
-            }
-        }
-    }
-}
-
-fn collect_tcp_routes(config_client: &ConfigClient, keys: &mut HashSet<String>) {
-    for route in &config_client.list_tcp_routes().data {
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        let Some(rules) = route.spec.rules.as_ref() else {
-            continue;
-        };
-        for rule in rules {
-            let Some(backend_refs) = rule.backend_refs.as_ref() else {
-                continue;
-            };
-            for br in backend_refs {
-                let ns = br.namespace.as_deref().unwrap_or(route_ns);
-                keys.insert(format!("{}/{}", ns, br.name));
-            }
-        }
-    }
-}
-
-fn collect_udp_routes(config_client: &ConfigClient, keys: &mut HashSet<String>) {
-    for route in &config_client.list_udp_routes().data {
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        let Some(rules) = route.spec.rules.as_ref() else {
-            continue;
-        };
-        for rule in rules {
-            let Some(backend_refs) = rule.backend_refs.as_ref() else {
-                continue;
-            };
-            for br in backend_refs {
-                let ns = br.namespace.as_deref().unwrap_or(route_ns);
-                keys.insert(format!("{}/{}", ns, br.name));
-            }
-        }
-    }
-}
-
-fn collect_tls_routes(config_client: &ConfigClient, keys: &mut HashSet<String>) {
-    for route in &config_client.list_tls_routes().data {
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        let Some(rules) = route.spec.rules.as_ref() else {
-            continue;
-        };
-        for rule in rules {
-            let Some(backend_refs) = rule.backend_refs.as_ref() else {
-                continue;
-            };
-            for br in backend_refs {
-                let ns = br.namespace.as_deref().unwrap_or(route_ns);
-                keys.insert(format!("{}/{}", ns, br.name));
-            }
-        }
-    }
-}
-
 /// Hydrate the `ServiceSelectorCell` for `service_key` from the EndpointSlice store.
 /// Returns true if data was available and the cell was warmed.
 fn warm_cell(service_key: &str) -> bool {
@@ -150,10 +85,16 @@ fn warm_cell(service_key: &str) -> bool {
         return false;
     }
 
+    // Seed the cell through `hydrate_if_empty` so the empty-check and the store
+    // happen atomically under the cell's `build_lock` (shared with
+    // `replace_backends`). A bare `load().is_empty()` + `replace_backends` would
+    // be a TOCTOU: a concurrent EP-sync watch task could call `replace_backends`
+    // with fresher data between the check and the write, and the stale snapshot
+    // taken above would overwrite it. The provider re-reads the store inside the
+    // lock so the freshest data is used. Mirrors the data-plane path in
+    // `selector::hydrate_cell_if_empty`.
     let cell = compiled_selector::get_or_create_cell(service_key);
-    if cell.backends.load().is_empty() {
-        cell.replace_backends(backends);
-    }
+    cell.hydrate_if_empty(|| get_roundrobin_store().get_backends_for_service(service_key));
 
     tracing::trace!(component = "lb_preload", service_key, "Warmed ServiceSelectorCell");
     true

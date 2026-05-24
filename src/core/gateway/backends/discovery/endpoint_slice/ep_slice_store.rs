@@ -190,10 +190,20 @@ where
             return Vec::new();
         }
 
-        let port = slices
+        // Fail closed when no EndpointSlice declares a usable port. Guessing a
+        // default (the old `unwrap_or(8080)`) silently misdirects traffic to a
+        // wrong port that often still accepts the connection, hiding the
+        // misconfiguration. Returning no backends instead surfaces an error
+        // (BackendEndpointSliceNotFoundByRoundRobinDefault → HTTP 500) that the
+        // access log records, so the operator sees the failure rather than
+        // wrong-port traffic. No tracing here: this runs on the data-plane
+        // request path via selector hydration (Iron rule 3).
+        let Some(port) = slices
             .iter()
             .find_map(|s| s.ports.as_ref()?.first()?.port.map(|p| p as u16))
-            .unwrap_or(8080);
+        else {
+            return Vec::new();
+        };
 
         let mut backends = BTreeSet::new();
         for slice in slices {
@@ -260,7 +270,7 @@ mod stats_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k8s_openapi::api::discovery::v1::{Endpoint, EndpointPort};
+    use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use std::collections::BTreeMap;
 
@@ -372,6 +382,78 @@ mod tests {
         assert!(affected.contains("default/svc-b"));
         assert!(store.get_slices_for_service("default/svc-a").is_none());
         assert!(store.get_slices_for_service("default/svc-b").is_some());
+    }
+
+    /// Build a slice with a single ready endpoint and a configurable `ports`.
+    fn ready_slice_with_ports(
+        name: &str,
+        namespace: &str,
+        service_name: &str,
+        addr: &str,
+        ports: Option<Vec<EndpointPort>>,
+    ) -> EndpointSlice {
+        let mut labels = BTreeMap::new();
+        labels.insert(SERVICE_NAME.to_string(), service_name.to_string());
+
+        EndpointSlice {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(namespace.to_string()),
+                labels: Some(labels),
+                ..Default::default()
+            },
+            address_type: "IPv4".to_string(),
+            endpoints: vec![Endpoint {
+                addresses: vec![addr.to_string()],
+                conditions: Some(EndpointConditions {
+                    ready: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ports,
+        }
+    }
+
+    #[test]
+    fn test_get_backends_for_service_no_port_returns_empty() {
+        let store = EpSliceStore::<RoundRobin>::new();
+
+        // A ready endpoint but no declared port: must fail closed (no backends)
+        // rather than fall back to a guessed default port (backends-F013).
+        let mut data = HashMap::new();
+        data.insert(
+            "default/svc-noport-slice1".to_string(),
+            ready_slice_with_ports("svc-noport-slice1", "default", "svc-noport", "10.0.0.1", None),
+        );
+        store.replace_data_only(data);
+
+        assert!(store.get_backends_for_service("default/svc-noport").is_empty());
+    }
+
+    #[test]
+    fn test_get_backends_for_service_with_port_builds_backend() {
+        let store = EpSliceStore::<RoundRobin>::new();
+
+        // Same ready endpoint, but with a declared port: a backend is built.
+        // Confirms the empty result above is caused by the missing port, not readiness.
+        let mut data = HashMap::new();
+        data.insert(
+            "default/svc-port-slice1".to_string(),
+            ready_slice_with_ports(
+                "svc-port-slice1",
+                "default",
+                "svc-port",
+                "10.0.0.1",
+                Some(vec![EndpointPort {
+                    port: Some(80),
+                    ..Default::default()
+                }]),
+            ),
+        );
+        store.replace_data_only(data);
+
+        assert_eq!(store.get_backends_for_service("default/svc-port").len(), 1);
     }
 
     #[test]

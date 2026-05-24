@@ -3,6 +3,7 @@ use crate::core::gateway::backends::discovery::get_roundrobin_store;
 use crate::core::gateway::backends::health;
 use crate::core::gateway::backends::health::get_health_status_store;
 use crate::core::gateway::lb::{compiled_selector, EdgionBackend, PolicyKind};
+use crate::core::gateway::routes::HttpRouteRuleUnit;
 use crate::types::edgion_status::EdgionStatus;
 use crate::types::{ConsistentHashOn, ParsedLBPolicy};
 use pingora_proxy::Session;
@@ -127,24 +128,21 @@ pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPol
             .and_then(|query| {
                 query.split('&').find_map(|param| {
                     let (name, value) = param.split_once('=')?;
-                    if name == arg_name {
-                        Some(value.as_bytes().to_vec())
-                    } else {
-                        None
-                    }
+                    // Fast path: most query param names are plain identifiers
+                    // that match arg_name byte-for-byte, so the common case stays
+                    // allocation-free. Only percent/plus-encoded names need
+                    // decoding before comparison (e.g. `session%20id` / `foo+bar`
+                    // matching an arg_name of `session id` / `foo bar`). The value
+                    // is intentionally left raw — decoding it would change the hash
+                    // key of existing deployments.
+                    let matched = name == arg_name
+                        || (name.contains(['%', '+'])
+                            && HttpRouteRuleUnit::url_decode(name) == *arg_name);
+                    matched.then(|| value.as_bytes().to_vec())
                 })
             })
             .unwrap_or_default(),
     }
-}
-
-/// Select backend based on LB policy (always reads from EndpointSlice store).
-pub(crate) fn select_backend_by_policy(
-    service_key: &str,
-    lb_policy: &Option<ParsedLBPolicy>,
-    session: &Session,
-) -> Result<Arc<EdgionBackend>, EdgionStatus> {
-    select_from_endpoint_slice(service_key, lb_policy, session)
 }
 
 /// Errors raised when the cell yields no backend, broken out per LB policy

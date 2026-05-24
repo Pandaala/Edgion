@@ -221,9 +221,13 @@ impl BackendTLSPolicyStore {
             let total_policies = policies_write.len();
             let affected_count = affected_targets.len();
 
-            // Use incremental update only if it's beneficial
-            // Heuristic: incremental is O(n*m), full rebuild is O(m)
-            // Use incremental when n < m/10
+            // Heuristic: prefer incremental only when few targets changed relative to the
+            // total policy count.
+            //   A = affected_count, P = total_policies, R = avg target_refs per policy
+            // Incremental clones the current index (O(P*R)) and then, for each affected
+            // target, rescans all policies (~O(A*P) match checks); full rebuild is a single
+            // O(P*R) pass. The A < P/10 threshold is a cheap "small change ratio" proxy,
+            // not the exact O(A*P)-vs-O(P*R) crossover.
             let use_incremental = affected_count < total_policies.max(10) / 10;
 
             let new_index = if use_incremental {
