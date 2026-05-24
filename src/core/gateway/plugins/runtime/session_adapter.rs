@@ -1,13 +1,13 @@
 use async_trait::async_trait;
 use bytes::Bytes;
-use http::{HeaderMap, HeaderValue, Uri};
+use http::Uri;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 use std::collections::HashMap;
 
 use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
-use crate::core::gateway::runtime::server::http_to_grpc_status;
+use crate::core::gateway::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
 use crate::types::common::{KeyGet, KeySet, WebhookExtract};
 use crate::types::filters::PluginRunningResult;
 use crate::types::{EdgionHttpContext, MirrorState, PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget};
@@ -59,12 +59,10 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.ctx.drain_pending_response_header_ops(response_header);
     }
 
-    /// Send a gRPC error response with user-specified grpc-status and grpc-message.
-    ///
-    /// Uses the same three-frame pattern as `send_grpc_error_three_frame`:
-    /// 1. HEADERS (HTTP 200 + content-type: application/grpc)
-    /// 2. DATA (empty)
-    /// 3. TRAILERS (grpc-status + grpc-message)
+    /// Send a gRPC error response with user-specified grpc-status and grpc-message using
+    /// the Trailers-Only single-frame form: one HEADERS frame with END_STREAM set, carrying
+    /// grpc-status (and grpc-message if provided) as ordinary header fields alongside the
+    /// HTTP/2 pseudo-headers and content-type. No DATA frame is emitted.
     pub async fn send_grpc_error_direct(&mut self, grpc_status: u16, message: Option<&str>) -> PluginSessionResult<()> {
         self.ctx.request_info.status = Some(200);
         self.ctx.request_info.grpc_status = Some(grpc_status);
@@ -72,53 +70,17 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.grpc_response_terminated = true;
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
-        // Apply queued ops first so request-stage plugins (e.g. cookie issuance)
-        // still land their headers even when the request terminates with a
-        // gRPC error. Then write content-type LAST so a queued Set on
-        // "content-type" cannot overwrite the gRPC contract value and break
-        // tonic clients with Internal(13).
+        // Apply queued ops first so request-stage plugins (e.g. cookie issuance) still land
+        // their headers, then strip framing headers and re-assert content-type LAST so a queued
+        // Set cannot break the gRPC contract. On a body-less single HEADERS+END_STREAM frame a
+        // queued content-length / transfer-encoding would be a framing inconsistency strict
+        // clients reject, so remove them after draining.
         self.ctx.drain_pending_response_header_ops(&mut resp);
+        resp.remove_header(&http::header::CONTENT_LENGTH);
+        resp.remove_header(&http::header::TRANSFER_ENCODING);
         resp.insert_header("content-type", "application/grpc")
             .map_err(|e| Box::new(e) as PluginSessionError)?;
-        self.inner
-            .write_response_header(Box::new(resp), false)
-            .await
-            .map_err(|e| Box::new(e) as PluginSessionError)?;
-        self.inner
-            .write_response_body(Some(Bytes::new()), false)
-            .await
-            .map_err(|e| Box::new(e) as PluginSessionError)?;
-
-        let mut trailers = HeaderMap::new();
-        trailers.insert(
-            http::header::HeaderName::from_static("grpc-status"),
-            HeaderValue::from_str(&grpc_status.to_string())
-                .expect("u16 decimal string is always a valid HeaderValue (ASCII digits only)"),
-        );
-        if let Some(msg) = message {
-            // Per gRPC spec, grpc-message must be percent-encoded for non-ASCII chars
-            let encoded: String = msg
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_graphic() || c == ' ' {
-                        c.to_string()
-                    } else {
-                        let mut buf = [0u8; 4];
-                        c.encode_utf8(&mut buf)
-                            .as_bytes()
-                            .iter()
-                            .map(|b| format!("%{:02X}", b))
-                            .collect()
-                    }
-                })
-                .collect();
-            if let Ok(val) = HeaderValue::from_str(&encoded) {
-                trailers.insert(http::header::HeaderName::from_static("grpc-message"), val);
-            }
-        }
-        self.inner
-            .as_downstream_mut()
-            .write_response_trailers(trailers)
+        send_grpc_trailers_only_frame(self.inner, resp, grpc_status, message)
             .await
             .map_err(|e| Box::new(e) as PluginSessionError)
     }
@@ -168,15 +130,11 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.ctx.path_params = Some(params);
     }
 
-    /// Send a gRPC error response using the three-frame workaround:
-    /// HEADERS (no END_STREAM) -> empty DATA -> TRAILERS (grpc-status + grpc-message).
-    ///
-    /// A spec-compliant gRPC Trailers-Only single HEADERS+END_STREAM frame cannot be emitted
-    /// due to a double-layer Pingora limitation: (1) the proxy Session drops end_of_stream
-    /// before it reaches the H2 layer, and (2) the H2 server has no API to fold pseudo-headers
-    /// and trailer fields into one HEADERS block. All mainstream gRPC clients tolerate the
-    /// three-frame form. See skills/04-review/rfc-divergence/h2-grpc-01-trailers-only-three-frame.md.
-    async fn send_grpc_error_three_frame(
+    /// Send a gRPC error response as a single-frame Trailers-Only response (HEADERS+END_STREAM),
+    /// converting an HTTP status code to the corresponding gRPC status code. Mirrors
+    /// `send_grpc_error_direct` but is the dispatch target for the `write_response_header`
+    /// trait path when `is_grpc_request` and an error status are seen.
+    async fn send_grpc_trailers_only(
         inner: &mut Session,
         ctx: &mut EdgionHttpContext,
         http_status: u16,
@@ -187,36 +145,14 @@ impl<'a> PingoraSessionAdapter<'a> {
         ctx.request_info.response_committed = true;
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
-        // Drain queued response-header ops (e.g. X-Trace-Id, Set-Cookie set
-        // by an earlier request-stage plugin) before re-asserting
-        // content-type. Mirrors `send_grpc_error_direct`: write content-type
-        // LAST so a queued Set on "content-type" cannot break the gRPC
-        // contract.
+        // Drain queued response-header ops, strip framing headers, then re-assert content-type
+        // LAST. See send_grpc_error_direct for why content-length / transfer-encoding are removed.
         ctx.drain_pending_response_header_ops(&mut resp);
+        resp.remove_header(&http::header::CONTENT_LENGTH);
+        resp.remove_header(&http::header::TRANSFER_ENCODING);
         resp.insert_header("content-type", "application/grpc")
             .map_err(|e| Box::new(e) as PluginSessionError)?;
-        inner
-            .write_response_header(Box::new(resp), false)
-            .await
-            .map_err(|e| Box::new(e) as PluginSessionError)?;
-        inner
-            .write_response_body(Some(Bytes::new()), false)
-            .await
-            .map_err(|e| Box::new(e) as PluginSessionError)?;
-
-        let mut trailers = HeaderMap::new();
-        trailers.insert(
-            http::header::HeaderName::from_static("grpc-status"),
-            HeaderValue::from_str(&grpc_status.to_string())
-                .expect("u16 decimal string is always a valid HeaderValue (ASCII digits only)"),
-        );
-        trailers.insert(
-            http::header::HeaderName::from_static("grpc-message"),
-            HeaderValue::from_static(grpc_message),
-        );
-        inner
-            .as_downstream_mut()
-            .write_response_trailers(trailers)
+        send_grpc_trailers_only_frame(inner, resp, grpc_status, Some(grpc_message))
             .await
             .map_err(|e| Box::new(e) as PluginSessionError)
     }
@@ -362,7 +298,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         let http_status = resp.status.as_u16();
         if self.ctx.request_info.is_grpc_request && http_status != 200 {
             self.grpc_response_terminated = true;
-            return Self::send_grpc_error_three_frame(self.inner, self.ctx, http_status).await;
+            return Self::send_grpc_trailers_only(self.inner, self.ctx, http_status).await;
         }
         let result = self
             .inner
@@ -384,7 +320,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             let http_status = resp.status.as_u16();
             if self.ctx.request_info.is_grpc_request && http_status != 200 {
                 self.grpc_response_terminated = true;
-                return Self::send_grpc_error_three_frame(self.inner, self.ctx, http_status).await;
+                return Self::send_grpc_trailers_only(self.inner, self.ctx, http_status).await;
             }
             let result = self
                 .inner

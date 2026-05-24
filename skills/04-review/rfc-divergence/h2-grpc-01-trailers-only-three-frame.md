@@ -1,9 +1,18 @@
 ---
 name: h2-grpc-01-trailers-only-three-frame
-description: Accepted gRPC-over-HTTP/2 spec divergence — error responses emit 3 frames (HEADERS + empty DATA + TRAILERS) instead of spec-required single HEADERS+END_STREAM. Pingora API limitation. Reject re-reports; see tasks/todo/h2-grpc-01-trailers-only-single-frame.md for unblocking conditions.
+description: "RESOLVED 2026-05-24. Native gRPC now emits a spec-compliant single-frame Trailers-Only response via Session::write_response_tasks. Historical record of the accepted Pingora-API-limited three-frame divergence follows below."
 ---
 
 # h2-grpc-01 — gRPC error responses emit 3 frames instead of spec-compliant single HEADERS+END_STREAM
+
+> **RESOLVED — 2026-05-24**
+> Native gRPC error responses now emit a spec-compliant single-frame Trailers-Only response
+> via `Session::write_response_tasks(vec![HttpTask::Header(resp, true)])`. The Pingora API
+> limitation that forced the three-frame workaround no longer applies. See
+> `docs/superpowers/specs/2026-05-24-h2-grpc-single-frame-trailers-only-design.md` for the
+> implementation design and migration details.
+>
+> The historical record below is retained for reference.
 
 **Status:** ⚠️ accepted divergence · 2026-05-18
 **Spec:** gRPC over HTTP/2 § Responses — Trailers-Only (MUST-equivalent)

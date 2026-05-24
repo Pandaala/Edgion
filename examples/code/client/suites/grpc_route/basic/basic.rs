@@ -14,6 +14,7 @@ use std::time::Instant;
 // Use proto module from grpc_route
 use super::super::test::test_service_client::TestServiceClient;
 use super::super::test::HelloRequest;
+use super::super::test::NumberRequest;
 
 pub struct GrpcTestSuite;
 
@@ -83,6 +84,83 @@ impl GrpcTestSuite {
                 }
             })
         })
+    }
+
+    /// Server-streaming success: the gateway must forward all stream messages and end with a
+    /// clean OK(0) close. This is the canonical "non-close" path — initial HEADERS (END_STREAM=0),
+    /// N DATA frames (END_STREAM=0), then trailers (END_STREAM=1). Guards against the gRPC
+    /// error-path single-frame change leaking into the success/streaming path.
+    fn test_grpc_server_streaming() -> TestCase {
+        TestCase::new(
+            "grpc_server_streaming",
+            "gRPC server streaming returns full stream then clean OK close",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
+                    let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
+                        Ok(mut ep) => {
+                            if let Some(ref host) = ctx.grpc_host {
+                                let origin_uri = match format!("http://{}:{}", host, ctx.grpc_port).parse() {
+                                    Ok(uri) => uri,
+                                    Err(e) => {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            format!("Invalid origin URI: {}", e),
+                                        );
+                                    }
+                                };
+                                ep = ep.origin(origin_uri);
+                            }
+                            ep
+                        }
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Invalid endpoint: {}", e));
+                        }
+                    };
+                    let mut client = match TestServiceClient::connect(endpoint).await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Failed to connect to {}: {}", grpc_url, e),
+                            );
+                        }
+                    };
+                    let request = tonic::Request::new(NumberRequest { count: 3 });
+                    let mut stream = match client.stream_numbers(request).await {
+                        Ok(resp) => resp.into_inner(),
+                        Err(e) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("stream_numbers RPC failed: {:?}: {}", e.code(), e.message()),
+                            );
+                        }
+                    };
+                    let mut got = Vec::new();
+                    loop {
+                        match stream.message().await {
+                            Ok(Some(msg)) => got.push(msg.number),
+                            Ok(None) => break, // clean end-of-stream: trailers closed the stream with OK(0)
+                            Err(e) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("stream errored before clean close: {:?}: {}", e.code(), e.message()),
+                                );
+                            }
+                        }
+                    }
+                    if got == vec![1, 2, 3] {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!("received {:?} then clean OK close", got),
+                        )
+                    } else {
+                        TestResult::failed(start.elapsed(), format!("expected [1, 2, 3], got {:?}", got))
+                    }
+                })
+            },
+        )
     }
 
     /// gRPC client supplies an already-expired `grpc-timeout` header. The gateway
@@ -211,6 +289,10 @@ impl TestSuite for GrpcTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::test_grpc_say_hello(), Self::test_grpc_client_deadline_exceeded()]
+        vec![
+            Self::test_grpc_say_hello(),
+            Self::test_grpc_server_streaming(),
+            Self::test_grpc_client_deadline_exceeded(),
+        ]
     }
 }

@@ -757,9 +757,9 @@ pub struct EdgionHttpContext {
     ///   3. `send_grpc_error_direct` — applied before re-asserting
     ///      `content-type: application/grpc` so the gRPC contract value
     ///      cannot be overwritten by a queued Set.
-    ///   4. `send_grpc_error_three_frame` — same pattern as (3), reached when
-    ///      a plugin calls `write_response_header` directly with a non-200
-    ///      status on a gRPC route.
+    ///   4. `send_grpc_trailers_only` — same single-frame Trailers-Only pattern
+    ///      as (3), reached when a plugin calls `write_response_header` directly
+    ///      with a non-200 status on a gRPC route.
     ///
     /// Each entry carries an explicit op (Set/Append/Remove) so semantics
     /// are preserved across the deferral — without this tag, an `Append`

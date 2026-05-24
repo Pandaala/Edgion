@@ -28,7 +28,7 @@ set -eo pipefail
 # Fallback version used when HEAD has no git tag.
 # Normal release flow: git tag v0.x.y  →  script auto-detects via `git describe --tags --exact-match`
 # or pass --from-tag / --version explicitly.
-DEFAULT_VERSION="0.1.29"
+DEFAULT_VERSION="0.1.30"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
 RUST_VERSION="${RUST_VERSION:-1.92}"

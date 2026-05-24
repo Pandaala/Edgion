@@ -998,7 +998,7 @@ impl PluginRuntime {
                     // gRPC route: route to the gRPC-native error path. The
                     // HTTP-style resp built below would otherwise be discarded
                     // by `write_response_header`'s gRPC re-route (see
-                    // `send_grpc_error_three_frame`), losing any queued
+                    // `send_grpc_trailers_only`), losing any queued
                     // response-header ops. `send_grpc_error_direct` drains
                     // those ops itself and re-asserts the gRPC content-type
                     // contract.
