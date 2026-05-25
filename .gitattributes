@@ -2,3 +2,9 @@
 examples/** linguist-vendored
 docs/** linguist-documentation
 skills/** linguist-documentation
+
+# Separated unit-test files (see skills/05-testing/00-unit-testing.md): collapse
+# in GitHub PR diffs to keep reviewer/AI focus on production code. These are
+# hand-written tests; marked generated only to reduce diff noise (expand manually).
+**/tests/*_test.rs linguist-generated=true
+**/tests.rs linguist-generated=true
