@@ -9,7 +9,7 @@ description: EdgionGatewayConfig CRD schema: GatewayClass-level runtime configur
 
 ## When to Change This Layer
 
-Change here, instead of the Gateway TOML, when:
+Change here, instead of the Gateway YAML, when:
 
 - A specific GatewayClass needs its own server / timeout / security defaults
 - You want to configure global plugin references
@@ -202,9 +202,9 @@ globalPluginsRef:
 
 Global plugins are applied to all routes and execute before route-level plugins.
 
-## Differences from TOML Configuration
+## Differences from Gateway YAML Configuration
 
-| Configuration Item | TOML | EdgionGatewayConfig |
+| Configuration Item | Gateway YAML | EdgionGatewayConfig |
 |--------------------|------|---------------------|
 | Scope | A single process instance | The entire GatewayClass |
 | Change Method | Restart the process | Takes effect dynamically (CRD update) |
@@ -214,6 +214,6 @@ Global plugins are applied to all routes and execute before route-level plugins.
 
 Do not use `EdgionGatewayConfig` to solve these problems:
 
-- Which Controller the Gateway process connects to: that is `server_addr` in the Gateway TOML.
+- Which Controller the Gateway process connects to: that is `server_addr` in the Gateway YAML.
 - Gateway Admin / Metrics ports: that is the process startup layer.
 - Whether the Controller uses file_system or kubernetes: that is `conf_center` in the Controller TOML.

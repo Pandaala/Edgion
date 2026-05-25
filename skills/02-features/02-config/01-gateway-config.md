@@ -107,14 +107,14 @@ access_log_sensitive:
 
 ## Field Details
 
-### [gateway]
+### gateway
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `server_addr` | `String` | **Required** | Controller gRPC address |
 | `admin_listen` | `String` | `0.0.0.0:5810` | Admin API listen address; default `0.0.0.0:5810`. The `admin_listen` field is now fully wired up. Gateway Metrics API remains fixed at `:5901`. |
 
-### [conf_sync_security.tls]
+### conf_sync_security.tls
 
 Optional configuration; when enabled, the Gateway connects to the Controller's gRPC using mTLS.
 
@@ -126,10 +126,10 @@ Optional configuration; when enabled, the Gateway connects to the Controller's g
 | `skip_tls` | `bool` | `false` | Emergency downgrade switch: `true` skips TLS and connects in plaintext (logs ERROR) |
 
 > When this section is not configured, gRPC connects in plaintext, fully compatible with previous versions.
-> When mTLS is enabled, the URI scheme of `[gateway].server_addr` is automatically switched to `https://`.
+> When mTLS is enabled, the URI scheme of `gateway.server_addr` is automatically switched to `https://`.
 > Generate certificates with `edgion-cli gen-certs --output file --output-dir <dir>`.
 
-### [server]
+### server
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -166,11 +166,11 @@ LogConfig:
 | `"daily"` | Rotate at midnight daily |
 | `"hourly"` | Rotate hourly |
 | `"never"` | Do not rotate |
-| `{ Size = 104857600 }` | Rotate by file size (bytes, default 100 MB) |
+| `{ Size: 104857600 }` | Rotate by file size (bytes, default 100 MB) |
 
-**Important**: `[logging].log_dir` only affects the system log path; it does not affect business log paths. Business log paths are configured independently in each `output.localFile.path`.
+**Important**: `logging.log_dir` only affects the system log path; it does not affect business log paths. Business log paths are configured independently in each `output.localFile.path`.
 
-### [rate_limit]
+### rate_limit
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -178,7 +178,7 @@ LogConfig:
 | `max_estimator_slots_k` | `usize` | `1024` | CMS maximum slot cap |
 | `gateway_instance_count` | `u32` | `1` | Gateway instance count (denominator for cluster rate limiting; static fallback when there is no Controller) |
 
-### [access_log_sensitive]
+### access_log_sensitive
 
 Controls the redaction behavior of fields marked as sensitive in access log, ssl.log, and plugin log. **`mode=off` by default**: all sensitive values are emitted in plaintext (preserving historical behavior).
 
@@ -210,7 +210,7 @@ Controls the redaction behavior of fields marked as sensitive in access log, ssl
 
 ## `integration_testing_mode`
 
-This is a CLI flag, not a TOML section:
+This is a CLI flag, not a YAML config section:
 
 ```bash
 ./target/debug/edgion-gateway --config-file config/edgion-gateway.yaml --integration-testing-mode
@@ -223,8 +223,8 @@ When enabled, it additionally activates:
 
 ## Most Common Gateway Configuration Changes in This Project
 
-- Change the Controller gRPC address: change `[gateway].server_addr`
-- Change system log noise: change `[logging].log_level`
-- Toggle business logs: change `[access_log]` / `[ssl_log]` / `[tcp_log]` / `[udp_log]`
-- Tune Pingora workers and keepalive: change `[server]`
-- Tune the default RateLimit precision: change `[rate_limit]`
+- Change the Controller gRPC address: change `gateway.server_addr`
+- Change system log noise: change `logging.log_level`
+- Toggle business logs: change `access_log` / `ssl_log` / `tcp_log` / `udp_log`
+- Tune Pingora workers and keepalive: change `server`
+- Tune the default RateLimit precision: change `rate_limit`

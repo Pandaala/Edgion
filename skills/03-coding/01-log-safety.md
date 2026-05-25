@@ -19,7 +19,7 @@
 
 | Category | Risk | Handling |
 |------|------|---------|
-| `client_cert_info` | subject / SAN may contain PII | Already wired into the `[access_log_sensitive]` global switch via `serialize_with = "masked::serialize"` |
+| `client_cert_info` | subject / SAN may contain PII | Already wired into the `access_log_sensitive` global switch via `serialize_with = "masked::serialize"` |
 | `client_addr` / `remote_addr` / `path` / `x_forwarded_for` / `sni` | Real user IP / request path | Same as above; uniformly masked when `mode=replace` or `mode=wrap` is enabled |
 | Plugin log dynamic parameters | May contain username / IP / token | Use `push_fmt` + `sensitive(...)` to mark explicitly; DSL `log_warn` / `log_error` automatically go through `push_sensitive` |
 
@@ -307,5 +307,5 @@ The following issues have been identified in existing code; fix them while modif
 | ~~`connection_filter_bridge.rs`~~ | ~~Connection-filter debug/info~~ | ~~Remove all~~ | Fixed |
 | ~~`grpc/match_unit.rs`~~ | ~~Request-level warn~~ | ~~Remove~~ | Fixed |
 | ~~`preflight_handler.rs`~~ | ~~preflight debug~~ | ~~Remove~~ | Fixed |
-| ~~Access log `ctx_map`~~ | ~~Full ctx_map serialization~~ | Field removed from access log entry | Fixed |
-| ~~LDAP/JWT auth plugin username~~ | ~~username flowing into stage_logs~~ | Wired into the `[access_log_sensitive]` global masking switch with explicit `sensitive(...)` markers | Fixed |
+| ~~Access log `ctx_map`~~ | ~~Sensitive claim keys (`jwt_claims` / `oidc_claims` / `jwe_payload`) flattened verbatim into the access log~~ | `entry.rs` `FilteredCtx` blocklist drops the three keys during serialization; other `ctx_map` keys (CtxSet) still flatten | Fixed |
+| ~~LDAP/JWT auth plugin username~~ | ~~username flowing into stage_logs~~ | Wired into the `access_log_sensitive` global masking switch with explicit `sensitive(...)` markers | Fixed |

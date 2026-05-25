@@ -176,7 +176,7 @@ async fn send(&self, data: String) -> Result<()> {
 
 #### 5. 日志脱敏（默认关闭）
 
-通过 `[access_log_sensitive]` 配置统一控制敏感字段输出方式，三档全局开关 + 默认 `off`：
+通过 `access_log_sensitive` 配置统一控制敏感字段输出方式，三档全局开关 + 默认 `off`：
 
 | 模式 | 行为 |
 |------|------|

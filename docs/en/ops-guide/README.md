@@ -37,7 +37,7 @@ This section is intended for operators, covering Gateway deployment, configurati
 ### Configuration Reference
 
 - [Controller Configuration](./configuration/controller-config.md): Controller TOML process configuration parameters.
-- [Gateway Configuration](./configuration/gateway-config.md): Gateway TOML process configuration parameters.
+- [Gateway Configuration](./configuration/gateway-config.md): Gateway YAML process configuration parameters.
 - [EdgionGatewayConfig](./configuration/edgion-gateway-config.md): GatewayClass-level runtime configuration (timeouts, real IP, global plugins, etc.).
 
 ### Federation

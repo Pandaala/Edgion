@@ -94,14 +94,14 @@ plugin_metadata:
 
 ## Configuration Parameters
 
-### [gateway]
+### gateway
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `server_addr` | `String` | **Required** | Controller gRPC address, e.g. `http://127.0.0.1:50051` |
 | `admin_listen` | `String` | `0.0.0.0:5810` | Admin API listen address; default `0.0.0.0:5810`. Gateway Metrics API remains fixed at `:5901`. |
 
-### [conf_sync_security.tls]
+### conf_sync_security.tls
 
 Optional. When present, Gateway connects to Controller gRPC using mTLS. When absent, gRPC runs in plaintext (compatible with older versions).
 
@@ -112,9 +112,9 @@ Optional. When present, Gateway connects to Controller gRPC using mTLS. When abs
 | `ca` | `String` | — | CA certificate path used to verify the Controller server certificate |
 | `skip_tls` | `Boolean` | `false` | Emergency fallback: `true` skips TLS and connects in plaintext (logs ERROR) |
 
-When mTLS is enabled, the URI scheme of `[gateway].server_addr` is automatically switched to `https://`. Certificates can be generated with `edgion-cli gen-certs --output file --output-dir <dir>`.
+When mTLS is enabled, the URI scheme of `gateway.server_addr` is automatically switched to `https://`. Certificates can be generated with `edgion-cli gen-certs --output file --output-dir <dir>`.
 
-### [logging]
+### logging
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -125,7 +125,7 @@ When mTLS is enabled, the URI scheme of `[gateway].server_addr` is automatically
 | `console` | `Boolean` | `true` | Also write logs to stdout |
 | `buffer_size` | `Integer` | `10000` | Async log buffer size |
 
-### [server]
+### server
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -146,7 +146,7 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enabled` | `Boolean` | — | Whether to enable this log type |
-| `output.localFile.path` | `String` | — | Log file path (relative to work_dir); independent of `[logging].log_dir` |
+| `output.localFile.path` | `String` | — | Log file path (relative to work_dir); independent of `logging.log_dir` |
 | `output.localFile.queue_size` | `Integer` | CPU cores × 10000 | Write queue size |
 | `output.localFile.rotation.strategy` | `Enum` | — | Rotation strategy (see table below) |
 | `output.localFile.rotation.max_files` | `Integer` | — | Number of rotated files to retain; `0` means unlimited |
@@ -159,9 +159,9 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 | `"daily"` | Rotate at midnight each day |
 | `"hourly"` | Rotate every hour |
 | `"never"` | No rotation |
-| `{ Size = 104857600 }` | Rotate by file size (bytes), default 100 MB |
+| `{ Size: 104857600 }` | Rotate by file size (bytes), default 100 MB |
 
-### [rate_limit]
+### rate_limit
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -169,7 +169,7 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 | `max_estimator_slots_k` | `Integer` | `1024` | Maximum CMS slot count cap |
 | `gateway_instance_count` | `Integer` | `1` | Gateway instance count used as divisor for cluster rate limiting. **Must be set correctly for multi-instance deployments** |
 
-### [plugin_metadata]
+### plugin_metadata
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|

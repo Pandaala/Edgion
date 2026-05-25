@@ -41,7 +41,7 @@
 | `payloadToHeaders` | map | - | 解密 payload 字段映射到上游头 |
 | `maxHeaderValueBytes` | integer | `4096` | 单个映射头 value 大小上限 |
 | `maxTotalHeaderBytes` | integer | `16384` | 全部映射头总大小上限 |
-| `storePayloadInCtx` | bool | `false` | 是否写入 ctx 变量 `jwe_payload` |
+| `storePayloadInCtx` | bool | `false` | 是否写入 ctx 变量 `jwe_payload`(供下游插件通过 `get_ctx_var` 读取;已从访问日志中排除,解密后的 payload 不会被持久化) |
 | `authFailureDelayMs` | integer | `0` | 失败延迟毫秒数 |
 
 ## 示例配置

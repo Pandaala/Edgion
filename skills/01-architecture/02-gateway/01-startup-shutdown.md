@@ -19,13 +19,13 @@ pub fn run(&self) -> Result<()> {
 }
 ```
 
-### Step 1: Load TOML configuration
+### Step 1: Load YAML configuration
 
 ```rust
 let config = EdgionGatewayConfig::load(self.config.clone())?;
 ```
 
-`EdgionGatewayConfig::load()` merges CLI arguments and the TOML configuration file. The configuration structure is defined in `cli/config.rs` and includes sections such as server, access_log, ssl_log, tcp_log, tls_log, udp_log, rate_limit, all_endpoint_status.
+`EdgionGatewayConfig::load()` merges CLI arguments and the YAML configuration file. The configuration structure is defined in `cli/config.rs` and includes sections such as server, access_log, ssl_log, tcp_log, tls_log, udp_log, rate_limit, all_endpoint_status.
 
 ### Step 2: Initialize the working directory
 
@@ -135,7 +135,7 @@ let pingora_server = runtime.block_on(async {
 
 Phase 1 runs within the Tokio Runtime context (`spawn_blocking` ensures UDP listeners can use a Tokio UDP socket):
 
-1. **Create ServerConf**: read `threads` (default = CPU cores), `work_stealing` (default true), `grace_period_seconds` (default 30), `graceful_shutdown_timeout_seconds` (default 10), and `upstream_keepalive_pool_size` (default 128) from the TOML configuration.
+1. **Create ServerConf**: read `threads` (default = CPU cores), `work_stealing` (default true), `grace_period_seconds` (default 30), `graceful_shutdown_timeout_seconds` (default 10), and `upstream_keepalive_pool_size` (default 128) from the YAML configuration.
 2. **Bootstrap**: `Server::new_with_opt_and_conf(None, server_conf)` + `pingora_server.bootstrap()`.
 3. **Create GatewayBase**: `GatewayBase::new(config_client)`.
 4. **Get the Gateway list**: `config_client.list_gateways().data`.

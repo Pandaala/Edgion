@@ -158,6 +158,15 @@ curl -X POST "http://localhost:8080/api/v1/services/acme/default/example-acme/tr
 }
 ```
 
+如果 ACME 服务未运行（例如当前未持有 leadership 的 Controller 副本），请求不会入队，响应会如实报告失败，而不是返回误导性的成功：
+
+```json
+{
+  "success": false,
+  "error": "ACME service not running; trigger for default/example-acme was not queued"
+}
+```
+
 ---
 
 ## 状态与排查

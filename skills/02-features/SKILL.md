@@ -20,7 +20,7 @@ description: Use when looking up configuration schemas, resource field definitio
 | # | Directory | Purpose |
 |---|-----------|---------|
 | 01 | [binary-and-deployment/](01-binary-and-deployment/SKILL.md) | Startup of the four binaries, CLI arguments, deployment patterns, Feature Flags |
-| 02 | [config/](02-config/SKILL.md) | Controller/Gateway TOML configuration schemas, EdgionGatewayConfig CRD schema |
+| 02 | [config/](02-config/SKILL.md) | Controller (TOML) and Gateway (YAML) configuration schemas, EdgionGatewayConfig CRD schema |
 | 03 | [resources/](03-resources/SKILL.md) | **All resource feature schemas**: Gateway, Route, TLS, Plugin, Backend, LinkSys |
 | 04 | [observability/](04-observability/SKILL.md) | Observability features: Access Log configuration, Metrics endpoints, protocol logs |
 | 05 | [annotations/](05-annotations/SKILL.md) | Annotations and Options reference: complete list of all `edgion.io/*` keys |

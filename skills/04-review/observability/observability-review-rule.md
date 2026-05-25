@@ -95,6 +95,7 @@ See [coding-standards/01-log-safety.md](../../03-coding/01-log-safety.md) Iron R
 
 - [ ] New keys added to `ctx_map` do not contain JWT / OIDC / JWE claims or other sensitive info
 - [ ] If sensitive-related keys must be stored, is there allowlist/blocklist filtering?
+  - The access-log projection of `ctx_map` is filtered by the `ACCESS_LOG_BLOCKED_CTX_KEYS` blocklist in `gateway/observe/access_log/entry.rs` (`FilteredCtx`). Any new key that stores claims / payloads / secrets for downstream `get_ctx_var` reads MUST be added to that blocklist so it does not flatten into the access log.
 
 ---
 

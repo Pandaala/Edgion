@@ -44,7 +44,7 @@ Edgion's Metrics design principles (strict for the Gateway data plane; looser fo
 |-------------|------|-------------|
 | `edgion_requests_total` | Counter | Total requests |
 | `edgion_requests_failed_total` | Counter | Failed requests |
-| `edgion_backend_requests_total` | Counter | Total backend requests. Labels are **configurable** (see "backend_requests label configuration" below). By default only `gateway_namespace` + `gateway_name` + `protocol` + `status`; enable `route_*` / `backend_*` drill-down via `[metrics.backend_requests.labels]` when needed. ⚠️ `test_key` / `test_data` only appear under `--integration-testing-mode` with explicit Gateway annotation opt-in; `test_data` varies per request (containing ip / latency_ms, etc.), so **never enable this flag in production**. |
+| `edgion_backend_requests_total` | Counter | Total backend requests. Labels are **configurable** (see "backend_requests label configuration" below). By default only `gateway_namespace` + `gateway_name` + `protocol` + `status`; enable `route_*` / `backend_*` drill-down via `metrics.backend_requests.labels` when needed. ⚠️ `test_key` / `test_data` only appear under `--integration-testing-mode` with explicit Gateway annotation opt-in; `test_data` varies per request (containing ip / latency_ms, etc.), so **never enable this flag in production**. |
 | `edgion_ctx_active` | Gauge | Currently active request contexts |
 | `edgion_gateway_request_duration_ms` | **Histogram (the only exception on the Gateway data plane)** | End-to-end request latency, core SLI. Disabled by default; once enabled, buckets are configured via `MetricsConfig::request_duration`. |
 | `edgion_mirror_requests_total{status}` | Counter | Result of each mirror by the request mirror plugin. `status` ∈ `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout` (**mirror latency no longer has a histogram — query the `et` field in mirror_log**). |
@@ -53,15 +53,17 @@ Edgion's Metrics design principles (strict for the Gateway data plane; looser fo
 
 ### `backend_requests` Label Configuration
 
-The labels of `edgion_backend_requests_total` are entirely controlled by `[metrics.backend_requests.labels]`. Changing the default behavior requires a restart (OnceLock does not support hot reload). The defaults are conservative:
+The labels of `edgion_backend_requests_total` are entirely controlled by `metrics.backend_requests.labels`. Changing the default behavior requires a restart (OnceLock does not support hot reload). The defaults are conservative:
 
-```toml
-[metrics.backend_requests.labels]
-gateway  = true    # Enable the gateway_namespace + gateway_name pair
-route    = false   # Enable route_namespace + route_name
-backend  = false   # Enable backend_namespace + backend_name
-protocol = true    # Bounded enum (http/grpc/websocket), cardinality cost is essentially zero
-status   = true    # Bounded enum (2xx/3xx/4xx/5xx/failed), same as above
+```yaml
+metrics:
+  backend_requests:
+    labels:
+      gateway: true     # Enable the gateway_namespace + gateway_name pair
+      route: false      # Enable route_namespace + route_name
+      backend: false    # Enable backend_namespace + backend_name
+      protocol: true    # Bounded enum (http/grpc/websocket), cardinality cost is essentially zero
+      status: true      # Bounded enum (2xx/3xx/4xx/5xx/failed), same as above
 ```
 
 Design principles:

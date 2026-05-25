@@ -68,7 +68,7 @@ src/core/gateway/
 │   └── validation.rs
 ├── cache/         # LRU cache
 ├── cli/           # Startup entry (EdgionGatewayCli::run())
-│   ├── config.rs  # EdgionGatewayConfig TOML configuration structure
+│   ├── config.rs  # EdgionGatewayConfig YAML configuration structure
 │   ├── pingora.rs # Pingora Server creation and run (two-phase)
 │   └── log_config.rs
 ├── conf_sync/     # Configuration sync

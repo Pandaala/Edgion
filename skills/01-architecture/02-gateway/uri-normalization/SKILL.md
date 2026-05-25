@@ -151,10 +151,10 @@ ACL bypass protection **holds for** the following cases (within the guarantee sc
 
 Recommended for high-security scenarios:
 
-```toml
-[path_normalization]
-reject_escaped_slashes = true         # reject requests that contain %2F / %5C
-reject_invalid_percent_encoding = true # reject requests with non-UTF-8 / invalid hex percent-encoding
+```yaml
+path_normalization:
+  reject_escaped_slashes: true          # reject requests that contain %2F / %5C
+  reject_invalid_percent_encoding: true # reject requests with non-UTF-8 / invalid hex percent-encoding
 ```
 
 See spec §1.4 for the full security guarantee scope.

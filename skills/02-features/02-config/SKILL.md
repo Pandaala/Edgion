@@ -1,6 +1,6 @@
 ---
 name: config-reference
-description: Configuration schema reference: complete field definitions for Controller/Gateway TOML configuration and the EdgionGatewayConfig CRD.
+description: Configuration schema reference: complete field definitions for Controller (TOML) and Gateway (YAML) configuration and the EdgionGatewayConfig CRD.
 ---
 
 # 02 Configuration Reference
@@ -12,7 +12,7 @@ description: Configuration schema reference: complete field definitions for Cont
 | Layer | Carrier | Scope | Change Frequency |
 |-------|---------|-------|------------------|
 | Controller process configuration | TOML file | A single Controller instance | Low (loaded at startup) |
-| Gateway process configuration | TOML file | A single Gateway instance | Low (loaded at startup) |
+| Gateway process configuration | YAML file | A single Gateway instance | Low (loaded at startup) |
 | Runtime configuration | EdgionGatewayConfig CRD | All Gateways under the same GatewayClass | Medium (takes effect dynamically) |
 
 ## File List
@@ -20,7 +20,7 @@ description: Configuration schema reference: complete field definitions for Cont
 | File | Topic |
 |------|-------|
 | [00-controller-config.md](00-controller-config.md) | Full Controller TOML schema |
-| [01-gateway-config.md](01-gateway-config.md) | Full Gateway TOML schema |
+| [01-gateway-config.md](01-gateway-config.md) | Full Gateway YAML schema |
 | [02-edgion-gateway-config.md](02-edgion-gateway-config.md) | EdgionGatewayConfig CRD schema |
 | [03-auth-bootstrap.md](03-auth-bootstrap.md) | Admin credential bootstrap — Controller auto-generation, Center fail-close behavior, operator config paths |
 
@@ -30,10 +30,10 @@ description: Configuration schema reference: complete field definitions for Cont
 |-------------------|-------------------|
 | Controller gRPC/Admin listen address | Controller TOML `[server]` |
 | conf_center mode (FileSystem/K8s) | Controller TOML `[conf_center]` |
-| Controller address that the Gateway connects to | Gateway TOML `[gateway]` |
-| System log level/format | Controller/Gateway TOML `[logging]` |
-| Access/SSL/TCP/TLS/UDP log toggles and paths | Gateway TOML `*_log` sections |
-| Pingora worker thread count/connection pool | Gateway TOML `[server]` |
+| Controller address that the Gateway connects to | Gateway YAML `gateway` |
+| System log level/format | Controller TOML `[logging]` / Gateway YAML `logging` |
+| Access/SSL/TCP/TLS/UDP log toggles and paths | Gateway YAML `*_log` sections |
+| Pingora worker thread count/connection pool | Gateway YAML `server` |
 | Global HTTP timeouts | EdgionGatewayConfig CRD `spec.httpTimeout` |
 | Global retry count | EdgionGatewayConfig CRD `spec.maxRetries` (top-level field; `spec.httpTimeout.backend.defaultMaxRetries` is deprecated) |
 | Global real IP extraction | EdgionGatewayConfig CRD `spec.realIp` |

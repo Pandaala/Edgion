@@ -2,17 +2,17 @@
 
 EdgionGatewayConfig is a cluster-scoped CRD (`edgion.io/v1alpha1`) that configures runtime behavior at the GatewayClass level. It is referenced via `GatewayClass.spec.parametersRef` and takes effect dynamically without restarting the Gateway process.
 
-## Difference from Gateway TOML
+## Difference from Gateway YAML
 
-| Layer | Gateway TOML | EdgionGatewayConfig |
+| Layer | Gateway YAML | EdgionGatewayConfig |
 |-------|-------------|---------------------|
 | Scope | Single Gateway process | Entire GatewayClass |
 | How changes apply | Requires process restart | Dynamic (CRD update) |
 | Typical use | Process connection params, log paths, rate limit precision | Timeout policies, security rules, global plugins, real IP extraction |
 
-**When to use TOML vs EdgionGatewayConfig:**
-- Change the Controller gRPC address → Gateway TOML `[gateway].server_addr`
-- Change Admin / Metrics ports → Gateway TOML (process startup layer)
+**When to use Gateway YAML vs EdgionGatewayConfig:**
+- Change the Controller gRPC address → Gateway YAML `gateway.server_addr`
+- Change Admin / Metrics ports → Gateway YAML (process startup layer)
 - Configure HTTP timeouts, real IP, global plugins → EdgionGatewayConfig
 
 ## How to Associate

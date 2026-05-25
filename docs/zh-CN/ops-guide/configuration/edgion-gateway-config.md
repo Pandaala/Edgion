@@ -2,17 +2,17 @@
 
 EdgionGatewayConfig 是 Edgion 的 Cluster 作用域 CRD（`edgion.io/v1alpha1`），用于设置 GatewayClass 级别的运行时行为，通过 `GatewayClass.spec.parametersRef` 关联，更新后动态生效，无需重启进程。
 
-## 与 Gateway TOML 的区别
+## 与 Gateway YAML 的区别
 
-| 配置层 | Gateway TOML | EdgionGatewayConfig |
+| 配置层 | Gateway YAML | EdgionGatewayConfig |
 |--------|-------------|---------------------|
 | 作用域 | 单个 Gateway 进程 | 整个 GatewayClass |
 | 变更生效方式 | 需要重启进程 | 动态生效 |
 | 典型用途 | 进程连接参数、日志路径、限流精度 | 超时策略、安全防护、全局插件、真实 IP 提取 |
 
-**何时用 TOML，何时用 EdgionGatewayConfig：**
-- 改 Controller gRPC 地址 → Gateway TOML `[gateway].server_addr`
-- 改 Admin / Metrics 端口 → Gateway TOML（进程启动层）
+**何时用 Gateway YAML，何时用 EdgionGatewayConfig：**
+- 改 Controller gRPC 地址 → Gateway YAML `gateway.server_addr`
+- 改 Admin / Metrics 端口 → Gateway YAML（进程启动层）
 - 配置 HTTP 超时、真实 IP、全局插件 → EdgionGatewayConfig
 
 ## 关联方式

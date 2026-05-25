@@ -9,12 +9,12 @@ description: Logging system: Access Log, SSL/TCP/TLS/UDP protocol logs, system l
 
 | Type | Purpose | Configuration Location | Default Path |
 |------|---------|------------------------|--------------|
-| System log | Control plane/data plane runtime logs | `[logging]` | `logs/edgion-{type}.log` |
-| Access Log | HTTP/gRPC request log (JSON) | `[access_log]` | `logs/edgion_access.log` |
-| SSL Log | HTTPS connection log | `[ssl_log]` | `logs/ssl.log` |
-| TCP Log | TCP proxy log | `[tcp_log]` | `logs/tcp_access.log` |
-| TLS Log | TLS proxy log | `[tls_log]` | `logs/tls_access.log` |
-| UDP Log | UDP proxy log | `[udp_log]` | `logs/udp_access.log` |
+| System log | Control plane/data plane runtime logs | `logging` | `logs/edgion-{type}.log` |
+| Access Log | HTTP/gRPC request log (JSON) | `access_log` | `logs/edgion_access.log` |
+| SSL Log | HTTPS connection log | `ssl_log` | `logs/ssl.log` |
+| TCP Log | TCP proxy log | `tcp_log` | `logs/tcp_access.log` |
+| TLS Log | TLS proxy log | `tls_log` | `logs/tls_access.log` |
+| UDP Log | UDP proxy log | `udp_log` | `logs/udp_access.log` |
 
 ## Access Log
 
@@ -36,15 +36,16 @@ Access Log is Edgion's core observability mechanism. Every request produces one 
 
 ### Configuration Example
 
-```toml
-[access_log]
-enabled = true
-[access_log.output.localFile]
-path = "logs/edgion_access.log"
-queue_size = 80000
-[access_log.output.localFile.rotation]
-strategy = "daily"
-max_files = 7
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+      queue_size: 80000
+      rotation:
+        strategy: daily
+        max_files: 7
 ```
 
 ## Protocol Logs
@@ -53,19 +54,20 @@ SSL/TCP/TLS/UDP logs share the same configuration schema (see the business log s
 
 ### Enable/Disable
 
-```toml
-[tcp_log]
-enabled = true      # Enable TCP log
-[tcp_log.output.localFile]
-path = "logs/tcp_access.log"
+```yaml
+tcp_log:
+  enabled: true        # Enable TCP log
+  output:
+    localFile:
+      path: logs/tcp_access.log
 ```
 
 ## System Log
 
 The system log uses the Rust `tracing` framework and supports module-level filtering:
 
-```toml
-[logging]
-log_level = "info,edgion::core::gateway::routes=debug"  # Debug for a specific module
-json_format = true                                        # Structured JSON
+```yaml
+logging:
+  log_level: "info,edgion::core::gateway::routes=debug"  # Debug for a specific module
+  json_format: true                                       # Structured JSON
 ```

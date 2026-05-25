@@ -162,6 +162,15 @@ Response example:
 }
 ```
 
+If the ACME service is not running (for example, on a Controller replica that does not currently hold leadership), the request is not queued and the response reports the failure instead of a misleading success:
+
+```json
+{
+  "success": false,
+  "error": "ACME service not running; trigger for default/example-acme was not queued"
+}
+```
+
 ---
 
 ## Status and Troubleshooting

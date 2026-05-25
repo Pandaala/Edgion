@@ -24,9 +24,9 @@ The current simplified strategy: after the Controller processes a resource, it s
 
 **Decision: not implemented**
 
-The `GatewayStaticAddresses` conformance test requires the Gateway to actually bind to the addresses specified in `spec.addresses`. Edgion is a pre-deployed binary; its listening addresses come from TOML configuration and do not dynamically change binding behavior based on Gateway `spec.addresses`. This is also limited by the lack of a data plane → Controller status feedback channel.
+The `GatewayStaticAddresses` conformance test requires the Gateway to actually bind to the addresses specified in `spec.addresses`. Edgion is a pre-deployed binary; its listening addresses come from YAML configuration and do not dynamically change binding behavior based on Gateway `spec.addresses`. This is also limited by the lack of a data plane → Controller status feedback channel.
 
-Current behavior: `derive_gateway_addresses()` copies `spec.addresses` to `status.addresses`, but the data-plane actual binding addresses do not change (they are still determined by TOML configuration). `SupportGatewayStaticAddresses` and `SupportGatewayAddressEmpty` are not declared.
+Current behavior: `derive_gateway_addresses()` copies `spec.addresses` to `status.addresses`, but the data-plane actual binding addresses do not change (they are still determined by YAML configuration). `SupportGatewayStaticAddresses` and `SupportGatewayAddressEmpty` are not declared.
 
 ## Cross-type Hostname conflict detection between GRPCRoute and HTTPRoute
 

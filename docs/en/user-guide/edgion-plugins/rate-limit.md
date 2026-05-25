@@ -216,9 +216,9 @@ Cluster mode automatically degrades when the Controller is unavailable, ensuring
 | Scenario | gateway_count | Behavior |
 |----------|---------------|----------|
 | Controller pushing normally | Dynamic value (e.g., 4) | Normal cluster rate limiting |
-| Controller disconnected, TOML has `gateway_instance_count` | Static value (e.g., 4) | Uses static fallback |
-| Controller disconnected, no TOML config | 1 | Equivalent to Instance scope (skewTolerance still applies) |
-| Gateway just started, not yet connected to Controller | 1 or TOML value | Graceful startup |
+| Controller disconnected, YAML has `gateway_instance_count` | Static value (e.g., 4) | Uses static fallback |
+| Controller disconnected, no YAML config | 1 | Equivalent to Instance scope (skewTolerance still applies) |
+| Gateway just started, not yet connected to Controller | 1 or YAML value | Graceful startup |
 
 ### Response Header Behavior
 
@@ -394,20 +394,20 @@ spec:
 
 Uses 503 status code with a custom message, rate limiting headers hidden.
 
-## Global Configuration (TOML)
+## Global Configuration (YAML)
 
-RateLimit global parameters can be set in the Gateway's TOML configuration file:
+RateLimit global parameters can be set in the Gateway's YAML configuration file:
 
-```toml
-[rate_limit]
-# CMS default precision (K units, 1K = 1024 slots, default 64K ≈ 4MB)
-default_estimator_slots_k = 64
+```yaml
+rate_limit:
+  # CMS default precision (K units, 1K = 1024 slots, default 64K ≈ 4MB)
+  default_estimator_slots_k: 64
 
-# CMS maximum precision (K units, default 1024K ≈ 64MB)
-max_estimator_slots_k = 1024
+  # CMS maximum precision (K units, default 1024K ≈ 64MB)
+  max_estimator_slots_k: 1024
 
-# Cluster scope static fallback (used when Controller is unavailable, default 1)
-gateway_instance_count = 4
+  # Cluster scope static fallback (used when Controller is unavailable, default 1)
+  gateway_instance_count: 4
 ```
 
 ### CMS Precision and Memory
@@ -464,7 +464,7 @@ Queries use the current active slot's count as the estimate.
 
 ## Notes
 
-1. **Cluster mode depends on Controller**: If the Controller is unavailable, gateway_count falls back to 1 or the TOML static value
+1. **Cluster mode depends on Controller**: If the Controller is unavailable, gateway_count falls back to 1 or the YAML static value
 2. **CMS bounded overestimation**: Near the rate limit threshold, there may be slight margin of error (always conservative); precision adjustable via `estimatorSlotsK`
 3. **scope and skewTolerance validation**: `skewTolerance` outside the 1.0~2.0 range is automatically clamped; Cluster scope requires `rate >= 2`
 4. **Independent plugin instances**: Different RateLimit plugin instances have separate CMS states and do not affect each other

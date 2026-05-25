@@ -30,7 +30,48 @@ mod tests {
 }
 ```
 
-A separate `tests/` directory is not used for unit tests.
+A top-level `tests/` directory (crate-level integration tests) is **not** used for unit tests: those files compile as a separate crate and can only reach the public API, so they cannot test private items.
+
+### Separating large test blocks (when a file is dominated by tests)
+
+When the inline test block makes a file hard to read/review, move the tests into a sibling **in-crate** test file. **Trigger** (guideline, not a hard gate): test lines > ~60% of the file **and** file > ~800 lines. Below that, keep tests inline — selectivity is what keeps the tree from filling with test files.
+
+The mechanism keeps the test module a **child of the source file** (via `#[path]`), so it retains full access to module-private items — no visibility changes are ever needed.
+
+**1. In the source file** `foo.rs`, replace the whole `#[cfg(test)] mod tests { ... }` block with this footer at the very bottom:
+
+```rust
+// Unit tests for this module live in `tests/foo_test.rs`.
+#[cfg(test)]
+#[path = "tests/foo_test.rs"]
+mod tests;
+```
+
+**2. The test file** `<source_dir>/tests/foo_test.rs` starts with a back-pointer header, then the moved body:
+
+```rust
+//! Unit tests for `foo.rs` (see `super`).
+use super::*;
+// ... the moved test body, verbatim ...
+```
+
+**Rules:**
+- Naming: `<source_stem>_test.rs` (singular `_test`). For a directory module whose code is in `mod.rs`, name it after the directory (`config/tests/config_test.rs`).
+- The `tests/` sub-dir needs **no** `mod.rs` — each file is pulled in only by its source file's `#[path]`. Multiple source files in one directory share one `tests/` dir (each is a distinct child module, no collision).
+- **Never** bump an item's visibility (`pub`/`pub(crate)`) just to relocate a test. If the move needs that, you are using the wrong mechanism — go back to `#[path]`.
+- Pure move: same test count in and out; no logic edits. Verify with `cargo test --lib <module>::tests` before/after.
+- `#[path]` resolves relative to the **directory of the source file**, so `#[path = "tests/foo_test.rs"]` written in `bar/foo.rs` loads `bar/tests/foo_test.rs`.
+
+**Finding separated tests (grep standard for AI/humans):**
+
+```bash
+# List every source file that has an externalized test file:
+rg -l '#\[path = "tests/.*_test\.rs"\]' src
+# Review only production changes (exclude separated tests + the integration harness):
+git diff main... -- ':(exclude)**/tests/*_test.rs' ':(exclude)**/tests.rs' ':(exclude)examples/code/**'
+```
+
+The leading `// Unit tests for this module live in ...` comment + the `#[path]` line are the machine-readable markers; AI review tooling should scope to non-test paths via the exclusion above.
 
 ### Distribution of test files
 

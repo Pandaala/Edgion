@@ -86,7 +86,7 @@
 | `setUserinfoHeader` | Boolean | `false` | 是否将 Userinfo 传给上游 |
 | `accessTokenInAuthorizationHeader` | Boolean | `false` | 是否将 Access Token 写入上游的 `Authorization: Bearer` 头 |
 | `claimsToHeaders` | Object | 无 | Claims 到 Header 的映射（支持 dot-notation，如 `user.name`） |
-| `storeClaimsInCtx` | Boolean | `false` | 是否将 Claims 存入上下文变量 |
+| `storeClaimsInCtx` | Boolean | `false` | 是否将 Claims 存入上下文变量 `oidc_claims`(供下游插件通过 `get_ctx_var` 读取;已从访问日志中排除,claims 不会被持久化) |
 | `maxHeaderValueBytes` | Integer | `4096` | 单个映射 Header 值的最大字节数 |
 | `maxTotalHeaderBytes` | Integer | `16384` | 所有映射 Header 的总最大字节数 |
 

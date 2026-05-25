@@ -95,14 +95,14 @@ access_log_sensitive:
 
 ## 配置参数
 
-### [gateway]
+### gateway
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `server_addr` | `String` | **必填** | Controller gRPC 地址，如 `http://127.0.0.1:50051` |
 | `admin_listen` | `String` | `0.0.0.0:5810` | Admin API 监听地址，默认 `0.0.0.0:5810`。Gateway Metrics API 固定 `:5901`，不受此字段影响。 |
 
-### [conf_sync_security.tls]
+### conf_sync_security.tls
 
 可选配置。启用后 Gateway 使用 mTLS 连接 Controller gRPC；不配置此 section 时，gRPC 以明文连接。
 
@@ -113,9 +113,9 @@ access_log_sensitive:
 | `ca` | `String` | — | CA 证书路径，用于验证 Controller 服务端证书 |
 | `skip_tls` | `Boolean` | `false` | 紧急降级开关，`true` 时跳过 TLS 以明文连接，会输出 ERROR 日志 |
 
-启用 mTLS 时，`[gateway].server_addr` 的 URI scheme 会自动切换为 `https://`。证书可通过 `edgion-cli gen-certs --output file --output-dir <dir>` 生成。
+启用 mTLS 时，`gateway.server_addr` 的 URI scheme 会自动切换为 `https://`。证书可通过 `edgion-cli gen-certs --output file --output-dir <dir>` 生成。
 
-### [logging]
+### logging
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -126,7 +126,7 @@ access_log_sensitive:
 | `console` | `Boolean` | `true` | 是否同时输出到控制台 |
 | `buffer_size` | `Integer` | `10000` | 异步日志缓冲区大小 |
 
-### [server]
+### server
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -147,7 +147,7 @@ access_log_sensitive:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `enabled` | `Boolean` | — | 是否启用此类日志 |
-| `output.localFile.path` | `String` | — | 日志文件路径（相对 work_dir），与 `[logging].log_dir` 无关 |
+| `output.localFile.path` | `String` | — | 日志文件路径（相对 work_dir），与 `logging.log_dir` 无关 |
 | `output.localFile.queue_size` | `Integer` | CPU 核心数 × 10000 | 写入队列大小 |
 | `output.localFile.rotation.strategy` | `Enum` | — | 轮转策略（见下表） |
 | `output.localFile.rotation.max_files` | `Integer` | — | 保留的轮转文件数，`0` 表示无限 |
@@ -160,9 +160,9 @@ access_log_sensitive:
 | `"daily"` | 每日零点轮转 |
 | `"hourly"` | 每小时轮转 |
 | `"never"` | 不轮转 |
-| `{ Size = 104857600 }` | 按文件大小轮转（字节），默认 100 MB |
+| `{ Size: 104857600 }` | 按文件大小轮转（字节），默认 100 MB |
 
-### [rate_limit]
+### rate_limit
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -170,7 +170,7 @@ access_log_sensitive:
 | `max_estimator_slots_k` | `Integer` | `1024` | CMS 最大 slot 数上限 |
 | `gateway_instance_count` | `Integer` | `1` | Gateway 实例数，集群限流时作为分母，**集群部署时必须设置正确值** |
 
-### [access_log_sensitive]
+### access_log_sensitive
 
 控制 access log、ssl.log、plugin log 中已标注敏感字段的脱敏行为。**默认关闭**——所有敏感字段以明文输出，与历史行为一致。
 

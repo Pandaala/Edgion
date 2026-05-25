@@ -40,7 +40,7 @@ Use cases:
 | `payloadToHeaders` | map | - | Map decrypted payload fields to upstream headers |
 | `maxHeaderValueBytes` | integer | `4096` | Maximum size per mapped header value |
 | `maxTotalHeaderBytes` | integer | `16384` | Maximum total size for all mapped headers |
-| `storePayloadInCtx` | bool | `false` | Whether to store in ctx variable `jwe_payload` |
+| `storePayloadInCtx` | bool | `false` | Whether to store in ctx variable `jwe_payload` (read by downstream plugins via `get_ctx_var`; excluded from the access log so the decrypted payload is not persisted) |
 | `authFailureDelayMs` | integer | `0` | Failure delay in milliseconds |
 
 ## Example Configuration

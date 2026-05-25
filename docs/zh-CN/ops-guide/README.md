@@ -37,7 +37,7 @@
 ### 配置参考
 
 - [Controller 配置](./configuration/controller-config.md)：Controller TOML 进程配置参数。
-- [Gateway 配置](./configuration/gateway-config.md)：Gateway TOML 进程配置参数。
+- [Gateway 配置](./configuration/gateway-config.md)：Gateway YAML 进程配置参数。
 - [EdgionGatewayConfig](./configuration/edgion-gateway-config.md)：GatewayClass 级运行时配置（超时、真实 IP、全局插件等）。
 
 ### 运维工具

@@ -76,7 +76,7 @@ stringData:
 | `lifetimeGracePeriod` | Integer | `0` | Clock skew tolerance for exp/nbf validation (seconds) |
 | `base64Secret` | Boolean | `false` | Whether the HS* secret value is base64-encoded |
 | `maximumExpiration` | Integer | `0` | Maximum allowed exp duration from now (seconds). `0` disables the check |
-| `storeClaimsInCtx` | Boolean | `false` | Store decoded claims in the ctx variable `jwt_claims` |
+| `storeClaimsInCtx` | Boolean | `false` | Store decoded claims in the ctx variable `jwt_claims` (read by downstream plugins via `get_ctx_var`; excluded from the access log so claims are not persisted) |
 | `claimsToHeaders` | Object | None | Map JWT claim names to upstream request header names |
 
 **Constraint**: `issuerGroups` is required when `anonymous` is not set.

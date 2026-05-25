@@ -37,7 +37,7 @@ Each access log entry must contain enough information for an operator to locate 
 | `client-addr` | Direct TCP IP |
 | `remote-addr` | Real client IP (after RealIp plugin processing) |
 | `host` / `path` | Request host and the **normalized** current path (no query) |
-| `request_uri` | **Optional** — client-entry **raw URI** (raw path + raw query); only emitted when `[access_log_options] include_raw_uri = true` |
+| `request_uri` | **Optional** — client-entry **raw URI** (raw path + raw query); only emitted when `access_log_options.includeRawUri: true` |
 | `x-trace-id` | trace id (passed from client or auto-generated UUID) |
 | `status` | Final response status code |
 | `sni` | TLS SNI (HTTPS connections) |
@@ -321,9 +321,9 @@ The JSON access log emits only the **normalized** path by default; no raw-form f
 
 When "the full URI sent by the client" (with query) is needed, enable the global option:
 
-```toml
-[access_log_options]
-include_raw_uri = true
+```yaml
+access_log_options:
+  includeRawUri: true
 ```
 
 An additional `request_uri` field is emitted, valued as entry raw path + entry raw query:
