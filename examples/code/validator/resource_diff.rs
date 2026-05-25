@@ -315,6 +315,26 @@ const RESOURCE_TYPES: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// Compute the set difference between controller-side and gateway-side resources
+/// of a single kind. Returns a `ResourceDiff` (which may be empty). Pure: no I/O.
+fn compute_resource_diff(kind: &str, controller: &[Resource], gateway: &[Resource]) -> ResourceDiff {
+    let controller_ids: HashSet<ResourceId> = controller
+        .iter()
+        .map(|r| ResourceId::new(kind, r.metadata.name.clone(), r.metadata.namespace.clone()))
+        .collect();
+    let gateway_ids: HashSet<ResourceId> = gateway
+        .iter()
+        .map(|r| ResourceId::new(kind, r.metadata.name.clone(), r.metadata.namespace.clone()))
+        .collect();
+    let missing_in_gateway: Vec<String> = controller_ids.difference(&gateway_ids).map(|id| id.display()).collect();
+    let extra_in_gateway: Vec<String> = gateway_ids.difference(&controller_ids).map(|id| id.display()).collect();
+    ResourceDiff {
+        kind: kind.to_string(),
+        missing_in_gateway,
+        extra_in_gateway,
+    }
+}
+
 /// Note: Gateway and GatewayClass resources are Kubernetes-level resources managed by Controller only.
 /// They are not synced to Gateway's config client, so we skip comparing them.
 ///
@@ -344,32 +364,33 @@ async fn compare_resources(client: &AdminClient, skip_kinds: &[String]) -> DiffR
             }
         };
 
-        // Extract resource IDs
-        let controller_ids: HashSet<ResourceId> = controller_resources
-            .iter()
-            .map(|r| ResourceId::new(kind, r.metadata.name.clone(), r.metadata.namespace.clone()))
-            .collect();
-
-        let gateway_ids: HashSet<ResourceId> = gateway_resources
-            .iter()
-            .map(|r| ResourceId::new(kind, r.metadata.name.clone(), r.metadata.namespace.clone()))
-            .collect();
-
-        // Find differences
-        let missing_in_gateway: Vec<String> = controller_ids.difference(&gateway_ids).map(|id| id.display()).collect();
-
-        let extra_in_gateway: Vec<String> = gateway_ids.difference(&controller_ids).map(|id| id.display()).collect();
-
-        if !missing_in_gateway.is_empty() || !extra_in_gateway.is_empty() {
-            result.differences.push(ResourceDiff {
-                kind: kind.to_string(),
-                missing_in_gateway,
-                extra_in_gateway,
-            });
+        let diff = compute_resource_diff(kind, &controller_resources, &gateway_resources);
+        if !diff.missing_in_gateway.is_empty() || !diff.extra_in_gateway.is_empty() {
+            result.differences.push(diff);
         }
     }
 
     result
+}
+
+/// For a list of `certificateRefs` JSON values, return the `ns/name` of each ref
+/// whose Secret is not present in `secret_ids`. A ref with no explicit `namespace`
+/// falls back to `default_ns`. Refs without a `name` are skipped. Pure: no I/O.
+fn collect_missing_cert_refs(
+    cert_refs: &[serde_json::Value],
+    default_ns: &str,
+    secret_ids: &HashSet<(String, String)>,
+) -> Vec<String> {
+    let mut missing = Vec::new();
+    for cert_ref in cert_refs {
+        if let Some(name) = cert_ref.get("name").and_then(|v| v.as_str()) {
+            let ns = cert_ref.get("namespace").and_then(|v| v.as_str()).unwrap_or(default_ns);
+            if !secret_ids.contains(&(ns.to_string(), name.to_string())) {
+                missing.push(format!("{}/{}", ns, name));
+            }
+        }
+    }
+    missing
 }
 
 /// Validate Secret references in resources
@@ -405,18 +426,8 @@ async fn validate_secret_references(client: &AdminClient) -> Vec<SecretIssue> {
             // Extract certificate_refs from spec
             if let Some(spec) = tls.rest.get("spec") {
                 if let Some(cert_refs) = spec.get("certificateRefs").and_then(|v| v.as_array()) {
-                    for cert_ref in cert_refs {
-                        if let (Some(name), namespace) = (
-                            cert_ref.get("name").and_then(|v| v.as_str()),
-                            cert_ref.get("namespace").and_then(|v| v.as_str()),
-                        ) {
-                            let ns = namespace
-                                .unwrap_or_else(|| tls.metadata.namespace.as_deref().unwrap_or("edgion-default"));
-                            if !secret_ids.contains(&(ns.to_string(), name.to_string())) {
-                                missing.push(format!("{}/{}", ns, name));
-                            }
-                        }
-                    }
+                    let default_ns = tls.metadata.namespace.as_deref().unwrap_or("edgion-default");
+                    missing.extend(collect_missing_cert_refs(cert_refs, default_ns, &secret_ids));
                 }
             }
 
@@ -444,17 +455,7 @@ async fn validate_secret_references(client: &AdminClient) -> Vec<SecretIssue> {
                     for listener in listeners {
                         if let Some(tls) = listener.get("tls") {
                             if let Some(cert_refs) = tls.get("certificateRefs").and_then(|v| v.as_array()) {
-                                for cert_ref in cert_refs {
-                                    if let (Some(name), namespace) = (
-                                        cert_ref.get("name").and_then(|v| v.as_str()),
-                                        cert_ref.get("namespace").and_then(|v| v.as_str()),
-                                    ) {
-                                        let ns = namespace.unwrap_or("edgion-default");
-                                        if !secret_ids.contains(&(ns.to_string(), name.to_string())) {
-                                            missing.push(format!("{}/{}", ns, name));
-                                        }
-                                    }
-                                }
+                                missing.extend(collect_missing_cert_refs(cert_refs, "edgion-default", &secret_ids));
                             }
                         }
                     }
@@ -655,5 +656,245 @@ async fn main() {
         process::exit(1);
     } else {
         process::exit(0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a `Resource` from a name and optional namespace (used by several tests below).
+    fn res(name: &str, namespace: Option<&str>) -> Resource {
+        let meta = match namespace {
+            Some(ns) => serde_json::json!({"name": name, "namespace": ns}),
+            None => serde_json::json!({"name": name}),
+        };
+        serde_json::from_value(serde_json::json!({"metadata": meta})).unwrap()
+    }
+
+    // -------------------------------------------------------------------------
+    // ResourceId tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn resource_id_display_with_namespace() {
+        let id = ResourceId::new("HTTPRoute", "my-route".to_string(), Some("prod".to_string()));
+        assert_eq!(id.display(), "prod/my-route");
+    }
+
+    #[test]
+    fn resource_id_display_without_namespace() {
+        let id = ResourceId::new("Gateway", "gw".to_string(), None);
+        assert_eq!(id.display(), "gw");
+    }
+
+    #[test]
+    fn resource_id_equal_ids_hash_to_one_slot() {
+        let id1 = ResourceId::new("HTTPRoute", "r".to_string(), Some("ns".to_string()));
+        let id2 = ResourceId::new("HTTPRoute", "r".to_string(), Some("ns".to_string()));
+        assert_eq!(id1, id2);
+        let mut set = HashSet::new();
+        set.insert(id1);
+        set.insert(id2);
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn resource_id_different_namespaces_are_not_equal() {
+        let id1 = ResourceId::new("HTTPRoute", "r".to_string(), Some("ns-a".to_string()));
+        let id2 = ResourceId::new("HTTPRoute", "r".to_string(), Some("ns-b".to_string()));
+        assert_ne!(id1, id2);
+        let mut set = HashSet::new();
+        set.insert(id1);
+        set.insert(id2);
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn resource_id_some_ns_vs_none_not_equal() {
+        let id1 = ResourceId::new("HTTPRoute", "r".to_string(), Some("ns".to_string()));
+        let id2 = ResourceId::new("HTTPRoute", "r".to_string(), None);
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn resource_id_different_kind_same_name_ns_not_equal() {
+        let id1 = ResourceId::new("HTTPRoute", "r".to_string(), Some("ns".to_string()));
+        let id2 = ResourceId::new("GRPCRoute", "r".to_string(), Some("ns".to_string()));
+        assert_ne!(id1, id2);
+    }
+
+    // -------------------------------------------------------------------------
+    // compute_resource_diff tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn compute_resource_diff_identical_sets_empty() {
+        let controller = vec![res("route-a", Some("ns")), res("route-b", Some("ns"))];
+        let gateway = vec![res("route-a", Some("ns")), res("route-b", Some("ns"))];
+        let diff = compute_resource_diff("HTTPRoute", &controller, &gateway);
+        assert!(diff.missing_in_gateway.is_empty());
+        assert!(diff.extra_in_gateway.is_empty());
+    }
+
+    #[test]
+    fn compute_resource_diff_missing_in_gateway() {
+        let controller = vec![res("route-a", Some("ns")), res("route-b", Some("ns"))];
+        let gateway = vec![res("route-a", Some("ns"))];
+        let diff = compute_resource_diff("HTTPRoute", &controller, &gateway);
+        assert_eq!(diff.missing_in_gateway, vec!["ns/route-b"]);
+        assert!(diff.extra_in_gateway.is_empty());
+    }
+
+    #[test]
+    fn compute_resource_diff_extra_in_gateway() {
+        let controller = vec![res("route-a", Some("ns"))];
+        let gateway = vec![res("route-a", Some("ns")), res("route-b", Some("ns"))];
+        let diff = compute_resource_diff("HTTPRoute", &controller, &gateway);
+        assert!(diff.missing_in_gateway.is_empty());
+        assert_eq!(diff.extra_in_gateway, vec!["ns/route-b"]);
+    }
+
+    #[test]
+    fn compute_resource_diff_same_name_different_ns_both_missing_and_extra() {
+        // controller has "route" in "ns-ctrl"; gateway has "route" in "ns-gw"
+        // They do NOT match (namespace differs), so the controller one is missing
+        // from gateway and the gateway one is extra.
+        let controller = vec![res("route", Some("ns-ctrl"))];
+        let gateway = vec![res("route", Some("ns-gw"))];
+        let diff = compute_resource_diff("HTTPRoute", &controller, &gateway);
+        assert_eq!(diff.missing_in_gateway, vec!["ns-ctrl/route"]);
+        assert_eq!(diff.extra_in_gateway, vec!["ns-gw/route"]);
+    }
+
+    #[test]
+    fn compute_resource_diff_kind_field_matches_input() {
+        let diff = compute_resource_diff("TCPRoute", &[], &[]);
+        assert_eq!(diff.kind, "TCPRoute");
+    }
+
+    // -------------------------------------------------------------------------
+    // DiffResult tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn diff_result_default_has_no_issues() {
+        let result = DiffResult::default();
+        assert!(!result.has_issues());
+        assert_eq!(result.total_issues(), 0);
+    }
+
+    #[test]
+    fn diff_result_with_resource_diff_counts_individual_resources() {
+        let mut result = DiffResult::default();
+        result.differences.push(ResourceDiff {
+            kind: "HTTPRoute".to_string(),
+            missing_in_gateway: vec!["ns/a".to_string(), "ns/b".to_string()],
+            extra_in_gateway: vec!["ns/c".to_string()],
+        });
+        assert_eq!(result.total_issues(), 3);
+        assert!(result.has_issues());
+    }
+
+    #[test]
+    fn diff_result_secret_issue_counts_as_one_not_by_missing_count() {
+        let mut result = DiffResult::default();
+        result.secret_issues.push(SecretIssue {
+            resource: "some-tls".to_string(),
+            kind: "EdgionTls".to_string(),
+            missing_secrets: vec!["ns/sec-a".to_string(), "ns/sec-b".to_string(), "ns/sec-c".to_string()],
+        });
+        // The SecretIssue counts as 1 (not 3) toward total_issues.
+        assert_eq!(result.total_issues(), 1);
+        assert!(result.has_issues());
+    }
+
+    #[test]
+    fn diff_result_mixed_diff_and_secret_issue() {
+        let mut result = DiffResult::default();
+        result.differences.push(ResourceDiff {
+            kind: "HTTPRoute".to_string(),
+            missing_in_gateway: vec!["ns/a".to_string()],
+            extra_in_gateway: vec![],
+        });
+        result.secret_issues.push(SecretIssue {
+            resource: "some-tls".to_string(),
+            kind: "EdgionTls".to_string(),
+            missing_secrets: vec!["ns/sec".to_string()],
+        });
+        assert_eq!(result.total_issues(), 2);
+    }
+
+    // -------------------------------------------------------------------------
+    // Resource deserialization tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn resource_deserializes_with_extra_top_level_keys() {
+        let v = serde_json::json!({
+            "metadata": {"name": "my-route", "namespace": "default"},
+            "spec": {"hostnames": ["example.com"]}
+        });
+        let r: Resource = serde_json::from_value(v).unwrap();
+        assert_eq!(r.metadata.name, "my-route");
+        assert_eq!(r.metadata.namespace.as_deref(), Some("default"));
+        // The extra "spec" key is captured by the flattened rest field.
+        assert!(r.rest.get("spec").is_some());
+    }
+
+    #[test]
+    fn resource_missing_metadata_fails_to_deserialize() {
+        let v = serde_json::json!({"spec": {"hostnames": ["example.com"]}});
+        assert!(serde_json::from_value::<Resource>(v).is_err());
+    }
+
+    // -------------------------------------------------------------------------
+    // collect_missing_cert_refs tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn collect_missing_cert_refs_present_secret_not_reported() {
+        let mut secret_ids = HashSet::new();
+        secret_ids.insert(("edgion-default".to_string(), "my-cert".to_string()));
+        let cert_refs = vec![serde_json::json!({"name": "my-cert"})];
+        let missing = collect_missing_cert_refs(&cert_refs, "edgion-default", &secret_ids);
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn collect_missing_cert_refs_absent_secret_reported() {
+        let secret_ids: HashSet<(String, String)> = HashSet::new();
+        let cert_refs = vec![serde_json::json!({"name": "missing-cert"})];
+        let missing = collect_missing_cert_refs(&cert_refs, "edgion-default", &secret_ids);
+        assert_eq!(missing, vec!["edgion-default/missing-cert"]);
+    }
+
+    #[test]
+    fn collect_missing_cert_refs_explicit_namespace_overrides_default() {
+        let mut secret_ids = HashSet::new();
+        secret_ids.insert(("other-ns".to_string(), "my-cert".to_string()));
+        let cert_refs = vec![serde_json::json!({"name": "my-cert", "namespace": "other-ns"})];
+        // The ref carries an explicit namespace "other-ns", which matches the secret.
+        let missing = collect_missing_cert_refs(&cert_refs, "edgion-default", &secret_ids);
+        assert!(missing.is_empty());
+        // Sanity: without the secret under "other-ns", it would be reported.
+        let empty_ids: HashSet<(String, String)> = HashSet::new();
+        let missing2 = collect_missing_cert_refs(&cert_refs, "edgion-default", &empty_ids);
+        assert_eq!(missing2, vec!["other-ns/my-cert"]);
+    }
+
+    #[test]
+    fn collect_missing_cert_refs_no_name_key_skipped() {
+        let secret_ids: HashSet<(String, String)> = HashSet::new();
+        let cert_refs = vec![serde_json::json!({"namespace": "ns"})]; // no "name"
+        let missing = collect_missing_cert_refs(&cert_refs, "edgion-default", &secret_ids);
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn collect_missing_cert_refs_empty_slice_returns_empty() {
+        let secret_ids: HashSet<(String, String)> = HashSet::new();
+        let missing = collect_missing_cert_refs(&[], "edgion-default", &secret_ids);
+        assert!(missing.is_empty());
     }
 }

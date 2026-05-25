@@ -8,4 +8,4 @@ mod stream_plugins;
 // Test suite
 pub use basic::TcpTestSuite;
 pub use global_connection_ip_restriction::GcirEnforcementTestSuite;
-pub use stream_plugins::TcpStreamPluginsTestSuite;
+pub use stream_plugins::{TcpEspReloadAllowTestSuite, TcpEspReloadDenyTestSuite, TcpStreamPluginsTestSuite};

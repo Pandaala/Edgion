@@ -26,7 +26,10 @@ pub use http_route::{
 
 pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite, GrpcUnmatchedRouteTestSuite, GrpcWebTestSuite};
 
-pub use tcp_route::{GcirEnforcementTestSuite, TcpStreamPluginsTestSuite, TcpTestSuite};
+pub use tcp_route::{
+    GcirEnforcementTestSuite, TcpEspReloadAllowTestSuite, TcpEspReloadDenyTestSuite, TcpStreamPluginsTestSuite,
+    TcpTestSuite,
+};
 
 pub use tls_route::{
     TlsBothAbsentParentRefTestSuite, TlsMultiSniTestSuite, TlsPassthroughTestSuite, TlsProxyProtocolTestSuite,

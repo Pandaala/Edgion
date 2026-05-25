@@ -1,5 +1,5 @@
 {
-  "current_max": 31387,
+  "current_max": 31388,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -129,6 +129,9 @@
       "tcp": 31274,
       "tcp_filtered": 31275,
       "tcp_fail_close": 31273
+    },
+    "TCPRoute/StreamPlugins/Dynamic": {
+      "tcp": 31388
     },
     "Gateway/AllowedRoutes/Selector": {
       "http": 31276

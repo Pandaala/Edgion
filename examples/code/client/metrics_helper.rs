@@ -649,4 +649,246 @@ mod tests {
         assert!(analysis.is_balanced);
         assert!(analysis.max_variance <= 0.1);
     }
+
+    // ---- fixture helper ----
+
+    fn metric(backend_ns: &str, backend_name: &str, td: Option<TestData>, count: u64) -> BackendMetric {
+        BackendMetric {
+            gateway_ns: "default".to_string(),
+            gateway_name: "gw".to_string(),
+            backend_ns: backend_ns.to_string(),
+            backend_name: backend_name.to_string(),
+            protocol: "http".to_string(),
+            status: "2xx".to_string(),
+            test_key: "test".to_string(),
+            test_data: td,
+            count,
+        }
+    }
+
+    // ---- parse_labels: escape decoding ----
+
+    #[test]
+    fn test_parse_labels_escape_decoding() {
+        // The raw Rust string r#"..."# gives us the literal bytes: a\nb\tc\\d\"e
+        // parse_labels should decode: \n -> newline, \t -> tab, \\ -> backslash, \" -> quote
+        let labels_str = r#"key="a\nb\tc\\d\"e""#;
+        let labels = parse_labels(labels_str);
+        let expected = "a\nb\tc\\d\"e";
+        assert_eq!(labels.get("key").map(String::as_str), Some(expected));
+    }
+
+    #[test]
+    fn test_parse_labels_unknown_escape_kept_literally() {
+        // \x is not a recognized escape; it should be kept as backslash + 'x'
+        let labels_str = r#"key="a\xb""#;
+        let labels = parse_labels(labels_str);
+        assert_eq!(labels.get("key").map(String::as_str), Some("a\\xb"));
+    }
+
+    #[test]
+    fn test_parse_labels_comma_inside_quotes_is_part_of_value() {
+        // A comma inside a quoted value must NOT split into multiple labels
+        let labels_str = r#"key="a,b,c""#;
+        let labels = parse_labels(labels_str);
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels.get("key").map(String::as_str), Some("a,b,c"));
+    }
+
+    #[test]
+    fn test_parse_labels_empty_value() {
+        // An empty quoted value should produce a present-but-empty label
+        let labels_str = r#"key="""#;
+        let labels = parse_labels(labels_str);
+        assert!(labels.contains_key("key"), "key should be present");
+        assert_eq!(labels.get("key").map(String::as_str), Some(""));
+    }
+
+    // ---- parse_metric_line edge cases ----
+
+    #[test]
+    fn test_parse_metric_line_no_braces_returns_none() {
+        // A line without braces has no label block and should return None
+        let line = "edgion_backend_requests_total 42";
+        assert!(parse_metric_line(line).is_none());
+    }
+
+    #[test]
+    fn test_parse_metric_line_non_numeric_value_returns_none() {
+        let line = r#"edgion_backend_requests_total{a="b"} notanumber"#;
+        assert!(parse_metric_line(line).is_none());
+    }
+
+    #[test]
+    fn test_parse_metric_line_empty_test_data_yields_none_test_data() {
+        // test_data="" should produce test_data: None, but the metric itself must still parse
+        let line = r#"edgion_backend_requests_total{gateway_namespace="default",gateway_name="gw",backend_namespace="ns",backend_name="svc",protocol="http",status="2xx",test_key="t1",test_data=""} 77"#;
+        let metric = parse_metric_line(line);
+        assert!(metric.is_some(), "metric line must parse successfully");
+        let m = metric.unwrap();
+        assert_eq!(m.count, 77);
+        assert!(m.test_data.is_none(), "empty test_data string should yield None");
+    }
+
+    #[test]
+    fn test_parse_metric_line_invalid_test_data_json_yields_none_test_data() {
+        // test_data contains malformed JSON; serde_json should fail silently and test_data == None
+        let line = r#"edgion_backend_requests_total{gateway_namespace="default",gateway_name="gw",backend_namespace="ns",backend_name="svc",protocol="http",status="2xx",test_key="t2",test_data="{not json}"} 33"#;
+        let metric = parse_metric_line(line);
+        assert!(metric.is_some(), "metric line must parse successfully");
+        let m = metric.unwrap();
+        assert_eq!(m.count, 33);
+        assert!(m.test_data.is_none(), "invalid JSON in test_data should yield None");
+    }
+
+    // ---- parse_backend_metrics: filtering ----
+
+    #[test]
+    fn test_parse_backend_metrics_filters_and_skips() {
+        let input = concat!(
+            "# HELP edgion_backend_requests_total Total backend requests\n",
+            "\n",
+            "some_other_metric{foo=\"bar\"} 5\n",
+            r#"edgion_backend_requests_total{gateway_namespace="default",gateway_name="gw",backend_namespace="ns",backend_name="svc",protocol="http",status="2xx",test_key="k",test_data=""} 10"#,
+            "\n",
+            r#"edgion_backend_requests_total{gateway_namespace="default",gateway_name="gw",backend_namespace="ns",backend_name="svc",protocol="http",status="4xx",test_key="k",test_data=""} 3"#,
+            "\n",
+        );
+
+        let metrics = parse_backend_metrics(input).unwrap();
+        assert_eq!(
+            metrics.len(),
+            2,
+            "only edgion_backend_requests_total lines should be kept"
+        );
+        let counts: Vec<u64> = {
+            let mut c: Vec<u64> = metrics.iter().map(|m| m.count).collect();
+            c.sort_unstable();
+            c
+        };
+        assert_eq!(counts, vec![3, 10]);
+    }
+
+    // ---- analyze_chash_consistency ----
+
+    #[test]
+    fn test_analyze_chash_consistency_all_consistent() {
+        // Two metrics, same hash_key, same endpoint -> fully consistent
+        let td1 = TestData {
+            ip: Some("10.0.0.1".to_string()),
+            port: Some(80),
+            hash_key: Some("k1".to_string()),
+            ..Default::default()
+        };
+        let td2 = TestData {
+            ip: Some("10.0.0.1".to_string()),
+            port: Some(80),
+            hash_key: Some("k1".to_string()),
+            ..Default::default()
+        };
+        let metrics = vec![metric("ns", "svc", Some(td1), 3), metric("ns", "svc", Some(td2), 2)];
+
+        let analysis = analyze_chash_consistency(&metrics).unwrap();
+        assert_eq!(analysis.unique_keys, 1);
+        assert!(analysis.inconsistent_keys.is_empty());
+        assert!(analysis.is_consistent);
+        assert!((analysis.consistency_rate - 1.0).abs() < 1e-9);
+        assert_eq!(
+            analysis.key_to_endpoint.get("k1").map(String::as_str),
+            Some("10.0.0.1:80")
+        );
+    }
+
+    #[test]
+    fn test_analyze_chash_consistency_inconsistent_key() {
+        // hash_key k1 splits across two endpoints: 10.0.0.1:80 (7) and 10.0.0.2:80 (3)
+        // majority endpoint is 10.0.0.1:80; consistency_rate = 7/10 = 0.7
+        let td_majority = TestData {
+            ip: Some("10.0.0.1".to_string()),
+            port: Some(80),
+            hash_key: Some("k1".to_string()),
+            ..Default::default()
+        };
+        let td_minority = TestData {
+            ip: Some("10.0.0.2".to_string()),
+            port: Some(80),
+            hash_key: Some("k1".to_string()),
+            ..Default::default()
+        };
+        let metrics = vec![
+            metric("ns", "svc", Some(td_majority), 7),
+            metric("ns", "svc", Some(td_minority), 3),
+        ];
+
+        let analysis = analyze_chash_consistency(&metrics).unwrap();
+        assert!(analysis.inconsistent_keys.contains(&"k1".to_string()));
+        assert!(!analysis.is_consistent);
+        assert_eq!(
+            analysis.key_to_endpoint.get("k1").map(String::as_str),
+            Some("10.0.0.1:80"),
+            "majority endpoint should be selected"
+        );
+        assert!(
+            (analysis.consistency_rate - 0.7).abs() < 1e-9,
+            "consistency_rate should be 0.7, got {}",
+            analysis.consistency_rate
+        );
+    }
+
+    #[test]
+    fn test_analyze_chash_consistency_no_keyed_requests() {
+        // Metrics without hash_key: unique_keys==0, consistency_rate==1.0, is_consistent==false
+        let td = TestData {
+            ip: Some("10.0.0.1".to_string()),
+            port: Some(80),
+            hash_key: None, // no hash key
+            ..Default::default()
+        };
+        let metrics = vec![metric("ns", "svc", Some(td), 10)];
+
+        let analysis = analyze_chash_consistency(&metrics).unwrap();
+        assert_eq!(analysis.unique_keys, 0);
+        assert!((analysis.consistency_rate - 1.0).abs() < 1e-9);
+        assert!(!analysis.is_consistent, "is_consistent requires unique_keys > 0");
+    }
+
+    // ---- analyze_latency ----
+
+    #[test]
+    fn test_analyze_latency_expands_by_count_and_computes_stats() {
+        // latency_ms=100, count=2 -> two samples of 100
+        // latency_ms=200, count=1 -> one sample of 200
+        // sorted samples: [100, 100, 200]; min=100, max=200, avg=400/3 ~133.333
+        let td1 = TestData {
+            latency_ms: Some(100),
+            ..Default::default()
+        };
+        let td2 = TestData {
+            latency_ms: Some(200),
+            ..Default::default()
+        };
+        let metrics = vec![metric("ns", "svc", Some(td1), 2), metric("ns", "svc", Some(td2), 1)];
+
+        let analysis = analyze_latency(&metrics).unwrap();
+        assert_eq!(analysis.total_requests, 3);
+        assert_eq!(analysis.min_latency_ms, 100);
+        assert_eq!(analysis.max_latency_ms, 200);
+        assert_eq!(analysis.samples, vec![100, 100, 200]);
+        let expected_avg = 400.0 / 3.0;
+        assert!(
+            (analysis.avg_latency_ms - expected_avg).abs() < 1e-9,
+            "avg should be ~133.333, got {}",
+            analysis.avg_latency_ms
+        );
+    }
+
+    #[test]
+    fn test_analyze_latency_empty_when_no_latency_data() {
+        // Metrics with test_data=None should produce LatencyAnalysis::default()
+        let metrics = vec![metric("ns", "svc", None, 5)];
+
+        let analysis = analyze_latency(&metrics).unwrap();
+        assert_eq!(analysis.total_requests, 0);
+        assert!(analysis.samples.is_empty());
+    }
 }

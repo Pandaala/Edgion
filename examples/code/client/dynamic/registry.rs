@@ -14,6 +14,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::btlsp_ref_flap::SCENARIO,
         crate::dynamic::scenarios::pmd_ref_flap::SCENARIO,
         crate::dynamic::scenarios::sp_backend_change::SCENARIO,
+        crate::dynamic::scenarios::tcp_esp_reload::SCENARIO,
     ]
 }
 

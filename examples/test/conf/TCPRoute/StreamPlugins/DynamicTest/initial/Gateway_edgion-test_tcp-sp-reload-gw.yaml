@@ -1,0 +1,12 @@
+# Dynamic ESP reload scenario: single TCP listener; ESP allow-list flaps across phases.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tcp-sp-reload-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tcp-sp-reload
+      protocol: TCP
+      port: 31388

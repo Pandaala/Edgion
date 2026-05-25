@@ -143,7 +143,7 @@ impl AccessLogAnalyzer {
         report.push_str("============================================================\n\n");
 
         for res in results {
-            report.push_str(&format!("📊 {}  ({})\n", res.test_type.replace("-", ""), res.test_type));
+            report.push_str(&format!("📊 {} ({})\n", res.test_type.replace("-", ""), res.test_type));
             report.push_str(&format!("   Total requests: {}\n", res.total_requests));
 
             if !res.lb_policy_counts.is_empty() {
@@ -161,7 +161,7 @@ impl AccessLogAnalyzer {
             }
 
             if !res.backend_counts.is_empty() {
-                report.push_str("   :\n");
+                report.push_str("   Backend distribution:\n");
                 for (backend, count) in &res.backend_counts {
                     report.push_str(&format!(
                         "     - {}: {} ({:.1}%)\n",
@@ -171,25 +171,28 @@ impl AccessLogAnalyzer {
                     ));
                 }
             } else {
-                report.push_str("   : not recorded\n");
+                report.push_str("   Backend distribution: not recorded\n");
             }
 
             if res.errors.is_empty() {
-                report.push_str("   ✅ : LB \n");
+                report.push_str("   ✅ Status: LB policy verified\n");
             } else {
-                report.push_str(&format!("   ❌ : {:?}\n", res.errors));
+                report.push_str(&format!("   ❌ Errors: {:?}\n", res.errors));
             }
             report.push('\n');
         }
 
         report.push_str("============================================================\n");
-        report.push_str(":\n");
+        report.push_str("Summary:\n");
         for res in results {
             if res.errors.is_empty() {
-                report.push_str(&format!("  ✅ {} : Passed - LB \n", res.test_type.replace("-", "")));
+                report.push_str(&format!(
+                    "  ✅ {}: Passed - LB policy verified\n",
+                    res.test_type.replace("-", "")
+                ));
             } else {
                 report.push_str(&format!(
-                    "  ❌ {} :  - {:?}\n",
+                    "  ❌ {}: Failed - {:?}\n",
                     res.test_type.replace("-", ""),
                     res.errors
                 ));
@@ -206,6 +209,17 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
+    // Helper: write lines into a temp file and return (file, analyzer).
+    // The NamedTempFile must outlive the analyze_by_prefix call, so it is
+    // returned together with the analyzer rather than being dropped here.
+    fn analyzer_for(lines: &str) -> (NamedTempFile, AccessLogAnalyzer) {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(lines.as_bytes()).unwrap();
+        f.flush().unwrap();
+        let a = AccessLogAnalyzer::new(f.path());
+        (f, a)
+    }
+
     #[test]
     fn test_parse_access_log() {
         let mut temp_file = NamedTempFile::new().unwrap();
@@ -221,5 +235,189 @@ mod tests {
         assert_eq!(result.total_requests, 2);
         assert_eq!(*result.lb_policy_counts.get("RoundRobin").unwrap(), 2);
         assert_eq!(result.backend_counts.len(), 2);
+    }
+
+    // Test 1: prefix filtering — only entries whose trace-id starts with the
+    // given prefix are counted; the other entry must not appear in results.
+    #[test]
+    fn test_prefix_filtering_keeps_only_matching_entries() {
+        let lines = concat!(
+            r#"{"request_info":{"x-trace-id":"aa-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":8001,"lb_policy":"RoundRobin"}]}}"#,
+            "\n",
+            r#"{"request_info":{"x-trace-id":"bb-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.2","port":8002,"lb_policy":"RoundRobin"}]}}"#,
+            "\n",
+        );
+        let (_f, a) = analyzer_for(lines);
+        let result = a.analyze_by_prefix("aa").unwrap();
+
+        assert_eq!(result.total_requests, 1);
+        assert!(result.backend_counts.contains_key("10.0.0.1:8001"));
+        assert!(!result.backend_counts.contains_key("10.0.0.2:8002"));
+    }
+
+    // Test 2: lb_policy that is an object with a "ConsistentHash" key maps to
+    // the string "ConsistentHash".
+    #[test]
+    fn test_lb_policy_consistent_hash_object() {
+        let lines = concat!(
+            r#"{"request_info":{"x-trace-id":"ch-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9000,"lb_policy":{"ConsistentHash":{"hash_on":"header"}}}]}}"#,
+            "\n",
+        );
+        let (_f, a) = analyzer_for(lines);
+        let result = a.analyze_by_prefix("ch").unwrap();
+
+        assert_eq!(result.total_requests, 1);
+        assert_eq!(*result.lb_policy_counts.get("ConsistentHash").unwrap(), 1);
+    }
+
+    // Test 3: lb_policy that is an object WITHOUT a "ConsistentHash" key falls
+    // through to the Debug-format fallback — it must not be "RoundRobin" or
+    // "ConsistentHash", but exactly one policy key must be recorded.
+    #[test]
+    fn test_lb_policy_other_object_uses_debug_fallback() {
+        let lines = concat!(
+            r#"{"request_info":{"x-trace-id":"wr-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9001,"lb_policy":{"WeightedRandom":{}}}]}}"#,
+            "\n",
+        );
+        let (_f, a) = analyzer_for(lines);
+        let result = a.analyze_by_prefix("wr").unwrap();
+
+        assert!(!result.lb_policy_counts.contains_key("RoundRobin"));
+        assert!(!result.lb_policy_counts.contains_key("ConsistentHash"));
+        let total: usize = result.lb_policy_counts.values().sum();
+        assert_eq!(total, 1);
+    }
+
+    // Test 4: lb_policy whose JSON value is a number (not string, not object)
+    // must default to "RoundRobin".
+    #[test]
+    fn test_lb_policy_number_defaults_to_round_robin() {
+        let lines = concat!(
+            r#"{"request_info":{"x-trace-id":"num-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9002,"lb_policy":123}]}}"#,
+            "\n",
+        );
+        let (_f, a) = analyzer_for(lines);
+        let result = a.analyze_by_prefix("num").unwrap();
+
+        assert_eq!(*result.lb_policy_counts.get("RoundRobin").unwrap(), 1);
+    }
+
+    // Test 5: lb_policy field absent entirely (upstream object has no lb_policy
+    // key) must default to "RoundRobin".
+    #[test]
+    fn test_lb_policy_absent_defaults_to_round_robin() {
+        let lines = concat!(
+            r#"{"request_info":{"x-trace-id":"abs-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":9003}]}}"#,
+            "\n",
+        );
+        let (_f, a) = analyzer_for(lines);
+        let result = a.analyze_by_prefix("abs").unwrap();
+
+        assert_eq!(result.total_requests, 1);
+        assert_eq!(*result.lb_policy_counts.get("RoundRobin").unwrap(), 1);
+    }
+
+    // Test 6: when multiple upstreams are present, analyze_by_prefix must use
+    // the LAST upstream for both the backend address and the policy — not the
+    // first one.
+    #[test]
+    fn test_uses_last_upstream_not_first() {
+        let lines = concat!(
+            r#"{"request_info":{"x-trace-id":"last-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"10.0.0.1","port":1111,"lb_policy":"RoundRobin"},{"ip":"10.0.0.2","port":2222,"lb_policy":{"ConsistentHash":{}}}]}}"#,
+            "\n",
+        );
+        let (_f, a) = analyzer_for(lines);
+        let result = a.analyze_by_prefix("last").unwrap();
+
+        assert!(result.backend_counts.contains_key("10.0.0.2:2222"));
+        assert!(!result.backend_counts.contains_key("10.0.0.1:1111"));
+        assert_eq!(*result.lb_policy_counts.get("ConsistentHash").unwrap(), 1);
+        assert!(!result.lb_policy_counts.contains_key("RoundRobin"));
+    }
+
+    // Test 7: entry with a matching prefix but no backend_context must still
+    // increment total_requests and must push an error containing both the
+    // human-readable label and the trace id.
+    #[test]
+    fn test_missing_backend_context_produces_error() {
+        let lines = concat!(
+            r#"{"request_info":{"x-trace-id":"noctx-1","host":"h","path":"/","status":200}}"#,
+            "\n",
+        );
+        let (_f, a) = analyzer_for(lines);
+        let result = a.analyze_by_prefix("noctx").unwrap();
+
+        assert_eq!(result.total_requests, 1);
+        assert!(result.lb_policy_counts.is_empty());
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].contains("No backend context"));
+        assert!(result.errors[0].contains("noctx-1"));
+    }
+
+    // Test 8: entry with backend_context present but upstreams is an empty
+    // array must push an error containing "No upstream info".
+    #[test]
+    fn test_empty_upstreams_produces_error() {
+        let lines = concat!(
+            r#"{"request_info":{"x-trace-id":"emup-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[]}}"#,
+            "\n",
+        );
+        let (_f, a) = analyzer_for(lines);
+        let result = a.analyze_by_prefix("emup").unwrap();
+
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].contains("No upstream info"));
+        assert!(result.errors[0].contains("emup-1"));
+    }
+
+    // Test 9: a line of garbage (not valid JSON) must be silently skipped; the
+    // surrounding valid entries must still be counted and no error must be
+    // pushed into the result for the garbage line.
+    #[test]
+    fn test_malformed_json_line_is_skipped_silently() {
+        let lines = concat!(
+            r#"{"request_info":{"x-trace-id":"ok-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":5001}]}}"#,
+            "\n",
+            "not json at all\n",
+            r#"{"request_info":{"x-trace-id":"ok-2","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":5002}]}}"#,
+            "\n",
+        );
+        let (_f, a) = analyzer_for(lines);
+        let result = a.analyze_by_prefix("ok").unwrap();
+
+        assert_eq!(result.total_requests, 2);
+        // No error must be recorded in result.errors for the garbage line.
+        assert!(result.errors.is_empty());
+    }
+
+    // Test 10: blank (whitespace-only) lines between valid JSON entries must be
+    // silently skipped; both surrounding entries must be counted.
+    #[test]
+    fn test_blank_lines_are_skipped() {
+        let lines = concat!(
+            r#"{"request_info":{"x-trace-id":"bl-1","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":6001}]}}"#,
+            "\n",
+            "\n",
+            r#"{"request_info":{"x-trace-id":"bl-2","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":6002}]}}"#,
+            "\n",
+        );
+        let (_f, a) = analyzer_for(lines);
+        let result = a.analyze_by_prefix("bl").unwrap();
+
+        assert_eq!(result.total_requests, 2);
+    }
+
+    // Test 11: multiple requests routed to the same backend address must
+    // accumulate in backend_counts; lb_policy_counts must also accumulate
+    // across all matching entries.
+    #[test]
+    fn test_backend_counts_aggregates_same_address() {
+        let entry = r#"{"request_info":{"x-trace-id":"agg-x","host":"h","path":"/","status":200},"backend_context":{"upstreams":[{"ip":"127.0.0.1","port":30001}]}}"#;
+        let lines = format!("{}\n{}\n{}\n", entry, entry, entry);
+        let (_f, a) = analyzer_for(&lines);
+        let result = a.analyze_by_prefix("agg").unwrap();
+
+        assert_eq!(*result.backend_counts.get("127.0.0.1:30001").unwrap(), 3);
+        assert_eq!(*result.lb_policy_counts.get("RoundRobin").unwrap(), 3);
     }
 }
