@@ -120,6 +120,16 @@ impl<M> CredentialState<M> {
             Self::Resolved(_) => "Resolved",
         }
     }
+
+    /// Map the inner material (only in the `Resolved` variant).
+    fn map<N, F: FnOnce(M) -> N>(self, f: F) -> CredentialState<N> {
+        match self {
+            Self::NotRequired => CredentialState::NotRequired,
+            Self::Pending => CredentialState::Pending,
+            Self::Invalid(r) => CredentialState::Invalid(r),
+            Self::Resolved(m) => CredentialState::Resolved(f(m)),
+        }
+    }
 }
 
 impl<M> std::fmt::Debug for CredentialState<M> {
@@ -248,18 +258,6 @@ pub fn resolved_state(ls: &LinkSys) -> CredentialState<ResolvedCredential> {
             }
         },
         _ => CredentialState::NotRequired,
-    }
-}
-
-impl<M> CredentialState<M> {
-    /// Map the inner material (only in the `Resolved` variant).
-    fn map<N, F: FnOnce(M) -> N>(self, f: F) -> CredentialState<N> {
-        match self {
-            Self::NotRequired => CredentialState::NotRequired,
-            Self::Pending => CredentialState::Pending,
-            Self::Invalid(r) => CredentialState::Invalid(r),
-            Self::Resolved(m) => CredentialState::Resolved(f(m)),
-        }
     }
 }
 
@@ -594,6 +592,96 @@ mod tests {
     fn resolved_state_no_auth_is_not_required() {
         let ls = mk_es_linksys(None);
         assert!(matches!(resolved_state(&ls), CredentialState::NotRequired));
+    }
+
+    // ------------------------------------------------------------
+    // resolved_state + dispatch gate — Webhook variants
+    //
+    // Regression coverage for link-sys-F003: Webhook dispatch must gate on
+    // `resolved_state(ls).is_buildable()` (same as Elasticsearch) so a webhook
+    // whose `auth.secretRef` Secret is Pending / Invalid is not registered and
+    // cannot silently send an unauthenticated request.
+    // ------------------------------------------------------------
+
+    fn mk_webhook_linksys(auth: Option<WebhookAuth>) -> LinkSys {
+        use crate::types::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
+        LinkSys {
+            metadata: ObjectMeta {
+                name: Some("wh".into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                config: SystemConfig::Webhook(WebhookServiceConfig {
+                    target: WebhookTarget::Uri {
+                        uri: "http://localhost:8080/hook".into(),
+                    },
+                    auth,
+                    ..Default::default()
+                }),
+            },
+            status: None,
+        }
+    }
+
+    fn mk_webhook_bearer(secret: Option<Secret>) -> WebhookAuth {
+        use crate::types::resources::common::SecretSlot;
+        WebhookAuth::Bearer {
+            slot: SecretSlot {
+                secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "s".into(),
+                    namespace: None,
+                },
+                secret,
+            },
+        }
+    }
+
+    #[test]
+    fn resolved_state_webhook_no_auth_is_not_required() {
+        let ls = mk_webhook_linksys(None);
+        assert!(matches!(resolved_state(&ls), CredentialState::NotRequired));
+    }
+
+    #[test]
+    fn resolved_state_webhook_bearer_pending_when_secret_missing() {
+        let ls = mk_webhook_linksys(Some(mk_webhook_bearer(None)));
+        assert!(matches!(resolved_state(&ls), CredentialState::Pending));
+    }
+
+    #[test]
+    fn resolved_state_webhook_bearer_resolved_when_secret_present() {
+        let ls = mk_webhook_linksys(Some(mk_webhook_bearer(Some(mk_secret(&[("bearerToken", b"tok")])))));
+        assert!(matches!(
+            resolved_state(&ls),
+            CredentialState::Resolved(ResolvedCredential::Bearer(_))
+        ));
+    }
+
+    /// The exact gate expression used by both Webhook dispatch arms in
+    /// `runtime::store`. Locks "client is registered iff the credential is
+    /// buildable".
+    fn webhook_dispatch_gate(ls: &LinkSys) -> bool {
+        resolved_state(ls).is_buildable()
+    }
+
+    #[test]
+    fn webhook_dispatch_gate_open_without_auth() {
+        assert!(webhook_dispatch_gate(&mk_webhook_linksys(None)));
+    }
+
+    #[test]
+    fn webhook_dispatch_gate_blocks_pending_auth() {
+        let ls = mk_webhook_linksys(Some(mk_webhook_bearer(None)));
+        assert!(!webhook_dispatch_gate(&ls));
+    }
+
+    #[test]
+    fn webhook_dispatch_gate_opens_with_resolved_auth() {
+        let ls = mk_webhook_linksys(Some(mk_webhook_bearer(Some(mk_secret(&[("bearerToken", b"tok")])))));
+        assert!(webhook_dispatch_gate(&ls));
     }
 
     // ------------------------------------------------------------

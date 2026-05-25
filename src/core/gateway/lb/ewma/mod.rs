@@ -17,9 +17,9 @@ mod tests {
     //! writes under Rust's default parallel test execution.
     use super::*;
     use crate::core::gateway::lb::edgion_backend::{EdgionBackend, INITIAL_EWMA_US};
+    use parking_lot::{Mutex, MutexGuard};
     use pingora_core::protocols::l4::socket::SocketAddr as PSocketAddr;
     use pingora_load_balancing::Backend;
-    use parking_lot::{Mutex, MutexGuard};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     /// Serializes alpha-mutating tests: `ALPHA_PERCENT` is a process-wide

@@ -136,8 +136,7 @@ pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPol
                     // is intentionally left raw — decoding it would change the hash
                     // key of existing deployments.
                     let matched = name == arg_name
-                        || (name.contains(['%', '+'])
-                            && HttpRouteRuleUnit::url_decode(name) == *arg_name);
+                        || (name.contains(['%', '+']) && HttpRouteRuleUnit::url_decode(name) == *arg_name);
                     matched.then(|| value.as_bytes().to_vec())
                 })
             })

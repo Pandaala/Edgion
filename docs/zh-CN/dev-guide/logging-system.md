@@ -117,13 +117,15 @@ LocalFileWriter 实现批处理写入逻辑：
 ```rust
 // 阻塞等待第一条日志
 while let Ok(first_line) = rx.recv() {
-    let _ = writeln!(file, "{}", first_line);
-    
+    // write_log_line 仅在写成功时累加 size；写失败时记录 dropped 指标
+    // 并在一段连续错误的首次记录一条 error 日志。
+    write_log_line(&mut file, &first_line, &mut current_size, &mut consecutive_write_errors, log_type);
+
     // 批量处理剩余日志（最多 999 条，总共 1000 条）
     for _ in 0..999 {
         match rx.try_recv() {
             Ok(line) => {
-                let _ = writeln!(file, "{}", line);
+                write_log_line(&mut file, &line, &mut current_size, &mut consecutive_write_errors, log_type);
             }
             Err(_) => break,
         }
@@ -158,7 +160,7 @@ while let Ok(first_line) = rx.recv() {
 
 #### 4. Metrics 集成
 
-当队列满导致日志丢弃时，自动记录 metrics：
+日志行在两种情况下计为丢弃，并记录到同一指标：发送队列满（下方 `send`），或后台线程写盘失败（磁盘满、权限被收回、文件被外部删除）。写盘失败还会输出一条 `tracing::error!`（对连续错误做去抖，仅记首条），并且不再累加追踪的文件 size，从而避免触发过早的 size 轮转。
 
 ```rust
 async fn send(&self, data: String) -> Result<()> {
@@ -574,14 +576,14 @@ udp_log:
 
 ## Metrics 监控
 
-每种日志类型都有独立的 dropped 指标，用于监控队列满导致的日志丢失：
+每种日志类型都有独立的 dropped 指标，同时统计队列满丢弃和后台写盘失败：
 
 | Metric 名称 | 说明 | 触发条件 |
 |------------|------|---------|
-| `edgion_access_log_dropped_total` | Access 日志丢弃数 | Access 日志队列满 |
-| `edgion_ssl_log_dropped_total` | SSL 日志丢弃数 | SSL 日志队列满 |
-| `edgion_tcp_log_dropped_total` | TCP 日志丢弃数 | TCP 日志队列满 |
-| `edgion_udp_log_dropped_total` | UDP 日志丢弃数 | UDP 日志队列满 |
+| `edgion_access_log_dropped_total` | Access 日志丢弃数 | Access 日志队列满或写盘失败 |
+| `edgion_ssl_log_dropped_total` | SSL 日志丢弃数 | SSL 日志队列满或写盘失败 |
+| `edgion_tcp_log_dropped_total` | TCP 日志丢弃数 | TCP 日志队列满或写盘失败 |
+| `edgion_udp_log_dropped_total` | UDP 日志丢弃数 | UDP 日志队列满或写盘失败 |
 
 **监控示例**：
 

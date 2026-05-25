@@ -9,10 +9,52 @@ use std::time::{Duration, Instant};
 use super::rotation::{
     cleanup_old_files, find_next_size_index, get_rotated_path, get_rotation_key, get_size_rotated_path, open_log_file,
 };
-use super::LocalFileWriter;
+use super::{LocalFileWriter, LogType};
 use crate::core::gateway::link_sys::DataSender;
 use crate::core::gateway::observe::global_metrics;
 use crate::types::output::RotationStrategy;
+
+/// Write a single log line, tracking size and surfacing write errors.
+///
+/// On success the byte count (line length + newline) is added to `current_size`
+/// and the consecutive-error counter is reset. On failure `current_size` is left
+/// unchanged — so the tracked size cannot drift past the real on-disk size and
+/// trigger premature size-based rotation — the dropped-log metric for `log_type`
+/// is incremented, and an error is logged only on the first failure of a burst
+/// (debounced) to avoid flooding on a persistent disk-full / permission error.
+fn write_log_line<W: Write>(
+    file: &mut BufWriter<W>,
+    line: &str,
+    current_size: &mut u64,
+    consecutive_errors: &mut u64,
+    log_type: LogType,
+) {
+    match writeln!(file, "{}", line) {
+        Ok(()) => {
+            *current_size += line.len() as u64 + 1; // +1 for newline
+            if *consecutive_errors > 0 {
+                tracing::info!(
+                    recovered_after = *consecutive_errors,
+                    "Local file log writes recovered after errors"
+                );
+                *consecutive_errors = 0;
+            }
+        }
+        Err(e) => {
+            if *consecutive_errors == 0 {
+                tracing::error!(error = %e, "Failed to write log line to local file");
+            }
+            *consecutive_errors += 1;
+            match log_type {
+                LogType::Access => global_metrics().access_log_dropped(),
+                LogType::Ssl => global_metrics().ssl_log_dropped(),
+                LogType::Tcp => global_metrics().tcp_log_dropped(),
+                LogType::Tls => global_metrics().tls_log_dropped(),
+                LogType::Udp => global_metrics().udp_log_dropped(),
+            }
+        }
+    }
+}
 
 #[async_trait]
 impl DataSender<String> for LocalFileWriter {
@@ -28,6 +70,7 @@ impl DataSender<String> for LocalFileWriter {
         // Create bounded sync channel for writes
         let queue_size = self.get_queue_size();
         let (tx, rx) = std::sync::mpsc::sync_channel::<String>(queue_size);
+        let log_type = self.log_type;
 
         // Spawn background thread for file writes (avoids blocking tokio runtime)
         std::thread::spawn(move || {
@@ -42,6 +85,10 @@ impl DataSender<String> for LocalFileWriter {
             // For size-based rotation
             let mut current_size: u64 = 0;
             let mut size_index: u32 = 0;
+
+            // Consecutive write-error count, used to debounce error logging so a
+            // persistent disk-full / permission failure does not flood the log.
+            let mut consecutive_write_errors: u64 = 0;
 
             // Active file always uses the base path (nginx-style).
             // On time-based rotation, the old file is renamed to include
@@ -95,12 +142,11 @@ impl DataSender<String> for LocalFileWriter {
                     last_rotation_check = Instant::now();
 
                     match &strategy {
-                        RotationStrategy::Never => {}
-                        RotationStrategy::Size(max_size) => {
-                            if current_size >= *max_size {
-                                rotate_for_size(&mut file, &mut current_path, &mut current_size, &mut size_index);
-                            }
-                        }
+                        // Size rotation is checked per-batch after each flush (see below),
+                        // not on this timer, so the file cannot overshoot max_size by more
+                        // than one batch. The timer remains the right trigger for the
+                        // wall-clock strategies, which do not benefit from per-batch checks.
+                        RotationStrategy::Never | RotationStrategy::Size(_) => {}
                         RotationStrategy::Daily | RotationStrategy::Hourly => {
                             let new_key = get_rotation_key(&strategy);
                             if new_key != current_key {
@@ -141,17 +187,25 @@ impl DataSender<String> for LocalFileWriter {
                 }
 
                 // Write first line and track size
-                let bytes_written = first_line.len() as u64 + 1; // +1 for newline
-                let _ = writeln!(file, "{}", first_line);
-                current_size += bytes_written;
+                write_log_line(
+                    &mut file,
+                    &first_line,
+                    &mut current_size,
+                    &mut consecutive_write_errors,
+                    log_type,
+                );
 
                 // Batch: drain available messages (max 999, total 1000 with first_line)
                 for _ in 0..999 {
                     match rx.try_recv() {
                         Ok(line) => {
-                            let bytes = line.len() as u64 + 1;
-                            let _ = writeln!(file, "{}", line);
-                            current_size += bytes;
+                            write_log_line(
+                                &mut file,
+                                &line,
+                                &mut current_size,
+                                &mut consecutive_write_errors,
+                                log_type,
+                            );
                         }
                         Err(_) => break,
                     }
@@ -160,6 +214,15 @@ impl DataSender<String> for LocalFileWriter {
                 // Flush once after batch write
                 if let Err(e) = file.flush() {
                     tracing::error!(error = %e, "Failed to flush log file");
+                }
+
+                // Size rotation runs per-batch, not on the timer, so the active file
+                // overshoots max_size by at most one batch instead of by a full
+                // rotation_check_interval worth of writes.
+                if let RotationStrategy::Size(max_size) = &strategy {
+                    if current_size >= *max_size {
+                        rotate_for_size(&mut file, &mut current_path, &mut current_size, &mut size_index);
+                    }
                 }
             }
         });
@@ -186,7 +249,6 @@ impl DataSender<String> for LocalFileWriter {
             // Non-blocking send, drop if channel is full
             if sender.try_send(data).is_err() {
                 // Record dropped log with type-specific metrics
-                use super::LogType;
                 match self.log_type {
                     LogType::Access => global_metrics().access_log_dropped(),
                     LogType::Ssl => global_metrics().ssl_log_dropped(),
@@ -201,5 +263,75 @@ impl DataSender<String> for LocalFileWriter {
 
     fn name(&self) -> &str {
         "local_file"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A writer that always fails, to exercise the write-error path.
+    struct FailWriter;
+
+    impl Write for FailWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("write failed"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("flush failed"))
+        }
+    }
+
+    #[test]
+    fn write_log_line_success_advances_size_and_resets_errors() {
+        // Vec<u8> never fails, so the write succeeds.
+        let mut file = BufWriter::new(Vec::<u8>::new());
+        let mut current_size: u64 = 0;
+        let mut consecutive_errors: u64 = 5; // pretend a prior burst
+
+        write_log_line(
+            &mut file,
+            "hello",
+            &mut current_size,
+            &mut consecutive_errors,
+            LogType::Access,
+        );
+
+        // "hello" is 5 bytes + 1 newline.
+        assert_eq!(current_size, 6);
+        // A successful write clears the consecutive-error counter.
+        assert_eq!(consecutive_errors, 0);
+    }
+
+    #[test]
+    fn write_log_line_error_keeps_size_and_counts_errors() {
+        // capacity 0 forces every write straight through to the failing inner writer.
+        let mut file = BufWriter::with_capacity(0, FailWriter);
+        let mut current_size: u64 = 100;
+        let mut consecutive_errors: u64 = 0;
+
+        write_log_line(
+            &mut file,
+            "hello",
+            &mut current_size,
+            &mut consecutive_errors,
+            LogType::Access,
+        );
+        // On failure current_size must NOT advance (otherwise it drifts past the
+        // real on-disk size and can trigger premature size rotation).
+        assert_eq!(current_size, 100);
+        assert_eq!(consecutive_errors, 1);
+
+        // A second consecutive failure still does not advance size; the counter grows.
+        write_log_line(
+            &mut file,
+            "world",
+            &mut current_size,
+            &mut consecutive_errors,
+            LogType::Access,
+        );
+        assert_eq!(current_size, 100);
+        assert_eq!(consecutive_errors, 2);
     }
 }

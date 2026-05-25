@@ -569,6 +569,9 @@ log_info "─── 7. Bulk Ingest ───"
 
 # Bulk ingest writes to the date-based index configured in the CRD:
 # prefix = "edgion-test", datePattern = "%Y.%m.%d" → "edgion-test-YYYY.MM.DD"
+# The CRD sets a tiny maxBodyBytes (256), so these 10 docs are flushed as
+# several sub-batches (F-002 partitioning); the count check below would catch
+# any sub-batch that the split path lost.
 BULK_INDEX="edgion-test-$(date +%Y.%m.%d)"
 log_info "Bulk target index: ${BULK_INDEX}"
 

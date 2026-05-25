@@ -130,187 +130,190 @@ impl LinkSysStore {
 }
 
 // ============================================================
-// Redis runtime store (ArcSwap for lock-free reads)
+// Generic per-provider runtime store (ArcSwap for lock-free reads)
 // ============================================================
 
-/// Global runtime store for Redis clients.
-/// Keyed by "namespace/name", same as LinkSys CRD key.
-/// ArcSwap provides lock-free concurrent reads, consistent with PluginStore pattern.
-static REDIS_RUNTIME: LazyLock<ArcSwap<HashMap<String, Arc<RedisLinkClient>>>> =
-    LazyLock::new(|| ArcSwap::from_pointee(HashMap::new()));
+/// Generic ArcSwap-backed runtime store shared by every LinkSys provider.
+///
+/// Holds a map of "namespace/name" -> Arc<Client> for one provider type.
+/// ArcSwap gives lock-free concurrent reads; `insert` / `remove` use `rcu`
+/// so concurrent dispatch tasks cannot lose an update, and `replace_all`
+/// performs a single atomic swap. There is intentionally **no** trait bound on
+/// `C`: this is pure storage and never touches the client's lifecycle, so each
+/// provider's static is a one-line declaration (adding a new provider no longer
+/// means copying the insert/remove/replace_all bodies).
+struct ProviderRuntimeStore<C> {
+    map: ArcSwap<HashMap<String, Arc<C>>>,
+}
+
+impl<C> ProviderRuntimeStore<C> {
+    fn new() -> Self {
+        Self {
+            map: ArcSwap::from_pointee(HashMap::new()),
+        }
+    }
+
+    /// Look up a client by key ("namespace/name").
+    fn get(&self, key: &str) -> Option<Arc<C>> {
+        self.map.load().get(key).cloned()
+    }
+
+    /// All registered client keys.
+    fn list(&self) -> Vec<String> {
+        self.map.load().keys().cloned().collect()
+    }
+
+    /// Number of clients currently in the store.
+    fn count(&self) -> usize {
+        self.map.load().len()
+    }
+
+    /// Whether a key is currently present.
+    fn contains(&self, key: &str) -> bool {
+        self.map.load().contains_key(key)
+    }
+
+    /// Snapshot of all live clients (used by health checks).
+    fn values(&self) -> Vec<Arc<C>> {
+        self.map.load().values().cloned().collect()
+    }
+
+    /// Full `Arc` snapshot of the current map (used to carry over clients on full-set).
+    fn load_full(&self) -> Arc<HashMap<String, Arc<C>>> {
+        self.map.load_full()
+    }
+
+    /// Insert a client into the store.
+    fn insert(&self, key: String, client: Arc<C>) {
+        // `rcu` retries the closure on CAS contention, so the load-clone-insert-store
+        // is atomic against concurrent dispatch tasks (no lost update). The closure
+        // is `FnMut` and may run more than once, hence the per-iteration clones.
+        self.map.rcu(|current| {
+            let mut new_map = (**current).clone();
+            new_map.insert(key.clone(), client.clone());
+            new_map
+        });
+    }
+
+    /// Remove a client from the store, returning the old client (if any).
+    fn remove(&self, key: &str) -> Option<Arc<C>> {
+        // Fast path: skip the clone when the key is clearly absent. A concurrent
+        // insert after this check is a separate entry we legitimately do not remove.
+        if !self.map.load().contains_key(key) {
+            return None;
+        }
+        // `rcu` returns the map as it was immediately before the successful swap, so
+        // `old.get(key)` is exactly the client this call removed.
+        let old = self.map.rcu(|current| {
+            let mut new_map = (**current).clone();
+            new_map.remove(key);
+            new_map
+        });
+        old.get(key).cloned()
+    }
+
+    /// Replace the whole map atomically, returning the previous contents.
+    fn replace_all(&self, new_map: HashMap<String, Arc<C>>) -> HashMap<String, Arc<C>> {
+        let old = self.map.swap(Arc::new(new_map));
+        (*old).clone()
+    }
+}
+
+// ============================================================
+// Redis runtime store
+// ============================================================
+
+/// Global runtime store for Redis clients, keyed by "namespace/name".
+static REDIS_RUNTIME: LazyLock<ProviderRuntimeStore<RedisLinkClient>> = LazyLock::new(ProviderRuntimeStore::new);
 
 /// Get a Redis client by LinkSys name ("namespace/name").
 ///
 /// This is the primary API for plugins and other callers.
 /// Returns None if the LinkSys resource doesn't exist or isn't a Redis type.
 pub fn get_redis_client(name: &str) -> Option<Arc<RedisLinkClient>> {
-    REDIS_RUNTIME.load().get(name).cloned()
+    REDIS_RUNTIME.get(name)
 }
 
 /// List all registered Redis client names.
 pub fn list_redis_clients() -> Vec<String> {
-    REDIS_RUNTIME.load().keys().cloned().collect()
+    REDIS_RUNTIME.list()
 }
 
 /// Number of Redis link clients currently in the runtime.
 pub fn redis_client_count() -> usize {
-    REDIS_RUNTIME.load().len()
+    REDIS_RUNTIME.count()
 }
 
 /// Health check all registered Redis clients.
 pub async fn health_check_all_redis() -> Vec<LinkSysHealth> {
-    let clients: Vec<Arc<RedisLinkClient>> = REDIS_RUNTIME.load().values().cloned().collect();
+    let clients = REDIS_RUNTIME.values();
     futures::future::join_all(clients.into_iter().map(|c| async move { c.health_status().await })).await
 }
 
-/// Insert a Redis client into the runtime store.
-fn redis_runtime_insert(key: String, client: Arc<RedisLinkClient>) {
-    let current = REDIS_RUNTIME.load();
-    let mut new_map = (**current).clone();
-    new_map.insert(key, client);
-    REDIS_RUNTIME.store(Arc::new(new_map));
-}
-
-/// Remove a Redis client from the runtime store, returning the old client (if any).
-fn redis_runtime_remove(key: &str) -> Option<Arc<RedisLinkClient>> {
-    let current = REDIS_RUNTIME.load();
-    if !current.contains_key(key) {
-        return None;
-    }
-    let mut new_map = (**current).clone();
-    let old = new_map.remove(key);
-    REDIS_RUNTIME.store(Arc::new(new_map));
-    old
-}
-
-/// Replace all Redis clients in the runtime store atomically.
-fn redis_runtime_replace_all(new_map: HashMap<String, Arc<RedisLinkClient>>) -> HashMap<String, Arc<RedisLinkClient>> {
-    let old = REDIS_RUNTIME.swap(Arc::new(new_map));
-    (*old).clone()
-}
-
 // ============================================================
-// Etcd runtime store (ArcSwap for lock-free reads)
+// Etcd runtime store
 // ============================================================
 
-/// Global runtime store for Etcd clients.
-/// Keyed by "namespace/name", same as LinkSys CRD key.
-/// ArcSwap provides lock-free concurrent reads, consistent with Redis pattern.
-static ETCD_RUNTIME: LazyLock<ArcSwap<HashMap<String, Arc<EtcdLinkClient>>>> =
-    LazyLock::new(|| ArcSwap::from_pointee(HashMap::new()));
+/// Global runtime store for Etcd clients, keyed by "namespace/name".
+static ETCD_RUNTIME: LazyLock<ProviderRuntimeStore<EtcdLinkClient>> = LazyLock::new(ProviderRuntimeStore::new);
 
 /// Get an Etcd client by LinkSys name ("namespace/name").
 ///
 /// This is the primary API for plugins and other callers.
 /// Returns None if the LinkSys resource doesn't exist or isn't an Etcd type.
 pub fn get_etcd_client(name: &str) -> Option<Arc<EtcdLinkClient>> {
-    ETCD_RUNTIME.load().get(name).cloned()
+    ETCD_RUNTIME.get(name)
 }
 
 /// List all registered Etcd client names.
 pub fn list_etcd_clients() -> Vec<String> {
-    ETCD_RUNTIME.load().keys().cloned().collect()
+    ETCD_RUNTIME.list()
 }
 
 /// Number of Etcd link clients currently in the runtime.
 pub fn etcd_client_count() -> usize {
-    ETCD_RUNTIME.load().len()
+    ETCD_RUNTIME.count()
 }
 
 /// Health check all registered Etcd clients.
 pub async fn health_check_all_etcd() -> Vec<LinkSysHealth> {
-    let clients: Vec<Arc<EtcdLinkClient>> = ETCD_RUNTIME.load().values().cloned().collect();
+    let clients = ETCD_RUNTIME.values();
     futures::future::join_all(clients.into_iter().map(|c| async move { c.health_status().await })).await
 }
 
-/// Insert an Etcd client into the runtime store.
-fn etcd_runtime_insert(key: String, client: Arc<EtcdLinkClient>) {
-    let current = ETCD_RUNTIME.load();
-    let mut new_map = (**current).clone();
-    new_map.insert(key, client);
-    ETCD_RUNTIME.store(Arc::new(new_map));
-}
-
-/// Remove an Etcd client from the runtime store, returning the old client (if any).
-fn etcd_runtime_remove(key: &str) -> Option<Arc<EtcdLinkClient>> {
-    let current = ETCD_RUNTIME.load();
-    if !current.contains_key(key) {
-        return None;
-    }
-    let mut new_map = (**current).clone();
-    let old = new_map.remove(key);
-    ETCD_RUNTIME.store(Arc::new(new_map));
-    old
-}
-
-/// Replace all Etcd clients in the runtime store atomically.
-fn etcd_runtime_replace_all(new_map: HashMap<String, Arc<EtcdLinkClient>>) -> HashMap<String, Arc<EtcdLinkClient>> {
-    let old = ETCD_RUNTIME.swap(Arc::new(new_map));
-    (*old).clone()
-}
-
 // ============================================================
-// Elasticsearch runtime store (ArcSwap for lock-free reads)
+// Elasticsearch runtime store
 // ============================================================
 
-/// Global runtime store for Elasticsearch clients.
-/// Keyed by "namespace/name", same as LinkSys CRD key.
-/// ArcSwap provides lock-free concurrent reads, consistent with Redis/Etcd pattern.
-static ES_RUNTIME: LazyLock<ArcSwap<HashMap<String, Arc<EsLinkClient>>>> =
-    LazyLock::new(|| ArcSwap::from_pointee(HashMap::new()));
+/// Global runtime store for Elasticsearch clients, keyed by "namespace/name".
+static ES_RUNTIME: LazyLock<ProviderRuntimeStore<EsLinkClient>> = LazyLock::new(ProviderRuntimeStore::new);
 
 /// Get an Elasticsearch client by LinkSys name ("namespace/name").
 ///
 /// This is the primary API for DataSender and other callers.
 /// Returns None if the LinkSys resource doesn't exist or isn't an Elasticsearch type.
 pub fn get_es_client(name: &str) -> Option<Arc<EsLinkClient>> {
-    ES_RUNTIME.load().get(name).cloned()
+    ES_RUNTIME.get(name)
 }
 
 /// List all registered Elasticsearch client names.
 pub fn list_es_clients() -> Vec<String> {
-    ES_RUNTIME.load().keys().cloned().collect()
+    ES_RUNTIME.list()
 }
 
 /// Number of Elasticsearch link clients currently in the runtime.
 pub fn es_client_count() -> usize {
-    ES_RUNTIME.load().len()
+    ES_RUNTIME.count()
 }
 
 /// Health check all registered Elasticsearch clients.
 pub async fn health_check_all_es() -> Vec<LinkSysHealth> {
-    let clients: Vec<Arc<EsLinkClient>> = ES_RUNTIME.load().values().cloned().collect();
+    let clients = ES_RUNTIME.values();
     futures::future::join_all(clients.into_iter().map(|c| async move { c.health_status().await })).await
 }
 
-/// Insert an ES client into the runtime store.
-fn es_runtime_insert(key: String, client: Arc<EsLinkClient>) {
-    let current = ES_RUNTIME.load();
-    let mut new_map = (**current).clone();
-    new_map.insert(key, client);
-    ES_RUNTIME.store(Arc::new(new_map));
-}
-
-/// Remove an ES client from the runtime store, returning the old client (if any).
-fn es_runtime_remove(key: &str) -> Option<Arc<EsLinkClient>> {
-    let current = ES_RUNTIME.load();
-    if !current.contains_key(key) {
-        return None;
-    }
-    let mut new_map = (**current).clone();
-    let old = new_map.remove(key);
-    ES_RUNTIME.store(Arc::new(new_map));
-    old
-}
-
-/// Replace all ES clients in the runtime store atomically.
-fn es_runtime_replace_all(new_map: HashMap<String, Arc<EsLinkClient>>) -> HashMap<String, Arc<EsLinkClient>> {
-    let old = ES_RUNTIME.swap(Arc::new(new_map));
-    (*old).clone()
-}
-
 // ============================================================
-// Webhook runtime store (ArcSwap for lock-free reads)
+// Webhook runtime store
 // ============================================================
 //
 // Webhook does NOT expose a typed `get_webhook_client` API — the runtime
@@ -318,37 +321,33 @@ fn es_runtime_replace_all(new_map: HashMap<String, Arc<EsLinkClient>>) -> HashMa
 // instances so they can be shut down on remove. Plugins / other consumers
 // continue to interact with WebhookManager via existing APIs.
 
-static WEBHOOK_RUNTIME: LazyLock<ArcSwap<HashMap<String, Arc<WebhookLinkClient>>>> =
-    LazyLock::new(|| ArcSwap::from_pointee(HashMap::new()));
-
-fn webhook_runtime_insert(key: String, client: Arc<WebhookLinkClient>) {
-    let current = WEBHOOK_RUNTIME.load();
-    let mut new_map = (**current).clone();
-    new_map.insert(key, client);
-    WEBHOOK_RUNTIME.store(Arc::new(new_map));
-}
-
-fn webhook_runtime_remove(key: &str) -> Option<Arc<WebhookLinkClient>> {
-    let current = WEBHOOK_RUNTIME.load();
-    if !current.contains_key(key) {
-        return None;
-    }
-    let mut new_map = (**current).clone();
-    let old = new_map.remove(key);
-    WEBHOOK_RUNTIME.store(Arc::new(new_map));
-    old
-}
-
-fn webhook_runtime_replace_all(
-    new_map: HashMap<String, Arc<WebhookLinkClient>>,
-) -> HashMap<String, Arc<WebhookLinkClient>> {
-    let old = WEBHOOK_RUNTIME.swap(Arc::new(new_map));
-    (*old).clone()
-}
+static WEBHOOK_RUNTIME: LazyLock<ProviderRuntimeStore<WebhookLinkClient>> = LazyLock::new(ProviderRuntimeStore::new);
 
 // ============================================================
 // Generic dispatch helpers
 // ============================================================
+
+/// Compute the credential-readiness gate shared by every non-Webhook provider
+/// arm in both dispatch functions: a provider is buildable only when its auth
+/// material resolves (`is_buildable()`) AND its TLS material (if any) is ready.
+///
+/// Centralizing the `is_buildable() && tls_ok` formula keeps `dispatch_full_set`
+/// and `dispatch_partial_update` in lock-step and prevents a future provider arm
+/// from silently dropping the `tls_ok` term. Returns `(ready, tls_ok, auth)`;
+/// `tls_ok` and `auth` are returned because the readiness-log helpers want
+/// `tls_ok` / `auth.kind()` and the build closures borrow `&auth`.
+///
+/// Webhook is intentionally NOT routed through this helper — it gates on auth
+/// only (`tls_ok` hard-coded true; TLS is validated inside the manager).
+fn credential_readiness<M>(
+    ls: &LinkSys,
+    auth_fn: fn(&LinkSys) -> credential::CredentialState<M>,
+) -> (bool, bool, credential::CredentialState<M>) {
+    let tls_ok = credential::tls_ready(ls);
+    let auth = auth_fn(ls);
+    let ready = auth.is_buildable() && tls_ok;
+    (ready, tls_ok, auth)
+}
 
 /// Helper shared by the remove / disable paths: if there is an old client,
 /// spawn its shutdown.
@@ -376,12 +375,12 @@ fn preserve_if_not_ready<C>(
     auth_kind: &str,
     tls_ok: bool,
     ready: bool,
-    runtime: &ArcSwap<HashMap<String, Arc<C>>>,
+    runtime: &ProviderRuntimeStore<C>,
 ) -> bool {
     if ready {
         return false;
     }
-    let existing = runtime.load().contains_key(key);
+    let existing = runtime.contains(key);
     tracing::info!(
         key,
         label,
@@ -402,21 +401,16 @@ fn preserve_if_not_ready<C>(
 /// itself does not await, so it is a synchronous `fn`. Callers must invoke
 /// it from a tokio runtime context.
 ///
-/// **Key invariant**: reading `old` (`runtime.load().get(key).cloned()`) is
-/// read-only; afterwards `insert_fn` performs a single atomic
-/// `ArcSwap.store()` that swaps in the new map (where that key already
-/// points to the new client). This way `get_*_client(key)` always sees
+/// **Key invariant**: reading `old` (`runtime.get(key)`) is read-only;
+/// afterwards `runtime.insert` performs a single atomic `ArcSwap` swap of the
+/// new map (where that key already points to the new client). This way
+/// `get_*_client(key)` always sees
 /// either the old or the new client -- **there is never a window where it
 /// is None**. If we instead did `remove` followed by `insert`, the
 /// intermediate store would temporarily drop the key -- exactly the
 /// invariant that the pre-refactor code explicitly avoided.
-fn spawn_and_swap_partial<C, F>(
-    key: &str,
-    label: &'static str,
-    build: F,
-    insert_fn: fn(String, Arc<C>),
-    runtime: &ArcSwap<HashMap<String, Arc<C>>>,
-) where
+fn spawn_and_swap_partial<C, F>(key: &str, label: &'static str, build: F, runtime: &ProviderRuntimeStore<C>)
+where
     C: LinkSysLifecycle,
     F: FnOnce() -> anyhow::Result<C>,
 {
@@ -424,8 +418,8 @@ fn spawn_and_swap_partial<C, F>(
         Err(e) => tracing::error!(key, label, error = %e, "from_config failed"),
         Ok(client) => {
             let client = Arc::new(client);
-            let old = runtime.load().get(key).cloned();
-            insert_fn(key.to_string(), client.clone());
+            let old = runtime.get(key);
+            runtime.insert(key.to_string(), client.clone());
 
             // New client: always init in the background
             let c = client.clone();
@@ -518,9 +512,9 @@ fn swap_and_shutdown_olds<C: LinkSysLifecycle>(
     label: &'static str,
     new_map: HashMap<String, Arc<C>>,
     preserved: HashSet<String>,
-    replace_fn: fn(HashMap<String, Arc<C>>) -> HashMap<String, Arc<C>>,
+    runtime: &ProviderRuntimeStore<C>,
 ) {
-    let old = replace_fn(new_map);
+    let old = runtime.replace_all(new_map);
     if !C::SHUTDOWN_ON_REPLACE || old.is_empty() {
         return;
     }
@@ -562,12 +556,21 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
     for (key, ls) in data {
         match &ls.spec.config {
             crate::types::resources::link_sys::SystemConfig::Webhook(config) => {
+                // Gate on credential readiness: a webhook whose `auth.secretRef`
+                // is configured but whose Secret is not yet injected (Pending) or
+                // is malformed (Invalid) must not be registered — otherwise
+                // `inject_auth` would silently send an unauthenticated request.
+                // Mirrors the Elasticsearch arm below.
+                let auth = credential::resolved_state(ls);
+                let ready = auth.is_buildable();
                 if carry_over_if_not_ready(
                     key,
                     "Webhook",
-                    "NotRequired",
+                    auth.kind(),
+                    // Webhook TLS material is validated inside the manager's
+                    // build_webhook_client; only auth is gated here.
                     true,
-                    true,
+                    ready,
                     &*old_webhook_snapshot,
                     &mut new_webhook_map,
                     &mut preserved_webhook_keys,
@@ -588,9 +591,7 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                 );
             }
             crate::types::resources::link_sys::SystemConfig::Redis(redis_config) => {
-                let tls_ok = credential::tls_ready(ls);
-                let auth = credential::basic_state(ls);
-                let ready = auth.is_buildable() && tls_ok;
+                let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
                 if carry_over_if_not_ready(
                     key,
                     "Redis",
@@ -611,9 +612,7 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                 );
             }
             crate::types::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
-                let tls_ok = credential::tls_ready(ls);
-                let auth = credential::basic_state(ls);
-                let ready = auth.is_buildable() && tls_ok;
+                let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
                 if carry_over_if_not_ready(
                     key,
                     "Etcd",
@@ -634,9 +633,7 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                 );
             }
             crate::types::resources::link_sys::SystemConfig::Elasticsearch(es_config) => {
-                let tls_ok = credential::tls_ready(ls);
-                let auth = credential::resolved_state(ls);
-                let ready = auth.is_buildable() && tls_ok;
+                let (ready, tls_ok, auth) = credential_readiness(ls, credential::resolved_state);
                 if carry_over_if_not_ready(
                     key,
                     "Elasticsearch",
@@ -667,15 +664,10 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
     }
 
     // Atomic swap + background shutdown of evicted old Arcs, gated by SHUTDOWN_ON_REPLACE
-    swap_and_shutdown_olds(
-        "Webhook",
-        new_webhook_map,
-        preserved_webhook_keys,
-        webhook_runtime_replace_all,
-    );
-    swap_and_shutdown_olds("Redis", new_redis_map, preserved_redis_keys, redis_runtime_replace_all);
-    swap_and_shutdown_olds("Etcd", new_etcd_map, preserved_etcd_keys, etcd_runtime_replace_all);
-    swap_and_shutdown_olds("Elasticsearch", new_es_map, preserved_es_keys, es_runtime_replace_all);
+    swap_and_shutdown_olds("Webhook", new_webhook_map, preserved_webhook_keys, &WEBHOOK_RUNTIME);
+    swap_and_shutdown_olds("Redis", new_redis_map, preserved_redis_keys, &REDIS_RUNTIME);
+    swap_and_shutdown_olds("Etcd", new_etcd_map, preserved_etcd_keys, &ETCD_RUNTIME);
+    swap_and_shutdown_olds("Elasticsearch", new_es_map, preserved_es_keys, &ES_RUNTIME);
 }
 
 /// Dispatch incremental changes to sub-module managers.
@@ -684,10 +676,15 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
     for (key, ls) in add_or_update {
         match &ls.spec.config {
             crate::types::resources::link_sys::SystemConfig::Webhook(config) => {
-                let auth_kind = "NotRequired"; // Webhook uses manager-internal auth; dispatch does not resolve it
-                let tls_ok = true;
-                let ready = true; // Webhook has no credential gating; always ready
-                if preserve_if_not_ready(key, "Webhook", auth_kind, tls_ok, ready, &WEBHOOK_RUNTIME) {
+                // Gate on credential readiness so a webhook whose secretRef is
+                // configured but whose Secret is not yet injected (Pending) or is
+                // malformed (Invalid) is not registered with an unresolved
+                // credential — otherwise inject_auth would silently send an
+                // unauthenticated request. Mirrors the Elasticsearch arm.
+                let auth = credential::resolved_state(ls);
+                let tls_ok = true; // Webhook TLS material is validated inside build_webhook_client.
+                let ready = auth.is_buildable();
+                if preserve_if_not_ready(key, "Webhook", auth.kind(), tls_ok, ready, &WEBHOOK_RUNTIME) {
                     continue;
                 }
                 spawn_and_swap_partial(
@@ -700,14 +697,11 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                             ls.metadata.namespace.clone(),
                         ))
                     },
-                    webhook_runtime_insert,
                     &WEBHOOK_RUNTIME,
                 );
             }
             crate::types::resources::link_sys::SystemConfig::Redis(redis_config) => {
-                let tls_ok = credential::tls_ready(ls);
-                let auth = credential::basic_state(ls);
-                let ready = auth.is_buildable() && tls_ok;
+                let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
                 if preserve_if_not_ready(key, "Redis", auth.kind(), tls_ok, ready, &REDIS_RUNTIME) {
                     continue;
                 }
@@ -715,14 +709,11 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                     key,
                     "Redis",
                     || RedisLinkClient::from_config(key, redis_config, &auth),
-                    redis_runtime_insert,
                     &REDIS_RUNTIME,
                 );
             }
             crate::types::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
-                let tls_ok = credential::tls_ready(ls);
-                let auth = credential::basic_state(ls);
-                let ready = auth.is_buildable() && tls_ok;
+                let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
                 if preserve_if_not_ready(key, "Etcd", auth.kind(), tls_ok, ready, &ETCD_RUNTIME) {
                     continue;
                 }
@@ -730,14 +721,11 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                     key,
                     "Etcd",
                     || EtcdLinkClient::from_config(key, etcd_config, &auth),
-                    etcd_runtime_insert,
                     &ETCD_RUNTIME,
                 );
             }
             crate::types::resources::link_sys::SystemConfig::Elasticsearch(es_config) => {
-                let tls_ok = credential::tls_ready(ls);
-                let auth = credential::resolved_state(ls);
-                let ready = auth.is_buildable() && tls_ok;
+                let (ready, tls_ok, auth) = credential_readiness(ls, credential::resolved_state);
                 if preserve_if_not_ready(key, "Elasticsearch", auth.kind(), tls_ok, ready, &ES_RUNTIME) {
                     continue;
                 }
@@ -745,7 +733,6 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                     key,
                     "Elasticsearch",
                     || EsLinkClient::from_config(key, es_config, &auth),
-                    es_runtime_insert,
                     &ES_RUNTIME,
                 );
             }
@@ -761,10 +748,10 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
 
     // Handle remove — uniform across all 4 providers
     for key in remove {
-        spawn_shutdown_if_present(webhook_runtime_remove(key), "Webhook");
-        spawn_shutdown_if_present(redis_runtime_remove(key), "Redis");
-        spawn_shutdown_if_present(etcd_runtime_remove(key), "Etcd");
-        spawn_shutdown_if_present(es_runtime_remove(key), "Elasticsearch");
+        spawn_shutdown_if_present(WEBHOOK_RUNTIME.remove(key), "Webhook");
+        spawn_shutdown_if_present(REDIS_RUNTIME.remove(key), "Redis");
+        spawn_shutdown_if_present(ETCD_RUNTIME.remove(key), "Etcd");
+        spawn_shutdown_if_present(ES_RUNTIME.remove(key), "Elasticsearch");
     }
 }
 
@@ -1017,7 +1004,7 @@ mod tests {
         );
 
         // Cleanup so the global store doesn't carry state into other tests.
-        let _ = redis_runtime_remove(&key);
+        let _ = REDIS_RUNTIME.remove(&key);
     }
 
     /// I5 regression: partial-update dispatch must not build a client on an
@@ -1064,7 +1051,7 @@ mod tests {
             "the preserved client must be the same Arc instance"
         );
 
-        let _ = redis_runtime_remove(&key);
+        let _ = REDIS_RUNTIME.remove(&key);
     }
 
     /// M4 regression (dispatch side): an `Invalid` credential state must also
@@ -1114,7 +1101,7 @@ mod tests {
         // Share a global lock with other tests that call dispatch_* directly
         // (I5/M4 series) to serialize. Without holding the lock, their
         // `dispatch_full_set` calls would wipe the key inserted by this test
-        // via an empty new_webhook_map through `webhook_runtime_replace_all`.
+        // via an empty new_webhook_map through `WEBHOOK_RUNTIME.replace_all`.
         let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // Use a unique key to also avoid interference with other tests' add/remove paths.
@@ -1144,7 +1131,7 @@ mod tests {
         dispatch_partial_update(&add, &HashSet::new()).await;
         // spawn_and_swap_partial inserts into WEBHOOK_RUNTIME synchronously before
         // spawning background init, so the Arc is visible immediately after await.
-        let arc1 = WEBHOOK_RUNTIME.load().get(&key).cloned();
+        let arc1 = WEBHOOK_RUNTIME.get(&key);
         assert!(arc1.is_some(), "first dispatch must populate WEBHOOK_RUNTIME");
 
         // Update (different config) — a new Arc should replace the old one.
@@ -1152,7 +1139,7 @@ mod tests {
         let mut update = HashMap::new();
         update.insert(key.clone(), make_ls("http://b/y"));
         dispatch_partial_update(&update, &HashSet::new()).await;
-        let arc2 = WEBHOOK_RUNTIME.load().get(&key).cloned();
+        let arc2 = WEBHOOK_RUNTIME.get(&key);
         assert!(arc2.is_some(), "after update, WEBHOOK_RUNTIME must still hold a client");
         assert!(
             !Arc::ptr_eq(arc1.as_ref().unwrap(), arc2.as_ref().unwrap()),
@@ -1163,10 +1150,7 @@ mod tests {
         let mut remove = HashSet::new();
         remove.insert(key.clone());
         dispatch_partial_update(&HashMap::new(), &remove).await;
-        assert!(
-            WEBHOOK_RUNTIME.load().get(&key).is_none(),
-            "remove must clear WEBHOOK_RUNTIME"
-        );
+        assert!(WEBHOOK_RUNTIME.get(&key).is_none(), "remove must clear WEBHOOK_RUNTIME");
     }
 }
 

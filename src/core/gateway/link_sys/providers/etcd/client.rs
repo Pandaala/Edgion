@@ -14,7 +14,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use rand::Rng;
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 
 use async_trait::async_trait;
 
@@ -48,6 +50,9 @@ pub struct EtcdLinkClient {
     namespace: Option<String>,
     /// Shutdown signal sender
     shutdown_tx: tokio::sync::watch::Sender<bool>,
+    /// Handle to the spawned health-monitor task (populated by `init()`),
+    /// aborted in `shutdown()` so the task is deterministically terminated.
+    monitor_handle: parking_lot::Mutex<Option<JoinHandle<()>>>,
 }
 
 impl std::fmt::Debug for EtcdLinkClient {
@@ -103,6 +108,7 @@ impl EtcdLinkClient {
             healthy: Arc::new(AtomicBool::new(false)),
             namespace: config.namespace.clone(),
             shutdown_tx,
+            monitor_handle: parking_lot::Mutex::new(None),
         })
     }
 
@@ -160,7 +166,7 @@ impl EtcdLinkClient {
         let healthy = self.healthy.clone();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let base_interval = Duration::from_secs(10);
             let mut check_interval = base_interval;
             let mut backoff = Duration::from_millis(500);
@@ -219,13 +225,20 @@ impl EtcdLinkClient {
                                 error = %e,
                                 "Etcd reconnect failed"
                             );
-                            check_interval = backoff;
+                            // Apply +/-20% jitter to the wait so that N gateway pods
+                            // sharing this etcd cluster do not wake and reconnect in
+                            // lockstep on a shared outage (thundering herd). Only the
+                            // sleep is jittered; `backoff` keeps doubling deterministically.
+                            let jitter = rand::rng().random_range(0.8_f64..=1.2);
+                            check_interval = backoff.mul_f64(jitter).min(max_backoff);
                             backoff = (backoff * 2).min(max_backoff);
                         }
                     }
                 }
             }
         });
+
+        *self.monitor_handle.lock() = Some(handle);
     }
 
     /// Check if the client is connected and healthy.
@@ -263,7 +276,17 @@ impl EtcdLinkClient {
     /// Graceful shutdown — signal health monitor to stop and clear the client.
     pub async fn shutdown(&self) -> Result<()> {
         tracing::info!(etcd = %self.name, "Etcd client shutting down");
+        // Cooperative exit for the common case: a task parked at the select
+        // sleep wakes on the watch change and logs its own shutdown line.
         let _ = self.shutdown_tx.send(true);
+        // Hard backstop: abort the monitor so a task mid `status()` / `connect()`
+        // (holding the `client` read lock) is cancelled at its next await point,
+        // releasing the read lock so the `client.write()` below cannot block for
+        // the full etcd call timeout. The task holds no unwind-critical state, so
+        // abort (no join) is sufficient — same as the Webhook health_task path.
+        if let Some(handle) = self.monitor_handle.lock().take() {
+            handle.abort();
+        }
         let mut guard = self.client.write().await;
         *guard = None;
         self.healthy.store(false, Ordering::Relaxed);

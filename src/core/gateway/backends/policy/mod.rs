@@ -65,10 +65,12 @@ fn select_policy_for_service<'a>(
         }
     }
 
-    if let Some(wildcard) = candidates
-        .iter()
-        .find(|pol| pol.spec.target_refs.iter().any(|tr| tr.name == name && tr.section_name.is_none()))
-    {
+    if let Some(wildcard) = candidates.iter().find(|pol| {
+        pol.spec
+            .target_refs
+            .iter()
+            .any(|tr| tr.name == name && tr.section_name.is_none())
+    }) {
         return Some(wildcard);
     }
 

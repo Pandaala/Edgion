@@ -78,7 +78,7 @@ pub async fn bulk_ingest_loop(
                             let endpoint = &endpoints[endpoint_idx % endpoints.len().max(1)];
                             endpoint_idx = endpoint_idx.wrapping_add(1);
                             flush_batch(
-                                &client, endpoint, &config, &healthy, &name, batch,
+                                &client, endpoint, &config, &healthy, &name, batch, &shutdown,
                             ).await;
                         }
                     }
@@ -88,7 +88,7 @@ pub async fn bulk_ingest_loop(
                             let batch = std::mem::take(&mut buffer);
                             let endpoint = &endpoints[endpoint_idx % endpoints.len().max(1)];
                             flush_batch(
-                                &client, endpoint, &config, &healthy, &name, batch,
+                                &client, endpoint, &config, &healthy, &name, batch, &shutdown,
                             ).await;
                         }
                         tracing::info!("ES [{}] bulk ingest loop exiting (channel closed)", name);
@@ -106,7 +106,7 @@ pub async fn bulk_ingest_loop(
                     let endpoint = &endpoints[endpoint_idx % endpoints.len().max(1)];
                     endpoint_idx = endpoint_idx.wrapping_add(1);
                     flush_batch(
-                        &client, endpoint, &config, &healthy, &name, batch,
+                        &client, endpoint, &config, &healthy, &name, batch, &shutdown,
                     ).await;
                 }
             }
@@ -117,7 +117,7 @@ pub async fn bulk_ingest_loop(
                         let batch = std::mem::take(&mut buffer);
                         let endpoint = &endpoints[endpoint_idx % endpoints.len().max(1)];
                         flush_batch(
-                            &client, endpoint, &config, &healthy, &name, batch,
+                            &client, endpoint, &config, &healthy, &name, batch, &shutdown,
                         ).await;
                     }
                     tracing::info!("ES [{}] bulk ingest loop exiting (shutdown)", name);
@@ -128,10 +128,16 @@ pub async fn bulk_ingest_loop(
     }
 }
 
-/// Flush a batch of documents to ES via Bulk API.
+/// Flush a batch of documents to ES via the Bulk API.
 ///
-/// Handles retries with exponential backoff.
-/// On permanent failure, logs error and drops the batch.
+/// Partitions `docs` into sub-batches whose NDJSON body stays within
+/// `config.max_body_bytes`, then sends each sub-batch independently. Without
+/// this split the operator-configured ceiling is never enforced — a large
+/// batch could exceed ES's `http.max_content_length` and get reset, feeding the
+/// retry loop until the whole batch is lost. A single document that on its own
+/// exceeds the limit can never be batched safely and is dropped with a warning.
+/// In the common case (batch already within the limit) this produces exactly
+/// one sub-batch, byte-identical to the unpartitioned path.
 async fn flush_batch(
     client: &Client,
     endpoint: &str,
@@ -139,19 +145,108 @@ async fn flush_batch(
     healthy: &Arc<AtomicBool>,
     name: &str,
     docs: Vec<String>,
+    shutdown: &watch::Receiver<bool>,
 ) {
     let index_name = config.current_index_name();
     let bulk_url = format!("{}/_bulk", endpoint);
 
-    // Build NDJSON body
-    let body = build_ndjson_body(&docs, &index_name);
+    // Per-document wire cost: header line + '\n' + doc + '\n'. The header line
+    // is constant for the batch, so its length is computed once here.
+    let per_doc_overhead = ndjson_header_line(&index_name).len() + 2;
 
+    let (sub_batches, dropped) = partition_into_sub_batches(&docs, per_doc_overhead, config.max_body_bytes);
+    if dropped > 0 {
+        tracing::warn!(
+            "ES [{}] bulk: dropped {} document(s) each exceeding max_body_bytes ({})",
+            name,
+            dropped,
+            config.max_body_bytes
+        );
+    }
+
+    for sub_batch in &sub_batches {
+        // The final drain (shutdown arm / channel-closed arm) calls this with
+        // `shutdown` already signaled, so every sub-batch must still be sent to
+        // honor the "flush buffered docs before exit" contract. Bounding the
+        // post-shutdown work is left to `send_bulk_request` (which aborts its
+        // retry loop on shutdown) plus the 10s drain timeout + task abort in
+        // `EsLinkClient::shutdown`.
+        let body = build_ndjson_body(sub_batch, &index_name);
+        send_bulk_request(
+            client,
+            &bulk_url,
+            body,
+            config,
+            healthy,
+            name,
+            sub_batch.len(),
+            shutdown,
+        )
+        .await;
+    }
+}
+
+/// Partition `docs` into sub-batches whose NDJSON body stays within
+/// `max_body_bytes`, using `per_doc_overhead` (header line + two newlines) plus
+/// the document length as each document's wire cost.
+///
+/// Documents that individually exceed the limit cannot be batched safely and
+/// are excluded; the second return value reports how many were dropped so the
+/// caller can emit a single aggregated warning.
+fn partition_into_sub_batches(
+    docs: &[String],
+    per_doc_overhead: usize,
+    max_body_bytes: usize,
+) -> (Vec<Vec<&str>>, usize) {
+    let mut sub_batches: Vec<Vec<&str>> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    let mut current_bytes = 0usize;
+    let mut dropped = 0usize;
+
+    for doc in docs {
+        let doc_cost = per_doc_overhead + doc.len();
+        if doc_cost > max_body_bytes {
+            dropped += 1;
+            continue;
+        }
+        if !current.is_empty() && current_bytes + doc_cost > max_body_bytes {
+            sub_batches.push(std::mem::take(&mut current));
+            current_bytes = 0;
+        }
+        current.push(doc);
+        current_bytes += doc_cost;
+    }
+    if !current.is_empty() {
+        sub_batches.push(current);
+    }
+
+    (sub_batches, dropped)
+}
+
+/// Send one NDJSON body to ES via the Bulk API.
+///
+/// Handles retries with exponential backoff.
+/// On permanent failure, logs error and drops the sub-batch.
+// Threads the request, its config, the health flag, the name, and the shutdown
+// signal as separate borrows; bundling them into a context struct would not
+// improve clarity for a single private helper.
+#[allow(clippy::too_many_arguments)]
+async fn send_bulk_request(
+    client: &Client,
+    bulk_url: &str,
+    body: String,
+    config: &EsBulkConfig,
+    healthy: &Arc<AtomicBool>,
+    name: &str,
+    doc_count: usize,
+    shutdown: &watch::Receiver<bool>,
+) {
     let mut retries = 0u32;
     let mut backoff = config.backoff;
 
     loop {
         match client
-            .post(&bulk_url)
+            .post(bulk_url)
             .header("Content-Type", "application/x-ndjson")
             .body(body.clone())
             .send()
@@ -168,9 +263,9 @@ async fn flush_batch(
                                     .iter()
                                     .filter(|item| item.index.as_ref().map(|i| i.status >= 400).unwrap_or(false))
                                     .count();
-                                tracing::warn!("ES [{}] bulk: {}/{} items failed", name, failed_count, docs.len());
+                                tracing::warn!("ES [{}] bulk: {}/{} items failed", name, failed_count, doc_count);
                             } else {
-                                tracing::debug!("ES [{}] bulk: {} items indexed successfully", name, docs.len());
+                                tracing::debug!("ES [{}] bulk: {} items indexed successfully", name, doc_count);
                             }
                             healthy.store(true, Ordering::Relaxed);
                             return;
@@ -206,7 +301,20 @@ async fn flush_batch(
                 "ES [{}] bulk: max retries ({}) exhausted, {} items lost",
                 name,
                 config.max_retries,
-                docs.len()
+                doc_count
+            );
+            return;
+        }
+
+        // Stop retrying promptly once shutdown is signaled. The retry loop is
+        // otherwise unbounded relative to the 10s drain budget enforced by
+        // EsLinkClient::shutdown: a slow/unreachable ES endpoint would let this
+        // task outlive shutdown by up to max_retries * request_timeout.
+        if *shutdown.borrow() {
+            tracing::info!(
+                "ES [{}] bulk: shutdown signaled, aborting retry ({} items dropped)",
+                name,
+                doc_count
             );
             return;
         }
@@ -232,19 +340,26 @@ async fn flush_batch(
 /// {"index":{"_index":"edgion-logs-2026.02.11"}}
 /// {"message":"log line 2"}
 /// ```
-pub fn build_ndjson_body(docs: &[String], index_name: &str) -> String {
+pub fn build_ndjson_body<S: AsRef<str>>(docs: &[S], index_name: &str) -> String {
     let mut body = String::with_capacity(docs.len() * 256);
-    // Build the index-action header via serde_json so any special characters in
-    // index_name (e.g. " or \) are correctly escaped and the NDJSON stays valid.
-    let header = serde_json::json!({ "index": { "_index": index_name } });
-    let header_line = serde_json::to_string(&header).unwrap_or_default();
+    let header_line = ndjson_header_line(index_name);
     for doc in docs {
         body.push_str(&header_line);
         body.push('\n');
-        body.push_str(doc);
+        body.push_str(doc.as_ref());
         body.push('\n');
     }
     body
+}
+
+/// Build the per-document index-action header line for the ES Bulk API.
+///
+/// Built via serde_json so any special characters in `index_name` (e.g. `"` or
+/// `\`) are correctly escaped and the NDJSON stays valid. The line is constant
+/// for a given index name, so callers hoist it out of the per-document loop.
+fn ndjson_header_line(index_name: &str) -> String {
+    let header = serde_json::json!({ "index": { "_index": index_name } });
+    serde_json::to_string(&header).unwrap_or_default()
 }
 
 // ============================================================================
@@ -313,5 +428,106 @@ mod tests {
         let resp: BulkResponse = serde_json::from_str(json).unwrap();
         assert!(!resp.errors);
         assert!(resp.items.is_empty());
+    }
+
+    #[test]
+    fn test_partition_single_sub_batch_when_within_limit() {
+        let docs = vec!["aaaa".to_string(), "bbbb".to_string(), "cccc".to_string()];
+        // overhead 0 + 4 bytes each = 12 bytes total, well within the limit.
+        let (batches, dropped) = partition_into_sub_batches(&docs, 0, 1024);
+        assert_eq!(dropped, 0);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0], vec!["aaaa", "bbbb", "cccc"]);
+    }
+
+    #[test]
+    fn test_partition_splits_on_byte_budget() {
+        // Each doc costs per_doc_overhead(1) + len(4) = 5 bytes. With a 12-byte
+        // limit, two docs (10 B) fit but a third (15 B) would exceed, so the
+        // batch splits 2 + 1.
+        let docs = vec![
+            "aaaa".to_string(),
+            "bbbb".to_string(),
+            "cccc".to_string(),
+            "dddd".to_string(),
+        ];
+        let (batches, dropped) = partition_into_sub_batches(&docs, 1, 12);
+        assert_eq!(dropped, 0);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0], vec!["aaaa", "bbbb"]);
+        assert_eq!(batches[1], vec!["cccc", "dddd"]);
+    }
+
+    #[test]
+    fn test_partition_drops_oversized_single_doc() {
+        // The middle doc alone (overhead 1 + len 20 = 21 B) exceeds the 10-byte
+        // limit and is dropped; the two small docs each fit in their own batch.
+        let docs = vec!["aa".to_string(), "x".repeat(20), "bb".to_string()];
+        let (batches, dropped) = partition_into_sub_batches(&docs, 1, 10);
+        assert_eq!(dropped, 1);
+        let kept: Vec<&str> = batches.iter().flatten().copied().collect();
+        assert_eq!(kept, vec!["aa", "bb"]);
+    }
+
+    #[test]
+    fn test_partition_empty_input() {
+        let docs: Vec<String> = Vec::new();
+        let (batches, dropped) = partition_into_sub_batches(&docs, 1, 10);
+        assert_eq!(dropped, 0);
+        assert!(batches.is_empty());
+    }
+
+    #[test]
+    fn test_partition_doc_exactly_at_limit_is_kept() {
+        // overhead 2 + len 8 = 10 bytes, exactly the limit — must be kept.
+        let docs = vec!["x".repeat(8)];
+        let (batches, dropped) = partition_into_sub_batches(&docs, 2, 10);
+        assert_eq!(dropped, 0);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].len(), 1);
+    }
+
+    /// link-sys-F016 regression: once the shutdown signal is set, the retry loop
+    /// must exit before the next backoff sleep instead of exhausting `max_retries`.
+    /// With a 5s backoff against an unreachable endpoint, the pre-fix code would
+    /// sleep for seconds; the fix returns promptly after the first failed request,
+    /// so the 2s guard below would trip if any retry sleep ran.
+    #[tokio::test]
+    async fn test_send_bulk_request_aborts_retry_on_shutdown() {
+        let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_millis(200))
+            .timeout(std::time::Duration::from_millis(200))
+            .build()
+            .unwrap();
+        let config = EsBulkConfig {
+            batch_size: 500,
+            flush_interval: std::time::Duration::from_secs(5),
+            max_retries: 10,
+            backoff: std::time::Duration::from_secs(5),
+            max_body_bytes: 10 * 1024 * 1024,
+            channel_size: 10_000,
+            index_prefix: "test-logs".to_string(),
+            date_pattern: "%Y.%m.%d".to_string(),
+        };
+        let healthy = Arc::new(AtomicBool::new(true));
+        // Shutdown is already signaled before the call.
+        let (_tx, shutdown_rx) = watch::channel(true);
+        let body = build_ndjson_body(&[r#"{"message":"x"}"#], "test-logs-2026.01.01");
+
+        // Port 1 is unreachable: the first request fails fast, after which the
+        // shutdown check must return before the 5s backoff sleep.
+        let fut = send_bulk_request(
+            &client,
+            "http://127.0.0.1:1/_bulk",
+            body,
+            &config,
+            &healthy,
+            "test",
+            1,
+            &shutdown_rx,
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), fut)
+            .await
+            .expect("send_bulk_request must return promptly when shutdown is signaled");
     }
 }

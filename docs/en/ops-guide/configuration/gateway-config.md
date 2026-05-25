@@ -150,7 +150,7 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 | `output.localFile.queue_size` | `Integer` | CPU cores × 10000 | Write queue size |
 | `output.localFile.rotation.strategy` | `Enum` | — | Rotation strategy (see table below) |
 | `output.localFile.rotation.max_files` | `Integer` | — | Number of rotated files to retain; `0` means unlimited |
-| `output.localFile.rotation.check_interval_secs` | `Integer` | `30` | Rotation check interval in seconds |
+| `output.localFile.rotation.check_interval_secs` | `Integer` | `30` | Check interval in seconds for the time-based strategies (`daily` / `hourly`). The `Size` strategy is checked after every write batch and is not affected by this field. |
 
 **`rotation.strategy` values:**
 

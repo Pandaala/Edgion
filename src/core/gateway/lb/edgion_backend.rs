@@ -89,9 +89,8 @@ impl EdgionBackend {
             // overflow u64. alpha is clamped to [0, 100], so 100 * u64::MAX
             // still fits in u128. The result is a weighted average bounded by
             // max(latency_us, current) <= u64::MAX, so the cast back is lossless.
-            let new_ewma = ((alpha as u128 * latency_us as u128
-                + (100 - alpha) as u128 * current as u128)
-                / 100) as u64;
+            let new_ewma =
+                ((alpha as u128 * latency_us as u128 + (100 - alpha) as u128 * current as u128) / 100) as u64;
             match self
                 .ewma_us
                 .compare_exchange_weak(current, new_ewma, Ordering::Relaxed, Ordering::Relaxed)

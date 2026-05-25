@@ -17,6 +17,11 @@ spec:
       batchSize: 100
       flushInterval: 2000
       maxRetries: 3
+      # Deliberately tiny so the integration bulk scenario (10 small docs)
+      # is forced to split into several sub-batches, exercising the F-002
+      # max_body_bytes partitioning path. No single doc approaches this size,
+      # so none is dropped and all docs still reach ES.
+      maxBodyBytes: 256
     index:
       prefix: "edgion-test"
       datePattern: "%Y.%m.%d"

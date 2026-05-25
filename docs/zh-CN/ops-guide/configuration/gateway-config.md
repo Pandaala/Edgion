@@ -151,7 +151,7 @@ access_log_sensitive:
 | `output.localFile.queue_size` | `Integer` | CPU 核心数 × 10000 | 写入队列大小 |
 | `output.localFile.rotation.strategy` | `Enum` | — | 轮转策略（见下表） |
 | `output.localFile.rotation.max_files` | `Integer` | — | 保留的轮转文件数，`0` 表示无限 |
-| `output.localFile.rotation.check_interval_secs` | `Integer` | `30` | 轮转检查间隔秒数 |
+| `output.localFile.rotation.check_interval_secs` | `Integer` | `30` | 时间型策略（`daily` / `hourly`）的检查间隔秒数。`Size` 策略在每批写入后检查，不受此字段影响。 |
 
 **`rotation.strategy` 可选值：**
 

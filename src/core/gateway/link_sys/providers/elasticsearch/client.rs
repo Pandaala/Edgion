@@ -64,6 +64,10 @@ impl EsLinkClient {
         config: &ElasticsearchClientConfig,
         auth: &CredentialState<ResolvedCredential>,
     ) -> Result<Self> {
+        if config.endpoints.is_empty() {
+            anyhow::bail!("Elasticsearch endpoints list is empty for '{}'", name);
+        }
+
         let (client, _headers) = build_es_client(config, auth)?;
         let bulk_config = EsBulkConfig::from_crd(config);
 
@@ -199,14 +203,23 @@ impl EsLinkClient {
         // (per-request timeout + retries can reach ~90s; we cap the total wait at 10s).
         let handle = self.bulk_task.lock().take();
         if let Some(handle) = handle {
+            // Capture an abort handle before moving the join handle into `timeout`.
+            // `tokio::time::timeout` over a JoinHandle only stops the caller from
+            // waiting — it does NOT abort the spawned task. Without an explicit
+            // abort, a task stuck in an in-flight HTTP request keeps running
+            // detached past the 10s budget. `bulk_ingest_loop` already exits its
+            // retry loop promptly on the shutdown signal; this abort is the hard
+            // backstop for a single request hung beyond the budget.
+            let abort_handle = handle.abort_handle();
             match tokio::time::timeout(Duration::from_secs(10), handle).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
                     tracing::warn!("ES [{}] bulk task join error: {:?}", self.name, e);
                 }
                 Err(_) => {
+                    abort_handle.abort();
                     tracing::warn!(
-                        "ES [{}] bulk task did not drain within 10s; buffered docs may be lost",
+                        "ES [{}] bulk task did not drain within 10s; aborting (buffered docs may be lost)",
                         self.name
                     );
                 }
@@ -246,5 +259,40 @@ impl LinkSysLifecycle for EsLinkClient {
 
     async fn shutdown(&self) -> anyhow::Result<()> {
         EsLinkClient::shutdown(self).await
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with_endpoints(endpoints: Vec<String>) -> ElasticsearchClientConfig {
+        ElasticsearchClientConfig {
+            endpoints,
+            auth: None,
+            tls: None,
+            timeout: None,
+            pool: None,
+            bulk: None,
+            index: None,
+            failed_cache: None,
+            compatibility: None,
+        }
+    }
+
+    fn no_auth() -> CredentialState<ResolvedCredential> {
+        CredentialState::NotRequired
+    }
+
+    #[test]
+    fn test_empty_endpoints_returns_error() {
+        let config = config_with_endpoints(vec![]);
+        let result = EsLinkClient::from_config("test", &config, &no_auth());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty"));
     }
 }

@@ -120,7 +120,10 @@ pub struct EsBulk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backoff_ms: Option<u64>,
 
-    /// Maximum bulk request body size in bytes (default: 10MB)
+    /// Maximum bulk request body size in bytes (default: 10MB, ceiling: 50MB).
+    /// A batch whose NDJSON body would exceed this is split into multiple bulk
+    /// requests; a single document that on its own exceeds the limit is dropped
+    /// with a warning, since it can never be batched safely.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_body_bytes: Option<usize>,
 

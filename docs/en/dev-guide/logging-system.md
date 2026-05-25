@@ -117,13 +117,15 @@ LocalFileWriter implements batch writing logic:
 ```rust
 // Block waiting for the first log entry
 while let Ok(first_line) = rx.recv() {
-    let _ = writeln!(file, "{}", first_line);
-    
+    // write_log_line tracks size only on success and, on a write error,
+    // records the dropped-log metric + logs the first error of a burst.
+    write_log_line(&mut file, &first_line, &mut current_size, &mut consecutive_write_errors, log_type);
+
     // Batch process remaining logs (up to 999 more, 1000 total)
     for _ in 0..999 {
         match rx.try_recv() {
             Ok(line) => {
-                let _ = writeln!(file, "{}", line);
+                write_log_line(&mut file, &line, &mut current_size, &mut consecutive_write_errors, log_type);
             }
             Err(_) => break,
         }
@@ -158,7 +160,11 @@ Automatic cleanup of old files, keeping the most recent N (configurable via `max
 
 #### 4. Metrics Integration
 
-When queue-full causes log drops, metrics are automatically recorded:
+A log line counts as dropped in two cases, both recorded on the same metric: the
+send queue is full (`send` below), or the background thread fails to write the line
+to disk (disk full, permission revoked, file deleted externally). A write failure
+also emits a `tracing::error!` (debounced to the first error of a burst) and leaves
+the tracked file size unchanged so it cannot trigger premature size rotation.
 
 ```rust
 async fn send(&self, data: String) -> Result<()> {
@@ -557,14 +563,15 @@ All logs are output in JSON format, one record per line. Below are format exampl
 
 ## Metrics Monitoring
 
-Each log type has independent dropped metrics for monitoring queue-full log loss:
+Each log type has independent dropped metrics for monitoring log loss, counting both
+queue-full drops and background file-write failures:
 
 | Metric Name | Description | Trigger |
 |------------|-------------|---------|
-| `edgion_access_log_dropped_total` | Access log dropped count | Access log queue full |
-| `edgion_ssl_log_dropped_total` | SSL log dropped count | SSL log queue full |
-| `edgion_tcp_log_dropped_total` | TCP log dropped count | TCP log queue full |
-| `edgion_udp_log_dropped_total` | UDP log dropped count | UDP log queue full |
+| `edgion_access_log_dropped_total` | Access log dropped count | Access log queue full or file-write failure |
+| `edgion_ssl_log_dropped_total` | SSL log dropped count | SSL log queue full or file-write failure |
+| `edgion_tcp_log_dropped_total` | TCP log dropped count | TCP log queue full or file-write failure |
+| `edgion_udp_log_dropped_total` | UDP log dropped count | UDP log queue full or file-write failure |
 
 **Monitoring examples**:
 

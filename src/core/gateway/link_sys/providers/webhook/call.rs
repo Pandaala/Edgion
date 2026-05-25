@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use bytes::Bytes;
+use futures::StreamExt;
 
 use super::health::{record_passive_result, should_halfopen_probe};
 use super::runtime::WebhookRuntime;
@@ -160,20 +161,27 @@ pub async fn webhook_call(
                     return Err(WebhookCallError::StatusNotSuccess { status, body });
                 }
 
-                // Read body
-                let resp_headers = resp.headers().clone();
-                let body = match resp.bytes().await {
-                    Ok(b) => {
-                        if b.len() > max_bytes {
-                            return Err(WebhookCallError::ResponseTooLarge);
-                        }
-                        b
+                // Read body without buffering an oversized response: a declared
+                // Content-Length over the cap is refused before reading any body,
+                // and the streaming accumulator stops the moment the running total
+                // would exceed the cap (peak memory <= cap + one chunk). Mirrors
+                // `core/common/http_util::fetch_json_limited`.
+                if let Some(cl) = resp.content_length() {
+                    if cl > max_bytes as u64 {
+                        return Err(WebhookCallError::ResponseTooLarge);
                     }
+                }
+                let resp_headers = resp.headers().clone();
+                let (body, truncated) = match stream_body_capped(resp, max_bytes).await {
+                    Ok(v) => v,
                     Err(e) => {
                         record_passive_result(runtime, false);
                         return Err(WebhookCallError::Connect(e.to_string()));
                     }
                 };
+                if truncated {
+                    return Err(WebhookCallError::ResponseTooLarge);
+                }
 
                 return Ok(WebhookCallResult {
                     status,
@@ -280,7 +288,8 @@ fn inject_auth(auth: &Option<WebhookAuth>, headers: &mut reqwest::header::Header
             }
         }
         WebhookAuth::Hmac { .. } => {
-            // HMAC signing is deferred: requires body bytes before building the request.
+            // Unreachable: WebhookManager::upsert rejects auth.hmac at registration time
+            // (signing is not yet implemented), so this arm never executes in practice.
         }
     }
 }
@@ -302,17 +311,33 @@ fn compute_retry_delay_ms(attempt: u32, base_ms: u64, max_ms: u64) -> u64 {
     (exp + jitter).min(max_ms)
 }
 
-async fn read_body_limited(resp: reqwest::Response, max_bytes: usize) -> Bytes {
-    match resp.bytes().await {
-        Ok(b) => {
-            if b.len() <= max_bytes {
-                b
-            } else {
-                b.slice(..max_bytes)
-            }
+/// Stream a response body, accumulating at most `max_bytes`. Returns the
+/// collected bytes and whether the body exceeded the cap (further chunks were
+/// discarded). Peak memory is at most `max_bytes` plus one chunk, regardless of
+/// the actual body size.
+async fn stream_body_capped(resp: reqwest::Response, max_bytes: usize) -> Result<(Bytes, bool), reqwest::Error> {
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::with_capacity(8192.min(max_bytes));
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        let remaining = max_bytes - buf.len();
+        if chunk.len() > remaining {
+            buf.extend_from_slice(&chunk[..remaining]);
+            return Ok((Bytes::from(buf), true));
         }
-        Err(_) => Bytes::new(),
+        buf.extend_from_slice(&chunk);
     }
+    Ok((Bytes::from(buf), false))
+}
+
+/// Read a non-success response body for diagnostics, truncated to `max_bytes`.
+/// A read error yields whatever was already buffered (empty on the first
+/// failing chunk), matching the previous all-or-nothing behavior.
+async fn read_body_limited(resp: reqwest::Response, max_bytes: usize) -> Bytes {
+    stream_body_capped(resp, max_bytes)
+        .await
+        .map(|(b, _)| b)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -364,6 +389,30 @@ mod tests {
             headers: HashMap::new(),
             body: None,
         }
+    }
+
+    /// Spawn a one-shot server that returns a 200 with the body sent via
+    /// `Transfer-Encoding: chunked` (no `Content-Length`), so the size guard
+    /// must be enforced by the streaming accumulator rather than the
+    /// Content-Length pre-check.
+    async fn spawn_chunked_server(body: Vec<u8>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut throwaway = [0u8; 1024];
+            let _ = sock.read(&mut throwaway).await;
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n",
+                body.len()
+            );
+            let _ = sock.write_all(header.as_bytes()).await;
+            let _ = sock.write_all(&body).await;
+            let _ = sock.write_all(b"\r\n0\r\n\r\n").await;
+            let _ = sock.shutdown().await;
+        });
+        format!("http://{addr}/")
     }
 
     // ============================================================
@@ -524,6 +573,38 @@ mod tests {
             matches!(result, Err(WebhookCallError::ResponseTooLarge)),
             "Expected ResponseTooLarge"
         );
+    }
+
+    /// 5b. Streaming guard: a chunked response (no Content-Length) larger than
+    /// the cap is rejected by the streaming accumulator, not buffered in full.
+    #[tokio::test]
+    async fn chunked_response_exceeding_cap_returns_too_large() {
+        let url = spawn_chunked_server(vec![b'z'; 4096]).await;
+        let runtime = make_runtime(url, |c| {
+            c.max_response_bytes = 128;
+        });
+
+        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        assert!(
+            matches!(result, Err(WebhookCallError::ResponseTooLarge)),
+            "Expected ResponseTooLarge from streaming guard, got {result:?}"
+        );
+    }
+
+    /// 5c. A chunked response within the cap is read in full via the streaming
+    /// path (no false truncation when Content-Length is absent).
+    #[tokio::test]
+    async fn chunked_response_within_cap_returns_full_body() {
+        let body = b"streamed-body".to_vec();
+        let url = spawn_chunked_server(body.clone()).await;
+        let runtime = make_runtime(url, |c| {
+            c.max_response_bytes = 1024;
+        });
+
+        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        let ok = result.expect("Expected Ok");
+        assert_eq!(ok.status, 200);
+        assert_eq!(ok.body.as_ref(), body.as_slice());
     }
 
     /// 6. Bearer auth injection: Authorization: Bearer tok123 is sent to the server.

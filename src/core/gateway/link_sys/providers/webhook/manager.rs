@@ -96,6 +96,12 @@ impl WebhookManager {
                 ));
             }
         }
+        if let Some(WebhookAuth::Hmac { .. }) = config.auth.as_ref() {
+            return Err(anyhow::anyhow!(
+                "webhook '{}': auth.hmac is not yet implemented; remove the auth field or use bearer/basic/apiKey(header)",
+                webhook_ref
+            ));
+        }
 
         let tls_on = config.tls.as_ref().is_some_and(|t| t.enabled);
         let scheme = if tls_on { "https" } else { "http" };
@@ -471,5 +477,34 @@ mod tests {
         };
         let result = manager.upsert("ns/wh", config, None).await;
         assert!(result.is_err(), "ServiceImport should be rejected by manager");
+    }
+
+    #[tokio::test]
+    async fn test_manager_hmac_auth_returns_error() {
+        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
+        use crate::types::resources::link_sys::webhook::{WebhookAuth, WebhookTarget};
+
+        let manager = WebhookManager::new();
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Uri {
+                uri: "http://localhost:8080/resolve".to_string(),
+            },
+            auth: Some(WebhookAuth::Hmac {
+                slot: SecretSlot {
+                    secret_ref: SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: "hmac-secret".to_string(),
+                        namespace: None,
+                    },
+                    secret: None,
+                },
+            }),
+            ..Default::default()
+        };
+        // auth.hmac is not yet implemented; upsert must fail closed rather than
+        // register a webhook that silently sends unsigned requests.
+        let result = manager.upsert("ns/wh", config, None).await;
+        assert!(result.is_err(), "auth.hmac should be rejected by manager");
     }
 }

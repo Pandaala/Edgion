@@ -118,7 +118,9 @@ impl RrCore {
         }
         let addr_map = &self.addr_map;
         self.selector
-            .select(SELECT_MAX_ITERATIONS, |b| backend_passes_health(b, addr_map, &health_filter))
+            .select(SELECT_MAX_ITERATIONS, |b| {
+                backend_passes_health(b, addr_map, &health_filter)
+            })
             .and_then(|b| resolve_backend(&b, addr_map).cloned())
     }
 }
@@ -155,7 +157,9 @@ impl ChCore {
         // second identical copy: both are built from the same backend slice.
         let addr_map = &self.rr_fallback.addr_map;
         self.ring
-            .select(hash_key, SELECT_MAX_ITERATIONS, |b| backend_passes_health(b, addr_map, &health_filter))
+            .select(hash_key, SELECT_MAX_ITERATIONS, |b| {
+                backend_passes_health(b, addr_map, &health_filter)
+            })
             .and_then(|b| resolve_backend(&b, addr_map).cloned())
     }
 }

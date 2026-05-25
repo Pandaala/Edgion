@@ -38,7 +38,13 @@ fn gcd(mut a: usize, mut b: usize) -> usize {
 ///
 /// Zero weights are left as zero (callers filter them out before selection).
 fn normalize_weights(mut weights: Vec<usize>) -> Vec<usize> {
-    let divisor = weights.iter().copied().filter(|&w| w > 0).reduce(gcd).unwrap_or(1).max(1);
+    let divisor = weights
+        .iter()
+        .copied()
+        .filter(|&w| w > 0)
+        .reduce(gcd)
+        .unwrap_or(1)
+        .max(1);
     if divisor > 1 {
         for w in weights.iter_mut() {
             *w /= divisor;

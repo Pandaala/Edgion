@@ -138,16 +138,25 @@ pub fn should_halfopen_probe(runtime: &WebhookRuntime) -> bool {
     };
 
     let now = now_epoch_secs();
-    let last = runtime.last_halfopen.load(Ordering::Relaxed);
+    let last = runtime.last_halfopen.load(Ordering::Acquire);
     let interval = runtime.backoff_sec.load(Ordering::Relaxed);
 
     if interval == 0 || now >= last + interval {
-        runtime.last_halfopen.store(now, Ordering::Relaxed);
-        let next_backoff = ((interval as f64) * backoff.multiplier) as u64;
-        runtime
-            .backoff_sec
-            .store(next_backoff.min(backoff.max_sec), Ordering::Relaxed);
-        return true;
+        // Only the CAS winner admits the probe. Concurrent callers that observed
+        // the same `last` lose the swap and fall through to `false`, so exactly one
+        // half-open probe is sent per backoff window instead of a thundering herd.
+        // Mirrors SlidingWindowCounter::try_acquire (see review finding F-006).
+        if runtime
+            .last_halfopen
+            .compare_exchange(last, now, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
+            let next_backoff = ((interval as f64) * backoff.multiplier) as u64;
+            runtime
+                .backoff_sec
+                .store(next_backoff.min(backoff.max_sec), Ordering::Relaxed);
+            return true;
+        }
     }
     false
 }
@@ -163,7 +172,7 @@ mod tests {
 
     use crate::core::gateway::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
     use crate::types::resources::link_sys::webhook::{
-        PassiveHealthCheck, WebhookHealthCheck, WebhookServiceConfig, WebhookTarget,
+        PassiveBackoff, PassiveHealthCheck, WebhookHealthCheck, WebhookServiceConfig, WebhookTarget,
     };
 
     #[test]
@@ -239,5 +248,67 @@ mod tests {
         record_passive_result(&runtime, true);
         assert_eq!(runtime.passive_failures.load(Ordering::Relaxed), 0);
         assert!(runtime.healthy.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_halfopen_probe_admits_exactly_one_under_contention() {
+        use std::sync::{Arc, Barrier};
+
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Uri {
+                uri: "http://localhost:8080".to_string(),
+            },
+            health_check: Some(WebhookHealthCheck {
+                active: None,
+                passive: Some(PassiveHealthCheck {
+                    unhealthy_threshold: 3,
+                    failure_status_codes: vec![500],
+                    count_timeout: true,
+                    backoff: Some(PassiveBackoff {
+                        initial_sec: 5,
+                        multiplier: 2.0,
+                        max_sec: 60,
+                    }),
+                }),
+            }),
+            ..Default::default()
+        };
+
+        // Unhealthy with the backoff window already elapsed (last_halfopen = 0,
+        // interval = 5, now = current epoch), so the gate is open for one probe.
+        let runtime = Arc::new(WebhookRuntime {
+            config,
+            http_client: std::sync::Arc::new(reqwest::Client::builder().build().expect("test client")),
+            resolved_target: WebhookResolvedTarget::Static("http://localhost:8080".to_string()),
+            healthy: AtomicBool::new(false),
+            passive_failures: AtomicU32::new(0),
+            last_halfopen: AtomicU64::new(0),
+            backoff_sec: AtomicU64::new(5),
+            rate_counter: None,
+        });
+
+        const THREADS: usize = 16;
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let rt = Arc::clone(&runtime);
+                let b = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    b.wait();
+                    should_halfopen_probe(&rt)
+                })
+            })
+            .collect();
+
+        let granted = handles
+            .into_iter()
+            .map(|h| h.join().expect("thread join"))
+            .filter(|&won| won)
+            .count();
+
+        assert_eq!(
+            granted, 1,
+            "exactly one concurrent caller should win the half-open probe"
+        );
     }
 }
