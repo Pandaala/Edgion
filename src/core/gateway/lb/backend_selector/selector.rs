@@ -10,6 +10,10 @@ use std::sync::Arc;
 /// Error codes for backend selection configuration
 pub const ERR_NO_BACKEND_REFS: u32 = 1;
 pub const ERR_INCONSISTENT_WEIGHT: u32 = 2;
+/// The weighted round-robin selector could not be constructed (invariant violation).
+/// Currently unreachable because `create_state` pre-validates all inputs; kept as a
+/// fail-close path so a future change cannot turn a `WrrError` into a panic.
+pub const ERR_WRR_BUILD_FAILED: u32 = 3;
 
 /// Internal selector state
 enum SelectorState<T> {
@@ -111,9 +115,15 @@ impl<T: Clone> BackendSelector<T> {
             return SelectorState::Single(item);
         }
 
-        // Multiple valid items - create weighted round-robin selector
+        // Multiple valid items - create weighted round-robin selector.
+        // Inputs are already validated above (len >= 2, lengths match, all weights > 0),
+        // so `new` cannot fail here; map any error to a fail-close error code rather
+        // than unwrapping, so a future change to the pre-validation degrades gracefully.
         let (items, weights): (Vec<T>, Vec<usize>) = valid_items.into_iter().unzip();
-        SelectorState::Multiple(WeightedRoundRobin::new(items, weights))
+        match WeightedRoundRobin::new(items, weights) {
+            Ok(wrr) => SelectorState::Multiple(wrr),
+            Err(_) => SelectorState::Error(ERR_WRR_BUILD_FAILED),
+        }
     }
 
     /// Select a backend.

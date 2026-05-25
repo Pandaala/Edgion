@@ -122,7 +122,21 @@ impl WebhookManager {
                             WebhookResolvedTarget::Pending
                         } else {
                             let urls: Vec<String> = endpoints.iter().map(|ep| format!("{scheme}://{ep}")).collect();
-                            WebhookResolvedTarget::Endpoints(WeightedRoundRobin::with_equal_weights(urls))
+                            match WeightedRoundRobin::with_equal_weights(urls) {
+                                Ok(rr) => WebhookResolvedTarget::Endpoints(rr),
+                                Err(e) => {
+                                    // Fail-close: treat the webhook as not-yet-ready rather than
+                                    // routing to a malformed selector. Runs at registration time
+                                    // (not the request hot path), so logging is allowed here.
+                                    tracing::warn!(
+                                        webhook = %webhook_ref,
+                                        count = endpoints.len(),
+                                        error = %e,
+                                        "Failed to build webhook endpoint selector; treating target as pending"
+                                    );
+                                    WebhookResolvedTarget::Pending
+                                }
+                            }
                         }
                     }
                     _ => {

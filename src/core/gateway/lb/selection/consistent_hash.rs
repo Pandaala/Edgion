@@ -3,6 +3,17 @@ use pingora_ketama::{Bucket, Continuum};
 use pingora_load_balancing::Backend;
 use std::collections::HashMap;
 
+/// Upper bound on a single backend's ketama weight.
+///
+/// Each unit of weight expands into ~160 virtual nodes on the ring, and the
+/// value is cast `usize -> u32` before reaching `Bucket::new`. Per-endpoint
+/// weights are hard-coded to 1 today, so the clamp is a no-op; it is
+/// defense-in-depth for the day per-endpoint weights are introduced, when an
+/// unclamped value would (a) silently truncate on the cast and (b) expand into
+/// a multi-GB ring. A 1024:1 ratio is finer than any realistic backend split.
+/// Mirrors the WeightedRoundRobin weight cap (lb-F005).
+const MAX_CH_BACKEND_WEIGHT: usize = 1 << 10;
+
 /// Consistent hash ring wrapping `pingora_ketama::Continuum`.
 ///
 /// Built from a backend list; walks the ring clockwise for fallback.
@@ -18,7 +29,7 @@ impl ConsistentHashRing {
             .iter()
             .filter_map(|b| {
                 if let SocketAddr::Inet(addr) = b.addr {
-                    Some(Bucket::new(addr, b.weight.max(1) as u32))
+                    Some(Bucket::new(addr, b.weight.clamp(1, MAX_CH_BACKEND_WEIGHT) as u32))
                 } else {
                     None
                 }
@@ -264,6 +275,21 @@ mod tests {
         backends[0].weight = 200;
         let ring = ConsistentHashRing::build(&backends);
         assert!(ring.select(b"f004-key", 1_000_000, |_| false).is_none());
+    }
+
+    #[test]
+    fn huge_weight_is_clamped_and_ring_stays_bounded() {
+        // Defense-in-depth: a weight that would overflow the `usize -> u32` cast
+        // (silently truncating) and explode the ~160*weight vnode count must be
+        // clamped. Build must not OOM/panic and selection must still succeed.
+        // (Today all weights are 1; this guards the day per-endpoint weights land.)
+        let mut backends: Vec<Backend> = (1..=3).map(make_backend).collect();
+        backends[0].weight = usize::MAX;
+        let ring = ConsistentHashRing::build(&backends);
+        assert!(
+            ring.select(b"clamp-key", 8, |_| true).is_some(),
+            "ring built from a clamped huge weight must still select a backend"
+        );
     }
 
     #[test]

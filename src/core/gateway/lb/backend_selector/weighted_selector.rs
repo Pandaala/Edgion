@@ -55,6 +55,37 @@ fn normalize_weights(mut weights: Vec<usize>) -> Vec<usize> {
     weights
 }
 
+/// Construction-time invariant violation for [`WeightedRoundRobin`].
+///
+/// Returned by [`WeightedRoundRobin::new`] / [`WeightedRoundRobin::with_equal_weights`]
+/// instead of panicking, so callers on long-running paths (lazy route init, webhook
+/// resolve) can fail gracefully (fail-close) rather than abort the process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WrrError {
+    /// `items` was empty.
+    EmptyItems,
+    /// `items` and `weights` had different lengths.
+    LengthMismatch,
+    /// `items` exceeded the `u16`-indexable limit (65535).
+    TooManyItems,
+    /// The sum of `weights` was zero.
+    ZeroTotalWeight,
+}
+
+impl std::fmt::Display for WrrError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = match self {
+            WrrError::EmptyItems => "items must not be empty",
+            WrrError::LengthMismatch => "items and weights must have same length",
+            WrrError::TooManyItems => "supports up to 65535 items",
+            WrrError::ZeroTotalWeight => "total weight must be greater than 0",
+        };
+        f.write_str(msg)
+    }
+}
+
+impl std::error::Error for WrrError {}
+
 /// Lock-free Smooth Weighted Round Robin selector
 ///
 /// Pre-computes a smooth sequence at construction time, then uses atomic counter
@@ -68,7 +99,7 @@ fn normalize_weights(mut weights: Vec<usize>) -> Vec<usize> {
 /// ```ignore
 /// let backends = vec!["server1", "server2", "server3"];
 /// let weights = vec![3, 1, 2]; // server1 has weight 3, etc.
-/// let selector = WeightedRoundRobin::new(backends, weights);
+/// let selector = WeightedRoundRobin::new(backends, weights).unwrap();
 ///
 /// // Selection sequence will be smoothly distributed:
 /// // server1, server3, server1, server2, server3, server1, ...
@@ -92,15 +123,24 @@ impl<T> WeightedRoundRobin<T> {
     /// * `items` - A vector of items to select from
     /// * `weights` - A vector of weights for each item. Must have same length as items.
     ///
-    /// # Panics
-    /// Panics if items is empty, weights length doesn't match items, or total weight is 0.
-    pub fn new(items: Vec<T>, weights: Vec<usize>) -> Self {
-        assert!(!items.is_empty(), "items must not be empty");
-        assert_eq!(items.len(), weights.len(), "items and weights must have same length");
-        assert!(items.len() <= u16::MAX as usize, "supports up to 65535 items");
+    /// # Errors
+    /// Returns [`WrrError`] if `items` is empty, `weights` length doesn't match
+    /// `items`, there are more than 65535 items, or the total weight is 0.
+    pub fn new(items: Vec<T>, weights: Vec<usize>) -> Result<Self, WrrError> {
+        if items.is_empty() {
+            return Err(WrrError::EmptyItems);
+        }
+        if items.len() != weights.len() {
+            return Err(WrrError::LengthMismatch);
+        }
+        if items.len() > u16::MAX as usize {
+            return Err(WrrError::TooManyItems);
+        }
 
         let total_weight: usize = weights.iter().sum();
-        assert!(total_weight > 0, "total weight must be greater than 0");
+        if total_weight == 0 {
+            return Err(WrrError::ZeroTotalWeight);
+        }
 
         // Bound the precomputed sequence before expansion so a large (or
         // unclamped attacker-controlled) weight cannot blow up the allocation.
@@ -109,11 +149,11 @@ impl<T> WeightedRoundRobin<T> {
         // Pre-compute smooth sequence using Smooth WRR algorithm
         let sequence = Self::generate_smooth_sequence(&weights);
 
-        Self {
+        Ok(Self {
             items: items.into_boxed_slice(),
             sequence: sequence.into_boxed_slice(),
             counter: AtomicUsize::new(0),
-        }
+        })
     }
 
     /// Generate smooth sequence using Smooth Weighted Round Robin algorithm.
@@ -160,7 +200,10 @@ impl<T> WeightedRoundRobin<T> {
     ///
     /// # Arguments
     /// * `items` - A vector of items to select from
-    pub fn with_equal_weights(items: Vec<T>) -> Self {
+    ///
+    /// # Errors
+    /// Returns [`WrrError`] if `items` is empty (see [`WeightedRoundRobin::new`]).
+    pub fn with_equal_weights(items: Vec<T>) -> Result<Self, WrrError> {
         let len = items.len();
         let weights = vec![1; len];
         Self::new(items, weights)
@@ -271,7 +314,7 @@ mod tests {
         // not allocate an O(sum-of-weights) sequence.
         let a = 1_000_000_007usize;
         let b = 1_000_000_009usize;
-        let wrr = WeightedRoundRobin::new(vec!["a", "b"], vec![a, b]);
+        let wrr = WeightedRoundRobin::new(vec!["a", "b"], vec![a, b]).expect("valid WRR inputs");
         assert!(
             wrr.sequence_len() <= MAX_SMOOTH_SEQUENCE_LEN + 2,
             "sequence must stay bounded, got {}",
@@ -282,7 +325,8 @@ mod tests {
     #[test]
     fn new_huge_equal_weights_still_distribute_evenly() {
         // After normalization the ratio is intact: a huge 1:1 split is still 1:1.
-        let wrr = WeightedRoundRobin::new(vec!["a", "b"], vec![i32::MAX as usize, i32::MAX as usize]);
+        let wrr = WeightedRoundRobin::new(vec!["a", "b"], vec![i32::MAX as usize, i32::MAX as usize])
+            .expect("valid WRR inputs");
         let mut a = 0;
         let mut b = 0;
         for _ in 0..10 {

@@ -5,8 +5,8 @@
 mod selector;
 mod weighted_selector;
 
-pub use selector::{BackendSelector, ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
-pub use weighted_selector::WeightedRoundRobin;
+pub use selector::{BackendSelector, ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS, ERR_WRR_BUILD_FAILED};
+pub use weighted_selector::{WeightedRoundRobin, WrrError};
 
 #[cfg(test)]
 mod tests {
@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn weighted_rr_with_equal_weights_distributes_evenly() {
-        let wrr = WeightedRoundRobin::with_equal_weights(vec!["a", "b", "c"]);
+        let wrr = WeightedRoundRobin::with_equal_weights(vec!["a", "b", "c"]).expect("valid WRR inputs");
         let mut counts: HashMap<&'static str, usize> = HashMap::new();
         for _ in 0..9 {
             *counts.entry(*wrr.select()).or_default() += 1;
@@ -107,7 +107,7 @@ mod tests {
     fn weighted_rr_smooth_distribution_does_not_cluster() {
         // Smooth WRR should not return [a,a,a,b,c,c] for weights [3,1,2];
         // the first three picks must touch at least 2 distinct items.
-        let wrr = WeightedRoundRobin::new(vec!["a", "b", "c"], vec![3, 1, 2]);
+        let wrr = WeightedRoundRobin::new(vec!["a", "b", "c"], vec![3, 1, 2]).expect("valid WRR inputs");
         let first_three: Vec<_> = (0..3).map(|_| *wrr.select()).collect();
         let distinct: std::collections::HashSet<_> = first_three.iter().collect();
         assert!(
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn weighted_rr_select_index_matches_select() {
-        let wrr = WeightedRoundRobin::new(vec!["a", "b"], vec![1, 1]);
+        let wrr = WeightedRoundRobin::new(vec!["a", "b"], vec![1, 1]).expect("valid WRR inputs");
         assert_eq!(wrr.len(), 2);
         assert!(!wrr.is_empty());
         assert_eq!(wrr.sequence_len(), 2);
@@ -129,20 +129,20 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "items must not be empty")]
-    fn weighted_rr_panics_on_empty_items() {
-        let _: WeightedRoundRobin<&'static str> = WeightedRoundRobin::new(vec![], vec![]);
+    fn weighted_rr_rejects_empty_items() {
+        let r: Result<WeightedRoundRobin<&'static str>, _> = WeightedRoundRobin::new(vec![], vec![]);
+        assert_eq!(r.err(), Some(WrrError::EmptyItems));
     }
 
     #[test]
-    #[should_panic(expected = "items and weights must have same length")]
-    fn weighted_rr_panics_on_length_mismatch() {
-        let _ = WeightedRoundRobin::new(vec!["a", "b"], vec![1]);
+    fn weighted_rr_rejects_length_mismatch() {
+        let r = WeightedRoundRobin::new(vec!["a", "b"], vec![1]);
+        assert_eq!(r.err(), Some(WrrError::LengthMismatch));
     }
 
     #[test]
-    #[should_panic(expected = "total weight must be greater than 0")]
-    fn weighted_rr_panics_on_zero_total_weight() {
-        let _ = WeightedRoundRobin::new(vec!["a", "b"], vec![0, 0]);
+    fn weighted_rr_rejects_zero_total_weight() {
+        let r = WeightedRoundRobin::new(vec!["a", "b"], vec![0, 0]);
+        assert_eq!(r.err(), Some(WrrError::ZeroTotalWeight));
     }
 }

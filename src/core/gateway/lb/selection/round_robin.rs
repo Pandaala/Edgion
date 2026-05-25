@@ -8,6 +8,54 @@ use crate::core::gateway::observe::metrics::registry::record_rr_selector_truncat
 /// are only visible via the `edgion_rr_selector_truncated_total` counter.
 static TRUNCATION_WARN_ONCE: Once = Once::new();
 
+/// Upper bound on the expanded `weighted` index array length.
+///
+/// `weighted` is a `Box<[u16]>` (~2 bytes/entry) whose length is the sum of the
+/// (normalized) per-backend weights. Per-endpoint weights are hard-coded to 1
+/// today, so the sum equals the backend count (<= u16::MAX) and this cap is a
+/// no-op; it is defense-in-depth for the day per-endpoint weights are
+/// introduced, when a single unclamped `weight` would otherwise expand into a
+/// multi-GB allocation. Mirrors the WeightedRoundRobin cap (lb-F005).
+const MAX_RR_WEIGHTED_LEN: usize = 1 << 20;
+
+/// Greatest common divisor (Euclid's algorithm). `gcd(x, 0) == x`.
+fn gcd(mut a: usize, mut b: usize) -> usize {
+    while b != 0 {
+        let r = a % b;
+        a = b;
+        b = r;
+    }
+    a
+}
+
+/// Normalize per-backend weights (each already `>= 1`) so the expanded index
+/// array stays within `MAX_RR_WEIGHTED_LEN`, preserving the traffic ratio.
+/// Mirrors `weighted_selector::normalize_weights` (lb-F005):
+///
+/// 1. Reduce by the greatest common divisor — lossless, collapses e.g.
+///    `[100, 100]` to `[1, 1]` so common-factor weights cost almost nothing
+///    regardless of magnitude.
+/// 2. If the total still exceeds the cap (only reachable with adversarial
+///    coprime large weights), scale every weight down proportionally, keeping
+///    at least 1 so no backend drops out of the rotation.
+fn normalize_rr_weights(mut weights: Vec<usize>) -> Vec<usize> {
+    let divisor = weights.iter().copied().reduce(gcd).unwrap_or(1).max(1);
+    if divisor > 1 {
+        for w in weights.iter_mut() {
+            *w /= divisor;
+        }
+    }
+
+    let total: usize = weights.iter().sum();
+    if total > MAX_RR_WEIGHTED_LEN {
+        for w in weights.iter_mut() {
+            *w = ((*w as u128 * MAX_RR_WEIGHTED_LEN as u128) / total as u128).max(1) as usize;
+        }
+    }
+
+    weights
+}
+
 /// Weighted round-robin selector.
 ///
 /// Builds a `weighted` index array where each backend appears `weight` times.
@@ -40,9 +88,11 @@ impl RoundRobinSelector {
         let mut sorted = backends.to_vec();
         sorted.sort_by(|a, b| a.addr.cmp(&b.addr));
 
-        let mut weighted = Vec::with_capacity(sorted.len());
-        for (index, b) in sorted.iter().enumerate() {
-            for _ in 0..b.weight.max(1) {
+        let weights = normalize_rr_weights(sorted.iter().map(|b| b.weight.max(1)).collect());
+        let total_len: usize = weights.iter().sum();
+        let mut weighted = Vec::with_capacity(total_len);
+        for (index, &w) in weights.iter().enumerate() {
+            for _ in 0..w {
                 weighted.push(index as u16);
             }
         }
@@ -255,6 +305,38 @@ mod tests {
             "max_iterations=1 must skip fallback walk, got {:?}",
             picked
         );
+    }
+
+    #[test]
+    fn huge_per_backend_weight_is_capped_and_light_backend_survives() {
+        // Defense-in-depth: an adversarially large per-backend weight must not
+        // expand the `weighted` index array without bound. With the cap, build
+        // must not OOM and every backend must keep at least one slot — proven by
+        // the fallback walk still locating the light backend when the heavy one
+        // is rejected. (Today all weights are 1; this guards the future.)
+        let backends = vec![make_backend_weighted(1, 100_000_000), make_backend_weighted(2, 1)];
+        let light = backends[1].addr.clone();
+        let selector = RoundRobinSelector::build(&backends);
+        let picked = selector
+            .select(8, |b| b.addr == light)
+            .expect("light backend must remain reachable after weight capping");
+        assert_eq!(picked.addr, light);
+    }
+
+    #[test]
+    fn common_factor_weights_are_reduced() {
+        // GCD reduction: weights [100, 100] collapse to [1, 1], so the index
+        // array length is 2 (not 200) and two consecutive selections touch each
+        // backend once. Without the reduction both selections would land on the
+        // first backend's run of duplicate slots.
+        let backends = vec![make_backend_weighted(1, 100), make_backend_weighted(2, 100)];
+        let selector = RoundRobinSelector::build(&backends);
+        let mut counts: HashMap<PSocketAddr, usize> = HashMap::new();
+        for _ in 0..2 {
+            let picked = selector.select(8, |_| true).expect("healthy backend");
+            *counts.entry(picked.addr).or_default() += 1;
+        }
+        assert_eq!(counts.len(), 2, "equal weights must round-robin one-each regardless of magnitude");
     }
 
     #[test]

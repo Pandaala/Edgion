@@ -13,7 +13,10 @@ pub mod runtime_state;
 pub mod selection;
 
 pub use attempt::{commit_attempt, finalize_attempt, FinalizeMode, LbCommit};
-pub use backend_selector::{BackendSelector, WeightedRoundRobin, ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
+pub use backend_selector::{
+    BackendSelector, WeightedRoundRobin, WrrError, ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS,
+    ERR_WRR_BUILD_FAILED,
+};
 pub use compiled_selector::{
     drop_cell, get_or_create_cell, try_get_cell, CompiledSelector, PolicyKind, ServiceSelectorCell,
 };
