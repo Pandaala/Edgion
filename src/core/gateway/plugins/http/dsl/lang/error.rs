@@ -150,7 +150,12 @@ pub enum RuntimeError {
     CallLimitExceeded { limit: u32 },
     /// Stack depth exceeded limit
     StackOverflow { limit: usize },
-    /// String concatenation result too long
+    /// String concatenation result too long.
+    ///
+    /// `len` and `limit` are both **UTF-8 byte counts** — this is a memory-budget
+    /// guard for the sandbox, not a logical character-count guard. The DSL `len()`
+    /// builtin returns Unicode character count and is *not* the same unit; see the
+    /// `len` entry in `docs/.../dsl/api-reference.md` for the contract.
     StringTooLong { len: usize, limit: usize },
     /// List exceeded element-count limit
     ListTooLong { len: usize, limit: usize },
@@ -183,7 +188,7 @@ impl fmt::Display for RuntimeError {
             Self::CallLimitExceeded { limit } => write!(f, "call budget exceeded ({})", limit),
             Self::StackOverflow { limit } => write!(f, "stack overflow (depth {})", limit),
             Self::StringTooLong { len, limit } => {
-                write!(f, "string too long ({} > {})", len, limit)
+                write!(f, "string too long ({} bytes > {} bytes)", len, limit)
             }
             Self::ListTooLong { len, limit } => {
                 write!(f, "list too long ({} > {})", len, limit)

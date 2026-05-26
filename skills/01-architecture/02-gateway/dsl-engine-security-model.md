@@ -123,6 +123,8 @@ The validator-side rebuild at `validator.rs:114-125` is the key safeguard agains
 
 The blocklist is **host-string** based, not post-DNS-resolution. If the URL host is a name (`internal-svc.local`), the script can still reach private IPs by resolving in the upstream DNS. A future tightening would resolve before checking — out of scope today because it would require a synchronous resolver in the path. Reopen when an SSRF report cites this gap.
 
+**Redirect hops are guarded (F-012, 2026-05-26).** With `httpBlockPrivateIps: true`, `runtime::dsl_http_client(true)` returns a separate process-global `reqwest::Client` whose `redirect::Policy::custom` re-applies `is_ssrf_blocked_ip_literal` to **every** redirect hop's URL host; a 30x to a blocked IP literal terminates the request (`status = 0`) instead of being silently followed. The same host-string-only limitation applies to redirect hops too — a redirect `Location:` pointing at a DNS name that resolves privately still goes through, by the same accepted tradeoff above.
+
 ## Cross-references
 
 - User-view sandbox doc: `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/sandbox-security.md` (and the zh-CN mirror)

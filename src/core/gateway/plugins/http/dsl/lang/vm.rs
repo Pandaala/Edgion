@@ -7,6 +7,18 @@
 //!   - Stack depth limit
 //!   - String length limit
 //!   - catch_unwind for fault isolation
+//!
+//! Note on the step budget: `max_steps` counts opcode dispatches, not CPU time.
+//! Regex opcodes (`Matches`, `RegexFind`, `RegexReplace`) and `CallBuiltin`
+//! may each perform O(input_len) work per single step — regex evaluation runs
+//! over strings up to `max_string_len` bytes, and builtins such as `json_get`,
+//! `split`, `url_encode`, and `base64` iterate their input under one call /
+//! step deduction. The realistic CPU upper bound is therefore approximately
+//! `max_steps * max_string_len` for regex-heavy scripts and
+//! `max_call_count * max_string_len` for builtin-heavy scripts, additionally
+//! bounded by each regex's `dfa_size_limit` (1 MiB) and per-builtin output
+//! caps. See `skills/01-architecture/02-gateway/dsl-engine-security-model.md`
+//! for the canonical breakdown of every cap and where it is enforced.
 
 use std::borrow::Cow;
 use std::sync::Arc;

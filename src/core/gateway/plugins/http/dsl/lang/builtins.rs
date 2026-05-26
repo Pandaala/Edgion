@@ -35,7 +35,14 @@ fn redis_err(msg: String) -> Value {
     Value::Map(Box::new(m))
 }
 
-/// Check that a string result doesn't exceed the VM's max_string_len limit.
+/// Check that a string result doesn't exceed the VM's `max_string_len` limit.
+///
+/// The limit is enforced in **UTF-8 bytes** (matching the sandbox memory budget
+/// documented on `VmLimits::max_string_len`). This is deliberately a different
+/// unit from the DSL `len()` builtin, which returns Unicode character count;
+/// scripts that need to predict this guard from inside the VM should account
+/// for multi-byte characters. See the `len` entry in
+/// `docs/.../dsl/api-reference.md` for the user-facing contract.
 fn check_string_len(s: &str, limit: usize) -> Result<(), RuntimeError> {
     if s.len() > limit {
         Err(RuntimeError::StringTooLong { len: s.len(), limit })
@@ -429,22 +436,51 @@ impl Vm {
                 Ok(Value::Int(now))
             }
             BuiltinId::UrlEncode => {
+                use std::fmt::Write as _;
                 let s = state.pop()?.into_string();
-                let encoded: String = s
-                    .chars()
-                    .map(|c| {
-                        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
-                            c.to_string()
-                        } else {
-                            let mut buf = [0u8; 4];
-                            let bytes = c.encode_utf8(&mut buf);
-                            bytes.as_bytes().iter().map(|b| format!("%{:02X}", b)).collect()
+                let limit = self.limits.max_string_len;
+                // Build the encoded string incrementally and bail as soon as the running
+                // length crosses `max_string_len`, instead of collecting the full result
+                // and only then size-checking. Percent-encoding can expand each input byte
+                // to 3 bytes ("%XX"), so the previous "encode-then-check" path allowed a
+                // transient allocation of up to 3 * max_string_len before rejection; this
+                // loop caps the transient at max_string_len + a few trailing bytes from
+                // the partial char that crossed the limit. Legitimate inputs (those that
+                // would have encoded within `limit`) remain unaffected — the early bail
+                // only fires when the post-check would have rejected anyway.
+                let mut encoded = String::with_capacity(s.len());
+                for c in s.chars() {
+                    if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
+                        encoded.push(c);
+                    } else {
+                        let mut buf = [0u8; 4];
+                        for b in c.encode_utf8(&mut buf).as_bytes() {
+                            // write! into a String never fails
+                            let _ = write!(encoded, "%{:02X}", b);
                         }
-                    })
-                    .collect();
-                check_string_len(&encoded, self.limits.max_string_len)?;
+                    }
+                    if encoded.len() > limit {
+                        return Err(RuntimeError::StringTooLong {
+                            len: encoded.len(),
+                            limit,
+                        });
+                    }
+                }
                 Ok(Value::Str(encoded.into()))
             }
+            // `url_decode(s)` uses `application/x-www-form-urlencoded` semantics: `%XX` is
+            // decoded AND a literal `+` is decoded to a space. This is NOT RFC 3986 path
+            // decoding (in RFC 3986 a literal `+` in a path is a reserved character and must
+            // be preserved). The form-semantics choice intentionally mirrors
+            // `HttpRouteRuleUnit::url_decode` (see `routes/http/match_unit.rs`) so the DSL
+            // and the routing/consistent-hash layers agree on query-string decoding.
+            //
+            // Security note: callers must NOT pass `req.path()` here and then compare the
+            // result against an ACL that contains a literal `+` — `%20` and `+` collapse to
+            // the same byte, which is exploitable for allowlist bypass. The api-reference
+            // doc carries the operator-facing warning; this comment is the in-source pointer
+            // for future maintainers considering a rename / semantics change. See
+            // `skills/04-review/dsl-builtins/url-decode-form-semantics.md`.
             BuiltinId::UrlDecode => {
                 let s = state.pop()?.into_string();
                 let mut result = Vec::new();
@@ -466,7 +502,8 @@ impl Vm {
                             }
                         }
                     } else if bytes[i] == b'+' {
-                        // application/x-www-form-urlencoded: '+' → space
+                        // application/x-www-form-urlencoded: '+' → space (see arm-level
+                        // doc-comment above for the security implication)
                         result.push(b' ');
                         i += 1;
                         continue;
@@ -905,7 +942,9 @@ impl Vm {
             }
         };
 
-        let client = dsl_http_client();
+        // When block_private_ips is set, select the guarded client whose redirect
+        // policy re-applies is_ssrf_blocked_ip_literal to every hop (F-012).
+        let client = dsl_http_client(runtime.block_private_ips);
         let mut builder = client
             .request(method, &url_str)
             .timeout(std::time::Duration::from_millis(timeout_ms));
@@ -985,7 +1024,25 @@ impl Vm {
             }
         }
 
-        let body_text = String::from_utf8_lossy(&buf).to_string();
+        let mut body_text = String::from_utf8_lossy(&buf).to_string();
+        // Restore the sandbox invariant "no DSL string value exceeds max_string_len"
+        // for r["body"]: without this guard, a body up to max_response_body_bytes
+        // (default 1 MB = 128x max_string_len) would flow into req.set_header /
+        // resp.set_header / ctx.set / log without further size gating. We *truncate*
+        // rather than raise StringTooLong to keep http.call's documented "never raises
+        // a runtime error" contract and to stay consistent with the other size caps in
+        // the same return value (body bytes capped silently at max_response_body_bytes,
+        // headers map capped silently at max_map_size). Operators who need to see a
+        // larger body must raise max_string_len. Walk back to a UTF-8 char boundary so
+        // String::truncate cannot panic — String::from_utf8_lossy guarantees valid
+        // UTF-8, so is_char_boundary(0) always succeeds and the loop terminates.
+        if body_text.len() > self.limits.max_string_len {
+            let mut end = self.limits.max_string_len;
+            while !body_text.is_char_boundary(end) {
+                end -= 1;
+            }
+            body_text.truncate(end);
+        }
 
         let mut result = IndexMap::new();
         result.insert("status".to_string(), Value::Int(status));
@@ -1343,7 +1400,11 @@ impl Vm {
 /// (loopback / link-local / RFC 1918 private / RFC 4193 ULA / unspecified).
 /// Hostnames are NOT resolved here — callers rely on network-level egress controls for those.
 /// IPv6 zone IDs are stripped per RFC 6874 before parsing.
-fn is_ssrf_blocked_ip_literal(host: &str) -> bool {
+///
+/// Exposed `pub(crate)` so the guarded DSL HTTP client's redirect policy
+/// (`runtime::dsl_http_client(true)`) re-applies the same IP-literal check to
+/// every redirect hop — F-012's per-hop SSRF guard.
+pub(crate) fn is_ssrf_blocked_ip_literal(host: &str) -> bool {
     use std::net::IpAddr;
     // Strip IPv6 zone IDs (RFC 6874: "::1%eth0")
     let host = host.split('%').next().unwrap_or(host);

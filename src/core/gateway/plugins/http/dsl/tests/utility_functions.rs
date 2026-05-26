@@ -283,9 +283,62 @@ fn test_url_encode() {
     assert_sets_request_header(r#"req.set_header("X-Out", url_encode("a b+c"))"#, "X-Out", "a%20b%2Bc");
 }
 
+// url_encode result exceeding max_string_len → runtime error (FB-02).
+// Encoder builds incrementally and bails inside the per-char loop as soon as
+// `encoded.len() > max_string_len`, instead of `collect()`-then-check.
+#[test]
+fn test_url_encode_result_too_long() {
+    let session = MockPluginSession::new();
+    let limits = VmLimits {
+        max_string_len: 5,
+        ..Default::default()
+    };
+    // "a b c" encodes to "a%20b%20c" (length 9) > limit 5 — the in-loop bail trips
+    // mid-encoding once running length crosses 5.
+    let result = run_with_limits(r#"let v = url_encode("a b c")"#, session, limits);
+    assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
+}
+
+// FB-02 follow-up: the coarse `s.len() * 3 > max_string_len` pre-guard proposed in
+// the original issue would false-reject this case. Encoded output equals input (all
+// safe ASCII), so it MUST succeed even though `input.len() * 3 = 12 > limit = 8`.
+// Locks the in-loop bail semantics against future "optimizations" to a length-only
+// pre-check.
+#[test]
+fn test_url_encode_safe_ascii_within_limit_succeeds() {
+    let limits = VmLimits {
+        max_string_len: 8,
+        ..Default::default()
+    };
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_request_header()
+        .withf(|n, v| n == "X-Out" && v == "abcdefgh")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run_with_limits(r#"req.set_header("X-Out", url_encode("abcdefgh"))"#, session, limits);
+    assert_eq!(result, good_next());
+}
+
 #[test]
 fn test_url_decode() {
     assert_sets_request_header(r#"req.set_header("X-Out", url_decode("a%20b"))"#, "X-Out", "a b");
+}
+
+// `url_decode` uses application/x-www-form-urlencoded semantics: a literal `+` decodes to a
+// space. This is intentional and documented in api-reference.md §url_decode (Semantics +
+// Security warning) and in the BuiltinId::UrlDecode source comment. Mirrors the same
+// semantics used by HttpRouteRuleUnit::url_decode at the routing layer. See
+// skills/04-review/dsl-builtins/url-decode-form-semantics.md for the design lock.
+#[test]
+fn test_url_decode_plus_decodes_to_space_form_semantics() {
+    assert_sets_request_header(r#"req.set_header("X-Out", url_decode("a+b"))"#, "X-Out", "a b");
+}
+
+// Mixed `%XX` + `+` exercises both branches of the decoder in one input.
+#[test]
+fn test_url_decode_mixed_percent_and_plus_form_semantics() {
+    assert_sets_request_header(r#"req.set_header("X-Out", url_decode("a+b%20c"))"#, "X-Out", "a b c");
 }
 
 // base64_decode invalid input returns nil — matches hex_decode contract.
@@ -344,6 +397,15 @@ fn test_substr_negative_start_clamps_to_zero() {
 #[test]
 fn test_len() {
     assert_sets_request_header(r#"req.set_header("X-Out", to_str(len("abc")))"#, "X-Out", "3");
+}
+
+// Locks the documented `len()` contract: Unicode character count, NOT UTF-8 byte
+// count. "héllo" is 5 chars but 6 UTF-8 bytes (the `é` is a 2-byte sequence) —
+// a regression that switched to `s.len()` would surface here as 6. This guard is
+// paired with the byte-unit note on the `len` entry in dsl/api-reference.md.
+#[test]
+fn test_len_multibyte_returns_char_count_not_byte_count() {
+    assert_sets_request_header(r#"req.set_header("X-Out", to_str(len("héllo")))"#, "X-Out", "5");
 }
 
 #[test]

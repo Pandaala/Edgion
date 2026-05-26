@@ -465,17 +465,31 @@ pub fn add_listener(server: &mut Server, context: ListenerContext) -> Result<()>
 /// Apply connection filter to a Pingora Service if the Gateway has the
 /// `edgion.io/edgion-stream-plugins` annotation set.
 ///
-/// The annotation value should be "namespace/name" referencing an EdgionStreamPlugins resource.
+/// The annotation value may be `name` (expanded with the Gateway's namespace) or the
+/// fully-qualified `namespace/name` referencing an EdgionStreamPlugins resource. This
+/// matches the bare-name convention documented for the Gateway annotation and aligns
+/// with the TCPRoute / TLSRoute handlers, which apply the same normalization before
+/// looking up the global `StreamPluginStore` (keyed by `namespace/name`).
+///
 /// The filter runs at TCP level, before TLS handshake or HTTP parsing.
 fn apply_connection_filter<A>(service: &mut Service<A>, context: &ListenerContext) {
     let Some(annotation_value) = context.gateway_annotations.get(edgion::EDGION_STREAM_PLUGINS) else {
         return;
     };
 
-    let store_key = annotation_value.trim().to_string();
-    if store_key.is_empty() {
+    let trimmed = annotation_value.trim();
+    if trimmed.is_empty() {
         return;
     }
+    // The store is always keyed by the fully-qualified `namespace/name`. Expand a bare
+    // name using the Gateway's own namespace so doc-sanctioned short references resolve
+    // instead of silently fail-closing the listener.
+    let store_key = if trimmed.contains('/') {
+        trimmed.to_string()
+    } else {
+        let ns = context.gateway_namespace.as_deref().unwrap_or("default");
+        format!("{}/{}", ns, trimmed)
+    };
 
     let store = get_global_stream_plugin_store();
     let port = context.listener.port as u16;

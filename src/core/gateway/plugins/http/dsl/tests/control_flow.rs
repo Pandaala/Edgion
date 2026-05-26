@@ -131,22 +131,14 @@ fn test_break_in_for_in() {
 fn test_or_coerces_rhs_to_bool() {
     // Left falsy -> falls through to RHS; RHS must be coerced to Bool(is_truthy).
     // Before the fix this leaked the raw Str "ignored".
-    assert_sets_request_header(
-        r#"req.set_header("X-Or", to_str(false || "ignored"))"#,
-        "X-Or",
-        "true",
-    );
+    assert_sets_request_header(r#"req.set_header("X-Or", to_str(false || "ignored"))"#, "X-Or", "true");
 }
 
 #[test]
 fn test_and_coerces_rhs_to_bool() {
     // Left truthy -> falls through to RHS; RHS must be coerced to Bool(is_truthy).
     // Before the fix this leaked the raw Str "ignored".
-    assert_sets_request_header(
-        r#"req.set_header("X-And", to_str(true && "ignored"))"#,
-        "X-And",
-        "true",
-    );
+    assert_sets_request_header(r#"req.set_header("X-And", to_str(true && "ignored"))"#, "X-And", "true");
 }
 
 #[test]

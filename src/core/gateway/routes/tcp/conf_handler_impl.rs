@@ -1,5 +1,5 @@
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
-use crate::core::gateway::routes::common::is_core_service_backend_ref;
+use crate::core::gateway::routes::common::{is_core_service_backend_ref, resolve_stream_plugin_store_key};
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::tcp::routes_mgr::{
     get_global_tcp_route_managers, resolved_listeners_for_route, GlobalTcpRouteManagers,
@@ -81,14 +81,12 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
     }
 }
 
-use crate::types::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
-
 impl GlobalTcpRouteManagers {
     /// Initialize a TCPRoute by setting up BackendSelector and stream plugin store key.
     fn initialize_route(&self, mut route: TCPRoute) -> Result<Arc<TCPRoute>, String> {
         let route_key = route.key_name();
 
-        let store_key = Self::resolve_stream_plugin_store_key(&route);
+        let store_key = resolve_stream_plugin_store_key(&route.metadata);
 
         if let Some(rules) = route.spec.rules.as_mut() {
             for (rule_idx, rule) in rules.iter_mut().enumerate() {
@@ -122,25 +120,6 @@ impl GlobalTcpRouteManagers {
         }
 
         Ok(Arc::new(route))
-    }
-
-    /// Resolve the stream plugin store key from the TCPRoute's annotation.
-    fn resolve_stream_plugin_store_key(route: &TCPRoute) -> Option<String> {
-        let annotations = route.metadata.annotations.as_ref()?;
-        let annotation_value = annotations.get(EDGION_STREAM_PLUGINS)?;
-        let trimmed = annotation_value.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-
-        let store_key = if trimmed.contains('/') {
-            trimmed.to_string()
-        } else {
-            let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-            format!("{}/{}", namespace, trimmed)
-        };
-
-        Some(store_key)
     }
 }
 

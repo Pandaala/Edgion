@@ -7,14 +7,13 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
 use ldap3::{LdapConnAsync, LdapConnSettings};
-use pingora_http::ResponseHeader;
 use sha2::{Digest, Sha256};
 
 use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::observe::metrics::registry::record_ldap_auth_error;
 use crate::core::gateway::plugins::http::common::auth_common::{
-    apply_auth_failure_delay, send_gateway_auth_error_response,
+    apply_auth_failure_delay, send_gateway_auth_error_response, send_gateway_plain_error_response,
 };
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
@@ -220,17 +219,13 @@ impl LdapAuth {
     }
 
     async fn service_unavailable(&self, session: &mut dyn PluginSession) -> PluginRunningResult {
-        let mut resp = match ResponseHeader::build(503, None) {
-            Ok(v) => v,
-            Err(_) => return PluginRunningResult::ErrTerminateRequest,
-        };
-        let body = Bytes::from("503 An unexpected error occurred");
-        let _ = resp.insert_header("Content-Type", "text/plain");
-
-        if session.write_response_header(Box::new(resp), false).await.is_ok() {
-            let _ = session.write_response_body(Some(body), true).await;
-        }
-        session.shutdown().await;
+        let _ = send_gateway_plain_error_response(
+            session,
+            503,
+            "text/plain",
+            Bytes::from_static(b"503 An unexpected error occurred"),
+        )
+        .await;
         PluginRunningResult::ErrTerminateRequest
     }
 }

@@ -825,6 +825,8 @@ Returns the number of Unicode characters in a string (not bytes), or the number 
 
 **Constraints**: Only `Str`, `Nil`, and `List` are supported; other types trigger a type error.
 
+> **Note (unit mismatch with `max_string_len`)**: `len()` reports **Unicode character count**, while the sandbox `max_string_len` limit (default 8192) and the resulting `string too long (N bytes > L bytes)` error are measured in **UTF-8 bytes**. For ASCII strings the two numbers are equal; for strings containing multi-byte characters (e.g. CJK, emoji) the byte length can be up to 4× the character length, so a `len(s) < max_string_len` guard does not guarantee that a subsequent concatenation or builtin call will pass the byte-length check.
+
 **Example**:
 ```
 let token = req.header("X-Api-Key")
@@ -1100,14 +1102,18 @@ if value != nil {
 
 **Signature**: `url_decode(s)` → `Str`
 
-Decodes a URL-encoded string. `%XX` sequences are restored to their corresponding characters, and `+` is restored to a space (compatible with `application/x-www-form-urlencoded`). Invalid `%XX` sequences are preserved as-is.
+Decodes a URL-encoded string using `application/x-www-form-urlencoded` semantics: `%XX` sequences are restored to their corresponding characters, **and `+` is converted to a space**. Invalid `%XX` sequences are preserved as-is.
+
+> **Semantics**: this builtin matches form-body / query-string decoding, **not** RFC 3986 path decoding. In RFC 3986 a literal `+` in a path is a reserved character and must be preserved; this builtin treats it as a space. The behavior intentionally mirrors `HttpRouteRuleUnit::url_decode` used by route matching and consistent-hash arg-name comparison, so DSL and routing layer agree on the same decoded form for query data.
+>
+> **Security warning — do not use on URL paths for ACL / allowlist comparisons.** If you call `url_decode(req.path())` and compare the result against an allowlist that contains a literal `+`, an attacker can substitute `%20` (or vice versa) and the two distinct paths will compare equal. For path normalization in security contexts, compare against `req.path()` directly (already pingora-normalized) or use string operations (`starts_with`, `regex_match`) that do not collapse `+` and space. There is currently no RFC 3986 path-decoding builtin; the recommended path-ACL pattern is to write rules against the raw (already-normalized) path.
 
 **Parameters**:
-- `s` (Str) — URL-encoded string
+- `s` (Str) — URL-encoded string (intended for query strings or form bodies)
 
 **Return value**: Decoded string
 
-**Example**:
+**Example** (query-string decoding — the intended use):
 ```
 let raw = req.query("callback")
 if raw != nil {
@@ -1405,10 +1411,10 @@ Sends an outbound HTTP request from the gateway to an arbitrary HTTP/HTTPS endpo
 **Constraints**:
 - Only `http` and `https` URL schemes are accepted; other schemes (e.g. `file://`, `ftp://`) return `status = 0`.
 - When `httpBlockPrivateIps: true`, requests whose URL host is a loopback, private, or link-local **IP literal** return `status = 0`. The guard inspects the URL host string only — it does **not** resolve DNS names, so a hostname that resolves to a private address is not blocked by this flag. Use network-level egress controls (NetworkPolicy) as the primary defense for hostname-based SSRF.
-- The response body is truncated at `httpMaxResponseBodyBytes` (default 1 MiB).
+- The response body is truncated at `min(httpMaxResponseBodyBytes, max_string_len)` (defaults: 1 MiB and 8 KiB respectively). The stricter of the two caps wins, so the body returned to the script is bounded by the same `max_string_len` that applies to every other DSL string value. Truncation is silent — the call still succeeds and the call still does not raise.
 - The response `headers` Map is silently truncated to the first `max_map_size` entries (SSRF / large-response-header guard); the call still succeeds.
 - The actual timeout applied is `min(timeout_ms, httpMaxTimeoutMs)`.
-- At most 10 redirects are followed (global client setting).
+- At most 10 redirects are followed (global client setting). When `httpBlockPrivateIps: true`, the same IP-literal guard is re-applied to **every** redirect hop, so a 30x to a blocked address yields `status = 0` instead of silently following.
 
 **Configuration fields** (inside `config`):
 

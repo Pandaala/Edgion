@@ -51,7 +51,7 @@ Re-open this decision only if:
 ## Reference Cases
 
 - F-018 (2026-05-26) — `tasks/plugins/plugins-http-dsl-F018-...`, closed as accepted tradeoff + doc clarification.
-- F-012 — sibling redirect-bypass of the same guard; a separately-tracked *fixable* per-hop-check finding (`tasks/plugins/plugins-http-dsl-F012-...`), distinct from this DNS-name limitation.
+- F-012 (2026-05-26) — sibling redirect-bypass of the same guard; **fixed** by switching the DSL HTTP client to a guarded variant whose `Policy::custom` re-runs `is_ssrf_blocked_ip_literal` on every redirect hop when `block_private_ips: true`. See [dsl-http-call-redirect-per-hop.md](dsl-http-call-redirect-per-hop.md). Distinct from this DNS-name limitation, which remains an accepted tradeoff.
 - `skills/01-architecture/02-gateway/dsl-engine-security-model.md` §7 — maintainer-view rationale.
 - [forward-auth-webhook-ssrf.md](forward-auth-webhook-ssrf.md) — same host-string-blocklist reasoning for ForwardAuth / Webhook.
 - [upstream-address-safety.md](upstream-address-safety.md) — the stricter post-DNS-resolution standard that applies to **upstream dial paths** (DynamicExternalUpstream, RegionRoute, etc.), a different threat surface than the trusted-author `http.call` builtin.

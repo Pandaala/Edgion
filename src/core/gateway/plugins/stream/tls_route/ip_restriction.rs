@@ -7,8 +7,9 @@
 use async_trait::async_trait;
 
 use super::tls_route_plugin_trait::{TlsRouteContext, TlsRoutePlugin};
+use crate::core::gateway::plugins::stream::stream_plugin_trait::access_decision_to_stream_result;
 use crate::core::gateway::plugins::stream::StreamPluginResult;
-use crate::types::resources::edgion_plugins::{AccessDecision, DefaultAction, IpRestrictionConfig};
+use crate::types::resources::edgion_plugins::IpRestrictionConfig;
 
 const PLUGIN_NAME: &str = "TlsRouteIpRestriction";
 
@@ -44,12 +45,6 @@ impl TlsRoutePlugin for TlsRouteIpRestriction {
         if self.init_failed {
             return StreamPluginResult::Deny("ip init fail".to_string());
         }
-        match self.config.check_ip_access(&ctx.client_ip) {
-            AccessDecision::AllowByGroup(_) => StreamPluginResult::Allow,
-            AccessDecision::DenyByGroup(g) => StreamPluginResult::Deny(format!("ip:deny:group={}", g)),
-            AccessDecision::DenyByWhitelistMiss => StreamPluginResult::Deny("ip:deny:not-in-allow".to_string()),
-            AccessDecision::Default(DefaultAction::Allow) => StreamPluginResult::Allow,
-            AccessDecision::Default(DefaultAction::Deny) => StreamPluginResult::Deny("ip:deny:default".to_string()),
-        }
+        access_decision_to_stream_result(self.config.check_ip_access(&ctx.client_ip), || {})
     }
 }

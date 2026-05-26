@@ -213,6 +213,67 @@ fn test_http_call_caps_large_response_body() {
 }
 
 #[test]
+fn test_http_call_body_truncated_to_max_string_len() {
+    // Regression for FB-03: even after streaming-truncation at max_response_body_bytes,
+    // r["body"] must also honor the sandbox-wide max_string_len. Without that cap, a
+    // body up to max_response_body_bytes (default 1 MB = 128x max_string_len) would
+    // flow into req.set_header / ctx.set / log without any further size gate. The
+    // truncation is silent (not an error) to preserve http.call's documented
+    // "never raises a runtime error" contract — mirroring the existing silent caps on
+    // body bytes (max_response_body_bytes) and headers map size (max_map_size).
+    // Setup: server returns 16 bytes, default max_response_body_bytes (1 MB) so the
+    // body-bytes cap does not fire, but max_string_len = 4 forces the new truncation.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut throwaway = [0u8; 1024];
+            let _ = sock.read(&mut throwaway).await;
+            let body = vec![b'A'; 16];
+            let header = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+            let _ = sock.write_all(header.as_bytes()).await;
+            let _ = sock.write_all(&body).await;
+            let _ = sock.shutdown().await;
+        });
+        let url = format!("http://{}/", addr);
+        let source = r#"
+            let r = http.call("GET", "__URL__", nil)
+            if r["status"] == 200 {
+                if r["body"] == "AAAA" {
+                    return next()
+                }
+            }
+            return deny(500, "body not truncated to max_string_len")
+        "#
+        .replace("__URL__", &url);
+
+        let limits = VmLimits {
+            max_string_len: 4,
+            ..VmLimits::default()
+        };
+        let vm = make_vm_with_limits(&source, limits);
+        let mut log = PluginLog::new("test");
+        let mut session = MockPluginSession::new();
+        let runtime = DslRuntime::default();
+        let result = execute_safe(
+            &vm,
+            &mut session as &mut dyn PluginSession,
+            &mut log,
+            &DslErrorPolicy::Deny,
+            &runtime,
+        )
+        .await;
+        assert_eq!(result, good_next());
+    });
+}
+
+#[test]
 fn test_map_len() {
     let source = r#"
         let m = {"a": "1", "b": "2", "c": "3"}

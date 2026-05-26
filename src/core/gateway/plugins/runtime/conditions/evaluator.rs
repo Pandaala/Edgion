@@ -703,6 +703,46 @@ mod tests {
         assert!(!condition.evaluate());
     }
 
+    #[test]
+    fn test_time_range_validate_rejects_malformed_after() {
+        // Invalid month (13) — operator typo. Must surface as a preparse error
+        // (caller pushes into preparse_errors → seal_fail_closed) instead of
+        // being silently dropped at evaluation time, which would leave the
+        // time-gate permanently inert. See F-002.
+        let condition = TimeRangeCondition {
+            after: Some("2024-13-01T00:00:00Z".to_string()),
+            before: None,
+        };
+        assert!(condition.validate().is_err());
+    }
+
+    #[test]
+    fn test_time_range_validate_rejects_malformed_before() {
+        let condition = TimeRangeCondition {
+            after: None,
+            before: Some("not-a-timestamp".to_string()),
+        };
+        assert!(condition.validate().is_err());
+    }
+
+    #[test]
+    fn test_time_range_validate_accepts_well_formed_bounds() {
+        let condition = TimeRangeCondition {
+            after: Some("2020-01-01T00:00:00Z".to_string()),
+            before: Some("2030-12-31T23:59:59Z".to_string()),
+        };
+        assert!(condition.validate().is_ok());
+    }
+
+    #[test]
+    fn test_time_range_validate_accepts_unset_bounds() {
+        let condition = TimeRangeCondition {
+            after: None,
+            before: None,
+        };
+        assert!(condition.validate().is_ok());
+    }
+
     #[tokio::test]
     async fn test_probability_always() {
         let condition = ProbabilityCondition { ratio: 1.0, key: None };

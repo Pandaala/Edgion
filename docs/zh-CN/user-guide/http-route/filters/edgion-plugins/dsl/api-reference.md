@@ -825,6 +825,8 @@ ctx.remove("temp_flag")
 
 **限制**：参数类型仅支持 `Str`、`Nil`、`List`，其他类型会触发类型错误。
 
+> **注意（与 `max_string_len` 单位不一致）**：`len()` 返回的是 **Unicode 字符数**，而沙箱的 `max_string_len` 限制（默认 8192）以及相应的 `string too long (N bytes > L bytes)` 错误信息都是按 **UTF-8 字节** 度量的。对 ASCII 字符串两者相等；对含多字节字符（如中文、emoji）的字符串，字节长度最多可达字符数的 4 倍，因此 `len(s) < max_string_len` 这样的脚本守卫并不能保证后续的字符串拼接或内置函数调用一定能通过字节长度检查。
+
 **示例**：
 ```
 let token = req.header("X-Api-Key")
@@ -1100,14 +1102,18 @@ if value != nil {
 
 **签名**：`url_decode(s)` → `Str`
 
-对 URL 编码字符串进行解码。`%XX` 序列被还原为对应字符，`+` 被还原为空格（兼容 `application/x-www-form-urlencoded`）。不合法的 `%XX` 序列会被原样保留。
+按 `application/x-www-form-urlencoded` 语义对 URL 编码字符串进行解码：`%XX` 序列被还原为对应字符，**`+` 被还原为空格**。不合法的 `%XX` 序列会被原样保留。
+
+> **语义说明**：本内建采用表单体 / 查询字符串解码语义，**不是** RFC 3986 路径解码。RFC 3986 中路径里的字面量 `+` 是保留字符，必须原样保留；本内建会把它当作空格。这一行为与路由匹配和一致性哈希参数名比较所使用的 `HttpRouteRuleUnit::url_decode` 保持一致，使 DSL 与路由层在 query 数据上得到相同的解码结果。
+>
+> **安全告警 — 不要用于 URL 路径的 ACL / 白名单比较。** 如果你调用 `url_decode(req.path())` 并与含字面量 `+` 的白名单比较，攻击者可以用 `%20`（或反过来）替换，使两个不同的路径被判定相等。在安全场景中做路径归一化，应直接对 `req.path()`（已由 pingora 归一化）做比较，或使用不会把 `+` 与空格折叠的字符串操作（`starts_with`、`regex_match`）。当前 DSL 不提供 RFC 3986 路径解码内建；推荐的路径 ACL 模式是针对原始（已归一化）路径写规则。
 
 **参数**：
-- `s`（Str）— URL 编码字符串
+- `s`（Str）— URL 编码字符串（适用于查询字符串或表单体）
 
 **返回值**：解码后的字符串
 
-**示例**：
+**示例**（查询字符串解码 — 推荐用途）：
 ```
 let raw = req.query("callback")
 if raw != nil {
@@ -1405,10 +1411,10 @@ if payload != nil {
 **限制**：
 - 仅接受 `http` 和 `https` 协议；其他协议（如 `file://`、`ftp://`）返回 `status = 0`。
 - 当 `httpBlockPrivateIps: true` 时，URL host 为回环、私有、链路本地 **IP 字面量**的请求返回 `status = 0`。该守卫**仅检查 URL host 字符串，不解析 DNS 域名**，因此解析到私有地址的域名不会被此开关拦截。域名形式的 SSRF 防护应以网络层出站控制（NetworkPolicy）为主。
-- 响应体超过 `httpMaxResponseBodyBytes`（默认 1 MiB）时会被截断。
+- 响应体截断在 `min(httpMaxResponseBodyBytes, max_string_len)`（默认分别为 1 MiB 与 8 KiB）。两者中较小者生效，保证返回给脚本的 body 与其它 DSL 字符串值共享同一长度上限。截断为静默行为——调用仍成功，且依然不会抛出运行时错误。
 - 响应 `headers` Map 超过 `max_map_size` 时静默截断为前 `max_map_size` 项（SSRF / 大响应头防护）；调用仍返回成功。
 - 实际超时为 `min(timeout_ms, httpMaxTimeoutMs)`。
-- 全局客户端最多跟随 10 次重定向。
+- 全局客户端最多跟随 10 次重定向。当 `httpBlockPrivateIps: true` 时，同一 IP 字面量守卫会对**每一跳重定向**重新应用，因此跳到被阻断地址的 30x 会得到 `status = 0`，而非静默跟随。
 
 **配置字段**（位于插件 `config` 块内）：
 

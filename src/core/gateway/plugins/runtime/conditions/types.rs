@@ -215,6 +215,25 @@ pub struct TimeRangeCondition {
     pub before: Option<String>,
 }
 
+impl TimeRangeCondition {
+    /// Validate that `after` / `before` are parseable as RFC3339. Called from
+    /// `compile_conditions` during preparse so a mistyped timestamp surfaces
+    /// through `preparse_errors` → `seal_fail_closed` (fail-closed at HTTP 500
+    /// + K8s status condition) instead of being silently ignored at evaluation
+    /// time, which would leave the time-gate permanently inert.
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(s) = &self.after {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .map_err(|e| format!("timeRange.after '{s}' is not a valid RFC3339 timestamp: {e}"))?;
+        }
+        if let Some(s) = &self.before {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .map_err(|e| format!("timeRange.before '{s}' is not a valid RFC3339 timestamp: {e}"))?;
+        }
+        Ok(())
+    }
+}
+
 /// Probability condition
 ///
 /// Executes with a specified probability. Useful for:
@@ -374,6 +393,16 @@ impl Condition {
         }
     }
 
+    /// Validate non-regex configuration that must parse correctly at preparse time.
+    /// Currently only `TimeRange` carries unparsed string fields; other variants
+    /// have nothing to validate beyond regex (handled by `compile`).
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Condition::TimeRange(c) => c.validate(),
+            _ => Ok(()),
+        }
+    }
+
     /// Clear regex patterns so the uncompiled-regex runtime guard cannot fire.
     /// Called after a compile failure to prevent per-request push_err flooding.
     pub fn clear_regex(&mut self) {
@@ -435,6 +464,24 @@ impl PluginConditions {
             Some(e) => Err(e),
             None => Ok(()),
         }
+    }
+
+    /// Validate non-regex configuration on every condition. Should be called
+    /// alongside `compile` during preparse so that malformed values (e.g. a
+    /// `TimeRange` bound that fails RFC3339 parsing) surface through the same
+    /// `preparse_errors` → `seal_fail_closed` pipeline as regex compile errors.
+    ///
+    /// Returns the first error found; later errors are dropped so the caller's
+    /// status condition stays readable (matches `compile`'s behavior).
+    pub fn validate(&self) -> Result<(), String> {
+        for conds in [&self.skip, &self.run] {
+            if let Some(conditions) = conds {
+                for c in conditions {
+                    c.validate()?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 

@@ -31,9 +31,9 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use pingora_http::ResponseHeader;
 use std::net::IpAddr;
 
+use crate::core::gateway::plugins::http::common::auth_common::send_gateway_plain_error_response;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig, IpSource};
@@ -130,24 +130,13 @@ impl RequestFilter for IpRestriction {
                 .as_deref()
                 .unwrap_or("Your IP address is not allowed to access this resource");
 
-            // Build error response.
-            // invariant: 403 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
-            let mut resp = Box::new(
-                ResponseHeader::build(self.config.status, None)
-                    .unwrap_or_else(|_| ResponseHeader::build(403, None).expect("403 is valid")),
-            );
-            resp.insert_header("Content-Type", "application/json").ok();
-
+            // `self.config.status` is validated in range 100..600 by IpRestrictionConfig::validate_and_init,
+            // so the helper's ResponseHeader::build never fails here in practice.
             let body = Bytes::from(serde_json::json!({"message": message}).to_string());
-
-            if let Err(_e) = session.write_response_header(resp, false).await {
-                plugin_log.push_err("write response header fail");
-                return PluginRunningResult::ErrTerminateRequest;
-            }
-
-            if let Err(_e) = session.write_response_body(Some(body), true).await {
-                plugin_log.push_err("write response body fail");
-                return PluginRunningResult::ErrTerminateRequest;
+            if let Err(_e) =
+                send_gateway_plain_error_response(session, self.config.status, "application/json", body).await
+            {
+                plugin_log.push_err("write response fail");
             }
 
             return PluginRunningResult::ErrTerminateRequest;
@@ -226,6 +215,7 @@ mod tests {
         mock_session.expect_remote_addr().return_const("".to_string());
         mock_session.expect_write_response_header().returning(|_, _| Ok(()));
         mock_session.expect_write_response_body().returning(|_, _| Ok(()));
+        mock_session.expect_shutdown().returning(|| {});
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
@@ -244,6 +234,7 @@ mod tests {
         mock_session.expect_remote_addr().return_const("10.0.0.1".to_string());
         mock_session.expect_write_response_header().returning(|_, _| Ok(()));
         mock_session.expect_write_response_body().returning(|_, _| Ok(()));
+        mock_session.expect_shutdown().returning(|| {});
 
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 

@@ -73,13 +73,21 @@ impl Compiler {
 
         let break_target = self.current_offset();
 
-        for idx in self.break_patch_stacks.pop().unwrap() {
+        let break_patches = self
+            .break_patch_stacks
+            .pop()
+            .ok_or_else(|| CompileError::new("internal: break_patch_stacks underflow"))?;
+        for idx in break_patches {
             let offset = break_target as i32 - (idx as i32 + 1);
             if let OpCode::Jump(ref mut o) = self.code[idx] {
                 *o = offset;
             }
         }
-        for idx in self.continue_patch_stacks.pop().unwrap() {
+        let continue_patches = self
+            .continue_patch_stacks
+            .pop()
+            .ok_or_else(|| CompileError::new("internal: continue_patch_stacks underflow"))?;
+        for idx in continue_patches {
             let offset = continue_target as i32 - (idx as i32 + 1);
             if let OpCode::Jump(ref mut o) = self.code[idx] {
                 *o = offset;
@@ -167,13 +175,21 @@ impl Compiler {
 
         let break_target = self.current_offset();
 
-        for idx in self.break_patch_stacks.pop().unwrap() {
+        let break_patches = self
+            .break_patch_stacks
+            .pop()
+            .ok_or_else(|| CompileError::new("internal: break_patch_stacks underflow"))?;
+        for idx in break_patches {
             let offset = break_target as i32 - (idx as i32 + 1);
             if let OpCode::Jump(ref mut o) = self.code[idx] {
                 *o = offset;
             }
         }
-        for idx in self.continue_patch_stacks.pop().unwrap() {
+        let continue_patches = self
+            .continue_patch_stacks
+            .pop()
+            .ok_or_else(|| CompileError::new("internal: continue_patch_stacks underflow"))?;
+        for idx in continue_patches {
             let offset = continue_target as i32 - (idx as i32 + 1);
             if let OpCode::Jump(ref mut o) = self.code[idx] {
                 *o = offset;
@@ -219,14 +235,22 @@ impl Compiler {
         let break_target = self.current_offset();
 
         // Backpatch break jumps → after LoopEnd
-        for idx in self.break_patch_stacks.pop().unwrap() {
+        let break_patches = self
+            .break_patch_stacks
+            .pop()
+            .ok_or_else(|| CompileError::new("internal: break_patch_stacks underflow"))?;
+        for idx in break_patches {
             let offset = break_target as i32 - (idx as i32 + 1);
             if let OpCode::Jump(ref mut o) = self.code[idx] {
                 *o = offset;
             }
         }
         // Backpatch continue jumps → condition check (loop_start)
-        for idx in self.continue_patch_stacks.pop().unwrap() {
+        let continue_patches = self
+            .continue_patch_stacks
+            .pop()
+            .ok_or_else(|| CompileError::new("internal: continue_patch_stacks underflow"))?;
+        for idx in continue_patches {
             let offset = continue_target as i32 - (idx as i32 + 1);
             if let OpCode::Jump(ref mut o) = self.code[idx] {
                 *o = offset;
@@ -319,5 +343,35 @@ mod tests {
         let prog = parse_program(source).unwrap();
         let result = Compiler::new().compile(&prog);
         assert!(result.is_err());
+    }
+
+    /// Regression: nested loops mixing all three loop forms (for-range,
+    /// for-in, while) must keep the break/continue patch stacks balanced
+    /// (push at entry, pop at exit). A future refactor that imbalances the
+    /// stacks would surface here as a `CompileError` instead of a panic —
+    /// see F-013 / F-006.
+    #[test]
+    fn test_compile_nested_loops_patch_stacks_balanced() {
+        let source = r#"
+            let mut total = 0
+            for i in range(0, 3) {
+                let mut j = 0
+                while j < 3 {
+                    for name in req.header_names {
+                        if name == "skip" {
+                            continue
+                        }
+                        total = total + 1
+                    }
+                    if j == 2 {
+                        break
+                    }
+                    j = j + 1
+                }
+            }
+        "#;
+        let prog = parse_program(source).unwrap();
+        let compiled = Compiler::new().compile(&prog).unwrap();
+        assert!(compiled.max_loop_depth >= 3);
     }
 }

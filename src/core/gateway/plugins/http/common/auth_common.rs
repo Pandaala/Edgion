@@ -54,6 +54,30 @@ pub async fn send_gateway_auth_error_response(
     Ok(())
 }
 
+/// Build and send a plain (non-`WWW-Authenticate`) error response for the gateway plane.
+///
+/// Mirrors [`send_gateway_auth_error_response`] but skips the auth-challenge header,
+/// so it can be used for 503s, non-auth 403s, and other gateway-side error replies that
+/// still need the standard `write_response_header` → `write_response_body` → `shutdown`
+/// sequence. The body is sent verbatim — the caller decides the content type and exact
+/// payload.
+///
+/// `Connection: close` is intentionally not set — Pingora manages connection lifecycle.
+pub async fn send_gateway_plain_error_response(
+    session: &mut dyn PluginSession,
+    status: u16,
+    content_type: &str,
+    body: Bytes,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut resp = ResponseHeader::build(status, None)?;
+    resp.insert_header("Content-Type", content_type)?;
+
+    session.write_response_header(Box::new(resp), false).await?;
+    session.write_response_body(Some(body), true).await?;
+    session.shutdown().await;
+    Ok(())
+}
+
 /// Escape a string for safe inclusion in an HTTP `quoted-string` (RFC 9110 §5.6.4):
 /// backslash-escape `\` and `"`, and drop control characters that are not valid in
 /// a header value (prevents header injection from dynamic error messages).

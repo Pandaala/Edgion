@@ -237,7 +237,14 @@ impl EdgionPlugins {
         self.spec.preparse_errors = errors;
     }
 
-    /// Compile regex patterns in conditions for all plugin entries.
+    /// Compile regex patterns and validate static config in conditions for all plugin entries.
+    ///
+    /// Both compile failures (regex) and validate failures (e.g. malformed
+    /// `timeRange.after`/`before` timestamps) push into the shared `errors`
+    /// vec, which `preparse()` then forwards to `seal_fail_closed` — every
+    /// request through a misconfigured EdgionPlugins is rejected with HTTP
+    /// 500, and the Controller writes the message into the resource's K8s
+    /// status condition.
     fn compile_conditions(&mut self, errors: &mut Vec<String>) {
         macro_rules! compile_entries {
             ($entries:expr, $label:expr) => {
@@ -246,6 +253,11 @@ impl EdgionPlugins {
                         if let Some(conds) = entry.conditions.as_mut() {
                             if let Err(e) = conds.compile() {
                                 let msg = format!("{}[{}] conditions regex: {}", $label, i, e);
+                                tracing::warn!("{}", msg);
+                                errors.push(msg);
+                            }
+                            if let Err(e) = conds.validate() {
+                                let msg = format!("{}[{}] conditions: {}", $label, i, e);
                                 tracing::warn!("{}", msg);
                                 errors.push(msg);
                             }

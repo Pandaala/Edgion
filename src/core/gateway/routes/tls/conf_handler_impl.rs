@@ -1,6 +1,6 @@
 use super::{cap_tls_connect_retries, DEFAULT_TLS_CONNECT_RETRIES, MAX_TLS_CONNECT_RETRIES};
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
-use crate::core::gateway::routes::common::is_core_service_backend_ref;
+use crate::core::gateway::routes::common::{is_core_service_backend_ref, resolve_stream_plugin_store_key};
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::tls::routes_mgr::resolved_listeners_for_route;
 use crate::core::gateway::routes::tls::{get_global_tls_route_managers, GlobalTlsRouteManagers};
@@ -85,8 +85,6 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
     }
 }
 
-use crate::types::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
-
 impl GlobalTlsRouteManagers {
     /// Initialize a TLSRoute by setting up BackendSelector, proxy protocol,
     /// and stream plugin store key from annotations.
@@ -101,7 +99,7 @@ impl GlobalTlsRouteManagers {
                 _ => None,
             });
 
-        let store_key = Self::resolve_stream_plugin_store_key(&route);
+        let store_key = resolve_stream_plugin_store_key(&route.metadata);
 
         let configured_max_connect_retries = annotations
             .and_then(|a| a.get(crate::types::constants::annotations::edgion::MAX_CONNECT_RETRIES))
@@ -163,24 +161,6 @@ impl GlobalTlsRouteManagers {
         }
 
         Ok(Arc::new(route))
-    }
-
-    fn resolve_stream_plugin_store_key(route: &TLSRoute) -> Option<String> {
-        let annotations = route.metadata.annotations.as_ref()?;
-        let annotation_value = annotations.get(EDGION_STREAM_PLUGINS)?;
-        let trimmed = annotation_value.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-
-        let store_key = if trimmed.contains('/') {
-            trimmed.to_string()
-        } else {
-            let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
-            format!("{}/{}", namespace, trimmed)
-        };
-
-        Some(store_key)
     }
 }
 

@@ -3,7 +3,9 @@
 use async_trait::async_trait;
 use std::net::IpAddr;
 
-use crate::core::gateway::plugins::stream::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
+use crate::core::gateway::plugins::stream::stream_plugin_trait::{
+    access_decision_to_stream_result, StreamContext, StreamPlugin, StreamPluginResult,
+};
 use crate::types::resources::edgion_stream_plugins::ConnectionIpRestrictionRules;
 
 const PLUGIN_NAME: &str = "StreamIpRestriction";
@@ -34,18 +36,10 @@ pub(crate) fn check_ip_access(
     init_failed: bool,
     ip: &IpAddr,
 ) -> StreamPluginResult {
-    use crate::types::resources::edgion_plugins::{AccessDecision, DefaultAction};
-
     if init_failed {
         return StreamPluginResult::Deny("ip init fail".to_string());
     }
-    match rules.check_ip(ip) {
-        AccessDecision::AllowByGroup(_) => StreamPluginResult::Allow,
-        AccessDecision::DenyByGroup(g) => StreamPluginResult::Deny(format!("ip:deny:group={}", g)),
-        AccessDecision::DenyByWhitelistMiss => StreamPluginResult::Deny("ip:deny:not-in-allow".to_string()),
-        AccessDecision::Default(DefaultAction::Allow) => StreamPluginResult::Allow,
-        AccessDecision::Default(DefaultAction::Deny) => StreamPluginResult::Deny("ip:deny:default".to_string()),
-    }
+    access_decision_to_stream_result(rules.check_ip(ip), || {})
 }
 
 /// Stream IP Restriction plugin

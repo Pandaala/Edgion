@@ -138,10 +138,7 @@ impl DslPlugin {
                     if let Some(OpCode::LoadConst(k)) = script.code.get(first_arg_pos) {
                         if let Some(Constant::Str(link_name)) = script.constants.get(*k as usize) {
                             if !valid_names.contains(link_name.as_str()) {
-                                return Err(format!(
-                                    "redis.* uses link '{}' which is not in linkSysRefs",
-                                    link_name
-                                ));
+                                return Err(format!("redis.* uses link '{}' which is not in linkSysRefs", link_name));
                             }
                         }
                     }
@@ -154,25 +151,30 @@ impl DslPlugin {
     /// Validate a `DslConfig` exactly as far as construction would: resolve the
     /// script (compile `source` / deserialize+validate `bytecode`), check the
     /// `linksys_refs` config, and run the redis link-name scan. Returns the
-    /// first error string, or `Ok(())`. This is intended to be used as the
-    /// single validation entry point by `DslConfig::validation_error()` so the
-    /// control plane sees the same failures the data-plane constructor would hit.
+    /// validated `CompiledScript` on success so callers (notably `resolve_parts`)
+    /// can reuse it without paying for a second deserialize / validate cycle.
+    /// This is the single validation entry point used by
+    /// `DslConfig::validation_error()` so the control plane sees the same
+    /// failures the data-plane constructor would hit.
     ///
     /// Note: VM init (`Vm::new`) is intentionally NOT run here — it is the one
     /// failure that cannot be predicted statically and is covered by the
     /// data-plane seal backstop instead.
-    pub(crate) fn validate_config(config: &DslConfig) -> Result<(), String> {
+    pub(crate) fn validate_config(config: &DslConfig) -> Result<CompiledScript, String> {
         let script = Self::resolve_script(config)?;
         config.validate()?;
         Self::check_redis_link_names(config, &script)?;
-        Ok(())
+        Ok(script)
     }
 
-    /// Extract script, limits, error policy, and runtime from DslConfig
+    /// Extract script, limits, error policy, and runtime from DslConfig.
+    ///
+    /// `validate_config` is the single source of truth for the three validation
+    /// steps (resolve_script / config.validate / check_redis_link_names); this
+    /// function reuses the `CompiledScript` it returns rather than running the
+    /// same pipeline a second time.
     fn resolve_parts(config: &DslConfig) -> Result<(CompiledScript, VmLimits, DslErrorPolicy, DslRuntime), String> {
-        let script = Self::resolve_script(config)?;
-        config.validate()?;
-        Self::check_redis_link_names(config, &script)?;
+        let script = Self::validate_config(config)?;
 
         let limits = VmLimits {
             max_steps: config.max_steps.unwrap_or(10_000),
