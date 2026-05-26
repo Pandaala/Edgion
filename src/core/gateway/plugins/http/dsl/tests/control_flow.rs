@@ -122,6 +122,49 @@ fn test_break_in_for_in() {
     assert_eq!(result, good_next());
 }
 
+// ---------------------------------------------------------------------------
+// Logical operator value semantics (F-019): && / || always yield a Bool, even
+// in a value context where the non-short-circuit branch returns the RHS.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_or_coerces_rhs_to_bool() {
+    // Left falsy -> falls through to RHS; RHS must be coerced to Bool(is_truthy).
+    // Before the fix this leaked the raw Str "ignored".
+    assert_sets_request_header(
+        r#"req.set_header("X-Or", to_str(false || "ignored"))"#,
+        "X-Or",
+        "true",
+    );
+}
+
+#[test]
+fn test_and_coerces_rhs_to_bool() {
+    // Left truthy -> falls through to RHS; RHS must be coerced to Bool(is_truthy).
+    // Before the fix this leaked the raw Str "ignored".
+    assert_sets_request_header(
+        r#"req.set_header("X-And", to_str(true && "ignored"))"#,
+        "X-And",
+        "true",
+    );
+}
+
+#[test]
+fn test_or_nil_operands_yield_false_not_nil() {
+    // Both operands falsy -> RHS (Nil) coerced to Bool(false), not leaked as "nil".
+    assert_sets_request_header(r#"req.set_header("X-Or", to_str(nil || nil))"#, "X-Or", "false");
+}
+
+#[test]
+fn test_and_falsy_left_short_circuits_to_false() {
+    // Left falsy short-circuits to LoadFalse; RHS is not evaluated.
+    assert_sets_request_header(
+        r#"req.set_header("X-And", to_str(false && "ignored"))"#,
+        "X-And",
+        "false",
+    );
+}
+
 #[test]
 fn test_nested_while_break() {
     let mut session = MockPluginSession::new();

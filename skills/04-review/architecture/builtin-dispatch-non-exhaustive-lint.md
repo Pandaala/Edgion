@@ -1,6 +1,6 @@
 ---
 name: builtin-dispatch-non-exhaustive-lint
-description: Use when reviewing DSL `BuiltinId` dispatch findings that propose enabling `#![warn(non_exhaustive_omitted_patterns)]` on `lang/builtins.rs` or `lang/compiler/builtins.rs` to catch forgotten arms when new `BuiltinId` variants are added.
+description: Use when reviewing DSL `BuiltinId` dispatch findings that propose enabling `#![warn(non_exhaustive_omitted_patterns)]` on `lang/builtins.rs` or `lang/compiler/builtins.rs` to catch forgotten arms when new `BuiltinId` variants are added, OR that report the Redis-builtin predicate (`is_redis_builtin` / `is_redis_builtin_id`) as duplicated, OR that propose converting `BuiltinId::is_redis_builtin` to an exhaustive `match`.
 ---
 
 # `non_exhaustive_omitted_patterns` Lint on `BuiltinId` Dispatch — NOT-AN-ISSUE
@@ -48,6 +48,27 @@ Re-open this decision only if:
 - Rust adds a same-crate-aware variant of `non_exhaustive_omitted_patterns` (or a separate lint such as a hypothetical `unreachable_exhaustive_wildcard`) that does fire on internal enums with `_ =>` arms.
 - A new `BuiltinId` dispatch site is added that legitimately needs a `_ =>` catch-all (e.g., a generic fallback dispatcher), at which point the trade-off becomes specific to that site.
 - The `BuiltinId` enum is moved to a separate crate (e.g., a published `edgion-dsl-bytecode` crate consumed by external integrations), where `#[non_exhaustive]` + the lint would start to bite.
+
+## Related: Redis-predicate consolidation (F-004, 2026-05-26)
+
+The two byte-for-byte-identical private predicates that enumerated the 13 `Redis*`
+variants — `is_redis_builtin` in `lang/vm.rs` (VM dispatch loop) and
+`is_redis_builtin_id` in `plugin.rs` (compile-time link-name check) — have been
+consolidated into a single inherent method `BuiltinId::is_redis_builtin(self) -> bool`
+in `bytecode.rs`, the same module as the enum. Both call sites now invoke it, so a new
+`Redis*` variant only has to be reflected in one place.
+
+The method body stays a `matches!` (non-exhaustive) **intentionally**, not an exhaustive
+`match` returning `bool`: a boolean predicate has no `_ =>` arm to remove, so making it
+"exhaustive" would force every future *non-Redis* variant addition to also touch this
+predicate (adding a `BuiltinId::X => false` arm) for zero protection on the Redis set it
+guards. This is the same stance as the rest of this rule — compile-time safety comes from
+explicit non-`_` lists at the actual dispatch matches (`call_builtin_redis`) plus tests,
+not from type-system gymnastics on a side predicate.
+
+Re-reports of the form "`is_redis_builtin` / `is_redis_builtin_id` are duplicated" are now
+moot (single source). Suggestions to "convert `BuiltinId::is_redis_builtin` to an
+exhaustive `match`" are **not accepted** for the reason above.
 
 ## Reference Cases
 

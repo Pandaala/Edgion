@@ -85,12 +85,6 @@ impl RequestFilter for RealIp {
 
         if extractor.is_trusted_proxy(&client_ip) {
             plugin_log.push("trusted proxy:match");
-            // Cold path: emit at most once per request when the client IP itself
-            // is a trusted proxy. Surfaces which named group matched, for ops
-            // debugging without touching the per-XFF-hop hot path.
-            if let Some(group) = extractor.matched_trusted_group(&client_ip) {
-                tracing::debug!(group = %group, ip = %client_ip, "trusted_proxy_match");
-            }
         } else {
             plugin_log.push("trusted proxy:miss");
         }

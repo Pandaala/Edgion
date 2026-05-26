@@ -290,7 +290,11 @@ impl RequestFilter for LdapAuth {
                 PluginRunningResult::GoodNext
             }
             Err(LdapAuthError::InvalidCredentials) => {
-                plugin_log.push("Deny bad password");
+                // Uniform credential-rejection tag, matching basic/key/hmac/jwt_auth.
+                // LDAP rc 49 (invalidCredentials) is returned for both a nonexistent DN
+                // and a wrong password, so this branch cannot — and must not appear to —
+                // discriminate username existence.
+                plugin_log.push("Deny bad credential");
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 self.unauthorized(session).await
             }

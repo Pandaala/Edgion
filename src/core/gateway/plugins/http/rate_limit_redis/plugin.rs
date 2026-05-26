@@ -21,11 +21,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::core::gateway::link_sys::get_redis_client;
 use crate::core::gateway::link_sys::providers::redis::RedisLinkClient;
-use crate::core::gateway::plugins::http::common::format_duration;
+use crate::core::gateway::plugins::http::common::{format_duration, resolve_rate_limit_key, RateLimitKey};
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{OnMissingKey, OnRedisFailure, RateLimitAlgorithm, RateLimitRedisConfig};
+use crate::types::resources::edgion_plugins::{OnRedisFailure, RateLimitAlgorithm, RateLimitRedisConfig};
 
 use super::scripts::{FIXED_WINDOW_SCRIPT, SLIDING_WINDOW_SCRIPT, TOKEN_BUCKET_SCRIPT};
 
@@ -504,33 +504,19 @@ impl RequestFilter for RateLimitRedis {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        // 2. Extract key (identical logic to RateLimit)
-        let limit_key = {
-            let mut parts: Vec<String> = Vec::new();
-            for k in &self.config.key {
-                if let Some(v) = session.key_get(k).await {
-                    parts.push(v);
-                }
-            }
-            if parts.is_empty() {
-                if let Some(ref dk) = self.config.default_key {
-                    plugin_log.push("key miss:allow");
-                    dk.clone()
-                } else {
-                    match self.config.on_missing_key {
-                        OnMissingKey::Allow => {
-                            plugin_log.push("key miss:allow");
-                            return PluginRunningResult::GoodNext;
-                        }
-                        OnMissingKey::Deny => {
-                            plugin_log.push("Deny rate limit");
-                            return self.reject_request(session, Duration::ZERO, None).await;
-                        }
-                    }
-                }
-            } else {
-                parts.join("_")
-            }
+        // 2. Extract key (shared with RateLimit via resolve_rate_limit_key)
+        let limit_key = match resolve_rate_limit_key(
+            session,
+            &self.config.key,
+            self.config.default_key.as_deref(),
+            &self.config.on_missing_key,
+            plugin_log,
+        )
+        .await
+        {
+            RateLimitKey::Resolved(k) => k,
+            RateLimitKey::Allow => return PluginRunningResult::GoodNext,
+            RateLimitKey::Deny => return self.reject_request(session, Duration::ZERO, None).await,
         };
 
         let kl = limit_key.len();

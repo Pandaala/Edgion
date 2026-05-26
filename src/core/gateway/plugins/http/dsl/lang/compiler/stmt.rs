@@ -127,7 +127,7 @@ impl Compiler {
             for stmt in body {
                 self.compile_stmt(stmt)?;
             }
-            self.leave_scope();
+            self.leave_scope()?;
 
             // Jump to end after body (skip remaining branches)
             if i < branches.len() - 1 || else_body.is_some() {
@@ -143,7 +143,7 @@ impl Compiler {
             for stmt in else_stmts {
                 self.compile_stmt(stmt)?;
             }
-            self.leave_scope();
+            self.leave_scope()?;
         }
 
         // Patch all end jumps

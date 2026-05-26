@@ -235,6 +235,31 @@ fn test_regex_replace_result_too_long() {
     assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
 }
 
+// sha256 / md5 result must honor max_string_len like every other string builtin (F-005)
+#[test]
+fn test_sha256_result_too_long() {
+    let session = MockPluginSession::new();
+    let limits = VmLimits {
+        max_string_len: 63,
+        ..Default::default()
+    };
+    // SHA-256 hex output is 64 chars > limit 63
+    let result = run_with_limits(r#"let v = sha256("hello")"#, session, limits);
+    assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
+}
+
+#[test]
+fn test_md5_result_too_long() {
+    let session = MockPluginSession::new();
+    let limits = VmLimits {
+        max_string_len: 31,
+        ..Default::default()
+    };
+    // MD5 hex output is 32 chars > limit 31
+    let result = run_with_limits(r#"let v = md5("hello")"#, session, limits);
+    assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
+}
+
 #[test]
 fn test_base64_encode() {
     assert_sets_request_header(

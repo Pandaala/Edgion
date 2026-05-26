@@ -124,8 +124,15 @@ impl Compiler {
         self.scope_depth += 1;
     }
 
-    pub(super) fn leave_scope(&mut self) {
-        assert!(self.scope_depth > 0, "leave_scope called at depth 0");
+    pub(super) fn leave_scope(&mut self) -> Result<(), CompileError> {
+        // scope_depth == 0 here is a compiler-internal invariant violation
+        // (an unbalanced enter/leave) that no user-supplied DSL source can reach.
+        // Per the graceful-degrade policy, surface it as a CompileError instead of
+        // panicking, so a future compiler bug fails the config load cleanly rather
+        // than unwinding the preparse task.
+        if self.scope_depth == 0 {
+            return Err(CompileError::new("leave_scope called at depth 0"));
+        }
         // Pop locals declared in the current scope
         while let Some(local) = self.locals.last() {
             if local.depth < self.scope_depth {
@@ -134,6 +141,7 @@ impl Compiler {
             self.locals.pop();
         }
         self.scope_depth = self.scope_depth.saturating_sub(1);
+        Ok(())
     }
 }
 
@@ -156,5 +164,25 @@ mod record_line_tests {
         assert_eq!(c.line_runs.len(), 2);
         assert_eq!(c.line_runs[0], (u16::MAX, 1));
         assert_eq!(c.line_runs[1], (1, 1));
+    }
+}
+
+#[cfg(test)]
+mod scope_balance_tests {
+    use super::super::Compiler;
+
+    #[test]
+    fn leave_scope_at_depth_zero_returns_err_not_panic() {
+        // scope_depth starts at 0; an unbalanced leave must surface a CompileError
+        // (graceful degrade) instead of panicking. See plugins-http-dsl-F006.
+        let mut c = Compiler::new();
+        assert!(c.leave_scope().is_err());
+    }
+
+    #[test]
+    fn balanced_enter_leave_scope_is_ok() {
+        let mut c = Compiler::new();
+        c.enter_scope();
+        assert!(c.leave_scope().is_ok());
     }
 }

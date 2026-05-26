@@ -190,6 +190,8 @@ String `==` and `!=` comparisons use lexicographic order (byte-by-byte):
 - `&&`: if the left operand is falsy, the right operand is not evaluated
 - `||`: if the left operand is truthy, the right operand is not evaluated
 
+**Result type**: `&&` and `||` always evaluate to a `Bool` (`true` / `false`), regardless of the operand types. They are logical operators, not value-selection / null-coalescing operators — `false || "x"` yields `true`, not `"x"`. To select a value based on a condition, use an `if`/`else` block.
+
 ```dsl
 let h = req.header("X-Token")
 

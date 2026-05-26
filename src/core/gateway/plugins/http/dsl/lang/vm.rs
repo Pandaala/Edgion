@@ -754,7 +754,7 @@ impl Vm {
                     state.tick_call()?;
                     let result = if id == BuiltinId::HttpCall {
                         self.call_builtin_http(argc, &mut state, runtime).await?
-                    } else if is_redis_builtin(id) {
+                    } else if id.is_redis_builtin() {
                         self.call_builtin_redis(id, argc, &mut state, runtime).await?
                     } else {
                         self.call_builtin(id, argc, &mut state, session, log)?
@@ -818,27 +818,6 @@ impl Vm {
             }
         }
     }
-}
-
-/// Returns true for all `redis.*` builtin IDs that require async dispatch.
-#[inline]
-fn is_redis_builtin(id: BuiltinId) -> bool {
-    matches!(
-        id,
-        BuiltinId::RedisGet
-            | BuiltinId::RedisSet
-            | BuiltinId::RedisDel
-            | BuiltinId::RedisExists
-            | BuiltinId::RedisTtl
-            | BuiltinId::RedisExpire
-            | BuiltinId::RedisIncr
-            | BuiltinId::RedisIncrBy
-            | BuiltinId::RedisHGet
-            | BuiltinId::RedisHSet
-            | BuiltinId::RedisHDel
-            | BuiltinId::RedisHGetAll
-            | BuiltinId::RedisHExists
-    )
 }
 
 // ==================== Safe Execution Wrapper ====================

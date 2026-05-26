@@ -226,11 +226,7 @@ impl RequestFilter for OpenidConnect {
                             let _ = self.send_redirect_with_cookies(session, &location, &cookies).await;
                         }
                         Err(err) => {
-                            if err.http_status() == 502 {
-                                let _ = self.send_plain_error(session, 502, &err.user_message()).await;
-                            } else {
-                                let _ = self.send_unauthorized(session, &err.user_message()).await;
-                            }
+                            self.send_oidc_error(session, &err).await;
                         }
                     }
                     return PluginRunningResult::ErrTerminateRequest;

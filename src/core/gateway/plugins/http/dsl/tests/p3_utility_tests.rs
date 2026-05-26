@@ -41,6 +41,19 @@ fn test_hmac_sha256() {
     assert_eq!(result, good_next());
 }
 
+// hmac_sha256 result must honor max_string_len like every other string builtin (F-005)
+#[test]
+fn test_hmac_sha256_result_too_long() {
+    let session = MockPluginSession::new();
+    let limits = VmLimits {
+        max_string_len: 63,
+        ..Default::default()
+    };
+    // HMAC-SHA-256 hex output is 64 chars > limit 63
+    let result = run_with_limits(r#"let v = hmac_sha256("key", "data")"#, session, limits);
+    assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
+}
+
 #[test]
 fn test_json_get_string() {
     let source = r#"

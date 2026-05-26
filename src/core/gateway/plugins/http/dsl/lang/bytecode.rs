@@ -238,6 +238,34 @@ pub enum BuiltinId {
     RedisHExists,
 }
 
+impl BuiltinId {
+    /// Returns true for all `redis.*` builtin IDs that require async dispatch
+    /// through the LinkSys Redis connection pool.
+    ///
+    /// Single authoritative source for the Redis-variant set: the VM dispatch
+    /// loop and the plugin-level link-name check both call this method, so a new
+    /// `Redis*` variant only has to be added here.
+    #[inline]
+    pub fn is_redis_builtin(self) -> bool {
+        matches!(
+            self,
+            BuiltinId::RedisGet
+                | BuiltinId::RedisSet
+                | BuiltinId::RedisDel
+                | BuiltinId::RedisExists
+                | BuiltinId::RedisTtl
+                | BuiltinId::RedisExpire
+                | BuiltinId::RedisIncr
+                | BuiltinId::RedisIncrBy
+                | BuiltinId::RedisHGet
+                | BuiltinId::RedisHSet
+                | BuiltinId::RedisHDel
+                | BuiltinId::RedisHGetAll
+                | BuiltinId::RedisHExists
+        )
+    }
+}
+
 /// Constant pool entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Constant {

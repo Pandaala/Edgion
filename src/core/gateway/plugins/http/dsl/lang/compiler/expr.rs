@@ -48,23 +48,31 @@ impl Compiler {
 
             ExprKind::BinaryOp { op, left, right } => {
                 match op {
-                    // Short-circuit &&
+                    // Short-circuit && — always yields a Bool (Logical AND).
                     BinOp::And => {
                         self.compile_expr(left)?;
                         let false_jump = self.emit(OpCode::JumpIfFalse(0));
                         self.compile_expr(right)?;
+                        // Coerce the RHS to Bool(is_truthy) via double Not so the result
+                        // type is consistent with the LoadFalse short-circuit branch.
+                        self.emit(OpCode::Not);
+                        self.emit(OpCode::Not);
                         let end_jump = self.emit(OpCode::Jump(0));
                         self.patch_jump(false_jump);
                         self.emit(OpCode::LoadFalse);
                         self.patch_jump(end_jump);
                     }
-                    // Short-circuit ||
+                    // Short-circuit || — always yields a Bool (Logical OR).
                     BinOp::Or => {
                         self.compile_expr(left)?;
                         // If truthy, skip right side
                         self.emit(OpCode::Not);
                         let false_jump = self.emit(OpCode::JumpIfFalse(0));
                         self.compile_expr(right)?;
+                        // Coerce the RHS to Bool(is_truthy) via double Not so the result
+                        // type is consistent with the LoadTrue short-circuit branch.
+                        self.emit(OpCode::Not);
+                        self.emit(OpCode::Not);
                         let end_jump = self.emit(OpCode::Jump(0));
                         self.patch_jump(false_jump);
                         self.emit(OpCode::LoadTrue);

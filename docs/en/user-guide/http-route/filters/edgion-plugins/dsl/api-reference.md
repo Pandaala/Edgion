@@ -1404,7 +1404,7 @@ Sends an outbound HTTP request from the gateway to an arbitrary HTTP/HTTPS endpo
 
 **Constraints**:
 - Only `http` and `https` URL schemes are accepted; other schemes (e.g. `file://`, `ftp://`) return `status = 0`.
-- When `httpBlockPrivateIps: true`, requests to loopback, private, and link-local addresses return `status = 0`.
+- When `httpBlockPrivateIps: true`, requests whose URL host is a loopback, private, or link-local **IP literal** return `status = 0`. The guard inspects the URL host string only — it does **not** resolve DNS names, so a hostname that resolves to a private address is not blocked by this flag. Use network-level egress controls (NetworkPolicy) as the primary defense for hostname-based SSRF.
 - The response body is truncated at `httpMaxResponseBodyBytes` (default 1 MiB).
 - The response `headers` Map is silently truncated to the first `max_map_size` entries (SSRF / large-response-header guard); the call still succeeds.
 - The actual timeout applied is `min(timeout_ms, httpMaxTimeoutMs)`.
@@ -1416,7 +1416,7 @@ Sends an outbound HTTP request from the gateway to an arbitrary HTTP/HTTPS endpo
 |-------|------|---------|-------------|
 | `httpMaxTimeoutMs` | Integer | `5000` | Hard cap on per-call timeout (ms) |
 | `httpMaxResponseBodyBytes` | Integer | `1048576` | Maximum response body size (bytes); body is truncated if exceeded |
-| `httpBlockPrivateIps` | Boolean | `false` | Block outbound calls to private/loopback/link-local IP addresses (SSRF guard) |
+| `httpBlockPrivateIps` | Boolean | `false` | Block outbound calls to private/loopback/link-local IP addresses (SSRF guard). IP literals only — hostnames are not resolved (see note above). |
 
 **Example — call a health endpoint and branch on status**:
 ```

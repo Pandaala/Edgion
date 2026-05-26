@@ -71,6 +71,19 @@ impl OpenidConnect {
         Ok(())
     }
 
+    /// Dispatch an `OidcVerifyError` to the matching error response: an upstream-side
+    /// failure (`http_status() == 502`) becomes a plain 502, anything else a 401.
+    /// This centralizes the 502-vs-401 decision so it cannot drift between the
+    /// callback and request-filter error paths. The caller still owns logging and
+    /// the `PluginRunningResult` it returns.
+    pub(super) async fn send_oidc_error(&self, session: &mut dyn PluginSession, err: &OidcVerifyError) {
+        if err.http_status() == 502 {
+            let _ = self.send_plain_error(session, 502, &err.user_message()).await;
+        } else {
+            let _ = self.send_unauthorized(session, &err.user_message()).await;
+        }
+    }
+
     pub(super) async fn send_redirect_with_cookies(
         &self,
         session: &mut dyn PluginSession,
@@ -206,11 +219,7 @@ impl OpenidConnect {
             match self.decode_signed_cookie_payload(&raw_state_cookie, &session_secret) {
                 Ok(v) => v,
                 Err(err) => {
-                    if err.http_status() == 502 {
-                        let _ = self.send_plain_error(session, 502, &err.user_message()).await;
-                    } else {
-                        let _ = self.send_unauthorized(session, &err.user_message()).await;
-                    }
+                    self.send_oidc_error(session, &err).await;
                     return PluginRunningResult::ErrTerminateRequest;
                 }
             };
@@ -240,11 +249,7 @@ impl OpenidConnect {
         let redirect_uri = match self.resolve_redirect_uri(session) {
             Ok(v) => v,
             Err(err) => {
-                if err.http_status() == 502 {
-                    let _ = self.send_plain_error(session, 502, &err.user_message()).await;
-                } else {
-                    let _ = self.send_unauthorized(session, &err.user_message()).await;
-                }
+                self.send_oidc_error(session, &err).await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
         };
@@ -256,11 +261,7 @@ impl OpenidConnect {
             Ok(v) => v,
             Err(err) => {
                 plugin_log.push_err("token exchange fail");
-                if err.http_status() == 502 {
-                    let _ = self.send_plain_error(session, 502, &err.user_message()).await;
-                } else {
-                    let _ = self.send_unauthorized(session, &err.user_message()).await;
-                }
+                self.send_oidc_error(session, &err).await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
         };
@@ -282,11 +283,7 @@ impl OpenidConnect {
             };
             if let Err(err) = self.validate_id_token_nonce(id_token, expected_nonce).await {
                 plugin_log.push_err(err.log_tag());
-                if err.http_status() == 502 {
-                    let _ = self.send_plain_error(session, 502, &err.user_message()).await;
-                } else {
-                    let _ = self.send_unauthorized(session, &err.user_message()).await;
-                }
+                self.send_oidc_error(session, &err).await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
         }
@@ -295,11 +292,7 @@ impl OpenidConnect {
             Ok(v) => v,
             Err(err) => {
                 plugin_log.push_err(err.log_tag());
-                if err.http_status() == 502 {
-                    let _ = self.send_plain_error(session, 502, &err.user_message()).await;
-                } else {
-                    let _ = self.send_unauthorized(session, &err.user_message()).await;
-                }
+                self.send_oidc_error(session, &err).await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
         };

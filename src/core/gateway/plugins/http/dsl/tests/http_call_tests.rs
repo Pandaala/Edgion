@@ -156,6 +156,63 @@ fn test_http_call_block_private_ips_rejects_ipv4_mapped_ipv6() {
 }
 
 #[test]
+fn test_http_call_caps_large_response_body() {
+    // Regression for F-007: a response body larger than max_response_body_bytes must be
+    // streamed and truncated to the cap, never fully buffered first. Unlike the other tests
+    // in this file, this one needs a live response to exercise the body-read path, so it
+    // drives a loopback server in-process (deterministic, no external dependency). The
+    // server returns 100 bytes; with the cap set to 4 the script must observe exactly the
+    // first 4 bytes.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut throwaway = [0u8; 1024];
+            let _ = sock.read(&mut throwaway).await;
+            let body = vec![b'A'; 100];
+            let header = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+            let _ = sock.write_all(header.as_bytes()).await;
+            let _ = sock.write_all(&body).await;
+            let _ = sock.shutdown().await;
+        });
+        let url = format!("http://{}/", addr);
+        let source = r#"
+            let r = http.call("GET", "__URL__", nil)
+            if r["status"] == 200 {
+                if r["body"] == "AAAA" {
+                    return next()
+                }
+            }
+            return deny(500, "body not capped")
+        "#
+        .replace("__URL__", &url);
+
+        let vm = make_vm(&source);
+        let mut log = PluginLog::new("test");
+        let mut session = MockPluginSession::new();
+        let runtime = DslRuntime {
+            max_response_body_bytes: 4,
+            ..DslRuntime::default()
+        };
+        let result = execute_safe(
+            &vm,
+            &mut session as &mut dyn PluginSession,
+            &mut log,
+            &DslErrorPolicy::Deny,
+            &runtime,
+        )
+        .await;
+        assert_eq!(result, good_next());
+    });
+}
+
+#[test]
 fn test_map_len() {
     let source = r#"
         let m = {"a": "1", "b": "2", "c": "3"}

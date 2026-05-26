@@ -3,6 +3,7 @@
 //! Arguments are popped from the VM stack, results pushed back.
 //! Each builtin maps to exactly one PluginSession API call.
 
+use futures::StreamExt;
 use indexmap::IndexMap;
 use std::sync::Arc;
 
@@ -481,13 +482,13 @@ impl Vm {
                 use sha2::Digest;
                 let s = state.pop()?.into_string();
                 let hash = sha2::Sha256::digest(s.as_bytes());
-                Ok(Value::Str(hex::encode(hash).into()))
+                checked_value_str(hex::encode(hash), self.limits.max_string_len)
             }
             BuiltinId::Md5 => {
                 use md5::Digest;
                 let s = state.pop()?.into_string();
                 let hash = md5::Md5::digest(s.as_bytes());
-                Ok(Value::Str(hex::encode(hash).into()))
+                checked_value_str(hex::encode(hash), self.limits.max_string_len)
             }
             BuiltinId::Trim => {
                 let s = state.pop()?.into_string();
@@ -568,7 +569,7 @@ impl Vm {
                 })?;
                 mac.update(data.as_bytes());
                 let result = hex::encode(mac.finalize().into_bytes());
-                Ok(Value::Str(result.into()))
+                checked_value_str(result, self.limits.max_string_len)
             }
             BuiltinId::JsonGet => {
                 let path = state.pop()?.into_string();
@@ -959,16 +960,32 @@ impl Vm {
             }
         }
 
-        let body_bytes = match resp.bytes().await {
-            Ok(b) => b,
-            Err(_) => return Ok(failure_map()),
-        };
+        // Stream the response body, accumulating at most max_response_body_bytes and
+        // discarding the rest. Buffering the whole body first (resp.bytes()) then
+        // truncating let a slow/large upstream allocate the full body before the cap
+        // applied (memory exhaustion / SSRF amplification, esp. with block_private_ips
+        // false). Streaming bounds peak memory to the cap plus one chunk. A read error
+        // yields failure_map(), preserving the prior all-or-nothing bytes() semantics.
+        // Mirrors http_util::fetch_json_limited and webhook stream_body_capped.
+        let max_body = runtime.max_response_body_bytes;
+        let mut stream = resp.bytes_stream();
+        let mut buf: Vec<u8> = Vec::with_capacity(8192.min(max_body));
+        loop {
+            match stream.next().await {
+                Some(Ok(chunk)) => {
+                    let remaining = max_body - buf.len();
+                    if chunk.len() >= remaining {
+                        buf.extend_from_slice(&chunk[..remaining]);
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk);
+                }
+                Some(Err(_)) => return Ok(failure_map()),
+                None => break,
+            }
+        }
 
-        let body_text = if body_bytes.len() > runtime.max_response_body_bytes {
-            String::from_utf8_lossy(&body_bytes[..runtime.max_response_body_bytes]).to_string()
-        } else {
-            String::from_utf8_lossy(&body_bytes).to_string()
-        };
+        let body_text = String::from_utf8_lossy(&buf).to_string();
 
         let mut result = IndexMap::new();
         result.insert("status".to_string(), Value::Int(status));

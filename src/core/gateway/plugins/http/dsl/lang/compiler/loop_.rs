@@ -52,7 +52,7 @@ impl Compiler {
         for stmt in body {
             self.compile_stmt(stmt)?;
         }
-        self.leave_scope();
+        self.leave_scope()?;
 
         // continue target = start of increment
         let continue_target = self.current_offset();
@@ -87,7 +87,7 @@ impl Compiler {
         }
 
         self.loop_depth -= 1;
-        self.leave_scope();
+        self.leave_scope()?;
 
         Ok(())
     }
@@ -146,7 +146,7 @@ impl Compiler {
         for stmt in body {
             self.compile_stmt(stmt)?;
         }
-        self.leave_scope();
+        self.leave_scope()?;
 
         // continue target = start of increment
         let continue_target = self.current_offset();
@@ -181,7 +181,7 @@ impl Compiler {
         }
 
         self.loop_depth -= 1;
-        self.leave_scope();
+        self.leave_scope()?;
 
         Ok(())
     }
@@ -206,7 +206,7 @@ impl Compiler {
         for stmt in body {
             self.compile_stmt(stmt)?;
         }
-        self.leave_scope();
+        self.leave_scope()?;
 
         let continue_target = loop_start;
 
@@ -234,7 +234,7 @@ impl Compiler {
         }
 
         self.loop_depth -= 1;
-        self.leave_scope();
+        self.leave_scope()?;
 
         Ok(())
     }

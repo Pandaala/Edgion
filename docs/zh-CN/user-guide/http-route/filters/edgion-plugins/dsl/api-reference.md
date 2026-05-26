@@ -1404,7 +1404,7 @@ if payload != nil {
 
 **限制**：
 - 仅接受 `http` 和 `https` 协议；其他协议（如 `file://`、`ftp://`）返回 `status = 0`。
-- 当 `httpBlockPrivateIps: true` 时，目标为回环、私有、链路本地地址的请求返回 `status = 0`。
+- 当 `httpBlockPrivateIps: true` 时，URL host 为回环、私有、链路本地 **IP 字面量**的请求返回 `status = 0`。该守卫**仅检查 URL host 字符串，不解析 DNS 域名**，因此解析到私有地址的域名不会被此开关拦截。域名形式的 SSRF 防护应以网络层出站控制（NetworkPolicy）为主。
 - 响应体超过 `httpMaxResponseBodyBytes`（默认 1 MiB）时会被截断。
 - 响应 `headers` Map 超过 `max_map_size` 时静默截断为前 `max_map_size` 项（SSRF / 大响应头防护）；调用仍返回成功。
 - 实际超时为 `min(timeout_ms, httpMaxTimeoutMs)`。
@@ -1416,7 +1416,7 @@ if payload != nil {
 |------|------|--------|------|
 | `httpMaxTimeoutMs` | Integer | `5000` | 单次调用超时上限（毫秒） |
 | `httpMaxResponseBodyBytes` | Integer | `1048576` | 响应体最大字节数；超出时截断 |
-| `httpBlockPrivateIps` | Boolean | `false` | 拦截对私有/回环/链路本地 IP 的出站调用（SSRF 防护） |
+| `httpBlockPrivateIps` | Boolean | `false` | 拦截对私有/回环/链路本地 IP 的出站调用（SSRF 防护）。仅检查 IP 字面量，不解析域名（见上方说明）。 |
 
 **示例 — 调用健康检查端点并根据状态分支**：
 ```

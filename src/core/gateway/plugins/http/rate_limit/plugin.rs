@@ -41,12 +41,12 @@ use pingora_limits::rate::Rate;
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::core::gateway::plugins::http::common::format_duration;
+use crate::core::gateway::plugins::http::common::{format_duration, resolve_rate_limit_key, RateLimitKey};
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 
 use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{OnMissingKey, RateLimitConfig};
+use crate::types::resources::edgion_plugins::RateLimitConfig;
 
 // CMS estimator configuration
 // HASHES is fixed at 4 (4 hash functions for CMS)
@@ -211,37 +211,19 @@ impl RequestFilter for RateLimit {
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // PluginLog must stay short (≤40B) and must never contain the resolved
         // limit_key — it can be a user-identifying value (API key, user_id).
-        // Get the rate limiting key using session.key_get()
-        // Multiple keys are combined with "_" separator
-        let limit_key = {
-            let mut parts: Vec<String> = Vec::new();
-            for k in &self.config.key {
-                if let Some(v) = session.key_get(k).await {
-                    parts.push(v);
-                }
-            }
-
-            if parts.is_empty() {
-                // No keys resolved - check if we have a default key configured
-                if let Some(ref default_key) = self.config.default_key {
-                    plugin_log.push("key miss:allow");
-                    default_key.clone()
-                } else {
-                    // No default key - check onMissingKey behavior
-                    match self.config.on_missing_key {
-                        OnMissingKey::Allow => {
-                            plugin_log.push("key miss:allow");
-                            return PluginRunningResult::GoodNext;
-                        }
-                        OnMissingKey::Deny => {
-                            plugin_log.push("Deny key miss");
-                            return self.reject_request(session, Duration::ZERO).await;
-                        }
-                    }
-                }
-            } else {
-                parts.join("_")
-            }
+        // Key extraction is shared with RateLimitRedis via resolve_rate_limit_key.
+        let limit_key = match resolve_rate_limit_key(
+            session,
+            &self.config.key,
+            self.config.default_key.as_deref(),
+            &self.config.on_missing_key,
+            plugin_log,
+        )
+        .await
+        {
+            RateLimitKey::Resolved(k) => k,
+            RateLimitKey::Allow => return PluginRunningResult::GoodNext,
+            RateLimitKey::Deny => return self.reject_request(session, Duration::ZERO).await,
         };
 
         let interval = self.config.get_interval_duration();
