@@ -26,7 +26,7 @@ use crate::core::gateway::backends::{
 };
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::AccessLogger;
-use crate::core::gateway::routes::common::is_core_service_backend_ref;
+use crate::core::gateway::routes::common::{is_core_service_backend_ref, UNSAFE_UPSTREAM_ADDRESS_LOG};
 use crate::core::gateway::runtime::matching::route::hostname_matches_listener;
 use crate::core::gateway::runtime::store::get_listener_gateway_info_store;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -34,8 +34,6 @@ use crate::types::ResourceMeta;
 use crate::types::{ListenerKey, MatchedInfo, Rsc};
 
 use super::tls_connect_retry_backoff;
-
-const UNSAFE_UPSTREAM_ADDRESS_LOG: &str = "unsafe upstream address";
 
 /// Wall-clock budget for accumulating a complete TLS ClientHello record from
 /// the downstream. Aligned with Envoy's `listener_filters_timeout` default

@@ -3,6 +3,7 @@ use crate::core::common::utils::net::{classify_backend_addr, resolve_domain, Blo
 use crate::core::gateway::backends::EdgionService;
 use crate::core::gateway::backends::{get_peer, try_get_peer};
 use crate::core::gateway::cli::config::get_path_normalization_config;
+use crate::core::gateway::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::core::gateway::routes::grpc::handle_grpc_upstream;
 use crate::core::gateway::routes::http::routes_mgr::RouteRules;
 use crate::core::gateway::routes::http::session_persistence;
@@ -709,7 +710,7 @@ fn record_unsafe_resolved_upstream_attempt(
         let reason = match status {
             EdgionStatus::BackendLocalhostNotAllowed => "unsafe loopback upstream",
             EdgionStatus::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
-            _ => "unsafe upstream address",
+            _ => UNSAFE_UPSTREAM_ADDRESS_LOG,
         };
         upstream.err.push(reason.to_string());
     }

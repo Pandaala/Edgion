@@ -24,6 +24,7 @@ pub use conf_handler_impl::create_tls_route_handler;
 
 use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult, TlsRouteContext};
+use crate::core::gateway::routes::l4_duplex::{DuplexError, DuplexHooks};
 use proxy::TlsContext;
 
 pub(super) const MAX_TLS_CONNECT_RETRIES: u32 = 5;
@@ -41,6 +42,42 @@ pub(super) fn tls_connect_retry_backoff(attempt: u32) -> Duration {
         .saturating_mul(multiplier)
         .min(TLS_CONNECT_RETRY_BACKOFF_MAX_MS);
     Duration::from_millis(millis)
+}
+
+/// Shared [`DuplexHooks`] for both TLS proxy modes (terminate and passthrough).
+///
+/// - Byte counters live on the per-attempt `TlsUpstreamInfo` reached via
+///   `current_upstream_mut()`; if no upstream is currently being attempted
+///   the increment is silently skipped (matches prior behavior).
+/// - Errors surface as a free-form `ctx.err_log` string; `DownstreamFlush`
+///   uses a distinct `"downstream flush err"` message (matches prior behavior).
+pub(super) struct TlsDuplexHooks<'a> {
+    pub ctx: &'a mut TlsContext,
+}
+
+impl DuplexHooks for TlsDuplexHooks<'_> {
+    fn record_sent(&mut self, n: usize) {
+        if let Some(info) = self.ctx.current_upstream_mut() {
+            info.bytes_sent += n as u64;
+        }
+    }
+
+    fn record_received(&mut self, n: usize) {
+        if let Some(info) = self.ctx.current_upstream_mut() {
+            info.bytes_received += n as u64;
+        }
+    }
+
+    fn on_error(&mut self, err: DuplexError) {
+        let msg = match err {
+            DuplexError::UpstreamWrite => "upstream write err",
+            DuplexError::DownstreamRead => "downstream read err",
+            DuplexError::DownstreamWrite => "downstream write err",
+            DuplexError::DownstreamFlush => "downstream flush err",
+            DuplexError::UpstreamRead => "upstream read err",
+        };
+        self.ctx.err_log = Some(msg.to_string());
+    }
 }
 
 /// Shared Stage 2 TLS route plugin execution.

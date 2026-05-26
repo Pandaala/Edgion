@@ -1,6 +1,7 @@
-mod common;
+pub(crate) mod common;
 pub mod grpc;
 pub mod http;
+mod l4_duplex;
 mod l4_partial_update;
 pub mod tcp;
 pub mod tls;

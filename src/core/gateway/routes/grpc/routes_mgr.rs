@@ -1,6 +1,6 @@
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
@@ -12,14 +12,20 @@ use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use crate::types::{GRPCBackendRef, GRPCRoute, GRPCRouteRule, ListenerKey};
 
-/// gRPC route rules for a specific domain
+/// gRPC route rules for a specific domain.
+///
+/// Instances are constructed once in `build_grpc_route_rules_from_units` and then
+/// wrapped in `Arc<GrpcRouteRules>` and published via the outer `ArcSwap`, so the
+/// fields are effectively immutable after construction. No interior mutability
+/// (no `RwLock`/`Mutex`) is required.
+#[derive(Clone)]
 pub struct GrpcRouteRules {
     /// All resource keys (GRPCRoute) that apply to this hostname
     /// Format: "namespace/name"
-    pub resource_keys: RwLock<HashSet<String>>,
+    pub resource_keys: HashSet<String>,
 
     /// All route rule units (stored as Arc to avoid cloning)
-    pub route_rules_list: RwLock<Vec<Arc<GrpcRouteRuleUnit>>>,
+    pub route_rules_list: Vec<Arc<GrpcRouteRuleUnit>>,
 
     /// Match engine for service/method routing
     /// None if there are no routes
@@ -35,8 +41,8 @@ impl Default for GrpcRouteRules {
 impl GrpcRouteRules {
     pub fn new() -> Self {
         Self {
-            resource_keys: RwLock::new(HashSet::new()),
-            route_rules_list: RwLock::new(Vec::new()),
+            resource_keys: HashSet::new(),
+            route_rules_list: Vec::new(),
             match_engine: None,
         }
     }
@@ -96,16 +102,6 @@ impl GrpcRouteRules {
         }
 
         Ok(backend_ref)
-    }
-}
-
-impl Clone for GrpcRouteRules {
-    fn clone(&self) -> Self {
-        Self {
-            resource_keys: RwLock::new(self.resource_keys.read().clone()),
-            route_rules_list: RwLock::new(self.route_rules_list.read().clone()),
-            match_engine: self.match_engine.clone(),
-        }
     }
 }
 
@@ -391,8 +387,8 @@ fn build_grpc_route_rules_from_units(all_units: &HashMap<String, Vec<Arc<GrpcRou
     };
 
     let grpc_route_rules = Arc::new(GrpcRouteRules {
-        resource_keys: RwLock::new(resource_keys),
-        route_rules_list: RwLock::new(route_rules_list),
+        resource_keys,
+        route_rules_list,
         match_engine,
     });
 

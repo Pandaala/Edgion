@@ -16,6 +16,7 @@ use crate::core::gateway::backends::{
 use crate::core::gateway::observe::{log_tcp, TcpLogEntry};
 use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult};
+use crate::core::gateway::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::core::gateway::routes::tcp::TcpPortRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::ListenerKey;
@@ -159,6 +160,12 @@ impl EdgionTcpProxy {
         ctx.upstream_addr = Some(upstream_addr_str.clone());
         if validate_endpoint_backend_addr(&upstream_addr, self.allow_loopback_upstream()).is_err() {
             ctx.status = TcpStatus::UnsafeUpstreamAddress;
+            // Mirror the TLS/UDP fail-close access-log fields: surface the
+            // shared SSRF-guard literal into `deny_reason` so operator log
+            // scraping for "unsafe upstream address" matches on the TCP path
+            // too (TCP's `status` enum debug repr is PascalCase and does not
+            // contain this string).
+            ctx.deny_reason = Some(UNSAFE_UPSTREAM_ADDRESS_LOG);
             return;
         }
 

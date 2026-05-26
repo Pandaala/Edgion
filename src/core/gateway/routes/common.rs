@@ -3,6 +3,13 @@ use crate::types::resources::common::ParentReference;
 use crate::types::resources::http_route::RouteParentStatus;
 use kube::api::ObjectMeta;
 
+/// Canonical access-log string for an upstream address rejected by the
+/// SSRF guard (`validate_endpoint_backend_addr`). Centralized so the
+/// per-protocol fail-close paths (TCP, TLS terminate, TLS passthrough, UDP,
+/// HTTP) emit the same literal and operator log-scraping rules match across
+/// all protocols. Update here only; do not re-declare in protocol modules.
+pub(crate) const UNSAFE_UPSTREAM_ADDRESS_LOG: &str = "unsafe upstream address";
+
 /// Check if a specific parentRef has Accepted=True in the route status.
 ///
 /// Returns true when no matching status entry is found (optimistic: include

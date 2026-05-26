@@ -85,18 +85,18 @@ impl GrpcMatchEngine {
                             (false, true) => exact_service_regex_method.push(route),
                             (true, false) => regex_service_exact_method.push(route),
                             (true, true) => regex_service_regex_method.push(route),
-                            // Both failed to compile — treat as exact fallback
+                            // Both regexes failed to compile — skip the route entirely.
+                            // The raw pattern strings (e.g. "test\\.Service") would never
+                            // match the runtime path components decoded from the gRPC
+                            // request (e.g. "test.Service"), so inserting into
+                            // exact_routes would leave a permanently unreachable entry
+                            // in the bucket. Mirror the service-only failure arm below,
+                            // which already skips with a warn.
                             (false, false) => {
                                 tracing::warn!(
                                     route = %route.identifier(),
-                                    "RegularExpression match type but no regex compiled, treating as exact"
+                                    "RegularExpression service and method but both regex compilations failed, skipping"
                                 );
-                                exact_routes
-                                    .entry(_service.clone())
-                                    .or_default()
-                                    .entry(_method.clone())
-                                    .or_default()
-                                    .push(route);
                             }
                         }
                     }
@@ -237,60 +237,80 @@ impl GrpcMatchEngine {
         }
 
         // Priority 2: Exact service + Regex method
-        for route_unit in &self.exact_service_regex_method {
-            let method_match = route_unit.matched_info.matched.method.as_ref();
-            let service_matches = method_match
-                .and_then(|m| m.service.as_ref())
-                .map_or(false, |s| s == &service);
-            if !service_matches {
-                continue;
-            }
-            if let Some(ref re) = route_unit.matched_info.compiled_method_regex {
-                if re.is_match(&method) {
-                    if let Some(matched_gi) = try_route_deep_match_unit(route_unit, session, index, hostname) {
-                        return Ok((route_unit.clone(), matched_gi));
-                    }
+        if let Some(hit) = try_match_linear(
+            &self.exact_service_regex_method,
+            session,
+            index,
+            hostname,
+            |route_unit| {
+                let service_matches = route_unit
+                    .matched_info
+                    .matched
+                    .method
+                    .as_ref()
+                    .and_then(|m| m.service.as_ref())
+                    .map_or(false, |s| s == &service);
+                if !service_matches {
+                    return false;
                 }
-            }
+                route_unit
+                    .matched_info
+                    .compiled_method_regex
+                    .as_ref()
+                    .is_some_and(|re| re.is_match(&method))
+            },
+        ) {
+            return Ok(hit);
         }
 
         // Priority 3: Regex service + Exact method
-        for route_unit in &self.regex_service_exact_method {
-            if let Some(ref re) = route_unit.matched_info.compiled_service_regex {
-                if re.is_match(&service) {
-                    let method_matches = route_unit
-                        .matched_info
-                        .matched
-                        .method
-                        .as_ref()
-                        .and_then(|m| m.method.as_ref())
-                        .map_or(false, |m| m == &method);
-                    if method_matches {
-                        if let Some(matched_gi) = try_route_deep_match_unit(route_unit, session, index, hostname) {
-                            return Ok((route_unit.clone(), matched_gi));
-                        }
-                    }
+        if let Some(hit) = try_match_linear(
+            &self.regex_service_exact_method,
+            session,
+            index,
+            hostname,
+            |route_unit| {
+                let service_ok = route_unit
+                    .matched_info
+                    .compiled_service_regex
+                    .as_ref()
+                    .is_some_and(|re| re.is_match(&service));
+                if !service_ok {
+                    return false;
                 }
-            }
+                route_unit
+                    .matched_info
+                    .matched
+                    .method
+                    .as_ref()
+                    .and_then(|m| m.method.as_ref())
+                    .map_or(false, |m| m == &method)
+            },
+        ) {
+            return Ok(hit);
         }
 
         // Priority 4: Regex service + Regex method
-        for route_unit in &self.regex_service_regex_method {
-            let service_ok = route_unit
-                .matched_info
-                .compiled_service_regex
-                .as_ref()
-                .map_or(false, |re| re.is_match(&service));
-            let method_ok = route_unit
-                .matched_info
-                .compiled_method_regex
-                .as_ref()
-                .map_or(false, |re| re.is_match(&method));
-            if service_ok && method_ok {
-                if let Some(matched_gi) = try_route_deep_match_unit(route_unit, session, index, hostname) {
-                    return Ok((route_unit.clone(), matched_gi));
-                }
-            }
+        if let Some(hit) = try_match_linear(
+            &self.regex_service_regex_method,
+            session,
+            index,
+            hostname,
+            |route_unit| {
+                let service_ok = route_unit
+                    .matched_info
+                    .compiled_service_regex
+                    .as_ref()
+                    .map_or(false, |re| re.is_match(&service));
+                let method_ok = route_unit
+                    .matched_info
+                    .compiled_method_regex
+                    .as_ref()
+                    .map_or(false, |re| re.is_match(&method));
+                service_ok && method_ok
+            },
+        ) {
+            return Ok(hit);
         }
 
         // Priority 5: Exact service only (method not specified)
@@ -303,14 +323,20 @@ impl GrpcMatchEngine {
         }
 
         // Priority 6: Regex service only (method not specified)
-        for route_unit in &self.regex_service_only {
-            if let Some(ref re) = route_unit.matched_info.compiled_service_regex {
-                if re.is_match(&service) {
-                    if let Some(matched_gi) = try_route_deep_match_unit(route_unit, session, index, hostname) {
-                        return Ok((route_unit.clone(), matched_gi));
-                    }
-                }
-            }
+        if let Some(hit) = try_match_linear(
+            &self.regex_service_only,
+            session,
+            index,
+            hostname,
+            |route_unit| {
+                route_unit
+                    .matched_info
+                    .compiled_service_regex
+                    .as_ref()
+                    .is_some_and(|re| re.is_match(&service))
+            },
+        ) {
+            return Ok(hit);
         }
 
         // Priority 7: Catch-all (sorted by specificity)
@@ -344,6 +370,32 @@ fn try_route_deep_match_unit(
         Ok(Some(gi)) => Some(gi),
         Ok(None) | Err(_) => None,
     }
+}
+
+/// Walk a linear priority bucket: keep routes that satisfy `predicate`, return
+/// the first one whose `deep_match` succeeds. Used by `match_route` for tiers
+/// 2/3/4/6 (regex-based scans) so the per-tier loop reduces to one call with a
+/// tier-specific predicate closure.
+#[inline]
+fn try_match_linear<F>(
+    routes: &[Arc<GrpcRouteRuleUnit>],
+    session: &Session,
+    index: &GatewayInfoIndex,
+    hostname: &str,
+    predicate: F,
+) -> Option<(Arc<GrpcRouteRuleUnit>, GatewayInfo)>
+where
+    F: Fn(&GrpcRouteRuleUnit) -> bool,
+{
+    for route_unit in routes {
+        if !predicate(route_unit) {
+            continue;
+        }
+        if let Some(matched_gi) = try_route_deep_match_unit(route_unit, session, index, hostname) {
+            return Some((route_unit.clone(), matched_gi));
+        }
+    }
+    None
 }
 
 /// Parse gRPC path: /{service}/{method}
@@ -582,6 +634,43 @@ mod tests {
         // Longest combined pattern first
         assert_eq!(engine.regex_service_regex_method[0].matched_info.rsc.name, "long");
         assert_eq!(engine.regex_service_regex_method[1].matched_info.rsc.name, "short");
+    }
+
+    #[test]
+    fn test_grpc_regex_both_compilation_failed_skipped() {
+        // F-020 regression guard: when match_type is RegularExpression with both
+        // service and method patterns present but both regex compilations fail
+        // (e.g. invalid patterns), the route must be skipped entirely — not
+        // inserted into exact_routes keyed by the raw regex strings (which would
+        // never match runtime-decoded gRPC path components).
+        let route = make_route(
+            Some("["),
+            Some("["),
+            Some(GRPCMethodMatchType::RegularExpression),
+            "both-regex-failed",
+        );
+
+        // Sanity: both compilations must have actually failed for this to exercise
+        // the (false, false) arm; if make_route ever changes to validate or
+        // sanitize patterns, surface the change here instead of silently passing.
+        assert!(route.matched_info.compiled_service_regex.is_none());
+        assert!(route.matched_info.compiled_method_regex.is_none());
+
+        let engine = GrpcMatchEngine::new(vec![route]);
+
+        // The route must not be parked in exact_routes under the raw pattern key.
+        assert!(
+            engine.exact_routes.is_empty(),
+            "exact_routes must not receive the failed-regex route"
+        );
+        // Nor in any regex bucket — both compilations failed.
+        assert!(engine.exact_service_regex_method.is_empty());
+        assert!(engine.regex_service_exact_method.is_empty());
+        assert!(engine.regex_service_regex_method.is_empty());
+        // Catch-all and service-only buckets are unrelated to this arm.
+        assert!(engine.service_routes.is_empty());
+        assert!(engine.regex_service_only.is_empty());
+        assert!(engine.catch_all_routes.is_empty());
     }
 
     fn make_header_only_route(

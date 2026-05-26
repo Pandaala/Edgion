@@ -12,6 +12,7 @@ use crate::core::gateway::backends::{
     resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr,
 };
 use crate::core::gateway::observe::{log_udp, UdpLogEntry};
+use crate::core::gateway::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::core::gateway::routes::tcp::edgion_tcp::{check_stream_plugins, StreamPluginCheck};
 use crate::core::gateway::routes::udp::UdpPortRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -26,8 +27,6 @@ const MAX_UDP_PACKET_SIZE: usize = 65535;
 /// Maximum number of concurrent client sessions per listener.
 /// Prevents resource exhaustion from UDP reflection/amplification attacks.
 const MAX_UDP_SESSIONS: usize = 10000;
-
-const UNSAFE_UPSTREAM_ADDRESS_LOG: &str = "unsafe upstream address";
 
 /// Pick the wildcard bind address whose family matches the upstream.
 ///

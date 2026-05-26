@@ -31,6 +31,7 @@ pub use service_kind::EdgionService;
 pub use validation::validate_endpoint_in_route;
 
 use crate::core::common::utils::net::resolve_domain;
+use crate::core::gateway::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::core::gateway::runtime::ServerHeaderOpts;
 use crate::core::gateway::{end_response_500, end_response_503};
 use crate::types::edgion_status::EdgionStatus;
@@ -361,7 +362,7 @@ fn record_unsafe_upstream_attempt(ctx: &mut EdgionHttpContext, addr: &SocketAddr
     let reason = match status {
         EdgionStatus::BackendLocalhostNotAllowed => "unsafe loopback upstream",
         EdgionStatus::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
-        _ => "unsafe upstream address",
+        _ => UNSAFE_UPSTREAM_ADDRESS_LOG,
     };
     // Backfill the placeholder pushed by `begin_upstream_attempt`. Fall back to
     // pushing a fresh entry if no placeholder exists (defensive — should not happen
