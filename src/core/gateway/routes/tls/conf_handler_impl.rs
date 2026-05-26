@@ -1,5 +1,6 @@
 use super::{cap_tls_connect_retries, DEFAULT_TLS_CONNECT_RETRIES, MAX_TLS_CONNECT_RETRIES};
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
+use crate::core::gateway::routes::common::is_core_service_backend_ref;
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::tls::routes_mgr::resolved_listeners_for_route;
 use crate::core::gateway::routes::tls::{get_global_tls_route_managers, GlobalTlsRouteManagers};
@@ -123,7 +124,7 @@ impl GlobalTlsRouteManagers {
                 if let Some(backend_refs) = &rule.backend_refs {
                     let (backends, weights): (Vec<_>, Vec<_>) = backend_refs
                         .iter()
-                        .filter(|br| is_service_backend_ref(br))
+                        .filter(|br| is_core_service_backend_ref(br.group.as_deref(), br.kind.as_deref()))
                         .map(|br| (br.clone(), br.weight))
                         .unzip();
 
@@ -181,20 +182,6 @@ impl GlobalTlsRouteManagers {
 
         Some(store_key)
     }
-}
-
-/// A BackendRef is routable only when it targets a core Service
-/// (group is "" or "core" and kind is "Service" or omitted).
-fn is_service_backend_ref(br: &crate::types::resources::tls_route::TLSBackendRef) -> bool {
-    let group_ok = match br.group.as_deref() {
-        None | Some("") | Some("core") => true,
-        _ => false,
-    };
-    let kind_ok = match br.kind.as_deref() {
-        None | Some("Service") => true,
-        _ => false,
-    };
-    group_ok && kind_ok
 }
 
 #[cfg(test)]
@@ -448,45 +435,6 @@ mod tests {
         assert_eq!(rule.proxy_protocol_version, None);
         assert!(rule.stream_plugin_store_key.is_none());
         assert_eq!(rule.max_connect_retries, 2);
-    }
-
-    #[test]
-    fn test_is_service_backend_ref_filters_unknown_kind() {
-        use crate::types::resources::tls_route::TLSBackendRef;
-
-        let valid = TLSBackendRef {
-            name: "svc".to_string(),
-            namespace: None,
-            port: Some(443),
-            weight: Some(1),
-            group: None,
-            kind: None,
-            extension_info: Default::default(),
-            plugin_runtime: Default::default(),
-            ref_denied: None,
-        };
-        assert!(is_service_backend_ref(&valid));
-
-        let explicit_service = TLSBackendRef {
-            group: Some("core".to_string()),
-            kind: Some("Service".to_string()),
-            ..valid.clone()
-        };
-        assert!(is_service_backend_ref(&explicit_service));
-
-        let unknown_kind = TLSBackendRef {
-            group: Some("example.com".to_string()),
-            kind: Some("Foo".to_string()),
-            ..valid.clone()
-        };
-        assert!(!is_service_backend_ref(&unknown_kind));
-
-        let wrong_kind = TLSBackendRef {
-            group: Some("".to_string()),
-            kind: Some("Deployment".to_string()),
-            ..valid
-        };
-        assert!(!is_service_backend_ref(&wrong_kind));
     }
 
     #[test]

@@ -70,6 +70,14 @@ pub struct UDPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub stream_plugin_runtime: Arc<StreamPluginRuntime>,
+
+    /// Store key for dynamic stream plugin lookup (runtime only, not serialized)
+    /// Format: "namespace/name" referencing an EdgionStreamPlugins resource.
+    /// Used for dynamic lookup from StreamPluginStore on each packet,
+    /// avoiding resource loading order issues and supporting hot-reloading.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub stream_plugin_store_key: Option<String>,
 }
 
 impl Clone for UDPRouteRule {
@@ -79,6 +87,7 @@ impl Clone for UDPRouteRule {
             backend_finder: BackendSelector::new(),
             plugin_runtime: self.plugin_runtime.clone(),
             stream_plugin_runtime: self.stream_plugin_runtime.clone(),
+            stream_plugin_store_key: self.stream_plugin_store_key.clone(),
         }
     }
 }
@@ -90,6 +99,7 @@ impl fmt::Debug for UDPRouteRule {
             .field("backend_finder", &"<skipped>")
             .field("plugin_runtime", &self.plugin_runtime)
             .field("stream_plugin_runtime", &self.stream_plugin_runtime)
+            .field("stream_plugin_store_key", &self.stream_plugin_store_key)
             .finish()
     }
 }

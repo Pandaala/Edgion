@@ -1,8 +1,10 @@
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
+use crate::core::gateway::routes::common::is_core_service_backend_ref;
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::udp::routes_mgr::{
     get_global_udp_route_managers, resolved_listeners_for_route, GlobalUdpRouteManagers,
 };
+use crate::types::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
 use crate::types::{ResourceMeta, UDPRoute};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -81,16 +83,18 @@ impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
 }
 
 impl GlobalUdpRouteManagers {
-    /// Initialize a UDPRoute by setting up BackendSelector for each rule.
+    /// Initialize a UDPRoute by setting up BackendSelector and stream plugin store key.
     fn initialize_route(&self, mut route: UDPRoute) -> Result<Arc<UDPRoute>, String> {
         let route_key = route.key_name();
+
+        let store_key = Self::resolve_stream_plugin_store_key(&route);
 
         if let Some(rules) = route.spec.rules.as_mut() {
             for (rule_idx, rule) in rules.iter_mut().enumerate() {
                 if let Some(backend_refs) = &rule.backend_refs {
                     let (backends, weights): (Vec<_>, Vec<_>) = backend_refs
                         .iter()
-                        .filter(|br| is_service_backend_ref(br))
+                        .filter(|br| is_core_service_backend_ref(br.group.as_deref(), br.kind.as_deref()))
                         .map(|br| (br.clone(), br.weight))
                         .unzip();
 
@@ -103,25 +107,40 @@ impl GlobalUdpRouteManagers {
                         "Initialized BackendSelector for UDPRoute rule"
                     );
                 }
+
+                if let Some(ref key) = store_key {
+                    rule.stream_plugin_store_key = Some(key.clone());
+                    tracing::info!(
+                        route = %route_key,
+                        rule_idx,
+                        store_key = %key,
+                        "Set stream plugin store key for UDPRoute rule (dynamic lookup)"
+                    );
+                }
             }
         }
 
         Ok(Arc::new(route))
     }
-}
 
-/// A BackendRef is routable only when it targets a core Service
-/// (group is "" or "core" and kind is "Service" or omitted).
-fn is_service_backend_ref(br: &crate::types::resources::udp_route::UDPBackendRef) -> bool {
-    let group_ok = match br.group.as_deref() {
-        None | Some("") | Some("core") => true,
-        _ => false,
-    };
-    let kind_ok = match br.kind.as_deref() {
-        None | Some("Service") => true,
-        _ => false,
-    };
-    group_ok && kind_ok
+    /// Resolve the stream plugin store key from the UDPRoute's annotation.
+    fn resolve_stream_plugin_store_key(route: &UDPRoute) -> Option<String> {
+        let annotations = route.metadata.annotations.as_ref()?;
+        let annotation_value = annotations.get(EDGION_STREAM_PLUGINS)?;
+        let trimmed = annotation_value.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let store_key = if trimmed.contains('/') {
+            trimmed.to_string()
+        } else {
+            let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+            format!("{}/{}", namespace, trimmed)
+        };
+
+        Some(store_key)
+    }
 }
 
 #[cfg(test)]
@@ -173,6 +192,7 @@ mod tests {
                         ref_denied: None,
                     }]),
                     stream_plugin_runtime: Default::default(),
+                    stream_plugin_store_key: None,
                     backend_finder: Default::default(),
                     plugin_runtime: Default::default(),
                 }]),
@@ -393,35 +413,5 @@ mod tests {
             .match_route()
             .is_some());
         assert_eq!(managers.stats().route_cache, 1);
-    }
-
-    #[test]
-    fn test_is_service_backend_ref_filters_unknown_kind() {
-        let valid = UDPBackendRef {
-            name: "svc".to_string(),
-            namespace: None,
-            port: Some(80),
-            weight: Some(1),
-            group: None,
-            kind: None,
-            extension_info: Default::default(),
-            plugin_runtime: Default::default(),
-            ref_denied: None,
-        };
-        assert!(is_service_backend_ref(&valid));
-
-        let explicit_service = UDPBackendRef {
-            group: Some("core".to_string()),
-            kind: Some("Service".to_string()),
-            ..valid.clone()
-        };
-        assert!(is_service_backend_ref(&explicit_service));
-
-        let unknown_kind = UDPBackendRef {
-            group: Some("example.com".to_string()),
-            kind: Some("Foo".to_string()),
-            ..valid
-        };
-        assert!(!is_service_backend_ref(&unknown_kind));
     }
 }

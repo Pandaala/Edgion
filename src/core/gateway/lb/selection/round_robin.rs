@@ -336,7 +336,11 @@ mod tests {
             let picked = selector.select(8, |_| true).expect("healthy backend");
             *counts.entry(picked.addr).or_default() += 1;
         }
-        assert_eq!(counts.len(), 2, "equal weights must round-robin one-each regardless of magnitude");
+        assert_eq!(
+            counts.len(),
+            2,
+            "equal weights must round-robin one-each regardless of magnitude"
+        );
     }
 
     #[test]

@@ -79,3 +79,30 @@ pub(crate) fn effective_hostnames(resolved: Option<&[String]>, spec: Option<&[St
     }
     vec!["*".to_string()]
 }
+
+/// A BackendRef is routable only when it targets a core Kubernetes Service:
+/// group is `""` / `"core"` / omitted and kind is `"Service"` / omitted.
+///
+/// Single source of truth shared by all L4 route modules (TCP, TLS termination,
+/// TLS passthrough, UDP). Struct-based callers pass
+/// `br.group.as_deref(), br.kind.as_deref()`.
+pub(crate) fn is_core_service_backend_ref(group: Option<&str>, kind: Option<&str>) -> bool {
+    matches!(group, None | Some("") | Some("core")) && matches!(kind, None | Some("Service"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_core_service_backend_ref_accepts_core_service_and_rejects_others() {
+        // Omitted group + kind defaults to a core Service.
+        assert!(is_core_service_backend_ref(None, None));
+        // Explicit empty / "core" group with the Service kind.
+        assert!(is_core_service_backend_ref(Some(""), Some("Service")));
+        assert!(is_core_service_backend_ref(Some("core"), Some("Service")));
+        // Unknown group or non-Service kind is not routable.
+        assert!(!is_core_service_backend_ref(Some("example.com"), Some("Foo")));
+        assert!(!is_core_service_backend_ref(Some(""), Some("Deployment")));
+    }
+}

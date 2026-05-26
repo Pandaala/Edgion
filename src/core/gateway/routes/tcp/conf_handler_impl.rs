@@ -1,4 +1,5 @@
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
+use crate::core::gateway::routes::common::is_core_service_backend_ref;
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::tcp::routes_mgr::{
     get_global_tcp_route_managers, resolved_listeners_for_route, GlobalTcpRouteManagers,
@@ -94,7 +95,7 @@ impl GlobalTcpRouteManagers {
                 if let Some(backend_refs) = &rule.backend_refs {
                     let (backends, weights): (Vec<_>, Vec<_>) = backend_refs
                         .iter()
-                        .filter(|br| is_service_backend_ref(br))
+                        .filter(|br| is_core_service_backend_ref(br.group.as_deref(), br.kind.as_deref()))
                         .map(|br| (br.clone(), br.weight))
                         .unzip();
 
@@ -141,20 +142,6 @@ impl GlobalTcpRouteManagers {
 
         Some(store_key)
     }
-}
-
-/// A BackendRef is routable only when it targets a core Service
-/// (group is "" or "core" and kind is "Service" or omitted).
-fn is_service_backend_ref(br: &crate::types::resources::tcp_route::TCPBackendRef) -> bool {
-    let group_ok = match br.group.as_deref() {
-        None | Some("") | Some("core") => true,
-        _ => false,
-    };
-    let kind_ok = match br.kind.as_deref() {
-        None | Some("Service") => true,
-        _ => false,
-    };
-    group_ok && kind_ok
 }
 
 #[cfg(test)]
@@ -239,34 +226,6 @@ mod tests {
         let key9002 = make_listener_key(9002, "TCP");
         let mgr9002 = managers.get_or_create_listener_manager(&key9002);
         assert!(mgr9002.load_route_table().match_route().is_none());
-    }
-
-    #[test]
-    fn test_is_service_backend_ref_filters_unknown_kind() {
-        let valid = TCPBackendRef {
-            name: "svc".to_string(),
-            namespace: None,
-            port: Some(80),
-            weight: Some(1),
-            group: None,
-            kind: None,
-            ref_denied: None,
-        };
-        assert!(is_service_backend_ref(&valid));
-
-        let explicit_service = TCPBackendRef {
-            group: Some("".to_string()),
-            kind: Some("Service".to_string()),
-            ..valid.clone()
-        };
-        assert!(is_service_backend_ref(&explicit_service));
-
-        let unknown_kind = TCPBackendRef {
-            group: Some("example.com".to_string()),
-            kind: Some("Foo".to_string()),
-            ..valid.clone()
-        };
-        assert!(!is_service_backend_ref(&unknown_kind));
     }
 
     #[test]

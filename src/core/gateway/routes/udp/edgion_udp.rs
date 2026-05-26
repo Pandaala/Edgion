@@ -12,6 +12,7 @@ use crate::core::gateway::backends::{
     resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr,
 };
 use crate::core::gateway::observe::{log_udp, UdpLogEntry};
+use crate::core::gateway::routes::tcp::edgion_tcp::{check_stream_plugins, StreamPluginCheck};
 use crate::core::gateway::routes::udp::UdpPortRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::ListenerKey;
@@ -27,6 +28,17 @@ const MAX_UDP_PACKET_SIZE: usize = 65535;
 const MAX_UDP_SESSIONS: usize = 10000;
 
 const UNSAFE_UPSTREAM_ADDRESS_LOG: &str = "unsafe upstream address";
+
+/// Pick the wildcard bind address whose family matches the upstream.
+///
+/// A UDP socket can only `send_to` a destination of the same address family,
+/// so an IPv4-only socket sending to an IPv6 backend fails with `EINVAL`.
+fn upstream_bind_addr(upstream: std::net::SocketAddr) -> std::net::SocketAddr {
+    match upstream {
+        std::net::SocketAddr::V4(_) => std::net::SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, 0)),
+        std::net::SocketAddr::V6(_) => std::net::SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, 0)),
+    }
+}
 
 /// Client session information with statistics
 struct ClientSession {
@@ -129,6 +141,20 @@ impl EdgionUdpProxy {
         let client_ip = client_addr.ip().to_string();
         let client_port = client_addr.port();
 
+        // Fast path: an established session already has a pinned upstream and a
+        // dedicated upstream socket, so the route pipeline below (ArcSwap load,
+        // route match, backend selection, round-robin, SSRF validation) is pure
+        // redundant work — its result is discarded for existing sessions anyway,
+        // since the send always targets the session's stored `upstream_addr`.
+        // Route/backend changes take effect when the session expires
+        // (SESSION_TIMEOUT) and a new one is created. Clone the Arc out so the
+        // DashMap read guard is dropped before the `.await` below.
+        if let Some(session) = self.client_sessions.get(&client_addr).map(|s| s.value().clone()) {
+            let send_result = session.upstream_socket.send_to(data, session.upstream_addr).await;
+            Self::record_upstream_send_result(send_result, &session, self.listener_port, client_ip, client_port).await;
+            return;
+        }
+
         let route_table = self.udp_route_manager.load_route_table();
         let udp_route = match route_table.match_route() {
             Some(route) => route,
@@ -144,26 +170,51 @@ impl EdgionUdpProxy {
             }
         };
 
-        let backend_ref = match udp_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
-            Some(rule) => match rule.backend_finder.select() {
-                Ok(backend) => backend,
-                Err(_) => {
-                    log_udp(&UdpLogEntry::failure(
-                        self.listener_port,
-                        client_ip,
-                        client_port,
-                        "NoBackendSelected",
-                    ))
-                    .await;
-                    return;
-                }
-            },
+        let rule = match udp_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
+            Some(rule) => rule,
             None => {
                 log_udp(&UdpLogEntry::failure(
                     self.listener_port,
                     client_ip,
                     client_port,
                     "NoRuleAvailable",
+                ))
+                .await;
+                return;
+            }
+        };
+
+        // Stream plugin enforcement (dynamic lookup from StreamPluginStore, fail-close).
+        // Mirrors the TCPRoute path: a packet whose rule references an
+        // EdgionStreamPlugins resource is dropped unless the policy admits it.
+        // Only packets that reach the pipeline are checked — the F-016 fast-path
+        // above returns first for established sessions, so the check runs once at
+        // session creation (like TCP's per-connection check). A denied client is
+        // dropped before get_or_create_session and therefore never establishes a
+        // session. A rule with no annotation has store_key None, so the check
+        // returns Allow immediately and the non-annotated path pays only one
+        // Option check.
+        if let StreamPluginCheck::Deny(reason) =
+            check_stream_plugins(rule.stream_plugin_store_key.as_deref(), &client_ip, self.listener_port).await
+        {
+            log_udp(&UdpLogEntry::failure(
+                self.listener_port,
+                client_ip,
+                client_port,
+                reason,
+            ))
+            .await;
+            return;
+        }
+
+        let backend_ref = match rule.backend_finder.select() {
+            Ok(backend) => backend,
+            Err(_) => {
+                log_udp(&UdpLogEntry::failure(
+                    self.listener_port,
+                    client_ip,
+                    client_port,
+                    "NoBackendSelected",
                 ))
                 .await;
                 return;
@@ -248,7 +299,10 @@ impl EdgionUdpProxy {
             }
         };
 
-        let upstream_socket = match UdpSocket::bind("0.0.0.0:0").await {
+        // Bind the upstream socket to the address family of the resolved upstream.
+        // An IPv4-only socket cannot send to an IPv6 backend (send_to fails with
+        // EINVAL), which would silently drop every packet for the session.
+        let upstream_socket = match UdpSocket::bind(upstream_bind_addr(upstream_addr)).await {
             Ok(socket) => Arc::new(socket),
             Err(_) => return Err(()),
         };
@@ -469,6 +523,16 @@ mod tests {
     #[test]
     fn test_session_limit_constant() {
         assert_eq!(MAX_UDP_SESSIONS, 10000);
+    }
+
+    #[test]
+    fn test_upstream_bind_addr_matches_family() {
+        // IPv4 upstream → IPv4 wildcard bind (unchanged behavior).
+        let v4: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        assert!(upstream_bind_addr(v4).is_ipv4());
+        // IPv6 upstream → IPv6 wildcard bind, so send_to does not fail with EINVAL.
+        let v6: SocketAddr = "[2001:db8::1]:8080".parse().unwrap();
+        assert!(upstream_bind_addr(v6).is_ipv6());
     }
 
     #[test]

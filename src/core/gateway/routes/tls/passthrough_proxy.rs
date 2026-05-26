@@ -26,6 +26,7 @@ use crate::core::gateway::backends::{
 };
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::AccessLogger;
+use crate::core::gateway::routes::common::is_core_service_backend_ref;
 use crate::core::gateway::runtime::matching::route::hostname_matches_listener;
 use crate::core::gateway::runtime::store::get_listener_gateway_info_store;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -42,12 +43,6 @@ const UNSAFE_UPSTREAM_ADDRESS_LOG: &str = "unsafe upstream address";
 /// blocks slowloris-style dribble: an attacker feeding one byte at a time
 /// cannot push the cumulative wait past this bound.
 const SNI_READ_DEADLINE: Duration = Duration::from_secs(15);
-
-fn is_service_backend_ref(group: Option<&str>, kind: Option<&str>) -> bool {
-    let group_ok = matches!(group, None | Some("") | Some("core"));
-    let kind_ok = matches!(kind, None | Some("Service"));
-    group_ok && kind_ok
-}
 
 /// TLS Passthrough proxy service.
 ///
@@ -237,7 +232,7 @@ impl EdgionTlsPassthroughProxy {
                     return;
                 }
             };
-            if !is_service_backend_ref(backend_ref.group.as_deref(), backend_ref.kind.as_deref()) {
+            if !is_core_service_backend_ref(backend_ref.group.as_deref(), backend_ref.kind.as_deref()) {
                 last_err = format!(
                     "unsupported backend kind: group={:?}, kind={:?}, name={}",
                     backend_ref.group, backend_ref.kind, backend_ref.name
@@ -369,19 +364,19 @@ impl EdgionTlsPassthroughProxy {
     /// Bidirectional data transfer between downstream and upstream.
     async fn duplex(&self, mut downstream: Stream, mut upstream: Stream, ctx: &mut TlsContext) {
         const BUFFER_SIZE: usize = 8192;
-        let mut upstream_buf = vec![0u8; BUFFER_SIZE];
-        let mut downstream_buf = vec![0u8; BUFFER_SIZE];
+        let mut client_to_upstream_buf = vec![0u8; BUFFER_SIZE];
+        let mut upstream_to_client_buf = vec![0u8; BUFFER_SIZE];
 
         loop {
             tokio::select! {
-                result = downstream.read(&mut upstream_buf) => {
+                result = downstream.read(&mut client_to_upstream_buf) => {
                     match result {
                         Ok(0) => break,
                         Ok(n) => {
                             if let Some(info) = ctx.current_upstream_mut() {
                                 info.bytes_sent += n as u64;
                             }
-                            if (upstream.write_all(&upstream_buf[..n]).await).is_err() {
+                            if (upstream.write_all(&client_to_upstream_buf[..n]).await).is_err() {
                                 ctx.err_log = Some("upstream write err".to_string());
                                 return;
                             }
@@ -392,14 +387,14 @@ impl EdgionTlsPassthroughProxy {
                         }
                     }
                 }
-                result = upstream.read(&mut downstream_buf) => {
+                result = upstream.read(&mut upstream_to_client_buf) => {
                     match result {
                         Ok(0) => break,
                         Ok(n) => {
                             if let Some(info) = ctx.current_upstream_mut() {
                                 info.bytes_received += n as u64;
                             }
-                            if (downstream.write_all(&downstream_buf[..n]).await).is_err() {
+                            if (downstream.write_all(&upstream_to_client_buf[..n]).await).is_err() {
                                 ctx.err_log = Some("downstream write err".to_string());
                                 return;
                             }

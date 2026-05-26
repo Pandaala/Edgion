@@ -66,7 +66,14 @@ metadata:
 metadata:
   annotations:
     edgion.io/edgion-stream-plugins: "default/tls-plugins"
+
+# UDPRoute level — Stage 1 only (no TLS handshake)
+metadata:
+  annotations:
+    edgion.io/edgion-stream-plugins: "default/udp-plugins"
 ```
+
+On `UDPRoute` the binding runs only the Stage-1 ConnectionFilter (`spec.plugins`, IP-based, evaluated at session creation, fail-close); `tlsRoutePlugins` never apply because UDP has no TLS handshake. The F-016 session fast-path skips the route pipeline for established sessions, so the check runs on the first packet of each session (a denied client never establishes a session), matching TCP's per-connection model.
 
 ## Currently Supported Stream Plugins
 

@@ -34,13 +34,15 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
   - `"true"` forces raw, `"false"` forces normalized (overrides region_route); absent falls back to the default flow.
   - See spec §14.6 / metadata reference for details.
 
-### TCPRoute / TLSRoute
+### TCPRoute / TLSRoute / UDPRoute
 
 | Annotation | Value | Description |
 |------------|-------|-------------|
-| `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins binding |
-| `edgion.io/proxy-protocol` | `"1"\|"2"` | Proxy Protocol version |
-| `edgion.io/max-connect-retries` | `u32` | Max connection retries |
+| `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins binding (TCPRoute / TLSRoute / UDPRoute) |
+| `edgion.io/proxy-protocol` | `"1"\|"2"` | Proxy Protocol version (TCPRoute / TLSRoute) |
+| `edgion.io/max-connect-retries` | `u32` | Max connection retries (TCPRoute / TLSRoute) |
+
+- On `UDPRoute`, `edgion.io/edgion-stream-plugins` runs only the Stage-1 ConnectionFilter (`spec.plugins`, IP-based, fail-close); there is no TLS stage.
 
 ### EdgionTls
 

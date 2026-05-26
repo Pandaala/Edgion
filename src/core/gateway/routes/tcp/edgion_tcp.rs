@@ -180,19 +180,19 @@ impl EdgionTcpProxy {
 
     async fn duplex(&self, mut downstream: Stream, mut upstream: Stream, ctx: &mut TcpContext) {
         const BUFFER_SIZE: usize = 8192;
-        let mut upstream_buf = vec![0u8; BUFFER_SIZE];
-        let mut downstream_buf = vec![0u8; BUFFER_SIZE];
+        let mut client_to_upstream_buf = vec![0u8; BUFFER_SIZE];
+        let mut upstream_to_client_buf = vec![0u8; BUFFER_SIZE];
 
         loop {
             select! {
-                result = downstream.read(&mut upstream_buf) => {
+                result = downstream.read(&mut client_to_upstream_buf) => {
                     match result {
                         Ok(0) => {
                             break;
                         }
                         Ok(n) => {
                             ctx.bytes_sent += n as u64;
-                            if (upstream.write_all(&upstream_buf[0..n]).await).is_err() {
+                            if (upstream.write_all(&client_to_upstream_buf[0..n]).await).is_err() {
                                 ctx.status = TcpStatus::UpstreamWriteError;
                                 break;
                             }
@@ -203,14 +203,14 @@ impl EdgionTcpProxy {
                         }
                     }
                 }
-                result = upstream.read(&mut downstream_buf) => {
+                result = upstream.read(&mut upstream_to_client_buf) => {
                     match result {
                         Ok(0) => {
                             break;
                         }
                         Ok(n) => {
                             ctx.bytes_received += n as u64;
-                            if (downstream.write_all(&downstream_buf[0..n]).await).is_err() {
+                            if (downstream.write_all(&upstream_to_client_buf[0..n]).await).is_err() {
                                 ctx.status = TcpStatus::DownstreamWriteError;
                                 break;
                             }

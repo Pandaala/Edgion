@@ -18,8 +18,12 @@ use super::config::PathNormalizationConfig;
 /// O(n) byte scan, zero allocation.
 pub fn needs_normalization(path: &str, cfg: &PathNormalizationConfig) -> bool {
     let bytes = path.as_bytes();
-    // Contains percent-encoding
-    if bytes.contains(&b'%') {
+    // Contains a `%XX` sequence that would actually decode. A bare `%`, invalid
+    // hex (`%XY`), a truncated tail (`%2`), or a non-decodable byte (`%3F`,
+    // `%C0`, `%25`) is left untouched by `do_normalize`, so it must NOT trigger
+    // the allocating pipeline here. `has_decodable_percent` mirrors the scan in
+    // `percent_decode_whitelist`, keeping this an exact zero-allocation predicate.
+    if has_decodable_percent(bytes) {
         return true;
     }
     // Only treat `;` as a normalization trigger when path-parameter stripping is enabled.
@@ -41,6 +45,30 @@ pub fn needs_normalization(path: &str, cfg: &PathNormalizationConfig) -> bool {
     false
 }
 
+/// Returns `true` if `bytes` contains at least one `%XX` sequence whose two hex
+/// digits decode to an [`is_decodable`] byte — the only case in which
+/// [`percent_decode_whitelist`] would actually change the path.
+///
+/// The scan mirrors [`percent_decode_whitelist`] exactly: it advances one byte
+/// at a time, so overlapping forms such as `%%41` (where `%41` decodes after the
+/// leading `%` is consumed) align identically. Using a fixed `+= 3` stride here
+/// would miss those, so the predicate stays byte-for-byte equivalent to the
+/// decoder. Zero allocation.
+fn has_decodable_percent(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'%' {
+            let h = bytes[i + 1];
+            let l = bytes[i + 2];
+            if h.is_ascii_hexdigit() && l.is_ascii_hexdigit() && is_decodable((hex_val(h) << 4) | hex_val(l)) {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Normalize `raw` path using the Edgion BASE algorithm.
 ///
 /// Returns `Some(normalized)` when the path changes after normalization.
@@ -50,7 +78,17 @@ pub fn normalize_path(raw: &str, cfg: &PathNormalizationConfig) -> Option<String
     if !needs_normalization(raw, cfg) {
         return None;
     }
-    Some(do_normalize(raw, cfg))
+    // `needs_normalization` is a zero-allocation pre-filter; with
+    // `has_decodable_percent` it only fires when `do_normalize` would actually
+    // change the path. The comparison below is kept as a cheap defense-in-depth
+    // safety net so the documented contract — return `Some` only when the path
+    // changed — still holds if the pre-filter ever over-approximates.
+    let normalized = do_normalize(raw, cfg);
+    if normalized == raw {
+        None
+    } else {
+        Some(normalized)
+    }
 }
 
 /// Normalize a config-side path string at load time.
@@ -416,16 +454,19 @@ mod tests {
 
     #[test]
     fn reserved_chars_kept_encoded() {
-        // %3F = '?', %23 = '#' — kept encoded
-        let result = normalize_path("/path%3Fquery", &PathNormalizationConfig::default()).unwrap();
-        assert!(result.contains("%3F"));
-
-        let result = normalize_path("/path%23frag", &PathNormalizationConfig::default()).unwrap();
-        assert!(result.contains("%23"));
-
-        // sub-delim %21 = '!' — kept encoded
-        let result = normalize_path("/path%21x", &PathNormalizationConfig::default()).unwrap();
-        assert!(result.contains("%21"));
+        // Reserved / sub-delim chars are not in the decode whitelist, so the path is
+        // unchanged by normalization: normalize_path returns None (contract), while
+        // do_normalize keeps the bytes encoded.
+        let cfg = PathNormalizationConfig::default();
+        // %3F = '?'
+        assert_eq!(normalize_path("/path%3Fquery", &cfg), None);
+        assert!(do_normalize("/path%3Fquery", &cfg).contains("%3F"));
+        // %23 = '#'
+        assert_eq!(normalize_path("/path%23frag", &cfg), None);
+        assert!(do_normalize("/path%23frag", &cfg).contains("%23"));
+        // sub-delim %21 = '!'
+        assert_eq!(normalize_path("/path%21x", &cfg), None);
+        assert!(do_normalize("/path%21x", &cfg).contains("%21"));
     }
 
     #[test]
@@ -520,38 +561,30 @@ mod tests {
 
     #[test]
     fn invalid_hex_preserved() {
-        // %XY where Y is not hex — kept as literal
-        assert_eq!(
-            normalize_path("/admin%XY/x", &PathNormalizationConfig::default()),
-            Some("/admin%XY/x".to_string())
-        );
+        // Invalid / truncated `%` sequences are kept as literals, so the path is
+        // unchanged by normalization → normalize_path returns None (contract).
+        let cfg = PathNormalizationConfig::default();
+        // %XY where Y is not hex
+        assert_eq!(normalize_path("/admin%XY/x", &cfg), None);
         // % at end of path
-        assert_eq!(
-            normalize_path("/admin%", &PathNormalizationConfig::default()),
-            Some("/admin%".to_string())
-        );
+        assert_eq!(normalize_path("/admin%", &cfg), None);
         // % followed by single hex digit only
-        assert_eq!(
-            normalize_path("/admin%2", &PathNormalizationConfig::default()),
-            Some("/admin%2".to_string())
-        );
+        assert_eq!(normalize_path("/admin%2", &cfg), None);
     }
 
     #[test]
     fn overlong_utf8_preserved_encoded() {
-        // %C0%80 = overlong encoding of NUL — not in is_decodable whitelist,
-        // so bytes are kept encoded.  Result still contains %C0 and %80.
-        let result = normalize_path("/admin/%C0%80/secret", &PathNormalizationConfig::default());
-        assert!(result.is_some());
-        let r = result.unwrap();
+        // %C0%80 = overlong encoding of NUL — not in is_decodable whitelist, so the
+        // bytes stay encoded and the path is unchanged → normalize_path returns None
+        // (contract). do_normalize keeps the encoded bytes (asserted below).
+        let cfg = PathNormalizationConfig::default();
+        assert_eq!(normalize_path("/admin/%C0%80/secret", &cfg), None);
+        let r = do_normalize("/admin/%C0%80/secret", &cfg);
         assert!(
             r.contains("%C0") || r.contains("%c0"),
             "overlong bytes must remain encoded, got: {r}"
         );
-        assert!(
-            r.contains("%80") || r.contains("%80"),
-            "overlong bytes must remain encoded, got: {r}"
-        );
+        assert!(r.contains("%80"), "overlong bytes must remain encoded, got: {r}");
     }
 
     #[test]
@@ -559,17 +592,17 @@ mod tests {
         // %252E = %25 (literal %) + 2E.
         // %25 decodes to '%' which is NOT is_decodable, so it stays as %25.
         // Result: /admin/%252E%252E/secret is unchanged by percent_decode_whitelist.
-        // needs_normalization sees %, returns true.
-        // do_normalize strip + decode + merge + dot-segment all leave it unchanged.
-        let result = normalize_path("/admin/%252E%252E/secret", &PathNormalizationConfig::default());
-        assert!(result.is_some());
-        let r = result.unwrap();
-        // Must NOT collapse to /secret (no recursive decoding)
+        // needs_normalization sees %, returns true; do_normalize strip + decode +
+        // merge + dot-segment all leave it unchanged, so the path is unchanged →
+        // normalize_path returns None (contract).
+        let cfg = PathNormalizationConfig::default();
+        assert_eq!(normalize_path("/admin/%252E%252E/secret", &cfg), None);
+        // do_normalize must NOT recursively decode; %25 stays encoded.
+        let r = do_normalize("/admin/%252E%252E/secret", &cfg);
         assert!(
             !r.starts_with("/secret"),
             "double-encoded dots must NOT be recursively decoded, got: {r}"
         );
-        // The %25 stays encoded; result should contain %25
         assert!(r.contains("%25"), "percent literal (%25) must stay encoded, got: {r}");
     }
 
@@ -618,6 +651,16 @@ mod tests {
         assert!(!needs_normalization("/foo/.bar", &PathNormalizationConfig::default()));
         assert!(!needs_normalization("", &PathNormalizationConfig::default()));
         assert!(!needs_normalization("/", &PathNormalizationConfig::default()));
+        // A `%` that does not decode must NOT trigger the allocating pipeline:
+        // invalid hex, truncated tails, non-decodable reserved/overlong bytes,
+        // and double-encoded percents are all inert under `do_normalize`.
+        let cfg = PathNormalizationConfig::default();
+        assert!(!needs_normalization("/admin%XY/x", &cfg)); // invalid hex
+        assert!(!needs_normalization("/admin%", &cfg)); // bare `%`
+        assert!(!needs_normalization("/admin%2", &cfg)); // truncated tail
+        assert!(!needs_normalization("/path%3Fquery", &cfg)); // %3F = '?' (reserved)
+        assert!(!needs_normalization("/admin/%C0%80/secret", &cfg)); // overlong UTF-8
+        assert!(!needs_normalization("/admin/%252E%252E/secret", &cfg)); // %25 = '%'
     }
 
     #[test]
@@ -633,6 +676,27 @@ mod tests {
         assert!(needs_normalization("/foo/.", &PathNormalizationConfig::default())); // ends_with /.
         assert!(needs_normalization("/foo/..", &PathNormalizationConfig::default()));
         // ends_with /..
+    }
+
+    #[test]
+    fn has_decodable_percent_matches_decoder() {
+        // Positive: at least one `%XX` decodes to an `is_decodable` byte.
+        assert!(has_decodable_percent(b"/%61dmin")); // %61 = 'a'
+        assert!(has_decodable_percent(b"/admin%2Fextra")); // %2F = '/'
+        assert!(has_decodable_percent(b"/foo%2Ebar")); // %2E = '.'
+                                                       // Byte-alignment with `percent_decode_whitelist`: a non-decodable `%`
+                                                       // is consumed one byte at a time, so `%41` is still found after the
+                                                       // leading `%` in `%%41`. A fixed `+= 3` stride would miss this and is
+                                                       // exactly the bug avoided here.
+        assert!(has_decodable_percent(b"%%41")); // decodes to "%A"
+                                                 // Negative: nothing decodes — must stay zero-allocation `false`.
+        assert!(!has_decodable_percent(b"/admin%XY/x")); // invalid hex
+        assert!(!has_decodable_percent(b"/admin%")); // bare `%`
+        assert!(!has_decodable_percent(b"/admin%2")); // truncated tail
+        assert!(!has_decodable_percent(b"/path%3Fquery")); // %3F = '?' (reserved)
+        assert!(!has_decodable_percent(b"/%C0%80")); // overlong UTF-8
+        assert!(!has_decodable_percent(b"/admin/%252E%252E/secret")); // %25 = '%'
+        assert!(!has_decodable_percent(b"/api/users")); // no `%` at all
     }
 
     // ------------------------------------------------------------------

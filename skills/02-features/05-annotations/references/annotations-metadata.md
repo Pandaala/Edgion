@@ -77,18 +77,18 @@ Notes:
             port: 8080
   ```
 
-## TCPRoute / TLSRoute `metadata.annotations`
+## TCPRoute / TLSRoute / UDPRoute `metadata.annotations`
 
 | Key | Resource | Value | Default | Effect |
 |-----|----------|-------|---------|--------|
-| `edgion.io/edgion-stream-plugins` | `TCPRoute`, `TLSRoute` | `name` or `namespace/name` | none | Resolves dynamic `EdgionStreamPlugins` lookup key. Short names are expanded with the route namespace. |
+| `edgion.io/edgion-stream-plugins` | `TCPRoute`, `TLSRoute`, `UDPRoute` | `name` or `namespace/name` | none | Resolves dynamic `EdgionStreamPlugins` lookup key. Short names are expanded with the route namespace. On `UDPRoute` only the Stage-1 ConnectionFilter (`spec.plugins`, IP-based) runs — there is no TLS stage. |
 | `edgion.io/proxy-protocol` | `TLSRoute` | currently `"v2"` is recognized | disabled | Sends Proxy Protocol v2 to upstream. Other values are ignored. |
 | `edgion.io/max-connect-retries` | `TLSRoute` | unsigned integer string | `2` | Max upstream connect attempts. Values below `1` are normalized to `1`; values above `5` are capped to `5`. |
 
 Current implementation note:
 
-- I verified active annotation resolution paths for `Gateway`, `TCPRoute`, and `TLSRoute`.
-- `UDPRoute` has runtime fields for stream plugin state, but I did not find a matching annotation parser in the current Gateway conf handlers. Treat UDP annotation support as unverified until code lands.
+- Active annotation resolution paths verified for `Gateway`, `TCPRoute`, `TLSRoute`, and `UDPRoute`.
+- `UDPRoute` resolves the key in `GlobalUdpRouteManagers::initialize_route` and enforces it (fail-close) in `edgion_udp.rs::handle_client_packet`, mirroring the TCP path. The F-016 session fast-path returns first for established sessions, so the check runs once at session creation (a denied client never establishes a session) — like TCP's per-connection check. Only Stage-1 plugins apply (UDP has no TLS handshake).
 
 ## EdgionTls `metadata.annotations`
 
