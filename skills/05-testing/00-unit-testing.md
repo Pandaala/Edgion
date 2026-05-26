@@ -8,7 +8,7 @@ Use for these tasks:
 
 ## Design principles
 
-- The combined goal of unit tests + integration tests: **99% code coverage**
+- The combined goal of unit tests + integration tests: **maximize meaningful coverage without padding** — cover critical paths, branches, and risk boundaries with real assertions and push coverage as high as that allows; never add low-value tests just to hit a coverage number
 - Unit tests cover: pure logic, data structures, parsing, validation, utility functions
 - Integration tests cover: cross-process interaction, config sync, routing behavior, plugin runtime
 

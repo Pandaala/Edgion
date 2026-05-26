@@ -5,12 +5,12 @@ description: Testing skill for Edgion. Use when writing, running, or extending u
 
 # 05 Testing
 
-> Edgion test system. Goal: unit tests + integration tests reach **99% code coverage**.
-> Split into **standard tests** (coverage guarantee) and **dedicated tests** (specific-scenario validation).
+> Edgion test system. Goal: **maximize meaningful coverage without padding** — write tests worth keeping (critical paths, branches, risk boundaries, with real assertions) and push coverage as high as that allows; do not add low-value tests just to hit a line-coverage number.
+> Split into **standard tests** (critical-path & risk-boundary coverage) and **dedicated tests** (specific-scenario validation).
 
 ## File list
 
-### Part 1 — Standard tests (coverage guarantee)
+### Part 1 — Standard tests (critical-path & risk-boundary coverage)
 
 | File | Topic | Status |
 |------|------|------|
