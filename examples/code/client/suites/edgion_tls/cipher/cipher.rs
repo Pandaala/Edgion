@@ -8,10 +8,12 @@
 // - EdgionTls_cipher_modern.yaml      # TLS 1.2 + modern ciphers (ECDHE-RSA-AES256-GCM-SHA384, etc.)
 // - EdgionTls_cipher_strict.yaml      # TLS 1.3-only on https-strict listener (port 31197)
 // - EdgionTls_cipher_permissive.yaml  # TLS 1.2 on the SAME listener (per-SNI policy demo)
+// - EdgionTls_cipher_badname.yaml     # TLS 1.2 with an invalid cipher name (fail-closed scenario, tls-F002)
 //
 // This test uses openssl s_client to verify:
 // 1. Server negotiates the expected cipher
 // 2. Server accepts/rejects specific cipher requests
+// 3. Server fails-closed when spec.ciphers contains a name BoringSSL doesn't recognize
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -335,7 +337,52 @@ impl CipherTestSuite {
         )
     }
 
-    // Test 6: MultiSniDifferentPolicy — same port, different SNI, different minVersion.
+    // Test 6: BadCipherName — operator configures a cipher name BoringSSL doesn't
+    // recognize. SSL_set_strict_cipher_list returns 0 and the cipher branch in
+    // apply_edgion_tls_cert must fail-closed so the handshake aborts (tls-F002).
+    // Before the fix BoringSSL silently retained its default suite and handshake
+    // completed; after the fix err_log is set and certificate_callback skips
+    // finalize_ssl_ctx so handshake_truly_completed must be false here.
+    fn test_bad_cipher_name_failclosed() -> TestCase {
+        TestCase::new(
+            "cipher_bad_name_failclosed",
+            "BadCipherName: unrecognized cipher in spec.ciphers aborts handshake (tls-F002)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let hostname = "cipher-badname.wildcard.example.com";
+                    let port = ctx.https_port + 2; // 31197 (https-strict listener)
+
+                    match get_tls_info(&ctx.target_host, port, hostname, "-tls1_2") {
+                        Ok(info) => {
+                            if handshake_truly_completed(&info) {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "bad cipher name should fail-close the handshake but it completed. \
+                                         Protocol={}, Cipher={}",
+                                        info.protocol, info.cipher
+                                    ),
+                                )
+                            } else {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!(
+                                        "Bad cipher name correctly aborted handshake. \
+                                         Protocol={}, Cipher={}",
+                                        info.protocol, info.cipher
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("OpenSSL test failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // Test 7: MultiSniDifferentPolicy — same port, different SNI, different minVersion.
     // Proves the per-SNI policy enforcement that this fix exists for.
     fn test_multi_sni_different_policy() -> TestCase {
         TestCase::new(
@@ -421,6 +468,7 @@ impl TestSuite for CipherTestSuite {
             Self::test_legacy_cipher_accepted(),
             Self::test_modern_cipher_accepted(),
             Self::test_client_cipher_mismatch(),
+            Self::test_bad_cipher_name_failclosed(),
             Self::test_multi_sni_different_policy(),
         ]
     }

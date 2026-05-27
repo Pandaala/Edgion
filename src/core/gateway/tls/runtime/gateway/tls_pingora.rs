@@ -284,6 +284,9 @@ impl TlsAccept for TlsCallback {
                 return;
             }
             self.finalize_ssl_ctx(ssl, &mut ssl_ctx);
+            if ssl_ctx.meta.err_log.is_some() {
+                log_ssl(&ssl_ctx.meta);
+            }
             return;
         }
         if let Some(gateway_tls) = ssl_ctx.matched_gateway_tls.clone() {
@@ -293,6 +296,9 @@ impl TlsAccept for TlsCallback {
                 return;
             }
             self.finalize_ssl_ctx(ssl, &mut ssl_ctx);
+            if ssl_ctx.meta.err_log.is_some() {
+                log_ssl(&ssl_ctx.meta);
+            }
             return;
         }
 
@@ -324,8 +330,25 @@ impl TlsAccept for TlsCallback {
             return Some(Arc::new(ssl_ctx.meta));
         }
 
-        // Non-BoringSSL fallback: return a minimal TlsConnMeta so downstream
-        // consumers (TLS proxy, HTTP proxy) can still read it from the digest.
+        // Fallback when no SslCtx is recoverable from ex_data. Returns a minimal
+        // TlsConnMeta so downstream consumers (TLS proxy, HTTP proxy) can still
+        // read it from the digest.
+        //
+        // Intentionally does NOT call log_ssl here — preserving the
+        // "one ssl.log per connection" audit invariant (tls-F004):
+        // * BoringSSL builds: the only realistic paths into this branch are
+        //   store_ssl_ctx failures in select_cb / finalize_ssl_ctx, both of
+        //   which already emitted ssl.log with a more complete meta
+        //   (tls_id / sni / matched populated). Logging again here would
+        //   double-count the connection and the second entry would lack
+        //   tls_id / sni / matched, misleading audit consumers.
+        // * Non-BoringSSL builds: store_ssl_ctx in select_cb always fails and
+        //   returns SelectCertError::ERROR, so cert_cb / this callback are not
+        //   reached on that path.
+        // The remaining theoretical case (BoringSSL state-machine glitch zeroing
+        // ex_data between callbacks) is unreachable-by-design; we accept losing
+        // a fallback log entry there in exchange for not double-counting the
+        // rare allocation-failure case.
         let meta = TlsConnMeta {
             ts: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -346,7 +369,6 @@ impl TlsAccept for TlsCallback {
             client_cert_info: None,
             is_mtls: false,
         };
-        log_ssl(&meta);
         Some(Arc::new(meta))
     }
 }
@@ -464,6 +486,11 @@ impl TlsCallback {
     }
 
     /// Stamp `tls_id` and store SslCtx into ex_data for handshake_complete_callback.
+    ///
+    /// On store failure, sets `err_log` so the caller can mirror the
+    /// apply_*_cert failure pattern (check `err_log.is_some()` → `log_ssl`).
+    /// Without this signal, the caller silently returns and the only audit
+    /// trace is the partial entry emitted internally by `store_ssl_ctx`.
     fn finalize_ssl_ctx(&self, ssl: &mut SslRef, ssl_ctx: &mut SslCtx) {
         let rand: u64 = random();
         ssl_ctx.meta.tls_id = Some(format!("{:016x}-{:016x}", ssl_ctx.meta.ts, rand));
@@ -473,10 +500,28 @@ impl TlsCallback {
                 .log
                 .get_or_insert_with(LogBuffer::new)
                 .push("store ctx failed");
+            ssl_ctx.meta.err_log = Some("finalize: store ctx failed".to_string());
         }
     }
 
     /// Apply certificate from EdgionTls resource
+    ///
+    /// Ordering rule (load-bearing for fail-closed, see tls-F002):
+    /// every SSL-level setup that does NOT depend on cert/key state runs
+    /// BEFORE `ssl_use_certificate` / `ssl_use_private_key`. Reason: this
+    /// callback has no way to abort the handshake from the outside — pingora's
+    /// `TlsAccept::certificate_callback` is a `()`-returning async fn and
+    /// always reports success to BoringSSL. The only handshake-aborting effect
+    /// available is "do not bind a cert/key", which leaves BoringSSL with no
+    /// usable cert and forces handshake failure. If a security-boundary
+    /// control (e.g. `spec.ciphers` policy) fails after cert/key are already
+    /// bound, the early `return` only skips the log entry — the connection
+    /// still completes on whatever default BoringSSL had inherited.
+    ///
+    /// Concretely: `spec.ciphers` is processed first. `SSL_set_strict_cipher_list`
+    /// is pure SSL-level configuration with no cert dependency, so the early
+    /// position is safe; and on failure we have not yet bound cert/key, so the
+    /// `return` here is what actually fails the handshake closed.
     fn apply_edgion_tls_cert(&self, ssl: &mut SslRef, edgion_tls: &Arc<EdgionTls>, ssl_ctx: &mut SslCtx) {
         let ns = edgion_tls.metadata.namespace.as_deref().unwrap_or("-");
         let name = edgion_tls.metadata.name.as_deref().unwrap_or("-");
@@ -489,6 +534,23 @@ impl TlsCallback {
             section: None,
             sv: edgion_tls.get_sync_version(),
         });
+
+        // Cipher policy is a security-boundary control (FIPS-only, exclude-weak,
+        // …). BoringSSL's `SSL_set_strict_cipher_list` rejects unrecognized
+        // names rather than applying them and leaves the SSL on its inherited
+        // default suite — so on Err we MUST not bind cert/key, otherwise the
+        // handshake completes negotiating from BoringSSL's full default and the
+        // operator's restrictive policy is silently dropped. Doing this BEFORE
+        // cert/key (instead of the historical "after" position) is what
+        // converts the `err_log + return` pattern into an actual handshake
+        // abort, since "no cert bound" is the only fail-close lever we have
+        // from inside cert_cb (see the function-level doc above).
+        if let Some(ref ciphers) = edgion_tls.spec.ciphers {
+            if let Err(e) = self.configure_ciphers(ssl, ciphers) {
+                ssl_ctx.meta.err_log = Some(format!("cipher config: {e}"));
+                return;
+            }
+        }
 
         let cert_pem = match edgion_tls.cert_pem() {
             Ok(pem) => pem,
@@ -558,16 +620,6 @@ impl TlsCallback {
             if let Err(e) = self.configure_mtls(ssl, client_auth, edgion_tls) {
                 ssl_ctx.meta.err_log = Some(format!("mtls config: {e}"));
                 return;
-            }
-        }
-
-        if let Some(ref ciphers) = edgion_tls.spec.ciphers {
-            if let Err(_e) = self.configure_ciphers(ssl, ciphers) {
-                let _ = ssl_ctx
-                    .meta
-                    .log
-                    .get_or_insert_with(LogBuffer::new)
-                    .push_err("cipher config fail");
             }
         }
     }
@@ -777,6 +829,36 @@ impl TlsCallback {
                 return;
             }
         };
+        // Runtime expiry recheck — cert may have expired between controller
+        // rebuilds. Mirrors the EdgionTls path in apply_edgion_tls_cert so that
+        // GatewayTls-sourced certs emit the same cert_expired / cert_not_yet_valid
+        // audit signal (RFC 5280 inclusive bounds). The `&now` of the EdgionTls
+        // block is dropped here on purpose — clippy::op_ref flags it, and
+        // `Asn1Time`/`Asn1TimeRef` cross-compare unchanged either way.
+        #[cfg(feature = "boringssl")]
+        match boring::asn1::Asn1Time::days_from_now(0) {
+            Ok(now) => {
+                if cert.not_after() < now {
+                    ssl_ctx.meta.err_log = Some(format!("cert_expired: not_after={}", cert.not_after()));
+                    return;
+                }
+                if cert.not_before() > now {
+                    ssl_ctx.meta.err_log = Some(format!("cert_not_yet_valid: not_before={}", cert.not_before()));
+                    return;
+                }
+            }
+            Err(_e) => {
+                // days_from_now(0) only fails on BoringSSL allocation failure
+                // (effectively impossible). Don't fail the connection — the
+                // cert was validated at load time and BoringSSL rejects
+                // genuinely broken certs during the handshake.
+                let _ = ssl_ctx
+                    .meta
+                    .log
+                    .get_or_insert_with(crate::core::gateway::observe::logs::LogBuffer::new)
+                    .push_err("cert_expiry_check_failed");
+            }
+        }
         if let Err(e) = pingora_core::tls::ext::ssl_use_certificate(ssl, &cert) {
             ssl_ctx.meta.err_log = Some(format!("set cert: {e}"));
             return;
@@ -816,12 +898,29 @@ impl TlsCallback {
             PingoraError::explain(ErrorType::InvalidCert, format!("Failed to create X509 store: {}", e))
         })?;
 
+        let mut certs_added: usize = 0;
         for secret in ca_secrets {
             if let Some(data) = &secret.data {
                 if let Some(ca_bytes) = data.get(CA_CERT) {
-                    add_ca_bundle_to_store(&mut store_builder, &ca_bytes.0)?;
+                    certs_added += add_ca_bundle_to_store(&mut store_builder, &ca_bytes.0)?;
                 }
             }
+        }
+
+        // Symmetric with the fail-closed branch inside `add_ca_bundle_to_store`
+        // for empty/garbage PEM: if every referenced Secret lacked the `ca.crt`
+        // key, the loop body never ran and we are about to build an empty trust
+        // store. Returning Err here lets the caller stamp `err_log` instead of
+        // silently installing a barrier that rejects every client.
+        if certs_added == 0 {
+            return Err(PingoraError::explain(
+                ErrorType::InvalidCert,
+                format!(
+                    "frontendValidation references {} CA Secret(s), but none contained the `{}` key",
+                    ca_secrets.len(),
+                    CA_CERT
+                ),
+            ));
         }
 
         let store = store_builder.build();

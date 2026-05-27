@@ -6,7 +6,7 @@ use crate::types::ctx::ClientCertInfo;
 
 /// Validate client certificate against SAN whitelist
 /// Returns true if certificate matches whitelist or no whitelist configured
-pub fn validate_san_whitelist(cert_info: &ClientCertInfo, allowed_sans: &Vec<String>) -> bool {
+pub fn validate_san_whitelist(cert_info: &ClientCertInfo, allowed_sans: &[String]) -> bool {
     if allowed_sans.is_empty() {
         return true;
     }
@@ -24,7 +24,7 @@ pub fn validate_san_whitelist(cert_info: &ClientCertInfo, allowed_sans: &Vec<Str
 
 /// Validate client certificate against CN whitelist
 /// Returns true if certificate matches whitelist or no whitelist configured
-pub fn validate_cn_whitelist(cert_info: &ClientCertInfo, allowed_cns: &Vec<String>) -> bool {
+pub fn validate_cn_whitelist(cert_info: &ClientCertInfo, allowed_cns: &[String]) -> bool {
     if allowed_cns.is_empty() {
         return true;
     }
@@ -71,7 +71,7 @@ mod tests {
         };
 
         // Empty whitelist should allow all
-        assert!(validate_san_whitelist(&cert_info, &vec![]));
+        assert!(validate_san_whitelist(&cert_info, &[]));
     }
 
     #[test]
@@ -85,10 +85,10 @@ mod tests {
 
         assert!(validate_san_whitelist(
             &cert_info,
-            &vec!["test.example.com".to_string()]
+            &["test.example.com".to_string()]
         ));
-        assert!(validate_san_whitelist(&cert_info, &vec!["other.com".to_string()]));
-        assert!(validate_san_whitelist(&cert_info, &vec!["*.example.com".to_string()]));
+        assert!(validate_san_whitelist(&cert_info, &["other.com".to_string()]));
+        assert!(validate_san_whitelist(&cert_info, &["*.example.com".to_string()]));
     }
 
     #[test]
@@ -100,7 +100,7 @@ mod tests {
             fingerprint: "abc123".to_string(),
         };
 
-        assert!(!validate_san_whitelist(&cert_info, &vec!["other.com".to_string()]));
+        assert!(!validate_san_whitelist(&cert_info, &["other.com".to_string()]));
     }
 
     #[test]
@@ -112,8 +112,8 @@ mod tests {
             fingerprint: "abc123".to_string(),
         };
 
-        assert!(validate_cn_whitelist(&cert_info, &vec![])); // Empty whitelist
-        assert!(validate_cn_whitelist(&cert_info, &vec!["TestUser".to_string()]));
-        assert!(!validate_cn_whitelist(&cert_info, &vec!["OtherUser".to_string()]));
+        assert!(validate_cn_whitelist(&cert_info, &[])); // Empty whitelist
+        assert!(validate_cn_whitelist(&cert_info, &["TestUser".to_string()]));
+        assert!(!validate_cn_whitelist(&cert_info, &["OtherUser".to_string()]));
     }
 }
