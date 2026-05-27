@@ -641,7 +641,26 @@ impl TlsCallback {
         }
     }
 
-    /// Apply certificate from Gateway Listener TLS configuration (from Secret)
+    /// Apply certificate from Gateway Listener TLS configuration (from Secret).
+    ///
+    /// Ordering rule (load-bearing for fail-closed, see tls-F002 and tls-F011):
+    /// every SSL-level setup that does NOT depend on cert/key state runs BEFORE
+    /// `apply_secret_to_ssl` (which is what binds cert/key on this path).
+    /// `TlsAccept::certificate_callback` is a `()`-returning async fn that
+    /// always reports success to BoringSSL, so the only handshake-aborting
+    /// effect available from inside cert_cb is "do not bind a cert/key". If a
+    /// security-boundary control (e.g. listener-level `frontendValidation`)
+    /// fails after cert/key are already bound, the early `return` only skips
+    /// the audit log — the connection still completes with verify mode never
+    /// installed and no client cert ever requested.
+    ///
+    /// Concretely: `select_gateway_secret` runs first (it reads only the
+    /// ClientHello sigalg extension to pick RSA vs ECDSA cert); then
+    /// `frontendValidation` (pure client-verify configuration, no server
+    /// cert/key dependency); only then does `apply_secret_to_ssl` bind
+    /// cert/key. If a future change adds a server cert read inside
+    /// `configure_gateway_frontend_mtls` (e.g. SAN-mirror logic), this
+    /// ordering decision must be revisited.
     fn apply_gateway_tls_cert(&self, ssl: &mut SslRef, gateway_tls: &GatewayTlsEntry, ssl_ctx: &mut SslCtx) {
         ssl_ctx.meta.matched = Some(MatchedInfo {
             rsc: Rsc {
@@ -677,22 +696,27 @@ impl TlsCallback {
                 return;
             }
         };
+        // Listener-level frontendValidation is a security-boundary control
+        // (operator-required client cert). `configure_gateway_frontend_mtls`
+        // only touches client verify state (X509 store, verify mode, verify
+        // depth, optional verify callback) with no server cert/key
+        // dependency, so it runs BEFORE `apply_secret_to_ssl` binds cert/key.
+        // On Err we stamp `err_log` and `return` with no cert bound — that is
+        // what aborts the handshake. The Ok branch keeps the `is_mtls`
+        // stamping contract unchanged. See tls-F011.
+        if gateway_tls.frontend_validation.is_some() {
+            match self.configure_gateway_frontend_mtls(ssl, gateway_tls) {
+                Err(e) => {
+                    ssl_ctx.meta.err_log = Some(format!("frontend mTLS error: {}", e));
+                    return;
+                }
+                Ok(verify_installed) => ssl_ctx.meta.is_mtls = verify_installed,
+            }
+        }
+
         self.apply_secret_to_ssl(ssl, &secret, ssl_ctx);
         if ssl_ctx.meta.err_log.is_some() {
             return;
-        }
-
-        // Apply frontend validation mTLS if configured. The callee reports
-        // whether it actually installed a verify mode: a frontendValidation with
-        // empty/None CA refs reaches here (the controller does not fence it) and
-        // returns Ok(false) without requesting any client cert, so flagging
-        // is_mtls=true there would mislead tls.log / tls_route consumers (the
-        // same reasoning as the EdgionTls path above, fixed in tls-F001).
-        if gateway_tls.frontend_validation.is_some() {
-            match self.configure_gateway_frontend_mtls(ssl, gateway_tls) {
-                Err(e) => ssl_ctx.meta.err_log = Some(format!("frontend mTLS error: {}", e)),
-                Ok(verify_installed) => ssl_ctx.meta.is_mtls = verify_installed,
-            }
         }
     }
 
