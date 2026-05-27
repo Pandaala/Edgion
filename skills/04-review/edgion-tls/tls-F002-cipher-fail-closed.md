@@ -95,6 +95,10 @@ If a future "graceful degrade on cipher mismatch" mode is wanted it must be an e
 opt-in (e.g. an `EdgionTls.spec.cipherPolicy: strict | bestEffort` field), not the default.
 Until then, treat the strict semantics as load-bearing.
 
+The same ordering rule has since been applied to the mTLS verify-setup
+branches in `apply_edgion_tls_cert` and `apply_gateway_tls_cert`; see
+[tls-F011-mtls-config-reorder] for the second application.
+
 ## Tests guarding this
 
 - `examples/code/client/suites/edgion_tls/cipher/cipher.rs::test_bad_cipher_name_failclosed`
