@@ -1285,6 +1285,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::HttpsTestSuite));
             runner.add_suite(Box::new(suites::GrpcTlsTestSuite));
             runner.add_suite(Box::new(suites::MtlsTestSuite));
+            runner.add_suite(Box::new(suites::MtlsFailcloseTestSuite));
             runner.add_suite(Box::new(suites::PortOnlyEdgionTlsTestSuite));
             runner.add_suite(Box::new(suites::FallbackSniTestSuite));
             runner.add_suite(Box::new(suites::WildcardSingleLabelTestSuite));
@@ -1317,6 +1318,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::CipherTestSuite));
+        }
+        "EdgionTls/mtls_failclose" => {
+            if !gateway {
+                eprintln!("Error: EdgionTls/mtls_failclose tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::MtlsFailcloseTestSuite));
         }
         "EdgionTls/fallback_sni" => {
             if !gateway {
