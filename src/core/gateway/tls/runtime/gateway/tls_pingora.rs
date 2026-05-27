@@ -522,6 +522,17 @@ impl TlsCallback {
     /// is pure SSL-level configuration with no cert dependency, so the early
     /// position is safe; and on failure we have not yet bound cert/key, so the
     /// `return` here is what actually fails the handshake closed.
+    ///
+    /// The same rule applies to `spec.client_auth`: mTLS verify configuration
+    /// is a security-boundary control (operator-required client cert), and
+    /// `configure_mtls` only operates on client-side verify state
+    /// (`set_verify_cert_store`, `set_verify_depth`, `set_verify`, optional
+    /// verify callback) with no server cert/key dependency. Its branch
+    /// therefore runs before cert/key are bound, so an Err inside
+    /// `configure_mtls` (e.g. CA Secret missing, garbage CA PEM) actually
+    /// aborts the handshake rather than only suppressing the audit log. If a
+    /// future change adds a server cert read inside `configure_mtls` (e.g.
+    /// SAN-mirror logic), this ordering decision must be revisited.
     fn apply_edgion_tls_cert(&self, ssl: &mut SslRef, edgion_tls: &Arc<EdgionTls>, ssl_ctx: &mut SslCtx) {
         let ns = edgion_tls.metadata.namespace.as_deref().unwrap_or("-");
         let name = edgion_tls.metadata.name.as_deref().unwrap_or("-");
@@ -548,6 +559,19 @@ impl TlsCallback {
         if let Some(ref ciphers) = edgion_tls.spec.ciphers {
             if let Err(e) = self.configure_ciphers(ssl, ciphers) {
                 ssl_ctx.meta.err_log = Some(format!("cipher config: {e}"));
+                return;
+            }
+        }
+
+        // mTLS client-cert verification is a security-boundary control
+        // (operator-required client cert). `configure_mtls` only touches
+        // client verify state and has no server cert/key dependency, so it
+        // runs BEFORE cert/key are bound -- that way a CA Secret read failure
+        // or a garbage CA PEM stamps `err_log` and `return`s with no cert
+        // bound, and BoringSSL aborts the handshake. See tls-F011.
+        if let Some(ref client_auth) = edgion_tls.spec.client_auth {
+            if let Err(e) = self.configure_mtls(ssl, client_auth, edgion_tls) {
+                ssl_ctx.meta.err_log = Some(format!("mtls config: {e}"));
                 return;
             }
         }
@@ -614,13 +638,6 @@ impl TlsCallback {
         if let Err(e) = pingora_core::tls::ext::ssl_use_private_key(ssl, &key) {
             ssl_ctx.meta.err_log = Some(format!("set key: {e}"));
             return;
-        }
-
-        if let Some(ref client_auth) = edgion_tls.spec.client_auth {
-            if let Err(e) = self.configure_mtls(ssl, client_auth, edgion_tls) {
-                ssl_ctx.meta.err_log = Some(format!("mtls config: {e}"));
-                return;
-            }
         }
     }
 
