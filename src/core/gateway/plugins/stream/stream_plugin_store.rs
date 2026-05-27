@@ -170,9 +170,6 @@ impl ConfHandler<EdgionStreamPlugins> for StreamPluginStore {
         );
         let mut add_or_update: HashMap<String, Arc<EdgionStreamPlugins>> = add;
         add_or_update.extend(update);
-        for key in &remove {
-            tracing::debug!(key = %key, "Removing EdgionStreamPlugins");
-        }
         self.update(add_or_update, &remove);
     }
 }

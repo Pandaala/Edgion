@@ -12,24 +12,20 @@ use crate::types::resources::edgion_gateway_config::PluginReference;
 const PLUGIN_NAME: &str = "GlobalConnectionIpRestriction";
 
 pub struct GlobalConnectionIpRestrictionPlugin {
-    plugin_metadata_ref: PluginReference,
-    parent_namespace: String,
+    /// Precomputed PM store key ("<effective_ns>/<name>"). Built once at
+    /// construction so the per-connection on_connection path can avoid the
+    /// format!() allocation inside the by-(ns,name) getter.
+    metadata_key: String,
 }
 
 impl GlobalConnectionIpRestrictionPlugin {
     pub fn new(plugin_metadata_ref: PluginReference, parent_namespace: String) -> Self {
-        Self {
-            plugin_metadata_ref,
-            parent_namespace,
-        }
-    }
-
-    /// Resolve effective namespace: explicit ref.namespace > parent fallback.
-    fn ref_namespace(&self) -> &str {
-        self.plugin_metadata_ref
+        let effective_ns = plugin_metadata_ref
             .namespace
             .as_deref()
-            .unwrap_or(&self.parent_namespace)
+            .unwrap_or(&parent_namespace);
+        let metadata_key = format!("{}/{}", effective_ns, plugin_metadata_ref.name);
+        Self { metadata_key }
     }
 }
 
@@ -41,8 +37,7 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
 
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult {
         let store = get_global_plugin_metadata_store();
-        // Getter signature: (namespace, name)
-        let Some(pm) = store.get_global_connection_ip_restriction(self.ref_namespace(), &self.plugin_metadata_ref.name)
+        let Some(pm) = store.get_global_connection_ip_restriction_by_key(&self.metadata_key)
         else {
             // A configured PM reference that does not resolve is a real
             // misconfiguration (sync is gated by ConfigClient::is_ready before

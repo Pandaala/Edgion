@@ -395,6 +395,7 @@ mod tests {
                 values: Some(vec!["POST".to_string()]),
                 regex: None,
                 values_set: None,
+                wildcard_patterns: None,
                 compiled_regex: None,
             })]),
         };
@@ -426,6 +427,7 @@ mod tests {
                 values: Some(vec!["POST".to_string()]),
                 regex: None,
                 values_set: None,
+                wildcard_patterns: None,
                 compiled_regex: None,
             })]),
         };
@@ -557,6 +559,7 @@ mod tests {
                 values: Some(vec!["POST".to_string()]),
                 regex: None,
                 values_set: None,
+                wildcard_patterns: None,
                 compiled_regex: None,
             })]),
         };
@@ -595,6 +598,7 @@ mod tests {
             values: Some(vec!["GET".to_string(), "POST".to_string()]),
             regex: None,
             values_set: None,
+            wildcard_patterns: None,
             compiled_regex: None,
         });
         assert_eq!(c2.cond_type(), "include");

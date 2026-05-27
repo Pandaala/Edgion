@@ -1,7 +1,5 @@
 //! Request-stage operations: token extraction, anonymous fallback, 401 response,
-//! auth-failure delay, hide_credentials, claims-to-headers propagation.
-
-use std::time::Duration;
+//! hide_credentials, claims-to-headers propagation.
 
 use super::{JwtAuth, JwtAuthResult};
 use crate::core::gateway::plugins::http::common::auth_common::{
@@ -100,13 +98,6 @@ impl JwtAuth {
         )
         .await
         .map_err(|_| ())
-    }
-
-    /// Delay before returning auth failure (timing attack protection).
-    pub(super) async fn apply_auth_failure_delay(&self) {
-        if self.config.auth_failure_delay_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(self.config.auth_failure_delay_ms)).await;
-        }
     }
 
     /// Hide credentials based on token source.

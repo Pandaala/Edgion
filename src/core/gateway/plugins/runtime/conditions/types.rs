@@ -322,6 +322,15 @@ pub struct IncludeCondition {
     #[schemars(skip)]
     pub values_set: Option<HashSet<String>>,
 
+    /// Wildcard-only subset of `values` (entries containing `*`).
+    /// Populated by `compile()` together with `values_set` so the eval-time loop
+    /// only iterates wildcards instead of rescanning exact entries already
+    /// covered by the HashSet. `None` means "no compiled split"; the matcher
+    /// falls back to iterating `values` directly.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub wildcard_patterns: Option<Vec<String>>,
+
     /// Compiled regex (runtime only, merged from all patterns)
     #[serde(skip)]
     #[schemars(skip)]
@@ -374,6 +383,15 @@ pub struct ExcludeCondition {
     #[serde(skip)]
     #[schemars(skip)]
     pub values_set: Option<HashSet<String>>,
+
+    /// Wildcard-only subset of `values` (entries containing `*`).
+    /// Populated by `compile()` together with `values_set` so the eval-time loop
+    /// only iterates wildcards instead of rescanning exact entries already
+    /// covered by the HashSet. `None` means "no compiled split"; the matcher
+    /// falls back to iterating `values` directly.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub wildcard_patterns: Option<Vec<String>>,
 
     /// Compiled regex (runtime only, merged from all patterns)
     #[serde(skip)]
@@ -443,9 +461,11 @@ impl PluginConditions {
     ///
     /// Compiles every condition independently (no early-return on first error).
     /// On failure, clears the failing condition's `regex` field so the runtime
-    /// "uncompiled regex" guard is never reached; returns the first error found.
-    pub fn compile(&mut self) -> Result<(), regex::Error> {
-        let mut first_err: Option<regex::Error> = None;
+    /// "uncompiled regex" guard is never reached; returns every error collected
+    /// across `skip` and `run` (in that order) so the operator sees all bad
+    /// patterns in one apply cycle instead of one fix-and-retry round per pattern.
+    pub fn compile(&mut self) -> Result<(), Vec<regex::Error>> {
+        let mut errors: Vec<regex::Error> = Vec::new();
         for conds in [&mut self.skip, &mut self.run] {
             if let Some(conditions) = conds {
                 for c in conditions {
@@ -453,17 +473,12 @@ impl PluginConditions {
                         // Prevent per-request push_err flooding: clear the regex so
                         // the uncompiled-regex guard in evaluator.rs is never triggered.
                         c.clear_regex();
-                        if first_err.is_none() {
-                            first_err = Some(e);
-                        }
+                        errors.push(e);
                     }
                 }
             }
         }
-        match first_err {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
+        if errors.is_empty() { Ok(()) } else { Err(errors) }
     }
 
     /// Validate non-regex configuration on every condition. Should be called
@@ -471,17 +486,21 @@ impl PluginConditions {
     /// `TimeRange` bound that fails RFC3339 parsing) surface through the same
     /// `preparse_errors` → `seal_fail_closed` pipeline as regex compile errors.
     ///
-    /// Returns the first error found; later errors are dropped so the caller's
-    /// status condition stays readable (matches `compile`'s behavior).
-    pub fn validate(&self) -> Result<(), String> {
+    /// Returns every error collected across `skip` and `run` (in that order),
+    /// mirroring `compile`'s behavior so the operator sees all malformed values
+    /// in one apply cycle.
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors: Vec<String> = Vec::new();
         for conds in [&self.skip, &self.run] {
             if let Some(conditions) = conds {
                 for c in conditions {
-                    c.validate()?;
+                    if let Err(e) = c.validate() {
+                        errors.push(e);
+                    }
                 }
             }
         }
-        Ok(())
+        if errors.is_empty() { Ok(()) } else { Err(errors) }
     }
 }
 
@@ -526,11 +545,19 @@ impl IncludeCondition {
             }
         }
 
-        // 2. Extract exact values (without wildcards) and build HashSet if above threshold
+        // 2. Extract exact values (without wildcards) and build HashSet if above threshold.
+        //    When the HashSet is built, also split wildcard entries into a separate bucket
+        //    so the eval-time loop only iterates wildcards (the HashSet covers exact entries).
+        //    `wildcard_patterns` is set to `Some(_)` even when empty so the matcher's
+        //    `else if` always short-circuits `self.values` when `values_set` is active —
+        //    this is critical for the canonical W=0 (all-exact allowlist) case, where
+        //    falling back to `self.values` would reintroduce the redundant O(N) rescan.
         if let Some(values) = &self.values {
             let exact_values: Vec<_> = values.iter().filter(|v| !v.contains('*')).cloned().collect();
             if exact_values.len() > VALUES_HASHSET_THRESHOLD {
+                let wildcards: Vec<String> = values.iter().filter(|v| v.contains('*')).cloned().collect();
                 self.values_set = Some(exact_values.into_iter().collect());
+                self.wildcard_patterns = Some(wildcards);
             }
         }
 
@@ -550,11 +577,19 @@ impl ExcludeCondition {
             }
         }
 
-        // 2. Extract exact values (without wildcards) and build HashSet if above threshold
+        // 2. Extract exact values (without wildcards) and build HashSet if above threshold.
+        //    When the HashSet is built, also split wildcard entries into a separate bucket
+        //    so the eval-time loop only iterates wildcards (the HashSet covers exact entries).
+        //    `wildcard_patterns` is set to `Some(_)` even when empty so the matcher's
+        //    `else if` always short-circuits `self.values` when `values_set` is active —
+        //    this is critical for the canonical W=0 (all-exact denylist) case, where
+        //    falling back to `self.values` would reintroduce the redundant O(N) rescan.
         if let Some(values) = &self.values {
             let exact_values: Vec<_> = values.iter().filter(|v| !v.contains('*')).cloned().collect();
             if exact_values.len() > VALUES_HASHSET_THRESHOLD {
+                let wildcards: Vec<String> = values.iter().filter(|v| v.contains('*')).cloned().collect();
                 self.values_set = Some(exact_values.into_iter().collect());
+                self.wildcard_patterns = Some(wildcards);
             }
         }
 
@@ -720,6 +755,7 @@ mod tests {
             values: Some(vec!["/static/*".to_string()]),
             regex: Some(vec![r"^/api/v[0-9]+/.*".to_string(), r"^/internal/.*".to_string()]),
             values_set: None,
+            wildcard_patterns: None,
             compiled_regex: None,
         };
 
@@ -740,6 +776,7 @@ mod tests {
             values: Some(vec!["/health".to_string()]),
             regex: Some(vec![r"^/debug/.*".to_string(), r"^/metrics/.*".to_string()]),
             values_set: None,
+            wildcard_patterns: None,
             compiled_regex: None,
         };
 
@@ -752,20 +789,162 @@ mod tests {
         assert!(!regex.is_match("/api/v1/users"));
     }
 
+    // F-005 regression sentinel: when the HashSet acceleration kicks in (exact
+    // entries > VALUES_HASHSET_THRESHOLD), `wildcard_patterns` MUST be `Some(_)`
+    // — including the all-exact / W=0 case where the inner Vec is empty — so the
+    // matcher's `else if let Some(patterns) = &self.values` arm stays dead.
+    // Flipping the all-exact branch to `None` re-introduces F-005 (matcher
+    // falls back to scanning the full `self.values`, redoing the exact-match
+    // work HashSet just covered on every miss).
+    #[test]
+    fn test_include_compile_above_threshold_pure_exact_sets_empty_wildcards() {
+        let values: Vec<String> = (0..20).map(|i| format!("value{}", i)).collect();
+        let mut condition = IncludeCondition {
+            key: KeyGet::Path,
+            values: Some(values),
+            regex: None,
+            values_set: None,
+            wildcard_patterns: None,
+            compiled_regex: None,
+        };
+
+        assert!(condition.compile().is_ok());
+
+        let set = condition.values_set.as_ref().expect("values_set must be built above threshold");
+        assert_eq!(set.len(), 20);
+        assert!(set.contains("value0"));
+
+        // Load-bearing assertion: Some(vec![]) — never None — so matcher's
+        // else-if shorts out instead of rescanning self.values.
+        let wildcards = condition
+            .wildcard_patterns
+            .as_ref()
+            .expect("wildcard_patterns must be Some(_) (possibly empty) whenever values_set is built");
+        assert!(wildcards.is_empty(), "no wildcard entries in input, but wildcard_patterns = {:?}", wildcards);
+    }
+
+    #[test]
+    fn test_include_compile_above_threshold_mixed_splits_wildcards_out() {
+        // 17 exact entries (just above threshold) + 2 wildcard entries.
+        // Exact bucket = HashSet, wildcard bucket = the two `*`-bearing entries only;
+        // wildcard bucket must NOT contain any exact entry.
+        let mut values: Vec<String> = (0..17).map(|i| format!("exact{}", i)).collect();
+        values.push("/api/*".to_string());
+        values.push("*.png".to_string());
+        let mut condition = IncludeCondition {
+            key: KeyGet::Path,
+            values: Some(values),
+            regex: None,
+            values_set: None,
+            wildcard_patterns: None,
+            compiled_regex: None,
+        };
+
+        assert!(condition.compile().is_ok());
+
+        let set = condition.values_set.as_ref().expect("values_set must be built");
+        assert_eq!(set.len(), 17);
+        assert!(set.contains("exact0"));
+        assert!(!set.contains("/api/*"), "wildcard entries must not leak into values_set");
+
+        let wildcards = condition.wildcard_patterns.as_ref().expect("wildcard_patterns must be Some(_)");
+        assert_eq!(wildcards.len(), 2);
+        assert!(wildcards.contains(&"/api/*".to_string()));
+        assert!(wildcards.contains(&"*.png".to_string()));
+        for w in wildcards {
+            assert!(w.contains('*'), "wildcard bucket must only hold entries with '*', found {:?}", w);
+        }
+    }
+
+    #[test]
+    fn test_exclude_compile_above_threshold_pure_exact_sets_empty_wildcards() {
+        let values: Vec<String> = (0..20).map(|i| format!("/path{}", i)).collect();
+        let mut condition = ExcludeCondition {
+            key: KeyGet::Path,
+            values: Some(values),
+            regex: None,
+            values_set: None,
+            wildcard_patterns: None,
+            compiled_regex: None,
+        };
+
+        assert!(condition.compile().is_ok());
+
+        let set = condition.values_set.as_ref().expect("values_set must be built above threshold");
+        assert_eq!(set.len(), 20);
+
+        let wildcards = condition
+            .wildcard_patterns
+            .as_ref()
+            .expect("wildcard_patterns must be Some(_) (possibly empty) whenever values_set is built");
+        assert!(wildcards.is_empty(), "no wildcard entries in input, but wildcard_patterns = {:?}", wildcards);
+    }
+
+    #[test]
+    fn test_exclude_compile_above_threshold_mixed_splits_wildcards_out() {
+        let mut values: Vec<String> = (0..17).map(|i| format!("/exact{}", i)).collect();
+        values.push("/internal/*".to_string());
+        let mut condition = ExcludeCondition {
+            key: KeyGet::Path,
+            values: Some(values),
+            regex: None,
+            values_set: None,
+            wildcard_patterns: None,
+            compiled_regex: None,
+        };
+
+        assert!(condition.compile().is_ok());
+
+        let set = condition.values_set.as_ref().expect("values_set must be built");
+        assert_eq!(set.len(), 17);
+        assert!(!set.contains("/internal/*"));
+
+        let wildcards = condition.wildcard_patterns.as_ref().expect("wildcard_patterns must be Some(_)");
+        assert_eq!(wildcards.len(), 1);
+        assert_eq!(wildcards[0], "/internal/*");
+    }
+
+    #[test]
+    fn test_include_compile_below_threshold_no_split() {
+        // At or below the threshold, no HashSet is built and no wildcard split happens.
+        // Matcher must remain in the "scan the full values Vec" fallback path —
+        // semantically identical to pre-F005 small-list behaviour.
+        let values: Vec<String> = (0..16).map(|i| format!("value{}", i)).collect();
+        let mut condition = IncludeCondition {
+            key: KeyGet::Path,
+            values: Some(values),
+            regex: None,
+            values_set: None,
+            wildcard_patterns: None,
+            compiled_regex: None,
+        };
+
+        assert!(condition.compile().is_ok());
+        assert!(condition.values_set.is_none());
+        assert!(condition.wildcard_patterns.is_none());
+    }
+
     #[test]
     fn test_plugin_conditions_compile_all_independent() {
-        // Two skip conditions: one invalid regex, one valid regex.
-        // compile() must return Err (first error) AND still compile the valid condition,
-        // while clearing the invalid condition's regex to prevent per-request push_err.
-        let invalid = Condition::KeyMatch(KeyMatchCondition {
+        // Mix of valid/invalid across skip and run; compile() must return EVERY
+        // error (not just the first) while still compiling the valid conditions
+        // and clearing the failing ones' regex to prevent per-request push_err.
+        //
+        // Layout (order matters — errors are returned in skip → run order):
+        //   skip[0] invalid (unclosed bracket)
+        //   skip[1] valid
+        //   skip[2] invalid (lone repeat)
+        //   run[0]  valid
+        //   run[1]  invalid (mismatched paren)
+        let invalid_bracket = Condition::KeyMatch(KeyMatchCondition {
             key: KeyGet::Path,
             value: None,
             values: None,
-            regex: Some(vec!["[invalid".to_string()]), // unclosed bracket → invalid
+            regex: Some(vec!["[invalid".to_string()]),
             values_set: None,
             compiled_regex: None,
         });
-        let valid = Condition::KeyMatch(KeyMatchCondition {
+        let valid_skip = Condition::KeyMatch(KeyMatchCondition {
             key: KeyGet::Path,
             value: None,
             values: None,
@@ -773,26 +952,95 @@ mod tests {
             values_set: None,
             compiled_regex: None,
         });
-        let mut conds = PluginConditions::default();
-        conds.skip = Some(vec![invalid, valid]);
+        let invalid_repeat = Condition::Include(IncludeCondition {
+            key: KeyGet::Path,
+            values: None,
+            regex: Some(vec!["*foo".to_string()]),
+            values_set: None,
+            wildcard_patterns: None,
+            compiled_regex: None,
+        });
+        let valid_run = Condition::Exclude(ExcludeCondition {
+            key: KeyGet::Path,
+            values: None,
+            regex: Some(vec![r"^/health$".to_string()]),
+            values_set: None,
+            wildcard_patterns: None,
+            compiled_regex: None,
+        });
+        let invalid_paren = Condition::Exclude(ExcludeCondition {
+            key: KeyGet::Path,
+            values: None,
+            regex: Some(vec!["(unclosed".to_string()]),
+            values_set: None,
+            wildcard_patterns: None,
+            compiled_regex: None,
+        });
+        let mut conds = PluginConditions {
+            skip: Some(vec![invalid_bracket, valid_skip, invalid_repeat]),
+            run: Some(vec![valid_run, invalid_paren]),
+        };
 
-        let result = conds.compile();
-        assert!(result.is_err(), "should return the first regex compile error");
+        let errs = conds.compile().expect_err("should collect every regex compile error");
+        assert_eq!(errs.len(), 3, "must report all 3 invalid patterns, not just the first");
 
         let skip = conds.skip.as_ref().unwrap();
-        // Invalid condition: regex cleared, compiled_regex still None
+        // skip[0] invalid → regex cleared
         if let Condition::KeyMatch(c) = &skip[0] {
-            assert!(c.regex.is_none(), "failed condition's regex must be cleared");
+            assert!(c.regex.is_none(), "skip[0] regex must be cleared");
             assert!(c.compiled_regex.is_none());
         } else {
-            panic!("expected KeyMatch");
+            panic!("expected KeyMatch at skip[0]");
         }
-        // Valid condition: compiled successfully despite the earlier failure
+        // skip[1] valid → compiled
         if let Condition::KeyMatch(c) = &skip[1] {
-            assert!(c.compiled_regex.is_some(), "valid condition must be compiled");
+            assert!(c.compiled_regex.is_some(), "skip[1] valid condition must be compiled");
         } else {
-            panic!("expected KeyMatch");
+            panic!("expected KeyMatch at skip[1]");
         }
+        // skip[2] invalid → regex cleared
+        if let Condition::Include(c) = &skip[2] {
+            assert!(c.regex.is_none(), "skip[2] regex must be cleared");
+            assert!(c.compiled_regex.is_none());
+        } else {
+            panic!("expected Include at skip[2]");
+        }
+
+        let run = conds.run.as_ref().unwrap();
+        // run[0] valid → compiled
+        if let Condition::Exclude(c) = &run[0] {
+            assert!(c.compiled_regex.is_some(), "run[0] valid condition must be compiled");
+        } else {
+            panic!("expected Exclude at run[0]");
+        }
+        // run[1] invalid → regex cleared
+        if let Condition::Exclude(c) = &run[1] {
+            assert!(c.regex.is_none(), "run[1] regex must be cleared");
+            assert!(c.compiled_regex.is_none());
+        } else {
+            panic!("expected Exclude at run[1]");
+        }
+    }
+
+    #[test]
+    fn test_plugin_conditions_validate_collects_all_errors() {
+        // Two TimeRange conditions with malformed bounds across skip and run.
+        // validate() must return both errors (not just the first), in skip → run order.
+        let bad_after = Condition::TimeRange(TimeRangeCondition {
+            after: Some("not-a-timestamp".to_string()),
+            before: None,
+        });
+        let bad_before = Condition::TimeRange(TimeRangeCondition {
+            after: None,
+            before: Some("also-bad".to_string()),
+        });
+        let conds = PluginConditions {
+            skip: Some(vec![bad_after]),
+            run: Some(vec![bad_before]),
+        };
+
+        let errs = conds.validate().expect_err("should collect every validate error");
+        assert_eq!(errs.len(), 2, "must report both malformed bounds, not just the first");
     }
 
     #[test]

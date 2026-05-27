@@ -49,6 +49,16 @@ Edgion 现在把 stream plugin 分成两个阶段：
 - 按 SNI 或 mTLS 状态做限制
 - 只在某条 `TLSRoute` 命中后执行策略
 
+#### 向下兼容：回退到 Stage 1
+
+`run_tls_route_plugins`（`src/core/gateway/routes/tls/mod.rs`）会优先执行 Stage 2 runtime。如果引用的 `EdgionStreamPlugins` 资源里 `tlsRoutePlugins` 为空（典型情况：老资源只声明了 Stage 1 的 `plugins`），运行时会回退到在 TLS 路由层执行 Stage 1（`ConnectionFilter`）策略，从而保证只挂在 `plugins` 上的 IP 限制等策略仍然生效。
+
+运维注意：
+
+- 该回退路径只通过 access log 体现，不会写 `tracing`。允许的连接会记录 `stream plugin allowed (compat)`；拒绝的连接会设置 `ctx.err_log = "stream plugin denied (compat): <reason>"`。在 TLS access log（`tls.log`）里搜 `(compat)` 后缀即可判断走的是哪一阶段。
+- 兼容路径在 hot-path 上故意保持 tracing 静默，激活时不会有 `tracing::*` 事件，与「数据面零 tracing」准则一致（见 `skills/03-coding/01-log-safety.md` Iron Rule 3）。
+- **升级时的静默切换风险**：如果之后给同一个 `EdgionStreamPlugins` 资源加上 `tlsRoutePlugins` 条目，下一次热更新后 Stage 1 兼容回退会在 TLS 路由层静默停跑 —— Stage 2 会优先生效，老的 `plugins` 列表不再被 `run_tls_route_plugins` 调用。升级前需要先决定：要么在添加第一条 Stage 2 条目前先把策略复制到 `tlsRoutePlugins`，要么接受行为变化并在热更新后用 tcp.log / tls.log 验证。
+
 ## 当前架构里的关键链路
 
 ```mermaid

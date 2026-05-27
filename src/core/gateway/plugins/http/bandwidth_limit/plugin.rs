@@ -54,7 +54,15 @@ impl BandwidthLimit {
     /// Create a new BandwidthLimit plugin from config
     ///
     /// Returns a boxed UpstreamResponseBodyFilter trait object.
-    /// If the rate cannot be parsed, creates a no-op instance (rate_bps = 0) that logs an error.
+    ///
+    /// The `unwrap_or(0)` below is a defensive sentinel: a `rate_bps` of 0 short-circuits
+    /// `run_upstream_response_body_filter` to `None` (throttling silently disabled). In
+    /// production this branch is unreachable — `PluginRuntime::add_from_upstream_response_body_filters`
+    /// calls `BandwidthLimitConfig::validation_error()` before construction, and an
+    /// unparseable `rate` is rejected there with "invalid rate format..." which
+    /// `seal_fail_closed` promotes into a fail-closed 500 + K8s status condition. The
+    /// sentinel is only exercised by unit tests that build the plugin directly without
+    /// going through the runtime validation gate.
     pub fn create(config: &BandwidthLimitConfig) -> Box<dyn UpstreamResponseBodyFilter> {
         let rate_bps = config.parse_rate().unwrap_or(0);
 

@@ -150,8 +150,15 @@ impl RateLimit {
                 .unwrap_or_else(|_| ResponseHeader::build(429, None).expect("429 is valid")),
         );
         resp.insert_header("Content-Type", "application/json").ok();
-        resp.insert_header("Retry-After", retry_after.as_secs().to_string())
-            .ok();
+        // RFC 7231 §7.1.3: Retry-After is a delta-seconds integer; "0" tells
+        // RFC-compliant clients to retry immediately and risks a hot-loop under
+        // pressure. Omit the header for Duration::ZERO (OnMissingKey::Deny path)
+        // and ceil any positive sub-second value to 1. Mirrors the sibling
+        // rate_limit_redis guard (g4-005).
+        if !retry_after.is_zero() {
+            let secs = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
+            resp.insert_header("Retry-After", secs.to_string()).ok();
+        }
 
         // Add rate limit headers (all controlled by show_limit_headers)
         if self.config.show_limit_headers {

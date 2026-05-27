@@ -1,8 +1,6 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::select;
 
 use pingora_core::apps::ServerApp;
 use pingora_core::connectors::TransportConnector;
@@ -17,6 +15,7 @@ use crate::core::gateway::observe::{log_tcp, TcpLogEntry};
 use crate::core::gateway::plugins::stream::get_global_stream_plugin_store;
 use crate::core::gateway::plugins::{StreamContext, StreamPluginResult};
 use crate::core::gateway::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
+use crate::core::gateway::routes::l4_duplex::{bidirectional_relay, DuplexError, DuplexHooks};
 use crate::core::gateway::routes::tcp::TcpPortRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::ListenerKey;
@@ -185,56 +184,8 @@ impl EdgionTcpProxy {
         self.duplex(downstream, upstream, ctx).await;
     }
 
-    async fn duplex(&self, mut downstream: Stream, mut upstream: Stream, ctx: &mut TcpContext) {
-        const BUFFER_SIZE: usize = 8192;
-        let mut client_to_upstream_buf = vec![0u8; BUFFER_SIZE];
-        let mut upstream_to_client_buf = vec![0u8; BUFFER_SIZE];
-
-        loop {
-            select! {
-                result = downstream.read(&mut client_to_upstream_buf) => {
-                    match result {
-                        Ok(0) => {
-                            break;
-                        }
-                        Ok(n) => {
-                            ctx.bytes_sent += n as u64;
-                            if (upstream.write_all(&client_to_upstream_buf[0..n]).await).is_err() {
-                                ctx.status = TcpStatus::UpstreamWriteError;
-                                break;
-                            }
-                        }
-                        Err(_) => {
-                            ctx.status = TcpStatus::DownstreamReadError;
-                            break;
-                        }
-                    }
-                }
-                result = upstream.read(&mut upstream_to_client_buf) => {
-                    match result {
-                        Ok(0) => {
-                            break;
-                        }
-                        Ok(n) => {
-                            ctx.bytes_received += n as u64;
-                            if (downstream.write_all(&upstream_to_client_buf[0..n]).await).is_err() {
-                                ctx.status = TcpStatus::DownstreamWriteError;
-                                break;
-                            }
-                            // Listener streams buffer writes; flush client-facing bytes promptly.
-                            if (downstream.flush().await).is_err() {
-                                ctx.status = TcpStatus::DownstreamWriteError;
-                                break;
-                            }
-                        }
-                        Err(_) => {
-                            ctx.status = TcpStatus::UpstreamReadError;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+    async fn duplex(&self, downstream: Stream, upstream: Stream, ctx: &mut TcpContext) {
+        bidirectional_relay(downstream, upstream, TcpDuplexHooks { ctx }).await;
     }
 
     async fn log_connection(&self, ctx: &TcpContext) {
@@ -249,6 +200,39 @@ impl EdgionTcpProxy {
             .as_ref()
             .map(|s| s.allow_loopback_upstream)
             .unwrap_or(false)
+    }
+}
+
+/// [`DuplexHooks`] for the plain TCP proxy.
+///
+/// - Byte counters increment `TcpContext::bytes_sent` / `bytes_received` directly
+///   (TCP has no per-attempt upstream split, unlike TLS).
+/// - Errors are recorded as `TcpStatus` enum variants on the context. The
+///   `DownstreamFlush` variant intentionally maps to `DownstreamWriteError` —
+///   matching the prior inlined behavior and aligning with `DuplexError`'s
+///   documented "callers that do not distinguish flush from write" guidance.
+struct TcpDuplexHooks<'a> {
+    ctx: &'a mut TcpContext,
+}
+
+impl DuplexHooks for TcpDuplexHooks<'_> {
+    fn record_sent(&mut self, n: usize) {
+        self.ctx.bytes_sent += n as u64;
+    }
+
+    fn record_received(&mut self, n: usize) {
+        self.ctx.bytes_received += n as u64;
+    }
+
+    fn on_error(&mut self, err: DuplexError) {
+        self.ctx.status = match err {
+            DuplexError::UpstreamWrite => TcpStatus::UpstreamWriteError,
+            DuplexError::DownstreamRead => TcpStatus::DownstreamReadError,
+            DuplexError::DownstreamWrite => TcpStatus::DownstreamWriteError,
+            // Collapse flush failure into DownstreamWriteError to match prior behavior.
+            DuplexError::DownstreamFlush => TcpStatus::DownstreamWriteError,
+            DuplexError::UpstreamRead => TcpStatus::UpstreamReadError,
+        };
     }
 }
 

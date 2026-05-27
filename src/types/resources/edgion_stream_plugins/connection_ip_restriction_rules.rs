@@ -8,9 +8,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 
-use crate::core::common::matcher::ip_cidr_helpers::build_grouped_matcher;
+use crate::core::common::matcher::ip_cidr_helpers::{
+    build_grouped_matcher, evaluate_ip_access, validate_groups_structure,
+};
 use crate::core::common::matcher::ip_radix_tree::IpRadixMatcher;
-use crate::types::resources::edgion_plugins::{AccessDecision, DefaultAction};
+use crate::types::resources::edgion_plugins::{AccessDecision, DefaultAction, PluginValidation};
 use crate::types::resources::plugin_metadata::IpGroup;
 
 /// Legacy HTTP-layer field names that must be flagged when found on L4 configs.
@@ -96,19 +98,44 @@ impl ConnectionIpRestrictionRules {
     /// Returns the full access decision (group name included).
     ///
     /// Priority: deny > allow > default_action. See spec §4.6.
+    /// Delegates to the shared `evaluate_ip_access` so the L4, HTTP, and
+    /// global-connection IP-restriction paths cannot drift.
     pub fn check_ip(&self, ip: &IpAddr) -> AccessDecision {
-        if let Some(deny) = &self.deny_matcher {
-            if let Some(g) = deny.matched_group_arc(ip) {
-                return AccessDecision::DenyByGroup(g);
+        evaluate_ip_access(
+            self.deny_matcher.as_ref(),
+            self.allow_matcher.as_ref(),
+            &self.default_action,
+            ip,
+        )
+    }
+}
+
+/// Stateless structural validation mirroring HTTP `IpRestrictionConfig`. The
+/// controller preparse calls this instead of the side-effectful
+/// `validate_and_init` (which builds radix matchers and is reserved for the
+/// data-plane builders in `StreamIpRestriction::new`).
+impl PluginValidation for ConnectionIpRestrictionRules {
+    fn validation_error(&self) -> Option<String> {
+        let allow_nonempty = self.allow.as_ref().is_some_and(|v| !v.is_empty());
+        let deny_nonempty = self.deny.as_ref().is_some_and(|v| !v.is_empty());
+        if !allow_nonempty && !deny_nonempty {
+            return Some("At least one of 'allow' or 'deny' must be non-empty".to_string());
+        }
+        if let Some(groups) = &self.allow {
+            if !groups.is_empty() {
+                if let Err(e) = validate_groups_structure(groups) {
+                    return Some(e);
+                }
             }
         }
-        if let Some(allow) = &self.allow_matcher {
-            if let Some(g) = allow.matched_group_arc(ip) {
-                return AccessDecision::AllowByGroup(g);
+        if let Some(groups) = &self.deny {
+            if !groups.is_empty() {
+                if let Err(e) = validate_groups_structure(groups) {
+                    return Some(e);
+                }
             }
-            return AccessDecision::DenyByWhitelistMiss;
         }
-        AccessDecision::Default(self.default_action.clone())
+        None
     }
 }
 
@@ -258,6 +285,36 @@ mod tests {
         r.validate_and_init().unwrap();
         let outside: IpAddr = "10.0.0.1".parse().unwrap();
         assert!(matches!(r.check_ip(&outside), AccessDecision::DenyByWhitelistMiss));
+    }
+
+    #[test]
+    fn validation_error_both_none_reports_missing_lists() {
+        let rules = ConnectionIpRestrictionRules::default();
+        assert_eq!(
+            rules.validation_error(),
+            Some("At least one of 'allow' or 'deny' must be non-empty".to_string())
+        );
+    }
+
+    #[test]
+    fn validation_error_is_stateless_and_keeps_matchers_unset() {
+        let rules = ConnectionIpRestrictionRules {
+            allow: Some(vec![group("office", &["192.168.1.0/24"])]),
+            ..Default::default()
+        };
+        assert!(rules.validation_error().is_none());
+        // Stateless: must not have built matchers as a side effect.
+        assert!(rules.allow_matcher.is_none());
+        assert!(rules.deny_matcher.is_none());
+    }
+
+    #[test]
+    fn validation_error_surfaces_invalid_cidr() {
+        let rules = ConnectionIpRestrictionRules {
+            allow: Some(vec![group("bad", &["not-an-ip"])]),
+            ..Default::default()
+        };
+        assert!(rules.validation_error().is_some());
     }
 
     #[test]

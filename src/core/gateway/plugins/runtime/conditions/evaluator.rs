@@ -11,6 +11,7 @@ use crate::core::gateway::plugins::runtime::log::PluginLog;
 use crate::core::gateway::plugins::runtime::PluginSession;
 use chrono::Utc;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
 /// Result of condition evaluation
@@ -400,34 +401,15 @@ impl IncludeCondition {
 
     /// Check if a value matches any of the configured patterns
     fn matches_value(&self, value: &str, log: Option<&mut PluginLog>) -> bool {
-        // 1. Check HashSet first for O(1) exact match lookup
-        if let Some(set) = &self.values_set {
-            if set.contains(value) {
-                return true;
-            }
-        }
-
-        // 2. Check wildcard patterns
-        if let Some(patterns) = &self.values {
-            for pattern in patterns {
-                if matches_pattern(value, pattern) {
-                    return true;
-                }
-            }
-        }
-
-        // 3. Check compiled regex (merged from all patterns)
-        if let Some(compiled) = &self.compiled_regex {
-            if compiled.is_match(value) {
-                return true;
-            }
-        } else if self.regex.as_ref().map_or(false, |p| !p.is_empty()) {
-            if let Some(log) = log {
-                log.push_err("regex not compiled");
-            }
-        }
-
-        false
+        matches_pattern_set(
+            value,
+            self.values_set.as_ref(),
+            self.wildcard_patterns.as_deref(),
+            self.values.as_deref(),
+            self.compiled_regex.as_ref(),
+            self.regex.as_deref(),
+            log,
+        )
     }
 }
 
@@ -453,35 +435,70 @@ impl ExcludeCondition {
 
     /// Check if a value matches any of the configured patterns (excluded)
     fn matches_value(&self, value: &str, log: Option<&mut PluginLog>) -> bool {
-        // 1. Check HashSet first for O(1) exact match lookup
-        if let Some(set) = &self.values_set {
-            if set.contains(value) {
-                return true;
-            }
-        }
-
-        // 2. Check wildcard patterns
-        if let Some(patterns) = &self.values {
-            for pattern in patterns {
-                if matches_pattern(value, pattern) {
-                    return true;
-                }
-            }
-        }
-
-        // 3. Check compiled regex (merged from all patterns)
-        if let Some(compiled) = &self.compiled_regex {
-            if compiled.is_match(value) {
-                return true;
-            }
-        } else if self.regex.as_ref().map_or(false, |p| !p.is_empty()) {
-            if let Some(log) = log {
-                log.push_err("regex not compiled");
-            }
-        }
-
-        false
+        matches_pattern_set(
+            value,
+            self.values_set.as_ref(),
+            self.wildcard_patterns.as_deref(),
+            self.values.as_deref(),
+            self.compiled_regex.as_ref(),
+            self.regex.as_deref(),
+            log,
+        )
     }
+}
+
+/// Shared pattern-set matcher used by both `IncludeCondition::matches_value` and
+/// `ExcludeCondition::matches_value`. The two conditions store identical pattern data
+/// and run identical lookup logic — Include returns this directly, Exclude negates it
+/// in its evaluate wrappers.
+#[inline]
+fn matches_pattern_set(
+    value: &str,
+    values_set: Option<&HashSet<String>>,
+    wildcard_patterns: Option<&[String]>,
+    values: Option<&[String]>,
+    compiled_regex: Option<&regex::Regex>,
+    regex: Option<&[String]>,
+    log: Option<&mut PluginLog>,
+) -> bool {
+    // 1. Check HashSet first for O(1) exact match lookup
+    if let Some(set) = values_set {
+        if set.contains(value) {
+            return true;
+        }
+    }
+
+    // 2. Iterate the wildcard-only bucket when compile() split the values; otherwise
+    //    fall back to scanning the full `values` list (small list, no HashSet built).
+    //    The `else if` is critical: when `wildcard_patterns` is present, `values_set`
+    //    already covers every exact entry, so re-iterating `values` here would
+    //    repeat the exact-match work for nothing on the miss path.
+    if let Some(patterns) = wildcard_patterns {
+        for pattern in patterns {
+            if matches_pattern(value, pattern) {
+                return true;
+            }
+        }
+    } else if let Some(patterns) = values {
+        for pattern in patterns {
+            if matches_pattern(value, pattern) {
+                return true;
+            }
+        }
+    }
+
+    // 3. Check compiled regex (merged from all patterns)
+    if let Some(compiled) = compiled_regex {
+        if compiled.is_match(value) {
+            return true;
+        }
+    } else if regex.map_or(false, |p| !p.is_empty()) {
+        if let Some(log) = log {
+            log.push_err("regex not compiled");
+        }
+    }
+
+    false
 }
 
 /// Match value against pattern
@@ -602,6 +619,7 @@ mod tests {
                     values: Some(vec!["GET".to_string(), "POST".to_string()]),
                     regex: None,
                     values_set: None,
+                    wildcard_patterns: None,
                     compiled_regex: None,
                 }),
             ]),
@@ -634,6 +652,7 @@ mod tests {
                     values: Some(vec!["POST".to_string()]),
                     regex: None,
                     values_set: None,
+                    wildcard_patterns: None,
                     compiled_regex: None,
                 }),
             ]),
@@ -768,6 +787,7 @@ mod tests {
             values: Some(vec!["/api/*".to_string(), "/admin/*".to_string()]),
             regex: None,
             values_set: None,
+            wildcard_patterns: None,
             compiled_regex: None,
         };
 
@@ -793,6 +813,7 @@ mod tests {
             ]),
             regex: None,
             values_set: None,
+            wildcard_patterns: None,
             compiled_regex: None,
         };
 

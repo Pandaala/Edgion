@@ -19,6 +19,7 @@ use pingora_core::upstreams::peer::BasicPeer;
 
 use super::proxy::{TlsContext, TlsUpstreamInfo};
 use super::sni_parser;
+use super::TlsDuplexHooks;
 use super::TlsRouteManager;
 use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
 use crate::core::gateway::backends::{
@@ -27,6 +28,7 @@ use crate::core::gateway::backends::{
 use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::routes::common::{is_core_service_backend_ref, UNSAFE_UPSTREAM_ADDRESS_LOG};
+use crate::core::gateway::routes::l4_duplex::bidirectional_relay;
 use crate::core::gateway::runtime::matching::route::hostname_matches_listener;
 use crate::core::gateway::runtime::store::get_listener_gateway_info_store;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -360,56 +362,8 @@ impl EdgionTlsPassthroughProxy {
     }
 
     /// Bidirectional data transfer between downstream and upstream.
-    async fn duplex(&self, mut downstream: Stream, mut upstream: Stream, ctx: &mut TlsContext) {
-        const BUFFER_SIZE: usize = 8192;
-        let mut client_to_upstream_buf = vec![0u8; BUFFER_SIZE];
-        let mut upstream_to_client_buf = vec![0u8; BUFFER_SIZE];
-
-        loop {
-            tokio::select! {
-                result = downstream.read(&mut client_to_upstream_buf) => {
-                    match result {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if let Some(info) = ctx.current_upstream_mut() {
-                                info.bytes_sent += n as u64;
-                            }
-                            if (upstream.write_all(&client_to_upstream_buf[..n]).await).is_err() {
-                                ctx.err_log = Some("upstream write err".to_string());
-                                return;
-                            }
-                        }
-                        Err(_) => {
-                            ctx.err_log = Some("downstream read err".to_string());
-                            return;
-                        }
-                    }
-                }
-                result = upstream.read(&mut upstream_to_client_buf) => {
-                    match result {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if let Some(info) = ctx.current_upstream_mut() {
-                                info.bytes_received += n as u64;
-                            }
-                            if (downstream.write_all(&upstream_to_client_buf[..n]).await).is_err() {
-                                ctx.err_log = Some("downstream write err".to_string());
-                                return;
-                            }
-                            // Listener streams buffer writes; flush client-facing bytes promptly.
-                            if (downstream.flush().await).is_err() {
-                                ctx.err_log = Some("downstream flush err".to_string());
-                                return;
-                            }
-                        }
-                        Err(_) => {
-                            ctx.err_log = Some("upstream read err".to_string());
-                            return;
-                        }
-                    }
-                }
-            }
-        }
+    async fn duplex(&self, downstream: Stream, upstream: Stream, ctx: &mut TlsContext) {
+        bidirectional_relay(downstream, upstream, TlsDuplexHooks { ctx }).await;
     }
 
     /// Check if any listener on this port accepts the given SNI hostname.

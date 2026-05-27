@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 
 use crate::core::common::matcher::ip_radix_tree::IpRadixMatcher;
+use crate::types::resources::edgion_plugins::{AccessDecision, DefaultAction};
 use crate::types::resources::plugin_metadata::IpGroup;
 
 pub use crate::types::resources::common::group_name::validate_group_name;
@@ -99,6 +100,40 @@ pub fn build_grouped_matcher(groups: &[IpGroup]) -> Result<IpRadixMatcher, Strin
     builder
         .build()
         .map_err(|e| format!("Failed to build IpRadixMatcher: {}", e))
+}
+
+/// Evaluate an IP against `deny`/`allow` matchers with the canonical
+/// deny > allow > default priority used by every IP-restriction plugin
+/// (HTTP `IpRestrictionConfig`, L4 `ConnectionIpRestrictionRules`, and
+/// the cluster-scope `GlobalConnectionIpRestriction` profile).
+///
+/// Behaviour:
+/// - `deny` match wins → `DenyByGroup(g)`.
+/// - `allow` is present and matches → `AllowByGroup(g)`.
+/// - `allow` is present but does not match → `DenyByWhitelistMiss`.
+/// - `allow` is absent → fall through to `Default(default_action.clone())`.
+///
+/// Keeping the algorithm in one place prevents the three call sites from
+/// silently diverging when the priority or returned variants change. See
+/// spec §4.6 truth table.
+pub fn evaluate_ip_access(
+    deny: Option<&IpRadixMatcher>,
+    allow: Option<&IpRadixMatcher>,
+    default_action: &DefaultAction,
+    ip: &IpAddr,
+) -> AccessDecision {
+    if let Some(d) = deny {
+        if let Some(g) = d.matched_group_arc(ip) {
+            return AccessDecision::DenyByGroup(g);
+        }
+    }
+    if let Some(a) = allow {
+        if let Some(g) = a.matched_group_arc(ip) {
+            return AccessDecision::AllowByGroup(g);
+        }
+        return AccessDecision::DenyByWhitelistMiss;
+    }
+    AccessDecision::Default(default_action.clone())
 }
 
 #[cfg(test)]

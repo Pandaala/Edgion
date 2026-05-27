@@ -2,8 +2,7 @@ use async_trait::async_trait;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::select;
+use tokio::io::AsyncWriteExt;
 
 use pingora_core::apps::ServerApp;
 use pingora_core::connectors::TransportConnector;
@@ -21,12 +20,13 @@ use crate::core::gateway::observe::log_tls;
 use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::routes::common::{is_core_service_backend_ref, UNSAFE_UPSTREAM_ADDRESS_LOG};
+use crate::core::gateway::routes::l4_duplex::bidirectional_relay;
 use crate::core::gateway::routes::tls::TlsRouteManager;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::{ListenerKey, MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
 use serde::Serialize;
 
-use super::tls_connect_retry_backoff;
+use super::{tls_connect_retry_backoff, TlsDuplexHooks};
 
 fn is_zero_u64(v: &u64) -> bool {
     *v == 0
@@ -385,62 +385,8 @@ impl EdgionTlsTcpProxy {
     }
 
     /// Bidirectional data transfer between downstream (TLS-terminated) and upstream (TCP)
-    async fn duplex(&self, mut downstream: Stream, mut upstream: Stream, ctx: &mut TlsContext) {
-        const BUFFER_SIZE: usize = 8192;
-        let mut client_to_upstream_buf = vec![0u8; BUFFER_SIZE];
-        let mut upstream_to_client_buf = vec![0u8; BUFFER_SIZE];
-
-        loop {
-            select! {
-                // Client → Upstream
-                result = downstream.read(&mut client_to_upstream_buf) => {
-                    match result {
-                        Ok(0) => {
-                            break;
-                        }
-                        Ok(n) => {
-                            if let Some(upstream_info) = ctx.current_upstream_mut() {
-                                upstream_info.bytes_sent += n as u64;
-                            }
-                            if (upstream.write_all(&client_to_upstream_buf[0..n]).await).is_err() {
-                                ctx.err_log = Some("upstream write err".to_string());
-                                return;
-                            }
-                        }
-                        Err(_) => {
-                            ctx.err_log = Some("downstream read err".to_string());
-                            return;
-                        }
-                    }
-                }
-                // Upstream → Client
-                result = upstream.read(&mut upstream_to_client_buf) => {
-                    match result {
-                        Ok(0) => {
-                            break;
-                        }
-                        Ok(n) => {
-                            if let Some(upstream_info) = ctx.current_upstream_mut() {
-                                upstream_info.bytes_received += n as u64;
-                            }
-                            if (downstream.write_all(&upstream_to_client_buf[0..n]).await).is_err() {
-                                ctx.err_log = Some("downstream write err".to_string());
-                                return;
-                            }
-                            // Listener streams buffer writes; flush client-facing bytes promptly.
-                            if (downstream.flush().await).is_err() {
-                                ctx.err_log = Some("downstream flush err".to_string());
-                                return;
-                            }
-                        }
-                        Err(_) => {
-                            ctx.err_log = Some("upstream read err".to_string());
-                            return;
-                        }
-                    }
-                }
-            }
-        }
+    async fn duplex(&self, downstream: Stream, upstream: Stream, ctx: &mut TlsContext) {
+        bidirectional_relay(downstream, upstream, TlsDuplexHooks { ctx }).await;
     }
 
     fn is_tls_proxy_log_enabled(&self) -> bool {

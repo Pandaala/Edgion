@@ -4,6 +4,7 @@
 //! Supports HS256/HS384/HS512 (symmetric) and RS256/RS384/RS512, ES256/ES384 (asymmetric).
 //! All credentials come from controller-resolved issuer groups (no runtime Secret fetch).
 
+use crate::core::gateway::plugins::http::common::auth_common::apply_auth_failure_delay;
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -57,7 +58,7 @@ impl RequestFilter for JwtAuth {
                     return PluginRunningResult::GoodNext;
                 }
                 // Apply failure delay before returning 401
-                self.apply_auth_failure_delay().await;
+                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 // No credentials present: omit the RFC 6750 error code (SHOULD NOT).
                 let _ = self.auth_failed_return(session, None).await;
                 return PluginRunningResult::ErrTerminateRequest;
@@ -86,7 +87,7 @@ impl RequestFilter for JwtAuth {
             Err(_) => {
                 // Specific `Deny <kind>; ` tag was already pushed inside verify_jwt.
                 // Token present but invalid/expired -- always reject, never allow anonymous.
-                self.apply_auth_failure_delay().await;
+                apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
                 let _ = self.auth_failed_return(session, Some("invalid_token")).await;
                 PluginRunningResult::ErrTerminateRequest
             }

@@ -6,7 +6,6 @@
 
 use parking_lot::RwLock;
 use std::sync::Arc;
-use std::time::Duration;
 
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce, Tag};
@@ -15,7 +14,9 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
-use crate::core::gateway::plugins::http::common::auth_common::{send_gateway_auth_error_response, set_claims_headers};
+use crate::core::gateway::plugins::http::common::auth_common::{
+    apply_auth_failure_delay, send_gateway_auth_error_response, set_claims_headers,
+};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{JweContentEncryption, JweDecryptConfig};
@@ -121,12 +122,6 @@ impl JweDecrypt {
         value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0')
     }
 
-    async fn apply_auth_failure_delay(&self) {
-        if self.config.auth_failure_delay_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(self.config.auth_failure_delay_ms)).await;
-        }
-    }
-
     async fn reject(
         &self,
         session: &mut dyn PluginSession,
@@ -144,7 +139,7 @@ impl JweDecrypt {
                 plugin_log.push(failure.log_code());
             }
         }
-        self.apply_auth_failure_delay().await;
+        apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
         let _ =
             send_gateway_auth_error_response(session, failure.status(), "Bearer", "edgion", None, failure.message())
                 .await;
@@ -160,7 +155,7 @@ impl JweDecrypt {
         log_code: &str,
     ) -> PluginRunningResult {
         plugin_log.push(log_code);
-        self.apply_auth_failure_delay().await;
+        apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
         let _ = send_gateway_auth_error_response(session, status, "Bearer", "edgion", None, message).await;
         PluginRunningResult::ErrTerminateRequest
     }

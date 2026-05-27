@@ -908,8 +908,7 @@ impl PluginRuntime {
         self.upstream_response_plugins.push(filter);
     }
 
-    pub fn add_upstream_response_body_filter(&mut self, filter: Box<dyn UpstreamResponseBodyFilter>) {
-        tracing::info!("PluginRuntime: adding body filter '{}'", filter.name());
+    fn add_upstream_response_body_filter(&mut self, filter: Box<dyn UpstreamResponseBodyFilter>) {
         self.upstream_response_body_plugins.push(filter);
     }
 

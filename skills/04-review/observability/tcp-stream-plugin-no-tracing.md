@@ -98,7 +98,8 @@ reporting that no such counter has landed yet.
 - Decision date: 2026-05-24 (re-report 1 + 2); 2026-05-26 extension for
   re-report (3) — listener-level `StreamPluginConnectionFilter` deny.
 - Source issues: `tasks/review-2/gateway-routes-01-tcp-stream-plugin-tracing-on-hot-path.md` (closed),
-  `tasks/plugins/plugins-stream-FB02-gateway-filter-denial-reason-silently-discarded.md` (closed 2026-05-26)
+  `tasks/plugins/plugins-stream-FB02-gateway-filter-denial-reason-silently-discarded.md` (closed 2026-05-26),
+  `tasks/plugins/plugins-stream-FB01-tcp-hot-path-tracing-warn-store-miss.md` (closed 2026-05-27 — re-report of the store-miss branch warn, already removed in the 2026-05-24 fix)
 - Same class as gateway-routes-04 ([global-plugins-resolve-no-tracing.md](global-plugins-resolve-no-tracing.md))
   and P3-g4-008 ([../cors/force-wildcard-no-tracing-warn.md](../cors/force-wildcard-no-tracing-warn.md)):
   a warn on a per-request/per-connection data-plane helper, removed because the

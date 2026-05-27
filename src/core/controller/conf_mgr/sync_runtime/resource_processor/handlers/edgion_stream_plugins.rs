@@ -9,6 +9,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_types, HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
 };
 use crate::types::prelude_resources::{EdgionStreamPlugins, PluginMetaData};
+use crate::types::resources::edgion_plugins::PluginValidation;
 use crate::types::resources::edgion_stream_plugins::{
     EdgionStreamPlugin, EdgionStreamPluginsStatus, TlsRouteStreamPlugin,
 };
@@ -80,12 +81,14 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         // runtime builders (`from_stream_plugins` / `from_entries`) which never construct a
         // disabled plugin — a parked broken config must not flip `Accepted` to False.
         //
-        // The structural `validate_and_init()` call reruns exactly what the data-plane plugin
-        // does at construction. Both stage plugins (`StreamIpRestriction::new`,
-        // `TlsRouteIpRestriction::new`) fail closed on an invalid config — every connection
-        // denied — but without surfacing the error here the CR keeps a healthy-looking
-        // `Accepted=True`, i.e. a silent blackhole. Emitting a non-legacy error makes
-        // `update_status` set `Accepted=False` with the `Invalid` reason.
+        // Validation routes through the stateless `PluginValidation::validation_error()`
+        // trait, mirroring the HTTP-plugin preparse pattern. The structural checks match
+        // what the data-plane plugins (`StreamIpRestriction::new`,
+        // `TlsRouteIpRestriction::new`) would hit at construction. Both stage plugins fail
+        // closed on an invalid config — every connection denied — but without surfacing
+        // the error here the CR keeps a healthy-looking `Accepted=True`, i.e. a silent
+        // blackhole. Emitting a non-legacy error makes `update_status` set
+        // `Accepted=False` with the `Invalid` reason.
 
         // Stage 1: ConnectionFilter plugins (pre-TLS, inline L4 `ConnectionIpRestrictionRules`).
         for (idx, entry) in esp.spec.plugins.iter().flatten().enumerate() {
@@ -102,7 +105,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                     ));
                     continue;
                 }
-                if let Err(e) = rules.clone().validate_and_init() {
+                if let Some(e) = rules.validation_error() {
                     errors.push(format!("plugins[{idx}] (IpRestriction): {e}"));
                 }
             }

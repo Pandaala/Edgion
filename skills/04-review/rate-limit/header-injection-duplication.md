@@ -24,9 +24,11 @@ Fix suggestions of the form "extract `write_rate_limit_headers(session, ..)` /
 - **Reset on the allow path**: `rate_limit` emits `X-RateLimit-Reset`; `rate_limit_redis`
   intentionally omits it — the Lua scripts return only `{allowed, current, remaining,
   retry_ms}`, so there is no precise window-reset timestamp for an allowed request.
-- **`Retry-After` rounding**: `rate_limit` truncates (`retry_after.as_secs()`);
-  `rate_limit_redis` ceils sub-second values and omits the header for `Duration::ZERO`.
-  That divergence is itself an accepted decision (g4-005, RFC 7231 §7.1.3).
+- **`Retry-After` emission contract**: both plugins now share the same RFC 7231 §7.1.3
+  guard — omit the header on `Duration::ZERO` (`OnMissingKey::Deny`, and on the Redis side
+  `OnRedisFailure::Deny`) and ceil any positive sub-second value to 1 s (g4-005 for Redis,
+  plugins-http-FB01 for local). This axis no longer differs; the remaining divergences
+  below are still enough to defeat a shared helper.
 - **Header gating on the reject path**: `rate_limit_redis::reject_request` only writes
   limit/remaining/reset when a `result: Option<&RateLimitResult>` is present; `rate_limit`
   always has its values.
@@ -70,8 +72,11 @@ divergent `match` arms into one generic — not accepted).
 - Extract `write_rate_limit_headers` / `write_rate_limit_rejection_headers` shared helpers —
   couples two intentionally-divergent emitters and needs a write-target + value-divergence
   parameterization that does not reduce net complexity.
-- Unify the `Retry-After` rounding across the two plugins — the divergence is an accepted
-  decision (g4-005): Redis ceils + omits `ZERO` per RFC 7231 §7.1.3; local truncates.
+- Re-extract the `Retry-After` guard into a shared helper now that both plugins follow the
+  same RFC 7231 §7.1.3 rule (g4-005 + plugins-http-FB01) — the per-plugin two-line
+  `if !retry_after.is_zero() { ceil-and-insert }` body is short, inline, and lives inside
+  otherwise-divergent `reject_request` bodies; a freestanding helper does not shrink the
+  surface enough to justify the extra indirection.
 - Add the reset header to the Redis allow path "for consistency" — the Lua script returns
   no window-reset timestamp; emitting a fabricated one would be incorrect.
 
@@ -90,6 +95,9 @@ Re-open this decision only if:
 - plugins-http-F004 (2026-05-26) — this finding, accepted tradeoff.
 - plugins-http-F003 — sibling key-extraction (extracted): [key-extraction-shared-helper.md](key-extraction-shared-helper.md).
 - g4-005 — Redis `Retry-After` rounding / `ZERO` omission decision (see [CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md)).
+- plugins-http-FB01 (2026-05-27) — local `rate_limit::reject_request` gained the same
+  `Duration::ZERO` omit + sub-second ceil guard, eliminating the RFC 7231 §7.1.3
+  divergence on `OnMissingKey::Deny` (see [CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md)).
 - link-sys-F008 — same redundancy class, "collapse divergent arms" declined (see [CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md)).
 - Source: `src/core/gateway/plugins/http/rate_limit/plugin.rs:104-202`,
   `src/core/gateway/plugins/http/rate_limit_redis/plugin.rs:372-467`.

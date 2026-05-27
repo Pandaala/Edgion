@@ -246,20 +246,28 @@ impl EdgionPlugins {
     /// 500, and the Controller writes the message into the resource's K8s
     /// status condition.
     fn compile_conditions(&mut self, errors: &mut Vec<String>) {
+        // Both `compile()` and `validate()` now return every error collected
+        // across `skip` and `run`, so a single entry with N bad regex / N
+        // malformed bounds surfaces N preparse_errors strings (one K8s status
+        // condition line per defect) and the operator can fix them in one pass.
         macro_rules! compile_entries {
             ($entries:expr, $label:expr) => {
                 if let Some(entries) = &mut $entries {
                     for (i, entry) in entries.iter_mut().enumerate() {
                         if let Some(conds) = entry.conditions.as_mut() {
-                            if let Err(e) = conds.compile() {
-                                let msg = format!("{}[{}] conditions regex: {}", $label, i, e);
-                                tracing::warn!("{}", msg);
-                                errors.push(msg);
+                            if let Err(errs) = conds.compile() {
+                                for e in errs {
+                                    let msg = format!("{}[{}] conditions regex: {}", $label, i, e);
+                                    tracing::warn!("{}", msg);
+                                    errors.push(msg);
+                                }
                             }
-                            if let Err(e) = conds.validate() {
-                                let msg = format!("{}[{}] conditions: {}", $label, i, e);
-                                tracing::warn!("{}", msg);
-                                errors.push(msg);
+                            if let Err(errs) = conds.validate() {
+                                for e in errs {
+                                    let msg = format!("{}[{}] conditions: {}", $label, i, e);
+                                    tracing::warn!("{}", msg);
+                                    errors.push(msg);
+                                }
                             }
                         }
                     }

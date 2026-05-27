@@ -149,6 +149,8 @@ When allowing anonymous access, the following headers are injected:
 
 > **Accepted tradeoff — cache-hit timing.** A cached credential returns faster than an uncached one (which performs a full LDAP bind). This timing difference only reveals *cache state* (whether an exact `(username, password)` pair was authenticated recently); credential validity is already conveyed by the `200`/`401` status, and triggering a cache hit requires already knowing the full valid credential. No response jitter is added — it would penalize every legitimate authenticated request. Operators who must hide cache membership can set `cacheTtl: 0` to disable caching, and can stack the `RateLimit` plugin to throttle probing.
 
+> **Accepted tradeoff — per-request LDAP connection.** Each cache-miss authentication opens a new TCP (and optional TLS) connection to the LDAP server, runs `simple_bind`, and unbinds immediately. There is no connection pool, because LDAP `simple_bind` is session-rebinding (a successful bind mutates the connection's authenticated identity for the rest of that TCP session): a naive pool that hands sockets across users carries a real cross-identity-leak risk that is strictly worse than the ephemeral-port pressure it would relieve. For high-throughput deployments, keep `cacheTtl` non-zero (60–300 s recommended) so steady-state traffic is absorbed by the in-process cache, and stack `RateLimit` to bound cache-miss bursts. Setting `cacheTtl: 0` means **every** request opens an LDAP connection — only choose it when the LDAP server is sized for that load.
+
 ## Related Documentation
 
 - [BasicAuth Plugin](../http-route/filters/edgion-plugins/basic-auth.md) - Basic username/password authentication

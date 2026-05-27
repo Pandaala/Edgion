@@ -8,7 +8,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
@@ -17,7 +16,9 @@ use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha384, Sha512};
 
-use crate::core::gateway::plugins::http::common::auth_common::send_gateway_auth_error_response;
+use crate::core::gateway::plugins::http::common::auth_common::{
+    apply_auth_failure_delay, send_gateway_auth_error_response,
+};
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::types::filters::PluginRunningResult;
@@ -64,12 +65,6 @@ impl HmacAuth {
             .or_else(|| session.header_value("proxy-authorization"))
     }
 
-    async fn apply_auth_failure_delay(&self) {
-        if self.config.auth_failure_delay_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(self.config.auth_failure_delay_ms)).await;
-        }
-    }
-
     async fn reject(
         &self,
         session: &mut dyn PluginSession,
@@ -79,7 +74,7 @@ impl HmacAuth {
         log_code: &str,
     ) -> PluginRunningResult {
         plugin_log.push(log_code);
-        self.apply_auth_failure_delay().await;
+        apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
         let _ = send_gateway_auth_error_response(session, status, "hmac", &self.config.realm, None, message).await;
         PluginRunningResult::ErrTerminateRequest
     }
@@ -365,7 +360,7 @@ impl RequestFilter for HmacAuth {
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         if self.config.validate_request_body {
             plugin_log.push_err("body not supported");
-            self.apply_auth_failure_delay().await;
+            apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
             let _ = send_gateway_auth_error_response(
                 session,
                 500,
@@ -400,7 +395,7 @@ impl RequestFilter for HmacAuth {
 
         if self.credentials.is_empty() {
             plugin_log.push_err("no creds configured");
-            self.apply_auth_failure_delay().await;
+            apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
             let _ = send_gateway_auth_error_response(
                 session,
                 500,

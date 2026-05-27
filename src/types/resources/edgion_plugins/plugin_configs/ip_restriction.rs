@@ -169,19 +169,16 @@ impl IpRestrictionConfig {
     /// group name.
     ///
     /// Priority: deny > allow > default. See spec §4.6 truth table.
+    /// Delegates to the shared `evaluate_ip_access` so the HTTP, L4, and
+    /// global-connection IP-restriction paths cannot drift.
     pub fn check_ip_access(&self, ip: &IpAddr) -> AccessDecision {
-        if let Some(deny) = &self.deny_matcher {
-            if let Some(g) = deny.matched_group_arc(ip) {
-                return AccessDecision::DenyByGroup(g);
-            }
-        }
-        if let Some(allow) = &self.allow_matcher {
-            if let Some(g) = allow.matched_group_arc(ip) {
-                return AccessDecision::AllowByGroup(g);
-            }
-            return AccessDecision::DenyByWhitelistMiss;
-        }
-        AccessDecision::Default(self.default_action.clone())
+        use crate::core::common::matcher::ip_cidr_helpers::evaluate_ip_access;
+        evaluate_ip_access(
+            self.deny_matcher.as_ref(),
+            self.allow_matcher.as_ref(),
+            &self.default_action,
+            ip,
+        )
     }
 }
 
