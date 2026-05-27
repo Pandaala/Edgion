@@ -3,3 +3,5 @@ certs/
 
 # Dynamically generated Secret manifests (contain certificates, do not commit)
 conf/**/Secret*.yaml
+# Exception: mtls_failclose test fixtures hold static garbage payloads, not real certs
+!conf/EdgionTls/mtls_failclose/Secret*.yaml

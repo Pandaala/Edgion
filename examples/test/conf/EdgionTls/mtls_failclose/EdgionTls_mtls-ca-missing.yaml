@@ -1,0 +1,28 @@
+# tls-F011 case 1: caSecretRef points to a Secret that does NOT exist.
+# Controller admission does not gate CA Secret existence (handlers/edgion_tls.rs:48-88),
+# so this CR reaches the gateway with `client_auth.ca_secret = None`. At handshake
+# time, edgion_tls.ca_cert_pem() returns Err in configure_mtls; the reorder ensures
+# cert/key have not yet been bound and the handshake aborts.
+# Uses edge-tls (wildcard *.example.com SAN) so SAN validation passes and the SNI
+# matcher is populated, allowing apply_edgion_tls_cert to be reached at handshake time.
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: mtls-ca-missing
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: mtls-failclose-gateway
+      namespace: edgion-test
+      sectionName: https-mtls-failclose
+  hosts:
+    - mtls-ca-missing.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test
+  clientAuth:
+    mode: Mutual
+    caSecretRef:
+      name: nonexistent-ca
+      namespace: edgion-test
+    verifyDepth: 1

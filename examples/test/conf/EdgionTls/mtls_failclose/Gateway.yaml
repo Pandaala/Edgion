@@ -1,0 +1,29 @@
+# tls-F011 mtls_failclose Gateway
+# Two HTTPS listeners:
+# - https-mtls-failclose (31199): hosts both EdgionTls fail-close scenarios via per-SNI EdgionTls bindings
+# - https-frontend-mtls-failclose (31340): listener-level frontendValidation with a garbage CA Secret;
+#     exercises the apply_gateway_tls_cert ordering rule.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: mtls-failclose-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: https-mtls-failclose
+      protocol: HTTPS
+      port: 31199
+    - name: https-frontend-mtls-failclose
+      hostname: "frontend-mtls-garbage.example.com"
+      protocol: HTTPS
+      port: 31340
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: fv-server-cert
+        frontendValidation:
+          caCertificateRefs:
+            - name: garbage-frontend-ca
+              kind: Secret
+              group: ""
