@@ -209,6 +209,7 @@ time = { version = "0.3", features = ["std"] }
 mockall = "0.14.0"
 colored = "2.2"
 console = "0.16"
+expect-test = "1.5"
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 proxy-header = "0.1.2"
 tower = "0.5"

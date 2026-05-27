@@ -23,10 +23,7 @@ pub enum StreamPluginResult {
 /// stream IP-restriction call sites — any future format change applies in one
 /// place and downstream consumers parsing deny reasons (metrics labels, audit
 /// logs) stay in sync.
-pub(crate) fn access_decision_to_stream_result(
-    decision: AccessDecision,
-    on_deny: impl FnOnce(),
-) -> StreamPluginResult {
+pub(crate) fn access_decision_to_stream_result(decision: AccessDecision, on_deny: impl FnOnce()) -> StreamPluginResult {
     match decision {
         AccessDecision::AllowByGroup(_) => StreamPluginResult::Allow,
         AccessDecision::DenyByGroup(g) => {

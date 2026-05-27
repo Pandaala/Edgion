@@ -20,10 +20,7 @@ pub struct GlobalConnectionIpRestrictionPlugin {
 
 impl GlobalConnectionIpRestrictionPlugin {
     pub fn new(plugin_metadata_ref: PluginReference, parent_namespace: String) -> Self {
-        let effective_ns = plugin_metadata_ref
-            .namespace
-            .as_deref()
-            .unwrap_or(&parent_namespace);
+        let effective_ns = plugin_metadata_ref.namespace.as_deref().unwrap_or(&parent_namespace);
         let metadata_key = format!("{}/{}", effective_ns, plugin_metadata_ref.name);
         Self { metadata_key }
     }
@@ -37,8 +34,7 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
 
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult {
         let store = get_global_plugin_metadata_store();
-        let Some(pm) = store.get_global_connection_ip_restriction_by_key(&self.metadata_key)
-        else {
+        let Some(pm) = store.get_global_connection_ip_restriction_by_key(&self.metadata_key) else {
             // A configured PM reference that does not resolve is a real
             // misconfiguration (sync is gated by ConfigClient::is_ready before
             // listeners bind) — fail closed, consistent with the L4 ESP paths.

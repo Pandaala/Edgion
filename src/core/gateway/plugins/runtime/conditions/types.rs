@@ -478,7 +478,11 @@ impl PluginConditions {
                 }
             }
         }
-        if errors.is_empty() { Ok(()) } else { Err(errors) }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 
     /// Validate non-regex configuration on every condition. Should be called
@@ -500,7 +504,11 @@ impl PluginConditions {
                 }
             }
         }
-        if errors.is_empty() { Ok(()) } else { Err(errors) }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 }
 
@@ -810,7 +818,10 @@ mod tests {
 
         assert!(condition.compile().is_ok());
 
-        let set = condition.values_set.as_ref().expect("values_set must be built above threshold");
+        let set = condition
+            .values_set
+            .as_ref()
+            .expect("values_set must be built above threshold");
         assert_eq!(set.len(), 20);
         assert!(set.contains("value0"));
 
@@ -820,7 +831,11 @@ mod tests {
             .wildcard_patterns
             .as_ref()
             .expect("wildcard_patterns must be Some(_) (possibly empty) whenever values_set is built");
-        assert!(wildcards.is_empty(), "no wildcard entries in input, but wildcard_patterns = {:?}", wildcards);
+        assert!(
+            wildcards.is_empty(),
+            "no wildcard entries in input, but wildcard_patterns = {:?}",
+            wildcards
+        );
     }
 
     #[test]
@@ -845,14 +860,24 @@ mod tests {
         let set = condition.values_set.as_ref().expect("values_set must be built");
         assert_eq!(set.len(), 17);
         assert!(set.contains("exact0"));
-        assert!(!set.contains("/api/*"), "wildcard entries must not leak into values_set");
+        assert!(
+            !set.contains("/api/*"),
+            "wildcard entries must not leak into values_set"
+        );
 
-        let wildcards = condition.wildcard_patterns.as_ref().expect("wildcard_patterns must be Some(_)");
+        let wildcards = condition
+            .wildcard_patterns
+            .as_ref()
+            .expect("wildcard_patterns must be Some(_)");
         assert_eq!(wildcards.len(), 2);
         assert!(wildcards.contains(&"/api/*".to_string()));
         assert!(wildcards.contains(&"*.png".to_string()));
         for w in wildcards {
-            assert!(w.contains('*'), "wildcard bucket must only hold entries with '*', found {:?}", w);
+            assert!(
+                w.contains('*'),
+                "wildcard bucket must only hold entries with '*', found {:?}",
+                w
+            );
         }
     }
 
@@ -870,14 +895,21 @@ mod tests {
 
         assert!(condition.compile().is_ok());
 
-        let set = condition.values_set.as_ref().expect("values_set must be built above threshold");
+        let set = condition
+            .values_set
+            .as_ref()
+            .expect("values_set must be built above threshold");
         assert_eq!(set.len(), 20);
 
         let wildcards = condition
             .wildcard_patterns
             .as_ref()
             .expect("wildcard_patterns must be Some(_) (possibly empty) whenever values_set is built");
-        assert!(wildcards.is_empty(), "no wildcard entries in input, but wildcard_patterns = {:?}", wildcards);
+        assert!(
+            wildcards.is_empty(),
+            "no wildcard entries in input, but wildcard_patterns = {:?}",
+            wildcards
+        );
     }
 
     #[test]
@@ -899,7 +931,10 @@ mod tests {
         assert_eq!(set.len(), 17);
         assert!(!set.contains("/internal/*"));
 
-        let wildcards = condition.wildcard_patterns.as_ref().expect("wildcard_patterns must be Some(_)");
+        let wildcards = condition
+            .wildcard_patterns
+            .as_ref()
+            .expect("wildcard_patterns must be Some(_)");
         assert_eq!(wildcards.len(), 1);
         assert_eq!(wildcards[0], "/internal/*");
     }

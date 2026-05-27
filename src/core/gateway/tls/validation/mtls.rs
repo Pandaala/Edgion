@@ -83,10 +83,7 @@ mod tests {
             fingerprint: "abc123".to_string(),
         };
 
-        assert!(validate_san_whitelist(
-            &cert_info,
-            &["test.example.com".to_string()]
-        ));
+        assert!(validate_san_whitelist(&cert_info, &["test.example.com".to_string()]));
         assert!(validate_san_whitelist(&cert_info, &["other.com".to_string()]));
         assert!(validate_san_whitelist(&cert_info, &["*.example.com".to_string()]));
     }

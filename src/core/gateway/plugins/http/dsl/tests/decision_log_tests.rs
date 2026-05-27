@@ -6,14 +6,14 @@
 //! paths emit only the `err: ` entry, never a decision token.
 
 use super::*;
+use expect_test::expect;
 
 #[test]
 fn test_decision_log_next_emits_ok() {
     let vm = make_vm("return next()");
     let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
-    assert!(log.contains("OK; "), "expected 'OK; ' in log");
-    assert!(!log.contains("dsl match"), "stale 'dsl match' entry");
+    expect!["OK; "].assert_eq(&log.render_for_test());
 }
 
 #[test]
@@ -21,7 +21,7 @@ fn test_decision_log_implicit_return_emits_ok() {
     let vm = make_vm("let x = 1");
     let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, good_next());
-    assert!(log.contains("OK; "), "expected 'OK; ' in log for implicit return");
+    expect!["OK; "].assert_eq(&log.render_for_test());
 }
 
 #[test]
@@ -29,8 +29,7 @@ fn test_decision_log_deny_emits_status() {
     let vm = make_vm(r#"return deny(403, "blocked")"#);
     let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, err_response_body(403, "blocked"));
-    assert!(log.contains("Deny 403; "), "expected 'Deny 403; ' in log");
-    assert!(!log.contains("dsl match"), "stale 'dsl match' entry");
+    expect!["Deny 403; "].assert_eq(&log.render_for_test());
 }
 
 #[test]
@@ -38,9 +37,7 @@ fn test_decision_log_terminate_emits_deny_once() {
     let vm = make_vm("return terminate()");
     let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-    assert!(log.contains("Deny terminate; "), "expected 'Deny terminate; ' in log");
-    assert!(!log.contains("dsl match"), "stale 'dsl match' entry");
-    assert!(!log.contains("Deny dsl terminate"), "duplicate in-VM terminate entry");
+    expect!["Deny terminate; "].assert_eq(&log.render_for_test());
 }
 
 #[test]
@@ -54,8 +51,7 @@ fn test_decision_log_grpc_error_emits_deny() {
             message: Some("permission denied".to_string()),
         }
     );
-    assert!(log.contains("Deny grpc 7; "), "expected 'Deny grpc 7; ' in log");
-    assert!(!log.contains("dsl match"), "stale 'dsl match' entry");
+    expect!["Deny grpc 7; "].assert_eq(&log.render_for_test());
 }
 
 #[test]
@@ -70,12 +66,21 @@ fn test_decision_log_runtime_error_emits_only_err_entry() {
     );
     let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, err_response_body(500, "DSL execution error"));
-    assert!(log.contains("err: "), "expected 'err: ' entry in log");
-    // The error path must not also push a decision token.
-    assert!(!log.contains("OK"), "error path must not emit 'OK'");
+
+    // PARTIAL CONVERSION (spec § 4 Step 2 / review finding I1):
+    // The exact-string snapshot below guards the precise log format.
+    // The three negative `!contains` probes below the snapshot carry
+    // invariant-explanation messages a reviewer reads in a failure
+    // output — these protect against a regression that re-introduces
+    // a decision token on the error path, where the snapshot alone
+    // would only show "string differs" without the "why".
+    expect!["err: step limit exceeded"].assert_eq(&log.render_for_test());
+
+    // Invariants the snapshot alone cannot articulate to a reviewer:
+    assert!(!log.contains("OK"), "error path must not emit 'OK' decision token");
     assert!(
         !log.contains("Deny"),
         "error path must not emit a 'Deny' decision token"
     );
-    assert!(!log.contains("dsl match"), "stale 'dsl match' entry");
+    assert!(!log.contains("dsl match"), "stale 'dsl match' entry must not appear");
 }

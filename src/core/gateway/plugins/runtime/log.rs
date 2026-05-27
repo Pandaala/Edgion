@@ -381,6 +381,34 @@ impl PluginLog {
     pub fn add_plugin_log(&mut self, log: &str) {
         self.push(log);
     }
+
+    /// Render this log as a single `String` suitable for `expect-test`
+    /// snapshot assertions.
+    ///
+    /// Entries inside one tier are joined by `\n`. When both tier-1 (`log`)
+    /// and tier-2 (`ulog`) carry entries, they are separated by the literal
+    /// marker `\n--- \n` — a sequence reviewers can grep for and visually
+    /// distinguish in `git diff`. Empty `PluginLog` yields `""`.
+    ///
+    /// `#[cfg(test)]` is deliberate: this format is for tests only. A
+    /// production `Display` impl is intentionally NOT provided to prevent
+    /// accidental `println!("{}", plugin_log)` from leaking into hot paths.
+    ///
+    /// See `docs/superpowers/specs/2026-05-27-snapshot-testing-skill-and-pilot-design.md`
+    /// § 2.2 for the separator-format decision rationale.
+    #[cfg(test)]
+    pub fn render_for_test(&self) -> String {
+        let main: Vec<&str> = self.log.iter().flat_map(|b| b.entries()).collect();
+        let user: Vec<&str> = self.ulog.iter().flat_map(|b| b.entries()).collect();
+        match (main.is_empty(), user.is_empty()) {
+            (true, true) => String::new(),
+            (false, true) => main.join("\n"),
+            (true, false) => user.join("\n"),
+            (false, false) => {
+                format!("{}\n--- \n{}", main.join("\n"), user.join("\n"))
+            }
+        }
+    }
 }
 
 /// EdgionPlugins execution log (flattened in edgion_plugins array)
@@ -819,5 +847,52 @@ mod tests {
         assert_eq!(parsed["edgion_plugins"][0]["name"], "auth-plugins");
         assert_eq!(parsed["edgion_plugins"][0]["logs"][0]["name"], "BasicAuth");
         assert_eq!(parsed["edgion_plugins"][0]["logs"][0]["time_cost"], 45);
+    }
+}
+
+#[cfg(test)]
+mod render_for_test_tests {
+    use super::*;
+    use crate::core::gateway::observe::logs::buffer::{LogBuffer, ULogBuffer};
+
+    #[test]
+    fn render_for_test_empty_buffers_returns_empty_string() {
+        let log = PluginLog::new("test");
+        assert_eq!(log.render_for_test(), "");
+    }
+
+    #[test]
+    fn render_for_test_log_only_joins_entries_with_newline() {
+        let mut log = PluginLog::new("test");
+        log.push("first");
+        log.push("second");
+        assert_eq!(log.render_for_test(), "first\nsecond");
+    }
+
+    #[test]
+    fn render_for_test_ulog_only_when_log_is_none() {
+        // Force the ulog-only branch by direct field assignment.
+        let mut log = PluginLog::new("test");
+        let mut u = ULogBuffer::new();
+        u.push("only-ulog");
+        log.ulog = Some(u);
+        assert_eq!(log.render_for_test(), "only-ulog");
+    }
+
+    #[test]
+    fn render_for_test_both_buffers_separated_by_marker() {
+        // Construct both buffers directly to make the separator behavior
+        // testable independent of the tier-1 overflow threshold.
+        let mut main = LogBuffer::new();
+        main.push("main-a");
+        main.push("main-b");
+        let mut user = ULogBuffer::new();
+        user.push("user-x");
+        let log = PluginLog {
+            log: Some(main),
+            ulog: Some(user),
+            ..PluginLog::new("test")
+        };
+        assert_eq!(log.render_for_test(), "main-a\nmain-b\n--- \nuser-x");
     }
 }

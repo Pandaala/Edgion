@@ -323,19 +323,13 @@ impl GrpcMatchEngine {
         }
 
         // Priority 6: Regex service only (method not specified)
-        if let Some(hit) = try_match_linear(
-            &self.regex_service_only,
-            session,
-            index,
-            hostname,
-            |route_unit| {
-                route_unit
-                    .matched_info
-                    .compiled_service_regex
-                    .as_ref()
-                    .is_some_and(|re| re.is_match(&service))
-            },
-        ) {
+        if let Some(hit) = try_match_linear(&self.regex_service_only, session, index, hostname, |route_unit| {
+            route_unit
+                .matched_info
+                .compiled_service_regex
+                .as_ref()
+                .is_some_and(|re| re.is_match(&service))
+        }) {
             return Ok(hit);
         }
 

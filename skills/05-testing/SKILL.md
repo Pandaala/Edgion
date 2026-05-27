@@ -17,6 +17,7 @@ description: Testing skill for Edgion. Use when writing, running, or extending u
 | [00-unit-testing.md](00-unit-testing.md) | Unit testing: inline test module, how to run, writing rules, division of labor with integration tests | Complete |
 | [01-integration-testing.md](01-integration-testing.md) | Integration testing: architecture, run flow, steps to add a test, **dynamic (hot reload) test scenario framework** | Refactored |
 | [02-k8s-integration-testing.md](02-k8s-integration-testing.md) | K8s integration testing: differences from local testing, modification checklist, execution phases | Complete |
+| [05-snapshot-testing.md](05-snapshot-testing.md) | Snapshot testing: when to use / refuse, expect-test workflow, volatile-field escape hatches | Complete |
 
 ### Part 2 — Dedicated tests (specific-scenario validation)
 

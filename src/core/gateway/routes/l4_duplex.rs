@@ -74,11 +74,7 @@ pub(crate) trait DuplexHooks {
 /// Consumes both streams. Returns when:
 /// - Either side returns `Ok(0)` from `read` (clean EOF), or
 /// - Any read/write/flush errors, after notifying [`DuplexHooks::on_error`].
-pub(crate) async fn bidirectional_relay(
-    mut downstream: Stream,
-    mut upstream: Stream,
-    mut hooks: impl DuplexHooks,
-) {
+pub(crate) async fn bidirectional_relay(mut downstream: Stream, mut upstream: Stream, mut hooks: impl DuplexHooks) {
     let mut client_to_upstream_buf = vec![0u8; BUFFER_SIZE];
     let mut upstream_to_client_buf = vec![0u8; BUFFER_SIZE];
 
