@@ -5,7 +5,7 @@
 //! from the main gateway bootstrap process.
 
 use crate::core::gateway::runtime::ServerHeaderOpts;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use pingora_core::apps::HttpServerOptions;
 use pingora_core::connectors::TransportConnector;
 use pingora_core::listeners::Listeners;
@@ -49,6 +49,27 @@ pub struct ListenerContext {
     pub gateway_annotations: std::collections::HashMap<String, String>,
 }
 
+/// Pre-flight TCP bind probe.
+///
+/// Pingora's `add_tcp` / `add_tls_with_settings` / `Listeners::tcp` only queue a
+/// `ServerAddress`; the real `bind()` + `listen()` is deferred to
+/// `ServiceTrait::start_service` and a failure there manifests as
+/// `.expect("Failed to build listeners")` panic inside a tokio task, with no
+/// gateway / listener name in the message. Probing the bind synchronously here
+/// turns startup-time port conflicts (EADDRINUSE) and permission errors
+/// (EACCES) into a `Result::Err` carrying gateway / listener / address
+/// context, matching the UDP path. The probe socket is dropped immediately;
+/// Pingora re-binds with SO_REUSEADDR when the service starts.
+fn probe_tcp_bind(addr: &str, gateway_key: &str, listener_name: &str) -> Result<()> {
+    std::net::TcpListener::bind(addr).with_context(|| {
+        format!(
+            "gateway '{}' listener '{}' failed to bind {}",
+            gateway_key, listener_name, addr
+        )
+    })?;
+    Ok(())
+}
+
 /// Add an HTTP or HTTPS listener to the Pingora server
 ///
 /// This function creates an HTTP proxy service and adds it to the server
@@ -90,6 +111,7 @@ pub fn add_http_listener(
         );
         let mut http_service = http_proxy_service(&context.server_conf, redirect_handler);
         apply_connection_filter(&mut http_service, context);
+        probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
         http_service.add_tcp(&addr);
 
         tracing::info!(
@@ -216,6 +238,7 @@ pub fn add_http_listener(
             if enable_http2 {
                 tls_settings.enable_h2();
             }
+            probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
             http_service.add_tls_with_settings(&addr, None, tls_settings);
             let protocol = if enable_http2 {
                 "HTTPS (HTTP/2 enabled)"
@@ -236,6 +259,7 @@ pub fn add_http_listener(
             anyhow::bail!("TLS support requires the 'boringssl' feature");
         }
     } else {
+        probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
         http_service.add_tcp(&addr);
         let protocol = if enable_http2 { "HTTP (h2c enabled)" } else { "HTTP" };
         tracing::info!(
@@ -270,6 +294,7 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
         connector: TransportConnector::new(None),
     };
 
+    probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
     // Create TCP service
     let mut tcp_service = Service::with_listeners(format!("TCP-{}", listener_name), Listeners::tcp(&addr), edgion_tcp);
 
@@ -368,6 +393,7 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     // Apply connection filter if configured via annotation
     apply_connection_filter(&mut tls_service, context);
 
+    probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
     // Only bind the TLS endpoint; Listeners::tcp() would bind a plain TCP socket
     // on the same port, causing EEXIST when add_tls_with_settings tries to bind again.
     tls_service.add_tls_with_settings(&addr, None, tls_settings);
@@ -407,6 +433,7 @@ pub fn add_tls_passthrough_listener(server: &mut Server, context: &ListenerConte
         connector: TransportConnector::new(None),
     };
 
+    probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
     let mut service = Service::with_listeners(
         format!("TLS-Passthrough-{}", listener_name),
         Listeners::tcp(&addr),

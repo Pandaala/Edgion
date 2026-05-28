@@ -85,13 +85,14 @@ cd /Users/caohao/ws1/Edgion
 
 ### Implementation Pieces
 
-1. `GatewayConfigStore`: global runtime configuration store backed by `ArcSwap`
+1. `GatewayStore` + `ListenerGatewayInfoStore`: runtime stores backed by `RwLock` / `ArcSwap`; `GatewayInfoIndex` carries per-Listener hostname + allowedRoutes
 2. `ConfHandler<Gateway>`: reacts to configuration change events
 3. Controller API: supports create and update operations for `Gateway` and `HTTPRoute`
 
 ## Key Files
 
-- `/src/core/gateway/runtime/store/config.rs`: configuration store
+- `/src/core/gateway/runtime/store/gateway.rs`: Gateway resource store
+- `/src/core/gateway/runtime/store/listener_gateway_info.rs`: Listener → Gateway-info index
 - `/src/core/gateway/runtime/handler.rs`: Gateway handler
 - `/src/core/controller/api/namespaced_handlers.rs`: Controller API
 - `/examples/test/scripts/utils/load_conf.sh`: configuration loader

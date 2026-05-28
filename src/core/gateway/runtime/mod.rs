@@ -17,6 +17,5 @@ pub use server::{
     ServerHeaderOpts,
 };
 pub use store::{
-    get_global_gateway_config_store, get_global_gateway_store, get_listener_gateway_info_store,
-    rebuild_listener_gateway_infos, GatewayInfoIndex,
+    get_global_gateway_store, get_listener_gateway_info_store, rebuild_listener_gateway_infos, GatewayInfoIndex,
 };

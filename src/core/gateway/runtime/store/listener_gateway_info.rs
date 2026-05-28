@@ -140,7 +140,7 @@ impl GatewayListeners {
 }
 
 /// A single Listener's pre-built matching info.
-/// Combines GatewayInfo (identity/metrics) + ListenerConfig (hostname + allowedRoutes).
+/// Combines GatewayInfo (identity/metrics) with the Listener's hostname + allowedRoutes.
 #[derive(Clone, Debug)]
 pub struct ListenerEntry {
     pub info: GatewayInfo,
@@ -150,16 +150,37 @@ pub struct ListenerEntry {
     pub allowed_routes: Option<AllowedRoutes>,
 }
 
+/// Epoch-consistent pair of the flat and indexed listener maps.
+///
+/// `flat` and `index` are derived from the same Gateway slice in a single
+/// `rebuild()` call, and are always swapped together via a single `ArcSwap`
+/// store on `ListenerGatewayInfoStore::snapshot`. Readers that need both
+/// maps can `load()` once and access both fields from the resulting Arc,
+/// guaranteed to belong to the same epoch.
+struct ListenerGatewayInfoSnapshot {
+    flat: HashMap<ListenerKey, Arc<Vec<GatewayInfo>>>,
+    index: HashMap<ListenerKey, Arc<GatewayInfoIndex>>,
+}
+
+impl ListenerGatewayInfoSnapshot {
+    fn empty() -> Self {
+        Self {
+            flat: HashMap::new(),
+            index: HashMap::new(),
+        }
+    }
+}
+
 pub struct ListenerGatewayInfoStore {
-    flat_data: ArcSwap<HashMap<ListenerKey, Arc<Vec<GatewayInfo>>>>,
-    index_data: ArcSwap<HashMap<ListenerKey, Arc<GatewayInfoIndex>>>,
+    // Single ArcSwap so that `flat` and `index` are always swapped atomically
+    // and a concurrent reader can never observe a cross-epoch pair.
+    snapshot: ArcSwap<ListenerGatewayInfoSnapshot>,
 }
 
 impl ListenerGatewayInfoStore {
     pub fn new() -> Self {
         Self {
-            flat_data: ArcSwap::from_pointee(HashMap::new()),
-            index_data: ArcSwap::from_pointee(HashMap::new()),
+            snapshot: ArcSwap::from_pointee(ListenerGatewayInfoSnapshot::empty()),
         }
     }
 
@@ -169,8 +190,8 @@ impl ListenerGatewayInfoStore {
     /// This is the hot-path call used in `pg_request_filter` per request.
     #[inline]
     pub fn get(&self, key: &ListenerKey) -> Arc<Vec<GatewayInfo>> {
-        let data = self.flat_data.load();
-        data.get(key).cloned().unwrap_or_else(|| Arc::new(Vec::new()))
+        let snap = self.snapshot.load();
+        snap.flat.get(key).cloned().unwrap_or_else(|| Arc::new(Vec::new()))
     }
 
     /// Get the pre-built GatewayInfoIndex for a given listener key.
@@ -179,16 +200,17 @@ impl ListenerGatewayInfoStore {
     /// Hot-path call: O(1) ArcSwap load + HashMap get.
     #[inline]
     pub fn get_index(&self, key: &ListenerKey) -> Arc<GatewayInfoIndex> {
-        let data = self.index_data.load();
-        data.get(key)
+        let snap = self.snapshot.load();
+        snap.index
+            .get(key)
             .cloned()
             .unwrap_or_else(|| Arc::new(GatewayInfoIndex::new()))
     }
 
     /// Return all listener keys that have at least one registered Gateway/Listener.
     pub fn all_listener_keys(&self) -> Vec<ListenerKey> {
-        let data = self.flat_data.load();
-        data.keys().cloned().collect()
+        let snap = self.snapshot.load();
+        snap.flat.keys().cloned().collect()
     }
 
     /// Rebuild the store from the full list of Gateway resources.
@@ -276,8 +298,12 @@ impl ListenerGatewayInfoStore {
             .map(|(key, index)| (key, Arc::new(index)))
             .collect();
 
-        self.flat_data.store(Arc::new(flat_arc_map));
-        self.index_data.store(Arc::new(index_arc_map));
+        // Single atomic swap: both `flat` and `index` become visible together,
+        // so a concurrent reader can never see a cross-epoch pair.
+        self.snapshot.store(Arc::new(ListenerGatewayInfoSnapshot {
+            flat: flat_arc_map,
+            index: index_arc_map,
+        }));
 
         tracing::info!(
             component = "listener_gateway_info_store",
@@ -297,10 +323,10 @@ pub struct ListenerGatewayInfoStats {
 impl ListenerGatewayInfoStore {
     /// Collect size statistics for leak-detection tests.
     pub fn stats(&self) -> ListenerGatewayInfoStats {
-        let data = self.flat_data.load();
-        let total: usize = data.values().map(|v| v.len()).sum();
+        let snap = self.snapshot.load();
+        let total: usize = snap.flat.values().map(|v| v.len()).sum();
         ListenerGatewayInfoStats {
-            listener_count: data.len(),
+            listener_count: snap.flat.len(),
             total_entries: total,
         }
     }
@@ -324,7 +350,7 @@ pub fn format_gateway_key(namespace: &str, name: &str) -> String {
 ///
 /// Returns true if the Listener has a Conflicted condition with status "True".
 /// This is set by the Controller when port conflicts are detected.
-fn is_listener_conflicted(gateway: &Gateway, listener_name: &str) -> bool {
+pub(crate) fn is_listener_conflicted(gateway: &Gateway, listener_name: &str) -> bool {
     gateway
         .status
         .as_ref()

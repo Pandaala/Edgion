@@ -14,8 +14,9 @@ use crate::core::gateway::observe::metrics::TestType;
 /// This struct should be created once when the HTTP proxy listener is constructed,
 /// not per-request, to avoid allocation overhead.
 ///
-/// Note: Listener configuration (hostname, allowedRoutes) is queried dynamically
-/// from GatewayConfigStore to support hot-reload of Gateway configuration.
+/// Note: Listener configuration (hostname, allowedRoutes) is resolved through
+/// `ListenerGatewayInfoStore::GatewayInfoIndex`, which is rebuilt on every
+/// Gateway change to support hot-reload.
 #[derive(Clone, Debug, Default)]
 pub struct GatewayInfo {
     /// Gateway namespace (None for cluster-scoped or default namespace)

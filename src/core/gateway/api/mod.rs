@@ -389,7 +389,9 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
     let tls_routes = crate::core::gateway::routes::tls::get_global_tls_route_managers().stats();
 
     let gateway_config = GatewayConfigStats {
-        gateways: crate::core::gateway::runtime::store::config::get_global_gateway_config_store().gateway_count(),
+        gateways: crate::core::gateway::runtime::store::get_global_gateway_store()
+            .read()
+            .count(),
     };
     let listener_gateway_info =
         crate::core::gateway::runtime::store::listener_gateway_info::get_listener_gateway_info_store().stats();

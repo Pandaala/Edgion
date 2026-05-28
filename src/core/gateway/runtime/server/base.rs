@@ -2,6 +2,7 @@ use crate::core::gateway::conf_sync::conf_client::ConfigClient;
 use crate::core::gateway::observe::access_log::get_access_logger_unchecked;
 use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::runtime::server::listener_builder;
+use crate::core::gateway::runtime::store::listener_gateway_info::is_listener_conflicted;
 use crate::core::gateway::runtime::store::{get_global_gateway_store, rebuild_listener_gateway_infos};
 use crate::types::listener_key::{resolve_listener_addr, ListenerKey};
 use crate::types::resources::edgion_gateway_config::{EdgionGatewayConfig, EdgionGatewayConfigSpec};
@@ -29,24 +30,6 @@ fn parse_enable_http2_annotation(gateway: &Gateway) -> bool {
         .unwrap_or(true) // Default to true if annotation is not present
 }
 
-/// Check if a Listener is marked as Conflicted in Gateway status
-///
-/// Returns true if the Listener has a Conflicted condition with status "True".
-/// This is set by the Controller when port conflicts are detected.
-fn is_listener_conflicted(gateway: &Gateway, listener_name: &str) -> bool {
-    gateway
-        .status
-        .as_ref()
-        .and_then(|s| s.listeners.as_ref())
-        .and_then(|listeners| listeners.iter().find(|ls| ls.name == listener_name))
-        .map(|ls| {
-            ls.conditions
-                .iter()
-                .any(|c| c.type_ == "Conflicted" && c.status == "True")
-        })
-        .unwrap_or(false)
-}
-
 impl GatewayBase {
     pub fn new(config_client: Arc<ConfigClient>) -> Self {
         Self { config_client }
@@ -65,7 +48,20 @@ impl GatewayBase {
     /// 3. For each listener in the Gateway, adds it to the Pingora server
     pub fn configure_listeners(&self, pingora_server: &mut Server, gateways: Vec<crate::types::Gateway>) -> Result<()> {
         if gateways.is_empty() {
-            return Err(anyhow!("No Gateway resources available"));
+            // The cache is marked ready as soon as the first gRPC list response arrives,
+            // regardless of item count, so reaching this branch means the controller pushed
+            // zero Gateways. Surface the sibling cache counts so the operator can tell
+            // "controller never synced anything" from "controller synced but no Gateway CRs
+            // matched its class/namespace scope".
+            let gateway_class_count = self.config_client.list_gateway_classes().data.len();
+            let edgion_gateway_config_count = self.config_client.list_edgion_gateway_configs().data.len();
+            return Err(anyhow!(
+                "No Gateway resources synced from controller (gateways=0, gateway_classes={}, edgion_gateway_configs={}); \
+                 check the controller's gateway_class_name, watched namespace, and RBAC scope, \
+                 then verify Gateway CRs exist in the cluster",
+                gateway_class_count,
+                edgion_gateway_config_count
+            ));
         }
 
         tracing::info!("Configuring {} Gateway resources", gateways.len());

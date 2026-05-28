@@ -24,10 +24,7 @@ use crate::types::resources::edgion_gateway_config::PluginReference;
 /// Takes `&PluginStore` so the caller can fetch the global store once per
 /// request and share it across multiple resolve calls, avoiding redundant
 /// `Arc::clone` of `GLOBAL_PLUGIN_STORE`.
-pub fn resolve_global_plugins(
-    store: &PluginStore,
-    refs: Option<&[PluginReference]>,
-) -> Vec<Arc<PluginRuntime>> {
+pub fn resolve_global_plugins(store: &PluginStore, refs: Option<&[PluginReference]>) -> Vec<Arc<PluginRuntime>> {
     let Some(refs) = refs else { return Vec::new() };
     let mut out = Vec::with_capacity(refs.len());
     for r in refs {
@@ -49,10 +46,7 @@ pub fn resolve_global_plugins(
 ///
 /// Takes `&PluginStore` so the caller can fetch the global store once per
 /// request and share it across multiple resolve calls.
-pub fn resolve_route_ext_refs(
-    store: &PluginStore,
-    keys: &[(String, String)],
-) -> Vec<Option<Arc<PluginRuntime>>> {
+pub fn resolve_route_ext_refs(store: &PluginStore, keys: &[(String, String)]) -> Vec<Option<Arc<PluginRuntime>>> {
     let mut out = Vec::with_capacity(keys.len());
     for (ns, name) in keys {
         let key = format!("{}/{}", ns, name);

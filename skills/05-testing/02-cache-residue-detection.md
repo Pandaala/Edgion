@@ -44,7 +44,7 @@ When adding any in-memory store / cache, it must be wired into store-stats, othe
 An ignore-path is a structural constant (a legitimate value that never returns to zero), such as:
 - Monotonically increasing sequence counters
 - A fixed number of registered items (kind list, watch object count)
-- Values that are normally `>0` during the test (e.g., GatewayConfigStore.gateways)
+- Values that are normally `>0` during the test (e.g., `gateway_config.gateways` — sourced from `GatewayStore::count()` since runtime-F003)
 
 Modify the `IGNORE_PATHS` constant in `examples/code/validator/cache_residue.rs`. Every addition must include a commit message explaining why this field does not count as a leak.
 

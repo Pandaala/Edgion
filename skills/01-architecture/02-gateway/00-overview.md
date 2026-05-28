@@ -104,7 +104,7 @@ src/core/gateway/
 ├── runtime/       # Pingora runtime
 │   ├── server/    # GatewayBase, listener_builder, error_response, server_header
 │   ├── matching/  # Gateway matching, TLS certificate matching (ArcSwap)
-│   ├── store/     # GatewayStore, GatewayConfigStore, ListenerGatewayInfoStore (ArcSwap)
+│   ├── store/     # GatewayStore, ListenerGatewayInfoStore (ArcSwap)
 │   ├── handler.rs # ConfHandler implementation for the Gateway resource
 │   └── gateway_info.rs
 ├── services/      # Auxiliary services

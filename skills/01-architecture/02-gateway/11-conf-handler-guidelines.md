@@ -147,6 +147,6 @@ partial_update:
 | BackendTLSPolicy | B | ArcSwap clone-modify-swap |
 | LinkSys | B | ArcSwap clone-modify-swap |
 | EdgionAcme | B | Incremental challenge store |
-| Gateway | B | Incremental GatewayConfigStore; full TLS matcher rebuild (with short-circuit optimization) |
+| Gateway | B | Incremental updates to GatewayStore + ListenerGatewayInfoStore; full TLS matcher rebuild (with short-circuit optimization) |
 | GatewayClass | C | Linear Vec scan, acceptable due to very small count |
 | EdgionGatewayConfig | C | Same as GatewayClass |

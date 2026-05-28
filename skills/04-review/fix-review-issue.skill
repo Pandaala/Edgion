@@ -92,8 +92,37 @@ Check the issue against:
 File: <file:line>
 Disposition: <value from issue file>
 
+### Classification
+Module        : control-plane (Controller) | data-plane (Gateway) | shared (types / common / utils)
+                | center (federation) | cli (edgion-cli) | build-ci | docs-only
+Issue type    : bug (correctness) | security | performance | code-quality (refactor / readability)
+                | observability (logs / metrics / tracing) | design tradeoff | doc / comment
+                | test gap | other (specify)
+Severity      : critical | high | medium | low | info
+Path category : hot path (request / connection processing) | cold path (admin / sync / startup)
+                | init-only | test-only | doc-only
+
+(Pick one value per row. If the issue spans multiple modules — e.g. controller + gateway
+coordination — list the primary first and note the secondary in parentheses.)
+
 ### What is wrong
-<1–3 plain-English sentences describing the concrete defect>
+
+**Context** — <1–2 sentences describing where this code lives and what it normally does,
+so a reader without the file open can still follow the rest. Mention the calling layer
+(e.g. "called from every request via filter()", "runs once during controller bootstrap").>
+
+**The defect** — <a fuller description of what the code actually does, what it should do,
+and the precise gap between them. One short paragraph is fine; for non-trivial issues use
+more. Quote the offending snippet(s) when that sharpens the explanation, but keep quotes
+small. If the issue is a design tradeoff or doc-only, describe the missing contract or
+the misleading wording instead of "the bug".>
+
+**Why it matters** — <the concrete failure mode in operational terms: what triggers it,
+what the user / operator observes, and under what conditions it manifests. Examples:
+"every request with header X gets a 500", "leaks one task per reconnect over weeks",
+"misleading log makes on-call chase the wrong component". For optimizations, describe
+the cost being paid today (latency, allocations, log volume) rather than a hypothetical
+harm.>
 
 ### Fix Value
 Trigger frequency : almost never | low | medium | hot path
@@ -110,6 +139,13 @@ Value verdict     : 🔴 Not worth fixing (harm tiny, cost/risk out of proportio
 ⚠️  Accepted tradeoff — close without code change; add 04-review entry to prevent re-reporting
 ❌ Already fixed or false positive — close without change
 ```
+
+**Sizing guidance for "What is wrong":** scale length to complexity. A trivial typo / dead
+code finding can be 2–3 sentences total across the three sub-sections. A subtle concurrency
+or protocol bug usually needs a full paragraph per sub-section plus a code snippet. **Do
+not regress to a single one-liner** — even trivial issues benefit from the
+Context / Defect / Why-it-matters split because it forces you to state where the code
+lives and who pays the cost.
 
 Relationship between Value verdict and Verdict:
 - Value verdict 🔴 → regardless of whether Verdict is ✅ or 📝, recommend downgrading to ⚠️ or ❌ and explain the reasoning to the user
@@ -375,6 +411,8 @@ When tempted to skip a step, check this table first:
 | "cargo check passed, clippy is probably fine" | Step 6 requires both. Clippy catches a different class of defect. |
 | "Reverting subagent's out-of-scope change is wasteful, I'll keep it since it's already done" | Keeping out-of-scope work means the diff no longer matches what the user approved in Step 2. Revert. |
 | "User said 'go ahead' once, I can skip future confirmation prompts" | Approval is per-gate, not blanket. Each presented panel needs its own confirmation. |
+| "One sentence in 'What is wrong' is enough, the user can read the issue file" | The Step 1 panel is the user's decision surface; if it doesn't say which module, which path category, and what breaks operationally, the user is forced to re-open the file. Fill in all three sub-sections (Context / Defect / Why it matters). |
+| "Classification fields are bureaucratic — module is obvious from the path" | Stating module / issue-type / severity / path-category explicitly is what lets the user catch a mis-tagged finding (e.g. a "bug" that is really a doc gap, or a "data-plane" issue that turns out to live in shared code). Do not skip it. |
 
 If your reasoning matches any row: **stop, return to the skipped gate, run it properly.**
 

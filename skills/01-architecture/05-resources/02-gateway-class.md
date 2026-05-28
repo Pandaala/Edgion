@@ -41,7 +41,7 @@ No special handling; passes through directly.
 
 ## Gateway-side processing
 
-After GatewayClass is synced to the Gateway side, it is stored in GatewayConfigStore and used for class-matching validation of Gateway resources.
+After GatewayClass is synced to the Gateway side, it is stored in the GatewayClass cache (`src/core/gateway/config/gateway_class/`) and used for class-matching validation of Gateway resources.
 
 ## Cross-resource relationships
 

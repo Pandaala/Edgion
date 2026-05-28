@@ -12,7 +12,7 @@ Gateway is Edgion's core resource. It defines the gateway's Listeners (listening
 ## Source code locations
 
 - Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs`
-- Gateway ConfHandler: `src/core/gateway/config/` (GatewayConfigStore)
+- Gateway ConfHandler: `src/core/gateway/runtime/handler.rs` (drives `GatewayStore`, `ListenerGatewayInfoStore`, and the per-port route managers)
 - Type definitions: `src/types/resources/gateway.rs`
 
 ## Controller-side processing
@@ -54,7 +54,7 @@ Filters by `gatewayClassName`. If `gateway_class_name` is configured as `Some(na
 
 ## Gateway-side processing
 
-After the Gateway resource is synced to the Gateway side, it is used to configure Pingora's listeners. Each Listener is identified by a `ListenerKey` (formatted `"{addr}/{protocol}"`); `ListenerGatewayInfoStore` manages aggregated Gateway information per `ListenerKey`, and GatewayConfigStore manages Listener configuration. TLS certificates are stored in the certificate-matching engine, and a request selects a certificate by matching ListenerKey + SNI.
+After the Gateway resource is synced to the Gateway side, it is used to configure Pingora's listeners. Each Listener is identified by a `ListenerKey` (formatted `"{addr}/{protocol}"`); `ListenerGatewayInfoStore` manages aggregated Gateway information per `ListenerKey` (including each Listener's hostname constraint and allowedRoutes via the per-port `GatewayInfoIndex`). TLS certificates are stored in the certificate-matching engine, and a request selects a certificate by matching ListenerKey + SNI.
 
 ## Cross-resource relationships
 

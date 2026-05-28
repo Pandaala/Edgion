@@ -164,6 +164,47 @@ pub fn http_to_grpc_status(http_status: u16) -> (u16, &'static str) {
 
 // ─── Public HTTP error response functions ────────────────────────────────────
 
+/// Shared nginx-style HTML error response writer used by every `end_response_<code>` helper.
+///
+/// Handles the `response_committed` guard, sets `ctx.request_info.status`, builds the
+/// response header with the standard `Content-Type: text/html`, writes the nginx-style
+/// body (only `title` varies between status codes), and tears down the session.
+///
+/// gRPC-aware delegation is intentionally NOT performed here: each caller checks
+/// `ctx.request_info.is_grpc_request` first and routes to [`send_grpc_trailers_only`]
+/// before reaching this helper. Keeping the gRPC branch at the call site preserves the
+/// per-helper doc comments that describe the gRPC mapping for each HTTP status.
+async fn send_html_error(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    server_header_opts: &ServerHeaderOpts,
+    status: u16,
+    title: &str,
+) -> pingora_core::Result<()> {
+    if ctx.request_info.response_committed {
+        return Ok(());
+    }
+
+    ctx.request_info.status = Some(status);
+    ctx.request_info.response_committed = true;
+
+    let mut resp = ResponseHeader::build(status, None)?;
+    server_header_opts.apply_to_response(&mut resp);
+    resp.insert_header("Content-Type", "text/html")
+        .expect("static ASCII header literal, cannot fail");
+
+    let body = format!(
+        "<html>\n<head><title>{title}</title></head>\n<body>\n<center><h1>{title}</h1></center>\n<hr><center>edgion</center>\n</body>\n</html>"
+    );
+
+    let resp_box = Box::new(resp);
+    session.write_response_header(resp_box, false).await?;
+    session.write_response_body(Some(Bytes::from(body)), true).await?;
+    shutdown_after_error_response(session).await;
+
+    Ok(())
+}
+
 /// Send 400 Bad Request error response (nginx-style).
 /// For gRPC requests, returns gRPC INVALID_ARGUMENT (status 3).
 pub async fn end_response_400(
@@ -174,32 +215,7 @@ pub async fn end_response_400(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 400).await;
     }
-    if ctx.request_info.response_committed {
-        return Ok(());
-    }
-
-    ctx.request_info.status = Some(400);
-    ctx.request_info.response_committed = true;
-
-    let mut resp = ResponseHeader::build(400, None)?;
-    server_header_opts.apply_to_response(&mut resp);
-    resp.insert_header("Content-Type", "text/html")
-        .expect("static ASCII header literal, cannot fail");
-
-    let body = r#"<html>
-<head><title>400 Bad Request</title></head>
-<body>
-<center><h1>400 Bad Request</h1></center>
-<hr><center>edgion</center>
-</body>
-</html>"#;
-
-    let resp_box = Box::new(resp);
-    session.write_response_header(resp_box, false).await?;
-    session.write_response_body(Some(Bytes::from(body)), true).await?;
-    shutdown_after_error_response(session).await;
-
-    Ok(())
+    send_html_error(session, ctx, server_header_opts, 400, "400 Bad Request").await
 }
 
 /// Send 421 Misdirected Request error response (RFC 7540).
@@ -213,32 +229,7 @@ pub async fn end_response_421(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 421).await;
     }
-    if ctx.request_info.response_committed {
-        return Ok(());
-    }
-
-    ctx.request_info.status = Some(421);
-    ctx.request_info.response_committed = true;
-
-    let mut resp = ResponseHeader::build(421, None)?;
-    server_header_opts.apply_to_response(&mut resp);
-    resp.insert_header("Content-Type", "text/html")
-        .expect("static ASCII header literal, cannot fail");
-
-    let body = r#"<html>
-<head><title>421 Misdirected Request</title></head>
-<body>
-<center><h1>421 Misdirected Request</h1></center>
-<hr><center>edgion</center>
-</body>
-</html>"#;
-
-    let resp_box = Box::new(resp);
-    session.write_response_header(resp_box, false).await?;
-    session.write_response_body(Some(Bytes::from(body)), true).await?;
-    shutdown_after_error_response(session).await;
-
-    Ok(())
+    send_html_error(session, ctx, server_header_opts, 421, "421 Misdirected Request").await
 }
 
 /// Send 404 Not Found error response (nginx-style).
@@ -251,32 +242,7 @@ pub async fn end_response_404(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 404).await;
     }
-    if ctx.request_info.response_committed {
-        return Ok(());
-    }
-
-    ctx.request_info.status = Some(404);
-    ctx.request_info.response_committed = true;
-
-    let mut resp = ResponseHeader::build(404, None)?;
-    server_header_opts.apply_to_response(&mut resp);
-    resp.insert_header("Content-Type", "text/html")
-        .expect("static ASCII header literal, cannot fail");
-
-    let body = r#"<html>
-<head><title>404 Not Found</title></head>
-<body>
-<center><h1>404 Not Found</h1></center>
-<hr><center>edgion</center>
-</body>
-</html>"#;
-
-    let resp_box = Box::new(resp);
-    session.write_response_header(resp_box, false).await?;
-    session.write_response_body(Some(Bytes::from(body)), true).await?;
-    shutdown_after_error_response(session).await;
-
-    Ok(())
+    send_html_error(session, ctx, server_header_opts, 404, "404 Not Found").await
 }
 
 /// Send gRPC UNAVAILABLE (status 14) error response for backend errors.
@@ -313,32 +279,7 @@ pub async fn end_response_500(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 500).await;
     }
-    if ctx.request_info.response_committed {
-        return Ok(());
-    }
-
-    ctx.request_info.status = Some(500);
-    ctx.request_info.response_committed = true;
-
-    let mut resp = ResponseHeader::build(500, None)?;
-    server_header_opts.apply_to_response(&mut resp);
-    resp.insert_header("Content-Type", "text/html")
-        .expect("static ASCII header literal, cannot fail");
-
-    let body = r#"<html>
-<head><title>500 Internal Server Error</title></head>
-<body>
-<center><h1>500 Internal Server Error</h1></center>
-<hr><center>edgion</center>
-</body>
-</html>"#;
-
-    let resp_box = Box::new(resp);
-    session.write_response_header(resp_box, false).await?;
-    session.write_response_body(Some(Bytes::from(body)), true).await?;
-    shutdown_after_error_response(session).await;
-
-    Ok(())
+    send_html_error(session, ctx, server_header_opts, 500, "500 Internal Server Error").await
 }
 
 /// Send 502 Bad Gateway error response (nginx-style).
@@ -352,32 +293,7 @@ pub async fn end_response_502(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 502).await;
     }
-    if ctx.request_info.response_committed {
-        return Ok(());
-    }
-
-    ctx.request_info.status = Some(502);
-    ctx.request_info.response_committed = true;
-
-    let mut resp = ResponseHeader::build(502, None)?;
-    server_header_opts.apply_to_response(&mut resp);
-    resp.insert_header("Content-Type", "text/html")
-        .expect("static ASCII header literal, cannot fail");
-
-    let body = r#"<html>
-<head><title>502 Bad Gateway</title></head>
-<body>
-<center><h1>502 Bad Gateway</h1></center>
-<hr><center>edgion</center>
-</body>
-</html>"#;
-
-    let resp_box = Box::new(resp);
-    session.write_response_header(resp_box, false).await?;
-    session.write_response_body(Some(Bytes::from(body)), true).await?;
-    shutdown_after_error_response(session).await;
-
-    Ok(())
+    send_html_error(session, ctx, server_header_opts, 502, "502 Bad Gateway").await
 }
 
 /// Fail-safe for plugins that returned
@@ -413,32 +329,14 @@ pub async fn end_response_503(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 503).await;
     }
-    if ctx.request_info.response_committed {
-        return Ok(());
-    }
-
-    ctx.request_info.status = Some(503);
-    ctx.request_info.response_committed = true;
-
-    let mut resp = ResponseHeader::build(503, None)?;
-    server_header_opts.apply_to_response(&mut resp);
-    resp.insert_header("Content-Type", "text/html")
-        .expect("static ASCII header literal, cannot fail");
-
-    let body = r#"<html>
-<head><title>503 Service Temporarily Unavailable</title></head>
-<body>
-<center><h1>503 Service Temporarily Unavailable</h1></center>
-<hr><center>edgion</center>
-</body>
-</html>"#;
-
-    let resp_box = Box::new(resp);
-    session.write_response_header(resp_box, false).await?;
-    session.write_response_body(Some(Bytes::from(body)), true).await?;
-    shutdown_after_error_response(session).await;
-
-    Ok(())
+    send_html_error(
+        session,
+        ctx,
+        server_header_opts,
+        503,
+        "503 Service Temporarily Unavailable",
+    )
+    .await
 }
 
 #[cfg(test)]

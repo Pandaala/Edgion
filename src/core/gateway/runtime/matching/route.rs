@@ -3,7 +3,7 @@
 //! This module provides shared functions for matching routes against
 //! Gateway and Listener constraints, used by both HTTP and gRPC routes.
 
-use crate::core::gateway::runtime::store::config::GatewayInfo;
+use crate::core::gateway::runtime::gateway_info::GatewayInfo;
 use crate::core::gateway::runtime::store::listener_gateway_info::{format_gateway_key, GatewayInfoIndex};
 use crate::types::resources::common::ParentReference;
 use crate::types::resources::gateway::AllowedRoutes;

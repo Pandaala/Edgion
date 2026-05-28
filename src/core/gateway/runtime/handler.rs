@@ -7,8 +7,7 @@ use crate::core::gateway::routes::tls::get_global_tls_route_managers;
 use crate::core::gateway::routes::udp::get_global_udp_route_managers;
 use crate::core::gateway::runtime::matching::rebuild_gateway_tls_matcher;
 use crate::core::gateway::runtime::store::{
-    get_global_gateway_config_store, get_global_gateway_store, get_listener_gateway_info_store,
-    rebuild_listener_gateway_infos,
+    get_global_gateway_store, get_listener_gateway_info_store, rebuild_listener_gateway_infos,
 };
 use crate::types::prelude_resources::Gateway;
 use crate::types::ListenerKey;
@@ -19,10 +18,13 @@ use std::sync::Arc;
 /// ConfHandler implementation for Gateway
 /// Stores Gateway resources in cache for dynamic lookup during bootstrap
 ///
-/// This handler manages three stores:
+/// This handler manages two stores:
 /// 1. GatewayStore: Raw Gateway resources
-/// 2. GatewayConfigStore: Two-layer structure (host_map + listener_map) for dynamic lookup
-/// 3. GatewayTlsMatcher: Port-based TLS certificate matching
+/// 2. GatewayTlsMatcher: Port-based TLS certificate matching
+///
+/// Listener-level routing state is rebuilt into `ListenerGatewayInfoStore`
+/// (see `rebuild_listener_gateway_infos`); per-listener route managers are
+/// only rebuilt when the listener key set actually changes.
 pub struct GatewayHandler;
 
 impl GatewayHandler {
@@ -66,10 +68,6 @@ impl ConfHandler<Gateway> for GatewayHandler {
             store.list_gateways()
         }; // write lock on gateway store released here
 
-        // Rebuild GatewayConfigStore (two-layer structure for dynamic lookup)
-        let config_store = get_global_gateway_config_store();
-        config_store.full_set(&gateways);
-
         // Rebuild Gateway TLS matcher (port-based certificate lookup)
         rebuild_gateway_tls_matcher(&gateways);
 
@@ -99,94 +97,108 @@ impl ConfHandler<Gateway> for GatewayHandler {
         update: HashMap<String, Arc<Gateway>>,
         remove: HashSet<String>,
     ) {
-        let global_store = get_global_gateway_store();
-        let mut store = global_store.write();
-        let config_store = get_global_gateway_config_store();
         let mut needs_rebuild = false;
 
-        if !add.is_empty() {
-            tracing::info!(
-                count = add.len(),
-                "Gateway partial_update: added {} Gateway resources",
-                add.len()
-            );
-            for (key, gateway) in add {
-                let listener_count = gateway.spec.listeners.as_ref().map(|l| l.len()).unwrap_or(0);
+        // Mirror `full_set`: keep all GatewayStore mutations inside a scoped block
+        // and snapshot `list_gateways()` before dropping the write guard. The
+        // rebuild functions below do not read GatewayStore, so holding the lock
+        // across them would only stall unrelated GatewayStore consumers.
+        let gateways = {
+            let global_store = get_global_gateway_store();
+            let mut store = global_store.write();
+
+            if !add.is_empty() {
                 tracing::info!(
-                    key = %key,
-                    namespace = ?gateway.namespace(),
-                    name = %gateway.name_any(),
-                    gateway_class = %gateway.spec.gateway_class_name,
-                    listeners = listener_count,
-                    "Gateway added"
+                    count = add.len(),
+                    "Gateway partial_update: added {} Gateway resources",
+                    add.len()
                 );
+                for (key, gateway) in add {
+                    let listener_count = gateway.spec.listeners.as_ref().map(|l| l.len()).unwrap_or(0);
+                    tracing::info!(
+                        key = %key,
+                        namespace = ?gateway.namespace(),
+                        name = %gateway.name_any(),
+                        gateway_class = %gateway.spec.gateway_class_name,
+                        listeners = listener_count,
+                        "Gateway added"
+                    );
 
-                config_store.update_gateway(&gateway);
-                update_gateway_backend_tls_store(&key, &gateway);
+                    update_gateway_backend_tls_store(&key, &gateway);
 
-                if let Err(e) = store.add_gateway((*gateway).clone()) {
-                    tracing::warn!(key = %key, error = %e, "Failed to add gateway");
+                    if let Err(e) = store.add_gateway((*gateway).clone()) {
+                        tracing::warn!(key = %key, error = %e, "Failed to add gateway");
+                    }
                 }
+                needs_rebuild = true;
             }
-            needs_rebuild = true;
-        }
 
-        if !update.is_empty() {
-            tracing::info!(
-                count = update.len(),
-                "Gateway partial_update: updated {} Gateway resources",
-                update.len()
-            );
-            for (key, gateway) in update {
-                let listener_count = gateway.spec.listeners.as_ref().map(|l| l.len()).unwrap_or(0);
+            if !update.is_empty() {
                 tracing::info!(
-                    key = %key,
-                    namespace = ?gateway.namespace(),
-                    name = %gateway.name_any(),
-                    gateway_class = %gateway.spec.gateway_class_name,
-                    listeners = listener_count,
-                    "Gateway updated (dynamic listener/TLS config updated)"
+                    count = update.len(),
+                    "Gateway partial_update: updated {} Gateway resources",
+                    update.len()
                 );
+                for (key, gateway) in update {
+                    let listener_count = gateway.spec.listeners.as_ref().map(|l| l.len()).unwrap_or(0);
+                    tracing::info!(
+                        key = %key,
+                        namespace = ?gateway.namespace(),
+                        name = %gateway.name_any(),
+                        gateway_class = %gateway.spec.gateway_class_name,
+                        listeners = listener_count,
+                        "Gateway updated (dynamic listener/TLS config updated)"
+                    );
 
-                config_store.update_gateway(&gateway);
-                update_gateway_backend_tls_store(&key, &gateway);
+                    update_gateway_backend_tls_store(&key, &gateway);
 
-                store.update_gateway((*gateway).clone());
-            }
-            needs_rebuild = true;
-        }
-
-        if !remove.is_empty() {
-            tracing::info!(
-                count = remove.len(),
-                "Gateway partial_update: removed {} Gateway resources",
-                remove.len()
-            );
-            for key in &remove {
-                tracing::info!(
-                    key = %key,
-                    "Gateway removed"
-                );
-
-                let parts: Vec<&str> = key.split('/').collect();
-                let (namespace, name) = if parts.len() == 2 {
-                    (parts[0], parts[1])
-                } else {
-                    ("", key.as_str())
-                };
-
-                config_store.remove_gateway(namespace, name);
-                get_global_gateway_backend_tls_store().remove(key);
-
-                if let Err(e) = store.remove_gateway(key) {
-                    tracing::warn!(key = %key, error = %e, "Failed to remove gateway");
+                    store.update_gateway((*gateway).clone());
                 }
+                needs_rebuild = true;
             }
-            needs_rebuild = true;
-        }
 
-        if needs_rebuild {
-            let gateways = store.list_gateways();
+            if !remove.is_empty() {
+                tracing::info!(
+                    count = remove.len(),
+                    "Gateway partial_update: removed {} Gateway resources",
+                    remove.len()
+                );
+                for key in &remove {
+                    tracing::info!(
+                        key = %key,
+                        "Gateway removed"
+                    );
+
+                    get_global_gateway_backend_tls_store().remove(key);
+
+                    if let Err(e) = store.remove_gateway(key) {
+                        tracing::warn!(key = %key, error = %e, "Failed to remove gateway");
+                    }
+                }
+                needs_rebuild = true;
+            }
+
+            if needs_rebuild {
+                Some(store.list_gateways())
+            } else {
+                None
+            }
+        }; // write lock on gateway store released here
+
+        if let Some(gateways) = gateways {
+            // GatewayTlsMatcher and ListenerGatewayInfoStore are two independent
+            // ArcSwap-backed globals; we rebuild them sequentially rather than
+            // committing them as a single atomic snapshot. This leaves a brief
+            // window (between the two stores below) in which a concurrent TLS
+            // handshake can match against the new SNI table while subsequent
+            // listener routing still reads the previous ListenerGatewayInfoStore
+            // epoch — and vice versa. Accepted as a design tradeoff: the window
+            // is microseconds long on a cold path (controller→gateway sync),
+            // self-heals on the next request, and merging both into one
+            // ArcSwap<Snapshot> would require pulling unrelated state behind a
+            // single global lifetime with significant ripple through the route
+            // managers. See `skills/04-review/concurrency/runtime-F005-*` for
+            // the rationale and the criteria that would justify revisiting this.
             rebuild_gateway_tls_matcher(&gateways);
 
             let keys_before = get_listener_gateway_info_store().all_listener_keys();

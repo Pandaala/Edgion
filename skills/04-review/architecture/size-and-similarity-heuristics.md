@@ -41,9 +41,9 @@ If any of the three is missing, it is a "based on line count / looks similar"-dr
 - **Fails acceptance**: the two operate on different types in `add_headers` / `reject_request` (`isize` vs `i64`, `Rate` local CMS vs Redis Lua script result); the extractable common part is only ~30 lines of header writing and 429 body construction, and would forcibly couple two currently **completely independent** plugins. The `get_header_names()` helper already covers the genuinely reusable part.
 - **Verdict**: plugin independence takes priority; "extract common" suggestion not accepted.
 
-### (e) `src/core/gateway/runtime/store/config.rs` (622 lines) "modify `is_ready` against `ConfigClient::required_cache_names`"
+### (e) `runtime/store/config.rs` (formerly 622 lines, deleted in runtime-F003) "modify `is_ready` against `ConfigClient::required_cache_names`"
 
-- **Cites a non-existent API**: `required_cache_names` does not appear in repo grep; this file also has no `is_ready` function; its single responsibility is `GatewayListenerConfig` query logic.
+- **Cites a non-existent API**: `required_cache_names` did not appear in repo grep; the file also had no `is_ready` function; its single responsibility was `GatewayListenerConfig` query logic. The whole file has since been removed as orphan code (runtime-F003), which retroactively confirms the original finding's premise as wrong on yet another axis.
 - **Verdict**: finding's premise is wrong; close.
 
 ### (f) `src/core/common/unified_auth/mod.rs` (808 lines = 559 non-test + 249 test) "should split into state/middleware/oidc/local"

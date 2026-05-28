@@ -56,6 +56,11 @@ impl GatewayStore {
     pub fn list_gateways(&self) -> Vec<Gateway> {
         self.gateways.values().cloned().collect()
     }
+
+    /// Number of Gateway resources currently held.
+    pub fn count(&self) -> usize {
+        self.gateways.len()
+    }
 }
 
 /// Global GatewayStore instance
