@@ -368,7 +368,8 @@ static REQUEST_DURATION_CONFIG: OnceLock<RequestDurationConfig> = OnceLock::new(
 
 /// Initialize the global request duration config (call once at startup).
 pub fn init_request_duration_config(config: RequestDurationConfig) {
-    let _ = REQUEST_DURATION_CONFIG.set(config);
+    let result = REQUEST_DURATION_CONFIG.set(config);
+    debug_assert!(result.is_ok(), "init_request_duration_config called more than once");
 }
 
 /// Get the global request duration config (zero-cost after init).
@@ -439,7 +440,8 @@ static BACKEND_REQUESTS_CONFIG: OnceLock<BackendRequestsConfig> = OnceLock::new(
 
 /// Initialize the global backend-requests config (call once at startup).
 pub fn init_backend_requests_config(config: BackendRequestsConfig) {
-    let _ = BACKEND_REQUESTS_CONFIG.set(config);
+    let result = BACKEND_REQUESTS_CONFIG.set(config);
+    debug_assert!(result.is_ok(), "init_backend_requests_config called more than once");
 }
 
 /// Get the global backend-requests config (zero-cost after init).
@@ -462,7 +464,8 @@ static PATH_NORMALIZATION_CONFIG: OnceLock<crate::core::gateway::path_normalizat
 
 /// Initialize the global path normalization config (call once at startup).
 pub fn init_path_normalization_config(config: crate::core::gateway::path_normalization::PathNormalizationConfig) {
-    let _ = PATH_NORMALIZATION_CONFIG.set(config);
+    let result = PATH_NORMALIZATION_CONFIG.set(config);
+    debug_assert!(result.is_ok(), "init_path_normalization_config called more than once");
 }
 
 /// Get the global path normalization config (zero-cost after init).
@@ -485,7 +488,8 @@ static ACCESS_LOG_OPTIONS: OnceLock<crate::types::observe::AccessLogOptions> = O
 
 /// Initialize the global access log options (call once at startup).
 pub fn init_access_log_options(options: crate::types::observe::AccessLogOptions) {
-    let _ = ACCESS_LOG_OPTIONS.set(options);
+    let result = ACCESS_LOG_OPTIONS.set(options);
+    debug_assert!(result.is_ok(), "init_access_log_options called more than once");
 }
 
 /// Get the global access log options (zero-cost after init).
@@ -710,7 +714,8 @@ static LRU_CACHE_GLOBAL_CONFIG: OnceLock<LruCacheGlobalConfig> = OnceLock::new()
 
 /// Initialize the global LRU cache configuration (call once at startup).
 pub fn init_lru_cache_global_config(config: &LruCacheGlobalConfig) {
-    let _ = LRU_CACHE_GLOBAL_CONFIG.set(config.clone());
+    let result = LRU_CACHE_GLOBAL_CONFIG.set(config.clone());
+    debug_assert!(result.is_ok(), "init_lru_cache_global_config called more than once");
 }
 
 /// Get the default LRU cache capacity.

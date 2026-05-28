@@ -228,7 +228,15 @@ where
             return false; // key-update: no eviction
         }
 
-        self.prune_expired_from_tail(now);
+        // Only prune when no free slot is available: alloc_index would
+        // otherwise be forced to displace the LRU tail. When free_head is Some,
+        // alloc_index returns immediately without touching the list, so the
+        // O(N) tail walk is pure overhead. This preserves the "prune before
+        // forced eviction of a live entry" invariant exercised by
+        // `test_eviction_count_zero_when_expired_entry_freed_before_displacement`.
+        if self.free_head.is_none() {
+            self.prune_expired_from_tail(now);
+        }
 
         let (idx, evicted) = self.alloc_index();
         self.nodes[idx].key = Some(key.clone());

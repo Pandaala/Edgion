@@ -232,7 +232,7 @@ verify_store_stats_empty() {
         # TLS cert stores
         ".data.tls_store.entries"  ".data.tls_cert_matcher.port_count"
         # Plugin stores
-        ".data.plugin_store.plugins"     ".data.stream_plugin_store.plugins"
+        ".data.plugin_store_v2.total"    ".data.stream_plugin_store_v2.total"
         # Link / policy stores
         ".data.link_sys_store.resources" ".data.policy_store.total_services"
         ".data.backend_tls_policy.policies" ".data.backend_tls_policy.reverse_index_targets"

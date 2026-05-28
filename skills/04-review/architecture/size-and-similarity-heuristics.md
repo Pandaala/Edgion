@@ -53,6 +53,15 @@ If any of the three is missing, it is a "based on line count / looks similar"-dr
 - **The only marginally doable small cleanup**: `UnifiedAuthState::from_configs` (~135 lines, startup-time construction) could be moved into `state.rs` separately, with the rationale of "startup vs hot path" separation — but the benefit is weak and does not constitute P2/P3.
 - **Verdict**: split not accepted. 559 non-test lines is not large within this project (compare `edgion_acme.rs` 1491 lines, `config.rs` 622 lines).
 
+### (g) `src/core/gateway/api/mod.rs` (1644 lines) "should split into admin / testing / link_sys submodules + dedup 3 `get_*_client_by_name` helpers + merge `serve` / `serve_with_shutdown`" (infra-cluster-F003, 2026-05-27)
+
+- **Fails the duplication evidence bar**: the three `get_redis_client_by_name` / `get_etcd_client_by_name` / `get_es_client_by_name` helpers are ~15 lines each (≈45 lines total), below the ≥30-line-per-near-duplicate threshold this skill requires. The bodies also pin a per-provider concrete client type (`RedisLinkClient` / `EtcdLinkClient` / `EsLinkClient`) — a generic helper would need a trait + per-provider impl, expanding surface without reducing reader load.
+- **No coupling leak**: the only `pub` symbol with an external caller is `serve_with_shutdown` (single site at `src/core/gateway/cli/mod.rs:103`); `pub fn create_admin_router` has zero external grep callers (only the in-file `serve` and `serve_with_shutdown` consume it); testing handlers and `get_*_client_by_name` helpers are not referenced from outside the file. Splitting changes nothing about the public surface.
+- **Story line is linear**: admin core router build → conditional testing-mode merge → testing handlers (access-log + store-stats + LinkSys) → bind & serve. A single startup story currently reads top-to-bottom; splitting forces readers to jump across `api/admin.rs` / `api/testing/mod.rs` / `api/testing/link_sys/*.rs` to follow one boot path.
+- **Severity Low + zero runtime impact**: the finding itself acknowledges "no runtime impact". Refactoring 1600+ lines for maintainability-only gain is exactly the kind of churn this skill exists to reject.
+- **The `serve` / `serve_with_shutdown` sub-point is already covered by F-014** (its own narrow scope: delete dead `serve()` or implement it as a thin wrapper, per the controller's pattern at `controller/api/mod.rs:457` — `pub async fn serve` body is a single delegation to `serve_with_shutdown(..., std::future::pending::<()>())`). F-003 should not bundle that work — F-014 is the correct unit.
+- **Verdict**: ⚠️ accepted tradeoff. Re-open only on (i) a third `get_*_client_by_name` clone landing for a fourth provider (then dedup the helper alone, single-file change — not a whole-file split); (ii) external code starting to import handler symbols from this file (real coupling leak); (iii) a concrete operability incident traced to the file size (e.g. a bug fix that demonstrably required cross-referencing two unrelated handlers).
+
 ## When to Re-Evaluate
 
 - Any of the above files develop **real** line-level duplication (≥ 2 places with 30+ similar blocks); re-evaluate (d).
@@ -64,3 +73,4 @@ If any of the three is missing, it is a "based on line count / looks similar"-dr
 - "File X has too many lines, should be split" — close directly without the three pieces of evidence.
 - "Two modules look like they both do Y; should extract common code" — close directly without ≥ 2 places of 30+ line-level near-duplicate evidence.
 - "Adding X automatically becomes public API" — close directly without distinguishing binary / lib projects.
+- "Single-file admin/testing router mixes admin core + integration-test routes + LinkSys testing handlers + serve helpers, should be split into submodules" — close per (g); pure-position-only refactor of a 1600-line file with no coupling leak and no real duplication. The narrow `serve` / `serve_with_shutdown` dedup is a separate issue (infra-cluster F-014), not a reason to bundle a whole-file split.

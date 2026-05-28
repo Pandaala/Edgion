@@ -310,8 +310,6 @@ struct StoreStatsResponse {
     gateway_tls_matcher: crate::core::gateway::runtime::matching::tls::GatewayTlsMatcherStats,
     tls_store: TlsStoreStats,
     tls_cert_matcher: TlsCertMatcherStats,
-    plugin_store: PluginStoreStats,
-    stream_plugin_store: StreamPluginStoreStats,
     link_sys_store: LinkSysStoreStats,
     policy_store: crate::core::gateway::lb::lb_policy::PolicyStoreStats,
     backend_tls_policy: crate::core::gateway::backends::policy::BackendTLSPolicyStoreStats,
@@ -346,16 +344,6 @@ struct TlsStoreStats {
 #[derive(Serialize)]
 struct TlsCertMatcherStats {
     listener_count: usize,
-}
-
-#[derive(Serialize)]
-struct PluginStoreStats {
-    plugins: usize,
-}
-
-#[derive(Serialize)]
-struct StreamPluginStoreStats {
-    plugins: usize,
 }
 
 #[derive(Serialize)]
@@ -420,14 +408,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
     };
 
     let http_plugin_store = crate::core::gateway::plugins::http::get_global_plugin_store();
-    let plugin_store = PluginStoreStats {
-        plugins: http_plugin_store.count(),
-    };
-
     let stream_plugin_store_ref = crate::core::gateway::plugins::stream::get_global_stream_plugin_store();
-    let stream_plugin_store = StreamPluginStoreStats {
-        plugins: stream_plugin_store_ref.count(),
-    };
 
     let link_sys_store = LinkSysStoreStats {
         resources: crate::core::gateway::link_sys::runtime::store::get_global_link_sys_store().count(),
@@ -506,8 +487,6 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         gateway_tls_matcher,
         tls_store,
         tls_cert_matcher,
-        plugin_store,
-        stream_plugin_store,
         link_sys_store,
         policy_store,
         backend_tls_policy,
@@ -1501,24 +1480,13 @@ async fn es_bulk_send(
     })))
 }
 
-/// Serve the admin API on the specified port
+/// Serve the admin API on the specified port.
+///
+/// Thin wrapper over [`serve_with_shutdown`] with a never-resolving shutdown future,
+/// kept as a public entry point for callers that don't need graceful shutdown plumbing.
 pub async fn serve(config_client: Arc<ConfigClient>, port: u16) -> anyhow::Result<()> {
-    let app = create_admin_router(config_client);
     let addr_str = format!("0.0.0.0:{}", port);
-    let addr: std::net::SocketAddr = addr_str.parse()?;
-
-    tracing::info!(
-        component = "admin_api_gateway",
-        event = "server_starting",
-        addr = %addr,
-        integration_testing = crate::core::common::config::is_integration_testing_mode(),
-        "Gateway Admin API server listening"
-    );
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-
-    Ok(())
+    serve_with_shutdown(config_client, &addr_str, std::future::pending::<()>()).await
 }
 
 /// Serve the admin API on the specified listen address with graceful shutdown support
@@ -1593,8 +1561,6 @@ mod store_stats_tests {
                 invalid: 0,
             },
             tls_cert_matcher: TlsCertMatcherStats { listener_count: 0 },
-            plugin_store: PluginStoreStats { plugins: 0 },
-            stream_plugin_store: StreamPluginStoreStats { plugins: 0 },
             link_sys_store: LinkSysStoreStats { resources: 0 },
             policy_store: crate::core::gateway::lb::lb_policy::PolicyStoreStats {
                 total_services: 0,
@@ -1638,7 +1604,7 @@ mod store_stats_tests {
         assert!(json.get("client_caches").is_some());
         assert!(json.get("plugin_store_v2").is_some());
         assert!(json.get("stream_plugin_store_v2").is_some());
-        assert!(json.get("plugin_store").is_some()); // backward compat
-        assert!(json.get("stream_plugin_store").is_some()); // backward compat
+        assert!(json.get("plugin_store").is_none());
+        assert!(json.get("stream_plugin_store").is_none());
     }
 }

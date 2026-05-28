@@ -198,7 +198,7 @@ verify_store_stats_baseline() {
         # TLS cert stores
         ".data.tls_store.entries"  ".data.tls_cert_matcher.port_count"
         # Plugin stores
-        ".data.plugin_store.plugins"     ".data.stream_plugin_store.plugins"
+        ".data.plugin_store_v2.total"    ".data.stream_plugin_store_v2.total"
         # Link / policy stores
         ".data.link_sys_store.resources" ".data.policy_store.total_services"
         ".data.backend_tls_policy.policies" ".data.backend_tls_policy.reverse_index_targets"
@@ -401,9 +401,9 @@ scenario_stream_plugin() {
     sleep "$SYNC_WAIT"
     local stats sp sp_bl
     stats=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
-    sp=$(json_field "$stats" ".data.stream_plugin_store.plugins")
-    sp_bl=$(json_field "$BASELINE_STORE_STATS" ".data.stream_plugin_store.plugins")
-    log_info "  stream_plugin_store: ${sp} (baseline=${sp_bl})"
+    sp=$(json_field "$stats" ".data.stream_plugin_store_v2.total")
+    sp_bl=$(json_field "$BASELINE_STORE_STATS" ".data.stream_plugin_store_v2.total")
+    log_info "  stream_plugin_store_v2.total: ${sp} (baseline=${sp_bl})"
     ctl_delete "EdgionStreamPlugins" "leak-stream-plugins"
     ctl_delete "TCPRoute" "leak-tcp-sp"
     ctl_delete "Service" "leak-svc"

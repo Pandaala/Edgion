@@ -93,8 +93,8 @@ Returns counts from all derived stores. Key fields:
   "udp_routes":  { "routes_by_key": 0 },
   "tls_routes":  { "route_cache": 0 },
   "tls_store":   { "entries": 0 },
-  "plugin_store": { "plugins": 0 },
-  "stream_plugin_store": { "plugins": 0 },
+  "plugin_store_v2":        { "total": 0, "by_kind": {} },
+  "stream_plugin_store_v2": { "total": 0, "by_kind": {} },
   "backend_tls_policy": { "policies": 0, "reverse_index_targets": 0 },
   "policy_store": { "total_services": 0 }
 }
