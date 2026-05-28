@@ -102,7 +102,7 @@ Single-key entry-view access **does** exist (`get_query_param(name)` / `req.quer
 Allowlist (direct reads at the following sites are legitimate):
 
 - The ctx path/uri method implementations themselves in `src/types/ctx.rs`.
-- The entry-snapshot block in `pg_early_request_filter.rs` (path normalization entry layer).
+- The entry-snapshot block in `pg_request_filter.rs::build_request_metadata` (the `raw_path` / `raw_query` capture feeding the path-normalization entry layer).
 - ACME / well-known protocol handling code.
 - Pingora default forwarding logic paths.
 - The session trait implementations in `session_adapter.rs`.

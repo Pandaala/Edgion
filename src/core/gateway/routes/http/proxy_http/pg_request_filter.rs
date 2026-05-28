@@ -168,18 +168,27 @@ pub async fn request_filter(
     // === Per-request resolve (Phase 4 of unified plugin snapshot) ===
     // Resolve once at request_filter entry; later stages read directly from
     // ctx without paying any format!() / store-lookup cost.
-    if ctx.resolved_global_plugins.is_none() {
-        let resolved = resolve_global_plugins(edgion_http.edgion_gateway_config.spec.global_plugins_ref.as_deref());
-        ctx.resolved_global_plugins = Some(Arc::new(resolved));
-    }
+    // Fetch the global plugin store once and share &PluginStore across both
+    // resolve calls to avoid redundant Arc::clone on the hot path.
+    if ctx.resolved_global_plugins.is_none() || ctx.resolved_route_ext_refs.is_none() {
+        let plugin_store = get_global_plugin_store();
 
-    if ctx.resolved_route_ext_refs.is_none() {
-        let resolved = match (&ctx.route_unit, &ctx.grpc_route_unit) {
-            (Some(unit), _) => resolve_route_ext_refs(unit.rule.plugin_runtime.ext_ref_keys()),
-            (_, Some(unit)) => resolve_route_ext_refs(unit.rule.plugin_runtime.ext_ref_keys()),
-            _ => Vec::new(),
-        };
-        ctx.resolved_route_ext_refs = Some(Arc::new(resolved));
+        if ctx.resolved_global_plugins.is_none() {
+            let resolved = resolve_global_plugins(
+                &plugin_store,
+                edgion_http.edgion_gateway_config.spec.global_plugins_ref.as_deref(),
+            );
+            ctx.resolved_global_plugins = Some(Arc::new(resolved));
+        }
+
+        if ctx.resolved_route_ext_refs.is_none() {
+            let resolved = match (&ctx.route_unit, &ctx.grpc_route_unit) {
+                (Some(unit), _) => resolve_route_ext_refs(&plugin_store, unit.rule.plugin_runtime.ext_ref_keys()),
+                (_, Some(unit)) => resolve_route_ext_refs(&plugin_store, unit.rule.plugin_runtime.ext_ref_keys()),
+                _ => Vec::new(),
+            };
+            ctx.resolved_route_ext_refs = Some(Arc::new(resolved));
+        }
     }
 
     // Step 2: Run global plugins from EdgionGatewayConfig (executed before route-level plugins)

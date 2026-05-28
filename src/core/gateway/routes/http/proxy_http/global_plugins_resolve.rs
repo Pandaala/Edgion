@@ -13,16 +13,22 @@
 
 use std::sync::Arc;
 
-use crate::core::gateway::plugins::http::get_global_plugin_store;
+use crate::core::gateway::plugins::http::PluginStore;
 use crate::core::gateway::plugins::runtime::PluginRuntime;
 use crate::types::resources::edgion_gateway_config::PluginReference;
 
 /// Resolve `EdgionGatewayConfig.spec.global_plugins_ref` to a Vec of plugin
 /// runtimes, preserving order. Dangling refs are silently dropped from the
 /// output — no logging, this runs on the data-plane hot path.
-pub fn resolve_global_plugins(refs: Option<&[PluginReference]>) -> Vec<Arc<PluginRuntime>> {
+///
+/// Takes `&PluginStore` so the caller can fetch the global store once per
+/// request and share it across multiple resolve calls, avoiding redundant
+/// `Arc::clone` of `GLOBAL_PLUGIN_STORE`.
+pub fn resolve_global_plugins(
+    store: &PluginStore,
+    refs: Option<&[PluginReference]>,
+) -> Vec<Arc<PluginRuntime>> {
     let Some(refs) = refs else { return Vec::new() };
-    let store = get_global_plugin_store();
     let mut out = Vec::with_capacity(refs.len());
     for r in refs {
         let ns = r.namespace.as_deref().unwrap_or("default");
@@ -40,8 +46,13 @@ pub fn resolve_global_plugins(refs: Option<&[PluginReference]>) -> Vec<Arc<Plugi
 /// `None` slots are dangling refs; position is preserved because
 /// `ExtensionRefFilter.index` directly indexes into this Vec. Dangling refs
 /// are not logged here — this runs on the data-plane hot path.
-pub fn resolve_route_ext_refs(keys: &[(String, String)]) -> Vec<Option<Arc<PluginRuntime>>> {
-    let store = get_global_plugin_store();
+///
+/// Takes `&PluginStore` so the caller can fetch the global store once per
+/// request and share it across multiple resolve calls.
+pub fn resolve_route_ext_refs(
+    store: &PluginStore,
+    keys: &[(String, String)],
+) -> Vec<Option<Arc<PluginRuntime>>> {
     let mut out = Vec::with_capacity(keys.len());
     for (ns, name) in keys {
         let key = format!("{}/{}", ns, name);
@@ -53,6 +64,7 @@ pub fn resolve_route_ext_refs(keys: &[(String, String)]) -> Vec<Option<Arc<Plugi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::gateway::plugins::http::get_global_plugin_store;
     use crate::types::resources::edgion_plugins::{EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry};
     use crate::types::resources::http_route::HTTPHeaderFilter;
     use kube::core::ObjectMeta;
@@ -115,7 +127,8 @@ mod tests {
     fn resolve_global_plugins_empty_when_none() {
         let _g = TEST_LOCK.lock();
         clear_store();
-        let resolved = resolve_global_plugins(None);
+        let store = get_global_plugin_store();
+        let resolved = resolve_global_plugins(&store, None);
         assert!(resolved.is_empty());
     }
 
@@ -129,7 +142,8 @@ mod tests {
             pref("p2", Some("ns1")), // dangling
             pref("p3", Some("ns1")),
         ];
-        let resolved = resolve_global_plugins(Some(&refs));
+        let store = get_global_plugin_store();
+        let resolved = resolve_global_plugins(&store, Some(&refs));
         assert_eq!(resolved.len(), 2, "dangling p2 should be dropped");
     }
 
@@ -138,7 +152,8 @@ mod tests {
         let _g = TEST_LOCK.lock();
         install_plugins(vec![("default", "global1")]);
         let refs = vec![pref("global1", None)];
-        let resolved = resolve_global_plugins(Some(&refs));
+        let store = get_global_plugin_store();
+        let resolved = resolve_global_plugins(&store, Some(&refs));
         assert_eq!(resolved.len(), 1);
     }
 
@@ -151,7 +166,8 @@ mod tests {
             ("ns1".to_string(), "missing".to_string()),
             ("ns1".to_string(), "p1".to_string()), // duplicate ok
         ];
-        let resolved = resolve_route_ext_refs(&keys);
+        let store = get_global_plugin_store();
+        let resolved = resolve_route_ext_refs(&store, &keys);
         assert_eq!(resolved.len(), 3);
         assert!(resolved[0].is_some());
         assert!(resolved[1].is_none(), "dangling slot must be None");
@@ -162,7 +178,8 @@ mod tests {
     fn resolve_route_ext_refs_empty_keys_yields_empty_vec() {
         let _g = TEST_LOCK.lock();
         clear_store();
-        let resolved = resolve_route_ext_refs(&[]);
+        let store = get_global_plugin_store();
+        let resolved = resolve_route_ext_refs(&store, &[]);
         assert!(resolved.is_empty());
     }
 }

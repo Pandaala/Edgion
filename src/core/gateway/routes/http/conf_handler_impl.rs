@@ -11,7 +11,6 @@ use crate::core::gateway::routes::http::routes_mgr::{
 use crate::core::gateway::routes::http::{get_global_http_route_managers, HttpRouteRuleUnit};
 use crate::types::resources::common::ParentReference;
 use crate::types::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, MatchInfo, ResourceMeta};
-use parking_lot::RwLock;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -477,10 +476,10 @@ pub(crate) fn build_domain_route_rules_from_routes(data: &HashMap<String, HTTPRo
         resource_keys.extend(split.1.iter().map(|u| u.resource_key.clone()));
 
         let route_rules = Arc::new(RouteRules {
-            resource_keys: RwLock::new(resource_keys),
-            route_rules_list: RwLock::new(split.0),
+            resource_keys,
+            route_rules_list: split.0,
             match_engine,
-            regex_routes: RwLock::new(split.1),
+            regex_routes: split.1,
             regex_routes_engine,
         });
 

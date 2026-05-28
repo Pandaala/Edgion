@@ -205,8 +205,8 @@ mod route_matching_tests {
         };
 
         if let Some(route_rules) = route_rules {
-            let normal_count = route_rules.route_rules_list.read().len();
-            let regex_count = route_rules.regex_routes.read().len();
+            let normal_count = route_rules.route_rules_list.len();
+            let regex_count = route_rules.regex_routes.len();
             assert_eq!(
                 normal_count, expected_normal_routes,
                 "Expected {} normal routes for hostname '{}', got {}",

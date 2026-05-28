@@ -67,7 +67,7 @@ let path = ctx.path();                  // ctx canonical
 **Allowlist** (the following locations may read directly without report):
 
 - The ctx path/uri method implementations themselves inside `src/types/ctx.rs`
-- The entry-snapshot code block in `pg_early_request_filter.rs` (path normalization entry layer)
+- The entry-snapshot code block in `pg_request_filter.rs::build_request_metadata` (the `raw_path` / `raw_query` capture feeding the path-normalization entry layer)
 - ACME / well-known protocol handling code (`/.well-known/` path dispatch)
 - pingora default forwarding logic paths
 - The session trait implementations inside `session_adapter.rs` (adapter implementations of `get_path` etc.)

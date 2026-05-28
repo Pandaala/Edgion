@@ -12,7 +12,6 @@ use crate::types::ListenerKey;
 use crate::types::{HTTPBackendRef, HTTPRouteRule};
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
-use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
@@ -21,11 +20,11 @@ type DomainStr = String;
 pub struct RouteRules {
     /// All resource keys (HTTPRoute) that apply to this hostname
     /// Format: "namespace/name"
-    pub(crate) resource_keys: RwLock<HashSet<String>>,
+    pub(crate) resource_keys: HashSet<String>,
 
     /// Exact and prefix match routes (handled by radix tree)
     /// Stored as Arc to avoid cloning when returning from match_route
-    pub(crate) route_rules_list: RwLock<Vec<Arc<HttpRouteRuleUnit>>>,
+    pub(crate) route_rules_list: Vec<Arc<HttpRouteRuleUnit>>,
     /// Match engine for exact/prefix routes. None if there are no normal routes (only regex routes)
     pub(crate) match_engine: Option<Arc<RadixRouteMatchEngine>>,
 
@@ -33,7 +32,7 @@ pub struct RouteRules {
     /// Uses HttpRouteRuleUnit with path_regex field set
     /// Stored as Arc to avoid cloning when returning from match_route
     /// Kept for backward compatibility and debugging, but matching uses regex_routes_engine
-    pub(crate) regex_routes: RwLock<Vec<Arc<HttpRouteRuleUnit>>>,
+    pub(crate) regex_routes: Vec<Arc<HttpRouteRuleUnit>>,
     /// Regex routes engine for lock-free matching. None if there are no regex routes
     pub(crate) regex_routes_engine: Option<Arc<RegexRoutesEngine>>,
 }
@@ -41,10 +40,10 @@ pub struct RouteRules {
 impl Clone for RouteRules {
     fn clone(&self) -> Self {
         Self {
-            resource_keys: RwLock::new(self.resource_keys.read().clone()),
-            route_rules_list: RwLock::new(self.route_rules_list.read().clone()),
+            resource_keys: self.resource_keys.clone(),
+            route_rules_list: self.route_rules_list.clone(),
             match_engine: self.match_engine.clone(),
-            regex_routes: RwLock::new(self.regex_routes.read().clone()),
+            regex_routes: self.regex_routes.clone(),
             regex_routes_engine: self.regex_routes_engine.clone(),
         }
     }

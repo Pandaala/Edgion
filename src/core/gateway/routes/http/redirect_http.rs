@@ -307,8 +307,8 @@ mod tests {
 
         // Path with special characters
         assert_eq!(
-            redirect.build_redirect_url_from_parts("example.com", "/path/to/%E4%B8%AD%E6%96%87"),
-            "https://example.com/path/to/%E4%B8%AD%E6%96%87"
+            redirect.build_redirect_url_from_parts("example.com", "/path/to/%C3%A9%C3%B1"),
+            "https://example.com/path/to/%C3%A9%C3%B1"
         );
     }
 
