@@ -31,7 +31,7 @@ Edgion's Metrics design principles (strict for the Gateway data plane; looser fo
 
 | Question | Where to look |
 |----------|---------------|
-| "What is the gateway's current error rate? Should we alert?" | Prometheus counters (`edgion_requests_failed_total` / `edgion_backend_requests_total{status="5xx"}`, etc.) |
+| "What is the gateway's current error rate? Should we alert?" | Prometheus counter `edgion_backend_requests_total{status=~"5xx\|failed"}` (no standalone "gateway request total/failed" counters — derive both from this multi-label counter) |
 | "What happened on the request with x-trace-id=abc?" | access log |
 | "Is mirror keeping up with primary traffic?" | Prometheus counter `edgion_mirror_requests_total{status="channel_full"\|"timeout"}` |
 | "What is the p99 latency distribution of mirror?" | aggregate the `et` field in the mirror access log (do not add a histogram) |
@@ -42,9 +42,7 @@ Edgion's Metrics design principles (strict for the Gateway data plane; looser fo
 
 | Metric Name | Type | Description |
 |-------------|------|-------------|
-| `edgion_requests_total` | Counter | Total requests |
-| `edgion_requests_failed_total` | Counter | Failed requests |
-| `edgion_backend_requests_total` | Counter | Total backend requests. Labels are **configurable** (see "backend_requests label configuration" below). By default only `gateway_namespace` + `gateway_name` + `protocol` + `status`; enable `route_*` / `backend_*` drill-down via `metrics.backend_requests.labels` when needed. ⚠️ `test_key` / `test_data` only appear under `--integration-testing-mode` with explicit Gateway annotation opt-in; `test_data` varies per request (containing ip / latency_ms, etc.), so **never enable this flag in production**. |
+| `edgion_backend_requests_total` | Counter | Total backend requests; also the **only** per-request counter — gateway-level totals/failures are derived via `sum(...)` and `status` label filtering. Labels are **configurable** (see "backend_requests label configuration" below). By default only `gateway_namespace` + `gateway_name` + `protocol` + `status`; enable `route_*` / `backend_*` drill-down via `metrics.backend_requests.labels` when needed. ⚠️ `test_key` / `test_data` only appear under `--integration-testing-mode` with explicit Gateway annotation opt-in; `test_data` varies per request (containing ip / latency_ms, etc.), so **never enable this flag in production**. |
 | `edgion_ctx_active` | Gauge | Currently active request contexts |
 | `edgion_gateway_request_duration_ms` | **Histogram (the only exception on the Gateway data plane)** | End-to-end request latency, core SLI. Disabled by default; once enabled, buckets are configured via `MetricsConfig::request_duration`. |
 | `edgion_mirror_requests_total{status}` | Counter | Result of each mirror by the request mirror plugin. `status` ∈ `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout` (**mirror latency no longer has a histogram — query the `et` field in mirror_log**). |

@@ -434,9 +434,8 @@ Edgion 定义了 21 个 Prometheus 指标，覆盖 Google SRE 四大黄金信号
 
 | 指标名 | 类型 | 说明 |
 |--------|------|------|
-| `edgion_requests_total` | Counter | 已处理请求总数 |
 | `edgion_ctx_created_total` | Counter | 创建的请求上下文总数 |
-| `edgion_backend_requests_total` | Counter | 后端请求总数，携带 gateway/route/backend/protocol/status 等多维 label |
+| `edgion_backend_requests_total` | Counter | 后端请求总数，携带 gateway/route/backend/protocol/status 等多维 label（请求总量用 `sum(...)` 聚合得到） |
 | `edgion_mirror_requests_total` | Counter | 镜像请求总数，按 status label 分组 |
 | `edgion_gateway_request_bytes_total` | Counter | 下行到上游的请求字节总数 |
 | `edgion_gateway_response_bytes_total` | Counter | 上游到下行的响应字节总数 |
@@ -452,7 +451,6 @@ Edgion 定义了 21 个 Prometheus 指标，覆盖 Google SRE 四大黄金信号
 
 | 指标名 | 类型 | 说明 |
 |--------|------|------|
-| `edgion_requests_failed_total` | Counter | 失败请求总数 |
 | `edgion_status_update_failed_total` | Counter | K8s Status 更新失败总数 |
 | `edgion_access_log_dropped_total` | Counter | HTTP 访问日志丢弃条数（Channel 满） |
 | `edgion_ssl_log_dropped_total` | Counter | SSL 日志丢弃条数 |

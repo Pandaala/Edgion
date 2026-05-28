@@ -10,8 +10,6 @@ use std::sync::{LazyLock, OnceLock};
 pub mod names {
     pub const CTX_CREATED: &str = "edgion_ctx_created_total";
     pub const CTX_ACTIVE: &str = "edgion_ctx_active";
-    pub const REQUESTS_TOTAL: &str = "edgion_requests_total";
-    pub const REQUESTS_FAILED: &str = "edgion_requests_failed_total";
     pub const ACCESS_LOG_DROPPED: &str = "edgion_access_log_dropped_total";
     pub const SSL_LOG_DROPPED: &str = "edgion_ssl_log_dropped_total";
     pub const TCP_LOG_DROPPED: &str = "edgion_tcp_log_dropped_total";
@@ -91,8 +89,6 @@ pub struct GatewayMetrics {
     gateway_response_bytes: Counter,
 
     // --- Cold / rare-event handles (lazy registration via OnceLock) ---
-    requests_total: OnceLock<Counter>,
-    requests_failed: OnceLock<Counter>,
     access_log_dropped: OnceLock<Counter>,
     ssl_log_dropped: OnceLock<Counter>,
     tcp_log_dropped: OnceLock<Counter>,
@@ -130,8 +126,6 @@ impl GatewayMetrics {
             gateway_request_bytes: counter!(names::GATEWAY_REQUEST_BYTES),
             gateway_response_bytes: counter!(names::GATEWAY_RESPONSE_BYTES),
             // Cold handles: lazy
-            requests_total: OnceLock::new(),
-            requests_failed: OnceLock::new(),
             access_log_dropped: OnceLock::new(),
             ssl_log_dropped: OnceLock::new(),
             tcp_log_dropped: OnceLock::new(),
@@ -158,19 +152,6 @@ impl GatewayMetrics {
     #[inline]
     pub fn ctx_destroyed(&self) {
         self.ctx_active.decrement(1.0);
-    }
-
-    /// Record a successful request
-    #[inline]
-    pub fn request_success(&self) {
-        get_or_register_counter(&self.requests_total, names::REQUESTS_TOTAL).increment(1);
-    }
-
-    /// Record a failed request
-    #[inline]
-    pub fn request_failed(&self) {
-        get_or_register_counter(&self.requests_total, names::REQUESTS_TOTAL).increment(1);
-        get_or_register_counter(&self.requests_failed, names::REQUESTS_FAILED).increment(1);
     }
 
     /// Record a dropped access log entry

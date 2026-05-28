@@ -8,6 +8,7 @@ pub mod tcp_log;
 pub mod tls_log;
 pub mod udp_log;
 
+pub use crate::core::gateway::link_sys::providers::local_file::LogType;
 pub use buffer::{LogBuffer, ULogBuffer};
 pub use logger_factory::{create_async_logger, create_sync_logger};
 pub use ssl_log::{init_ssl_logger, log_ssl};

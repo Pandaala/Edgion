@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-use crate::core::gateway::observe::logs::create_async_logger;
+use crate::core::gateway::observe::logs::{create_async_logger, LogType};
 use crate::core::gateway::observe::AccessLogger;
 
 /// Global UDP logger instance
@@ -92,7 +92,7 @@ impl UdpLogEntry {
 
 /// Initialize the global UDP logger from configuration
 pub async fn init_udp_logger(config: &crate::types::LogConfig) -> Result<()> {
-    if let Some(logger) = create_async_logger(config, "udp").await? {
+    if let Some(logger) = create_async_logger(config, LogType::Udp).await? {
         UDP_LOGGER
             .set(logger)
             .map_err(|_| anyhow!("UdpLogger already initialized"))?;

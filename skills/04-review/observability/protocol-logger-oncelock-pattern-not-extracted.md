@@ -52,10 +52,10 @@ consistent across `access_log/mod.rs`, `tcp_log.rs`, `tls_log.rs`,
 prevent has not appeared in practice. The shared real work (writer
 construction, `LocalFileWriter::init`, queue/rotation wiring) already lives
 in `logger_factory.rs::create_async_logger`, which all four sites call with
-their own kind string (`"access"` / `"tcp"` / `"tls"` / `"udp"` — the
-`log_type` enum match in `create_async_logger` at lines 59-65 of
-`logger_factory.rs` is the canonical kind table). What's left in each file
-is the per-protocol OnceLock plumbing.
+their own `LogType` enum variant (`LogType::Access` / `Tcp` / `Tls` / `Udp`
+— typed since observe-FB03, 2026-05-29; the kind is no longer routed
+through a string match). What's left in each file is the per-protocol
+OnceLock plumbing.
 
 **2. The wrapper cannot hold the static — per-protocol boilerplate stays.**
 
@@ -170,6 +170,7 @@ Re-open this decision only if:
   - `src/core/gateway/observe/logs/ssl_log.rs:16,55-73`
 - Shared real work (intentional consolidation point):
   `src/core/gateway/observe/logs/logger_factory.rs` — `create_async_logger`
-  (called by access_log / tcp_log / tls_log / udp_log with kind strings
-  `"access"` / `"tcp"` / `"tls"` / `"udp"`), `create_sync_logger` (called by
-  ssl_log).
+  (called by access_log / tcp_log / tls_log / udp_log with the typed
+  `LogType::Access` / `Tcp` / `Tls` / `Udp` enum variants, observe-FB03,
+  2026-05-29), `create_sync_logger` (called by ssl_log, hard-wired to
+  `LogType::Ssl`).

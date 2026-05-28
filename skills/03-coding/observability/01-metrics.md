@@ -17,7 +17,7 @@
 
   **Counter/gauge off by default**: discrete events like validate rejection, resource conflict, illegal config are sufficiently covered by `tracing::warn!(ns, name, field, reason, "...")` + status condition; do not "casually" add a counter like `edgion_controller_validate_rejected_total{reason}` — every reason is a cardinality decision and easily expands without discipline.
 - **Finer observation goes through access log aggregation, not metric expansion**: most "what happened on this request / how long it took / which backend it went to" questions already have raw data in the access/mirror/ssl/tls/tcp/udp access logs (JSON structured fields). Aggregation in Loki / Elasticsearch / ClickHouse at query time produces percentile / rate / distribution along any dimension. Prometheus is for **second-level alerts + low-cardinality aggregation**; the access log is for **high-cardinality detail replay**. Their division of labor is clear:
-  - "What is the gateway error rate now?" → Prometheus counter (`edgion_requests_failed_total`)
+  - "What is the gateway error rate now?" → Prometheus counter `edgion_backend_requests_total{status=~"5xx|failed"}` (the gateway-level `edgion_requests_failed_total` was removed: it was never wired up, and the backend-labeled counter is a strictly superior signal)
   - "What exactly happened on that 5xx just now? x-trace-id is abc123" → access log
   - "What's mirror's p99 latency?" → aggregate the `et` field of the mirror access log; **do not** add a histogram
   - "What's a backend's 2xx ratio?" → counter rate, already exists

@@ -95,8 +95,6 @@ Metrics are exposed on port `:5901` via Axum routes:
 |-------------|------|-------------|
 | `edgion_ctx_created_total` | Counter | Total contexts created |
 | `edgion_ctx_active` | Gauge | Currently active contexts |
-| `edgion_requests_total` | Counter | Total requests |
-| `edgion_requests_failed_total` | Counter | Total failed requests |
 | `edgion_access_log_dropped_total` | Counter | Number of dropped access logs |
 | `edgion_ssl_log_dropped_total` | Counter | Number of dropped SSL logs |
 | `edgion_tcp_log_dropped_total` | Counter | Number of dropped TCP logs |

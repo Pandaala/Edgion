@@ -1,20 +1,20 @@
 ---
 name: metrics-registry-cold-oncelock-pattern-not-extracted
-description: Decision record for observe F-011 — the 14 cold `OnceLock<Counter/Gauge>` fields in `GatewayMetrics` (struct field + `new()` initializer + `record_*` method, three wiring points per metric) are intentionally not folded into a `cold_counter!` / `cold_gauge!` declarative macro.
+description: Decision record for observe F-011 — the 12 cold `OnceLock<Counter/Gauge>` fields in `GatewayMetrics` (struct field + `new()` initializer + `record_*` method, three wiring points per metric) are intentionally not folded into a `cold_counter!` / `cold_gauge!` declarative macro.
 ---
 
 # observe F-011 — Cold-metric OnceLock boilerplate is not extracted into a macro
 
 ## Conclusion
 
-`src/core/gateway/observe/metrics/registry.rs` declares 14 cold metrics as
+`src/core/gateway/observe/metrics/registry.rs` declares 12 cold metrics as
 `OnceLock<Counter>` / `OnceLock<Gauge>` fields. Each metric is wired in three
 places:
 
-1. Struct field declaration on `GatewayMetrics` (L94–107).
-2. `OnceLock::new()` initializer inside `GatewayMetrics::new()` (L133–146).
+1. Struct field declaration on `GatewayMetrics`.
+2. `OnceLock::new()` initializer inside `GatewayMetrics::new()`.
 3. A dedicated `#[inline] pub fn record_*` method that calls
-   `get_or_register_counter(&self.<field>, names::<NAME>)` (L164–272).
+   `get_or_register_counter(&self.<field>, names::<NAME>)`.
 
 Folding this into a `cold_counter!(field, NAME_CONST)` /
 `cold_gauge!(field, NAME_CONST)` macro that emits all three artefacts at once
@@ -27,7 +27,7 @@ collapses the cold-metric registration into a single line" should be closed as
 **1. "Silent `None`" risk is not real under the current struct shape.**
 
 `GatewayMetrics::new()` uses a literal struct expression `Self { field: ..., ... }`
-listing every field explicitly (L126–147). Missing a field there is a hard
+listing every field explicitly. Missing a field there is a hard
 compile error, not a silent `None`. The "silent `None` if field and `new()`
 diverge" hazard cited in the finding can only materialize if the codebase
 later switches to `..Default::default()` (or `OnceLock::default()`) — which
@@ -65,22 +65,20 @@ exact tradeoff:
 Not every cold metric is a 1-field-→-1-method mapping. Real shapes that a
 `cold_counter!(field, NAME)` arm cannot generate:
 
-- `request_failed` (L171–174) increments both `requests_total` AND
-  `requests_failed` in the same call — two `OnceLock` slots, one method.
-- `status_update_failed` (L214–217) has the same composite shape on
-  `status_update_total` + `status_update_failed`.
-- `gateway_connected` / `gateway_disconnected` (L251–267) share the same
+- `status_update_failed` increments both `status_update_total` AND
+  `status_update_failed` in the same call — two `OnceLock` slots, one method.
+- `gateway_connected` / `gateway_disconnected` share the same
   `controller_connected_gateways` gauge but are two methods with opposite
   ±1 semantics.
 
-After excluding these, only 8–10 cold metrics actually fit the
+After excluding these, only 8–9 cold metrics actually fit the
 "declare-init-record" 1:1 shape; the remainder still has to be hand-written.
 The ~100-line saving in the finding is closer to ~50 lines in practice — at
 the cost of one new macro layer that readers have to chase.
 
 **4. Cost-of-change is concentrated in the existing helpers, not at call sites.**
 
-The two helpers `get_or_register_counter` / `get_or_register_gauge` (L110–117)
+The two helpers `get_or_register_counter` / `get_or_register_gauge`
 already abstract the lazy-init mechanism. Adding a new cold metric is three
 nearly-mechanical edits in one file — there is no cross-module coordination,
 no public API to keep in sync, no runtime behavior to preserve across versions.
@@ -122,7 +120,7 @@ Same shape, same conclusion:
 
 Re-open this decision only if:
 
-- The number of cold metrics on `GatewayMetrics` roughly doubles (≥30) and
+- The number of cold metrics on `GatewayMetrics` roughly doubles (≥25) and
   the file becomes hard to read at a glance.
 - A real silent-`None` or wrong-name incident is observed in production
   (not hypothesized in review) and is directly traceable to the three-point
@@ -141,7 +139,7 @@ Re-open this decision only if:
 - Closed finding: `tasks/observe/observe-F011-registry-extract-fn-registration-boilerplate.md`
   (closed 2026-05-28, ⚠️ accepted tradeoff).
 - Source kept as-is:
-  - `src/core/gateway/observe/metrics/registry.rs:82-274`
+  - `src/core/gateway/observe/metrics/registry.rs` (`GatewayMetrics` struct + `new()` + `record_*` methods)
 - Sibling decision records:
   - `skills/04-review/observability/protocol-logger-oncelock-pattern-not-extracted.md`
   - `skills/04-review/architecture/style-consolidation-thresholds.md`

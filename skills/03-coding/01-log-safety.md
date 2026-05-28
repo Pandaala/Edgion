@@ -103,7 +103,7 @@ The data plane (request/connection processing path) produces logs only through t
 | **access log** | Request-level result records | `AccessLogEntry` / `log_tls()` |
 | **ctx.err_log / ctx.log** | Connection-level error/event | TLS proxy's `ctx.err_log = Some(...)` |
 | **PluginLog** | Plugin execution summary | `log.push("OK u=alice")` |
-| **Metrics** | Aggregated counters | `global_metrics().request_success()` |
+| **Metrics** | Aggregated counters | `global_metrics().ctx_created()` / `record_backend_request(...)` |
 
 **Any `tracing::` macro is forbidden on the request/connection processing hot path**, including `debug!`.
 

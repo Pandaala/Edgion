@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use serde::Serialize;
 use std::sync::{Arc, OnceLock};
 
-use crate::core::gateway::observe::logs::create_async_logger;
+use crate::core::gateway::observe::logs::{create_async_logger, LogType};
 use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::routes::tcp::edgion_tcp::TcpContext;
 
@@ -55,7 +55,7 @@ impl TcpLogEntry {
 }
 
 pub async fn init_tcp_logger(config: &crate::types::LogConfig) -> Result<()> {
-    if let Some(logger) = create_async_logger(config, "tcp").await? {
+    if let Some(logger) = create_async_logger(config, LogType::Tcp).await? {
         TCP_LOGGER
             .set(logger)
             .map_err(|_| anyhow!("TcpLogger already initialized"))?;

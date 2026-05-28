@@ -431,9 +431,8 @@ The labels for `edgion_gateway_request_duration_ms` are driven by the `RequestDu
 
 | Metric Name | Type | Description |
 |-------------|------|-------------|
-| `edgion_requests_total` | Counter | Total number of processed requests |
 | `edgion_ctx_created_total` | Counter | Total number of request contexts created |
-| `edgion_backend_requests_total` | Counter | Total number of backend requests, with multi-dimensional labels including gateway/route/backend/protocol/status |
+| `edgion_backend_requests_total` | Counter | Total number of backend requests, with multi-dimensional labels including gateway/route/backend/protocol/status (use `sum(...)` for the aggregate request total) |
 | `edgion_mirror_requests_total` | Counter | Total number of mirror requests, grouped by status label |
 | `edgion_gateway_request_bytes_total` | Counter | Total request bytes sent downstream to upstream |
 | `edgion_gateway_response_bytes_total` | Counter | Total response bytes sent from upstream to downstream |
@@ -449,7 +448,6 @@ The labels for `edgion_gateway_request_duration_ms` are driven by the `RequestDu
 
 | Metric Name | Type | Description |
 |-------------|------|-------------|
-| `edgion_requests_failed_total` | Counter | Total number of failed requests |
 | `edgion_status_update_failed_total` | Counter | Total number of K8s Status update failures |
 | `edgion_access_log_dropped_total` | Counter | Number of HTTP access log entries dropped (channel full) |
 | `edgion_ssl_log_dropped_total` | Counter | Number of SSL log entries dropped |

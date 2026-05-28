@@ -15,21 +15,21 @@ use crate::types::{LocalFileWriterConfig, LogConfig, StringOutput};
 /// output path (both are operator-driven "logger off" cases, not errors).
 /// Future non-`LocalFile` `StringOutput` variants (Es, Kafka, ...) will need
 /// their own front-end builder and should not be funnelled through this one.
-fn build_writer_config(config: &LogConfig, log_type: &str) -> Option<LocalFileWriterConfig> {
+fn build_writer_config(config: &LogConfig, log_type: LogType) -> Option<LocalFileWriterConfig> {
     if !config.enabled {
-        tracing::info!(log_type, "Logger disabled by configuration");
+        tracing::info!(?log_type, "Logger disabled by configuration");
         return None;
     }
 
     let StringOutput::LocalFile(file_cfg) = &config.output;
 
     if file_cfg.path.is_empty() {
-        tracing::info!(log_type, "Logger disabled (empty path)");
+        tracing::info!(?log_type, "Logger disabled (empty path)");
         return None;
     }
 
     tracing::info!(
-        log_type,
+        ?log_type,
         path = %file_cfg.path,
         queue_size = ?file_cfg.queue_size,
         "Initializing logger with LocalFile output"
@@ -50,29 +50,20 @@ fn build_writer_config(config: &LogConfig, log_type: &str) -> Option<LocalFileWr
 
 /// Create an async logger (for Access, TCP, UDP logs)
 /// Returns None if the log is disabled
-pub async fn create_async_logger(config: &LogConfig, log_type: &str) -> Result<Option<Arc<AccessLogger>>> {
+pub async fn create_async_logger(config: &LogConfig, log_type: LogType) -> Result<Option<Arc<AccessLogger>>> {
     let Some(writer_config) = build_writer_config(config, log_type) else {
         return Ok(None);
     };
 
-    // Determine log type from string
-    let log_type_enum = match log_type {
-        "access" => LogType::Access,
-        "tls" => LogType::Tls,
-        "tcp" => LogType::Tcp,
-        "udp" => LogType::Udp,
-        _ => LogType::Access,
-    };
-
     // Create and initialize LocalFileWriter
-    let mut writer = LocalFileWriter::new(writer_config).with_log_type(log_type_enum);
+    let mut writer = LocalFileWriter::new(writer_config).with_log_type(log_type);
     writer.init().await?;
 
     // Register the writer
     let mut logger = AccessLogger::new();
     logger.register(Box::new(writer));
 
-    tracing::info!(log_type, "Logger initialized successfully");
+    tracing::info!(?log_type, "Logger initialized successfully");
 
     Ok(Some(Arc::new(logger)))
 }
@@ -80,7 +71,7 @@ pub async fn create_async_logger(config: &LogConfig, log_type: &str) -> Result<O
 /// Create a sync logger (for SSL log which needs sync API for TLS callbacks)
 /// Returns None if the log is disabled
 pub async fn create_sync_logger(config: &LogConfig) -> Result<Option<SslLogger>> {
-    let Some(writer_config) = build_writer_config(config, "ssl") else {
+    let Some(writer_config) = build_writer_config(config, LogType::Ssl) else {
         return Ok(None);
     };
 
