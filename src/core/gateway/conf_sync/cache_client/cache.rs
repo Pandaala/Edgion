@@ -27,6 +27,16 @@ pub trait DynClientCache: Send + Sync {
 
     /// Start watching resources from gRPC server
     async fn start_watch_dyn(&self) -> Result<(), tonic::Status>;
+
+    /// Human-readable kind name (e.g., "HTTPRoute"). Forwarded from `T::kind_name()`,
+    /// so it stays in lockstep with the resource's `ResourceMeta` impl.
+    fn kind_name_dyn(&self) -> &'static str;
+
+    /// Number of entries currently held by this cache.
+    fn len_dyn(&self) -> usize;
+
+    /// Snapshot of all keys currently held by this cache.
+    fn keys_dyn(&self) -> Vec<String>;
 }
 
 pub struct ClientCache<T>
@@ -194,5 +204,17 @@ where
 
     async fn start_watch_dyn(&self) -> Result<(), tonic::Status> {
         self.start_watch().await
+    }
+
+    fn kind_name_dyn(&self) -> &'static str {
+        T::kind_name()
+    }
+
+    fn len_dyn(&self) -> usize {
+        self.len()
+    }
+
+    fn keys_dyn(&self) -> Vec<String> {
+        self.keys()
     }
 }

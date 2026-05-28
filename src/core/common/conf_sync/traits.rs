@@ -1,4 +1,3 @@
-use crate::types::ResourceKind;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -75,12 +74,3 @@ pub fn arc_map_into_owned<T: Clone>(data: HashMap<String, Arc<T>>) -> HashMap<St
     data.into_iter().map(|(k, v)| (k, (*v).clone())).collect()
 }
 
-pub trait ConfigClientEventDispatcher: Send + Sync {
-    fn apply_resource_change(
-        &self,
-        change: ResourceChange,
-        resource_type: Option<ResourceKind>,
-        data: String,
-        resource_version: Option<u64>,
-    );
-}

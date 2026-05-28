@@ -1,15 +1,13 @@
-use crate::core::common::conf_sync::traits::{CacheEventDispatch, ConfigClientEventDispatcher, ResourceChange};
 use crate::core::common::conf_sync::types::ListData;
 use crate::core::gateway::backends::{create_ep_slice_handler, create_service_handler};
 use crate::core::gateway::conf_sync::cache_client::{ClientCache, DynClientCache};
 use crate::core::gateway::routes::create_route_manager_handler;
 use crate::types::prelude_resources::*;
 use crate::types::resource_defs::get_resource_info;
-use crate::types::{all_resource_type_names, GatewayBaseConf, ResourceKind, ResourceMeta};
+use crate::types::{all_resource_type_names, GatewayBaseConf, ResourceKind};
 use anyhow::Result;
 use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
-use kube::Resource;
 use parking_lot::RwLock;
 use std::collections::HashSet;
 
@@ -384,14 +382,6 @@ impl ConfigClient {
         }
     }
 
-    /// Initialize base configuration with parsed objects
-    fn apply_change_to_cache<T>(cache: &ClientCache<T>, change: ResourceChange, resource: T)
-    where
-        T: Clone + ResourceMeta + Resource + Send + 'static,
-    {
-        cache.apply_change(change, resource, None);
-    }
-
     pub fn list(&self, _key: &String, kind: &ResourceKind) -> Result<ListDataSimple, String> {
         let (data_json, sync_version) = match kind {
             ResourceKind::Unspecified => return Err("Resource kind unspecified".to_string()),
@@ -518,151 +508,51 @@ impl ConfigClient {
         self.endpoint_slices.trigger_update_event_by_key(key);
     }
 
-    /// Per-kind entry counts for all 17 ClientCaches. Used by store-stats leak detection.
+    /// Per-kind entry counts for every ClientCache held on the Gateway side.
+    /// Used by store-stats leak detection.
     ///
-    /// Covers every kind that ConfigClient actually caches on the Gateway side.
-    /// Omitted (not cached on Gateway): Secret, ConfigMap, ReferenceGrant, Endpoint (removed).
+    /// Iterates `ALL_RESOURCE_INFOS` and dispatches through `get_dyn_cache()`,
+    /// which is an exhaustive `ResourceKind` match. Kinds not cached on Gateway
+    /// (Secret, ConfigMap, ReferenceGrant) return `None` and are skipped. Adding a
+    /// new `ResourceKind` automatically appears here as soon as it is wired into
+    /// `get_dyn_cache()` — no separate string table to keep in sync.
     pub fn client_cache_stats(&self) -> std::collections::BTreeMap<String, usize> {
+        use crate::types::resource_defs::ALL_RESOURCE_INFOS;
+
         let mut out = std::collections::BTreeMap::new();
-        out.insert("HTTPRoute".to_string(), self.routes().len());
-        out.insert("GRPCRoute".to_string(), self.grpc_routes().len());
-        out.insert("TCPRoute".to_string(), self.tcp_routes().len());
-        out.insert("UDPRoute".to_string(), self.udp_routes().len());
-        out.insert("TLSRoute".to_string(), self.tls_routes().len());
-        out.insert("Service".to_string(), self.services().len());
-        out.insert("EndpointSlice".to_string(), self.endpoint_slices().len());
-        out.insert("EdgionTls".to_string(), self.edgion_tls().len());
-        out.insert("EdgionAcme".to_string(), self.edgion_acme().len());
-        out.insert("EdgionPlugins".to_string(), self.edgion_plugins().len());
-        out.insert("EdgionStreamPlugins".to_string(), self.edgion_stream_plugins().len());
-        out.insert("BackendTLSPolicy".to_string(), self.backend_tls_policies().len());
-        out.insert("PluginMetaData".to_string(), self.plugin_metadata().len());
-        out.insert("LinkSys".to_string(), self.link_sys().len());
-        out.insert("GatewayClass".to_string(), self.gateway_classes().len());
-        out.insert("Gateway".to_string(), self.gateways().len());
-        out.insert("EdgionGatewayConfig".to_string(), self.edgion_gateway_configs().len());
+        for info in ALL_RESOURCE_INFOS {
+            if let Some(cache) = self.get_dyn_cache(info.kind) {
+                out.insert(cache.kind_name_dyn().to_string(), cache.len_dyn());
+            }
+        }
         out
     }
 
     /// Per-kind sample keys (capped at `max`). Used by leak detection diagnostic report.
     ///
-    /// Returns an empty Vec for any kind not cached on Gateway (Secret, ConfigMap, ReferenceGrant).
+    /// Looks up the cache via `get_dyn_cache()` (exhaustive `ResourceKind` match) and
+    /// matches `kind` against `kind_name_dyn()` — so it stays in lockstep with
+    /// `client_cache_stats`. Returns an empty Vec for any unknown kind or for kinds
+    /// not cached on Gateway (Secret, ConfigMap, ReferenceGrant).
     #[allow(dead_code)] // Consumed by validator binary (Task 15/16); allow until then.
     pub fn client_cache_keys(&self, kind: &str, max: usize) -> Vec<String> {
-        let all = match kind {
-            "HTTPRoute" => self.routes().keys(),
-            "GRPCRoute" => self.grpc_routes().keys(),
-            "TCPRoute" => self.tcp_routes().keys(),
-            "UDPRoute" => self.udp_routes().keys(),
-            "TLSRoute" => self.tls_routes().keys(),
-            "Service" => self.services().keys(),
-            "EndpointSlice" => self.endpoint_slices().keys(),
-            "EdgionTls" => self.edgion_tls().keys(),
-            "EdgionAcme" => self.edgion_acme().keys(),
-            "EdgionPlugins" => self.edgion_plugins().keys(),
-            "EdgionStreamPlugins" => self.edgion_stream_plugins().keys(),
-            "BackendTLSPolicy" => self.backend_tls_policies().keys(),
-            "PluginMetaData" => self.plugin_metadata().keys(),
-            "LinkSys" => self.link_sys().keys(),
-            "GatewayClass" => self.gateway_classes().keys(),
-            "Gateway" => self.gateways().keys(),
-            "EdgionGatewayConfig" => self.edgion_gateway_configs().keys(),
-            _ => Vec::new(),
-        };
-        all.into_iter().take(max).collect()
+        use crate::types::resource_defs::ALL_RESOURCE_INFOS;
+
+        for info in ALL_RESOURCE_INFOS {
+            let Some(cache) = self.get_dyn_cache(info.kind) else {
+                continue;
+            };
+            if cache.kind_name_dyn() == kind {
+                return cache.keys_dyn().into_iter().take(max).collect();
+            }
+        }
+        Vec::new()
     }
 }
 
 pub struct ListDataSimple {
     pub data: String,
     pub sync_version: u64,
-}
-
-impl ConfigClientEventDispatcher for ConfigClient {
-    fn apply_resource_change(
-        &self,
-        change: ResourceChange,
-        resource_type: Option<ResourceKind>,
-        data: String,
-        _resource_version: Option<u64>,
-    ) {
-        let resource_type = resource_type.or_else(|| ResourceKind::from_content(&data));
-        let Some(resource_type) = resource_type else {
-            tracing::error!(
-                component = "config_client",
-                change = ?change,
-                data_len = data.len(),
-                "Failed to determine resource type"
-            );
-            return;
-        };
-
-        let log_error = |kind: &str, err: &serde_yaml::Error| {
-            tracing::error!(
-                component = "config_client",
-                change = ?change,
-                kind = kind,
-                error = %err,
-                data_len = data.len(),
-                "Failed to parse resource"
-            );
-        };
-
-        // Helper macro to reduce repetitive parse-and-apply code
-        macro_rules! apply_change {
-            ($type:ty, $field:ident, $name:literal) => {
-                match serde_yaml::from_str::<$type>(&data) {
-                    Ok(resource) => Self::apply_change_to_cache(&self.$field, change, resource),
-                    Err(e) => log_error($name, &e),
-                }
-            };
-        }
-
-        match resource_type {
-            ResourceKind::Unspecified => {
-                tracing::warn!(
-                    component = "config_client",
-                    change = ?change,
-                    data_len = data.len(),
-                    "Unspecified resource kind, skipping"
-                );
-            }
-            ResourceKind::GatewayClass => apply_change!(GatewayClass, gateway_classes, "GatewayClass"),
-            ResourceKind::EdgionGatewayConfig => {
-                apply_change!(EdgionGatewayConfig, edgion_gateway_configs, "EdgionGatewayConfig")
-            }
-            ResourceKind::Gateway => apply_change!(Gateway, gateways, "Gateway"),
-            ResourceKind::HTTPRoute => apply_change!(HTTPRoute, routes, "HTTPRoute"),
-            ResourceKind::GRPCRoute => apply_change!(GRPCRoute, grpc_routes, "GRPCRoute"),
-            ResourceKind::TCPRoute => apply_change!(TCPRoute, tcp_routes, "TCPRoute"),
-            ResourceKind::UDPRoute => apply_change!(UDPRoute, udp_routes, "UDPRoute"),
-            ResourceKind::TLSRoute => apply_change!(TLSRoute, tls_routes, "TLSRoute"),
-            ResourceKind::LinkSys => apply_change!(LinkSys, link_sys, "LinkSys"),
-            ResourceKind::PluginMetaData => apply_change!(PluginMetaData, plugin_metadata, "PluginMetaData"),
-            ResourceKind::Service => apply_change!(Service, services, "Service"),
-            ResourceKind::EndpointSlice => apply_change!(EndpointSlice, endpoint_slices, "EndpointSlice"),
-            ResourceKind::EdgionTls => apply_change!(EdgionTls, edgion_tls, "EdgionTls"),
-            ResourceKind::EdgionPlugins => apply_change!(EdgionPlugins, edgion_plugins, "EdgionPlugins"),
-            ResourceKind::EdgionStreamPlugins => {
-                apply_change!(EdgionStreamPlugins, edgion_stream_plugins, "EdgionStreamPlugins")
-            }
-            ResourceKind::ReferenceGrant => {
-                tracing::debug!(
-                    "skip resource change {:?} for ReferenceGrant (not synced to Gateway)",
-                    change
-                )
-            }
-            ResourceKind::BackendTLSPolicy => apply_change!(BackendTLSPolicy, backend_tls_policies, "BackendTLSPolicy"),
-            ResourceKind::Secret => tracing::warn!("skip resource change {:?} for Secret", change),
-            ResourceKind::ConfigMap => {
-                tracing::debug!(
-                    "skip resource change {:?} for ConfigMap (not synced to Gateway)",
-                    change
-                )
-            }
-            ResourceKind::EdgionAcme => apply_change!(EdgionAcme, edgion_acme, "EdgionAcme"),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -700,6 +590,8 @@ mod tests {
 
     #[test]
     fn client_cache_stats_all_zero_initially() {
+        use crate::types::resource_defs::ALL_RESOURCE_INFOS;
+
         let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
         let _enter = rt.enter();
         let client = ConfigClient::new("cid".to_string(), "cname".to_string());
@@ -710,6 +602,24 @@ mod tests {
         for (kind, count) in &stats {
             assert_eq!(*count, 0, "kind {kind} should start empty");
         }
+        // Contract: stats.keys() must equal the kind_name set of every ResourceKind
+        // that `get_dyn_cache()` returns `Some` for. `get_dyn_cache` is the
+        // compile-time-exhaustive dispatch table; this assertion bridges it to the
+        // stats output, so a future hand-rolled stats table that forgets a kind
+        // will fail this test loudly.
+        let expected_keys: std::collections::BTreeSet<String> = ALL_RESOURCE_INFOS
+            .iter()
+            .filter_map(|info| {
+                client
+                    .get_dyn_cache(info.kind)
+                    .map(|c| c.kind_name_dyn().to_string())
+            })
+            .collect();
+        let actual_keys: std::collections::BTreeSet<String> = stats.keys().cloned().collect();
+        assert_eq!(
+            actual_keys, expected_keys,
+            "client_cache_stats keys must match the get_dyn_cache coverage set"
+        );
         // Cross-check: every kind reported by stats must be reachable via client_cache_keys.
         // Catches future divergence if a new kind is added to stats but not keys.
         for kind in stats.keys() {
