@@ -3,7 +3,6 @@ use crate::core::gateway::observe::access_log::get_access_logger_unchecked;
 use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::runtime::server::listener_builder;
 use crate::core::gateway::runtime::store::listener_gateway_info::is_listener_conflicted;
-use crate::core::gateway::runtime::store::{get_global_gateway_store, rebuild_listener_gateway_infos};
 use crate::types::listener_key::{resolve_listener_addr, ListenerKey};
 use crate::types::resources::edgion_gateway_config::{EdgionGatewayConfig, EdgionGatewayConfigSpec};
 use crate::types::{Gateway, ResourceMeta};
@@ -40,12 +39,19 @@ impl GatewayBase {
         get_access_logger_unchecked().clone()
     }
 
-    /// Configure listeners on Pingora server for all Gateway resources
+    /// Configure listeners on Pingora server for all Gateway resources.
     ///
     /// This method:
-    /// 1. Adds all gateways to the global gateway store
-    /// 2. For each Gateway, fetches its GatewayClass and EdgionGatewayConfig
-    /// 3. For each listener in the Gateway, adds it to the Pingora server
+    /// 1. For each Gateway, fetches its GatewayClass and EdgionGatewayConfig.
+    /// 2. For each listener in the Gateway, adds it to the Pingora server.
+    ///
+    /// # Startup invariant
+    ///
+    /// Callers must ensure `GatewayHandler::full_set` has already populated
+    /// `GatewayStore` and `ListenerGatewayInfoStore` before invoking this
+    /// method. This is enforced by `cli/mod.rs` step 18 (`wait_for_ready`),
+    /// which blocks until the gateway cache's `reset()` has synchronously
+    /// driven `full_set` (`cache_data.rs::CacheData::reset`).
     pub fn configure_listeners(&self, pingora_server: &mut Server, gateways: Vec<crate::types::Gateway>) -> Result<()> {
         if gateways.is_empty() {
             // The cache is marked ready as soon as the first gRPC list response arrives,
@@ -66,23 +72,10 @@ impl GatewayBase {
 
         tracing::info!("Configuring {} Gateway resources", gateways.len());
 
-        // 1. Ensure all gateways are in the global gateway store
-        // Use update_gateway (idempotent) instead of add_gateway to avoid warnings
-        // when GatewayHandler has already added them via full_set/partial_update
-        let gateway_store = get_global_gateway_store();
-        {
-            let mut store_guard = gateway_store.write();
-            for gateway in gateways.iter() {
-                store_guard.update_gateway(gateway.clone());
-            }
-        }
-
-        // 2. Get ServerConf Arc from pingora_server for listener creation
+        // Get ServerConf Arc from pingora_server for listener creation.
+        // GatewayStore and ListenerGatewayInfoStore are already populated by
+        // GatewayHandler::full_set (see the method-level startup invariant).
         let server_conf_arc = pingora_server.configuration.clone();
-
-        // 2.5. Populate global ListenerGatewayInfoStore so that route matching can
-        // dynamically look up which Gateways share each listener.
-        rebuild_listener_gateway_infos(&gateways);
 
         // Track bound listeners to avoid duplicate physical bindings
         let mut bound_listeners: HashSet<ListenerKey> = HashSet::new();
