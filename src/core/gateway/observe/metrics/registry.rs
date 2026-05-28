@@ -364,7 +364,7 @@ pub fn status_group(status: Option<u16>) -> &'static str {
 pub fn record_mirror_metric(status: &'static str) {
     counter!(
         names::MIRROR_REQUESTS_TOTAL,
-        "status" => status.to_string(),
+        "status" => status,
     )
     .increment(1);
 }

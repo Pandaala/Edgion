@@ -32,7 +32,7 @@ impl TcpLogEntry {
         let duration_ms = std::time::Instant::now()
             .saturating_duration_since(ctx.start_time)
             .as_millis() as u64;
-        let status = format!("{:?}", ctx.status);
+        let status = ctx.status.as_str().to_owned();
 
         Self {
             ts: chrono::Utc::now().timestamp_millis(),
@@ -120,5 +120,29 @@ mod tests {
             !entry.to_json().contains("deny_reason"),
             "deny_reason must be omitted from JSON when None"
         );
+    }
+
+    #[test]
+    fn tcp_status_as_str_matches_log_field() {
+        // Locks the TCP access log `status` field labels. If a variant is
+        // renamed for code clarity, this test forces an explicit update so
+        // operators' log pipelines do not break silently.
+        let cases: &[(TcpStatus, &str)] = &[
+            (TcpStatus::Success, "Success"),
+            (TcpStatus::NoRouteMatched, "NoRouteMatched"),
+            (TcpStatus::NoRuleAvailable, "NoRuleAvailable"),
+            (TcpStatus::PluginDenied, "PluginDenied"),
+            (TcpStatus::NoBackendSelected, "NoBackendSelected"),
+            (TcpStatus::NoBackendResolved, "NoBackendResolved"),
+            (TcpStatus::UnsafeUpstreamAddress, "UnsafeUpstreamAddress"),
+            (TcpStatus::UpstreamConnectionFailed, "UpstreamConnectionFailed"),
+            (TcpStatus::UpstreamReadError, "UpstreamReadError"),
+            (TcpStatus::UpstreamWriteError, "UpstreamWriteError"),
+            (TcpStatus::DownstreamReadError, "DownstreamReadError"),
+            (TcpStatus::DownstreamWriteError, "DownstreamWriteError"),
+        ];
+        for (variant, expected) in cases {
+            assert_eq!(variant.as_str(), *expected);
+        }
     }
 }

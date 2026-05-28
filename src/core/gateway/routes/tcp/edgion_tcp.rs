@@ -53,6 +53,29 @@ pub enum TcpStatus {
     DownstreamWriteError,
 }
 
+impl TcpStatus {
+    /// Stable string label for this status, used as the TCP access log
+    /// `status` field. Decouples the log schema from the `Debug` impl so
+    /// renaming a variant for code clarity cannot silently break log
+    /// consumers, and avoids a per-connection `format!` allocation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Success => "Success",
+            Self::NoRouteMatched => "NoRouteMatched",
+            Self::NoRuleAvailable => "NoRuleAvailable",
+            Self::PluginDenied => "PluginDenied",
+            Self::NoBackendSelected => "NoBackendSelected",
+            Self::NoBackendResolved => "NoBackendResolved",
+            Self::UnsafeUpstreamAddress => "UnsafeUpstreamAddress",
+            Self::UpstreamConnectionFailed => "UpstreamConnectionFailed",
+            Self::UpstreamReadError => "UpstreamReadError",
+            Self::UpstreamWriteError => "UpstreamWriteError",
+            Self::DownstreamReadError => "DownstreamReadError",
+            Self::DownstreamWriteError => "DownstreamWriteError",
+        }
+    }
+}
+
 /// TCP proxy service for Gateway TCP listeners.
 pub struct EdgionTcpProxy {
     pub listener_port: u16,

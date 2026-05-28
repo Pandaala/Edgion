@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, Layer};
 
 /// Configuration for the logging system
 #[derive(Debug, Clone)]
@@ -54,54 +54,38 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
     // The guard MUST be kept alive, otherwise the background thread will shut down
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    // Build subscriber based on format and console settings
-    // We need to handle different layer types separately due to type constraints
-    if config.json_format {
-        // Build env filter
-        let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.level));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.level));
 
-        // JSON format file layer
-        let file_layer = tracing_subscriber::fmt::layer()
+    // Only `.json()` and `.with_current_span(false)` differ between the two output formats;
+    // box the file layer so JSON and plain-text variants share one subscriber pipeline.
+    let file_layer = if config.json_format {
+        tracing_subscriber::fmt::layer()
             .json()
             .with_writer(non_blocking)
             .with_target(true)
             .with_line_number(true)
             .with_current_span(false)
-            .with_ansi(false);
-
-        let subscriber = tracing_subscriber::registry().with(env_filter).with(file_layer);
-
-        if config.console {
-            let console_layer = tracing_subscriber::fmt::layer()
-                .with_target(true)
-                .with_line_number(true)
-                .with_ansi(true);
-            subscriber.with(console_layer).try_init()?;
-        } else {
-            subscriber.try_init()?;
-        }
+            .with_ansi(false)
+            .boxed()
     } else {
-        // Build env filter
-        let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.level));
-
-        // Plain text format file layer
-        let file_layer = tracing_subscriber::fmt::layer()
+        tracing_subscriber::fmt::layer()
             .with_writer(non_blocking)
             .with_target(true)
             .with_line_number(true)
-            .with_ansi(false);
+            .with_ansi(false)
+            .boxed()
+    };
 
-        let subscriber = tracing_subscriber::registry().with(env_filter).with(file_layer);
+    let subscriber = tracing_subscriber::registry().with(env_filter).with(file_layer);
 
-        if config.console {
-            let console_layer = tracing_subscriber::fmt::layer()
-                .with_target(true)
-                .with_line_number(true)
-                .with_ansi(true);
-            subscriber.with(console_layer).try_init()?;
-        } else {
-            subscriber.try_init()?;
-        }
+    if config.console {
+        let console_layer = tracing_subscriber::fmt::layer()
+            .with_target(true)
+            .with_line_number(true)
+            .with_ansi(true);
+        subscriber.with(console_layer).try_init()?;
+    } else {
+        subscriber.try_init()?;
     }
 
     Ok(guard)

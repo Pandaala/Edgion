@@ -96,7 +96,9 @@ impl AccessLogStore {
     /// If still at capacity after cleaning, the store accepts the new entry
     /// (DashMap doesn't support ordered eviction, so we rely on TTL cleanup).
     pub fn store(&self, trace_id: String, json: String) -> Result<(), String> {
-        // Periodic cleanup: on every 100th store, clean expired entries
+        // Periodic cleanup once per 100 stores: fires at the 1st, 101st, 201st, ... call
+        // (predicate is on the pre-increment value, so 0/100/200/... all match).
+        // The first cleanup runs on an empty map and is a no-op.
         let count = self.total_stored.fetch_add(1, Ordering::Relaxed);
         if count.is_multiple_of(100) {
             self.cleanup_expired();
@@ -139,10 +141,14 @@ impl AccessLogStore {
 
     /// List all stored trace_ids (non-expired)
     pub fn list(&self) -> Vec<AccessLogListItem> {
+        // Read-path cleanup: without it, once writes stop, expired entries linger in the
+        // DashMap until the next store() call. Reading also evicts so memory and the
+        // entry_count reported by status() reflect only live entries.
+        self.cleanup_expired();
         let now = Instant::now();
         self.entries
             .iter()
-            .filter(|entry| Instant::now().saturating_duration_since(entry.stored_at) < self.ttl)
+            .filter(|entry| now.saturating_duration_since(entry.stored_at) < self.ttl)
             .map(|entry| AccessLogListItem {
                 trace_id: entry.key().clone(),
                 stored_at_ms_ago: now.saturating_duration_since(entry.stored_at).as_millis() as u64,
@@ -157,6 +163,9 @@ impl AccessLogStore {
 
     /// Get store status
     pub fn status(&self) -> AccessLogStoreStatus {
+        // Read-path cleanup: entry_count would otherwise include TTL-expired entries that
+        // store() has not yet swept, misleading any test assertion that relies on it.
+        self.cleanup_expired();
         AccessLogStoreStatus {
             enabled: true,
             entry_count: self.entries.len(),

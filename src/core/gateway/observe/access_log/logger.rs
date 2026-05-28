@@ -1,6 +1,7 @@
 //! Access logger with pluggable data senders
 
 use crate::core::gateway::link_sys::DataSender;
+use crate::core::gateway::observe::metrics::global_metrics;
 
 /// Access logger that dispatches log entries to registered senders
 pub struct AccessLogger {
@@ -26,6 +27,10 @@ impl AccessLogger {
     }
 
     /// Send log to first healthy sender
+    ///
+    /// When all senders report unhealthy (e.g., writer task died, sender init
+    /// failed), the entry is dropped and `edgion_access_log_dropped_total` is
+    /// incremented so operators have a signal for sustained log loss.
     pub async fn send(&self, data: String) {
         for sender in &self.senders {
             if sender.healthy() {
@@ -33,6 +38,7 @@ impl AccessLogger {
                 return;
             }
         }
+        global_metrics().access_log_dropped();
     }
 }
 
