@@ -64,11 +64,9 @@ ClientCache internally holds `CacheData<T>` (RwLock-protected), which contains:
 
 #### Event-batch compression background task
 
-When `set_conf_processor` is called, `CacheData` starts a background Tokio task for that resource type that wakes up every **100ms**, batching the accumulated `CompressEvent`s and dispatching them to `ConfHandler.partial_update()`.
+When `set_conf_processor` is called, `CacheData` starts a background Tokio task for that resource type. The task sleeps in `notify.notified().await` and only wakes when `add_compress_event` calls `notify_one()`; on wake it waits a short debounce window (`BATCH_DEBOUNCE`, **100ms**) so further events in the same burst are merged, then takes the write lock once and dispatches the accumulated `CompressEvent`s to `ConfHandler.partial_update()`.
 
-**Design intent**: prevent a burst of K8s resource changes (e.g., rolling updates, batch ConfigMap writes) from invoking `partial_update` at high frequency and triggering excessive ArcSwap rebuilds. The 100ms window merges multiple incremental events into a single `partial_update`, significantly reducing the rate of ArcSwap stores.
-
-**Known optimization (TODO)**: the current background task unconditionally takes the write lock every 100ms to check whether the queue is empty, which causes unnecessary RwLock write-lock contention during steady state (a pending write lock blocks new readers). The optimization direction: switch to `tokio::sync::Notify` + debounce — `add_compress_event` calls `notify_one()`; the task sleeps in `notified().await` and only wakes on events, then waits a small window (~100ms) for batch processing. This is a pure performance optimization with no semantic change.
+**Design intent**: prevent a burst of K8s resource changes (e.g., rolling updates, batch ConfigMap writes) from invoking `partial_update` at high frequency and triggering excessive ArcSwap rebuilds. The 100ms debounce window merges multiple incremental events into a single `partial_update`, significantly reducing the rate of ArcSwap stores. The Notify-driven wakeup also avoids steady-state write-lock contention: when no events arrive the task stays parked and never touches the `RwLock`.
 
 ### DynClientCache
 

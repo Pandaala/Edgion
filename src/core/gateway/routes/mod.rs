@@ -3,6 +3,7 @@ pub mod grpc;
 pub mod http;
 mod l4_duplex;
 mod l4_partial_update;
+mod l4_rebuild;
 pub mod tcp;
 pub mod tls;
 pub mod udp;

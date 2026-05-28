@@ -1,7 +1,7 @@
 use crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::core::gateway::conf_sync::cache_client::cache_data::CacheData;
-use crate::core::gateway::observe::metrics::global_metrics;
+use crate::core::gateway::observe::metrics::{global_metrics, record_config_event_parse_error};
 use crate::types::{
     ResourceMeta, WATCH_ERR_NOT_READY, WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD,
     WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED,
@@ -160,23 +160,28 @@ where
                 }
                 is_first_iteration = false;
 
-                // Get gRPC conf_client
-                let mut client_guard = grpc_client.write().await;
-                let client = match client_guard.as_mut() {
-                    Some(c) => c,
-                    None => {
-                        tracing::error!(kind = T::kind_name(), "gRPC conf_client not initialized");
-                        drop(client_guard);
-                        // Increase backoff on failure
-                        backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
-                        continue;
+                // Get gRPC conf_client — clone the handle out under a brief write-lock
+                // acquisition so we never hold the async write guard across the RPC.
+                // ConfigSyncClientService<Channel> wraps a tonic Channel which is cheaply
+                // cloneable (shares the underlying connection pool).
+                let mut client = {
+                    let guard = grpc_client.write().await;
+                    match guard.as_ref() {
+                        Some(c) => c.clone(),
+                        None => {
+                            drop(guard);
+                            tracing::error!(kind = T::kind_name(), "gRPC conf_client not initialized");
+                            // Increase backoff on failure
+                            backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
+                            continue;
+                        }
                     }
                 };
 
                 // Perform list_and_reset to get latest sync version and server_id
                 // First list doesn't need to validate server_id (pass empty string)
                 let (from_version, current_server_id) =
-                    match Self::list_and_reset(client, "", &cache_data, "watch relist", "").await {
+                    match Self::list_and_reset(&mut client, "", &cache_data, "watch relist", "").await {
                         Ok(list_result) => {
                             // Reset backoff on success
                             backoff_secs = BACKOFF_INIT_SECS;
@@ -220,24 +225,25 @@ where
                             } else {
                                 tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
                             }
-                            drop(client_guard);
                             // Increase backoff on failure
                             backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
                             continue;
                         }
                     };
 
-                drop(client_guard);
-
                 // Watch block: perform watch operation, break to return to outer loop for re-list
                 'watch_block: {
-                    let mut client_guard = grpc_client.write().await;
-                    let client = match client_guard.as_mut() {
-                        Some(c) => c,
-                        None => {
-                            tracing::error!(kind = T::kind_name(), "gRPC conf_client not initialized for watch");
-                            drop(client_guard);
-                            break 'watch_block; // Return to outer loop
+                    // Clone the client out under a brief write-lock acquisition; do not hold
+                    // the async write guard across the watch RPC or the stream lifetime.
+                    let mut client = {
+                        let guard = grpc_client.write().await;
+                        match guard.as_ref() {
+                            Some(c) => c.clone(),
+                            None => {
+                                drop(guard);
+                                tracing::error!(kind = T::kind_name(), "gRPC conf_client not initialized for watch");
+                                break 'watch_block; // Return to outer loop
+                            }
                         }
                     };
 
@@ -257,12 +263,9 @@ where
                         }
                         Err(e) => {
                             tracing::error!(kind = T::kind_name(), error = %e, from_version = from_version, "Failed to start watch");
-                            drop(client_guard);
                             break 'watch_block; // Return to outer loop to re-list
                         }
                     };
-
-                    drop(client_guard);
 
                     // Process watch stream messages
                     loop {
@@ -300,11 +303,15 @@ where
                                 let events: Vec<serde_json::Value> = match serde_json::from_str(&watch_response.data) {
                                     Ok(events) => events,
                                     Err(e) => {
-                                        tracing::error!(error = %e, "Failed to parse watch response events");
+                                        record_config_event_parse_error(T::kind_name());
+                                        tracing::error!(kind = T::kind_name(), error = %e, "Failed to parse watch response events");
                                         continue;
                                     }
                                 };
 
+                                // Hold a single write guard across all events in this WatchResponse
+                                // to coalesce O(N) lock acquisitions into one batch.
+                                let mut cache = cache_data.write();
                                 for event in events {
                                     if let Some(event_type) = event.get("type").and_then(|v| v.as_str()) {
                                         if let Some(event_data) = event.get("data") {
@@ -329,9 +336,7 @@ where
                                                         _ => continue,
                                                     };
 
-                                                    // Apply change using single lock
                                                     let resource_key = resource.key_name(); // Use namespace/name as key
-                                                    let mut cache = cache_data.write();
                                                     match change {
                                                         ResourceChange::InitAdd
                                                         | ResourceChange::EventAdd
@@ -351,6 +356,7 @@ where
                                                     }
                                                 }
                                                 Err(e) => {
+                                                    record_config_event_parse_error(T::kind_name());
                                                     tracing::error!(error = %e, kind = T::kind_name(), "Failed to parse resource from watch event");
                                                 }
                                             }

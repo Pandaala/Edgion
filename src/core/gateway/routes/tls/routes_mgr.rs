@@ -118,138 +118,38 @@ impl GlobalTlsRouteManagers {
 
     /// Rebuild all per-listener managers from the current route cache.
     ///
-    /// 1. Bucket each route by its target listeners (from resolved_listeners)
-    /// 2. For each listener that has routes: rebuild the manager
-    /// 3. For listeners that no longer have routes: rebuild with empty set
+    /// Delegates to the shared L4 orchestrator
+    /// `routes::l4_rebuild::rebuild_all_l4_listener_managers` (see that
+    /// function's docs for invariants — bucket / rebuild / stale-sweep /
+    /// clear-pass).
     pub fn rebuild_all_listener_managers(&self) {
-        // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
-        let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
-        for key in pgis.all_listener_keys() {
-            self.get_or_create_listener_manager(&key);
-        }
-
-        let listener_buckets = self.bucket_routes_by_listener();
-
-        let mut rebuilt_listeners = 0u32;
-
-        for (key, routes) in &listener_buckets {
-            let manager = self.get_or_create_listener_manager(key);
-            manager.rebuild(routes);
-            rebuilt_listeners += 1;
-        }
-
-        // Remove stale listener entries that no longer have any routes and are not
-        // registered in ListenerGatewayInfoStore
-        let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
-        let stale_listeners: Vec<ListenerKey> = self
-            .by_listener
-            .iter()
-            .filter(|e| !listener_buckets.contains_key(e.key()) && !active_listeners.contains(e.key()))
-            .map(|e| e.key().clone())
-            .collect();
-        for key in &stale_listeners {
-            self.by_listener.remove(key);
-        }
-
-        let total_routes: usize = listener_buckets.values().map(|r| r.len()).sum();
-        tracing::info!(
-            component = "global_tls_route_managers",
-            listeners = listener_buckets.len(),
-            total_route_entries = total_routes,
-            rebuilt_listeners,
-            removed_stale_listeners = stale_listeners.len(),
-            "Rebuilt all per-listener TLS route managers"
+        let active = crate::core::gateway::runtime::store::get_listener_gateway_info_store().all_listener_keys();
+        crate::core::gateway::routes::l4_rebuild::rebuild_all_l4_listener_managers(
+            "global_tls_route_managers",
+            &self.by_listener,
+            &self.route_cache,
+            active,
+            |r| resolved_listeners_for_route(r).to_vec(),
+            |k| self.get_or_create_listener_manager(k),
+            |m, routes| m.rebuild(routes),
         );
     }
 
-    /// Rebuild only the per-listener managers for the given set of affected listeners.
-    ///
-    /// Single-pass: iterates route_cache once, bucketing routes into only the
-    /// affected listeners. Listeners in `affected_listeners` that end up with no routes
-    /// are rebuilt with an empty set (clearing stale entries).
+    /// Rebuild only the per-listener managers for the given set of affected
+    /// listeners. Delegates to the shared L4 orchestrator
+    /// `routes::l4_rebuild::rebuild_affected_l4_listener_managers`.
     pub fn rebuild_affected_listener_managers(&self, affected_listeners: &HashSet<ListenerKey>) {
-        if affected_listeners.is_empty() {
-            return;
-        }
-
-        let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Arc<TLSRoute>>> = HashMap::new();
-        for key in affected_listeners {
-            listener_buckets.insert(key.clone(), HashMap::new());
-        }
-
-        for entry in self.route_cache.iter() {
-            let route_listeners = resolved_listeners_for_route(entry.value());
-            for key in route_listeners {
-                if let Some(bucket) = listener_buckets.get_mut(key) {
-                    bucket.insert(entry.key().clone(), entry.value().clone());
-                }
-            }
-        }
-
-        let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
-        let active_listeners: HashSet<ListenerKey> = pgis.all_listener_keys().into_iter().collect();
-        let mut removed_stale = 0usize;
-        for (key, routes) in &listener_buckets {
-            let manager = self.get_or_create_listener_manager(key);
-            manager.rebuild(routes);
-            if routes.is_empty() && !active_listeners.contains(key) {
-                self.by_listener.remove(key);
-                removed_stale += 1;
-            }
-        }
-
-        // Sweep orphan entries left over from earlier rebuild_all calls — see the
-        // matching comment in HTTP routes_mgr::rebuild_affected_listener_managers.
-        let route_referenced: HashSet<ListenerKey> = self
-            .route_cache
-            .iter()
-            .flat_map(|e| resolved_listeners_for_route(e.value()).to_vec())
-            .collect();
-        let orphans: Vec<ListenerKey> = self
-            .by_listener
-            .iter()
-            .filter(|e| !route_referenced.contains(e.key()) && !active_listeners.contains(e.key()))
-            .map(|e| e.key().clone())
-            .collect();
-        for key in &orphans {
-            self.by_listener.remove(key);
-        }
-        removed_stale += orphans.len();
-
-        tracing::info!(
-            component = "global_tls_route_managers",
-            affected = affected_listeners.len(),
-            removed_stale_listeners = removed_stale,
-            "Rebuilt affected per-listener TLS route managers"
+        let active = crate::core::gateway::runtime::store::get_listener_gateway_info_store().all_listener_keys();
+        crate::core::gateway::routes::l4_rebuild::rebuild_affected_l4_listener_managers(
+            "global_tls_route_managers",
+            &self.by_listener,
+            &self.route_cache,
+            affected_listeners,
+            active,
+            |r| resolved_listeners_for_route(r).to_vec(),
+            |k| self.get_or_create_listener_manager(k),
+            |m, routes| m.rebuild(routes),
         );
-    }
-
-    /// Bucket all cached routes by their resolved listeners.
-    fn bucket_routes_by_listener(&self) -> HashMap<ListenerKey, HashMap<String, Arc<TLSRoute>>> {
-        let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Arc<TLSRoute>>> = HashMap::new();
-
-        for entry in self.route_cache.iter() {
-            let route_key = entry.key().clone();
-            let route = entry.value().clone();
-            let listeners = resolved_listeners_for_route(&route);
-
-            if listeners.is_empty() {
-                tracing::warn!(
-                    route = %route_key,
-                    "TLSRoute has no resolved_listeners, skipping listener assignment"
-                );
-                continue;
-            }
-
-            for key in listeners {
-                listener_buckets
-                    .entry(key.clone())
-                    .or_default()
-                    .insert(route_key.clone(), route.clone());
-            }
-        }
-
-        listener_buckets
     }
 }
 
@@ -281,4 +181,167 @@ static GLOBAL_TLS_ROUTE_MANAGERS: OnceLock<GlobalTlsRouteManagers> = OnceLock::n
 
 pub fn get_global_tls_route_managers() -> &'static GlobalTlsRouteManagers {
     GLOBAL_TLS_ROUTE_MANAGERS.get_or_init(GlobalTlsRouteManagers::new)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::gateway::routes::l4_rebuild::{
+        rebuild_affected_l4_listener_managers, rebuild_all_l4_listener_managers,
+    };
+    use crate::types::resources::common::ParentReference;
+    use crate::types::resources::tls_route::TLSRouteSpec;
+
+    fn make_listener_key(port: u16, protocol: &str) -> ListenerKey {
+        let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);
+        ListenerKey::new(addr, protocol)
+    }
+
+    fn create_test_tls_route(namespace: &str, name: &str, listener_key: ListenerKey) -> TLSRoute {
+        TLSRoute {
+            metadata: kube::api::ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: TLSRouteSpec {
+                parent_refs: Some(vec![ParentReference {
+                    group: Some("gateway.networking.k8s.io".to_string()),
+                    kind: Some("Gateway".to_string()),
+                    namespace: Some(namespace.to_string()),
+                    name: "test-gateway".to_string(),
+                    section_name: Some("tls".to_string()),
+                    port: None,
+                }]),
+                hostnames: None,
+                rules: Some(vec![]),
+                resolved_listeners: Some(vec![listener_key]),
+                effective_hostnames: None,
+            },
+            status: None,
+        }
+    }
+
+    /// Drive the shared helper directly with a synthetic `active` PGIS
+    /// snapshot so tests do not race against the global store.
+    fn drive_rebuild_all(managers: &GlobalTlsRouteManagers, active: Vec<ListenerKey>) {
+        rebuild_all_l4_listener_managers(
+            "global_tls_route_managers",
+            &managers.by_listener,
+            &managers.route_cache,
+            active,
+            |r| resolved_listeners_for_route(r).to_vec(),
+            |k| managers.get_or_create_listener_manager(k),
+            |m, routes| m.rebuild(routes),
+        );
+    }
+
+    fn drive_rebuild_affected(
+        managers: &GlobalTlsRouteManagers,
+        affected: &HashSet<ListenerKey>,
+        active: Vec<ListenerKey>,
+    ) {
+        rebuild_affected_l4_listener_managers(
+            "global_tls_route_managers",
+            &managers.by_listener,
+            &managers.route_cache,
+            affected,
+            active,
+            |r| resolved_listeners_for_route(r).to_vec(),
+            |k| managers.get_or_create_listener_manager(k),
+            |m, routes| m.rebuild(routes),
+        );
+    }
+
+    /// Regression for F-007: `rebuild_all` must clear the route table of an
+    /// active listener that previously had routes but now has none.
+    #[test]
+    fn test_rebuild_all_clears_active_listener_with_no_routes() {
+        let managers = GlobalTlsRouteManagers::new();
+        let listener_a = make_listener_key(8443, "TLS");
+        let listener_b = make_listener_key(8444, "TLS");
+
+        // Pre-seed B's manager with a prior route.
+        let mgr_b = managers.get_or_create_listener_manager(&listener_b);
+        let prior_route = Arc::new(create_test_tls_route("default", "prior", listener_b.clone()));
+        let mut prior: HashMap<String, Arc<TLSRoute>> = HashMap::new();
+        prior.insert("default/prior".to_string(), prior_route);
+        mgr_b.rebuild(&prior);
+        assert!(
+            mgr_b.load_route_table().has_catch_all(),
+            "precondition: B has a non-empty table"
+        );
+
+        // route_cache only references A.
+        let route_a = Arc::new(create_test_tls_route("default", "route-a", listener_a.clone()));
+        managers.insert_route(route_a);
+
+        drive_rebuild_all(&managers, vec![listener_a.clone(), listener_b.clone()]);
+
+        assert!(
+            !mgr_b.load_route_table().has_catch_all(),
+            "active-but-no-routes TLS listener should be cleared"
+        );
+        assert!(managers.by_listener.contains_key(&listener_a));
+        assert!(managers.by_listener.contains_key(&listener_b));
+    }
+
+    #[test]
+    fn test_rebuild_all_removes_stale_inactive_listener() {
+        let managers = GlobalTlsRouteManagers::new();
+        let stale = make_listener_key(8445, "TLS");
+        managers.get_or_create_listener_manager(&stale);
+        assert!(managers.by_listener.contains_key(&stale));
+
+        drive_rebuild_all(&managers, vec![]);
+
+        assert!(
+            !managers.by_listener.contains_key(&stale),
+            "inactive-and-no-routes TLS by_listener entry should be removed"
+        );
+    }
+
+    #[test]
+    fn test_rebuild_affected_clears_listener_with_empty_bucket() {
+        let managers = GlobalTlsRouteManagers::new();
+        let listener = make_listener_key(8446, "TLS");
+
+        let mgr = managers.get_or_create_listener_manager(&listener);
+        let prior_route = Arc::new(create_test_tls_route("default", "prior", listener.clone()));
+        let mut prior: HashMap<String, Arc<TLSRoute>> = HashMap::new();
+        prior.insert("default/prior".to_string(), prior_route);
+        mgr.rebuild(&prior);
+        assert!(
+            mgr.load_route_table().has_catch_all(),
+            "precondition: listener has the catch-all prior route"
+        );
+
+        let mut affected: HashSet<ListenerKey> = HashSet::new();
+        affected.insert(listener.clone());
+        drive_rebuild_affected(&managers, &affected, vec![listener.clone()]);
+
+        assert!(
+            !mgr.load_route_table().has_catch_all(),
+            "affected TLS listener with no routes should be cleared"
+        );
+        assert!(managers.by_listener.contains_key(&listener));
+    }
+
+    #[test]
+    fn test_rebuild_affected_orphan_sweep() {
+        let managers = GlobalTlsRouteManagers::new();
+        let affected_key = make_listener_key(8447, "TLS");
+        let orphan_key = make_listener_key(8448, "TLS");
+
+        managers.get_or_create_listener_manager(&orphan_key);
+        let route = Arc::new(create_test_tls_route("default", "route-x", affected_key.clone()));
+        managers.insert_route(route);
+
+        let mut affected: HashSet<ListenerKey> = HashSet::new();
+        affected.insert(affected_key.clone());
+        drive_rebuild_affected(&managers, &affected, vec![affected_key.clone()]);
+
+        assert!(!managers.by_listener.contains_key(&orphan_key));
+        assert!(managers.by_listener.contains_key(&affected_key));
+    }
 }

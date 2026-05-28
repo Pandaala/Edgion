@@ -442,6 +442,7 @@ Edgion 定义了 21 个 Prometheus 指标，覆盖 Google SRE 四大黄金信号
 | `edgion_gateway_response_bytes_total` | Counter | 上游到下行的响应字节总数 |
 | `edgion_config_reload_signals_total` | Counter | 从 Controller 接收的配置重载信号总数 |
 | `edgion_config_relist_total` | Counter | 配置全量重新拉取次数 |
+| `edgion_config_event_parse_errors_total` | Counter | watch 事件 JSON 解析失败次数（按资源 `kind` 打 label） |
 | `edgion_status_update_total` | Counter | K8s Status 更新尝试总数 |
 | `edgion_status_update_skipped_total` | Counter | K8s Status 更新跳过次数（无变更） |
 

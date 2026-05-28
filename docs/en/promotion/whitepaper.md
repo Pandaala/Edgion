@@ -439,6 +439,7 @@ The labels for `edgion_gateway_request_duration_ms` are driven by the `RequestDu
 | `edgion_gateway_response_bytes_total` | Counter | Total response bytes sent from upstream to downstream |
 | `edgion_config_reload_signals_total` | Counter | Total number of configuration reload signals received from the Controller |
 | `edgion_config_relist_total` | Counter | Number of full configuration re-fetches |
+| `edgion_config_event_parse_errors_total` | Counter | Number of watch-event JSON parse failures (labeled by resource `kind`) |
 | `edgion_status_update_total` | Counter | Total number of K8s Status update attempts |
 | `edgion_status_update_skipped_total` | Counter | Number of K8s Status update skips (no changes) |
 

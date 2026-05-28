@@ -24,6 +24,7 @@ pub mod names {
     // Config sync metrics (client side)
     pub const CONFIG_RELOAD_SIGNALS: &str = "edgion_config_reload_signals_total";
     pub const CONFIG_RELIST_TOTAL: &str = "edgion_config_relist_total";
+    pub const CONFIG_EVENT_PARSE_ERRORS_TOTAL: &str = "edgion_config_event_parse_errors_total";
     // Backend request metrics (for LB testing and monitoring)
     pub const BACKEND_REQUESTS_TOTAL: &str = "edgion_backend_requests_total";
     // Gateway traffic byte counters
@@ -443,6 +444,21 @@ pub fn record_cb_rejection(service_key: &str) {
 /// Low, fixed cardinality — safe as a label.
 pub fn record_acme_challenge_lookup(result: &'static str) {
     counter!(names::ACME_CHALLENGE_LOOKUP_TOTAL, "result" => result).increment(1);
+}
+
+/// Record a watch-event JSON parse failure (per resource kind).
+///
+/// Triggered from `ClientCache::start_watch` when either the outer
+/// `serde_json::from_str` (events array) or the per-event
+/// `serde_json::from_value::<T>` deserialization fails. `kind` is sourced from
+/// `T::kind_name()` which returns a `&'static str` from a closed set of
+/// registered resource types, so label cardinality is bounded.
+///
+/// The control flow on parse failure remains "log and continue" — this counter
+/// exists purely so operators can alert on schema drift between controller and
+/// gateway (the most common real-world trigger) without relying on log scraping.
+pub fn record_config_event_parse_error(kind: &'static str) {
+    counter!(names::CONFIG_EVENT_PARSE_ERRORS_TOTAL, "kind" => kind).increment(1);
 }
 
 /// Record a `GlobalConnectionIpRestriction` stream plugin decision event.

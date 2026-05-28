@@ -186,15 +186,22 @@ impl<T: ResourceMeta> CacheData<T> {
 
         // Process events if there are any
         if !add.is_empty() || !update.is_empty() || !remove.is_empty() {
-            let add_keys: Vec<&String> = add.keys().collect();
-            let update_keys: Vec<&String> = update.keys().collect();
-            let remove_keys: Vec<&String> = remove.iter().collect();
+            // Info-level log keeps counts only; per-key detail stays at debug to avoid
+            // log volume bloat during high-churn batches (see event_dispatch.rs:105 for
+            // the established count-only / debug-detail pattern).
             tracing::info!(
                 component = "cache_client",
-                add_keys = ?add_keys,
-                update_keys = ?update_keys,
-                remove_keys = ?remove_keys,
+                add_count = add.len(),
+                update_count = update.len(),
+                remove_count = remove.len(),
                 "Processing compressed events"
+            );
+            tracing::debug!(
+                component = "cache_client",
+                add_keys = ?add.keys().collect::<Vec<_>>(),
+                update_keys = ?update.keys().collect::<Vec<_>>(),
+                remove_keys = ?remove.iter().collect::<Vec<_>>(),
+                "Compressed event key details"
             );
 
             // Process events with immutable borrow

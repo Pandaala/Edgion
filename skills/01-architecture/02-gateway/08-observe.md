@@ -107,6 +107,7 @@ Metrics are exposed on port `:5901` via Axum routes:
 | `edgion_status_update_skipped_total` | Counter | Skipped K8s status updates |
 | `edgion_config_reload_signals_total` | Counter | Configuration reload signals |
 | `edgion_config_relist_total` | Counter | Configuration relist count |
+| `edgion_config_event_parse_errors_total` | Counter | Watch-event JSON parse failures (label: `kind`); fires when `ClientCache::start_watch` cannot deserialize a `WatchResponse.data` batch or a per-event `T` payload — primary symptom of controller↔gateway schema drift |
 | `edgion_backend_requests_total` | Counter | Total backend requests (grouped by backend) |
 | `edgion_gateway_request_bytes_total` | Counter | Gateway request bytes |
 | `edgion_gateway_response_bytes_total` | Counter | Gateway response bytes |
