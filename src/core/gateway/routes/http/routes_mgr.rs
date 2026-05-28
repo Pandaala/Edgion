@@ -10,7 +10,7 @@ use crate::types::err::EdError;
 use crate::types::HTTPRoute;
 use crate::types::ListenerKey;
 use crate::types::{HTTPBackendRef, HTTPRouteRule};
-use arc_swap::{ArcSwap, ArcSwapOption};
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -183,26 +183,29 @@ impl RouteRules {
 
 pub struct DomainRouteRules {
     /// Exact domain matching (e.g., "example.com")
-    /// Uses HashMap for O(1) lookup performance
-    pub(crate) exact_domain_map: ArcSwap<HashMap<DomainStr, Arc<RouteRules>>>,
+    /// Uses HashMap for O(1) lookup performance.
+    /// Plain `Arc` — atomic swap granularity is provided by the outer
+    /// `ArcSwap<DomainRouteRules>` in `HttpPortRouteManager`, so per-request
+    /// loads do not need an extra atomic indirection here.
+    pub(crate) exact_domain_map: Arc<HashMap<DomainStr, Arc<RouteRules>>>,
 
     /// Wildcard domain matching (e.g., "*.example.com")
     /// Uses RadixHostMatchEngine for wildcard support
     /// None if no wildcard domains are configured
-    pub(crate) wildcard_engine: ArcSwapOption<RadixHostMatchEngine<RouteRules>>,
+    pub(crate) wildcard_engine: Option<Arc<RadixHostMatchEngine<RouteRules>>>,
 
     /// Catch-all routes from HTTPRoutes with no spec.hostnames.
     /// Stored separately from exact_domain_map to avoid mixing fallback
     /// semantics with exact-match semantics.
-    pub(crate) catch_all_routes: ArcSwapOption<RouteRules>,
+    pub(crate) catch_all_routes: Option<Arc<RouteRules>>,
 }
 
 impl DomainRouteRules {
     pub fn new() -> Self {
         Self {
-            exact_domain_map: ArcSwap::from_pointee(HashMap::new()),
-            wildcard_engine: ArcSwapOption::empty(),
-            catch_all_routes: ArcSwapOption::empty(),
+            exact_domain_map: Arc::new(HashMap::new()),
+            wildcard_engine: None,
+            catch_all_routes: None,
         }
     }
 
@@ -229,22 +232,19 @@ impl DomainRouteRules {
         // port-stripped, FQDN-dot-removed. No further normalization needed.
         let hostname: &str = &ctx.request_info.hostname;
 
-        let exact_map = self.exact_domain_map.load();
-        let wildcard_engine = self.wildcard_engine.load();
-
-        if let Some(route_rules) = exact_map.get(hostname) {
+        if let Some(route_rules) = self.exact_domain_map.get(hostname) {
             return route_rules.match_route(session, ctx, index);
         }
 
         // Step 2: Try wildcard domain match (O(log n))
-        if let Some(engine) = wildcard_engine.as_ref() {
+        if let Some(engine) = self.wildcard_engine.as_ref() {
             if let Some(route_rules) = engine.match_host(hostname) {
                 return route_rules.match_route(session, ctx, index);
             }
         }
 
         // Step 3: Try catch-all routes (from HTTPRoutes with no spec.hostnames)
-        if let Some(catch_all) = self.catch_all_routes.load().as_ref() {
+        if let Some(catch_all) = self.catch_all_routes.as_ref() {
             return catch_all.match_route(session, ctx, index);
         }
 
@@ -402,6 +402,12 @@ impl GlobalHttpRouteManagers {
             listener_buckets.insert(key.clone(), HashMap::new());
         }
 
+        // Single pass over route_cache: bucket affected routes into
+        // listener_buckets and collect all listener keys referenced by any
+        // current route into route_referenced (consumed by the orphan sweep
+        // below). Merging the two scans avoids a second full iteration plus
+        // a per-entry slice→Vec allocation that the previous flat_map needed.
+        let mut route_referenced: HashSet<ListenerKey> = HashSet::new();
         for entry in self.route_cache.iter() {
             let route = entry.value();
             let listeners = resolved_listeners_for_route(route);
@@ -409,6 +415,7 @@ impl GlobalHttpRouteManagers {
                 if let Some(bucket) = listener_buckets.get_mut(key) {
                     bucket.insert(entry.key().clone(), entry.value().clone());
                 }
+                route_referenced.insert(key.clone());
             }
         }
 
@@ -432,11 +439,6 @@ impl GlobalHttpRouteManagers {
         // any current route. Without this sweep, those entries (and their stale
         // route tables) leak indefinitely — they are never the target of a
         // subsequent partial update.
-        let route_referenced: HashSet<ListenerKey> = self
-            .route_cache
-            .iter()
-            .flat_map(|e| resolved_listeners_for_route(e.value()).to_vec())
-            .collect();
         let orphans: Vec<ListenerKey> = self
             .by_listener
             .iter()
@@ -500,11 +502,9 @@ impl GlobalHttpRouteManagers {
 
         for entry in self.by_listener.iter() {
             let table = entry.value().load_route_table();
-            let exact_map = table.exact_domain_map.load();
-            total_exact_domains += exact_map.len();
-            let wc = table.wildcard_engine.load();
-            total_wildcard_domains += wc.as_ref().map_or(0, |e| e.host_count());
-            if table.catch_all_routes.load().is_some() {
+            total_exact_domains += table.exact_domain_map.len();
+            total_wildcard_domains += table.wildcard_engine.as_ref().map_or(0, |e| e.host_count());
+            if table.catch_all_routes.is_some() {
                 total_catch_all = true;
             }
         }

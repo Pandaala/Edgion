@@ -3,8 +3,8 @@ use crate::core::gateway::backends::discovery::get_roundrobin_store;
 use crate::core::gateway::backends::health;
 use crate::core::gateway::backends::health::get_health_status_store;
 use crate::core::gateway::lb::{compiled_selector, EdgionBackend, PolicyKind};
-use crate::core::gateway::routes::HttpRouteRuleUnit;
 use crate::types::edgion_status::EdgionStatus;
+use crate::types::uri_utils;
 use crate::types::{ConsistentHashOn, ParsedLBPolicy};
 use pingora_proxy::Session;
 use std::sync::Arc;
@@ -135,8 +135,8 @@ pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPol
                     // matching an arg_name of `session id` / `foo bar`). The value
                     // is intentionally left raw — decoding it would change the hash
                     // key of existing deployments.
-                    let matched = name == arg_name
-                        || (name.contains(['%', '+']) && HttpRouteRuleUnit::url_decode(name) == *arg_name);
+                    let matched =
+                        name == arg_name || (name.contains(['%', '+']) && uri_utils::url_decode(name) == *arg_name);
                     matched.then(|| value.as_bytes().to_vec())
                 })
             })

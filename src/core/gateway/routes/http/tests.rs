@@ -159,14 +159,13 @@ mod route_matching_tests {
     fn verify_route_exists(listener_manager: &Arc<HttpPortRouteManager>, hostname: &str, should_exist: bool) {
         let domain_routes = listener_manager.load_route_table();
         // Check exact domain map first (case-insensitive)
-        let exact_map = domain_routes.exact_domain_map.load();
-        let exists_exact = exact_map.get(&hostname.to_lowercase()).is_some();
-        let exists_catch_all = domain_routes.catch_all_routes.load().is_some();
+        let exists_exact = domain_routes.exact_domain_map.get(&hostname.to_lowercase()).is_some();
+        let exists_catch_all = domain_routes.catch_all_routes.is_some();
 
         // Check wildcard engine if not found in exact map
         let exists_wildcard = if !exists_exact && !exists_catch_all {
-            let wildcard_engine = domain_routes.wildcard_engine.load();
-            wildcard_engine
+            domain_routes
+                .wildcard_engine
                 .as_ref()
                 .and_then(|engine| engine.match_host(hostname))
                 .is_some()
@@ -193,15 +192,16 @@ mod route_matching_tests {
     ) {
         let domain_routes = listener_manager.load_route_table();
         // Try exact domain map first (case-insensitive)
-        let exact_map = domain_routes.exact_domain_map.load();
-        let route_rules = if let Some(route_rules) = exact_map.get(&hostname.to_lowercase()) {
+        let route_rules = if let Some(route_rules) = domain_routes.exact_domain_map.get(&hostname.to_lowercase()) {
             Some(route_rules.clone())
-        } else if let Some(catch_all) = domain_routes.catch_all_routes.load_full() {
-            Some(catch_all)
+        } else if let Some(catch_all) = domain_routes.catch_all_routes.as_ref() {
+            Some(catch_all.clone())
         } else {
             // Try wildcard engine
-            let wildcard_engine = domain_routes.wildcard_engine.load();
-            wildcard_engine.as_ref().and_then(|engine| engine.match_host(hostname))
+            domain_routes
+                .wildcard_engine
+                .as_ref()
+                .and_then(|engine| engine.match_host(hostname))
         };
 
         if let Some(route_rules) = route_rules {

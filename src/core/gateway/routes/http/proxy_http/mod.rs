@@ -9,6 +9,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use crate::core::gateway::observe::AccessLogger;
+use crate::core::gateway::routes::grpc::GrpcPortRouteManager;
+use crate::core::gateway::routes::http::routes_mgr::HttpPortRouteManager;
 use crate::core::gateway::runtime::server::server_header::ServerHeaderOpts;
 use crate::types::{EdgionGatewayConfig, EdgionHttpContext, Listener, ListenerKey};
 
@@ -68,6 +70,17 @@ pub struct EdgionHttpProxy {
 
     /// Preflight request handler
     pub preflight_handler: PreflightHandler,
+
+    /// Cached per-listener HTTP route manager. The outer `Arc` is stable for the
+    /// lifetime of a serving listener (route hot-reload only swaps the inner
+    /// `ArcSwap<DomainRouteRules>`), so resolving it once at construction
+    /// removes a `DashMap` shard write-lock and a `ListenerKey(String)` clone
+    /// from every request.
+    pub http_route_manager: Arc<HttpPortRouteManager>,
+
+    /// Cached per-listener gRPC route manager. Same stability rationale as
+    /// `http_route_manager`.
+    pub grpc_route_manager: Arc<GrpcPortRouteManager>,
 }
 
 #[async_trait]

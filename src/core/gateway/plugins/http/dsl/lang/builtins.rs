@@ -472,7 +472,7 @@ impl Vm {
             // decoded AND a literal `+` is decoded to a space. This is NOT RFC 3986 path
             // decoding (in RFC 3986 a literal `+` in a path is a reserved character and must
             // be preserved). The form-semantics choice intentionally mirrors
-            // `HttpRouteRuleUnit::url_decode` (see `routes/http/match_unit.rs`) so the DSL
+            // `crate::types::uri_utils::url_decode` (see `src/types/uri_utils.rs`) so the DSL
             // and the routing/consistent-hash layers agree on query-string decoding.
             //
             // Security note: callers must NOT pass `req.path()` here and then compare the

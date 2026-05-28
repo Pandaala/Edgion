@@ -328,7 +328,7 @@ fn test_url_decode() {
 // `url_decode` uses application/x-www-form-urlencoded semantics: a literal `+` decodes to a
 // space. This is intentional and documented in api-reference.md §url_decode (Semantics +
 // Security warning) and in the BuiltinId::UrlDecode source comment. Mirrors the same
-// semantics used by HttpRouteRuleUnit::url_decode at the routing layer. See
+// semantics used by crate::types::uri_utils::url_decode at the routing layer. See
 // skills/04-review/dsl-builtins/url-decode-form-semantics.md for the design lock.
 #[test]
 fn test_url_decode_plus_decodes_to_space_form_semantics() {

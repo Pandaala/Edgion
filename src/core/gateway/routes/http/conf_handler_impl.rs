@@ -506,9 +506,9 @@ pub(crate) fn build_domain_route_rules_from_routes(data: &HashMap<String, HTTPRo
     };
 
     DomainRouteRules {
-        exact_domain_map: arc_swap::ArcSwap::from_pointee(exact_domain_map),
-        wildcard_engine: arc_swap::ArcSwapOption::new(wildcard_engine.map(Arc::new)),
-        catch_all_routes: arc_swap::ArcSwapOption::new(catch_all_routes),
+        exact_domain_map: Arc::new(exact_domain_map),
+        wildcard_engine: wildcard_engine.map(Arc::new),
+        catch_all_routes,
     }
 }
 

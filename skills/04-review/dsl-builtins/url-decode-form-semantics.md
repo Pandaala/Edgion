@@ -13,7 +13,7 @@ decodes both `%XX` AND literal `+` (`+` → space), implementing
 The name-vs-semantics mismatch is **documented** (api-reference §`url_decode` carries
 an explicit security warning, plus an in-source doc-comment above the arm) and is
 **locked** as a design choice: the form semantics intentionally mirror
-`HttpRouteRuleUnit::url_decode` (`src/core/gateway/routes/http/match_unit.rs`) so the
+`uri_utils::url_decode` (`src/types/uri_utils.rs`) so the
 DSL, route matching, and consistent-hash arg-name comparison (`backends-F014`) all
 agree on the same decoded form. Re-introducing the asymmetry by renaming or
 splitting the builtin would create a cross-layer divergence.
@@ -26,8 +26,8 @@ Fix suggestions of the form "rename to `form_decode` and introduce a new RFC 398
 
 **1. Cross-layer consistency with route matching**
 
-`HttpRouteRuleUnit::url_decode` is the canonical decoder used by HTTP route
-matching and was exposed `pub(crate)` for `backends-F014` (consistent-hash arg-name
+`uri_utils::url_decode` (in `src/types/uri_utils.rs`) is the canonical decoder used
+by HTTP route matching and is shared with `backends-F014` (consistent-hash arg-name
 percent-decoding). It uses form semantics (`+` → space). The DSL `url_decode` was
 intentionally written to behave the same so operators writing
 `url_decode(req.query("foo"))` get the same byte sequence the routing layer would
@@ -55,7 +55,7 @@ breaks every operator-deployed DSL script that already calls it (a "rename" with
 deprecation alias is still a multi-release rollout for a niche risk). Adding a
 sibling `path_decode` builtin doubles the surface area of the encoding-related
 builtin set and forces a parallel decision at the routing layer
-(`HttpRouteRuleUnit::url_decode` would need a sibling too, or the layers
+(`uri_utils::url_decode` would need a sibling too, or the layers
 diverge again). The cost/benefit ratio does not justify either change at the
 current severity.
 
@@ -77,9 +77,9 @@ The right fix is documentation, not picking one side of the naming split.
   warning already covers the misuse case.
 - "Add a sibling `path_decode(s)` (RFC 3986) builtin and keep `url_decode`" —
   doubles the encoding-builtin surface for a Low-severity, narrow-trigger issue;
-  also forces a parallel decision at the routing layer (`HttpRouteRuleUnit`
-  consistent-hash arg-name path) to keep cross-layer parity, expanding the
-  change well beyond the DSL.
+  also forces a parallel decision at the routing layer (`uri_utils`
+  shared by route matching and consistent-hash arg-name path) to keep cross-layer
+  parity, expanding the change well beyond the DSL.
 - "Make `url_decode` round-trip-symmetric with `url_encode`" — `url_encode`
   already encodes `+` as `%2B`, so `url_decode(url_encode(s)) == s` for any
   input that does not itself contain a literal `+`. Making the round-trip
@@ -98,7 +98,7 @@ Re-open this decision only if:
 - A concrete production incident is reported in which a DSL script's
   `url_decode(req.path())` allowlist bypass was exploited (Severity bumps to
   High/Critical, justifying a breaking rename).
-- `HttpRouteRuleUnit::url_decode` is itself rewritten to RFC 3986 semantics —
+- `uri_utils::url_decode` is itself rewritten to RFC 3986 semantics —
   in that case the DSL must follow for cross-layer consistency, and this rule
   is superseded.
 - A separate RFC 3986 path-decoding builtin is requested for a different

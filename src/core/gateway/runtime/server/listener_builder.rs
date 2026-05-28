@@ -136,6 +136,11 @@ pub fn add_http_listener(
         context.edgion_gateway_config.spec.preflight_policy.clone(),
     );
 
+    let http_route_manager = crate::core::gateway::routes::http::get_global_http_route_managers()
+        .get_or_create_listener_manager(&context.listener_key);
+    let grpc_route_manager = crate::core::gateway::routes::grpc::get_global_grpc_route_managers()
+        .get_or_create_listener_manager(&context.listener_key);
+
     let edgion_http = EdgionHttpProxy {
         gateway_class_name: context.gateway_class_name.clone(),
         listener: context.listener.clone(),
@@ -154,6 +159,8 @@ pub fn add_http_listener(
         enable_http2: context.enable_http2,
         real_ip_extractor,
         preflight_handler,
+        http_route_manager,
+        grpc_route_manager,
     };
 
     // Build HttpServerOptions: h2c + downstream keepalive request limit

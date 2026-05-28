@@ -36,6 +36,12 @@ impl RegexRoutesEngine {
 
         // Sort routes by pattern length (longest first) for priority matching,
         // with specificity tie-breaking per Gateway API spec.
+        //
+        // Invariant relied on by `match_route`: `RegexSet::matches()` returns matched
+        // indices in ascending order (regex crate contract). Because `routes` is
+        // sorted longest-first here, that ascending subsequence is already in
+        // highest-precedence-first order. `match_route` MUST NOT re-sort the matched
+        // indices — doing so would be a per-request no-op on the hot path.
         let mut routes = routes;
         routes.sort_by(|a, b| {
             let len_a = a.path_regex.as_ref().map(|r| r.as_str().len()).unwrap_or(0);
@@ -97,27 +103,10 @@ impl RegexRoutesEngine {
                 return Ok(None);
             }
 
-            // Sort matched indices by precedence (RegexSet may return in arbitrary order)
-            let mut sorted_matches = matches;
-            sorted_matches.sort_by(|&a, &b| {
-                let len_a = self.routes[a]
-                    .path_regex
-                    .as_ref()
-                    .map(|r| r.as_str().len())
-                    .unwrap_or(0);
-                let len_b = self.routes[b]
-                    .path_regex
-                    .as_ref()
-                    .map(|r| r.as_str().len())
-                    .unwrap_or(0);
-                let len_cmp = len_b.cmp(&len_a);
-                if len_cmp != std::cmp::Ordering::Equal {
-                    return len_cmp;
-                }
-                self.routes[a].specificity.cmp_precedence(&self.routes[b].specificity)
-            });
-
-            for &idx in &sorted_matches {
+            // Indices from `RegexSet::matches()` are ascending; combined with the
+            // build-time longest-first sort of `routes`, this iteration is already
+            // in highest-precedence-first order. See the invariant note in `build`.
+            for &idx in &matches {
                 let regex_route = &self.routes[idx];
                 if let Some(matched_gi) = regex_route.deep_match(session, ctx, index)? {
                     return Ok(Some(RouteMatchResult {

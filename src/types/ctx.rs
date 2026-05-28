@@ -8,6 +8,7 @@ use crate::core::gateway::routes::HttpRouteRuleUnit;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::http_route_preparse::ParsedLBPolicy;
+use crate::types::uri_utils;
 use crate::types::{EdgionStatus, GRPCBackendRef, HTTPBackendRef, HTTPRouteMatch};
 use bytes::Bytes;
 use pingora_core::protocols::l4::socket::SocketAddr;
@@ -890,12 +891,12 @@ impl EdgionHttpContext {
     /// `raw_query` is consulted only on first access. Subsequent calls return
     /// the already-cached map regardless of the argument.
     ///
-    /// Decoding follows `HttpRouteRuleUnit::parse_query_string` — `%XX`
-    /// percent-decoded and `+` translated to space, matching what the route
-    /// matcher sees in `queryParams`.
+    /// Decoding follows `crate::types::uri_utils::parse_query_string` —
+    /// `%XX` percent-decoded and `+` translated to space, matching what the
+    /// route matcher sees in `queryParams`.
     pub fn cached_query(&self, raw_query: Option<&str>) -> &HashMap<String, String> {
         self.cached_query_cell
-            .get_or_init(|| raw_query.map(HttpRouteRuleUnit::parse_query_string).unwrap_or_default())
+            .get_or_init(|| raw_query.map(uri_utils::parse_query_string).unwrap_or_default())
     }
 
     /// Resolve the route-level `request_timeout`, preferring HTTP `route_unit`

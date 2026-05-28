@@ -4,8 +4,7 @@ use crate::core::gateway::path_normalization::{
     contains_escaped_slash, has_invalid_percent_encoding, normalize_path, PathNormalizationConfig,
 };
 use crate::core::gateway::plugins::http::get_global_plugin_store;
-use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, parse_grpc_timeout, try_match_grpc_route};
-use crate::core::gateway::routes::http::routes_mgr::get_global_http_route_managers;
+use crate::core::gateway::routes::grpc::{parse_grpc_timeout, try_match_grpc_route};
 use crate::core::gateway::runtime::hostname_matches_listener;
 use crate::core::gateway::runtime::store::get_listener_gateway_info_store;
 use crate::core::gateway::runtime::store::listener_gateway_info::format_gateway_key;
@@ -88,9 +87,7 @@ pub async fn request_filter(
             return Ok(true);
         }
 
-        let grpc_listener_manager =
-            get_global_grpc_route_managers().get_or_create_listener_manager(&edgion_http.listener_key);
-        let grpc_routes = grpc_listener_manager.load_route_table();
+        let grpc_routes = edgion_http.grpc_route_manager.load_route_table();
         let _ = try_match_grpc_route(&grpc_routes, session, ctx, &gateway_index).await;
 
         // If GRPCRoutes exist on this port but none matched, return UNIMPLEMENTED
@@ -111,9 +108,7 @@ pub async fn request_filter(
     }
 
     if !ctx.is_grpc_route_matched {
-        let http_listener_manager =
-            get_global_http_route_managers().get_or_create_listener_manager(&edgion_http.listener_key);
-        let port_routes = http_listener_manager.load_route_table();
+        let port_routes = edgion_http.http_route_manager.load_route_table();
         match port_routes.match_route(session, ctx, &gateway_index) {
             Ok(result) => {
                 ctx.gateway_info = result.matched_gateway;

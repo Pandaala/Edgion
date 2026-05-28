@@ -13,7 +13,7 @@ description: Consistent-hash ConsistentHashOn::Arg now decodes percent/plus-enco
 The `ConsistentHashOn::Arg(arg_name)` branch of `extract_hash_key`
 (`src/core/gateway/backends/selector.rs`) now matches a query parameter when its
 name equals `arg_name` **byte-for-byte** OR — only when the raw name contains `%`
-or `+` — when `HttpRouteRuleUnit::url_decode(name) == *arg_name`. So a client
+or `+` — when `uri_utils::url_decode(name) == *arg_name`. So a client
 sending `?session%20id=abc` (or `?session+id=abc`) now matches an `arg_name` of
 `session id`. The matched **value** is still extracted raw (not decoded) — decoding
 it would change the hash key of every existing deployment.
@@ -28,7 +28,7 @@ Re-reports of the form "consistent-hash `extract_hash_key` Arg branch uses
 without percent-decoding", "`?session%20id=` / `?foo+bar=` fails to match a
 spaced arg name", or "the hash key is silently empty and the request falls back
 to round-robin" are **not accepted** — verify the current Arg branch carries the
-`name.contains(['%', '+']) && HttpRouteRuleUnit::url_decode(name) == *arg_name`
+`name.contains(['%', '+']) && uri_utils::url_decode(name) == *arg_name`
 guard before re-reporting.
 
 ## What was wrong (before the fix)
@@ -48,9 +48,9 @@ percent/plus-encoded, so the mismatch only surfaces for an exotic arg-name confi
 
 ## Why the fix is correct
 
-`HttpRouteRuleUnit::url_decode` (exposed `pub(crate)` for this call; same helper
+`uri_utils::url_decode` (lives in `src/types/uri_utils.rs`; same helper
 backing route-matching `parse_query_string`) is already exhaustively unit-tested
-in `match_unit.rs` (`%20`→space, `+`→space, invalid `%XX` preserved literally,
+in `uri_utils.rs` (`%20`→space, `+`→space, invalid `%XX` preserved literally,
 multibyte UTF-8). The new branch is a thin wrapper over it, gated so the decode
 runs only when needed. Backward compatible: a plain-identifier arg name still
 matches raw via the `name == arg_name` fast path (including the case where an
@@ -82,6 +82,6 @@ Re-open only if:
 ## Reference Cases
 
 - backends-F014 (review finding, fixed 2026-05-24)
-- `HttpRouteRuleUnit::url_decode` unit tests (`src/core/gateway/routes/http/match_unit.rs`)
+- `uri_utils::url_decode` unit tests (`src/types/uri_utils.rs`)
 - Existing integration scenario `HTTPRoute_default_lb-ch-arg.yaml` (`arg.user_id`,
   plain-identifier no-regression path)
