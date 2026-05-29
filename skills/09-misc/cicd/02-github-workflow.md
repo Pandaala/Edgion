@@ -11,10 +11,23 @@ Use this skill to answer:
 - How to modify the `setup-rust` local action without simultaneously breaking `ci.yml` and `build-image.yml`
 - How to reproduce the CI / release build path locally as closely as possible
 
+## The four workflows
+
+The repo currently has four workflows under `.github/workflows/`:
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `ci.yml` | `push` / `pull_request` to `main` / `master` | Rust check / fmt / clippy / test + agent-docs gate |
+| `check-english-only.yml` | `pull_request` + `push` to `main` | Runs `make check-english-only` — the English-only gate the project relies on |
+| `docs.yml` | `push` to `main` touching `docs/**` (or `workflow_dispatch`) | VitePress build + GitHub Pages deploy |
+| `build-image.yml` | `workflow_dispatch` (manual only) | Cross-compile binaries, build/push runtime images, merge manifests, create release |
+
 ## Read these real entry points first
 
 - [../../../.github/workflows/ci.yml](../../../.github/workflows/ci.yml)
 - [../../../.github/workflows/build-image.yml](../../../.github/workflows/build-image.yml)
+- [../../../.github/workflows/check-english-only.yml](../../../.github/workflows/check-english-only.yml)
+- [../../../.github/workflows/docs.yml](../../../.github/workflows/docs.yml)
 - [../../../.github/actions/setup-rust/action.yml](../../../.github/actions/setup-rust/action.yml)
 - [../../../docker/Dockerfile.runtime](../../../docker/Dockerfile.runtime)
 - [00-local-build.md](00-local-build.md)
@@ -61,7 +74,7 @@ When changing it, treat it as "shared infrastructure", not as a private script f
 
 ## Current release workflow
 
-`build-image.yml` triggers on pushing tag `v*` and is split into 4 stages:
+`build-image.yml` currently triggers on **`workflow_dispatch` only** (manual run). The `push: tags: - "v*"` trigger is commented out in the workflow file, so pushing a `v*` tag no longer auto-builds images or auto-creates a release. To restore auto-release on tag push, uncomment that `push.tags` block. The workflow is split into 5 jobs:
 
 1. `prepare-cargo-cache`
    - checkout
@@ -72,23 +85,27 @@ When changing it, treat it as "shared infrastructure", not as a private script f
 2. `build-binaries`
    - `amd64` / `arm64` matrix
    - arm64 additionally installs `gcc-aarch64-linux-gnu` / `g++-aarch64-linux-gnu`
-   - Builds four binaries:
+   - Builds three binaries (the release build step does **not** include `edgion-center`):
      - `edgion-gateway`
      - `edgion-controller`
      - `edgion-cli`
-     - `edgion-center`
    - Uploads the artifact `edgion-binaries-<arch>`
 
 3. `build-and-push-images`
    - Downloads the binaries from the previous stage
    - Builds runtime images using [../../../docker/Dockerfile.runtime](../../../docker/Dockerfile.runtime)
-   - Pushes per architecture:
+   - Pushes per architecture (only `gateway` and `controller` get images; `edgion-cli` is built but not imaged):
      - `pandaala/edgion-gateway:<tag>_amd64`
      - `pandaala/edgion-gateway:<tag>_arm64`
      - `pandaala/edgion-controller:<tag>_amd64`
      - `pandaala/edgion-controller:<tag>_arm64`
 
-4. `merge-manifests`
+4. `create-release` (needs `build-and-push-images`)
+   - Uses `softprops/action-gh-release` with `body_path: releases/<ref_name>.md`
+   - Tags containing `-` are marked pre-release
+   - Note: with `workflow_dispatch`, `github.ref_name` is the dispatched branch/tag — this job assumes a tag context, so it is only meaningful when the workflow is run against a `v*` tag ref
+
+5. `merge-manifests` (needs `build-and-push-images`)
    - Extracts from `refs/tags/vX.Y.Z`:
      - Full version `X.Y.Z`
      - minor `X.Y`
@@ -101,10 +118,12 @@ When changing it, treat it as "shared infrastructure", not as a private script f
 
 ## Publishing a GitHub Release
 
+> Because `build-image.yml` is currently `workflow_dispatch`-only, this is **no longer auto-triggered by a tag push**. You run the workflow manually (selecting the `v*` tag ref); the `create-release` job then creates the Release.
+
 **Publishing steps:**
 
 1. Write `releases/<tag>.md` (e.g. `releases/v0.2.0.md`) and commit it to the repo
-2. Push the tag → after the workflow finishes pushing images, it automatically creates a Release whose body is taken from that file
+2. Push the tag, then manually dispatch `build-image.yml` against that tag → after the workflow finishes pushing images, the `create-release` job creates a Release whose body is taken from that file
 
 **File format:** plain Markdown, divided into sections such as `## Features` / `## Bug Fixes`, with a link at the end pointing to the README.
 

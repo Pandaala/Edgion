@@ -179,6 +179,8 @@ GO_RUN_FILTER="TestConformance/GRPCRouteListenerHostnameMatching$" bash scripts/
 
 ## References
 
+- Conformance failure-pattern recipes (kubectl + in-cluster runner lens): `skills/08-kubernetes/01-gateway-api/06-conformance-debug-cookbook.md`
+- Cross-test leakage / timeline correlation: `skills/08-kubernetes/01-gateway-api/05-batch-conformance-debugging.md`
 - rv/sv triple architecture: `skills/03-coding/00-logging-and-tracing-ids.md`
 - access-log field spec: `skills/03-coding/observability/00-access-log.md`
 - Targeted TLS debugging (more grep patterns): `skills/09-misc/debugging-tls-gateway.md`

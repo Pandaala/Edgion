@@ -88,15 +88,18 @@ Edgion extends standard Gateway API through the following mechanisms:
 
 ### 1. Annotations
 
-Use annotations with the `edgion.io/*` prefix to add Edgion-specific behavior to standard resources:
+Use annotations with the `edgion.io/*` prefix to add Edgion-specific behavior to standard resources.
+Most `edgion.io/*` annotations tune runtime behavior (e.g. `edgion.io/enable-http2`,
+`edgion.io/http-to-https-redirect`, `edgion.io/health-check`, `edgion.io/circuit-breaker`,
+`edgion.io/proxy-protocol`). The one annotation that references another resource is:
 
 | Annotation | Applicable Resources | Description |
 |------|---------|------|
-| `edgion.io/edgion-plugins` | HTTPRoute, GRPCRoute | References an EdgionPlugins resource by name |
 | `edgion.io/edgion-stream-plugins` | Gateway | References an EdgionStreamPlugins resource by name |
-| `edgion.io/edgion-gateway-config` | Gateway | References an EdgionGatewayConfig resource by name |
-| `edgion.io/edgion-tls` | Gateway | References an EdgionTls resource by name (alternative to Secret) |
-| `edgion.io/link-sys` | Gateway | References a LinkSys resource by name |
+
+EdgionPlugins, EdgionTls, and EdgionGatewayConfig are **not** wired via annotation keys — they are
+associated through `ExtensionRef`-type filters (EdgionPlugins) or spec references (EdgionTls,
+EdgionGatewayConfig); LinkSys is its own resource. See the ExtensionRef section below.
 
 For the full list of annotations, see `skills/02-features/05-annotations/00-annotations-overview.md`.
 

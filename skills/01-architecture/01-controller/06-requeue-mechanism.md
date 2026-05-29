@@ -15,7 +15,7 @@ Core components:
 - **PROCESSOR_REGISTRY** (global singleton) — registers all Processors and provides cross-resource dispatch via `requeue(kind, key)` and `requeue_with_chain(kind, key, chain)`
 - **TriggerChain** — causality trace chain that records the requeue cascade path to prevent infinite loops
 
-## 6 Trigger Paths
+## 5 Trigger Paths
 
 ### 1. GatewayRouteIndex
 
@@ -116,7 +116,6 @@ Call sites:
 | ReferenceGrant | yes | yes | CrossNsRevalidationListener |
 | ConfigMap | yes | yes | no requeue dependency |
 | EndpointSlice | — | — | stored directly; consumed by Gateway on demand |
-| Endpoints | — | — | stored directly; consumed by Gateway on demand |
 | GatewayClass | — | — | referenced by Gateway; no requeue |
 | EdgionGatewayConfig | — | — | referenced by Gateway; no requeue |
 

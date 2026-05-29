@@ -1,6 +1,6 @@
 ---
 name: http-plugin-catalog
-description: Full EdgionPlugins CRD schema and catalog of 28 HTTP plugins.
+description: Full EdgionPlugins CRD schema and catalog of 33 HTTP plugins.
 ---
 
 # EdgionPlugins — HTTP Plugins
@@ -84,6 +84,7 @@ spec:
 | `DynamicInternalUpstream` | Dynamic internal upstream |
 | `DynamicExternalUpstream` | Dynamic external upstream |
 | `AllEndpointStatus` | All-endpoint status query |
+| `RegionRoute` | Multi-region traffic routing. The EdgionPlugins config only holds a `serviceRegionRouteRef`; all routing rules live in PluginMetaData (ServiceRegionRoute → ClusterRegionRoute), resolved at plugin-build time. See `05-resources/15-plugin-metadata.md`. |
 
 > Note: `EdgionPlugin::ExtensionRef` (the nested form) has been removed. Multi-plugin reuse is achieved via an aggregate EdgionPlugins resource or by listing multiple ExtensionRef entries side-by-side in the HTTPRoute filter list. See `docs/zh-CN/migrations/<version>-extension-ref.md` for details.
 

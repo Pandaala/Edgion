@@ -1,6 +1,6 @@
 # Edgion K8s Integration Testing Guide
 
-> See `/Users/caohao/ws1/Edgion/skills/integration-testing.md` for the base workflow. This file only covers **the differences and modifications required for the Kubernetes scenario**.
+> See [`01-integration-testing.md`](01-integration-testing.md) for the base workflow. This file only covers **the differences and modifications required for the Kubernetes scenario**.
 
 ## 1. Goal and scope
 
@@ -63,7 +63,7 @@ Constraints to keep in mind:
 
 ### 4.2 The execution chain and config source are settled
 
-`/Users/caohao/ws1/Edgion/examples/k8stest/scripts/run_k8s_integration.sh` is now the sole entry point for K8s integration tests. prepare / conf apply / test-client batch all run around `examples/k8stest/conf` and no longer rely on an external deploy repo loading `examples/test/conf`.
+`examples/k8stest/scripts/run_k8s_integration.sh` is now the sole entry point for K8s integration tests. prepare / conf apply / test-client batch all run around `examples/k8stest/conf` and no longer rely on an external deploy repo loading `examples/test/conf`.
 
 ## 5. What must be changed for new conf (landing checklist)
 
@@ -153,7 +153,7 @@ Roll out in stages:
 
 Corresponding script:
 
-- `/Users/caohao/ws1/Edgion/examples/k8stest/scripts/run_k8s_integration.sh`
+- `examples/k8stest/scripts/run_k8s_integration.sh`
   - `--prepare-only`: only prepare the environment
   - `--skip-prepare`: only run tests
 
@@ -161,17 +161,17 @@ Corresponding script:
 
 The following directories still contain `127.0.0.1/localhost/fixed admin port` assumptions and should be reworked first:
 
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/http_route/backend/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/edgion_plugins/direct_endpoint/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/edgion_plugins/all_endpoint_status/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/edgion_plugins/dynamic_external_upstream/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/gateway/allowed_routes/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/gateway/listener_hostname/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/gateway/combined/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/gateway/dynamic/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/tcp_route/stream_plugins/*`
+- `examples/code/client/suites/http_route/backend/*`
+- `examples/code/client/suites/edgion_plugins/direct_endpoint/*`
+- `examples/code/client/suites/edgion_plugins/all_endpoint_status/*`
+- `examples/code/client/suites/edgion_plugins/dynamic_external_upstream/*`
+- `examples/code/client/suites/gateway/allowed_routes/*`
+- `examples/code/client/suites/gateway/listener_hostname/*`
+- `examples/code/client/suites/gateway/combined/*`
+- `examples/code/client/suites/gateway/dynamic/*`
+- `examples/code/client/suites/tcp_route/stream_plugins/*`
 
-## 9. Mapping to the original document
+## 9. Mapping to the base workflow
 
-- Original flow and test framework: `/Users/caohao/ws1/Edgion/skills/integration-testing.md`
+- Base flow and test framework: [`01-integration-testing.md`](01-integration-testing.md)
 - This document only adds K8s-specific differences, the K8s conf checklist, and suite rework items.

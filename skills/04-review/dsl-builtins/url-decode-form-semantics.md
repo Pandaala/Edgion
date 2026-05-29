@@ -113,7 +113,7 @@ Re-open this decision only if:
   `BuiltinId::UrlDecode` arm with the in-source design-rationale comment
 - `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md`
   §`url_decode` — operator-facing semantics + security warning
-- `skills/04-review/backends/backends-F014-consistent-hash-arg-percent-encoded-name.md`
+- `skills/04-review/backends/consistent-hash-arg-percent-encoded-name.md`
   — sibling decision locking the same form semantics at the routing layer
 - `skills/03-coding/dsl/builtin-error-semantics.md` — `url_decode` row already
   catalogues the "silent fallback" error shape (preserves literal `%XX` on

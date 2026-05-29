@@ -5,7 +5,7 @@ description: Use for pre-commit/local checks, CI/CD workflows, Docker builds, re
 
 # 09 Miscellaneous
 
-> Edgion build and release workflow. Rust 1.75+ single-crate project, default features: `allocator-jemalloc` + `boringssl`.
+> Edgion build and release workflow. Single-crate project; Rust toolchain is pinned by CI / `rust-toolchain.toml` (currently `1.92`, channel `stable`). Default features: `allocator-jemalloc` + `boringssl`.
 > Four binaries: `edgion-gateway` (data plane), `edgion-controller` (control plane), `edgion-cli` (CLI), `edgion-center` (federation center).
 
 ## File list
@@ -47,9 +47,12 @@ docker build -f docker/Dockerfile -t edgion .
 ```
 
 ### Release workflow
+`build-image.yml` is currently **`workflow_dispatch`-only** (the tag-push trigger is commented out). Release is a manual dispatch:
 ```
-git tag v0.x.x → push → build-image.yml → Docker Hub pandaala/edgion-*
+write releases/v0.x.x.md → push tag v0.x.x → manually dispatch build-image.yml against that tag
+  → Docker Hub pandaala/edgion-gateway, pandaala/edgion-controller → create-release
 ```
+See [cicd/02-github-workflow.md](cicd/02-github-workflow.md) for the full job breakdown.
 
 ## Cargo features cheat sheet
 

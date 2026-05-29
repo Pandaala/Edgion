@@ -5,7 +5,7 @@ description: edgion-cli subcommand details — apply, get, delete, reload argume
 
 # edgion-cli subcommands
 
-edgion-cli provides 6 subcommands: apply (apply configuration), get (query resources), delete (delete resources), reload (reload resources), gen-certs (generate mTLS certificates), and login (authentication). apply, delete, and reload are only available with the center target; gen-certs does not depend on a target.
+edgion-cli provides 7 subcommands: apply (apply configuration), get (query resources), delete (delete resources), reload (reload resources), gen-certs (generate mTLS certificates), gen-token (mint a CLI token), and login (authentication). apply, delete, and reload are only available with the center target; gen-certs and gen-token do not depend on a target and do not contact the controller.
 
 ## apply
 
@@ -259,6 +259,28 @@ src/core/ctl/
     └── commands/
         └── gen_certs.rs      # GenCertsArgs, write_to_files(), write_to_k8s_secrets()
 ```
+
+## gen-token
+
+Mint a new CLI token and print it together with its SHA-256 digest. Does not contact the controller.
+
+### Syntax
+
+```bash
+edgion-cli gen-token
+```
+
+### Implementation logic
+
+1. Generate 32 CSPRNG bytes, encode as URL-safe base64 (no padding), and prepend an `edg_` prefix to form the token.
+2. Compute the SHA-256 over the **full `edg_`-prefixed token** (the exact `Authorization: Bearer <token>` string the CLI sends).
+3. Print the token (used with `--token` or `EDGION_TOKEN`) and the SHA-256 (pasted into the controller `cli_tokens[].token_sha256`).
+
+### Module location
+
+| Module | Path |
+|------|------|
+| Token generation | `src/core/ctl/cli/token.rs` (`gen_token`) |
 
 ## login — authentication
 

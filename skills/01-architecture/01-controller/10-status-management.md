@@ -1,3 +1,8 @@
+---
+name: status-management
+description: update_status implementation rules and pitfalls — status write flow, field rules, and testing points for CRD status writeback.
+---
+
 # Status Management — update_status Implementation Rules
 
 > For the location of status fields per resource, see [05-resources/SKILL.md](../05-resources/SKILL.md); this document covers only the status write flow, field rules, and testing points.
@@ -174,7 +179,7 @@ EdgionAcme has both a Gateway API-style `Accepted` condition and ACME-specific l
 
 ### 4.5 Resources without status
 
-**Pattern:** Secret, Service, EndpointSlice, Endpoint, ReferenceGrant, ConfigMap
+**Pattern:** Secret, Service, EndpointSlice, ReferenceGrant, ConfigMap
 
 These use `DefaultHandler` or a handler with empty `update_status()`.
 

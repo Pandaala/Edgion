@@ -145,11 +145,7 @@ PID=$!; sleep 5; kill $PID 2>/dev/null; wait $PID 2>/dev/null
 ### 7. Build and Deploy a Fixed Binary
 
 ```bash
-# Use cross to compile for linux amd64
-~/sh/copy-gw.sh
-
-# Or manually:
-cd ~/ws/ws1/Edgion
+# From the repo root, use cross to compile for linux amd64
 cross build --release --target x86_64-unknown-linux-gnu --bin edgion-gateway
 
 # Copy to all gateway pods
@@ -167,8 +163,15 @@ done
 ### 8. Entering Gateway / Controller Pods
 
 ```bash
-~/sh/in-gw.sh    # exec into edgion-gateway pod
-~/sh/in-ctl.sh   # exec into edgion-controller pod
+# exec into the edgion-gateway pod
+GW_POD=$(kubectl get pods -n edgion-system -l app=edgion-gateway \
+  -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -it -n edgion-system "$GW_POD" -- /bin/sh
+
+# exec into the edgion-controller pod
+CTL_POD=$(kubectl get pods -n edgion-system -l app=edgion-controller \
+  -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -it -n edgion-system "$CTL_POD" -- /bin/sh
 ```
 
 ## Architecture Reference

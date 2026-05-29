@@ -15,7 +15,7 @@ The ConfigCenter defines a unified interface via the `ConfCenter` trait, which c
 - **CenterApi** — resource CRUD operations: `get_one`, `set_one`, `create_one`, `update_one`, `list`
 - **CenterLifeCycle** — lifecycle management: `start`, `ready check`, `reload`, `shutdown`
 
-Whether the underlying backend is the file system or the Kubernetes API, the upper-layer Workqueue and ResourceProcessor pipeline is identical. Resource changes from the event source enter the Workqueue uniformly for dedup and backoff, then the ResourceProcessor performs validation, preparse, processing, and dispatch.
+Whether the underlying backend is the file system or the Kubernetes API, the upper-layer Workqueue and ResourceProcessor pipeline is identical. Resource changes from the event source enter the Workqueue uniformly for dedup and delayed (coalesced) requeue, then the ResourceProcessor performs validation, preparse, processing, and dispatch.
 
 ## File List
 

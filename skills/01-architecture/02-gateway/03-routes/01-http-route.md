@@ -25,6 +25,7 @@ src/core/gateway/routes/http/
 │   └── ...                     # other Pingora callbacks
 ├── redirect_http.rs            # EdgionHttpRedirectProxy: HTTP→HTTPS 301 redirect
 ├── lb_policy_sync.rs           # sync LB policies into the global PolicyStore
+├── session_persistence.rs      # Gateway API SessionPersistence: cookie/header session affinity
 └── tests.rs
 ```
 
@@ -70,9 +71,10 @@ The radix tree internally supports `:param` parameter matching; a double colon `
 | `new_ctx` | `pg_new_ctx.rs` | Create `EdgionHttpContext` |
 | `early_request_filter` | `pg_early_request_filter.rs` | Protocol detection (gRPC / gRPC-Web), request info extraction |
 | `request_filter` | `pg_request_filter.rs` | Route matching, plugin execution, gRPC route attempt |
-| `upstream_peer` | `pg_upstream_peer.rs` | Backend selection, BackendTLSPolicy lookup, connection establishment |
+| `upstream_peer` | `pg_upstream_peer.rs` | Backend selection (incl. session-affinity sticky target), BackendTLSPolicy lookup, connection establishment |
 | `request_body_filter` | `pg_request_body_filter.rs` | Request body filtering |
-| `upstream_response_filter` | `pg_upstream_response_filter.rs` | Upstream response header processing |
+| `upstream_request_filter` | `pg_upstream_request_filter.rs` | Outgoing upstream request header rewrite (e.g. `grpc-timeout`) |
+| `upstream_response_filter` | `pg_upstream_response_filter.rs` | Upstream response header processing (incl. session-affinity `Set-Cookie`) |
 | `upstream_response_body_filter` | `pg_upstream_response_body_filter.rs` | Upstream response body processing |
 | `response_filter` | `pg_response_filter.rs` | Downstream response filtering |
 | `logging` | `pg_logging.rs` | Access log recording |
@@ -94,6 +96,15 @@ The radix tree internally supports `:param` parameter matching; a double colon `
 - `sync_lb_policies_for_routes`: iterate all HTTPRoute rules' `backend_refs`, extract `extension_info.lb_policy`, and update `PolicyStore`.
 - `cleanup_lb_policies_for_routes`: remove LB policies associated with deleted routes.
 - Supported policy types: `LBPolicyConsistentHash` (header.xxx / cookie.xxx / arg.xxx), `LBPolicyLeastConn`.
+
+## Session persistence
+
+`session_persistence.rs` implements Gateway API `SessionPersistence` (cookie- or header-based session affinity):
+
+- **Token derivation**: `generate_session_token(backend_addr)` returns a deterministic 8-char hex CRC32 of the backend `ip:port`. It is a stickiness hint, not a security boundary (no MAC/secret) — see the module doc-comment threat model.
+- **Default name**: `edgion-session-affinity` (overridable via the resource's `sessionName`). `get_session_name` / `get_persistence_type` read the config.
+- **Request path** (`pg_upstream_peer.rs`): `extract_session_token` reads the token from the cookie or header; if present and the token maps to a live backend, that backend is selected (with SSRF validation on the upstream-peer fallback path).
+- **Response path** (`pg_upstream_response_filter.rs`): `build_set_cookie_value` emits the `Set-Cookie` for cookie-mode persistence.
 
 ## conf_handler_impl flow
 

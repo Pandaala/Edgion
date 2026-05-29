@@ -94,7 +94,7 @@ collapsing cleanly.**
   a literal parameter (each call site still writes the literal) or uses
   `std::any::type_name::<T>()` and changes production log strings to
   compiler-internal names. Past precedent
-  (`infra-cluster-F012-conf-handler-simple-map-pattern.md`) declined the same
+  (`conf-handler-simple-map-pattern.md`) declined the same
   trade-off.
 - `log_tcp(entry: &TcpLogEntry)` / `log_udp(entry: &UdpLogEntry)` go through
   the concrete `entry.to_json()` helpers, whereas `log_tls<T: Serialize>(&T)`
@@ -117,7 +117,7 @@ This finding sits in the same class as:
   better than a premature abstraction; `Looks duplicated` / `style
   inconsistent` must be supported by real maintenance cost or reading-cost
   evidence."
-- `architecture/infra-cluster-F012-conf-handler-simple-map-pattern.md` — same
+- `architecture/conf-handler-simple-map-pattern.md` — same
   shape of finding (extract a generic wrapper around a
   `static + init + accessor` pattern across 2-3 sites), closed ⚠️ accepted
   tradeoff for the same wrapper-cannot-hold-the-static and kind-literal

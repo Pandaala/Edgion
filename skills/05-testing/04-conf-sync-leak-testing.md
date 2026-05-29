@@ -29,6 +29,8 @@ Baseline comparison (not absolute-zero) accounts for pre-existing resources from
 |--------|---------|----------|
 | `run_conf_sync_test.sh` | Basic: N cycles of full inject → verify → delete → verify | ~25s (5 cycles) |
 | `run_conf_sync_advanced_test.sh` | Advanced: 10 edge-case scenarios (orphan, wildcard, out-of-order, rapid-fire, etc.) | ~100s |
+| `run_controller_reconnect_test.sh` | Gateway recovers gracefully when the Controller dies and restarts (config not dropped, then reconverges) | — |
+| `run_controller_stress_restart_test.sh` | Controller reconverges 200+ HTTPRoute / 50+ BackendTLSPolicy after a restart with no Gateway-side resource loss | — |
 
 Both scripts are **self-contained** — they auto-start and auto-stop the environment via `start_all_with_conf.sh` / `kill_all.sh`.
 
@@ -126,7 +128,9 @@ examples/test/conf/conf-sync-leak-test/
 examples/test/scripts/conf-sync/
 ├── run_conf_sync_test.sh                 # Basic cyclic test
 ├── run_conf_sync_advanced_test.sh        # Advanced scenario test
-└── run_conf_sync_mtls_test.sh            # mTLS end-to-end test
+├── run_conf_sync_mtls_test.sh            # mTLS end-to-end test
+├── run_controller_reconnect_test.sh      # Gateway survives Controller restart/reconnect
+└── run_controller_stress_restart_test.sh # Controller reconverges 200+ routes after restart
 
 examples/test/scripts/gen_certs/
 └── generate_conf_sync_certs.sh           # Uses edgion-cli gen-certs for conf_sync mTLS certs

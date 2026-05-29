@@ -53,9 +53,9 @@ resync.
 `rcu` performs `compare_and_swap` and re-runs the closure whenever the pointer changed between
 load and swap, so concurrent insert/remove writers serialize and the last one wins
 deterministically with no lost update. This is the same defect class as
-[backends-F002](../backends/backends-F002-upsert-task-concurrent-handle-leak.md),
-[backends-F004](../backends/backends-F004-set-service-config-toctou-race.md), and
-[backends-F005](../backends/backends-F005-warm-cell-toctou-stale-overwrite.md) — non-atomic
+[backends-F002](../backends/upsert-task-concurrent-handle-leak.md),
+[backends-F004](../backends/set-service-config-toctou-race.md), and
+[backends-F005](../backends/warm-cell-toctou-stale-overwrite.md) — non-atomic
 multi-step mutation on a config-sync–driven shared store — fixed with the same
 atomic-swap-with-retry principle. The remove fast-path `contains_key` check is a benign
 optimization only: a concurrent insert landing after the check is a separate entry the call

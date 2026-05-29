@@ -313,8 +313,21 @@ Ask: does the fix change user-visible behavior, a configuration field, a default
 
 Ask: does the fix resolve a pattern that could be re-reported in a future review?
 
-- If **yes**: add a short entry to the appropriate file under `skills/04-review/` (or create a new sub-file) explaining why the old behavior was a defect and how it was fixed. Follow the format of existing files in that directory. This is also the primary action for ⚠️ accepted-tradeoff verdicts.
-- Ask: does the fix change a design decision, architectural constraint, or coding rule documented in `skills/`? If so, update that skill file.
+- If **yes**: **create ONE independent per-finding file** at
+  `skills/04-review/<topic>/<finding-id>-<slug>.md` recording why the old behavior was a
+  defect and how it was fixed (or, for ⚠️, why the tradeoff is accepted) and what re-reports
+  to reject. Use the `_template.md` shape and its frontmatter (`status`, `finding_id`,
+  `closed`). This is also the primary action for ⚠️ accepted-tradeoff verdicts.
+  - **One finding = one new file. Do NOT append the conclusion into any shared / aggregate
+    file** — not the `04-review/SKILL.md` "Usage principles" list, not any central
+    closed-findings log, not another finding's file. This is the rule that keeps parallel
+    `/fix-issue` runs conflict-free: N findings closed in parallel = N independent new files,
+    zero merge conflicts.
+  - Pick `<topic>` = the directory where sibling findings of the same family already live
+    (`ls skills/04-review/`); create the directory if the family is new. Discovery later is by
+    `grep -rl '<keyword>' skills/04-review/` over the topic directories — there is no central index.
+- Ask: does the fix change a design decision, architectural constraint, or coding rule
+  documented in an EXISTING specific skill file (not an index)? If so, update that one file.
 - Check `skills/SKILL.md` "Key constraints" table — if the fix touches a listed constraint, update the table entry.
 
 ### 4c. Integration tests (`examples/test/`)

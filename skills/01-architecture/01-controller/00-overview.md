@@ -58,7 +58,6 @@ Each resource type (kind) has its own **Workqueue** and **ResourceProcessor** in
 A Go controller-runtime style work queue with these core features:
 
 - **Dedup**: the same key exists in the queue at most once
-- **Exponential backoff**: increasing delay on retry after failure
 - **Delayed enqueue**: cross-resource requeue uses a built-in DelayQueue for coalescing
 - **TriggerChain**: cascade-path tracking and cycle detection (similar to X-Forwarded-For)
 - **Dirty re-enqueue**: new enqueue requests received during processing are not lost
@@ -130,7 +129,7 @@ src/core/controller/
 │   │   ├── file_system/        # FileSystemCenter implementation
 │   │   └── kubernetes/         # KubernetesCenter implementation
 │   └── sync_runtime/           # Shared sync runtime
-│       ├── workqueue.rs        # Workqueue (dedup, backoff, TriggerChain)
+│       ├── workqueue.rs        # Workqueue (dedup, delayed requeue, TriggerChain)
 │       ├── shutdown.rs         # ShutdownHandle for graceful shutdown
 │       ├── metrics.rs          # Runtime metrics
 │       └── resource_processor/ # ResourceProcessor framework
@@ -161,7 +160,7 @@ The complete data flow from event source to Gateway sync:
 flowchart TD
     A["K8s Informer / Watcher"] --> C["Event (Add/Update/Delete)"]
     B["FileSystem Watcher"] --> C
-    C --> D["Workqueue\nIndependent queue per kind\nDedup + backoff, supports cross-resource requeue"]
+    C --> D["Workqueue\nIndependent queue per kind\nDedup + delayed requeue, supports cross-resource requeue"]
     D --> E["ResourceProcessor‹T›\non_init — initial load\non_apply — add/update handling\non_delete — delete handling"]
     E --> F["ServerCache\nIn-memory cache (processed resources)"]
     F --> G["ConfigSyncServer\ngRPC server (Watch/List)\nDetects changes and pushes incrementally"]
@@ -171,7 +170,7 @@ flowchart TD
 Key flow details:
 
 1. **Event source**: in K8s mode, events are produced by the Informer/Watcher; in file-system mode, they are triggered by file changes
-2. **Workqueue**: receives resource keys, dequeues them in order after dedup; failures are retried with exponential backoff
+2. **Workqueue**: receives resource keys, dequeues them in order after dedup; cross-resource requeue is coalesced via delayed enqueue (no exponential backoff — status-write failures self-heal on watcher relist)
 3. **ResourceProcessor**: pulls a key from the queue, dispatches to the matching `ProcessorHandler`; the result is written into `ServerCache`
 4. **ServerCache**: stores processed resource objects; changes are notified to the ConfigSyncServer via `CacheEventDispatch`
 5. **ConfigSyncServer**: maintains a Watch stream for each Gateway client; detects `server_id` changes to trigger a full re-list, otherwise pushes incremental changes

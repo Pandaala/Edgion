@@ -178,63 +178,11 @@ The comparison uses JSON strings rather than struct PartialEq, because different
 
 ## Workqueue Mechanism
 
-### Structure
-
-```rust
-pub struct Workqueue {
-    kind: &'static str,
-    queue: Mutex<VecDeque<WorkItem>>,       // FIFO queue
-    pending: Mutex<HashMap<String, PendingItem>>,  // dedup set
-    notify: Notify,                         // wake the worker
-    config: WorkqueueConfig,
-}
-```
-
-### Dedup
-
-```
-enqueue("default/my-route"):
-├── if "default/my-route" in pending → skip (already queued)
-└── else → add to pending + push to queue + notify worker
-```
-
-### Dirty Requeue
-
-```
-dequeue():
-├── pop from queue
-├── remove from pending    ← key released here
-└── return WorkItem
-
-# While processing "default/my-route":
-# If K8s sends a new event for that key → enqueue succeeds
-# Because the key has been removed from pending
-```
-
-### WorkqueueConfig
-
-```rust
-pub struct WorkqueueConfig {
-    pub default_requeue_delay: Duration, // delay for cross-resource requeue
-    pub max_trigger_cycles: usize,       // max trigger-chain cycle count
-    pub max_trigger_depth: usize,        // max trigger-chain total length (safety cap)
-}
-```
-
-> **No exponential-backoff retry**: status-write failures (such as transient K8s API unavailability) rely on a full rebuild after the watcher reconnects to self-heal. Reliably distinguishing transient jitter from permanent failure is impossible, so explicit retry has limited value.
-
-### TriggerChain (Cascade Tracking)
-
-Cross-resource requeue carries a `TriggerChain` to detect cycles and bound depth:
-
-```rust
-pub struct TriggerChain {
-    entries: Vec<TriggerEntry>,  // [(kind, key), ...]
-}
-```
-
-The chain is extended on each cross-resource requeue, and is checked against `max_trigger_cycles` or for cycles.
-Once the limit is exceeded, propagation stops and a warning is logged.
+Each `ResourceController` drives a per-kind Workqueue (dedup, dirty requeue, delayed/coalesced
+cross-resource requeue, and TriggerChain cycle detection). There is intentionally no
+exponential-backoff retry; status-write failures self-heal on watcher relist. The canonical structure
+and behavior are documented in [`../../04-workqueue.md`](../../04-workqueue.md) — see it for the real
+`Workqueue` / `WorkqueueConfig` / `TriggerChain` definitions.
 
 ## 410 Gone Handling
 

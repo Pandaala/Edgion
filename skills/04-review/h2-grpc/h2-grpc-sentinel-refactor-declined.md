@@ -65,5 +65,4 @@ polish, not a required fix.
 ## Reference
 
 - Verifier: `tasks/todo/rfc-review/_raw/verification-a2.md → N7` (CONFIRM, but RFC-CHECK = N/A clarity-only)
-- Closure: [CLOSED-FINDINGS.md → refactor-h2-grpc-02](../CLOSED-FINDINGS.md)
-- Related rename: [naming-h2-grpc-01](../CLOSED-FINDINGS.md) (`send_grpc_trailers_only` → `send_grpc_error_three_frame`)
+- Related rename: `naming-h2-grpc-01` (`send_grpc_trailers_only` → `send_grpc_error_three_frame`)

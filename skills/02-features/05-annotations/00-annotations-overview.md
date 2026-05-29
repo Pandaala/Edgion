@@ -32,15 +32,15 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
 
 - `edgion.io/forward-raw-path` (HTTPRoute) — three-state control over the upstream path forwarding view:
   - `"true"` forces raw, `"false"` forces normalized (overrides region_route); absent falls back to the default flow.
-  - See spec §14.6 / metadata reference for details.
+  - See the [metadata reference](references/annotations-metadata.md) for details.
 
 ### TCPRoute / TLSRoute / UDPRoute
 
 | Annotation | Value | Description |
 |------------|-------|-------------|
 | `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins binding (TCPRoute / TLSRoute / UDPRoute) |
-| `edgion.io/proxy-protocol` | `"1"\|"2"` | Proxy Protocol version (TCPRoute / TLSRoute) |
-| `edgion.io/max-connect-retries` | `u32` | Max connection retries (TCPRoute / TLSRoute) |
+| `edgion.io/proxy-protocol` | `"v2"` | Send Proxy Protocol v2 to upstream (TLSRoute only; other values ignored) |
+| `edgion.io/max-connect-retries` | `u32` | Max upstream connect attempts (TLSRoute only; clamped to 1..=5, default 2) |
 
 - On `UDPRoute`, `edgion.io/edgion-stream-plugins` runs only the Stage-1 ConnectionFilter (`spec.plugins`, IP-based, fail-close); there is no TLS stage.
 

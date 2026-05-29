@@ -13,9 +13,14 @@ Use this skill to answer:
 
 ## Main files
 
-- `docker/Dockerfile`
-- `docker/Dockerfile.builder`
-- `docker/Dockerfile.runtime`
+- `docker/Dockerfile` — multi-stage source build (covered in detail below)
+- `docker/Dockerfile.builder` — standalone build-environment image
+- `docker/Dockerfile.runtime` — packages a pre-built artifact into a runtime image
+
+Other variants in `docker/` (not detailed here):
+
+- `docker/Dockerfile.all-in-one` (+ `docker/all-in-one-entrypoint.sh`) — packages pre-built binaries + the frontend dashboard + nginx into one image; two modes via `ALL_IN_ONE_MODE`: `controller-gateway` (controller + gateway + dashboard) or `center` (center + dashboard). Driven by `build-image.sh`
+- `docker/Dockerfile.allbin` — builds all binaries (controller, center, cli) from source in one pass, using BuildKit cache mounts for fast incremental rebuilds
 
 ## The 4 stages of `docker/Dockerfile`
 
@@ -122,7 +127,7 @@ Key arguments:
 | `BINARY` | `gateway` / `controller` or example name |
 | `BUILD_TYPE` | `bin` or `example` |
 | `BINARY_PATH` | Pre-built artifact directory |
-| `RUNTIME_BASE` | Runtime base image, defaults to `ubuntu:24.04` |
+| `RUNTIME_BASE` | Runtime base image, defaults to `debian:bookworm-slim` |
 | `EXTRA_PACKAGES` | Extra runtime apt packages |
 
 Example:

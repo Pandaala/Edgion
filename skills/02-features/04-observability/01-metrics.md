@@ -17,15 +17,13 @@ description: Prometheus Metrics endpoints and available metrics.
 
 ## Metric Conventions
 
-Edgion's Metrics design principles (strict for the Gateway data plane; looser for the control plane but governed by an "ask before adding" rule):
+Canonical reference: [../../03-coding/observability/01-metrics.md](../../03-coding/observability/01-metrics.md) holds the full design rules. In short, Edgion deliberately keeps the metric surface small:
 
-1. **No Histograms in the Gateway data plane**: histograms multiplied by many labels on the data plane per-request path can produce a Cartesian-product explosion. Use only Counter and Gauge. **The single existing exception**: `edgion_gateway_request_duration_ms` (a core SLI, disabled by default and requiring explicit opt-in, with explicitly configured buckets). Adding new histograms is forbidden — if you believe one is necessary, first amend the rules in `skills/03-coding/observability/01-metrics.md` and explain the reasoning in code review.
-2. **Histograms are allowed but restrained on the Controller / Center control plane**: the control plane has low trigger frequency, label cardinality is bounded by deployment scale, and cardinality risk is low — histograms are **technically allowed**. However, following the "ask before adding a metric" principle, prefer counter/gauge + access log aggregation, and only add a histogram when distribution shape (not "most recent") is the core decision input. There are currently 0 histograms on the control plane (the `edgion_fed_*` / `edgion_controller_*` families are all counters and gauges).
-3. **Bounded label cardinality**: each label's value domain is ≤ a few dozen (applies to both data plane and control plane).
-4. **Managed via the GatewayMetrics struct**: do not directly use the `metrics::counter!()` macro (on the Gateway side; for Controller/Center see `common/observe/fed_metrics.rs` — the control plane may use macros directly).
-5. **Gauge balance**: every +1 path has a matching -1.
-6. **Hybrid registration strategy**: hot per-request paths (ctx_created / gateway_request_bytes, etc.) store `Counter`/`Gauge` directly with eager registration in `new()`; cold failure/low-frequency paths use `OnceLock<Counter>/<Gauge>` and register on first record — untouched metrics do not appear in `/metrics`, so zero values do not consume bandwidth.
-7. **Fine-grained observation goes through access log aggregation**: Prometheus carries only **low-cardinality alerting + second-level aggregation**. Finer questions (per-request latency, per-target distributions, trace-level replay) have raw data in the access log (and `mirror_log` / `ssl_log` / `tls_log` / `tcp_log` / `udp_log`); use Loki / Elasticsearch / ClickHouse to aggregate at query time and you get rates / percentiles in any dimension. Do not expand Prometheus metrics for "I want more detail" needs.
+- The **Gateway data plane** uses only Counter and Gauge (no histograms, except the core SLI `edgion_gateway_request_duration_ms`, which is off by default), with strictly bounded label cardinality.
+- The **Controller / Center control plane** also restrains new metrics — most control-plane events go through structured `tracing` logs + K8s status conditions instead.
+- Fine-grained, high-cardinality questions (per-request latency, per-target distribution, trace-level replay) are answered by aggregating the access log (and `mirror_log` / `ssl_log` / `tls_log` / `tcp_log` / `udp_log`), not by adding Prometheus metrics.
+
+See the coding doc above for the per-step rules (no-macro / `GatewayMetrics` management, gauge symmetry, hybrid registration, the "ask before adding" threshold).
 
 ### Observability Responsibility Cheat Sheet
 

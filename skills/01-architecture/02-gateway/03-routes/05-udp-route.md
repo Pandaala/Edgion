@@ -35,26 +35,9 @@ pub struct UdpRouteTable {
 - No hostname dimension (UDP has no SNI-like mechanism).
 - Per the Gateway API spec, each UDP listener is typically bound to at most one UDPRoute.
 
-## Route management
+## Route management, bucketing, rebuild, ConfHandler
 
-`GlobalUdpRouteManagers` follows the unified per-listener management pattern:
-
-```
-GlobalUdpRouteManagers
-├── route_cache: DashMap<String, Arc<UDPRoute>>        # global route cache
-└── by_listener: DashMap<ListenerKey, Arc<UdpPortRouteManager>>
-    └── UdpPortRouteManager
-        └── route_table: ArcSwap<UdpRouteTable>        # per-listener snapshot
-```
-
-### Listener bucketing
-
-Routes are distributed to the matching listener via `resolved_listeners` (Controller-precomputed). Routes without `resolved_listeners` log a warning and are skipped.
-
-### Rebuild strategy
-
-- `rebuild_all_listener_managers`: full rebuild of every listener route table; cleans up stale listeners with no routes.
-- `rebuild_affected_listener_managers`: rebuild only affected listeners (used by incremental updates).
+`GlobalUdpRouteManagers` (`route_cache` + `by_listener → UdpPortRouteManager → ArcSwap<UdpRouteTable>`) follows the shared L4 per-listener management pattern — identical bucketing/rebuild/ConfHandler mechanics to TCPRoute. See [SKILL.md → Shared L4 per-listener management](SKILL.md#shared-l4-per-listener-management-tcp--tls--udp).
 
 ## Stateless UDP proxy
 
@@ -65,15 +48,6 @@ Routes are distributed to the matching listener via `resolved_listeners` (Contro
 - Selects a backend from the route's `backend_refs`.
 - UDP is connectionless — each datagram is forwarded independently with no connection state.
 - Supports weighted backend selection (same `BackendSelector` mechanism as TCP / HTTP).
-
-## ConfHandler handling
-
-`ConfHandler<UDPRoute>` is implemented identically to TCPRoute:
-
-- `full_set`: clear route_cache, full replace, call `rebuild_all_listener_managers`.
-- `partial_update`: compute affected listeners, update route_cache, call `rebuild_affected_listener_managers`.
-
-The route's `ArcSwap` atomic swap ensures in-flight datagram handling is unaffected.
 
 ## Key source files
 

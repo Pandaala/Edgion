@@ -113,7 +113,7 @@ Check the finding against:
 - The sealed sonnet verifier's conclusion in `_raw/verification-<area>.md` — was it CONFIRM, UNCERTAIN, or REFUTE? REFUTE means stop now and close as ❌.
 - Existing `skills/04-review/` entries — is there an explicit accepted-tradeoff for this exact pattern?
 - `skills/08-kubernetes/01-gateway-api/01-not-implemented.md` — is the "violation" actually a documented Gateway API non-implementation that the project signed off on?
-- `CLOSED-FINDINGS.md` — has an analogous P-finding been closed under the related review-* skill (the existing 04-review CLOSED log uses P-IDs like `P3-g3-016`)?
+- `grep -rl '<keyword>' skills/04-review/` — has an analogous finding already been closed? Each closed finding is one independent file under its topic directory (there is no central CLOSED log); `grep` / `ls` over the topic dirs is the source of truth.
 - Current source code state — the file may already be fixed by another stream of work; RFC review was a point-in-time snapshot.
 
 **Present to the user (mandatory pause before proceeding):**
@@ -300,11 +300,11 @@ Ask: does the fix change user-visible behavior, a configuration field, a default
 
 This is **especially important for RFC findings** because the project will get re-reviewed in future sweeps; without a skills entry, the same finding gets re-flagged.
 
-- ✅ fixes where the code now matches RFC: add an entry under the relevant `skills/04-review/<topic>/` (or create one) explaining what was fixed and what re-reports to reject.
+- ✅ fixes where the code now matches RFC: create ONE independent per-finding file under `skills/04-review/<topic>/<finding-id>-<slug>.md` explaining what was fixed and what re-reports to reject.
 - ⚠️ accepted tradeoffs: **mandatory** create `skills/04-review/rfc-divergence/<finding-id>-<short-slug>.md` (flat directory; finding ID already encodes the area) — see template in 4c below.
 - 📝 doc-comment-only: if the doc-comment encodes a deliberate divergence, also add the skills entry (4c).
 - Check `skills/SKILL.md` "Key constraints" table; if the fix touches a listed constraint, update the table entry.
-- Update `CLOSED-FINDINGS.md` with the row: finding ID, fix date, topic, summary, linked rule.
+- **One finding = one new file. Do NOT append to any shared / aggregate file** — there is no central CLOSED log and no SKILL.md index to update. Discovery is by `ls` / `grep` over the topic directories (the same "ls is the source of truth" rule the RFC review queue already uses). This is what keeps parallel runs conflict-free.
 
 ### 4c. RFC-divergence record (mandatory for ⚠️ and for 🟡 mitigation fixes)
 
@@ -352,7 +352,7 @@ Suggestions of the form "<rejected suggestion>" are **not accepted**.
 ## Reference
 
 - Verifier: `tasks/todo/rfc-review/_raw/verification-<area>.md → <ID>`
-- Closure: [CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md)
+- (this file IS the durable closure record — there is no central CLOSED log)
 - (optional) Gateway API test / Pingora upstream issue
 ```
 

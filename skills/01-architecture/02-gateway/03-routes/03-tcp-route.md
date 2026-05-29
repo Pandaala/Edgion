@@ -35,26 +35,9 @@ pub struct TcpRouteTable {
 - TCP has no hostname dimension (unlike TLS's SNI matching), so no `HashHost` index is needed.
 - Per the Gateway API spec, each TCP listener is typically bound to at most one TCPRoute.
 
-## Route management
+## Route management, bucketing, rebuild, ConfHandler
 
-`GlobalTcpRouteManagers` manages global TCP routes following the unified per-listener pattern:
-
-```
-GlobalTcpRouteManagers
-├── route_cache: DashMap<String, Arc<TCPRoute>>        # global route cache
-└── by_listener: DashMap<ListenerKey, Arc<TcpPortRouteManager>>
-    └── TcpPortRouteManager
-        └── route_table: ArcSwap<TcpRouteTable>        # per-listener snapshot
-```
-
-### Listener bucketing
-
-`bucket_routes_by_listener` distributes routes to the matching listener via `resolved_listeners` (precomputed by the Controller). If a route has no `resolved_listeners`, a warning is logged and the route is skipped (TCP routes must bind to a specific listener).
-
-### Rebuild strategy
-
-- `rebuild_all_listener_managers`: full rebuild of every listener route table; cleans up stale listeners with no routes.
-- `rebuild_affected_listener_managers`: rebuild only affected listeners (used by incremental updates).
+`GlobalTcpRouteManagers` (`route_cache` + `by_listener → TcpPortRouteManager → ArcSwap<TcpRouteTable>`) follows the shared L4 per-listener management pattern — listener bucketing via `resolved_listeners`, `rebuild_all`/`rebuild_affected`, and `full_set`/`partial_update` ConfHandler semantics. See [SKILL.md → Shared L4 per-listener management](SKILL.md#shared-l4-per-listener-management-tcp--tls--udp).
 
 ## TCP proxy
 
@@ -64,15 +47,6 @@ GlobalTcpRouteManagers
 - Calls `match_route()` once per connection to obtain the route.
 - Selects a backend from the route's `backend_refs` and establishes an upstream TCP connection.
 - Forwards data transparently in both directions, never parsing the application layer.
-
-## ConfHandler handling
-
-`ConfHandler<TCPRoute>` implementation:
-
-- `full_set`: clear route_cache, full replace, call `rebuild_all_listener_managers`.
-- `partial_update`: compute affected listeners, update route_cache, call `rebuild_affected_listener_managers`.
-
-The route's `ArcSwap` atomic swap ensures existing connections are unaffected and new connections automatically pick up the latest snapshot.
 
 ## Key source files
 

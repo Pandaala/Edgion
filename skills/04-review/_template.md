@@ -1,10 +1,25 @@
 ---
 name: <rule-name-in-kebab-case>
 description: Use when reviewing <topic area> findings; covers <one-line summary of what the rule decides>.
+status: fixed | accepted-tradeoff | false-positive | rfc-divergence | wont-fix
+finding_id: <e.g. backends-F010 / P3-g3-016 / http1-04>
+closed: <YYYY-MM-DD>
 ---
 
 <!--
 Copy this file to `04-review/<topic>/<rule-name>.md` and fill in every `<...>` placeholder.
+The finding ID lives in the `finding_id:` frontmatter field and the H1 title — NOT in the filename
+(filenames are descriptive kebab-case slugs; the topic directory supplies the category context).
+
+ONE FINDING = ONE FILE. This file is the SOLE durable record of a closed / decided finding.
+Do NOT also append the conclusion to any shared / aggregate file — there is NO central
+closed-findings log and NO `SKILL.md` "Usage principles" index to maintain. Discovery is by
+`ls` / `grep` over the topic directories, e.g. `grep -rl '<keyword>' skills/04-review/`.
+Keeping every finding in its own file is what lets parallel `/fix-issue` runs close many
+findings at once with zero merge conflicts.
+
+Pick `<topic>` = the directory where sibling findings of the same family already live
+(`ls skills/04-review/`); create the directory if the family is new.
 
 The "Decision rule" shape is canonical for new entries — Conclusion-first, then rationale,
 then explicit rejection of competing fixes, then re-evaluation triggers, then reference cases.

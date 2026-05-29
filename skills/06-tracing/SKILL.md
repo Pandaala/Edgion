@@ -10,9 +10,9 @@ description: Debugging and troubleshooting skill for Edgion. Use when local code
 
 ## File list
 
-| File | Topic | Status |
-|------|------|------|
-| [00-debugging.md](00-debugging.md) | Daily development debugging, Admin API, edgion-cli, Access Log Store, Metrics, quick lookup | Refactored |
+| File | Topic |
+|------|------|
+| [00-debugging.md](00-debugging.md) | Daily development debugging, Admin API, edgion-cli, Access Log Store, Metrics, quick lookup |
 
 ## Quick entry points
 

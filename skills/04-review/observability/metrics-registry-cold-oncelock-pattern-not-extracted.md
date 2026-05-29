@@ -53,7 +53,7 @@ exact tradeoff:
 - `architecture/style-consolidation-thresholds.md` codifies the general rule:
   "Three similar lines is better than a premature abstraction; duplication
   itself is not a problem unless backed by real maintenance or reading cost."
-- `architecture/infra-cluster-F012-conf-handler-simple-map-pattern.md` declined
+- `architecture/conf-handler-simple-map-pattern.md` declined
   a different shape (a `LazyLock<RwLock<HashMap>>` + three-arm `add` / `update`
   / `remove` trio) on a rationale that still applies here: stable Rust offers
   no generic-static keyed on a wrapper type, so any "extract the storage cell"
@@ -91,7 +91,7 @@ Same shape, same conclusion:
 
 - `observability/protocol-logger-oncelock-pattern-not-extracted.md` — extract
   `OnceLock + init + get + log` across `tcp/tls/udp/ssl_log.rs`. Declined.
-- `architecture/infra-cluster-F012-conf-handler-simple-map-pattern.md` —
+- `architecture/conf-handler-simple-map-pattern.md` —
   extract a generic wrapper across `LazyLock<RwLock<HashMap>>` + three-arm
   add/update/remove sites. Declined for the same "no stable-Rust
   generic-static keyed on a wrapper type" reason that applies here.
@@ -143,4 +143,4 @@ Re-open this decision only if:
 - Sibling decision records:
   - `skills/04-review/observability/protocol-logger-oncelock-pattern-not-extracted.md`
   - `skills/04-review/architecture/style-consolidation-thresholds.md`
-  - `skills/04-review/architecture/infra-cluster-F012-conf-handler-simple-map-pattern.md`
+  - `skills/04-review/architecture/conf-handler-simple-map-pattern.md`

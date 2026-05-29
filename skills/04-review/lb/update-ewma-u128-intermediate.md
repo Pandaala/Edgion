@@ -1,0 +1,10 @@
+---
+name: update-ewma-u128-intermediate
+description: Use when reviewing EdgionBackend::update_ewma u64 overflow findings — the blend now uses u128 intermediates; the 60s latency-cap suggestion is rejected.
+---
+
+# EdgionBackend::update_ewma u64 Overflow
+
+**Status / verdict**: fixed (lb-F001, 2026-05-24)
+
+When reviewing findings of the form "`EdgionBackend::update_ewma` computes `(alpha * latency_us + (100 - alpha) * current) / 100` in u64 / the EWMA multiply can overflow u64 / promote to u128 or cap the latency sample (lb-F001)": **fixed (lb-F001, 2026-05-24)**. `update_ewma` (`src/core/gateway/lb/edgion_backend.rs`) now performs the blend through u128 intermediates and casts back to u64. The cast is lossless: the formula is a weighted average (`alpha <= 100`) so the result is bounded by `max(latency_us, current) <= u64::MAX`, and the EWMA does NOT accumulate (each sample is a single-request elapsed time from `attempt.rs`, no running sum), so the only overflow risk was the intermediate products `alpha * latency_us` / `(100 - alpha) * current` exceeding u64 before the divide — `100 * u64::MAX` fits in u128. This matches Envoy's Peak EWMA philosophy (stores the EWMA as a wide `double`, clamps only the smoothing factor, never caps RTT samples). The issue's **primary** suggestion (`.min(60_000_000)` to cap latency at 60s) was **not adopted**: it changes real behavior for long-lived requests (WebSocket / gRPC streaming / large uploads legitimately exceed 60s) and diverges from Envoy, which leaves RTT samples unbounded. Unit regression `ewma_update_does_not_overflow_on_extreme_sample` (alpha=100 then alpha=0 with `u64::MAX / 50`, exercising both product terms). The bare overflow was physically unreachable (requires a ~5,840-year single sample), so the fix is zero-behavior-change hardening, not a live-bug fix. Re-reports of the overflow form are not accepted; the 60s-cap suggestion is specifically rejected. Verify the current `update_ewma` uses u128 intermediates before re-reporting.

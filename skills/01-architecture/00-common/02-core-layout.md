@@ -9,13 +9,14 @@ description: Core module layering conventions — top-level grouping, per-bin la
 
 ## Top-level grouping
 
-`src/core/` has only four top-level groups:
+`src/core/` has five top-level groups:
 
 ```
 src/core/
 ├── controller/   # Logic belonging to edgion-controller
 ├── gateway/      # Logic belonging to edgion-gateway
 ├── ctl/          # Logic belonging to edgion-cli
+├── center/       # Logic belonging to edgion-center (federation center)
 └── common/       # Code shared across bins
 ```
 
@@ -23,6 +24,7 @@ src/core/
 - Serves the control plane only → `controller/`
 - Serves the data plane only → `gateway/`
 - Serves only the CLI → `ctl/`
+- Serves only the federation center → `center/`
 - Depended on by at least two bins with no implicit runtime coupling → `common/`
 
 ## Gateway layout
@@ -55,6 +57,7 @@ src/core/gateway/
 │   ├── providers/    # Redis / Etcd / ES / Webhook / LocalFile
 │   └── runtime/      # LinkSysStore + DataSender
 ├── observe/      # AccessLog / Metrics / SSL/TCP/TLS/UDP logs
+├── path_normalization/ # Request path normalization
 ├── plugins/      # Plugin system
 │   ├── http/         # 28 HTTP plugin implementations
 │   ├── stream/       # Stream plugins (IP restriction + TLS routing)
@@ -88,40 +91,59 @@ src/core/gateway/
 
 ## Controller layout
 
+The `api/` handlers are flat `.rs` files; `workqueue`, `processor_registry`, and `schema_validator`
+are also flat `.rs` files, not directories. The canonical, fully annotated tree lives in
+`../01-controller/00-overview.md`; this is the placement-oriented summary.
+
 ```
 src/core/controller/
-├── api/          # Admin API endpoints
-│   ├── cluster_handlers/      # Cluster-scoped resource CRUD
-│   ├── namespaced_handlers/   # Namespaced resource CRUD
-│   ├── configserver_handlers/ # ConfigServer endpoints (for ctl)
-│   └── common/                # Shared handler logic
+├── api/          # Admin API endpoints (flat .rs files)
+│   ├── cluster_handlers.rs       # Cluster-scoped resource CRUD
+│   ├── namespaced_handlers.rs    # Namespaced resource CRUD
+│   ├── configserver_handlers.rs  # ConfigServer endpoints (for ctl)
+│   ├── region_route_handlers.rs  # RegionRoute endpoints
+│   ├── wipe_handlers.rs          # Wipe-all endpoints
+│   ├── debug_handlers.rs / diagnostics_handlers.rs # Debug / diagnostics
+│   ├── authz_classifier.rs / authz_middleware.rs / cli_token_middleware.rs # Authz
+│   └── common.rs                 # Shared handler logic
+├── authz/        # Authorization engine
 ├── cli/          # CLI entry and startup
 ├── conf_mgr/     # Configuration manager (core)
-│   ├── conf_center/           # Configuration source abstraction
-│   │   ├── file_system/       #   FileSystemCenter implementation
-│   │   └── kubernetes/        #   KubernetesCenter implementation
-│   ├── sync_runtime/          # Sync runtime
-│   │   ├── workqueue/         #   Work queue
-│   │   ├── resource_processor/#   Resource processing pipeline
-│   │   │   ├── handlers/      #     23 resource handlers
-│   │   │   ├── ref_grant/     #     Cross-namespace reference validation
-│   │   │   ├── secret_utils/  #     Secret dependency tracking
-│   │   │   └── configmap_utils/#    ConfigMap utilities
-│   │   ├── shutdown/          #   Graceful shutdown
-│   │   └── metrics/           #   Prometheus metrics
-│   ├── processor_registry/    # Global processor registry
-│   └── schema_validator/      # CRD Schema validation
+│   ├── manager.rs                # ConfMgr facade
+│   ├── processor_registry.rs     # Global processor registry
+│   ├── schema_validator.rs       # CRD Schema validation
+│   ├── conf_center/              # Configuration source abstraction
+│   │   ├── file_system/          #   FileSystemCenter implementation
+│   │   └── kubernetes/           #   KubernetesCenter implementation
+│   └── sync_runtime/             # Sync runtime
+│       ├── workqueue.rs          #   Work queue
+│       ├── metrics.rs            #   Prometheus metrics
+│       ├── shutdown.rs           #   Graceful shutdown
+│       └── resource_processor/   #   Resource processing pipeline
+│           ├── handlers/         #     20 resource handlers
+│           ├── ref_grant/        #     Cross-namespace reference validation
+│           ├── secret_utils/     #     Secret dependency tracking
+│           └── configmap_utils/  #     ConfigMap utilities
 ├── conf_sync/    # Config sync (gRPC server side)
-│   ├── conf_server/           # ConfigSyncServer + gRPC implementation
-│   └── cache_server/          # ServerCache + EventStore
+│   ├── conf_server/              # ConfigSyncServer + gRPC implementation
+│   └── cache_server/             # ServerCache + EventStore
+├── fed_sync/     # Federation sync toward Center
 ├── observe/      # Logging facade
 └── services/     # Controller-side services
-    └── acme/                  # ACME certificate automation
+    └── acme/                     # ACME certificate automation
 ```
 
 **Placement rules**:
 - K8s watch/list, parse/preparse, reference management, status writeback → `conf_mgr/`
 - Configuration distribution toward the Gateway → `conf_sync/`
+
+## Center layout
+
+`src/core/center/` owns the federation Center binary (edgion-center). It accepts gRPC streams from
+multiple Controllers and aggregates their state. Subgroups include `aggregator/`, `api/`, `cli/`,
+`commander/`, `config/`, `db/`, `fed_sync/`, `metadata_store/`, and `proxy/`. Per the dependency rules
+below, `center` must not depend on `controller`; cross-bin types live in `types/` and shared logic in
+`common/`. See `../06-center/SKILL.md` for the architecture.
 
 ## Common layout
 
@@ -139,7 +161,13 @@ src/core/common/
 │   ├── proto/        # protobuf definitions
 │   ├── traits/       # CacheEventDispatch + ConfHandler
 │   └── types/        # Sync-related types
+├── fed_sync/     # Shared federation-sync proto / types (Controller ↔ Center)
+├── observe/      # Shared observability helpers (logging facade)
 ├── config/       # Shared startup configuration
+├── startup.rs    # Common process startup helpers
+├── grpc_tls.rs   # Shared gRPC TLS setup
+├── http_util.rs  # Shared HTTP utilities
+├── metadata_conf_handler.rs # Shared metadata config handling
 ├── matcher/      # Shared matching algorithms
 │   ├── host_match/   # Domain matching (Hash + Radix)
 │   ├── ip_radix_tree/ # IP Radix tree

@@ -12,7 +12,7 @@ description: Route matching overview — multi-stage pipeline (Listener→Domain
 | [01-http-route.md](01-http-route.md) | HTTP route engine — RadixPath, RegexSet, ConfHandler, proxy implementation, LB policy sync |
 | [02-grpc-route.md](02-grpc-route.md) | gRPC route engine — Service/Method matching, gRPC-Web support, HTTP pipeline integration |
 | [03-tcp-route.md](03-tcp-route.md) | TCP route — per-listener route table, TCP proxy implementation, ConfHandler |
-| [04-tls-route.md](04-tls-route.md) | TLS route — SNI matching, per-listener route table, TLS passthrough proxy implementation |
+| [04-tls-route.md](04-tls-route.md) | TLS route — SNI matching, per-listener route table, terminate vs passthrough proxies |
 | [05-udp-route.md](05-udp-route.md) | UDP route — per-listener route table, stateless proxy, ConfHandler |
 
 ## Multi-stage matching pipeline
@@ -49,6 +49,17 @@ GlobalHttpRouteManagers
 - `pg_request_filter` calls `load_route_table()` per request to obtain the current snapshot, and the reference stays stable for the entire request lifetime.
 
 The global managers for other protocols (gRPC / TCP / TLS / UDP) follow the same `Global*RouteManagers → per-listener manager → ArcSwap` pattern.
+
+### Shared L4 per-listener management (TCP / TLS / UDP)
+
+The TCP, TLS, and UDP route docs all share the same listener-bucketing, rebuild, and ConfHandler mechanics. Canonical description (the per-protocol docs only call out their deltas):
+
+- **Layout**: `Global*RouteManagers { route_cache: DashMap<String, Arc<Route>>, by_listener: DashMap<ListenerKey, Arc<*PortRouteManager>> }`, with each per-listener manager holding `route_table: ArcSwap<*RouteTable>` for lock-free reads.
+- **Listener bucketing**: `bucket_routes_by_listener` distributes routes to listeners via `resolved_listeners` (Controller-precomputed). A route with no `resolved_listeners` logs a warning and is skipped.
+- **Rebuild strategy**: `rebuild_all_listener_managers` fully rebuilds every listener table and cleans up stale listeners with no routes; `rebuild_affected_listener_managers` rebuilds only affected listeners (incremental updates).
+- **ConfHandler**: `full_set` clears `route_cache`, replaces in full, and calls `rebuild_all_listener_managers`; `partial_update` computes affected listeners, updates `route_cache`, and calls `rebuild_affected_listener_managers`. The `ArcSwap` swap leaves in-flight connections/datagrams on the old snapshot; new ones pick up the latest.
+
+Per-protocol deltas: **TCP** = first-match over a flat `Vec` (no hostname dimension); **TLS** = SNI-indexed `HashHost` + two proxies (terminate-to-TCP vs passthrough); **UDP** = connectionless per-datagram match, weighted backend selection.
 
 ## Domain match
 

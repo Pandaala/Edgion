@@ -21,10 +21,16 @@
 ```
 Map {
   "status":  Int   // HTTP status code, or 0 on failure
-  "body":    Str   // Response body (truncated at httpMaxResponseBodyBytes)
+  "body":    Str   // Response body (truncated at min(httpMaxResponseBodyBytes, max_string_len))
   "headers": Map   // Lowercase header name → last value for that name
 }
 ```
+
+The body is first streaming-capped at `max_response_body_bytes`, then silently truncated to
+`max_string_len` (UTF-8 boundary aware) before being wrapped in `Value::Str`, so the effective
+cap is `min(httpMaxResponseBodyBytes, max_string_len)` (default `min(1 MiB, 8 KiB)` = 8 KiB).
+Why truncation rather than raising `StringTooLong` →
+[http-call body cap](../../04-review/dsl-builtins/http-call-body-truncate-to-max-string-len.md).
 
 ## DslRuntime fields
 

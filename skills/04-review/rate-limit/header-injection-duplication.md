@@ -94,11 +94,11 @@ Re-open this decision only if:
 
 - plugins-http-F004 (2026-05-26) — this finding, accepted tradeoff.
 - plugins-http-F003 — sibling key-extraction (extracted): [key-extraction-shared-helper.md](key-extraction-shared-helper.md).
-- g4-005 — Redis `Retry-After` rounding / `ZERO` omission decision (see [CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md)).
+- g4-005 — Redis `Retry-After` rounding / `ZERO` omission decision.
 - plugins-http-FB01 (2026-05-27) — local `rate_limit::reject_request` gained the same
   `Duration::ZERO` omit + sub-second ceil guard, eliminating the RFC 7231 §7.1.3
-  divergence on `OnMissingKey::Deny` (see [CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md)).
-- link-sys-F008 — same redundancy class, "collapse divergent arms" declined (see [CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md)).
+  divergence on `OnMissingKey::Deny`.
+- link-sys-F008 — same redundancy class, "collapse divergent arms" declined.
 - Source: `src/core/gateway/plugins/http/rate_limit/plugin.rs:104-202`,
   `src/core/gateway/plugins/http/rate_limit_redis/plugin.rs:372-467`.
 </content>

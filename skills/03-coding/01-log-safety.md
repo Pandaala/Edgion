@@ -293,9 +293,10 @@ rg -n 'impl (ProxyHttp|ServerApp|TlsAccept|ConnectionFilter|StreamPlugin|TlsRout
 
 ---
 
-## Known items to be cleaned up
+## Resolved cleanup log (historical)
 
-The following issues have been identified in existing code; fix them while modifying the related files:
+All previously-identified hot-path tracing / sensitive-data items below have been cleared.
+This table is kept as a historical record; there are no remaining open items in it.
 
 | File | Issue | Fix | Status |
 |------|------|---------|------|

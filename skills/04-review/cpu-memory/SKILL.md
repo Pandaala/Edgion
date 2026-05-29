@@ -19,7 +19,7 @@ description: Use when reviewing CPU or memory performance findings; index of per
 - **Looking for a specific named scenario?** → see the case table below or search `cases/`
 - **Checking a finding against a known accepted tradeoff?** → find the matching row and load that file
 
-See also [../CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md) for the cross-topic closure log.
+Closed findings are recorded one-file-per-finding under the relevant `skills/04-review/<topic>/` directory; use `grep`/`ls` to find them.
 
 ## Case Index
 

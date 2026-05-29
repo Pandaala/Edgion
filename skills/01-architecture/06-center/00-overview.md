@@ -8,22 +8,22 @@ description: Deployment shape, top-level module map, startup lifecycle, and fail
 ## Deployment shape
 
 `edgion-center` is a standalone process separate from any Controller or Gateway instance.
-It binds two ports (defaults from `src/core/center/config/mod.rs:72-77`):
+It binds two ports (defaults in `src/core/center/config/mod.rs`, `CenterConfig`):
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
 | `:50052` | gRPC (optionally mTLS) | `FederationSync` — Controllers connect here |
 | `:5810` | HTTP | Admin API + auth endpoints |
 
-TLS posture for the gRPC port is governed by `grpc_security` in `CenterConfig`
-(`src/core/center/config/mod.rs:44-47`). Omitting that section keeps plaintext gRPC
+TLS posture for the gRPC port is governed by the `grpc_security` field of `CenterConfig`
+(`src/core/center/config/mod.rs`). Omitting that section keeps plaintext gRPC
 (backward compatible); setting it enables mTLS via `ConfSyncSecurityConfig`.
 The HTTP Admin API uses axum + `compose_admin_routes` and is protected by `local_auth`
 or OIDC `auth`. Authentication is **mandatory** — no-auth mode was removed 2026-05-24;
 `enabled: false` is now ignored with a startup WARN. Center has **no auto-generated
 credentials** (unlike Controller); if neither `[local_auth]` nor `[auth]` is configured,
 the server still starts but all business routes return 503 fail-close
-(`src/core/center/cli/mod.rs:215-225`). `/health`, `/ready`, `/metrics`, and
+(the 503 fail-close branch in `src/core/center/cli/mod.rs::run`). `/health`, `/ready`, `/metrics`, and
 `/api/v1/auth/status` remain reachable. Center has **no authz/RBAC engine** — the
 `(verb, kind)` authorization engine is Controller-private (`src/core/controller/authz/`);
 Center is authentication-only. See
@@ -48,7 +48,7 @@ for credential bootstrap details.
 
 ## Lifecycle
 
-### Startup sequence (`src/core/center/cli/mod.rs:29-175`)
+### Startup sequence (`EdgionCenterCli::run`, `src/core/center/cli/mod.rs`)
 
 1. Parse config from `edgion-center.yaml` (defaults used if missing or unparseable).
 2. Install tracing subscriber + Prometheus recorder.
@@ -57,11 +57,11 @@ for credential bootstrap details.
 4. Optionally open SQLite (skipped when `database.enabled = false`).
 5. Build `FederationGrpcServer` with optional TLS config.
 6. Spawn gRPC task (`tonic::transport::Server`) and HTTP task (`axum::serve`).
-7. `tokio::select!` waits for Ctrl-C or either task to exit (`src/core/center/cli/mod.rs:232-238`).
+7. `tokio::select!` waits for Ctrl-C or either task to exit (the `tokio::select!` block in `EdgionCenterCli::run`).
 
 ### Registration acceptance
 
-When a Controller dials in (`src/core/center/fed_sync/server/mod.rs:218-260`):
+When a Controller dials in (the registration prologue in `FederationGrpcServer`, `src/core/center/fed_sync/server/mod.rs`):
 1. Wait up to 5 s for first `ControllerMessage` (must be `RegisterRequest`).
 2. Run `validate_register_req` + `registry_capacity_exceeded` — any failure returns
    a `Status` error and leaves zero residue in in-memory state or SQLite.
@@ -72,7 +72,7 @@ When a Controller dials in (`src/core/center/fed_sync/server/mod.rs:218-260`):
 
 ### Ongoing sync
 
-The main loop (`src/core/center/fed_sync/server/mod.rs:459-705`) forwards:
+The main message loop (`src/core/center/fed_sync/server/mod.rs`) forwards:
 - `Pong` — no-op, but refreshes `last_seen`.
 - `WatchListResponse` / `WatchEventResponse` — applied to `CenterWatchCache`, which
   calls `CenterMetaDataStore` via the `CenterConfHandler` trait.
@@ -82,9 +82,9 @@ The main loop (`src/core/center/fed_sync/server/mod.rs:459-705`) forwards:
 
 | Scenario | Code behavior |
 |----------|---------------|
-| Controller disconnects (stream closed or error) | `mark_offline_all` called: `ControllerRegistry::mark_offline`, `ResourceAggregator::mark_offline`, `CenterWatchCacheRegistry::mark_offline`, async `CenterDb::mark_offline`. `CenterMetaDataStore` data retained (offline data stays queryable). `src/core/center/fed_sync/server/mod.rs:414-447` |
-| Heartbeat timeout (3× `ping_interval`) | Same `mark_offline_all` path, `reason = HEARTBEAT`. `src/core/center/fed_sync/server/mod.rs:460-468` |
+| Controller disconnects (stream closed or error) | `mark_offline_all` called: `ControllerRegistry::mark_offline`, `ResourceAggregator::mark_offline`, `CenterWatchCacheRegistry::mark_offline`, async `CenterDb::mark_offline`. `CenterMetaDataStore` data retained (offline data stays queryable). `mark_offline_all` closure in `src/core/center/fed_sync/server/mod.rs` (DISCONNECT branch) |
+| Heartbeat timeout (3× `ping_interval`, `HEARTBEAT_MISSED_PING_BUDGET`) | Same `mark_offline_all` path, `reason = HEARTBEAT`. `src/core/center/fed_sync/server/mod.rs` |
 | Center restarts | In-memory state is empty; Controllers reconnect and re-register automatically. SQLite preserves the controller registry (if enabled); `CenterMetaDataStore` is rebuilt from incoming watch data on reconnect. |
-| Registry at capacity (10 000 entries) | New controller IDs are rejected with `Status::resource_exhausted`; reconnects from already-known IDs are still accepted. `src/core/center/fed_sync/server/mod.rs:252-260` |
-| SQLite unavailable at startup | Center logs an error and continues without persistence; in-memory structures remain fully operational. `src/core/center/cli/mod.rs:91-104` |
-| SQLite write failure during registration | Warning is logged; federation stream is not blocked. `src/core/center/fed_sync/server/mod.rs:287-295` |
+| Registry at capacity (`MAX_REGISTRY_ENTRIES` = 10 000 entries) | New controller IDs are rejected with `Status::resource_exhausted`; reconnects from already-known IDs are still accepted. `registry_capacity_exceeded` in `src/core/center/fed_sync/server/mod.rs` |
+| SQLite unavailable at startup | Center logs an error and continues without persistence; in-memory structures remain fully operational. `CenterDb::open` call site in `src/core/center/cli/mod.rs` |
+| SQLite write failure during registration | Warning is logged; federation stream is not blocked. SQLite upsert (best-effort, isolated) in `src/core/center/fed_sync/server/mod.rs` |

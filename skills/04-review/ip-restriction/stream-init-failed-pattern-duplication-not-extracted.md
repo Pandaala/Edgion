@@ -50,7 +50,7 @@ The duplication threshold for this kind of stream-plugin pattern is "3 sites of 
 
 **5. Project policy on small-DRY refactors**
 
-Other declined-extract precedents at comparable cost / benefit: [`plugins-http-dsl-F009`](../CLOSED-FINDINGS.md) (wholesale `call_builtin` extract declined) and [`plugins-http-F004`](../rate-limit/header-injection-duplication.md) (rate-limit header injectors diverge by design). Cross-layer abstraction for ≤10 net-line savings is not worth a new trait surface.
+Other declined-extract precedents at comparable cost / benefit: `plugins-http-dsl-F009` (wholesale `call_builtin` extract declined) and [`plugins-http-F004`](../rate-limit/header-injection-duplication.md) (rate-limit header injectors diverge by design). Cross-layer abstraction for ≤10 net-line savings is not worth a new trait surface.
 
 ## Fix Suggestions Not Accepted
 
@@ -69,5 +69,5 @@ Re-open only if:
 ## Reference Cases
 
 - `plugins-stream-F003` — original finding, 2026-05-26 (this file).
-- Sibling decisions: `plugins-http-dsl-F009` (giant-match extract declined; see [`../CLOSED-FINDINGS.md`](../CLOSED-FINDINGS.md)), `plugins-http-F004` (rate-limit header-injection extraction declined; see [`../rate-limit/header-injection-duplication.md`](../rate-limit/header-injection-duplication.md)).
+- Sibling decisions: `plugins-http-dsl-F009` (giant-match extract declined), `plugins-http-F004` (rate-limit header-injection extraction declined; see [`../rate-limit/header-injection-duplication.md`](../rate-limit/header-injection-duplication.md)).
 - Source: `src/core/gateway/plugins/stream/ip_restriction/stream_ip_restriction.rs:13-29`, `src/core/gateway/plugins/stream/tls_route/ip_restriction.rs:20-34`.

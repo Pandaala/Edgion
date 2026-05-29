@@ -14,7 +14,7 @@ Center uses SQLite to persist **controller registration information** (online/of
 
 **Why bundled SQLite rather than a runtime dependency:**
 - `rusqlite = { features = ["bundled"] }` compiles SQLite from C source and statically links it at compile time
-- No `libsqlite3.so` is needed at runtime; deploying to `Dockerfile.runtime` (ubuntu:24.04) requires no changes
+- No `libsqlite3.so` is needed at runtime; deploying to `Dockerfile.runtime` (debian:bookworm-slim) requires no changes
 - The build-side `Dockerfile.builder` (rust:bookworm, includes gcc) needs no changes either — C source compilation is handled by cargo
 - Compared with the "system dynamic library" approach: bundled has zero runtime dependencies, at the cost of an additional ~30 seconds on first compile (compiling the C code)
 
@@ -109,7 +109,7 @@ All endpoints return 503 when `database.enabled = false`.
 
 `rusqlite bundled` does all of its work at **compile time**:
 - `Dockerfile.builder` (rust:bookworm + gcc): no extra packages required, gcc is already included
-- `Dockerfile.runtime` (ubuntu:24.04 + libssl3): no need to install `libsqlite3`; SQLite is statically linked into the binary
+- `Dockerfile.runtime` (debian:bookworm-slim + libssl3): no need to install `libsqlite3`; SQLite is statically linked into the binary
 
 The only impact is that the first full compile takes ~30 seconds longer (compiling the C code); subsequent builds hit the cargo cache and do not recompile.
 

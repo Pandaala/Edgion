@@ -5,45 +5,32 @@ description: Use when reviewing BasicAuth PluginLog assertions or fixture change
 
 # BasicAuth — group name appears in OK access log, not in failures
 
-After the BasicAuth `secret_groups` rollout, successful authentication
-writes:
+Per-plugin instance of the cross-feature [Access-log group attribution iron
+rule](../security/iron-rules.md) — read it for the shared threat model
+(topology-probing oracle). BasicAuth specifics:
 
-- `OK group=<g> user <X>` — always (BasicAuth has no "username-less" hit
-  branch; the username comes from the Basic auth header and is always
-  present on the OK path)
+**OK line** — `OK group=<g> user <X>`, always (BasicAuth has no "username-less"
+hit branch; the username comes from the Basic auth header and is always present
+on the OK path).
 
-Failure / non-OK branches intentionally **do not** carry the group name:
+**Failure / non-OK branches** (must NOT carry `group=` or the username):
 
 - `Allow anonymous` — anonymous bypass, no group attribution
 - `Deny no credential` — no Authorization header
-- `Deny bad credential` — username not found OR password verification
-  failed (cannot distinguish from log message — by design, avoids
-  username-existence oracle)
-
-## Threat model
-
-- **Success line carries `group=<g>`** — caller already authenticated;
-  surfacing group attribution in PluginLog is operator audit info
-- **Failure line MUST NOT carry group/username** beyond what `Deny bad credential`
-  already implies. Critically, **never include** the username on the
-  failure line (lookups for unknown users return the same `Deny bad
-  credential` literal — preserves the "no username-existence oracle"
-  property)
-
-Reviewers must reject patches that:
-
-- Add `group=` to `Deny *` or `Allow anonymous` lines
-- Split `Deny bad credential` into `Deny unknown user` vs `Deny wrong password`
-  (would create the oracle)
+- `Deny bad credential` — username not found OR password verification failed
+  (single literal — by design, avoids the username-existence oracle; do NOT
+  split into `Deny unknown user` vs `Deny wrong password`)
 
 ## Implementation
 
-Verify code lives in:
-- `src/core/gateway/plugins/http/basic_auth/plugin.rs` — OK log push around
-  line 273; failure push at lines 221, 254, 265
+- `src/core/gateway/plugins/http/basic_auth/plugin.rs` — the single
+  `OK group={} user {}` `push_fmt` is the only line that carries `group=`; the
+  `Deny no credential`, `Deny bad credential`, and `Allow anonymous` `push` calls
+  carry no group/username. An in-file test asserts the OK line matches
+  `OK group=...` and the three Deny/Allow literals appear verbatim. (Line numbers
+  omitted — they drift; grep the literals.)
 
 ## Related
 
-- `skills/04-review/key-auth/group-in-ok-log.md` — same convention for KeyAuth
-- `skills/04-review/hmac-auth/group-in-ok-log.md` — same convention for HmacAuth
-- `skills/04-review/jwt-auth/group-in-ok-log.md` — same convention for JwtAuth
+- Shared rule + sibling plugins (KeyAuth, HmacAuth, JwtAuth) and the inverse
+  IpRestriction convention: [security/iron-rules.md](../security/iron-rules.md).

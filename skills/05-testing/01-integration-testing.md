@@ -208,12 +208,20 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 
 ### Current scenario set
 
-| Scenario id | conf directory | Verifies |
+> Source of truth is `examples/code/client/dynamic/registry.rs` (`all()`); run `--list-dynamic-scenarios` for the live list. As of this writing it registers 10 scenarios:
+
+| Scenario id | conf directory (`conf_path`) | Verifies |
 |-------------|----------|---------|
-| `GatewayDynamic` | `Gateway/DynamicTest/` | Gateway/HTTPRoute config changes (migrated case) |
-| `DslDynamic` | `EdgionPlugins/DslDynamic/DynamicTest/` | DSL plugin source switch v1→v2 |
-| `BasicAuthDynamic` | `EdgionPlugins/BasicAuth/DynamicTest/` | `secretRefs` list shrinks; bob credentials removed → 401 |
-| `RateLimitDynamic` | `EdgionPlugins/RateLimit/DynamicTest/` | `onMissingKey` switched from Allow to Deny |
+| `GatewayDynamic` | `Gateway/DynamicTest` | Gateway/HTTPRoute config changes (migrated case) |
+| `DslDynamic` | `EdgionPlugins/DslDynamic/DynamicTest` | DSL plugin source switch v1→v2 |
+| `BasicAuthDynamic` | `EdgionPlugins/BasicAuth/DynamicTest` | `secretRefs` list shrinks; bob credentials removed → 401 |
+| `BasicAuthDynamicGrouped` | `EdgionPlugins/BasicAuth/DynamicTest` | Grouped BasicAuth variant (`updates_grouped/`) |
+| `RateLimitDynamic` | `EdgionPlugins/RateLimit/DynamicTest` | `onMissingKey` switched from Allow to Deny |
+| `ObservedGenHighFreq` | `Status/ObservedGeneration/HighFrequency/DynamicTest` | 10 rapid Gateway spec changes; `observedGeneration` catches up to the final generation |
+| `BtlspRefFlap` | `Status/BackendTLSPolicy/RefFlap/DynamicTest` | BackendTLSPolicy CA ConfigMap ref flaps good→missing→good; `Accepted`/`ResolvedRefs` track it |
+| `PmdRefFlap` | `EdgionPlugins/PluginMetaDataStatus/RefFlap/DynamicTest` | EdgionPlugins `serviceRegionRouteRef` flaps good→missing→good; `Accepted` tracks it |
+| `SpBackendChange` | `HTTPRoute/Backend/SessionPersistenceBackendChange/DynamicTest` | SessionPersistence cookie re-routes to a healthy backend after backend-a is drained |
+| `TcpEspReload` | `TCPRoute/StreamPlugins/DynamicTest` | Hot-reload of EdgionStreamPlugins allow-list on a TCPRoute listener (allow→deny→allow) |
 
 ### Where the framework lives
 

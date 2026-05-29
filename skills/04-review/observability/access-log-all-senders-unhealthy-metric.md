@@ -70,7 +70,7 @@ not by scraping process stdout.
   we losing log lines", and the alerting threshold is the same in all three cases. A separate
   metric only fragments dashboards.
 - "Flip `healthy()` based on the dispatch outcome so failover can route around a dead writer."
-  Out of scope — same reasoning as F-020 (`link-sys-F020-local-file-write-error-surfaced.md` ·
+  Out of scope — same reasoning as F-020 (`local-file-write-error-surfaced.md` ·
   "Fix Suggestions Not Accepted"): conflating transient runtime faults with the startup-style
   health bool risks oscillation and routing-to-nowhere in a single-sender setup. If failover is
   ever wanted, track it as a separate task.
@@ -89,7 +89,7 @@ Re-open only if:
 ## Reference Cases
 
 - observe F-003 (`tasks/observe/observe-F003-access-logger-send-silent-drop-no-metric.md`, 2026-05-28)
-- `link-sys-F020-local-file-write-error-surfaced.md` — complementary fix at the writer level
+- `local-file-write-error-surfaced.md` — complementary fix at the writer level
 - `observability-review-rule.md` — Iron Rule 3 (Zero Tracing on the Data Plane)
 - `src/core/gateway/observe/metrics/registry.rs:178` — `access_log_dropped()` counter definition
 - `src/core/gateway/observe/logs/ssl_log.rs:48-50` — sibling pattern (metric-only on drop, no `tracing::warn!`)

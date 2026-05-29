@@ -48,5 +48,5 @@ Controller-private; Center is authentication-only (shared `unified_auth`).
 
 ## See also
 
-- [`04-review/CLOSED-FINDINGS.md`](../../04-review/CLOSED-FINDINGS.md) — `common-center-03` row: validation caps confirmed fixed
+- `04-review/` — the `common-center-03` finding (validation caps confirmed fixed) is recorded one-file-per-finding under the relevant topic subdirectory; use `grep`/`ls` to find it
 - [`04-review/SKILL.md`](../../04-review/SKILL.md) — security review routing table (federation / CPU-memory topics)

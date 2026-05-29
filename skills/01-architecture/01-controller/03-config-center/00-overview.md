@@ -65,10 +65,12 @@ The differences are only at the two ends:
 
 The middle layers (Workqueue, ResourceProcessor, ProcessorHandler, ServerCache, reference managers, etc.) are fully reused.
 
-### Requeue with Backoff
+### Requeue and Self-Healing
 
-Failed work items are retried with exponential backoff: `initial_backoff * 2^retry_count`, capped at `max_backoff`.
-After exceeding `max_retries`, the item is dropped and not re-enqueued.
+There is no exponential-backoff retry (`requeue_with_backoff` is intentionally not implemented). Status-write
+failures (e.g., transient K8s API unavailability) are self-healing: when the watcher reconnects after a
+disconnect, a full cache rebuild is triggered, which reprocesses everything and rewrites all statuses.
+Cross-resource requeue is coalesced via delayed enqueue. See `04-workqueue.md` for details.
 
 ### Dirty Requeue
 

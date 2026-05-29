@@ -89,6 +89,14 @@ src/
 │   │   └── tls/                 #   TLS runtime / certificate store / validation
 │   ├── ctl/                     # Code belonging to edgion-cli
 │   │   └── cli/                 #   commands / output / client
+│   ├── center/                  # Code belonging to edgion-center (federation center)
+│   │   ├── aggregator/          #   Multi-Controller state aggregation
+│   │   ├── api/                 #   Center API
+│   │   ├── commander/           #   Command dispatch toward Controllers
+│   │   ├── db/                  #   Persistence
+│   │   ├── fed_sync/            #   Federation gRPC sync
+│   │   ├── metadata_store/      #   Metadata store
+│   │   └── proxy/               #   Reverse proxy toward Controllers
 │   └── common/                  # Cross-bin shared modules
 │       ├── config/              #   Shared startup configuration (test mode, cache config)
 │       ├── conf_sync/           #   gRPC proto / traits / shared types
@@ -105,7 +113,7 @@ src/
     └── err.rs                   # Error types
 ```
 
-**Design principles**: `types/` only holds pure data definitions; `core/` holds all logic. `core/` is layered by bin ownership (controller / gateway / ctl / common); no top-level shim modules are used.
+**Design principles**: `types/` only holds pure data definitions; `core/` holds all logic. `core/` is layered by bin ownership (controller / gateway / ctl / center / common); no top-level shim modules are used.
 
 ## EdgionHttpContext — per-request state container
 

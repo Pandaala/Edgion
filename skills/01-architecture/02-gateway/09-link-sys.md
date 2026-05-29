@@ -63,6 +63,8 @@ providers/webhook/
 ├── manager.rs         # WebhookManager (manages webhook instances)
 ├── runtime.rs         # webhook runtime
 ├── resolver.rs        # KeyGet::Webhook resolver
+├── call.rs            # unified webhook call interface
+├── client.rs          # WebhookLinkClient
 ├── health.rs          # health check
 └── mod.rs
 ```
@@ -163,6 +165,10 @@ impl ConfHandler<LinkSys> for Arc<LinkSysStore> {
 ```
 src/core/gateway/link_sys/
 ├── mod.rs                    # module exports
+├── credential.rs             # materialise credentials from the embedded Secret in LinkSys.spec.*Auth
+├── health.rs                 # LinkSysHealth status DTO shared by all providers
+├── lifecycle.rs              # unified provider lifecycle (init/shutdown, dispatch)
+├── tls.rs                    # unified TLS material resolution for provider connections
 ├── providers/                # implementations of 5 providers
 │   ├── elasticsearch/        # ES bulk indexing
 │   ├── etcd/                 # Etcd v3 client

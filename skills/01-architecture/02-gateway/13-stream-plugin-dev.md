@@ -76,7 +76,7 @@ src/core/gateway/plugins/stream/
 
 ### Stage 2: TlsRoute
 
-- The runtime entry is in [../../../src/core/gateway/routes/tls/proxy.rs](../../../src/core/gateway/routes/tls/proxy.rs).
+- The Stage-2 runtime (`run_tls_route_plugins`) is invoked from **both** TLS proxies: the TLS-terminate proxy [../../../src/core/gateway/routes/tls/proxy.rs](../../../src/core/gateway/routes/tls/proxy.rs) and the TLS-passthrough proxy [../../../src/core/gateway/routes/tls/passthrough_proxy.rs](../../../src/core/gateway/routes/tls/passthrough_proxy.rs). Any binding-site change must touch both paths.
 - `tls_route_plugin_runtime` runs first.
 - If a resource has no `tlsRoutePlugins` but has the legacy `plugins`, the current implementation falls back to the Stage 1 runtime for compatibility.
 - Suitable for:
@@ -180,7 +180,7 @@ Existing binding sites:
 
 - Gateway listener level: `listener_builder.rs`.
 - `TCPRoute`: `routes/tcp/conf_handler_impl.rs`.
-- `TLSRoute`: `routes/tls/conf_handler_impl.rs` + `routes/tls/proxy.rs`.
+- `TLSRoute`: `routes/tls/conf_handler_impl.rs` + `routes/tls/proxy.rs` (terminate) + `routes/tls/passthrough_proxy.rs` (passthrough). `run_tls_route_plugins` fires from both proxies.
 
 If you only added the resource and the runtime but did not wire the route / listener side reference, the runtime will not fire either.
 

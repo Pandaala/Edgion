@@ -65,7 +65,7 @@ description: Feature and configuration schema reference for all Kubernetes resou
 
 | Resource | Description |
 |----------|-------------|
-| [13-edgion-plugins.md](13-edgion-plugins.md) | Catalog and configuration of 28 HTTP plugins |
+| [13-edgion-plugins.md](13-edgion-plugins.md) | Catalog and configuration of 33 HTTP plugins |
 | [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) | Stream plugin two-stage model |
 
 ### Backends and External Systems

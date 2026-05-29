@@ -49,8 +49,8 @@ Key components:
 ### TCP/TLS/UDP routes
 
 Beyond HTTP/gRPC, the Gateway also supports:
-- **TCPRoute**: TCP layer-4 proxy, matched by port and SNI.
-- **TLSRoute**: TLS passthrough proxy, matched by SNI and forwards encrypted traffic directly.
+- **TCPRoute**: TCP layer-4 proxy, matched per-listener (first-match, no SNI/hostname dimension).
+- **TLSRoute**: SNI-based layer-4 proxy; supports Terminate (TLS→TCP) and Passthrough (encrypted forward) modes.
 - **UDPRoute**: UDP proxy.
 
 Each protocol has an independent `routes_mgr` (route manager) and `route_table`, both implemented with ArcSwap for lock-free hot updates.
@@ -110,8 +110,7 @@ src/core/gateway/
 ├── services/      # Auxiliary services
 │   └── acme/      # ACME automatic certificate issuance (challenge store)
 └── tls/           # TLS certificate management
-    ├── boringssl/ # BoringSSL backend
-    ├── openssl/   # OpenSSL backend
+    ├── boringssl/ # BoringSSL backend (the rustls backend is feature-gated, not a separate dir)
     ├── runtime/   # TLS callbacks (SNI matching, certificate selection)
     ├── store/     # Certificate storage
     └── validation/ # Certificate validation

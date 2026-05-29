@@ -54,6 +54,31 @@ Memory-leak risk of using plaintext or reversibly-encoded values (base64) as LRU
 
 ---
 
+## Access-log group attribution (no topology-probing oracle)
+
+Auth plugins that support credential grouping — BasicAuth / KeyAuth / HmacAuth
+(`secret_groups`) and JwtAuth (`issuer_groups`) — write the originating group on
+the **OK** access-log line only, never on a failure/`Deny *`/`Allow anon*` line.
+
+- **OK line carries `group=<g>`** (JwtAuth also adds `iss=<iss>`): the caller already
+  authenticated for that group, so the attribution is operator audit info, not a leak.
+- **Failure / `Deny *` / `Allow anon*` lines MUST NOT carry `group=`** — nor `iss=` /
+  `kid=` / `alg=` (JwtAuth), nor the username (BasicAuth). An unauthenticated attacker
+  brute-forcing usernames / keys / issuers must not be able to watch which group or
+  issuer surfaces and thereby map the multi-tenant topology.
+- **Corollary (BasicAuth)**: never split `Deny bad credential` into `Deny unknown user`
+  vs `Deny wrong password` — that re-introduces a username-existence oracle.
+
+Reviewers must reject patches that add `group=` / `iss=` / `kid=` / `alg=` (or the
+username) to any non-OK line. Per-plugin OK-line formats, Deny-branch lists, and code
+paths live in the family files: [basic-auth](../basic-auth/group-in-ok-log.md),
+[key-auth](../key-auth/group-in-ok-log.md), [hmac-auth](../hmac-auth/group-in-ok-log.md),
+[jwt-auth](../jwt-auth/group-in-ok-log.md). The **inverse** convention — IpRestriction
+*does* log group on its deny line, because the threat model differs — is
+[ip-restriction/group-name-in-deny-log.md](../ip-restriction/group-name-in-deny-log.md).
+
+---
+
 ## Upstream address safety
 
 When reviewing paths that rewrite or select upstreams, load [04-review/ssrf/upstream-address-safety.md](../ssrf/upstream-address-safety.md). Key distinctions:
@@ -72,4 +97,4 @@ When reviewing paths that rewrite or select upstreams, load [04-review/ssrf/upst
 | P0-04b | `csrf/token.rs` | SHA-256 key mixing instead of HMAC | Closed — exact-match validation blocks length-extension exploitation |
 | P0-09 | `csrf/token.rs` | `SystemTime::now().duration_since(UNIX_EPOCH).unwrap()` on hot path | Closed — requires clock pre-dating 1970; `unwrap_or(0)` would silently bypass expiry check |
 
-See [../CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md) for the full cross-topic closure log.
+Closed findings are recorded one-file-per-finding under the relevant `skills/04-review/<topic>/` directory; use `grep`/`ls` to find them.

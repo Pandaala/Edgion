@@ -90,8 +90,8 @@ Internal architecture of the control plane, broken down by module:
 | Startup / shutdown | Leader election, HA mode, event-driven main loop |
 | Admin API | port :5800, CRUD, health/ready |
 | ConfigCenter | ConfCenter trait, FileSystem / Kubernetes implementations |
-| Workqueue | deduplication, exponential backoff, dirty requeue |
-| ResourceProcessor | 11-step processing pipeline, 23 Handler kinds |
+| Workqueue | deduplication, delayed (coalesced) requeue, dirty requeue |
+| ResourceProcessor | 11-step processing pipeline, 20 Handler kinds |
 | Requeue | cross-resource linkage, TriggerChain cycle detection |
 | CacheServer | ServerCache + EventStore, gRPC data source |
 | ACME | Let's Encrypt automated certificates, Leader only |
@@ -140,7 +140,7 @@ For resource Schema (field definitions, default values) see [02-features/03-reso
 | Routes | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute |
 | Security / policy | EdgionTls, Secret, ReferenceGrant, BackendTLSPolicy |
 | Plugins / extensions | EdgionPlugins, EdgionStreamPlugins, PluginMetaData |
-| Backends / services | Service, EndpointSlice, Endpoint |
+| Backends / services | Service, EndpointSlice |
 | Automation | EdgionAcme |
 | Infrastructure | LinkSys |
 

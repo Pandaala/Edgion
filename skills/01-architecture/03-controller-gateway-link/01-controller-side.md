@@ -38,13 +38,7 @@ The watch operation spawns a tokio task that converts `WatchResponseSimple` into
 
 ### State management
 
-| Method | Description |
-|------|------|
-| `is_all_ready()` | All WatchObjs are ready |
-| `not_ready_kinds()` | Returns the list of kinds that are not yet ready |
-| `set_all_not_ready()` | Marks all caches not-ready on relink |
-| `clear_all()` | Clears all cache data |
-| `reset_for_relink()` | Full reset: set_all_not_ready + clear_all + regenerate_server_id |
+ConfigSyncServer's readiness/relink lifecycle methods (`is_all_ready()`, `not_ready_kinds()`, `set_all_not_ready()`, `clear_all()`, `reset_for_relink()`) are documented canonically in [01-controller/07-cache-server.md](../01-controller/07-cache-server.md#state-management).
 
 ## ConfigSyncGrpcServer
 
@@ -87,7 +81,7 @@ A `None` return indicates that ConfigSyncServer is not yet ready (e.g., Controll
 
 ConfigSyncServer must wait for all phased processors to finish registration before it can be published.
 
-In Kubernetes mode, Phase 1 base resources (Gateway, Service, Endpoints, etc.) start before Phase 2 route/TLS/plugin resources. If ConfigSyncServer is published immediately after Phase 1 is ready, Gateway might receive an incomplete `supported_kinds` and List calls for Phase 2 resources will return errors:
+In Kubernetes mode, Phase 1 base resources (Gateway, Service, EndpointSlice, etc.) start before Phase 2 route/TLS/plugin resources. If ConfigSyncServer is published immediately after Phase 1 is ready, Gateway might receive an incomplete `supported_kinds` and List calls for Phase 2 resources will return errors:
 
 ```
 Failed to list resources: Unknown kind: HTTPRoute
@@ -99,31 +93,7 @@ This is a control-plane readiness issue, not an unsupported resource type. Gatew
 
 ## WatchObj trait
 
-An object-safe list/watch interface implemented by `ServerCache<T>`, allowing ConfigSyncServer to manage caches of different types uniformly.
-
-```rust
-pub trait WatchObj: Send + Sync {
-    fn kind_name(&self) -> &'static str;
-    fn list_json(&self) -> Result<(String, u64), String>;
-    fn watch_json(&self, client_id: String, client_name: String, from_version: u64)
-        -> mpsc::Receiver<WatchResponseSimple>;
-    fn is_ready(&self) -> bool;
-    fn set_ready(&self);
-    fn set_not_ready(&self);
-    fn clear(&self);
-}
-```
-
-All methods involve JSON serialization, so using a trait object is reasonable — the serialization overhead far exceeds virtual call overhead.
-
-| Method | Description |
-|------|------|
-| `kind_name()` | Returns the resource type name (e.g., "Gateway", "HTTPRoute") |
-| `list_json()` | Returns the full resources as a JSON string + the current sync_version |
-| `watch_json()` | Spawns a watcher task and returns an `mpsc::Receiver` to continuously receive change events |
-| `is_ready()` | Whether the cache has finished initialization |
-| `set_ready()` / `set_not_ready()` | Toggle readiness state |
-| `clear()` | Clears the cache data |
+`ConfigSyncServer` manages per-kind caches uniformly through the object-safe `WatchObj` trait, which `ServerCache<T>` implements. The trait definition and its method semantics are canonical in [01-controller/07-cache-server.md](../01-controller/07-cache-server.md#watchobj-trait); they are not repeated here.
 
 ## ClientRegistry
 
@@ -136,34 +106,7 @@ Main uses:
 
 ## ServerCache integration
 
-ResourceProcessor is the data source for ServerCache. The full data flow:
-
-```
-K8s API / FileSystem
-        │
-        ▼
-  ConfCenter (watcher)
-        │
-        ▼
-  ResourceProcessor.process_resource()    ← 11-step processing pipeline
-        │
-        ▼
-  ServerCache.apply_change()              ← assigns sync_version, writes to EventStore
-        │
-        ▼
-  Notify.notify_waiters()                 ← wakes all watcher tasks
-        │
-        ▼
-  Watcher Task → mpsc::channel            ← sends incremental events
-        │
-        ▼
-  ConfigSyncServer.watch()                ← attaches server_id
-        │
-        ▼
-  gRPC Stream → Gateway                  ← Gateway instance receives configuration changes
-```
-
-The detailed implementation of ServerCache (EventStore, ring buffer, sync_version mechanism) is documented in [01-controller/07-cache-server.md](../01-controller/07-cache-server.md).
+ResourceProcessor is the data source for ServerCache, which feeds ConfigSyncServer's watch streams. The full data flow (ConfCenter → ResourceProcessor → ServerCache → Notify → Watcher Task → ConfigSyncServer → gRPC → Gateway) and the detailed ServerCache implementation (EventStore, ring buffer, sync_version mechanism) are documented canonically in [01-controller/07-cache-server.md](../01-controller/07-cache-server.md#full-data-flow).
 
 ## Module structure
 

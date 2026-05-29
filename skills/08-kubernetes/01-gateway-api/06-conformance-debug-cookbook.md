@@ -429,3 +429,8 @@ kubectl exec -n edgion-system "$GW_POD" -- tail -20 /usr/local/edgion/logs/tls_a
 kubectl exec -n edgion-system "$GW_POD" -- tail -50 /usr/local/edgion/logs/edgion-gateway.log
 kubectl logs -n edgion-system "$GW_POD" --tail=50
 ```
+
+## Related
+
+- Per-profile failure modes via the rv/sv/access-log tracing chain + `orbstack-dev.sh` log commands: [`../../09-misc/debugging-conformance.md`](../../09-misc/debugging-conformance.md)
+- Cross-test leakage / timeline correlation: [`05-batch-conformance-debugging.md`](05-batch-conformance-debugging.md)

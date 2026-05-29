@@ -32,7 +32,7 @@ and the per-site `push_err` stay at the call sites. That is the same low-risk, d
 leaf extraction the project *accepted* in link-sys (`credential_readiness`), as opposed to the
 `ControlFlow` / `LifecycleAction` re-encodings it *declined* in
 [link-sys-dispatch-extract-function.md](link-sys-dispatch-extract-function.md) and
-[link-sys-F015-webhook-call-extract-function.md](link-sys-F015-webhook-call-extract-function.md).
+[webhook-call-extract-function.md](webhook-call-extract-function.md).
 It centralizes a security-relevant 502-vs-401 decision on the OIDC auth path, satisfying the
 "drift-prevention" exception in [style-consolidation-thresholds.md](style-consolidation-thresholds.md).
 
@@ -62,4 +62,4 @@ Re-open only if:
 - plugins-http F-010 (`tasks/plugins/plugins-http-F010-openid-connect-multi-file-extract-fn.md`), fixed 2026-05-26.
 - `src/core/gateway/plugins/http/openid_connect/callback.rs` — `send_oidc_error` and its five call sites.
 - `src/core/gateway/plugins/http/openid_connect/request_filter_impl.rs` — the `UnauthAction::Auth` call site (folded) vs the `:187` fall-through site (untouched).
-- Sibling leaf-vs-control-flow extraction decisions: [link-sys-dispatch-extract-function.md](link-sys-dispatch-extract-function.md), [link-sys-F015-webhook-call-extract-function.md](link-sys-F015-webhook-call-extract-function.md), [style-consolidation-thresholds.md](style-consolidation-thresholds.md).
+- Sibling leaf-vs-control-flow extraction decisions: [link-sys-dispatch-extract-function.md](link-sys-dispatch-extract-function.md), [webhook-call-extract-function.md](webhook-call-extract-function.md), [style-consolidation-thresholds.md](style-consolidation-thresholds.md).

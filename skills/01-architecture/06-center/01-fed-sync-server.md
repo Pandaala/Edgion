@@ -23,7 +23,7 @@ These constants are defined at `src/core/center/fed_sync/server/mod.rs:46-57` an
 All caps follow K8s label-value conventions (63 bytes per token, 253 bytes for full
 DNS-style identifiers).
 
-> See `04-review/CLOSED-FINDINGS.md` row `common-center-03` for the security rationale.
+> For the security rationale, see the `common-center-03` finding, recorded one-file-per-finding under the relevant `skills/04-review/<topic>/` directory (use `grep`/`ls` to find it).
 
 ## `validate_register_req` — validation function
 

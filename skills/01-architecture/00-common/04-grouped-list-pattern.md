@@ -1,3 +1,8 @@
+---
+name: grouped-list-pattern
+description: Design contract for list-shaped resources that need named groups for source attribution and audit (IP lists, key lists, regex lists, issuer lists, certificate trust stores).
+---
+
 # Grouped-list pattern
 
 > Design contract for list-shaped resources (IP lists, key lists, regex lists, issuer lists, certificate trust stores, …) that need **named groups** for source attribution and audit. Read this **before** designing or extending any list field that should support grouping.

@@ -16,7 +16,7 @@ description: edgion-controller control plane architecture — overall design, st
 | [01-startup-shutdown.md](01-startup-shutdown.md) | Process startup and shutdown flow | Debugging startup issues, understanding the initialization order |
 | [02-admin-api.md](02-admin-api.md) | Admin HTTP API (:5800) | Using or extending the management interface |
 | [03-config-center/](03-config-center/SKILL.md) | ConfigCenter subsystem (ConfCenter trait + dual backends) | Modifying the resource processing flow, K8s HA |
-| [04-workqueue.md](04-workqueue.md) | Workqueue dedup and backoff mechanism | Debugging processing latency, understanding dedup and retry logic |
+| [04-workqueue.md](04-workqueue.md) | Workqueue dedup and delayed-requeue mechanism | Debugging processing latency, understanding dedup and requeue logic |
 | [05-resource-processor.md](05-resource-processor.md) | ResourceProcessor processing pipeline | Modifying resource processing logic, understanding the Handler interface |
 | [06-requeue-mechanism.md](06-requeue-mechanism.md) | Cross-resource requeue mechanism | Investigating dependency interactions, understanding TriggerChain |
 | [07-cache-server.md](07-cache-server.md) | ServerCache + EventStore in-memory cache | Debugging the gRPC sync data source, understanding the version mechanism |
@@ -33,7 +33,7 @@ description: edgion-controller control plane architecture — overall design, st
 │                                                             │
 │  ConfCenter (FileSystem / Kubernetes)                       │
 │  ├── ResourceController (per-kind watcher)                  │
-│  │   └── Workqueue (dedup + backoff)                        │
+│  │   └── Workqueue (dedup + delayed requeue)               │
 │  │       └── ResourceProcessor                              │
 │  │           ├── validate → preparse → parse → on_change    │
 │  │           └── update ServerCache                         │

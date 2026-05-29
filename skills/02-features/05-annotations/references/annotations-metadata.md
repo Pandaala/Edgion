@@ -114,6 +114,7 @@ GatewayClass declares `HTTPRouteBackendProtocolH2C` as a supported feature.
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
 | `edgion.io/health-check` | YAML string | none | Configures active backend health checks (type: http/tcp/grpc). For gRPC, supports `grpcServiceName` field. Parsed from object metadata and validated before use. |
+| `edgion.io/circuit-breaker` | YAML string | none | Configures backend outlier-detection circuit breaking. Fields: `consecutiveErrors`, `ejectionSeconds`, `maxEjectionPercent`. Verify in code: `src/core/gateway/backends/circuit_breaker/config.rs`. |
 
 Notes:
 
