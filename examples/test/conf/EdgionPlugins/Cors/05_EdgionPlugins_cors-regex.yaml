@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: cors-regex
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: Cors
+      # Exercises the runtime-compiled origin matchers (fr-types-02): a
+      # comma-separated exact origin, an HTTPS-only subdomain wildcard, and a
+      # user-provided regex. These all depend on validate_and_init being run at
+      # plugin construction; before the fix every one of them was silently ignored.
+      config:
+        allowOrigins: "https://a.example.com,*.sub.example.com"
+        allowOriginsByRegex:
+          - "https://.*\\.regex\\.example\\.com"
+        allowMethods: "GET,POST"
+        allowHeaders: "Content-Type"
+        allowCredentials: false

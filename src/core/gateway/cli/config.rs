@@ -5,8 +5,13 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing;
 
-/// Default admin API listen address (port 5810 avoids macOS Screen Sharing / VNC conflict on 5900)
-pub const DEFAULT_GATEWAY_ADMIN_LISTEN: &str = "0.0.0.0:5810";
+/// Default admin API listen address. Binds loopback by default so the admin API
+/// is not exposed to the cluster unless the operator opts in via `admin_listen`.
+/// Deployments that probe the admin port over the pod IP (e.g. a kubelet `httpGet`
+/// readiness probe) must set `admin_listen` to `0.0.0.0` explicitly; the shipped
+/// K8s manifests already do. (Port 5810 avoids the macOS Screen Sharing / VNC
+/// conflict on 5900.)
+pub const DEFAULT_GATEWAY_ADMIN_LISTEN: &str = "127.0.0.1:5810";
 
 /// Edgion Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
@@ -890,6 +895,25 @@ mod tests {
         assert_eq!(config.default_estimator_slots_k, DEFAULT_ESTIMATOR_SLOTS_K);
         assert_eq!(config.max_estimator_slots_k, DEFAULT_MAX_ESTIMATOR_SLOTS_K);
         assert_eq!(config.gateway_instance_count, 1);
+    }
+
+    #[test]
+    fn test_admin_listen_defaults_to_loopback() {
+        // Security default: when admin_listen is unset, the admin API must bind
+        // loopback so it is not exposed cluster-wide. Reverting this to 0.0.0.0
+        // would reopen the unauthenticated admin-surface exposure (harden Task 2).
+        let cfg = EdgionGatewayConfig::default();
+        assert_eq!(cfg.admin_listen(), None);
+        assert_eq!(cfg.admin_listen_or_default(), "127.0.0.1:5810");
+    }
+
+    #[test]
+    fn test_admin_listen_explicit_value_is_respected() {
+        // Operators opting into cluster exposure (e.g. pod-IP kubelet probes)
+        // set admin_listen explicitly; the default must not override it.
+        let mut cfg = EdgionGatewayConfig::default();
+        cfg.gateway.admin_listen = Some("0.0.0.0:5810".to_string());
+        assert_eq!(cfg.admin_listen_or_default(), "0.0.0.0:5810");
     }
 
     #[test]

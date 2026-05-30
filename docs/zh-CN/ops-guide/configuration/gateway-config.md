@@ -11,7 +11,7 @@ work_dir: "."
 
 gateway:
   server_addr: "http://127.0.0.1:50051"  # 必填：Controller gRPC 地址
-  admin_listen: "0.0.0.0:5810"           # Admin API 监听地址（默认：0.0.0.0:5810）
+  admin_listen: "0.0.0.0:5810"           # Admin API 监听地址（默认：127.0.0.1:5810，仅 loopback）
 
 # ─── gRPC 通道安全（可选 mTLS）────────────────────────────────────
 # conf_sync_security:
@@ -100,7 +100,7 @@ access_log_sensitive:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `server_addr` | `String` | **必填** | Controller gRPC 地址，如 `http://127.0.0.1:50051` |
-| `admin_listen` | `String` | `0.0.0.0:5810` | Admin API 监听地址，默认 `0.0.0.0:5810`。Gateway Metrics API 固定 `:5901`，不受此字段影响。 |
+| `admin_listen` | `String` | `127.0.0.1:5810` | Admin API 监听地址，默认绑 loopback（`127.0.0.1:5810`），使 admin/readiness 端点默认不对集群暴露；设为 `0.0.0.0` 可允许通过 pod IP 访问（例如 kubelet `httpGet` readiness 探针 —— 出厂 K8s manifest 即如此）。Gateway Metrics API 固定 `:5901`，不受此字段影响。 |
 
 ### conf_sync_security.tls
 

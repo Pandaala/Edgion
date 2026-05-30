@@ -10,14 +10,16 @@
 //   04_EdgionPlugins_ep-validation-rate-limit-invalid.yaml      — RateLimit: rate=0
 //   05_EdgionPlugins_ep-validation-alias-invalid.yaml           — Cors entry with alias containing a space
 //   06_EdgionPlugins_ep-validation-dsl-invalid.yaml             — Dsl: uncompilable inline source
+//   07_EdgionPlugins_ep-validation-cors-regex-invalid.yaml      — Cors: allowCredentials=true + catch-all allowOriginsByRegex
 //
 // Scenarios:
-//   1. jwt_auth_invalid   → Accepted=False/Invalid, message contains "secretRef"
-//   2. cors_invalid       → Accepted=False/Invalid, message contains "allow_credentials"
-//   3. direct_ep_invalid  → Accepted=False/Invalid, message contains "regex"
-//   4. rate_limit_invalid → Accepted=False/Invalid, message contains "rate"
-//   5. alias_invalid      → Accepted=False/Invalid, message contains "alias"
-//   6. dsl_invalid        → Accepted=False/Invalid, message contains "DSL compile errors"
+//   1. jwt_auth_invalid     → Accepted=False/Invalid, message contains "secretRef"
+//   2. cors_invalid         → Accepted=False/Invalid, message contains "allow_credentials"
+//   3. direct_ep_invalid    → Accepted=False/Invalid, message contains "regex"
+//   4. rate_limit_invalid   → Accepted=False/Invalid, message contains "rate"
+//   5. alias_invalid        → Accepted=False/Invalid, message contains "alias"
+//   6. dsl_invalid          → Accepted=False/Invalid, message contains "DSL compile errors"
+//   7. cors_regex_invalid   → Accepted=False/Invalid, message contains "allow_origins_by_regex"
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -220,6 +222,27 @@ impl PluginValidationStatusTestSuite {
             },
         )
     }
+
+    // =========================================================================
+    // Scenario 7: Cors with allowCredentials=true + catch-all allowOriginsByRegex
+    //             → Accepted=False/Invalid
+    //
+    // Regression for fr-auth2-01: a broad regex (".*") must not bypass the
+    // allow_credentials wildcard guard. The runtime error message uses
+    // snake_case "allow_origins_by_regex".
+    // =========================================================================
+
+    fn cors_regex_invalid() -> TestCase {
+        TestCase::new(
+            "cors_regex_invalid",
+            "Cors 'ep-validation-cors-regex-invalid': credentials + catch-all regex → Accepted=False/Invalid",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    assert_accepted_false(&ctx, "ep-validation-cors-regex-invalid", "allow_origins_by_regex").await
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for PluginValidationStatusTestSuite {
@@ -235,6 +258,7 @@ impl TestSuite for PluginValidationStatusTestSuite {
             Self::rate_limit_invalid(),
             Self::alias_invalid(),
             Self::dsl_invalid(),
+            Self::cors_regex_invalid(),
         ]
     }
 }

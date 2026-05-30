@@ -106,6 +106,7 @@ impl CenterApi for FileSystemStorage {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
+        validate_path_components(kind, namespace, name)?;
         let path = self.resolve_path(kind, namespace, name);
 
         // Ensure parent directory exists
@@ -151,6 +152,7 @@ impl CenterApi for FileSystemStorage {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
+        validate_path_components(kind, namespace, name)?;
         // Check the registry first: if a winner already exists for this key (e.g. a
         // legacy flat-layout file at root, or a previously-recorded nested file),
         // refuse the create rather than writing a new file at the default nested
@@ -232,6 +234,7 @@ impl CenterApi for FileSystemStorage {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
+        validate_path_components(kind, namespace, name)?;
         let path = self.resolve_path(kind, namespace, name);
 
         // Check if file exists
@@ -261,6 +264,7 @@ impl CenterApi for FileSystemStorage {
     }
 
     async fn get_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<String, ConfWriterError> {
+        validate_path_components(kind, namespace, name)?;
         let path = self.resolve_path(kind, namespace, name);
 
         if !path.exists() {
@@ -339,6 +343,7 @@ impl CenterApi for FileSystemStorage {
     }
 
     async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
+        validate_path_components(kind, namespace, name)?;
         let path = self.resolve_path(kind, namespace, name);
 
         if !path.exists() {
@@ -523,6 +528,28 @@ impl CenterApi for FileSystemStorage {
     }
 }
 
+/// Reject any resource identifier that could escape the conf root via directory
+/// traversal before it is used to construct an on-disk path.
+///
+/// The namespaced admin API binds `{namespace}` / `{name}` as raw single URL
+/// segments (axum percent-decodes but does not normalize them), and `kind` is
+/// interpolated into the filename. `build_resource_path` uses `namespace` as a
+/// raw subdirectory, so a literal `..` namespace would resolve `root.join("..")`
+/// one level above the conf root (write/read/delete of an adjacent `.yaml`).
+/// Legitimate Kubernetes identifiers are RFC 1123 labels and never contain
+/// `..`, `/`, or `\`, so rejecting these characters is safe for all real input.
+fn validate_path_components(kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
+    for (label, value) in [("kind", Some(kind)), ("namespace", namespace), ("name", Some(name))] {
+        let Some(component) = value else { continue };
+        if component.contains("..") || component.contains('/') || component.contains('\\') {
+            return Err(ConfWriterError::ValidationError(format!(
+                "invalid {label} path component: {component:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Build resource file path:
 ///   namespace-scoped: `<root>/<ns>/Kind_ns_name.yaml`
 ///   cluster-scoped:   `<root>/cluster/Kind__name.yaml`
@@ -572,5 +599,28 @@ mod path_tests {
             build_resource_path(root, "GatewayClass", Some(""), "edgion"),
             Path::new("/conf/cluster/GatewayClass__edgion.yaml")
         );
+    }
+
+    #[test]
+    fn validate_path_components_accepts_legitimate_identifiers() {
+        assert!(validate_path_components("HTTPRoute", Some("default"), "my-route").is_ok());
+        assert!(validate_path_components("GatewayClass", None, "edgion").is_ok());
+        assert!(validate_path_components("Service", Some(""), "svc").is_ok());
+    }
+
+    #[test]
+    fn validate_path_components_rejects_traversal_namespace() {
+        // A bare ".." namespace would resolve `root.join("..")` one level above
+        // the conf root — this is the fr-csync-01 path-traversal vector.
+        assert!(validate_path_components("HTTPRoute", Some(".."), "x").is_err());
+        assert!(validate_path_components("HTTPRoute", Some("a/b"), "x").is_err());
+        assert!(validate_path_components("HTTPRoute", Some("a\\b"), "x").is_err());
+    }
+
+    #[test]
+    fn validate_path_components_rejects_traversal_kind_and_name() {
+        assert!(validate_path_components("..", Some("default"), "x").is_err());
+        assert!(validate_path_components("HTTPRoute", Some("default"), "..").is_err());
+        assert!(validate_path_components("HTTPRoute", Some("default"), "a/b").is_err());
     }
 }

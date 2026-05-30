@@ -609,11 +609,7 @@ mod tests {
         // will fail this test loudly.
         let expected_keys: std::collections::BTreeSet<String> = ALL_RESOURCE_INFOS
             .iter()
-            .filter_map(|info| {
-                client
-                    .get_dyn_cache(info.kind)
-                    .map(|c| c.kind_name_dyn().to_string())
-            })
+            .filter_map(|info| client.get_dyn_cache(info.kind).map(|c| c.kind_name_dyn().to_string()))
             .collect();
         let actual_keys: std::collections::BTreeSet<String> = stats.keys().cloned().collect();
         assert_eq!(

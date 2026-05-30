@@ -216,7 +216,7 @@ spec:
 
 ### Q2: Why does a wildcard origin with credentials fail to apply?
 
-**A**: This is by design. When `allowCredentials: true`, you cannot use `*` or `**` in `allowOrigins` (or in `allowMethods`, `allowHeaders`, `exposeHeaders`, `timingAllowOrigins`). The plugin rejects such a config. Use explicit origins or a `*.domain` subdomain wildcard instead.
+**A**: This is by design. When `allowCredentials: true`, you cannot use `*` or `**` in `allowOrigins` (or in `allowMethods`, `allowHeaders`, `exposeHeaders`, `timingAllowOrigins`), and `allowOriginsByRegex` / `timingAllowOriginsByRegex` are likewise disallowed (a broad pattern such as `.*` would echo any origin back with credentials enabled). The plugin rejects such a config. Use explicit origins or a `*.domain` subdomain wildcard instead.
 
 ### Q3: How do I allow `http://` origins for local development?
 

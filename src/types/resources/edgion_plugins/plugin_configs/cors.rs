@@ -152,6 +152,29 @@ impl CorsConfig {
                     );
                 }
             }
+            // Regex allowlists cannot be reliably checked for wildcard width (e.g. ".*",
+            // "^https?://.*" match any origin). Since is_origin_allowed echoes any matched
+            // origin back as Access-Control-Allow-Origin while allow_credentials emits
+            // Access-Control-Allow-Credentials: true, a broad regex reproduces the exact
+            // ACAO:<origin> + ACAC:true combination this guard exists to prevent. Disallow
+            // regex allowlists with credentials entirely; operators who need both must use
+            // an explicit comma-separated allow_origins list.
+            if self.allow_origins_by_regex.as_ref().is_some_and(|v| !v.is_empty()) {
+                return Err("Cannot use allow_origins_by_regex when allow_credentials is true; \
+                     use an explicit comma-separated allow_origins list instead"
+                    .to_string());
+            }
+            if self
+                .timing_allow_origins_by_regex
+                .as_ref()
+                .is_some_and(|v| !v.is_empty())
+            {
+                return Err(
+                    "Cannot use timing_allow_origins_by_regex when allow_credentials is true; \
+                     use an explicit comma-separated timing_allow_origins list instead"
+                        .to_string(),
+                );
+            }
         }
 
         // Parse comma-separated origins into HashMap and collect wildcard patterns
@@ -350,6 +373,27 @@ impl PluginValidation for CorsConfig {
                         "Cannot use '*' or '**' in timing_allow_origins when allow_credentials is true".to_string(),
                     );
                 }
+            }
+            // See validate_and_init: a broad regex (".*", "^https?://.*") bypasses the
+            // wildcard guard and reproduces the prohibited ACAO:<origin> + ACAC:true
+            // response. Disallow regex allowlists with credentials in both validation paths.
+            if self.allow_origins_by_regex.as_ref().is_some_and(|v| !v.is_empty()) {
+                return Some(
+                    "Cannot use allow_origins_by_regex when allow_credentials is true; \
+                     use an explicit comma-separated allow_origins list instead"
+                        .to_string(),
+                );
+            }
+            if self
+                .timing_allow_origins_by_regex
+                .as_ref()
+                .is_some_and(|v| !v.is_empty())
+            {
+                return Some(
+                    "Cannot use timing_allow_origins_by_regex when allow_credentials is true; \
+                     use an explicit comma-separated timing_allow_origins list instead"
+                        .to_string(),
+                );
             }
         }
 
@@ -709,6 +753,43 @@ mod tests {
             assert!(err
                 .unwrap()
                 .contains("timing_allow_origins when allow_credentials is true"));
+        }
+
+        #[test]
+        fn test_regex_origins_with_credentials_is_error() {
+            // A catch-all regex bypasses the literal '*' guard but still reproduces the
+            // prohibited ACAO:<origin> + ACAC:true response at runtime, so it must be rejected.
+            let cors = CorsConfig {
+                allow_origins_by_regex: Some(vec![".*".to_string()]),
+                allow_credentials: true,
+                ..Default::default()
+            };
+            let err = cors.validation_error();
+            assert!(err.is_some());
+            assert!(err
+                .unwrap()
+                .contains("allow_origins_by_regex when allow_credentials is true"));
+
+            let mut cors2 = cors.clone();
+            assert!(cors2.validate_and_init().is_err());
+        }
+
+        #[test]
+        fn test_timing_regex_origins_with_credentials_is_error() {
+            let cors = CorsConfig {
+                allow_origins: "https://example.com".to_string(),
+                timing_allow_origins_by_regex: Some(vec![".*".to_string()]),
+                allow_credentials: true,
+                ..Default::default()
+            };
+            let err = cors.validation_error();
+            assert!(err.is_some());
+            assert!(err
+                .unwrap()
+                .contains("timing_allow_origins_by_regex when allow_credentials is true"));
+
+            let mut cors2 = cors.clone();
+            assert!(cors2.validate_and_init().is_err());
         }
 
         #[test]

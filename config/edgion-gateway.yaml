@@ -46,7 +46,9 @@ gateway:
   server_addr: "http://127.0.0.1:50051"
 
   # Admin HTTP server listen address (optional).
-  # The Gateway Admin API listens on this address; default is 0.0.0.0:5810.
+  # The Gateway Admin API listens on this address; default is 127.0.0.1:5810
+  # (loopback only). Set it to 0.0.0.0 to expose the admin/readiness port over the
+  # pod IP (e.g. for a kubelet httpGet readiness probe).
   # The Metrics API remains fixed at :5901 and is not affected by this field.
   # admin_listen: "0.0.0.0:5810"
 

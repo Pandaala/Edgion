@@ -1,4 +1,5 @@
 use crate::core::gateway::conf_sync::ConfigClient;
+use crate::types::resources::edgion_tls::EdgionTls;
 use crate::types::ResourceKind;
 use axum::{
     extract::{Path, Query, State},
@@ -105,7 +106,7 @@ macro_rules! list_client_resources {
             ResourceKind::TLSRoute => to_json_vec($client.tls_routes().list().data),
             ResourceKind::Service => to_json_vec($client.services().list().data),
             ResourceKind::EndpointSlice => to_json_vec($client.endpoint_slices().list().data),
-            ResourceKind::EdgionTls => to_json_vec($client.edgion_tls().list().data),
+            ResourceKind::EdgionTls => to_json_vec_edgion_tls($client.edgion_tls().list().data),
             ResourceKind::EdgionPlugins => to_json_vec($client.edgion_plugins().list().data),
             ResourceKind::EdgionStreamPlugins => to_json_vec($client.edgion_stream_plugins().list().data),
             ResourceKind::ReferenceGrant => vec![], // ReferenceGrant not synced to Gateway
@@ -133,7 +134,7 @@ macro_rules! get_client_resource {
             ResourceKind::TLSRoute => find_resource($client.tls_routes().list().data, ns_opt, name_str),
             ResourceKind::Service => find_resource($client.services().list().data, ns_opt, name_str),
             ResourceKind::EndpointSlice => find_resource($client.endpoint_slices().list().data, ns_opt, name_str),
-            ResourceKind::EdgionTls => find_resource($client.edgion_tls().list().data, ns_opt, name_str),
+            ResourceKind::EdgionTls => find_edgion_tls($client.edgion_tls().list().data, ns_opt, name_str),
             ResourceKind::EdgionPlugins => find_resource($client.edgion_plugins().list().data, ns_opt, name_str),
             ResourceKind::EdgionStreamPlugins => {
                 find_resource($client.edgion_stream_plugins().list().data, ns_opt, name_str)
@@ -152,6 +153,45 @@ macro_rules! get_client_resource {
             _ => None,
         }
     }};
+}
+
+/// Remove resolved private-key material from an `EdgionTls` before it leaves the
+/// gateway through the admin API.
+///
+/// `EdgionTlsSpec.secret` and `ClientAuthConfig.ca_secret` are filled by the
+/// Controller with the resolved `kubernetes.io/tls` Secret (raw `tls.key` private
+/// key, mTLS CA key) and are kept on the struct only for the controller->gateway
+/// sync transport. They must never be echoed back in an admin API response body,
+/// so we null them out before serialization. Both fields are
+/// `skip_serializing_if = "Option::is_none"`, so once cleared they vanish from the
+/// JSON entirely.
+fn scrub_edgion_tls_secrets(tls: &mut EdgionTls) {
+    tls.spec.secret = None;
+    if let Some(client_auth) = tls.spec.client_auth.as_mut() {
+        client_auth.ca_secret = None;
+    }
+}
+
+/// `to_json_vec` for `EdgionTls`, with private-key material scrubbed first.
+fn to_json_vec_edgion_tls(items: Vec<EdgionTls>) -> Vec<serde_json::Value> {
+    items
+        .into_iter()
+        .filter_map(|mut tls| {
+            scrub_edgion_tls_secrets(&mut tls);
+            serde_json::to_value(tls).ok()
+        })
+        .collect()
+}
+
+/// `find_resource` for `EdgionTls`, with private-key material scrubbed first.
+fn find_edgion_tls(items: Vec<EdgionTls>, namespace: Option<&str>, name: &str) -> Option<serde_json::Value> {
+    items
+        .into_iter()
+        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
+        .and_then(|mut tls| {
+            scrub_edgion_tls_secrets(&mut tls);
+            serde_json::to_value(tls).ok()
+        })
 }
 
 /// Convert a list of resources to JSON values
@@ -1513,6 +1553,102 @@ pub async fn serve_with_shutdown(
 
     tracing::info!(component = "admin_api_gateway", "Admin API server stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod edgion_tls_scrub_tests {
+    use super::*;
+    use crate::types::resources::common::SecretObjectReference;
+    use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTlsSpec};
+    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::ByteString;
+    use kube::api::ObjectMeta;
+    use std::collections::BTreeMap;
+
+    /// Build a `Secret` carrying a fake `tls.key` private key, mirroring what the
+    /// Controller resolves into the gateway cache.
+    fn tls_secret(key_bytes: &[u8]) -> Secret {
+        let mut data = BTreeMap::new();
+        data.insert("tls.crt".to_string(), ByteString(b"cert".to_vec()));
+        data.insert("tls.key".to_string(), ByteString(key_bytes.to_vec()));
+        Secret {
+            data: Some(data),
+            ..Default::default()
+        }
+    }
+
+    fn edgion_tls_with_secrets() -> EdgionTls {
+        EdgionTls {
+            metadata: ObjectMeta {
+                name: Some("tls-cert".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: EdgionTlsSpec {
+                parent_refs: None,
+                hosts: vec!["example.com".to_string()],
+                secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "tls-cert".to_string(),
+                    namespace: None,
+                },
+                client_auth: Some(ClientAuthConfig {
+                    mode: ClientAuthMode::Mutual,
+                    ca_secret_ref: None,
+                    verify_depth: 1,
+                    ca_secret: Some(tls_secret(b"CA-PRIVATE-KEY")),
+                    allowed_sans: None,
+                    allowed_cns: None,
+                }),
+                min_tls_version: None,
+                ciphers: None,
+                extend: None,
+                secret: Some(tls_secret(b"LEAF-PRIVATE-KEY")),
+                resolved_listeners: None,
+            },
+            status: None,
+        }
+    }
+
+    /// The admin API must never serialize resolved private-key material, whether
+    /// listed or fetched by name. Both `spec.secret` (leaf key) and
+    /// `spec.client_auth.ca_secret` (mTLS CA key) must be gone from the JSON.
+    #[test]
+    fn admin_serialization_strips_private_keys() {
+        let list_json = to_json_vec_edgion_tls(vec![edgion_tls_with_secrets()]);
+        assert_eq!(list_json.len(), 1);
+        let serialized = serde_json::to_string(&list_json[0]).unwrap();
+        assert!(
+            !serialized.contains("LEAF-PRIVATE-KEY"),
+            "leaf private key leaked: {serialized}"
+        );
+        assert!(
+            !serialized.contains("CA-PRIVATE-KEY"),
+            "CA private key leaked: {serialized}"
+        );
+        assert!(!serialized.contains("tls.key"), "tls.key field leaked: {serialized}");
+        assert!(list_json[0]["spec"].get("secret").is_none(), "spec.secret present");
+        assert!(
+            list_json[0]["spec"]["clientAuth"].get("caSecret").is_none(),
+            "spec.clientAuth.caSecret present"
+        );
+
+        let get_json = find_edgion_tls(vec![edgion_tls_with_secrets()], Some("default"), "tls-cert")
+            .expect("resource should be found");
+        let serialized = serde_json::to_string(&get_json).unwrap();
+        assert!(
+            !serialized.contains("LEAF-PRIVATE-KEY"),
+            "leaf private key leaked via get: {serialized}"
+        );
+        assert!(
+            !serialized.contains("CA-PRIVATE-KEY"),
+            "CA private key leaked via get: {serialized}"
+        );
+
+        // Non-secret fields must survive the scrub so the endpoint stays useful.
+        assert_eq!(get_json["spec"]["hosts"][0], "example.com");
+    }
 }
 
 #[cfg(test)]

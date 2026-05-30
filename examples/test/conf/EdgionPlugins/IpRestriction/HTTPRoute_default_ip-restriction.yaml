@@ -1,0 +1,76 @@
+# HTTPRoute for the HTTP-layer IpRestriction plugin (fr-types-01 coverage).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ip-restriction-test-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "ip-restriction.example.com"
+  rules:
+    # 1. Whitelist miss — client IP not in allow list → 403 (fr-types-01 regression)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/allow-miss
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ip-restriction-allow-miss
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 2. Whitelist hit — client IP in allow list → 200
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/allow-hit
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ip-restriction-allow-hit
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 3. Blacklist hit — client IP in deny list → 403
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/deny-hit
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ip-restriction-deny-hit
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 4. Blacklist miss — client IP not in deny list, default allow → 200
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/deny-miss
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ip-restriction-deny-miss
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

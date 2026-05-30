@@ -19,6 +19,7 @@ mod global_connection_ip_restriction;
 mod global_plugins_snapshot;
 mod header_cert_auth;
 mod hmac_auth;
+mod ip_restriction;
 mod jwe_decrypt;
 mod jwt_auth;
 mod key_auth;
@@ -59,6 +60,7 @@ pub use global_connection_ip_restriction::GlobalConnectionIpRestrictionTestSuite
 pub use global_plugins_snapshot::GlobalPluginsSnapshotTestSuite;
 pub use header_cert_auth::HeaderCertAuthTestSuite;
 pub use hmac_auth::HmacAuthTestSuite;
+pub use ip_restriction::IpRestrictionPluginTestSuite;
 pub use jwe_decrypt::JweDecryptTestSuite;
 pub use jwt_auth::JwtAuthTestSuite;
 pub use key_auth::KeyAuthTestSuite;

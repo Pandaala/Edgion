@@ -1,0 +1,16 @@
+# Scenario: Cors plugin with allowCredentials=true and a catch-all allowOriginsByRegex
+# Expect: Accepted=False/Invalid, message contains "allow_origins_by_regex"
+# Regression for fr-auth2-01: a broad regex must not bypass the allow_credentials guard.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ep-validation-cors-regex-invalid
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Cors
+      config:
+        allowCredentials: true
+        allowOriginsByRegex:
+          - ".*"

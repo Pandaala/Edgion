@@ -106,6 +106,14 @@ impl LocalAuthConfig {
         if self.jwt_expiry_hours == 0 {
             return Some("local_auth.jwt_expiry_hours must be greater than 0");
         }
+        // Guard against fr-cauth-01: see the same check in `AdminAuthConfig::validate`.
+        // A business route added here would slip past unified_auth and become an
+        // unauthenticated admin (Controller) or fully unauthenticated (Center) route.
+        for p in &self.skip_paths {
+            if !crate::core::common::auth::config::skip_path_is_allowlisted(p) {
+                return Some(crate::core::common::auth::config::SKIP_PATHS_ALLOWLIST_ERR);
+            }
+        }
         None
     }
 
@@ -121,4 +129,40 @@ fn default_skip_paths() -> Vec<String> {
 
 fn default_cookie_secure() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_base() -> LocalAuthConfig {
+        LocalAuthConfig {
+            password: "secret".to_string(),
+            jwt_secret: "signing-key".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn skip_paths_business_route_rejected() {
+        // fr-cauth-01: a business route in skip_paths must be rejected at validation.
+        let mut config = valid_base();
+        config.skip_paths = vec!["/health".to_string(), "/api/v1/cluster/httproute".to_string()];
+        assert_eq!(
+            config.validate(),
+            Some(crate::core::common::auth::config::SKIP_PATHS_ALLOWLIST_ERR)
+        );
+    }
+
+    #[test]
+    fn skip_paths_allowlist_accepted() {
+        let mut config = valid_base();
+        config.skip_paths = vec![
+            "/health".to_string(),
+            "/ready".to_string(),
+            "/metrics".to_string(),
+            "/api/v1/auth/status".to_string(),
+        ];
+        assert!(config.validate().is_none());
+    }
 }

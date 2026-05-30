@@ -198,7 +198,7 @@ When enabled, the Admin API requires an OIDC JWT Bearer token. Defined in `src/c
 | `clock_skew_seconds` | `u64` | `120` | JWT timestamp tolerance (seconds) |
 | `jwks_cache_ttl` | `u64` | `300` | JWKS cache TTL (seconds) |
 | `jwks_min_refresh_interval` | `u64` | `10` | Minimum JWKS refresh interval (seconds), used as debouncing |
-| `skip_paths` | `Vec<String>` | `["/health", "/ready"]` | Path prefixes that skip authentication |
+| `skip_paths` | `Vec<String>` | `["/health", "/ready"]` | Paths that skip authentication. **Allowlisted**: each entry must be exactly `/health`, `/ready`, `/metrics`, or start with `/api/v1/auth/`; any other value (e.g. a business route) is rejected at startup. This prevents silently exposing an admin route as unauthenticated. |
 | `ssl_verify` | `bool` | `true` | Whether to verify TLS certificates when fetching discovery/JWKS; production must be `true` |
 | `discovery_max_response_bytes` | `usize` | `65536` (64 KB) | Upper bound for the OIDC discovery response body; prevents DoS, compliant IdPs typically < 4 KB |
 | `jwks_max_response_bytes` | `usize` | `1048576` (1 MB) | Upper bound for the JWKS response body; typical JWKS < 10 KB |
@@ -226,7 +226,7 @@ Built-in username/password authentication that issues HS256 JWTs. When **Control
 | `password` | `String` | `""` | Password (empty = needs auto-generation) |
 | `jwt_secret` | `String` | `""` | JWT signing secret (empty = needs auto-generation) |
 | `jwt_expiry_hours` | `u64` | `24` | Token expiration (hours) |
-| `skip_paths` | `Vec<String>` | `["/health", "/ready"]` | Path prefixes that skip authentication |
+| `skip_paths` | `Vec<String>` | `["/health", "/ready"]` | Paths that skip authentication. **Allowlisted**: each entry must be exactly `/health`, `/ready`, `/metrics`, or start with `/api/v1/auth/`; any other value (e.g. a business route) is rejected at startup. This prevents silently exposing an admin route as unauthenticated. |
 | `cookie_secure` | `bool` | `true` | Emit `Secure` on the `edgion_token` cookie. `false` only for explicit non-TLS (plain HTTP) setups. Mirrors CSRF `cookieSecure` / OIDC `sessionCookieSecure`. |
 
 ```yaml

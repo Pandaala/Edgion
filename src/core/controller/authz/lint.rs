@@ -65,16 +65,19 @@ pub fn lint_rbac_policy(rbac: &FedRbacConfig, context: &str, identity: &str) {
             }
         }
         // Dangerous-grant WARNs — folded here so both startup AND reload emit them.
+        // `watch` is included alongside the point-read verbs: it streams the same
+        // credential data and goes through the identical `authorize()` gate, so a
+        // `watch Secret` / `watch *` grant is just as dangerous as a `get`/`list`.
         let has_read_verb = rule
             .verbs
             .iter()
-            .any(|v| matches!(v.to_ascii_lowercase().as_str(), "get" | "list" | "list-keys"));
+            .any(|v| matches!(v.to_ascii_lowercase().as_str(), "get" | "list" | "list-keys" | "watch"));
         if has_read_verb && rule.kinds.iter().any(|k| k == "Secret") {
             tracing::warn!(
                 component = "rbac_lint",
                 context = context,
                 identity = identity,
-                "rbac rule grants read access to Secret; this exposes credential data \
+                "rbac rule grants read/watch access to Secret; this exposes credential data \
                  — review the policy"
             );
         }
@@ -83,7 +86,7 @@ pub fn lint_rbac_policy(rbac: &FedRbacConfig, context: &str, identity: &str) {
                 component = "rbac_lint",
                 context = context,
                 identity = identity,
-                "rbac rule uses kinds:[\"*\"] with a read verb; this may expose Secret data \
+                "rbac rule uses kinds:[\"*\"] with a read/watch verb; this may expose Secret data \
                  via wildcard — review the policy"
             );
         }
@@ -275,5 +278,76 @@ mod tests {
         };
         // Must not panic.
         lint_rbac_policy(&rbac, "test", "test-identity");
+    }
+
+    /// In-memory `MakeWriter` so a test can capture the advisory WARN output of
+    /// `lint_rbac_policy` and assert that the dangerous-grant warning fired.
+    #[derive(Clone, Default)]
+    struct BufWriter(std::sync::Arc<parking_lot::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for BufWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufWriter {
+        type Writer = BufWriter;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Run `lint_rbac_policy` against `rbac` with a thread-local WARN-capturing
+    /// subscriber and return everything it logged as a single string.
+    fn capture_lint_warns(rbac: &FedRbacConfig) -> String {
+        let buf = BufWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(buf.clone())
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            lint_rbac_policy(rbac, "test", "test-identity");
+        });
+        let bytes = buf.0.lock().clone();
+        String::from_utf8(bytes).expect("captured log is valid UTF-8")
+    }
+
+    #[test]
+    fn watch_secret_emits_dangerous_grant_warn() {
+        // Regression for m1-01: a `watch Secret` grant must trip the same
+        // dangerous-grant advisory as `get`/`list`/`list-keys`.
+        let rbac = FedRbacConfig {
+            allow: vec![FedAllowRule {
+                verbs: vec!["watch".to_string()],
+                kinds: vec!["Secret".to_string()],
+            }],
+        };
+        let captured = capture_lint_warns(&rbac);
+        assert!(
+            captured.contains("read/watch access to Secret"),
+            "watch Secret must emit the Secret dangerous-grant warn; captured: {captured}"
+        );
+    }
+
+    #[test]
+    fn watch_wildcard_emits_dangerous_grant_warn() {
+        // Regression for m1-01: a `watch *` grant must trip the wildcard
+        // dangerous-grant advisory, not just point-read verbs.
+        let rbac = FedRbacConfig {
+            allow: vec![FedAllowRule {
+                verbs: vec!["watch".to_string()],
+                kinds: vec!["*".to_string()],
+            }],
+        };
+        let captured = capture_lint_warns(&rbac);
+        assert!(
+            captured.contains("kinds:[\"*\"] with a read/watch verb"),
+            "watch * must emit the wildcard dangerous-grant warn; captured: {captured}"
+        );
     }
 }

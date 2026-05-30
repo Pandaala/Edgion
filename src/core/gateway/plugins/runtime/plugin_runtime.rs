@@ -399,9 +399,24 @@ impl PluginRuntime {
                 // handler can fetch it without deep-cloning per request. Mirrors
                 // the `find_map` semantics previously used in
                 // `pg_request_filter::extract_cors_config_from_route_filters`.
+                // Initialize the `#[serde(skip)]` runtime fields (origins_cache /
+                // compiled_origins_regex / compiled_timing_regex) here: the
+                // preflight handler builds `Cors::from_arc` from this Arc and never
+                // re-initializes, so an uncompiled config would silently break
+                // regex / subdomain-wildcard / comma-separated origins on the
+                // preflight path. On failure keep the uncompiled (deny-safe) config.
                 if self.cors_config.is_none() {
                     if let EdgionPlugin::Cors(cfg) = &entry.plugin {
-                        self.cors_config = Some(Arc::new(cfg.clone()));
+                        let mut cfg = cfg.clone();
+                        if let Err(e) = cfg.validate_and_init() {
+                            tracing::warn!(
+                                error = %e,
+                                label = "HTTP plugin",
+                                "Failed to initialize cached CorsConfig for preflight handler; \
+                                 regex/cache origins will be ignored (deny-safe)",
+                            );
+                        }
+                        self.cors_config = Some(Arc::new(cfg));
                     }
                 }
 

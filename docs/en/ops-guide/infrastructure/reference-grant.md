@@ -25,6 +25,29 @@ spec:
       kind: Secret
 ```
 
+## Example: Allow EdgionTls to Reference Cross-Namespace Secret
+
+`EdgionTls` resolves both `spec.secretRef` (server certificate) and
+`spec.clientAuth.caSecretRef` (mTLS CA) through the same ReferenceGrant check. A
+cross-namespace `secretRef` is rejected (the certificate stays unresolved and the
+`ResolvedRefs` condition reports `RefNotPermitted`) unless a matching grant exists:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: ReferenceGrant
+metadata:
+  name: allow-edgiontls-to-secret
+  namespace: security
+spec:
+  from:
+    - group: edgion.io
+      kind: EdgionTls
+      namespace: gateway-system
+  to:
+    - group: ""
+      kind: Secret
+```
+
 ## Security Recommendations
 
 1. Keep `from` granularity as small as possible, specifying namespace and kind precisely.

@@ -63,12 +63,12 @@ pub use edgion_plugins::{
     DirectEndpointTestSuite, DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite,
     DslTestSuite, DynamicExternalUpstreamTestSuite, DynamicInternalUpstreamTestSuite, ForwardAuthTestSuite,
     GlobalConnectionIpRestrictionTestSuite, GlobalPluginsSnapshotTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite,
-    JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite, OpenidConnectTestSuite,
-    PathNormalizationForwardViewTestSuite, PathNormalizationPreserveParamTestSuite, PathNormalizationTestSuite,
-    PluginConditionTestSuite, PluginLogsTestSuite, PluginMetaDataManagedTestSuite, PluginMetaDataStatusTestSuite,
-    PluginValidationStatusTestSuite, PmdFlapInitialTestSuite, PmdFlapInvalidTestSuite, PmdFlapValidTestSuite,
-    ProxyRewriteTestSuite, RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitRedisTestSuite,
-    RateLimitTestSuite, RealIpPluginTestSuite, RegionRouteTestSuite, RequestMirrorTestSuite,
+    IpRestrictionPluginTestSuite, JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite,
+    OpenidConnectTestSuite, PathNormalizationForwardViewTestSuite, PathNormalizationPreserveParamTestSuite,
+    PathNormalizationTestSuite, PluginConditionTestSuite, PluginLogsTestSuite, PluginMetaDataManagedTestSuite,
+    PluginMetaDataStatusTestSuite, PluginValidationStatusTestSuite, PmdFlapInitialTestSuite, PmdFlapInvalidTestSuite,
+    PmdFlapValidTestSuite, ProxyRewriteTestSuite, RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite,
+    RateLimitRedisTestSuite, RateLimitTestSuite, RealIpPluginTestSuite, RegionRouteTestSuite, RequestMirrorTestSuite,
     RequestRestrictionTestSuite, ResolvedRefsTestSuite, ResponseRewriteTestSuite, WebhookKeyGetTestSuite,
 };
 

@@ -18,10 +18,30 @@ pub struct Cors {
 
 impl Cors {
     /// Create from a `CorsConfig` reference. Wraps the config in an `Arc` —
-    /// callers that already hold an `Arc<CorsConfig>` should use
+    /// callers that already hold an initialized `Arc<CorsConfig>` should use
     /// [`Cors::from_arc`] instead to avoid a deep clone.
+    ///
+    /// `origins_cache` / `compiled_origins_regex` / `compiled_timing_regex` carry
+    /// `#[serde(skip)]`, so they are `None` after gRPC/YAML deserialization. Compile
+    /// them here via `validate_and_init`; without this `is_origin_allowed` skips the
+    /// cache and regex branches, silently breaking comma-separated, `*.domain`
+    /// subdomain-wildcard, and `allow_origins_by_regex` origins. Mirrors the
+    /// `IpRestriction::create` fix (fr-types-01). Construction runs at plugin build
+    /// (config-apply / hot-reload), off the request path, so `tracing` is permitted
+    /// here. On failure keep the uncompiled (deny-safe) config: regex/cache origins
+    /// are skipped rather than wrongly allowed. In practice this path is unreachable
+    /// for an operator config because `validation_error()` (run before construction)
+    /// already rejects the same security/syntax cases.
     pub fn new(config: &CorsConfig) -> Self {
-        Self::from_arc(Arc::new(config.clone()))
+        let mut config = config.clone();
+        if let Err(e) = config.validate_and_init() {
+            tracing::warn!(
+                error = %e,
+                label = "HTTP plugin",
+                "Failed to initialize CorsConfig; regex/cache origins will be ignored (deny-safe)",
+            );
+        }
+        Self::from_arc(Arc::new(config))
     }
 
     /// Create from a shared `Arc<CorsConfig>` without cloning the underlying
@@ -341,6 +361,73 @@ mod tests {
         assert_eq!(
             cors.select_acao_value("https://example.com".to_string()),
             "https://example.com"
+        );
+    }
+
+    /// Run a simple (non-preflight) GET through `Cors` with the given origin and
+    /// return whether the plugin logged an allow decision. Mocks the response-header
+    /// sinks so the allowed path can complete. Mirrors the deserialization shape:
+    /// the caller must leave `compiled_origins_regex` / `origins_cache` as `None` so
+    /// the test exercises `Cors::new`'s `validate_and_init` call, not a pre-built config.
+    async fn origin_allowed_via_new(config: &CorsConfig, origin: &'static str) -> bool {
+        let cors = Cors::new(config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("Cors");
+
+        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session.expect_header_value().returning(move |name| {
+            if name == "origin" {
+                Some(origin.to_string())
+            } else {
+                None
+            }
+        });
+        mock_session.expect_set_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_append_response_header().returning(|_, _| Ok(()));
+
+        let _ = cors.run_request(&mut mock_session, &mut plugin_log).await;
+        plugin_log.contains("origin match:allow")
+    }
+
+    // Regression for fr-types-02: `Cors::new` must call `validate_and_init` so the
+    // `#[serde(skip)]` matchers are compiled. Each config below is built the way
+    // deserialization yields it (compiled fields `None`); a config routed through
+    // `CorsConfig::new` would pre-build the matchers and mask the bug.
+
+    #[tokio::test]
+    async fn test_new_compiles_regex_origin_allowed() {
+        let mut config = create_cors_config();
+        config.allow_credentials = false; // regex + credentials is rejected by validate_and_init
+        config.allow_origins = "https://exact.example.com".to_string();
+        config.allow_origins_by_regex = Some(vec![r"https://.*\.regex\.example\.com".to_string()]);
+
+        assert!(
+            origin_allowed_via_new(&config, "https://api.regex.example.com").await,
+            "regex-matched origin should be allowed after Cors::new compiles allow_origins_by_regex"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_new_compiles_comma_separated_list() {
+        let mut config = create_cors_config();
+        config.allow_credentials = false;
+        config.allow_origins = "https://a.example.com,https://b.example.com".to_string();
+
+        assert!(
+            origin_allowed_via_new(&config, "https://b.example.com").await,
+            "second origin in a comma-separated list should be allowed via origins_cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_new_compiles_subdomain_wildcard() {
+        let mut config = create_cors_config();
+        config.allow_credentials = false;
+        config.allow_origins = "*.example.com".to_string();
+
+        assert!(
+            origin_allowed_via_new(&config, "https://tenant.example.com").await,
+            "subdomain-wildcard origin should be allowed via the compiled wildcard regex"
         );
     }
 

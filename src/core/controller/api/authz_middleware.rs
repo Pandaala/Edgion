@@ -190,6 +190,9 @@ pub async fn inject_center_identity(
 /// `Role::Restricted`) and AFTER the `unified_auth` middleware (which has verified
 /// the request is authenticated). It enforces fail-closed logic:
 ///
+/// - If the path is in the public skip set (`is_skipped`: health/ready/metrics and
+///   the auth endpoints) → pass through unchanged. These are intentionally
+///   unauthenticated and carry no `Role`/claims; `authz_layer` skips them too.
 /// - If a `Role` is already present in extensions (cli-pre injected `Restricted`) →
 ///   pass through unchanged.
 /// - If no `Role` is present but `AuthBypass` IS present → the request was
@@ -198,12 +201,31 @@ pub async fn inject_center_identity(
 ///   We key the 403 on `AuthBypass` alone (NOT `AuthBypass && CliTokenIdentity`),
 ///   which prevents a future AuthBypass-without-CliTokenIdentity from silently
 ///   escalating to Superuser.
-/// - Otherwise (authenticated admin via `unified_auth`, no Role, no AuthBypass) →
-///   insert `Role::Superuser`, granting full access on the local server.
+/// - If no `Role` and no `AuthBypass`, but `unified_auth` validated a token
+///   (a `UnifiedAuthClaims` is present in extensions) → insert `Role::Superuser`,
+///   granting full access on the local server.
+/// - Otherwise (no Role, no AuthBypass, no `UnifiedAuthClaims`) the request reached
+///   this route_layer WITHOUT being authenticated — the only way that happens is a
+///   `unified_auth` skip_paths bypass on a business route → **FAIL CLOSED: 403**.
+///   Granting Superuser here was the fr-cauth-01 escalation: an operator-configured
+///   `skip_paths` entry on an admin route would otherwise turn an unauthenticated
+///   request into a full admin one.
 ///
 /// This layer is a `route_layer`, so it only fires for matched routes (never the
 /// fallback). The authz middleware reads the `Role` extension inserted here.
 pub(crate) async fn assign_superuser_if_no_role(mut req: Request<Body>, next: Next) -> Response {
+    // Case 0: public skip-set paths (`/health`, `/ready`, `/metrics`,
+    // `/api/v1/auth/{login,logout,status}`) bypass authz entirely — `authz_layer`
+    // mirrors this same skip. These are intentionally unauthenticated infrastructure
+    // endpoints, so they legitimately carry no `Role` and no `UnifiedAuthClaims`.
+    // Without this short-circuit they would fall through to the fail-closed Case 4
+    // below and wrongly 403 (this is NOT the fr-cauth-01 business-route bypass —
+    // these paths are public by design). Pass through WITHOUT inserting a `Role`;
+    // `authz_layer`'s own `is_skipped` then lets them reach the handler.
+    if is_skipped(req.uri().path()) {
+        return next.run(req).await;
+    }
+
     // Case 1: cli-pre already assigned a Restricted role — keep it.
     if req.extensions().get::<crate::core::controller::authz::Role>().is_some() {
         return next.run(req).await;
@@ -226,10 +248,27 @@ pub(crate) async fn assign_superuser_if_no_role(mut req: Request<Body>, next: Ne
         return (StatusCode::FORBIDDEN, "Forbidden").into_response();
     }
 
-    // Case 3: Authenticated admin via unified_auth — assign Superuser.
-    req.extensions_mut()
-        .insert(crate::core::controller::authz::Role::Superuser);
-    next.run(req).await
+    // Case 3: unified_auth actually validated a token (claims present) — assign Superuser.
+    // The `UnifiedAuthClaims` check is the authentication proof: a request that skipped
+    // unified_auth via skip_paths carries no claims and must NOT be treated as admin.
+    if req
+        .extensions()
+        .get::<crate::core::common::unified_auth::UnifiedAuthClaims>()
+        .is_some()
+    {
+        req.extensions_mut()
+            .insert(crate::core::controller::authz::Role::Superuser);
+        return next.run(req).await;
+    }
+
+    // Case 4: no Role, no AuthBypass, no claims — unauthenticated (skip_paths bypass on a
+    // business route). Fail closed and make the bug path observable.
+    crate::core::common::observe::fed_metrics::record_rbac_denied(
+        "unknown",
+        "unknown",
+        crate::core::common::observe::fed_metrics::labels::rbac_source::UNKNOWN,
+    );
+    (StatusCode::FORBIDDEN, "Forbidden").into_response()
 }
 
 #[cfg(test)]
@@ -337,13 +376,53 @@ mod tests {
 
     /// When `assign_superuser_if_no_role` runs before `authz_layer`
     /// (the real wiring in `serve_with_shutdown`), an authenticated admin request
-    /// that carries no explicit `Role` extension is assigned `Role::Superuser` by
-    /// `assign_superuser_if_no_role`, so a deny-all authorizer still returns 200.
+    /// (carrying `UnifiedAuthClaims` from unified_auth) with no explicit `Role`
+    /// extension is assigned `Role::Superuser`, so a deny-all authorizer still
+    /// returns 200.
     #[tokio::test]
     async fn assign_layer_inserts_superuser_when_no_role() {
+        use crate::core::common::unified_auth::{AuthProvider, UnifiedAuthClaims};
+
         // Build a router that wires the two layers in the same order as serve_with_shutdown:
         //   authz_layer first (innermost route_layer), then assign_superuser on top (outermost).
-        // No external role-insertion layer -- assign_superuser_if_no_role is the sole source of Role.
+        // An outer layer injects UnifiedAuthClaims, simulating a request that unified_auth
+        // successfully authenticated (the only legitimate way to reach Case 3 with no Role).
+        let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
+        let router = Router::new()
+            .route("/api/v1/cluster/{kind}", get(|| async { "ok" }))
+            .route_layer(axum::middleware::from_fn_with_state(authorizer, authz_layer))
+            .route_layer(axum::middleware::from_fn(assign_superuser_if_no_role))
+            .layer(axum::middleware::from_fn(
+                move |mut req: Request<Body>, next: axum::middleware::Next| async move {
+                    req.extensions_mut().insert(UnifiedAuthClaims {
+                        provider: AuthProvider::Local,
+                        sub: None,
+                        iss: None,
+                        claims: serde_json::Value::Null,
+                    });
+                    next.run(req).await
+                },
+            ));
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/cluster/HTTPRoute")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // Superuser overrides even a deny-all policy.
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// fr-cauth-01 regression: a request that reaches the business route_layer with no
+    /// `Role`, no `AuthBypass`, AND no `UnifiedAuthClaims` was never authenticated (it
+    /// slipped past unified_auth via a misconfigured `skip_paths` entry on a business
+    /// route). It must be denied (403), NOT silently granted Superuser.
+    #[tokio::test]
+    async fn no_claims_no_role_is_denied_not_superuser() {
         let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
         let router = Router::new()
             .route("/api/v1/cluster/{kind}", get(|| async { "ok" }))
@@ -359,18 +438,39 @@ mod tests {
             )
             .await
             .unwrap();
-        // Superuser overrides even a deny-all policy.
+        // No authentication proof => fail closed, never Superuser.
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// Public skip-set paths (`/health`, `/ready`, `/metrics`, auth endpoints) must
+    /// pass through `assign_superuser_if_no_role` even with no `Role`, no `AuthBypass`,
+    /// and no `UnifiedAuthClaims` — they are intentionally unauthenticated infrastructure
+    /// endpoints. The fr-cauth-01 fail-closed Case 4 must NOT swallow them with a 403.
+    /// (Regression: a deny-all authorizer is wired to prove the skip happens before authz.)
+    #[tokio::test]
+    async fn skip_path_passes_through_without_claims() {
+        let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
+        let router = Router::new()
+            .route("/health", get(|| async { "ok" }))
+            .route_layer(axum::middleware::from_fn_with_state(authorizer, authz_layer))
+            .route_layer(axum::middleware::from_fn(assign_superuser_if_no_role));
+
+        let resp = router
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        // Public skip path reaches the handler despite no auth proof and a deny-all policy.
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
     /// Verify the three fail-closed cases of `assign_superuser_if_no_role`:
     ///
     /// (a) `Role::Restricted(deny-all)` already in extensions → authz denies (403)
-    /// (b) No Role, no AuthBypass (authenticated admin) → Superuser → allowed (200)
+    /// (b) No Role, no AuthBypass, but `UnifiedAuthClaims` present (authenticated admin) → Superuser → allowed (200)
     /// (c) `AuthBypass` present but no Role (bug path) → 403, never Superuser
     #[tokio::test]
     async fn cli_role_kept_admin_gets_superuser_bypass_without_role_403() {
-        use crate::core::common::unified_auth::AuthBypass;
+        use crate::core::common::unified_auth::{AuthBypass, AuthProvider, UnifiedAuthClaims};
 
         // Helper: build a router with:
         //   assign_superuser_if_no_role (outermost route_layer) → authz_layer (innermost)
@@ -414,9 +514,17 @@ mod tests {
             );
         }
 
-        // (b) No Role, no AuthBypass → assign_superuser_if_no_role inserts Superuser → 200.
+        // (b) No Role, no AuthBypass, but unified_auth validated a token (claims present)
+        //     → assign_superuser_if_no_role inserts Superuser → 200.
         {
-            let r = make_router(authorizer.clone(), |_ext| { /* inject nothing */ });
+            let r = make_router(authorizer.clone(), |ext| {
+                ext.insert(UnifiedAuthClaims {
+                    provider: AuthProvider::Local,
+                    sub: None,
+                    iss: None,
+                    claims: serde_json::Value::Null,
+                });
+            });
             let resp = r
                 .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
                 .await

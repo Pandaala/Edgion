@@ -6,11 +6,14 @@
 // - Credentials mode (echo origin + Access-Control-Allow-Credentials)
 // - Max-Age (preflight only)
 // - Expose-Headers
+// - Runtime-compiled origin matchers (fr-types-02): comma-separated list,
+//   HTTPS subdomain wildcard, and allow_origins_by_regex
 //
 // Configs defined in examples/test/conf/EdgionPlugins/Cors/:
 //   cors-basic:       specific origin, no credentials, maxAge=3600
 //   cors-wildcard:    origin=*, no credentials
 //   cors-credentials: specific origin, credentials=true, maxAge=7200
+//   cors-regex:       comma-separated list + *.sub wildcard + regex, no credentials
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use reqwest::Method;
@@ -456,6 +459,200 @@ impl CorsPluginTestSuite {
         )
     }
 
+    // 11. Regex preflight (cors-regex) → 204 + echoed origin.
+    //     Exercises the global preflight handler's cached Arc<CorsConfig>
+    //     (fr-types-02 fix #2): the compiled regex must match.
+    fn test_regex_preflight_matching() -> TestCase {
+        TestCase::new(
+            "cors_regex_preflight_matching",
+            "Preflight from a regex-matched origin returns 204 + echoed origin",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let resp = ctx
+                        .http_client
+                        .request(Method::OPTIONS, format!("{}/cors-regex/test", ctx.http_url()))
+                        .header("host", HOST)
+                        .header("origin", "https://svc.regex.example.com")
+                        .header("access-control-request-method", "POST")
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(resp) => {
+                            if resp.status().as_u16() != 204 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 204, got {}", resp.status()),
+                                );
+                            }
+                            if let Err(e) =
+                                assert_header_eq(&resp, "access-control-allow-origin", "https://svc.regex.example.com")
+                            {
+                                return TestResult::failed(start.elapsed(), e);
+                            }
+                            TestResult::passed(start.elapsed())
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // 12. Regex simple GET (cors-regex) → 200 + echoed origin.
+    //     Exercises the per-route request-filter Cors::new path (fr-types-02 fix #1).
+    fn test_regex_simple_matching() -> TestCase {
+        TestCase::new(
+            "cors_regex_simple_matching",
+            "Simple GET from a regex-matched origin returns echoed origin",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let resp = ctx
+                        .http_client
+                        .get(format!("{}/cors-regex/headers", ctx.http_url()))
+                        .header("host", HOST)
+                        .header("origin", "https://api.regex.example.com")
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(resp) => {
+                            if resp.status() != 200 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 200, got {}", resp.status()),
+                                );
+                            }
+                            if let Err(e) =
+                                assert_header_eq(&resp, "access-control-allow-origin", "https://api.regex.example.com")
+                            {
+                                return TestResult::failed(start.elapsed(), e);
+                            }
+                            TestResult::passed(start.elapsed())
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // 13. Subdomain-wildcard simple GET (cors-regex `*.sub.example.com`) → echoed origin.
+    fn test_subdomain_wildcard_simple() -> TestCase {
+        TestCase::new(
+            "cors_subdomain_wildcard_simple",
+            "Simple GET from an HTTPS subdomain-wildcard origin returns echoed origin",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let resp = ctx
+                        .http_client
+                        .get(format!("{}/cors-regex/headers", ctx.http_url()))
+                        .header("host", HOST)
+                        .header("origin", "https://tenant.sub.example.com")
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(resp) => {
+                            if resp.status() != 200 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 200, got {}", resp.status()),
+                                );
+                            }
+                            if let Err(e) =
+                                assert_header_eq(&resp, "access-control-allow-origin", "https://tenant.sub.example.com")
+                            {
+                                return TestResult::failed(start.elapsed(), e);
+                            }
+                            TestResult::passed(start.elapsed())
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // 14. Comma-separated exact origin (cors-regex `https://a.example.com,...`) → echoed origin.
+    //     Exercises the origins_cache HashMap path.
+    fn test_comma_list_exact_simple() -> TestCase {
+        TestCase::new(
+            "cors_comma_list_exact_simple",
+            "Simple GET from an exact origin in a comma-separated list returns echoed origin",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let resp = ctx
+                        .http_client
+                        .get(format!("{}/cors-regex/headers", ctx.http_url()))
+                        .header("host", HOST)
+                        .header("origin", "https://a.example.com")
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(resp) => {
+                            if resp.status() != 200 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 200, got {}", resp.status()),
+                                );
+                            }
+                            if let Err(e) =
+                                assert_header_eq(&resp, "access-control-allow-origin", "https://a.example.com")
+                            {
+                                return TestResult::failed(start.elapsed(), e);
+                            }
+                            TestResult::passed(start.elapsed())
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // 15. Non-matching origin against cors-regex → no CORS headers (guards against
+    //     the compiled regex over-matching / echoing every origin).
+    fn test_regex_non_matching() -> TestCase {
+        TestCase::new(
+            "cors_regex_non_matching",
+            "Simple GET from an origin matching neither list nor regex returns no CORS headers",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let resp = ctx
+                        .http_client
+                        .get(format!("{}/cors-regex/headers", ctx.http_url()))
+                        .header("host", HOST)
+                        .header("origin", "https://evil.com")
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(resp) => {
+                            if resp.status() != 200 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 200, got {}", resp.status()),
+                                );
+                            }
+                            if let Err(e) = assert_header_absent(&resp, "access-control-allow-origin") {
+                                return TestResult::failed(start.elapsed(), e);
+                            }
+                            TestResult::passed(start.elapsed())
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     // 10. No Origin header → no CORS processing, normal proxy
     fn test_no_origin_header() -> TestCase {
         TestCase::new(
@@ -509,6 +706,11 @@ impl TestSuite for CorsPluginTestSuite {
             Self::test_credentials_simple(),
             Self::test_credentials_non_matching_preflight(),
             Self::test_no_origin_header(),
+            Self::test_regex_preflight_matching(),
+            Self::test_regex_simple_matching(),
+            Self::test_subdomain_wildcard_simple(),
+            Self::test_comma_list_exact_simple(),
+            Self::test_regex_non_matching(),
         ]
     }
 }

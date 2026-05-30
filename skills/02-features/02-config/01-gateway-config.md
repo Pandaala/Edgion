@@ -23,7 +23,7 @@ work_dir: "."
 
 gateway:
   server_addr: "http://127.0.0.1:50051"   # Required: Controller gRPC address
-  admin_listen: "0.0.0.0:5810"            # Admin API listen address (default: 0.0.0.0:5810)
+  admin_listen: "0.0.0.0:5810"            # Admin API listen address (default: 127.0.0.1:5810, loopback)
 
 # ─── gRPC channel security (optional mTLS) ───
 # conf_sync_security:
@@ -112,7 +112,7 @@ access_log_sensitive:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `server_addr` | `String` | **Required** | Controller gRPC address |
-| `admin_listen` | `String` | `0.0.0.0:5810` | Admin API listen address; default `0.0.0.0:5810`. The `admin_listen` field is now fully wired up. Gateway Metrics API remains fixed at `:5901`. |
+| `admin_listen` | `String` | `127.0.0.1:5810` | Admin API listen address. Defaults to loopback (`127.0.0.1:5810`) so the admin/readiness endpoints are not exposed cluster-wide; set `0.0.0.0` to allow pod-IP access (e.g. a kubelet `httpGet` readiness probe — the shipped K8s manifests do this). Gateway Metrics API remains fixed at `:5901`. |
 
 ### conf_sync_security.tls
 

@@ -160,7 +160,7 @@ filters:
 
 ### 6. 带身份认证（Cookie/Token）
 
-⚠️ **重要**：使用 `allow_credentials: true` 时，**不能**使用通配符 `*`
+⚠️ **重要**：使用 `allow_credentials: true` 时，**不能**使用通配符 `*`，也**不能**使用 `allow_origins_by_regex` / `timing_allow_origins_by_regex`（像 `.*` 这样的宽泛模式会在启用凭证时回显任意 origin）。请改用显式的 `allow_origins` 列表。
 
 ```yaml
 filters:
@@ -260,12 +260,16 @@ filters:
    ✅ "^http://localhost:[0-9]+$"  # 正则匹配任意端口
    ```
 
-3. **使用 credentials 时不能用通配符**：
+3. **使用 credentials 时不能用通配符或正则白名单**：
    ```yaml
    ❌ 错误配置:
    allow_origins: "*"
    allow_credentials: true
-   
+
+   ❌ 错误配置（正则会绕过通配符守卫）:
+   allow_origins_by_regex: [".*"]
+   allow_credentials: true
+
    ✅ 正确配置:
    allow_origins: "https://app.example.com"
    allow_credentials: true

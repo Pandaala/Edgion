@@ -106,6 +106,18 @@ pub async fn create_namespaced(
         StatusCode::BAD_REQUEST
     })?;
 
+    // The URL namespace is the authoritative storage key, but the body content is
+    // what gets persisted. Reject a body whose metadata.namespace contradicts the
+    // URL, otherwise the resource would be stored under the URL namespace while its
+    // content claims a different one (create_one keys the path on the URL namespace
+    // in non-K8s mode), desynchronizing storage and the running cache. Absent body
+    // namespace defers to the URL value. Mirrors the guard in update_namespaced.
+    // (K8s API server rejects the same mismatch.) The collection POST takes the name
+    // from the body by design, so only the namespace dimension is validated here.
+    if metadata.namespace.as_ref().is_some_and(|meta_ns| meta_ns != &ns) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     let name = metadata.name.ok_or_else(|| {
         tracing::warn!("Resource name is missing in metadata");
         StatusCode::BAD_REQUEST
@@ -644,5 +656,36 @@ mod update_identity_tests {
         )
         .await;
         assert_eq!(result.err(), Some(StatusCode::NOT_FOUND));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_mismatched_namespace() {
+        // Body metadata.namespace ("other-ns") disagrees with the URL namespace
+        // ("default"); the create-path guard must reject before persisting,
+        // mirroring update_namespaced.
+        let (state, _tmp) = make_fs_state().await;
+        let result = create_namespaced(
+            State(state),
+            Path(("HTTPRoute".to_string(), "default".to_string())),
+            http_route_body("route-a", "other-ns"),
+        )
+        .await;
+        assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST));
+    }
+
+    #[tokio::test]
+    async fn create_matching_namespace_passes_guard() {
+        // Body metadata.namespace matches the URL namespace, so the guard must NOT
+        // reject; the request reaches the writer and the resource is created (201),
+        // proving the guard does not false-positive on a valid identity.
+        let (state, _tmp) = make_fs_state().await;
+        let result = create_namespaced(
+            State(state),
+            Path(("HTTPRoute".to_string(), "default".to_string())),
+            http_route_body("route-a", "default"),
+        )
+        .await;
+        let (status, _headers, _body) = result.expect("create should succeed on matching identity");
+        assert_eq!(status, StatusCode::CREATED);
     }
 }

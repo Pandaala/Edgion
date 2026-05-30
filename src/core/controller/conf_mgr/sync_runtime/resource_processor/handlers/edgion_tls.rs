@@ -14,9 +14,32 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     ResolvedRefsError, ResourceRef,
 };
 use crate::types::prelude_resources::EdgionTls;
+use crate::types::resources::common::SecretObjectReference;
 use crate::types::resources::edgion_tls::EdgionTlsStatus;
 use crate::types::resources::http_route::RouteParentStatus;
 use crate::types::ResourceKind;
+
+/// Returns `true` when `secret_ref` points at a different namespace than `owner_ns`,
+/// ReferenceGrant validation is enabled, and no `ReferenceGrant` authorizes the
+/// `EdgionTls` -> `Secret` reference. Mirrors the cross-namespace guard used by
+/// `GatewayHandler` for `certificateRefs`; when validation is disabled this always
+/// returns `false`, keeping behavior consistent with the other handlers.
+fn cross_ns_secret_ref_denied(ctx: &HandlerContext, owner_ns: &str, secret_ref: &SecretObjectReference) -> bool {
+    if !secret_ref.is_cross_namespace(owner_ns) || !crate::core::common::config::is_reference_grant_validation_enabled()
+    {
+        return false;
+    }
+    let target_ns = secret_ref.effective_namespace(owner_ns);
+    !ctx.runtime().ref_grant_store.check_reference_allowed(
+        owner_ns,
+        "edgion.io",
+        "EdgionTls",
+        target_ns,
+        "",
+        "Secret",
+        Some(&secret_ref.name),
+    )
+}
 
 /// EdgionTls handler
 ///
@@ -109,6 +132,9 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 
         // Clear old references first (for update scenario)
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        // Clear old cross-namespace references too; they are re-registered below so a
+        // later ReferenceGrant add/remove requeues this EdgionTls (mirrors GatewayHandler).
+        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
 
         // 1. Resolve server Secret from global secret store
         let secret_ns = tls
@@ -124,8 +150,27 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         ctx.secret_ref_manager()
             .add_ref(secret_key.clone(), resource_ref.clone());
 
-        // Try to resolve Secret from runtime store
-        if let Some(secret) = ctx
+        // Enforce ReferenceGrant for cross-namespace Secret refs before reading the
+        // Secret, mirroring GatewayHandler's certificateRefs handling (gateway.rs).
+        // The controller ServiceAccount can read Secrets cluster-wide, so this is the
+        // only tenant-isolation boundary preventing a low-privilege EdgionTls writer
+        // from embedding another namespace's TLS private key into spec.secret.
+        let owner_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
+        // Track the cross-namespace dependency so ReferenceGrant changes in the target
+        // namespace requeue this EdgionTls (covers both grant-added and grant-removed).
+        if tls.spec.secret_ref.is_cross_namespace(owner_ns) {
+            ctx.runtime().cross_ns_ref_mgr.add_ref(
+                tls.spec.secret_ref.effective_namespace(owner_ns).to_string(),
+                resource_ref.clone(),
+            );
+        }
+        if cross_ns_secret_ref_denied(ctx, owner_ns, &tls.spec.secret_ref) {
+            tracing::info!(
+                edgion_tls = %resource_ref.key(),
+                secret_key = %secret_key,
+                "Cross-namespace Secret reference denied (no ReferenceGrant); leaving secret unresolved"
+            );
+        } else if let Some(secret) = ctx
             .runtime()
             .secret_store
             .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
@@ -156,8 +201,22 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
                 ctx.secret_ref_manager()
                     .add_ref(ca_secret_key.clone(), resource_ref.clone());
 
-                // Try to resolve CA Secret from runtime store
-                if let Some(ca_secret) = ctx
+                // Same cross-namespace ReferenceGrant guard as the server cert above:
+                // the mTLS CA Secret can also carry private key material.
+                let ca_owner_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
+                if ca_secret_ref.is_cross_namespace(ca_owner_ns) {
+                    ctx.runtime().cross_ns_ref_mgr.add_ref(
+                        ca_secret_ref.effective_namespace(ca_owner_ns).to_string(),
+                        resource_ref.clone(),
+                    );
+                }
+                if cross_ns_secret_ref_denied(ctx, ca_owner_ns, ca_secret_ref) {
+                    tracing::info!(
+                        edgion_tls = %resource_ref.key(),
+                        ca_secret_key = %ca_secret_key,
+                        "Cross-namespace CA Secret reference denied (no ReferenceGrant); leaving ca_secret unresolved"
+                    );
+                } else if let Some(ca_secret) = ctx
                     .runtime()
                     .secret_store
                     .get(ca_ns.map(|s| s.as_str()), &ca_secret_ref.name)
@@ -232,6 +291,7 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             tls.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
 
         let tls_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
         let tls_name = tls.metadata.name.as_deref().unwrap_or("");
@@ -260,10 +320,23 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
                 .namespace
                 .as_ref()
                 .or(tls.metadata.namespace.as_ref());
-            vec![ResolvedRefsError::SecretNotFound {
-                namespace: secret_ns.map(|s| s.as_str()).unwrap_or("default").to_string(),
-                name: tls.spec.secret_ref.name.clone(),
-            }]
+            let target_ns = secret_ns.map(|s| s.as_str()).unwrap_or("default").to_string();
+            // Distinguish "denied by ReferenceGrant" from "Secret simply absent" so
+            // the K8s ResolvedRefs condition reports RefNotPermitted instead of a
+            // perpetual SecretNotFound wait when the cross-ns ref was rejected in parse().
+            if cross_ns_secret_ref_denied(ctx, resource_ns, &tls.spec.secret_ref) {
+                vec![ResolvedRefsError::RefNotPermitted {
+                    from_namespace: resource_ns.to_string(),
+                    from_kind: "EdgionTls",
+                    target_namespace: target_ns,
+                    target_name: tls.spec.secret_ref.name.clone(),
+                }]
+            } else {
+                vec![ResolvedRefsError::SecretNotFound {
+                    namespace: target_ns,
+                    name: tls.spec.secret_ref.name.clone(),
+                }]
+            }
         };
 
         let status = tls.status.get_or_insert_with(|| EdgionTlsStatus { parents: vec![] });
@@ -660,6 +733,169 @@ mod tests {
             warnings.iter().any(|w| w.contains("does not match")),
             "should detect cert/key mismatch, got: {:?}",
             warnings
+        );
+    }
+
+    /// Build a HandlerContext whose secret store holds `<secret_ns>/<secret_name>`
+    /// (a `kubernetes.io/tls`-shaped Secret) and, when `grant_from_ns` is `Some`,
+    /// a ReferenceGrant in `secret_ns` allowing `edgion.io/EdgionTls` from that
+    /// namespace to reference `""/Secret`.
+    fn make_ctx_cross_ns(secret_ns: &str, secret_name: &str, grant_from_ns: Option<&str>) -> HandlerContext {
+        use crate::core::controller::conf_mgr::ControllerRuntime;
+        use crate::types::constants::secret_keys::tls::{CERT, KEY};
+        use crate::types::resources::{ReferenceGrant, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use std::collections::{BTreeMap, HashMap};
+
+        let mut data = BTreeMap::new();
+        data.insert(CERT.to_string(), ByteString(b"cert-pem".to_vec()));
+        data.insert(KEY.to_string(), ByteString(b"key-pem".to_vec()));
+        let secret = Secret {
+            metadata: ObjectMeta {
+                name: Some(secret_name.to_string()),
+                namespace: Some(secret_ns.to_string()),
+                ..Default::default()
+            },
+            data: Some(data),
+            ..Default::default()
+        };
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let mut secrets = HashMap::new();
+        secrets.insert(format!("{}/{}", secret_ns, secret_name), secret);
+        runtime.secret_store.replace_all(secrets);
+
+        if let Some(from_ns) = grant_from_ns {
+            let grant = ReferenceGrant {
+                metadata: ObjectMeta {
+                    name: Some("allow-edgiontls".to_string()),
+                    namespace: Some(secret_ns.to_string()),
+                    ..Default::default()
+                },
+                spec: ReferenceGrantSpec {
+                    from: vec![ReferenceGrantFrom {
+                        group: "edgion.io".to_string(),
+                        kind: "EdgionTls".to_string(),
+                        namespace: from_ns.to_string(),
+                    }],
+                    to: vec![ReferenceGrantTo {
+                        group: "".to_string(),
+                        kind: "Secret".to_string(),
+                        name: None,
+                    }],
+                },
+            };
+            runtime
+                .ref_grant_store
+                .upsert(format!("{}/allow-edgiontls", secret_ns), Arc::new(grant));
+        }
+
+        HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime)
+    }
+
+    /// EdgionTls in `owner_ns` whose `secret_ref` points at `secret_ns/secret_name`.
+    fn make_cross_ns_tls(owner_ns: &str, secret_ns: &str, secret_name: &str) -> EdgionTls {
+        let mut tls = make_tls(None, secret_name);
+        tls.metadata.namespace = Some(owner_ns.to_string());
+        tls.spec.secret_ref.namespace = Some(secret_ns.to_string());
+        tls
+    }
+
+    #[tokio::test]
+    async fn test_parse_denies_cross_ns_secret_without_grant() {
+        // The Secret EXISTS in the store; only the missing ReferenceGrant must
+        // keep it out of spec.secret. This is the core exfiltration guard.
+        let ctx = make_ctx_cross_ns("victim-ns", "victim-secret", None);
+        let handler = EdgionTlsHandler::default();
+        let tls = make_cross_ns_tls("attacker-ns", "victim-ns", "victim-secret");
+
+        let result = handler.parse(tls, &ctx).await;
+        let tls = match result {
+            ProcessResult::Continue(t) => t,
+            ProcessResult::Skip { reason } => panic!("unexpected Skip: {reason}"),
+        };
+        assert!(
+            tls.spec.secret.is_none(),
+            "cross-namespace Secret without a ReferenceGrant must not be embedded"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parse_allows_cross_ns_secret_with_grant() {
+        let ctx = make_ctx_cross_ns("victim-ns", "victim-secret", Some("attacker-ns"));
+        let handler = EdgionTlsHandler::default();
+        let tls = make_cross_ns_tls("attacker-ns", "victim-ns", "victim-secret");
+
+        let result = handler.parse(tls, &ctx).await;
+        let tls = match result {
+            ProcessResult::Continue(t) => t,
+            ProcessResult::Skip { reason } => panic!("unexpected Skip: {reason}"),
+        };
+        assert!(
+            tls.spec.secret.is_some(),
+            "cross-namespace Secret WITH a matching ReferenceGrant should resolve"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parse_resolves_same_ns_secret() {
+        // Same-namespace ref is never a cross-ns reference, so no grant is needed.
+        let ctx = make_ctx_cross_ns("test-ns", "test-secret", None);
+        let handler = EdgionTlsHandler::default();
+        let tls = make_cross_ns_tls("test-ns", "test-ns", "test-secret");
+
+        let result = handler.parse(tls, &ctx).await;
+        let tls = match result {
+            ProcessResult::Continue(t) => t,
+            ProcessResult::Skip { reason } => panic!("unexpected Skip: {reason}"),
+        };
+        assert!(
+            tls.spec.secret.is_some(),
+            "same-namespace Secret should resolve without a grant"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parse_registers_cross_ns_ref_for_requeue_on_grant_change() {
+        // A denied cross-ns ref must still be tracked in cross_ns_ref_mgr so that a
+        // later ReferenceGrant addition in the target namespace requeues this EdgionTls
+        // (otherwise it would stay stuck in RefNotPermitted forever).
+        let ctx = make_ctx_cross_ns("victim-ns", "victim-secret", None);
+        let handler = EdgionTlsHandler::default();
+        let tls = make_cross_ns_tls("attacker-ns", "victim-ns", "victim-secret");
+        let expected_ref = ResourceRef::new(
+            ResourceKind::EdgionTls,
+            Some("attacker-ns".to_string()),
+            "test-tls".to_string(),
+        );
+
+        let _ = handler.parse(tls, &ctx).await;
+
+        let tracked = ctx.runtime().cross_ns_ref_mgr.get_refs("victim-ns");
+        assert!(
+            tracked.contains(&expected_ref),
+            "cross-ns secret ref must be tracked under the target namespace, got: {:?}",
+            tracked
+        );
+    }
+
+    #[test]
+    fn test_update_status_reports_ref_not_permitted_for_cross_ns_without_grant() {
+        let ctx = make_ctx_cross_ns("victim-ns", "victim-secret", None);
+        let handler = EdgionTlsHandler::default();
+        let mut tls = make_cross_ns_tls("attacker-ns", "victim-ns", "victim-secret");
+        tls.spec.parent_refs = Some(vec![make_parent_ref("my-gw", "attacker-ns")]);
+        // spec.secret stays None (the denied/unresolved state parse() leaves behind).
+
+        handler.update_status(&mut tls, &ctx, &[]);
+
+        let conditions = &tls.status.as_ref().unwrap().parents[0].conditions;
+        let resolved = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
+        assert_eq!(resolved.status, "False");
+        assert_eq!(
+            resolved.reason, "RefNotPermitted",
+            "cross-ns denial should surface RefNotPermitted, not a perpetual SecretNotFound"
         );
     }
 

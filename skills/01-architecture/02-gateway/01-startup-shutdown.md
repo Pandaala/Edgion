@@ -92,7 +92,7 @@ runtime.block_on(Self::start_auxiliary_services(config_client.clone()));
 `start_auxiliary_services()` starts four components:
 1. **BackendCleaner**: `BackendCleaner::new().start()`, cleans up stale backend state for LeastConnection LB.
 2. **Health Check Manager**: `get_hc_config_store()` + `get_health_check_manager()` initialize the health-check configuration store and manager.
-3. **Admin API**: `tokio::spawn(api::serve(config_client, admin_listen))`, listens on the address from `gateway.admin_listen` (default `0.0.0.0:5810`).
+3. **Admin API**: `tokio::spawn(api::serve(config_client, admin_listen))`, listens on the address from `gateway.admin_listen` (default `127.0.0.1:5810`, loopback; set `0.0.0.0` to expose over the pod IP for a kubelet `httpGet` probe).
 4. **Metrics API**: `tokio::spawn(metrics::serve(5901))`, port 5901, exposes Prometheus metrics.
 
 ### Step 9: Wait for all caches to be ready

@@ -73,4 +73,3 @@ pub fn arc_map_to_owned<T: Clone>(data: &HashMap<String, Arc<T>>) -> HashMap<Str
 pub fn arc_map_into_owned<T: Clone>(data: HashMap<String, Arc<T>>) -> HashMap<String, T> {
     data.into_iter().map(|(k, v)| (k, (*v).clone())).collect()
 }
-

@@ -72,7 +72,7 @@ edgion-gateway [OPTIONS]
 | `--work-dir` | `-w` | `PathBuf` | `"."` | Working directory |
 | `--config-file` | `-c` | `String` | `config/edgion-gateway.yaml` | YAML configuration file path |
 | `--server-addr` | — | `String` | **Required** | Controller gRPC address (e.g., `http://127.0.0.1:50051`) |
-| `--admin-listen` | — | `String` | `0.0.0.0:5810` | Admin API listen address (default: `0.0.0.0:5810`) |
+| `--admin-listen` | — | `String` | `127.0.0.1:5810` | Admin API listen address (default: `127.0.0.1:5810`, loopback; set `0.0.0.0` to expose over the pod IP, e.g. a kubelet `httpGet` probe) |
 | `--threads` | — | `usize` | CPU core count | Pingora worker thread count |
 | `--work-stealing` | — | `bool` | `true` | Tokio task stealing |
 | `--grace-period` | — | `u64` | `30` | Graceful shutdown wait time in seconds |

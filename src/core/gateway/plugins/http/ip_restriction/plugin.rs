@@ -42,14 +42,34 @@ use crate::types::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig
 pub struct IpRestriction {
     name: String,
     config: IpRestrictionConfig,
+    /// True when `validate_and_init` failed at construction; requests are then
+    /// denied (fail-closed) instead of evaluated against uncompiled matchers.
+    init_failed: bool,
 }
 
 impl IpRestriction {
     /// Create a new IpRestriction plugin from configuration
     pub fn create(config: &IpRestrictionConfig) -> Box<dyn RequestFilter> {
+        // `allow_matcher` / `deny_matcher` are `#[serde(skip)]`, so they are `None`
+        // after gRPC/YAML deserialization. Compile them here via `validate_and_init`;
+        // without this the evaluator falls through to `Default(Allow)` and the ACL is
+        // silently fail-open. Mirror the stream-layer fail-closed pattern on failure.
+        let mut config = config.clone();
+        let init_failed = if let Err(e) = config.validate_and_init() {
+            tracing::error!(
+                error = %e,
+                label = "HTTP plugin",
+                "Failed to initialize IpRestrictionConfig; all requests will be denied",
+            );
+            true
+        } else {
+            false
+        };
+
         let ip_restriction = IpRestriction {
             name: "IpRestriction".to_string(),
-            config: config.clone(),
+            config,
+            init_failed,
         };
 
         Box::new(ip_restriction)
@@ -79,6 +99,17 @@ impl RequestFilter for IpRestriction {
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         use crate::types::resources::edgion_plugins::AccessDecision;
+
+        // Fail-closed: if matcher compilation failed at construction, deny every
+        // request rather than fall through to the (uncompiled) default action.
+        if self.init_failed {
+            plugin_log.push_err("ip init fail");
+            let body = Bytes::from(serde_json::json!({"message": "Access denied"}).to_string());
+            if let Err(_e) = send_gateway_plain_error_response(session, 403, "application/json", body).await {
+                plugin_log.push_err("write response fail");
+            }
+            return PluginRunningResult::ErrTerminateRequest;
+        }
 
         let client_ip_opt = self.get_client_ip(session);
 
@@ -221,6 +252,46 @@ mod tests {
 
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(plugin_log.contains("deny:no-client-ip"));
+    }
+
+    /// Regression for fr-types-01: a config arriving via the gRPC/YAML path has
+    /// `allow_matcher`/`deny_matcher` == None (they are `#[serde(skip)]`). `create`
+    /// must compile them via `validate_and_init`; otherwise the evaluator falls
+    /// through to `Default(Allow)` and the whitelist is silently fail-open.
+    #[tokio::test]
+    async fn test_create_compiles_matchers_whitelist_enforced() {
+        // Build the config exactly as deserialization yields it: matchers are None
+        // and we do NOT route through `IpRestrictionConfig::new` (which would pre-build
+        // them and mask the constructor bug). default_action stays Allow (the default).
+        let config = IpRestrictionConfig {
+            allow: Some(vec![IpGroup {
+                name: "default".into(),
+                description: None,
+                cidrs: vec!["192.168.1.0/24".into()],
+            }]),
+            deny: None,
+            default_action: DefaultAction::Allow,
+            ip_source: IpSource::ClientIp,
+            message: None,
+            status: 403,
+            allow_matcher: None,
+            deny_matcher: None,
+        };
+
+        let plugin = IpRestriction::create(&config);
+        let mut mock_session = MockPluginSession::new();
+        let mut plugin_log = PluginLog::new("IpRestriction");
+
+        // An IP outside the allow list must be denied (pre-fix: silently allowed).
+        mock_session.expect_remote_addr().return_const("10.0.0.1".to_string());
+        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
+        mock_session.expect_shutdown().returning(|| {});
+
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(plugin_log.contains("deny:not-in-allow"));
     }
 
     #[tokio::test]

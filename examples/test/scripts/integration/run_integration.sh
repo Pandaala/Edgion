@@ -965,6 +965,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_RequestMirror" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestMirror" || test_failed=true
                     run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
                     run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
+                    run_test "EdgionPlugins_IpRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i IpRestriction" || test_failed=true
                     run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
                     run_test "EdgionPlugins_PathNormalization_ForwardView" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
                     run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
@@ -1137,6 +1138,7 @@ run_all_tests() {
         run_test "EdgionPlugins_RequestMirror" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestMirror" || test_failed=true
         run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
         run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
+        run_test "EdgionPlugins_IpRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i IpRestriction" || test_failed=true
         run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
         run_test "EdgionPlugins_PathNormalization_ForwardView" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
         run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true

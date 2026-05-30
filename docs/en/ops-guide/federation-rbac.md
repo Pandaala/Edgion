@@ -348,8 +348,8 @@ needs.
 
 **2. Wildcard read exposes credential material.**
 There is no server-side `Secret` backstop on the cli-token path. Using
-`kinds: ["*"]` with `get`, `list`, or `list-keys` lets the token read `Secret`
-and `EdgionTls` private-key material via the blind proxy. Always enumerate
+`kinds: ["*"]` with `get`, `list`, `list-keys`, or `watch` lets the token read
+`Secret` and `EdgionTls` private-key material via the blind proxy. Always enumerate
 concrete kinds for any read grant. See the [wildcard-read security note](#wildcard-read-exposes-credential-material) above.
 
 **3. Verb and kind strings are canonical-cased.**

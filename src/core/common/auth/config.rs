@@ -122,6 +122,15 @@ impl AdminAuthConfig {
         if self.jwks_max_response_bytes == 0 {
             return Some("auth.jwks_max_response_bytes must be greater than 0");
         }
+        // Guard against fr-cauth-01: an operator must not be able to add a business
+        // route to the auth skip-set. A skipped business route slips past unified_auth
+        // and (on the Controller) gets Superuser via the assign_superuser fallback, or
+        // (on the Center, which has no authz layer) becomes fully unauthenticated.
+        for p in &self.skip_paths {
+            if !skip_path_is_allowlisted(p) {
+                return Some(SKIP_PATHS_ALLOWLIST_ERR);
+            }
+        }
         None
     }
 
@@ -145,6 +154,22 @@ fn default_jwks_min_refresh_interval() -> u64 {
 
 fn default_skip_paths() -> Vec<String> {
     vec!["/health".to_string(), "/ready".to_string()]
+}
+
+/// Error returned when a `skip_paths` entry is outside the allowed set.
+pub(crate) const SKIP_PATHS_ALLOWLIST_ERR: &str =
+    "skip_paths entries must be exactly /health, /ready, /metrics, or start with /api/v1/auth/";
+
+/// Whether an operator-supplied `skip_paths` entry is safe to bypass authentication.
+///
+/// Only the public probe endpoints (`/health`, `/ready`, `/metrics`) and the public
+/// auth endpoints (`/api/v1/auth/...`, which are unauthenticated by design) may be
+/// skipped. Any other path — in particular a business route like
+/// `/api/v1/cluster/httproute` — must NOT be skippable, because a skipped route is
+/// unauthenticated and (on the Controller) is granted Superuser by the
+/// `assign_superuser_if_no_role` fallback. See finding fr-cauth-01.
+pub(crate) fn skip_path_is_allowlisted(path: &str) -> bool {
+    matches!(path, "/health" | "/ready" | "/metrics") || path.starts_with("/api/v1/auth/")
 }
 
 fn default_discovery_max_response_bytes() -> usize {
@@ -210,6 +235,35 @@ mod tests {
         let set = config.skip_paths_set();
         assert!(set.contains("/health"));
         assert!(set.contains("/ready"));
+    }
+
+    #[test]
+    fn test_skip_paths_business_route_rejected() {
+        // fr-cauth-01: a business route in skip_paths must be rejected at validation.
+        let config = AdminAuthConfig {
+            enabled: true,
+            discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+            skip_paths: vec!["/health".to_string(), "/api/v1/cluster/httproute".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(config.validate(), Some(SKIP_PATHS_ALLOWLIST_ERR));
+    }
+
+    #[test]
+    fn test_skip_paths_allowlist_accepted() {
+        // The allowed set (probe + public auth endpoints) must pass validation.
+        let config = AdminAuthConfig {
+            enabled: true,
+            discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+            skip_paths: vec![
+                "/health".to_string(),
+                "/ready".to_string(),
+                "/metrics".to_string(),
+                "/api/v1/auth/login".to_string(),
+            ],
+            ..Default::default()
+        };
+        assert!(config.validate().is_none());
     }
 
     #[test]
