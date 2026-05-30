@@ -1,6 +1,6 @@
 # HMAC Auth Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > HmacAuth is an HMAC signature authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 

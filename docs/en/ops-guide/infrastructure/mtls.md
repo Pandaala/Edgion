@@ -1,6 +1,6 @@
 # mTLS Configuration
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > mTLS configuration is implemented through the `EdgionTls` CRD. This is an Edgion extension feature, not part of the standard Gateway API specification.
 

@@ -1,6 +1,6 @@
 # Access Log User Guide
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > The access log format and plugin log structure are features specific to Edgion Gateway.
 

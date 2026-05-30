@@ -1,6 +1,6 @@
 # ResponseRewrite Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > ResponseRewrite is a response rewriting plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
@@ -407,4 +407,5 @@ spec:
 ## Related Links
 
 - [ProxyRewrite](./proxy-rewrite.md) — Request rewriting
-- [RequestHeaderModifier](../gateway-api/request-header-modifier.md) — Gateway API standard request header modification
+- [RateLimit](./rate-limit.md) — Rate limiting
+- [Filters Overview](../overview.md) — All HTTPRoute filters

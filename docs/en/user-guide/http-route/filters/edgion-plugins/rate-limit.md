@@ -1,6 +1,6 @@
 # RateLimit (HTTPRoute Filter)
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > RateLimit is a request rate limiting plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 
@@ -38,13 +38,21 @@ metadata:
   name: api-rate-limit
   namespace: production
 spec:
-  plugins:
-    - RateLimit:
+  requestPlugins:
+    - type: RateLimit
+      config:
+        # Allowed requests per interval
+        rate: 100
+        interval: "60s"
         key:
           - type: clientIp
-        limit: 100
-        window: "60s"
 ```
+
+> **Schema note**: RateLimit runs in the `requestPlugins` phase and uses the
+> `type` / `config` plugin-entry form. The fields are `rate` (max requests per
+> interval) and `interval` (the time window) — there are no `limit` / `window`
+> fields. See the [standalone plugin page](../../../edgion-plugins/rate-limit.md)
+> for the full parameter table.
 
 ## Related Links
 

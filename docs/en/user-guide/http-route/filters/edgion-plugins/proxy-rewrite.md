@@ -1,6 +1,6 @@
 # ProxyRewrite Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > ProxyRewrite is a request rewriting plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
@@ -120,6 +120,38 @@ config:
 ```
 
 **Effect**: `/api/users/456` → `/internal/users/id/456`
+
+### Regex rewrite (`ProxyRewriteRegex` mode)
+
+> **Note on `ProxyRewriteRegex`**: There is **no separate `ProxyRewriteRegex`
+> plugin type**. Regex-based URI rewriting is the `regexUri` mode of the single
+> `ProxyRewrite` plugin (`type: ProxyRewrite`). The capture-group rewrite shown
+> in scenarios 4 and 5 above *is* the "ProxyRewriteRegex" behavior. Use the
+> `uri` field for a static path and the `regexUri` field (with `pattern` +
+> `replacement`) when you need to capture parts of the incoming path.
+
+The two URI-rewrite modes are mutually exclusive in effect — when both `uri` and
+`regexUri` are set, `uri` wins and `regexUri` is ignored:
+
+| Mode | Field | When to use |
+|------|-------|-------------|
+| Static | `uri` | The upstream path is a fixed string (optionally with `$uri` / `$arg_*` variables). |
+| Regex | `regexUri.pattern` + `regexUri.replacement` | The upstream path must capture segments of the request path via `$1`, `$2`, … |
+
+```yaml
+# Capture and reshape the path, and inject a marker header.
+config:
+  regexUri:
+    pattern: "^/api/v[0-9]+/users/([0-9]+)/profile$"
+    replacement: "/internal/profile/$1"
+  headers:
+    set:
+      - name: X-Rewritten-By
+        value: "edgion"
+```
+
+**Effect**: `/api/v2/users/42/profile` → `/internal/profile/42` (the original
+query string is preserved automatically).
 
 ### 6. Host Rewrite
 

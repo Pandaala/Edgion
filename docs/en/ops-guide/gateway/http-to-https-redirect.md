@@ -1,6 +1,6 @@
 # HTTP to HTTPS Redirect Guide
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > This feature is implemented through Edgion custom Annotations and is not part of the standard Gateway API specification.
 
@@ -72,7 +72,7 @@ spec:
 
 ## Annotation Reference
 
-> **🔌 Edgion Extension Annotations**
+> **🔌 Edgion extension annotations**
 > 
 > The following Annotations use the `edgion.io/` prefix and are extension configurations for Edgion Gateway.
 

@@ -1,6 +1,6 @@
 # Basic Auth Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > BasicAuth is an authentication plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 

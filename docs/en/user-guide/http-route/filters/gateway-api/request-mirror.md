@@ -1,48 +1,117 @@
 # RequestMirror
 
-RequestMirror is a standard Gateway API HTTPRoute filter used to mirror requests to another backend.
+## Overview
 
-In Edgion, this capability commonly appears in two forms:
+`RequestMirror` copies a fraction of incoming requests to a second backend while the original request is still served normally by the route's primary backend. It is a standard Gateway API filter and runs in the request stage. Mirroring is fire-and-forget: the mirrored response is discarded and never affects the client, so it is safe for shadow testing a new service version against live traffic.
 
-1. directly as the standard HTTPRoute `RequestMirror` filter
-2. as a reusable `EdgionPlugins` `RequestMirror` configuration
+## Configuration
 
-If you only want standard Gateway API usage, start here. If you want reusable mirror logic as a plugin resource, continue to the extension page.
+```yaml
+filters:
+  - type: RequestMirror
+    requestMirror:
+      backendRef:
+        name: mirror-service
+        port: 8080
+      fraction:
+        numerator: 10
+        denominator: 100
+```
 
-## Minimal example
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `backendRef` | Object | **Required** | The backend to mirror traffic to: `{name, port}` |
+| `fraction` | Object | mirror all | Portion of requests to mirror: `{numerator, denominator}` |
+| `connectTimeoutMs` | Integer | `1000` | Connect timeout for the mirror request, in milliseconds |
+| `writeTimeoutMs` | Integer | `1000` | Write timeout for the mirror request, in milliseconds |
+| `maxBufferedChunks` | Integer | `5` | Maximum number of body chunks buffered for mirroring |
+| `mirrorLog` | Boolean | `true` | Whether the mirror produces its own access log entry |
+| `maxConcurrent` | Integer | `1024` | Maximum number of concurrent in-flight mirror tasks per gateway process |
+| `channelFullTimeoutMs` | Integer | `0` | How long to wait for queue space when the mirror channel is full, in milliseconds; `0` abandons the mirror immediately |
+
+### `fraction` sub-fields
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `fraction.numerator` | Integer | none | Numerator of the mirrored fraction |
+| `fraction.denominator` | Integer | `100` | Denominator of the mirrored fraction |
+
+## Examples
+
+### Example 1: Mirror all traffic to a shadow service
+
+Send a copy of every request to a new version of the service for comparison.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: request-mirror-route
+  name: shadow-route
+  namespace: production
 spec:
   parentRefs:
-    - name: public-gateway
-      sectionName: http
+    - name: main-gateway
   rules:
     - matches:
         - path:
             type: PathPrefix
-            value: /
+            value: /api/
       filters:
         - type: RequestMirror
           requestMirror:
             backendRef:
-              name: mirror-service
+              name: api-service-v2
               port: 8080
       backendRefs:
-        - name: primary-service
+        - name: api-service
           port: 8080
 ```
 
-## What matters in Edgion
+### Example 2: Mirror 10% with bounded resource usage
 
-- the primary request and the mirrored request use the same underlying RequestMirror runtime
-- mirroring is asynchronous and does not determine primary request success
-- if you want reusable configuration, central references, or richer Edgion-specific operational tuning, use the `EdgionPlugins` form instead
+Mirror only a tenth of traffic and cap the concurrency and buffering so the mirror cannot back-pressure the primary path.
 
-## Continue reading
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: sampled-shadow-route
+  namespace: production
+spec:
+  parentRefs:
+    - name: main-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/
+      filters:
+        - type: RequestMirror
+          requestMirror:
+            backendRef:
+              name: api-service-v2
+              port: 8080
+            # Mirror 10% of requests
+            fraction:
+              numerator: 10
+              denominator: 100
+            connectTimeoutMs: 1000
+            writeTimeoutMs: 1000
+            maxBufferedChunks: 5
+            maxConcurrent: 1024
+      backendRefs:
+        - name: api-service
+          port: 8080
+```
 
-- [Edgion extension Request Mirror plugin](../edgion-plugins/request-mirror.md)
-- [Filters Overview](../overview.md)
+## Notes
+
+- The mirror is non-blocking: the client always receives the primary backend's response, and the mirrored response is discarded.
+- If the mirror queue is full and `channelFullTimeoutMs` elapses, the mirror for that request is dropped rather than delaying the original request.
+- This is the standard Gateway API mirror, which targets a `backendRef`. For richer mirroring options — such as mirroring to an external destination or finer control beyond a `backendRef` — see the [Edgion RequestMirror plugin](../edgion-plugins/request-mirror.md).
+
+## Related documents
+
+- [Edgion RequestMirror plugin](../edgion-plugins/request-mirror.md)
+- [RequestHeaderModifier](./request-header-modifier.md)
+- [Plugin Composition and Execution Order](../plugin-composition.md)

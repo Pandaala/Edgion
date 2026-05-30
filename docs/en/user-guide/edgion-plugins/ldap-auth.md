@@ -1,6 +1,6 @@
 # LDAP Auth Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > LdapAuth is an LDAP directory authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 

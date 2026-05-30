@@ -1,6 +1,6 @@
 # Stream Plugins User Guide
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > `EdgionStreamPlugins` is an Edgion custom CRD that provides access control for stream-style connections.
 

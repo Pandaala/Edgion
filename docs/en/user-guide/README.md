@@ -78,6 +78,11 @@ This section is intended for application developers and covers how to configure 
 - [Backend Configuration](./udp-route/backends/overview.md)
 - [Stream Plugins](./tcp-route/stream-plugins.md) (shared with TCPRoute)
 
+### TLSRoute
+
+- [TLSRoute Overview](./tls-route/overview.md)
+- [Backend Configuration](./tls-route/backends/overview.md)
+
 ### Advanced Features
 
 - Canary Release: start with [Weight Configuration](./http-route/backends/weight.md)

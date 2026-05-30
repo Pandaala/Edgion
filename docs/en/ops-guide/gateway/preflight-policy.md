@@ -1,6 +1,6 @@
 # Preflight Request Handling Policy
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > The preflight policy is configured through the `EdgionGatewayConfig` CRD and is an Edgion extension feature.
 

@@ -1,114 +1,104 @@
 # HTTPRoute Overview
 
-HTTPRoute is the core resource in Gateway API for defining HTTP routing rules.
+HTTPRoute is the core Gateway API resource for routing HTTP/HTTPS traffic, mapping incoming requests to backend services based on match conditions, applying filters, and splitting traffic across backends.
 
-## Basic Structure
+## Basic structure
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: example-route
-  namespace: default
+  namespace: production
 spec:
-  parentRefs:           # Which Gateway to bind to
-    - name: my-gateway
+  # Which Gateway listener(s) to attach to
+  parentRefs:
+    - name: main-gateway
       sectionName: http
-  hostnames:            # Hostnames to match
-    - "example.com"
-  rules:                # List of routing rules
-    - matches:          # Match conditions
+  # Host header values this route matches
+  hostnames:
+    - "app.example.com"
+  rules:
+    - matches:
         - path:
             type: PathPrefix
             value: /api
-      filters:          # Filters (optional)
-        - type: RequestHeaderModifier
-          requestHeaderModifier:
-            add:
-              - name: X-Custom-Header
-                value: "value"
-      backendRefs:      # Backend services
+      backendRefs:
         - name: api-service
           port: 8080
-          weight: 100
 ```
 
-Key fields:
+Key top-level fields:
 
 | Field | Description |
 |-------|-------------|
-| `parentRefs` | Binds the route to one or more Gateway listeners |
-| `hostnames` | Matches the Host header of requests (exact or wildcard) |
-| `rules` | List of routing rules, each containing matches, filters, and backendRefs |
+| `parentRefs` | Attaches the route to one or more Gateway listeners |
+| `hostnames` | Matches the request Host header (exact or `*.` wildcard) |
+| `rules` | List of routing rules, each with matches, filters, and backendRefs |
 
-## Core Concepts
+## Core concepts
 
 ### ParentRefs
 
-Specifies which listener of which Gateway this route binds to:
+`parentRefs` attaches the route to a Gateway listener. The Controller intersects the route's hostnames with the listener's hostnames and binds the route only to matching listeners.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | String | Yes | Gateway name |
-| `namespace` | String | No | Gateway namespace (defaults to the route's namespace) |
-| `sectionName` | String | No | Listener name |
+| `name` | String | **Required** | Gateway name |
+| `namespace` | String | none | Gateway namespace; cross-namespace requires a `ReferenceGrant` |
+| `sectionName` | String | none | Specific listener name on the Gateway |
+| `port` | Integer | none | Specific listener port |
 
-A single HTTPRoute can reference multiple parentRefs to share routing rules across Gateways.
+A single HTTPRoute can reference multiple Gateways to share routing rules. See [Backend configuration](./backends/README.md) for cross-namespace details.
 
 ### Rules
 
-Each Rule is an independent routing decision unit containing match conditions, filters, and backend references. Multiple Rules are evaluated in declaration order; the first matching Rule takes effect.
+Each entry in `rules` is an independent routing decision unit containing match conditions, filters, and backend references. When a request matches multiple rules, the most specific match wins (longer path prefixes and exact paths take precedence over shorter prefixes).
 
 ### Matches
 
-Defines request match conditions across multiple dimensions:
-
-- **Path matching**: `PathPrefix`, `Exact`, `RegularExpression`
-- **Header matching**: Exact or regex matching on HTTP headers
-- **Query parameter matching**: Matching on URL query parameters
-- **Method matching**: Matching on HTTP methods (GET, POST, etc.)
-
-Conditions within the same Match are ANDed; multiple Matches are ORed. See [Match Rules](./matches/README.md) for details.
+`matches` defines the conditions a request must satisfy. You can match on path, headers, query parameters, and HTTP method. Conditions inside a single match are ANDed; multiple matches in one rule are ORed. See [Match rules](./matches/README.md).
 
 ### Filters / Plugins
 
-Executes processing logic before requests reach the backend or before responses are returned to the client:
+`filters` run processing logic before the request reaches the backend or before the response returns to the client:
 
-- **Gateway API standard Filters**: `RequestHeaderModifier`, `ResponseHeaderModifier`, `RequestRedirect`, `URLRewrite`, `RequestMirror`, etc.
-- **Edgion extension Plugins**: Reference `EdgionPlugins` CRDs via `ExtensionRef` for advanced features such as rate limiting, authentication, and CORS.
+- **Gateway API standard filters**: `RequestHeaderModifier`, `ResponseHeaderModifier`, `RequestRedirect`, `URLRewrite`, `RequestMirror`, native `CORS`, and `ExternalAuth`.
+- **Edgion extension plugins**: referenced through `ExtensionRef` pointing at an `EdgionPlugins` resource (rate limiting, authentication, DSL, and more).
 
-See [Filters](./filters/README.md) for details.
+`URLRewrite` and `RequestRedirect` are mutually exclusive within the same rule. See [Filters](./filters/README.md).
 
 ### BackendRefs
 
-Defines the list of backend services for traffic forwarding:
+`backendRefs` lists the backend services that receive matched traffic:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | String | Yes | Service name |
-| `port` | Integer | Yes | Port number |
-| `weight` | Integer | No | Weight (default `1`), used for weighted round-robin |
+| `name` | String | **Required** | Service name |
+| `port` | Integer | none | Target port |
+| `weight` | Integer | `1` | Traffic weight, interpreted as a ratio for weighted round-robin |
+| `namespace` | String | none | Service namespace; cross-namespace requires a `ReferenceGrant` |
 
-Supports multi-backend weighted traffic splitting for canary releases and blue-green deployments. See [Backend Configuration](./backends/README.md) for details.
+Multiple weighted backends enable canary releases and blue-green deployments. See [Backend configuration](./backends/README.md) and [Load balancing algorithms](./lb-algorithms.md).
 
-## Full Example
+## Complete example
 
-The following example demonstrates an HTTPRoute with multiple rules, covering path matching, header modification, traffic splitting, and more:
+This HTTPRoute covers path matching, header modification, traffic splitting, and a redirect across several rules:
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: app-route
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
       sectionName: http
   hostnames:
     - "app.example.com"
   rules:
-    # Rule 1: API routing with custom header
+    # Rule 1: API v2 routing with a custom header
     - matches:
         - path:
             type: PathPrefix
@@ -120,10 +110,10 @@ spec:
               - name: X-API-Version
                 value: "v2"
       backendRefs:
-        - name: api-v2
+        - name: api-v2-service
           port: 8080
 
-    # Rule 2: Canary release, 90% to stable, 10% to canary
+    # Rule 2: Canary release — 90% stable, 10% canary
     - matches:
         - path:
             type: PathPrefix
@@ -136,7 +126,7 @@ spec:
           port: 8080
           weight: 10
 
-    # Rule 3: Redirect old path
+    # Rule 3: Redirect a retired path
     - matches:
         - path:
             type: Exact
@@ -149,17 +139,28 @@ spec:
               replaceFullPath: /new-page
             statusCode: 301
 
-    # Rule 4: Default backend
-    - backendRefs:
-        - name: frontend
-          port: 3000
+    # Rule 4: Default backend with resilience policies
+    - timeouts:
+        request: "30s"
+        backendRequest: "10s"
+      retry:
+        attempts: 3
+        backoff: "1s"
+        codes:
+          - 502
+          - 503
+          - 504
+      backendRefs:
+        - name: frontend-service
+          port: 8080
 ```
 
-## Sub-document Navigation
+## Subdocument navigation
 
 | Topic | Document | Description |
 |-------|----------|-------------|
-| Match Rules | [matches/](./matches/README.md) | Path, header, query parameter, and method matching |
-| Filters | [filters/](./filters/README.md) | Gateway API standard Filters and Edgion extension Plugins |
-| Backend Configuration | [backends/](./backends/README.md) | Multi-backend traffic splitting, weights, cross-namespace references |
-| Resilience | [resilience/](./resilience/) | Timeout, retry, circuit breaker, and other resilience policies |
+| Match rules | [matches/](./matches/README.md) | Path, header, query parameter, and method matching |
+| Filters | [filters/](./filters/README.md) | Gateway API standard filters and Edgion extension plugins |
+| Backend configuration | [backends/](./backends/README.md) | Weighted traffic splitting, cross-namespace references, health checks |
+| Load balancing | [lb-algorithms.md](./lb-algorithms.md) | RoundRobin, ConsistentHash, LeastConnection, and EWMA algorithms |
+| Resilience | [resilience/](./resilience/README.md) | Timeouts, retries, and session persistence |

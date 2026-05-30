@@ -1,6 +1,6 @@
 # Backend Active Health Check
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 >
 > This feature enables active probing for backends via the `edgion.io/health-check` Annotation, and is an Edgion extension capability.
 
@@ -189,11 +189,12 @@ metadata:
 
 ## Notes
 
-1. `expectedStatuses` only applies to `http` mode; `tcp` and `grpc` modes ignore this field.
-2. `path` must start with `/`, otherwise the configuration is considered invalid and ignored. Only applies to `http` mode.
+1. `expectedStatuses` only applies to `http` mode; `tcp` and `grpc` modes ignore this field. For `http`, the list must be non-empty and every entry must be a valid HTTP status code (100–599).
+2. `path` applies to `http` mode only and must not be empty; an empty `path` makes the whole configuration invalid, so it is ignored. Use a leading-slash path such as `/healthz`.
 3. `healthyThreshold` and `unhealthyThreshold` must be greater than or equal to `1`.
-4. Services without health check configuration are not probed and participate in load balancing as "healthy" by default.
-5. `grpcServiceName` only applies to `grpc` mode. An empty string (default) checks the overall server health.
+4. `interval` and `timeout` must parse to a non-zero duration (for example `10s`, `500ms`); otherwise the configuration is rejected.
+5. Services without health check configuration are not probed and participate in load balancing as "healthy" by default.
+6. `grpcServiceName` only applies to `grpc` mode. An empty string (default) checks the overall server health.
 
 ## Current Limitations
 

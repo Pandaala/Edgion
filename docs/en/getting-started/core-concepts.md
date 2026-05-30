@@ -27,17 +27,16 @@ controllerName: edgion.io/gateway-controller
 
 That tells Gateway API that Edgion is the controller responsible for this class.
 
-## 3. Gateway defines traffic entry points
+## 3. Gateway and Listeners define traffic entry points
 
-`Gateway` defines:
+A `Gateway` is the traffic entry declaration. It is made up of one or more **listeners**, where each listener defines:
 
-- which listeners exist
-- which protocol each listener uses
+- which protocol it uses (HTTP, HTTPS, TLS, TCP, UDP)
 - which port it listens on
 - whether TLS is required
 - which routes are allowed to bind
 
-You can think of it as the traffic entry declaration.
+Routes attach to a specific listener by name through `sectionName`. See more: [Gateway Resource Overview](../ops-guide/gateway/overview.md).
 
 ## 4. Route resources define matching and forwarding
 
@@ -66,11 +65,11 @@ Besides standard Gateway API resources, Edgion provides extensions such as:
 
 These are typically used for:
 
-- HTTP, TCP, and TLS plugins
-- finer-grained TLS behavior
-- gateway-level advanced configuration
+- HTTP and stream (TCP/UDP) plugins — see [Filters Overview](../user-guide/http-route/filters/overview.md)
+- finer-grained TLS behavior — see [EdgionTls](../ops-guide/gateway/tls/edgion-tls.md)
+- gateway-level advanced configuration — see [EdgionGatewayConfig reference](../ops-guide/configuration/edgion-gateway-config.md)
 
-When you see the `🔌 Edgion Extension` marker in the docs, that feature is not part of standard Gateway API.
+When you see the `🔌 Edgion extension` marker in the docs, that feature is not part of standard Gateway API.
 
 ## 6. Recommended learning order
 

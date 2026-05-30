@@ -1,8 +1,8 @@
 # AllEndpointStatus Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 >  
-> AllEndpointStatus is a backend endpoint fan-out probe plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
+> AllEndpointStatus is a backend endpoint fan-out probe plugin provided by the `EdgionPlugins` CRD; it is not part of standard Gateway API.
 
 ## What is AllEndpointStatus?
 
@@ -91,36 +91,89 @@ All parameters have hard limits. The effective value is the three-layer minimum:
 
 ## Response Format
 
-The plugin returns `200 OK` with `Content-Type: application/json`. The response body is a JSON array, with one element per endpoint:
+The plugin returns `200 OK` with `Content-Type: application/json`. The body is a JSON object with a `summary` block and a `backends` array; each backend carries an `endpoints` array (one element per endpoint). Field names use snake_case.
 
 ```json
-[
-  {
-    "endpoint": "10.0.0.1:8080",
-    "status": 200,
-    "latencyMs": 12,
-    "body": "{\"status\":\"ok\"}",
-    "headers": {}
+{
+  "summary": {
+    "total_backends": 1,
+    "total_endpoints": 2,
+    "success_count": 1,
+    "failure_count": 1,
+    "truncated": false,
+    "timeout_ms": 2000,
+    "wall_timeout_ms": 10000,
+    "total_latency_ms": 42,
+    "total_response_bytes": 17,
+    "wall_timeout_hit": false
   },
-  {
-    "endpoint": "10.0.0.2:8080",
-    "status": 503,
-    "latencyMs": 2001,
-    "body": "service unavailable",
-    "headers": {}
-  }
-]
+  "backends": [
+    {
+      "name": "api-service",
+      "namespace": "production",
+      "port": 8080,
+      "endpoint_count": 2,
+      "endpoints": [
+        {
+          "address": "10.0.0.1:8080",
+          "status": 200,
+          "latency_ms": 12,
+          "body": "{\"status\":\"ok\"}",
+          "body_truncated": false,
+          "error": null
+        },
+        {
+          "address": "10.0.0.2:8080",
+          "status": null,
+          "latency_ms": 0,
+          "body": null,
+          "body_truncated": false,
+          "error": "wall timeout exceeded"
+        }
+      ]
+    }
+  ]
+}
 ```
+
+### `summary` fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `endpoint` | String | Endpoint address (`host:port`) |
-| `status` | Integer | HTTP status code; `-1` on connection failure |
-| `latencyMs` | Integer | Request latency in milliseconds |
-| `body` | String | Response body (truncated to `maxBodySize`) |
-| `headers` | Object | Response headers (only present when `includeResponseHeaders: true`) |
+| `total_backends` | Integer | Number of backends probed |
+| `total_endpoints` | Integer | Number of endpoints probed across all backends |
+| `success_count` | Integer | Endpoints that returned a 2xx/3xx status |
+| `failure_count` | Integer | Endpoints that returned a non-2xx status or failed |
+| `truncated` | Boolean | `true` if the endpoint count exceeded `maxEndpoints` and was capped |
+| `timeout_ms` | Integer | Effective per-endpoint timeout used |
+| `wall_timeout_ms` | Integer | Effective wall-clock timeout used |
+| `total_latency_ms` | Integer | Wall-clock time for the whole fan-out, in milliseconds |
+| `total_response_bytes` | Integer | Total response body bytes fetched across all endpoints |
+| `wall_timeout_hit` | Boolean | `true` if the wall timeout cancelled some endpoints |
 
-When an endpoint is cancelled due to wall timeout, `status` is `-1` and `body` is `"wall timeout exceeded"`.
+### `backends[]` fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | String | Backend Service name |
+| `namespace` | String | Backend namespace |
+| `port` | Integer | Backend port |
+| `endpoint_count` | Integer | Number of endpoints for this backend |
+| `endpoints` | Array | Per-endpoint results (see below) |
+
+### `endpoints[]` fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `address` | String | Endpoint address (`host:port`) |
+| `status` | Integer | HTTP status code; `null` when the probe failed before a response |
+| `latency_ms` | Integer | Round-trip latency in milliseconds |
+| `body` | String | Response body (truncated to `maxBodySize`); `null` when the probe failed or no body was read |
+| `body_truncated` | Boolean | `true` if the body was cut off at the `maxBodySize` limit |
+| `headers` | Object | Response headers. Present only when `includeResponseHeaders: true` |
+| `error` | String | Error description; `null` on success |
+
+When an endpoint fails — connection failure or the `wallTimeoutMs` deadline — `status` is `null` and `error` carries the reason (a connection error, or `"wall timeout exceeded"`).
 
 ---
 
@@ -249,13 +302,13 @@ spec:
 
 **A**: The hard limit for `timeoutMs` is 5000 ms. Values above this are silently clamped. This is a security design decision to prevent slow backends from blocking the fan-out operation for extended periods.
 
-### Q3: Some endpoints have `status: -1` in the result. What does this mean?
+### Q3: Some endpoints have `status: null`. What does this mean?
 
-**A**: There are two possible causes:
+**A**: The probe never received a response. There are two common causes:
 1. Connection failure (network unreachable, port not listening)
-2. The `wallTimeoutMs` deadline was reached before the endpoint responded
+2. The `wallTimeoutMs` deadline was reached before the endpoint responded (`summary.wall_timeout_hit` is then `true`)
 
-Check the `body` field to distinguish: connection failures typically include an error description, while wall timeout cancellations show `"wall timeout exceeded"`.
+Read the `error` field to distinguish the two — it carries the failure reason (a connection error, or `"wall timeout exceeded"`).
 
 ### Q4: Does this plugin affect normal traffic?
 

@@ -80,7 +80,12 @@ spec:
     statusCode: 204
 
   enableReferenceGrantValidation: false
+
+  linkSys:
+    webhookMaxResponseBytes: 16384   # Hard cap for LinkSys webhook response body (16 KiB)
 ```
+
+> Note: URI path normalization (`%2F` rejection, invalid percent-encoding rejection, etc.) is **not** part of EdgionGatewayConfig — it is configured in the Gateway YAML `path_normalization` section. See [Gateway Configuration](./gateway-config.md).
 
 ## Configuration Parameters
 
@@ -118,6 +123,8 @@ spec:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `maxRetries` | `Integer` | `3` | Maximum retry attempts on upstream connection failure |
+
+> The older `httpTimeout.backend.defaultMaxRetries` field is **deprecated**. If present, its value is ignored and a warning is logged at config load; use the top-level `maxRetries` instead.
 
 ### spec.realIp
 
@@ -164,6 +171,14 @@ globalPluginsRef:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enableReferenceGrantValidation` | `Boolean` | `false` | Enforce ReferenceGrant validation for cross-namespace references |
+
+### spec.linkSys
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `webhookMaxResponseBytes` | `Integer` | `16384` | Hard upper bound (bytes) for a LinkSys webhook response body. Each call's response is clamped to `min(per-resource maxResponseBytes, this value)`. Raise both values together when an external API legitimately returns a larger payload |
+
+Changes to `linkSys` take effect immediately through EdgionGatewayConfig partial-update — no Gateway restart required.
 
 ## Common Scenarios
 

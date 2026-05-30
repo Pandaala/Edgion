@@ -1,6 +1,6 @@
 # ForwardAuth Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > ForwardAuth is an external authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 

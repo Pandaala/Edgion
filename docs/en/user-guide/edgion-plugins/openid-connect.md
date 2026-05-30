@@ -1,6 +1,6 @@
 # OpenID Connect Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > OpenidConnect is an OIDC/OAuth2 authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 

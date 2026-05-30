@@ -1,6 +1,6 @@
 # RegionRoute Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > RegionRoute is a multi-region traffic routing plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 

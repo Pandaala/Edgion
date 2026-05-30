@@ -144,6 +144,14 @@ const enSidebar = [
         ],
       },
       {
+        text: 'TLS Route',
+        collapsed: true,
+        items: [
+          { text: 'Overview', link: '/en/user-guide/tls-route/overview' },
+          { text: 'Backends', link: '/en/user-guide/tls-route/backends/overview' },
+        ],
+      },
+      {
         text: 'Edgion Plugins (Route-Level)',
         collapsed: true,
         items: [
@@ -207,6 +215,7 @@ const enSidebar = [
           { text: 'mTLS', link: '/en/ops-guide/infrastructure/mtls' },
           { text: 'Reference Grant', link: '/en/ops-guide/infrastructure/reference-grant' },
           { text: 'Secret Management', link: '/en/ops-guide/infrastructure/secret-management' },
+          { text: 'Connectors (LinkSys)', link: '/en/ops-guide/infrastructure/connectors' },
         ],
       },
       {

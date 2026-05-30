@@ -1,6 +1,6 @@
 # RateLimitRedis Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 >  
 > RateLimitRedis is a Redis-backed cluster-wide precise rate limiting plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
@@ -69,7 +69,7 @@ spec:
 
 ### Prerequisites
 
-`redisRef` must point to an existing `LinkSys` resource of type Redis. Ensure the corresponding LinkSys is created in the same or target namespace before applying this plugin.
+`redisRef` must point to an existing `LinkSys` Redis connector, in `"namespace/name"` format. Ensure the corresponding LinkSys is created before applying this plugin. For how to define a Redis connector, see [Infrastructure Connectors](../../../../ops-guide/infrastructure/connectors.md).
 
 ### Default Behavior
 
@@ -343,7 +343,7 @@ spec:
 
 ### Q1: What is the format of `redisRef`?
 
-**A**: The format is `"namespace/name"`, referring to a `LinkSys` resource of type Redis. For example: `"default/shared-redis"`. Only alphanumeric characters, `-`, and `_` are allowed — no special characters or extra separators.
+**A**: The format is `"namespace/name"`, referring to a `LinkSys` Redis connector. For example: `"default/shared-redis"`. Each segment (namespace and name) may contain only alphanumeric characters, `-`, and `_` — no special characters or extra separators. The reference must resolve to an existing LinkSys; see [Infrastructure Connectors](../../../../ops-guide/infrastructure/connectors.md).
 
 ### Q2: What is the minimum `interval`?
 
@@ -366,6 +366,7 @@ spec:
 ## Related Documentation
 
 - [RateLimit Plugin](rate-limit.md) — In-process approximate rate limiting (high performance, low latency)
+- [Infrastructure Connectors](../../../../ops-guide/infrastructure/connectors.md) — Defining the Redis `LinkSys` referenced by `redisRef`
 - [IpRestriction Plugin](ip-restriction.md) — IP-based access control
 - [KeyAuth Plugin](key-auth.md) — API Key authentication
 - [JwtAuth Plugin](jwt-auth.md) — JWT authentication

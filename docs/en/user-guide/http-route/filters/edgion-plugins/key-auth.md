@@ -1,6 +1,6 @@
 # Key Auth Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > KeyAuth is an API Key authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 

@@ -1,6 +1,6 @@
 # DSL Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 >
 > DSL is a custom scripting plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 

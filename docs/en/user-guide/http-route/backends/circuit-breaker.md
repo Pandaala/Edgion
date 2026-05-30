@@ -1,6 +1,6 @@
 # Circuit Breaker
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 >
 > This feature enables passive ejection for backends via the `edgion.io/circuit-breaker` Annotation, and is an Edgion extension capability.
 
@@ -37,9 +37,11 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `consecutiveErrors` | u32 | 5 | Number of consecutive failures before ejection (minimum 1) |
-| `ejectionSeconds` | u64 | 30 | Ejection cooldown duration in seconds (minimum 1) |
-| `maxEjectionPercent` | u32 | 50 | Maximum ejection percentage (0 = no limit) |
+| `consecutiveErrors` | Integer | `5` | Consecutive failures before an endpoint is ejected. Minimum `1` |
+| `ejectionSeconds` | Integer | `30` | Cooldown in seconds before an ejected endpoint rejoins. Minimum `1` |
+| `maxEjectionPercent` | Integer | `50` | Maximum percent of endpoints that may be ejected at once. `0` means no limit; values above `100` are rejected |
+
+An annotation that fails to parse or fails validation (for example `consecutiveErrors: 0`, `ejectionSeconds: 0`, or `maxEjectionPercent: 150`) is logged and **ignored**, leaving the circuit breaker disabled for that Service.
 
 ## How It Works
 
@@ -50,6 +52,20 @@ spec:
 5. After `ejectionSeconds` seconds elapse -> the endpoint automatically recovers and rejoins the selection pool
 
 `maxEjectionPercent` prevents all endpoints from being ejected simultaneously. For example, with a setting of 50%, at most 1 out of 2 endpoints can be ejected.
+
+## Tuning
+
+| Goal | Adjustment | Trade-off |
+|------|------------|-----------|
+| React faster to a failing endpoint | Lower `consecutiveErrors` (e.g. `3`) | More sensitive to transient blips; an endpoint may be ejected on a brief spike |
+| Tolerate occasional errors | Raise `consecutiveErrors` (e.g. `10`) | Slower to remove a genuinely failing endpoint |
+| Give a recovering endpoint more time | Raise `ejectionSeconds` (e.g. `60`) | Longer reduced capacity while the endpoint is parked |
+| Probe recovery quickly | Lower `ejectionSeconds` (e.g. `10`) | An endpoint that is still broken re-enters the pool sooner and may be re-ejected |
+| Protect capacity on small pools | Lower `maxEjectionPercent` | A failing endpoint may stay in rotation if the cap is already reached |
+
+Recommended starting point for most production Services: `consecutiveErrors: 5`, `ejectionSeconds: 30`, `maxEjectionPercent: 50` (the defaults). Tune from there using the metrics below.
+
+⚠️ **On very small pools** (1–2 endpoints), a low `maxEjectionPercent` can prevent ejection entirely — the cap is reached before a single endpoint is removed. Pair the circuit breaker with active health checks so unhealthy endpoints are still skipped during selection.
 
 ## Relationship with Health Checks
 

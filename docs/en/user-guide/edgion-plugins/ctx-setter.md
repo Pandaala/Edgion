@@ -1,6 +1,6 @@
 # CtxSet Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > CtxSet is a context variable setting plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 

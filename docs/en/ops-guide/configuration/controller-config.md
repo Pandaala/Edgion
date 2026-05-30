@@ -64,10 +64,12 @@ conf_center:
 #   leader_election:
 #     lease_name: edgion-controller-leader
 #     lease_namespace: edgion-system
-#     lease_duration_seconds: 15
-#     renew_deadline_seconds: 10
-#     retry_period_seconds: 2
+#     lease_duration_secs: 15
+#     renew_deadline_secs: 10
+#     retry_period_secs: 2
 #   metadata_filter:
+#     label_selector: ""          # Resource label filter
+#     field_selector: ""          # Resource field filter
 #     blocked_annotations: []     # Annotations stripped before entering memory (default: common kubectl/helm annotations)
 #     remove_managed_fields: true # Strip managedFields to reduce object size
 ```
@@ -153,14 +155,16 @@ Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` 
 |-----------|------|---------|-------------|
 | `lease_name` | `String` | `edgion-controller-leader` | Kubernetes Lease resource name |
 | `lease_namespace` | `String` | `edgion-system` | Namespace where the Lease lives |
-| `lease_duration_seconds` | `Integer` | `15` | Lease hold duration in seconds |
-| `renew_deadline_seconds` | `Integer` | `10` | Lease renewal deadline in seconds |
-| `retry_period_seconds` | `Integer` | `2` | Leader election retry interval in seconds |
+| `lease_duration_secs` | `Integer` | `15` | Lease hold duration in seconds (server-side validity on the apiserver) |
+| `renew_deadline_secs` | `Integer` | `10` | Renewal deadline window: the leader keeps leadership across transient errors as long as the last successful renew was within this window. Constraint: `retry_period_secs < renew_deadline_secs < lease_duration_secs` |
+| `retry_period_secs` | `Integer` | `2` | Sleep interval between each acquire/renew attempt (client-go `RetryPeriod`) |
 
 ### [conf_center.metadata_filter]
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
+| `label_selector` | `String` | `""` | Label selector applied to watched resources |
+| `field_selector` | `String` | `""` | Field selector applied to watched resources |
 | `blocked_annotations` | `Array<String>` | Common kubectl/helm annotations | Annotations stripped from resources before they enter memory |
 | `remove_managed_fields` | `Boolean` | `true` | Strip `managedFields` to reduce object size |
 
@@ -217,9 +221,9 @@ conf_center:
   leader_election:
     lease_name: edgion-controller-leader
     lease_namespace: edgion-system
-    lease_duration_seconds: 15
-    renew_deadline_seconds: 10
-    retry_period_seconds: 2
+    lease_duration_secs: 15
+    renew_deadline_secs: 10
+    retry_period_secs: 2
 ```
 
 ### Enabling mTLS
@@ -253,7 +257,7 @@ Authentication is **mandatory** for the Controller Admin API. All requests to `/
 >
 > You can also authenticate interactively with `edgion-cli login`, or the CLI auto-logs-in by reading the config file.
 
-For the full bootstrap decision tree and Center auth behavior, see [`skills/02-features/02-config/03-auth-bootstrap.md`](../../../../skills/02-features/02-config/03-auth-bootstrap.md).
+The Controller and Center read the same `[local_auth]` / `[auth]` schema, but bootstrap differently: the Controller auto-generates credentials when neither is set, while the Center fails closed (see the Center note below).
 
 ### [local_auth]
 
@@ -280,18 +284,28 @@ local_auth:
 
 ### [auth] — OIDC
 
-Optional OIDC integration for the Admin API. Can coexist with `[local_auth]`; requests are attempted in the order OIDC → local.
+Optional OIDC integration for the Admin API. Validates JWT Bearer tokens against an OIDC provider's discovery document and JWKS. Can coexist with `[local_auth]`; requests are attempted in the order OIDC → local.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | `Boolean` | `true` (when the section is present) | Enable OIDC validation |
+| `discovery` | `String` | **Required** | OIDC discovery URL (`/.well-known/openid-configuration`) |
+| `audiences` | `Array<String>` | `[]` | Expected JWT `aud` values; empty skips the audience check |
+| `issuers` | `Array<String>` | `[]` | Expected JWT `iss` values; empty validates against the discovery document's issuer |
+| `allowed_algorithms` | `Array<String>` | `[RS256, RS384, RS512, ES256, ES384]` | Allowed signing algorithms |
+| `clock_skew_seconds` | `Integer` | `120` | JWT timestamp tolerance in seconds |
+| `jwks_cache_ttl` | `Integer` | `300` | JWKS cache TTL in seconds |
+| `jwks_min_refresh_interval` | `Integer` | `10` | Minimum interval between JWKS refresh attempts (debounce), seconds |
+| `skip_paths` | `Array<String>` | `["/health", "/ready"]` | Path prefixes that skip authentication |
+| `ssl_verify` | `Boolean` | `true` | Verify TLS certificates when fetching discovery/JWKS; production must keep `true` |
+| `discovery_max_response_bytes` | `Integer` | `65536` | Upper bound for the discovery response body |
+| `jwks_max_response_bytes` | `Integer` | `1048576` | Upper bound for the JWKS response body |
 
 ```yaml
 auth:
-  oidc:
-    issuer: "https://auth.example.com"
-    client_id: "edgion"
-    client_secret: "secret"
-    redirect_url: "https://controller.example.com/api/v1/auth/callback"
+  discovery: "https://keycloak.example.com/realms/edgion/.well-known/openid-configuration"
+  audiences: [edgion-admin]
 ```
-
-For the full OIDC field reference, see [`skills/02-features/02-config/00-controller-config.md`](../../../../skills/02-features/02-config/00-controller-config.md).
 
 ### [cli_tokens] — Static CLI Tokens
 
@@ -308,13 +322,15 @@ cli_tokens:
   - name: "ci-readonly"
     token_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
     rbac:
-      rules:
+      allow:
+        # Enumerate concrete kinds; never use kinds: ["*"] with read verbs
+        # (a wildcard read exposes Secret and EdgionTls private-key material).
         - verbs: [get, list, watch]
-          kinds: ["*"]
+          kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service, EdgionGatewayConfig]
   - name: "deploy-bot"
     token_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
     rbac:
-      rules:
+      allow:
         - verbs: [get, list, create, update, delete]
           kinds: [HTTPRoute, Service]
 ```

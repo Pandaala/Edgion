@@ -84,12 +84,13 @@ rate_limit:
   max_estimator_slots_k: 1024     # CMS maximum precision cap
   gateway_instance_count: 1       # Cluster rate limiting: instance count (static fallback when no Controller push)
 
-# ─── Plugin metadata ──────────────────────────────────────────────
+# ─── Log redaction (off by default) ────────────────────────────────
 
-plugin_metadata:
-  # IMPORTANT: setting this field REPLACES the default list entirely — it is not appended.
-  # To preserve the default protection, include all default keywords plus your custom ones.
-  ctx_log_denylist: [auth, pass, claim, payload, token, secret, credential]
+access_log_sensitive:
+  mode: off                       # off | replace | wrap
+  # replace_with: "***"           # Replacement string when mode=replace
+  # wrap_prefix: "<E>"            # Prefix when mode=wrap
+  # wrap_suffix: "</E>"           # Suffix when mode=wrap
 ```
 
 ## Configuration Parameters
@@ -169,18 +170,24 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 | `max_estimator_slots_k` | `Integer` | `1024` | Maximum CMS slot count cap |
 | `gateway_instance_count` | `Integer` | `1` | Gateway instance count used as divisor for cluster rate limiting. **Must be set correctly for multi-instance deployments** |
 
-### plugin_metadata
+### access_log_sensitive
+
+Controls redaction of fields marked sensitive in the access log, ssl.log, and plugin log. **Disabled (`off`) by default** — all sensitive values are emitted in plaintext.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `ctx_log_denylist` | `Array<String>` | `["auth","pass","claim","payload","token","secret","credential"]` | Ctx keys containing any of these substrings (case-insensitive) are excluded from access log |
+| `mode` | `Enum` | `off` | Redaction mode: `off`, `replace`, or `wrap` |
+| `replace_with` | `String` | `"***"` | Replacement string used when `mode=replace` |
+| `wrap_prefix` | `String` | `"<E>"` | Prefix added when `mode=wrap` |
+| `wrap_suffix` | `String` | `"</E>"` | Suffix added when `mode=wrap` |
 
-**Important:** Setting this field **completely replaces** the default list — it is not appended. To preserve the default protection, include all default keywords plus any custom ones.
+Behavior (using `client_addr=192.168.1.10`):
 
-Filtering rules (either condition causes the entry to be skipped):
-
-1. Key starts with `_` (plugin-private convention)
-2. Key contains any substring in `ctx_log_denylist` (case-insensitive)
+| Mode | Output |
+|------|--------|
+| `off` | `192.168.1.10` |
+| `replace` | `***` |
+| `wrap` | `<E>192.168.1.10</E>` |
 
 ## Common Scenarios
 
@@ -216,12 +223,14 @@ rate_limit:
   gateway_instance_count: 3   # Running 3 Gateway replicas
 ```
 
-### Extending the Sensitive Field Denylist
+### Redacting Sensitive Fields in Access Logs
+
+Replace sensitive values (client IPs, SNI, client-certificate fields, etc.) with a placeholder in the access log:
 
 ```yaml
-plugin_metadata:
-  # Keep all defaults and add "tenant"
-  ctx_log_denylist: [auth, pass, claim, payload, token, secret, credential, tenant]
+access_log_sensitive:
+  mode: replace
+  replace_with: "***"
 ```
 
 ### Enabling mTLS to Controller

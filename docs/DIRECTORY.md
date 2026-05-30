@@ -105,6 +105,10 @@ en/
 │   │   ├── README.md
 │   │   ├── overview.md
 │   │   └── backends/overview.md
+│   ├── tls-route/
+│   │   ├── README.md
+│   │   ├── overview.md
+│   │   └── backends/overview.md
 │   └── edgion-plugins/
 │       ├── README.md
 │       ├── real-ip.md
@@ -143,7 +147,8 @@ en/
 │   ├── infrastructure/
 │   │   ├── secret-management.md
 │   │   ├── reference-grant.md
-│   │   └── mtls.md
+│   │   ├── mtls.md
+│   │   └── connectors.md
 │   └── observability/
 │       ├── access-log.md
 │       └── metrics.md

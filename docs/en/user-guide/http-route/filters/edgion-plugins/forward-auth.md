@@ -1,6 +1,6 @@
 # ForwardAuth (HTTPRoute Filter)
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 >  
 > ForwardAuth is an external authentication delegation plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 

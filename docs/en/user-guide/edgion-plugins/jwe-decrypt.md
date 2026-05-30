@@ -1,6 +1,6 @@
 # JWE Decrypt Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > JweDecrypt is a JWE decryption authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 

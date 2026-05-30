@@ -1,6 +1,6 @@
 # RealIp Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > RealIp is a real client IP extraction plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 

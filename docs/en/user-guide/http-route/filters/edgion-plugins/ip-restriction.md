@@ -1,12 +1,14 @@
 # IP Restriction Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > IpRestriction is an access control plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
 ## What is IP Restriction?
 
 The IP Restriction plugin controls which IP addresses or CIDR ranges can access your API, providing allowlist and denylist functionality.
+
+`allow` and `deny` are lists of **named IP groups**. Each group has a `name` (surfaced in deny logs for audit/attribution) and a `cidrs` list of IP/CIDR strings. At least one of `allow` or `deny` must be non-empty.
 
 **Use cases**:
 - Only allow internal network IPs to access admin interfaces
@@ -23,8 +25,10 @@ filters:
   - type: IpRestriction
     config:
       allow:
-        - "192.168.1.0/24"  # Allow entire subnet
-        - "10.0.0.100"       # Allow single IP
+        - name: internal
+          cidrs:
+            - "192.168.1.0/24"  # Allow entire subnet
+            - "10.0.0.100"       # Allow single IP
 ```
 
 **Effect**: Only `192.168.1.x` and `10.0.0.100` can access; all other IPs are denied.
@@ -36,11 +40,13 @@ filters:
   - type: IpRestriction
     config:
       deny:
-        - "203.0.113.50"     # Deny single malicious IP
-        - "198.51.100.0/24"  # Deny entire malicious subnet
+        - name: blocklist
+          cidrs:
+            - "203.0.113.50"     # Deny single malicious IP
+            - "198.51.100.0/24"  # Deny entire malicious subnet
 ```
 
-**Effect**: Only the IPs in the list are denied; all other IPs can access.
+**Effect**: Only the IPs in the list are denied; all other IPs can access (because `defaultAction` is `allow`).
 
 ---
 
@@ -48,12 +54,22 @@ filters:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `allow` | Array | None | Allowlist. List of IP addresses or CIDRs. Example: `["192.168.1.0/24", "10.0.0.1"]` |
-| `deny` | Array | None | Denylist. List of IP addresses or CIDRs. Example: `["203.0.113.50"]` |
-| `ipSource` | String | `"clientIp"` | IP source. `clientIp`: extract real IP from proxy headers; `remoteAddr`: use TCP connection address |
-| `status` | Integer | `403` | HTTP status code returned when denied |
-| `message` | String | None | Custom message returned when denied |
-| `defaultAction` | String | `"allow"` | Default action when IP doesn't match any rule. `allow` or `deny` |
+| `allow` | Array\<Object\> | none | Allowlist groups (whitelist). When non-empty, only IPs in an allow group are permitted. Each entry is an IP group (see sub-table). |
+| `deny` | Array\<Object\> | none | Denylist groups (blacklist). Highest priority: IPs in a deny group are always denied. |
+| `ipSource` | Enum | `clientIp` | IP source. `clientIp`: reads `remote_addr` (pre-processed by the RealIp plugin or global `spec.realIp`; falls back to the TCP peer IP if neither is configured). `remoteAddr`: always the TCP connection peer address (never forgeable). |
+| `status` | Integer | `403` | HTTP status code returned when denied (100..=599). |
+| `message` | String | none | Custom message returned when denied. |
+| `defaultAction` | Enum | `allow` | Action when an IP matches no rule. Allowed values: `allow` / `deny`. |
+
+At least one of `allow` or `deny` must be non-empty, otherwise the configuration is rejected.
+
+### IP group sub-fields (`allow[]` / `deny[]`)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | String | — | Group name. Required. Surfaces in deny logs for audit/attribution. |
+| `description` | String | none | Human-readable description (not used by the runtime). |
+| `cidrs` | Array\<String\> | `[]` | IP addresses or CIDR ranges (IPv4 and IPv6). |
 
 ---
 
@@ -63,11 +79,11 @@ The plugin uses a three-tier priority system consistent with Nginx:
 
 ```
 1. Deny takes priority (highest priority)
-   └─> If IP is in the deny list, deny immediately
+   └─> If IP is in a deny group, deny immediately
 
 2. Allow comes next
-   └─> If IP is in the allow list, allow access
-   └─> If allow is configured but IP is not in the list, deny
+   └─> If IP is in an allow group, allow access
+   └─> If allow is configured but IP is not in any allow group, deny
 
 3. Default Action (fallback)
    └─> If nothing matches, use defaultAction
@@ -76,17 +92,21 @@ The plugin uses a three-tier priority system consistent with Nginx:
 ### Example
 
 ```yaml
-allow: ["10.0.0.0/8"]
-deny: ["10.0.0.100"]
+allow:
+  - name: internal
+    cidrs: ["10.0.0.0/8"]
+deny:
+  - name: blocked
+    cidrs: ["10.0.0.100"]
 defaultAction: "deny"
 ```
 
 | Client IP | Matched Rule | Result |
 |-----------|-------------|--------|
-| `10.0.0.100` | In deny list | ❌ Denied (deny takes priority) |
-| `10.0.0.50` | In allow list | ✅ Allowed |
-| `10.1.2.3` | In allow list | ✅ Allowed |
-| `192.168.1.1` | Not in any list | ❌ Denied (defaultAction: deny) |
+| `10.0.0.100` | In deny group | ❌ Denied (deny takes priority) |
+| `10.0.0.50` | In allow group | ✅ Allowed |
+| `10.1.2.3` | In allow group | ✅ Allowed |
+| `192.168.1.1` | Not in any group | ❌ Denied (defaultAction: deny) |
 
 ---
 
@@ -101,9 +121,11 @@ filters:
   - type: IpRestriction
     config:
       allow:
-        - "10.0.0.0/8"        # Private Class A
-        - "172.16.0.0/12"     # Private Class B
-        - "192.168.0.0/16"    # Private Class C
+        - name: rfc1918
+          cidrs:
+            - "10.0.0.0/8"        # Private Class A
+            - "172.16.0.0/12"     # Private Class B
+            - "192.168.0.0/16"    # Private Class C
       message: "Access denied: Internal network only"
       status: 403
 ```
@@ -117,9 +139,11 @@ filters:
   - type: IpRestriction
     config:
       allow:
-        - "203.0.113.10"      # Office IP 1
-        - "203.0.113.20"      # Office IP 2
-        - "198.51.100.0/24"   # VPN subnet
+        - name: office
+          cidrs:
+            - "203.0.113.10"      # Office IP 1
+            - "203.0.113.20"      # Office IP 2
+            - "198.51.100.0/24"   # VPN subnet
       message: "Access restricted to office network"
 ```
 
@@ -130,9 +154,11 @@ filters:
   - type: IpRestriction
     config:
       deny:
-        - "203.0.113.50"      # Malicious attacker
-        - "198.51.100.100"    # Malicious crawler
-        - "192.0.2.0/24"      # Malicious subnet
+        - name: abuse
+          cidrs:
+            - "203.0.113.50"      # Malicious attacker
+            - "198.51.100.100"    # Malicious crawler
+            - "192.0.2.0/24"      # Malicious subnet
       message: "Your IP has been blocked"
       status: 403
       defaultAction: "allow"  # All other IPs allowed
@@ -140,17 +166,21 @@ filters:
 
 ### 4. Combined Mode: Allow Subnet but Exclude Specific IPs
 
-Allow an entire subnet but exclude a few IPs (e.g., test machines):
+Allow an entire subnet but exclude a few IPs (deny wins over allow):
 
 ```yaml
 filters:
   - type: IpRestriction
     config:
       allow:
-        - "10.0.0.0/16"       # Allow entire subnet
+        - name: subnet
+          cidrs:
+            - "10.0.0.0/16"       # Allow entire subnet
       deny:
-        - "10.0.0.100"        # Exclude test machine 1
-        - "10.0.0.200"        # Exclude test machine 2
+        - name: excluded
+          cidrs:
+            - "10.0.0.100"        # Exclude test machine 1
+            - "10.0.0.200"        # Exclude test machine 2
 ```
 
 **Results**:
@@ -158,113 +188,56 @@ filters:
 - `10.0.0.100` → ❌ Denied (in deny, deny takes priority)
 - `192.168.1.1` → ❌ Denied (not in allow)
 
-### 5. Partner API
+### 5. Multiple Named Groups (Partners)
 
-Allow specific partner access:
+Use separate named groups so deny logs attribute the matched group:
 
 ```yaml
 filters:
   - type: IpRestriction
     config:
       allow:
-        - "203.0.113.0/24"    # Partner A
-        - "198.51.100.50"     # Partner B
-        - "192.0.2.100"       # Partner C
+        - name: partner-a
+          cidrs: ["203.0.113.0/24"]
+        - name: partner-b
+          cidrs: ["198.51.100.50"]
+        - name: partner-c
+          cidrs: ["192.0.2.100"]
       message: "Access restricted to authorized partners"
       status: 403
 ```
 
-### 6. Multi-Tier Access Control
+### 6. Behind a Load Balancer (trust the real client IP)
 
-Different IP restrictions for different paths:
+When the gateway sits behind a proxy/load balancer, the TCP peer is the proxy. Configure the RealIp plugin first to derive the true client IP from `X-Forwarded-For` / `X-Real-IP`; then `ipSource: clientIp` matches against the real IP.
 
 ```yaml
-# Admin interface: internal network only
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: admin-api
-spec:
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /admin
-      filters:
-        - type: ExtensionRef
-          extensionRef:
-            group: edgion.io
-            kind: EdgionPlugins
-            name: admin-ip-policy
----
-# Public interface: denylist mode
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: public-api
-spec:
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /api
-      filters:
-        - type: ExtensionRef
-          extensionRef:
-            group: edgion.io
-            kind: EdgionPlugins
-            name: public-ip-policy
----
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: admin-ip-policy
-spec:
-  plugins:
-    - enable: true
-      plugin:
-        type: IpRestriction
-        config:
-          allow:
+filters:
+  # RealIp normalizes remote_addr from trusted proxies first
+  - type: RealIp
+    config:
+      trustedIps:
+        - name: lb
+          cidrs:
             - "10.0.0.0/8"
----
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: public-ip-policy
-spec:
-  plugins:
-    - enable: true
-      plugin:
-        type: IpRestriction
-        config:
-          deny:
-            - "203.0.113.50"
-          defaultAction: "allow"
+  # IpRestriction reads the normalized client IP
+  - type: IpRestriction
+    config:
+      ipSource: "clientIp"
+      allow:
+        - name: clients
+          cidrs: ["203.0.113.0/24"]
 ```
+
+> **Warning:** `ipSource: clientIp` is only as trustworthy as the upstream that sets `X-Forwarded-For`. Without RealIp configured, `clientIp` falls back to the TCP peer IP (safe, not forgeable). If clients can reach the gateway directly, do not trust forwarded headers — use `ipSource: remoteAddr` or configure RealIp with the exact trusted-proxy ranges.
 
 ---
 
 ## IP Source Selection
 
-### `ipSource: clientIp` (Default, Recommended)
+### `ipSource: clientIp` (Default)
 
-Extracts the real client IP from proxy headers (`X-Forwarded-For` or `X-Real-IP`).
-
-**Use cases**:
-- Application deployed behind CDN/load balancers
-- Need to obtain the real client IP
-
-**Example**:
-```
-Client IP: 203.0.113.50
- ↓
-CDN/Load Balancer: 198.51.100.10
- ↓
-Edgion extracts: X-Forwarded-For: 203.0.113.50
- ↓
-Matches rule: 203.0.113.50
-```
+Reads `remote_addr`, which the RealIp plugin or global `spec.realIp` pre-processes from proxy headers. Without RealIp configured, it falls back to the TCP connection IP (not forgeable).
 
 ```yaml
 filters:
@@ -272,25 +245,17 @@ filters:
     config:
       ipSource: "clientIp"  # Default
       allow:
-        - "203.0.113.0/24"
+        - name: clients
+          cidrs: ["203.0.113.0/24"]
 ```
 
 ### `ipSource: remoteAddr`
 
-Uses the TCP connection's peer address (direct connection IP).
+Always uses the TCP connection's peer address (direct connection IP); never forgeable.
 
 **Use cases**:
 - Direct deployment without proxy/load balancer
-- Need to restrict proxy server IPs
-
-**Example**:
-```
-Load Balancer: 10.0.0.50
- ↓
-Edgion gets: TCP peer address: 10.0.0.50
- ↓
-Matches rule: 10.0.0.50
-```
+- Restricting the proxy/load balancer server IPs themselves
 
 ```yaml
 filters:
@@ -298,7 +263,8 @@ filters:
     config:
       ipSource: "remoteAddr"
       allow:
-        - "10.0.0.0/8"  # Only allow internal load balancers
+        - name: lb
+          cidrs: ["10.0.0.0/8"]  # Only allow internal load balancers
 ```
 
 ---
@@ -309,18 +275,22 @@ filters:
 
 ```yaml
 allow:
-  - "192.168.1.100"      # Single IP
-  - "203.0.113.50"
+  - name: hosts
+    cidrs:
+      - "192.168.1.100"      # Single IP
+      - "203.0.113.50"
 ```
 
 ### CIDR Subnets
 
 ```yaml
 allow:
-  - "192.168.1.0/24"     # 192.168.1.0 - 192.168.1.255 (256 IPs)
-  - "10.0.0.0/8"         # 10.0.0.0 - 10.255.255.255 (16M IPs)
-  - "172.16.0.0/12"      # 172.16.0.0 - 172.31.255.255
-  - "203.0.113.0/28"     # 203.0.113.0 - 203.0.113.15 (16 IPs)
+  - name: subnets
+    cidrs:
+      - "192.168.1.0/24"     # 192.168.1.0 - 192.168.1.255 (256 IPs)
+      - "10.0.0.0/8"         # 10.0.0.0 - 10.255.255.255 (16M IPs)
+      - "172.16.0.0/12"      # 172.16.0.0 - 172.31.255.255
+      - "203.0.113.0/28"     # 203.0.113.0 - 203.0.113.15 (16 IPs)
 ```
 
 ### CIDR Quick Reference
@@ -336,25 +306,16 @@ allow:
 
 ```yaml
 allow:
-  - "2001:db8::1"                    # Single IPv6
-  - "2001:db8::/32"                  # IPv6 subnet
-  - "fe80::/10"                      # Link-local address
+  - name: ipv6
+    cidrs:
+      - "2001:db8::1"                    # Single IPv6
+      - "2001:db8::/32"                  # IPv6 subnet
+      - "fe80::/10"                      # Link-local address
 ```
 
 ---
 
 ## Custom Deny Response
-
-### Default Response
-
-```
-HTTP/1.1 403 Forbidden
-Content-Type: application/json
-
-{
-  "error": "IP address not allowed"
-}
-```
 
 ### Custom Status Code and Message
 
@@ -363,7 +324,8 @@ filters:
   - type: IpRestriction
     config:
       allow:
-        - "10.0.0.0/8"
+        - name: internal
+          cidrs: ["10.0.0.0/8"]
       status: 404  # Pretend the resource doesn't exist (hide the API)
       message: "Not Found"
 ```
@@ -375,9 +337,10 @@ filters:
   - type: IpRestriction
     config:
       allow:
-        - "192.168.1.0/24"
+        - name: office
+          cidrs: ["192.168.1.0/24"]
       status: 403
-      message: "Access denied. Please contact administrator at admin@example.com"
+      message: "Access denied. Please contact your administrator."
 ```
 
 ---
@@ -386,70 +349,45 @@ filters:
 
 ### ✅ Recommended
 
-1. **Principle of least privilege**
+1. **Principle of least privilege** — only allow the IPs you need; prefer an explicit allow-list over relying on deny alone.
+
    ```yaml
-   # ✅ Good: only allow needed IPs
    allow:
-     - "192.168.1.100"
-     - "192.168.1.101"
-   
-   # ❌ Bad: allow the entire internet
-   # defaultAction: "allow"
+     - name: hosts
+       cidrs:
+         - "192.168.1.100"
+         - "192.168.1.101"
    ```
 
-2. **Use the smallest CIDR range possible**
-   ```yaml
-   # ✅ Good: precise range
-   allow:
-     - "10.0.1.0/24"
-   
-   # ❌ Bad: overly broad range
-   allow:
-     - "10.0.0.0/8"
-   ```
+2. **Use the smallest CIDR range possible** — `10.0.1.0/24` rather than `10.0.0.0/8`.
 
-3. **Review rules regularly**
-    - Remove IPs that are no longer needed
-    - Update changed office IPs
+3. **Review rules regularly** — remove IPs that are no longer needed; update changed office IPs.
 
-4. **Document deny reasons**
-   ```yaml
-   message: "Internal API - Access restricted to office network (203.0.113.0/24)"
-   ```
+4. **Pair `clientIp` with RealIp** — only trust forwarded client IPs when the RealIp plugin (or global `spec.realIp`) sanitizes them from known trusted proxies. Otherwise use `remoteAddr`.
 
-5. **Combine with other authentication**
+5. **Combine with authentication** — IP restriction is defense-in-depth, not a substitute for authentication.
+
    ```yaml
-   # IP restriction + Basic Auth = dual protection
    filters:
      - type: IpRestriction
        config:
-         allow: ["10.0.0.0/8"]
+         allow:
+           - name: internal
+             cidrs: ["10.0.0.0/8"]
      - type: BasicAuth
        config:
-         secretRefs:
-           - name: admin-users
+         secretGroups:
+           - name: default
+             secretRefs:
+               - name: admin-users
    ```
 
 ### ❌ Avoid
 
-1. **Do not use overly broad ranges in production**
-   ```yaml
-   # ❌ Dangerous: allow all private networks
-   allow:
-     - "0.0.0.0/0"  # Allows all IPs
-   ```
-
-2. **Do not rely solely on IP restriction for authentication**
-    - IPs can be spoofed (especially on internal networks)
-    - Should be combined with user authentication
-
-3. **Do not forget IPv6**
-   ```yaml
-   # If IPv6 is supported, configure both
-   allow:
-     - "192.168.1.0/24"   # IPv4
-     - "2001:db8::/32"    # IPv6
-   ```
+1. **Overly broad ranges in production** (for example `0.0.0.0/0`, which allows all IPs).
+2. **Relying solely on IP restriction for authentication** — IPs can be spoofed, especially on internal networks.
+3. **Trusting `clientIp` without RealIp** on a gateway that clients can reach directly (forwarded-header spoofing bypass).
+4. **Forgetting IPv6** — configure both families when IPv6 traffic is possible.
 
 ---
 
@@ -459,78 +397,26 @@ filters:
 
 **Cause**:
 - CIDR range misconfigured
-- IP source misconfigured (`ipSource`)
-- CDN/load balancer present but using `remoteAddr`
+- Wrong `ipSource` (behind a proxy but using `remoteAddr` without RealIp)
 
-**Solution**:
-```bash
-# Check request logs to confirm actual IP
-# Check X-Forwarded-For header
-
-# Adjust configuration
-ipSource: "clientIp"  # If behind a proxy
-# Or
-ipSource: "remoteAddr"  # If direct connection
-```
+**Solution**: Check the request logs for the actual matched IP and the `X-Forwarded-For` header, then align `ipSource` (and configure RealIp if behind a proxy).
 
 ### Issue 2: Cannot Obtain Real IP
 
-**Cause**: CDN/load balancer not correctly setting proxy headers
+**Cause**: The proxy/load balancer is not setting `X-Forwarded-For`, or RealIp is not configured.
 
-**Solution**:
-```yaml
-# Temporary: use remoteAddr and allow load balancer IP
-ipSource: "remoteAddr"
-allow:
-  - "10.0.0.50"  # Load balancer IP
-
-# Long-term: configure load balancer to correctly pass X-Forwarded-For
-```
+**Solution**: Configure the RealIp plugin with the trusted proxy ranges, or temporarily use `ipSource: remoteAddr` and allow the load balancer IP.
 
 ### Issue 3: Rules Not Taking Effect
 
 **Cause**:
-- Plugin not correctly bound to the route
+- Plugin not bound to the route
 - YAML formatting error
 
 **Solution**:
 ```bash
-# Check resource status
 kubectl get edgionplugins -A
 kubectl describe edgionplugins <name>
-
-# Check logs
-kubectl logs -n edgion-system <edgion-controller-pod>
-```
-
----
-
-## Testing Configuration
-
-### Using curl
-
-```bash
-# 1. Test allowlist
-curl -v https://api.example.com/admin
-# Should return 403 (if your IP is not in the allowlist)
-
-# 2. Spoof IP test (requires server cooperation)
-curl -H "X-Forwarded-For: 192.168.1.100" https://api.example.com/admin
-# If 192.168.1.100 is in the allowlist, it should succeed
-```
-
-### Testing from Different IPs
-
-```bash
-# From the office
-curl https://api.example.com/admin
-
-# From home (should be denied)
-curl https://api.example.com/admin
-
-# From a server in the allowlist
-ssh server-in-whitelist
-curl https://api.example.com/admin
 ```
 
 ---
@@ -549,7 +435,7 @@ spec:
   hostnames:
     - "api.example.com"
   rules:
-    # Admin interface: strict IP restriction
+    # Admin interface: strict IP allowlist
     - matches:
         - path:
             type: PathPrefix
@@ -563,7 +449,6 @@ spec:
       backendRefs:
         - name: admin-service
           port: 8080
-    
     # Public API: denylist mode
     - matches:
         - path:
@@ -585,29 +470,32 @@ metadata:
   name: admin-security
   namespace: default
 spec:
-  plugins:
+  requestPlugins:
     # IP allowlist
-    - enable: true
-      plugin:
-        type: IpRestriction
-        config:
-          ipSource: "clientIp"
-          allow:
-            - "10.0.0.0/8"           # Internal network
-            - "203.0.113.10"         # Office IP 1
-            - "203.0.113.20"         # Office IP 2
-          deny:
-            - "10.0.0.100"           # Exclude test machine
-          message: "Admin access restricted to authorized networks"
-          status: 403
-    
+    - type: IpRestriction
+      config:
+        ipSource: "clientIp"
+        allow:
+          - name: internal
+            cidrs:
+              - "10.0.0.0/8"
+          - name: office
+            cidrs:
+              - "203.0.113.10"
+              - "203.0.113.20"
+        deny:
+          - name: excluded
+            cidrs:
+              - "10.0.0.100"
+        message: "Admin access restricted to authorized networks"
+        status: 403
     # Additional authentication
-    - enable: true
-      plugin:
-        type: BasicAuth
-        config:
-          secretRefs:
-            - name: admin-users
+    - type: BasicAuth
+      config:
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: admin-users
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -615,43 +503,26 @@ metadata:
   name: public-security
   namespace: default
 spec:
-  plugins:
+  requestPlugins:
     # IP denylist
-    - enable: true
-      plugin:
-        type: IpRestriction
-        config:
-          ipSource: "clientIp"
-          deny:
-            - "203.0.113.50"         # Malicious IP
-            - "198.51.100.0/24"      # Malicious subnet
-          defaultAction: "allow"
-          message: "Your IP has been blocked due to suspicious activity"
-          status: 403
-```
-
-**Test scenarios**:
-
-```bash
-# 1. Access admin interface from office - success
-curl -u admin:password https://api.example.com/admin/users
-
-# 2. Access admin interface from home - fail (IP not in allowlist)
-curl https://api.example.com/admin/users
-# -> 403 Forbidden
-
-# 3. Malicious IP accesses public API - fail
-curl -H "X-Forwarded-For: 203.0.113.50" https://api.example.com/api/data
-# -> 403 Forbidden
-
-# 4. Normal user accesses public API - success
-curl https://api.example.com/api/data
-# -> 200 OK
+    - type: IpRestriction
+      config:
+        ipSource: "clientIp"
+        deny:
+          - name: abuse
+            cidrs:
+              - "203.0.113.50"
+              - "198.51.100.0/24"
+        defaultAction: "allow"
+        message: "Your IP has been blocked due to suspicious activity"
+        status: 403
 ```
 
 ---
 
 ## Related Links
 
+- [RealIp](./real-ip.md) — Real client IP extraction (configure first when behind a proxy)
 - [RateLimit](./rate-limit.md) — Rate limiting
 - [RequestRestriction](./request-restriction.md) — Request restriction
+- [Basic Auth](./basic-auth.md) — Combine with authentication

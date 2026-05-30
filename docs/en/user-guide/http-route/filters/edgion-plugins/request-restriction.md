@@ -1,6 +1,6 @@
 # Request Restriction Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > RequestRestriction is a request restriction plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
@@ -310,6 +310,36 @@ Edgion's `RequestRestriction` plugin unifies multiple restriction capabilities i
 4. **Regex performance**: Multiple regex patterns are merged into a single regex (joined with `|`), reducing matching overhead
 5. **HashSet optimization**: Exact match lists exceeding 16 values automatically use HashSet for O(1) lookup
 6. **Missing value handling**: Choose the appropriate `onMissing` behavior based on security requirements — authentication scenarios typically use `Deny`
+
+## FAQ
+
+### Q1: What happens if I set both an allow list and a deny list on the same rule?
+
+**A**: Deny wins. Within a single rule, `deny` / `denyRegex` are evaluated first — if the value matches, the rule denies regardless of the allow lists. If it does not match a deny entry and an allow list is present, the value must match `allow` / `allowRegex` to pass; otherwise the rule denies. If no allow list is configured, any non-denied value passes.
+
+### Q2: When is the `key` field required?
+
+**A**: For the `Header`, `Cookie`, and `Query` sources, which look up a named value. For `Path`, `Method`, and `Referer` the value is intrinsic to the request, so `key` is ignored.
+
+### Q3: What is the difference between `Any` and `All` for `matchMode`?
+
+**A**: With `Any` (default), the request is denied as soon as any single rule denies — processing stops at the first deny. With `All`, the request is denied only when every rule denies. Use `Any` for layered blocklists and `All` for "deny only if all conditions hold" policies.
+
+### Q4: How do I make exact matching case-insensitive?
+
+**A**: Set `caseSensitive: false` on the rule (it applies to `allow` / `deny` exact matching). For regex matching use the `(?i)` inline flag, e.g. `(?i).*bot.*`.
+
+---
+
+## Get help
+
+If you run into problems:
+
+1. Check the FAQ section of this document
+2. Check the gateway logs
+3. Open an issue on GitHub
+
+---
 
 ## Related Links
 

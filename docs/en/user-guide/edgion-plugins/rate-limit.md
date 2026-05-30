@@ -1,6 +1,6 @@
 # RateLimit Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > RateLimit is a request rate limiting plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 

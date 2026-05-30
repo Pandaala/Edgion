@@ -1,6 +1,6 @@
 # LDAP Auth (HTTPRoute Filter)
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 >  
 > LdapAuth is an LDAP authentication plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 

@@ -2,7 +2,7 @@
 
 GatewayClass defines the implementation type of a Gateway, similar to IngressClass.
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > `parametersRef` can reference the `EdgionGatewayConfig` CRD for advanced configuration. This is an Edgion extension feature.
 

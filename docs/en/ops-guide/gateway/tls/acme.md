@@ -1,221 +1,345 @@
-# ACME Auto-Certificate (EdgionAcme)
+# ACME Automatic Certificates
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 >
-> `EdgionAcme` is an Edgion custom CRD for automatically requesting and renewing TLS certificates via the ACME protocol (e.g., Let's Encrypt), and automatically creating/updating EdgionTls and Secret resources.
+> `EdgionAcme` is an Edgion custom CRD (`edgion.io/v1`) that requests and renews TLS certificates over the ACME protocol (RFC 8555, e.g. Let's Encrypt) and can automatically create/update the matching EdgionTls and Secret. It is not part of standard Gateway API.
 
-## What is EdgionAcme?
+EdgionAcme runs an ACME client on the Controller: it registers an account, validates domain ownership, issues and renews certificates, writes them to a Kubernetes Secret, and optionally maintains an EdgionTls resource so the Gateway can serve them.
 
-EdgionAcme runs an ACME client on the Controller side, handling domain validation, certificate issuance and renewal, writing certificates to Kubernetes Secrets, and optionally auto-creating/updating EdgionTls resources for Gateway use.
+## Overview
 
-**Key capabilities**:
+```
+EdgionAcme (Controller) --ACME order--> ACME server (Let's Encrypt)
+   ├─ HTTP-01: token published in status -> Gateway serves /.well-known/acme-challenge/<token>
+   ├─ DNS-01:  _acme-challenge TXT record created via provider API
+   └─ on success: write cert to storage.secretName, update EdgionTls (autoEdgionTls)
+```
 
-- **HTTP-01**: Validates via HTTP access to `/.well-known/acme-challenge/<token>`, suitable for single domains or non-wildcard domains.
-- **DNS-01**: Validates via DNS TXT records, **supports wildcard domains** (e.g., `*.example.com`).
-- **Auto-renewal**: Automatically renews before expiry based on configuration, with exponential backoff retry on failure (up to 5 attempts).
-- **EdgionTls integration**: Can automatically create or update EdgionTls after issuance, eliminating manual certificate resource maintenance.
+**Challenge types**
 
-**Current limitations**:
+- **HTTP-01** validates ownership over `http://<domain>/.well-known/acme-challenge/<token>`. Suitable for single, non-wildcard domains; the Gateway's HTTP listener must be publicly reachable.
+- **DNS-01** validates over a DNS TXT record and is the **only** option for wildcard domains (e.g. `*.example.com`).
 
-- Only **ECDSA** certificates are supported (ecdsa-p256 / ecdsa-p384).
-- Does not interoperate with Kubernetes cert-manager; certificates and accounts are independently managed by the Edgion Controller.
+**Current limitations**
 
----
+- Only **ECDSA** keys are supported (`ecdsa-p256` / `ecdsa-p384`).
+- Independent of cert-manager — Edgion manages its own ACME account and certificates.
 
 ## Quick Start
 
 ### Prerequisites
 
-- Controller is deployed with cluster permissions to read/write EdgionAcme, Secret, and EdgionTls resources.
-- Gateway is deployed; for HTTP-01, an HTTP listener (e.g., port 80) must be externally accessible, and the domain must resolve to that Gateway.
+- The Controller is deployed with permission to read/write EdgionAcme, Secret, and EdgionTls.
+- For HTTP-01: a reachable HTTP listener (typically port 80) and DNS that resolves the domain to that Gateway.
 
-### Minimal Example (HTTP-01)
+### Minimal example (HTTP-01, staging)
+
+Start against Let's Encrypt **staging** while you validate the flow — staging has high rate limits but issues untrusted certificates:
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionAcme
 metadata:
   name: example-acme
-  namespace: default
+  namespace: production
 spec:
+  # Let's Encrypt STAGING — use for testing only (issues untrusted certs).
+  server: "https://acme-staging-v02.api.letsencrypt.org/directory"
   email: admin@example.com
+  privateKeySecretRef:
+    name: example-acme-account
   domains:
     - example.com
     - www.example.com
   challenge:
     type: http-01
     gatewayRef:
-      name: my-gateway
-      namespace: default
+      name: main-gateway
+      namespace: production
   storage:
-    secretName: example-tls-cert
+    secretName: example-com-tls
   autoEdgionTls:
     enabled: true
     parentRefs:
-      - name: my-gateway
-        namespace: default
+      - name: main-gateway
+        sectionName: https
 ```
 
-After creation, the Controller registers an account with the ACME service (default: Let's Encrypt), initiates an order, completes HTTP-01 validation, writes the certificate to the Secret specified by `storage.secretName`, and automatically creates/updates the EdgionTls resource.
+Once issuance succeeds, switch `server` to the production directory `https://acme-v02.api.letsencrypt.org/directory` (the default if you omit `server`) to obtain a trusted certificate.
 
----
+After creation the Controller registers the ACME account (storing its key in `privateKeySecretRef`), runs the challenge, writes the certificate to `storage.secretName`, and creates/updates the EdgionTls.
 
-## Configuration Reference
+## Configuration parameters
 
-### Basic Fields
+### Basic parameters
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `server` | String | No | Let's Encrypt production directory | ACME directory URL, e.g., `https://acme-v02.api.letsencrypt.org/directory`; use staging or Pebble for testing. |
-| `email` | String | **Yes** | - | ACME account contact email. |
-| `domains` | Array\<String\> | **Yes** | - | Domains for certificate request; wildcards (e.g., `*.example.com`) require DNS-01. |
-| `keyType` | String | No | `ecdsa-p256` | Certificate key type: `ecdsa-p256`, `ecdsa-p384`. |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `server` | String | Let's Encrypt production directory | ACME directory URL. Use the staging URL for testing |
+| `email` | String | **Required** | Contact email for ACME account registration |
+| `privateKeySecretRef` | Object | **Required** | Secret that stores the ACME **account** private key. Edgion creates it if missing; existing credentials are reused |
+| `domains` | Array\<String\> | **Required** | Domains to request. Wildcards (e.g. `*.example.com`) require DNS-01 |
+| `keyType` | Enum | `ecdsa-p256` | Certificate key algorithm. Allowed values: `ecdsa-p256` \| `ecdsa-p384` |
+| `challenge` | Object | **Required** | Challenge configuration; see [Challenge configuration](#challenge-configuration) |
+| `renewal` | Object | (defaults below) | Renewal timing; see [Renewal](#renewal) |
+| `externalAccountBinding` | Object | none | External Account Binding for providers that require it (e.g. ZeroSSL); see [External Account Binding](#external-account-binding) |
+| `storage` | Object | **Required** | Where the issued certificate is stored; see [Certificate storage](#certificate-storage) |
+| `autoEdgionTls` | Object | (enabled) | Auto-create/update an EdgionTls; see [Auto EdgionTls](#auto-edgiontls) |
 
-### Challenge Method: challenge
+> `privateKeySecretRef` (the ACME **account** key) and `storage.secretName` (the issued **certificate**) are two different Secrets. The account Secret is reused across renewals; the certificate Secret is overwritten on each issuance.
 
-`challenge` is a tagged enum keyed by `type`, with the type-specific fields flattened directly under `challenge`.
+### Challenge configuration
+
+`challenge` is a tagged enum keyed by `type`; the type-specific fields are flattened directly under `challenge` (there are no `http01:` / `dns01:` sub-objects).
 
 **HTTP-01** (`type: http-01`):
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `gatewayRef` | **Yes** | Gateway reference that serves challenge responses. |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `gatewayRef` | Object | **Required** | Gateway whose HTTP listener serves the challenge response |
 
-The ACME service will access `http://<domain>/.well-known/acme-challenge/<token>`. The Controller writes the token to `status.activeChallenges` of the EdgionAcme and syncs it to the Gateway, which responds to that path only while there are pending challenges. After validation, the path is no longer intercepted.
+The Controller publishes the token in `status.activeChallenges`; the Gateway reads it and answers `http://<domain>/.well-known/acme-challenge/<token>` only while a challenge is in flight, then stops intercepting that path.
 
 **DNS-01** (`type: dns-01`):
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `provider` | String | **Yes** | - | Supported: `cloudflare`, `alidns`; use `pebble` for testing (with Pebble + challtestsrv). |
-| `credentialRef` | object | **Yes** | - | Secret reference containing DNS API credentials. |
-| `propagationTimeout` | int | No | 120 | Maximum wait time for DNS propagation (seconds). |
-| `propagationCheckInterval` | int | No | 5 | Propagation check interval (seconds). |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `provider` | String | **Required** | DNS provider. Allowed values: `cloudflare` \| `alidns` |
+| `credentialRef` | Object | **Required** | Secret holding the provider's API credentials |
+| `propagationTimeout` | Integer | `120` | Max seconds to wait for the TXT record to propagate |
+| `propagationCheckInterval` | Integer | `5` | Seconds between propagation checks |
 
-The Controller creates a `_acme-challenge.<domain>` TXT record using the DNS provider API based on the value returned by ACME, waits for propagation, then notifies ACME for validation; the TXT record is deleted after success. Wildcard domains must use DNS-01.
+The Controller creates a `_acme-challenge.<domain>` TXT record via the provider API, waits for propagation, asks ACME to validate, then deletes the record. Provider credential Secret keys:
 
-**Cloudflare**: The Secret must provide `api-token` (with Zone.DNS:Edit permission).
+- **Cloudflare** — `api-token` (with Zone.DNS:Edit permission)
+- **Alibaba Cloud DNS (`alidns`)** — `access-key-id` and `access-key-secret`
 
-**Alibaba Cloud DNS (alidns)**: The Secret must provide `access-key-id` and `access-key-secret`.
+### Renewal
 
-### Renewal and Retry: renewal
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `renewal.renewBeforeDays` | Integer | `30` | Renew this many days before expiry |
+| `renewal.checkInterval` | Integer | `86400` | Seconds between renewal checks (default 24h) |
+| `renewal.failBackoff` | Integer | `300` | Base seconds for the first retry after a failure; backs off exponentially (300, 1200, 4800, …) up to 5 attempts |
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `renewBeforeDays` | int | 30 | Number of days before expiry to start renewal. |
-| `checkInterval` | int | 86400 | Interval for periodic renewal checks (seconds), e.g., 24 hours. |
-| `failBackoff` | int | 300 | Base delay for first retry after failure (seconds); uses exponential backoff (300, 1200, 4800...), up to 5 retries. |
+### External Account Binding
 
-### Certificate Storage: storage
+Some ACME providers (for example ZeroSSL) require an External Account Binding (EAB) to associate the new account with an existing one:
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `secretName` | String | **Yes** | Name of the Secret storing `tls.crt` and `tls.key`. |
-| `secretNamespace` | String | No | Namespace of the Secret; defaults to the EdgionAcme namespace. |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `externalAccountBinding.keyId` | String | **Required (when present)** | EAB key identifier from the provider |
+| `externalAccountBinding.hmacKey` | String | **Required (when present)** | base64url-encoded HMAC key from the provider |
 
-### Auto EdgionTls: autoEdgionTls
+Omit `externalAccountBinding` entirely for Let's Encrypt, which does not require it.
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | Boolean | true | Whether to automatically create/update EdgionTls. |
-| `name` | String | No | EdgionTls name; defaults to `acme-<EdgionAcme name>`. |
-| `parentRefs` | []ParentRef | No | Gateway bindings for the auto-created EdgionTls. |
+### Certificate storage
 
----
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `storage.secretName` | String | **Required** | Secret to hold the issued `tls.crt` and `tls.key` |
+| `storage.secretNamespace` | String | EdgionAcme namespace | Namespace for the certificate Secret |
 
-## Manual Trigger
+### Auto EdgionTls
 
-When you need to immediately re-initiate a request or renewal (e.g., after fixing DNS/network issues), you can manually trigger processing, which has the same effect as "making the Controller reprocess the resource" and resets the failure retry counter.
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `autoEdgionTls.enabled` | Boolean | `true` | Create/update an EdgionTls for the issued certificate |
+| `autoEdgionTls.name` | String | `acme-<EdgionAcme name>` | Name of the auto-created EdgionTls |
+| `autoEdgionTls.parentRefs` | Array\<Object\> | none | Gateway listeners the auto-created EdgionTls attaches to |
 
-### Method 1: Modify Resource (kubectl)
+## Common configuration scenarios
 
-Make any modification to the EdgionAcme metadata (e.g., add an annotation), and the Controller will receive the change and reprocess the resource:
+### 1. Wildcard certificate via DNS-01 (Cloudflare)
+
+Wildcards can only be issued with DNS-01:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionAcme
+metadata:
+  name: wildcard-acme
+  namespace: production
+spec:
+  email: admin@example.com
+  privateKeySecretRef:
+    name: wildcard-acme-account
+  domains:
+    - "*.example.com"
+    - example.com
+  keyType: ecdsa-p384
+  challenge:
+    type: dns-01
+    provider: cloudflare
+    credentialRef:
+      name: cloudflare-api-token
+      namespace: production
+    propagationTimeout: 180
+  renewal:
+    renewBeforeDays: 14
+    checkInterval: 43200
+  storage:
+    secretName: wildcard-example-com-tls
+  autoEdgionTls:
+    enabled: true
+    parentRefs:
+      - name: main-gateway
+        sectionName: https
+```
+
+Create the provider credential Secret:
 
 ```bash
-kubectl annotate edgionacme example-acme -n default edgion.io/trigger="$(date +%s)" --overwrite
+kubectl create secret generic cloudflare-api-token \
+  --from-literal=api-token=<cloudflare-api-token> \
+  -n production
+```
+
+⚠️ The `<cloudflare-api-token>` value is a placeholder — never commit a real token.
+
+### 2. Multiple domains on one certificate (HTTP-01)
+
+A single EdgionAcme can cover several non-wildcard domains in one certificate (SAN list):
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionAcme
+metadata:
+  name: multi-domain-acme
+  namespace: production
+spec:
+  email: admin@example.com
+  privateKeySecretRef:
+    name: multi-domain-acme-account
+  domains:
+    - example.com
+    - www.example.com
+    - api.example.com
+  challenge:
+    type: http-01
+    gatewayRef:
+      name: main-gateway
+      namespace: production
+  storage:
+    secretName: multi-domain-tls
+  autoEdgionTls:
+    enabled: true
+    parentRefs:
+      - name: main-gateway
+        sectionName: https
+```
+
+Each domain must resolve to the Gateway and pass its own HTTP-01 challenge.
+
+### 3. Production issuance (Let's Encrypt prod)
+
+Omit `server` to use the production directory by default. **Mind the rate limits** — validate with staging first (see Quick Start), then apply the production resource:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionAcme
+metadata:
+  name: example-acme-prod
+  namespace: production
+spec:
+  # server omitted -> defaults to Let's Encrypt production.
+  email: admin@example.com
+  privateKeySecretRef:
+    name: example-acme-account
+  domains:
+    - example.com
+  challenge:
+    type: http-01
+    gatewayRef:
+      name: main-gateway
+      namespace: production
+  storage:
+    secretName: example-com-tls
+  autoEdgionTls:
+    enabled: true
+    parentRefs:
+      - name: main-gateway
+        sectionName: https
+```
+
+## Manual trigger
+
+To immediately re-run issuance or renewal (for example after fixing DNS or network problems), trigger reprocessing — this also resets the failure retry counter.
+
+### Method 1: annotate the resource
+
+Any metadata change makes the Controller reprocess the resource:
+
+```bash
+kubectl annotate edgionacme example-acme -n production \
+  edgion.io/trigger="$(date +%s)" --overwrite
 ```
 
 ### Method 2: Admin API
 
-The Controller's Admin API provides a dedicated trigger endpoint.
-
-> **Authentication required**: all Controller Admin API calls must include a Bearer token. Set `EDGION_TOKEN` to a token generated with `edgion-cli gen-token`, or use `edgion-cli acme trigger` directly. See [Federation RBAC — CLI Token RBAC](../../federation-rbac.md#cli-token-rbac) for token setup.
+> **Authentication required**: all Controller Admin API calls need a Bearer token. Set `EDGION_TOKEN` to a token from `edgion-cli gen-token`, or use `edgion-cli acme trigger` directly. See [Federation RBAC — CLI Token RBAC](../../federation-rbac.md#cli-token-rbac).
 
 ```bash
 curl -X POST "http://<controller-admin>:8080/api/v1/services/acme/<namespace>/<name>/trigger" \
   -H "Authorization: Bearer $EDGION_TOKEN"
 ```
 
-Example: Trigger the ACME flow for `example-acme` in the `default` namespace:
-
-```bash
-curl -X POST "http://localhost:8080/api/v1/services/acme/default/example-acme/trigger" \
-  -H "Authorization: Bearer $EDGION_TOKEN"
-```
-
-Response example:
+A successful response:
 
 ```json
 {
   "success": true,
-  "data": "ACME check triggered for default/example-acme"
+  "data": "ACME check triggered for production/example-acme"
 }
 ```
 
-If the ACME service is not running (for example, on a Controller replica that does not currently hold leadership), the request is not queued and the response reports the failure instead of a misleading success:
+If the ACME service is not running on the contacted replica (for example one that does not hold leadership), the request is not queued and the failure is reported rather than a misleading success:
 
 ```json
 {
   "success": false,
-  "error": "ACME service not running; trigger for default/example-acme was not queued"
+  "error": "ACME service not running; trigger for production/example-acme was not queued"
 }
 ```
 
----
+## Status and troubleshooting
 
-## Status and Troubleshooting
+### Status phases (`status.phase`)
 
-### Status Phases (status.phase)
+| Phase | Meaning |
+|-------|---------|
+| `Pending` | No certificate yet — awaiting first issuance or retry |
+| `Issuing` | ACME order in progress (validating or issuing) |
+| `Ready` | Certificate issued and valid |
+| `Renewing` | Renewal in progress |
+| `Failed` | Last operation failed; retried with exponential backoff, up to 5 times |
 
-| Phase | Description |
-|-------|-------------|
-| `Pending` | Certificate not yet issued, awaiting first issuance or retry. |
-| `Issuing` | ACME order in progress (validating or issuing). |
-| `Ready` | Certificate has been issued and is valid. |
-| `Renewing` | Renewal in progress. |
-| `Failed` | Last operation failed; retries with exponential backoff, up to 5 times. |
+### Useful status fields
 
-### Common Status Fields
+- `status.certificateSerial`, `status.certificateNotAfter` — serial and expiry (RFC 3339) of the current certificate
+- `status.lastFailureReason`, `status.lastFailureTime` — most recent failure detail
+- `status.secretName`, `status.edgionTlsName` — the Secret and EdgionTls in use
+- `status.accountUri` — the registered ACME account URI
 
-- `status.certificateSerial`, `status.certificateNotAfter`: Current certificate serial number and expiry time (RFC 3339).
-- `status.lastFailureReason`, `status.lastFailureTime`: Most recent failure reason and time.
-- `status.secretName`, `status.edgionTlsName`: Current Secret and EdgionTls names in use.
+### Common issues
 
-### Common Issues
+1. **HTTP-01 fails** — confirm the domain resolves to the Gateway and its HTTP port (typically 80) is reachable from the internet. The Gateway must receive the published token via List-Watch and answer `/.well-known/acme-challenge/<token>`.
+2. **DNS-01 times out** — increase `propagationTimeout`; verify the `credentialRef` Secret keys are correct and the provider API is reachable.
+3. **Stuck in `Failed`** — read `status.lastFailureReason`, fix the cause, then use [Manual trigger](#manual-trigger) to re-run and reset the retry counter.
+4. **Wildcard request rejected** — wildcards require `challenge.type: dns-01`; HTTP-01 cannot validate them.
+5. **Rate-limited by the ACME server** — switch to the staging directory while testing; production Let's Encrypt enforces strict per-domain limits.
 
-1. **HTTP-01 validation failure**  
-   Confirm the domain resolves to the Gateway serving HTTP, and port 80 is accessible from the public internet; after the Controller writes the token, the Gateway must receive it via List-Watch and respond to `/.well-known/acme-challenge/<token>`.
+## Get help
 
-2. **DNS-01 validation timeout**  
-   Increase `dns01.propagationTimeout`; confirm the `credentialRef` Secret is correct and the DNS provider API is accessible.
+If you run into problems:
 
-3. **Certificate stuck in Failed state**  
-   Check `status.lastFailureReason`; after fixing configuration or network issues, use the "Manual Trigger" method described above to re-initiate and reset the retry counter.
+1. Check the Status and troubleshooting section above
+2. Check the Controller logs (ACME runs on the leader Controller)
+3. Open an issue on GitHub
 
----
+## Related documents
 
-## Examples
-
-- **HTTP-01**: See `examples/test/conf/Services/acme/http01-example.yaml` in the repository.
-- **DNS-01 (Cloudflare)**: `examples/test/conf/Services/acme/dns01-cloudflare-example.yaml`.
-- **DNS-01 (Alibaba Cloud)**: `examples/test/conf/Services/acme/dns01-alidns-example.yaml`.
-- **Local Integration Test (Pebble)**: Docker Compose and instructions under `examples/test/conf/Services/acme/pebble/`.
-
-For usage with EdgionTls, see the [EdgionTls User Guide](./edgion-tls.md).
-
-## Related Documentation
-
+- [EdgionTls extension](./edgion-tls.md)
 - [TLS Termination](./tls-termination.md)
-- [EdgionTls Extension](./edgion-tls.md)
-- [Gateway Resource Overview](../overview.md)
 - [HTTPS Listener](../listeners/https.md)
+- [Federation RBAC](../../federation-rbac.md)
