@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,7 +13,6 @@ pub struct AuthMiddlewareState {
     pub issuers: Vec<String>,
     pub allowed_algorithms: Vec<String>,
     pub clock_skew_seconds: u64,
-    pub skip_paths: HashSet<String>,
 }
 
 impl AuthMiddlewareState {
@@ -47,7 +45,6 @@ impl AuthMiddlewareState {
             issuers: config.issuers.clone(),
             allowed_algorithms: config.allowed_algorithms.clone(),
             clock_skew_seconds: config.clock_skew_seconds,
-            skip_paths: config.skip_paths_set(),
         }))
     }
 }

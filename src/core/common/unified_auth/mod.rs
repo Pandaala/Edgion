@@ -131,9 +131,9 @@ impl UnifiedAuthState {
         component: &str,
     ) -> anyhow::Result<Arc<Self>> {
         let mut skip_paths = HashSet::new();
-        skip_paths.insert("/health".to_string());
-        skip_paths.insert("/ready".to_string());
-        skip_paths.insert("/metrics".to_string());
+        for p in crate::core::common::auth::public_paths::PUBLIC_PROBE_PATHS {
+            skip_paths.insert((*p).to_string());
+        }
 
         // Test mode exposes diagnostic endpoints without auth.
         // These routes are only mounted when is_test_mode() is true (controller side)
@@ -141,8 +141,9 @@ impl UnifiedAuthState {
         // production builds. Either flag triggers the skip — both are set together
         // by gateway startup; controller only sets test_mode.
         if crate::core::common::config::is_test_mode() || crate::core::common::config::is_integration_testing_mode() {
-            skip_paths.insert("/api/v1/debug/store-stats".to_string());
-            skip_paths.insert("/api/v1/admin/wipe-all".to_string());
+            for p in crate::core::common::auth::public_paths::TEST_ONLY_PATHS {
+                skip_paths.insert((*p).to_string());
+            }
         }
 
         let oidc = match auth_config {
@@ -320,8 +321,8 @@ pub async fn unified_auth_middleware(
     // provider readiness: login so clients can authenticate, logout so they
     // can clear a session, status so UIs can surface the init state.
     // `/api/v1/auth/me` is intentionally NOT in this list — it requires
-    // a valid token.
-    if path == "/api/v1/auth/login" || path == "/api/v1/auth/logout" || path == "/api/v1/auth/status" {
+    // a valid token. (Canonical set lives in auth::public_paths.)
+    if crate::core::common::auth::public_paths::is_public_auth_endpoint(&path) {
         return next.run(request).await;
     }
 

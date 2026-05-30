@@ -38,8 +38,11 @@ pub enum RateLimitKey {
 ///
 /// Shared by the `RateLimit` and `RateLimitRedis` plugins so the key-extraction
 /// policy (separator, default-key fallback, `OnMissingKey` handling, and the
-/// PluginLog tags) lives in exactly one place. The canonical key-miss-denial tag
-/// is `"Deny key miss"`, distinct from a quota-exceeded denial.
+/// PluginLog tags) lives in exactly one place. The PluginLog tags distinguish the
+/// three key-miss outcomes: `"key miss:default"` (rate-limited under the shared
+/// default key), `"key miss:allow"` (full bypass via `OnMissingKey::Allow`), and
+/// `"Deny key miss"` (the canonical key-miss-denial tag, distinct from a
+/// quota-exceeded denial).
 ///
 /// `plugin_log` entries stay short (≤40B) and never contain the resolved key,
 /// which can be a user-identifying value (API key, user_id).
@@ -62,8 +65,10 @@ pub async fn resolve_rate_limit_key(
     }
 
     // No keys resolved - fall back to the configured default key if present.
+    // Distinct tag from the OnMissingKey::Allow path below: here the request IS
+    // rate-limited (counted against the shared default-key bucket), it is not a bypass.
     if let Some(default_key) = default_key {
-        plugin_log.push("key miss:allow");
+        plugin_log.push("key miss:default");
         return RateLimitKey::Resolved(default_key.to_string());
     }
 
@@ -135,7 +140,7 @@ mod tests {
         let out = resolve_rate_limit_key(&mut session, &keys, Some("dflt"), &OnMissingKey::Deny, &mut plugin_log).await;
 
         assert!(matches!(out, RateLimitKey::Resolved(k) if k == "dflt"));
-        assert!(plugin_log.contains("key miss:allow"));
+        assert!(plugin_log.contains("key miss:default"));
     }
 
     #[tokio::test]

@@ -55,7 +55,10 @@ pub async fn ensure_admin_credentials<C: CenterApi>(center: &C) -> anyhow::Resul
                 password,
                 jwt_secret,
                 jwt_expiry_hours: 24,
-                skip_paths: vec!["/health".to_string(), "/ready".to_string()],
+                skip_paths: crate::core::common::auth::public_paths::PUBLIC_PROBE_PATHS
+                    .iter()
+                    .map(|p| (*p).to_string())
+                    .collect(),
                 cookie_secure: true,
             })
         }
@@ -109,7 +112,10 @@ fn parse_secret_to_config(yaml: &str) -> anyhow::Result<LocalAuthConfig> {
         password,
         jwt_secret,
         jwt_expiry_hours: 24,
-        skip_paths: vec!["/health".to_string(), "/ready".to_string()],
+        skip_paths: crate::core::common::auth::public_paths::PUBLIC_PROBE_PATHS
+            .iter()
+            .map(|p| (*p).to_string())
+            .collect(),
         cookie_secure: true,
     })
 }

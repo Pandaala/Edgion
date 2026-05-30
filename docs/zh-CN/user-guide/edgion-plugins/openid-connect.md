@@ -29,8 +29,14 @@
 | `bearerOnly` | Boolean | `false` | 仅验证 Bearer Token，不启用浏览器登录流程 |
 | `unauthAction` | Enum | `Auth` | 未认证时行为。可选值：`Auth`（触发登录流） | `Deny`（返回 401） | `Pass`（放行） |
 | `scope` | String | `"openid"` | OIDC 请求的 scope |
-| `requiredScopes` | Array\<String\> | 无 | 必需的 scope 列表，token 中缺少则拒绝 |
+| `requiredScopes` | Array\<String\> | 无 | 必需的 scope 列表，token 中缺少则拒绝。**仅在 `bearerOnly: true` 时强制校验**（见下方说明） |
 | `realm` | String | `"edgion"` | `WWW-Authenticate` 响应头中的 realm 值 |
+
+> **关于 `requiredScopes` 的说明：** scope 强制校验仅在 bearer-only 模式
+> （`bearerOnly: true`）下生效。在默认的 session/登录模式（`bearerOnly: false`，包括
+> `unauthAction: Auth`）下，`requiredScopes` 在配置时会被接受，但运行时**不会**强制校验——
+> 任何已认证用户都会通过，与 token 携带的 scope 无关。如需按 scope 限制访问，请将
+> `bearerOnly` 设为 `true`。
 
 ### 认证流程参数
 

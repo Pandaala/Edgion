@@ -15,7 +15,6 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 
 /// Local authentication configuration.
 ///
@@ -116,15 +115,13 @@ impl LocalAuthConfig {
         }
         None
     }
-
-    /// Build a HashSet of skip paths for O(1) lookup in middleware.
-    pub fn skip_paths_set(&self) -> HashSet<String> {
-        self.skip_paths.iter().cloned().collect()
-    }
 }
 
 fn default_skip_paths() -> Vec<String> {
-    vec!["/health".to_string(), "/ready".to_string()]
+    crate::core::common::auth::public_paths::PUBLIC_PROBE_PATHS
+        .iter()
+        .map(|p| (*p).to_string())
+        .collect()
 }
 
 fn default_cookie_secure() -> bool {

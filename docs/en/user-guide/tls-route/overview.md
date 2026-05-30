@@ -4,7 +4,7 @@ TLSRoute matches inbound TLS connections by the SNI hostname in the ClientHello 
 
 TLSRoute is a standard Gateway API resource. It is the encryption-aware counterpart of TCPRoute: where TCPRoute routes a raw TCP stream by listener port only, TLSRoute peeks at the unencrypted SNI field of the TLS handshake and routes by hostname, letting many hostnames share one listener port.
 
-**TLS passthrough** means the gateway does not decrypt traffic. It reads only the SNI to pick a backend, then proxies the original encrypted stream end to end. This requires the parent Gateway listener to use TLS mode `Passthrough`. This contrasts with **TLS termination**, where the gateway decrypts traffic and works with the plaintext (see [TLS Termination](../../../ops-guide/gateway/tls/tls-termination.md)).
+**TLS passthrough** means the gateway does not decrypt traffic. It reads only the SNI to pick a backend, then proxies the original encrypted stream end to end. This requires the parent Gateway listener to use TLS mode `Passthrough`. This contrasts with **TLS termination**, where the gateway decrypts traffic and works with the plaintext (see [TLS Termination](../../ops-guide/gateway/tls/tls-termination.md)).
 
 ## Basic structure
 
@@ -41,7 +41,7 @@ Key fields:
 
 `parentRefs` binds the TLSRoute to a Gateway listener. Use `sectionName` to target a specific listener by name; this listener must have `tls.mode: Passthrough` so the gateway forwards encrypted bytes instead of decrypting them. A single TLSRoute may attach to more than one Gateway.
 
-More on listeners: [TLS Termination](../../../ops-guide/gateway/tls/tls-termination.md).
+More on listeners: [TLS Termination](../../ops-guide/gateway/tls/tls-termination.md).
 
 ### Hostnames (SNI)
 
@@ -55,7 +55,7 @@ More on listeners: [TLS Termination](../../../ops-guide/gateway/tls/tls-terminat
 
 `rules[].backendRefs` lists the destinations for matched connections. Each entry names a Service and a port; when several backends are listed, traffic is split by `weight`. Backends in another namespace require a ReferenceGrant.
 
-More on backends: [Backend configuration](./backends/README.md).
+More on backends: [Backend configuration](./backends/overview.md).
 
 ## Complete example
 
@@ -91,10 +91,10 @@ spec:
 
 | Topic | Document | Description |
 |-------|----------|-------------|
-| Backend configuration | [backends/](./backends/README.md) | Define target Services, ports, weights, and cross-namespace references |
+| Backend configuration | [backends/](./backends/overview.md) | Define target Services, ports, weights, and cross-namespace references |
 
 ## Related documents
 
-- [TLS Termination](../../../ops-guide/gateway/tls/tls-termination.md)
-- [Backend configuration](./backends/README.md)
+- [TLS Termination](../../ops-guide/gateway/tls/tls-termination.md)
+- [Backend configuration](./backends/overview.md)
 - [TCPRoute Overview](../tcp-route/overview.md)

@@ -1681,13 +1681,20 @@ main() {
             # Always invoke validator with --mode fail so exit 1 unambiguously means
             # "residue detected". Shell-side RESIDUE_MODE then decides whether to
             # block the build (default: fail — opt out with RESIDUE_MODE=warn).
+            # The controller's test-only diagnostic routes (wipe-all, store-stats)
+            # are intentionally unauthenticated under test mode, so the validator
+            # calls them tokenless.
             local residue_mode="${RESIDUE_MODE:-fail}"
+            # Disable errexit around the call so a non-zero exit (residue / infra
+            # error) is captured into $rc and handled below instead of aborting.
+            set +e
             "$residue_bin" \
                 --controller-addr "http://127.0.0.1:5800" \
                 --gateway-addr    "http://127.0.0.1:5810" \
                 --timeout-secs 30 \
                 --mode fail
             local rc=$?
+            set -e
 
             if [ $rc -eq 0 ]; then
                 log_success "Cache residue check passed (no leaks)"

@@ -29,8 +29,14 @@
 | `bearerOnly` | Boolean | `false` | Only validate Bearer Tokens, do not enable browser login flow |
 | `unauthAction` | Enum | `Auth` | Behavior on unauthenticated requests. Values: `Auth` (trigger login) | `Deny` (return 401) | `Pass` (pass through) |
 | `scope` | String | `"openid"` | OIDC request scope |
-| `requiredScopes` | Array\<String\> | None | Required scopes; token missing any will be rejected |
+| `requiredScopes` | Array\<String\> | None | Required scopes; a token missing any is rejected. **Only enforced when `bearerOnly: true`** (see note below) |
 | `realm` | String | `"edgion"` | Realm value in the `WWW-Authenticate` response header |
+
+> **Note on `requiredScopes`:** scope enforcement only applies in bearer-only mode
+> (`bearerOnly: true`). In the default session/login mode (`bearerOnly: false`, which
+> includes `unauthAction: Auth`), `requiredScopes` is accepted at config time but **not**
+> enforced at runtime — every authenticated user passes regardless of the token's scopes.
+> To restrict access by scope, set `bearerOnly: true`.
 
 ### Authentication Flow Parameters
 

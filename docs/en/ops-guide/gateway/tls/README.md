@@ -6,4 +6,4 @@ How to terminate TLS at the Gateway, add advanced TLS features, and automate cer
 - [EdgionTls](./edgion-tls.md) 🔌 — extension for mTLS, minimum TLS version, and cipher control
 - [ACME Automatic Certificates](./acme.md) 🔌 — automatic issuance and renewal via the ACME protocol
 
-For forwarding encrypted TLS without decrypting it, see [TLS Passthrough Listener](../listeners/tls-passthrough.md).
+For forwarding encrypted TLS without decrypting it, see [TLS Passthrough Listener](../listeners/https.md#passthrough---tls-passthrough).

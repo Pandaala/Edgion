@@ -118,6 +118,16 @@ pub trait PluginSession: Send + Sync {
     /// Remove a request header (e.g., hide credentials)
     fn remove_request_header(&mut self, name: &str) -> PluginSessionResult<()>;
 
+    /// Replace the request query string (the part after `?`) while leaving the
+    /// request path untouched. A non-empty `query` (no leading `?`) becomes the
+    /// new query; an empty string removes the query entirely.
+    ///
+    /// Unlike `set_upstream_uri`, this does NOT mark the URI as finalized — the
+    /// raw-vs-normalized path-forwarding decision is still made later at the
+    /// upstream-peer stage. Used by credential-hiding to strip a query
+    /// parameter without overriding that path decision.
+    fn set_request_query(&mut self, query: &str) -> PluginSessionResult<()>;
+
     /// Set the upstream URI (for proxy rewrite)
     fn set_upstream_uri(&mut self, uri: &str) -> PluginSessionResult<()>;
 

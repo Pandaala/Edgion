@@ -139,5 +139,5 @@ spec:
 ## Related documents
 
 - [TLSRoute Overview](../overview.md)
-- [TLS Termination](../../../../ops-guide/gateway/tls/tls-termination.md)
+- [TLS Termination](../../../ops-guide/gateway/tls/tls-termination.md)
 - [TCPRoute Backends](../../tcp-route/backends/overview.md)

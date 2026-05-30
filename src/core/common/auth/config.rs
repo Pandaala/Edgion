@@ -12,7 +12,6 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 
 /// Admin API authentication configuration.
 ///
@@ -55,7 +54,7 @@ pub struct AdminAuthConfig {
     pub jwks_min_refresh_interval: u64,
 
     /// Paths that skip authentication (e.g., health/ready probes).
-    /// Default: ["/health", "/ready"].
+    /// Default: ["/health", "/ready", "/metrics"].
     #[serde(default = "default_skip_paths")]
     pub skip_paths: Vec<String>,
 
@@ -133,11 +132,6 @@ impl AdminAuthConfig {
         }
         None
     }
-
-    /// Build a HashSet of skip paths for O(1) lookup in middleware.
-    pub fn skip_paths_set(&self) -> HashSet<String> {
-        self.skip_paths.iter().cloned().collect()
-    }
 }
 
 fn default_clock_skew() -> u64 {
@@ -153,7 +147,10 @@ fn default_jwks_min_refresh_interval() -> u64 {
 }
 
 fn default_skip_paths() -> Vec<String> {
-    vec!["/health".to_string(), "/ready".to_string()]
+    crate::core::common::auth::public_paths::PUBLIC_PROBE_PATHS
+        .iter()
+        .map(|p| (*p).to_string())
+        .collect()
 }
 
 /// Error returned when a `skip_paths` entry is outside the allowed set.
@@ -169,7 +166,7 @@ pub(crate) const SKIP_PATHS_ALLOWLIST_ERR: &str =
 /// unauthenticated and (on the Controller) is granted Superuser by the
 /// `assign_superuser_if_no_role` fallback. See finding fr-cauth-01.
 pub(crate) fn skip_path_is_allowlisted(path: &str) -> bool {
-    matches!(path, "/health" | "/ready" | "/metrics") || path.starts_with("/api/v1/auth/")
+    crate::core::common::auth::public_paths::is_skip_allowlisted(path)
 }
 
 fn default_discovery_max_response_bytes() -> usize {
@@ -232,9 +229,9 @@ mod tests {
     #[test]
     fn test_skip_paths_default() {
         let config = AdminAuthConfig::default();
-        let set = config.skip_paths_set();
-        assert!(set.contains("/health"));
-        assert!(set.contains("/ready"));
+        assert!(config.skip_paths.iter().any(|p| p == "/health"));
+        assert!(config.skip_paths.iter().any(|p| p == "/ready"));
+        assert!(config.skip_paths.iter().any(|p| p == "/metrics"));
     }
 
     #[test]

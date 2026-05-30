@@ -5,7 +5,6 @@
 //! API. This module exposes `LocalAuthState` so `unified_auth` can perform the
 //! local-validation fallback without depending on full middleware plumbing.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::config::LocalAuthConfig;
@@ -23,8 +22,6 @@ pub struct LocalAuthState {
     pub jwt_secret: String,
     /// Token expiry in hours.
     pub jwt_expiry_hours: u64,
-    /// Paths that bypass auth checks.
-    pub skip_paths: HashSet<String>,
     /// Emit the `Secure` attribute on the issued/cleared auth cookie.
     pub cookie_secure: bool,
 }
@@ -42,7 +39,6 @@ impl LocalAuthState {
             username: config.username.clone(),
             jwt_secret: config.jwt_secret.clone(),
             jwt_expiry_hours: config.jwt_expiry_hours,
-            skip_paths: config.skip_paths_set(),
             cookie_secure: config.cookie_secure,
         })
     }
