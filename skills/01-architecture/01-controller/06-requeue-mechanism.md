@@ -116,8 +116,15 @@ Call sites:
 | ReferenceGrant | yes | yes | CrossNsRevalidationListener |
 | ConfigMap | yes | yes | no requeue dependency |
 | EndpointSlice | — | — | stored directly; consumed by Gateway on demand |
-| GatewayClass | — | — | referenced by Gateway; no requeue |
-| EdgionGatewayConfig | — | — | referenced by Gateway; no requeue |
+| Endpoints | — | — | stored directly; consumed by Gateway on demand |
+| GatewayClass | — | — | referenced by Gateway; no requeue (intentional — see note) |
+| EdgionGatewayConfig | — | — | referenced by Gateway; no requeue (intentional — see note) |
+
+> **Note (GatewayClass / EdgionGatewayConfig "no requeue" is intentional):** both resources are
+> independently synced to the data plane and consumed directly at listener-build time
+> (`src/core/gateway/runtime/server/base.rs:110-129`), and the controller-side `GatewayHandler`
+> derives no status from them, so requeuing a Gateway on their change would be a no-op. See
+> `skills/04-review/handler-requeue/controller-06-gatewayclass-egc-no-gateway-requeue.md`.
 
 ## Cycle Safety
 

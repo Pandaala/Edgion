@@ -188,3 +188,17 @@ Shutdown relies on Pingora's built-in graceful shutdown mechanism:
 5. After the grace period expires, enter the graceful shutdown timeout (default 10 seconds), forcibly closing remaining connections.
 6. `run_forever()` returns, the main thread exits.
 7. The background Tokio thread terminates automatically when the process exits.
+
+## Known limitation: listener port set is frozen at startup
+
+Listener sockets are bound exactly once, during Phase 1 (`create_and_configure_server()` → `gateway_base.configure_listeners()`). The `Server` is then consumed by `run_forever()` (`cli/pingora.rs`), so nothing in the runtime path holds a handle that could `bind()`/`listen()` a new socket or drain an old one.
+
+When a Gateway resource changes at runtime, `GatewayHandler::partial_update()` (`runtime/handler.rs`) rebuilds only the routing data structures (the `ListenerGatewayInfoStore`/PGIS and the per-listener route managers). It does **not** touch listener sockets. The consequences:
+
+- **Adding a port** to a live Gateway updates routing but leaves the new port unbound — traffic to it is silently dropped.
+- **Removing a port** leaves its socket bound and accepting connections that route to nothing.
+- **TLS certificate updates are exempt**: they hot-reload via ArcSwap on the existing socket, so cert rotation works without restart.
+
+Therefore any change to the listener **port set** requires a full gateway process restart (e.g. a Kubernetes rolling restart). The `"Gateway updated (routes/TLS hot-reloaded; listener port add/remove requires a process restart)"` log line in `partial_update` reflects this.
+
+Lifting the limitation depends on Pingora's `Server` API gaining support for adding `Service`s after `run_forever()` has started; until then, restart is the documented operator workflow for port changes.

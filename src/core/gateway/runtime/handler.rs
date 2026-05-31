@@ -147,7 +147,11 @@ impl ConfHandler<Gateway> for GatewayHandler {
                         name = %gateway.name_any(),
                         gateway_class = %gateway.spec.gateway_class_name,
                         listeners = listener_count,
-                        "Gateway updated (dynamic listener/TLS config updated)"
+                        // Routes and TLS certificates hot-reload here; listener port
+                        // add/remove does NOT (sockets are bound once at startup, see
+                        // the rebuild_listener_gateway_infos comment below).
+                        "Gateway updated (routes/TLS hot-reloaded; listener port \
+                         add/remove requires a process restart)"
                     );
 
                     update_gateway_backend_tls_store(&key, &gateway);
@@ -201,6 +205,17 @@ impl ConfHandler<Gateway> for GatewayHandler {
             // the rationale and the criteria that would justify revisiting this.
             rebuild_gateway_tls_matcher(&gateways);
 
+            // KNOWN LIMITATION: this rebuilds only the routing data structures
+            // (PGIS + per-listener route managers). The OS-level listener sockets
+            // are bound once during startup Phase 1 (create_and_configure_server ->
+            // configure_listeners) and the Server is then consumed by
+            // run_forever() (cli/pingora.rs), so we hold no handle to bind/drain
+            // sockets here. Adding a new listener port to a live Gateway updates
+            // routing but leaves the new port unbound (traffic silently dropped);
+            // removing a port leaves its socket bound with no route. A port-set
+            // change therefore requires a gateway process restart. TLS certificate
+            // updates are exempt — they hot-reload via ArcSwap on existing sockets.
+            // See skills/01-architecture/02-gateway/01-startup-shutdown.md.
             let keys_before = get_listener_gateway_info_store().all_listener_keys();
             rebuild_listener_gateway_infos(&gateways);
             let keys_after = get_listener_gateway_info_store().all_listener_keys();
