@@ -287,8 +287,8 @@ the config.
 
 ### Controller configuration
 
-Add a `cli_tokens` block to the Controller TOML (can coexist with `[center]`,
-`[local_auth]`, and `[auth]`):
+Add a `cli_tokens` block to the Controller YAML config (can coexist with `center`,
+`local_auth`, and `auth`):
 
 ```yaml
 cli_tokens:
@@ -372,9 +372,8 @@ over `--token` to avoid leaking the token in shell history or process listings.
 **6. Migration: no-auth mode was removed.**
 Deployments that previously relied on `local_auth.enabled: false` (or
 `auth.enabled: false`) to bypass authentication must now configure at least one
-auth provider. See
-[No-Auth Mode Removed](../../../skills/02-features/02-config/03-auth-bootstrap.md)
-for the upgrade path.
+auth provider. See the [Controller configuration](configuration/controller-config.md)
+guide (the `[local_auth]` and `[auth]` sections) for the upgrade path.
 
 **7. `list-keys` reveals resource names.**
 The `list-keys` verb exposes resource names (and namespace/kind metadata) even
@@ -396,13 +395,12 @@ on the Controller process, not by the RBAC engine.
 
 ### Configuration schema reference
 
-See `skills/02-features/02-config/00-controller-config.md` (`[cli_tokens]`) for
+See [Controller Configuration](configuration/controller-config.md#cli-tokens----static-cli-tokens) for
 the full field reference and a two-token example.
 
 ---
 
-## Reference
+## Related documents
 
-- Controller configuration schema: `skills/02-features/02-config/00-controller-config.md`
-- Sample configuration file: `config/edgion-controller.yaml`
-- Design specification: `docs/superpowers/specs/2026-05-21-fed-center-rbac-design.md`
+- [Controller Configuration](configuration/controller-config.md)
+- [edgion-cli](edgion-cli.md)

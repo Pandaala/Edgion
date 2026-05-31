@@ -154,7 +154,7 @@ apiVersion: edgion.io/v1
 kind: PluginMetaData
 metadata:
   name: my-svc-pm
-  namespace: default
+  namespace: production
 spec:
   plugins:
     - type: ServiceRegionRoute
@@ -176,7 +176,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: my-app-plugins
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RegionRoute

@@ -1,253 +1,267 @@
-# Access Log 用户指南
+# Access Log
 
 > **🔌 Edgion 扩展**
-> 
-> Access Log 格式和插件日志结构是 Edgion Gateway 的特有功能。
+>
+> access log 格式和插件日志结构是 Edgion Gateway 的特有功能，不属于标准 Gateway API 规范。
+
+Edgion Gateway 为每个请求生成一条结构化 JSON access log，记录完整的请求生命周期：客户端信息、路由匹配、后端响应、每个插件的执行日志和错误。这是网关诊断单个请求的主要机制。
 
 ## 概述
 
-Edgion Gateway 为每个请求生成详细的访问日志（access log），记录请求的完整生命周期信息，包括客户端信息、路由匹配、后端响应、插件执行日志等。
+access log 是回答*特定请求*相关问题的正确工具——"带 `x-trace-id=abc` 的请求发生了什么？"。聚合指标（见[监控指标](./metrics.md)）回答集群级问题；access log 回答单请求级问题。
 
-日志默认以 JSON 格式输出，便于日志分析工具解析。
+每条日志是一行上的单个 JSON 对象，文件可直接被 `jq`、Loki、Elasticsearch 或任何面向行的日志管道消费。
 
-## 日志位置
+```
+client request ──► Gateway ──► backend
+                     │
+                     └──► one JSON line ──► logs/edgion_access.log
+```
 
-- **默认路径**: `logs/edgion_access.log`
-- **格式**: JSON (每行一条日志)
+## 配置
 
-## 日志结构
+access log 在网关配置的 `access_log` 段下配置。
 
-### 基础字段
+### 最小配置
 
-每条 access log 包含以下主要字段：
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+```
+
+此配置使用默认队列和轮转行为启用日志。`path` 除非为绝对路径，否则相对于 `work_dir` 解析。
+
+### 生产配置
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+      # 反压作用于请求路径之前的内存队列
+      queue_size: 80000
+      rotation:
+        strategy: daily
+        max_files: 7
+```
+
+### 配置参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `enabled` | Boolean | `false` | 启用 access log 通道 |
+| `output.localFile.path` | String | none | 日志文件路径（除非为绝对路径，否则相对于 `work_dir`）。使用 `localFile` 时**必填** |
+| `output.localFile.queue_size` | Integer | none | 反压生效前的内存队列大小 |
+| `output.localFile.rotation.strategy` | Enum | none | 轮转策略。示例值：`daily` |
+| `output.localFile.rotation.max_files` | Integer | none | 保留的轮转文件最大数量 |
+| `output.elasticsearch` | Object | none | 将 access log 发送到 Elasticsearch（通过 `link_sys`），可替代或补充本地文件 |
+
+原始客户端入口 URI（`request_uri`）由单独的顶层 `access_log_options` 段控制，而非 `access_log` 块——见[特殊字段](#特殊字段)。
+
+> `output` 块也接受 `elasticsearch` sink。当 Elasticsearch 生产者→批量循环通道被填满时，`edgion_link_sys_es_bulk_channel_full_total` 计数器递增——将其作为反压信号监控。见[监控指标](./metrics.md)。
+
+## 日志格式
+
+日志始终是 JSON，每行一条。可选字段为空时完全省略（而非输出 `null`），保持每行紧凑。顶层结构如下：
 
 ```json
 {
   "ts": 1767089146376,
-  "request_info": { ... },
-  "match_info": { ... },
-  "backend_context": { ... },
-  "plugin_logs": [ ... ],
-  "errors": [ ... ]
-}
-```
-
-### 1. 时间戳 (`ts`)
-
-请求的时间戳，毫秒级 Unix 时间。
-
-**示例**:
-```json
-"ts": 1767089146376
-```
-
-### 2. 请求信息 (`request_info`)
-
-记录客户端和请求的基本信息：
-
-| 字段 | 说明 | 示例 |
-|------|------|------|
-| `client-addr` | 客户端 TCP 连接地址 | `"127.0.0.1"` |
-| `client-port` | 客户端端口 | `54882` |
-| `remote-addr` | 实际客户端 IP（考虑代理后） | `"203.0.113.1"` |
-| `x-trace-id` | 请求追踪 ID | `"eff524a7-10a4-483c-..."` |
-| `host` | 请求的 Host 头 | `"test.example.com"` |
-| `path` | 请求路径 | `"/health"` |
-| `status` | 响应状态码 | `200` |
-| `x-forwarded-for` | X-Forwarded-For 头（如有） | `"203.0.113.1, 198.51.100.2"` |
-| `discover_protocol` | 自动识别的协议类型 | `"grpc"`, `"websocket"` |
-| `grpc_service` | gRPC 服务名（gRPC 请求） | `"test.TestService"` |
-| `grpc_method` | gRPC 方法名（gRPC 请求） | `"SayHello"` |
-
-**示例**:
-```json
-"request_info": {
-  "client-addr": "127.0.0.1",
-  "client-port": 54882,
-  "remote-addr": "127.0.0.1",
-  "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
-  "host": "test.example.com",
+  "client-addr": "192.168.1.20",
+  "host": "api.example.com",
   "path": "/health",
-  "status": 200
+  "status": 200,
+  "match_info": { },
+  "backend_context": { },
+  "plugin_logs": [ ],
+  "info": [ ],
+  "errors": [ ]
 }
 ```
 
-### 3. 路由匹配信息 (`match_info`)
+请求作用域字段（`client-addr`、`host`、`path`、`status` 等）直接平铺在顶层对象中；路由、后端和插件信息为嵌套结构。
 
-记录匹配到的路由规则：
+## 字段参考
 
-| 字段 | 说明 | 示例 |
+### 顶层字段
+
+| 字段 | 类型 | 说明 |
 |------|------|------|
-| `rns` | 路由命名空间 | `"edge"` |
-| `rn` | 路由名称 | `"test-http"` |
-| `rule_id` | 规则 ID（从 0 开始） | `0` |
-| `match_id` | 匹配项 ID（从 0 开始） | `0` |
+| `ts` | Integer | 条目时间戳，纪元毫秒 |
+| `match_info` | Object | 匹配的路由标识（无路由匹配时省略） |
+| `backend_context` | Object | 后端标识和上游时序（无后端时省略/`null`） |
+| `plugin_logs` | Array\<Object\> | 按阶段分组的每插件执行日志（为空时省略） |
+| `info` | Array\<String\> | 网关内部信息事件（为空时省略） |
+| `errors` | Array\<String\> | 处理过程中捕获的错误原因（为空时省略） |
 
-**示例**:
-```json
-"match_info": {
-  "rns": "edge",
-  "rn": "test-http",
-  "rule_id": 0,
-  "match_id": 0
-}
-```
+### 请求字段
 
-如果路由未匹配，`match_info` 字段将不出现。
+直接平铺在顶层对象中。每个字段不存在时省略。
 
-### 4. 后端信息 (`backend_context`)
-
-记录后端服务和上游连接信息：
-
-| 字段 | 说明 |
-|------|------|
-| `name` | 后端服务名称 |
-| `namespace` | 后端服务命名空间 |
-| `upstreams` | 上游连接尝试列表（支持重试） |
-
-**上游连接信息** (`upstreams`):
-
-| 字段 | 说明 | 单位 |
+| 字段 | 类型 | 说明 |
 |------|------|------|
-| `ip` | 上游 IP 地址 | - |
-| `port` | 上游端口 | - |
-| `status` | 上游响应状态码 | - |
-| `ct` | 连接时间 (Connect Time) | 毫秒 |
-| `ht` | 首字节响应时间 (Header Time) | 毫秒 |
-| `bt` | 首包响应时间 (Body Time) | 毫秒 |
-| `err` | 错误信息（如有） | - |
+| `client-addr` | String | 客户端 TCP 连接地址 |
+| `client-port` | Integer | 客户端 TCP 端口 |
+| `remote-addr` | String | 代理解析后的真实客户端 IP（如来自 `X-Forwarded-For`） |
+| `x-trace-id` | String | 每请求追踪 ID；客户端传递相同值可关联日志 |
+| `host` | String | 请求 `Host` 头 |
+| `path` | String | 规范化后的请求路径 |
+| `status` | Integer | 响应状态码 |
+| `x-forwarded-for` | String | `X-Forwarded-For` 头值（存在时） |
+| `discover_protocol` | String | 自动检测的协议。示例：`grpc`、`websocket` |
+| `grpc_service` | String | gRPC 服务名（仅 gRPC 请求） |
+| `grpc_method` | String | gRPC 方法名（仅 gRPC 请求） |
+| `sni` | String | TLS 服务器名指示（仅 TLS 连接） |
+| `tls_id` | String | TLS 连接/会话标识符（仅 TLS 连接） |
+| `request_uri` | String | 客户端入口原始 URI；**仅当** `access_log_options.include_raw_uri: true` 时输出 |
 
-**示例**:
-```json
-"backend_context": {
-  "name": "test-http",
-  "namespace": "edge",
-  "upstreams": [
-    {
-      "ip": "127.0.0.1",
-      "port": 30001,
-      "status": 200,
-      "ct": 0,
-      "ht": 0,
-      "bt": 0
-    }
-  ]
-}
-```
+### `match_info` 字段
 
-**多次重试示例**:
-```json
-"backend_context": {
-  "name": "test-service",
-  "namespace": "edge",
-  "upstreams": [
-    {
-      "ip": "10.0.1.5",
-      "port": 8080,
-      "status": 502,
-      "ct": 1,
-      "ht": 100,
-      "err": ["Connection reset"]
-    },
-    {
-      "ip": "10.0.1.6",
-      "port": 8080,
-      "status": 200,
-      "ct": 2,
-      "ht": 50,
-      "bt": 50
-    }
-  ]
-}
-```
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `rns` | String | 路由命名空间 |
+| `rn` | String | 路由名称 |
+| `rule_id` | Integer | 匹配的规则索引（从 0 开始） |
+| `match_id` | Integer | 匹配的匹配项索引（从 0 开始） |
+| `sv` | Integer | Controller→Gateway 同步版本；为 0 时省略 |
 
-如果路由未匹配或请求被插件终止，`backend_context` 将为 `null`。
+无路由匹配时，整个 `match_info` 对象省略。
 
-### 5. 插件日志 (`plugin_logs`)
+### `backend_context` 字段
 
-记录插件执行的详细日志，按执行阶段（stage）分组：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | String | 后端服务名称 |
+| `namespace` | String | 后端服务命名空间 |
+| `upstreams` | Array\<Object\> | 每次上游尝试的条目（重试时产生多条） |
+
+#### `upstreams[]` 子字段
+
+| 字段 | 类型 | 单位 | 说明 |
+|------|------|------|------|
+| `ip` | String | — | 上游 IP 地址 |
+| `port` | Integer | — | 上游端口 |
+| `status` | Integer | — | 上游响应状态码 |
+| `ct` | Integer | ms | 连接时间 |
+| `ht` | Integer | ms | 首字节时间（到响应第一字节） |
+| `bt` | Integer | ms | 响应体首字节时间 |
+| `et` | Integer | ms | 本次尝试的总耗时 |
+| `err` | Array\<String\> | — | 本次尝试的错误信息（为空时省略） |
+
+无后端使用时（路由未匹配，或请求被插件短路），`backend_context` 为 `null` 或省略。
+
+### `plugin_logs` 字段
+
+`plugin_logs` 是阶段组的数组；每个组包含一个执行阶段的每插件日志。
 
 ```json
 "plugin_logs": [
   {
     "stage": "request_filters",
     "logs": [
-      {
-        "name": "BasicAuth",
-        "time_cost": 5,
-        "log": ["Auth success"]
-      },
-      {
-        "name": "Cors",
-        "time_cost": 2,
-        "log": ["CORS resp set"]
-      }
-    ]
-  },
-  {
-    "stage": "upstream_response_filters",
-    "logs": [
-      {
-        "name": "ResponseHeaderModifier",
-        "time_cost": 1,
-        "log": ["Header modified"]
-      }
+      { "name": "BasicAuth", "time_cost": 5, "log": ["Auth success"] },
+      { "name": "Cors", "time_cost": 2, "log": ["CORS resp set"] }
     ]
   }
 ]
 ```
 
-**插件日志字段说明**:
-
-| 字段 | 说明 | 示例 |
+| 字段 | 类型 | 说明 |
 |------|------|------|
-| `stage` | 执行阶段 | `"request_filters"`, `"upstream_response_filters"` |
-| `name` | 插件名称 | `"BasicAuth"`, `"Cors"` |
-| `time_cost` | 执行耗时（微秒） | `5` |
-| `log` | 日志内容数组 | `["Auth success"]` |
-| `log_full` | 日志缓冲区是否已满 | `true` (仅在已满时出现) |
+| `stage` | String | 执行阶段。示例：`request_filters`、`upstream_response_filters` |
+| `logs[].name` | String | 插件名称 |
+| `logs[].time_cost` | Integer | 插件执行时间（**微秒**） |
+| `logs[].log` | Array\<String\> | 插件输出的日志行 |
+| `logs[].log_full` | Boolean | 仅在插件日志缓冲区溢出并丢弃条目时出现且为 `true` |
 
-**常见插件日志内容**:
+常见插件日志行：
 
-| 插件 | 日志内容 |
-|------|----------|
-| **BasicAuth** | `Auth success` - 认证成功<br>`Auth failed` - 认证失败<br>`Anonymous` - 匿名访问 |
-| **Cors** | `CORS resp set` - CORS 头已设置<br>`Preflight handled` - Preflight 已处理<br>`Origin rejected` - Origin 被拒绝 |
-| **CSRF** | `Token verified` - Token 验证成功<br>`Token set` - Token 已设置<br>`Token mismatch` - Token 不匹配<br>`No token in header` - 缺少 token |
-| **IPRestriction** | `Allowed` - IP 允许访问<br>`Denied` - IP 被拒绝 |
-| **Mock** | `Mock returned` - 返回 mock 响应 |
+| 插件 | 日志行 | 含义 |
+|------|--------|------|
+| BasicAuth | `Auth success` / `Auth failed` / `Anonymous` | 认证结果 |
+| Cors | `CORS resp set` / `Preflight handled` / `Origin rejected` | CORS 处理结果 |
+| CSRF | `Token verified` / `Token set` / `Token mismatch` / `No token in header` | CSRF 处理结果 |
+| IPRestriction | `Allowed` / `Denied` | IP 过滤结果 |
+| Mock | `Mock returned` | 返回了 mock 响应 |
 
-**`log_full` 说明**:
+`log_full: true` 表示插件输出的日志数据超过了每插件缓冲区的容量，后续行被丢弃。将其视为需要精简插件日志输出的提示，而非错误。
 
-插件日志内部使用两级缓冲区——固定 128 字节的 tier-1 栈缓冲区，溢出后写入 512 字节的 tier-2 堆缓冲区——但始终序列化为一个合并的 `log` 数组。当 tier-2 缓冲区也写满时，后续条目会被丢弃并设置 `log_full: true`：
+### `errors` 取值
 
-```json
-{
-  "name": "CustomPlugin",
-  "time_cost": 10,
-  "log": ["Entry 1", "Entry 2", "Entry 3", "Entry 4"],
-  "log_full": true
-}
-```
-
-这表示该插件的日志被截断了，可能需要检查插件逻辑或优化日志输出。
-
-### 6. 错误信息 (`errors`)
-
-记录请求处理过程中的错误：
-
-```json
-"errors": ["RouteNotFound"]
-```
-
-**常见错误码**:
-
-| 错误码 | 说明 |
-|--------|------|
-| `RouteNotFound` | 未找到匹配的路由 |
-| `XffHeaderTooLong` | X-Forwarded-For 头过长 |
-| `BackendNotFound` | 后端服务未找到 |
+| 值 | 说明 |
+|----|------|
+| `RouteNotFound` | 请求无匹配路由 |
+| `XffHeaderTooLong` | `X-Forwarded-For` 头超过允许长度 |
+| `BackendNotFound` | 后端服务无法解析 |
 | `UpstreamConnectError` | 上游连接失败 |
+
+## 特殊字段
+
+### 原始请求 URI
+
+默认情况下日志记录规范化后的 `path`。要同时捕获客户端发送的原始 URI（规范化/重写之前），在顶层 `access_log_options` 段启用 `include_raw_uri`：
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+
+access_log_options:
+  include_raw_uri: true
+```
+
+原始 URI 随后出现在 `request_uri` 字段中。调试路径重写或 URL 编码问题时有用，但会增加每行大小，因此仅在排查时启用。
+
+## 常见配置场景
+
+### 1. 快速本地调试
+
+使用默认配置将日志写入本地文件——开发期间查看网关行为的最简方式：
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+```
+
+### 2. 生产环境按日轮转
+
+每天保留一个文件，保留一周历史：
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+      queue_size: 80000
+      rotation:
+        strategy: daily
+        max_files: 7
+```
+
+### 3. 排查路径重写问题
+
+调试重写问题时同时捕获规范化路径和客户端原始 URI：
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+
+access_log_options:
+  include_raw_uri: true
+```
 
 ## 日志示例
 
@@ -256,89 +270,40 @@ Edgion Gateway 为每个请求生成详细的访问日志（access log），记�
 ```json
 {
   "ts": 1767089146376,
-  "request_info": {
-    "client-addr": "127.0.0.1",
-    "client-port": 54882,
-    "remote-addr": "127.0.0.1",
-    "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
-    "host": "test.example.com",
-    "path": "/health",
-    "status": 200
-  },
-  "match_info": {
-    "rns": "edge",
-    "rn": "test-http",
-    "rule_id": 0,
-    "match_id": 0
-  },
+  "client-addr": "192.168.1.20",
+  "client-port": 54882,
+  "remote-addr": "192.168.1.20",
+  "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
+  "host": "test.example.com",
+  "path": "/health",
+  "status": 200,
+  "match_info": { "rns": "production", "rn": "api-route", "rule_id": 0, "match_id": 0 },
   "backend_context": {
-    "name": "test-http",
-    "namespace": "edge",
+    "name": "api-service",
+    "namespace": "production",
     "upstreams": [
-      {
-        "ip": "127.0.0.1",
-        "port": 30001,
-        "status": 200,
-        "ct": 0,
-        "ht": 0,
-        "bt": 0
-      }
+      { "ip": "10.0.0.5", "port": 8080, "status": 200, "ct": 0, "ht": 0, "bt": 0, "et": 1 }
     ]
   }
 }
 ```
 
-### 带插件的请求
+### 带重试的请求
 
 ```json
 {
   "ts": 1767089146377,
-  "request_info": {
-    "client-addr": "127.0.0.1",
-    "client-port": 54883,
-    "remote-addr": "127.0.0.1",
-    "x-trace-id": "d82dcc21-2412-4582-8726-3e7a7becc58b",
-    "host": "api.example.com",
-    "path": "/api/data",
-    "status": 200
-  },
-  "match_info": {
-    "rns": "edge",
-    "rn": "api-route",
-    "rule_id": 0,
-    "match_id": 0
-  },
+  "host": "api.example.com",
+  "path": "/api/data",
+  "status": 200,
   "backend_context": {
-    "name": "api-backend",
-    "namespace": "edge",
+    "name": "api-service",
+    "namespace": "production",
     "upstreams": [
-      {
-        "ip": "10.0.1.5",
-        "port": 8080,
-        "status": 200,
-        "ct": 2,
-        "ht": 15,
-        "bt": 15
-      }
+      { "ip": "10.0.0.5", "port": 8080, "status": 502, "ct": 1, "ht": 100, "et": 100, "err": ["Connection reset"] },
+      { "ip": "10.0.0.6", "port": 8080, "status": 200, "ct": 2, "ht": 50, "bt": 50, "et": 52 }
     ]
-  },
-  "plugin_logs": [
-    {
-      "stage": "request_filters",
-      "logs": [
-        {
-          "name": "BasicAuth",
-          "time_cost": 8,
-          "log": ["Auth success"]
-        },
-        {
-          "name": "Cors",
-          "time_cost": 2,
-          "log": ["CORS resp set"]
-        }
-      ]
-    }
-  ]
+  }
 }
 ```
 
@@ -347,15 +312,9 @@ Edgion Gateway 为每个请求生成详细的访问日志（access log），记�
 ```json
 {
   "ts": 1767089149015,
-  "request_info": {
-    "client-addr": "127.0.0.1",
-    "client-port": 54892,
-    "remote-addr": "127.0.0.1",
-    "x-trace-id": "c8f3e4ec-e1b6-47f0-8941-be21bb86ee0f",
-    "host": "wrong-hostname.example.com",
-    "path": "/test",
-    "status": 404
-  },
+  "host": "wrong-hostname.example.com",
+  "path": "/test",
+  "status": 404,
   "errors": ["RouteNotFound"],
   "backend_context": null
 }
@@ -366,76 +325,78 @@ Edgion Gateway 为每个请求生成详细的访问日志（access log），记�
 ```json
 {
   "ts": 1767089148470,
-  "request_info": {
-    "client-addr": "127.0.0.1",
-    "client-port": 54885,
-    "remote-addr": "127.0.0.1",
-    "x-trace-id": "358c2727-250a-405a-92b2-7b5017cf95d0",
-    "host": "grpc.example.com",
-    "path": "/test.TestService/SayHello",
-    "status": 200,
-    "discover_protocol": "grpc",
-    "grpc_service": "test.TestService",
-    "grpc_method": "SayHello"
-  },
+  "host": "grpc.example.com",
+  "path": "/test.TestService/SayHello",
+  "status": 200,
+  "discover_protocol": "grpc",
+  "grpc_service": "test.TestService",
+  "grpc_method": "SayHello",
   "backend_context": {
-    "name": "test-grpc",
-    "namespace": "edge",
+    "name": "grpc-service",
+    "namespace": "production",
     "upstreams": [
-      {
-        "ip": "127.0.0.1",
-        "port": 30021,
-        "status": 200,
-        "ct": 0,
-        "ht": 1,
-        "bt": 1
-      }
+      { "ip": "10.0.0.21", "port": 8080, "status": 200, "ct": 0, "ht": 1, "bt": 1, "et": 1 }
     ]
   }
 }
 ```
 
-## 日志分析建议
-
-### 1. 使用 jq 分析日志
+## 使用 jq 分析日志
 
 ```bash
-# 查看所有 4xx 错误
-cat logs/edgion_access.log | jq 'select(.request_info.status >= 400 and .request_info.status < 500)'
+# 所有 4xx 响应
+cat logs/edgion_access.log | jq 'select(.status >= 400 and .status < 500)'
 
-# 统计最慢的请求（根据 ht）
-cat logs/edgion_access.log | jq -r '[.request_info.path, .backend_context.upstreams[0].ht] | @tsv' | sort -k2 -n
+# 按上游首字节时间排序最慢的请求
+cat logs/edgion_access.log | jq -r '[.path, .backend_context.upstreams[0].ht] | @tsv' | sort -k2 -n
 
-# 查看插件执行耗时
-cat logs/edgion_access.log | jq '.plugin_logs[] | .logs[] | select(.time_cost > 100)'
+# 耗时超过 100 微秒的插件执行
+cat logs/edgion_access.log | jq '.plugin_logs[]?.logs[]? | select(.time_cost > 100)'
 
-# 查看所有认证失败的请求
-cat logs/edgion_access.log | jq 'select(.plugin_logs[]?.logs[]? | select(.name == "BasicAuth" and (.log[] | contains("Auth failed"))))'
+# 端到端追踪一个请求
+cat logs/edgion_access.log | jq 'select(.["x-trace-id"] == "eff524a7-10a4-483c-a534-3c50b1199aa0")'
 ```
 
-### 2. 关注关键指标
+重点关注的字段：
 
-- **`ht` (Header Time)**: 后端响应首字节时间，高值可能表示后端性能问题
-- **`ct` (Connect Time)**: 连接建立时间，高值可能表示网络问题
-- **`plugin_logs.time_cost`**: 插件执行耗时，高值可能表示插件性能问题
-- **`log_full: true`**: 插件日志被截断，可能需要优化插件
+- `ht`（首字节时间）：后端首字节时间；值高说明后端延迟高。
+- `ct`（连接时间）：值高说明网络或连接池问题。
+- `et`（总耗时）：每次尝试的总时间，含重试。
+- `plugin_logs[].time_cost`：插件开销（微秒）。
+- `log_full: true`：插件日志缓冲区溢出。
 
-### 3. 错误排查
+## 常见问题
 
-1. **路由未匹配** (`RouteNotFound`): 检查 `host` 和 `path` 是否与路由配置匹配
-2. **认证失败**: 查看 `plugin_logs` 中的 `BasicAuth` 日志
-3. **CORS 错误**: 查看 `plugin_logs` 中的 `Cors` 日志，检查是否有 `Origin rejected`
-4. **后端错误**: 查看 `backend_context.upstreams[].status` 和 `err` 字段
+### Q1：我启用了 access log，但文件为空。为什么？
 
-## 最佳实践
+**A**：确认 `enabled: true` 已设置，且 `output.localFile.path` 解析到可写位置。相对路径相对于 `work_dir` 解析，请检查网关进程的实际工作目录。同时确认请求确实到达了网关。
 
-1. **设置 X-Trace-ID**: 在客户端请求中设置 `X-Trace-ID` 头，便于追踪请求链路
-2. **定期轮转日志**: 使用 `logrotate` 或类似工具定期轮转 `edgion_access.log`
-3. **集成日志系统**: 将 `edgion_access.log` 集成到 ELK、Loki 等日志分析平台
-4. **监控关键指标**: 根据 `edgion_access.log` 设置告警，如高延迟、高错误率等
+### Q2：为什么某些字段从日志行中缺失？
+
+**A**：可选字段为空时省略，而非写入 `null`。例如，无路由匹配时 `match_info` 不存在，`grpc_service` 只出现在 gRPC 请求，`sni` / `tls_id` 只出现在 TLS 连接。这是预期行为，保持日志行紧凑。
+
+### Q3：如何关联多跳请求的日志？
+
+**A**：从客户端发送 `X-Trace-ID` 头。网关将其记录为 `x-trace-id`，可以用单个 `jq` 选择器过滤一个逻辑请求的所有条目。
+
+### Q4：请求被插件拒绝了——看哪里？
+
+**A**：查看 `plugin_logs`。拒绝插件的 `log` 数组通常包含原因（例如 BasicAuth 的 `Auth failed` 或 Cors 的 `Origin rejected`）。当插件短路请求时，`backend_context` 通常为 `null`。
+
+### Q5：如何获取某个路由的更详细插件诊断？
+
+**A**：使用 debug-access-log 插件提升每插件的详细程度。见 [debug-access-log](../../user-guide/http-route/filters/edgion-plugins/debug-access-log.md)。
+
+## 获取帮助
+
+如遇问题：
+
+1. 检查本文档的常见问题部分
+2. 检查网关日志
+3. 在 GitHub 提交 issue
 
 ## 相关文档
 
 - [监控指标](./metrics.md)
-- [Gateway 资源总览](../gateway/overview.md)
-- [edgion-cli 命令行工具](../edgion-cli.md)
+- [debug-access-log 插件](../../user-guide/http-route/filters/edgion-plugins/debug-access-log.md)
+- [edgion-cli](../edgion-cli.md)

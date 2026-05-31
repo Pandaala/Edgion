@@ -42,7 +42,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: all-ep-status
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: AllEndpointStatus
@@ -91,36 +91,89 @@ spec:
 
 ## 响应格式
 
-插件返回 `200 OK`，`Content-Type: application/json`，响应体为 JSON 数组，每个元素对应一个 endpoint：
+插件返回 `200 OK`，`Content-Type: application/json`。响应体是一个 JSON 对象，包含 `summary` 块和 `backends` 数组；每个后端下有一个 `endpoints` 数组（每个端点一个元素）。字段名使用 snake_case。
 
 ```json
-[
-  {
-    "endpoint": "10.0.0.1:8080",
-    "status": 200,
-    "latencyMs": 12,
-    "body": "{\"status\":\"ok\"}",
-    "headers": {}
+{
+  "summary": {
+    "total_backends": 1,
+    "total_endpoints": 2,
+    "success_count": 1,
+    "failure_count": 1,
+    "truncated": false,
+    "timeout_ms": 2000,
+    "wall_timeout_ms": 10000,
+    "total_latency_ms": 42,
+    "total_response_bytes": 17,
+    "wall_timeout_hit": false
   },
-  {
-    "endpoint": "10.0.0.2:8080",
-    "status": 503,
-    "latencyMs": 2001,
-    "body": "service unavailable",
-    "headers": {}
-  }
-]
+  "backends": [
+    {
+      "name": "api-service",
+      "namespace": "production",
+      "port": 8080,
+      "endpoint_count": 2,
+      "endpoints": [
+        {
+          "address": "10.0.0.1:8080",
+          "status": 200,
+          "latency_ms": 12,
+          "body": "{\"status\":\"ok\"}",
+          "body_truncated": false,
+          "error": null
+        },
+        {
+          "address": "10.0.0.2:8080",
+          "status": null,
+          "latency_ms": 0,
+          "body": null,
+          "body_truncated": false,
+          "error": "wall timeout exceeded"
+        }
+      ]
+    }
+  ]
+}
 ```
+
+### `summary` 字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `endpoint` | String | endpoint 地址（`host:port`） |
-| `status` | Integer | HTTP 状态码；连接失败时为 `-1` |
-| `latencyMs` | Integer | 请求延迟（毫秒） |
-| `body` | String | 响应体（截断到 `maxBodySize`） |
-| `headers` | Object | 响应头（仅当 `includeResponseHeaders: true` 时存在） |
+| `total_backends` | Integer | 探查的后端数量 |
+| `total_endpoints` | Integer | 所有后端探查的端点总数 |
+| `success_count` | Integer | 返回 2xx/3xx 状态码的端点数 |
+| `failure_count` | Integer | 返回非 2xx 状态码或失败的端点数 |
+| `truncated` | Boolean | 端点数超过 `maxEndpoints` 并被截断时为 `true` |
+| `timeout_ms` | Integer | 实际生效的单端点超时 |
+| `wall_timeout_ms` | Integer | 实际生效的 wall-clock 超时 |
+| `total_latency_ms` | Integer | 整个扇出操作的 wall-clock 耗时（毫秒） |
+| `total_response_bytes` | Integer | 所有端点读取的响应体总字节数 |
+| `wall_timeout_hit` | Boolean | wall timeout 取消了某些端点时为 `true` |
 
-当 endpoint 因 wall timeout 被取消时，`status` 为 `-1`，`body` 为 `"wall timeout exceeded"`。
+### `backends[]` 字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | String | 后端 Service 名称 |
+| `namespace` | String | 后端命名空间 |
+| `port` | Integer | 后端端口 |
+| `endpoint_count` | Integer | 该后端的端点数量 |
+| `endpoints` | Array | 各端点结果（见下方） |
+
+### `endpoints[]` 字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `address` | String | 端点地址（`host:port`） |
+| `status` | Integer | HTTP 状态码；探查在收到响应前失败时为 `null` |
+| `latency_ms` | Integer | 往返延迟（毫秒） |
+| `body` | String | 响应体（截断到 `maxBodySize`）；探查失败或无响应体时为 `null` |
+| `body_truncated` | Boolean | 响应体在 `maxBodySize` 处被截断时为 `true` |
+| `headers` | Object | 响应头。仅当 `includeResponseHeaders: true` 时存在 |
+| `error` | String | 错误描述；成功时为 `null` |
+
+当端点因连接失败或 `wallTimeoutMs` 超时而失败时，`status` 为 `null`，`error` 字段携带失败原因（连接错误，或 `"wall timeout exceeded"`）。
 
 ---
 
@@ -249,13 +302,13 @@ spec:
 
 **A**：`timeoutMs` 的硬上限是 5000 ms，超出部分被静默截断。这是安全设计，防止慢速后端长时间阻塞扇出操作。
 
-### Q3：结果中某些 endpoint 的 `status` 是 `-1`，是什么原因？
+### Q3：结果中某些 endpoint 的 `status` 是 `null`，是什么原因？
 
 **A**：有两种可能：
 1. 连接失败（网络不通、端口未监听）
-2. `wallTimeoutMs` 到期时该 endpoint 尚未响应，被强制取消
+2. `wallTimeoutMs` 到期时该 endpoint 尚未响应，被强制取消（`summary.wall_timeout_hit` 此时为 `true`）
 
-通过查看 `body` 字段可以区分：连接失败通常有错误描述，wall timeout 时 `body` 为 `"wall timeout exceeded"`。
+通过查看 `error` 字段可以区分两者——它携带失败原因（连接错误，或 `"wall timeout exceeded"`）。
 
 ### Q4：这个插件会影响正常流量吗？
 

@@ -9,10 +9,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: GRPCRoute
 metadata:
   name: grpc-route
-  namespace: default
+  namespace: production
 spec:
   parentRefs:             # 绑定到哪个 Gateway
-    - name: my-gateway
+    - name: main-gateway
       sectionName: grpc
   hostnames:              # 匹配的域名
     - "grpc.example.com"

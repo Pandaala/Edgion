@@ -1,23 +1,24 @@
 # CtxSet Plugin
 
 > **🔌 Edgion extension**
-> 
+>
 > CtxSet is a context variable setting plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 
 ## Overview
 
 The `CtxSet` plugin sets context variables during request processing. These variables can be used by subsequent plugins (such as RateLimit, PluginConditions) or output as log fields.
 
-CtxSet supports extracting data from multiple sources (Header, Query, Cookie, etc.), and supports default values, case conversion, value mapping, and template-based variable composition.
+CtxSet supports extracting data from multiple sources (Header, Query, Cookie, Path, ClientIP, Method, existing context vars), optionally reshapes the value with regex extraction, transformation, and value mapping, and stores the result under a named key for downstream plugins.
 
 ## Features
 
-- **Multiple data sources**: Extract from Header, Query, Cookie, Path, ClientIP, etc.
-- **Value transformation**: Convert extracted values to uppercase or lowercase
-- **Value mapping**: Map specific values to other values (e.g., map `plan_id` to `rate_limit_tier`)
-- **String templates**: Combine multiple variables using `{{ key }}` syntax
-- **Default values**: Use defaults when the data source is missing or mapping fails
-- **Static values**: Directly set static strings
+- **Multiple data sources**: Extract from Header, Query, Cookie, Path, Method, ClientIP, or an existing context variable (`from`)
+- **Static values**: Directly set a fixed string with `value`
+- **Template composition**: Combine multiple sources into a single string with `${...}` markers
+- **Regex extraction**: Pull a capture group from the resolved value with `extract`
+- **Value transformation**: Case conversion, substring, prefix/suffix, trim, or regex replace via `transform`
+- **Value mapping**: Map specific values to other values (e.g., plan name → rate-limit tier) via `mapping`
+- **Default values**: Use a fallback when the source is missing or processing fails
 
 ## Configuration Parameters
 
@@ -25,246 +26,294 @@ CtxSet supports extracting data from multiple sources (Header, Query, Cookie, et
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `rules` | Array\<Object\> | — (required) | List of setting rules, see CtxVarRule sub-fields below |
+| `vars` | Array\<Object\> | **Required** | List of context variable rules. Must be non-empty; see rule fields below |
 
-### CtxVarRule Sub-fields
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `name` | String | — (required) | Target context variable name |
-| `from` | Object | None | Data source (choose one of `from`, `value`, or `template`), see KeyGet below |
-| `value` | String | None | Static value (as data source) |
-| `template` | String | None | String template (e.g., `prefix_{{ var }}`) |
-| `default` | String | None | Default value when data source is missing |
-| `transform` | String | None | String transformation. Values: `"lower"` | `"upper"` |
-| `mapping` | Object | None | Value mapping rules, see ValueMapping below |
-
-### ValueMapping Sub-fields
+### `vars[]` rule fields
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `values` | Object | — (required) | Mapping table (`original value` -> `new value`) |
-| `default` | String | None | Default value when mapping doesn't match |
+| `name` | String | **Required** | Target context variable name (must be non-empty) |
+| `from` | Object | none | Value source; see the `from` table. Priority: `value` > `template` > `from` |
+| `template` | String | none | Template string with `${...}` interpolation; see the template table |
+| `value` | String | none | Static literal value (highest priority) |
+| `extract` | Object | none | Regex extraction applied to the resolved value |
+| `transform` | Object | none | Value transformation (case, substring, prefix, suffix, trim, regex replace) |
+| `mapping` | Object | none | Value lookup table with optional default |
+| `default` | String | none | Fallback when the source is empty or extraction/transform fails |
 
-### KeyGet (Data Source) Sub-fields
+### `from` source fields
 
-The `from` field uses the unified `KeyGet` structure:
+`from` uses the unified `KeyGet` accessor, tagged by a `type` field:
+
+| `type` | Extra field | Reads from |
+|--------|-------------|------------|
+| `clientIp` | — | The client IP address (respects RealIp if present) |
+| `clientIpAndPath` | — | Client IP combined with the request path |
+| `header` | `name` | The named request header |
+| `query` | `name` | The named query-string parameter |
+| `cookie` | `name` | The named cookie |
+| `path` | — | The request path |
+| `method` | — | The HTTP method |
+| `ctx` | `name` | An existing context variable set by an earlier rule or plugin |
+
+For a fixed literal, use the top-level `value` field instead of `from`. For a composite string built from multiple sources, use `template`.
+
+### `template` variables
+
+A `template` is a literal string with `${...}` markers. Supported markers:
+
+| Marker | Resolves to |
+|--------|-------------|
+| `${header:X-Name}` | A request header value |
+| `${query:name}` | A query-string parameter |
+| `${cookie:name}` | A cookie value |
+| `${ctx:name}` | An existing context variable |
+| `${path}` | Current normalized path (no query string) |
+| `${uri}` | Current normalized full URI (path + query) |
+| `${requestPath}` | Entry-time raw path (frozen, immune to later rewrites) |
+| `${requestUri}` | Entry-time raw full URI (frozen) |
+| `${method}` | HTTP method |
+| `${clientIp}` | Client IP address |
+
+User-controlled values that contain `${...}` are emitted as literal text, so templates are not vulnerable to injection.
+
+### `extract` fields
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `type` | String | — (required) | Data source type: `header`, `query`, `cookie`, `path`, `method`, `clientIp`, `ctx`, `webhook` |
-| `name` | String | None | Key name (required for `header`, `query`, `cookie`, `ctx` types) |
-| `webhookRef` | String | None | LinkSys webhook resource reference `"namespace/name"` (required for `webhook` type) |
-| `forwardHeaders` | Array\<String\> | None | List of inbound request header names to forward to the webhook; absent/empty = forward none (optional for `webhook` type) |
-| `pathSuffix` | String | None | Path appended to the webhook `uri` (optional for `webhook` type) |
-| `extract` | Object | — (required for webhook) | How to extract a value from the webhook response; see below |
+| `regex` | String | **Required** | Regex pattern to match against the value |
+| `group` | Integer | `1` | Capture group to use (group `0` is the whole match) |
 
-#### WebhookExtract Sub-fields
+### `transform` fields
+
+Specify at most one transformation per rule:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `source` | String | Extraction source: `header` (response header), `cookie` (Set-Cookie), `body` (JSON path), `bodyText` (raw text) |
-| `name` | String | Required for `header`/`cookie`; the target header / cookie name |
-| `path` | String | Required for `body`; dot-path, e.g. `data.user_id`, `items.0.id` |
+| `replace` | Object | Regex replace: `{ pattern, with }`. `with` supports `$1`, `$2` capture references |
+| `substring` | Array\<Integer\> | `[start, end]`, 0-indexed, exclusive end |
+| `case` | Enum | `upper` or `lower` |
+| `prefix` | String | Prepend a fixed string |
+| `suffix` | String | Append a fixed string |
+| `trim` | Boolean | Trim whitespace from both ends |
 
-## Configuration Examples
+### `mapping` fields
 
-### 1. Basic Usage: Extract from Header
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `values` | Object | `{}` | Lookup table mapping input value → output value |
+| `default` | String | none | Output when no key matches |
 
-Set the value of the `X-Tenant-Id` header into the `tenant_id` variable. If the header doesn't exist, use `default-tenant`.
+## Quick Start
+
+The simplest configuration: copy a request header into a context variable.
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: basic-ctx-setter
+  namespace: production
 spec:
   requestPlugins:
     - type: CtxSet
       config:
-        rules:
-          - name: tenant_id
+        vars:
+          - name: "user_id"
             from:
               type: header
-              name: X-Tenant-Id
-            default: "default-tenant"
+              name: "X-User-Id"
+            default: "anonymous"
 ```
 
-### 2. Case Conversion
-
-Convert the request method to lowercase and store it in the `method_lower` variable.
+Wire it to an HTTPRoute via an `ExtensionRef` filter:
 
 ```yaml
-rules:
-  - name: method_lower
-    from:
-      type: method
-    transform: "lower"  # GET -> get
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: api-route
+  namespace: production
+spec:
+  parentRefs:
+    - name: main-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: basic-ctx-setter
+      backendRefs:
+        - name: api-service
+          port: 8080
 ```
 
-### 3. Value Mapping
+## Common Configuration Scenarios
 
-Map the client-provided `X-Plan` to an internal `tier`.
+### 1. Build a composite key with a template
 
-```yaml
-rules:
-  - name: tier
-    from:
-      type: header
-      name: X-Plan
-    mapping:
-      values:
-        "premium": "tier_1"
-        "standard": "tier_2"
-      default: "tier_3"  # Unknown plans default to tier_3
-```
-
-**Example logic**:
-- `X-Plan: premium` -> `tier: tier_1`
-- `X-Plan: basic` -> `tier: tier_3` (default)
-- No `X-Plan` -> not set (unless the rule also has a default)
-
-### 4. String Template
-
-Combine ClientIP and Path to generate a unique rate limiting key.
-
-```yaml
-rules:
-  - name: rate_limit_key
-    template: "{{ client_ip }}:{{ path }}"
-```
-
-> **Note**: Variables in templates (e.g., `{{ client_ip }}`) must be **existing** context variables or built-in variables. It's recommended to first extract base variables with CtxSet, then combine them with templates.
-
-### 5. Webhook Resolution
-
-Resolve a variable value by calling an external service via webhook. First create a LinkSys webhook resource describing the connection:
+Combine the tenant header and the client IP into a single rate-limit key.
 
 ```yaml
 apiVersion: edgion.io/v1
-kind: LinkSys
+kind: EdgionPlugins
 metadata:
-  name: user-resolver
-  namespace: edgion-default
+  name: ctx-rate-key
+  namespace: production
 spec:
-  type: webhook
-  config:
-    uri: "https://api.example.com/v1/resolve"
-    requestMethod: GET
-    timeoutMs: 3000
-    successStatusCodes: [200]
+  requestPlugins:
+    - type: CtxSet
+      config:
+        vars:
+          - name: "rate_key"
+            template: "${header:X-Tenant}_${clientIp}"
 ```
 
-Then reference it from CtxSet:
+### 2. Case conversion
+
+Convert the HTTP method to lowercase for downstream use.
 
 ```yaml
-rules:
-  # Extract user_id from JSON response body
-  - name: user_id
-    from:
-      type: webhook
-      webhookRef: "edgion-default/user-resolver"
-      forwardHeaders:                      # forward these inbound headers to the webhook
-        - X-Tenant-Id
-        - Authorization
-      pathSuffix: "/user"                  # actual request: https://api.example.com/v1/resolve/user
-      extract:
-        source: body
-        path: "data.userId"
-    default: "anonymous"
-
-  # Extract token from a response header
-  - name: api_token
-    from:
-      type: webhook
-      webhookRef: "edgion-default/user-resolver"
-      forwardHeaders: [X-Tenant-Id]
-      extract:
-        source: header
-        name: "X-Resolved-Token"
-
-  # Extract from raw response body (plain text)
-  - name: body_value
-    from:
-      type: webhook
-      webhookRef: "edgion-default/user-resolver"
-      forwardHeaders: [X-Tenant-Id]
-      extract:
-        source: bodyText
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ctx-method
+  namespace: production
+spec:
+  requestPlugins:
+    - type: CtxSet
+      config:
+        vars:
+          - name: "method_lower"
+            from:
+              type: method
+            transform:
+              case: lower
 ```
 
-**Notes**:
-- LinkSys webhook resource connection settings (`auth`, `tls`, `retry`, `rateLimit`, `healthCheck`, `maxResponseBytes`) — see [LinkSys resource documentation](../../dev-guide/resource-architecture-overview.md).
-- `forwardHeaders` from the caller is merged with the LinkSys CRD's `defaultHeaders` (if any) — **caller headers win on conflict**.
-- Hop-by-hop headers (e.g. `Connection`, `Transfer-Encoding`) are automatically skipped.
-- When the webhook call fails, is rate-limited, unhealthy, or returns a non-2xx status, the resolver returns `None` — falling back to `default`.
+### 3. Value mapping (plan → tier)
 
-### 6. Comprehensive Example
-
-Combining multiple features:
+Map the `X-Plan` header to an internal tier label, with a fallback.
 
 ```yaml
-rules:
-  # 1. Extract API version (path cannot directly extract parts, assuming via header or other means)
-  - name: api_version
-    value: "v1" # Static value example
-
-  # 2. Extract and transform User-Type
-  - name: user_type
-    from:
-      type: header
-      name: X-User-Type
-    default: "guest"
-    transform: "lower"
-
-  # 3. Generate cache key by composition
-  - name: cache_key
-    template: "cache:{{ api_version }}:{{ user_type }}"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ctx-tier
+  namespace: production
+spec:
+  requestPlugins:
+    - type: CtxSet
+      config:
+        vars:
+          - name: "rate_tier"
+            from:
+              type: header
+              name: "X-Plan"
+            mapping:
+              values:
+                premium: "tier_1"
+                enterprise: "tier_1"
+                basic: "tier_2"
+              default: "tier_3"
 ```
 
-## Use Cases
+### 4. Regex extraction from a JWT Authorization header
 
-### With RateLimit
-
-The RateLimit plugin can use `ctx` as the data source for the rate limiting key. With CtxSet, you can construct complex rate limiting keys.
+Extract the JWT payload subject from `Authorization: Bearer <header>.<payload>.<sig>`.
 
 ```yaml
-# 1. Set variables first
-- type: CtxSet
-  config:
-    rules:
-      - name: limit_key
-        template: "{{ tenant_id }}_{{ remote_addr }}"
-
-# 2. Then apply rate limiting
-- type: RateLimit
-  config:
-    rate: 100
-    key:
-      source: Ctx
-      name: limit_key
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ctx-jwt-user
+  namespace: production
+spec:
+  requestPlugins:
+    - type: CtxSet
+      config:
+        vars:
+          - name: "jwt_user"
+            from:
+              type: header
+              name: "Authorization"
+            extract:
+              regex: "Bearer .*\\.(.+)\\."
+              group: 1
+            default: "anonymous"
 ```
 
-### With PluginConditions
+### 5. Chain: CtxSet feeds a downstream RateLimit key
 
-Conditional plugins can use context variables to decide whether to skip subsequent plugins.
+CtxSet runs in the request phase before RateLimit, so the variable it sets is available to RateLimit through a `ctx` key source (`key: { type: ctx, name: <name> }`).
 
 ```yaml
-- type: CtxSet
-  config:
-    rules:
-      - name: is_internal
-        from:
-          type: clientIp
-        mapping:
-          values:
-             "127.0.0.1": "true"
-          default: "false"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: tenant-rate-limit
+  namespace: production
+spec:
+  requestPlugins:
+    # 1. Derive a per-tenant value from the request
+    - type: CtxSet
+      config:
+        vars:
+          - name: "tenant"
+            from:
+              type: header
+              name: "X-Tenant"
+            default: "public"
+    # 2. RateLimit reads the variable set above
+    - type: RateLimit
+      config:
+        rate: 100
+        window: 60
+        burst: 20
+        key:
+          type: ctx
+          name: "tenant"
+```
+
+### 6. Full pipeline: extract, transform, and map
+
+Combine extraction, transformation, and mapping in a single rule.
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ctx-full-pipeline
+  namespace: production
+spec:
+  requestPlugins:
+    - type: CtxSet
+      config:
+        vars:
+          - name: "tenant_id"
+            from:
+              type: header
+              name: "Authorization"
+            extract:
+              regex: '"tenant":"([^"]+)"'
+              group: 1
+            transform:
+              case: lower
+            mapping:
+              values:
+                acme: "tenant_acme"
+                globex: "tenant_globex"
+              default: "tenant_default"
+            default: "unknown_tenant"
 ```
 
 ## Related Documentation
 
-- [ProxyRewrite Plugin](../http-route/filters/edgion-plugins/proxy-rewrite.md) - Request rewrite plugin
-- [ResponseRewrite Plugin](../http-route/filters/edgion-plugins/response-rewrite.md) - Response rewrite plugin
+- [CtxSet (HTTPRoute filter view)](../http-route/filters/edgion-plugins/ctx-setter.md) - Using CtxSet within an HTTPRoute filter
 - [RateLimit Plugin](rate-limit.md) - Can use CtxSet to construct rate limiting keys
 - [HTTPRoute Overview](../http-route/overview.md) - HTTPRoute configuration overview

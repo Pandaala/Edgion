@@ -29,8 +29,7 @@ metadata:
   name: dsl-plugin
 spec:
   requestPlugins:
-    - enable: true
-      type: Dsl
+    - type: Dsl
       config:
         name: "header-check"
         source: |

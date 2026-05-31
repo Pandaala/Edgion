@@ -17,7 +17,6 @@ metadata:
   name: bandwidth-limit-plugin
 spec:
   upstreamResponseBodyFilterPlugins:
-    - enable: true
       type: BandwidthLimit
       config:
         rate: "100kb"
@@ -50,7 +49,6 @@ spec:
 
 ```yaml
 upstreamResponseBodyFilterPlugins:
-  - enable: true
     type: BandwidthLimit
     config:
       rate: "1mb"
@@ -60,11 +58,38 @@ upstreamResponseBodyFilterPlugins:
 
 ```yaml
 upstreamResponseBodyFilterPlugins:
-  - enable: true
     type: BandwidthLimit
     config:
       rate: "50kb"
 ```
+
+### 场景 3：小数速率
+
+支持小数值，且单位不区分大小写：
+
+```yaml
+upstreamResponseBodyFilterPlugins:
+    type: BandwidthLimit
+    config:
+      # 1.5 MB/s = 1572864 字节/s
+      rate: "1.5mb"
+```
+
+---
+
+## 常见问题
+
+### Q1：支持哪些速率格式？
+
+**A**：纯字节数（`"1024"` 或 `"1024b"`），或带 `kb` / `mb` / `gb` 后缀的数字（`"512kb"`、`"1mb"`、`"1gb"`）。支持小数（`"1.5mb"`），后缀不区分大小写（`"512KB"` 有效）。值为必填项，且必须解析为正数——空值、零值或无法解析的速率会导致校验失败。
+
+### Q2：为什么总带宽超过了配置的速率？
+
+**A**：速率限制**作用于每个响应流**，而非每个连接或全局。在 HTTP/2 多路复用场景下，同一连接上的 N 个并发流各自享有完整的 `rate`，因此聚合连接带宽可达 N × `rate`。跨路由、跨连接、跨 Pod 之间没有共享的令牌桶——如需聚合限速，请使用外部机制（LB QoS、内核 `tc` 或 Service Mesh 策略）。
+
+### Q3：为什么 BandwidthLimit 没有效果？
+
+**A**：必须将其放在 `upstreamResponseBodyFilterPlugins` 阶段。放在 `requestPlugins` 或 `upstreamResponseFilterPlugins` 中无效，因为限速是通过延迟上游响应体 chunk 的发送来实现的。
 
 ---
 
@@ -113,7 +138,6 @@ metadata:
   name: bandwidth-limit-plugin
 spec:
   upstreamResponseBodyFilterPlugins:
-    - enable: true
       type: BandwidthLimit
       config:
         rate: "500kb"

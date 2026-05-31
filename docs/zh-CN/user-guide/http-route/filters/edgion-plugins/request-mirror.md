@@ -24,7 +24,6 @@ metadata:
   name: mirror-plugin
 spec:
   requestPlugins:
-    - enable: true
       type: RequestMirror
       config:
         backendRef:

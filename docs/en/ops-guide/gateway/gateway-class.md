@@ -1,12 +1,20 @@
-# GatewayClass Configuration
+# GatewayClass
 
-GatewayClass defines the implementation type of a Gateway, similar to IngressClass.
+Selects the Edgion controller and, optionally, a tuning parameter set.
 
-> **🔌 Edgion extension**
-> 
-> `parametersRef` can reference the `EdgionGatewayConfig` CRD for advanced configuration. This is an Edgion extension feature.
+## Overview
 
-## Resource Structure
+A `GatewayClass` is a cluster-scoped resource that tells Kubernetes which controller owns a
+class of Gateways. To run a Gateway on Edgion, create a GatewayClass whose `controllerName`
+matches the Edgion controller, then set `gatewayClassName` on your Gateways to reference it. A
+GatewayClass may also point at an `EdgionGatewayConfig` via `parametersRef` to tune data-plane
+behavior.
+
+Edgion follows a 1 controller : 1 GatewayClass model: a single Edgion instance manages one
+GatewayClass. `parametersRef` is optional — when unset, Gateways use built-in defaults; when
+set, it must reference an `edgion.io/EdgionGatewayConfig`.
+
+## Configuration
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -15,31 +23,37 @@ metadata:
   name: edgion
 spec:
   controllerName: edgion.io/gateway-controller
-  parametersRef:              # Optional: reference configuration parameters
-    group: edgion.io
-    kind: EdgionGatewayConfig
-    name: default-config
 ```
 
-## Configuration Reference
+## Field reference
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| controllerName | string | Yes | Controller identifier |
-| parametersRef | object | | Configuration parameter reference |
-| description | string | | Description |
+| `spec.controllerName` | String | Yes | Must be exactly `edgion.io/gateway-controller`. The Edgion controller only reconciles GatewayClasses with this value. |
+| `spec.parametersRef` | Object | No | Reference to an `EdgionGatewayConfig` that tunes gateway behavior. When set, `group` must be `edgion.io` and `kind` must be `EdgionGatewayConfig`, or the GatewayClass is rejected (`Accepted: False`). |
+| `spec.parametersRef.group` | String | No | API group of the parameters resource: `edgion.io`. |
+| `spec.parametersRef.kind` | String | No | `EdgionGatewayConfig`. |
+| `spec.parametersRef.name` | String | No | Name of the `EdgionGatewayConfig` resource. |
+| `spec.description` | String | No | Human-readable description. |
 
-## Edgion Controller Name
+`EdgionGatewayConfig` is cluster-scoped, so `parametersRef` does not take a `namespace`.
 
-The controller name used by Edgion:
+## controllerName
 
-```yaml
-controllerName: edgion.io/gateway-controller
+The Edgion controller name is a fixed constant:
+
+```
+edgion.io/gateway-controller
 ```
 
-## Examples
+A GatewayClass with any other `controllerName` is ignored by Edgion. This is how the cluster
+can run multiple Gateway API implementations side by side without conflict.
 
-### Example 1: Basic Configuration
+## Scenarios
+
+### Basic class with no parameters
+
+The simplest class. Gateways referencing it use Edgion defaults.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -48,96 +62,79 @@ metadata:
   name: edgion
 spec:
   controllerName: edgion.io/gateway-controller
+  description: "Edgion Gateway powered by Pingora"
 ```
 
-### Example 2: Configuration with Parameters
+### Class with tuning parameters
+
+> **🔌 Edgion extension**
+>
+> `parametersRef` referencing the `EdgionGatewayConfig` CRD is an Edgion extension; it is not part of standard Gateway API.
+
+Attach an `EdgionGatewayConfig` to tune data-plane behavior for all Gateways in this class.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
-  name: edgion-custom
+  name: edgion
 spec:
   controllerName: edgion.io/gateway-controller
   parametersRef:
     group: edgion.io
     kind: EdgionGatewayConfig
-    name: custom-config
+    name: prod-gateway-config
 ---
 apiVersion: edgion.io/v1alpha1
 kind: EdgionGatewayConfig
 metadata:
-  name: custom-config
+  name: prod-gateway-config
 spec:
   server:
-    threads: 4
+    threads: 0
     gracePeriodSeconds: 30
+  httpTimeout:
+    backend:
+      defaultConnectTimeout: "5s"
+      defaultRequestTimeout: "60s"
 ```
 
-## EdgionGatewayConfig Reference
+See [EdgionGatewayConfig](../configuration/edgion-gateway-config.md) for the full set of
+tunable fields.
 
-`EdgionGatewayConfig` is an Edgion extension CRD, referenced through the GatewayClass `parametersRef`, providing gateway-level advanced configuration.
+### Switch parameters without recreating Gateways
 
-### spec.server
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| threads | integer | CPU cores | Worker thread count |
-| workStealing | boolean | true | Enable work-stealing scheduling |
-| gracePeriodSeconds | integer | 30 | Graceful shutdown grace period (seconds) |
-| gracefulShutdownTimeoutS | integer | 10 | Graceful shutdown timeout (seconds) |
-| upstreamKeepalivePoolSize | integer | 128 | Upstream keepalive connection pool size |
-| enableCompression | boolean | false | Enable downstream response compression |
-| downstreamKeepaliveRequestLimit | integer | 1000 | Max requests per downstream connection |
-
-#### downstreamKeepaliveRequestLimit
-
-Limits the maximum number of HTTP requests a single downstream TCP connection can serve. The connection is closed after reaching the limit. Equivalent to Nginx's [`keepalive_requests`](https://nginx.org/en/docs/http/ngx_http_core_module.html#keepalive_requests).
-
-- **Per-connection**: Each TCP connection has an independent counter, not a global limit
-- **HTTP/1.1 only**: HTTP/2 multiplexing is not affected by this limit
-- **Default 1000**: Consistent with Nginx. Set to `0` to disable the limit
-
-**Purpose**: Prevents memory accumulation and load imbalance caused by long-lived single connections.
-
-### spec.httpTimeout
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| client.readTimeout | duration | 60s | Client read timeout |
-| client.writeTimeout | duration | 60s | Client write timeout |
-| client.keepaliveTimeout | duration | 75s | HTTP keepalive timeout |
-| backend.defaultConnectTimeout | duration | 5s | Backend connection timeout |
-| backend.defaultRequestTimeout | duration | 60s | Backend request timeout |
-| backend.defaultIdleTimeout | duration | 300s | Backend connection pool idle timeout |
-
-### Full Example
+Because Gateways reference the class by name, you can repoint `parametersRef` at a different
+`EdgionGatewayConfig` to roll out new tuning to every Gateway in the class at once.
 
 ```yaml
-apiVersion: edgion.io/v1alpha1
-kind: EdgionGatewayConfig
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
 metadata:
-  name: production-config
+  name: edgion
 spec:
-  server:
-    threads: 4
-    workStealing: true
-    gracePeriodSeconds: 30
-    upstreamKeepalivePoolSize: 256
-    downstreamKeepaliveRequestLimit: 1000
-  httpTimeout:
-    client:
-      readTimeout: 60s
-      writeTimeout: 60s
-      keepaliveTimeout: 75s
-    backend:
-      defaultConnectTimeout: 5s
-      defaultRequestTimeout: 60s
-      defaultIdleTimeout: 300s
+  controllerName: edgion.io/gateway-controller
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: tuned-gateway-config
 ```
 
-## Related Documentation
+## Edge cases and caveats
 
-- [Gateway Resource Overview](./overview.md)
-- [Listener Configuration](./listeners/)
-- [TLS Configuration](./tls/)
+- `controllerName` is immutable in the Gateway API; to change controllers you must delete and
+  recreate the GatewayClass.
+- If `controllerName` does not exactly match `edgion.io/gateway-controller`, Edgion never sets
+  an `Accepted` condition and Gateways referencing the class stay unprogrammed.
+- A `parametersRef` with the wrong `group` or `kind` is rejected with `Accepted: False`; an
+  unset `parametersRef` is valid and falls back to defaults.
+- `EdgionGatewayConfig` is cluster-scoped, so `parametersRef` carries no `namespace`.
+- `EdgionGatewayConfig` changes apply dynamically (no Gateway restart); see its page for the
+  fields that hot-reload.
+
+## Related documents
+
+- [Gateway overview](overview.md)
+- [Listeners](listeners/README.md)
+- [EdgionGatewayConfig](../configuration/edgion-gateway-config.md)
+- [Preflight policy](preflight-policy.md)

@@ -43,7 +43,6 @@ metadata:
   namespace: default
 spec:
   requestPlugins:
-    - enable: true
       type: KeyAuth
       config:
         keySources:
@@ -93,7 +92,6 @@ spec:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: KeyAuth
     config:
       keySources:
@@ -117,7 +115,6 @@ curl -H "X-API-Key: my-secret-api-key-1" https://api.example.com/resource
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: KeyAuth
     config:
       keySources:
@@ -146,7 +143,6 @@ curl "https://api.example.com/resource?api_key=my-key"
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: KeyAuth
     config:
       keySources:
@@ -163,7 +159,6 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: KeyAuth
     config:
       keySources:
@@ -185,7 +180,6 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: KeyAuth
     config:
       keySources:
@@ -280,7 +274,6 @@ metadata:
   name: key-auth-plugin
 spec:
   requestPlugins:
-    - enable: true
       type: KeyAuth
       config:
         keySources:

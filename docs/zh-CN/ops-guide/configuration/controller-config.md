@@ -1,6 +1,6 @@
 # Controller 配置
 
-edgion-controller 通过 YAML 文件启动，默认路径为 `config/edgion-controller.yaml`，可通过 `--config-file` 指定。
+edgion-controller 从 YAML 文件读取配置，默认路径为 `config/edgion-controller.yaml`，可通过 `--config-file` 指定。
 
 ## 完整示例
 
@@ -48,7 +48,7 @@ conf_sync:
 
 # ─── conf_center：FileSystem 模式（本地开发）─────────────────────
 conf_center:
-  type: filesystem
+  type: file_system
   conf_dir: config/resources      # YAML 资源目录（建议写绝对路径）
 
 # ─── conf_center：Kubernetes 模式（生产部署）─────────────────────
@@ -129,7 +129,7 @@ conf_center:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `type` | `String` | — | 固定填 `"filesystem"` |
+| `type` | `String` | — | 必须填 `file_system`（snake_case，不是 `filesystem`） |
 | `conf_dir` | `Path` | — | YAML 资源目录，**建议写绝对路径**（当前实现不会随 `work_dir` 自动解析） |
 
 注意：`--conf-dir` CLI 参数会直接覆盖此处的 `conf_dir`，并将 `conf_center` 切换到 FileSystem 模式。
@@ -161,8 +161,140 @@ conf_center:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
+| `label_selector` | `String` | `""` | 应用于被监控资源的标签选择器 |
+| `field_selector` | `String` | `""` | 应用于被监控资源的字段选择器 |
 | `blocked_annotations` | `Array<String>` | kubectl/helm 常见大注解 | 资源进入内存前移除的注解列表 |
 | `remove_managed_fields` | `Boolean` | `true` | 移除 `managedFields`，减小对象体积 |
+
+## 认证
+
+Controller Admin API 的认证是**必须的**。所有对 `/api/v1/*` 路由的请求都需要有效的 Bearer Token 或会话 Cookie。未认证的请求返回 HTTP 401。
+
+> 零配置也可工作：当 `[local_auth]` 不存在时，Controller 自动生成随机管理员密码和 JWT 密钥，存储在 `edgion-admin-credentials` Secret（`edgion-system` 命名空间）中。获取生成的密码：
+>
+> **Kubernetes 模式**：
+> ```bash
+> kubectl -n edgion-system get secret edgion-admin-credentials \
+>   -o jsonpath='{.data.password}' | base64 -d
+> ```
+>
+> **本地 / 文件模式**：
+> ```bash
+> cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
+> ```
+
+Controller 和 Center 使用相同的 `[local_auth]` / `[auth]` schema，但引导方式不同：Controller 在两者均未设置时自动生成凭据，而 Center 则失败关闭（见下方 Center 说明）。
+
+### [local_auth]
+
+内置用户名/密码认证，向已认证客户端签发 HS256 JWT。Controller 上不存在时自动生成凭据（见上文）。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `username` | `String` | `"admin"` | 管理员用户名 |
+| `password` | `String` | _（自动生成）_ | 管理员密码。Controller 上为空时自动生成；Center 上必须显式设置 |
+| `jwt_secret` | `String` | _（自动生成）_ | JWT 签名密钥。Controller 上为空时自动生成；Center 上必须显式设置 |
+| `jwt_expiry_hours` | `Integer` | `24` | 签发 Token 的有效时长（小时） |
+| `cookie_secure` | `Boolean` | `true` | 在 `edgion_token` 认证 Cookie 上设置 `Secure` 属性。TLS 前置的部署保持 `true`；仅明文 HTTP 的开发/内部环境设为 `false` |
+
+```yaml
+local_auth:
+  username: admin
+  password: "change-me"
+  jwt_secret: "a-long-random-signing-secret"
+  jwt_expiry_hours: 24
+  cookie_secure: true
+```
+
+> **Center 说明**：Center **没有**自动生成。若 `[local_auth]` 和 `[auth]` 均未配置，业务路由返回 503（失败关闭），而 `/health`、`/ready`、`/metrics` 和 `/api/v1/auth/status` 保持可访问。
+
+### [auth] — OIDC
+
+可选的 Admin API OIDC 集成。根据 OIDC 提供商的 discovery 文档和 JWKS 验证 JWT Bearer Token。可与 `[local_auth]` 共存；请求按 OIDC → local 顺序尝试。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `enabled` | `Boolean` | `true`（段存在时） | 启用 OIDC 验证 |
+| `discovery` | `String` | **必填** | OIDC discovery URL（`/.well-known/openid-configuration`） |
+| `audiences` | `Array<String>` | `[]` | 期望的 JWT `aud` 值；为空时跳过 audience 检查 |
+| `issuers` | `Array<String>` | `[]` | 期望的 JWT `iss` 值；为空时根据 discovery 文档的 issuer 验证 |
+| `allowed_algorithms` | `Array<String>` | `[RS256, RS384, RS512, ES256, ES384]` | 允许的签名算法 |
+| `clock_skew_seconds` | `Integer` | `120` | JWT 时间戳容差（秒） |
+| `jwks_cache_ttl` | `Integer` | `300` | JWKS 缓存 TTL（秒） |
+| `jwks_min_refresh_interval` | `Integer` | `10` | JWKS 刷新尝试的最小间隔（防抖），秒 |
+| `skip_paths` | `Array<String>` | `["/health", "/ready"]` | 跳过认证的路径前缀 |
+| `ssl_verify` | `Boolean` | `true` | 获取 discovery/JWKS 时验证 TLS 证书；生产环境必须保持 `true` |
+| `discovery_max_response_bytes` | `Integer` | `65536` | discovery 响应体大小上限 |
+| `jwks_max_response_bytes` | `Integer` | `1048576` | JWKS 响应体大小上限 |
+
+```yaml
+auth:
+  discovery: "https://keycloak.example.com/realms/edgion/.well-known/openid-configuration"
+  audiences: [edgion-admin]
+```
+
+### [cli_tokens] — 静态 CLI Token
+
+用于编程或 CI 访问 Admin API 的静态 Bearer Token。每个 Token 绑定到细粒度的 RBAC 策略。Token 以 SHA-256 十六进制摘要存储（永不明文）。支持热重载。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `name` | `String` | 此 Token 的人类可读标签 |
+| `token_sha256` | `String` | 原始 Bearer Token 的 SHA-256 十六进制摘要（64 个小写十六进制字符）。使用 `edgion-cli gen-token` 生成 |
+| `rbac` | Object | RBAC 允许规则（`verbs × kinds`）。缺失或为空则拒绝所有 |
+
+```yaml
+cli_tokens:
+  - name: "ci-readonly"
+    token_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    rbac:
+      allow:
+        # 枚举具体 kind；切勿对读取动词使用 kinds: ["*"]
+        # （通配符读取会暴露 Secret 和 EdgionTls 的私钥材料）
+        - verbs: [get, list, watch]
+          kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service, EdgionGatewayConfig]
+  - name: "deploy-bot"
+    token_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+    rbac:
+      allow:
+        - verbs: [get, list, create, update, delete]
+          kinds: [HTTPRoute, Service]
+```
+
+Token 生成工作流、轮换说明和所有安全注意事项，详见[联邦 RBAC — CLI Token RBAC](../federation-rbac.md#cli-token-rbac)。
+
+## 联邦客户端（center）
+
+添加可选的 `center` 段以将此 Controller 加入联邦 Center。不使用联邦时完全省略。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `address` | `String` | **必填** | Center 服务器的 gRPC 地址（如 `https://center.example.com:50052`） |
+| `name` | `String` | **必填** | 此 Controller 的逻辑名称，上报给 Center |
+| `cluster` | `String` | **必填** | 集群名称，用于路由和聚合 |
+| `enabled` | `Boolean` | `true` | 热重载开关；`false` 可停止联邦客户端而无需重启（通过 `POST /api/v1/reload` 重载） |
+| `env` | `Array<String>` | `[]` | 上报给 Center 的环境标签 |
+| `tag` | `Array<String>` | `[]` | 上报给 Center 的扩展标签 |
+| `ping_interval_secs` | `Integer` | `30` | 联邦 keepalive ping 间隔 |
+| `security` | Object | — | 通道的 mTLS 证书；必填（无此配置时联邦失败关闭） |
+| `rbac` | Object | 内置默认 | Center 操作的 RBAC；缺失时应用内置默认策略 |
+
+```yaml
+center:
+  address: "https://center.example.com:50052"
+  name: "ctrl-1"
+  cluster: "prod"
+  enabled: true
+  security:
+    active: primary
+    certs:
+      - name: primary
+        cert: certs/grpc/primary/client.crt
+        key: certs/grpc/primary/client.key
+        ca: certs/grpc/primary/ca.crt
+```
+
+完整的 `center.rbac` 模型、默认策略和安全说明，详见[联邦 RBAC](../federation-rbac.md)。
 
 ## 常见配置场景
 
@@ -172,7 +304,7 @@ conf_center:
 
 ```yaml
 conf_center:
-  type: filesystem
+  type: file_system
   conf_dir: /home/user/my-project/config/resources
 ```
 
@@ -239,3 +371,4 @@ conf_sync_security:
 - [Gateway 配置](./gateway-config.md)
 - [EdgionGatewayConfig CRD](./edgion-gateway-config.md)
 - [工作目录行为](../../dev-guide/work-directory.md)
+- [联邦 RBAC](../federation-rbac.md)

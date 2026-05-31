@@ -21,11 +21,14 @@ docs/
 ```
 en/
 ├── README.md
+├── path-normalization.md
 ├── getting-started/
 │   ├── README.md
 │   ├── installation-and-deployment.md
 │   ├── first-gateway.md
 │   └── core-concepts.md
+├── migrations/
+│   └── <version>-extension-ref.md
 ├── user-guide/
 │   ├── README.md
 │   ├── http-route/
@@ -122,6 +125,7 @@ en/
 ├── ops-guide/
 │   ├── README.md
 │   ├── edgion-cli.md
+│   ├── federation-rbac.md
 │   ├── gateway/
 │   │   ├── README.md
 │   │   ├── overview.md

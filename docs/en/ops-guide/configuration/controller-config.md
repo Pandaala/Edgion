@@ -48,7 +48,7 @@ conf_sync:
 
 # ─── conf_center: FileSystem mode (local development) ─────────────
 conf_center:
-  type: filesystem
+  type: file_system
   conf_dir: config/resources      # YAML resource directory (prefer absolute paths)
 
 # ─── conf_center: Kubernetes mode (production) ────────────────────
@@ -127,11 +127,14 @@ Optional. When present, the Controller gRPC port uses mTLS. When absent, gRPC ru
 
 Certificates can be generated with `edgion-cli gen-certs --output file --output-dir <dir>`.
 
+`conf_center.type` selects the backend. Accepted values are `file_system`,
+`kubernetes`, and `etcd` (snake_case — `file_system`, not `filesystem`).
+
 ### [conf_center] — FileSystem Mode
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `type` | `String` | — | Must be `"filesystem"` |
+| `type` | `String` | — | Must be `file_system` |
 | `conf_dir` | `Path` | — | YAML resource directory. **Use absolute paths** — the current implementation does not resolve this relative to `work_dir` |
 
 Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` to FileSystem mode.
@@ -176,7 +179,7 @@ Use local YAML files to simulate Kubernetes resources without a cluster:
 
 ```yaml
 conf_center:
-  type: filesystem
+  type: file_system
   conf_dir: /home/user/my-project/config/resources
 ```
 
@@ -337,7 +340,39 @@ cli_tokens:
 
 For the token generation workflow, rotation instructions, and the full security note list, see [**Federation RBAC — CLI Token RBAC**](../federation-rbac.md#cli-token-rbac).
 
-For the complete field reference (including `[center]`, `[center.rbac]`, all OIDC fields), see [`skills/02-features/02-config/00-controller-config.md`](../../../../skills/02-features/02-config/00-controller-config.md).
+## Federation Client (`center`)
+
+Add the optional `center` section to join this Controller to a federation Center.
+Omit it entirely when not using federation.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `address` | `String` | **Required** | gRPC address of the Center server (e.g. `https://center.example.com:50052`) |
+| `name` | `String` | **Required** | Logical name of this Controller, reported to Center |
+| `cluster` | `String` | **Required** | Cluster name, used for routing and aggregation |
+| `enabled` | `Boolean` | `true` | Hot-reloadable kill-switch; `false` stops the federation client without a restart (reload via `POST /api/v1/reload`) |
+| `env` | `Array<String>` | `[]` | Environment tags reported to Center |
+| `tag` | `Array<String>` | `[]` | Extension tags reported to Center |
+| `ping_interval_secs` | `Integer` | `30` | Federation keep-alive ping interval |
+| `security` | Object | — | mTLS certificates for the channel; required (federation fails closed without it) |
+| `rbac` | Object | built-in default | RBAC for Center operations; absent applies a built-in default policy |
+
+```yaml
+center:
+  address: "https://center.example.com:50052"
+  name: "ctrl-1"
+  cluster: "prod"
+  enabled: true
+  security:
+    active: primary
+    certs:
+      - name: primary
+        cert: certs/grpc/primary/client.crt
+        key: certs/grpc/primary/client.key
+        ca: certs/grpc/primary/ca.crt
+```
+
+For the full `center.rbac` model, default policy, and security notes, see [Federation RBAC](../federation-rbac.md).
 
 ## Related Documentation
 

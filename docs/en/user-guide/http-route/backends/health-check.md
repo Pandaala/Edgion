@@ -18,7 +18,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: my-backend
-  namespace: default
+  namespace: production
   annotations:
     edgion.io/health-check: |
       active:
@@ -40,7 +40,7 @@ spec:
 
 | Annotation | Applicable Resources | Type | Default | Description |
 |------------|---------------------|------|---------|-------------|
-| `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | YAML string | None | Configure active health check parameters |
+| `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | YAML string | none | Configure active health check parameters |
 
 Example value:
 
@@ -58,24 +58,24 @@ active:
 
 YAML structure of `edgion.io/health-check`:
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `active` | object | No | None | Active probe configuration; health check is disabled if not configured |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `active` | Object | none | Active probe configuration; health check is disabled if not configured |
 
 `active` sub-fields:
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `type` | `http` \| `tcp` \| `grpc` | No | `http` | Probe type |
-| `path` | string | No | `/` | HTTP probe path (only effective for `http`) |
-| `port` | uint16 | No | Uses backend port | Probe port override |
-| `interval` | duration string | No | `10s` | Probe interval |
-| `timeout` | duration string | No | `3s` | Single probe timeout |
-| `healthyThreshold` | uint32 | No | `2` | Number of consecutive successes to recover healthy status |
-| `unhealthyThreshold` | uint32 | No | `3` | Number of consecutive failures to mark unhealthy |
-| `expectedStatuses` | `[]uint16` | No | `[200]` | Expected HTTP status codes (only effective for `http`) |
-| `host` | string | No | None | HTTP Host header override (only effective for `http`) |
-| `grpcServiceName` | string | No | `""` (whole server) | gRPC Health Check service name (only effective for `grpc`) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `type` | Enum | `http` | Probe type. Allowed values: `http` / `tcp` / `grpc` |
+| `path` | String | `/` | HTTP probe path (only effective for `http`) |
+| `port` | Integer | uses backend port | Probe port override |
+| `interval` | Duration | `10s` | Probe interval |
+| `timeout` | Duration | `3s` | Single probe timeout |
+| `healthyThreshold` | Integer | `2` | Number of consecutive successes to recover healthy status |
+| `unhealthyThreshold` | Integer | `3` | Number of consecutive failures to mark unhealthy |
+| `expectedStatuses` | Array\<Integer\> | `[200]` | Expected HTTP status codes (only effective for `http`) |
+| `host` | String | none | HTTP Host header override (only effective for `http`) |
+| `grpcServiceName` | String | `""` (whole server) | gRPC Health Check service name (only effective for `grpc`) |
 
 ## Behavior Details and Priority
 
@@ -136,7 +136,7 @@ apiVersion: v1
 kind: Endpoints
 metadata:
   name: legacy-backend
-  namespace: default
+  namespace: production
   annotations:
     edgion.io/health-check: |
       active:

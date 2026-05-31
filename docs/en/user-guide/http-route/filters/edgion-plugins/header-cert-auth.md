@@ -33,7 +33,6 @@ metadata:
   name: cert-auth-plugin
 spec:
   requestPlugins:
-    - enable: true
       type: HeaderCertAuth
       config:
         mode: Header
@@ -46,22 +45,20 @@ spec:
 
 ## Configuration Reference
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `mode` | Enum | No | `Header` | Certificate source mode. Allowed values: `Header` / `Connection` |
-| `certificateHeaderName` | String | No | `"X-Client-Cert"` | Header name containing the certificate (Header mode only) |
-| `certificateHeaderFormat` | Enum | No | `Base64Encoded` | Certificate encoding (Header mode). Allowed values: `Base64Encoded` (base64 PEM body without delimiters) / `UrlEncoded` (URL-encoded full PEM) |
-| `hideCredentials` | Boolean | No | `true` | Remove the source certificate header before forwarding upstream |
-| `caSecretRefs` | Array | Yes* | `[]` | CA Secret references used to verify the client certificate. All certs in the referenced Secrets are loaded as trust anchors; include intermediates if the leaf is signed by one |
-| `skipConsumerLookup` | Boolean | No | `false` | Skip consumer mapping and pass the cert DN/SAN through directly |
-| `consumerBy` | Enum | No | `SanOrCn` | Consumer identity resolution. Allowed values: `SanOrCn` (first SAN, fall back to CN) / `Cn` (CN only) / `Fingerprint` (cert SHA-256 fingerprint) |
-| `upstreamHeaders` | Object | No | see sub-table | Upstream header names for identity propagation |
-| `allowAnonymous` | Boolean | No | `false` | Allow the request as anonymous when authentication fails |
-| `errorStatus` | Integer | No | `401` | Status code on verification failure (must be 400..=599) |
-| `errorMessage` | String | No | `"TLS certificate failed verification"` | Error message on failure |
-| `authFailureDelayMs` | Integer | No | `0` | Fixed delay (ms) before returning an auth-failure response |
-
-\* Required in Header mode (Connection mode obtains the verified cert from the TLS handshake and does not require `caSecretRefs`).
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `mode` | Enum | `Header` | Certificate source mode. Allowed values: `Header` / `Connection` |
+| `certificateHeaderName` | String | `"X-Client-Cert"` | Header name containing the certificate (Header mode only) |
+| `certificateHeaderFormat` | Enum | `Base64Encoded` | Certificate encoding (Header mode). Allowed values: `Base64Encoded` (base64 PEM body without delimiters) / `UrlEncoded` (URL-encoded full PEM) |
+| `hideCredentials` | Boolean | `true` | Remove the source certificate header before forwarding upstream |
+| `caSecretRefs` | Array\<Object\> | **Required** in Header mode | CA Secret references used to verify the client certificate. All certs in the referenced Secrets are loaded as trust anchors; include intermediates if the leaf is signed by one. Connection mode does not require this. |
+| `skipConsumerLookup` | Boolean | `false` | Skip consumer mapping and pass the cert DN/SAN through directly |
+| `consumerBy` | Enum | `SanOrCn` | Consumer identity resolution. Allowed values: `SanOrCn` (first SAN, fall back to CN) / `Cn` (CN only) / `Fingerprint` (cert SHA-256 fingerprint) |
+| `upstreamHeaders` | Object | see sub-table | Upstream header names for identity propagation |
+| `allowAnonymous` | Boolean | `false` | Allow the request as anonymous when authentication fails |
+| `errorStatus` | Integer | `401` | Status code on verification failure (must be 400–599) |
+| `errorMessage` | String | `"TLS certificate failed verification"` | Error message on failure |
+| `authFailureDelayMs` | Integer | `0` | Fixed delay (ms) before returning an auth-failure response |
 
 ### `upstreamHeaders` sub-fields
 
@@ -80,7 +77,6 @@ spec:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: HeaderCertAuth
     config:
       mode: Header
@@ -97,7 +93,6 @@ Reuse the certificate already verified during the TLS handshake. No `caSecretRef
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: HeaderCertAuth
     config:
       mode: Connection
@@ -108,7 +103,6 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: HeaderCertAuth
     config:
       mode: Header

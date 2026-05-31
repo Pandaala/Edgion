@@ -1,273 +1,273 @@
-# Stream Plugins User Guide
+# Stream Plugins
 
 > **🔌 Edgion extension**
 > 
-> `EdgionStreamPlugins` is an Edgion custom CRD that provides access control for stream-style connections.
+> Stream plugins are connection-level (L4) plugins provided by the `EdgionStreamPlugins` CRD; they run before HTTP parsing and are not part of standard Gateway API.
 
-Get started with Edgion's stream plugin functionality.
+Stream plugins apply access control to raw TCP/TLS/UDP connections at Pingora's
+ConnectionFilter stage. They decide whether a connection (or, for UDP, a
+session) is allowed before any payload is forwarded.
 
-## What are Stream Plugins?
+## How attachment works
 
-Stream Plugins provide access control and security policies for stream-style connections, such as IP restriction and early connection rejection.
+Stream plugins are **not** inline in the route. You define an
+`EdgionStreamPlugins` resource and reference it from the route with the
+`edgion.io/edgion-stream-plugins` annotation. The annotation value is
+`namespace/name` (or just `name` when the plugin lives in the same namespace as
+the route).
 
-**Supported Protocols**:
-- Gateway listener-level connection filtering
-- TCPRoute
-- TLSRoute
+```yaml
+metadata:
+  annotations:
+    edgion.io/edgion-stream-plugins: "edgion-test/tcp-ip-restriction-deny"
+```
 
-**Currently Supported Plugins**:
-- **IP Restriction** - Access control based on client IP address
+The same annotation works on `TCPRoute`, `TLSRoute`, `UDPRoute`, and at the
+Gateway listener level. On `UDPRoute` only the Stage-1 ConnectionFilter
+(`spec.plugins`) runs, because UDP has no TLS handshake.
 
----
+## Supported plugins
 
-## Quick Start
+| Type | Config object | Description |
+|------|---------------|-------------|
+| `IpRestriction` | inline rules | IP allow/deny groups embedded directly in the plugin. |
+| `GlobalConnectionIpRestriction` | `pluginMetadataRef` | References a `GlobalConnectionIpRestriction` PluginMetaData; Center-managed and synced across Controllers. |
 
-### Step 1: Create Plugin Configuration
+Each entry under `spec.plugins` has an optional `enable` flag (default `true`),
+a `type`, and a `config` object.
 
-Create an `EdgionStreamPlugins` resource:
+### `IpRestriction` config
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allow` | Array\<Object\> | none | Allow groups; each is `{name, cidrs}`. A non-empty `allow` turns on whitelist mode. |
+| `deny` | Array\<Object\> | none | Deny groups; each is `{name, cidrs}`. Evaluated before `allow`. |
+| `defaultAction` | Enum | `allow` | Action when no rule matches. Allowed values: `allow` \| `deny`. |
+
+At least one of `allow` or `deny` must be non-empty.
+
+#### Group sub-fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | String | **Required** | Group name, unique within the plugin (admin label only). |
+| `cidrs` | Array\<String\> | **Required** | CIDR strings or bare IPs (bare IPs become `/32` or `/128`). |
+| `description` | String | none | Optional human-readable note. |
+
+Evaluation order: `deny` first, then `allow`, then `defaultAction`. For raw TCP
+a denied connection is simply closed (no protocol-level response exists at L4).
+
+### `GlobalConnectionIpRestriction` config
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `pluginMetadataRef.name` | String | **Required** | Name of the `GlobalConnectionIpRestriction` PluginMetaData. |
+| `pluginMetadataRef.namespace` | String | parent ESP namespace | Namespace of the PluginMetaData; inherited from the parent `EdgionStreamPlugins` if omitted. |
+
+The referenced PluginMetaData stores the rules centrally under
+`spec.metadata.config`, with a kill switch (`enable`), a selected `activeProfile`,
+and named `profiles` so you can swap rule sets instantly. This lets multiple
+Controllers share one policy.
+
+## Quick start (inline IpRestriction)
+
+### Step 1: Define the plugin
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
-  name: ip-filter
-  namespace: default
+  name: tcp-ip-restriction-allow
+  namespace: edgion-test
 spec:
   plugins:
     - type: IpRestriction
       config:
-        ipSource: remoteAddr      # Use actual connection IP
-        allow:                     # Allowlist
-          - "10.0.0.0/8"
-          - "192.168.1.0/24"
-        deny:                      # Denylist (higher priority)
-          - "10.0.0.100"
-        defaultAction: deny        # Default deny
-        message: "Access denied"
+        allow:
+          - name: allowed-clients
+            cidrs:
+              - "10.0.0.0/8"          # internal network only
+        defaultAction: deny           # reject everything not allowed
 ```
 
-### Step 2: Reference in Route
-
-Reference the plugin in the TCPRoute `annotations`:
+### Step 2: Reference it from the route
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
 metadata:
-  name: my-tcp-route
-  namespace: default
+  name: redis-route
+  namespace: edgion-test
   annotations:
-    edgion.io/edgion-stream-plugins: ip-filter  # Reference plugin name
+    edgion.io/edgion-stream-plugins: "edgion-test/tcp-ip-restriction-allow"
 spec:
   parentRefs:
-    - name: my-gateway
-      sectionName: tcp-6379
+    - name: stream-gateway
+      sectionName: tcp-redis
   rules:
     - backendRefs:
-        - name: redis-service
+        - name: redis-primary
           port: 6379
 ```
 
-### Step 3: Apply Configuration
+### Step 3: Apply
 
 ```bash
 kubectl apply -f stream-plugins.yaml
 kubectl apply -f tcp-route.yaml
 ```
 
-Done! Now only IPs in the allowlist can access your TCP service.
+Only clients in `10.0.0.0/8` can now reach the Redis service.
 
----
+## Center-managed restriction (GlobalConnectionIpRestriction)
 
-## IP Restriction Configuration Details
-
-### Basic Configuration Fields
-
-| Field | Type | Description | Required |
-|-------|------|-------------|----------|
-| `ipSource` | string | IP source: `remoteAddr` (connection IP) | Yes |
-| `allow` | []string | IP allowlist (CIDR format) | No |
-| `deny` | []string | IP denylist (higher priority than allowlist) | No |
-| `defaultAction` | string | Default action: `allow` or `deny` | Yes |
-| `message` | string | Message when access is denied | No |
-
-### Evaluation Logic
-
-```
-1. Check deny list → deny if matched
-2. Check allow list → allow if matched
-3. Apply defaultAction
-```
-
----
-
-## Use Cases
-
-### Scenario 1: Database Access Control
-
-Only allow internal IPs to access Redis:
+Store the rules once in a `GlobalConnectionIpRestriction` PluginMetaData (which
+supports named `profiles` and a kill switch) and reference it from a stream
+plugin. This is the form Center syncs to multiple Controllers.
 
 ```yaml
 apiVersion: edgion.io/v1
-kind: EdgionStreamPlugins
+kind: PluginMetaData
 metadata:
-  name: redis-security
+  name: gcir-policy
+  namespace: edgion-test
 spec:
-  plugins:
-    - type: IpRestriction
-      config:
-        ipSource: remoteAddr
-        allow:
-          - "10.0.0.0/8"      # Internal network
-        defaultAction: deny
-```
-
-### Scenario 2: Block Specific IPs
-
-Allow everyone access but block malicious IPs:
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionStreamPlugins
-metadata:
-  name: block-bad-ips
-spec:
-  plugins:
-    - type: IpRestriction
-      config:
-        ipSource: remoteAddr
-        deny:
-          - "1.2.3.4"
-          - "5.6.7.0/24"
-        defaultAction: allow
-```
-
-### Scenario 3: Shared Policy Across Multiple Routes
-
-A single plugin configuration reused by multiple routes:
-
-```yaml
-# Define once
-apiVersion: edgion.io/v1
-kind: EdgionStreamPlugins
-metadata:
-  name: common-policy
-spec:
-  plugins:
-    - type: IpRestriction
-      config:
-        allow: ["10.0.0.0/8"]
-        defaultAction: deny
-
+  metadata:
+    type: GlobalConnectionIpRestriction
+    config:
+      enable: true                    # kill switch; false disables the policy
+      activeProfile: main             # which profile is live
+      profiles:
+        main:
+          defaultAction: deny
+          allow:
+            - name: office
+              cidrs:
+                - "10.0.0.0/8"
 ---
-# TCP route uses it
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: gcir-stream
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: GlobalConnectionIpRestriction
+      config:
+        pluginMetadataRef:
+          name: gcir-policy
+          # namespace omitted: inherits parent ESP namespace (edgion-test)
+---
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
 metadata:
+  name: gcir-route
+  namespace: edgion-test
   annotations:
-    edgion.io/edgion-stream-plugins: common-policy
-# ...
-
----
-# TLSRoute can also use it
-apiVersion: gateway.networking.k8s.io/v1alpha2
-kind: TLSRoute
-metadata:
-  annotations:
-    edgion.io/edgion-stream-plugins: common-policy
-# ...
+    edgion.io/edgion-stream-plugins: "edgion-test/gcir-stream"
+spec:
+  parentRefs:
+    - name: stream-gateway
+      sectionName: tcp-redis
+  rules:
+    - backendRefs:
+        - name: redis-primary
+          port: 6379
 ```
 
----
+## Cross-namespace reference
 
-## Cross-Namespace References
-
-Plugins and routes can be in different namespaces using the `namespace/name` format:
+Point at a plugin in another namespace using `namespace/name`:
 
 ```yaml
-# Plugin in the security namespace
-apiVersion: edgion.io/v1
-kind: EdgionStreamPlugins
-metadata:
-  name: global-policy
-  namespace: security
-spec:
-  plugins:
-    - type: IpRestriction
-      config:
-        allow: ["10.0.0.0/8"]
-        defaultAction: deny
-
----
-# Route in the app namespace, cross-namespace reference
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
 metadata:
   name: app-route
   namespace: app
   annotations:
-    edgion.io/edgion-stream-plugins: security/global-policy  # Cross-namespace
+    edgion.io/edgion-stream-plugins: "security/common-policy"
 spec:
-  # ...
+  parentRefs:
+    - name: stream-gateway
+      sectionName: tcp-redis
+  rules:
+    - backendRefs:
+        - name: redis-primary
+          port: 6379
 ```
 
----
+## Edge cases
+
+### Same annotation on a UDPRoute
+
+`UDPRoute` accepts the identical annotation. Only Stage-1 (`spec.plugins`) runs;
+the IP check is evaluated on the first datagram of each session (fail-close), so
+a denied client never establishes a session.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: udp-route-with-plugins
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "edgion-test/udp-ip-restriction-deny"
+spec:
+  parentRefs:
+    - name: stream-gateway
+      sectionName: udp-plugins
+  rules:
+    - backendRefs:
+        - name: udp-echo-backend
+          port: 9300
+```
+
+### Deny a single host inside an allowed range
+
+`deny` is evaluated before `allow`, so you can permit a broad CIDR while carving
+out one address. Group names are arbitrary labels used only for organization.
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: carve-out
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        allow:
+          - name: internal
+            cidrs:
+              - "10.0.0.0/8"
+        deny:
+          - name: quarantine
+            cidrs:
+              - "10.6.6.6/32"        # blocked even though it is inside 10.0.0.0/8
+        defaultAction: deny
+```
 
 ## Troubleshooting
 
-### Plugin Not Taking Effect
-
-**Checklist**:
+### Plugin not taking effect
 
 1. Confirm the plugin resource exists:
    ```bash
    kubectl get edgionstreamplugins -A
    ```
-
-2. Check if the annotation is correct:
+2. Check the annotation value (must be `name` or `namespace/name`):
    ```bash
-   kubectl get tcproute <name> -o yaml | grep annotations -A 2
+   kubectl get tcproute <name> -o yaml | grep -A2 annotations
    ```
-   The current primary key is `edgion.io/edgion-stream-plugins`.
-
 3. Check the Gateway logs:
    ```bash
    kubectl logs <gateway-pod> | grep -i "stream plugin"
    ```
 
-4. Verify namespace matching:
-   - Same namespace: use the plugin name directly
-   - Cross-namespace: use `namespace/name` format
+### Connection refused unexpectedly
 
-### Connection Refused
-
-Check if the IP is in the allowlist:
-
-```bash
-# Check your IP
-curl ifconfig.me
-
-# Check plugin configuration
-kubectl get edgionstreamplugins <name> -o yaml
-```
-
----
-
-## Performance Considerations
-
-- IP checks are performed at connection establishment and do not affect data transfer performance
-- Uses CIDR matching algorithms for fast lookups
-- Plugin configurations are hot-reloaded without Gateway restarts
-
----
-
-## Next Steps
-
-- [Full Annotations Reference](../../dev-guide/annotations-guide.md)
-- [Adding Custom Plugins](../../dev-guide/add-new-resource-guide.md)
-- [Architecture Overview](../../dev-guide/architecture-overview.md)
-
----
-
-**Version**: Edgion v0.1.0
-**Last Updated**: 2025-12-25
+`deny` wins over `allow`, and `defaultAction: deny` rejects anything not listed.
+Verify your client IP falls inside an `allow` group's `cidrs` and is not caught
+by a `deny` group.

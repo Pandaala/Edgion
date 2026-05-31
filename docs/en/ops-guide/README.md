@@ -22,12 +22,14 @@ This section is intended for operators, covering Gateway deployment, configurati
 - [TLS Termination](./gateway/tls/tls-termination.md): Standard TLS termination configuration.
 - [EdgionTls Extension 🔌](./gateway/tls/edgion-tls.md): Extended certificate and TLS capabilities.
 - [ACME Auto-Certificate 🔌](./gateway/tls/acme.md): Automatic issuance and renewal.
+- [TLS Routing (Passthrough)](../user-guide/tls-route/overview.md): SNI-based routing without decrypting traffic.
 
 ### Infrastructure
 
 - [Secret Management](./infrastructure/secret-management.md): Certificate and credential management.
 - [Cross-Namespace Reference (ReferenceGrant)](./infrastructure/reference-grant.md): Cross-namespace resource authorization.
 - [mTLS Configuration](./infrastructure/mtls.md): Mutual TLS between gateway and backends.
+- [Connectors (LinkSys) 🔌](./infrastructure/connectors.md): External-system integrations (Redis, Etcd, Elasticsearch, Webhook, Kafka).
 
 ### Observability
 
@@ -36,7 +38,7 @@ This section is intended for operators, covering Gateway deployment, configurati
 
 ### Configuration Reference
 
-- [Controller Configuration](./configuration/controller-config.md): Controller TOML process configuration parameters.
+- [Controller Configuration](./configuration/controller-config.md): Controller YAML process configuration parameters.
 - [Gateway Configuration](./configuration/gateway-config.md): Gateway YAML process configuration parameters.
 - [EdgionGatewayConfig](./configuration/edgion-gateway-config.md): GatewayClass-level runtime configuration (timeouts, real IP, global plugins, etc.).
 

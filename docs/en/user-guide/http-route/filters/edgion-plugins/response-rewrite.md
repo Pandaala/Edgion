@@ -35,14 +35,14 @@ spec:
 
 ## Configuration Parameters
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `statusCode` | Integer | No | HTTP status code (100-599) |
-| `headers` | Object | No | Response header modification operations |
-| `headers.set` | Array | No | Set response headers (overwrite existing values) |
-| `headers.add` | Array | No | Add response headers (append to existing values) |
-| `headers.remove` | Array | No | Remove response headers |
-| `headers.rename` | Array | No | Rename response headers |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `statusCode` | Integer | none | HTTP status code (100–599) |
+| `headers` | Object | none | Response header modification operations |
+| `headers.set` | Array\<Object\> | none | Set response headers (overwrite existing values) |
+| `headers.add` | Array\<Object\> | none | Add response headers (append to existing values) |
+| `headers.remove` | Array\<String\> | none | Remove response headers |
+| `headers.rename` | Array\<Object\> | none | Rename response headers |
 
 ### Headers Configuration Format
 
@@ -236,10 +236,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: api-route
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "api.example.com"
   rules:
@@ -261,7 +261,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: api-response-rewrite
-  namespace: default
+  namespace: production
 spec:
   upstreamResponseFilterPlugins:
     - type: ResponseRewrite
@@ -344,8 +344,8 @@ spec:
   requestPlugins:
     - type: Cors
       config:
-        allow_origins: "*"
-        allow_methods: "GET,POST,PUT,DELETE"
+        allowOrigins: "*"
+        allowMethods: "GET,POST,PUT,DELETE"
   upstreamResponseFilterPlugins:
     - type: ResponseRewrite
       config:

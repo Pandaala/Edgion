@@ -6,7 +6,7 @@ This document corresponds to the **feature and configuration preparation** phase
 
 ## 1. Directory and Code Locations
 
-- **Plugin directory**: `Edgion/src/core/plugins/edgion_plugins/jwt_auth/`
+- **Plugin directory**: `src/core/gateway/plugins/http/jwt_auth/`
   - `mod.rs`: Exports `JwtAuth`
   - `plugin.rs`: Plugin implementation (currently a stub, runtime logic to be added after review)
 - **Configuration types**: `Edgion/src/types/resources/edgion_plugins/plugin_configs/jwt_auth.rs`

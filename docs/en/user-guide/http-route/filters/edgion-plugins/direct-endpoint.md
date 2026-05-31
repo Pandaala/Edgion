@@ -19,7 +19,6 @@ metadata:
   name: direct-endpoint-plugin
 spec:
   requestPlugins:
-    - enable: true
       type: DirectEndpoint
       config:
         from:
@@ -31,19 +30,19 @@ spec:
 
 ## Configuration Reference
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `from` | Object | Yes | `{type:"header",name:"X-Target-Endpoint"}` | Endpoint value source |
-| `from.type` | String | Yes | `header` | Source type: `header` / `query` / `cookie` / `ctx` |
-| `from.name` | String | Yes | `X-Target-Endpoint` | Source name |
-| `extract` | Object | No | none | Extraction rules |
-| `extract.regex` | String | Yes (within `extract`) | none | Regular expression applied to the raw value |
-| `extract.group` | Integer | No | `1` | Capture group index (`0` = full match) |
-| `port` | Integer | No | none | Port to use when the value carries no `ip:port` and the backendRef has none |
-| `onMissing` | String | No | `Fallback` | Behavior when the value is missing: `Fallback` (normal LB) / `Reject` (400) |
-| `onInvalid` | String | No | `Reject` | Behavior when the endpoint is not in any backendRef: `Reject` (403) / `Fallback` |
-| `inheritTls` | Boolean | No | `true` | Inherit TLS from the matched backendRef's BackendTLSPolicy |
-| `debugHeader` | Boolean | No | `false` | When `true`, sets the `X-Direct-Endpoint` request header (sent to the upstream) indicating the targeted endpoint |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `from` | Object | **Required** | Endpoint value source (see sub-fields) |
+| `from.type` | String | `header` | Source type: `header` / `query` / `cookie` / `ctx` |
+| `from.name` | String | `X-Target-Endpoint` | Source name |
+| `extract` | Object | none | Extraction rules |
+| `extract.regex` | String | **Required** (within `extract`) | Regular expression applied to the raw value |
+| `extract.group` | Integer | `1` | Capture group index (`0` = full match) |
+| `port` | Integer | none | Port to use when the value carries no `ip:port` and the backendRef has none |
+| `onMissing` | Enum | `Fallback` | Behavior when the value is missing. Allowed values: `Fallback` (normal LB) / `Reject` (400) |
+| `onInvalid` | Enum | `Reject` | Behavior when the endpoint is not in any backendRef. Allowed values: `Reject` (403) / `Fallback` |
+| `inheritTls` | Boolean | `true` | Inherit TLS from the matched backendRef's BackendTLSPolicy |
+| `debugHeader` | Boolean | `false` | When `true`, sets the `X-Direct-Endpoint` request header (sent to the upstream) indicating the targeted endpoint |
 
 ---
 

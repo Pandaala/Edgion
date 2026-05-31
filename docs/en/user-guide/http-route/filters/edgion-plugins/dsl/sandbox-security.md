@@ -53,7 +53,6 @@ Limits the maximum byte length of strings produced by concatenation operations. 
 ```yaml
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "my-script"

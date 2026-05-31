@@ -1,48 +1,117 @@
 # RequestMirror
 
-RequestMirror 是 Gateway API 的标准 HTTPRoute 过滤器，用于将请求镜像到另一个后端。
+## 概述
 
-在 Edgion 里，这个能力常见有两种入口：
+`RequestMirror` 将部分入站请求复制到第二个后端，同时由路由的主后端正常处理原始请求。它是标准 Gateway API 过滤器，在请求阶段运行。镜像采用 fire-and-forget 模式：镜像响应被丢弃，永远不会影响客户端，因此可安全地对新服务版本进行生产流量的影子测试。
 
-1. 直接作为 HTTPRoute 的标准 `RequestMirror` filter
-2. 作为可复用的 `EdgionPlugins` `RequestMirror` 配置
+## 配置
 
-如果你只是按 Gateway API 标准方式配置，先看本页；如果你想把镜像逻辑抽成可复用插件资源，再继续看扩展页。
+```yaml
+filters:
+  - type: RequestMirror
+    requestMirror:
+      backendRef:
+        name: mirror-service
+        port: 8080
+      fraction:
+        numerator: 10
+        denominator: 100
+```
 
-## 最小示例
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `backendRef` | Object | **必填** | 镜像流量的目标后端：`{name, port}` |
+| `fraction` | Object | 全量镜像 | 镜像请求的比例：`{numerator, denominator}` |
+| `connectTimeoutMs` | Integer | `1000` | 镜像请求的连接超时（毫秒） |
+| `writeTimeoutMs` | Integer | `1000` | 镜像请求的写入超时（毫秒） |
+| `maxBufferedChunks` | Integer | `5` | 镜像时缓冲的最大请求体 chunk 数量 |
+| `mirrorLog` | Boolean | `true` | 镜像是否生成独立的 access log 条目 |
+| `maxConcurrent` | Integer | `1024` | 每个网关进程允许同时飞行的最大镜像任务数 |
+| `channelFullTimeoutMs` | Integer | `0` | 镜像通道满时等待队列空间的时长（毫秒）；`0` 表示立即放弃该次镜像 |
+
+### `fraction` 子字段
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `fraction.numerator` | Integer | 无 | 镜像比例的分子 |
+| `fraction.denominator` | Integer | `100` | 镜像比例的分母 |
+
+## 示例
+
+### 示例 1：将全部流量镜像到影子服务
+
+将每个请求的副本发送到新版本服务进行对比测试。
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: request-mirror-route
+  name: shadow-route
+  namespace: production
 spec:
   parentRefs:
-    - name: public-gateway
-      sectionName: http
+    - name: main-gateway
   rules:
     - matches:
         - path:
             type: PathPrefix
-            value: /
+            value: /api/
       filters:
         - type: RequestMirror
           requestMirror:
             backendRef:
-              name: mirror-service
+              name: api-service-v2
               port: 8080
       backendRefs:
-        - name: primary-service
+        - name: api-service
           port: 8080
 ```
 
-## 在 Edgion 中需要知道的点
+### 示例 2：镜像 10% 流量并限制资源消耗
 
-- 主请求和镜像请求共享同一套 RequestMirror 运行时实现
-- 镜像是异步执行的，不决定主请求是否成功
-- 如果你需要复用配置、统一引用或扩展更多运行时参数，可以改用 `EdgionPlugins` 形式
+只镜像十分之一的流量，并限制并发数和缓冲大小，防止镜像对主路径造成背压。
 
-## 继续阅读
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: sampled-shadow-route
+  namespace: production
+spec:
+  parentRefs:
+    - name: main-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/
+      filters:
+        - type: RequestMirror
+          requestMirror:
+            backendRef:
+              name: api-service-v2
+              port: 8080
+            # 镜像 10% 的请求
+            fraction:
+              numerator: 10
+              denominator: 100
+            connectTimeoutMs: 1000
+            writeTimeoutMs: 1000
+            maxBufferedChunks: 5
+            maxConcurrent: 1024
+      backendRefs:
+        - name: api-service
+          port: 8080
+```
 
-- [Edgion 扩展版 Request Mirror 插件](../edgion-plugins/request-mirror.md)
-- [过滤器总览](../overview.md)
+## 注意事项
+
+- 镜像是非阻塞的：客户端始终收到主后端的响应，镜像响应被丢弃。
+- 若镜像队列已满且 `channelFullTimeoutMs` 超时，该请求的镜像将被丢弃，而不会延迟原始请求。
+- 这是标准 Gateway API 镜像，目标是一个 `backendRef`。如需更丰富的镜像选项——例如镜像到外部目标或超出 `backendRef` 范围的精细控制——请参阅 [Edgion RequestMirror 插件](../edgion-plugins/request-mirror.md)。
+
+## 相关文档
+
+- [Edgion RequestMirror 插件](../edgion-plugins/request-mirror.md)
+- [RequestHeaderModifier](./request-header-modifier.md)
+- [插件组合与执行顺序](../plugin-composition.md)

@@ -31,39 +31,39 @@ The `RequestRestriction` plugin restricts access based on request attributes, su
 
 ### RequestRestrictionConfig
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `rules` | `RestrictionRule[]` | ✅ | - | List of restriction rules |
-| `matchMode` | `string` | ❌ | `Any` | Rule matching mode: `Any` (any triggers) or `All` (all must trigger) |
-| `status` | `integer` | ❌ | `403` | HTTP status code on denial |
-| `message` | `string` | ❌ | `Access denied...` | Response message on denial |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `rules` | Array\<Object\> | **Required** | List of restriction rules |
+| `matchMode` | Enum | `Any` | Rule matching mode. Allowed values: `Any` (any triggers) / `All` (all must trigger) |
+| `status` | Integer | `403` | HTTP status code on denial |
+| `message` | String | `Access denied...` | Response message on denial |
 
 ### RestrictionRule
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `name` | `string` | ❌ | - | Rule name (for logging) |
-| `source` | `string` | ✅ | - | Data source: `Header`, `Cookie`, `Query`, `Path`, `Method`, `Referer` |
-| `key` | `string` | Depends | - | Key name (required for Header/Cookie/Query, ignored for Path/Method/Referer) |
-| `allow` | `string[]` | ❌ | - | Exact match allowlist |
-| `allowRegex` | `string[]` | ❌ | - | Regex match allowlist |
-| `deny` | `string[]` | ❌ | - | Exact match denylist (highest priority) |
-| `denyRegex` | `string[]` | ❌ | - | Regex match denylist |
-| `caseSensitive` | `boolean` | ❌ | `true` | Whether exact matching is case-sensitive |
-| `onMissing` | `string` | ❌ | `Allow` | Behavior when value is missing: `Allow`, `Deny`, `Skip` |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | String | none | Rule name (for logging) |
+| `source` | Enum | **Required** | Data source: `Header` / `Cookie` / `Query` / `Path` / `Method` / `Referer` |
+| `key` | String | none | Key name (**Required** for `Header` / `Cookie` / `Query`; ignored for `Path` / `Method` / `Referer`) |
+| `allow` | Array\<String\> | none | Exact match allowlist |
+| `allowRegex` | Array\<String\> | none | Regex match allowlist |
+| `deny` | Array\<String\> | none | Exact match denylist (highest priority) |
+| `denyRegex` | Array\<String\> | none | Regex match denylist |
+| `caseSensitive` | Boolean | `true` | Whether exact matching is case-sensitive |
+| `onMissing` | Enum | `Allow` | Behavior when value is missing. Allowed values: `Allow` / `Deny` / `Skip` |
 
 > **Note**: At least one of `allow`, `allowRegex`, `deny`, `denyRegex` must be configured.
 
 ### Data Source Reference
 
-| Data Source | Description | Requires key |
-|-------------|-------------|-------------|
-| `Header` | HTTP request header | ✅ |
-| `Cookie` | HTTP Cookie | ✅ |
-| `Query` | URL query parameter | ✅ |
-| `Path` | Request path | ❌ |
-| `Method` | HTTP method | ❌ |
-| `Referer` | Referer request header | ❌ |
+| Data Source | Description | `key` required |
+|-------------|-------------|----------------|
+| `Header` | HTTP request header | Yes |
+| `Cookie` | HTTP Cookie | Yes |
+| `Query` | URL query parameter | Yes |
+| `Path` | Request path | No |
+| `Method` | HTTP method | No |
+| `Referer` | Referer request header | No |
 
 ### Matching Methods
 

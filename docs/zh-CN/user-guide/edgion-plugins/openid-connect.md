@@ -47,7 +47,7 @@
 | `redirectUri` | String | 无 | 自定义回调 URI，须为绝对路径或绝对 URL |
 | `authorizationParams` | Object | 无 | 附加到授权请求的额外参数（不可包含保留键如 `response_type`、`client_id` 等） |
 | `revokeTokensOnLogout` | Boolean | `false` | 登出时是否调用 Token Revocation 端点 |
-| `logoutPath` | String | `"/logout"` | 触发登出的路径，须以 `/` 开头。**加载时规范化**：配置值在 gateway 插件实例构建时自动规范化（`/auth//logout` 存储为 `/auth/logout`），INFO 日志记录转换。 |
+| `logoutPath` | String | `"/logout"` | 触发登出的路径，须以 `/` 开头 |
 | `postLogoutRedirectUri` | String | 无 | 登出后重定向 URI |
 
 ### Session 参数
@@ -92,7 +92,7 @@
 | `setUserinfoHeader` | Boolean | `false` | 是否将 Userinfo 传给上游 |
 | `accessTokenInAuthorizationHeader` | Boolean | `false` | 是否将 Access Token 写入上游的 `Authorization: Bearer` 头 |
 | `claimsToHeaders` | Object | 无 | Claims 到 Header 的映射（支持 dot-notation，如 `user.name`） |
-| `storeClaimsInCtx` | Boolean | `false` | 是否将 Claims 存入上下文变量 `oidc_claims`(供下游插件通过 `get_ctx_var` 读取;已从访问日志中排除,claims 不会被持久化) |
+| `storeClaimsInCtx` | Boolean | `false` | 是否将 Claims 存入上下文变量 `oidc_claims`（供下游插件读取；已从访问日志中排除，claims 不会被持久化） |
 | `maxHeaderValueBytes` | Integer | `4096` | 单个映射 Header 值的最大字节数 |
 | `maxTotalHeaderBytes` | Integer | `16384` | 所有映射 Header 的总最大字节数 |
 
@@ -160,15 +160,13 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-    - plugin:
-        type: OpenidConnect
-        config:
-          discovery: "https://idp.example.com/.well-known/openid-configuration"
-          clientId: "my-api"
-          bearerOnly: true
-          verificationMode: JwksOnly
-          unauthAction: Deny
-      enabled: true
+    - type: OpenidConnect
+      config:
+        discovery: "https://idp.example.com/.well-known/openid-configuration"
+        clientId: "my-api"
+        bearerOnly: true
+        verificationMode: JwksOnly
+        unauthAction: Deny
 ```
 
 ## Web 登录示例（Code Flow + PKCE）
@@ -181,20 +179,18 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-    - plugin:
-        type: OpenidConnect
-        config:
-          discovery: "https://idp.example.com/.well-known/openid-configuration"
-          clientId: "web-app"
-          clientSecretRef:
-            name: oidc-client-secret
-          bearerOnly: false
-          unauthAction: Auth
-          usePkce: true
-          useNonce: true
-          sessionSecretRef:
-            name: oidc-session-secret
-      enabled: true
+    - type: OpenidConnect
+      config:
+        discovery: "https://idp.example.com/.well-known/openid-configuration"
+        clientId: "web-app"
+        clientSecretRef:
+          name: oidc-client-secret
+        bearerOnly: false
+        unauthAction: Auth
+        usePkce: true
+        useNonce: true
+        sessionSecretRef:
+          name: oidc-session-secret
 ```
 
 ## Secret 约束

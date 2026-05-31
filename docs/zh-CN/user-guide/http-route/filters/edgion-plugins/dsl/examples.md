@@ -18,7 +18,6 @@ metadata:
   namespace: default
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "api-key-check"
@@ -55,7 +54,6 @@ metadata:
   namespace: default
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "jwt-claim-extractor"
@@ -139,7 +137,6 @@ metadata:
   namespace: default
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "grpc-auth-check"
@@ -195,7 +192,6 @@ metadata:
   namespace: default
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "ua-client-classify"
@@ -248,7 +244,6 @@ metadata:
   namespace: default
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "path-based-upstream"
@@ -298,7 +293,6 @@ metadata:
   namespace: default
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "ab-test-marker"
@@ -353,7 +347,6 @@ metadata:
   namespace: default
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "internal-ip-bypass"
@@ -404,7 +397,6 @@ metadata:
   namespace: default
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "body-size-limit"
@@ -452,7 +444,6 @@ metadata:
   namespace: default
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "strip-internal-headers"
@@ -505,7 +496,6 @@ metadata:
   namespace: default
 spec:
   upstreamResponseFilterPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "inject-security-headers"
@@ -550,7 +540,6 @@ metadata:
   namespace: default
 spec:
   upstreamResponseFilterPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "cache-control-policy"
@@ -602,7 +591,6 @@ metadata:
   namespace: default
 spec:
   upstreamResponseFilterPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "strip-debug-headers"
@@ -654,7 +642,6 @@ metadata:
   namespace: default
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "request-audit-log"
@@ -710,7 +697,6 @@ metadata:
   namespace: default
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "latency-marker-req"
@@ -727,7 +713,6 @@ spec:
           return next()
 
   upstreamResponseFilterPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "latency-marker-resp"
@@ -936,7 +921,6 @@ source: |
 # 错误示范：grpc_error() 在响应阶段不被支持
 spec:
   upstreamResponseFilterPlugins:  # 响应阶段
-    - enable: true
       type: Dsl
       config:
         name: "wrong-grpc-error"
@@ -951,7 +935,6 @@ spec:
 # 正确做法：gRPC 错误拦截应在请求阶段完成，响应阶段使用 resp.set_status() 改写状态码
 spec:
   upstreamResponseFilterPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "correct-resp-handling"

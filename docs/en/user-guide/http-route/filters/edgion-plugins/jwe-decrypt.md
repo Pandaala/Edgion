@@ -1,7 +1,7 @@
 # JWE Decrypt (HTTPRoute Filter)
 
 > **🔌 Edgion extension**
->  
+> 
 > JweDecrypt is a JWE Token decryption plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
 JweDecrypt can be used as an HTTPRoute filter or configured globally via `EdgionPlugins`. This page describes how to use it within HTTPRoute; for complete configuration parameters, see the [standalone plugin page](../../../edgion-plugins/jwe-decrypt.md).

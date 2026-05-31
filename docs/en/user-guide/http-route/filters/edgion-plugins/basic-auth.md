@@ -36,7 +36,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: my-users-secret
-  namespace: default
+  namespace: production
 type: kubernetes.io/basic-auth
 stringData:
   username: "admin"
@@ -63,10 +63,10 @@ filters:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `secretGroups` | Array | None | **Required** (except in anonymous-only mode). List of Secret groups. Each group holds a name and one or more Secret references. Each Secret must be of type `kubernetes.io/basic-auth` and contain `username` and `password` fields |
+| `secretGroups` | Array | none | **Required** (except in anonymous-only mode). List of Secret groups. Each group holds a name and one or more Secret references. Each Secret must be of type `kubernetes.io/basic-auth` and contain `username` and `password` fields |
 | `realm` | String | `"API Gateway"` | Authentication realm name, displayed in the browser login dialog |
 | `hideCredentials` | Boolean | `false` | Whether to hide the Authorization header from the upstream service |
-| `anonymous` | String | None | Anonymous username. When set, unauthenticated requests are also allowed with this username |
+| `anonymous` | String | none | Anonymous username. When set, unauthenticated requests are also allowed with this username |
 | `authFailureDelayMs` | Integer | `0` | Fixed delay (milliseconds) applied before returning an auth failure response. Used to mitigate brute-force and username-enumeration attacks — see [Security Best Practices · Mitigating Enumeration and Brute-Force](#6-mitigating-enumeration-and-brute-force-recommended) below |
 
 ### BasicAuthSecretGroup sub-fields
@@ -535,10 +535,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: protected-api
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "api.example.com"
   rules:
@@ -560,20 +560,18 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: auth-edgion_plugins
-  namespace: default
+  namespace: production
 spec:
-  plugins:
-    - enable: true
-      plugin:
-        type: BasicAuth
-        config:
-          secretGroups:
-            - name: default
-              secretRefs:
-                - name: api-admin
-                - name: api-developer
-          realm: "Protected API"
-          hideCredentials: true
+  requestPlugins:
+    - type: BasicAuth
+      config:
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: api-admin
+              - name: api-developer
+        realm: "Protected API"
+        hideCredentials: true
 ---
 apiVersion: v1
 kind: Secret

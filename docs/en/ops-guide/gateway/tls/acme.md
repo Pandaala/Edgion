@@ -120,7 +120,7 @@ The Controller creates a `_acme-challenge.<domain>` TXT record via the provider 
 |-----------|------|---------|-------------|
 | `renewal.renewBeforeDays` | Integer | `30` | Renew this many days before expiry |
 | `renewal.checkInterval` | Integer | `86400` | Seconds between renewal checks (default 24h) |
-| `renewal.failBackoff` | Integer | `300` | Base seconds for the first retry after a failure; backs off exponentially (300, 1200, 4800, …) up to 5 attempts |
+| `renewal.failBackoff` | Integer | `300` | Base seconds for the retry delay after a failure. Each consecutive failure multiplies the delay by 4 (`failBackoff * 4^attempt`, e.g. 300, 1200, 4800, 19200, 76800). After 5 consecutive failures the resource stays `Failed` and stops retrying until you edit the CRD or [manually trigger](#manual-trigger) it (which resets the counter); a success also resets it |
 
 ### External Account Binding
 
@@ -312,7 +312,7 @@ If the ACME service is not running on the contacted replica (for example one tha
 | `Issuing` | ACME order in progress (validating or issuing) |
 | `Ready` | Certificate issued and valid |
 | `Renewing` | Renewal in progress |
-| `Failed` | Last operation failed; retried with exponential backoff, up to 5 times |
+| `Failed` | Last operation failed; retried with exponential backoff (`failBackoff * 4^attempt`) for up to 5 attempts, then stays `Failed` until the CRD is edited or a [manual trigger](#manual-trigger) resets the retry counter |
 
 ### Useful status fields
 

@@ -6,34 +6,42 @@
 
 ## 什么是 CORS？
 
-CORS (Cross-Origin Resource Sharing，跨域资源共享) 是一种浏览器安全机制，用于控制哪些网站可以访问你的 API。
+**CORS（Cross-Origin Resource Sharing，跨域资源共享）** 是一种浏览器安全机制，用于控制某个来源的网页能否访问另一个来源的资源。
 
-**简单例子**：
-- 你的 API 在 `https://api.example.com`
-- 你的前端在 `https://app.example.com`
-- 没有 CORS 配置，浏览器会阻止前端访问 API
-- 配置 CORS 后，浏览器允许跨域访问
+**来源（origin）** 是协议 + 域名 + 端口的组合。例如，`https://app.example.com` 和 `https://api.example.com` 是不同的来源（不同子域名）。
 
-> **说明：** CORS 不适用于 WebSocket —— 浏览器不会对 WS 连接施加同源策略，因此 Edgion 透明转发 WS 握手、不校验 `Origin` 头；如需限制 WebSocket 来源，请在后端服务中实现。
+当前端应用向不同来源的 API 发起请求时，浏览器会发送 CORS 预检请求或附加 `Origin` 头，服务器必须返回正确的 CORS 响应头才能授权访问。
 
 ## 快速开始
 
-### 最简单的配置（开发环境）
+### 最简配置
 
 ```yaml
-filters:
-  - type: Cors
-    config:
-      allow_origins: "https://app.example.com"
-      allow_methods: "GET,POST,PUT,DELETE"
-      allow_headers: "Content-Type,Authorization"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: cors-plugin
+  namespace: production
+spec:
+  requestPlugins:
+    - type: Cors
+      config:
+        allowOrigins: "https://app.example.com"
+        allowMethods: "GET,POST,PUT,DELETE"
+        allowHeaders: "Content-Type,Authorization"
 ```
 
 ### 默认值说明
 
-为了安全，CORS 插件采用**拒绝所有**的默认策略，你必须显式配置允许的来源。
+默认值以安全为优先：
 
-如果不配置 `allow_origins`，所有跨域请求都会被拒绝。
+| 字段 | 默认值 | 含义 |
+|------|--------|------|
+| `allowOrigins` | `""` (空) | **拒绝所有来源**——必须显式配置 |
+| `allowMethods` | `GET,HEAD,OPTIONS` | 仅允许安全方法 |
+| `allowHeaders` | `Accept,Accept-Language,Content-Language,Content-Type,Range` | CORS 安全列表请求头 |
+| `allowCredentials` | `false` | 不允许携带凭据 |
+| `maxAge` | 无 | 不缓存预检请求 |
 
 ---
 
@@ -43,315 +51,186 @@ filters:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `allow_origins` | String | `""` (空) | **必填**。允许的来源域名，多个用逗号分隔。示例：`"https://app.com,https://admin.com"` |
-| `allow_origins_by_regex` | Array | 无 | 使用正则表达式匹配来源。示例：`["^https://.*\\.example\\.com$"]` |
-| `allow_methods` | String | `"GET,HEAD,OPTIONS"` | 允许的 HTTP 方法，多个用逗号分隔。常用：`"GET,POST,PUT,DELETE,PATCH"` |
-| `allow_headers` | String | `"Accept,Accept-Language,Content-Language,Content-Type,Range"` | 允许的请求头，多个用逗号分隔。常用：`"Content-Type,Authorization"` |
-| `expose_headers` | String | `""` (空) | 允许浏览器访问的响应头。示例：`"X-Request-ID,X-Total-Count"` |
-
-### 安全参数
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `allow_credentials` | Boolean | `false` | 是否允许发送 Cookie 和认证信息。设为 `true` 时不能使用通配符 `*` |
-| `max_age` | Integer | 无 | 预检请求的缓存时间（秒）。推荐：`86400` (24小时) |
+| `allowOrigins` | String | `""` (空) | 允许的来源，多个用逗号分隔。支持 `*`、`**` 和 `*.domain`。示例：`"https://app.example.com,https://admin.example.com"` |
+| `allowMethods` | String | `GET,HEAD,OPTIONS` | 允许的 HTTP 方法，多个用逗号分隔。支持 `*` / `**` |
+| `allowHeaders` | String | `Accept,Accept-Language,Content-Language,Content-Type,Range` | 允许的请求头，多个用逗号分隔。支持 `*` / `**` |
+| `exposeHeaders` | String | `""` (空) | 向浏览器暴露的响应头，多个用逗号分隔 |
+| `allowCredentials` | Boolean | `false` | 是否允许携带凭据（Cookie、Authorization 头） |
+| `maxAge` | Integer | 无 | 预检请求缓存时长（秒）。未设置时不发送 `Access-Control-Max-Age` 头 |
 
 ### 高级参数
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `preflight_continue` | Boolean | `false` | 是否将预检请求转发给上游服务。通常保持 `false` |
-| `allow_private_network` | Boolean | `false` | 启用 Private Network Access (Chrome 94+)。用于从公网访问私网资源 |
-| `timing_allow_origins` | String | 无 | 允许访问 Resource Timing API 的来源。格式同 `allow_origins` |
-| `timing_allow_origins_by_regex` | Array | 无 | 使用正则表达式匹配 Timing API 来源 |
+| `allowOriginsByRegex` | Array\<String\> | 无 | 来源匹配的正则表达式列表。用于允许 `http://` 来源（`*.domain` 简写仅适用于 HTTPS） |
+| `preflightContinue` | Boolean | `false` | 是否将 OPTIONS 预检请求转发给上游，而不是由网关直接响应 |
+| `allowPrivateNetwork` | Boolean | `false` | 启用 Private Network Access 支持（Chrome 94+） |
+| `timingAllowOrigins` | String | 无 | `Timing-Allow-Origin` 响应头的值。支持 `*` / `**` |
+| `timingAllowOriginsByRegex` | Array\<String\> | 无 | `Timing-Allow-Origin` 来源匹配的正则表达式列表 |
 
 ### 特殊值说明
 
+`allowOrigins` 支持多种特殊形式：
+
 | 值 | 含义 | 使用场景 |
 |----|------|----------|
-| `*` | 通配符，允许所有 | **不推荐生产使用**。仅用于开发环境 |
-| `**` | 强制通配符，绕过安全检查 | **危险**。仅在完全理解风险时使用 |
-| `""` (空字符串) | 拒绝所有 | 默认值，安全 |
+| `*` | 通配符，允许所有来源 | **生产环境不推荐** |
+| `**` | 强制通配符，允许所有来源 | **请避免使用** |
+| `*.example.com` | 子域名通配符，匹配 `https://<任意>.example.com`（仅 HTTPS；**不**匹配根域名或 `http://`） | 多子域名应用 |
+| `""` (空) | 拒绝所有来源 | 默认值，安全 |
+
+⚠️ **通配符来源（`*` / `**`）与 `allowCredentials: true` 组合将在解析时被拒绝。** 同样的限制也适用于 `allowMethods`、`allowHeaders`、`exposeHeaders` 和 `timingAllowOrigins`：当 `allowCredentials` 为 `true` 时，均不能包含 `*`。这与浏览器规则一致——携带凭据的响应不能使用通配符。
+
+`null` 来源始终被拒绝，即使 `allowOrigins` 为 `*`。
 
 ---
 
 ## 常见配置场景
 
-### 1. 开发环境：允许所有来源
-
-⚠️ **仅用于开发！不要在生产环境使用！**
+### 1. 单一前端来源
 
 ```yaml
-filters:
-  - type: Cors
-    config:
-      allow_origins: "*"
-      allow_methods: "*"
-      allow_headers: "*"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: cors-single
+  namespace: production
+spec:
+  requestPlugins:
+    - type: Cors
+      config:
+        allowOrigins: "https://app.example.com"
+        allowMethods: "GET,POST"
+        allowHeaders: "Content-Type"
 ```
 
-### 2. 生产环境：单个前端域名
+### 2. 多个指定来源并启用凭据
 
 ```yaml
-filters:
-  - type: Cors
-    config:
-      allow_origins: "https://app.example.com"
-      allow_methods: "GET,POST,PUT,DELETE"
-      allow_headers: "Content-Type,Authorization"
-      expose_headers: "X-Request-ID"
-      max_age: 86400
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: cors-multi
+  namespace: production
+spec:
+  requestPlugins:
+    - type: Cors
+      config:
+        allowOrigins: "https://app.example.com,https://admin.example.com"
+        allowMethods: "GET,POST,PUT,DELETE"
+        allowHeaders: "Content-Type,Authorization"
+        allowCredentials: true
 ```
 
-### 3. 多个前端域名
+### 3. 子域名通配符
 
 ```yaml
-filters:
-  - type: Cors
-    config:
-      allow_origins: "https://app.example.com,https://admin.example.com,https://mobile.example.com"
-      allow_methods: "GET,POST,PUT,DELETE"
-      allow_headers: "Content-Type,Authorization"
-      max_age: 86400
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: cors-subdomain
+  namespace: production
+spec:
+  requestPlugins:
+    - type: Cors
+      config:
+        # 匹配 https://<任意>.example.com，仅 HTTPS
+        allowOrigins: "*.example.com"
+        allowMethods: "GET,POST"
+        allowCredentials: true
 ```
 
-### 4. 允许所有子域名
-
-使用通配符匹配（**仅匹配 HTTPS**）：
+### 4. 公共 API，带预检缓存（无凭据）
 
 ```yaml
-filters:
-  - type: Cors
-    config:
-      allow_origins: "*.example.com"    # 仅匹配 https://*.example.com，不含 http://
-      allow_methods: "GET,POST,PUT,DELETE"
-      allow_headers: "Content-Type,Authorization"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: cors-public
+  namespace: production
+spec:
+  requestPlugins:
+    - type: Cors
+      config:
+        allowOrigins: "*"
+        allowMethods: "GET"
+        allowHeaders: "Content-Type"
+        # 预检结果缓存 1 小时
+        maxAge: 3600
 ```
 
-> ⚠️ **`*.domain` 简写仅匹配 `https://`**（Edgion 0.x 起）。如果需要匹配 `http://`（如本地 dev 或遗留内部子域），请改用 `allow_origins_by_regex`，见下。
-
-或使用正则表达式（需 http/https 全覆盖时）：
+### 5. 暴露并反射响应头
 
 ```yaml
-filters:
-  - type: Cors
-    config:
-      allow_origins: "https://example.com"  # 主域名
-      allow_origins_by_regex:
-        - "^https://[^/]+\\.example\\.com$"    # 所有 HTTPS 子域名
-        # - "^https?://[^/]+\\.example\\.com$"  # 含 http（按需启用）
-      allow_methods: "GET,POST,PUT,DELETE"
-      allow_headers: "Content-Type,Authorization"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: cors-headers
+  namespace: production
+spec:
+  requestPlugins:
+    - type: Cors
+      config:
+        allowOrigins: "https://app.example.com"
+        allowMethods: "GET,POST"
+        # 反射浏览器请求的任意请求头
+        allowHeaders: "**"
+        # 允许 JavaScript 读取这些响应头
+        exposeHeaders: "X-Total-Count,X-Page-Number"
 ```
 
-### 5. 允许本地开发（localhost）
+### 6. 完整生产配置
 
 ```yaml
-filters:
-  - type: Cors
-    config:
-      allow_origins: "https://app.example.com"
-      allow_origins_by_regex:
-        - "^http://localhost:[0-9]+$"        # localhost:任意端口
-        - "^http://127\\.0\\.0\\.1:[0-9]+$"  # 127.0.0.1:任意端口
-      allow_methods: "GET,POST,PUT,DELETE"
-      allow_headers: "Content-Type,Authorization"
-```
-
-### 6. 带身份认证（Cookie/Token）
-
-⚠️ **重要**：使用 `allow_credentials: true` 时，**不能**使用通配符 `*`，也**不能**使用 `allow_origins_by_regex` / `timing_allow_origins_by_regex`（像 `.*` 这样的宽泛模式会在启用凭证时回显任意 origin）。请改用显式的 `allow_origins` 列表。
-
-```yaml
-filters:
-  - type: Cors
-    config:
-      allow_origins: "https://app.example.com"  # 必须是具体域名
-      allow_methods: "GET,POST,PUT,DELETE"
-      allow_headers: "Content-Type,Authorization,X-Custom-Token"
-      allow_credentials: true                    # 允许发送 Cookie
-      max_age: 86400
-```
-
-### 7. 限制只读访问
-
-```yaml
-filters:
-  - type: Cors
-    config:
-      allow_origins: "https://public.example.com"
-      allow_methods: "GET,HEAD,OPTIONS"  # 只允许读取操作
-      allow_headers: "Accept,Content-Type"
-```
-
-### 8. RESTful API 完整配置
-
-```yaml
-filters:
-  - type: Cors
-    config:
-      # 允许的来源
-      allow_origins: "https://app.example.com,https://admin.example.com"
-      
-      # RESTful 方法
-      allow_methods: "GET,POST,PUT,DELETE,PATCH,OPTIONS"
-      
-      # 常用请求头
-      allow_headers: "Content-Type,Authorization,X-Request-ID,X-Api-Key"
-      
-      # 暴露自定义响应头
-      expose_headers: "X-Request-ID,X-Total-Count,X-Page-Count"
-      
-      # 启用身份认证
-      allow_credentials: true
-      
-      # 缓存预检结果 24 小时
-      max_age: 86400
-```
-
-### 9. 性能监控场景（Timing API）
-
-如果需要允许第三方监控服务访问性能数据：
-
-```yaml
-filters:
-  - type: Cors
-    config:
-      allow_origins: "https://app.example.com"
-      allow_methods: "GET,POST"
-      allow_headers: "Content-Type"
-      
-      # 允许监控服务访问 Resource Timing API
-      timing_allow_origins: "https://analytics.example.com"
-```
-
-### 10. Private Network Access（访问内网）
-
-Chrome 94+ 从公网访问内网资源需要额外配置：
-
-```yaml
-filters:
-  - type: Cors
-    config:
-      allow_origins: "https://app.example.com"
-      allow_methods: "GET,POST"
-      allow_headers: "Content-Type"
-      allow_private_network: true  # 启用 Private Network Access
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: cors-full
+  namespace: production
+spec:
+  requestPlugins:
+    - type: Cors
+      config:
+        allowOrigins: "https://app.example.com,https://admin.example.com"
+        allowMethods: "GET,POST,PUT,DELETE,PATCH"
+        allowHeaders: "Content-Type,Authorization,X-Request-ID"
+        exposeHeaders: "X-Total-Count,X-Page-Number"
+        allowCredentials: true
+        # 预检请求缓存 24 小时
+        maxAge: 86400
+        allowPrivateNetwork: false
 ```
 
 ---
 
 ## 常见问题
 
-### Q1: 为什么配置了 CORS 还是报错？
+### Q1：为什么配置了 CORS 还是被浏览器拦截？
 
-**A**: 检查以下几点：
+**A**：按以下顺序逐一排查：
 
-1. **Origin 拼写正确**：包括协议（http/https）、域名、端口
-   ```yaml
-   ✅ 正确: "https://app.example.com"
-   ❌ 错误: "app.example.com" (缺少协议)
-   ❌ 错误: "https://app.example.com/" (多了尾斜杠)
-   ```
+1. 是否配置了 `allowOrigins`？默认值为空（拒绝所有）。
+2. 请求的 `Origin` 是否精确匹配（协议 + 域名 + 端口）？
+3. 携带凭据的请求是否设置了 `allowCredentials: true`？
+4. 所需的请求头是否在 `allowHeaders` 中列出？
 
-2. **端口号匹配**：
-   ```yaml
-   ✅ "http://localhost:3000"  # 指定端口
-   ✅ "^http://localhost:[0-9]+$"  # 正则匹配任意端口
-   ```
+### Q2：为什么通配符来源与凭据组合会失败？
 
-3. **使用 credentials 时不能用通配符或正则白名单**：
-   ```yaml
-   ❌ 错误配置:
-   allow_origins: "*"
-   allow_credentials: true
+**A**：这是设计如此。当 `allowCredentials: true` 时，`allowOrigins`（以及 `allowMethods`、`allowHeaders`、`exposeHeaders`、`timingAllowOrigins`）不能使用 `*` 或 `**`，插件会在解析时拒绝此类配置。请改用显式来源或 `*.domain` 子域名通配符。
 
-   ❌ 错误配置（正则会绕过通配符守卫）:
-   allow_origins_by_regex: [".*"]
-   allow_credentials: true
+### Q3：如何为本地开发允许 `http://` 来源？
 
-   ✅ 正确配置:
-   allow_origins: "https://app.example.com"
-   allow_credentials: true
-   ```
-
-### Q2: 开发环境可以用 `*`，生产环境怎么办？
-
-**A**: 使用环境变量或不同的配置文件：
+**A**：`*.domain` 简写仅适用于 HTTPS。对于 `http://` 来源，请使用 `allowOriginsByRegex`：
 
 ```yaml
-# development.yaml
-filters:
-  - type: Cors
-    config:
-      allow_origins: "*"
-      allow_methods: "*"
-      allow_headers: "*"
-
-# production.yaml
-filters:
-  - type: Cors
-    config:
-      allow_origins: "https://app.example.com"
-      allow_methods: "GET,POST,PUT,DELETE"
-      allow_headers: "Content-Type,Authorization"
+config:
+  allowOriginsByRegex:
+    - "^http://localhost:[0-9]+$"
 ```
 
-### Q3: 如何调试 CORS 问题？
+### Q4：`*.example.com` 是否匹配根域名？
 
-**A**: 查看浏览器开发者工具的 Console 和 Network 面板：
-
-1. **Console** 会显示具体的 CORS 错误信息
-2. **Network** 面板查看请求头和响应头：
-   - 请求头：`Origin`, `Access-Control-Request-Method`, `Access-Control-Request-Headers`
-   - 响应头：`Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers`
-
-### Q4: 什么是预检请求（Preflight）？
-
-**A**: 对于某些"复杂"请求，浏览器会先发送一个 OPTIONS 请求询问服务器是否允许：
-
-**触发预检的情况**：
-- 使用 `PUT`, `DELETE`, `PATCH` 等方法
-- 使用自定义请求头（如 `X-Custom-Header`）
-- `Content-Type` 为 `application/json`
-
-**不触发预检的情况**（简单请求）：
-- 使用 `GET`, `HEAD`, `POST` 方法
-- 只使用基本请求头
-- `Content-Type` 为 `application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`
-
-### Q5: `max_age` 设多少合适？
-
-**A**: 推荐值：
-
-```yaml
-开发环境: max_age: 600       # 10 分钟，方便测试
-测试环境: max_age: 3600      # 1 小时
-生产环境: max_age: 86400     # 24 小时，减少预检请求
-```
-
-### Q6: 正则表达式怎么写？
-
-**A**: 常用正则示例：
-
-```yaml
-# 所有子域名
-"^https://.*\\.example\\.com$"
-
-# localhost 任意端口
-"^http://localhost:[0-9]+$"
-
-# 多个顶级域名
-"^https://app\\.(com|net|org)$"
-
-# 开发环境域名
-"^https://.*\\.dev\\.example\\.com$"
-
-# IP 地址范围
-"^http://192\\.168\\.1\\.[0-9]{1,3}:[0-9]+$"
-```
-
-**注意**：正则表达式中的 `.` 需要转义为 `\\.`
+**A**：不匹配。`*.example.com` 匹配 `https://api.example.com`，但不匹配 `https://example.com`。如果需要根域名，请在 `allowOrigins` 中显式列出：`allowOrigins: "https://example.com,*.example.com"`。
 
 ---
 
@@ -359,102 +238,35 @@ filters:
 
 ### ✅ 推荐做法
 
-1. **最小权限原则**：只允许必需的来源、方法和头
-   ```yaml
-   allow_origins: "https://app.example.com"  # 具体域名
-   allow_methods: "GET,POST"                 # 只允许需要的方法
-   allow_headers: "Content-Type"             # 只允许需要的头
-   ```
+```yaml
+✅ 正确：
+# 显式来源
+allowOrigins: "https://app.example.com"
+# 指定方法
+allowMethods: "GET,POST"
+# 指定请求头
+allowHeaders: "Content-Type,Authorization"
+# 仅在需要时启用凭据
+allowCredentials: true
+```
 
-2. **生产环境不用通配符**：
-   ```yaml
-   ❌ allow_origins: "*"
-   ✅ allow_origins: "https://app.example.com"
-   ```
+### ❌ 需要避免
 
-3. **使用 credentials 时必须指定具体域名**：
-   ```yaml
-   ✅ 安全:
-   allow_origins: "https://app.example.com"
-   allow_credentials: true
-   ```
-
-4. **设置合理的 max_age**：
-   ```yaml
-   max_age: 86400  # 24 小时，平衡性能和灵活性
-   ```
-
-5. **只暴露必要的响应头**：
-   ```yaml
-   expose_headers: "X-Request-ID"  # 只暴露需要的头
-   ```
-
-### ❌ 避免的做法
-
-1. **生产环境使用 `*`**：
-   ```yaml
-   ❌ 危险:
-   allow_origins: "*"
-   allow_methods: "*"
-   allow_headers: "*"
-   ```
-
-2. **credentials 配合通配符**：
-   ```yaml
-   ❌ 无效配置（会报错）:
-   allow_origins: "*"
-   allow_credentials: true
-   ```
-
-3. **不必要的方法**：
-   ```yaml
-   ❌ 过度开放:
-   allow_methods: "GET,POST,PUT,DELETE,PATCH,OPTIONS,TRACE,CONNECT"
-   
-   ✅ 按需开放:
-   allow_methods: "GET,POST,PUT,DELETE"
-   ```
-
----
-
-## 性能优化建议
-
-1. **使用 max_age 缓存预检请求**：
-   ```yaml
-   max_age: 86400  # 浏览器缓存预检结果 24 小时
-   ```
-
-2. **避免过多的正则表达式**：
-   ```yaml
-   ❌ 性能差:
-   allow_origins_by_regex:
-     - "^https://app1\\.example\\.com$"
-     - "^https://app2\\.example\\.com$"
-     - "^https://app3\\.example\\.com$"
-   
-   ✅ 性能好:
-   allow_origins: "https://app1.example.com,https://app2.example.com,https://app3.example.com"
-   ```
-
-3. **子域名通配符优先用 `*.example.com`（仅 HTTPS）**：
-   ```yaml
-   ✅ 快速（HTTPS-only，推荐用于生产）:
-   allow_origins: "*.example.com"
-
-   ⚠️ 较慢（需要 http/https 全覆盖时使用）:
-   allow_origins_by_regex:
-     - "^https?://[^/]+\\.example\\.com$"
-   ```
-   > `*.domain` 简写严格只匹配 `https://`。若必须放行 http 子域（本地 dev / 内部遗留服务），用 `allow_origins_by_regex` 显式声明 scheme。
+```yaml
+❌ 错误：
+# 生产环境使用通配符来源
+allowOrigins: "*"
+# 通配符与凭据组合（解析时将被拒绝）
+allowOrigins: "*"
+allowCredentials: true
+```
 
 ---
 
 ## 完整配置示例
 
-### 典型的生产环境配置
-
 ```yaml
-apiVersion: gateway.edgion.io/v1
+apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: api-route
@@ -470,47 +282,36 @@ spec:
             type: PathPrefix
             value: /api/
       filters:
-        - type: Cors
-          config:
-            # 允许的前端域名
-            allow_origins: "https://app.example.com,https://admin.example.com"
-            
-            # RESTful API 方法
-            allow_methods: "GET,POST,PUT,DELETE,PATCH,OPTIONS"
-            
-            # 允许的请求头
-            allow_headers: "Content-Type,Authorization,X-Request-ID,X-Api-Version"
-            
-            # 暴露的响应头（供前端读取）
-            expose_headers: "X-Request-ID,X-Total-Count,X-Rate-Limit-Remaining"
-            
-            # 允许发送 Cookie 和 Token
-            allow_credentials: true
-            
-            # 预检请求缓存 24 小时
-            max_age: 86400
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: cors-full
       backendRefs:
         - name: api-service
           port: 8080
-```
-
 ---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: cors-full
+  namespace: production
+spec:
+  requestPlugins:
+    - type: Cors
+      config:
+        allowOrigins: "https://app.example.com,https://admin.example.com"
+        allowMethods: "GET,POST,PUT,DELETE,PATCH"
+        allowHeaders: "Content-Type,Authorization,X-Request-ID"
+        exposeHeaders: "X-Total-Count,X-Page-Number"
+        allowCredentials: true
+        maxAge: 86400
+        allowPrivateNetwork: false
+```
 
 ## 相关链接
 
-- [MDN: CORS 详细说明](https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS)
-- [WHATWG Fetch Standard](https://fetch.spec.whatwg.org/)
-- [过滤器总览](../overview.md)
-
----
-
-## 获取帮助
-
-如果遇到问题：
-
-1. 检查浏览器控制台的错误信息
-2. 查看网关日志：`logs/edgion_access.log` 和 `logs/edgion-gateway.log`
-3. 参考本文档的常见问题部分
-4. 提交 Issue 到 GitHub
-
-**记住**：CORS 是浏览器的安全机制，服务端配置正确后，由浏览器负责验证和执行。
+- [CSRF 插件](./csrf.md)
+- [过滤器目录](../README.md)
+- [MDN: CORS](https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS)
+- [W3C: Private Network Access](https://wicg.github.io/private-network-access/)

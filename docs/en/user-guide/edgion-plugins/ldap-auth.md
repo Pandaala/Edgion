@@ -42,17 +42,17 @@ Use cases:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `ldapHost` | String | None | LDAP host, required |
+| `ldapHost` | String | **Required** | LDAP host |
 | `ldapPort` | Integer | `389` | LDAP port |
 | `ldaps` | Boolean | `false` | Whether to enable LDAPS |
 | `startTls` | Boolean | `false` | Whether to enable StartTLS (mutually exclusive with `ldaps`) |
 | `verifyLdapHost` | Boolean | `true` | Whether to verify the certificate hostname |
-| `baseDn` | String | None | Base DN, required |
-| `attribute` | String | None | User attribute, required (e.g., `uid`/`cn`) |
-| `bindDnTemplate` | String | None | Custom Bind DN template, must contain `{username}` |
+| `baseDn` | String | **Required** | Base DN |
+| `attribute` | String | **Required** | User attribute (e.g., `uid` / `cn`) |
+| `bindDnTemplate` | String | none | Custom Bind DN template, must contain `{username}` |
 | `headerType` | String | `ldap` | Authentication header scheme name |
 | `hideCredentials` | Boolean | `false` | Whether to remove the authentication header before forwarding |
-| `anonymous` | String | None | Anonymous username (when configured, allows unauthenticated requests) |
+| `anonymous` | String | none | Anonymous username (when configured, allows unauthenticated requests) |
 | `realm` | String | `API Gateway` | `WWW-Authenticate` realm |
 | `cacheTtl` | Integer | `60` | Authentication cache TTL (seconds), `0` disables caching |
 | `timeout` | Integer | `10000` | LDAP timeout (milliseconds) |
@@ -67,10 +67,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: ldap-auth
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: LdapAuth
       config:
         ldapHost: ldap.example.com
@@ -88,10 +87,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: ldap-auth-basic-scheme
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: LdapAuth
       config:
         ldapHost: ldap.example.com
@@ -113,10 +111,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: ldap-auth-anon
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: LdapAuth
       config:
         ldapHost: ldap.example.com

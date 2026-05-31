@@ -1,7 +1,7 @@
 # LDAP Auth (HTTPRoute Filter)
 
 > **🔌 Edgion extension**
->  
+> 
 > LdapAuth is an LDAP authentication plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
 LdapAuth can be used as an HTTPRoute filter or configured globally via `EdgionPlugins`. This page describes how to use it within HTTPRoute; for complete configuration parameters, see the [standalone plugin page](../../../edgion-plugins/ldap-auth.md).

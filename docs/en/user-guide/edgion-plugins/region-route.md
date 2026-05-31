@@ -47,7 +47,7 @@ The RegionRoute plugin config in `EdgionPlugins` has a single field:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `serviceRegionRouteRef` | String | None | Name of the ServiceRegionRoute PluginMetaData in the same namespace |
+| `serviceRegionRouteRef` | String | none | Name of the ServiceRegionRoute PluginMetaData in the same namespace |
 
 ### ClusterRegionRoute PluginMetaData Config
 
@@ -56,10 +56,10 @@ The RegionRoute plugin config in `EdgionPlugins` has a single field:
 | `myRegion` | String | `""` | This gateway's own region name; pass through when routing target equals this value |
 | `regions` | Array\<Object\> | `[]` | Region definitions list, see `RegionDef` sub-fields below |
 | `keyGet` | Array\<Object\> | `[]` | Shared key extraction config (used by RouteByKeyConfMatch and RouteByHashRange) |
-| `hashKeyGet` | Array\<Object\> | None | Pre-computed hash sources (read before computing in RouteByHashRange) |
-| `hashCalc` | Object | None | Hash computation config; if absent, RouteByHashRange is passthrough-only |
+| `hashKeyGet` | Array\<Object\> | none | Pre-computed hash sources (read before computing in RouteByHashRange) |
+| `hashCalc` | Object | none | Hash computation config; if absent, RouteByHashRange is passthrough-only |
 | `routeRules` | Array\<Object\> | `[]` | Ordered route rules list; empty list makes the plugin a no-op |
-| `routeByKeyConfMatch` | Object | None | RouteByKeyConfMatch matchMap config (managed by Center) |
+| `routeByKeyConfMatch` | Object | none | RouteByKeyConfMatch matchMap config (managed by Center) |
 
 ### `regions[]` (RegionDef) Sub-fields
 
@@ -69,13 +69,13 @@ The RegionRoute plugin config in `EdgionPlugins` has a single field:
 | `hashRange` | Array\<Integer\> | — (required) | Hash range `[low, high]`, closed interval, must satisfy `high < modulo` |
 | `backendEndpoint` | String | — (required) | Backend endpoint, format `host` or `host:port` |
 | `tls` | Boolean | `true` | Whether the upstream connection uses TLS |
-| `failoverTo` | String | None | Static failover target region name |
+| `failoverTo` | String | none | Static failover target region name |
 
 ### ServiceRegionRoute PluginMetaData Config
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `clusterRef` | Object | None | Reference to the ClusterRegionRoute PluginMetaData (namespace + name) |
+| `clusterRef` | Object | none | Reference to the ClusterRegionRoute PluginMetaData (namespace + name) |
 | `regions` | Array\<Object\> | `[]` | Per-region failoverTo overrides (only `name` and `failoverTo` fields are used) |
 
 ### `hashCalc` Sub-fields
@@ -154,7 +154,7 @@ apiVersion: edgion.io/v1
 kind: PluginMetaData
 metadata:
   name: my-svc-pm
-  namespace: default
+  namespace: production
 spec:
   plugins:
     - type: ServiceRegionRoute
@@ -176,7 +176,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: my-app-plugins
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RegionRoute

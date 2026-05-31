@@ -29,7 +29,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-basic
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -50,12 +50,12 @@ spec:
 | `scope` | Enum | `Instance` | Rate limiting scope. Values: `Instance` | `Cluster` |
 | `skewTolerance` | Float | `1.2` | Traffic skew tolerance (Cluster mode only, range 1.0~2.0) |
 | `onMissingKey` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` | `Deny` |
-| `defaultKey` | String | None | Default key when extraction fails |
+| `defaultKey` | String | none | Default key when extraction fails |
 | `rejectStatus` | Integer | `429` | HTTP status code on rejection (100~599) |
 | `rejectMessage` | String | `"Rate limit exceeded"` | Response message on rejection |
 | `showLimitHeaders` | Boolean | `true` | Whether to add rate limiting headers to the response |
-| `headerNames` | Object | None | Custom rate limiting response header names |
-| `estimatorSlotsK` | Integer | None | CMS precision (K units), uses global default if not set |
+| `headerNames` | Object | none | Custom rate limiting response header names |
+| `estimatorSlotsK` | Integer | none | CMS precision (K units), uses global default if not set |
 
 #### rate
 
@@ -109,7 +109,7 @@ When configured, **only explicitly specified headers** are shown; unspecified on
 | `limit` | Quota | `X-RateLimit-Limit` |
 | `remaining` | Remaining quota | `X-RateLimit-Remaining` |
 | `reset` | Window reset timestamp | `X-RateLimit-Reset` |
-| `retryIn` | Retry wait time (human-readable) | None |
+| `retryIn` | Retry wait time (human-readable) | none |
 
 ### Response Headers
 
@@ -241,7 +241,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-by-ip
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -261,7 +261,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-by-api-key
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -284,7 +284,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-composite
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -307,7 +307,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-cluster
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -328,7 +328,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-cluster-strict
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -350,7 +350,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-cluster-sticky
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -378,7 +378,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-custom-reject
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit

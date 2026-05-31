@@ -4,7 +4,7 @@
 > 
 > RateLimit 是 `EdgionPlugins` CRD 提供的速率限制插件，不属于标准 Gateway API。
 
-RateLimit 可以作为 HTTPRoute 的过滤器使用，也可以通过 `EdgionPlugins` 全局配置。本页介绍如何在 HTTPRoute 中使用；完整配置参数请见 [独立插件页](../../../edgion-plugins/rate-limit.md)。
+RateLimit 可作为 HTTPRoute 过滤器使用，也可通过 `EdgionPlugins` 全局配置。本页介绍如何在 HTTPRoute 中使用；完整配置参数请见[独立插件页](../../../edgion-plugins/rate-limit.md)。
 
 ## 在 HTTPRoute 中使用
 
@@ -38,13 +38,17 @@ metadata:
   name: api-rate-limit
   namespace: production
 spec:
-  plugins:
-    - RateLimit:
+  requestPlugins:
+    - type: RateLimit
+      config:
+        # 每个时间窗口允许的最大请求数
+        rate: 100
+        interval: "60s"
         key:
           - type: clientIp
-        limit: 100
-        window: "60s"
 ```
+
+> **Schema 说明**：RateLimit 在 `requestPlugins` 阶段运行，使用 `type` / `config` 插件条目格式。字段为 `rate`（每个时间窗口的最大请求数）和 `interval`（时间窗口）——没有 `limit` / `window` 字段。完整参数表请见[独立插件页](../../../edgion-plugins/rate-limit.md)。
 
 ## 相关链接
 

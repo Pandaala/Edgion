@@ -428,10 +428,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: protected-admin
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "api.example.com"
   rules:
@@ -468,7 +468,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: admin-security
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     # IP allowlist
@@ -501,7 +501,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: public-security
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     # IP denylist

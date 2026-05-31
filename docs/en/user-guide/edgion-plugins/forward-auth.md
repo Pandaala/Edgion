@@ -94,7 +94,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: forward-auth-basic
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: ForwardAuth
@@ -115,7 +115,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: forward-auth-selective
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: ForwardAuth
@@ -147,7 +147,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: forward-auth-degraded
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: ForwardAuth
@@ -168,7 +168,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: forward-auth-custom-error
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: ForwardAuth
@@ -188,7 +188,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: api-route
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
     - name: edgion-gateway

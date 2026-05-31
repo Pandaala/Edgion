@@ -1,7 +1,7 @@
 # AllEndpointStatus Plugin
 
 > **🔌 Edgion extension**
->  
+> 
 > AllEndpointStatus is a backend endpoint fan-out probe plugin provided by the `EdgionPlugins` CRD; it is not part of standard Gateway API.
 
 ## What is AllEndpointStatus?
@@ -17,10 +17,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: health-fan-out
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "ops.example.com"
   rules:
@@ -42,7 +42,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: all-ep-status
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: AllEndpointStatus
@@ -74,8 +74,8 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `methodOverride` | String | None | Override the HTTP method sent to endpoints, e.g. `"GET"` |
-| `pathOverride` | String | None | Override the request path sent to endpoints, e.g. `"/health"` |
+| `methodOverride` | String | none | Override the HTTP method sent to endpoints, e.g. `"GET"` |
+| `pathOverride` | String | none | Override the request path sent to endpoints, e.g. `"/health"` |
 
 ### Debug Parameters
 
@@ -188,7 +188,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: liveness-check
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: AllEndpointStatus
@@ -207,10 +207,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: health-probe
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "ops.example.com"
   rules:
@@ -232,7 +232,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: pod-health-check
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: AllEndpointStatus
@@ -253,10 +253,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: debug-pods
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "ops.example.com"
   rules:
@@ -278,7 +278,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: debug-all-ep
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: AllEndpointStatus

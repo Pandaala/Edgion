@@ -1,7 +1,5 @@
 # Path Normalization（路径规范化）
 
-> 详细技术规格：`docs/superpowers/specs/2026-04-26-uri-normalization-design.md`
-
 Edgion 在每个请求入口强制执行路径规范化，消除路径类访问控制规则可被 percent-encoding / 双斜杠 / dot-segment / path-parameter 绕过的缺口。**此功能始终启用，没有全局开关。**
 
 ---
@@ -58,11 +56,10 @@ spec:
 
 ```yaml
 access_log_options:
-  includeRawUri: true
+  include_raw_uri: true
 ```
 
-启用后 access log JSON 多一个字段 `request_uri`，值为客户端入口完整 raw URI（raw path
-+ raw query）。详见 `skills/03-coding/observability/00-access-log.md`。
+启用后 access log JSON 多一个字段 `request_uri`，值为客户端入口完整 raw URI（raw path + raw query）。详见 [Access Log](ops-guide/observability/access-log.md)。
 
 ---
 
@@ -172,8 +169,7 @@ path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类�
 
 ## 相关文档
 
-- 技术规格：`docs/superpowers/specs/2026-04-26-uri-normalization-design.md`
-- 配置参考：`skills/02-features/02-config/02-edgion-gateway-config.md`（`spec.pathNormalization`）
+- [EdgionGatewayConfig](ops-guide/configuration/edgion-gateway-config.md)——`spec.pathNormalization` 配置参考
 - RequestRestriction 插件：[user-guide/http-route/filters/edgion-plugins/request-restriction.md](user-guide/http-route/filters/edgion-plugins/request-restriction.md)
 
 ---

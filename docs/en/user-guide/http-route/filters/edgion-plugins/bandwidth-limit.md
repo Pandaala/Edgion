@@ -17,7 +17,6 @@ metadata:
   name: bandwidth-limit-plugin
 spec:
   upstreamResponseBodyFilterPlugins:
-    - enable: true
       type: BandwidthLimit
       config:
         rate: "100kb"
@@ -29,9 +28,9 @@ spec:
 
 ## Configuration Reference
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `rate` | String | Yes | none | Bandwidth limit value |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `rate` | String | **Required** | Bandwidth limit value (see Rate Format below) |
 
 ### Rate Format
 
@@ -50,7 +49,6 @@ spec:
 
 ```yaml
 upstreamResponseBodyFilterPlugins:
-  - enable: true
     type: BandwidthLimit
     config:
       rate: "1mb"
@@ -60,7 +58,6 @@ upstreamResponseBodyFilterPlugins:
 
 ```yaml
 upstreamResponseBodyFilterPlugins:
-  - enable: true
     type: BandwidthLimit
     config:
       rate: "50kb"
@@ -72,7 +69,6 @@ Decimal values are supported and the unit is case-insensitive:
 
 ```yaml
 upstreamResponseBodyFilterPlugins:
-  - enable: true
     type: BandwidthLimit
     config:
       # 1.5 MB/s = 1572864 bytes/s
@@ -122,7 +118,7 @@ metadata:
   name: download-route
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   rules:
     - matches:
         - path:
@@ -144,7 +140,6 @@ metadata:
   name: bandwidth-limit-plugin
 spec:
   upstreamResponseBodyFilterPlugins:
-    - enable: true
       type: BandwidthLimit
       config:
         rate: "500kb"

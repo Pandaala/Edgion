@@ -15,10 +15,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: api-key-check
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "api-key-check"
@@ -52,10 +51,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: jwt-claim-extractor
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "jwt-claim-extractor"
@@ -136,10 +134,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: grpc-auth-check
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "grpc-auth-check"
@@ -192,10 +189,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: ua-client-classify
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "ua-client-classify"
@@ -245,10 +241,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: path-based-upstream
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "path-based-upstream"
@@ -295,10 +290,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: ab-test-marker
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "ab-test-marker"
@@ -350,10 +344,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: internal-ip-bypass
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "internal-ip-bypass"
@@ -401,10 +394,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: body-size-limit
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "body-size-limit"
@@ -449,10 +441,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: strip-internal-headers
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "strip-internal-headers"
@@ -502,10 +493,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: security-headers
-  namespace: default
+  namespace: production
 spec:
   upstreamResponseFilterPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "inject-security-headers"
@@ -547,10 +537,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: cache-control-policy
-  namespace: default
+  namespace: production
 spec:
   upstreamResponseFilterPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "cache-control-policy"
@@ -599,10 +588,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: strip-debug-headers
-  namespace: default
+  namespace: production
 spec:
   upstreamResponseFilterPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "strip-debug-headers"
@@ -651,10 +639,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: request-audit-log
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "request-audit-log"
@@ -707,10 +694,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: latency-marker
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "latency-marker-req"
@@ -727,7 +713,6 @@ spec:
           return next()
 
   upstreamResponseFilterPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "latency-marker-resp"
@@ -936,7 +921,6 @@ source: |
 # Wrong: grpc_error() is not supported in the response phase
 spec:
   upstreamResponseFilterPlugins:  # response phase
-    - enable: true
       type: Dsl
       config:
         name: "wrong-grpc-error"
@@ -951,7 +935,6 @@ spec:
 # Correct: gRPC error interception should be done in the request phase; in the response phase use resp.set_status() to rewrite the status code
 spec:
   upstreamResponseFilterPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "correct-resp-handling"

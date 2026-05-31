@@ -1,108 +1,148 @@
 # HTTP Listener
 
-Configure an HTTP protocol listener.
+A plaintext listener that accepts HTTP/1.1 and h2c traffic and attaches `HTTPRoute` (or
+`GRPCRoute` for h2c).
 
-## Basic Configuration
+## Overview
 
-```yaml
-listeners:
-  - name: http
-    port: 80
-    protocol: HTTP
-```
+An HTTP listener binds a port with `protocol: HTTP` and serves cleartext traffic. It is the
+right choice for internal traffic, for a port that redirects to HTTPS, or for h2c gRPC where
+TLS is terminated upstream. No `tls` block is used.
 
-## Configuration Reference
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| name | string | Yes | | Listener name |
-| port | int | Yes | | Listening port |
-| protocol | string | Yes | | Protocol (HTTP) |
-| hostname | string | | | Hostname filter |
-| allowedRoutes | object | | | Allowed routes |
-
-## Hostname Filtering
-
-Restrict this listener to handle only specific domains:
-
-```yaml
-listeners:
-  - name: api
-    port: 80
-    protocol: HTTP
-    hostname: "api.example.com"
-```
-
-## Route Binding Control
-
-### Allow All Namespaces
-
-```yaml
-allowedRoutes:
-  namespaces:
-    from: All
-```
-
-### Allow Same Namespace Only
-
-```yaml
-allowedRoutes:
-  namespaces:
-    from: Same
-```
-
-### Allow Specific Namespaces
-
-```yaml
-allowedRoutes:
-  namespaces:
-    from: Selector
-    selector:
-      matchLabels:
-        env: production
-```
-
-## Examples
-
-### Example 1: Multi-Port Listening
+## Configuration
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: multi-port
+  name: web-gateway
+  namespace: edgion-system
 spec:
   gatewayClassName: edgion
   listeners:
     - name: http
       port: 80
       protocol: HTTP
-    - name: http-alt
-      port: 8080
-      protocol: HTTP
+      hostname: app.example.com
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds:
+          - kind: HTTPRoute
 ```
 
-### Example 2: Domain-Based Separation
+## Field reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Unique listener name within the Gateway. |
+| `port` | int | Yes | Port to bind (commonly `80`). |
+| `protocol` | enum | Yes | Must be `HTTP`. |
+| `hostname` | string | No | Host header match. Supports wildcard `*.example.com`. Omit to match any host. |
+| `allowedRoutes.namespaces.from` | enum | No | `Same` (default), `All`, or `Selector`. |
+| `allowedRoutes.kinds` | list | No | Route kinds allowed; `HTTPRoute` (default) or `GRPCRoute` for h2c. |
+
+An HTTP listener has no `tls` block. TLS mode does not apply.
+
+## Scenarios
+
+### Basic HTTP service
+
+A single plaintext listener for an internal service.
 
 ```yaml
-listeners:
-  - name: api
-    port: 80
-    protocol: HTTP
-    hostname: "api.example.com"
-    allowedRoutes:
-      kinds:
-        - kind: HTTPRoute
-  - name: web
-    port: 80
-    protocol: HTTP
-    hostname: "www.example.com"
-    allowedRoutes:
-      kinds:
-        - kind: HTTPRoute
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: internal-gateway
+  namespace: edgion-system
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
 ```
 
-## Related Documentation
+### Redirect HTTP to HTTPS
 
-- [HTTPS Listener](./https.md)
-- [TCP Listener](./tcp.md)
+Pair an HTTP listener with the redirect annotation so port-80 clients are upgraded.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: site-gateway
+  namespace: edgion-system
+  annotations:
+    edgion.io/http-to-https-redirect: "true"
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      hostname: app.example.com
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: app.example.com
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: app-example-com-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+```
+
+See [../http-to-https-redirect.md](../http-to-https-redirect.md).
+
+### Accept routes from other namespaces
+
+Let `HTTPRoute`s in any namespace attach to a shared ingress listener.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shared-ingress
+  namespace: edgion-system
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All
+        kinds:
+          - kind: HTTPRoute
+```
+
+## Edge cases and caveats
+
+- **Multiple listeners**: an HTTP listener can coexist with HTTPS/TLS/TCP/UDP listeners on
+  the same Gateway; each listener `name` must be unique.
+- **Hostname selection**: a request is matched to the most specific `hostname`. A listener
+  with no `hostname` accepts any Host; `*.example.com` matches a single label.
+- **Cross-namespace AllowedRoutes**: the default `from: Same` restricts attachment to the
+  Gateway's namespace; use `from: All` or `from: Selector` to widen it.
+- **h2c gRPC**: to serve cleartext gRPC, set `allowedRoutes.kinds` to include `GRPCRoute`.
+  See [grpc.md](grpc.md).
+- Plaintext HTTP exposes traffic on the wire; for public endpoints prefer HTTPS, optionally
+  with the redirect annotation on the HTTP listener.
+
+## Related documents
+
+- [Listeners overview](README.md)
+- [HTTPS listener](https.md)
+- [gRPC listener](grpc.md)
+- [HTTP to HTTPS redirect](../http-to-https-redirect.md)

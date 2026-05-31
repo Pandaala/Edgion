@@ -29,7 +29,6 @@ metadata:
   name: dsl-plugin
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "header-check"
@@ -42,21 +41,21 @@ spec:
 
 ## Configuration Parameters
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `name` | String | ✅ | none | Script name (used for logging and debugging) |
-| `source` | String | ✅* | none | DSL source code |
-| `bytecode` | String | ✅* | none | Pre-compiled bytecode (Base64) |
-| `maxSteps` | Integer | ❌ | `10000` | Maximum execution steps |
-| `maxLoopIterations` | Integer | ❌ | `100` | Maximum loop iterations |
-| `maxCallCount` | Integer | ❌ | `500` | Maximum function call count |
-| `maxStackDepth` | Integer | ❌ | `128` | Maximum stack depth |
-| `maxStringLen` | Integer | ❌ | `8192` | Maximum string length |
-| `errorPolicy` | String | ❌ | `Ignore` | Error policy: `Ignore` / `Deny` / `DenyWith` |
-| `httpMaxTimeoutMs` | Integer | ❌ | `5000` | Hard cap on `http.call()` timeout per request (ms) |
-| `httpMaxResponseBodyBytes` | Integer | ❌ | `1048576` | Maximum `http.call()` response body size (bytes) |
-| `httpBlockPrivateIps` | Boolean | ❌ | `false` | Block `http.call()` to private/loopback/link-local IPs |
-| `linkSysRefs` | Vec<{namespace, name}> | ❌† | `[]` | List of LinkSys Redis resources. Each `name` is the alias used as the first arg to `redis.*` calls |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | String | **Required** | Script name (used for logging and debugging) |
+| `source` | String | **Required** (or `bytecode`) | DSL source code |
+| `bytecode` | String | **Required** (or `source`) | Pre-compiled bytecode (Base64) |
+| `maxSteps` | Integer | `10000` | Maximum execution steps |
+| `maxLoopIterations` | Integer | `100` | Maximum loop iterations |
+| `maxCallCount` | Integer | `500` | Maximum function call count |
+| `maxStackDepth` | Integer | `128` | Maximum stack depth |
+| `maxStringLen` | Integer | `8192` | Maximum string length |
+| `errorPolicy` | Enum | `Ignore` | Error policy. Allowed values: `Ignore` / `Deny` / `DenyWith` |
+| `httpMaxTimeoutMs` | Integer | `5000` | Hard cap on `http.call()` timeout per request (ms) |
+| `httpMaxResponseBodyBytes` | Integer | `1048576` | Maximum `http.call()` response body size (bytes) |
+| `httpBlockPrivateIps` | Boolean | `false` | Block `http.call()` to private/loopback/link-local IPs |
+| `linkSysRefs` | Array\<Object\> | `[]` | List of LinkSys Redis resources. **Required** if any `redis.*` builtin appears in the script. Each `name` is the alias used as the first arg to `redis.*` calls |
 
 \* `source` and `bytecode` are mutually exclusive; at least one must be provided.
 † `linkSysRefs` is required if any `redis.*` builtin appears in the script; the plugin fails at load time if absent.

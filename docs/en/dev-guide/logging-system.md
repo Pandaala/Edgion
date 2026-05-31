@@ -184,7 +184,7 @@ Monitor the `access_log_dropped` metric via Prometheus to detect issues promptly
 
 ### Access Logger
 
-**Location**: `src/core/observe/access_log/`
+**Location**: `src/core/gateway/observe/access_log/`
 
 **Architecture**:
 
@@ -206,7 +206,7 @@ pub struct AccessLogger {
 
 ### SSL Logger
 
-**Location**: `src/core/observe/ssl_log.rs`
+**Location**: `src/core/gateway/observe/logs/ssl_log.rs`
 
 **Architecture**:
 
@@ -238,7 +238,7 @@ log_ssl(&entry);  // Synchronous call, never blocks
 
 ### TCP Logger
 
-**Location**: `src/core/observe/tcp_log.rs`
+**Location**: `src/core/gateway/observe/logs/tcp_log.rs`
 
 **Architecture**:
 
@@ -283,7 +283,7 @@ log_tcp(&log_entry).await;
 
 ### UDP Logger
 
-**Location**: `src/core/observe/udp_log.rs`
+**Location**: `src/core/gateway/observe/logs/udp_log.rs`
 
 **Architecture**:
 
@@ -337,7 +337,7 @@ log_udp(&log_entry).await;
 
 ### LocalFileWriter
 
-**Location**: `src/core/link_sys/local_file/`
+**Location**: `src/core/gateway/link_sys/providers/local_file/`
 
 **Responsibilities**:
 - Manage log file opening, writing, and closing
@@ -657,7 +657,7 @@ impl DataSender<String> for ElasticsearchSender {
 ### 2. Add Configuration Type
 
 ```rust
-// src/types/link_sys.rs
+// src/types/output.rs
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum StringOutput {
@@ -669,7 +669,7 @@ pub enum StringOutput {
 ### 3. Update Initialization Logic
 
 ```rust
-// src/core/observe/access_log/mod.rs
+// src/core/gateway/observe/access_log/mod.rs
 match &config.output {
     StringOutput::LocalFile(cfg) => { /* ... */ }
     StringOutput::Elasticsearch(cfg) => {
@@ -728,15 +728,15 @@ match &config.output {
 
 ### Core Implementation
 
-- `src/core/observe/access_log/` - Access Log implementation
-- `src/core/observe/ssl_log.rs` - SSL Log implementation
-- `src/core/link_sys/local_file/` - LocalFileWriter implementation
-- `src/core/link_sys/data_sender_trait.rs` - DataSender trait definition
+- `src/core/gateway/observe/access_log/` - Access Log implementation
+- `src/core/gateway/observe/logs/ssl_log.rs` - SSL Log implementation
+- `src/core/gateway/link_sys/providers/local_file/` - LocalFileWriter implementation
+- `src/core/gateway/link_sys/runtime/data_sender.rs` - DataSender trait definition
 
 ### Configuration
 
-- `src/core/cli/edgion_gateway/config.rs` - Gateway configuration structure
-- `src/types/link_sys.rs` - Log output configuration types
+- `src/core/gateway/cli/config.rs` - Gateway configuration structure
+- `src/types/output.rs` - Log output configuration types (StringOutput, LocalFileWriterCfg)
 - `config/edgion-gateway.yaml` - Configuration example
 
 ### User Documentation

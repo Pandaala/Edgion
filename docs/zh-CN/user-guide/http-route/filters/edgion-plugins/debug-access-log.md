@@ -2,38 +2,146 @@
 
 > **🔌 Edgion 扩展**
 >  
-> DebugAccessLogToHeader 是 `EdgionPlugins` CRD 提供的调试插件，将当前请求的完整 access log 序列化为 JSON 字符串注入响应头，不属于标准 Gateway API。
+> DebugAccessLogToHeader 是 `EdgionPlugins` CRD 提供的调试插件，不属于标准 Gateway API。
 
-> ⚠️ **仅限开发/测试环境**
->  
-> 此插件会将 IP 地址、路由信息、请求元数据等敏感数据暴露在 HTTP 响应头中，**严禁在生产环境使用**。
+## 概述
 
-## 什么是 DebugAccessLogToHeader？
+DebugAccessLogToHeader 插件将请求的 access log 序列化为 JSON 并注入到响应头中。使用它可以直接通过浏览器网络面板或 `curl -v` 查看路由、耗时和上游详情，无需读取网关日志。
 
-通常排查 access log 内容需要登录服务器或访问日志存储系统。DebugAccessLogToHeader 让你无需访问日志文件——它在请求处理完成后，将完整的 access log（与写入日志文件的内容相同）序列化为 JSON，注入到响应头 `X-Debug-Access-Log` 中。你可以用 `curl -v` 或浏览器开发者工具直接查看 access log 内容。
+注入的响应头名称为 `X-Debug-Access-Log`。
+
+⚠️ **仅供开发调试使用！请勿在生产环境启用！** Access log 可能包含敏感的路由和上游信息，且会增大每个响应的体积。
 
 ## 快速开始
 
-### 最简单的配置
+### 最简配置
 
-此插件无任何配置参数，直接启用即可。
+本插件在上游响应 Filter 阶段运行（需要响应存在后才能附加响应头），因此请将其放在 `upstreamResponseFilterPlugins` 中——而不是 `requestPlugins`。
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: debug-plugin
+  namespace: staging
+spec:
+  upstreamResponseFilterPlugins:
+    - type: DebugAccessLogToHeader
+      config: {}
+```
+
+---
+
+## 配置参数
+
+本插件无配置参数。通过添加带有空 `config: {}` 的条目来启用它。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| _（无）_ | — | — | 无参数；插件始终注入完整的 access log |
+
+---
+
+## 工作原理
+
+1. 请求正常代理到上游。
+2. 在上游响应 Filter 阶段，插件将 access log（与网关写入日志文件的结构化记录相同）序列化为 JSON 字符串。
+3. 将该 JSON 字符串以 `X-Debug-Access-Log` 响应头添加到响应中。
+
+在客户端检查：
+
+```bash
+curl -v https://api.example.com/path 2>&1 | grep -i x-debug-access-log
+```
+
+响应头的值包含匹配的路由、上游端点、状态码和耗时等字段——与该请求的 access log 记录完全一致。
+
+---
+
+## 常见配置场景
+
+### 1. 在单条调试路由上启用
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: debug-single
+  namespace: staging
+spec:
+  upstreamResponseFilterPlugins:
+    - type: DebugAccessLogToHeader
+      config: {}
+```
+
+### 2. 不删除资源的情况下临时禁用
+
+`enable` 标志（默认 `true`）允许你在保留 manifest 的情况下关闭该条目。
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: debug-toggle
+  namespace: staging
+spec:
+  upstreamResponseFilterPlugins:
+    - type: DebugAccessLogToHeader
+      enable: false
+      config: {}
+```
+
+### 3. 与其他响应 Filter 插件组合使用
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: debug-combo
+  namespace: staging
+spec:
+  upstreamResponseFilterPlugins:
+    - type: ResponseHeaderModifier
+      config:
+        add:
+          - name: X-Env
+            value: staging
+    - type: DebugAccessLogToHeader
+      config: {}
+```
+
+---
+
+## 常见问题
+
+### Q1：添加了插件但没有出现 `X-Debug-Access-Log` 响应头？
+
+**A**：请确认条目在 `upstreamResponseFilterPlugins` 下。本插件只在上游响应 Filter 阶段运行。若放在 `requestPlugins` 下，其 filter 永远不会被调用。
+
+### Q2：在生产环境保持开启是否安全？
+
+**A**：不安全。Access log 可能暴露内部路由和上游详情，额外的响应头也会增大每个响应的体积。请将其限定在 staging 环境或临时调试路由使用。
+
+---
+
+## 完整配置示例
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: debug-route
-  namespace: default
+  namespace: staging
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
-    - "dev.example.com"
+    - "api.example.com"
   rules:
     - matches:
         - path:
             type: PathPrefix
-            value: /api
+            value: /api/
       filters:
         - type: ExtensionRef
           extensionRef:
@@ -41,174 +149,21 @@ spec:
             kind: EdgionPlugins
             name: debug-access-log
       backendRefs:
-        - name: backend-service
+        - name: api-service
           port: 8080
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: debug-access-log
-  namespace: default
+  namespace: staging
 spec:
-  requestPlugins:
+  upstreamResponseFilterPlugins:
     - type: DebugAccessLogToHeader
       config: {}
 ```
 
-启用后，每个响应都会包含类似如下的响应头：
+## 相关链接
 
-```
-X-Debug-Access-Log: {"remote_addr":"192.168.1.1","method":"GET","uri":"/api/users","status":200,"latency_ms":12,...}
-```
-
----
-
-## 配置参数
-
-此插件无配置参数。
-
----
-
-## 常见配置场景
-
-### 1. 全路由启用（开发环境）
-
-在开发网关的所有路由上全局启用调试头，方便随时查看任意请求的 access log。
-
-```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: dev-all-debug
-  namespace: dev
-spec:
-  parentRefs:
-    - name: dev-gateway
-  hostnames:
-    - "dev.example.com"
-  rules:
-    - filters:
-        - type: ExtensionRef
-          extensionRef:
-            group: edgion.io
-            kind: EdgionPlugins
-            name: debug-log-header
-      backendRefs:
-        - name: backend-service
-          port: 8080
----
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: debug-log-header
-  namespace: dev
-spec:
-  requestPlugins:
-    - type: DebugAccessLogToHeader
-      config: {}
-```
-
-### 2. 仅对特定路径生效
-
-只在 `/api/v2/` 路径下注入调试头，不影响其他路由。适合在测试环境中针对特定接口调试。
-
-```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: partial-debug
-  namespace: test
-spec:
-  parentRefs:
-    - name: test-gateway
-  hostnames:
-    - "test.example.com"
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /api/v2
-      filters:
-        - type: ExtensionRef
-          extensionRef:
-            group: edgion.io
-            kind: EdgionPlugins
-            name: debug-v2-only
-      backendRefs:
-        - name: backend-service
-          port: 8080
-    - backendRefs:
-        - name: backend-service
-          port: 8080
----
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: debug-v2-only
-  namespace: test
-spec:
-  requestPlugins:
-    - type: DebugAccessLogToHeader
-      config: {}
-```
-
-### 3. 与其他插件组合使用
-
-将调试头与认证插件组合，调试已认证请求的 access log（如确认 JWT 解析是否正确注入到 access log 中）。
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: debug-with-auth
-  namespace: dev
-spec:
-  requestPlugins:
-    - type: JwtAuth
-      config:
-        secret: "dev-secret"
-    - type: DebugAccessLogToHeader
-      config: {}
-```
-
-插件按顺序执行，`DebugAccessLogToHeader` 捕获的是认证完成后的完整 access log（含 JWT 解析结果）。
-
----
-
-## 常见问题
-
-### Q1：`X-Debug-Access-Log` 头中能看到哪些信息？
-
-**A**：与 access log 文件中记录的内容相同，通常包括客户端 IP、请求方法、URI、响应状态码、延迟、上游地址、插件处理结果等。具体字段由 access log 配置决定，详见 [Access Log 文档](../../../../ops-guide/observability/access-log.md)。
-
-### Q2：响应头内容过长被截断了怎么办？
-
-**A**：HTTP 响应头有长度限制（取决于客户端和代理），过长的 access log 可能被截断。如果遇到此问题，建议直接查看日志文件，或在 access log 配置中减少字段数量。
-
-### Q3：能在生产环境临时开启用来排查问题吗？
-
-**A**：不推荐。即使是短暂开启，也可能将用户 IP、认证信息等敏感数据暴露给请求方，违反安全最佳实践。生产环境排查问题请使用 [Access Log](../../../../ops-guide/observability/access-log.md) 或分布式追踪系统。
-
----
-
-## 安全最佳实践
-
-### 推荐做法
-
-- 仅在开发、测试、预发布环境的命名空间中创建此插件
-- 通过 Kubernetes RBAC 限制 `EdgionPlugins` 资源的创建权限
-- 使用命名空间隔离，防止测试插件被误用于生产路由
-
-### 避免的做法
-
-- 不要在生产环境创建此插件，即使是临时的
-- 不要将包含此插件的 `EdgionPlugins` 资源部署到生产命名空间
-- 不要将 `X-Debug-Access-Log` 头的内容记录到客户端可访问的日志系统
-
----
-
-## 相关文档
-
-- [AllEndpointStatus 插件](all-endpoint-status.md) — 批量探查后端 endpoint
-- [Access Log 配置](../../../../ops-guide/observability/access-log.md) — access log 字段与格式说明
-- [Mock 插件](mock.md) — 静态响应返回（调试用）
+- [过滤器目录](../README.md)
+- [Mock 插件](./mock.md)

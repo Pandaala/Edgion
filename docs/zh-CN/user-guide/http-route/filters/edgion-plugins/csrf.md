@@ -548,24 +548,19 @@ metadata:
   name: security-edgion_plugins
   namespace: default
 spec:
-  plugins:
-    - enable: true
-      plugin:
-        type: Cors
-        config:
-          allowOrigins: "https://app.example.com"
-          allowMethods: "GET,POST,PUT,DELETE"
-          allowHeaders: "Content-Type,Authorization,apisix-csrf-token"
-          allowCredentials: true
-          maxAge: 86400
-    
-    - enable: true
-      plugin:
-        type: Csrf
-        config:
-          key: "9Kx8mV2nP5qR7tY3zB6cF1gH4jL0wX8d"
-          expires: 7200
-          name: "apisix-csrf-token"
+  requestPlugins:
+    - type: Cors
+      config:
+        allowOrigins: "https://app.example.com"
+        allowMethods: "GET,POST,PUT,DELETE"
+        allowHeaders: "Content-Type,Authorization,apisix-csrf-token"
+        allowCredentials: true
+        maxAge: 86400
+    - type: Csrf
+      config:
+        key: "9Kx8mV2nP5qR7tY3zB6cF1gH4jL0wX8d"
+        expires: 7200
+        name: "apisix-csrf-token"
 ```
 
 **测试**：

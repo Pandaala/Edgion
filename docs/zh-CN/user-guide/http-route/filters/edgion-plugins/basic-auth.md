@@ -36,7 +36,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: my-users-secret
-  namespace: default
+  namespace: production
 type: kubernetes.io/basic-auth
 stringData:
   username: "admin"
@@ -535,7 +535,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: protected-api
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
     - name: my-gateway
@@ -560,20 +560,18 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: auth-edgion_plugins
-  namespace: default
+  namespace: production
 spec:
-  plugins:
-    - enable: true
-      plugin:
-        type: BasicAuth
-        config:
-          secretGroups:
-            - name: default
-              secretRefs:
-                - name: api-admin
-                - name: api-developer
-          realm: "Protected API"
-          hideCredentials: true
+  requestPlugins:
+    - type: BasicAuth
+      config:
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: api-admin
+              - name: api-developer
+        realm: "Protected API"
+        hideCredentials: true
 ---
 apiVersion: v1
 kind: Secret

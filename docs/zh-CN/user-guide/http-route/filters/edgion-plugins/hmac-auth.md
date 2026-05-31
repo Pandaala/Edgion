@@ -39,7 +39,6 @@ metadata:
   name: hmac-auth-plugin
 spec:
   requestPlugins:
-    - enable: true
       type: HmacAuth
       config:
         secretGroups:
@@ -89,7 +88,6 @@ spec:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: HmacAuth
     config:
       secretGroups:
@@ -105,7 +103,6 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: HmacAuth
     config:
       secretGroups:
@@ -124,7 +121,6 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: HmacAuth
     config:
       secretGroups:
@@ -222,7 +218,6 @@ filters:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: HmacAuth
     config:
       secretGroups:

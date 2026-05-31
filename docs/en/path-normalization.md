@@ -1,7 +1,5 @@
 # Path Normalization
 
-> Detailed design spec: `docs/superpowers/specs/2026-04-26-uri-normalization-design.md`
-
 Edgion enforces path normalization at every request entry, eliminating bypass vectors against path-based access control rules (percent-encoding, double slashes, dot-segments, path-parameters). **This feature is always-on; there is no global enable/disable switch.**
 
 ---
@@ -58,10 +56,10 @@ To audit the client's original full URI, enable the gateway-side YAML option:
 
 ```yaml
 access_log_options:
-  includeRawUri: true
+  include_raw_uri: true
 ```
 
-This adds a `request_uri` field to access log JSON, containing the client entry full raw URI (raw path + raw query). See `skills/03-coding/observability/00-access-log.md`.
+This adds a `request_uri` field to access log JSON, containing the client entry full raw URI (raw path + raw query). See [Access Log](ops-guide/observability/access-log.md).
 
 ---
 
@@ -212,6 +210,5 @@ path_normalization:
 
 ## Related Documents
 
-- Design spec: `docs/superpowers/specs/2026-04-26-uri-normalization-design.md`
-- Configuration reference: `skills/02-features/02-config/02-edgion-gateway-config.md` (`spec.pathNormalization`)
+- [EdgionGatewayConfig](ops-guide/configuration/edgion-gateway-config.md) — `spec.pathNormalization` configuration reference
 - RequestRestriction plugin: [user-guide/http-route/filters/edgion-plugins/request-restriction.md](user-guide/http-route/filters/edgion-plugins/request-restriction.md)

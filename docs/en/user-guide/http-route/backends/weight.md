@@ -65,7 +65,7 @@ metadata:
   name: canary-release
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   rules:
     - backendRefs:
         - name: app-stable

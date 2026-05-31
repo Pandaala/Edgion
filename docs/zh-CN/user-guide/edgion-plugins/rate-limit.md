@@ -29,7 +29,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-basic
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -241,7 +241,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-by-ip
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -261,7 +261,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-by-api-key
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -284,7 +284,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-composite
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -307,7 +307,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-cluster
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -328,7 +328,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-cluster-strict
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -350,7 +350,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-cluster-sticky
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -378,7 +378,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-custom-reject
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit

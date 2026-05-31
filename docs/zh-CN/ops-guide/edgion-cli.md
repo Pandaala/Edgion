@@ -19,8 +19,11 @@ edgion-cli [OPTIONS] <COMMAND>
 | `--target` | `-t` | 目标 API 类型 | `center` |
 | `--server` | - | 服务器地址 | 根据 target 自动选择 |
 | `--socket` | - | Unix socket 路径 | - |
+| `--token` | - | 静态 CLI Token（长选项，`-t` 已被 `--target` 占用） | - |
 | `--help` | `-h` | 显示帮助信息 | - |
 | `--version` | `-V` | 显示版本信息 | - |
+
+`--token` 接受由 `gen-token` 生成的以 `edg_` 为前缀的 Token。环境变量 `EDGION_TOKEN` 是避免 Token 暴露在 shell 历史记录中的替代方式。优先级：`--token` > `EDGION_TOKEN` > 缓存的登录 Token。设置任一方式后，`ensure_auth`（包括 `/auth/status` 和 `/auth/me`）将被跳过；验证为惰性（401 = 未知 Token，403 = 权限不足）。
 
 ## Target 类型
 
@@ -176,15 +179,16 @@ edgion-cli gen-certs [OPTIONS]
 |------|------|--------|
 | `--output` | 输出目标：`file`（写入文件）或 `k8s`（写入 K8s Secret） | `file` |
 | `--output-dir` | 输出目录（仅 `--output file` 时生效） | `certs/grpc/` |
+| `--cert-name` | 证书集名称，文件输出到 `<output-dir>/<cert-name>/` | `primary` |
 | `--ca-days` | CA 证书有效天数 | `3650` |
 | `--cert-days` | 服务端/客户端证书有效天数 | `365` |
 | `--server-san` | 额外 SAN 条目（可多次指定） | 默认包含 localhost、127.0.0.1、::1 |
 | `--force` | 强制覆盖已有证书 | `false` |
 
-**生成的文件:**
+**生成的文件**（存放于 `<output-dir>/<cert-name>/`）：
 
 ```
-<output-dir>/
+<output-dir>/<cert-name>/
 ├── ca.crt        # CA 证书
 ├── ca.key        # CA 私钥（仅签发用）
 ├── server.crt    # Controller 服务端证书
@@ -210,7 +214,37 @@ edgion-cli gen-certs --output file \
 edgion-cli gen-certs --output k8s
 ```
 
-生成证书后，在 TOML 文件中配置 mTLS。详见[控制面 mTLS](infrastructure/mtls.md#控制面-mtlsconf_sync-grpc)。
+生成证书后，在 YAML 配置文件中配置 mTLS。详见[控制面 mTLS](infrastructure/mtls.md#控制面-mtlsconf_sync-grpc)。
+
+### gen-token - 生成静态 CLI Token
+
+生成新的角色范围 CLI Token，用于访问 Controller Admin API。不依赖运行中的 Controller。输出包含以 `edg_` 为前缀的 Token 及其 SHA-256 十六进制摘要。
+
+```bash
+edgion-cli gen-token
+```
+
+**输出示例：**
+
+```
+Token (use with --token or EDGION_TOKEN):
+  edg_<URL-safe base64, 43 chars>
+
+SHA-256 (paste into controller cli_tokens[].token_sha256):
+  <64 lowercase hex chars>
+```
+
+**工作流程：**
+
+1. 运行 `edgion-cli gen-token` 生成 Token。
+2. 将 SHA-256 行粘贴到 Controller 配置文件的 `cli_tokens[].token_sha256` 中。
+3. 热重载：`edgion-cli reload`（或 `POST /api/v1/reload`）。
+4. 通过 Secret 管理器或环境变量将 `edg_...` Token 分发给消费方——切勿以明文存储于文件或 shell 历史记录中。
+5. 消费方通过 `--token edg_...` 或 `export EDGION_TOKEN=edg_...` 使用 Token。
+
+> **安全说明：** SHA-256 是对完整的 `edg_` 前缀 Token 计算的——即作为 `Authorization: Bearer` 值发送的完整字符串。Controller 配置中只存储 SHA-256 摘要，切勿存储原始 Token。
+
+如需 RBAC 配置、轮换说明及所有安全注意事项，请参见[联邦 RBAC — CLI Token RBAC](federation-rbac.md#cli-token-rbac)。
 
 ## 连接配置
 

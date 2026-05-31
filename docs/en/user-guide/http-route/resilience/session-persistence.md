@@ -113,7 +113,7 @@ metadata:
   name: session-sticky
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   rules:
     - sessionPersistence:
         type: Cookie
@@ -135,7 +135,7 @@ metadata:
   name: session-strict
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   rules:
     - sessionPersistence:
         type: Header

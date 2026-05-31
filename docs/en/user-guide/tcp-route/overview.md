@@ -9,10 +9,10 @@ apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
 metadata:
   name: tcp-route
-  namespace: default
+  namespace: production
 spec:
   parentRefs:             # Which Gateway to bind to
-    - name: my-gateway
+    - name: main-gateway
       sectionName: tcp
   rules:                  # List of routing rules
     - backendRefs:        # Backend services

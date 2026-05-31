@@ -66,7 +66,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: ldap-auth
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - enable: true
@@ -87,7 +87,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: ldap-auth-basic-scheme
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - enable: true
@@ -112,7 +112,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: ldap-auth-anon
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - enable: true

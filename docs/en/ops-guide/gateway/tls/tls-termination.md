@@ -12,7 +12,7 @@ Client --[TLS]--> Gateway (decrypt) --[plaintext or re-encrypted TLS]--> Backend
 
 You need TLS termination whenever the Gateway must route on Layer 7 (HTTPRoute / GRPCRoute) for an HTTPS endpoint, because routing decisions require the decrypted request.
 
-This is the standard Gateway API approach: an HTTPS `Listener` with `tls.mode: Terminate` and a `certificateRefs` entry pointing at a `kubernetes.io/tls` Secret. It contrasts with **TLS passthrough** (`tls.mode: Passthrough` + `TLSRoute`), where the Gateway forwards the encrypted bytes to the backend without decrypting — see [TLS Passthrough Listener](../listeners/https.md#passthrough---tls-passthrough).
+This is the standard Gateway API approach: an HTTPS `Listener` with `tls.mode: Terminate` and a `certificateRefs` entry pointing at a `kubernetes.io/tls` Secret. It contrasts with **TLS passthrough** (`tls.mode: Passthrough` + `TLSRoute`), where the Gateway forwards the encrypted bytes to the backend without decrypting — see [TCP / TLS Listener](../listeners/tcp.md) and [TLSRoute Overview](../../../user-guide/tls-route/overview.md).
 
 If you need TLS features beyond the Gateway API (mTLS, minimum TLS version, custom cipher list), use the [EdgionTls extension](./edgion-tls.md) instead of — or alongside — the standard listener configuration.
 
@@ -213,7 +213,8 @@ Each listener owns its own certificate; the Gateway selects per connection based
 
 ## Related documents
 
-- [TLS Passthrough Listener](../listeners/https.md#passthrough---tls-passthrough)
 - [HTTPS Listener](../listeners/https.md)
+- [TCP / TLS Listener](../listeners/tcp.md)
 - [EdgionTls extension](./edgion-tls.md)
 - [ACME automatic certificates](./acme.md)
+- [TLSRoute Overview](../../../user-guide/tls-route/overview.md)

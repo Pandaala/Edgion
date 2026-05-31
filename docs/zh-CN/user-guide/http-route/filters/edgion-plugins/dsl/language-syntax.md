@@ -306,7 +306,7 @@ for i in range(0, 10) {
 }
 ```
 
-`range(start, end)` 最多生成 **1000 个元素**。请求超过 1000 个元素时会产生运行时错误。
+`range(start, end)` 最多生成 `min(max_list_len, 1000)` 个元素（其中 `max_list_len` 是单个插件 VM 的限制，默认 1024）。超出上限的元素会被静默截断。
 
 ### 4.4 while（条件循环）
 

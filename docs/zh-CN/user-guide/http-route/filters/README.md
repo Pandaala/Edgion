@@ -7,6 +7,7 @@
   - [ResponseHeaderModifier](./gateway-api/response-header-modifier.md)
   - [RequestRedirect](./gateway-api/request-redirect.md)
   - [URLRewrite](./gateway-api/url-rewrite.md)
+  - [RequestMirror](./gateway-api/request-mirror.md)
 - Edgion 扩展过滤器 🔌
   - [AllEndpointStatus](./edgion-plugins/all-endpoint-status.md)
   - [BandwidthLimit](./edgion-plugins/bandwidth-limit.md)

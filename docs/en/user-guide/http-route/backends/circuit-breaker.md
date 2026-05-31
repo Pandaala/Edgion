@@ -21,7 +21,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: my-backend
-  namespace: default
+  namespace: production
   annotations:
     edgion.io/circuit-breaker: |
       consecutiveErrors: 5

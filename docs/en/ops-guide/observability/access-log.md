@@ -1,441 +1,402 @@
-# Access Log User Guide
+# Access Log
 
 > **🔌 Edgion extension**
 > 
-> The access log format and plugin log structure are features specific to Edgion Gateway.
+> The access log format and plugin log structure are Edgion Gateway features; they are not part of standard Gateway API.
+
+Edgion Gateway emits one structured JSON access log entry per request, recording the full request lifecycle: client information, route matching, backend responses, per-plugin execution logs, and errors. It is the gateway's primary mechanism for diagnosing individual requests.
 
 ## Overview
 
-Edgion Gateway generates detailed access logs for each request, recording the complete request lifecycle including client information, route matching, backend responses, plugin execution logs, and more.
+The access log is the right tool when you need to answer a question about a *specific* request — "what happened to the request with `x-trace-id=abc`?". Aggregate metrics (see [Metrics](./metrics.md)) answer fleet-wide questions; the access log answers per-request ones.
 
-Logs are output in JSON format by default for easy parsing by log analysis tools.
+Each entry is one JSON object on a single line, so the file is directly consumable by `jq`, Loki, Elasticsearch, or any line-oriented log pipeline.
 
-## Log Location
+```
+client request ──► Gateway ──► backend
+                     │
+                     └──► one JSON line ──► logs/edgion_access.log
+```
 
-- **Default path**: `logs/edgion_access.log`
-- **Format**: JSON (one log entry per line)
+## Configuration
 
-## Log Structure
+The access log is configured under the `access_log` section of the gateway configuration.
 
-### Basic Fields
+### Minimal configuration
 
-Each access log entry contains the following main fields:
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+```
+
+This enables the log with default queue and rotation behavior. `path` is resolved relative to `work_dir` unless absolute.
+
+### Production configuration
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+      # In-memory queue before backpressure applies to the request path
+      queue_size: 80000
+      rotation:
+        strategy: daily
+        max_files: 7
+```
+
+### Configuration parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | Boolean | `false` | Enable the access log channel |
+| `output.localFile.path` | String | none | Log file path (relative to `work_dir` unless absolute). **Required** when `localFile` is used |
+| `output.localFile.queue_size` | Integer | none | In-memory queue size before backpressure applies |
+| `output.localFile.rotation.strategy` | Enum | none | Rotation strategy. Example value: `daily` |
+| `output.localFile.rotation.max_files` | Integer | none | Maximum rotated files to keep |
+| `output.elasticsearch` | Object | none | Ship the access log to Elasticsearch (via `link_sys`) instead of, or in addition to, a local file |
+
+The raw client-entry URI (`request_uri`) is controlled by a separate top-level `access_log_options` section, not by the `access_log` block — see [Special fields](#special-fields).
+
+> The `output` block also accepts an `elasticsearch` sink. When the Elasticsearch producer→bulk-loop channel fills up, the `edgion_link_sys_es_bulk_channel_full_total` counter increments — watch it as a backpressure signal. See [Metrics](./metrics.md).
+
+## Log format
+
+The log is always JSON, one entry per line. Optional fields are omitted entirely when empty (rather than emitted as `null`), which keeps each line compact. The top-level shape is:
 
 ```json
 {
   "ts": 1767089146376,
-  "request_info": { ... },
-  "match_info": { ... },
-  "backend_context": { ... },
-  "plugin_logs": [ ... ],
-  "errors": [ ... ]
-}
-```
-
-### 1. Timestamp (`ts`)
-
-Request timestamp in millisecond Unix time.
-
-**Example**:
-```json
-"ts": 1767089146376
-```
-
-### 2. Request Info (`request_info`)
-
-Records client and request basic information:
-
-| Field | Description | Example |
-|-------|-------------|---------|
-| `client-addr` | Client TCP connection address | `"127.0.0.1"` |
-| `client-port` | Client port | `54882` |
-| `remote-addr` | Actual client IP (after proxy) | `"203.0.113.1"` |
-| `x-trace-id` | Request trace ID | `"eff524a7-10a4-483c-..."` |
-| `host` | Request Host header | `"test.example.com"` |
-| `path` | Request path | `"/health"` |
-| `status` | Response status code | `200` |
-| `x-forwarded-for` | X-Forwarded-For header (if present) | `"203.0.113.1, 198.51.100.2"` |
-| `discover_protocol` | Auto-detected protocol type | `"grpc"`, `"websocket"` |
-| `grpc_service` | gRPC service name (for gRPC requests) | `"test.TestService"` |
-| `grpc_method` | gRPC method name (for gRPC requests) | `"SayHello"` |
-
-**Example**:
-```json
-"request_info": {
-  "client-addr": "127.0.0.1",
-  "client-port": 54882,
-  "remote-addr": "127.0.0.1",
-  "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
-  "host": "test.example.com",
+  "client-addr": "192.168.1.20",
+  "host": "api.example.com",
   "path": "/health",
-  "status": 200
+  "status": 200,
+  "match_info": { },
+  "backend_context": { },
+  "plugin_logs": [ ],
+  "info": [ ],
+  "errors": [ ]
 }
 ```
 
-### 3. Match Info (`match_info`)
+Request-scoped fields (`client-addr`, `host`, `path`, `status`, etc.) are flattened directly into the top-level object; routing, backend, and plugin information are nested.
 
-Records the matched route rule:
+## Field reference
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| `rns` | Route namespace | `"edge"` |
-| `rn` | Route name | `"test-http"` |
-| `rule_id` | Rule ID (starting from 0) | `0` |
-| `match_id` | Match item ID (starting from 0) | `0` |
+### Top-level fields
 
-**Example**:
-```json
-"match_info": {
-  "rns": "edge",
-  "rn": "test-http",
-  "rule_id": 0,
-  "match_id": 0
-}
-```
+| Field | Type | Description |
+|-------|------|-------------|
+| `ts` | Integer | Entry timestamp, epoch milliseconds |
+| `match_info` | Object | Matched route identity (omitted when no route matched) |
+| `backend_context` | Object | Backend identity and upstream timing (omitted/`null` when no backend was used) |
+| `plugin_logs` | Array\<Object\> | Per-plugin execution logs grouped by stage (omitted when empty) |
+| `info` | Array\<String\> | Gateway-internal informational events (omitted when empty) |
+| `errors` | Array\<String\> | Error reasons captured during processing (omitted when empty) |
 
-If no route is matched, the `match_info` field will not appear.
+### Request fields
 
-### 4. Backend Context (`backend_context`)
+Flattened into the top-level object. Every field is omitted when not present.
 
-Records backend service and upstream connection information:
+| Field | Type | Description |
+|-------|------|-------------|
+| `client-addr` | String | Client TCP connection address |
+| `client-port` | Integer | Client TCP port |
+| `remote-addr` | String | Real client IP after proxy resolution (e.g. from `X-Forwarded-For`) |
+| `x-trace-id` | String | Per-request trace ID; propagate the same value from clients to correlate |
+| `host` | String | Request `Host` header |
+| `path` | String | Normalized request path |
+| `status` | Integer | Response status code |
+| `x-forwarded-for` | String | `X-Forwarded-For` header value (when present) |
+| `discover_protocol` | String | Auto-detected protocol. Example values: `grpc`, `websocket` |
+| `grpc_service` | String | gRPC service name (gRPC requests only) |
+| `grpc_method` | String | gRPC method name (gRPC requests only) |
+| `sni` | String | TLS Server Name Indication (TLS connections only) |
+| `tls_id` | String | TLS connection/session identifier (TLS connections only) |
+| `request_uri` | String | Raw client-entry URI; emitted **only** when `access_log_options.include_raw_uri: true` |
 
-| Field | Description |
-|-------|-------------|
-| `name` | Backend service name |
-| `namespace` | Backend service namespace |
-| `upstreams` | Upstream connection attempt list (supports retries) |
+### `match_info` fields
 
-**Upstream connection info** (`upstreams`):
+| Field | Type | Description |
+|-------|------|-------------|
+| `rns` | String | Route namespace |
+| `rn` | String | Route name |
+| `rule_id` | Integer | Matched rule index (starts at 0) |
+| `match_id` | Integer | Matched match-item index (starts at 0) |
+| `sv` | Integer | Controller→Gateway sync version; omitted when 0 |
 
-| Field | Description | Unit |
-|-------|-------------|------|
-| `ip` | Upstream IP address | - |
-| `port` | Upstream port | - |
-| `status` | Upstream response status code | - |
-| `ct` | Connect Time | milliseconds |
-| `ht` | Header Time (time to first byte) | milliseconds |
-| `bt` | Body Time (time to first body byte) | milliseconds |
-| `err` | Error message (if any) | - |
+When no route matches, the entire `match_info` object is omitted.
 
-**Example**:
-```json
-"backend_context": {
-  "name": "test-http",
-  "namespace": "edge",
-  "upstreams": [
-    {
-      "ip": "127.0.0.1",
-      "port": 30001,
-      "status": 200,
-      "ct": 0,
-      "ht": 0,
-      "bt": 0
-    }
-  ]
-}
-```
+### `backend_context` fields
 
-**Multi-retry example**:
-```json
-"backend_context": {
-  "name": "test-service",
-  "namespace": "edge",
-  "upstreams": [
-    {
-      "ip": "10.0.1.5",
-      "port": 8080,
-      "status": 502,
-      "ct": 1,
-      "ht": 100,
-      "err": ["Connection reset"]
-    },
-    {
-      "ip": "10.0.1.6",
-      "port": 8080,
-      "status": 200,
-      "ct": 2,
-      "ht": 50,
-      "bt": 50
-    }
-  ]
-}
-```
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | String | Backend service name |
+| `namespace` | String | Backend service namespace |
+| `upstreams` | Array\<Object\> | One entry per upstream attempt (retries produce multiple entries) |
 
-If no route is matched or the request is terminated by a plugin, `backend_context` will be `null`.
+#### `upstreams[]` sub-fields
 
-### 5. Plugin Logs (`plugin_logs`)
+| Field | Type | Unit | Description |
+|-------|------|------|-------------|
+| `ip` | String | — | Upstream IP address |
+| `port` | Integer | — | Upstream port |
+| `status` | Integer | — | Upstream response status code |
+| `ct` | Integer | ms | Connect time |
+| `ht` | Integer | ms | Header time (time to first response byte) |
+| `bt` | Integer | ms | Body first-byte time |
+| `et` | Integer | ms | Total elapsed time for this attempt |
+| `err` | Array\<String\> | — | Error messages for this attempt (omitted when empty) |
 
-Records detailed plugin execution logs, grouped by execution stage:
+When no backend was used (route not matched, or the request was short-circuited by a plugin), `backend_context` is `null` or omitted.
+
+### `plugin_logs` fields
+
+`plugin_logs` is an array of stage groups; each group holds the per-plugin logs for one execution stage.
 
 ```json
 "plugin_logs": [
   {
     "stage": "request_filters",
     "logs": [
-      {
-        "name": "BasicAuth",
-        "time_cost": 5,
-        "log": ["Auth success"]
-      },
-      {
-        "name": "Cors",
-        "time_cost": 2,
-        "log": ["CORS resp set"]
-      }
-    ]
-  },
-  {
-    "stage": "upstream_response_filters",
-    "logs": [
-      {
-        "name": "ResponseHeaderModifier",
-        "time_cost": 1,
-        "log": ["Header modified"]
-      }
+      { "name": "BasicAuth", "time_cost": 5, "log": ["Auth success"] },
+      { "name": "Cors", "time_cost": 2, "log": ["CORS resp set"] }
     ]
   }
 ]
 ```
 
-**Plugin log field descriptions**:
+| Field | Type | Description |
+|-------|------|-------------|
+| `stage` | String | Execution stage. Examples: `request_filters`, `upstream_response_filters` |
+| `logs[].name` | String | Plugin name |
+| `logs[].time_cost` | Integer | Plugin execution time in **microseconds** |
+| `logs[].log` | Array\<String\> | Log lines emitted by the plugin |
+| `logs[].log_full` | Boolean | Present and `true` only when the plugin's log buffer overflowed and entries were dropped |
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| `stage` | Execution stage | `"request_filters"`, `"upstream_response_filters"` |
-| `name` | Plugin name | `"BasicAuth"`, `"Cors"` |
-| `time_cost` | Execution time (microseconds) | `5` |
-| `log` | Log content array | `["Auth success"]` |
-| `log_full` | Whether the log buffer is full | `true` (only appears when full) |
+Common plugin log lines:
 
-**Common plugin log content**:
+| Plugin | Log line | Meaning |
+|--------|----------|---------|
+| BasicAuth | `Auth success` / `Auth failed` / `Anonymous` | Authentication outcome |
+| Cors | `CORS resp set` / `Preflight handled` / `Origin rejected` | CORS handling outcome |
+| CSRF | `Token verified` / `Token set` / `Token mismatch` / `No token in header` | CSRF handling outcome |
+| IPRestriction | `Allowed` / `Denied` | IP filtering outcome |
+| Mock | `Mock returned` | Mock response was returned |
 
-| Plugin | Log Content |
-|--------|------------|
-| **BasicAuth** | `Auth success` - Authentication succeeded<br>`Auth failed` - Authentication failed<br>`Anonymous` - Anonymous access |
-| **Cors** | `CORS resp set` - CORS headers set<br>`Preflight handled` - Preflight handled<br>`Origin rejected` - Origin rejected |
-| **CSRF** | `Token verified` - Token verification succeeded<br>`Token set` - Token set<br>`Token mismatch` - Token mismatch<br>`No token in header` - Missing token |
-| **IPRestriction** | `Allowed` - IP allowed<br>`Denied` - IP denied |
-| **Mock** | `Mock returned` - Mock response returned |
+`log_full: true` means the plugin emitted more log data than the per-plugin buffer holds, so later lines were dropped. Treat it as a hint to trim the plugin's log output rather than as an error.
 
-**`log_full` explanation**:
+### `errors` values
 
-Plugin logs use a two-tier buffer internally — a fixed 128-byte tier-1 stack buffer overflowing into a 512-byte tier-2 heap buffer — but it always serializes as one merged `log` array. When even the tier-2 buffer is full, further entries are dropped and `log_full: true` is set:
+| Value | Description |
+|-------|-------------|
+| `RouteNotFound` | No matching route for the request |
+| `XffHeaderTooLong` | `X-Forwarded-For` header exceeded the allowed length |
+| `BackendNotFound` | Backend service could not be resolved |
+| `UpstreamConnectError` | Connection to the upstream failed |
 
-```json
-{
-  "name": "CustomPlugin",
-  "time_cost": 10,
-  "log": ["Entry 1", "Entry 2", "Entry 3", "Entry 4"],
-  "log_full": true
-}
+## Special fields
+
+### Raw request URI
+
+By default the log records the normalized `path`. To also capture the exact URI as the client sent it (before normalization / rewrites), enable `include_raw_uri` under the top-level `access_log_options` section:
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+
+access_log_options:
+  include_raw_uri: true
 ```
 
-This indicates the plugin's logs were truncated, and you may need to check the plugin logic or optimize log output.
+The raw URI then appears as the `request_uri` field. This is useful when debugging path rewrites or URL-encoding issues, but it increases line size, so enable it only while investigating.
 
-### 6. Errors (`errors`)
+## Common configuration scenarios
 
-Records errors during request processing:
+### 1. Quick local debugging
 
-```json
-"errors": ["RouteNotFound"]
+Enable the log to a local file with defaults — the simplest way to see what the gateway is doing during development:
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
 ```
 
-**Common error codes**:
+### 2. Production with daily rotation
 
-| Error Code | Description |
-|-----------|-------------|
-| `RouteNotFound` | No matching route found |
-| `XffHeaderTooLong` | X-Forwarded-For header too long |
-| `BackendNotFound` | Backend service not found |
-| `UpstreamConnectError` | Upstream connection failed |
+Keep one file per day and retain a week of history:
 
-## Log Examples
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+      queue_size: 80000
+      rotation:
+        strategy: daily
+        max_files: 7
+```
 
-### Basic HTTP Request
+### 3. Investigating path rewrites
+
+Capture both the normalized path and the raw client URI while debugging a rewrite problem:
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+
+access_log_options:
+  include_raw_uri: true
+```
+
+## Log examples
+
+### Basic HTTP request
 
 ```json
 {
   "ts": 1767089146376,
-  "request_info": {
-    "client-addr": "127.0.0.1",
-    "client-port": 54882,
-    "remote-addr": "127.0.0.1",
-    "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
-    "host": "test.example.com",
-    "path": "/health",
-    "status": 200
-  },
-  "match_info": {
-    "rns": "edge",
-    "rn": "test-http",
-    "rule_id": 0,
-    "match_id": 0
-  },
+  "client-addr": "192.168.1.20",
+  "client-port": 54882,
+  "remote-addr": "192.168.1.20",
+  "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
+  "host": "test.example.com",
+  "path": "/health",
+  "status": 200,
+  "match_info": { "rns": "production", "rn": "api-route", "rule_id": 0, "match_id": 0 },
   "backend_context": {
-    "name": "test-http",
-    "namespace": "edge",
+    "name": "api-service",
+    "namespace": "production",
     "upstreams": [
-      {
-        "ip": "127.0.0.1",
-        "port": 30001,
-        "status": 200,
-        "ct": 0,
-        "ht": 0,
-        "bt": 0
-      }
+      { "ip": "10.0.0.5", "port": 8080, "status": 200, "ct": 0, "ht": 0, "bt": 0, "et": 1 }
     ]
   }
 }
 ```
 
-### Request with Plugins
+### Request with a retry
 
 ```json
 {
   "ts": 1767089146377,
-  "request_info": {
-    "client-addr": "127.0.0.1",
-    "client-port": 54883,
-    "remote-addr": "127.0.0.1",
-    "x-trace-id": "d82dcc21-2412-4582-8726-3e7a7becc58b",
-    "host": "api.example.com",
-    "path": "/api/data",
-    "status": 200
-  },
-  "match_info": {
-    "rns": "edge",
-    "rn": "api-route",
-    "rule_id": 0,
-    "match_id": 0
-  },
+  "host": "api.example.com",
+  "path": "/api/data",
+  "status": 200,
   "backend_context": {
-    "name": "api-backend",
-    "namespace": "edge",
+    "name": "api-service",
+    "namespace": "production",
     "upstreams": [
-      {
-        "ip": "10.0.1.5",
-        "port": 8080,
-        "status": 200,
-        "ct": 2,
-        "ht": 15,
-        "bt": 15
-      }
+      { "ip": "10.0.0.5", "port": 8080, "status": 502, "ct": 1, "ht": 100, "et": 100, "err": ["Connection reset"] },
+      { "ip": "10.0.0.6", "port": 8080, "status": 200, "ct": 2, "ht": 50, "bt": 50, "et": 52 }
     ]
-  },
-  "plugin_logs": [
-    {
-      "stage": "request_filters",
-      "logs": [
-        {
-          "name": "BasicAuth",
-          "time_cost": 8,
-          "log": ["Auth success"]
-        },
-        {
-          "name": "Cors",
-          "time_cost": 2,
-          "log": ["CORS resp set"]
-        }
-      ]
-    }
-  ]
+  }
 }
 ```
 
-### Route Not Matched
+### Route not matched
 
 ```json
 {
   "ts": 1767089149015,
-  "request_info": {
-    "client-addr": "127.0.0.1",
-    "client-port": 54892,
-    "remote-addr": "127.0.0.1",
-    "x-trace-id": "c8f3e4ec-e1b6-47f0-8941-be21bb86ee0f",
-    "host": "wrong-hostname.example.com",
-    "path": "/test",
-    "status": 404
-  },
+  "host": "wrong-hostname.example.com",
+  "path": "/test",
+  "status": 404,
   "errors": ["RouteNotFound"],
   "backend_context": null
 }
 ```
 
-### gRPC Request
+### gRPC request
 
 ```json
 {
   "ts": 1767089148470,
-  "request_info": {
-    "client-addr": "127.0.0.1",
-    "client-port": 54885,
-    "remote-addr": "127.0.0.1",
-    "x-trace-id": "358c2727-250a-405a-92b2-7b5017cf95d0",
-    "host": "grpc.example.com",
-    "path": "/test.TestService/SayHello",
-    "status": 200,
-    "discover_protocol": "grpc",
-    "grpc_service": "test.TestService",
-    "grpc_method": "SayHello"
-  },
+  "host": "grpc.example.com",
+  "path": "/test.TestService/SayHello",
+  "status": 200,
+  "discover_protocol": "grpc",
+  "grpc_service": "test.TestService",
+  "grpc_method": "SayHello",
   "backend_context": {
-    "name": "test-grpc",
-    "namespace": "edge",
+    "name": "grpc-service",
+    "namespace": "production",
     "upstreams": [
-      {
-        "ip": "127.0.0.1",
-        "port": 30021,
-        "status": 200,
-        "ct": 0,
-        "ht": 1,
-        "bt": 1
-      }
+      { "ip": "10.0.0.21", "port": 8080, "status": 200, "ct": 0, "ht": 1, "bt": 1, "et": 1 }
     ]
   }
 }
 ```
 
-## Log Analysis Tips
-
-### 1. Analyze Logs with jq
+## Analyzing logs with jq
 
 ```bash
-# View all 4xx errors
-cat logs/edgion_access.log | jq 'select(.request_info.status >= 400 and .request_info.status < 500)'
+# All 4xx responses
+cat logs/edgion_access.log | jq 'select(.status >= 400 and .status < 500)'
 
-# Find slowest requests (by ht)
-cat logs/edgion_access.log | jq -r '[.request_info.path, .backend_context.upstreams[0].ht] | @tsv' | sort -k2 -n
+# Slowest requests by upstream header time
+cat logs/edgion_access.log | jq -r '[.path, .backend_context.upstreams[0].ht] | @tsv' | sort -k2 -n
 
-# View plugin execution times
-cat logs/edgion_access.log | jq '.plugin_logs[] | .logs[] | select(.time_cost > 100)'
+# Plugin executions over 100 microseconds
+cat logs/edgion_access.log | jq '.plugin_logs[]?.logs[]? | select(.time_cost > 100)'
 
-# View all authentication failures
-cat logs/edgion_access.log | jq 'select(.plugin_logs[]?.logs[]? | select(.name == "BasicAuth" and (.log[] | contains("Auth failed"))))'
+# Trace one request end to end
+cat logs/edgion_access.log | jq 'select(.["x-trace-id"] == "eff524a7-10a4-483c-a534-3c50b1199aa0")'
 ```
 
-### 2. Key Metrics to Watch
+Key fields to watch:
 
-- **`ht` (Header Time)**: Backend time-to-first-byte; high values may indicate backend performance issues
-- **`ct` (Connect Time)**: Connection establishment time; high values may indicate network issues
-- **`plugin_logs.time_cost`**: Plugin execution time; high values may indicate plugin performance issues
-- **`log_full: true`**: Plugin logs truncated, may need plugin optimization
+- `ht` (header time): backend time-to-first-byte; high values point to backend latency.
+- `ct` (connect time): high values point to network or connection-pool issues.
+- `et` (elapsed): total per-attempt time, including retries.
+- `plugin_logs[].time_cost`: plugin overhead in microseconds.
+- `log_full: true`: a plugin's log buffer overflowed.
 
-### 3. Error Investigation
+## FAQ
 
-1. **Route not matched** (`RouteNotFound`): Check if `host` and `path` match the route configuration
-2. **Authentication failure**: Check `plugin_logs` for `BasicAuth` logs
-3. **CORS error**: Check `plugin_logs` for `Cors` logs, look for `Origin rejected`
-4. **Backend error**: Check `backend_context.upstreams[].status` and `err` fields
+### Q1: I enabled the access log but the file is empty. Why?
 
-## Best Practices
+**A**: Confirm `enabled: true` is set and `output.localFile.path` resolves to a writable location. Relative paths are resolved against `work_dir`, so check the actual working directory of the gateway process. Also confirm requests are actually reaching the gateway.
 
-1. **Set X-Trace-ID**: Include an `X-Trace-ID` header in client requests for request tracing
-2. **Rotate logs regularly**: Use `logrotate` or similar tools to regularly rotate `edgion_access.log`
-3. **Integrate with log systems**: Integrate `edgion_access.log` with ELK, Loki, or other log analysis platforms
-4. **Monitor key metrics**: Set up alerts based on `edgion_access.log` for high latency, high error rates, etc.
+### Q2: Why are some fields missing from a log line?
 
-## Related Documentation
+**A**: Optional fields are omitted when empty rather than written as `null`. For example, `match_info` is absent when no route matched, `grpc_service` only appears for gRPC, and `sni` / `tls_id` only appear for TLS connections. This is expected and keeps lines compact.
 
-- [Monitoring Metrics](./metrics.md)
-- [Gateway Resource Overview](../gateway/overview.md)
-- [edgion-cli Command Line Tool](../edgion-cli.md)
+### Q3: How do I correlate logs across a multi-hop request?
+
+**A**: Send an `X-Trace-ID` header from the client. The gateway records it as `x-trace-id`, so you can filter every entry for one logical request with a single `jq` selector.
+
+### Q4: A request was rejected by a plugin — where do I look?
+
+**A**: Check `plugin_logs`. The rejecting plugin's `log` array typically carries the reason (for example `Auth failed` for BasicAuth or `Origin rejected` for Cors). When a plugin short-circuits the request, `backend_context` is usually `null`.
+
+### Q5: How do I get more detailed plugin diagnostics for one route?
+
+**A**: Use the debug access-log plugin to raise per-plugin verbosity. See [debug-access-log](../../user-guide/http-route/filters/edgion-plugins/debug-access-log.md).
+
+## Get help
+
+If you run into problems:
+
+1. Check the FAQ section of this document
+2. Check the gateway logs
+3. Open an issue on GitHub
+
+## Related documents
+
+- [Metrics](./metrics.md)
+- [debug-access-log Plugin](../../user-guide/http-route/filters/edgion-plugins/debug-access-log.md)
+- [edgion-cli](../edgion-cli.md)

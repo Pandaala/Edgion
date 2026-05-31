@@ -24,8 +24,7 @@ metadata:
   name: my-proxy-rewrite
 spec:
   requestPlugins:
-    - enable: true
-      type: ProxyRewrite
+    - type: ProxyRewrite
       config:
         uri: "/internal/api/v2"
 ```
@@ -34,18 +33,18 @@ spec:
 
 ## Configuration Parameters
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `uri` | String | No | New request path, supports variable substitution. Mutually exclusive with `regexUri`; `uri` has higher priority |
-| `regexUri` | Object | No | Regex-based URI rewriting |
-| `regexUri.pattern` | String | Yes | Regex match pattern |
-| `regexUri.replacement` | String | Yes | Replacement template, supports `$1-$9` capture groups |
-| `host` | String | No | New Host request header value |
-| `method` | String | No | New HTTP method: GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS, etc. |
-| `headers` | Object | No | Request header modification operations |
-| `headers.add` | Array | No | Add request headers (append to existing values) |
-| `headers.set` | Array | No | Set request headers (overwrite existing values) |
-| `headers.remove` | Array | No | Remove request headers |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `uri` | String | none | New request path, supports variable substitution. Mutually exclusive with `regexUri`; `uri` has higher priority |
+| `regexUri` | Object | none | Regex-based URI rewriting |
+| `regexUri.pattern` | String | **Required** (within `regexUri`) | Regex match pattern |
+| `regexUri.replacement` | String | **Required** (within `regexUri`) | Replacement template, supports `$1-$9` capture groups |
+| `host` | String | none | New Host request header value |
+| `method` | String | none | New HTTP method: GET / POST / PUT / DELETE / PATCH / HEAD / OPTIONS, etc. |
+| `headers` | Object | none | Request header modification operations |
+| `headers.add` | Array\<Object\> | none | Add request headers (append to existing values) |
+| `headers.set` | Array\<Object\> | none | Set request headers (overwrite existing values) |
+| `headers.remove` | Array\<String\> | none | Remove request headers |
 
 ### Variable Reference
 
@@ -348,10 +347,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: api-route
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "api.example.com"
   rules:
@@ -373,11 +372,10 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: api-rewrite
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
-      type: ProxyRewrite
+    - type: ProxyRewrite
       config:
         # URI rewrite: v1 → v2
         regexUri:
@@ -428,13 +426,13 @@ Authenticate first, then rewrite:
 ```yaml
 spec:
   requestPlugins:
-    - enable: true
-      type: BasicAuth
+    - type: BasicAuth
       config:
-        secretRefs:
-          - name: api-users
-    - enable: true
-      type: ProxyRewrite
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: api-users
+    - type: ProxyRewrite
       config:
         uri: "/internal$uri"
         headers:
@@ -450,13 +448,11 @@ Handle cross-origin first, then rewrite:
 ```yaml
 spec:
   requestPlugins:
-    - enable: true
-      type: Cors
+    - type: Cors
       config:
-        allow_origins: "https://app.example.com"
-        allow_methods: "GET,POST,PUT,DELETE"
-    - enable: true
-      type: ProxyRewrite
+        allowOrigins: "https://app.example.com"
+        allowMethods: "GET,POST,PUT,DELETE"
+    - type: ProxyRewrite
       config:
         host: "backend.internal.svc"
 ```

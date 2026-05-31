@@ -1,7 +1,7 @@
 # RateLimitRedis Plugin
 
 > **🔌 Edgion extension**
->  
+> 
 > RateLimitRedis is a Redis-backed cluster-wide precise rate limiting plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
 ## What is RateLimitRedis?
@@ -16,7 +16,7 @@ The [RateLimit plugin](rate-limit.md) uses an in-process Count-Min Sketch algori
 | Latency | Nanoseconds | 0.1–1 ms (network RTT) |
 | Accuracy | Approximate (CMS error) | Exact |
 | Scope | Per-instance | Cluster-wide |
-| External dependency | None | Requires Redis |
+| External dependency | none | Requires Redis |
 | On Redis failure | N/A | Configurable: Allow / Deny |
 | Use case | High throughput, tolerates approximation | Exact quotas, cluster-wide enforcement |
 
@@ -29,10 +29,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: api-with-redis-limit
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "api.example.com"
   rules:
@@ -54,7 +54,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: redis-rate-limit
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimitRedis
@@ -91,11 +91,11 @@ spec:
 | `policies` | Array\<Object\> | — (required) | Rate limiting policy list. At least 1, maximum 10. See Policy Configuration below |
 | `key` | Array\<Object\> | `[{type: clientIp}]` | Rate limiting dimension list. Multiple keys are joined with `_`. See Key Configuration below |
 | `onMissingKey` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` \| `Deny` |
-| `defaultKey` | String | None | Default key value when extraction fails, takes precedence over `onMissingKey` |
+| `defaultKey` | String | none | Default key value when extraction fails, takes precedence over `onMissingKey` |
 | `rejectStatus` | Integer | `429` | HTTP status code on rejection (100–599) |
-| `rejectMessage` | String | None | JSON response body on rejection |
+| `rejectMessage` | String | none | JSON response body on rejection |
 | `showLimitHeaders` | Boolean | `true` | Whether to return rate limit response headers |
-| `headerNames` | Object | None | Custom response header names. See HeaderNames Configuration below |
+| `headerNames` | Object | none | Custom response header names. See HeaderNames Configuration below |
 
 ### Redis Parameters
 
@@ -169,10 +169,10 @@ Customize rate limit response header names. Only explicitly configured fields ap
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `limit` | String | None | Rate limit header name (default: `X-RateLimit-Limit`) |
-| `remaining` | String | None | Remaining quota header name (default: `X-RateLimit-Remaining`) |
-| `reset` | String | None | Window reset time header name (default: `X-RateLimit-Reset`). Only emitted on rejection (429) responses — the Redis Lua scripts do not return a window-reset timestamp for allowed requests |
-| `retryIn` | String | None | Human-readable retry time (e.g., `"1.5s"`) |
+| `limit` | String | none | Rate limit header name (default: `X-RateLimit-Limit`) |
+| `remaining` | String | none | Remaining quota header name (default: `X-RateLimit-Remaining`) |
+| `reset` | String | none | Window reset time header name (default: `X-RateLimit-Reset`). Only emitted on rejection (429) responses — the Redis Lua scripts do not return a window-reset timestamp for allowed requests |
+| `retryIn` | String | none | Human-readable retry time (e.g., `"1.5s"`) |
 
 ---
 
@@ -187,10 +187,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: api-cluster-limit
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "api.example.com"
   rules:
@@ -212,7 +212,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: cluster-rate-limit
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimitRedis
@@ -235,10 +235,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: api-multi-policy
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "api.example.com"
   rules:
@@ -260,7 +260,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: multi-policy-limit
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimitRedis
@@ -289,10 +289,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: secure-api
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "secure-api.example.com"
   rules:
@@ -314,7 +314,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: secure-redis-limit
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimitRedis

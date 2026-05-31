@@ -22,7 +22,6 @@ metadata:
   name: diu-plugin
 spec:
   requestPlugins:
-    - enable: true
       type: DynamicInternalUpstream
       config:
         from:
@@ -33,20 +32,20 @@ spec:
 
 ### Configuration Reference
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `from` | Object | Yes | `{type:"header",name:"X-Backend-Target"}` | Routing key source |
-| `from.type` | String | Yes | `header` | Source type: `header` / `query` / `cookie` / `ctx` |
-| `from.name` | String | Yes (for `header`/`query`/`cookie`/`ctx`) | none | Source name |
-| `extract` | Object | No | none | Extraction rules with `regex` and `group` (default group `1`) |
-| `rules` | Array | No | none | Match rules list; if unset, uses direct mode |
-| `rules[].value` | String | Yes | none | Routing key value to match (exact) |
-| `rules[].backendRef.name` | String | Yes | none | Target backendRef name (must exist in the route's `backendRefs`) |
-| `rules[].backendRef.namespace` | String | No | same as route | Target backendRef namespace; when set, both name and namespace must match |
-| `onMissing` | String | No | `Fallback` | Behavior when the routing key is missing: `Fallback` / `Reject` (400) |
-| `onNoMatch` | String | No | `Fallback` | Behavior when no rule matches (rules mode only): `Fallback` / `Reject` (400) |
-| `onInvalid` | String | No | `Reject` | Behavior when the resolved backendRef is not in the route: `Reject` (403) / `Fallback` |
-| `debugHeader` | Boolean | No | `false` | When `true`, sets the `X-Dynamic-Internal-Upstream` request header (sent to the upstream) indicating the targeted backend |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `from` | Object | **Required** | Routing key source (see sub-fields) |
+| `from.type` | String | `header` | Source type: `header` / `query` / `cookie` / `ctx` |
+| `from.name` | String | none | Source name (**Required** for `header` / `query` / `cookie` / `ctx`) |
+| `extract` | Object | none | Extraction rules with `regex` and `group` (default group `1`) |
+| `rules` | Array\<Object\> | none | Match rules list; if unset, uses direct mode |
+| `rules[].value` | String | **Required** | Routing key value to match (exact) |
+| `rules[].backendRef.name` | String | **Required** | Target backendRef name (must exist in the route's `backendRefs`) |
+| `rules[].backendRef.namespace` | String | same as route | Target backendRef namespace; when set, both name and namespace must match |
+| `onMissing` | Enum | `Fallback` | Behavior when the routing key is missing. Allowed values: `Fallback` / `Reject` (400) |
+| `onNoMatch` | Enum | `Fallback` | Behavior when no rule matches (rules mode only). Allowed values: `Fallback` / `Reject` (400) |
+| `onInvalid` | Enum | `Reject` | Behavior when the resolved backendRef is not in the route. Allowed values: `Reject` (403) / `Fallback` |
+| `debugHeader` | Boolean | `false` | When `true`, sets the `X-Dynamic-Internal-Upstream` request header (sent to the upstream) indicating the targeted backend |
 
 ### Usage Scenarios
 
@@ -126,7 +125,6 @@ metadata:
   name: deu-plugin
 spec:
   requestPlugins:
-    - enable: true
       type: DynamicExternalUpstream
       config:
         from:
@@ -145,24 +143,24 @@ spec:
 
 ### Configuration Reference
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `from` | Object | Yes | `{type:"header",name:"X-Target-Region"}` | Value source |
-| `extract` | Object | No | none | Extraction rules with `regex` and `group` (default group `1`) |
-| `domainMap` | Object | Yes | none | Domain mapping whitelist (must be non-empty) |
-| `onMissing` | String | No | `Skip` | Behavior when the routing key is missing: `Skip` / `Reject` (400) |
-| `onNoMatch` | String | No | `Skip` | Behavior when the key matches no `domainMap` entry: `Skip` / `Reject` (400) |
-| `debugHeader` | Boolean | No | `false` | When `true`, sets the `X-Dynamic-External-Upstream` request header (sent to the upstream) indicating the targeted domain |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `from` | Object | **Required** | Value source (see sub-fields) |
+| `extract` | Object | none | Extraction rules with `regex` and `group` (default group `1`) |
+| `domainMap` | Object | **Required** | Domain mapping whitelist (must be non-empty) |
+| `onMissing` | Enum | `Skip` | Behavior when the routing key is missing. Allowed values: `Skip` / `Reject` (400) |
+| `onNoMatch` | Enum | `Skip` | Behavior when the key matches no `domainMap` entry. Allowed values: `Skip` / `Reject` (400) |
+| `debugHeader` | Boolean | `false` | When `true`, sets the `X-Dynamic-External-Upstream` request header (sent to the upstream) indicating the targeted domain |
 
 ### DomainTarget Sub-fields
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `domain` | String | Yes | none | Target domain (hostname; rejects spaces, `/`, `\`, `@`, `#`, `?`, `[`, `]`, and control characters) |
-| `port` | Integer | No | `443` if `tls: true`, else `80` | Target port |
-| `tls` | Boolean | No | `true` | Use TLS for the upstream connection |
-| `overrideHost` | String | No | original request Host | Override the Host header sent to the external domain |
-| `sni` | String | No | the `domain` value | Override the TLS SNI (only relevant when `tls: true`) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `domain` | String | **Required** | Target domain (hostname; rejects spaces, `/`, `\`, `@`, `#`, `?`, `[`, `]`, and control characters) |
+| `port` | Integer | `443` if `tls: true`, else `80` | Target port |
+| `tls` | Boolean | `true` | Use TLS for the upstream connection |
+| `overrideHost` | String | original request Host | Override the Host header sent to the external domain |
+| `sni` | String | the `domain` value | Override the TLS SNI (only relevant when `tls: true`) |
 
 ### Usage Scenarios
 

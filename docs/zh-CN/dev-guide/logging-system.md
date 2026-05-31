@@ -197,7 +197,7 @@ async fn send(&self, data: String) -> Result<()> {
 
 ### Access Logger
 
-**位置**：`src/core/observe/access_log/`
+**位置**：`src/core/gateway/observe/access_log/`
 
 **架构**：
 
@@ -219,7 +219,7 @@ pub struct AccessLogger {
 
 ### SSL Logger
 
-**位置**：`src/core/observe/ssl_log.rs`
+**位置**：`src/core/gateway/observe/logs/ssl_log.rs`
 
 **架构**：
 
@@ -251,7 +251,7 @@ log_ssl(&entry);  // 同步调用，永不阻塞
 
 ### TCP Logger
 
-**位置**：`src/core/observe/tcp_log.rs`
+**位置**：`src/core/gateway/observe/logs/tcp_log.rs`
 
 **架构**：
 
@@ -296,7 +296,7 @@ log_tcp(&log_entry).await;
 
 ### UDP Logger
 
-**位置**：`src/core/observe/udp_log.rs`
+**位置**：`src/core/gateway/observe/logs/udp_log.rs`
 
 **架构**：
 
@@ -350,7 +350,7 @@ log_udp(&log_entry).await;
 
 ### LocalFileWriter
 
-**位置**：`src/core/link_sys/local_file/`
+**位置**：`src/core/gateway/link_sys/providers/local_file/`
 
 **职责**：
 - 管理日志文件的打开、写入、关闭
@@ -670,7 +670,7 @@ impl DataSender<String> for ElasticsearchSender {
 ### 2. 添加配置类型
 
 ```rust
-// src/types/link_sys.rs
+// src/types/output.rs
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum StringOutput {
@@ -682,7 +682,7 @@ pub enum StringOutput {
 ### 3. 更新初始化逻辑
 
 ```rust
-// src/core/observe/access_log/mod.rs
+// src/core/gateway/observe/access_log/mod.rs
 match &config.output {
     StringOutput::LocalFile(cfg) => { /* ... */ }
     StringOutput::Elasticsearch(cfg) => {
@@ -741,15 +741,15 @@ match &config.output {
 
 ### 核心实现
 
-- `src/core/observe/access_log/` - Access Log 实现
-- `src/core/observe/ssl_log.rs` - SSL Log 实现
-- `src/core/link_sys/local_file/` - LocalFileWriter 实现
-- `src/core/link_sys/data_sender_trait.rs` - DataSender trait 定义
+- `src/core/gateway/observe/access_log/` - Access Log 实现
+- `src/core/gateway/observe/logs/ssl_log.rs` - SSL Log 实现
+- `src/core/gateway/link_sys/providers/local_file/` - LocalFileWriter 实现
+- `src/core/gateway/link_sys/runtime/data_sender.rs` - DataSender trait 定义
 
 ### 配置
 
-- `src/core/cli/edgion_gateway/config.rs` - Gateway 配置结构
-- `src/types/link_sys.rs` - 日志输出配置类型
+- `src/core/gateway/cli/config.rs` - Gateway 配置结构
+- `src/types/output.rs` - 日志输出配置类型
 - `config/edgion-gateway.yaml` - 配置示例
 
 ### 用户文档

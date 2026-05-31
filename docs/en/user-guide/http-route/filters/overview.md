@@ -80,7 +80,7 @@ spec:
   requestPlugins:
     - type: Cors
       config:
-        allow_origins: "https://app.example.com"
+        allowOrigins: "https://app.example.com"
 ```
 
 The full plugin catalog lives under [Edgion extension plugins](./edgion-plugins/).

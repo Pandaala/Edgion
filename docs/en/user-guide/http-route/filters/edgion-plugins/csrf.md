@@ -53,7 +53,7 @@ filters:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `key` | String | None | **Required**. Secret key used to sign tokens. Recommended 32+ characters, using a strong random value |
+| `key` | String | none | **Required**. Secret key used to sign tokens. Recommended 32+ characters, using a strong random value |
 | `expires` | Integer | `7200` (2 hours) | Token expiration time (seconds). Recommended to match the session expiration time |
 | `name` | String | `"apisix-csrf-token"` | Token name, used for cookie and header |
 | `cookieSecure` | Boolean | `true` | Whether to set the `Secure` attribute on the token cookie. Keep `true` when clients reach Edgion over HTTPS. Set `false` for HTTP-only deployment models (TLS terminated upstream at an LB/sidecar, mesh-internal plain HTTP, local development) — otherwise browsers drop the `Secure` cookie over HTTP and every state-mutating request fails with `no csrf cookie` |
@@ -503,9 +503,11 @@ filters:
   # Authenticate first
   - type: BasicAuth
     config:
-      secretRefs:
-        - name: api-user
-  
+      secretGroups:
+        - name: default
+          secretRefs:
+            - name: api-user
+
   # Then validate CSRF
   - type: Csrf
     config:
@@ -521,10 +523,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: web-api
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "api.example.com"
   rules:
@@ -546,7 +548,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: security-edgion_plugins
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: Cors

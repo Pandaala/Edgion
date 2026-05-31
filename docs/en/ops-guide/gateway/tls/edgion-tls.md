@@ -16,6 +16,8 @@ Client --[TLS + SNI]--> Gateway listener
                              enforce clientAuth / minTlsVersion / ciphers
 ```
 
+To make a listener resolve its certificate from EdgionTls instead of the standard `tls.certificateRefs`, set the listener option `edgion.io/cert-provider: "edgion-tls"` on the Gateway. See [Selecting EdgionTls on a listener](#selecting-edgiontls-on-a-listener).
+
 For automatic certificate issuance and renewal, pair EdgionTls with [EdgionAcme](./acme.md) — ACME can create and keep an EdgionTls up to date for you.
 
 ## Quick Start
@@ -55,6 +57,32 @@ The Secret must be of type `kubernetes.io/tls` with `tls.crt` and `tls.key` keys
 ```bash
 kubectl get edgiontls -n production
 curl -v https://example.com
+```
+
+### Selecting EdgionTls on a listener
+
+EdgionTls attaches through `parentRefs`, but the listener itself must opt in to using EdgionTls as its certificate source. Set the listener option `edgion.io/cert-provider` to `edgion-tls` so the Gateway resolves the certificate (and handshake options) from the matching EdgionTls rather than from the standard `tls.certificateRefs`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: main-gateway
+  namespace: production
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: "example.com"
+      tls:
+        mode: Terminate
+        # Resolve the certificate and handshake options from EdgionTls.
+        options:
+          edgion.io/cert-provider: "edgion-tls"
+        # certificateRefs may be empty when EdgionTls supplies the certificate.
+        certificateRefs: []
 ```
 
 ## Configuration parameters
@@ -244,6 +272,32 @@ spec:
 ```
 
 A client is accepted only if its certificate is issued by `client-ca` **and** its SAN/CN matches the allowlist. Prefer `allowedSans` over `allowedCns` — CN-based identity is deprecated.
+
+To pass the verified client-certificate identity downstream (to backends or plugins), add the annotation `edgion.io/expose-client-cert: "true"` to the EdgionTls metadata. After a successful mTLS handshake, the Gateway exposes the client certificate information for downstream use:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: mtls-allowlist
+  namespace: production
+  annotations:
+    edgion.io/expose-client-cert: "true"
+spec:
+  parentRefs:
+    - name: internal-gateway
+      sectionName: https
+  hosts:
+    - admin.example.com
+  secretRef:
+    name: admin-example-com-tls
+    namespace: production
+  clientAuth:
+    mode: Mutual
+    caSecretRef:
+      name: client-ca
+      namespace: production
+```
 
 ### 5. Intermediate-CA chain (`verifyDepth`)
 
@@ -455,4 +509,4 @@ If you run into problems:
 - [TLS Termination](./tls-termination.md)
 - [ACME automatic certificates](./acme.md)
 - [HTTPS Listener](../listeners/https.md)
-- [TLS Passthrough Listener](../listeners/https.md#passthrough---tls-passthrough)
+- [TCP / TLS Listener](../listeners/tcp.md)

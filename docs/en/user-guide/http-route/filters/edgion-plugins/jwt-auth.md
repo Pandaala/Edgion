@@ -29,7 +29,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: jwt-auth-plugin
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: JwtAuth
@@ -50,7 +50,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: jwt-secret
-  namespace: default
+  namespace: production
 type: Opaque
 stringData:
   key: "my-key-id"
@@ -63,21 +63,21 @@ stringData:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `issuerGroups` | Array | None | Named issuer groups (see sub-table below). Required when `anonymous` is not set |
+| `issuerGroups` | Array | none | Named issuer groups (see sub-table below). Required when `anonymous` is not set |
 | `algorithm` | String | `HS256` | Plugin-level default JWT signing algorithm; overridable per issuerGroup |
-| `audiences` | Array | None | Plugin-level default valid audiences; overridable per issuerGroup |
+| `audiences` | Array | none | Plugin-level default valid audiences; overridable per issuerGroup |
 | `header` | String | `authorization` | Header name to read the token from (supports `Bearer <token>` or bare token) |
 | `query` | String | `jwt` | Query parameter name for the token. Only consulted when `allowTokenInQuery` is `true` |
 | `allowTokenInQuery` | Boolean | `false` | Allow reading the token from the URL query parameter. Disabled by default because bearer tokens in URLs leak into access logs, browser history, and `Referer` headers (RFC 6750 §2.3/§5.3) |
 | `cookie` | String | `jwt` | Cookie name for the token |
 | `hideCredentials` | Boolean | `false` | Whether to remove the token from the request before forwarding to upstream |
-| `anonymous` | String | None | Anonymous username. When set, unauthenticated requests are allowed and assigned this username |
+| `anonymous` | String | none | Anonymous username. When set, unauthenticated requests are allowed and assigned this username |
 | `keyClaimName` | String | `key` | Claim name in the JWT payload used to select the credential key |
 | `lifetimeGracePeriod` | Integer | `0` | Clock skew tolerance for exp/nbf validation (seconds) |
 | `base64Secret` | Boolean | `false` | Whether the HS* secret value is base64-encoded |
 | `maximumExpiration` | Integer | `0` | Maximum allowed exp duration from now (seconds). `0` disables the check |
 | `storeClaimsInCtx` | Boolean | `false` | Store decoded claims in the ctx variable `jwt_claims` (read by downstream plugins via `get_ctx_var`; excluded from the access log so claims are not persisted) |
-| `claimsToHeaders` | Object | None | Map JWT claim names to upstream request header names |
+| `claimsToHeaders` | Object | none | Map JWT claim names to upstream request header names |
 
 **Constraint**: `issuerGroups` is required when `anonymous` is not set.
 
@@ -494,7 +494,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: partner-a-secret
-  namespace: default
+  namespace: production
 type: Opaque
 stringData:
   key: "partner-a-key"
@@ -505,7 +505,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: partner-b-secret
-  namespace: default
+  namespace: production
 type: Opaque
 stringData:
   key: "partner-b-key"
@@ -516,7 +516,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: jwt-auth-plugin
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: JwtAuth
@@ -543,10 +543,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: protected-api
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "api.example.com"
   rules:

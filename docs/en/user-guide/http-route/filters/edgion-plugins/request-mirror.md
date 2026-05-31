@@ -24,7 +24,6 @@ metadata:
   name: mirror-plugin
 spec:
   requestPlugins:
-    - enable: true
       type: RequestMirror
       config:
         backendRef:
@@ -36,24 +35,24 @@ spec:
 
 ## Configuration Reference
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `backendRef` | Object | Yes | none | Mirror backend reference |
-| `backendRef.name` | String | Yes | none | Backend service name |
-| `backendRef.group` | String | No | `""` (core) | API group of the referent |
-| `backendRef.kind` | String | No | `Service` | Kind of the referent |
-| `backendRef.namespace` | String | No | same as route | Backend service namespace |
-| `backendRef.port` | Integer | No | none | Backend service port |
-| `fraction` | Object | No | none (100%) | Mirror traffic fraction (Gateway API style) |
-| `fraction.numerator` | Integer | Yes (within `fraction`) | none | Numerator |
-| `fraction.denominator` | Integer | No | `100` | Denominator |
-| `percentage` | Integer | No | none (100%) | Percentage of requests to mirror (0–100). Gateway API v1.5 field, also accepted as `percent` |
-| `connectTimeoutMs` | Integer | No | `1000` | Connection timeout (ms) |
-| `writeTimeoutMs` | Integer | No | `1000` | Write timeout (ms) |
-| `maxBufferedChunks` | Integer | No | `5` | Maximum body chunks buffered when the mirror is slower than the client |
-| `mirrorLog` | Boolean | No | `true` | Emit a dedicated mirror line in the access log |
-| `maxConcurrent` | Integer | No | `1024` | Maximum concurrent mirror tasks per gateway process |
-| `channelFullTimeoutMs` | Integer | No | `0` | Max ms to wait for mirror channel space before abandoning the mirror. `0` = abandon immediately (zero impact on the main request) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `backendRef` | Object | **Required** | Mirror backend reference |
+| `backendRef.name` | String | **Required** | Backend service name |
+| `backendRef.group` | String | `""` (core) | API group of the referent |
+| `backendRef.kind` | String | `Service` | Kind of the referent |
+| `backendRef.namespace` | String | same as route | Backend service namespace |
+| `backendRef.port` | Integer | none | Backend service port |
+| `fraction` | Object | none (100%) | Mirror traffic fraction (Gateway API style) |
+| `fraction.numerator` | Integer | **Required** (within `fraction`) | Numerator |
+| `fraction.denominator` | Integer | `100` | Denominator |
+| `percentage` | Integer | none (100%) | Percentage of requests to mirror (0–100). Gateway API v1.5 field, also accepted as `percent` |
+| `connectTimeoutMs` | Integer | `1000` | Connection timeout (ms) |
+| `writeTimeoutMs` | Integer | `1000` | Write timeout (ms) |
+| `maxBufferedChunks` | Integer | `5` | Maximum body chunks buffered when the mirror is slower than the client |
+| `mirrorLog` | Boolean | `true` | Emit a dedicated mirror line in the access log |
+| `maxConcurrent` | Integer | `1024` | Maximum concurrent mirror tasks per gateway process |
+| `channelFullTimeoutMs` | Integer | `0` | Max ms to wait for mirror channel space before abandoning the mirror. `0` = abandon immediately (zero impact on the main request) |
 
 ---
 

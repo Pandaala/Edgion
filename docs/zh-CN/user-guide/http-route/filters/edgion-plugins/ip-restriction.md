@@ -219,28 +219,30 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: admin-ip-policy
+  namespace: production
 spec:
-  plugins:
-    - enable: true
-      plugin:
-        type: IpRestriction
-        config:
-          allow:
-            - "10.0.0.0/8"
+  requestPlugins:
+    - type: IpRestriction
+      config:
+        allow:
+          - name: internal
+            cidrs:
+              - "10.0.0.0/8"
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: public-ip-policy
+  namespace: production
 spec:
-  plugins:
-    - enable: true
-      plugin:
-        type: IpRestriction
-        config:
-          deny:
-            - "203.0.113.50"
-          defaultAction: "allow"
+  requestPlugins:
+    - type: IpRestriction
+      config:
+        deny:
+          - name: abuse
+            cidrs:
+              - "203.0.113.50"
+        defaultAction: "allow"
 ```
 
 ---
@@ -583,51 +585,54 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: admin-security
-  namespace: default
+  namespace: production
 spec:
-  plugins:
+  requestPlugins:
     # IP 白名单
-    - enable: true
-      plugin:
-        type: IpRestriction
-        config:
-          ipSource: "clientIp"
-          allow:
-            - "10.0.0.0/8"           # 内网
-            - "203.0.113.10"         # 办公室 IP 1
-            - "203.0.113.20"         # 办公室 IP 2
-          deny:
-            - "10.0.0.100"           # 排除测试机器
-          message: "Admin access restricted to authorized networks"
-          status: 403
-    
+    - type: IpRestriction
+      config:
+        ipSource: "clientIp"
+        allow:
+          - name: internal
+            cidrs:
+              - "10.0.0.0/8"
+          - name: office
+            cidrs:
+              - "203.0.113.10"
+              - "203.0.113.20"
+        deny:
+          - name: excluded
+            cidrs:
+              - "10.0.0.100"
+        message: "Admin access restricted to authorized networks"
+        status: 403
     # 额外认证
-    - enable: true
-      plugin:
-        type: BasicAuth
-        config:
-          secretRefs:
-            - name: admin-users
+    - type: BasicAuth
+      config:
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: admin-users
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: public-security
-  namespace: default
+  namespace: production
 spec:
-  plugins:
+  requestPlugins:
     # IP 黑名单
-    - enable: true
-      plugin:
-        type: IpRestriction
-        config:
-          ipSource: "clientIp"
-          deny:
-            - "203.0.113.50"         # 恶意 IP
-            - "198.51.100.0/24"      # 恶意网段
-          defaultAction: "allow"
-          message: "Your IP has been blocked due to suspicious activity"
-          status: 403
+    - type: IpRestriction
+      config:
+        ipSource: "clientIp"
+        deny:
+          - name: abuse
+            cidrs:
+              - "203.0.113.50"
+              - "198.51.100.0/24"
+        defaultAction: "allow"
+        message: "Your IP has been blocked due to suspicious activity"
+        status: 403
 ```
 
 **测试场景**：

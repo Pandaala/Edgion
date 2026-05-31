@@ -183,15 +183,16 @@ edgion-cli gen-certs [OPTIONS]
 |--------|-------------|---------|
 | `--output` | Output target: `file` or `k8s` | `file` |
 | `--output-dir` | Output directory (for `--output file`) | `certs/grpc/` |
+| `--cert-name` | Name for this certificate set; files go into `<output-dir>/<cert-name>/` | `primary` |
 | `--ca-days` | CA certificate validity (days) | `3650` |
 | `--cert-days` | Server/client certificate validity (days) | `365` |
 | `--server-san` | Additional SAN entries (repeatable) | localhost, 127.0.0.1, ::1 included by default |
 | `--force` | Overwrite existing certificates | `false` |
 
-**Generated files:**
+**Generated files** (placed under `<output-dir>/<cert-name>/`):
 
 ```
-<output-dir>/
+<output-dir>/<cert-name>/
 ├── ca.crt        # CA certificate
 ├── ca.key        # CA private key (for signing only)
 ├── server.crt    # Controller server certificate
@@ -217,7 +218,7 @@ edgion-cli gen-certs --output file \
 edgion-cli gen-certs --output k8s
 ```
 
-After generating certificates, configure mTLS in your TOML files. See [Control Plane mTLS](infrastructure/mtls.md#control-plane-mtls-conf_sync-grpc) for details.
+After generating certificates, configure mTLS in your YAML config files. See [Control Plane mTLS](infrastructure/mtls.md#control-plane-mtls-conf_sync-grpc) for details.
 
 ### gen-token - Generate a Static CLI Token
 

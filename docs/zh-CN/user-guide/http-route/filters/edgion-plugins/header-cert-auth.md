@@ -33,7 +33,6 @@ metadata:
   name: cert-auth-plugin
 spec:
   requestPlugins:
-    - enable: true
       type: HeaderCertAuth
       config:
         mode: Header
@@ -71,7 +70,6 @@ spec:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: HeaderCertAuth
     config:
       mode: Header
@@ -87,7 +85,6 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: HeaderCertAuth
     config:
       mode: Mtls
@@ -98,7 +95,6 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: HeaderCertAuth
     config:
       mode: Header
@@ -138,8 +134,27 @@ openssl verify -CAfile ca.crt client.crt
 
 ---
 
+## 安全最佳实践
+
+### ✅ 推荐做法
+
+- 提供可信的 `caSecretRefs` CA 包并保持验证开启；若叶证书由中间 CA 签发，请同时包含中间 CA。
+- 在 Header 模式下，确保只有可信的 TLS 终结代理才能设置 `certificateHeaderName`；对不可信入站流量剥离该头，防止客户端伪造证书。
+- 对于已知客户端集合，结合 `consumerBy` 和上游授权进行访问限制。
+- 保持 `hideCredentials: true`（默认值），除非后端本身需要证书。
+- 当网关直接终结 TLS 时，优先使用 Connection（mTLS）模式——证书在握手阶段完成验证，无法通过伪造请求头绕过。
+
+### ❌ 需要避免
+
+- 信任来自 TLS 终结代理以外的 `certificateHeaderName`（请求头伪造）。
+- 在必须要求客户端证书的路由上启用 `allowAnonymous: true`。
+- 在后端不需要证书时，将证书请求头转发至上游（`hideCredentials: false`）。
+
+---
+
 ## 相关文档
 
 - [mTLS 配置](../../../../ops-guide/infrastructure/mtls.md)
 - [TLS 终结](../../../../ops-guide/gateway/tls/tls-termination.md)
 - [Basic Auth](./basic-auth.md)
+- [JWT Auth](./jwt-auth.md)
