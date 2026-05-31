@@ -24,10 +24,6 @@ pub const PUBLIC_PROBE_PATHS: &[&str] = &["/health", "/ready", "/metrics"];
 /// valid token. Exact-match.
 pub const PUBLIC_AUTH_ENDPOINTS: &[&str] = &["/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/status"];
 
-/// Diagnostic endpoints exposed WITHOUT auth only under test/integration mode.
-/// Never mounted in production builds. Exact-match.
-pub const TEST_ONLY_PATHS: &[&str] = &["/api/v1/debug/store-stats", "/api/v1/admin/wipe-all"];
-
 /// Prefix under which all auth endpoints live. Operators may add any path under
 /// this prefix to their `skip_paths` (config allowlist), because everything here
 /// is unauthenticated by design.
@@ -45,8 +41,8 @@ pub fn is_public_auth_endpoint(path: &str) -> bool {
 
 /// The **static** public set used by the authorization layer's skip check.
 /// Probes + the three public auth endpoints. Deliberately EXCLUDES
-/// operator-configured `skip_paths` and the test-only diagnostic routes
-/// (fr-cauth-01: authz must never trust operator-extended skips).
+/// operator-configured `skip_paths` (fr-cauth-01: authz must never trust
+/// operator-extended skips).
 pub fn is_static_public(path: &str) -> bool {
     is_public_probe(path) || is_public_auth_endpoint(path)
 }
@@ -109,20 +105,5 @@ mod tests {
         assert!(is_skip_allowlisted("/api/v1/auth/anything"));
         assert!(!is_skip_allowlisted("/api/v1/cluster/httproute"));
         assert!(!is_skip_allowlisted("/metrics/../secret"));
-    }
-
-    /// Lock the test-only diagnostic set so an accidental edit (which would
-    /// expose unauthenticated routes like `/api/v1/admin/wipe-all`) is caught.
-    /// Also confirms these diagnostic routes are never in the static public
-    /// (authz) set — they bypass authn only under test mode, never authz.
-    #[test]
-    fn test_only_paths_are_locked() {
-        assert_eq!(
-            TEST_ONLY_PATHS,
-            &["/api/v1/debug/store-stats", "/api/v1/admin/wipe-all"]
-        );
-        for p in TEST_ONLY_PATHS {
-            assert!(!is_static_public(p), "{p} must not be static-public");
-        }
     }
 }

@@ -1668,22 +1668,37 @@ main() {
         log_section "Final Step: Cache Residue Detection"
 
         local residue_bin="${PROJECT_ROOT}/target/debug/cache_residue"
-        if [ ! -x "$residue_bin" ]; then
-            log_warn "cache_residue binary not built; building now..."
-            (cd "$PROJECT_ROOT" && cargo build --bin cache_residue) || {
-                log_error "cache_residue build failed — skipping leak check"
-                # do not fail the run on missing binary; fall through
-                residue_bin=""
-            }
+        # Always (re)build so the validator matches the current source. It changes
+        # rarely, but a stale binary silently runs old logic or rejects new flags
+        # (e.g. --controller-token), surfacing as a confusing rc=2 infra error.
+        log_info "Building cache_residue (incremental)..."
+        if ! (cd "$PROJECT_ROOT" && cargo build --bin cache_residue); then
+            log_error "cache_residue build failed — skipping leak check"
+            # do not fail the run on build failure; fall through
+            residue_bin=""
         fi
 
+        # The validator authenticates to the controller's now-standard-auth
+        # diagnostic routes (wipe-all, store-stats), so obtain the admin token
+        # first. ensure_ctrl_admin_token is idempotent and also covers the default
+        # no-reload path, which otherwise never logs in. Without a token we cannot
+        # authenticate, so skip the check rather than fail on a bogus 401.
+        if [ -n "$residue_bin" ] && [ -x "$residue_bin" ]; then
+            if ! ensure_ctrl_admin_token || [ -z "$CTRL_ADMIN_TOKEN" ]; then
+                log_warn "Cache residue check skipped — controller admin token unavailable"
+                residue_bin=""
+            fi
+        fi
+
+        # Re-check: the token step above may have cleared residue_bin (skip case).
         if [ -n "$residue_bin" ] && [ -x "$residue_bin" ]; then
             # Always invoke validator with --mode fail so exit 1 unambiguously means
             # "residue detected". Shell-side RESIDUE_MODE then decides whether to
             # block the build (default: fail — opt out with RESIDUE_MODE=warn).
             # The controller's test-only diagnostic routes (wipe-all, store-stats)
-            # are intentionally unauthenticated under test mode, so the validator
-            # calls them tokenless.
+            # require standard auth like any other admin route, so the validator
+            # is given the admin Bearer token obtained at login. Gateway admin is
+            # loopback-only and unauthenticated, so no token is passed for it.
             local residue_mode="${RESIDUE_MODE:-fail}"
             # Disable errexit around the call so a non-zero exit (residue / infra
             # error) is captured into $rc and handled below instead of aborting.
@@ -1691,6 +1706,7 @@ main() {
             "$residue_bin" \
                 --controller-addr "http://127.0.0.1:5800" \
                 --gateway-addr    "http://127.0.0.1:5810" \
+                --controller-token "$CTRL_ADMIN_TOKEN" \
                 --timeout-secs 30 \
                 --mode fail
             local rc=$?

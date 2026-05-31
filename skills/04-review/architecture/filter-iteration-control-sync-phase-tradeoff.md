@@ -32,7 +32,7 @@ underlying Pingora hooks (`upstream_response_filter` returning `Result<()>`,
 `upstream_response_body_filter` returning `Result<Option<Duration>>`) are sync. There is no
 Edgion-level lever to make them pausable; a true non-blocking pause-resume would require an async
 variant of these callbacks upstreamed into Pingora. This is the same root that
-[concurrency/plugins-http-dsl-F008-block-in-place-multi-thread-runtime.md](../concurrency/plugins-http-dsl-F008-block-in-place-multi-thread-runtime.md)
+[concurrency/block-in-place-multi-thread-runtime.md](../concurrency/block-in-place-multi-thread-runtime.md)
 established for the narrower `block_in_place`/`spawn_blocking` framing — F008 covers the
 "current_thread panic / spawn_blocking doesn't compile" angle; this entry covers the broader
 "thread starvation under load / no async response phase / no stop-and-buffer" framing.
@@ -98,7 +98,7 @@ Re-open this decision only if:
 - Finding `filter-02-no-iteration-control` (`tasks/review-envoy/`), 2026-05-29 — ⚠️ accepted
   tradeoff; closed without code change.
 - Narrower sibling rule:
-  [concurrency/plugins-http-dsl-F008-block-in-place-multi-thread-runtime.md](../concurrency/plugins-http-dsl-F008-block-in-place-multi-thread-runtime.md).
+  [concurrency/block-in-place-multi-thread-runtime.md](../concurrency/block-in-place-multi-thread-runtime.md).
 - Response-replacement subset: `filter-04-response-filter-cannot-replace-response` (same review set).
 - Source: `src/core/gateway/plugins/http/dsl/plugin.rs` (`run_upstream_response_filter`);
   `src/core/gateway/plugins/runtime/plugin_runtime.rs:1190` (`check_response_stage_terminate`);

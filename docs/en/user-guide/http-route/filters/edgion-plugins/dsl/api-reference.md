@@ -1477,6 +1477,8 @@ All `redis.*` functions are backed by a pre-configured LinkSys Redis connection 
 
 Reads the value of a string key. Returns `value: nil` when the key does not exist.
 
+The returned `value` is silently truncated at `max_string_len` (default 8 KiB, the same cap that applies to every other DSL string value); the call still succeeds and does not raise. Operators who need to read larger values must raise `max_string_len`.
+
 **Parameters**:
 - `link` (Str) — Alias name from `linkSysRefs[].name`
 - `key` (Str) — Redis key name
@@ -1617,6 +1619,8 @@ Atomically increments the integer value of a key by `delta`. `delta` may be nega
 
 Gets the value of a hash field. Returns `value: nil` when the key or field does not exist.
 
+The returned `value` is silently truncated at `max_string_len` (default 8 KiB), the same as `redis.get`.
+
 **Parameters**:
 - `link` (Str) — Alias name from `linkSysRefs[].name`
 - `key` (Str) — Hash key name
@@ -1655,7 +1659,7 @@ Deletes a field from a hash. Returns `value: true` if the field existed and was 
 
 **Signature**: `redis.hgetall(link, key)` → `Map { ok: Bool, value: Map, error: Str | Nil }`
 
-Gets all fields and values of a hash. Returns an empty `Map` when the key does not exist. `ok: false` is returned on a connection error, or when the hash contains more entries than the `max_map_size` limit (in which case the oversize `Map` is not constructed and `error` describes the actual size and limit).
+Gets all fields and values of a hash. Returns an empty `Map` when the key does not exist. `ok: false` is returned on a connection error, or when the hash contains more entries than the `max_map_size` limit (in which case the oversize `Map` is not constructed and `error` describes the actual size and limit). Each entry's key and value string is independently truncated at `max_string_len` (default 8 KiB), the same as `redis.get`; the call still succeeds.
 
 **Parameters**:
 - `link` (Str) — Alias name from `linkSysRefs[].name`

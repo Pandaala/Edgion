@@ -36,31 +36,12 @@ use crate::core::controller::authz::{Authorizer, Role};
 /// drift from the authentication layer's notion of "public". NEVER reference the
 /// operator-configurable `skip_paths` here (fr-cauth-01).
 ///
-/// Under test/integration mode the test-only diagnostic routes
-/// (`/api/v1/debug/store-stats`, `/api/v1/admin/wipe-all`) are additionally
-/// skipped, mirroring the authn layer's `skip_paths` bypass for the same set
-/// (see `unified_auth::UnifiedAuthState::from_configs`). Without this, the authn
-/// layer waves these tokenless requests through (no claims), then
-/// `assign_superuser_if_no_role` fail-closes them with 403 — the two layers
-/// would contradict each other. This is safe in production: those routes are
-/// only mounted under test mode (`create_admin_router`), so a production request
-/// reaches the fallback (404) and never this route_layer.
+/// The test-only diagnostic routes (`/api/v1/debug/store-stats`,
+/// `/api/v1/admin/wipe-all`) are NOT skipped — they require standard auth like
+/// any other admin route (callers pass a Bearer token). They are still only
+/// mounted under test mode (`create_admin_router`).
 fn is_skipped(path: &str) -> bool {
-    is_skipped_with_mode(path, test_mode_enabled())
-}
-
-/// Pure decision used by [`is_skipped`], split out so the test-mode branch can be
-/// exercised without mutating the process-global test-mode flag.
-fn is_skipped_with_mode(path: &str, test_mode: bool) -> bool {
-    use crate::core::common::auth::public_paths;
-    public_paths::is_static_public(path) || (test_mode && public_paths::TEST_ONLY_PATHS.contains(&path))
-}
-
-/// True when the controller runs in test or integration mode — the only modes in
-/// which the test-only diagnostic routes are mounted. Mirrors the flag check in
-/// `unified_auth::UnifiedAuthState::from_configs`.
-fn test_mode_enabled() -> bool {
-    crate::core::common::config::is_test_mode() || crate::core::common::config::is_integration_testing_mode()
+    crate::core::common::auth::public_paths::is_static_public(path)
 }
 
 /// Authorization route_layer middleware.
@@ -485,32 +466,6 @@ mod tests {
             .unwrap();
         // Public skip path reaches the handler despite no auth proof and a deny-all policy.
         assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    /// The test-only diagnostic routes are skipped by authz ONLY under test mode,
-    /// mirroring the authn-layer `skip_paths` bypass. In production mode they are
-    /// NOT skipped (defense in depth — though they are also never mounted there).
-    /// The static-public set is skipped regardless of mode; business routes never.
-    #[test]
-    fn test_only_paths_skipped_only_in_test_mode() {
-        use crate::core::common::auth::public_paths::TEST_ONLY_PATHS;
-
-        // Static-public is mode-independent.
-        assert!(is_skipped_with_mode("/health", false));
-        assert!(is_skipped_with_mode("/health", true));
-
-        // Test-only diagnostic routes: skipped in test mode, enforced otherwise.
-        for p in TEST_ONLY_PATHS {
-            assert!(is_skipped_with_mode(p, true), "{p} must be skipped in test mode");
-            assert!(
-                !is_skipped_with_mode(p, false),
-                "{p} must be authz-enforced in production"
-            );
-        }
-
-        // Business routes are never skipped, in either mode.
-        assert!(!is_skipped_with_mode("/api/v1/cluster/httproute", true));
-        assert!(!is_skipped_with_mode("/api/v1/cluster/httproute", false));
     }
 
     /// Verify the three fail-closed cases of `assign_superuser_if_no_role`:

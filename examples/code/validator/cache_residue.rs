@@ -23,6 +23,12 @@ struct Args {
     #[arg(long)]
     gateway_addr: String,
 
+    /// Bearer token for the controller admin API. The controller's test-only
+    /// diagnostic routes (wipe-all, store-stats) require standard auth; gateway
+    /// admin is loopback-only and unauthenticated, so no token is needed there.
+    #[arg(long)]
+    controller_token: Option<String>,
+
     #[arg(long, default_value_t = false)]
     no_wipe: bool,
 
@@ -101,7 +107,7 @@ async fn main() {
 
     // Step 1: wipe-all (unless --no-wipe)
     if !args.no_wipe && args.skip.as_deref() != Some("controller") {
-        if let Err(e) = wipe_all(&client, &args.controller_addr).await {
+        if let Err(e) = wipe_all(&client, &args.controller_addr, args.controller_token.as_deref()).await {
             eprintln!("[ERROR] wipe-all failed: {}", e);
             process::exit(2);
         }
@@ -143,9 +149,18 @@ async fn main() {
     }
 }
 
-async fn wipe_all(client: &Client, controller: &str) -> reqwest::Result<()> {
+/// Attach a Bearer token to a controller-bound request when one is configured.
+/// Gateway requests stay unauthenticated (gateway admin is loopback-only, no auth).
+fn with_bearer(rb: reqwest::RequestBuilder, token: Option<&str>) -> reqwest::RequestBuilder {
+    match token {
+        Some(t) => rb.bearer_auth(t),
+        None => rb,
+    }
+}
+
+async fn wipe_all(client: &Client, controller: &str, token: Option<&str>) -> reqwest::Result<()> {
     let url = format!("{}/api/v1/admin/wipe-all", controller);
-    let resp = client.post(&url).send().await?.error_for_status()?;
+    let resp = with_bearer(client.post(&url), token).send().await?.error_for_status()?;
     let body: Value = resp.json().await?;
     eprintln!(
         "[INFO] wipe-all: total={} errors={} duration_ms={}",
@@ -170,7 +185,12 @@ async fn collect(client: &Client, args: &Args) -> reqwest::Result<Snapshot> {
 
     if args.skip.as_deref() != Some("controller") {
         let url = format!("{}/api/v1/debug/store-stats", args.controller_addr);
-        let body: Value = client.get(&url).send().await?.error_for_status()?.json().await?;
+        let body: Value = with_bearer(client.get(&url), args.controller_token.as_deref())
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
         if let Some(data) = body.get("data") {
             walk_json("controller", data, &mut snap);
         }
@@ -197,7 +217,13 @@ async fn collect(client: &Client, args: &Args) -> reqwest::Result<Snapshot> {
 async fn fetch_samples(client: &Client, args: &Args, path: &str) -> Option<Vec<String>> {
     if let Some(rest) = path.strip_prefix("controller.conf_center_storage.") {
         let url = format!("{}/api/v1/namespaced/{}", args.controller_addr, rest);
-        let body: Value = client.get(&url).send().await.ok()?.json().await.ok()?;
+        let body: Value = with_bearer(client.get(&url), args.controller_token.as_deref())
+            .send()
+            .await
+            .ok()?
+            .json()
+            .await
+            .ok()?;
         let items = body.pointer("/data")?.as_array()?;
         let names: Vec<String> = items
             .iter()
@@ -345,6 +371,7 @@ mod e2e_tests {
         let args = Args {
             controller_addr: ctrl.uri(),
             gateway_addr: gw.uri(),
+            controller_token: None,
             no_wipe: true,
             timeout_secs: 1,
             poll_interval_ms: 100,

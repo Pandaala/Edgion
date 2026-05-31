@@ -135,17 +135,6 @@ impl UnifiedAuthState {
             skip_paths.insert((*p).to_string());
         }
 
-        // Test mode exposes diagnostic endpoints without auth.
-        // These routes are only mounted when is_test_mode() is true (controller side)
-        // or is_integration_testing_mode() (gateway side), so they cannot leak into
-        // production builds. Either flag triggers the skip — both are set together
-        // by gateway startup; controller only sets test_mode.
-        if crate::core::common::config::is_test_mode() || crate::core::common::config::is_integration_testing_mode() {
-            for p in crate::core::common::auth::public_paths::TEST_ONLY_PATHS {
-                skip_paths.insert((*p).to_string());
-            }
-        }
-
         let oidc = match auth_config {
             Some(cfg) if cfg.enabled => {
                 if let Some(err) = cfg.validate() {

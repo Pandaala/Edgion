@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::core::common::utils::net::host_without_port;
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::plugin_metadata::get_global_plugin_metadata_store;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
@@ -210,13 +211,9 @@ impl RegionRoute {
 
         let (host, port) = region.parse_endpoint();
 
-        let sni = session
-            .header_value("Host")
-            .unwrap_or_default()
-            .split(':')
-            .next()
-            .unwrap_or_default()
-            .to_string();
+        // IPv6-safe Host port stripping: a naive split(':') would mangle a
+        // bracketed IPv6 literal (`[::1]:8080` -> `[`) into a corrupt SNI.
+        let sni = host_without_port(&session.header_value("Host").unwrap_or_default()).to_string();
 
         log.push("proxy pass");
         log.push_fmt(

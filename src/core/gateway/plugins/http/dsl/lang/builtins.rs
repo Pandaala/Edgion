@@ -56,6 +56,29 @@ fn checked_value_str(s: String, limit: usize) -> Result<Value, RuntimeError> {
     Ok(Value::Str(s.into()))
 }
 
+/// Silently truncate `s` to at most `limit` UTF-8 bytes, walking back to the
+/// nearest char boundary so `String::truncate` cannot panic on multi-byte
+/// content. `is_char_boundary(0)` always succeeds, so the loop terminates.
+///
+/// Used by the `redis.*` read builtins (`get` / `hget` / `hgetall`) to restore
+/// the sandbox invariant "no DSL string value exceeds max_string_len" for
+/// externally-controlled Redis values. We *truncate* rather than raise
+/// `StringTooLong` because the redis dispatcher carries the documented "never
+/// raises a runtime error" contract (errors surface as a `redis_err` Map value,
+/// not a propagated `RuntimeError`); this mirrors the `http.call` body cap
+/// (FB-03). Without it an oversized Redis value (up to 512 MB) would flow into
+/// `req.set_header` / `ctx.set` / `log` without further size gating.
+fn truncate_to_max_string_len(mut s: String, limit: usize) -> String {
+    if s.len() > limit {
+        let mut end = limit;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+    }
+    s
+}
+
 fn checked_value_opt_str(s: Option<String>, limit: usize) -> Result<Value, RuntimeError> {
     match s {
         Some(v) => checked_value_str(v, limit),
@@ -1096,7 +1119,10 @@ impl Vm {
                     Err(e) => return Ok(e),
                 };
                 match client.get(&key).await {
-                    Ok(Some(v)) => Ok(redis_ok(Value::Str(v.into()))),
+                    Ok(Some(v)) => {
+                        let v = truncate_to_max_string_len(v, self.limits.max_string_len);
+                        Ok(redis_ok(Value::Str(v.into())))
+                    }
                     Ok(None) => Ok(redis_ok(Value::Nil)),
                     Err(e) => Ok(redis_err(e.to_string())),
                 }
@@ -1242,7 +1268,10 @@ impl Vm {
                     Err(e) => return Ok(e),
                 };
                 match client.hget(&key, &field).await {
-                    Ok(Some(v)) => Ok(redis_ok(Value::Str(v.into()))),
+                    Ok(Some(v)) => {
+                        let v = truncate_to_max_string_len(v, self.limits.max_string_len);
+                        Ok(redis_ok(Value::Str(v.into())))
+                    }
                     Ok(None) => Ok(redis_ok(Value::Nil)),
                     Err(e) => Ok(redis_err(e.to_string())),
                 }
@@ -1295,6 +1324,10 @@ impl Vm {
                         }
                         let mut result: IndexMap<String, Value> = IndexMap::new();
                         for (k, v) in map {
+                            // Both key and value are externally-controlled Redis
+                            // strings; truncate each to keep the sandbox invariant.
+                            let k = truncate_to_max_string_len(k, self.limits.max_string_len);
+                            let v = truncate_to_max_string_len(v, self.limits.max_string_len);
                             result.insert(k, Value::Str(v.into()));
                         }
                         Ok(redis_ok(Value::Map(Box::new(result))))
@@ -1504,5 +1537,36 @@ mod ip_tests {
             "IPv4-mapped IPv6 not detected as private: {:?}",
             host
         );
+    }
+}
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::truncate_to_max_string_len;
+
+    #[test]
+    fn under_limit_is_unchanged() {
+        assert_eq!(truncate_to_max_string_len("abc".to_string(), 8), "abc");
+        assert_eq!(truncate_to_max_string_len("abcdefgh".to_string(), 8), "abcdefgh");
+    }
+
+    #[test]
+    fn over_limit_truncated_to_byte_len() {
+        assert_eq!(truncate_to_max_string_len("abcdefghij".to_string(), 4), "abcd");
+        // limit 0 yields the empty string.
+        assert_eq!(truncate_to_max_string_len("abc".to_string(), 0), "");
+    }
+
+    #[test]
+    fn truncation_walks_back_to_char_boundary() {
+        // "é" is 2 UTF-8 bytes (0xC3 0xA9). Byte layout of "aéé": a@0, é@1..3, é@3..5.
+        // Char boundaries are at {0, 1, 3, 5}.
+        let s = "aéé".to_string();
+        // limit 2 splits the first "é" mid-codepoint; walk back to boundary 1 ("a").
+        assert_eq!(truncate_to_max_string_len(s.clone(), 2), "a");
+        // limit 3 already lands on a boundary; no walk-back, keep "aé".
+        let out = truncate_to_max_string_len(s, 3);
+        assert_eq!(out, "aé");
+        assert_eq!(out.len(), 3);
     }
 }

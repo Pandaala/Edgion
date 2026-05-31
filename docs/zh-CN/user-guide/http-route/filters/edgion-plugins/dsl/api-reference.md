@@ -1477,6 +1477,8 @@ if remaining != nil {
 
 读取字符串键的值。键不存在时返回 `value: nil`。
 
+返回的 `value` 会在 `max_string_len`（默认 8 KiB,与所有其他 DSL 字符串值相同的上限）处被静默截断；调用仍然成功,且不会抛出运行时错误。需要读取更大值的运营者应调高 `max_string_len`。
+
 **参数**：
 - `link`（Str）— 来自 `linkSysRefs[].name` 的别名
 - `key`（Str）— Redis 键名
@@ -1608,6 +1610,8 @@ if r["value"] > 100 {
 
 获取哈希字段的值。键或字段不存在时返回 `value: nil`。
 
+返回的 `value` 会在 `max_string_len`（默认 8 KiB）处被静默截断,与 `redis.get` 一致。
+
 **参数**：
 - `link`（Str）— 来自 `linkSysRefs[].name` 的别名
 - `key`（Str）— 哈希键名
@@ -1646,7 +1650,7 @@ if r["value"] > 100 {
 
 **签名**：`redis.hgetall(link, key)` → `Map { ok: Bool, value: Map, error: Str | Nil }`
 
-获取哈希的所有字段和值。键不存在时返回空 `Map`。在连接错误,或哈希条目数超过 `max_map_size` 限制时返回 `ok: false`(后者不会构造超大 `Map`,`error` 会描述实际大小与上限)。
+获取哈希的所有字段和值。键不存在时返回空 `Map`。在连接错误,或哈希条目数超过 `max_map_size` 限制时返回 `ok: false`(后者不会构造超大 `Map`,`error` 会描述实际大小与上限)。每个条目的键与值字符串都会各自在 `max_string_len`（默认 8 KiB）处被静默截断,与 `redis.get` 一致;调用仍然成功。
 
 **参数**：
 - `link`（Str）— 来自 `linkSysRefs[].name` 的别名

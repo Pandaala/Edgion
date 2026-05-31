@@ -1,4 +1,5 @@
 use super::{resolve_global_plugins, resolve_route_ext_refs, EdgionHttpProxy};
+use crate::core::common::utils::net::host_without_port;
 use crate::core::gateway::cli::config::get_path_normalization_config;
 use crate::core::gateway::path_normalization::{
     contains_escaped_slash, has_invalid_percent_encoding, normalize_path, PathNormalizationConfig,
@@ -481,10 +482,8 @@ fn acme_challenge_token_and_host(req_header: &RequestHeader) -> Option<(&str, St
         .headers
         .get("host")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .unwrap_or("")
+        .map(host_without_port)
+        .unwrap_or_default()
         .to_string();
 
     Some((token, host))
@@ -559,6 +558,20 @@ mod tests {
 
         assert_eq!(token, "token-1");
         assert_eq!(host, "example.com");
+    }
+
+    #[test]
+    fn acme_challenge_token_and_host_strips_port_from_ipv6_literal_host() {
+        // A bracketed IPv6 literal with a port must keep its brackets, not be
+        // mangled to "[" by a naive split(':') — otherwise the challenge lookup
+        // never matches the stored entry.domain.
+        let mut req = RequestHeader::build("GET", b"/.well-known/acme-challenge/token-2", None).unwrap();
+        req.insert_header("host", "[::1]:80").unwrap();
+
+        let (token, host) = acme_challenge_token_and_host(&req).unwrap();
+
+        assert_eq!(token, "token-2");
+        assert_eq!(host, "[::1]");
     }
 
     #[test]
