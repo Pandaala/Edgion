@@ -43,18 +43,23 @@ pub(crate) fn build_response_local_reply(
     };
     let bodyless = is_head || matches!(status, 204 | 304);
 
-    let _ = header.set_status(code);
-    header.headers.clear();
-
+    // Clear-and-rebuild by replacing the whole header: clearing only
+    // `header.headers` (the value map) would leave Pingora's parallel
+    // `header_name_map` (case map) stale and panic on H1 wire serialization.
+    // Building fresh and inserting via the pingora API keeps both maps in sync.
+    let Ok(mut fresh) = ResponseHeader::build(code, None) else {
+        return false;
+    };
     let body_bytes = body.map(bytes::Bytes::from).unwrap_or_default();
     if !bodyless {
-        let _ = header.insert_header("content-type", "text/plain");
-        let _ = header.insert_header("content-length", body_bytes.len().to_string());
+        let _ = fresh.insert_header("content-type", "text/plain");
+        let _ = fresh.insert_header("content-length", body_bytes.len().to_string());
     }
-    if let Some(tid) = ctx.request_info.x_trace_id.clone() {
-        let _ = header.insert_header("x-trace-id", tid.as_str());
+    if let Some(tid) = ctx.request_info.x_trace_id.as_deref() {
+        let _ = fresh.insert_header("x-trace-id", tid);
     }
-    ctx.drain_pending_response_header_ops(header);
+    ctx.drain_pending_response_header_ops(&mut fresh);
+    *header = fresh;
 
     ctx.local_reply_body = Some(if bodyless { bytes::Bytes::new() } else { body_bytes });
     ctx.local_reply_active = true;
@@ -768,6 +773,7 @@ mod local_reply_tests {
         let mut header = ResponseHeader::build(200, None).unwrap();
         let applied = build_response_local_reply(&mut header, &mut ctx, 403, Some("denied".into()), true);
         assert!(applied);
+        assert!(ctx.local_reply_active);
         assert!(header.headers.get("content-length").is_none());
         assert_eq!(ctx.local_reply_body.as_ref().unwrap().len(), 0);
     }
@@ -778,6 +784,7 @@ mod local_reply_tests {
         let mut header = ResponseHeader::build(200, None).unwrap();
         let applied = build_response_local_reply(&mut header, &mut ctx, 204, Some("ignored".into()), false);
         assert!(applied);
+        assert!(ctx.local_reply_active);
         assert!(header.headers.get("content-length").is_none());
         assert_eq!(ctx.local_reply_body.as_ref().unwrap().len(), 0);
     }
@@ -786,11 +793,15 @@ mod local_reply_tests {
     fn rebuild_grpc_route_is_refused() {
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.is_grpc_request = true;
-        let mut header = ResponseHeader::build(502, None).unwrap();
+        // Build the header at 200, attempt to replace with 502 — the gRPC early-return
+        // must leave the header completely untouched.
+        let mut header = ResponseHeader::build(200, None).unwrap();
         let applied = build_response_local_reply(&mut header, &mut ctx, 502, Some("x".into()), false);
         assert!(!applied);
         assert!(!ctx.local_reply_active);
         assert!(ctx.local_reply_body.is_none());
+        // Confirm the early-return mutated nothing: status must still be 200.
+        assert_eq!(header.status.as_u16(), 200);
     }
 
     #[test]
