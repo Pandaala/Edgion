@@ -65,10 +65,17 @@ PID_DIR="${WORK_DIR}/pids"
 CONFIG_DIR="${WORK_DIR}/config"
 GENERATED_SECRET_DIR="${WORK_DIR}/generated-secrets"
 
-# Exported so `edgion-cli` can auto-detect local_auth credentials from the
-# Controller-generated admin Secret (see src/core/ctl/cli/auto_auth.rs).
 export EDGION_WORK_DIR="$WORK_DIR"
+# Used by cert-generation helpers to write generated TLS Secrets.
 export EDGION_GENERATED_SECRET_DIR="$GENERATED_SECRET_DIR"
+
+# The Controller no longer auto-generates admin credentials; it synthesizes a
+# local_auth provider from EDGION_ADMIN_*. Export them (honoring inherited values)
+# so the Controller started below and edgion-cli (apply) agree on credentials;
+# auto_auth detects the same env vars. JWT secret must be >= 32 bytes.
+export EDGION_ADMIN_USERNAME="${EDGION_ADMIN_USERNAME:-admin}"
+export EDGION_ADMIN_PASSWORD="${EDGION_ADMIN_PASSWORD:-edgion-integration-test-admin-pw}"
+export EDGION_ADMIN_JWT_SECRET="${EDGION_ADMIN_JWT_SECRET:-edgion-integration-test-jwt-secret-0123456789}"
 
 # ── Flags ───────────────────────────────────────────────────────────────────
 DO_CLEANUP=true

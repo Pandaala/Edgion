@@ -94,6 +94,48 @@ This creates:
 - **EdgionGatewayConfig** — server tuning, real IP, timeouts
 - **Gateway** listeners — HTTP on port 80, HTTPS on port 443
 
+## Admin Credentials
+
+The controller reads admin credentials from the `edgion-admin-credentials` Secret via
+environment variables (`EDGION_ADMIN_USERNAME`, `EDGION_ADMIN_PASSWORD`,
+`EDGION_ADMIN_JWT_SECRET`). The Secret is wired into the controller Deployment via
+`secretKeyRef` entries in `controller/deployment.yaml`.
+
+### How `deploy.sh` bootstraps the Secret
+
+`deploy.sh` creates the Secret **before** applying the controller manifests, using the
+operator's own kubectl (not the controller ServiceAccount). The step is idempotent: if the
+Secret already exists, it is left untouched so the current password is preserved. This
+means re-running `deploy.sh` on an existing cluster never resets the password.
+
+```bash
+kubectl -n edgion-system get secret edgion-admin-credentials >/dev/null 2>&1 || \
+  kubectl -n edgion-system create secret generic edgion-admin-credentials \
+    --from-literal=username=admin \
+    --from-literal=password="$(openssl rand -base64 16)" \
+    --from-literal=jwt_secret="$(openssl rand -base64 32)"
+```
+
+### Reading the admin password
+
+```bash
+kubectl -n edgion-system get secret edgion-admin-credentials \
+  -o jsonpath='{.data.password}' | base64 -d
+```
+
+### Rotating the password
+
+Edit the Secret directly; the controller picks up the new value on restart (or via a
+rolling update):
+
+```bash
+kubectl -n edgion-system patch secret edgion-admin-credentials \
+  -p "{\"stringData\":{\"password\":\"$(openssl rand -base64 16)\"}}"
+kubectl rollout restart deployment/edgion-controller -n edgion-system
+```
+
+To invalidate **all issued JWTs immediately**, also rotate `jwt_secret` in the same patch.
+
 ## Configuration
 
 ### Controller Config

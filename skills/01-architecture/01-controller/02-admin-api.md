@@ -246,18 +246,27 @@ Request authentication order:
 
 After a successful login, the response sets an httpOnly JWT Cookie. Browsers automatically attach it on subsequent requests, so the front end does not need to manage tokens manually. This is suitable for the Dashboard front end.
 
-### Auto-generated Credentials (Controller only)
+### Admin Credential Bootstrap (Controller)
 
-When the Controller's TOML/YAML has neither `[auth]` (OIDC) nor `[local_auth]` configured:
+Admin credential auto-generation has been removed (as of 2026-06-01). The Controller now
+behaves identically to the Center: when no valid credentials are configured, the server
+starts but all Admin API business routes return 503 fail-close and a startup WARN is emitted.
 
-1. At startup, the Controller checks the Secret `edgion-admin-credentials` (namespace: `edgion-system`) via CenterApi
-2. If absent → generate a 20-character random password + 32-character JWT secret → create the Secret
-3. If present → read the credentials and continue starting up
-4. FileSystem mode storage location: `{conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
-5. K8s mode: creates a real Secret via the K8s API
-6. `secret_retry_loop` uses a `tokio_util::sync::CancellationToken` to listen for shutdown when the Secret is delayed in becoming ready (instead of `broadcast::Receiver<()>`), avoiding the case where the sender is dropped early and the polling exits immediately (fix #01 round 3 regression point)
+Credentials are read from the following sources (highest precedence first):
 
-> **Note**: Center has no auto-generation path. With neither `[local_auth]` nor `[auth]`, Center starts but all business routes return 503. See `skills/02-features/02-config/03-auth-bootstrap.md` for details.
+1. **Env vars** `EDGION_ADMIN_USERNAME` / `EDGION_ADMIN_PASSWORD` / `EDGION_ADMIN_JWT_SECRET`
+   injected via `valueFrom.secretKeyRef` from the `edgion-admin-credentials` Secret
+   (recommended for Kubernetes). The `deploy.sh` script creates this Secret idempotently.
+2. **`[local_auth]`** section in a Secret-mounted config file.
+3. **`[auth]`** OIDC.
+
+When nothing is configured: server starts, business routes return 503, `/health` / `/ready` /
+`/metrics` / `/api/v1/auth/status` remain accessible.
+
+The `secret_retry_loop` / `ensure_admin_credentials` / `process::exit(1)` machinery is gone.
+The Controller ServiceAccount no longer needs the `secrets: create` RBAC verb.
+
+See `skills/02-features/02-config/03-auth-bootstrap.md` for the full matrix and migration guide.
 
 ### Module Locations
 

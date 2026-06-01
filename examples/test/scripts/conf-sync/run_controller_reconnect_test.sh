@@ -121,8 +121,16 @@ resolve_work_dir() {
     PID_DIR="${WORK_DIR}/pids"
     CONFIG_DIR="${WORK_DIR}/config"
 
-    # Let edgion-cli auto_auth find credentials via EDGION_WORK_DIR
     export EDGION_WORK_DIR="${WORK_DIR}"
+
+    # The Controller no longer auto-generates admin credentials; it synthesizes a
+    # local_auth provider from EDGION_ADMIN_*. Export them (honoring inherited
+    # values, with the same defaults as start_all_with_conf.sh so the already-running
+    # Controller and our restart/cli all agree) so the restarted Controller has auth
+    # and edgion-cli (apply) can log in. JWT secret must be >= 32 bytes.
+    export EDGION_ADMIN_USERNAME="${EDGION_ADMIN_USERNAME:-admin}"
+    export EDGION_ADMIN_PASSWORD="${EDGION_ADMIN_PASSWORD:-edgion-integration-test-admin-pw}"
+    export EDGION_ADMIN_JWT_SECRET="${EDGION_ADMIN_JWT_SECRET:-edgion-integration-test-jwt-secret-0123456789}"
 
     log_info "Work dir: ${WORK_DIR}"
 }
@@ -379,7 +387,18 @@ main() {
     write_reconnect_fixture
 
     log_info "Applying reconnect fixture via edgion-cli..."
-    if "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f /tmp/reconnect-route.yaml > /dev/null 2>&1; then
+    # Right after a restart the Controller's config subsystem may still be
+    # initializing ("controller initializing, please retry after init completes").
+    # Retry the (idempotent) apply until it is accepted or we time out.
+    apply_ok=false
+    for _ in $(seq 1 15); do
+        if "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f /tmp/reconnect-route.yaml > /dev/null 2>&1; then
+            apply_ok=true
+            break
+        fi
+        sleep 1
+    done
+    if $apply_ok; then
         log_info "Fixture applied successfully; waiting ${SYNC_WAIT}s for sync..."
         sleep "$SYNC_WAIT"
 

@@ -241,59 +241,26 @@ wait_for_controller() {
 # ---------------------------------------------------------------------------
 # Extract admin credentials from controller Secret
 # ---------------------------------------------------------------------------
-ADMIN_USER="admin"
-ADMIN_PASS=""
-
-# Locate the auto-generated admin Secret under a controller conf dir, tolerating
-# both layouts: pre-Path-A flat (`<conf>/Secret_..yaml`) and Path A nested
-# (`<conf>/edgion-system/Secret_..yaml`).
-_find_admin_secret_file() {
-    local conf_dir="$1"
-    local name="Secret_edgion-system_edgion-admin-credentials.yaml"
-    if [ -f "${conf_dir}/edgion-system/${name}" ]; then
-        echo "${conf_dir}/edgion-system/${name}"
-        return 0
-    fi
-    if [ -f "${conf_dir}/${name}" ]; then
-        echo "${conf_dir}/${name}"
-        return 0
-    fi
-    return 1
-}
+# The Controller no longer auto-generates an admin Secret; it synthesizes a
+# local_auth provider from EDGION_ADMIN_*. Export them (honoring inherited values)
+# at load time — i.e. BEFORE main() calls start_services — so the Controller under
+# test and the CLI agree on credentials. JWT secret must be >= 32 bytes.
+export EDGION_ADMIN_USERNAME="${EDGION_ADMIN_USERNAME:-admin}"
+export EDGION_ADMIN_PASSWORD="${EDGION_ADMIN_PASSWORD:-edgion-integration-test-admin-pw}"
+export EDGION_ADMIN_JWT_SECRET="${EDGION_ADMIN_JWT_SECRET:-edgion-integration-test-jwt-secret-0123456789}"
+ADMIN_USER="${EDGION_ADMIN_USERNAME}"
+ADMIN_PASS="${EDGION_ADMIN_PASSWORD}"
 
 detect_admin_credentials() {
-    local secret_file
-    # Try EDGION_WORK_DIR first (set by test environment)
-    if [ -n "${EDGION_WORK_DIR:-}" ]; then
-        if secret_file=$(_find_admin_secret_file "${EDGION_WORK_DIR}/config"); then
-            ADMIN_PASS="$(grep '^\s*password:' "$secret_file" | head -1 | sed 's/.*password:[[:space:]]*//' | tr -d '"' | tr -d "'")"
-            ADMIN_USER="$(grep '^\s*username:' "$secret_file" | head -1 | sed 's/.*username:[[:space:]]*//' | tr -d '"' | tr -d "'")"
-            if [ -n "$ADMIN_PASS" ]; then
-                log_info "Detected admin credentials from Secret file (user: $ADMIN_USER)"
-                return 0
-            fi
-        fi
+    # Credentials come from the EDGION_ADMIN_* env vars exported above; the
+    # Controller no longer writes an admin Secret to read back.
+    ADMIN_USER="${EDGION_ADMIN_USERNAME:-admin}"
+    ADMIN_PASS="${EDGION_ADMIN_PASSWORD}"
+    if [ -z "$ADMIN_PASS" ]; then
+        echo "ERROR: EDGION_ADMIN_PASSWORD not set — cannot determine admin credentials" >&2
+        exit 1
     fi
-
-    # Fall back to .current pointer
-    local current_file="${PROJECT_ROOT}/integration_testing/.current"
-    if [ -f "$current_file" ]; then
-        local work_dir
-        work_dir="$(cat "$current_file")"
-        if secret_file=$(_find_admin_secret_file "${work_dir}/config"); then
-            ADMIN_PASS="$(grep '^\s*password:' "$secret_file" | head -1 | sed 's/.*password:[[:space:]]*//' | tr -d '"' | tr -d "'")"
-            ADMIN_USER="$(grep '^\s*username:' "$secret_file" | head -1 | sed 's/.*username:[[:space:]]*//' | tr -d '"' | tr -d "'")"
-            if [ -n "$ADMIN_PASS" ]; then
-                log_info "Detected admin credentials from .current Secret file (user: $ADMIN_USER)"
-                export EDGION_WORK_DIR="$work_dir"
-                return 0
-            fi
-        fi
-    fi
-
-    echo "ERROR: could not detect admin credentials — Secret file not found" >&2
-    echo "  Tried (nested then flat): \${EDGION_WORK_DIR}/config/{edgion-system/,}Secret_edgion-system_edgion-admin-credentials.yaml" >&2
-    exit 1
+    log_info "Using admin credentials from EDGION_ADMIN_* (user: $ADMIN_USER)"
 }
 
 # ---------------------------------------------------------------------------

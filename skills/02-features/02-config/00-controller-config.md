@@ -216,15 +216,17 @@ auth:
 
 ## `[local_auth]` — Local Authentication
 
-Built-in username/password authentication that issues HS256 JWTs. When **Controller** is not configured, random credentials are auto-generated and stored in a Secret
-(Center behavior differs, see the reference below).
+Built-in username/password authentication that issues HS256 JWTs. Must be configured
+explicitly — the Controller no longer auto-generates credentials. When absent (or empty
+`password`/`jwt_secret`), the Admin API returns 503 fail-close. See
+`skills/02-features/02-config/03-auth-bootstrap.md` for bootstrap options.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | `bool` | `true` | Enable local authentication |
 | `username` | `String` | `"admin"` | Username |
-| `password` | `String` | `""` | Password (empty = needs auto-generation) |
-| `jwt_secret` | `String` | `""` | JWT signing secret (empty = needs auto-generation) |
+| `password` | `String` | `""` | Password (required; empty → Admin API returns 503) |
+| `jwt_secret` | `String` | `""` | JWT signing secret (required; empty → Admin API returns 503) |
 | `jwt_expiry_hours` | `u64` | `24` | Token expiration (hours) |
 | `skip_paths` | `Vec<String>` | `["/health", "/ready"]` | Paths that skip authentication. **Allowlisted**: each entry must be exactly `/health`, `/ready`, `/metrics`, or start with `/api/v1/auth/`; any other value (e.g. a business route) is rejected at startup. This prevents silently exposing an admin route as unauthenticated. |
 | `cookie_secure` | `bool` | `true` | Emit `Secure` on the `edgion_token` cookie. `false` only for explicit non-TLS (plain HTTP) setups. Mirrors CSRF `cookieSecure` / OIDC `sessionCookieSecure`. |
@@ -239,20 +241,22 @@ local_auth:
   cookie_secure: true
 ```
 
-### Auto-generated Credentials (Controller only)
+### Admin Credential Bootstrap (Controller)
 
-When the Controller has neither `[auth]` (OIDC) nor `[local_auth]`:
+Admin credential auto-generation has been removed (as of 2026-06-01). The Controller and
+Center now behave identically. Credentials are read from (highest precedence first):
 
-1. On startup the Controller checks Secret `edgion-admin-credentials` (namespace: `edgion-system`) via CenterApi
-2. If it does not exist → generate a random 20-character password + 32-character JWT secret → create the Secret
-3. If it exists → read the credentials and continue startup
-4. FileSystem mode: `{conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
-5. K8s mode: create a real Secret via the K8s API
+1. **Env vars** `EDGION_ADMIN_USERNAME` / `EDGION_ADMIN_PASSWORD` / `EDGION_ADMIN_JWT_SECRET`
+   injected via `valueFrom.secretKeyRef` from a K8s Secret (recommended for Kubernetes).
+   `deploy.sh` creates the `edgion-admin-credentials` Secret idempotently.
+2. **`[local_auth]`** section in a Secret-mounted config file.
+3. **`[auth]`** OIDC.
 
-> **Center behavior differs**: Center has no Secret auto-generation path. With neither `[local_auth]` nor `[auth]`,
-> Center starts but rejects all business routes with 503 (fail-close via the
-> `unified_auth_middleware` initializing branch). See
-> `skills/02-features/02-config/03-auth-bootstrap.md` for details.
+When nothing is configured: server starts, all Admin API business routes return 503
+fail-close, and a startup WARN is emitted. `/health` / `/ready` / `/metrics` /
+`/api/v1/auth/status` remain accessible.
+
+See `skills/02-features/02-config/03-auth-bootstrap.md` for the full matrix and migration guide.
 
 ## `[center]` — Federation Client
 

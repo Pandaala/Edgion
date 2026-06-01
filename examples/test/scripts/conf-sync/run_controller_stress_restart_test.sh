@@ -132,8 +132,16 @@ resolve_work_dir() {
     PID_DIR="${WORK_DIR}/pids"
     CONFIG_DIR="${WORK_DIR}/config"
 
-    # Let edgion-cli auto_auth find credentials via EDGION_WORK_DIR
     export EDGION_WORK_DIR="${WORK_DIR}"
+
+    # The Controller no longer auto-generates admin credentials; it synthesizes a
+    # local_auth provider from EDGION_ADMIN_*. Export them (honoring inherited
+    # values, with the same defaults as start_all_with_conf.sh so the already-running
+    # Controller and our restart/cli all agree) so each restarted Controller has auth
+    # and edgion-cli (apply) can log in. JWT secret must be >= 32 bytes.
+    export EDGION_ADMIN_USERNAME="${EDGION_ADMIN_USERNAME:-admin}"
+    export EDGION_ADMIN_PASSWORD="${EDGION_ADMIN_PASSWORD:-edgion-integration-test-admin-pw}"
+    export EDGION_ADMIN_JWT_SECRET="${EDGION_ADMIN_JWT_SECRET:-edgion-integration-test-jwt-secret-0123456789}"
 
     log_info "Work dir: ${WORK_DIR}"
 }

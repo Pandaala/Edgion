@@ -51,6 +51,15 @@ CONFIG_DIR="${WORK_DIR}/config"
 CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.yaml"
 GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.yaml"
 
+# Admin credentials. The Controller no longer auto-generates them; it synthesizes
+# a local_auth provider from EDGION_ADMIN_*. Honor inherited values (e.g. exported
+# by run_integration.sh) or fall back to fixed test credentials so this script
+# also works standalone. The Controller started below and edgion-cli (config load)
+# both pick these up. JWT secret must be >= 32 bytes.
+export EDGION_ADMIN_USERNAME="${EDGION_ADMIN_USERNAME:-admin}"
+export EDGION_ADMIN_PASSWORD="${EDGION_ADMIN_PASSWORD:-edgion-integration-test-admin-pw}"
+export EDGION_ADMIN_JWT_SECRET="${EDGION_ADMIN_JWT_SECRET:-edgion-integration-test-jwt-secret-0123456789}"
+
 # serviceport
 TEST_SERVER_HTTP_PORT=30001
 CONTROLLER_ADMIN_PORT=5800

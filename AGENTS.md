@@ -119,9 +119,9 @@ Steps 2/3/4 may run in parallel. If any step fails, report the error immediately
 
 ## Authentication system
 
-- **Controller default behavior**: When `[local_auth]` is not configured, a random password is auto-generated and stored in the `edgion-admin-credentials` Secret (namespace: `edgion-system`). Both K8s mode and local mode are supported.
+- **Controller default behavior**: **No auto-generation.** The operator must supply credentials via one of three sources (highest precedence first): (1) env vars `EDGION_ADMIN_USERNAME` / `EDGION_ADMIN_PASSWORD` / `EDGION_ADMIN_JWT_SECRET` injected from a K8s Secret via `secretKeyRef` (recommended for Kubernetes); (2) `[local_auth]` in a Secret-mounted config file; (3) `[auth]` OIDC. When nothing valid is configured, the server starts and returns 503 fail-close on all Admin API business routes with a startup WARN — no panic, no `exit(1)`. See `skills/02-features/02-config/03-auth-bootstrap.md` for the full behavior matrix and migration guide.
 - **Center default behavior**: **No auto-generation**. The operator must provide either `[local_auth]` or `[auth]`. If neither is provided, the server still starts; `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain accessible, but all business routes reject with 503 (fail-close via `initializing_response`, not panic/exit). See `skills/02-features/02-config/03-auth-bootstrap.md` for details.
-- **View the password**: `cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
+- **View the K8s password**: `kubectl -n edgion-system get secret edgion-admin-credentials -o jsonpath='{.data.password}' | base64 -d`
 - **API authentication**: Bearer token or httpOnly Cookie.
 - **CLI authentication**: `edgion-cli login`, or auto-login by detecting the configuration file.
 - **Authentication endpoints**: `/api/v1/auth/login`, `/api/v1/auth/logout`, `/api/v1/auth/status`, `/api/v1/auth/me`.

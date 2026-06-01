@@ -1,6 +1,6 @@
 # Secret Management
 
-Edgion consumes Kubernetes Secrets for TLS certificates, plugin credentials, and the Controller admin password. This page covers how Secrets are referenced, the Secret types involved, the auto-generated admin credential, and operational recommendations.
+Edgion consumes Kubernetes Secrets for TLS certificates, plugin credentials, and the Controller admin password. This page covers how Secrets are referenced, the Secret types involved, the admin credential Secret, and operational recommendations.
 
 ## How Edgion uses Secrets
 
@@ -10,7 +10,7 @@ Edgion consumes Kubernetes Secrets for TLS certificates, plugin credentials, and
 | Extended TLS (mTLS, ciphers, OCSP) | `EdgionTls.spec.secretRef` and `clientAuth.caSecretRef` | `kubernetes.io/tls` (server), `Opaque` (CA) |
 | Plugin credentials | Plugins such as `jwt-auth`, `basic-auth`, `openid-connect` | `Opaque` |
 | Backend authentication | Backend mTLS client certificates | `kubernetes.io/tls` |
-| Controller admin password | Auto-generated `edgion-admin-credentials` | `Opaque` |
+| Controller admin password | Operator-created `edgion-admin-credentials` (injected as env vars) | `Opaque` |
 
 ### TLS certificate Secret
 
@@ -43,22 +43,28 @@ data:
 
 ⚠️ Never commit real certificate or key material to source control. All values above are placeholders.
 
-## Admin credentials (auto-generated)
+## Admin credentials (`edgion-admin-credentials`)
 
-When the Controller starts **without** a configured `[local_auth]` section, it auto-generates a random admin password and stores it in a Secret named `edgion-admin-credentials` in the `edgion-system` namespace. This applies in both Kubernetes mode and local mode.
+The Controller reads admin credentials from the `edgion-admin-credentials` Secret
+(namespace: `edgion-system`). This Secret must be created by the operator — the Controller
+no longer auto-generates it (removed as of 2026-06-01).
 
-Retrieve the generated password:
+The recommended Kubernetes approach is to use `deploy.sh`, which creates the Secret
+idempotently and wires it into the controller Deployment as env vars:
 
 ```bash
-# Kubernetes mode
+# Retrieve the admin password after running deploy.sh
 kubectl -n edgion-system get secret edgion-admin-credentials \
   -o jsonpath='{.data.password}' | base64 -d
-
-# Local mode (file-based config)
-cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
 ```
 
-> **Center is different**: the Center process does **not** auto-generate credentials. The operator must supply `[local_auth]` or `[auth]`; otherwise business routes fail closed with 503 while health endpoints stay available.
+Alternatively, configure `[local_auth]` in a Secret-mounted config file, or `[auth]` OIDC.
+
+When no valid credentials are configured, the server starts but all Admin API business routes
+return **503 fail-close**. `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain
+accessible. Both the Controller and Center follow this same behavior.
+
+See `skills/02-features/02-config/03-auth-bootstrap.md` for the full bootstrap matrix.
 
 ## Management recommendations
 
@@ -83,13 +89,13 @@ cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
 
 ### Cannot log in to the admin API
 
-- Retrieve the auto-generated password from `edgion-admin-credentials` (see above), or configure `[local_auth]` explicitly.
+- Retrieve the password from `edgion-admin-credentials` (see above — created by `deploy.sh`), or configure `[local_auth]` / `[auth]` explicitly.
 
 ## FAQ
 
 ### Q1: Where is the Controller admin password stored?
 
-**A**: In the `edgion-admin-credentials` Secret in the `edgion-system` namespace, auto-generated on first start when `[local_auth]` is not configured. In local mode it is written to `{conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`.
+**A**: In the `edgion-admin-credentials` Secret in the `edgion-system` namespace, created by the operator (e.g., via `deploy.sh`). The controller Deployment injects the Secret values as env vars (`EDGION_ADMIN_USERNAME`, `EDGION_ADMIN_PASSWORD`, `EDGION_ADMIN_JWT_SECRET`). The Controller no longer auto-generates this Secret.
 
 ### Q2: Can I reference a Secret in a different namespace?
 

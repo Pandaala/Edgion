@@ -71,6 +71,39 @@ ls target/release/edgion-{controller,gateway,ctl}
 └── gateway.pid
 ```
 
+## Admin Credentials
+
+The controller no longer auto-generates admin credentials at startup. You must supply them
+explicitly before using the Admin API. Two options:
+
+**Option A — `[local_auth]` in the config file** (recommended for standalone):
+
+```yaml
+# edgion-controller.yaml
+local_auth:
+  enabled: true
+  username: admin
+  password: "<your-password>"
+  jwt_secret: "<random string, at least 32 characters>"
+  jwt_expiry_hours: 24
+```
+
+**Option B — environment variables** (12-factor style):
+
+```bash
+export EDGION_ADMIN_PASSWORD="$(openssl rand -base64 16)"
+export EDGION_ADMIN_JWT_SECRET="$(openssl rand -base64 32)"
+# EDGION_ADMIN_USERNAME defaults to "admin" if not set
+./start.sh --work-dir /usr/local/edgion
+```
+
+If neither is provided, the server starts successfully but all Admin API business routes
+return `503 Service Unavailable` (fail-close) until credentials are configured and the
+controller is restarted. `/health`, `/ready`, and `/metrics` remain accessible.
+
+> **Do not put the password in a ConfigMap.** Use the config file or env vars — both keep
+> the secret out of version control and Kubernetes ConfigMap storage.
+
 ## Configuration
 
 ### Controller (`edgion-controller.yaml`)

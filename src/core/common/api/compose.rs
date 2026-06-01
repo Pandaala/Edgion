@@ -49,13 +49,13 @@ use crate::core::common::unified_auth::UnifiedAuthState;
 /// - `local_auth_intent`: whether local auth is intended to be enabled. When
 ///   `true`, mounts `/auth/{login,logout,me}`; when `false`, omits them
 ///   (OIDC-only or explicitly disabled). Note: this argument is not derived
-///   from `auth_state`. The reason is that the Controller's K8s Secret
-///   auto-generation path allows "intended-on but provider not yet ready"
-///   (`auth_state.local` is `None` but intent is `true`); in that state the
-///   routes should still be mounted (handlers return 503 until the Secret is
-///   ready). `auth_state.local.load().is_some()` cannot distinguish this
-///   case from "explicitly disabled", so the independent intent parameter is
-///   retained.
+///   from `auth_state`. The reason is that "intended-on but provider not yet
+///   ready" is a valid state (`auth_state.local` is `None` but intent is
+///   `true`, e.g. credentials configured but not yet loaded); in that state
+///   the routes should still be mounted (handlers fail closed with 503 until
+///   the provider is ready). `auth_state.local.load().is_some()` cannot
+///   distinguish this case from "explicitly disabled", so the independent
+///   intent parameter is retained.
 pub fn compose_admin_routes(business: Router, auth_state: Arc<UnifiedAuthState>, local_auth_intent: bool) -> Router {
     let with_auth_routes = add_local_auth_routes(business, auth_state.clone(), local_auth_intent);
     let with_status = add_auth_status_route(with_auth_routes, auth_state.clone());

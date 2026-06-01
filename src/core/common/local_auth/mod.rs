@@ -1,9 +1,10 @@
 //! Local authentication module.
 //!
 //! Provides built-in username/password authentication with JWT for the Admin API.
-//! When no OIDC (`[auth]`) section is present in the controller config, this is
-//! automatically enabled with auto-generated credentials persisted to a K8s
-//! Secret (`edgion-admin-credentials` in namespace `edgion-system`).
+//! Credentials come only from configuration: the `[local_auth]` section in the
+//! controller config file, the `EDGION_ADMIN_*` environment variables, or `[auth]`
+//! OIDC. They are never auto-generated. When nothing valid is configured, no auth
+//! provider loads and the Admin API returns 503 fail-close (mirrors Center).
 //!
 //! ## Sub-modules
 //!
@@ -15,8 +16,6 @@
 pub mod config;
 pub mod handlers;
 pub mod middleware;
-pub mod retry;
-pub mod secret;
 
 pub use config::LocalAuthConfig;
 pub use handlers::{

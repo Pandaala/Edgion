@@ -83,19 +83,16 @@ Authentication is **mandatory** for the Controller and Center Admin APIs — all
 
 ### Controller
 
-The Controller is zero-config friendly: when no `local_auth` section is present, it **auto-generates** a random admin password and JWT secret and stores them in the `edgion-admin-credentials` Secret in the `edgion-system` namespace.
+Credentials must be supplied explicitly — the Controller no longer auto-generates them.
+The recommended Kubernetes approach is to run `deploy.sh`, which idempotently creates the
+`edgion-admin-credentials` Secret and wires it into the controller Deployment as env vars
+(`EDGION_ADMIN_USERNAME`, `EDGION_ADMIN_PASSWORD`, `EDGION_ADMIN_JWT_SECRET`).
 
-Retrieve the generated password:
+Retrieve the password after running `deploy.sh`:
 
-**Kubernetes mode**:
 ```bash
 kubectl -n edgion-system get secret edgion-admin-credentials \
   -o jsonpath='{.data.password}' | base64 -d
-```
-
-**Local / file mode**:
-```bash
-cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
 ```
 
 Alternatively, authenticate interactively:
@@ -103,7 +100,10 @@ Alternatively, authenticate interactively:
 edgion-cli login
 ```
 
-The CLI also auto-logs-in by reading the local config file when the controller is running in the same environment.
+When no credentials are configured, the server starts but all Admin API business routes
+return **503 fail-close** until credentials are provided. See
+[Controller Configuration](../ops-guide/configuration/controller-config.md#authentication)
+for the full credential bootstrap options.
 
 ### Center
 

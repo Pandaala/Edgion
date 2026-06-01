@@ -58,7 +58,7 @@ REDIS_CONTAINER_NAME="edgion-test-redis"
 CONTROLLER_GRPC_PORT=50051
 
 # Controller admin token — populated lazily by ensure_ctrl_admin_token()
-# using the auto-generated Secret written by the Controller to WORK_DIR/config/.
+# by logging in with the EDGION_ADMIN_* credentials exported before Step 2.
 CTRL_ADMIN_TOKEN=""
 
 # Whether to skip cache residue detection after tests
@@ -93,33 +93,23 @@ log_section() {
 # =============================================================================
 # Controller admin authentication
 # =============================================================================
-# The Controller auto-generates admin credentials and writes them to
-# WORK_DIR/config/Secret_edgion-system_edgion-admin-credentials.yaml (or a
-# subdirectory).  ensure_ctrl_admin_token() reads that file, logs in, and
-# stores the JWT in CTRL_ADMIN_TOKEN for subsequent admin API calls.
+# The Controller no longer auto-generates admin credentials; it synthesizes a
+# local_auth provider from the EDGION_ADMIN_* env vars exported before Step 2.
+# ensure_ctrl_admin_token() logs in with those same credentials and stores the
+# JWT in CTRL_ADMIN_TOKEN for subsequent admin API calls.
 ensure_ctrl_admin_token() {
     if [ -n "$CTRL_ADMIN_TOKEN" ]; then
         return 0
     fi
-    local config_dir="${WORK_DIR}/config"
-    local secret_file=""
-    local waited=0
-    while [ $waited -lt 15 ]; do
-        secret_file=$(find "$config_dir" -name 'Secret_edgion-system_edgion-admin-credentials.yaml' -type f 2>/dev/null | head -1)
-        if [ -n "$secret_file" ]; then
-            break
-        fi
-        sleep 1
-        waited=$((waited + 1))
-    done
-    if [ -z "$secret_file" ]; then
-        log_error "Admin Secret not generated under $config_dir — cannot obtain admin token"
+    local user pass
+    user="${EDGION_ADMIN_USERNAME:-admin}"
+    pass="${EDGION_ADMIN_PASSWORD:-}"
+    if [ -z "$pass" ]; then
+        log_error "EDGION_ADMIN_PASSWORD not set — cannot obtain admin token"
         return 1
     fi
-    local pass
-    pass=$(awk '/^[[:space:]]+password:/ {print $2; exit}' "$secret_file" | tr -d '"')
     CTRL_ADMIN_TOKEN=$(curl -s -H "Content-Type: application/json" \
-        -d "{\"username\":\"admin\",\"password\":\"${pass}\"}" \
+        -d "{\"username\":\"${user}\",\"password\":\"${pass}\"}" \
         "http://127.0.0.1:5800/api/v1/auth/login" \
         | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('token',''))" 2>/dev/null || true)
     if [ -z "$CTRL_ADMIN_TOKEN" ]; then
@@ -1445,6 +1435,41 @@ main() {
         fi
         log_success "Center no-auth startup passed"
     fi
+
+    # Step 1.6: Controller no-auth + env-var-auth startup (standalone, no Gateway).
+    # Only runs in the default full sweep (no -r / -i targeting). Mirrors the Center
+    # test above but for the Controller.  Two phases:
+    #   Phase 1 (no-auth): no [local_auth]/[auth] + no EDGION_ADMIN_* env vars →
+    #     /health and /api/v1/auth/status 200; business route 503 fail-close;
+    #     startup WARN "No authentication configured" present.
+    #   Phase 2 (env-var auth): EDGION_ADMIN_PASSWORD + EDGION_ADMIN_JWT_SECRET
+    #     injected; no [local_auth] section → login 200 + token; business route 401
+    #     (auth active, not 503 fail-close).
+    if [ -z "$G_RESOURCE" ]; then
+        log_section "Controller no-auth and env-var-auth startup"
+        if ! "${SCRIPT_DIR}/test_controller_no_auth.sh"; then
+            log_error "FAIL: Controller no-auth/env-var-auth startup"
+            exit 1
+        fi
+        log_success "Controller no-auth and env-var-auth startup passed"
+    fi
+
+    # Admin credentials for the main suite.
+    #
+    # The Controller no longer auto-generates admin credentials (see
+    # docs/superpowers/specs/2026-06-01-remove-controller-admin-credential-autogen-design.md):
+    # with no [local_auth]/[auth] and no EDGION_ADMIN_* it fail-closes (503
+    # "authentication subsystem initializing") on every business route, so config
+    # load via edgion-cli would fail. Export obviously-fake test credentials here so
+    # both sides line up: the Controller (started by start_all_with_conf.sh below)
+    # synthesizes a local_auth provider from these env vars, and edgion-cli
+    # (load_conf.sh and every later resource test spawned by this script) detects the
+    # same EDGION_ADMIN_* via auto_auth and logs in. Exported AFTER the no-auth
+    # preflight (Step 1.5/1.6) on purpose so those clean-env scenarios are unaffected.
+    # JWT secret must be >= 32 bytes.
+    export EDGION_ADMIN_USERNAME="admin"
+    export EDGION_ADMIN_PASSWORD="edgion-integration-test-admin-pw"
+    export EDGION_ADMIN_JWT_SECRET="edgion-integration-test-jwt-secret-0123456789"
 
     # Step 2: Start services (including config load)
     if $do_start; then

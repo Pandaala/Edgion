@@ -40,6 +40,23 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
+        # Admin credentials injected from the edgion-admin-credentials Secret.
+        # The Secret is created by deploy.sh before the controller is applied.
+        - name: EDGION_ADMIN_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: edgion-admin-credentials
+              key: username
+        - name: EDGION_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: edgion-admin-credentials
+              key: password
+        - name: EDGION_ADMIN_JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: edgion-admin-credentials
+              key: jwt_secret
         resources:
           requests:
             cpu: 100m

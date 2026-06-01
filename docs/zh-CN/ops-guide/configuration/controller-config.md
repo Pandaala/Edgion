@@ -170,30 +170,36 @@ conf_center:
 
 Controller Admin API 的认证是**必须的**。所有对 `/api/v1/*` 路由的请求都需要有效的 Bearer Token 或会话 Cookie。未认证的请求返回 HTTP 401。
 
-> 零配置也可工作：当 `[local_auth]` 不存在时，Controller 自动生成随机管理员密码和 JWT 密钥，存储在 `edgion-admin-credentials` Secret（`edgion-system` 命名空间）中。获取生成的密码：
+> **凭据必须由运维人员显式提供。** Controller 不再自动生成管理员凭据。凭据来源（优先级从高到低）：
 >
-> **Kubernetes 模式**：
+> 1. 通过 `valueFrom.secretKeyRef` 从 `edgion-admin-credentials` Secret 注入的环境变量
+>    `EDGION_ADMIN_USERNAME` / `EDGION_ADMIN_PASSWORD` / `EDGION_ADMIN_JWT_SECRET`（Kubernetes 推荐方式）。
+>    `deploy.sh` 脚本会幂等地创建该 Secret。
+> 2. 挂载为 Secret 的配置文件中的 `[local_auth]` 段。
+> 3. `[auth]` OIDC。
+>
+> 若以上均未配置，服务器仍可启动，但所有 Admin API 业务路由返回 **503 fail-close**。
+> `/health`、`/ready`、`/metrics` 和 `/api/v1/auth/status` 保持可访问。
+> 读取密码（使用 `deploy.sh` 部署时）：
+>
 > ```bash
 > kubectl -n edgion-system get secret edgion-admin-credentials \
 >   -o jsonpath='{.data.password}' | base64 -d
 > ```
 >
-> **本地 / 文件模式**：
-> ```bash
-> cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
-> ```
+> 也可以通过交互方式认证：`edgion-cli login`。
 
-Controller 和 Center 使用相同的 `[local_auth]` / `[auth]` schema，但引导方式不同：Controller 在两者均未设置时自动生成凭据，而 Center 则失败关闭（见下方 Center 说明）。
+Controller 和 Center 使用相同的 `[local_auth]` / `[auth]` schema，引导方式现已一致：两者均未配置时均以 503 失败关闭（见下方 Center 说明）。
 
 ### [local_auth]
 
-内置用户名/密码认证，向已认证客户端签发 HS256 JWT。Controller 上不存在时自动生成凭据（见上文）。
+内置用户名/密码认证，向已认证客户端签发 HS256 JWT。Controller 和 Center 均需显式配置（不再自动生成）。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `username` | `String` | `"admin"` | 管理员用户名 |
-| `password` | `String` | _（自动生成）_ | 管理员密码。Controller 上为空时自动生成；Center 上必须显式设置 |
-| `jwt_secret` | `String` | _（自动生成）_ | JWT 签名密钥。Controller 上为空时自动生成；Center 上必须显式设置 |
+| `password` | `String` | _（必填）_ | 管理员密码。必须显式设置；未设置时 Admin API 返回 503 |
+| `jwt_secret` | `String` | _（必填）_ | JWT 签名密钥。必须显式设置；未设置时 Admin API 返回 503 |
 | `jwt_expiry_hours` | `Integer` | `24` | 签发 Token 的有效时长（小时） |
 | `cookie_secure` | `Boolean` | `true` | 在 `edgion_token` 认证 Cookie 上设置 `Secure` 属性。TLS 前置的部署保持 `true`；仅明文 HTTP 的开发/内部环境设为 `false` |
 
@@ -206,7 +212,7 @@ local_auth:
   cookie_secure: true
 ```
 
-> **Center 说明**：Center **没有**自动生成。若 `[local_auth]` 和 `[auth]` 均未配置，业务路由返回 503（失败关闭），而 `/health`、`/ready`、`/metrics` 和 `/api/v1/auth/status` 保持可访问。
+> **Center 说明**：Controller 和 Center 行为一致——均无自动生成。若 `[local_auth]` 和 `[auth]` 均未配置，业务路由返回 503（失败关闭），而 `/health`、`/ready`、`/metrics` 和 `/api/v1/auth/status` 保持可访问。
 
 ### [auth] — OIDC
 

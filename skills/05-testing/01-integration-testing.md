@@ -276,9 +276,9 @@ For detailed commands and log entry points see [../06-tracing/00-debugging.md](.
 
 In integration tests, authentication is handled by the framework automatically — no manual action is required:
 
-- The Controller generates random credentials at startup and writes them to `{WORK_DIR}/config/resources/Secret_edgion-system_edgion-admin-credentials.yaml`
-- When `load_conf.sh` invokes `edgion-cli`, `ensure_auth()` automatically locates the config via `EDGION_WORK_DIR` → reads the Secret → completes login
-- `start_all_with_conf.sh` exports `EDGION_WORK_DIR` so the auto-auth path is reachable
+- Integration tests set `EDGION_ADMIN_USERNAME`, `EDGION_ADMIN_PASSWORD`, and `EDGION_ADMIN_JWT_SECRET` explicitly before starting the controller (see `test_controller_no_auth.sh` for the positive-case pattern)
+- When `load_conf.sh` invokes `edgion-cli`, `ensure_auth()` locates those env vars and completes login automatically
+- `start_all_with_conf.sh` exports `EDGION_WORK_DIR` and the `EDGION_ADMIN_*` env vars so the auto-auth path is reachable
 - CI / test environments require no manual `edgion-cli login` step
 
 ### Center no-auth-config regression test

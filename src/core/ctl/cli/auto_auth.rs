@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use zeroize::Zeroizing;
 
 /// Minimal struct to deserialize auth-related sections from controller config.
@@ -10,9 +10,13 @@ struct ControllerConfigAuth {
     local_auth: Option<LocalAuthSection>,
 }
 
-/// Minimal OIDC auth section — we only need to know if it exists.
+/// Minimal OIDC auth section. Retained so `[auth]` still parses cleanly even
+/// though credential detection no longer branches on it (env / `[local_auth]`
+/// are the only credential sources for the CLI now).
 #[derive(Debug, Deserialize)]
 struct OidcAuthSection {
+    // Parsed for completeness; not currently read by detect_credentials.
+    #[allow(dead_code)]
     #[serde(default = "default_true")]
     enabled: bool,
 }
@@ -46,26 +50,41 @@ const DEFAULT_CONFIG_PATHS: &[&str] = &[
     "/etc/edgion/edgion-controller.yaml",              // pod: alternative path
 ];
 
-/// Try to find and read local_auth credentials from controller config.
+/// Try to find admin credentials for CLI auto-login.
 ///
 /// Search order:
-/// 1. Explicit path from --controller-config flag
-/// 2. EDGION_CONTROLLER_CONFIG env var
-/// 3. Default paths (CWD/config/, /usr/local/edgion/config/, /etc/edgion/)
+/// 1. `EDGION_ADMIN_*` environment variables (matches the controller; lets the CLI
+///    auto-login from the same Secret-injected env).
+/// 2. The `[local_auth]` section in the controller config file (real password only).
 ///
-/// Returns (username, password) if local_auth is configured and enabled. The password
-/// is wrapped in `Zeroizing` so its buffer is wiped on drop.
-///
-/// Mirrors the controller's logic: when neither `[auth]` (OIDC) nor `[local_auth]`
-/// is present, local_auth is auto-enabled with credentials auto-generated and
-/// persisted to a K8s Secret (`edgion-admin-credentials` in `edgion-system`).
+/// Returns (username, password) if credentials are found. The password is wrapped
+/// in `Zeroizing` so its buffer is wiped on drop. Credentials are never
+/// auto-generated; when nothing is found we return `None` and the caller falls
+/// back to `--token` / interactive login.
 pub fn detect_credentials(explicit_path: Option<&str>) -> Option<(String, Zeroizing<String>)> {
+    // 1. Env-var precedence: matches the controller's EDGION_ADMIN_* path so the
+    //    CLI can auto-login from the same Secret-injected environment.
+    // Intentional divergence from the controller: this client-side auto-login is a
+    // convenience and does not consult the config-file `local_auth.enabled` flag,
+    // so env creds win even when the file sets `enabled = false`. This is fail-safe
+    // because the server is the source of truth — it rejects on its own policy and
+    // the CLI falls back to `--token`/interactive login.
+    if let Ok(pw) = std::env::var("EDGION_ADMIN_PASSWORD") {
+        if !pw.is_empty() {
+            let user = std::env::var("EDGION_ADMIN_USERNAME")
+                .ok()
+                .filter(|u| !u.is_empty())
+                .unwrap_or_else(|| "admin".to_string());
+            return Some((user, Zeroizing::new(pw)));
+        }
+    }
+
+    // 2. Config-file [local_auth] with a real password.
     let config_path = resolve_config_path(explicit_path)?;
 
     let content = std::fs::read_to_string(&config_path).ok()?;
     let config: ControllerConfigAuth = serde_yaml::from_str(&content).ok()?;
 
-    // If explicit [local_auth] section exists, use it (if it has a real password)
     if let Some(local_auth) = config.local_auth {
         if !local_auth.enabled {
             return None;
@@ -73,142 +92,13 @@ pub fn detect_credentials(explicit_path: Option<&str>) -> Option<(String, Zeroiz
         if !local_auth.password.is_empty() {
             return Some((local_auth.username, Zeroizing::new(local_auth.password)));
         }
-        // [local_auth] exists but password is empty — credentials were auto-generated
-        return read_generated_credentials(&content, &config_path);
-    }
-
-    // No [local_auth] section — check if OIDC [auth] is configured
-    let oidc_enabled = config.auth.map_or(false, |a| a.enabled);
-    if oidc_enabled {
-        // OIDC is handling auth, no local credentials to use
+        // [local_auth] exists but password is empty — credentials are no longer
+        // auto-generated, so there is nothing to read; fall back to manual login.
         return None;
     }
 
-    // Neither [auth] nor [local_auth] → controller auto-generates credentials.
-    // Try to read the generated file from work_dir.
-    if let Some(creds) = read_generated_credentials(&content, &config_path) {
-        return Some(creds);
-    }
-
-    // Can't find generated credentials — user needs to login manually
+    // No [local_auth] section — OIDC or nothing; no local credentials to use.
     None
-}
-
-/// Read auto-generated credentials from the Secret YAML file in conf_dir.
-/// The conf_dir is parsed from the same controller config file.
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct ConfCenterSection {
-    #[serde(rename = "type")]
-    center_type: Option<String>,
-    conf_dir: Option<String>,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct PartialConfig {
-    conf_center: Option<ConfCenterSection>,
-}
-
-fn read_generated_credentials(config_content: &str, config_path: &Path) -> Option<(String, Zeroizing<String>)> {
-    let partial: PartialConfig = serde_yaml::from_str(config_content).ok()?;
-
-    // Resolve conf_dir with same priority as the controller:
-    //   1. EDGION_WORK_DIR env + "/config" (--conf-dir override used by test scripts)
-    //   2. conf_center.conf_dir from config file
-    let conf_dir = if let Ok(env_wd) = std::env::var("EDGION_WORK_DIR") {
-        // Test scripts set EDGION_WORK_DIR and --conf-dir $WORK_DIR/config
-        let candidate = PathBuf::from(&env_wd).join("config");
-        if candidate.exists() {
-            candidate
-        } else {
-            // Fallback to conf_center.conf_dir
-            resolve_conf_dir_from_config(&partial, config_path)?
-        }
-    } else {
-        resolve_conf_dir_from_config(&partial, config_path)?
-    };
-
-    // Resolve namespace (same as controller: POD_NAMESPACE or "edgion-system")
-    let namespace = std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "edgion-system".to_string());
-
-    let filename = format!(
-        "Secret_{}_{}.yaml",
-        namespace,
-        crate::core::common::local_auth::secret::ADMIN_SECRET_NAME
-    );
-
-    // After Path A (nested namespace subdir), the controller writes new resources
-    // to `<conf_dir>/<namespace>/<filename>`. Legacy flat deployments still keep
-    // the Secret at `<conf_dir>/<filename>`. Try nested first, fall back to flat.
-    let candidates = [conf_dir.join(&namespace).join(&filename), conf_dir.join(&filename)];
-
-    let secret_file = candidates.iter().find(|p| p.exists())?;
-
-    // Parse the Secret YAML to extract username and password
-    let content = std::fs::read_to_string(secret_file).ok()?;
-    parse_secret_credentials(&content)
-}
-
-/// Minimal K8s Secret shape for credential extraction.
-///
-/// Mirrors `parse_secret_to_config` in `core::common::local_auth::secret` so
-/// the CLI and controller agree on how to read the admin Secret.
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct SecretDoc {
-    #[serde(rename = "stringData")]
-    string_data: Option<std::collections::BTreeMap<String, String>>,
-    data: Option<std::collections::BTreeMap<String, String>>,
-}
-
-/// Extract username and password from a K8s Secret YAML.
-///
-/// Tries `stringData` (plaintext) first, then falls back to `data` (base64).
-/// Returns `None` if the YAML is malformed, the relevant fields are missing,
-/// or the password is empty.
-fn parse_secret_credentials(yaml: &str) -> Option<(String, Zeroizing<String>)> {
-    let doc: SecretDoc = serde_yaml::from_str(yaml).ok()?;
-
-    // Mirror `parse_secret_to_config` in `core::common::local_auth::secret`:
-    // when `stringData` is present we commit to that branch — we do NOT fall
-    // back to `data` if the password is missing/empty inside `stringData`.
-    if let Some(string_data) = doc.string_data.as_ref() {
-        let username = string_data.get("username")?.clone();
-        let password = string_data.get("password")?.clone();
-        if password.is_empty() {
-            return None;
-        }
-        return Some((username, Zeroizing::new(password)));
-    }
-
-    let data = doc.data.as_ref()?;
-    let username = decode_base64_field(data.get("username")?)?;
-    let password = decode_base64_field(data.get("password")?)?;
-    if password.is_empty() {
-        return None;
-    }
-    Some((username, Zeroizing::new(password)))
-}
-
-fn decode_base64_field(encoded: &str) -> Option<String> {
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
-    String::from_utf8(bytes).ok()
-}
-
-/// Resolve conf_dir from the parsed config file.
-fn resolve_conf_dir_from_config(partial: &PartialConfig, config_path: &Path) -> Option<PathBuf> {
-    let conf_center = partial.conf_center.as_ref()?;
-    let conf_dir_str = conf_center.conf_dir.as_ref()?;
-    let conf_dir = PathBuf::from(conf_dir_str);
-    if conf_dir.is_absolute() {
-        Some(conf_dir)
-    } else if conf_dir.exists() {
-        Some(conf_dir)
-    } else {
-        Some(config_path.parent()?.join(conf_dir_str))
-    }
 }
 
 /// Resolve controller config path from explicit, env, or default locations.
@@ -246,231 +136,150 @@ fn resolve_config_path(explicit: Option<&str>) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    fn yaml_with_string_data(extra: &str) -> String {
-        format!(
-            r#"apiVersion: v1
-kind: Secret
-metadata:
-  name: edgion-admin-credentials
-  namespace: edgion-system
-type: Opaque
-stringData:
-  username: "admin"
-  password: "p@ssw0rd"
-  jwt_secret: "jwt"{}"#,
-            extra
-        )
+    const ADMIN_ENV_VARS: [&str; 3] = [
+        "EDGION_ADMIN_USERNAME",
+        "EDGION_ADMIN_PASSWORD",
+        "EDGION_ADMIN_JWT_SECRET",
+    ];
+
+    fn clear_admin_env() {
+        for k in ADMIN_ENV_VARS {
+            std::env::remove_var(k);
+        }
+        // Ensure no config file is picked up via env during these tests.
+        std::env::remove_var("EDGION_CONTROLLER_CONFIG");
     }
 
     #[test]
-    fn parses_normal_secret() {
-        let (u, p) = parse_secret_credentials(&yaml_with_string_data("")).unwrap();
-        assert_eq!(u, "admin");
-        assert_eq!(p.as_str(), "p@ssw0rd");
+    fn detect_credentials_returns_env_creds_when_password_set() {
+        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        clear_admin_env();
+        std::env::set_var("EDGION_ADMIN_USERNAME", "envuser");
+        std::env::set_var("EDGION_ADMIN_PASSWORD", "envpass");
+
+        // Pass a non-existent explicit path: env must take precedence and short-circuit
+        // before any config-file lookup.
+        let creds = detect_credentials(Some("/nonexistent/controller.yaml"));
+        let (u, p) = creds.expect("env credentials should be detected");
+        assert_eq!(u, "envuser");
+        assert_eq!(p.as_str(), "envpass");
+
+        clear_admin_env();
     }
 
     #[test]
-    fn tolerates_comment_inside_string_data() {
-        let yaml = yaml_with_string_data("\n  # operator-added comment");
-        let (u, p) = parse_secret_credentials(&yaml).unwrap();
-        assert_eq!(u, "admin");
-        assert_eq!(p.as_str(), "p@ssw0rd");
-    }
-
-    #[test]
-    fn tolerates_extra_field_inside_string_data() {
-        // The old line scanner would `break` on any unknown non-comment line in
-        // stringData and silently drop credentials that came after.
-        let yaml = format!(
-            r#"apiVersion: v1
-kind: Secret
-metadata:
-  name: edgion-admin-credentials
-  namespace: edgion-system
-type: Opaque
-stringData:
-  extra_key: "ignored"
-  username: "admin"
-  password: "p@ssw0rd"
-  jwt_secret: "jwt"
-"#
-        );
-        let (u, p) = parse_secret_credentials(&yaml).unwrap();
-        assert_eq!(u, "admin");
-        assert_eq!(p.as_str(), "p@ssw0rd");
-    }
-
-    #[test]
-    fn preserves_password_starting_with_quote() {
-        // The old parser called `trim_matches('"')` which would strip a real
-        // leading/trailing quote character from the password.
-        let yaml = r#"apiVersion: v1
-kind: Secret
-type: Opaque
-stringData:
-  username: "admin"
-  password: '"quoted"value'
-  jwt_secret: "jwt"
-"#;
-        let (_, p) = parse_secret_credentials(yaml).unwrap();
-        assert_eq!(p.as_str(), "\"quoted\"value");
-    }
-
-    #[test]
-    fn preserves_password_with_hash() {
-        let yaml = r#"apiVersion: v1
-kind: Secret
-type: Opaque
-stringData:
-  username: "admin"
-  password: "abc#def"
-  jwt_secret: "jwt"
-"#;
-        let (_, p) = parse_secret_credentials(yaml).unwrap();
-        assert_eq!(p.as_str(), "abc#def");
-    }
-
-    #[test]
-    fn falls_back_to_base64_data() {
-        // base64("admin") = YWRtaW4=, base64("s3cret") = czNjcmV0
-        let yaml = r#"apiVersion: v1
-kind: Secret
-type: Opaque
-data:
-  username: YWRtaW4=
-  password: czNjcmV0
-  jwt_secret: and0
-"#;
-        let (u, p) = parse_secret_credentials(yaml).unwrap();
-        assert_eq!(u, "admin");
-        assert_eq!(p.as_str(), "s3cret");
-    }
-
-    #[test]
-    fn returns_none_when_password_missing() {
-        let yaml = r#"apiVersion: v1
-kind: Secret
-type: Opaque
-stringData:
-  username: "admin"
-  jwt_secret: "jwt"
-"#;
-        assert!(parse_secret_credentials(yaml).is_none());
-    }
-
-    #[test]
-    fn returns_none_when_password_empty() {
-        let yaml = r#"apiVersion: v1
-kind: Secret
-type: Opaque
-stringData:
-  username: "admin"
-  password: ""
-  jwt_secret: "jwt"
-"#;
-        assert!(parse_secret_credentials(yaml).is_none());
-    }
-
-    #[test]
-    fn returns_none_on_malformed_yaml() {
-        assert!(parse_secret_credentials("::: not yaml :::").is_none());
-    }
-
-    #[test]
-    fn does_not_fall_back_when_string_data_present_without_password() {
-        // Locks in parity with `secret.rs::parse_secret_to_config`: once
-        // `stringData` is present we commit to that branch and never fall back
-        // to `data`, even if the password lives there.
-        let yaml = r#"apiVersion: v1
-kind: Secret
-type: Opaque
-stringData:
-  username: "admin"
-data:
-  password: czNjcmV0
-"#;
-        assert!(parse_secret_credentials(yaml).is_none());
-    }
-
-    #[test]
-    fn returns_none_on_malformed_base64_in_data() {
-        let yaml = r#"apiVersion: v1
-kind: Secret
-type: Opaque
-data:
-  username: YWRtaW4=
-  password: "!!!not-base64!!!"
-"#;
-        assert!(parse_secret_credentials(yaml).is_none());
-    }
-
-    /// Locks the dual-layout lookup added when the controller switched to the
-    /// nested namespace-subdir layout for new resources. Pre-existing flat
-    /// deployments and freshly-bootstrapped nested ones must both authenticate
-    /// without operator intervention.
-    #[test]
-    fn read_generated_credentials_finds_secret_under_both_layouts() {
+    fn detect_credentials_env_wins_over_readable_config_file() {
         use tempfile::TempDir;
+        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        clear_admin_env();
 
-        const SECRET_YAML: &str = "apiVersion: v1\nkind: Secret\ntype: Opaque\nstringData:\n  username: admin\n  password: secret-pw\n  jwt_secret: jwt\n";
+        // A real, readable config file with valid file-based credentials.
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("controller.yaml");
+        std::fs::write(
+            &config_path,
+            "local_auth:\n  enabled: true\n  username: fileuser\n  password: filepass\n",
+        )
+        .unwrap();
 
-        let make_config = |dir: &std::path::Path| -> std::path::PathBuf {
-            let config_path = dir.join("controller.yaml");
-            std::fs::write(
-                &config_path,
-                format!(
-                    "conf_center:\n  type: file_system\n  conf_dir: {}\n",
-                    dir.join("config").display()
-                ),
-            )
-            .unwrap();
-            std::fs::create_dir_all(dir.join("config")).unwrap();
-            config_path
-        };
+        // Env vars are set: they must take precedence over the readable file.
+        std::env::set_var("EDGION_ADMIN_USERNAME", "envuser");
+        std::env::set_var("EDGION_ADMIN_PASSWORD", "envpass");
 
-        // Nested layout (Path A default for new resources).
-        {
-            let tmp = TempDir::new().unwrap();
-            let config_path = make_config(tmp.path());
-            let conf_dir = tmp.path().join("config");
-            let ns_dir = conf_dir.join("edgion-system");
-            std::fs::create_dir_all(&ns_dir).unwrap();
-            std::fs::write(
-                ns_dir.join("Secret_edgion-system_edgion-admin-credentials.yaml"),
-                SECRET_YAML,
-            )
-            .unwrap();
-            // Avoid stale EDGION_WORK_DIR from a parent test run.
-            let _guard = std::env::remove_var("EDGION_WORK_DIR");
-            let _guard2 = std::env::remove_var("POD_NAMESPACE");
-            let config_content = std::fs::read_to_string(&config_path).unwrap();
-            let creds = read_generated_credentials(&config_content, &config_path);
-            assert!(creds.is_some(), "should find Secret at nested namespace subdir");
-            let (u, p) = creds.unwrap();
-            assert_eq!(u, "admin");
-            assert_eq!(p.as_str(), "secret-pw");
-        }
+        let creds = detect_credentials(Some(config_path.to_str().unwrap()));
+        let (u, p) = creds.expect("env credentials should win over the config file");
+        // Env wins, NOT the file values.
+        assert_eq!(u, "envuser");
+        assert_eq!(p.as_str(), "envpass");
 
-        // Legacy flat layout (pre-Path-A deployments still on disk).
-        {
-            let tmp = TempDir::new().unwrap();
-            let config_path = make_config(tmp.path());
-            let conf_dir = tmp.path().join("config");
-            std::fs::write(
-                conf_dir.join("Secret_edgion-system_edgion-admin-credentials.yaml"),
-                SECRET_YAML,
-            )
-            .unwrap();
-            std::env::remove_var("EDGION_WORK_DIR");
-            std::env::remove_var("POD_NAMESPACE");
-            let config_content = std::fs::read_to_string(&config_path).unwrap();
-            let creds = read_generated_credentials(&config_content, &config_path);
-            assert!(
-                creds.is_some(),
-                "should fall back to flat layout for legacy deployments"
-            );
-            let (_, p) = creds.unwrap();
-            assert_eq!(p.as_str(), "secret-pw");
-        }
+        clear_admin_env();
+    }
+
+    #[test]
+    fn detect_credentials_env_defaults_username_to_admin() {
+        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        clear_admin_env();
+        // Only the password is set; username defaults to "admin".
+        std::env::set_var("EDGION_ADMIN_PASSWORD", "envpass");
+
+        let creds = detect_credentials(Some("/nonexistent/controller.yaml"));
+        let (u, p) = creds.expect("env credentials should be detected");
+        assert_eq!(u, "admin");
+        assert_eq!(p.as_str(), "envpass");
+
+        clear_admin_env();
+    }
+
+    #[test]
+    fn detect_credentials_reads_local_auth_from_config_file() {
+        use tempfile::TempDir;
+        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        clear_admin_env();
+
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("controller.yaml");
+        std::fs::write(
+            &config_path,
+            "local_auth:\n  enabled: true\n  username: fileuser\n  password: filepass\n",
+        )
+        .unwrap();
+
+        let creds = detect_credentials(Some(config_path.to_str().unwrap()));
+        let (u, p) = creds.expect("config-file local_auth should be detected");
+        assert_eq!(u, "fileuser");
+        assert_eq!(p.as_str(), "filepass");
+
+        clear_admin_env();
+    }
+
+    #[test]
+    fn detect_credentials_empty_local_auth_password_returns_none() {
+        use tempfile::TempDir;
+        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        clear_admin_env();
+
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("controller.yaml");
+        // Enabled but empty password — credentials are no longer auto-generated.
+        std::fs::write(
+            &config_path,
+            "local_auth:\n  enabled: true\n  username: admin\n  password: \"\"\n",
+        )
+        .unwrap();
+
+        assert!(detect_credentials(Some(config_path.to_str().unwrap())).is_none());
+
+        clear_admin_env();
+    }
+
+    #[test]
+    fn detect_credentials_disabled_local_auth_returns_none() {
+        use tempfile::TempDir;
+        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        clear_admin_env();
+
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("controller.yaml");
+        std::fs::write(
+            &config_path,
+            "local_auth:\n  enabled: false\n  username: admin\n  password: secret\n",
+        )
+        .unwrap();
+
+        assert!(detect_credentials(Some(config_path.to_str().unwrap())).is_none());
+
+        clear_admin_env();
     }
 }

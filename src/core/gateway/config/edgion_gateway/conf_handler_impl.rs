@@ -143,6 +143,7 @@ mod tests {
                 preflight_policy: None,
                 enable_reference_grant_validation: false,
                 link_sys: None,
+                tcp_timeout: None,
             },
         )
     }

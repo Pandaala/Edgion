@@ -105,6 +105,13 @@ done
 log_info "Config + ${FIXTURE_COUNT} HTTPRoute fixtures written"
 
 log_section "Start Controller (FileSystem mode)"
+# Admin credentials for the Controller we start below. It no longer
+# auto-generates them (see the credential-autogen-removal change); honor inherited
+# EDGION_ADMIN_* (e.g. from run_integration.sh) or fall back to fixed test values.
+# The Controller synthesizes a local_auth provider from these. JWT secret >= 32 bytes.
+export EDGION_ADMIN_USERNAME="${EDGION_ADMIN_USERNAME:-admin}"
+export EDGION_ADMIN_PASSWORD="${EDGION_ADMIN_PASSWORD:-edgion-integration-test-admin-pw}"
+export EDGION_ADMIN_JWT_SECRET="${EDGION_ADMIN_JWT_SECRET:-edgion-integration-test-jwt-secret-0123456789}"
 "$CONTROLLER_BIN" --config-file "${CONFIG_DIR}/edgion-controller.yaml" \
     > "${LOG_DIR}/controller.stdout.log" 2> "${LOG_DIR}/controller.stderr.log" &
 CONTROLLER_PID=$!
@@ -124,23 +131,19 @@ for i in $(seq 1 30); do
 done
 
 log_section "Authenticate"
-SECRET_FILE=""
-for i in $(seq 1 10); do
-    SECRET_FILE=$(find "$CONF_WATCH_DIR" -name 'Secret_edgion-system_edgion-admin-credentials.yaml' -type f 2>/dev/null | head -1)
-    [[ -n "$SECRET_FILE" ]] && break
+# Log in with the EDGION_ADMIN_* credentials exported above. Retry to absorb the
+# brief window where /health is up but the auth subsystem is still initializing.
+ADMIN_TOKEN=""
+for i in $(seq 1 15); do
+    ADMIN_TOKEN=$(curl -s -H "Content-Type: application/json" \
+        -d "{\"username\":\"${EDGION_ADMIN_USERNAME}\",\"password\":\"${EDGION_ADMIN_PASSWORD}\"}" \
+        "${ADMIN_URL}/api/v1/auth/login" \
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('token',''))" 2>/dev/null || true)
+    [[ -n "$ADMIN_TOKEN" ]] && break
     sleep 1
 done
-if [[ -z "$SECRET_FILE" ]]; then
-    log_error "Admin secret not generated under $CONF_WATCH_DIR"
-    exit 1
-fi
-PASSWORD=$(awk '/^[[:space:]]+password:/ {print $2; exit}' "$SECRET_FILE" | tr -d '"')
-ADMIN_TOKEN=$(curl -s -H "Content-Type: application/json" \
-    -d "{\"username\":\"admin\",\"password\":\"${PASSWORD}\"}" \
-    "${ADMIN_URL}/api/v1/auth/login" \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('token',''))")
 if [[ -z "$ADMIN_TOKEN" ]]; then
-    log_error "Login failed"
+    log_error "Login failed (admin auth not ready)"
     exit 1
 fi
 log_success "Got admin token"

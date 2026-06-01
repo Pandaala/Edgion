@@ -314,13 +314,18 @@ Before executing a command, edgion-cli automatically detects authentication stat
 
 ### Controller vs Center asymmetry
 
-- **Controller**: Step 4 always succeeds — Controller auto-generates the
-  `edgion-admin-credentials` Secret at startup, so `ensure_auth` can read it directly.
-- **Center**: there is no automatic Secret generation path. Operators must explicitly
-  configure `[local_auth]` or `[auth]` in the Center YAML; without it Center returns
-  503 for all business routes, the CLI cannot auto-login (manual `edgion-cli login`
-  with credentials is required).
-  See `skills/02-features/02-config/03-auth-bootstrap.md` for details.
+Both components now behave identically: credentials must be supplied explicitly; neither
+auto-generates them.
+
+- **Controller**: Step 4 succeeds only when the `edgion-admin-credentials` Secret was
+  pre-created by the operator (e.g., via `deploy.sh`) and the controller Deployment injects
+  it as `EDGION_ADMIN_*` env vars. If the Secret does not exist or env vars are not wired,
+  `ensure_auth` falls through to step 5 (prompt to run `edgion-cli login` manually).
+- **Center**: same behavior — no automatic Secret generation. Operators must explicitly
+  configure `[local_auth]` or `[auth]`; without it both Center and Controller return
+  503 for all business routes.
+
+See `skills/02-features/02-config/03-auth-bootstrap.md` for details.
 
 ### `/api/v1/auth/status` is always reachable
 

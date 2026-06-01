@@ -83,19 +83,15 @@ Controller（控制平面）和 Center 的 Admin API 均**强制要求认证**�
 
 ### Controller
 
-Controller 具备零配置友好性：当未配置 `local_auth` 时，会**自动生成**随机 admin 密码和 JWT secret，并将其存储在 `edgion-system` 命名空间的 `edgion-admin-credentials` Secret 中。
+凭据必须由运维人员显式提供——Controller 不再自动生成。
+Kubernetes 推荐方式是运行 `deploy.sh`，该脚本会幂等地创建 `edgion-admin-credentials` Secret
+并通过环境变量（`EDGION_ADMIN_USERNAME`、`EDGION_ADMIN_PASSWORD`、`EDGION_ADMIN_JWT_SECRET`）注入到 controller Deployment。
 
-获取生成的密码：
+运行 `deploy.sh` 后读取密码：
 
-**Kubernetes 模式**：
 ```bash
 kubectl -n edgion-system get secret edgion-admin-credentials \
   -o jsonpath='{.data.password}' | base64 -d
-```
-
-**本地 / 文件系统模式**：
-```bash
-cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
 ```
 
 也可以通过交互式方式认证：
@@ -103,7 +99,8 @@ cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
 edgion-cli login
 ```
 
-当 Controller 在同一环境中运行时，CLI 还会通过读取本地配置文件自动完成登录。
+若未配置任何凭据，服务器仍可启动，但所有 Admin API 业务路由返回 **503 fail-close**，直到提供凭据为止。
+完整的凭据引导选项参见 [Controller 配置](../ops-guide/configuration/controller-config.md#authentication)。
 
 ### Center
 

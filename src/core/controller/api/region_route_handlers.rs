@@ -180,6 +180,16 @@ async fn patch_plugin_metadata_failover(
 ) -> Result<bool, String> {
     use crate::types::ResourceKind;
 
+    // Serialize the whole get -> patch -> write below against other writers to the
+    // same resource so concurrent failover requests, and a concurrent generic
+    // `update_namespaced` PUT (which the Center region-route sync routes through),
+    // cannot interleave and silently lose an update. Held until the guard drops at
+    // the end of this function. See `super::resource_locks` and
+    // `skills/04-review/concurrency/failover-read-modify-write-per-key-lock.md`.
+    let _resource_guard =
+        super::resource_locks::lock_resource(ResourceKind::PluginMetaData.as_str(), namespace, plugin_metadata_name)
+            .await;
+
     let resource = state
         .center_get_resource(ResourceKind::PluginMetaData, namespace, plugin_metadata_name)
         .await

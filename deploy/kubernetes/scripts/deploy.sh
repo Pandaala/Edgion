@@ -65,6 +65,18 @@ echo "[${step}] Apply namespace"
 kubectl apply -f "${ROOT_DIR}/namespace.yaml"
 (( step++ ))
 
+# Ensure the admin-credentials Secret exists before the controller starts.
+# This is idempotent: if the Secret already exists (e.g. from a previous deployment or
+# the old auto-generation), it is left untouched so the current password is preserved.
+# The controller reads credentials from this Secret via env vars (secretKeyRef).
+echo "[${step}] Ensure admin credentials Secret"
+kubectl -n edgion-system get secret edgion-admin-credentials >/dev/null 2>&1 || \
+  kubectl -n edgion-system create secret generic edgion-admin-credentials \
+    --from-literal=username=admin \
+    --from-literal=password="$(openssl rand -base64 16)" \
+    --from-literal=jwt_secret="$(openssl rand -base64 32)"
+(( step++ ))
+
 if [[ "${SKIP_CRD}" == false ]]; then
   echo "[${step}] Install CRDs"
   "${SCRIPT_DIR}/install_crds.sh"

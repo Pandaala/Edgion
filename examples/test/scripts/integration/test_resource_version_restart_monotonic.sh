@@ -144,34 +144,30 @@ check_prerequisites() {
 }
 
 # =============================================================================
-# Admin auth: discover the auto-generated Secret and exchange password for a
-# Bearer token via /api/v1/auth/login. Mirrors test_file_watcher.sh.
+# Admin auth: the Controller no longer auto-generates an admin Secret. We export
+# EDGION_ADMIN_* (honored by every Controller (re)start below and used for login
+# here) and exchange them for a Bearer token via /api/v1/auth/login. JWT secret
+# must be >= 32 bytes. Mirrors test_file_watcher.sh.
 # =============================================================================
+export EDGION_ADMIN_USERNAME="${EDGION_ADMIN_USERNAME:-admin}"
+export EDGION_ADMIN_PASSWORD="${EDGION_ADMIN_PASSWORD:-edgion-integration-test-admin-pw}"
+export EDGION_ADMIN_JWT_SECRET="${EDGION_ADMIN_JWT_SECRET:-edgion-integration-test-jwt-secret-0123456789}"
 ensure_admin_token() {
     if [ -n "$ADMIN_TOKEN" ]; then
         return 0
     fi
-    local secret_file=""
-    local waited=0
-    while [ $waited -lt 10 ]; do
-        secret_file=$(find "$CONFIG_DIR" -name 'Secret_edgion-system_edgion-admin-credentials.yaml' -type f 2>/dev/null | head -1)
-        if [ -n "$secret_file" ]; then
-            break
-        fi
+    # Log in with EDGION_ADMIN_*. Retry to absorb the brief window where /health
+    # is up but the auth subsystem is still initializing.
+    local login_resp waited=0
+    while [ $waited -lt 15 ]; do
+        login_resp=$(curl -s -H "Content-Type: application/json" \
+            -d "{\"username\":\"${EDGION_ADMIN_USERNAME}\",\"password\":\"${EDGION_ADMIN_PASSWORD}\"}" \
+            "${CONTROLLER_URL}/api/v1/auth/login" 2>/dev/null || echo "")
+        ADMIN_TOKEN=$(echo "$login_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('token',''))" 2>/dev/null || echo "")
+        [ -n "$ADMIN_TOKEN" ] && break
         sleep 1
         waited=$((waited + 1))
     done
-    if [ -z "$secret_file" ]; then
-        log_error "Admin Secret was not generated under ${CONFIG_DIR}"
-        exit 1
-    fi
-    local pass
-    pass=$(awk '/^[[:space:]]+password:/ {print $2; exit}' "$secret_file" | tr -d '"')
-    local login_resp
-    login_resp=$(curl -s -H "Content-Type: application/json" \
-        -d "{\"username\":\"admin\",\"password\":\"${pass}\"}" \
-        "${CONTROLLER_URL}/api/v1/auth/login" 2>/dev/null || echo "")
-    ADMIN_TOKEN=$(echo "$login_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('token',''))" 2>/dev/null || echo "")
     if [ -z "$ADMIN_TOKEN" ]; then
         log_error "Login failed -- could not obtain admin token (response: ${login_resp})"
         exit 1

@@ -96,17 +96,17 @@ pub struct UnifiedAuthClaims {
 pub struct UnifiedAuthState {
     /// OIDC auth state (None when OIDC is not configured or disabled).
     pub oidc: Option<Arc<AuthMiddlewareState>>,
-    /// Local auth state. `ArcSwapOption` supports lazy population by
-    /// the background Secret retry task (Controller auto-generate path).
-    /// At startup it may be `None` even when `require_auth = true`;
-    /// middleware returns 503 in that case until the value is populated.
+    /// Local auth state. `ArcSwapOption` allows it to be `None` when local
+    /// credentials are not (yet) available. At startup it may be `None` even
+    /// when `require_auth = true` (e.g. nothing valid configured); middleware
+    /// returns 503 in that case (fail-close) until the value is populated.
     pub local: ArcSwapOption<LocalAuthState>,
     /// Paths that bypass authentication (union of both providers' skip_paths).
     pub skip_paths: HashSet<String>,
     /// Whether the operator *expects* authentication to be enforced.
-    /// Derived at startup from the intended configuration (including
-    /// auto-generate fallback), not from whether providers are currently ready.
-    /// Middleware uses this + provider readiness to decide pass-through vs 503.
+    /// Derived at startup from the intended configuration, not from whether
+    /// providers are currently ready. Middleware uses this + provider readiness
+    /// to decide pass-through vs 503.
     pub require_auth: bool,
 }
 
@@ -121,9 +121,10 @@ impl UnifiedAuthState {
     /// auth stack.
     ///
     /// `require_auth` must be supplied by the caller. It expresses operator
-    /// *intent* (e.g. Controller's auto-generate fallback sets it true even
-    /// when `local_auth_config` is `None`), independent of whether providers
-    /// are currently ready.
+    /// *intent* that authentication be enforced, independent of whether
+    /// providers are currently ready (a provider may be configured but not yet
+    /// loaded). When intent is `true` but no provider is ready, middleware
+    /// fails closed with 503 rather than passing requests through.
     pub fn from_configs(
         auth_config: Option<&AdminAuthConfig>,
         local_auth_config: Option<&LocalAuthConfig>,

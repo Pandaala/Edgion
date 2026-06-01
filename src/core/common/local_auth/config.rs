@@ -1,8 +1,10 @@
 //! Local authentication configuration.
 //!
 //! Provides built-in username/password authentication with JWT for the Admin API.
-//! When no OIDC (`auth`) section is present and no `[local_auth]` is configured,
-//! credentials are auto-generated and stored as a K8s Secret via `CenterApi`.
+//! Credentials come only from configuration (this `[local_auth]` section, the
+//! `EDGION_ADMIN_*` environment variables, or `[auth]` OIDC). They are never
+//! auto-generated. When nothing valid is configured the Admin API returns 503
+//! fail-close.
 //!
 //! Example TOML:
 //! ```toml
@@ -18,9 +20,10 @@ use serde::{Deserialize, Serialize};
 
 /// Local authentication configuration.
 ///
-/// When absent from the config file and no OIDC `[auth]` section is configured,
-/// local auth is automatically enabled with auto-generated credentials stored
-/// as a K8s Secret via `CenterApi`.
+/// Credentials come only from configuration (this section, the `EDGION_ADMIN_*`
+/// environment variables, or `[auth]` OIDC); they are never auto-generated. When
+/// nothing valid is configured, no auth provider loads and the Admin API returns
+/// 503 fail-close.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LocalAuthConfig {
@@ -31,10 +34,11 @@ pub struct LocalAuthConfig {
     pub username: String,
 
     /// Plaintext password (bcrypt hash is computed at startup).
-    /// Empty string means credentials need to be generated.
+    /// Empty string means unconfigured (no auth provider loads → 503 fail-close).
     pub password: String,
 
-    /// JWT signing secret. Empty string means credentials need to be generated.
+    /// JWT signing secret. Empty string means unconfigured
+    /// (no auth provider loads → 503 fail-close).
     pub jwt_secret: String,
 
     /// JWT token expiry in hours. Default: 24.
@@ -73,8 +77,8 @@ impl Default for LocalAuthConfig {
         Self {
             enabled: true,
             username: "admin".to_string(),
-            password: String::new(),   // empty = needs generation
-            jwt_secret: String::new(), // empty = needs generation
+            password: String::new(),   // empty = unconfigured (503 fail-close)
+            jwt_secret: String::new(), // empty = unconfigured (503 fail-close)
             jwt_expiry_hours: 24,
             skip_paths: default_skip_paths(),
             cookie_secure: default_cookie_secure(),
@@ -83,9 +87,36 @@ impl Default for LocalAuthConfig {
 }
 
 impl LocalAuthConfig {
-    /// Check if credentials need to be generated (password or jwt_secret is empty).
-    pub fn needs_generation(&self) -> bool {
-        self.password.is_empty() || self.jwt_secret.is_empty()
+    /// Apply EDGION_ADMIN_* environment-variable overrides onto this config.
+    /// A non-empty env value overrides the corresponding field. This is the
+    /// recommended K8s path: inject from a Secret via valueFrom.secretKeyRef.
+    pub fn apply_env_overrides(&mut self) {
+        if let Ok(v) = std::env::var("EDGION_ADMIN_USERNAME") {
+            if !v.is_empty() {
+                self.username = v;
+            }
+        }
+        if let Ok(v) = std::env::var("EDGION_ADMIN_PASSWORD") {
+            if !v.is_empty() {
+                self.password = v;
+            }
+        }
+        if let Ok(v) = std::env::var("EDGION_ADMIN_JWT_SECRET") {
+            if !v.is_empty() {
+                self.jwt_secret = v;
+            }
+        }
+    }
+
+    /// Whether any EDGION_ADMIN_* override is set (non-empty).
+    pub fn env_overrides_present() -> bool {
+        [
+            "EDGION_ADMIN_USERNAME",
+            "EDGION_ADMIN_PASSWORD",
+            "EDGION_ADMIN_JWT_SECRET",
+        ]
+        .iter()
+        .any(|k| std::env::var(k).map(|v| !v.is_empty()).unwrap_or(false))
     }
 
     /// Validate the configuration. Returns None if valid, Some(error) if invalid.
@@ -128,6 +159,13 @@ fn default_cookie_secure() -> bool {
     true
 }
 
+/// Shared lock serializing every test that mutates the process-global
+/// `EDGION_ADMIN_*` env vars. All such tests live in the single `edgion`
+/// lib test binary and run multi-threaded; per-module locks would not
+/// serialize across modules. Lock this in EVERY env-mutating test.
+#[cfg(test)]
+pub(crate) static ADMIN_ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,5 +199,77 @@ mod tests {
             "/api/v1/auth/status".to_string(),
         ];
         assert!(config.validate().is_none());
+    }
+
+    const ENV_VARS: [&str; 3] = [
+        "EDGION_ADMIN_USERNAME",
+        "EDGION_ADMIN_PASSWORD",
+        "EDGION_ADMIN_JWT_SECRET",
+    ];
+
+    fn clear_env() {
+        for k in ENV_VARS {
+            std::env::remove_var(k);
+        }
+    }
+
+    #[test]
+    fn apply_env_overrides_applies_set_and_leaves_unset() {
+        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        clear_env();
+
+        // Only password + jwt_secret are set; username is left unset.
+        std::env::set_var("EDGION_ADMIN_PASSWORD", "env-pass");
+        std::env::set_var("EDGION_ADMIN_JWT_SECRET", "env-jwt");
+
+        let mut cfg = LocalAuthConfig {
+            username: "original-user".to_string(),
+            password: "original-pass".to_string(),
+            jwt_secret: "original-jwt".to_string(),
+            ..Default::default()
+        };
+        assert!(LocalAuthConfig::env_overrides_present());
+        cfg.apply_env_overrides();
+
+        // Unset var leaves the field unchanged.
+        assert_eq!(cfg.username, "original-user");
+        // Set vars override.
+        assert_eq!(cfg.password, "env-pass");
+        assert_eq!(cfg.jwt_secret, "env-jwt");
+
+        clear_env();
+    }
+
+    #[test]
+    fn apply_env_overrides_empty_value_does_not_override() {
+        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        clear_env();
+
+        // An explicitly-empty env value must NOT clobber a configured field.
+        std::env::set_var("EDGION_ADMIN_PASSWORD", "");
+
+        let mut cfg = LocalAuthConfig {
+            password: "original-pass".to_string(),
+            ..Default::default()
+        };
+        // Empty value => not "present".
+        assert!(!LocalAuthConfig::env_overrides_present());
+        cfg.apply_env_overrides();
+        assert_eq!(cfg.password, "original-pass");
+
+        clear_env();
+    }
+
+    #[test]
+    fn env_overrides_present_false_when_unset() {
+        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        clear_env();
+        assert!(!LocalAuthConfig::env_overrides_present());
     }
 }

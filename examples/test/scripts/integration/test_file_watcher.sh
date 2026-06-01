@@ -147,40 +147,34 @@ start_controller() {
 }
 
 # =============================================================================
-# Auth helper — Controller in non-K8s mode auto-generates an admin Secret
-# under <conf-dir>; we read it once, login, cache the bearer token, and
-# inject it into every admin-API curl.
+# Auth helper — the Controller no longer auto-generates an admin Secret. Provide
+# EDGION_ADMIN_* (honored by the Controller started below and used for login
+# here), then exchange them for a cached bearer token injected into every
+# admin-API curl. Honor inherited values or fall back to fixed test credentials;
+# JWT secret must be >= 32 bytes.
 # =============================================================================
+export EDGION_ADMIN_USERNAME="${EDGION_ADMIN_USERNAME:-admin}"
+export EDGION_ADMIN_PASSWORD="${EDGION_ADMIN_PASSWORD:-edgion-integration-test-admin-pw}"
+export EDGION_ADMIN_JWT_SECRET="${EDGION_ADMIN_JWT_SECRET:-edgion-integration-test-jwt-secret-0123456789}"
 ADMIN_TOKEN=""
 ensure_admin_token() {
     if [ -n "$ADMIN_TOKEN" ]; then
         return 0
     fi
-    # Path A: new resources land at <conf>/<ns>/Kind_ns_name.yaml; the auto-generated
-    # admin Secret lives under edgion-system/. Pre-Path-A flat layouts also still
-    # work (left where the watcher first saw them). Search recursively for either.
-    local secret_file=""
+    # Log in with EDGION_ADMIN_*. Retry to absorb the brief window where /health
+    # is up but the auth subsystem is still initializing.
     local waited=0
-    while [ $waited -lt 10 ]; do
-        secret_file=$(find "$CONFIG_DIR" -name 'Secret_edgion-system_edgion-admin-credentials.yaml' -type f 2>/dev/null | head -1)
-        if [ -n "$secret_file" ]; then
-            break
-        fi
+    while [ $waited -lt 15 ]; do
+        ADMIN_TOKEN=$(curl -s -H "Content-Type: application/json" \
+            -d "{\"username\":\"${EDGION_ADMIN_USERNAME}\",\"password\":\"${EDGION_ADMIN_PASSWORD}\"}" \
+            "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/auth/login" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('token',''))" 2>/dev/null || true)
+        [ -n "$ADMIN_TOKEN" ] && break
         sleep 1
         waited=$((waited + 1))
     done
-    if [ -z "$secret_file" ]; then
-        log_error "Admin Secret was not generated under $CONFIG_DIR"
-        exit 1
-    fi
-    local pass
-    pass=$(awk '/^[[:space:]]+password:/ {print $2; exit}' "$secret_file" | tr -d '"')
-    ADMIN_TOKEN=$(curl -s -H "Content-Type: application/json" \
-        -d "{\"username\":\"admin\",\"password\":\"$pass\"}" \
-        "http://localhost:${CONTROLLER_ADMIN_PORT}/api/v1/auth/login" \
-        | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('token',''))")
     if [ -z "$ADMIN_TOKEN" ]; then
-        log_error "login failed: could not obtain admin token"
+        log_error "login failed: could not obtain admin token (auth not ready)"
         exit 1
     fi
 }

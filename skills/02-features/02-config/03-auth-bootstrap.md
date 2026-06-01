@@ -6,10 +6,11 @@ Describes where the Controller / Center admin credentials come from at startup a
 
 | Component | No `[local_auth]` + No `[auth]` | With `[local_auth]` | With `[auth]` OIDC |
 |-----------|---|---|---|
-| Controller | Auto-generates Secret `edgion-admin-credentials` (K8s mode) or writes to the conf directory (local mode); log in with the generated password | Static credentials from the configuration file | OIDC flow |
+| Controller | **Server starts + business routes always 503** + WARN log at startup | Static credentials from env vars or the configuration file | OIDC flow |
 | Center | **Server starts + business routes always 503** + WARN log at startup | Static credentials from the configuration file | OIDC flow |
 
-**Key difference**: Controller supports "zero-config startup" (Secret auto-generation is retained); Center requires the operator to provide credentials explicitly.
+**Both components behave identically**: the operator must supply credentials explicitly.
+Auto-generation has been removed from the Controller (as of 2026-06-01).
 
 ### Center's 503 Semantics (fail-close)
 
@@ -20,33 +21,62 @@ Center has no auto-generation capability. When neither `[local_auth]` nor `[auth
 - `/health`, `/ready`, `/metrics`, `/api/v1/auth/status` remain accessible (skip_paths + early-return paths).
 - The startup log prints WARN: `No authentication configured. Admin endpoints will return 503 until you configure [local_auth] or [auth] in your YAML.`
 
-## Controller: Reading the Auto-generated Credentials
+## Controller: Providing Admin Credentials
 
-### K8s Mode
+The Controller reads admin credentials from the following sources (highest precedence first):
 
-**RBAC prerequisite**: the Controller ServiceAccount must have
-`secrets: [get, list, watch, create]` (cluster-scope). The `create` verb is
-mandatory — without it the first-start auto-generation fails, the
-`secret_retry_loop` keeps retrying for up to 600 s, then calls
-`std::process::exit(1)` (see `src/core/common/local_auth/retry.rs`). Repo
-manifests in both `deploy/kubernetes/controller/rbac.yaml` and
-`examples/k8stest/kubernetes/controller/rbac.yaml` already include `create`.
+### Option A: Env vars from a K8s Secret (recommended for Kubernetes)
+
+Inject `EDGION_ADMIN_USERNAME`, `EDGION_ADMIN_PASSWORD`, and `EDGION_ADMIN_JWT_SECRET` via
+`valueFrom.secretKeyRef` in the controller Deployment. The `deploy.sh` script creates the
+`edgion-admin-credentials` Secret idempotently before the controller is applied.
+
+**RBAC prerequisite**: the Controller ServiceAccount needs only
+`secrets: [get, list, watch]` — the `create` verb is no longer required. Both
+`deploy/kubernetes/controller/rbac.yaml` and
+`examples/k8stest/kubernetes/controller/rbac.yaml` reflect this.
 
 ```bash
+# Read the current password
 kubectl -n edgion-system get secret edgion-admin-credentials \
     -o jsonpath='{.data.password}' | base64 -d
 ```
 
-### Local Mode
+### Option B: `[local_auth]` in a Secret-mounted config file
 
-```bash
-cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
+Store the controller YAML config in a K8s Secret (not a ConfigMap — it holds a password)
+and mount it into the pod. The `[local_auth]` section in that file is used directly.
+
+```yaml
+local_auth:
+  enabled: true
+  username: admin
+  password: "<your-password>"
+  jwt_secret: "<random string, at least 32 characters>"
+  jwt_expiry_hours: 24
 ```
 
-### Changing the Password
+> **Warning**: the controller config is currently mounted from a **ConfigMap** in the
+> default manifests. A ConfigMap is not suitable for storing a password. Use env vars
+> (Option A) or switch the mount to a Secret.
 
-After `kubectl edit secret edgion-admin-credentials`, the Controller's secret retry loop hot-reloads
-`UnifiedAuthState` (semantics are stable under the CancellationToken shutdown signal; see the structural regression in fix #01 round 3).
+### Option C: `[auth]` OIDC
+
+```yaml
+auth:
+  enabled: true
+  discovery: "https://your-oidc-provider/.well-known/openid-configuration"
+  client_id: "..."
+```
+
+### Behavior when nothing is configured
+
+If none of the above sources provides valid credentials, the controller starts successfully
+but all Admin API business routes return `503 Service Unavailable` (fail-close). A WARN is
+printed at startup: `No authentication configured. Admin endpoints will return 503 until
+you configure [local_auth] or [auth] in your YAML.` The controller never panics or exits.
+
+`/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain accessible.
 
 ## Center: How to Provide Admin Credentials
 
@@ -93,7 +123,7 @@ The `enabled: false` flag is now **ignored** with a startup `WARN` log (not a ha
 
 | Scenario | Controller behavior | Center behavior |
 |----------|--------------------|----|
-| Config absent (no `local_auth` / `auth` section at all) | Auto-generates admin credentials — **never bricks** | Business routes return 503 until configured |
+| Config absent (no `local_auth` / `auth` section at all) | Business routes return 503 until configured; emits startup WARN | Business routes return 503 until configured |
 | `local_auth.enabled: false` (explicit disable) | No provider is loaded → admin API returns 503 until reconfigured; emits startup WARN | Same: 503 fail-close until reconfigured; emits startup WARN |
 | `local_auth.enabled: true` (or section absent) | Normal operation | Normal operation |
 
@@ -164,20 +194,52 @@ local_auth:
 
 Since per-token revocation is unavailable, when handling operator departures / privilege removal:
 
-1. **Change the password**: `kubectl edit secret edgion-admin-credentials` to modify the `password` field → the Controller secret retry loop hot-reloads `UnifiedAuthState` → all future logins must use the new password (but **issued tokens** still remain valid until `exp`).
+1. **Change the password**: update the `edgion-admin-credentials` Secret and perform a rolling restart (`kubectl rollout restart deployment/edgion-controller -n edgion-system`) → all future logins must use the new password (but **issued tokens** still remain valid until `exp`).
 2. **Rotate `jwt_secret`**: modify the `jwt_secret` field in the Secret → all issued tokens become invalid immediately (**one-click revoke all**, but it also kicks off all currently logged-in administrators).
 3. **Wait for the window to expire**: if `jwt_expiry_hours` has been shortened to 1-4h, this is also acceptable.
 
 **Option 2 (rotate jwt_secret) is the fastest "bulk revocation"**, suitable for emergencies; routine personnel changes should be paired with OIDC federation.
+
+## Migration (BREAKING) — Controller credential auto-generation removed
+
+Existing deployments that relied on the Controller auto-generating the
+`edgion-admin-credentials` Secret will receive Admin-API 503 after upgrading until
+credentials are provided. Migration paths:
+
+1. **Run the updated `deploy.sh`** (idempotent). If the Secret already exists from the old
+   auto-generation, it is left untouched (current password preserved). The updated
+   `controller/deployment.yaml` wires the Secret into the controller via env vars, so a
+   `kubectl apply` of the new manifests is sufficient after `deploy.sh` completes.
+2. **Or** set `EDGION_ADMIN_PASSWORD` and `EDGION_ADMIN_JWT_SECRET` from any Secret and
+   patch the Deployment to use `secretKeyRef`.
+3. **Or** write `[local_auth]` into a Secret-mounted config file (not a ConfigMap — a
+   ConfigMap is not suitable for storing a password).
+
+The existing auto-generated `edgion-admin-credentials` Secret already has the correct keys
+(`username`, `password`, `jwt_secret`), so migration path 1 is transparent for the
+operator.
 
 ## Related Regression Tests
 
 - `examples/test/scripts/integration/test_center_no_auth.sh` —
   Integration-layer structural regression for Center starting without auth configured + 503 on `/api/v1/controllers` business paths + WARN log.
   Included in the prerequisites of `run_integration.sh`.
+- `examples/test/scripts/integration/test_controller_no_auth.sh` (added 2026-06-01) —
+  Mirrors the Center test for the Controller: no auth config → `/health`+`/ready` 200,
+  business route 503, startup WARN; second positive case exports `EDGION_ADMIN_PASSWORD`
+  + `EDGION_ADMIN_JWT_SECRET` and asserts login succeeds.
 
 ## History
 
+- 2026-06-01: Controller removed admin-credential auto-generation (BREAKING).
+  - The Controller now behaves identically to Center: no `[local_auth]` / no `[auth]` →
+    server starts + business routes 503 + startup WARN. Auto-generation
+    (`ensure_admin_credentials`, `secret_retry_loop`, the `secrets: create` RBAC verb) is
+    deleted.
+  - Credentials are supplied via env vars from a K8s Secret (`secretKeyRef`, recommended),
+    `[local_auth]` in a Secret-mounted config file, or `[auth]` OIDC.
+  - `deploy.sh` handles idempotent Secret creation for the operator.
+  - Related spec: `docs/superpowers/specs/2026-06-01-remove-controller-admin-credential-autogen-design.md`.
 - 2026-04-20: Center removed the default `admin/edgion1234` fallback (BREAKING).
   - Root cause: the bug 1 in fix #01 round 2 (`LocalAuthConfig::default()` panicked at startup) was rooted in
     the Center's `or_else(|| Some(edgion1234))` fallback constructing credentials for the operator that did not

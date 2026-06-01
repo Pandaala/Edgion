@@ -10,7 +10,7 @@ Edgion 将 Kubernetes Secret 用于 TLS 证书、插件凭据和 Controller 管�
 | 扩展 TLS（mTLS、密码套件、OCSP） | `EdgionTls.spec.secretRef` 和 `clientAuth.caSecretRef` | `kubernetes.io/tls`（服务端）、`Opaque`（CA） |
 | 插件凭据 | `jwt-auth`、`basic-auth`、`openid-connect` 等插件 | `Opaque` |
 | 后端认证 | 后端 mTLS 客户端证书 | `kubernetes.io/tls` |
-| Controller 管理员密码 | 自动生成的 `edgion-admin-credentials` | `Opaque` |
+| Controller 管理员密码 | 运维人员创建的 `edgion-admin-credentials`（注入为环境变量） | `Opaque` |
 
 ### TLS 证书 Secret
 
@@ -43,22 +43,25 @@ data:
 
 ⚠️ 切勿将真实证书或密钥材料提交到源代码控制。上方所有值均为占位符。
 
-## 管理员凭据（自动生成）
+## 管理员凭据（`edgion-admin-credentials`）
 
-当 Controller 在**未配置** `[local_auth]` 段的情况下启动时，会自动生成随机管理员密码，并存储在 `edgion-system` 命名空间中名为 `edgion-admin-credentials` 的 Secret 里。Kubernetes 模式和本地模式均适用。
+Controller 从 `edgion-admin-credentials` Secret（命名空间：`edgion-system`）读取管理员凭据。
+该 Secret 必须由运维人员创建——Controller 不再自动生成（已于 2026-06-01 移除）。
 
-获取生成的密码：
+Kubernetes 推荐方式是使用 `deploy.sh`，该脚本会幂等地创建 Secret 并通过环境变量注入到 controller Deployment：
 
 ```bash
-# Kubernetes 模式
+# 运行 deploy.sh 后读取管理员密码
 kubectl -n edgion-system get secret edgion-admin-credentials \
   -o jsonpath='{.data.password}' | base64 -d
-
-# 本地模式（基于文件的配置）
-cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
 ```
 
-> **Center 与此不同**：Center 进程**不会**自动生成凭据。运维人员必须提供 `[local_auth]` 或 `[auth]`；否则业务路由以 503 失败关闭，而健康检查端点保持可用。
+也可以在挂载为 Secret 的配置文件中配置 `[local_auth]`，或使用 `[auth]` OIDC。
+
+若未配置任何有效凭据，服务器仍可启动，但所有 Admin API 业务路由返回 **503 fail-close**。
+`/health`、`/ready`、`/metrics` 和 `/api/v1/auth/status` 保持可访问。Controller 和 Center 遵循相同的行为。
+
+完整引导矩阵参见 `skills/02-features/02-config/03-auth-bootstrap.md`。
 
 ## 管理建议
 
@@ -83,13 +86,13 @@ cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
 
 ### 无法登录管理 API
 
-- 从 `edgion-admin-credentials` 获取自动生成的密码（见上文），或显式配置 `[local_auth]`。
+- 从 `edgion-admin-credentials` 获取密码（见上文——由 `deploy.sh` 创建），或显式配置 `[local_auth]` / `[auth]`。
 
 ## 常见问题
 
 ### Q1：Controller 管理员密码存储在哪里？
 
-**A**：存储在 `edgion-system` 命名空间的 `edgion-admin-credentials` Secret 中，在首次未配置 `[local_auth]` 的情况下启动时自动生成。本地模式下写入 `{conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`。
+**A**：存储在 `edgion-system` 命名空间的 `edgion-admin-credentials` Secret 中，由运维人员通过 `deploy.sh` 创建。controller Deployment 将 Secret 中的值以环境变量（`EDGION_ADMIN_USERNAME`、`EDGION_ADMIN_PASSWORD`、`EDGION_ADMIN_JWT_SECRET`）形式注入。Controller 不再自动生成该 Secret。
 
 ### Q2：可以引用其他命名空间的 Secret 吗？
 

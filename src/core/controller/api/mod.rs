@@ -10,6 +10,7 @@ mod debug_handlers;
 mod diagnostics_handlers;
 mod namespaced_handlers;
 mod region_route_handlers;
+mod resource_locks;
 mod types;
 mod wipe_handlers;
 
@@ -461,7 +462,6 @@ pub async fn serve(
     auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
     require_auth: bool,
-    needs_retry: bool,
     config_file: Option<String>,
     authorizer: Arc<crate::core::controller::authz::Authorizer>,
     center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
@@ -473,7 +473,6 @@ pub async fn serve(
         auth_config,
         local_auth_config,
         require_auth,
-        needs_retry,
         config_file,
         authorizer,
         center_reload_tx,
@@ -483,6 +482,10 @@ pub async fn serve(
 }
 
 /// Serve the admin API with graceful shutdown support.
+///
+/// Credentials come only from configuration (resolved into `local_auth_config` /
+/// `auth_config` upstream); they are never auto-generated. When neither is present,
+/// no provider loads and the Admin API returns 503 fail-close.
 pub async fn serve_with_shutdown(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
@@ -490,7 +493,6 @@ pub async fn serve_with_shutdown(
     auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
     local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
     require_auth: bool,
-    needs_retry: bool,
     config_file: Option<String>,
     authorizer: Arc<crate::core::controller::authz::Authorizer>,
     center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
@@ -553,28 +555,6 @@ pub async fn serve_with_shutdown(
             authorizer,
             cli_auth_status_augment,
         ));
-
-    if needs_retry {
-        let auth_state_for_retry = auth_state.clone();
-        let conf_mgr_for_retry = conf_mgr.clone();
-        let fetch: crate::core::common::local_auth::retry::FetchFn = Box::new(move || {
-            let cm = conf_mgr_for_retry.clone();
-            Box::pin(async move { crate::core::common::local_auth::secret::ensure_admin_credentials(&*cm).await })
-        });
-        let exit: crate::core::common::local_auth::retry::ExitFn = Box::new(|| std::process::exit(1));
-        // Production never cancels the retry (it has its own 10-minute hard
-        // timeout plus process::exit(1)), so a never-cancelled token is
-        // sufficient. See the `retry.rs` module doc for details on the
-        // CancellationToken drop-vs-cancel semantics.
-        let retry_shutdown = tokio_util::sync::CancellationToken::new();
-        tokio::spawn(crate::core::common::local_auth::retry::secret_retry_loop(
-            auth_state_for_retry,
-            fetch,
-            std::time::Duration::from_secs(600),
-            exit,
-            retry_shutdown,
-        ));
-    }
 
     tracing::info!(
         component = "admin_api",

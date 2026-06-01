@@ -245,32 +245,37 @@ conf_sync_security:
 
 Authentication is **mandatory** for the Controller Admin API. All requests to `/api/v1/*` routes require a valid Bearer token or session cookie. Unauthenticated requests are rejected with HTTP 401.
 
-> Zero-config still works: when `[local_auth]` is absent, the Controller auto-generates a random admin password and JWT secret and stores them in the `edgion-admin-credentials` Secret (`edgion-system` namespace). To retrieve the generated password:
+> **Credentials must be supplied explicitly.** The Controller no longer auto-generates admin
+> credentials. Credentials come from (highest precedence first):
 >
-> **Kubernetes mode**:
+> 1. Env vars `EDGION_ADMIN_USERNAME` / `EDGION_ADMIN_PASSWORD` / `EDGION_ADMIN_JWT_SECRET`
+>    injected via `valueFrom.secretKeyRef` from the `edgion-admin-credentials` Secret
+>    (recommended for Kubernetes). `deploy.sh` creates this Secret idempotently.
+> 2. `[local_auth]` in a Secret-mounted config file.
+> 3. `[auth]` OIDC.
+>
+> When nothing is configured, the server starts but all Admin API business routes return
+> **503 fail-close**. `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain
+> accessible. Retrieve the password (if using `deploy.sh`):
+>
 > ```bash
 > kubectl -n edgion-system get secret edgion-admin-credentials \
 >   -o jsonpath='{.data.password}' | base64 -d
 > ```
 >
-> **Local / file mode**:
-> ```bash
-> cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
-> ```
->
-> You can also authenticate interactively with `edgion-cli login`, or the CLI auto-logs-in by reading the config file.
+> You can also authenticate interactively with `edgion-cli login`.
 
-The Controller and Center read the same `[local_auth]` / `[auth]` schema, but bootstrap differently: the Controller auto-generates credentials when neither is set, while the Center fails closed (see the Center note below).
+The Controller and Center read the same `[local_auth]` / `[auth]` schema and now bootstrap identically: when neither is set, both fail closed with 503 (see the Center note below).
 
 ### [local_auth]
 
-Built-in username/password authentication. Issues HS256 JWTs to authenticated clients. When absent on the Controller, credentials are auto-generated (see above).
+Built-in username/password authentication. Issues HS256 JWTs to authenticated clients. Must be configured explicitly on both Controller and Center (no auto-generation).
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `username` | `String` | `"admin"` | Admin username |
-| `password` | `String` | _(auto-generated)_ | Admin password. Empty → auto-generated on Controller; must be set explicitly on Center |
-| `jwt_secret` | `String` | _(auto-generated)_ | JWT signing secret. Empty → auto-generated on Controller; must be set explicitly on Center |
+| `password` | `String` | _(required)_ | Admin password. Must be set explicitly; if absent the Admin API returns 503 |
+| `jwt_secret` | `String` | _(required)_ | JWT signing secret. Must be set explicitly; if absent the Admin API returns 503 |
 | `jwt_expiry_hours` | `Integer` | `24` | Issued token lifetime in hours |
 | `cookie_secure` | `Boolean` | `true` | Emit the `Secure` attribute on the `edgion_token` auth cookie. Keep `true` for any TLS-fronted deployment so the bearer-equivalent cookie never traverses plaintext `http://`. Set `false` only for an explicit non-TLS dev/internal setup served over plain HTTP. |
 
@@ -283,7 +288,7 @@ local_auth:
   cookie_secure: true
 ```
 
-> **Center note**: Center has **no** auto-generation. If neither `[local_auth]` nor `[auth]` is configured, business routes return 503 (fail-close) while `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain accessible.
+> **Note**: Both Controller and Center behave identically — neither auto-generates credentials. If neither `[local_auth]` nor `[auth]` is configured, business routes return 503 (fail-close) while `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain accessible.
 
 ### [auth] — OIDC
 

@@ -61,6 +61,12 @@ pub struct EdgionGatewayConfigSpec {
     /// Global LinkSys provider configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_sys: Option<LinkSysGlobalConfig>,
+
+    /// Timeout configuration for L4 TCP-transport relays
+    /// (plain TCP, TLS-terminated, TLS-passthrough). UDP has its own
+    /// session model and is configured separately.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tcp_timeout: Option<TcpTimeout>,
 }
 
 // ============================================
@@ -186,6 +192,28 @@ pub struct BackendTimeout {
     pub default_max_retries: Option<u32>,
 }
 
+// ============================================
+// TCP (L4) Timeout Configuration
+// ============================================
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TcpTimeout {
+    /// Idle timeout for the established L4 relay. The activity clock resets
+    /// on every successful read in either direction. "0" / "0s" disables it
+    /// (unbounded — risky). Applies to plain TCP, TLS-terminated, and
+    /// TLS-passthrough relays. UDP is not affected.
+    /// Format: duration string (e.g. "1h", "300s", "5m"); a bare number is
+    /// interpreted as seconds. Default "1h".
+    #[serde(default = "default_tcp_idle_timeout")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    pub idle_timeout: String,
+}
+
+fn default_tcp_idle_timeout() -> String {
+    "1h".to_string()
+}
+
 // ClientTimeout defaults
 fn default_client_read_timeout() -> String {
     "60s".to_string()
@@ -229,6 +257,7 @@ impl Default for EdgionGatewayConfigSpec {
             preflight_policy: None,
             enable_reference_grant_validation: false,
             link_sys: None,
+            tcp_timeout: None,
         }
     }
 }
@@ -420,6 +449,34 @@ impl EdgionGatewayConfigSpec {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tcp_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn tcp_timeout_absent_section_is_none() {
+        let spec: EdgionGatewayConfigSpec = serde_json::from_str("{}").unwrap();
+        assert!(spec.tcp_timeout.is_none());
+    }
+
+    #[test]
+    fn tcp_timeout_idle_defaults_to_1h_when_field_omitted() {
+        let spec: EdgionGatewayConfigSpec = serde_json::from_str(r#"{"tcpTimeout": {}}"#).unwrap();
+        assert_eq!(spec.tcp_timeout.unwrap().idle_timeout, "1h");
+    }
+
+    #[test]
+    fn tcp_timeout_idle_explicit_value_round_trips() {
+        let spec: EdgionGatewayConfigSpec = serde_json::from_str(r#"{"tcpTimeout": {"idleTimeout": "300s"}}"#).unwrap();
+        assert_eq!(spec.tcp_timeout.unwrap().idle_timeout, "300s");
+    }
+
+    #[test]
+    fn default_spec_has_no_tcp_timeout() {
+        assert!(EdgionGatewayConfigSpec::default().tcp_timeout.is_none());
     }
 }
 

@@ -182,7 +182,7 @@ src/core/common/
 
 **Dependency direction constraints**:
 - `common` must not depend on `gateway`
-- `common` must not depend on `controller` (3 historical legacy exceptions remain to be cleaned up; see below)
+- `common` must not depend on `controller` (2 historical legacy exceptions remain to be cleaned up; see below)
 - `center` must not depend on `controller`
 
 Types shared across bins (such as RegionRoute Entry types) must live in `types/`, so each side depends on `types` rather than depending on each other. JWT/JWK utilities and other logic shared by both sides must live in `common/`, with gateway/center depending on it.
@@ -190,9 +190,8 @@ Types shared across bins (such as RegionRoute Entry types) must live in `types/`
 **Known historical legacy exceptions (`common → controller`, to be cleaned up later):**
 - `common/config/mod.rs` → `controller::conf_mgr::{ConfCenterConfig, FileSystemConfig}`
 - `common/utils/metadata_filter.rs` → `controller::conf_mgr::conf_center::MetadataFilterConfig`
-- `common/local_auth/secret.rs` → `controller::conf_mgr::conf_center::traits::{CenterApi, ConfWriterError}`
 
-When you encounter these three places do not mistake them for new violations; fixing them requires lifting the related configuration/traits up into `types/` or `common/`, which is a separate task.
+When you encounter these two places do not mistake them for new violations; fixing them requires lifting the related configuration/traits up into `types/` or `common/`, which is a separate task.
 
 Do not move code into `common/` simply to avoid a cross-module import. Keep ownership clear by business domain.
 
