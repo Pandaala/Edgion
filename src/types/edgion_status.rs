@@ -145,6 +145,18 @@ pub enum EdgionStatus {
     /// selection. Surfaced to the gRPC client as `grpc-status: 4` (DEADLINE_EXCEEDED)
     /// via the standard 504 → grpc-status mapping.
     GrpcClientDeadlineExceeded = 504_02,
+
+    /// A response-phase plugin replaced the upstream response with a local reply
+    /// (status + headers + body). Informational: this is the normal, intended
+    /// outcome of the `sendLocalReply` equivalent. No fixed HTTP status (the
+    /// replacement status is whatever the plugin chose), so `999` family.
+    PluginResponseReplaced = 999_03,
+
+    /// A response-phase plugin returned `ErrResponse` on a gRPC route. gRPC
+    /// response/body substitution is not supported this iteration: the response
+    /// is terminated by status only and the body is not replaced. Surfaces the
+    /// previously-silent termination. See `tasks/todo/filter-04-response-local-reply.md`.
+    PluginResponseReplaceUnsupportedGrpc = 999_04,
 }
 
 impl EdgionStatus {
@@ -217,6 +229,8 @@ mod tests {
             EdgionStatus::ForwardAuthServiceUnreachable => Some(503),
             EdgionStatus::RequestTimeoutExceeded => Some(504),
             EdgionStatus::GrpcClientDeadlineExceeded => Some(504),
+            EdgionStatus::PluginResponseReplaced => None,
+            EdgionStatus::PluginResponseReplaceUnsupportedGrpc => None,
         }
     }
 
@@ -265,6 +279,8 @@ mod tests {
             EdgionStatus::ForwardAuthServiceUnreachable,
             EdgionStatus::RequestTimeoutExceeded,
             EdgionStatus::GrpcClientDeadlineExceeded,
+            EdgionStatus::PluginResponseReplaced,
+            EdgionStatus::PluginResponseReplaceUnsupportedGrpc,
         ];
         for &s in all {
             assert_eq!(s.http_status(), expected_http(s), "http_status mismatch for {s:?}");
