@@ -812,6 +812,21 @@ pub struct EdgionHttpContext {
     /// Populated by `pg_request_filter`, read by `ExtensionRefFilter::prepare_execution`
     /// via `PluginSession::resolved_route_ext_ref(index)` (added in Task 4).
     pub resolved_route_ext_refs: Option<Arc<Vec<Option<Arc<PluginRuntime>>>>>,
+
+    /// Response-phase local-reply body, set by a response-phase plugin that
+    /// returned `ErrResponse { status, body }` (Phase 6 sync or Phase 7 async)
+    /// and consumed by `upstream_response_body_filter` (Phase 8). `Some` until
+    /// the body filter injects it on the first chunk; the replacement response
+    /// header (status + framing) was already rewritten in place during the
+    /// plugin phase. See `tasks/todo/filter-04-response-local-reply.md`.
+    pub local_reply_body: Option<bytes::Bytes>,
+
+    /// True once a response-phase local reply has been decided. Gates the
+    /// Phase-8 body swap (inject first chunk, drop the rest) and the
+    /// inter-group short-circuit in the response-filter hooks. Distinct from
+    /// `local_reply_body` because the body is `take()`n on the first chunk
+    /// while subsequent upstream chunks must still be dropped.
+    pub local_reply_active: bool,
 }
 
 impl Default for EdgionHttpContext {
@@ -867,6 +882,8 @@ impl EdgionHttpContext {
             allow_loopback_upstream: false,
             resolved_global_plugins: None,
             resolved_route_ext_refs: None,
+            local_reply_body: None,
+            local_reply_active: false,
         }
     }
 
@@ -1433,5 +1450,17 @@ mod cached_query_tests {
         // Subsequent call with Some(...) must NOT replace the cached empty map.
         let map2 = ctx.cached_query(Some("a=1"));
         assert!(map2.is_empty(), "OnceLock already initialized to empty");
+    }
+}
+
+#[cfg(test)]
+mod local_reply_tests {
+    use super::*;
+
+    #[test]
+    fn local_reply_defaults_are_inactive() {
+        let ctx = EdgionHttpContext::default();
+        assert!(ctx.local_reply_body.is_none());
+        assert!(!ctx.local_reply_active);
     }
 }
