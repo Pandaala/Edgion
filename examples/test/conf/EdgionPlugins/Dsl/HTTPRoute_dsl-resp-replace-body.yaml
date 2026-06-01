@@ -1,0 +1,26 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsl-resp-replace-body-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dsl-resp-replace-body.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /status
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-resp-replace-body
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

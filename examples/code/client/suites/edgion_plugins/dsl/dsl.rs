@@ -1489,6 +1489,54 @@ impl DslTestSuite {
         )
     }
 
+    // ==================== Test 20b: resp replace body ====================
+
+    /// Test: upstream returns 502 → DSL response plugin replaces the body with a
+    /// normalized JSON envelope (filter-04 sendLocalReply equivalent).
+    fn test_resp_replace_body() -> TestCase {
+        TestCase::new(
+            "dsl_resp_replace_body",
+            "DSL upstreamResponseFilter: upstream 502 → body replaced with normalized envelope",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/status/502", ctx.target_host);
+                    let response = ctx
+                        .http_client
+                        .get(url)
+                        .header("host", "dsl-resp-replace-body.example.com")
+                        .send()
+                        .await;
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let body = resp.text().await.unwrap_or_default();
+                            let expected = "{\"error\":\"upstream_error\",\"code\":502}";
+                            if status == 502 && body == expected {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Upstream 502 body replaced with normalized envelope"
+                                        .to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected status=502 body={:?}, got status={} body={:?}",
+                                        expected, status, body
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => {
+                            TestResult::failed(start.elapsed(), format!("Request failed: {}", e))
+                        }
+                    }
+                })
+            },
+        )
+    }
+
     // ==================== Test 21: Utility Combo ====================
 
     /// Test: multiple P3 utility functions in one DSL script
@@ -2305,6 +2353,8 @@ impl TestSuite for DslTestSuite {
             Self::test_terminate_normal_pass(),
             // Scenario 20: resp.set_status
             Self::test_resp_set_status_rewrite(),
+            // Scenario 20b: resp replace body (filter-04 sendLocalReply equivalent)
+            Self::test_resp_replace_body(),
             // Scenario 21: Utility combo (hex, json_get, uuid, ip_in_cidr, join, protocol)
             Self::test_utility_combo(),
             // Scenario 22: HMAC verify
