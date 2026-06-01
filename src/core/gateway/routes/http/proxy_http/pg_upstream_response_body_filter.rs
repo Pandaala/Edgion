@@ -29,6 +29,20 @@ pub fn upstream_response_body_filter(
         }
     }
 
+    // Response-phase local reply: a plugin replaced the response. Inject the
+    // stashed body on the first chunk and drop all remaining upstream chunks.
+    // Pingora still reads the upstream body to completion to drive this filter,
+    // so the upstream connection drains gracefully (no reset). The replacement
+    // is framed by the content-length set during the plugin phase. Bandwidth
+    // throttling is meaningless for a substituted body, so we return early.
+    if ctx.local_reply_active {
+        match ctx.local_reply_body.take() {
+            Some(replacement) => *body = Some(replacement), // first chunk: inject
+            None => *body = None,                            // later chunks: drop
+        }
+        return Ok(None);
+    }
+
     // Run upstream_response_body_filter plugins for bandwidth throttling
     let mut max_delay: Option<Duration> = None;
 
