@@ -124,20 +124,27 @@ pub fn upstream_response_filter(
     }
 
     // Run backend-level upstream_response edgion_plugins (sync)
-    if let Some(backend) = ctx.selected_backend.clone() {
-        backend
-            .plugin_runtime
-            .run_upstream_response_plugins_sync(session, ctx, upstream_response);
+    if !ctx.local_reply_active {
+        if let Some(backend) = ctx.selected_backend.clone() {
+            backend
+                .plugin_runtime
+                .run_upstream_response_plugins_sync(session, ctx, upstream_response);
+        }
     }
 
     // Run global plugins (D3-A gap fill from unified snapshot Phase 2).
     // Order: route → backend → global (onion: response stages go inner → outer).
-    if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(std::sync::Arc::clone) {
-        for runtime in plugins.iter() {
-            if runtime.upstream_response_plugins_count() == 0 {
-                continue;
+    if !ctx.local_reply_active {
+        if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(std::sync::Arc::clone) {
+            for runtime in plugins.iter() {
+                if ctx.local_reply_active {
+                    break;
+                }
+                if runtime.upstream_response_plugins_count() == 0 {
+                    continue;
+                }
+                runtime.run_upstream_response_plugins_sync(session, ctx, upstream_response);
             }
-            runtime.run_upstream_response_plugins_sync(session, ctx, upstream_response);
         }
     }
 
