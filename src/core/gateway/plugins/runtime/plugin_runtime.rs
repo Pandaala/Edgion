@@ -1090,7 +1090,7 @@ impl PluginRuntime {
                     Some(std::time::Instant::now().saturating_duration_since(start).as_micros() as u64);
             }
 
-            let should_terminate = check_response_stage_terminate(&result, &mut plugin_log);
+            let should_terminate = check_response_stage_terminate(&result, &mut plugin_log, &mut session_adapter);
             filter_logs.push(plugin_log);
 
             if should_terminate {
@@ -1180,7 +1180,7 @@ impl PluginRuntime {
                     Some(std::time::Instant::now().saturating_duration_since(start).as_micros() as u64);
             }
 
-            let should_terminate = check_response_stage_terminate(&result, &mut plugin_log);
+            let should_terminate = check_response_stage_terminate(&result, &mut plugin_log, &mut session_adapter);
             filter_logs.push(plugin_log);
 
             if should_terminate {
@@ -1197,16 +1197,32 @@ impl PluginRuntime {
     }
 }
 
-/// Check if a plugin result should terminate execution in the response stage.
-/// Response headers from upstream have been received but not yet sent to the client.
-/// However, we cannot replace them with ErrResponse/ErrGrpcError (sync context has no
-/// async I/O; async context has no way to substitute a different response body).
-/// Instead, log the error details to access log (PluginLog) and terminate.
-fn check_response_stage_terminate(result: &PluginRunningResult, plugin_log: &mut PluginLog) -> bool {
+/// Check if a plugin result should terminate execution in the response stage,
+/// and — for HTTP routes — turn an `ErrResponse { status, body }` into a local
+/// reply that fully replaces the upstream response (status + headers + body).
+///
+/// The header rebuild + body stash is synchronous, so this is shared by both
+/// the sync Phase-6 (`run_upstream_response_plugins_sync`) and async Phase-7
+/// (`run_upstream_response_plugins_async`) loops. The Phase-8
+/// `upstream_response_body_filter` injects the stashed body and drops the
+/// upstream chunks. gRPC routes are unsupported this iteration: the response is
+/// terminated by status only (body not replaced) and a marker is recorded.
+fn check_response_stage_terminate(
+    result: &PluginRunningResult,
+    plugin_log: &mut PluginLog,
+    adapter: &mut PingoraSessionAdapter<'_>,
+) -> bool {
     match result {
         PluginRunningResult::ErrTerminateRequest => true,
-        PluginRunningResult::ErrResponse { status, .. } => {
-            plugin_log.push_fmt("deny response {}", la![status.to_string().as_str()]);
+        PluginRunningResult::ErrResponse { status, body } => {
+            if adapter.apply_response_local_reply(*status, body.clone()) {
+                plugin_log.push_fmt("replace response {}", la![status.to_string().as_str()]);
+            } else {
+                // gRPC route (or no header bound): keep legacy log-and-terminate
+                // behavior, but surface the previously-silent termination.
+                plugin_log.push_fmt("deny response {}", la![status.to_string().as_str()]);
+                adapter.note_response_local_reply_unsupported();
+            }
             true
         }
         PluginRunningResult::ErrGrpcError { grpc_status, .. } => {
