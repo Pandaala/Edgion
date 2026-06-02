@@ -13,6 +13,12 @@ pub fn upstream_response_filter(
     upstream_response: &mut ResponseHeader,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<()> {
+    // filter-04b: clear any stale local-reply stash from a previous upstream
+    // attempt before this attempt's response-phase plugins run.
+    ctx.local_reply_header = None;
+    ctx.local_reply_body = None;
+    ctx.local_reply_written = false;
+
     // Record status code
     let status_code = upstream_response.status.as_u16();
     ctx.request_info.status = Some(status_code);
@@ -124,7 +130,7 @@ pub fn upstream_response_filter(
     }
 
     // Run backend-level upstream_response edgion_plugins (sync)
-    if !ctx.local_reply_active {
+    if ctx.local_reply_header.is_none() {
         if let Some(backend) = ctx.selected_backend.clone() {
             backend
                 .plugin_runtime
@@ -134,10 +140,10 @@ pub fn upstream_response_filter(
 
     // Run global plugins (D3-A gap fill from unified snapshot Phase 2).
     // Order: route → backend → global (onion: response stages go inner → outer).
-    if !ctx.local_reply_active {
+    if ctx.local_reply_header.is_none() {
         if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(std::sync::Arc::clone) {
             for runtime in plugins.iter() {
-                if ctx.local_reply_active {
+                if ctx.local_reply_header.is_some() {
                     break;
                 }
                 if runtime.upstream_response_plugins_count() == 0 {
