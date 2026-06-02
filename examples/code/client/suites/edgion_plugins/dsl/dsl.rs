@@ -1534,6 +1534,48 @@ impl DslTestSuite {
         )
     }
 
+    /// filter-04b: upstream returns a BODY-LESS 502 (Content-Length: 0); the DSL
+    /// response plugin must still deliver the full normalized envelope.
+    fn test_resp_replace_bodyless() -> TestCase {
+        TestCase::new(
+            "dsl_resp_replace_bodyless",
+            "DSL response: body-less upstream 502 -> full envelope delivered (filter-04b)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let expected = "{\"error\":\"upstream_error\",\"code\":502}";
+                    // Fire 5x to also assert the backend is not circuit-broken by the replacements.
+                    for i in 0..5 {
+                        let url = format!("http://{}:31180/status-empty/502", ctx.target_host);
+                        let resp = ctx
+                            .http_client
+                            .get(url)
+                            .header("host", "dsl-resp-replace-empty.example.com")
+                            .send()
+                            .await;
+                        match resp {
+                            Ok(r) => {
+                                let status = r.status().as_u16();
+                                let body = r.text().await.unwrap_or_default();
+                                if status != 502 || body != expected {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("iter {i}: expected 502 + envelope, got status={status} body={body:?}"),
+                                    );
+                                }
+                            }
+                            Err(e) => return TestResult::failed(start.elapsed(), format!("iter {i} request failed: {e}")),
+                        }
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "Body-less upstream 502 replaced with full envelope x5 (no CB ejection)".to_string(),
+                    )
+                })
+            },
+        )
+    }
+
     // ==================== Test 21: Utility Combo ====================
 
     /// Test: multiple P3 utility functions in one DSL script
@@ -2352,6 +2394,7 @@ impl TestSuite for DslTestSuite {
             Self::test_resp_set_status_rewrite(),
             // Scenario 20b: resp replace body (filter-04 sendLocalReply equivalent)
             Self::test_resp_replace_body(),
+            Self::test_resp_replace_bodyless(),
             // Scenario 21: Utility combo (hex, json_get, uuid, ip_in_cidr, join, protocol)
             Self::test_utility_combo(),
             // Scenario 22: HMAC verify

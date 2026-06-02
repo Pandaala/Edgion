@@ -333,6 +333,7 @@ fn create_echo_router(server_addr_str: String) -> Router {
         )
         .route("/webhook/healthz", get(health_handler))
         .route("/status/{code}", get(status_handler))
+        .route("/status-empty/{code}", get(status_empty_handler))
         .route("/delay/{seconds}", get(delay_handler))
         // --- Mirror endpoints (for RequestMirror plugin integration tests) ---
         // POST/GET to /mirror/capture: gateway mirrors requests here; stored by x-trace-id
@@ -872,6 +873,15 @@ async fn status_handler(Path(code): Path<u16>) -> impl IntoResponse {
     (
         axum::http::StatusCode::from_u16(code).unwrap_or(axum::http::StatusCode::OK),
         format!("Status: {}", code),
+    )
+}
+
+async fn status_empty_handler(Path(code): Path<u16>) -> impl IntoResponse {
+    // Body-less response: status code with an empty body (Content-Length: 0).
+    // Exercises the filter-04b path where the upstream sends no body bytes.
+    (
+        axum::http::StatusCode::from_u16(code).unwrap_or(axum::http::StatusCode::OK),
+        String::new(),
     )
 }
 
