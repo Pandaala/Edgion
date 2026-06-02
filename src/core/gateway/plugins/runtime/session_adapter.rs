@@ -21,15 +21,14 @@ pub struct PingoraSessionAdapter<'a> {
     grpc_response_terminated: bool,
 }
 
-/// Rebuild `header` as a local reply (clear-and-rebuild) and stash the body in
-/// `ctx` for Phase-8 injection. Pure/synchronous so it is unit-testable without
-/// a Pingora `Session`. Returns `false` (and makes no change) for gRPC routes —
-/// gRPC response substitution is unsupported this iteration.
+/// Build a fresh local-reply `ResponseHeader` + body and stash them in `ctx`
+/// for `response_filter` to write downstream (filter-04b). Pure/synchronous and
+/// unit-testable; refuses gRPC routes (Upgrade/1xx are refused by the caller,
+/// `apply_response_local_reply`, which has the session + upstream header).
 ///
-/// `is_head` and a 204/304 status make the reply body-less: no `content-length`
-/// is written and the stashed body is empty.
+/// `is_head` or a 204/304 status makes the reply body-less (no content-length,
+/// empty stashed body).
 pub(crate) fn build_response_local_reply(
-    header: &mut ResponseHeader,
     ctx: &mut EdgionHttpContext,
     status: u16,
     body: Option<String>,
@@ -42,34 +41,25 @@ pub(crate) fn build_response_local_reply(
         return false;
     };
     let bodyless = is_head || matches!(status, 204 | 304);
-
-    // Clear-and-rebuild by replacing the whole header: clearing only
-    // `header.headers` (the value map) would leave Pingora's parallel
-    // `header_name_map` (case map) stale and panic on H1 wire serialization.
-    // Building fresh and inserting via the pingora API keeps both maps in sync.
     let Ok(mut fresh) = ResponseHeader::build(code, None) else {
         return false;
     };
     let body_bytes = body.map(bytes::Bytes::from).unwrap_or_default();
     if !bodyless {
-        // Default content-type; a plugin-queued Set may override it below.
         let _ = fresh.insert_header("content-type", "text/plain");
     }
     if let Some(tid) = ctx.request_info.x_trace_id.as_deref() {
         let _ = fresh.insert_header("x-trace-id", tid);
     }
+    // Apply queued plugin header ops, then re-assert framing so a queued
+    // Set/Remove Content-Length cannot desync the wire from the body.
     ctx.drain_pending_response_header_ops(&mut fresh);
     if !bodyless {
-        // Re-assert framing AFTER draining queued ops: a plugin-queued
-        // Set/Remove of Content-Length (or a stray Transfer-Encoding) must not
-        // desync the wire framing from the body the Phase-8 filter injects.
         let _ = fresh.remove_header(&http::header::TRANSFER_ENCODING);
         let _ = fresh.insert_header("content-length", body_bytes.len().to_string());
     }
-    *header = fresh;
-
+    ctx.local_reply_header = Some(Box::new(fresh));
     ctx.local_reply_body = Some(if bodyless { bytes::Bytes::new() } else { body_bytes });
-    ctx.local_reply_active = true;
     ctx.add_info(EdgionStatus::PluginResponseReplaced);
     true
 }
@@ -104,16 +94,30 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.ctx.plugin_running_result = PluginRunningResult::ErrTerminateRequest;
     }
 
-    /// Apply a response-phase local reply: rebuild the bound response header in
-    /// place and stash the body for Phase-8 injection. Returns `true` when a
-    /// local reply was applied (HTTP route with a bound header), `false` for a
-    /// gRPC route or when no response header is bound.
+    /// Decide + stash a response-phase local reply. Returns `true` when a reply
+    /// was stashed (HTTP route, not an upgrade/informational response).
+    /// Refuses: gRPC route, Upgrade/CONNECT request, 1xx/101 upstream response,
+    /// or no bound response header. The actual downstream write happens later in
+    /// `response_filter` (filter-04b).
     pub fn apply_response_local_reply(&mut self, status: u16, body: Option<String>) -> bool {
-        let is_head = self.inner.req_header().method == http::Method::HEAD;
-        match self.response_header.as_deref_mut() {
-            Some(header) => build_response_local_reply(header, self.ctx, status, body, is_head),
-            None => false,
+        if self.response_header.is_none() {
+            return false;
         }
+        let (is_head, refuse) = {
+            let req = self.inner.req_header();
+            let upgrade = req.method == http::Method::CONNECT
+                || req.headers.get(http::header::UPGRADE).is_some();
+            let informational = self
+                .response_header
+                .as_deref()
+                .map(|h| h.status.is_informational())
+                .unwrap_or(false);
+            (req.method == http::Method::HEAD, upgrade || informational)
+        };
+        if refuse {
+            return false;
+        }
+        build_response_local_reply(self.ctx, status, body, is_head)
     }
 
     /// Record that a response-phase `ErrResponse` could not be turned into a
@@ -731,100 +735,72 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 mod local_reply_tests {
     use super::*;
     use crate::types::EdgionHttpContext;
-    use pingora_http::ResponseHeader;
 
     #[test]
-    fn rebuild_replaces_status_and_frames_body() {
+    fn build_stashes_status_and_framed_body() {
         let mut ctx = EdgionHttpContext::default();
-        let mut header = ResponseHeader::build(502, None).unwrap();
-        header.insert_header("content-encoding", "gzip").unwrap();
-        header.insert_header("x-backend-secret", "leak").unwrap();
-
-        let applied = build_response_local_reply(
-            &mut header,
-            &mut ctx,
-            403,
-            Some("{\"error\":\"forbidden\"}".to_string()),
-            false,
-        );
-
+        let applied = build_response_local_reply(&mut ctx, 403, Some("{\"error\":\"forbidden\"}".to_string()), false);
         assert!(applied);
-        assert_eq!(header.status.as_u16(), 403);
-        assert!(header.headers.get("content-encoding").is_none());
-        assert!(header.headers.get("x-backend-secret").is_none());
-        assert_eq!(
-            header.headers.get("content-type").unwrap().to_str().unwrap(),
-            "text/plain"
-        );
-        assert_eq!(header.headers.get("content-length").unwrap().to_str().unwrap(), "21");
-        assert!(ctx.local_reply_active);
-        assert_eq!(
-            ctx.local_reply_body.as_ref().unwrap().as_ref(),
-            b"{\"error\":\"forbidden\"}"
-        );
+        let h = ctx.local_reply_header.as_ref().expect("header stashed");
+        assert_eq!(h.status.as_u16(), 403);
+        assert_eq!(h.headers.get("content-type").unwrap().to_str().unwrap(), "text/plain");
+        assert_eq!(h.headers.get("content-length").unwrap().to_str().unwrap(), "21");
+        assert!(h.headers.get("content-encoding").is_none());
+        assert_eq!(ctx.local_reply_body.as_ref().unwrap().as_ref(), b"{\"error\":\"forbidden\"}");
     }
 
     #[test]
-    fn rebuild_none_body_yields_empty_with_zero_length() {
+    fn build_none_body_is_zero_length() {
         let mut ctx = EdgionHttpContext::default();
-        let mut header = ResponseHeader::build(500, None).unwrap();
-        let applied = build_response_local_reply(&mut header, &mut ctx, 500, None, false);
-        assert!(applied);
-        assert_eq!(header.headers.get("content-length").unwrap().to_str().unwrap(), "0");
+        assert!(build_response_local_reply(&mut ctx, 500, None, false));
+        let h = ctx.local_reply_header.as_ref().unwrap();
+        assert_eq!(h.headers.get("content-length").unwrap().to_str().unwrap(), "0");
         assert_eq!(ctx.local_reply_body.as_ref().unwrap().len(), 0);
     }
 
     #[test]
-    fn rebuild_head_suppresses_body_and_length() {
+    fn build_head_is_bodyless() {
         let mut ctx = EdgionHttpContext::default();
-        let mut header = ResponseHeader::build(200, None).unwrap();
-        let applied = build_response_local_reply(&mut header, &mut ctx, 403, Some("denied".into()), true);
-        assert!(applied);
-        assert!(ctx.local_reply_active);
-        assert!(header.headers.get("content-length").is_none());
+        assert!(build_response_local_reply(&mut ctx, 403, Some("denied".into()), true));
+        let h = ctx.local_reply_header.as_ref().unwrap();
+        assert!(h.headers.get("content-length").is_none());
         assert_eq!(ctx.local_reply_body.as_ref().unwrap().len(), 0);
     }
 
     #[test]
-    fn rebuild_204_is_bodyless() {
+    fn build_204_is_bodyless() {
         let mut ctx = EdgionHttpContext::default();
-        let mut header = ResponseHeader::build(200, None).unwrap();
-        let applied = build_response_local_reply(&mut header, &mut ctx, 204, Some("ignored".into()), false);
-        assert!(applied);
-        assert!(ctx.local_reply_active);
-        assert!(header.headers.get("content-length").is_none());
+        assert!(build_response_local_reply(&mut ctx, 204, Some("ignored".into()), false));
+        let h = ctx.local_reply_header.as_ref().unwrap();
+        assert!(h.headers.get("content-length").is_none());
         assert_eq!(ctx.local_reply_body.as_ref().unwrap().len(), 0);
     }
 
     #[test]
-    fn rebuild_grpc_route_is_refused() {
+    fn build_grpc_route_is_refused() {
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.is_grpc_request = true;
-        // Build the header at 200, attempt to replace with 502 — the gRPC early-return
-        // must leave the header completely untouched.
-        let mut header = ResponseHeader::build(200, None).unwrap();
-        let applied = build_response_local_reply(&mut header, &mut ctx, 502, Some("x".into()), false);
-        assert!(!applied);
-        assert!(!ctx.local_reply_active);
+        assert!(!build_response_local_reply(&mut ctx, 502, Some("x".into()), false));
+        assert!(ctx.local_reply_header.is_none());
         assert!(ctx.local_reply_body.is_none());
-        // Confirm the early-return mutated nothing: status must still be 200.
-        assert_eq!(header.status.as_u16(), 200);
     }
 
     #[test]
-    fn rebuild_drains_queued_header_ops_over_defaults() {
+    fn build_drains_queued_ops_then_reasserts_content_length() {
         let mut ctx = EdgionHttpContext::default();
         ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
             name: "content-type".to_string(),
             value: "application/json".to_string(),
         });
-        let mut header = ResponseHeader::build(502, None).unwrap();
-        let applied = build_response_local_reply(&mut header, &mut ctx, 502, Some("{}".into()), false);
-        assert!(applied);
-        assert_eq!(
-            header.headers.get("content-type").unwrap().to_str().unwrap(),
-            "application/json"
-        );
+        ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+            name: "content-length".to_string(),
+            value: "999".to_string(),
+        });
+        assert!(build_response_local_reply(&mut ctx, 502, Some("{}".into()), false));
+        let h = ctx.local_reply_header.as_ref().unwrap();
+        // queued content-type wins; queued content-length is overridden by the framing re-assert.
+        assert_eq!(h.headers.get("content-type").unwrap().to_str().unwrap(), "application/json");
+        assert_eq!(h.headers.get("content-length").unwrap().to_str().unwrap(), "2");
     }
 }
 
