@@ -52,13 +52,20 @@ pub(crate) fn build_response_local_reply(
     };
     let body_bytes = body.map(bytes::Bytes::from).unwrap_or_default();
     if !bodyless {
+        // Default content-type; a plugin-queued Set may override it below.
         let _ = fresh.insert_header("content-type", "text/plain");
-        let _ = fresh.insert_header("content-length", body_bytes.len().to_string());
     }
     if let Some(tid) = ctx.request_info.x_trace_id.as_deref() {
         let _ = fresh.insert_header("x-trace-id", tid);
     }
     ctx.drain_pending_response_header_ops(&mut fresh);
+    if !bodyless {
+        // Re-assert framing AFTER draining queued ops: a plugin-queued
+        // Set/Remove of Content-Length (or a stray Transfer-Encoding) must not
+        // desync the wire framing from the body the Phase-8 filter injects.
+        let _ = fresh.remove_header(&http::header::TRANSFER_ENCODING);
+        let _ = fresh.insert_header("content-length", body_bytes.len().to_string());
+    }
     *header = fresh;
 
     ctx.local_reply_body = Some(if bodyless { bytes::Bytes::new() } else { body_bytes });
