@@ -363,7 +363,10 @@ impl EdgionTlsPassthroughProxy {
 
     /// Bidirectional data transfer between downstream and upstream.
     async fn duplex(&self, downstream: Stream, upstream: Stream, ctx: &mut TlsContext) {
-        bidirectional_relay(downstream, upstream, TlsDuplexHooks { ctx }).await;
+        let idle = crate::types::resources::edgion_gateway_config::resolve_tcp_idle_timeout(
+            self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
+        );
+        bidirectional_relay(downstream, upstream, TlsDuplexHooks { ctx }, idle).await;
     }
 
     /// Check if any listener on this port accepts the given SNI hostname.

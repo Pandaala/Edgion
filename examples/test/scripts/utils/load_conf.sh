@@ -256,7 +256,8 @@ verify_sync() {
     
     "${BIN_DIR}/examples/resource_diff" \
         --controller-url "$CONTROLLER_URL" \
-        --gateway-url "$GATEWAY_ADMIN_URL"
+        --gateway-url "$GATEWAY_ADMIN_URL" \
+        --gateway-probe-url "${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:28000}"
     
     return $?
 }

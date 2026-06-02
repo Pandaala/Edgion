@@ -50,6 +50,11 @@ error categories, timeouts. Cross-check:
 - `TlsDuplexHooks::on_error` — mapping to `err_log` strings.
 - If you add a new `DuplexError` variant, every hook impl must cover it
   (compiler-enforced via the exhaustive `match`).
+- Idle timeout (landed 2026-06-02, finding fr-l4-02): `bidirectional_relay` takes
+  `idle_timeout: Option<Duration>` and is bounded by a single idle clock reset on
+  any byte progress (read or partial write) via `write_all_idle` / `flush_idle`.
+  `DuplexError::IdleTimeout` maps to `TcpStatus::IdleTimeout` and the TLS
+  `"idle timeout"` err_log. Value comes from `resolve_tcp_idle_timeout(spec.tcpTimeout)`.
 
 ## Behavior contract preserved by the helper
 

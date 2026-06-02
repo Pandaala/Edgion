@@ -51,6 +51,9 @@ pub enum TcpStatus {
     UpstreamWriteError,
     DownstreamReadError,
     DownstreamWriteError,
+    /// The bidirectional relay was closed because it stayed idle past the
+    /// configured `tcpTimeout.idleTimeout` window.
+    IdleTimeout,
 }
 
 impl TcpStatus {
@@ -72,6 +75,7 @@ impl TcpStatus {
             Self::UpstreamWriteError => "UpstreamWriteError",
             Self::DownstreamReadError => "DownstreamReadError",
             Self::DownstreamWriteError => "DownstreamWriteError",
+            Self::IdleTimeout => "IdleTimeout",
         }
     }
 }
@@ -208,7 +212,10 @@ impl EdgionTcpProxy {
     }
 
     async fn duplex(&self, downstream: Stream, upstream: Stream, ctx: &mut TcpContext) {
-        bidirectional_relay(downstream, upstream, TcpDuplexHooks { ctx }).await;
+        let idle = crate::types::resources::edgion_gateway_config::resolve_tcp_idle_timeout(
+            self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
+        );
+        bidirectional_relay(downstream, upstream, TcpDuplexHooks { ctx }, idle).await;
     }
 
     async fn log_connection(&self, ctx: &TcpContext) {
@@ -254,6 +261,7 @@ impl DuplexHooks for TcpDuplexHooks<'_> {
             DuplexError::DownstreamWrite => TcpStatus::DownstreamWriteError,
             // Collapse flush failure into DownstreamWriteError to match prior behavior.
             DuplexError::DownstreamFlush => TcpStatus::DownstreamWriteError,
+            DuplexError::IdleTimeout => TcpStatus::IdleTimeout,
             DuplexError::UpstreamRead => TcpStatus::UpstreamReadError,
         };
     }

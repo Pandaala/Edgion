@@ -30,7 +30,7 @@ spec:
     requireSniHostMatch: true
     fallbackSni: "default.example.com"
 
-  # HTTP 
+  # HTTP
   httpTimeout:
     client:
       readTimeout: 60s
@@ -40,3 +40,9 @@ spec:
       defaultConnectTimeout: 5s
       defaultRequestTimeout: 60s
       defaultIdleTimeout: 300s
+
+  # L4 (TCP/TLS) relay idle timeout. Short value so the idle-timeout integration
+  # scenario closes a stalled connection quickly. All existing L4 suites are
+  # sub-second single connections, so this does not sever them.
+  tcpTimeout:
+    idleTimeout: 2s

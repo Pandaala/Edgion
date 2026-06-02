@@ -118,6 +118,26 @@ spec:
 | `defaultRequestTimeout` | `Duration` | `60s` | Total request timeout including retries |
 | `defaultIdleTimeout` | `Duration` | `300s` | Connection pool idle timeout |
 
+### spec.tcpTimeout
+
+Idle timeout for established L4 relays — plain TCP, TLS-terminated, and TLS-passthrough. UDP has its own session model and is not affected.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `idleTimeout` | Duration string | `1h` | Closes a relay that makes no byte progress in either direction for this window. The clock resets on any completed read or advancing partial write, so active and slow-but-draining transfers are not severed. |
+
+**Secure by default:** If you omit the entire `tcpTimeout` section, the `1h` idle timeout still applies — every L4 relay is bounded without configuration.
+
+**Opt-out and risk:** Set `idleTimeout: "0"` (or `"0s"`) to disable the timeout (unbounded relay). This re-opens a resource-exhaustion risk: a stalled or trickle-sending peer can hold a relay — and its socket, task, and buffers — open indefinitely, with no in-process connection cap. Only disable it if a higher layer bounds connection lifetime.
+
+> **Known limitation:** An idle timeout does not stop a determined trickle attacker (a byte every N seconds resets the clock, on either the read or write half). Bounding that would require a total-duration cap, which would sever legitimate long-idle connections (DB pools, message queues, long-poll, SSH) and is not a sane default.
+
+```yaml
+spec:
+  tcpTimeout:
+    idleTimeout: 1h
+```
+
 ### spec.maxRetries
 
 | Parameter | Type | Default | Description |

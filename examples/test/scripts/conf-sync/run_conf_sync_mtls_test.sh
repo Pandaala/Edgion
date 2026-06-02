@@ -33,6 +33,7 @@ EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 CONTROLLER_GRPC_PORT="${EDGION_TEST_MTLS_GRPC_PORT:-50061}"
 CONTROLLER_ADMIN_PORT=5800
 GATEWAY_ADMIN_PORT=5810
+GATEWAY_PROBE_PORT=28000
 TEST_SERVER_HTTP_PORT=30001
 
 # Controller admin auth credentials (used by local_auth in the generated config)
@@ -497,7 +498,7 @@ EOF
         exit 1
     fi
 
-    if ! wait_for_ready "http://127.0.0.1:${GATEWAY_ADMIN_PORT}/ready" "gateway" 60; then
+    if ! wait_for_ready "http://127.0.0.1:${GATEWAY_PROBE_PORT}/ready" "gateway" 60; then
         log_error "Gateway not ready. Log:"
         tail -50 "${log_dir}/gateway.log" 2>/dev/null || true
         exit 1
@@ -567,14 +568,14 @@ test_mtls_log_entries() {
 # =============================================================================
 test_health() {
     curl -sf "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/health" >/dev/null 2>&1 && \
-    curl -sf "http://127.0.0.1:${GATEWAY_ADMIN_PORT}/health" >/dev/null 2>&1
+    curl -sf "http://127.0.0.1:${GATEWAY_PROBE_PORT}/health" >/dev/null 2>&1
 }
 
 # =============================================================================
 # Test: Gateway readiness (implies successful mTLS sync)
 # =============================================================================
 test_gateway_ready() {
-    curl -sf "http://127.0.0.1:${GATEWAY_ADMIN_PORT}/ready" >/dev/null 2>&1
+    curl -sf "http://127.0.0.1:${GATEWAY_PROBE_PORT}/ready" >/dev/null 2>&1
 }
 
 # =============================================================================

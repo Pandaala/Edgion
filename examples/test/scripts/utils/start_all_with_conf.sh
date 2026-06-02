@@ -68,6 +68,7 @@ CONTROLLER_GRPC_PORT="${EDGION_TEST_CONTROLLER_GRPC_PORT:-50051}"
 GATEWAY_HTTP_PORT=31000
 GATEWAY_ADMIN_PORT="${EDGION_TEST_GATEWAY_ADMIN_PORT:-5810}"
 export EDGION_GATEWAY_ADMIN_URL="http://127.0.0.1:${GATEWAY_ADMIN_PORT}"
+GATEWAY_PROBE_PORT="${GATEWAY_PROBE_PORT:-28000}"
 
 # LoadTestsuite（default，Loadall）
 SUITES=""
@@ -447,9 +448,14 @@ start_gateway() {
         tail -20 "${LOG_DIR}/gateway.log" 2>/dev/null || true
         exit 1
     fi
-    
+    if ! wait_for_port $GATEWAY_PROBE_PORT "edgion-gateway probe" $pid 30; then
+        log_error "edgion-gateway probe port not ready, view log: ${LOG_DIR}/gateway.log"
+        tail -20 "${LOG_DIR}/gateway.log" 2>/dev/null || true
+        exit 1
+    fi
+
     # Wait for Gateway to be fully ready (all caches synced from Controller)
-    if ! wait_for_ready "http://127.0.0.1:${GATEWAY_ADMIN_PORT}/ready" "edgion-gateway" 60; then
+    if ! wait_for_ready "http://127.0.0.1:${GATEWAY_PROBE_PORT}/ready" "edgion-gateway" 60; then
         log_error "edgion-gateway ，viewlog: ${LOG_DIR}/gateway.log"
         tail -30 "${LOG_DIR}/gateway.log" 2>/dev/null || true
         exit 1
@@ -737,6 +743,7 @@ verify_sync() {
         if "$resource_diff" \
             --controller-url "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" \
             --gateway-url "http://127.0.0.1:${GATEWAY_ADMIN_PORT}" \
+            --gateway-probe-url "http://127.0.0.1:${GATEWAY_PROBE_PORT}" \
             > "${LOG_DIR}/resource_diff.log" 2>&1; then
             log_success "resourcesyncverifypassed"
             return 0

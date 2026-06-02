@@ -7,6 +7,16 @@ metadata:
     app: edgion-gateway
 spec:
   replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Probe endpoints live on a dedicated port (28000) in this release. Keep
+      # serving endpoints from dropping below the current replica count during the
+      # rollout: a surge pod must pass its probes before any old pod is removed.
+      # Tradeoff: a probe-port mismatch wedges the rollout instead of causing an
+      # outage — watch `kubectl rollout status`.
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: edgion-gateway
@@ -37,16 +47,26 @@ spec:
         - name: admin
           containerPort: 5810
           protocol: TCP
+        - name: probe
+          containerPort: 28000
+          protocol: TCP
         - name: metrics
           containerPort: 5901
           protocol: TCP
         env:
         - name: RUST_LOG
           value: "info"
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 28000
+            scheme: HTTP
+          periodSeconds: 2
+          failureThreshold: 30
         readinessProbe:
           httpGet:
             path: /ready
-            port: 5810
+            port: 28000
             scheme: HTTP
           initialDelaySeconds: 10
           periodSeconds: 10

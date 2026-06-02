@@ -199,10 +199,10 @@ pub struct BackendTimeout {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TcpTimeout {
-    /// Idle timeout for the established L4 relay. The activity clock resets
-    /// on every successful read in either direction. "0" / "0s" disables it
-    /// (unbounded — risky). Applies to plain TCP, TLS-terminated, and
-    /// TLS-passthrough relays. UDP is not affected.
+    /// Idle timeout for the established L4 relay. The activity clock resets on
+    /// any byte progress in either direction (a completed read OR an advancing
+    /// partial write). "0" / "0s" disables it (unbounded — risky). Applies to
+    /// plain TCP, TLS-terminated, and TLS-passthrough relays. UDP is not affected.
     /// Format: duration string (e.g. "1h", "300s", "5m"); a bare number is
     /// interpreted as seconds. Default "1h".
     #[serde(default = "default_tcp_idle_timeout")]
@@ -212,6 +212,32 @@ pub struct TcpTimeout {
 
 fn default_tcp_idle_timeout() -> String {
     "1h".to_string()
+}
+
+/// Secure default idle timeout applied to every L4 relay when the operator
+/// configures no `tcpTimeout` section. Bounded-by-default: protection does not
+/// require config. Must stay in sync with `default_tcp_idle_timeout()` (a unit
+/// test asserts it).
+pub const DEFAULT_TCP_IDLE: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Resolve the effective L4 relay idle timeout from the optional `tcpTimeout`
+/// section.
+///
+/// - section absent (`None`)                      -> `Some(DEFAULT_TCP_IDLE)` (secure default)
+/// - explicit `"0"` / `"0s"` / any zero duration  -> `None` (operator opt-out, unbounded)
+/// - any other valid duration                     -> `Some(parsed)`
+/// - parse error (schema-validated upstream)       -> `Some(DEFAULT_TCP_IDLE)` (fail-safe, silent)
+///
+/// Runs per connection on the data plane; intentionally emits no `tracing`.
+pub fn resolve_tcp_idle_timeout(cfg: Option<&TcpTimeout>) -> Option<std::time::Duration> {
+    match cfg {
+        None => Some(DEFAULT_TCP_IDLE),
+        Some(t) => match crate::core::common::utils::parse_duration(&t.idle_timeout) {
+            Ok(d) if d.is_zero() => None,
+            Ok(d) => Some(d),
+            Err(_) => Some(DEFAULT_TCP_IDLE),
+        },
+    }
 }
 
 // ClientTimeout defaults
@@ -455,6 +481,8 @@ impl EdgionGatewayConfigSpec {
 #[cfg(test)]
 mod tcp_timeout_tests {
     use super::*;
+    use crate::core::common::utils::parse_duration;
+    use std::time::Duration;
 
     #[test]
     fn tcp_timeout_absent_section_is_none() {
@@ -477,6 +505,51 @@ mod tcp_timeout_tests {
     #[test]
     fn default_spec_has_no_tcp_timeout() {
         assert!(EdgionGatewayConfigSpec::default().tcp_timeout.is_none());
+    }
+
+    #[test]
+    fn resolve_absent_section_uses_secure_default() {
+        assert_eq!(resolve_tcp_idle_timeout(None), Some(DEFAULT_TCP_IDLE));
+    }
+
+    #[test]
+    fn resolve_omitted_field_uses_serde_default_1h() {
+        let spec: EdgionGatewayConfigSpec = serde_json::from_str(r#"{"tcpTimeout": {}}"#).unwrap();
+        assert_eq!(
+            resolve_tcp_idle_timeout(spec.tcp_timeout.as_ref()),
+            Some(Duration::from_secs(3600))
+        );
+    }
+
+    #[test]
+    fn resolve_explicit_value() {
+        let t = TcpTimeout {
+            idle_timeout: "300s".to_string(),
+        };
+        assert_eq!(resolve_tcp_idle_timeout(Some(&t)), Some(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn resolve_zero_is_unbounded_optout() {
+        for s in ["0", "0s", "0m", "0.0s"] {
+            let t = TcpTimeout {
+                idle_timeout: s.to_string(),
+            };
+            assert_eq!(resolve_tcp_idle_timeout(Some(&t)), None, "{s} should opt out");
+        }
+    }
+
+    #[test]
+    fn resolve_parse_error_fails_safe_to_default() {
+        let t = TcpTimeout {
+            idle_timeout: "not-a-duration".to_string(),
+        };
+        assert_eq!(resolve_tcp_idle_timeout(Some(&t)), Some(DEFAULT_TCP_IDLE));
+    }
+
+    #[test]
+    fn default_const_and_serde_default_stay_in_sync() {
+        assert_eq!(parse_duration(&default_tcp_idle_timeout()).unwrap(), DEFAULT_TCP_IDLE);
     }
 }
 

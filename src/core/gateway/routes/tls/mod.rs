@@ -75,6 +75,7 @@ impl DuplexHooks for TlsDuplexHooks<'_> {
             DuplexError::DownstreamWrite => "downstream write err",
             DuplexError::DownstreamFlush => "downstream flush err",
             DuplexError::UpstreamRead => "upstream read err",
+            DuplexError::IdleTimeout => "idle timeout",
         };
         self.ctx.err_log = Some(msg.to_string());
     }

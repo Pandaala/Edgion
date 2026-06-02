@@ -10,7 +10,7 @@ description: Entry points of the four binaries, full CLI argument reference, wor
 | Binary | Purpose | Default Ports | Entry |
 |--------|---------|---------------|-------|
 | `edgion-controller` | Control plane: resource ingestion/validation/processing/distribution | gRPC `:50051`, Admin `:5800` | `src/bin/edgion_controller.rs` |
-| `edgion-gateway` | Data plane: high-performance proxy (based on Pingora) | Admin `:5810` (configurable), Metrics `:5901` | `src/bin/edgion_gateway.rs` |
+| `edgion-gateway` | Data plane: high-performance proxy (based on Pingora) | Admin `:5810` (loopback, configurable), Probe `:28000` (outward, liveness+readiness), Metrics `:5901` (outward) | `src/bin/edgion_gateway.rs` |
 | `edgion-cli` | CLI tool: resource CRUD and operations | — | `src/bin/edgion_ctl.rs` |
 | `edgion-center` | Federation center: aggregates resources across federated controllers, serves Center API | — | `src/bin/edgion_center.rs` |
 
@@ -72,7 +72,8 @@ edgion-gateway [OPTIONS]
 | `--work-dir` | `-w` | `PathBuf` | `"."` | Working directory |
 | `--config-file` | `-c` | `String` | `config/edgion-gateway.yaml` | YAML configuration file path |
 | `--server-addr` | — | `String` | **Required** | Controller gRPC address (e.g., `http://127.0.0.1:50051`) |
-| `--admin-listen` | — | `String` | `127.0.0.1:5810` | Admin API listen address (default: `127.0.0.1:5810`, loopback; set `0.0.0.0` to expose over the pod IP, e.g. a kubelet `httpGet` probe) |
+| `--admin-listen` | — | `String` | `127.0.0.1:5810` | Admin API listen address (default: `127.0.0.1:5810`, loopback-only; sensitive endpoints not exposed cluster-wide) |
+| `--probe-listen` | — | `String` | `0.0.0.0:28000` | Liveness/readiness probe listen address (serves `/health` and `/ready` only; binds 0.0.0.0 so kubelet can reach the pod IP) |
 | `--threads` | — | `usize` | CPU core count | Pingora worker thread count |
 | `--work-stealing` | — | `bool` | `true` | Tokio task stealing |
 | `--grace-period` | — | `u64` | `30` | Graceful shutdown wait time in seconds |

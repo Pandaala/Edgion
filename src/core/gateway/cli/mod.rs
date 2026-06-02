@@ -118,6 +118,38 @@ impl EdgionGatewayCli {
             "Gateway Admin API server spawned"
         );
 
+        // Spawn probe API server (liveness/readiness only) with graceful shutdown.
+        let probe_listen = config.probe_listen_or_default();
+        let config_client_for_probe = config_client.clone();
+        let mut probe_shutdown = shutdown_rx.clone();
+        let probe_listen_clone = probe_listen.clone();
+        tokio::spawn(async move {
+            let shutdown_future = async move {
+                while !*probe_shutdown.borrow() {
+                    if probe_shutdown.changed().await.is_err() {
+                        break;
+                    }
+                }
+            };
+            if let Err(e) =
+                api::serve_probe_with_shutdown(config_client_for_probe, &probe_listen_clone, shutdown_future).await
+            {
+                tracing::error!(
+                    component = "probe_api_gateway",
+                    event = "server_error",
+                    error = %e,
+                    "Gateway probe API server failed"
+                );
+            }
+        });
+
+        tracing::info!(
+            component = "probe_api_gateway",
+            event = "server_spawned",
+            listen = %probe_listen,
+            "Gateway probe API server spawned"
+        );
+
         // Spawn Metrics API server with graceful shutdown
         let metrics_cfg = config.metrics.clone();
         let mut metrics_shutdown = shutdown_rx.clone();

@@ -52,6 +52,12 @@ gateway:
   # The Metrics API remains fixed at :5901 and is not affected by this field.
   # admin_listen: "0.0.0.0:5810"
 
+  # Probe HTTP server listen address (optional; liveness/readiness only).
+  # Serves /health and /ready on a dedicated outward port; default is 0.0.0.0:28000
+  # so a kubelet httpGet probe can reach it over the pod IP. Carries no sensitive
+  # data, so binding 0.0.0.0 is safe. The admin API (above) stays loopback.
+  # probe_listen: "0.0.0.0:28000"
+
 logging:
   #
   log_dir: logs

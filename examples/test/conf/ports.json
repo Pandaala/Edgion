@@ -69,6 +69,10 @@
       "tcp": 31090,
       "tcp_filtered": 31091
     },
+    "TCPRoute/IdleTimeout": {
+      "tcp": 31090,
+      "tcp_filtered": 31091
+    },
     "UDPRoute/Basic": {
       "udp": 31100
     },

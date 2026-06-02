@@ -11,7 +11,8 @@ work_dir: "."
 
 gateway:
   server_addr: "http://127.0.0.1:50051"  # 必填：Controller gRPC 地址
-  admin_listen: "0.0.0.0:5810"           # Admin API 监听地址（默认：127.0.0.1:5810，仅 loopback）
+  admin_listen: "127.0.0.1:5810"         # Admin API 监听地址（默认：127.0.0.1:5810，仅 loopback）
+  # probe_listen: "0.0.0.0:28000"        # 存活/就绪探针端口（默认：0.0.0.0:28000）；绑定 0.0.0.0 以便 kubelet 可通过 Pod IP 访问
 
 # ─── gRPC 通道安全（可选 mTLS）────────────────────────────────────
 # conf_sync_security:
@@ -97,10 +98,23 @@ access_log_sensitive:
 
 ### gateway
 
+Gateway 采用**三端口模型**：
+
+| 端口 | 默认绑定 | 用途 |
+|------|---------|------|
+| Admin | `127.0.0.1:5810` | Admin API（`/configclient`、`/api/v1/server-info` 等）——仅 loopback，不对外暴露 |
+| Probe | `0.0.0.0:28000` | 存活/就绪探针（`/health`、`/ready`）——绑定所有接口，以便 kubelet 通过 Pod IP 探活 |
+| Metrics | `0.0.0.0:5901` | Prometheus 指标——固定端口，对外暴露 |
+
+探针端口**不会**加入 gateway Service；kubelet 直接通过 Pod IP 探测 28000 端口。
+
+> **运维变更提示（Breaking Change）**：不再支持通过 Pod IP 或 Kubernetes Service 远程访问 gateway admin API（`/configclient`、`/api/v1/server-info`）。请改用 `kubectl port-forward pod/<gw-pod> 5810:5810`（连接到 Pod 的 loopback）或 `kubectl exec`；**不要**通过 gateway Service 访问。`edgion-cli --target client` 默认连接 `localhost:5810`，不受影响。
+
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `server_addr` | `String` | **必填** | Controller gRPC 地址，如 `http://127.0.0.1:50051` |
-| `admin_listen` | `String` | `127.0.0.1:5810` | Admin API 监听地址，默认绑 loopback（`127.0.0.1:5810`），使 admin/readiness 端点默认不对集群暴露；设为 `0.0.0.0` 可允许通过 pod IP 访问（例如 kubelet `httpGet` readiness 探针 —— 出厂 K8s manifest 即如此）。Gateway Metrics API 固定 `:5901`，不受此字段影响。 |
+| `admin_listen` | `String` | `127.0.0.1:5810` | Admin API 监听地址，默认绑 loopback（`127.0.0.1:5810`）——敏感端点（`/configclient`、`/api/v1/server-info`）不对集群暴露。远程访问请使用 `kubectl port-forward pod/<name> 5810:5810`。 |
+| `probe_listen` | `String` | `0.0.0.0:28000` | 存活/就绪探针监听地址，绑定所有接口以便 kubelet 通过 Pod IP 访问。仅提供 `/health` 和 `/ready`，不加入 gateway Service。 |
 
 ### conf_sync_security.tls
 

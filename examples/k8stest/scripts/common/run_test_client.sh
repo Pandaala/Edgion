@@ -5,10 +5,8 @@ NAMESPACE="${NAMESPACE:-edgion-test}"
 POD="${POD:-}"
 CONTAINER="${CONTAINER:-test-client}"
 TARGET_HOST="${TARGET_HOST:-edgion-gateway.edgion-system.svc.cluster.local}"
-GATEWAY_ADMIN_URL="${GATEWAY_ADMIN_URL:-http://edgion-gateway.edgion-system.svc.cluster.local:5810}"
 TEST_CLIENT_BIN_PATH="${TEST_CLIENT_BIN_PATH:-/usr/local/bin/test_client}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOLVE_DIRECT_ENDPOINT_SCRIPT="${SCRIPT_DIR}/resolve_direct_endpoint_ip_from_admin.sh"
 
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "kubectl not found in PATH"
@@ -193,30 +191,37 @@ if [[ "${RESOURCE}" == "Gateway" && "${ITEM}" == "PortConflict" ]]; then
   exit 1
 fi
 
+# Resolve the DirectEndpoint backend Pod IP directly from the K8s API.
+# The gateway admin API (port 5810) is loopback-only and is no longer reachable
+# over Service DNS, so kubectl is the primary (and only) resolver here.
 DIRECT_ENDPOINT_IP="${EDGION_TEST_DIRECT_ENDPOINT_IP:-}"
 if [[ -z "${DIRECT_ENDPOINT_IP}" ]]; then
-  if [[ -x "${RESOLVE_DIRECT_ENDPOINT_SCRIPT}" ]]; then
+  # EndpointSlice readiness lags pod scheduling, so retry briefly before giving up.
+  for _ in $(seq 1 15); do
     DIRECT_ENDPOINT_IP="$(
-      GATEWAY_ADMIN_URL="${GATEWAY_ADMIN_URL}" \
-      SERVICE_NAMESPACE="edgion-default" \
-      SERVICE_NAME="direct-endpoint-backend" \
-      SERVICE_PORT="30001" \
-      "${RESOLVE_DIRECT_ENDPOINT_SCRIPT}" 2>/dev/null || true
+      kubectl get endpointslices -n edgion-default \
+        -l kubernetes.io/service-name=direct-endpoint-backend -o json 2>/dev/null \
+        | jq -r 'first(.items[]?.endpoints[]? | select(.conditions.ready != false) | .addresses[]?) // empty' 2>/dev/null || true
     )"
-  fi
-fi
-
-if [[ -z "${DIRECT_ENDPOINT_IP}" ]]; then
-  DIRECT_ENDPOINT_IP="$(
-    kubectl get endpoints -n edgion-default direct-endpoint-backend \
-      -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true
-  )"
+    if [[ -z "${DIRECT_ENDPOINT_IP}" ]]; then
+      DIRECT_ENDPOINT_IP="$(
+        kubectl get endpoints -n edgion-default direct-endpoint-backend \
+          -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true
+      )"
+    fi
+    [[ -n "${DIRECT_ENDPOINT_IP}" ]] && break
+    sleep 1
+  done
 fi
 
 if [[ -n "${DIRECT_ENDPOINT_IP}" ]]; then
   echo "DirectEndpoint IP: ${DIRECT_ENDPOINT_IP}"
 else
-  echo "DirectEndpoint IP not resolved (admin API + kubectl fallback both failed)"
+  # The direct-endpoint-backend fixture is only deployed for the DirectEndpoint
+  # test, so an empty result is expected for every other resource/item. Warn and
+  # continue with an empty IP; the DirectEndpoint test's own assertions will fail
+  # if the IP is genuinely required but missing.
+  echo "WARNING: DirectEndpoint IP not resolved (kubectl endpointslices/endpoints both empty); continuing with empty EDGION_TEST_DIRECT_ENDPOINT_IP"
 fi
 
 GATEWAY_METRICS_ENDPOINTS="${EDGION_TEST_GATEWAY_METRICS_ENDPOINTS:-}"

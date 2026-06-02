@@ -37,6 +37,7 @@ EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 
 CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:5800}"
 GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:5810}"
+GATEWAY_PROBE_URL="${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:28000}"
 
 SYNC_WAIT=2
 CLEANUP_WAIT=5
@@ -114,8 +115,8 @@ check_prerequisites() {
     if ! curl -sf "${CONTROLLER_URL}/health" > /dev/null 2>&1; then
         log_error "Controller not reachable at ${CONTROLLER_URL}"; exit 1
     fi
-    if ! curl -sf "${GATEWAY_ADMIN_URL}/health" > /dev/null 2>&1; then
-        log_error "Gateway admin not reachable at ${GATEWAY_ADMIN_URL}"; exit 1
+    if ! curl -sf "${GATEWAY_PROBE_URL}/health" > /dev/null 2>&1; then
+        log_error "Gateway probe not reachable at ${GATEWAY_PROBE_URL}"; exit 1
     fi
     local status
     status=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/testing/status" 2>/dev/null || echo "")

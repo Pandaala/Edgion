@@ -55,6 +55,7 @@ ES_PORT=19200
 
 CONTROLLER_URL="http://127.0.0.1:${CONTROLLER_ADMIN_PORT}"
 GATEWAY_URL="http://127.0.0.1:${GATEWAY_ADMIN_PORT}"
+GATEWAY_PROBE_URL="${GATEWAY_PROBE_URL:-http://127.0.0.1:28000}"
 ES_URL="http://127.0.0.1:${ES_PORT}"
 
 # ── Working directory ───────────────────────────────────────────────────────
@@ -392,7 +393,7 @@ echo $! > "${PID_DIR}/gateway.pid"
 log_info "Gateway PID: $(cat "${PID_DIR}/gateway.pid")"
 
 for i in $(seq 1 60); do
-    if curl -sf "${GATEWAY_URL}/ready" > /dev/null 2>&1; then
+    if curl -sf "${GATEWAY_PROBE_URL}/ready" > /dev/null 2>&1; then
         log_success "Gateway ready (waited ${i}s)"
         break
     fi

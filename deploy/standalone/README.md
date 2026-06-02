@@ -140,7 +140,8 @@ work_dir: "/usr/local/edgion"
 
 gateway:
   server_addr: "http://127.0.0.1:50051"   # Controller gRPC address
-  admin_listen: "0.0.0.0:5810"            # Gateway admin API
+  admin_listen: "127.0.0.1:5810"          # Admin API (loopback-only; /configclient, /server-info)
+  # probe_listen: "0.0.0.0:28000"         # Liveness/readiness (/health, /ready); default 0.0.0.0:28000
 
 logging:
   log_dir: logs
@@ -282,14 +283,15 @@ sudo systemctl enable --now edgion-controller edgion-gateway
 
 ## Ports
 
-| Service | Port | Description |
-|---------|------|-------------|
-| Controller gRPC | 50051 | Gateway config sync |
-| Controller Admin | 5800 | Health check, config apply |
-| Gateway HTTP | 80 | Default HTTP listener |
-| Gateway HTTPS | 443 | Default HTTPS listener |
-| Gateway Admin | 5810 | Readiness, runtime info |
-| Gateway Metrics | 5901 | Prometheus metrics |
+| Service | Port | Bind | Description |
+|---------|------|------|-------------|
+| Controller gRPC | 50051 | 0.0.0.0 | Gateway config sync |
+| Controller Admin | 5800 | 0.0.0.0 | Health check, config apply |
+| Gateway HTTP | 80 | 0.0.0.0 | Default HTTP listener |
+| Gateway HTTPS | 443 | 0.0.0.0 | Default HTTPS listener |
+| Gateway Admin | 5810 | 127.0.0.1 (loopback) | Internal admin API (`/configclient`, `/api/v1/server-info`) |
+| Gateway Probe | 28000 | 0.0.0.0 | Liveness/readiness (`/health`, `/ready`) |
+| Gateway Metrics | 5901 | 0.0.0.0 | Prometheus metrics |
 
 ## Troubleshooting
 
@@ -298,7 +300,7 @@ sudo systemctl enable --now edgion-controller edgion-gateway
 curl http://127.0.0.1:5800/health
 
 # Check gateway readiness
-curl http://127.0.0.1:5810/ready
+curl http://127.0.0.1:28000/ready
 
 # View controller logs
 tail -f /usr/local/edgion/logs/edgion-controller.*.log

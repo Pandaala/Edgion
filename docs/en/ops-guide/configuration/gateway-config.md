@@ -11,7 +11,8 @@ work_dir: "."
 
 gateway:
   server_addr: "http://127.0.0.1:50051"  # Required: Controller gRPC address
-  admin_listen: "0.0.0.0:5810"           # Admin API listen address (default: 127.0.0.1:5810, loopback)
+  admin_listen: "127.0.0.1:5810"         # Admin API listen address (default: 127.0.0.1:5810, loopback-only)
+  # probe_listen: "0.0.0.0:28000"        # Liveness/readiness probe port (default: 0.0.0.0:28000); binds 0.0.0.0 so kubelet can reach the pod IP
 
 # ─── gRPC channel security (optional mTLS) ────────────────────────
 # conf_sync_security:
@@ -97,10 +98,23 @@ access_log_sensitive:
 
 ### gateway
 
+The gateway uses a **three-port model**:
+
+| Port | Default bind | Purpose |
+|------|-------------|---------|
+| Admin | `127.0.0.1:5810` | Admin API (`/configclient`, `/api/v1/server-info`, etc.) — loopback-only, never externally reachable |
+| Probe | `0.0.0.0:28000` | Liveness and readiness only (`/health`, `/ready`) — binds all interfaces so kubelet can reach the pod IP |
+| Metrics | `0.0.0.0:5901` | Prometheus metrics — fixed, outward-facing |
+
+The probe port is intentionally **not** added to the gateway Service; kubelet probes the pod IP directly on port 28000.
+
+> **Breaking change for operators**: remote access to the gateway admin API (`/configclient`, `/api/v1/server-info`) via pod IP or a Kubernetes Service is removed. Use `kubectl port-forward pod/<gw-pod> 5810:5810` (targets the pod loopback) or `kubectl exec` instead. Do **not** use the gateway Service for this. `edgion-cli --target client` defaults to `localhost:5810` and is unaffected.
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `server_addr` | `String` | **Required** | Controller gRPC address, e.g. `http://127.0.0.1:50051` |
-| `admin_listen` | `String` | `127.0.0.1:5810` | Admin API listen address. Defaults to loopback (`127.0.0.1:5810`) so the admin/readiness endpoints are not exposed cluster-wide; set `0.0.0.0` to allow pod-IP access (e.g. a kubelet `httpGet` readiness probe — the shipped K8s manifests do this). Gateway Metrics API remains fixed at `:5901`. |
+| `admin_listen` | `String` | `127.0.0.1:5810` | Admin API listen address. Defaults to loopback (`127.0.0.1:5810`) — sensitive endpoints (`/configclient`, `/api/v1/server-info`) are not exposed cluster-wide. Access remotely via `kubectl port-forward pod/<name> 5810:5810`. |
+| `probe_listen` | `String` | `0.0.0.0:28000` | Liveness/readiness probe listen address. Binds all interfaces so kubelet can reach the pod IP. Serves only `/health` and `/ready`. Not included in the gateway Service. |
 
 ### conf_sync_security.tls
 

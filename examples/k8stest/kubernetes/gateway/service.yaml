@@ -10,10 +10,8 @@ spec:
   selector:
     app: edgion-gateway
   ports:
-  - name: admin-5810
-    port: 5810
-    targetPort: 5810
-    protocol: TCP
+  # Admin API (5810) is loopback-only and intentionally NOT exposed via the Service.
+  # k8stest reaches admin through the pod loopback (kubectl exec / port-forward).
   - name: metrics-5901
     port: 5901
     targetPort: 5901

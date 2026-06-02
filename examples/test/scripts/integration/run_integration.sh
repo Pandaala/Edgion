@@ -887,6 +887,7 @@ run_all_tests() {
                     run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
                     run_test "TCPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i StreamPlugins" || test_failed=true
                     run_test "TCPRoute_GlobalConnectionIpRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i GlobalConnectionIpRestriction" || test_failed=true
+                    run_test "TCPRoute_IdleTimeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i IdleTimeout" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "TCPRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i ${G_ITEM}" || test_failed=true
@@ -1089,6 +1090,7 @@ run_all_tests() {
         # TCPRoute Tests
         run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
         run_test "TCPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i StreamPlugins" || test_failed=true
+        run_test "TCPRoute_IdleTimeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i IdleTimeout" || test_failed=true
         
         # TLSRoute Tests
         run_test "TLSRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i Basic" || test_failed=true

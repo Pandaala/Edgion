@@ -46,6 +46,7 @@ GATEWAY_HTTP_PORT=31000
 GATEWAY_HOST="127.0.0.1"
 CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:5800}"
 GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:5810}"
+GATEWAY_PROBE_URL="${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:28000}"
 CONTROLLER_ADMIN_PORT=5800
 CONTROLLER_GRPC_PORT="${EDGION_TEST_CONTROLLER_GRPC_PORT:-50051}"
 
@@ -157,8 +158,8 @@ check_prerequisites() {
         log_error "Controller not reachable at ${CONTROLLER_URL}"
         exit 1
     fi
-    if ! curl -sf "${GATEWAY_ADMIN_URL}/health" > /dev/null 2>&1; then
-        log_error "Gateway admin not reachable at ${GATEWAY_ADMIN_URL}"
+    if ! curl -sf "${GATEWAY_PROBE_URL}/health" > /dev/null 2>&1; then
+        log_error "Gateway probe not reachable at ${GATEWAY_PROBE_URL}"
         exit 1
     fi
     log_success "Prerequisites OK"

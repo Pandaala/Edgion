@@ -251,8 +251,6 @@ async fn get_resource(
 /// Create the admin API router with dynamic endpoints
 pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
     let mut router = Router::new()
-        .route("/health", get(health_check))
-        .route("/ready", get(readiness_check))
         // Server info endpoint (for reload testing)
         .route("/api/v1/server-info", get(get_server_info))
         // Dynamic endpoints for all resource types
@@ -266,6 +264,15 @@ pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
     }
 
     router
+}
+
+/// Create the probe router: only the non-sensitive liveness/readiness endpoints.
+/// Mounted on a dedicated outward-facing port so the admin port can stay loopback.
+pub fn create_probe_router(config_client: Arc<ConfigClient>) -> Router {
+    Router::new()
+        .route("/health", get(health_check))
+        .route("/ready", get(readiness_check))
+        .with_state(config_client)
 }
 
 // ==================== Integration Testing Endpoints ====================
@@ -1555,6 +1562,31 @@ pub async fn serve_with_shutdown(
     Ok(())
 }
 
+/// Serve the probe router (liveness/readiness) on the given listen address with
+/// graceful shutdown. Structurally identical to `serve_with_shutdown` but mounts
+/// only the non-sensitive probe endpoints.
+pub async fn serve_probe_with_shutdown(
+    config_client: Arc<ConfigClient>,
+    listen_addr: &str,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    let app = create_probe_router(config_client);
+    let addr: std::net::SocketAddr = listen_addr.parse()?;
+
+    tracing::info!(
+        component = "probe_api_gateway",
+        event = "server_starting",
+        addr = %addr,
+        "Gateway probe API server listening"
+    );
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
+
+    tracing::info!(component = "probe_api_gateway", "Probe API server stopped");
+    Ok(())
+}
+
 #[cfg(test)]
 mod edgion_tls_scrub_tests {
     use super::*;
@@ -1744,5 +1776,42 @@ mod store_stats_tests {
         assert!(json.get("stream_plugin_store_v2").is_some());
         assert!(json.get("plugin_store").is_none());
         assert!(json.get("stream_plugin_store").is_none());
+    }
+}
+
+#[cfg(test)]
+mod router_shape_tests {
+    use super::*;
+    use crate::core::gateway::conf_sync::ConfigClient;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt; // for `oneshot`
+
+    fn test_client() -> Arc<ConfigClient> {
+        Arc::new(ConfigClient::new("test".to_string(), "test".to_string()))
+    }
+
+    async fn status_of(router: Router, path: &str) -> StatusCode {
+        router
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn probe_router_serves_health_and_ready() {
+        let r = create_probe_router(test_client());
+        assert_eq!(status_of(r.clone(), "/health").await, StatusCode::OK);
+        let ready = status_of(r, "/ready").await;
+        assert!(ready == StatusCode::OK || ready == StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn admin_router_drops_health_and_ready_but_keeps_configclient() {
+        let r = create_admin_router(test_client());
+        assert_eq!(status_of(r.clone(), "/health").await, StatusCode::NOT_FOUND);
+        assert_eq!(status_of(r.clone(), "/ready").await, StatusCode::NOT_FOUND);
+        assert_eq!(status_of(r, "/configclient/httproute/list").await, StatusCode::OK);
     }
 }

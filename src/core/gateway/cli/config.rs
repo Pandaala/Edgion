@@ -6,12 +6,18 @@ use std::path::PathBuf;
 use tracing;
 
 /// Default admin API listen address. Binds loopback by default so the admin API
-/// is not exposed to the cluster unless the operator opts in via `admin_listen`.
-/// Deployments that probe the admin port over the pod IP (e.g. a kubelet `httpGet`
-/// readiness probe) must set `admin_listen` to `0.0.0.0` explicitly; the shipped
-/// K8s manifests already do. (Port 5810 avoids the macOS Screen Sharing / VNC
-/// conflict on 5900.)
+/// (which serves secret-bearing `/configclient` introspection) is not exposed to the
+/// cluster unless the operator opts in via `admin_listen`. Liveness/readiness live on
+/// the separate probe port (`DEFAULT_GATEWAY_PROBE_LISTEN`), so kubelet never needs to
+/// reach the admin port and the shipped manifests keep this on loopback. (Port 5810
+/// avoids the macOS Screen Sharing / VNC conflict on 5900.)
 pub const DEFAULT_GATEWAY_ADMIN_LISTEN: &str = "127.0.0.1:5810";
+
+/// Default probe API listen address. The probe API serves only the non-sensitive
+/// liveness/readiness endpoints (`/health`, `/ready`) and binds `0.0.0.0` by default
+/// so a kubelet `httpGet` probe can reach it over the pod IP. The sensitive admin API
+/// stays loopback (`DEFAULT_GATEWAY_ADMIN_LISTEN`) and need never be `0.0.0.0`.
+pub const DEFAULT_GATEWAY_PROBE_LISTEN: &str = "0.0.0.0:28000";
 
 /// Edgion Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
@@ -160,6 +166,11 @@ pub struct GatewayConfig {
     #[arg(long = "admin-listen", value_name = "ADDR")]
     #[serde(default)]
     pub admin_listen: Option<String>,
+
+    /// Gateway probe HTTP listen address (liveness/readiness only)
+    #[arg(long = "probe-listen", value_name = "ADDR")]
+    #[serde(default)]
+    pub probe_listen: Option<String>,
 }
 
 // Default log configurations
@@ -781,6 +792,9 @@ impl EdgionGatewayConfig {
         if cli.gateway.admin_listen.is_some() {
             base.gateway.admin_listen = cli.gateway.admin_listen.clone();
         }
+        if cli.gateway.probe_listen.is_some() {
+            base.gateway.probe_listen = cli.gateway.probe_listen.clone();
+        }
 
         // Logging config
         if cli.logging.log_dir.is_some() {
@@ -816,6 +830,19 @@ impl EdgionGatewayConfig {
             .admin_listen
             .clone()
             .unwrap_or_else(|| DEFAULT_GATEWAY_ADMIN_LISTEN.to_string())
+    }
+
+    /// Get probe_listen
+    pub fn probe_listen(&self) -> Option<String> {
+        self.gateway.probe_listen.clone()
+    }
+
+    /// Probe API listen address, falling back to the default when unset.
+    pub fn probe_listen_or_default(&self) -> String {
+        self.gateway
+            .probe_listen
+            .clone()
+            .unwrap_or_else(|| DEFAULT_GATEWAY_PROBE_LISTEN.to_string())
     }
 
     /// Get log_dir with default fallback
@@ -914,6 +941,33 @@ mod tests {
         let mut cfg = EdgionGatewayConfig::default();
         cfg.gateway.admin_listen = Some("0.0.0.0:5810".to_string());
         assert_eq!(cfg.admin_listen_or_default(), "0.0.0.0:5810");
+    }
+
+    #[test]
+    fn test_probe_listen_defaults_to_outward() {
+        // The probe port carries only non-sensitive liveness/readiness signals and
+        // binds 0.0.0.0 by default so a kubelet httpGet can reach it over the pod IP.
+        let cfg = EdgionGatewayConfig::default();
+        assert_eq!(cfg.probe_listen(), None);
+        assert_eq!(cfg.probe_listen_or_default(), "0.0.0.0:28000");
+    }
+
+    #[test]
+    fn test_probe_listen_explicit_value_is_respected() {
+        let mut cfg = EdgionGatewayConfig::default();
+        cfg.gateway.probe_listen = Some("127.0.0.1:28000".to_string());
+        assert_eq!(cfg.probe_listen_or_default(), "127.0.0.1:28000");
+    }
+
+    #[test]
+    fn test_probe_listen_cli_survives_config_file_merge() {
+        // Guards the merge() wiring: without the merge branch, a CLI --probe-listen
+        // is silently dropped whenever a config file is loaded.
+        let mut base = EdgionGatewayConfig::default();
+        let mut cli = EdgionGatewayConfig::default();
+        cli.gateway.probe_listen = Some("0.0.0.0:39999".to_string());
+        EdgionGatewayConfig::merge(&mut base, &cli);
+        assert_eq!(base.gateway.probe_listen.as_deref(), Some("0.0.0.0:39999"));
     }
 
     #[test]

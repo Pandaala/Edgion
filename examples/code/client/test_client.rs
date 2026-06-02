@@ -246,6 +246,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "GRPCRoute/UnmatchedRoute" => "GRPCRoute/UnmatchedRoute",
         // TCPRoute
         "TCPRoute/Basic" | "TCPRoute" => "TCPRoute/Basic",
+        "TCPRoute/IdleTimeout" => "TCPRoute/Basic",
         "TCPRoute/StreamPlugins" => "TCPRoute/StreamPlugins",
         "TCPRoute/GlobalConnectionIpRestriction" => "TCPRoute/GlobalConnectionIpRestriction",
         // TLSRoute
@@ -659,6 +660,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::GcirEnforcementTestSuite));
+        }
+        "TCPRoute/IdleTimeout" => {
+            if !gateway {
+                eprintln!("Error: TCPRoute/IdleTimeout tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TcpIdleTimeoutTestSuite));
         }
         // TLSRoute
         "TLSRoute" | "TLSRoute/Basic" => {
@@ -1479,6 +1487,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::TcpTestSuite));
             runner.add_suite(Box::new(suites::UdpTestSuite));
             if gateway {
+                runner.add_suite(Box::new(suites::TcpIdleTimeoutTestSuite));
                 runner.add_suite(Box::new(suites::HttpMatchTestSuite));
                 runner.add_suite(Box::new(suites::HttpsTestSuite));
                 runner.add_suite(Box::new(suites::GrpcMatchTestSuite));

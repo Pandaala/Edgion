@@ -10,10 +10,10 @@ spec:
   selector:
     app: edgion-gateway
   ports:
-  - name: admin
-    port: 5810
-    targetPort: 5810
-    protocol: TCP
+  # The admin API (5810) is loopback-only and intentionally NOT exposed here.
+  # The probe port (28000) is also kept out of the Service: kubelet probes the pod
+  # IP via the containerPort, so no Service entry is needed, and keeping it out
+  # prevents a LoadBalancer patch from publishing the readiness oracle externally.
   - name: metrics
     port: 5901
     targetPort: 5901

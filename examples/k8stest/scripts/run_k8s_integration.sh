@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Track background port-forward PIDs so they are always cleaned up, including on
+# SIGINT/early abort (the script uses `set -e`, so a fall-through-only kill would
+# leak the forward on interrupt).
+_PF_PIDS=()
+trap 'for p in "${_PF_PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done' EXIT INT TERM
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CONF_ROOT="${CONF_ROOT:-$PROJECT_ROOT/examples/k8stest/conf}"
@@ -22,7 +28,6 @@ STATE_NAMESPACE="${STATE_NAMESPACE:-edgion-system}"
 STATE_CONFIGMAP_NAME="${STATE_CONFIGMAP_NAME:-edgion-k8s-integration-state}"
 
 CONTROLLER_ADMIN_URL="${EDGION_CONTROLLER_ADMIN_URL:-http://edgion-controller.edgion-system.svc.cluster.local:5800}"
-GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://edgion-gateway.edgion-system.svc.cluster.local:5810}"
 
 START_FROM="${START_FROM:-}"
 ONLY_RESOURCE=""
@@ -810,6 +815,70 @@ get_server_id() {
   echo "${sid}"
 }
 
+# Fetch the Gateway's current server_id.
+#
+# The Gateway admin API (port 5810) is loopback-only and dropped from the Gateway
+# Service, so it cannot be reached over Service DNS from the host. The Gateway image
+# ships no curl/wget either, so a `kubectl exec ... curl` is not possible. Instead we
+# open a short-lived port-forward to the Gateway Pod and curl it on 127.0.0.1.
+# Gateway is replicas:1 and this suite is sequential. We request an ephemeral local
+# port (`:5810`) and parse the chosen port from the port-forward output so a leaked
+# forward from a prior run cannot cause a fixed-port collision. The PID is tracked in
+# `_PF_PIDS` so the top-level trap reaps it even on interrupt.
+get_gateway_server_id() {
+  local gw_pod pf_pid sid local_port pf_log
+  gw_pod="$(kubectl get pods -n edgion-system -l app=edgion-gateway \
+    --field-selector=status.phase=Running \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  if [[ -z "${gw_pod}" ]]; then
+    echo "unknown"
+    return 0
+  fi
+
+  pf_log="$(mktemp)"
+  kubectl port-forward -n edgion-system "pod/${gw_pod}" :5810 >"${pf_log}" 2>&1 &
+  pf_pid="$!"
+  _PF_PIDS+=("${pf_pid}")
+
+  # Discover the ephemeral local port kubectl picked, e.g.
+  # "Forwarding from 127.0.0.1:54321 -> 5810".
+  local attempt
+  local_port=""
+  for attempt in $(seq 1 20); do
+    local_port="$(sed -n 's/.*Forwarding from 127\.0\.0\.1:\([0-9]\{1,\}\) ->.*/\1/p' "${pf_log}" 2>/dev/null | head -n 1)"
+    [[ -n "${local_port}" ]] && break
+    sleep 0.5
+  done
+
+  if [[ -z "${local_port}" ]]; then
+    kill "${pf_pid}" >/dev/null 2>&1 || true
+    wait "${pf_pid}" 2>/dev/null || true
+    rm -f "${pf_log}"
+    echo "unknown"
+    return 0
+  fi
+
+  # Wait for the tunnel to come up (port accepting connections).
+  for attempt in $(seq 1 20); do
+    if curl -fsS "http://127.0.0.1:${local_port}/api/v1/server-info" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.5
+  done
+
+  sid="$(curl -fsS "http://127.0.0.1:${local_port}/api/v1/server-info" 2>/dev/null \
+    | jq -r '.data.server_id // .server_id // "unknown"' || true)"
+
+  kill "${pf_pid}" >/dev/null 2>&1 || true
+  wait "${pf_pid}" 2>/dev/null || true
+  rm -f "${pf_log}"
+
+  if [[ -z "${sid}" ]]; then
+    sid="unknown"
+  fi
+  echo "${sid}"
+}
+
 trigger_reload() {
   local admin_url="$1"
   local resp
@@ -1219,7 +1288,7 @@ fi
 if [[ "${WITH_RELOAD}" == "true" ]]; then
   echo "Rounds: 2 (with reload)"
   c_before="$(get_server_id "${CONTROLLER_ADMIN_URL}")"
-  g_before="$(get_server_id "${GATEWAY_ADMIN_URL}")"
+  g_before="$(get_gateway_server_id)"
   echo "Before reload: controller=${c_before} gateway=${g_before}"
 
   echo "Test round #1"
@@ -1231,8 +1300,19 @@ if [[ "${WITH_RELOAD}" == "true" ]]; then
   wait_gateway_stable 120
 
   c_after="$(get_server_id "${CONTROLLER_ADMIN_URL}")"
-  g_after="$(get_server_id "${GATEWAY_ADMIN_URL}")"
+  g_after="$(get_gateway_server_id)"
   echo "After reload: controller=${c_after} gateway=${g_after}"
+
+  # An empty or "unknown" server_id means we never reached the admin API, so the
+  # comparison is meaningless. Two "unknown" values would otherwise compare equal on
+  # the controller side or unequal-by-accident on the gateway side and silently
+  # mislead, so treat any unresolved id as a hard error.
+  for pair in "controller:${c_before}" "controller:${c_after}" "gateway:${g_before}" "gateway:${g_after}"; do
+    if [[ -z "${pair#*:}" || "${pair#*:}" == "unknown" ]]; then
+      echo "reload check failed: ${pair%%:*} server_id unresolved (empty/unknown); cannot verify reload"
+      exit 1
+    fi
+  done
 
   if [[ "${c_before}" == "${c_after}" || "${g_before}" == "${g_after}" ]]; then
     echo "reload check failed: server_id not changed as expected"

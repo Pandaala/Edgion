@@ -140,6 +140,7 @@ mod tests {
             (TcpStatus::UpstreamWriteError, "UpstreamWriteError"),
             (TcpStatus::DownstreamReadError, "DownstreamReadError"),
             (TcpStatus::DownstreamWriteError, "DownstreamWriteError"),
+            (TcpStatus::IdleTimeout, "IdleTimeout"),
         ];
         for (variant, expected) in cases {
             assert_eq!(variant.as_str(), *expected);

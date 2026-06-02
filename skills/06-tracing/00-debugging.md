@@ -93,14 +93,15 @@ curl -sf http://127.0.0.1:5800/api/v1/server-info
 ### Gateway
 
 ```bash
-curl -sf http://127.0.0.1:5810/health
-curl -sf http://127.0.0.1:5810/ready
+curl -sf http://127.0.0.1:28000/health
+curl -sf http://127.0.0.1:28000/ready
 curl -sf http://127.0.0.1:5810/api/v1/server-info
 curl -sf http://127.0.0.1:5901/health
 ```
 
 Things to remember:
-- The Gateway Admin API default port is `5810`, configurable via `gateway.admin_listen` in the config file or `--admin-listen` on the command line
+- The Gateway probe port (liveness/readiness) is `28000` (default `0.0.0.0:28000`), configurable via `gateway.probe_listen` in the config file or `--probe-listen` on the command line
+- The Gateway Admin API default port is `5810` (loopback-only), configurable via `gateway.admin_listen` or `--admin-listen`; serves `/configclient`, `/api/v1/server-info`, and other internal endpoints
 - The Gateway Metrics API port is fixed at `5901`
 
 ## Step 2: use the center / server / client three views to locate the issue layer

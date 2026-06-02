@@ -386,7 +386,10 @@ impl EdgionTlsTcpProxy {
 
     /// Bidirectional data transfer between downstream (TLS-terminated) and upstream (TCP)
     async fn duplex(&self, downstream: Stream, upstream: Stream, ctx: &mut TlsContext) {
-        bidirectional_relay(downstream, upstream, TlsDuplexHooks { ctx }).await;
+        let idle = crate::types::resources::edgion_gateway_config::resolve_tcp_idle_timeout(
+            self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
+        );
+        bidirectional_relay(downstream, upstream, TlsDuplexHooks { ctx }, idle).await;
     }
 
     fn is_tls_proxy_log_enabled(&self) -> bool {
