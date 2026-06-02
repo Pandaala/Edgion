@@ -10,6 +10,16 @@ pub async fn fail_to_proxy(
     e: &Error,
     ctx: &mut EdgionHttpContext,
 ) -> FailToProxy {
+    // filter-04b: the local reply was already written downstream by
+    // response_filter. Do not write an error page or pollute upstream.err;
+    // the downstream response is complete and the connection is reusable.
+    if ctx.local_reply_written {
+        return FailToProxy {
+            error_code: ctx.request_info.status.unwrap_or(500),
+            can_reuse_downstream: true,
+        };
+    }
+
     let code = match e.etype() {
         HTTPStatus(code) => *code,
         ErrorType::ReadTimedout | ErrorType::WriteTimedout => match e.esource() {
