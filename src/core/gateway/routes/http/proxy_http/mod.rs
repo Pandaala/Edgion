@@ -211,6 +211,12 @@ impl ProxyHttp for EdgionHttpProxy {
         pg_fail_to_proxy::fail_to_proxy(self, session, e, ctx).await
     }
 
+    fn suppress_error_log(&self, _session: &Session, ctx: &Self::CTX, _error: &Error) -> bool {
+        // filter-04b: the sentinel abort from a written local reply is not a real
+        // error; hide its error-log line (the access log still records the reply).
+        ctx.local_reply_written
+    }
+
     async fn connected_to_upstream(
         &self,
         session: &mut Session,
