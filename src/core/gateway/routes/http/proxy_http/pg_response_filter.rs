@@ -28,25 +28,24 @@ pub async fn response_filter(
     //     let _ = upstream_response.insert_header("Connection", "close");
     // }
 
-    // A sync Phase-6 plugin may have already produced a local reply (header
-    // rebuilt, body stashed). The server-header + x-trace-id application above
-    // re-stamped the gateway identity onto the rebuilt header; skip the async
-    // Phase-7 plugin groups entirely.
-    if ctx.local_reply_active {
-        return Ok(());
-    }
+    // A sync Phase-6 plugin may have already stashed a local reply. Do NOT
+    // return here: fall through so the write+abort block below actually writes
+    // the stashed reply. The group guards below (`is_some()` -> skip) prevent
+    // Phase-7 plugins from running on top of a Phase-6 reply.
 
     // Run rule-level response edgion_plugins (async)
-    if let Some(route_unit) = ctx.route_unit.clone() {
-        route_unit
-            .rule
-            .plugin_runtime
-            .run_upstream_response_plugins_async(session, ctx, upstream_response)
-            .await;
+    if ctx.local_reply_header.is_none() {
+        if let Some(route_unit) = ctx.route_unit.clone() {
+            route_unit
+                .rule
+                .plugin_runtime
+                .run_upstream_response_plugins_async(session, ctx, upstream_response)
+                .await;
+        }
     }
 
     // Run backend-level response edgion_plugins (async)
-    if !ctx.local_reply_active {
+    if ctx.local_reply_header.is_none() {
         if let Some(backend) = ctx.selected_backend.clone() {
             backend
                 .plugin_runtime
@@ -57,10 +56,10 @@ pub async fn response_filter(
 
     // Run global plugins (D3-A gap fill from unified snapshot Phase 2).
     // Order: route → backend → global (onion: response stages go inner → outer).
-    if !ctx.local_reply_active {
+    if ctx.local_reply_header.is_none() {
         if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(std::sync::Arc::clone) {
             for runtime in plugins.iter() {
-                if ctx.local_reply_active {
+                if ctx.local_reply_header.is_some() {
                     break;
                 }
                 if runtime.upstream_response_async_plugins_count() == 0 {
@@ -73,11 +72,27 @@ pub async fn response_filter(
         }
     }
 
-    // A Phase-7 plugin that produced a local reply cleared the upstream headers
-    // (including the Server header applied at the top of this hook). Re-stamp
-    // the gateway Server header; the rebuild already re-added x-trace-id.
-    if ctx.local_reply_active {
-        edgion_http.server_header_opts.apply_to_response(upstream_response);
+    // filter-04b: a response-phase plugin stashed a local reply. Write it
+    // directly to the downstream and abort the pump so the upstream response is
+    // not forwarded. This is the single write+abort point; it handles both
+    // body-less and body-present upstreams (Phase 8 is never reached).
+    if ctx.local_reply_header.is_some() && !ctx.request_info.response_committed {
+        let mut header = ctx.local_reply_header.take().expect("checked is_some");
+        // Stamp the gateway Server identity onto the freshly-built reply header.
+        edgion_http.server_header_opts.apply_to_response(&mut header);
+        let body = ctx.local_reply_body.take().unwrap_or_default();
+        let body_empty = body.is_empty();
+        ctx.request_info.status = Some(header.status.as_u16());
+        ctx.request_info.response_committed = true;
+        ctx.local_reply_written = true;
+        session.write_response_header(header, body_empty).await?;
+        if !body_empty {
+            session.write_response_body(Some(body), true).await?;
+        }
+        return Err(pingora_core::Error::explain(
+            pingora_core::ErrorType::InternalError,
+            "edgion response local reply",
+        ));
     }
 
     Ok(())
