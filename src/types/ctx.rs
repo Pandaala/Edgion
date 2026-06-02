@@ -821,13 +821,6 @@ pub struct EdgionHttpContext {
     /// plugin phase. See `tasks/todo/filter-04-response-local-reply.md`.
     pub local_reply_body: Option<bytes::Bytes>,
 
-    /// True once a response-phase local reply has been decided. Gates the
-    /// Phase-8 body swap (inject first chunk, drop the rest) and the
-    /// inter-group short-circuit in the response-filter hooks. Distinct from
-    /// `local_reply_body` because the body is `take()`n on the first chunk
-    /// while subsequent upstream chunks must still be dropped.
-    pub local_reply_active: bool,
-
     /// Stashed response-phase local-reply header (filter-04b). `Some` means a
     /// reply is pending; `response_filter` writes it downstream and aborts the
     /// pump. The gateway Server header is applied at write time.
@@ -893,7 +886,6 @@ impl EdgionHttpContext {
             resolved_global_plugins: None,
             resolved_route_ext_refs: None,
             local_reply_body: None,
-            local_reply_active: false,
             local_reply_header: None,
             local_reply_written: false,
         }
@@ -1472,7 +1464,8 @@ mod local_reply_tests {
     #[test]
     fn local_reply_defaults_are_inactive() {
         let ctx = EdgionHttpContext::default();
+        assert!(ctx.local_reply_header.is_none());
         assert!(ctx.local_reply_body.is_none());
-        assert!(!ctx.local_reply_active);
+        assert!(!ctx.local_reply_written);
     }
 }
