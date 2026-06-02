@@ -1201,12 +1201,16 @@ impl PluginRuntime {
 /// and — for HTTP routes — turn an `ErrResponse { status, body }` into a local
 /// reply that fully replaces the upstream response (status + headers + body).
 ///
-/// The header rebuild + body stash is synchronous, so this is shared by both
-/// the sync Phase-6 (`run_upstream_response_plugins_sync`) and async Phase-7
-/// (`run_upstream_response_plugins_async`) loops. The Phase-8
-/// `upstream_response_body_filter` injects the stashed body and drops the
-/// upstream chunks. gRPC routes are unsupported this iteration: the response is
-/// terminated by status only (body not replaced) and a marker is recorded.
+/// Building the local reply is synchronous, so this is shared by both the sync
+/// Phase-6 (`run_upstream_response_plugins_sync`) and async Phase-7
+/// (`run_upstream_response_plugins_async`) loops: it stashes the built reply in
+/// `ctx` (`local_reply_header`/`local_reply_body`). `response_filter` (Phase 7)
+/// then writes that reply directly to the downstream and returns a sentinel
+/// `Err` to abort the upstream forward — this is what makes a body-less upstream
+/// (where Pingora never calls the Phase-8 body filter) still emit the
+/// replacement body (filter-04b). gRPC routes are unsupported this iteration:
+/// the response is terminated by status only (body not replaced) and a marker
+/// is recorded.
 fn check_response_stage_terminate(
     result: &PluginRunningResult,
     plugin_log: &mut PluginLog,
