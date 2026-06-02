@@ -38,7 +38,7 @@ pub fn upstream_response_body_filter(
     if ctx.local_reply_active {
         match ctx.local_reply_body.take() {
             Some(replacement) => *body = Some(replacement), // first chunk: inject
-            None => *body = None,                            // later chunks: drop
+            None => *body = None,                           // later chunks: drop
         }
         return Ok(None);
     }

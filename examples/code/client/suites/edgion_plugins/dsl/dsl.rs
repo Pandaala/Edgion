@@ -1515,8 +1515,7 @@ impl DslTestSuite {
                             if status == 502 && body == expected {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "Upstream 502 body replaced with normalized envelope"
-                                        .to_string(),
+                                    "Upstream 502 body replaced with normalized envelope".to_string(),
                                 )
                             } else {
                                 TestResult::failed(
@@ -1528,9 +1527,7 @@ impl DslTestSuite {
                                 )
                             }
                         }
-                        Err(e) => {
-                            TestResult::failed(start.elapsed(), format!("Request failed: {}", e))
-                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
                 })
             },
