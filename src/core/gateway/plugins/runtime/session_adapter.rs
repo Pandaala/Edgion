@@ -105,8 +105,7 @@ impl<'a> PingoraSessionAdapter<'a> {
         }
         let (is_head, refuse) = {
             let req = self.inner.req_header();
-            let upgrade = req.method == http::Method::CONNECT
-                || req.headers.get(http::header::UPGRADE).is_some();
+            let upgrade = req.method == http::Method::CONNECT || req.headers.get(http::header::UPGRADE).is_some();
             let informational = self
                 .response_header
                 .as_deref()
@@ -746,7 +745,10 @@ mod local_reply_tests {
         assert_eq!(h.headers.get("content-type").unwrap().to_str().unwrap(), "text/plain");
         assert_eq!(h.headers.get("content-length").unwrap().to_str().unwrap(), "21");
         assert!(h.headers.get("content-encoding").is_none());
-        assert_eq!(ctx.local_reply_body.as_ref().unwrap().as_ref(), b"{\"error\":\"forbidden\"}");
+        assert_eq!(
+            ctx.local_reply_body.as_ref().unwrap().as_ref(),
+            b"{\"error\":\"forbidden\"}"
+        );
     }
 
     #[test]
@@ -799,7 +801,10 @@ mod local_reply_tests {
         assert!(build_response_local_reply(&mut ctx, 502, Some("{}".into()), false));
         let h = ctx.local_reply_header.as_ref().unwrap();
         // queued content-type wins; queued content-length is overridden by the framing re-assert.
-        assert_eq!(h.headers.get("content-type").unwrap().to_str().unwrap(), "application/json");
+        assert_eq!(
+            h.headers.get("content-type").unwrap().to_str().unwrap(),
+            "application/json"
+        );
         assert_eq!(h.headers.get("content-length").unwrap().to_str().unwrap(), "2");
     }
 }
