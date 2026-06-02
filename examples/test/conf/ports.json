@@ -123,7 +123,8 @@
     "Gateway/StreamPlugins": {
       "http": 31270,
       "tcp": 31271,
-      "tcp_filtered": 31272
+      "tcp_filtered": 31272,
+      "tcp_bare": 31269
     },
     "TCPRoute/StreamPlugins": {
       "tcp": 31274,

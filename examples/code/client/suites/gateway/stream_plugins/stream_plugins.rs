@@ -10,11 +10,14 @@
 // - HTTPRoute.yaml                        # Route for no-filter gateway
 // - TCPRoute_denied.yaml                  # Route for denied gateway
 // - TCPRoute_allowed.yaml                 # Route for allowed gateway
+// - 06_Gateway_bare_name.yaml             # bare-name allow gateway (port 31269)
+// - 07_TCPRoute_bare_name.yaml            # Route for bare-name gateway
 //
 // Port allocation (from ports.json "Gateway/StreamPlugins"):
 // - 31270: HTTP (no ConnectionFilter, control group)
 // - 31271: TCP (deny-all ConnectionFilter)
-// - 31272: TCP (allow-all ConnectionFilter)
+// - 31272: TCP (allow-all ConnectionFilter, fully-qualified name)
+// - 31269: TCP (allow-all ConnectionFilter, bare name -> namespace normalization)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::{Duration, Instant};
@@ -176,6 +179,75 @@ impl StreamPluginsTestSuite {
         )
     }
 
+    /// Test: a Gateway whose stream-plugins annotation uses the BARE name
+    /// (no namespace) must normalize it with the Gateway's own namespace,
+    /// resolve the allow-all resource, and pass connections through.
+    /// If the bare-name normalization branch regresses, the listener
+    /// fail-closes and this allow-through assertion fails.
+    fn test_tcp_bare_name_allowed() -> TestCase {
+        TestCase::new(
+            "tcp_connection_allowed_by_bare_name_filter",
+            "Bare-name stream-plugins annotation should normalize and pass connections through",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    // This listener is specific to this suite, so its port lives in
+                    // ports.json rather than on the shared TestContext.
+                    let bare_port = match crate::port_config::PortConfig::load() {
+                        Ok(cfg) => cfg.get_ports("Gateway/StreamPlugins").tcp_bare,
+                        Err(e) => {
+                            return TestResult::failed(start.elapsed(), format!("Failed to load ports.json: {}", e));
+                        }
+                    };
+                    let bare_port = match bare_port {
+                        Some(p) => p,
+                        None => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                "ports.json Gateway/StreamPlugins.tcp_bare is not set".to_string(),
+                            );
+                        }
+                    };
+                    let addr = format!("{}:{}", ctx.target_host, bare_port);
+                    let test_data = b"Hello BareName StreamPlugins";
+
+                    match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
+                        Ok(Ok(mut stream)) => {
+                            if let Err(e) = stream.write_all(test_data).await {
+                                return TestResult::failed(start.elapsed(), format!("Write failed: {}", e));
+                            }
+                            let mut buf = vec![0u8; 1024];
+                            match tokio::time::timeout(Duration::from_secs(3), stream.read(&mut buf)).await {
+                                Ok(Ok(n)) if n > 0 => TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!(
+                                        "Bare-name annotation resolved; connection passed through ({} bytes echoed)",
+                                        n
+                                    ),
+                                ),
+                                Ok(Ok(_)) => TestResult::failed(
+                                    start.elapsed(),
+                                    "Connection closed immediately (0 bytes) — bare name may have fail-closed"
+                                        .to_string(),
+                                ),
+                                Ok(Err(e)) => TestResult::failed(start.elapsed(), format!("Read failed: {}", e)),
+                                Err(_) => TestResult::failed(start.elapsed(), "Read timed out".to_string()),
+                            }
+                        }
+                        Ok(Err(e)) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Connection refused (bare name likely fail-closed): {}", e),
+                        ),
+                        Err(_) => TestResult::failed(
+                            start.elapsed(),
+                            "Connection timed out (bare name likely fail-closed)".to_string(),
+                        ),
+                    }
+                })
+            },
+        )
+    }
+
     /// Test: Multiple rapid connections to denied gateway should all be rejected
     fn test_tcp_denied_multiple() -> TestCase {
         TestCase::new(
@@ -233,6 +305,7 @@ impl TestSuite for StreamPluginsTestSuite {
             Self::test_http_no_filter(),
             Self::test_tcp_denied(),
             Self::test_tcp_allowed(),
+            Self::test_tcp_bare_name_allowed(),
             Self::test_tcp_denied_multiple(),
         ]
     }

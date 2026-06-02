@@ -24,6 +24,8 @@ mod framework;
 mod log_analyzer;
 #[path = "../client/metrics_helper.rs"]
 pub mod metrics_helper;
+#[path = "../client/port_config.rs"]
+mod port_config;
 #[path = "../client/reporter.rs"]
 mod reporter;
 #[path = "../client/suites/mod.rs"]

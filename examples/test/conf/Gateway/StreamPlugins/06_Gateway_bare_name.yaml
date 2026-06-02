@@ -1,0 +1,19 @@
+# Gateway with allow-all ConnectionFilter referenced by BARE name (no namespace).
+# Exercises listener_builder.rs::apply_connection_filter bare-name normalization:
+# "allow-all-ips" must expand to "edgion-test/allow-all-ips" using the Gateway's
+# own namespace. If normalization regresses, the store key is not found and the
+# listener fail-closes — caught by the allow-through assertion in the suite.
+# TCP listener on port 31269.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: stream-plugins-bare-gw
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "allow-all-ips"
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tcp
+      protocol: TCP
+      port: 31269
