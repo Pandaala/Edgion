@@ -827,6 +827,16 @@ pub struct EdgionHttpContext {
     /// `local_reply_body` because the body is `take()`n on the first chunk
     /// while subsequent upstream chunks must still be dropped.
     pub local_reply_active: bool,
+
+    /// Stashed response-phase local-reply header (filter-04b). `Some` means a
+    /// reply is pending; `response_filter` writes it downstream and aborts the
+    /// pump. The gateway Server header is applied at write time.
+    pub local_reply_header: Option<Box<ResponseHeader>>,
+
+    /// Set true once `response_filter` has written the local reply downstream.
+    /// Read by error_while_proxy / fail_to_proxy / suppress_error_log to treat
+    /// the sentinel abort as an intentional reply, not a proxy failure.
+    pub local_reply_written: bool,
 }
 
 impl Default for EdgionHttpContext {
@@ -884,6 +894,8 @@ impl EdgionHttpContext {
             resolved_route_ext_refs: None,
             local_reply_body: None,
             local_reply_active: false,
+            local_reply_header: None,
+            local_reply_written: false,
         }
     }
 
