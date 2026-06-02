@@ -162,15 +162,15 @@ impl ExtensionRefFilter {
             Ok(None) => return PluginRunningResult::GoodNext,
             Err(_) => {
                 // Sync stage: no `await`, so we cannot write a response body
-                // here. Signal the status via `ErrResponse` instead — the
-                // response runner records "deny response 500" and terminates
-                // (see `check_response_stage_terminate`). A bare
-                // `ErrTerminateRequest` would instead trip the runtime's 502
-                // fail-safe, masking that this is a plugin-reference error.
-                // `body` is `None`: `check_response_stage_terminate` only reads
-                // `status`, so a body would be allocated and dropped. The
-                // request-stage `run_extension_async` path is the one that
-                // writes the JSON body to the client.
+                // here. Signal the status via `ErrResponse` instead. The
+                // response runner (`check_response_stage_terminate`) now turns
+                // this into a real local reply: it builds a fresh `500` and
+                // `response_filter` writes it to the client, replacing the
+                // upstream response (filter-04b). `body` is `None`, so the client
+                // gets a bare `500` (no JSON envelope); the request-stage
+                // `run_extension_async` path is the one that writes a JSON body.
+                // A bare `ErrTerminateRequest` would instead trip the runtime's
+                // 502 fail-safe, masking that this is a plugin-reference error.
                 return PluginRunningResult::ErrResponse {
                     status: 500,
                     body: None,

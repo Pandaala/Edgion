@@ -126,6 +126,13 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.ctx.add_error(EdgionStatus::PluginResponseReplaceUnsupportedGrpc);
     }
 
+    /// Whether the in-flight request is gRPC/gRPC-Web. Used by the response
+    /// runner to record the gRPC-unsupported marker only for genuine gRPC
+    /// routes (other local-reply refusals — Upgrade/1xx — are not gRPC).
+    pub fn is_grpc_request(&self) -> bool {
+        self.ctx.request_info.is_grpc_request
+    }
+
     /// Apply queued response-header ops onto a freshly-built `ResponseHeader`.
     /// Used by request-stage termination paths (ErrResponse) that build their
     /// own response and would otherwise drop plugin-queued headers on the floor.

@@ -1564,7 +1564,9 @@ impl DslTestSuite {
                                     );
                                 }
                             }
-                            Err(e) => return TestResult::failed(start.elapsed(), format!("iter {i} request failed: {e}")),
+                            Err(e) => {
+                                return TestResult::failed(start.elapsed(), format!("iter {i} request failed: {e}"))
+                            }
                         }
                     }
                     TestResult::passed_with_message(

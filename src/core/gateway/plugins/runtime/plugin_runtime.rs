@@ -1222,10 +1222,13 @@ fn check_response_stage_terminate(
             if adapter.apply_response_local_reply(*status, body.clone()) {
                 plugin_log.push_fmt("replace response {}", la![status.to_string().as_str()]);
             } else {
-                // gRPC route (or no header bound): keep legacy log-and-terminate
-                // behavior, but surface the previously-silent termination.
+                // Refused (gRPC route, Upgrade/1xx upstream, or no header bound):
+                // keep legacy log-and-terminate behavior. Only tag the gRPC marker
+                // for genuine gRPC routes so it does not mislabel Upgrade/1xx.
                 plugin_log.push_fmt("deny response {}", la![status.to_string().as_str()]);
-                adapter.note_response_local_reply_unsupported();
+                if adapter.is_grpc_request() {
+                    adapter.note_response_local_reply_unsupported();
+                }
             }
             true
         }
