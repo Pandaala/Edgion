@@ -1,0 +1,3 @@
+# Delete list (Kind/Namespace/Name). EdgionGatewayConfig is cluster-scoped, so the
+# namespace segment is empty.
+EdgionGatewayConfig//params-flap-egc

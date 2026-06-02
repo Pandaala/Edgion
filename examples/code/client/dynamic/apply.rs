@@ -40,9 +40,10 @@ pub async fn apply_path(client: &EdgionClient, path: &Path) -> Result<()> {
 }
 
 /// Delete resources listed in a file. Each line uses the format `Kind/Namespace/Name`;
-/// lines starting with `#` and empty lines are ignored.
-/// The Namespace field must be non-empty; cluster-scoped resources are not yet supported
-/// (extend the format if needed).
+/// lines starting with `#` and empty lines are ignored. For cluster-scoped resources
+/// (e.g. `EdgionGatewayConfig`, `GatewayClass`) leave the Namespace segment empty:
+/// `Kind//Name` — an empty namespace is passed through as `None` so the delete targets the
+/// cluster-scoped route rather than the namespaced one.
 pub async fn delete_list(client: &EdgionClient, list_file: &Path) -> Result<()> {
     let content = tokio::fs::read_to_string(list_file)
         .await
@@ -57,9 +58,11 @@ pub async fn delete_list(client: &EdgionClient, list_file: &Path) -> Result<()> 
             anyhow::bail!("Invalid delete list line (expected Kind/Namespace/Name): {}", line);
         }
         let (kind, namespace, name) = (parts[0], parts[1], parts[2]);
-        delete(client, Some(kind), Some(name), Some(namespace), None)
+        // Empty namespace segment → cluster-scoped delete.
+        let namespace = if namespace.is_empty() { None } else { Some(namespace) };
+        delete(client, Some(kind), Some(name), namespace, None)
             .await
-            .with_context(|| format!("Failed to delete {}/{}/{}", kind, namespace, name))?;
+            .with_context(|| format!("Failed to delete {}/{}/{}", kind, namespace.unwrap_or(""), name))?;
     }
     Ok(())
 }

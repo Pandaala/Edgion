@@ -81,6 +81,8 @@ pub use status::BtlspFlapInitialTestSuite;
 pub use status::BtlspFlapInvalidTestSuite;
 pub use status::BtlspFlapValidTestSuite;
 pub use status::GatewayFrontendValidationStatusTestSuite;
+pub use status::GcParamsFlapMissingTestSuite;
+pub use status::GcParamsFlapPresentTestSuite;
 pub use status::GrpcRouteStatusTestSuite;
 pub use status::HighFreqFinalTestSuite;
 pub use status::HighFreqInitialTestSuite;

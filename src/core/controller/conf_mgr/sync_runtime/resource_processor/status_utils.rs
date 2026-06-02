@@ -39,6 +39,8 @@ pub mod condition_reasons {
     pub const NOT_ALLOWED_BY_LISTENERS: &str = "NotAllowedByListeners";
     /// Route hostnames don't intersect with the listener's hostname (Gateway API v1.1+)
     pub const NO_MATCHING_LISTENER_HOSTNAME: &str = "NoMatchingListenerHostname";
+    /// GatewayClass parametersRef target is invalid (bad group/kind) or not found.
+    pub const INVALID_PARAMETERS: &str = "InvalidParameters";
 
     // ResolvedRefs reasons
     pub const RESOLVED_REFS: &str = "ResolvedRefs";

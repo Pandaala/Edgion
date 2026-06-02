@@ -1,0 +1,12 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: params-flap-class
+spec:
+  controllerName: edgion.io/gateway-controller
+  description: "controller-07 parametersRef ResolvedRefs flap scenario"
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    # Initially missing: the EdgionGatewayConfig below is created only in updates/to_present.
+    name: params-flap-egc

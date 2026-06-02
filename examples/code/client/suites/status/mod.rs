@@ -1,4 +1,5 @@
 pub mod backend_tls;
+pub mod gateway_class_params;
 pub mod gateway_frontend_validation;
 pub mod grpc_route;
 pub mod helpers;
@@ -11,6 +12,7 @@ pub mod tls_route;
 pub use backend_tls::{
     BackendTlsStatusTestSuite, BtlspFlapInitialTestSuite, BtlspFlapInvalidTestSuite, BtlspFlapValidTestSuite,
 };
+pub use gateway_class_params::{GcParamsFlapMissingTestSuite, GcParamsFlapPresentTestSuite};
 pub use gateway_frontend_validation::GatewayFrontendValidationStatusTestSuite;
 pub use grpc_route::GrpcRouteStatusTestSuite;
 pub use hostname_intersection::HostnameIntersectionStatusTestSuite;

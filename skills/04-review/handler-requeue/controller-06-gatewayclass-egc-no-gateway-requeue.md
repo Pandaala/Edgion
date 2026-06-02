@@ -5,6 +5,14 @@ description: Use when reviewing findings that EdgionGatewayConfig / GatewayClass
 
 # GatewayClass / EdgionGatewayConfig Do Not Requeue Dependent Gateways — DESIGN-TRADEOFF
 
+> **Update (controller-07, 2026-06-01):** the first re-evaluation trigger below has fired. The
+> `GatewayClassHandler` now derives `ResolvedRefs`/`Accepted` from whether its `parametersRef` EGC
+> exists, so controller-07 added an **EdgionGatewayConfig → GatewayClass** requeue
+> (`EdgionGatewayConfigHandler::{on_change,on_delete}` + `trigger_gatewayclass_params_revalidation`).
+> That is a *different edge* from the one rejected here: this finding rejects **EGC → Gateway**
+> (a no-op, since the Gateway handler reads neither resource), and that rejection still stands. See
+> `skills/01-architecture/01-controller/06-requeue-mechanism.md` path 6.
+
 ## Conclusion
 
 `EdgionGatewayConfigHandler` and `GatewayClassHandler`

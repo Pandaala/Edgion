@@ -116,7 +116,35 @@ pub async fn trigger_gateway_secret_revalidation(runtime: Arc<ControllerRuntime>
 pub async fn run_post_cache_ready_revalidations(runtime: Arc<ControllerRuntime>) {
     trigger_full_cross_ns_revalidation(runtime.clone()).await;
     trigger_gateway_secret_revalidation(runtime.clone()).await;
-    trigger_gateway_route_revalidation(runtime).await;
+    trigger_gateway_route_revalidation(runtime.clone()).await;
+    trigger_gatewayclass_params_revalidation(runtime).await;
+}
+
+/// Requeue all GatewayClasses after caches are ready.
+///
+/// A GatewayClass's ResolvedRefs/Accepted conditions depend on whether its referenced
+/// EdgionGatewayConfig exists. During init the GatewayClass may be processed before its EGC
+/// (the init path does not fire `on_change`), so this one-shot revalidation re-resolves
+/// parametersRef once everything is loaded. Runs in both Kubernetes and file/etcd modes.
+pub async fn trigger_gatewayclass_params_revalidation(runtime: Arc<ControllerRuntime>) {
+    let Some(gc_processor) = runtime.processor_registry.get("GatewayClass") else {
+        return;
+    };
+
+    let keys = gc_processor.list_keys();
+    if keys.is_empty() {
+        return;
+    }
+
+    tracing::info!(
+        component = "gatewayclass_params_revalidation",
+        gateway_class_count = keys.len(),
+        "Requeuing all GatewayClasses for post-init parametersRef revalidation"
+    );
+
+    for key in keys {
+        runtime.processor_registry.requeue("GatewayClass", key).await;
+    }
 }
 
 /// Cross-namespace revalidation listener
