@@ -64,6 +64,7 @@ scrape_configs:
 | `edgion_gateway_request_duration_ms` | Histogram | none | End-to-end request latency (the only histogram on the data plane). **Disabled by default** |
 | `edgion_mirror_requests_total` | Counter | `status` | Request-mirror outcomes. `status` ∈ `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout` |
 | `edgion_rr_selector_truncated_total` | Counter | none | RoundRobin selector truncation events (backend count exceeded `u16::MAX`); used to alert on configuration anomalies |
+| `edgion_lb_panic_mode` | Gauge | `service` | `1` when load-balancer panic mode is engaged for the named service (healthy fraction below the configured threshold), `0` when normal. `service` format: `namespace/name`. |
 | `edgion_link_sys_es_bulk_channel_full_total` | Counter | none | Elasticsearch producer→bulk-loop channel was full at submit time; a sustained-backpressure signal on the log-shipping path |
 
 ### `edgion_backend_requests_total` labels

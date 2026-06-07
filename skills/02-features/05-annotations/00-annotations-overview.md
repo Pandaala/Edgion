@@ -56,6 +56,18 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
 |------------|-------|-------------|
 | `edgion.io/health-check` | YAML string | Health check configuration |
 | `edgion.io/circuit-breaker` | YAML string | Circuit breaker configuration (consecutiveErrors/ejectionSeconds/maxEjectionPercent) |
+| `edgion.io/panic-threshold` | integer string `0`–`100` | Panic threshold percent (default `0` = disabled). When the healthy-backend fraction drops below this value, the gateway routes across ALL backends instead of returning 503. Overrides the global `EdgionGatewayConfig.spec.loadBalancing.panicThreshold`. Prometheus gauge: `edgion_lb_panic_mode{service}` = 1 when engaged. |
+
+> **Panic threshold and the circuit breaker / health-check safety valve.** `edgion.io/panic-threshold` acts as a last-resort layer on top of the combined health-check + circuit-breaker predicate: when both active probes and passive ejection have together removed too many backends, panic mode kicks in and prevents a total 503 outage. The three annotations work best together on services with larger backend pools.
+
+> **When to enable panic threshold.** Default is `0` (disabled), matching Istio's
+> Kubernetes default, because a 50% threshold misfires on small pools — a 2-pod
+> service losing 1 pod hits 50% and would route back to the bad pod. Enable it
+> (e.g. `50`) for services with **larger** backend pools (≈ ≥ 5 endpoints) where
+> losing many backends at once more likely means a systemic problem (a
+> misconfigured health-check path, a network partition) than genuine failure.
+> The canonical case: a renamed health-check endpoint marks every backend
+> unhealthy and, without panic mode, takes the whole service offline with 503s.
 
 > **Backend protocol selection**: not controlled via annotation; use the standard Service `spec.ports[].appProtocol` field (GEP-1911). `kubernetes.io/h2c` (HTTP/2 cleartext upstream) and `kubernetes.io/ws` (WebSocket) are supported. See [annotations-metadata.md](references/annotations-metadata.md) for details.
 

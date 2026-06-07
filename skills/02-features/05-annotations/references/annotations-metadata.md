@@ -115,6 +115,7 @@ GatewayClass declares `HTTPRouteBackendProtocolH2C` as a supported feature.
 |-----|-------|---------|--------|
 | `edgion.io/health-check` | YAML string | none | Configures active backend health checks (type: http/tcp/grpc). For gRPC, supports `grpcServiceName` field. Parsed from object metadata and validated before use. |
 | `edgion.io/circuit-breaker` | YAML string | none | Configures backend outlier-detection circuit breaking. Fields: `consecutiveErrors`, `ejectionSeconds`, `maxEjectionPercent`. Verify in code: `src/core/gateway/backends/circuit_breaker/config.rs`. |
+| `edgion.io/panic-threshold` | integer string `0`–`100` | `0` (disabled) | Panic threshold percent. When the fraction of healthy backends (after health-check and circuit-breaker filtering) drops below this value, the gateway ignores health filtering and routes across **all** backends instead of returning 503. `0` disables panic mode. Values outside `0`–`100` are rejected. Overrides `EdgionGatewayConfig.spec.loadBalancing.panicThreshold` for this Service. |
 
 Notes:
 
