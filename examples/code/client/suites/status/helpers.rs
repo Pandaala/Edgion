@@ -73,8 +73,13 @@ pub async fn fetch_cluster_resource_status(ctx: &TestContext, kind: &str, name: 
 }
 
 /// Check if a resource status has a specific condition with expected status value.
-/// Works with both `status.parents[]` (Route) and `status.ancestors[]` (Policy) patterns.
+/// Works with the `status.conditions[]` (Gateway / GatewayClass) pattern as well
+/// as the `status.parents[]` (Route) and `status.ancestors[]` (Policy) patterns.
 pub fn has_condition(status: &Value, condition_type: &str, expected_status: &str) -> bool {
+    // Top-level conditions (Gateway / GatewayClass pattern)
+    if check_conditions(&status["status"], condition_type, expected_status) {
+        return true;
+    }
     // Try parents (Route pattern)
     if let Some(parents) = status["status"]["parents"].as_array() {
         for parent in parents {
@@ -101,6 +106,10 @@ pub fn has_condition_with_message(
     expected_status: &str,
     message_contains: &str,
 ) -> bool {
+    // Top-level conditions (Gateway / GatewayClass pattern)
+    if check_conditions_with_message(&status["status"], condition_type, expected_status, message_contains) {
+        return true;
+    }
     // Try parents
     if let Some(parents) = status["status"]["parents"].as_array() {
         for parent in parents {

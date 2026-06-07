@@ -48,6 +48,15 @@ spec:
       defaultRequestTimeout: 60s
       defaultIdleTimeout: 300s
 
+  # Mirror the base EdgionGatewayConfig (same cluster-scoped name) so this
+  # overlay stays a verbatim duplicate plus globalPluginsRef. The TCPRoute
+  # IdleTimeout suite depends on this value resolving to a short window; if it
+  # is dropped here, whichever overlay wins the apply-order race would leave
+  # example-gateway without a tcpTimeout and the L4 relay would fall back to the
+  # 1h default.
+  tcpTimeout:
+    idleTimeout: 2s
+
   globalPluginsRef:
     - name: gp-resp-header-modifier
       namespace: edgion-default
