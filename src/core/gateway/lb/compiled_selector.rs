@@ -186,6 +186,39 @@ pub enum CompiledSelector {
 }
 
 impl CompiledSelector {
+    /// Borrow this selector's own backend list. Used by the panic-threshold
+    /// counting pass so the count and the selection walk operate on the exact
+    /// same list (no `replace_backends` TOCTOU skew).
+    fn backends_slice(&self) -> &[Arc<EdgionBackend>] {
+        match self {
+            CompiledSelector::RoundRobin(c) => &c.backends,
+            CompiledSelector::ConsistentHash(c) => &c.backends,
+            CompiledSelector::LeastConn(c) => &c.backends,
+            CompiledSelector::Ewma(c) => &c.backends,
+        }
+    }
+
+    /// Decide whether panic mode should engage: count how many backends pass
+    /// the (side-effect-free) `quiet` predicate, returning `true` when fewer
+    /// than `floor` survive. Early-exits as soon as `floor` survivors are seen,
+    /// so the common healthy case scans at most `floor` backends. `floor == 0`
+    /// disables panic (returns `false`).
+    pub fn panic_should_engage(&self, floor: usize, quiet: impl Fn(&EdgionBackend) -> bool) -> bool {
+        if floor == 0 {
+            return false;
+        }
+        let mut survivors = 0usize;
+        for b in self.backends_slice() {
+            if quiet(b) {
+                survivors += 1;
+                if survivors >= floor {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Number of backends behind this selector. Useful for tests / metrics.
     pub fn backend_count(&self) -> usize {
         match self {
@@ -435,6 +468,58 @@ pub fn drop_cell(service_key: &str) {
 /// Look up an existing cell without creating one. Used by tests / diagnostics.
 pub fn try_get_cell(service_key: &str) -> Option<Arc<ServiceSelectorCell>> {
     SELECTOR_CACHE.get(service_key).map(|c| c.value().clone())
+}
+
+#[cfg(test)]
+mod panic_should_engage_tests {
+    use super::*;
+    use pingora_core::protocols::l4::socket::SocketAddr as PSocketAddr;
+    use pingora_load_balancing::Backend;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    fn backends(n: u8) -> Vec<Arc<EdgionBackend>> {
+        (0..n)
+            .map(|i| {
+                Arc::new(EdgionBackend::new(Backend {
+                    addr: PSocketAddr::Inet(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, i)), 80)),
+                    weight: 1,
+                    ext: Default::default(),
+                }))
+            })
+            .collect()
+    }
+
+    fn rr_selector(n: u8) -> CompiledSelector {
+        CompiledSelector::RoundRobin(RrCore::build(Arc::new(backends(n))))
+    }
+
+    #[test]
+    fn engages_when_survivors_below_floor() {
+        let sel = rr_selector(10);
+        // floor for 50% of 10 = 5; only 4 healthy → panic.
+        // Cell<u32> allows interior mutation through an Fn closure.
+        let healthy = std::cell::Cell::new(0u32);
+        let engaged = sel.panic_should_engage(5, |_| {
+            let h = healthy.get() + 1;
+            healthy.set(h);
+            h <= 4
+        });
+        assert!(engaged);
+    }
+
+    #[test]
+    fn does_not_engage_when_survivors_reach_floor() {
+        let sel = rr_selector(10);
+        // 6 healthy >= floor 5 → no panic; early-exit after the 5th survivor.
+        let engaged = sel.panic_should_engage(5, |_| true);
+        assert!(!engaged);
+    }
+
+    #[test]
+    fn floor_zero_never_engages() {
+        let sel = rr_selector(3);
+        assert!(!sel.panic_should_engage(0, |_| false));
+    }
 }
 
 #[cfg(test)]

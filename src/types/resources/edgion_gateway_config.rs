@@ -67,6 +67,10 @@ pub struct EdgionGatewayConfigSpec {
     /// session model and is configured separately.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tcp_timeout: Option<TcpTimeout>,
+
+    /// Load-balancing-wide settings (panic threshold, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_balancing: Option<LoadBalancingConfig>,
 }
 
 // ============================================
@@ -214,6 +218,22 @@ fn default_tcp_idle_timeout() -> String {
     "1h".to_string()
 }
 
+// ============================================
+// Load-Balancing Configuration
+// ============================================
+
+/// Gateway-wide load-balancing configuration.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadBalancingConfig {
+    /// Panic threshold percent (0-100). When the fraction of healthy backends
+    /// for a service drops below this percent, the gateway ignores health
+    /// filtering and load-balances across all backends. 0 (default) disables
+    /// panic mode. Per-service `edgion.io/panic-threshold` overrides this.
+    #[serde(default)]
+    pub panic_threshold: u8,
+}
+
 /// Secure default idle timeout applied to every L4 relay when the operator
 /// configures no `tcpTimeout` section. Bounded-by-default: protection does not
 /// require config. Must stay in sync with `default_tcp_idle_timeout()` (a unit
@@ -284,6 +304,7 @@ impl Default for EdgionGatewayConfigSpec {
             enable_reference_grant_validation: false,
             link_sys: None,
             tcp_timeout: None,
+            load_balancing: None,
         }
     }
 }

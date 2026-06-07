@@ -50,6 +50,12 @@ fn apply_link_sys_config(config: &EdgionGatewayConfig) {
     }
 }
 
+fn apply_load_balancing_config(config: &EdgionGatewayConfig) {
+    if let Some(lb) = &config.spec.load_balancing {
+        crate::core::gateway::backends::panic_threshold::configure_lb_panic_default(lb.panic_threshold);
+    }
+}
+
 impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
     fn full_set(&self, data: &HashMap<String, Arc<EdgionGatewayConfig>>) {
         tracing::info!(
@@ -61,6 +67,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         *store = arc_map_to_owned(data);
         for config in store.values() {
             apply_link_sys_config(config);
+            apply_load_balancing_config(config);
         }
     }
 
@@ -81,6 +88,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             for (key, config) in add {
                 tracing::debug!(key = %key, name = %config.name_any(), "EdgionGatewayConfig added");
                 apply_link_sys_config(&config);
+                apply_load_balancing_config(&config);
                 store.insert(key, (*config).clone());
             }
         }
@@ -94,6 +102,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             for (key, config) in update {
                 tracing::debug!(key = %key, name = %config.name_any(), "EdgionGatewayConfig updated");
                 apply_link_sys_config(&config);
+                apply_load_balancing_config(&config);
                 if store.insert(key.clone(), (*config).clone()).is_none() {
                     tracing::warn!(key = %key, "EdgionGatewayConfig update: key not found in store, inserting");
                 }
@@ -144,6 +153,7 @@ mod tests {
                 enable_reference_grant_validation: false,
                 link_sys: None,
                 tcp_timeout: None,
+                load_balancing: None,
             },
         )
     }
@@ -321,6 +331,26 @@ mod tests {
 
         // Reset to default for other tests
         configure_webhook_global_max(16384);
+    }
+
+    #[test]
+    fn test_load_balancing_panic_threshold_applied() {
+        use crate::core::gateway::backends::panic_threshold::get_lb_panic_default;
+        use crate::types::resources::edgion_gateway_config::LoadBalancingConfig;
+
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+
+        let handler = EdgionGatewayConfigHandler::new();
+        let mut cfg = make_config("gw-pt");
+        cfg.spec.load_balancing = Some(LoadBalancingConfig { panic_threshold: 50 });
+
+        let mut data = HashMap::new();
+        data.insert("gw-pt".to_string(), Arc::new(cfg));
+        handler.full_set(&data);
+
+        assert_eq!(get_lb_panic_default(), 50);
+        crate::core::gateway::backends::panic_threshold::configure_lb_panic_default(0);
     }
 
     #[test]

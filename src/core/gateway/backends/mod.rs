@@ -2,6 +2,7 @@ pub mod circuit_breaker;
 pub mod discovery;
 pub mod gateway_backend_tls_store;
 pub mod health;
+pub mod panic_threshold;
 pub(crate) mod peer_builder;
 pub mod policy;
 pub mod port_resolver;
@@ -15,6 +16,10 @@ pub use circuit_breaker::{get_circuit_breaker_store, parse_circuit_breaker_annot
 pub use discovery::{
     create_ep_slice_handler, create_service_handler, get_global_service_store, get_roundrobin_store, EndpointSliceExt,
     EpSliceStore, ServiceStore,
+};
+pub use panic_threshold::{
+    configure_lb_panic_default, get_lb_panic_default, get_panic_threshold_store, panic_floor,
+    parse_panic_threshold_annotation, resolve_panic_threshold,
 };
 
 pub use gateway_backend_tls_store::{get_global_gateway_backend_tls_store, GatewayBackendTlsStore};

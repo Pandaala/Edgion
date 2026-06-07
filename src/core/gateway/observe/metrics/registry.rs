@@ -42,6 +42,8 @@ pub mod names {
     pub const CB_EJECTIONS_TOTAL: &str = "edgion_circuit_breaker_ejections_total";
     pub const CB_EJECTED_ENDPOINTS: &str = "edgion_circuit_breaker_ejected_endpoints";
     pub const CB_REJECTIONS_TOTAL: &str = "edgion_circuit_breaker_rejections_total";
+    // Load-balancing panic mode: 1 = engaged, 0 = normal (per service)
+    pub const LB_PANIC_MODE: &str = "edgion_lb_panic_mode";
     // ACME HTTP-01 challenge lookup metrics
     pub const ACME_CHALLENGE_LOOKUP_TOTAL: &str = "edgion_acme_challenge_lookup_total";
     // Stream plugin: GlobalConnectionIpRestriction decision events
@@ -419,6 +421,13 @@ pub fn record_cb_rejection(service_key: &str) {
     counter!(names::CB_REJECTIONS_TOTAL, "service" => service_key.to_string()).increment(1);
 }
 
+/// Set the panic-mode gauge for a service: 1.0 when panic mode is engaged
+/// (health filtering bypassed), 0.0 when selecting normally. Called from the
+/// selection path; cheap (atomic gauge set), no logging — Iron Rule 3 safe.
+pub fn record_lb_panic_mode(service_key: &str, engaged: bool) {
+    gauge!(names::LB_PANIC_MODE, "service" => service_key.to_string()).set(if engaged { 1.0 } else { 0.0 });
+}
+
 /// Record an ACME HTTP-01 challenge token lookup event.
 ///
 /// `result` must be one of: `"hit"`, `"expired"`, `"domain_mismatch"`, `"not_found"`.
@@ -554,5 +563,17 @@ mod tests {
                 "still-untouched cold counter must remain absent, got:\n{rendered}"
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod lb_panic_metric_tests {
+    use super::*;
+
+    #[test]
+    fn record_lb_panic_mode_does_not_panic() {
+        // Smoke test: the gauge set path is callable for engaged/cleared.
+        record_lb_panic_mode("default/svc", true);
+        record_lb_panic_mode("default/svc", false);
     }
 }

@@ -6,6 +6,7 @@ use crate::core::gateway::backends::circuit_breaker::{
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
+use crate::core::gateway::backends::panic_threshold::{get_panic_threshold_store, parse_panic_threshold_annotation};
 use crate::core::gateway::lb::compiled_selector;
 use crate::core::gateway::lb::runtime_state;
 use k8s_openapi::api::core::v1::Service;
@@ -25,6 +26,7 @@ impl ConfHandler<Service> for ServiceStore {
         let config_store = get_hc_config_store();
         let hc_manager = get_health_check_manager();
         let cb_store = get_circuit_breaker_store();
+        let panic_store = get_panic_threshold_store();
         let incoming_keys: HashSet<String> = data.keys().cloned().collect();
 
         for old_key in config_store.service_keys() {
@@ -33,6 +35,7 @@ impl ConfHandler<Service> for ServiceStore {
                 hc_manager.reconcile_service(&old_key);
                 runtime_state::remove_service(&old_key);
                 cb_store.remove_service(&old_key);
+                panic_store.remove_service(&old_key);
                 compiled_selector::drop_cell(&old_key);
             }
         }
@@ -43,6 +46,7 @@ impl ConfHandler<Service> for ServiceStore {
             hc_manager.reconcile_service(key);
             let cb_config = parse_circuit_breaker_annotation(&service.metadata);
             cb_store.set_service_config(key, cb_config);
+            panic_store.set_service_threshold(key, parse_panic_threshold_annotation(&service.metadata));
         }
     }
 
@@ -63,6 +67,7 @@ impl ConfHandler<Service> for ServiceStore {
         let config_store = get_hc_config_store();
         let hc_manager = get_health_check_manager();
         let cb_store = get_circuit_breaker_store();
+        let panic_store = get_panic_threshold_store();
 
         for (key, service) in add.iter().chain(update.iter()) {
             let active_config = parse_health_check_annotation(&service.metadata);
@@ -70,6 +75,7 @@ impl ConfHandler<Service> for ServiceStore {
             hc_manager.reconcile_service(key);
             let cb_config = parse_circuit_breaker_annotation(&service.metadata);
             cb_store.set_service_config(key, cb_config);
+            panic_store.set_service_threshold(key, parse_panic_threshold_annotation(&service.metadata));
         }
 
         for key in &remove {
@@ -77,6 +83,7 @@ impl ConfHandler<Service> for ServiceStore {
             hc_manager.reconcile_service(key);
             runtime_state::remove_service(key);
             cb_store.remove_service(key);
+            panic_store.remove_service(key);
             compiled_selector::drop_cell(key);
         }
 
@@ -191,5 +198,34 @@ mod tests {
         store.partial_update(HashMap::new(), HashMap::new(), remove);
 
         assert!(!store.contains("default/svc1"));
+    }
+
+    #[test]
+    fn test_panic_threshold_annotation_plumbed_and_removed() {
+        use crate::core::gateway::backends::panic_threshold::{
+            configure_lb_panic_default, get_panic_threshold_store, resolve_panic_threshold,
+        };
+        configure_lb_panic_default(0);
+        let store = ServiceStore::new();
+
+        let mut svc = create_test_service("default", "pt-svc");
+        svc.metadata.annotations = Some(std::collections::BTreeMap::from([(
+            "edgion.io/panic-threshold".to_string(),
+            "40".to_string(),
+        )]));
+
+        let mut data = HashMap::new();
+        data.insert("default/pt-svc".to_string(), Arc::new(svc));
+        store.full_set(&data);
+        assert_eq!(resolve_panic_threshold("default/pt-svc"), 40);
+
+        // Removal clears the override (falls back to global default 0).
+        store.partial_update(
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::from(["default/pt-svc".to_string()]),
+        );
+        assert_eq!(resolve_panic_threshold("default/pt-svc"), 0);
+        get_panic_threshold_store().remove_service("default/pt-svc");
     }
 }

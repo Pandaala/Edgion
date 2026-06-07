@@ -17,6 +17,12 @@ pub mod edgion {
     /// Value format: YAML string.
     pub const CIRCUIT_BREAKER: &str = "edgion.io/circuit-breaker";
 
+    /// Per-service load-balancing panic threshold (percent, 0-100).
+    /// When the fraction of healthy backends drops below this percent, the
+    /// gateway ignores health filtering and load-balances across all backends.
+    /// Value: integer string. 0 (default) disables panic mode.
+    pub const PANIC_THRESHOLD: &str = "edgion.io/panic-threshold";
+
     /// Proxy Protocol version to send to upstream.
     /// Value: "v2" to enable PP2.
     pub const PROXY_PROTOCOL: &str = "edgion.io/proxy-protocol";
