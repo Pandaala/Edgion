@@ -74,7 +74,11 @@ pub struct ClientAuthConfig {
     /// CA Secret data (filled by controller, not from YAML)
     /// Note: This field is serialized for controller->gateway communication,
     /// but should be skipped when deserializing from YAML files
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub ca_secret: Option<Secret>,
 
@@ -167,7 +171,11 @@ pub struct EdgionTlsSpec {
     pub extend: Option<EdgionTlsExtend>,
 
     /// Resolved cert Secret (filled by Controller from `secret_ref`, never from user YAML).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub secret: Option<Secret>,
 

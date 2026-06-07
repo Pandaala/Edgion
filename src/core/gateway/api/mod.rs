@@ -1,5 +1,4 @@
 use crate::core::gateway::conf_sync::ConfigClient;
-use crate::types::resources::edgion_tls::EdgionTls;
 use crate::types::ResourceKind;
 use axum::{
     extract::{Path, Query, State},
@@ -94,27 +93,30 @@ async fn get_server_info(State(client): State<Arc<ConfigClient>>) -> Json<ApiRes
     Json(ApiResponse::ok_body(ServerInfoResponse { server_id, ready }))
 }
 
-/// List all resources of `kind` from ConfigClient as JSON.
+/// List all resources of `kind` from ConfigClient as JSON, with secret fields
+/// redacted for admin output.
 ///
-/// Every kind dispatches generically through [`ConfigClient::get_dyn_cache`].
-/// The sole exception is `EdgionTls`: its resolved private-key material must be
-/// scrubbed before leaving the gateway, so it goes through the typed path (see
-/// [`scrub_edgion_tls_secrets`]). Kinds not cached on the gateway (e.g.
-/// `ReferenceGrant`, `Secret`) resolve to `None` and yield an empty list.
+/// An [`AdminRedactGuard`] is held for the entire (synchronous) serialization, so
+/// every secret-bearing field annotated with the `redact_opt` / `redact_required`
+/// serde adapters emits `"[redacted]"`. Both the list endpoint and the get-by-name
+/// endpoint funnel through here, so both are covered by the single guard.
+///
+/// INVARIANT: keep this path synchronous and single-threaded — the guard is a
+/// thread-local and would not apply if serialization moved to another thread.
+/// Kinds not cached on the gateway (e.g. `ReferenceGrant`, `Secret`) resolve to
+/// `None` and yield an empty list.
 fn list_client_resources(client: &ConfigClient, kind: ResourceKind) -> Vec<serde_json::Value> {
-    match kind {
-        ResourceKind::EdgionTls => to_json_vec_edgion_tls(client.edgion_tls().list().data),
-        _ => client
-            .get_dyn_cache(kind)
-            .map(|cache| cache.list_json_dyn())
-            .unwrap_or_default(),
-    }
+    let _guard = crate::types::redact::AdminRedactGuard::new();
+    client
+        .get_dyn_cache(kind)
+        .map(|cache| cache.list_json_dyn())
+        .unwrap_or_default()
 }
 
 /// Get a single resource of `kind` by name (and namespace, unless cluster-scoped).
 ///
-/// Reuses [`list_client_resources`] so the `EdgionTls` private-key scrubbing is
-/// inherited, then filters the JSON by `metadata.name` / `metadata.namespace`.
+/// Reuses [`list_client_resources`], so it inherits the same admin-scope secret
+/// redaction, then filters the JSON by `metadata.name` / `metadata.namespace`.
 fn get_client_resource(
     client: &ConfigClient,
     kind: ResourceKind,
@@ -133,34 +135,6 @@ fn get_client_resource(
         }
         meta.and_then(|m| m.get("namespace")).and_then(|n| n.as_str()) == namespace
     })
-}
-
-/// Remove resolved private-key material from an `EdgionTls` before it leaves the
-/// gateway through the admin API.
-///
-/// `EdgionTlsSpec.secret` and `ClientAuthConfig.ca_secret` are filled by the
-/// Controller with the resolved `kubernetes.io/tls` Secret (raw `tls.key` private
-/// key, mTLS CA key) and are kept on the struct only for the controller->gateway
-/// sync transport. They must never be echoed back in an admin API response body,
-/// so we null them out before serialization. Both fields are
-/// `skip_serializing_if = "Option::is_none"`, so once cleared they vanish from the
-/// JSON entirely.
-fn scrub_edgion_tls_secrets(tls: &mut EdgionTls) {
-    tls.spec.secret = None;
-    if let Some(client_auth) = tls.spec.client_auth.as_mut() {
-        client_auth.ca_secret = None;
-    }
-}
-
-/// `to_json_vec` for `EdgionTls`, with private-key material scrubbed first.
-fn to_json_vec_edgion_tls(items: Vec<EdgionTls>) -> Vec<serde_json::Value> {
-    items
-        .into_iter()
-        .filter_map(|mut tls| {
-            scrub_edgion_tls_secrets(&mut tls);
-            serde_json::to_value(tls).ok()
-        })
-        .collect()
 }
 
 /// Dynamic list endpoint - list all resources of a kind
@@ -192,14 +166,13 @@ async fn get_resource(
 /// Create the admin API router with dynamic endpoints
 pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
     let mut router = Router::new()
-        // Server info endpoint (for reload testing)
-        .route("/api/v1/server-info", get(get_server_info))
-        // Dynamic endpoints for all resource types
+        // Dynamic endpoints for all resource types (secrets redacted via the
+        // AdminRedactGuard inside list_client_resources).
         .route("/configclient/{kind}", get(get_resource))
         .route("/configclient/{kind}/list", get(list_resources))
         .with_state(config_client.clone());
 
-    // Add testing endpoints only when integration testing mode is enabled
+    // Add testing endpoints (incl. /api/v1/server-info) only in integration testing mode.
     if crate::core::common::config::is_integration_testing_mode() {
         router = router.merge(create_testing_router(config_client));
     }
@@ -501,6 +474,8 @@ fn create_testing_router(config_client: Arc<ConfigClient>) -> Router {
     Router::new()
         .route("/api/v1/testing/status", get(testing_status))
         .route("/api/v1/debug/store-stats", get(store_stats))
+        // server-info needs State<Arc<ConfigClient>>, so it must precede .with_state.
+        .route("/api/v1/server-info", get(get_server_info))
         .with_state(config_client)
         .route(
             "/api/v1/testing/access-log/{trace_id}",
@@ -1532,7 +1507,7 @@ pub async fn serve_probe_with_shutdown(
 mod edgion_tls_scrub_tests {
     use super::*;
     use crate::types::resources::common::SecretObjectReference;
-    use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTlsSpec};
+    use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls, EdgionTlsSpec};
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use kube::api::ObjectMeta;
@@ -1584,49 +1559,38 @@ mod edgion_tls_scrub_tests {
         }
     }
 
-    /// The admin API must never serialize resolved private-key material, whether
-    /// listed or fetched by name. Both `spec.secret` (leaf key) and
-    /// `spec.client_auth.ca_secret` (mTLS CA key) must be gone from the JSON.
+    /// The admin API must redact resolved private-key material, whether listed or
+    /// fetched by name. Both `spec.secret` (leaf key) and `spec.client_auth.ca_secret`
+    /// (mTLS CA key) must serialize as `"[redacted]"` through the guarded path.
     #[test]
-    fn admin_serialization_strips_private_keys() {
-        let list_json = to_json_vec_edgion_tls(vec![edgion_tls_with_secrets()]);
-        assert_eq!(list_json.len(), 1);
-        let serialized = serde_json::to_string(&list_json[0]).unwrap();
-        assert!(
-            !serialized.contains("LEAF-PRIVATE-KEY"),
-            "leaf private key leaked: {serialized}"
-        );
-        assert!(
-            !serialized.contains("CA-PRIVATE-KEY"),
-            "CA private key leaked: {serialized}"
-        );
-        assert!(!serialized.contains("tls.key"), "tls.key field leaked: {serialized}");
-        assert!(list_json[0]["spec"].get("secret").is_none(), "spec.secret present");
-        assert!(
-            list_json[0]["spec"]["clientAuth"].get("caSecret").is_none(),
-            "spec.clientAuth.caSecret present"
-        );
-
-        // The get-by-name path reuses list_client_resources, so the same scrub
-        // must apply. Exercise it through the real ConfigClient dispatch.
+    fn admin_serialization_redacts_private_keys() {
         let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
         let _enter = rt.enter();
         let client = ConfigClient::new("cid".to_string(), "cname".to_string());
         client.edgion_tls().reset(vec![edgion_tls_with_secrets()], 1);
-        let get_json = get_client_resource(&client, ResourceKind::EdgionTls, Some("default"), "tls-cert")
-            .expect("resource should be found");
-        let serialized = serde_json::to_string(&get_json).unwrap();
-        assert!(
-            !serialized.contains("LEAF-PRIVATE-KEY"),
-            "leaf private key leaked via get: {serialized}"
+
+        // List path: guard lives inside list_client_resources.
+        let list = list_client_resources(&client, ResourceKind::EdgionTls);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["spec"]["secret"], "[redacted]", "leaf key not redacted");
+        assert_eq!(
+            list[0]["spec"]["clientAuth"]["caSecret"], "[redacted]",
+            "CA key not redacted"
         );
-        assert!(
-            !serialized.contains("CA-PRIVATE-KEY"),
-            "CA private key leaked via get: {serialized}"
+        let serialized = serde_json::to_string(&list[0]).unwrap();
+        assert!(!serialized.contains("tls.key"), "tls.key leaked: {serialized}");
+
+        // Get-by-name path reuses list_client_resources, so the same guard applies.
+        let got = get_client_resource(&client, ResourceKind::EdgionTls, Some("default"), "tls-cert")
+            .expect("resource should be found");
+        assert_eq!(got["spec"]["secret"], "[redacted]", "leaf key not redacted via get");
+        assert_eq!(
+            got["spec"]["clientAuth"]["caSecret"], "[redacted]",
+            "CA key not redacted via get"
         );
 
-        // Non-secret fields must survive the scrub so the endpoint stays useful.
-        assert_eq!(get_json["spec"]["hosts"][0], "example.com");
+        // Non-secret fields must survive so the endpoint stays useful.
+        assert_eq!(got["spec"]["hosts"][0], "example.com");
     }
 }
 
@@ -1759,6 +1723,15 @@ mod router_shape_tests {
         let r = create_admin_router(test_client());
         assert_eq!(status_of(r.clone(), "/health").await, StatusCode::NOT_FOUND);
         assert_eq!(status_of(r.clone(), "/ready").await, StatusCode::NOT_FOUND);
+        assert_eq!(status_of(r, "/configclient/httproute/list").await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn admin_router_drops_server_info_keeps_configclient() {
+        // Production admin router (integration testing mode off in unit tests):
+        // server-info is testing-only and must be absent; /configclient stays mounted.
+        let r = create_admin_router(test_client());
+        assert_eq!(status_of(r.clone(), "/api/v1/server-info").await, StatusCode::NOT_FOUND);
         assert_eq!(status_of(r, "/configclient/httproute/list").await, StatusCode::OK);
     }
 }

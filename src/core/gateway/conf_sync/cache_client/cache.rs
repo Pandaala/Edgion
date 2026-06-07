@@ -38,11 +38,12 @@ pub trait DynClientCache: Send + Sync {
     /// Snapshot of all keys currently held by this cache.
     fn keys_dyn(&self) -> Vec<String>;
 
-    /// Serialize every entry to JSON for type-erased admin listing.
+    /// Serialize all cached resources of this kind to JSON.
     ///
-    /// Entries that fail to serialize are skipped. Note: this performs no
-    /// field redaction — callers that expose secret-bearing kinds (e.g.
-    /// `EdgionTls`) must scrub through their typed path instead of this method.
+    /// Secret redaction for admin output is applied by the field-level serde adapters
+    /// (`types::redact`) when the caller holds an `AdminRedactGuard`; this method needs
+    /// no special-casing. INVARIANT: keep this serialization synchronous and on the
+    /// caller's thread (the guard is a thread-local).
     fn list_json_dyn(&self) -> Vec<serde_json::Value>;
 }
 

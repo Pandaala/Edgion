@@ -411,6 +411,12 @@ serializes on demand (so field adapters fire at request time), not pre-built JSO
   approach but requires standing up a proc-macro crate and introduces a second "sensitive data"
   paradigm parallel to the existing access-log subsystem. Rejected in favor of reusing the existing
   idiom.
+- **Free-form header/param values that an operator might paste a static token into**
+  (e.g. `proxy_rewrite` / `ctx_set` header values, OpenID `authorization_params`). These are not
+  designated secret fields — they are arbitrary user-authored config strings — so they are
+  intentionally outside the field-level redaction model. No K8s-resolved or designated-secret material
+  flows through them; an operator who hardcodes a bearer token into a header-injection value has placed
+  plaintext in their own manifest. Recorded here so it is on the record, not a coverage gap.
 
 ## Wrap-up
 

@@ -228,12 +228,11 @@ impl ConfigClient {
         }
     }
 
-    /// Get edgion_tls cache for direct access.
+    /// Typed accessor for the `EdgionTls` cache.
     ///
-    /// Retained as the only typed accessor because the admin API must scrub
-    /// private-key material from `EdgionTls` before serialization, which needs
-    /// the concrete type rather than the type-erased `DynClientCache` path.
-    /// All other kinds are reached generically via [`Self::get_dyn_cache`].
+    /// Admin-API secret redaction now happens uniformly at the serde layer
+    /// (`types::redact`), so this accessor is no longer required for scrubbing; it
+    /// is retained for typed test access.
     pub fn edgion_tls(&self) -> &ClientCache<EdgionTls> {
         &self.edgion_tls
     }

@@ -104,7 +104,10 @@ pub struct KeyAuthConfig {
     // === Runtime fields (populated by controller) ===
     /// Resolved API Keys mapping: key -> metadata
     /// This is populated during Secret parsing and should not be set by users
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub resolved_keys: Option<HashMap<String, KeyMetadata>>,
 }

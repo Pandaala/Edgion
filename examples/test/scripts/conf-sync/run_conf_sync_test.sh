@@ -210,6 +210,50 @@ verify_configclient_empty() {
     $all_ok
 }
 
+# Verify the admin /configclient API never leaks resolved secret material.
+# Reuses the kind sweep: scans every kind's response for plaintext private-key
+# markers, and confirms the one populated secret-bearing resource (EdgionTls
+# leak-cert, resolved from the edge-tls kubernetes.io/tls Secret) renders as
+# "[redacted]". The positive check is soft (skips, not fails) when the fixture's
+# spec.secret is not populated, so it cannot false-fail on a vacuous fixture.
+verify_no_secret_leak() {
+    local all_ok=true
+    local kinds=(httproute grpcroute tcproute udproute tlsroute edgiontls edgionplugins edgionstreamplugins backendtlspolicy service endpointslice)
+    for kind in "${kinds[@]}"; do
+        local resp
+        resp=$(curl -sf "${GATEWAY_ADMIN_URL}/configclient/${kind}/list" 2>/dev/null || echo '{}')
+        # No PEM private key and no raw kubernetes.io/tls Secret data keys may appear.
+        if echo "$resp" | grep -Eq 'BEGIN (RSA |EC |)PRIVATE KEY|"tls\.key"|"tls\.crt"'; then
+            all_ok=false
+            log_error "  configclient/${kind}: plaintext secret material leaked in response"
+        fi
+    done
+    local secret_val
+    secret_val=$(curl -sf "${GATEWAY_ADMIN_URL}/configclient/edgiontls/list" 2>/dev/null | python3 -c "
+import sys, json
+try:
+    rows = json.load(sys.stdin).get('data', [])
+except Exception:
+    print('ERR'); sys.exit(0)
+for r in rows:
+    if r.get('metadata', {}).get('name') == 'leak-cert':
+        s = r.get('spec', {}).get('secret', None)
+        print('ABSENT' if s is None else (s if isinstance(s, str) else 'OBJECT'))
+        break
+else:
+    print('NOTFOUND')
+" 2>/dev/null || echo "ERR")
+    case "$secret_val" in
+        '[redacted]') : ;; # expected: secret resolved and correctly redacted
+        ABSENT | NOTFOUND | ERR)
+            log_warn "  edgiontls/leak-cert spec.secret not populated (${secret_val}); redaction check skipped" ;;
+        *)
+            all_ok=false
+            log_error "  edgiontls/leak-cert spec.secret leaked (value='${secret_val}', expected '[redacted]')" ;;
+    esac
+    $all_ok
+}
+
 verify_store_stats_empty() {
     local stats
     stats=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
@@ -322,6 +366,13 @@ run_cycle() {
     pc_udp=$(json_field "$mid_stats" ".data.udp_routes.port_count")
     pc_tls=$(json_field "$mid_stats" ".data.tls_routes.port_count")
     log_success "Configs synced (port_counts: http=${pc_http} grpc=${pc_grpc} tcp=${pc_tcp} udp=${pc_udp} tls=${pc_tls})"
+
+    # While configs are present, confirm the admin API redacts secrets (no leak).
+    if ! verify_no_secret_leak; then
+        log_error "Cycle ${cycle}: SECRET LEAK detected in /configclient response"
+        FAILED=$((FAILED + 1))
+        return 1
+    fi
 
     delete_injected_configs
     log_info "Waiting ${CLEANUP_WAIT}s for cleanup..."

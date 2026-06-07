@@ -75,7 +75,10 @@ pub struct BasicAuthConfig {
 
     /// Resolved users from Secret refs (controller populated).
     /// Key: username, value: ResolvedBasicAuthUser (password + group).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub resolved_users: Option<HashMap<String, ResolvedBasicAuthUser>>,
 }

@@ -197,7 +197,10 @@ pub struct JwtAuthConfig {
     /// Built by controller from `issuer_groups` + plugin-level defaults.
     /// Multiple iss values from the same group each hold their own copy
     /// (clone, not Arc, to keep serde simple).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub resolved_groups_by_iss: Option<HashMap<String, ResolvedJwtIssuerGroup>>,
 }

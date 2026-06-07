@@ -159,7 +159,11 @@ pub struct RedisSentinel {
     pub sentinels: Vec<String>,
 
     /// Sentinel password
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     pub password: Option<String>,
 }
 

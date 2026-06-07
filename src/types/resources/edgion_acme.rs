@@ -277,7 +277,10 @@ pub struct EdgionAcmeSpec {
     pub renewal: AcmeRenewalConfig,
 
     /// External Account Binding (required by some ACME providers like ZeroSSL)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     pub external_account_binding: Option<AcmeExternalAccountBinding>,
 
     /// Certificate storage configuration

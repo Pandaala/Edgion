@@ -24,6 +24,7 @@ pub struct CsrfConfig {
     ///
     /// This key is used to generate and verify token signatures.
     /// Keep this secret and use a strong random value.
+    #[serde(serialize_with = "crate::types::redact::redact_required::serialize")]
     pub key: String,
 
     /// Token expiration time in seconds (default: 7200 = 2 hours)
@@ -160,6 +161,24 @@ mod tests {
         assert_eq!(config.key, "test-key");
         assert_eq!(config.expires, 1800);
         assert_eq!(config.name, "custom-token");
+    }
+
+    #[test]
+    fn csrf_key_redacted_under_guard() {
+        let cfg = CsrfConfig {
+            key: "SUPER-SECRET-KEY".to_string(),
+            expires: default_expires(),
+            name: default_name(),
+            cookie_secure: default_cookie_secure(),
+        };
+        let redacted = {
+            let _g = crate::types::redact::AdminRedactGuard::new();
+            serde_json::to_value(&cfg).unwrap()
+        };
+        assert_eq!(redacted["key"], "[redacted]");
+
+        let plain = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(plain["key"], "SUPER-SECRET-KEY");
     }
 
     #[test]

@@ -60,6 +60,7 @@ pub struct KeyListData {
 #[serde(rename_all = "camelCase")]
 pub struct MetaDataItem {
     /// Key value (string literal or regex pattern, depending on match_mode)
+    #[serde(serialize_with = "crate::types::redact::redact_required::serialize")]
     pub key: String,
 
     /// Numeric code associated with this item
@@ -92,6 +93,25 @@ mod tests {
             id: None,
             behavior: None,
         }
+    }
+
+    #[test]
+    fn metadata_item_key_redacted_under_guard() {
+        let item = MetaDataItem {
+            key: "API-KEY-123".to_string(),
+            code: None,
+            priority: None,
+            id: None,
+            behavior: None,
+        };
+        let redacted = {
+            let _g = crate::types::redact::AdminRedactGuard::new();
+            serde_json::to_value(&item).unwrap()
+        };
+        assert_eq!(redacted["key"], "[redacted]");
+
+        let plain = serde_json::to_value(&item).unwrap();
+        assert_eq!(plain["key"], "API-KEY-123");
     }
 
     #[test]

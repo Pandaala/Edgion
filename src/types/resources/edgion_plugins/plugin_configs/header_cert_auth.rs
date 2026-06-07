@@ -117,7 +117,10 @@ pub struct HeaderCertAuthConfig {
 
     // === Runtime fields (controller populated) ===
     /// Resolved CA secrets for Header mode verification.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub resolved_ca_secrets: Option<Vec<Secret>>,
 }

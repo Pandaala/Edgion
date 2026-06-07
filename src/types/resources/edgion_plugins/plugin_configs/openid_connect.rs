@@ -202,10 +202,16 @@ pub struct OpenidConnectConfig {
     pub userinfo_max_response_bytes: usize,
 
     // Runtime fields (controller-populated)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub resolved_client_secret: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub resolved_session_secret: Option<String>,
 

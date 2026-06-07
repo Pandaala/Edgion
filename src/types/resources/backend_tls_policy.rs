@@ -47,12 +47,20 @@ pub struct BackendTLSPolicySpec {
     pub options: Option<HashMap<String, String>>,
 
     /// Resolved CA certificate Secrets (runtime only, filled by controller).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub resolved_ca_certificates: Option<Vec<Secret>>,
 
     /// Resolved client certificate Secret for upstream mTLS (runtime only, filled by controller).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub resolved_client_certificate: Option<Secret>,
 
@@ -88,12 +96,20 @@ pub struct BackendTLSPolicyAlpha3Spec {
     pub options: Option<HashMap<String, String>>,
 
     /// Resolved CA certificate Secrets (runtime only, filled by controller).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub resolved_ca_certificates: Option<Vec<Secret>>,
 
     /// Resolved client certificate Secret for upstream mTLS (runtime only, filled by controller).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub resolved_client_certificate: Option<Secret>,
 

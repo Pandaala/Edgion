@@ -118,7 +118,11 @@ pub struct GatewayBackendTLS {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_certificate_ref: Option<SecretObjectReference>,
     /// Resolved by Controller, not user-configured
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub resolved_client_certificate: Option<Secret>,
 }
@@ -186,7 +190,11 @@ pub struct GatewayTLSConfig {
 
     /// Resolved Secret data (filled by Controller, not user-configured)
     /// Contains the actual TLS certificates referenced by certificate_refs
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub secrets: Option<Vec<Secret>>,
 
@@ -195,7 +203,11 @@ pub struct GatewayTLSConfig {
     pub frontend_validation: Option<FrontendTLSValidation>,
 
     /// Resolved CA Secret data for frontend validation (filled by Controller, not user-configured)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::types::redact::redact_opt::serialize"
+    )]
     #[schemars(skip)]
     pub resolved_frontend_ca_secrets: Option<Vec<Secret>>,
 }
@@ -295,6 +307,46 @@ pub struct ListenerStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gateway_listener_secrets_redacted_under_guard() {
+        use crate::types::redact::AdminRedactGuard;
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use std::collections::BTreeMap;
+
+        let mut data = BTreeMap::new();
+        data.insert("tls.key".to_string(), ByteString(b"LISTENER-PRIVATE-KEY".to_vec()));
+        let cfg = GatewayTLSConfig {
+            mode: None,
+            certificate_refs: None,
+            options: None,
+            secrets: Some(vec![Secret {
+                data: Some(data),
+                ..Default::default()
+            }]),
+            frontend_validation: None,
+            resolved_frontend_ca_secrets: None,
+        };
+
+        // Under the admin guard, the resolved listener serving cert+key is redacted.
+        let redacted = {
+            let _g = AdminRedactGuard::new();
+            serde_json::to_value(&cfg).unwrap()
+        };
+        assert_eq!(redacted["secrets"], "[redacted]");
+        assert!(
+            !redacted.to_string().contains("LISTENER-PRIVATE-KEY"),
+            "listener private key leaked under guard"
+        );
+
+        // Transport (no guard) must still emit the real Secret objects.
+        let plain = serde_json::to_value(&cfg).unwrap();
+        assert!(
+            plain["secrets"].is_array(),
+            "real listener secrets must serialize for transport"
+        );
+    }
 
     #[test]
     fn test_gateway_serialization() {

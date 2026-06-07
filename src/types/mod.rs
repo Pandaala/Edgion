@@ -9,6 +9,7 @@ pub mod gateway_base_conf;
 pub mod listener_key;
 pub mod observe;
 pub mod output;
+pub mod redact;
 pub mod resources;
 pub mod schema;
 pub mod sensitive;
