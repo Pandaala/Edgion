@@ -71,19 +71,46 @@ process-global `AtomicU8` via a `configure_lb_panic_default(...)` function, mirr
 existing `configure_webhook_global_max` pattern. The selection path reads this atomic — no
 GatewayClass identity needs to be threaded onto the hot path.
 
+**Known limitation (pre-existing pattern)**: `EDGION_GATEWAY_CONFIG_STORE` is keyed by name, so
+multiple `EdgionGatewayConfig` resources are possible; the global-atomic push is last-write-wins
+across them. This matches the existing `configure_webhook_global_max` behavior — the panic
+default inherits the same single-global-scalar semantics, not a new limitation. Per-service
+annotations remain exact regardless.
+
+**Annotation value format**: a bare integer string (`edgion.io/panic-threshold: "50"`), parsed
+with `str::parse::<u8>` and validated `0..=100`. Anything else (non-integer, `>100`, a `"50%"`
+suffix) → `tracing::warn` + ignore, falling back to the global default — parity with the
+circuit-breaker / health-check annotation handling.
+
 ### Selection path
 
 In `pick` and `select_roundrobin_backend_key`, before calling `selector.select`, compute the
 panic decision **once**:
 
-1. **Gate**: skip entirely unless `health_store.has_service(key) || cb_store.has_service(key)`.
-   Without HC/CB state every backend passes `is_backend_healthy`, so panic can never trigger and
-   the O(n) pass is pure waste.
+1. **Gate**: skip entirely unless `health_store.has_service(key) || cb_store.has_service(key)`
+   (both methods exist). Without HC/CB state every backend passes `is_backend_healthy`, so panic
+   can never trigger and the O(n) pass is pure waste. Note the gate means "may panic", not "is
+   panicking": a service with HC/CB config but zero unhealthy/ejected backends runs the count but
+   early-exits at `floor` (survivors == total ≥ floor) — cheap.
 2. **Resolve threshold** (annotation → global → 0). If `0`, skip (no panic).
-3. **Count survivors** over `cell.backends_snapshot()` using a side-effect-free predicate,
-   early-exiting as soon as `survivors >= floor`.
+3. **Count survivors** using a side-effect-free predicate, early-exiting as soon as
+   `survivors >= floor`. **The count must iterate the selector's own backend list, not a
+   separately-loaded `cell.backends_snapshot()`** — otherwise a concurrent `replace_backends`
+   between resolving the selector and loading the snapshot could count over a different list than
+   `select()` walks (a one-request skew). Implement as a `CompiledSelector` method
+   (e.g. `panic_should_engage(floor, quiet_filter)`) that iterates the core's `backends` Arc, so
+   total (`backend_count()`), survivor count, and the selection walk are all the same list.
 4. **Decide**: if `survivors < floor`, panic engages → pass a no-op filter (`|_| true`) to
    `selector.select`; otherwise pass the normal `is_backend_healthy` filter.
+
+**Latency side benefit**: today, an all-unhealthy service makes RR/CH walk up to 256 rejected
+iterations and P2C do 256 retries + a full linear scan before returning `None`. When panic
+passes `|_| true`, the first candidate succeeds — so panic mode also removes that wasted walk on
+degraded services, not just the 503.
+
+**Consistent-hash under panic**: with `|_| true`, a keyed request hashes to its node ignoring
+health, so session affinity is preserved even if that node is currently unhealthy. A truly-dead
+pick is handled by the connect-failure retry path. This matches Envoy and is intended.
 
 The single resolved filter closure is handed to `CompiledSelector::select`, so all four policy
 arms (RoundRobin, ConsistentHash, LeastConn, EWMA), the ConsistentHash empty-key RR fallback,
@@ -102,11 +129,20 @@ not re-fire this metric. Split into:
 
 ### Observability (Iron Rule 3: no `tracing::` on the request path)
 
-- **Hot path**: the panic decision flips a per-service `AtomicBool panic_active` and sets a
-  gauge metric `lb_panic_mode{service}` (1 engaged / 0 normal). Atomics only — no logging.
-- **Off path**: the health-check manager's existing periodic reconcile reads `panic_active` and
-  emits a `tracing::warn` only on an engage/disengage **edge**, so operators see
-  "panic mode engaged/cleared for service X" without any logging on the request path.
+- **Hot path (source of truth)**: the panic decision flips a per-service `AtomicBool panic_active`
+  and sets a gauge metric `lb_panic_mode{service}` (1 engaged / 0 normal). Atomics only — no
+  logging. Operators alert on the gauge.
+- **Off-path human log (best-effort)**: the health-check manager's per-service probe loop
+  (`manager.rs` `health_check_loop`) reads `panic_active` and emits a `tracing::warn` only on an
+  engage/disengage **edge**. Caveat: that loop is spawned **only for services with active
+  health-check config**, so a service that panics purely from circuit-breaker ejections (no active
+  HC) gets the gauge but **no** edge log. This is acceptable for the MVP — the gauge is the
+  source of truth. A dedicated periodic scanner over the `panic_active` map (covering CB-only
+  services) is deferred; do not add `tracing::` on the request path to close this gap.
+- **CB metric during panic**: when panic engages we bypass `is_backend_healthy` entirely, so
+  `record_cb_rejection` is not fired for that request. CB-rejection metrics therefore drop toward
+  zero for a service while it is in panic — a useful correlate of the `lb_panic_mode` gauge, not
+  a bug.
 
 ### Status-code semantics
 
