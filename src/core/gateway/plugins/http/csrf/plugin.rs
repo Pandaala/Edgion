@@ -94,10 +94,10 @@ impl RequestFilter for Csrf {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        let method = session.method();
+        let method = session.get_method();
 
         // For safe methods, skip validation but set cookie for future use
-        if SAFE_METHODS.contains(&method.as_str()) {
+        if SAFE_METHODS.contains(&method) {
             plugin_log.push("Skip safe method");
             self.set_csrf_cookie(session, plugin_log);
             return PluginRunningResult::GoodNext;
@@ -182,7 +182,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("Csrf");
 
-        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session.expect_get_method().return_const("GET".to_string());
         mock_session.expect_append_response_header().returning(|_, _| Ok(()));
 
         let result = csrf.run_request(&mut mock_session, &mut plugin_log).await;
@@ -198,7 +198,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("Csrf");
 
-        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session.expect_get_method().return_const("GET".to_string());
         mock_session
             .expect_append_response_header()
             .withf(|name, value| name == "Set-Cookie" && value.contains("; Secure"))
@@ -218,7 +218,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("Csrf");
 
-        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session.expect_get_method().return_const("GET".to_string());
         mock_session
             .expect_append_response_header()
             .withf(|name, value| name == "Set-Cookie" && !value.contains("; Secure"))
@@ -237,7 +237,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("Csrf");
 
-        mock_session.expect_method().returning(|| "POST".to_string());
+        mock_session.expect_get_method().return_const("POST".to_string());
         mock_session
             .expect_header_value()
             .with(mockall::predicate::eq("X-CSRF-Token"))
@@ -261,7 +261,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("Csrf");
 
-        mock_session.expect_method().returning(|| "POST".to_string());
+        mock_session.expect_get_method().return_const("POST".to_string());
         mock_session
             .expect_header_value()
             .with(mockall::predicate::eq("X-CSRF-Token"))
@@ -289,7 +289,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("Csrf");
 
-        mock_session.expect_method().returning(|| "POST".to_string());
+        mock_session.expect_get_method().return_const("POST".to_string());
         mock_session
             .expect_header_value()
             .with(mockall::predicate::eq("X-CSRF-Token"))

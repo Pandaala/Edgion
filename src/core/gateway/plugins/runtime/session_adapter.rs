@@ -290,10 +290,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .collect()
     }
 
-    fn method(&self) -> String {
-        self.inner.req_header().method.to_string()
-    }
-
     fn get_query_param(&self, name: &str) -> Option<String> {
         // Decoded values (percent-decoded, '+' → ' ') shared with the route
         // matcher via EdgionHttpContext::cached_query. Parsed at most once

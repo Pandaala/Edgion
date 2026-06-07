@@ -25,9 +25,6 @@ pub trait PluginSession: Send + Sync {
     /// Used by plugins that need to forward/inspect all headers (e.g., ForwardAuth).
     fn request_headers(&self) -> Vec<(String, String)>;
 
-    /// Get the HTTP method (returns owned String for compatibility)
-    fn method(&self) -> String;
-
     // ========== Condition evaluation methods (read-only) ==========
 
     /// Get a query parameter value by name
@@ -52,7 +49,7 @@ pub trait PluginSession: Send + Sync {
     /// Get the request query string (without leading '?')
     fn get_query(&self) -> Option<String>;
 
-    /// Get the HTTP method as &str (more efficient than method())
+    /// Get the HTTP method as &str (zero-copy)
     fn get_method(&self) -> &str;
 
     /// Get a context variable by key (set by plugins like KeySet)

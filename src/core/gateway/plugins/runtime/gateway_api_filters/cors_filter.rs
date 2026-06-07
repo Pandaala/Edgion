@@ -84,7 +84,7 @@ impl GapiCorsFilter {
     }
 
     fn is_preflight(&self, session: &mut dyn PluginSession) -> bool {
-        session.method() == "OPTIONS"
+        session.get_method() == "OPTIONS"
             && session.header_value("origin").is_some()
             && session.header_value("access-control-request-method").is_some()
     }

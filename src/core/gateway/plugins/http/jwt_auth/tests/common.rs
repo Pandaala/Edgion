@@ -118,7 +118,7 @@ pub(super) fn assert_no_token_leak(log: &PluginLog, token: &str) {
 pub(super) async fn run_and_assert_reject(auth: JwtAuth, token: &str) -> PluginLog {
     let mut mock = MockPluginSession::new();
     let mut log = PluginLog::new("JwtAuth");
-    mock.expect_method().returning(|| "GET".to_string());
+    mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.to_string();
     mock.expect_header_value()
         .returning(move |_| Some(format!("Bearer {}", token_clone)));

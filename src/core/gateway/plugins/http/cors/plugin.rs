@@ -57,7 +57,7 @@ impl Cors {
     /// Check if this is a CORS preflight request
     fn is_preflight_request(&self, session: &mut dyn PluginSession) -> bool {
         // Preflight must be OPTIONS with Origin and Access-Control-Request-Method headers
-        if session.method() != "OPTIONS" {
+        if session.get_method() != "OPTIONS" {
             return false;
         }
 
@@ -320,7 +320,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("Cors");
 
-        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session.expect_get_method().return_const("GET".to_string());
         mock_session
             .expect_header_value()
             .with(mockall::predicate::eq("origin"))
@@ -374,7 +374,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("Cors");
 
-        mock_session.expect_method().returning(|| "GET".to_string());
+        mock_session.expect_get_method().return_const("GET".to_string());
         mock_session.expect_header_value().returning(move |name| {
             if name == "origin" {
                 Some(origin.to_string())

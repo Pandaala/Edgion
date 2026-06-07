@@ -576,7 +576,7 @@ impl RequestFilter for AllEndpointStatus {
         };
 
         // Collect original request info (before mutable borrow)
-        let original_method = session.method();
+        let original_method = session.get_method().to_string();
         let original_path = session.get_path().to_string();
         let original_query = session.get_query();
         let original_headers = session.request_headers();

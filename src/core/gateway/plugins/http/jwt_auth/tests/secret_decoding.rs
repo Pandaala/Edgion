@@ -26,7 +26,7 @@ async fn test_base64_secret_decoding() {
     let mut mock = MockPluginSession::new();
     let mut log = PluginLog::new("JwtAuth");
 
-    mock.expect_method().returning(|| "GET".to_string());
+    mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
     mock.expect_header_value()
         .returning(move |_| Some(format!("Bearer {}", token_clone)));

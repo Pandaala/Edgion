@@ -23,7 +23,7 @@ async fn test_token_from_query_param() {
     let mut mock = MockPluginSession::new();
     let mut log = PluginLog::new("JwtAuth");
 
-    mock.expect_method().returning(|| "GET".to_string());
+    mock.expect_get_method().return_const("GET".to_string());
     mock.expect_header_value().returning(|_| None);
     let token_clone = token.clone();
     mock.expect_get_query_param().returning(move |name| {
@@ -57,7 +57,7 @@ async fn test_query_token_rejected_when_not_allowed_by_default() {
     let mut mock = MockPluginSession::new();
     let mut log = PluginLog::new("JwtAuth");
 
-    mock.expect_method().returning(|| "GET".to_string());
+    mock.expect_get_method().return_const("GET".to_string());
     mock.expect_header_value().returning(|_| None);
     let token_clone = token.clone();
     mock.expect_get_query_param()
@@ -94,7 +94,7 @@ async fn test_token_from_cookie() {
     let mut mock = MockPluginSession::new();
     let mut log = PluginLog::new("JwtAuth");
 
-    mock.expect_method().returning(|| "GET".to_string());
+    mock.expect_get_method().return_const("GET".to_string());
     mock.expect_header_value().returning(|_| None);
     mock.expect_get_query_param().returning(|_| None);
     let token_clone = token.clone();
