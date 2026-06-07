@@ -228,89 +228,14 @@ impl ConfigClient {
         }
     }
 
-    /// Get routes cache for direct access
-    pub fn routes(&self) -> &ClientCache<HTTPRoute> {
-        &self.routes
-    }
-
-    /// Get grpc_routes cache for direct access
-    pub fn grpc_routes(&self) -> &ClientCache<GRPCRoute> {
-        &self.grpc_routes
-    }
-
-    /// Get tcp_routes cache for direct access
-    pub fn tcp_routes(&self) -> &ClientCache<TCPRoute> {
-        &self.tcp_routes
-    }
-
-    /// Get udp_routes cache for direct access
-    pub fn udp_routes(&self) -> &ClientCache<UDPRoute> {
-        &self.udp_routes
-    }
-
-    /// Get tls_routes cache for direct access
-    pub fn tls_routes(&self) -> &ClientCache<TLSRoute> {
-        &self.tls_routes
-    }
-
-    /// Get link_sys cache for direct access
-    pub fn link_sys(&self) -> &ClientCache<LinkSys> {
-        &self.link_sys
-    }
-
-    /// Get services cache for direct access
-    pub fn services(&self) -> &ClientCache<Service> {
-        &self.services
-    }
-
-    /// Get endpoint_slices cache for direct access
-    pub fn endpoint_slices(&self) -> &ClientCache<EndpointSlice> {
-        &self.endpoint_slices
-    }
-
-    /// Get edgion_tls cache for direct access
+    /// Get edgion_tls cache for direct access.
+    ///
+    /// Retained as the only typed accessor because the admin API must scrub
+    /// private-key material from `EdgionTls` before serialization, which needs
+    /// the concrete type rather than the type-erased `DynClientCache` path.
+    /// All other kinds are reached generically via [`Self::get_dyn_cache`].
     pub fn edgion_tls(&self) -> &ClientCache<EdgionTls> {
         &self.edgion_tls
-    }
-
-    /// Get edgion_acme cache for direct access
-    pub fn edgion_acme(&self) -> &ClientCache<EdgionAcme> {
-        &self.edgion_acme
-    }
-
-    /// Get edgion_plugins cache for direct access
-    pub fn edgion_plugins(&self) -> &ClientCache<EdgionPlugins> {
-        &self.edgion_plugins
-    }
-
-    /// Get edgion_stream_plugins cache for direct access
-    pub fn edgion_stream_plugins(&self) -> &ClientCache<EdgionStreamPlugins> {
-        &self.edgion_stream_plugins
-    }
-
-    /// Get backend_tls_policies cache for direct access
-    pub fn backend_tls_policies(&self) -> &ClientCache<BackendTLSPolicy> {
-        &self.backend_tls_policies
-    }
-
-    /// Get plugin_metadata cache for direct access
-    pub fn plugin_metadata(&self) -> &ClientCache<PluginMetaData> {
-        &self.plugin_metadata
-    }
-
-    /// Get gateway_classes cache for direct access
-    pub fn gateway_classes(&self) -> &ClientCache<GatewayClass> {
-        &self.gateway_classes
-    }
-
-    /// Get gateways cache for direct access
-    pub fn gateways(&self) -> &ClientCache<Gateway> {
-        &self.gateways
-    }
-
-    /// Get edgion_gateway_configs cache for direct access
-    pub fn edgion_gateway_configs(&self) -> &ClientCache<EdgionGatewayConfig> {
-        &self.edgion_gateway_configs
     }
 
     /// Get the DynClientCache for a given ResourceKind.
@@ -380,39 +305,6 @@ impl ConfigClient {
         } else {
             Err(format!("wait [{}] ready", not_ready.join(", ")))
         }
-    }
-
-    pub fn list(&self, _key: &String, kind: &ResourceKind) -> Result<ListDataSimple, String> {
-        let (data_json, sync_version) = match kind {
-            ResourceKind::Unspecified => return Err("Resource kind unspecified".to_string()),
-            ResourceKind::GatewayClass => self.gateway_classes.list().to_json("GatewayClass")?,
-            ResourceKind::EdgionGatewayConfig => self.edgion_gateway_configs.list().to_json("EdgionGatewayConfig")?,
-            ResourceKind::Gateway => self.gateways.list().to_json("Gateway")?,
-            ResourceKind::HTTPRoute => self.routes.list().to_json("HTTPRoute")?,
-            ResourceKind::GRPCRoute => self.grpc_routes.list().to_json("GRPCRoute")?,
-            ResourceKind::TCPRoute => self.tcp_routes.list().to_json("TCPRoute")?,
-            ResourceKind::UDPRoute => self.udp_routes.list().to_json("UDPRoute")?,
-            ResourceKind::TLSRoute => self.tls_routes.list().to_json("TLSRoute")?,
-            ResourceKind::LinkSys => self.link_sys.list().to_json("LinkSys")?,
-            ResourceKind::Service => self.services.list().to_json("Service")?,
-            ResourceKind::EndpointSlice => self.endpoint_slices.list().to_json("EndpointSlice")?,
-            ResourceKind::EdgionTls => self.edgion_tls.list().to_json("EdgionTls")?,
-            ResourceKind::EdgionPlugins => self.edgion_plugins.list().to_json("EdgionPlugins")?,
-            ResourceKind::EdgionStreamPlugins => self.edgion_stream_plugins.list().to_json("EdgionStreamPlugins")?,
-            ResourceKind::ReferenceGrant => {
-                return Err("ReferenceGrant resources are not synced to Gateway".to_string())
-            }
-            ResourceKind::BackendTLSPolicy => self.backend_tls_policies.list().to_json("BackendTLSPolicy")?,
-            ResourceKind::PluginMetaData => self.plugin_metadata.list().to_json("PluginMetaData")?,
-            ResourceKind::Secret => return Err("Secret resources are not stored in ConfigClient".to_string()),
-            ResourceKind::ConfigMap => return Err("ConfigMap resources are not synced to Gateway".to_string()),
-            ResourceKind::EdgionAcme => self.edgion_acme.list().to_json("EdgionAcme")?,
-        };
-
-        Ok(ListDataSimple {
-            data: data_json,
-            sync_version,
-        })
     }
 
     /// List HTTP routes
@@ -548,11 +440,6 @@ impl ConfigClient {
         }
         Vec::new()
     }
-}
-
-pub struct ListDataSimple {
-    pub data: String,
-    pub sync_version: u64,
 }
 
 #[cfg(test)]

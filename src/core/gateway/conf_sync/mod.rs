@@ -4,7 +4,7 @@ pub mod conf_client;
 use std::sync::{Arc, OnceLock};
 
 pub use cache_client::{ClientCache, DynClientCache};
-pub use conf_client::{ConfigClient, ConfigSyncClient, ListDataSimple};
+pub use conf_client::{ConfigClient, ConfigSyncClient};
 
 static GLOBAL_CONFIG_CLIENT: OnceLock<Arc<ConfigClient>> = OnceLock::new();
 

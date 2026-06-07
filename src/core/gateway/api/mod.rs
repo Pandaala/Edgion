@@ -7,7 +7,6 @@ use axum::{
     routing::get,
     Router,
 };
-use kube::ResourceExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -95,64 +94,45 @@ async fn get_server_info(State(client): State<Arc<ConfigClient>>) -> Json<ApiRes
     Json(ApiResponse::ok_body(ServerInfoResponse { server_id, ready }))
 }
 
-/// Helper macro to list all resources from ConfigClient
-macro_rules! list_client_resources {
-    ($client:expr, $kind:expr) => {{
-        match $kind {
-            ResourceKind::HTTPRoute => to_json_vec($client.routes().list().data),
-            ResourceKind::GRPCRoute => to_json_vec($client.grpc_routes().list().data),
-            ResourceKind::TCPRoute => to_json_vec($client.tcp_routes().list().data),
-            ResourceKind::UDPRoute => to_json_vec($client.udp_routes().list().data),
-            ResourceKind::TLSRoute => to_json_vec($client.tls_routes().list().data),
-            ResourceKind::Service => to_json_vec($client.services().list().data),
-            ResourceKind::EndpointSlice => to_json_vec($client.endpoint_slices().list().data),
-            ResourceKind::EdgionTls => to_json_vec_edgion_tls($client.edgion_tls().list().data),
-            ResourceKind::EdgionPlugins => to_json_vec($client.edgion_plugins().list().data),
-            ResourceKind::EdgionStreamPlugins => to_json_vec($client.edgion_stream_plugins().list().data),
-            ResourceKind::ReferenceGrant => vec![], // ReferenceGrant not synced to Gateway
-            ResourceKind::BackendTLSPolicy => to_json_vec($client.backend_tls_policies().list().data),
-            ResourceKind::PluginMetaData => to_json_vec($client.plugin_metadata().list().data),
-            ResourceKind::LinkSys => to_json_vec($client.link_sys().list().data),
-            ResourceKind::GatewayClass => to_json_vec($client.gateway_classes().list().data),
-            ResourceKind::Gateway => to_json_vec($client.gateways().list().data),
-            ResourceKind::EdgionGatewayConfig => to_json_vec($client.edgion_gateway_configs().list().data),
-            _ => vec![],
-        }
-    }};
+/// List all resources of `kind` from ConfigClient as JSON.
+///
+/// Every kind dispatches generically through [`ConfigClient::get_dyn_cache`].
+/// The sole exception is `EdgionTls`: its resolved private-key material must be
+/// scrubbed before leaving the gateway, so it goes through the typed path (see
+/// [`scrub_edgion_tls_secrets`]). Kinds not cached on the gateway (e.g.
+/// `ReferenceGrant`, `Secret`) resolve to `None` and yield an empty list.
+fn list_client_resources(client: &ConfigClient, kind: ResourceKind) -> Vec<serde_json::Value> {
+    match kind {
+        ResourceKind::EdgionTls => to_json_vec_edgion_tls(client.edgion_tls().list().data),
+        _ => client
+            .get_dyn_cache(kind)
+            .map(|cache| cache.list_json_dyn())
+            .unwrap_or_default(),
+    }
 }
 
-/// Helper macro to get a single resource from ConfigClient
-macro_rules! get_client_resource {
-    ($client:expr, $kind:expr, $ns:expr, $name:expr) => {{
-        let ns_opt = $ns.as_deref();
-        let name_str = $name.as_str();
-        match $kind {
-            ResourceKind::HTTPRoute => find_resource($client.routes().list().data, ns_opt, name_str),
-            ResourceKind::GRPCRoute => find_resource($client.grpc_routes().list().data, ns_opt, name_str),
-            ResourceKind::TCPRoute => find_resource($client.tcp_routes().list().data, ns_opt, name_str),
-            ResourceKind::UDPRoute => find_resource($client.udp_routes().list().data, ns_opt, name_str),
-            ResourceKind::TLSRoute => find_resource($client.tls_routes().list().data, ns_opt, name_str),
-            ResourceKind::Service => find_resource($client.services().list().data, ns_opt, name_str),
-            ResourceKind::EndpointSlice => find_resource($client.endpoint_slices().list().data, ns_opt, name_str),
-            ResourceKind::EdgionTls => find_edgion_tls($client.edgion_tls().list().data, ns_opt, name_str),
-            ResourceKind::EdgionPlugins => find_resource($client.edgion_plugins().list().data, ns_opt, name_str),
-            ResourceKind::EdgionStreamPlugins => {
-                find_resource($client.edgion_stream_plugins().list().data, ns_opt, name_str)
-            }
-            ResourceKind::ReferenceGrant => None, // ReferenceGrant not synced to Gateway
-            ResourceKind::BackendTLSPolicy => {
-                find_resource($client.backend_tls_policies().list().data, ns_opt, name_str)
-            }
-            ResourceKind::PluginMetaData => find_resource($client.plugin_metadata().list().data, ns_opt, name_str),
-            ResourceKind::LinkSys => find_resource($client.link_sys().list().data, ns_opt, name_str),
-            ResourceKind::GatewayClass => find_region_resource($client.gateway_classes().list().data, name_str),
-            ResourceKind::Gateway => find_resource($client.gateways().list().data, ns_opt, name_str),
-            ResourceKind::EdgionGatewayConfig => {
-                find_region_resource($client.edgion_gateway_configs().list().data, name_str)
-            }
-            _ => None,
+/// Get a single resource of `kind` by name (and namespace, unless cluster-scoped).
+///
+/// Reuses [`list_client_resources`] so the `EdgionTls` private-key scrubbing is
+/// inherited, then filters the JSON by `metadata.name` / `metadata.namespace`.
+fn get_client_resource(
+    client: &ConfigClient,
+    kind: ResourceKind,
+    namespace: Option<&str>,
+    name: &str,
+) -> Option<serde_json::Value> {
+    let cluster_scoped = crate::types::resource::is_kind_cluster_scoped(kind);
+    list_client_resources(client, kind).into_iter().find(|value| {
+        let meta = value.get("metadata");
+        let name_matches = meta.and_then(|m| m.get("name")).and_then(|n| n.as_str()) == Some(name);
+        if !name_matches {
+            return false;
         }
-    }};
+        if cluster_scoped {
+            return true;
+        }
+        meta.and_then(|m| m.get("namespace")).and_then(|n| n.as_str()) == namespace
+    })
 }
 
 /// Remove resolved private-key material from an `EdgionTls` before it leaves the
@@ -183,49 +163,10 @@ fn to_json_vec_edgion_tls(items: Vec<EdgionTls>) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// `find_resource` for `EdgionTls`, with private-key material scrubbed first.
-fn find_edgion_tls(items: Vec<EdgionTls>, namespace: Option<&str>, name: &str) -> Option<serde_json::Value> {
-    items
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
-        .and_then(|mut tls| {
-            scrub_edgion_tls_secrets(&mut tls);
-            serde_json::to_value(tls).ok()
-        })
-}
-
-/// Convert a list of resources to JSON values
-fn to_json_vec<T: serde::Serialize>(items: Vec<T>) -> Vec<serde_json::Value> {
-    items
-        .into_iter()
-        .filter_map(|item| serde_json::to_value(item).ok())
-        .collect()
-}
-
-/// Find a namespaced resource by namespace and name
-fn find_resource<T: ResourceExt + serde::Serialize>(
-    items: Vec<T>,
-    namespace: Option<&str>,
-    name: &str,
-) -> Option<serde_json::Value> {
-    items
-        .into_iter()
-        .find(|r| r.name_any() == name && r.namespace().as_deref() == namespace)
-        .and_then(|r| serde_json::to_value(r).ok())
-}
-
-/// Find a cluster-scoped resource by name only
-fn find_region_resource<T: ResourceExt + serde::Serialize>(items: Vec<T>, name: &str) -> Option<serde_json::Value> {
-    items
-        .into_iter()
-        .find(|r| r.name_any() == name)
-        .and_then(|r| serde_json::to_value(r).ok())
-}
-
 /// Dynamic list endpoint - list all resources of a kind
 async fn list_resources(State(client): State<Arc<ConfigClient>>, Path(kind_str): Path<String>) -> Json<ListResponse> {
     let kind = ResourceKind::from_kind_name(&kind_str).unwrap_or(ResourceKind::Unspecified);
-    let data = list_client_resources!(&client, kind);
+    let data = list_client_resources(&client, kind);
     Json(ListResponse::success(data))
 }
 
@@ -240,7 +181,7 @@ async fn get_resource(
     };
 
     let kind = ResourceKind::from_kind_name(&kind_str).unwrap_or(ResourceKind::Unspecified);
-    let resource = get_client_resource!(&client, kind, query.namespace, name);
+    let resource = get_client_resource(&client, kind, query.namespace.as_deref(), &name);
 
     match resource {
         Some(r) => Json(ApiResponse::ok_body(r)),
@@ -1666,7 +1607,13 @@ mod edgion_tls_scrub_tests {
             "spec.clientAuth.caSecret present"
         );
 
-        let get_json = find_edgion_tls(vec![edgion_tls_with_secrets()], Some("default"), "tls-cert")
+        // The get-by-name path reuses list_client_resources, so the same scrub
+        // must apply. Exercise it through the real ConfigClient dispatch.
+        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let _enter = rt.enter();
+        let client = ConfigClient::new("cid".to_string(), "cname".to_string());
+        client.edgion_tls().reset(vec![edgion_tls_with_secrets()], 1);
+        let get_json = get_client_resource(&client, ResourceKind::EdgionTls, Some("default"), "tls-cert")
             .expect("resource should be found");
         let serialized = serde_json::to_string(&get_json).unwrap();
         assert!(

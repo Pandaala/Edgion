@@ -37,6 +37,13 @@ pub trait DynClientCache: Send + Sync {
 
     /// Snapshot of all keys currently held by this cache.
     fn keys_dyn(&self) -> Vec<String>;
+
+    /// Serialize every entry to JSON for type-erased admin listing.
+    ///
+    /// Entries that fail to serialize are skipped. Note: this performs no
+    /// field redaction — callers that expose secret-bearing kinds (e.g.
+    /// `EdgionTls`) must scrub through their typed path instead of this method.
+    fn list_json_dyn(&self) -> Vec<serde_json::Value>;
 }
 
 pub struct ClientCache<T>
@@ -187,7 +194,7 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
 #[async_trait::async_trait]
 impl<T> DynClientCache for ClientCache<T>
 where
-    T: ResourceMeta + Resource + Clone + Send + Sync + 'static,
+    T: ResourceMeta + Resource + Clone + Send + Sync + serde::Serialize + 'static,
 {
     fn is_ready(&self) -> bool {
         self.is_ready()
@@ -216,5 +223,13 @@ where
 
     fn keys_dyn(&self) -> Vec<String> {
         self.keys()
+    }
+
+    fn list_json_dyn(&self) -> Vec<serde_json::Value> {
+        self.list_owned()
+            .data
+            .into_iter()
+            .filter_map(|item| serde_json::to_value(item).ok())
+            .collect()
     }
 }
