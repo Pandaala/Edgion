@@ -44,11 +44,12 @@ BIN_DIR="${PROJECT_ROOT}/target/debug"
 
 GATEWAY_HTTP_PORT=31000
 GATEWAY_HOST="127.0.0.1"
-CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:5800}"
-GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:5810}"
-GATEWAY_PROBE_URL="${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:28000}"
-CONTROLLER_ADMIN_PORT=5800
-CONTROLLER_GRPC_PORT="${EDGION_TEST_CONTROLLER_GRPC_PORT:-50051}"
+CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:12101}"
+CONTROLLER_PROBE_URL="${CONTROLLER_PROBE_URL:-http://127.0.0.1:12100}"
+GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:12001}"
+GATEWAY_PROBE_URL="${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"
+CONTROLLER_ADMIN_PORT=12101
+CONTROLLER_GRPC_PORT="${EDGION_TEST_CONTROLLER_GRPC_PORT:-12151}"
 
 RECONNECT_TIMEOUT=30   # seconds to wait for Gateway to reconnect after Controller restart
 SYNC_WAIT=3            # seconds to wait after applying new route before verification
@@ -154,8 +155,8 @@ check_prerequisites() {
         log_error "Run: cargo build --bin edgion-cli  (or use prepare.sh)"
         exit 1
     fi
-    if ! curl -sf "${CONTROLLER_URL}/health" > /dev/null 2>&1; then
-        log_error "Controller not reachable at ${CONTROLLER_URL}"
+    if ! curl -sf "${CONTROLLER_PROBE_URL}/health" > /dev/null 2>&1; then
+        log_error "Controller not reachable at ${CONTROLLER_PROBE_URL}"
         exit 1
     fi
     if ! curl -sf "${GATEWAY_PROBE_URL}/health" > /dev/null 2>&1; then
@@ -325,7 +326,7 @@ main() {
     sleep 2
 
     # Confirm Controller is truly gone
-    if curl -sf "${CONTROLLER_URL}/health" > /dev/null 2>&1; then
+    if curl -sf "${CONTROLLER_PROBE_URL}/health" > /dev/null 2>&1; then
         log_warn "Controller still responding after SIGKILL — test may be unreliable"
     else
         log_info "Controller confirmed dead (health check fails as expected)"
@@ -352,7 +353,7 @@ main() {
     reconnect_elapsed=0
     controller_alive=false
     while [ $reconnect_elapsed -lt $RECONNECT_TIMEOUT ]; do
-        if curl -sf "${CONTROLLER_URL}/health" > /dev/null 2>&1; then
+        if curl -sf "${CONTROLLER_PROBE_URL}/health" > /dev/null 2>&1; then
             controller_alive=true
             break
         fi

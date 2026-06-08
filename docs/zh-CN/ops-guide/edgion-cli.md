@@ -31,9 +31,9 @@ edgion-cli [OPTIONS] <COMMAND>
 
 | Target | 组件 | 默认端口 | 支持的命令 | 说明 |
 |--------|------|----------|------------|------|
-| `center` | Controller/ConfCenter | 5800 | get, apply, delete, reload | 完整 CRUD 操作 |
-| `server` | Controller/ConfigServer | 5800 | get (只读) | 查看 ConfigServer 缓存 |
-| `client` | Gateway/ConfigClient | 5810 | get (只读) | 查看 Gateway 缓存 |
+| `center` | Controller/ConfCenter | 12101 | get, apply, delete, reload | 完整 CRUD 操作 |
+| `server` | Controller/ConfigServer | 12101 | get (只读) | 查看 ConfigServer 缓存 |
+| `client` | Gateway/ConfigClient | 12001 | get (只读) | 查看 Gateway 缓存 |
 
 ### 使用示例
 
@@ -49,7 +49,7 @@ edgion-cli -t server get httproute -n prod
 
 # client - 查看 Gateway 的 ConfigClient 缓存
 edgion-cli -t client get httproute
-edgion-cli -t client --server http://gateway:5810 get service -n default
+edgion-cli -t client --server http://gateway:12001 get service -n default
 ```
 
 ## 命令详解
@@ -254,9 +254,9 @@ SHA-256 (paste into controller cli_tokens[].token_sha256):
 
 | Target | 默认地址 |
 |--------|----------|
-| center | http://localhost:5800 |
-| server | http://localhost:5800 |
-| client | http://localhost:5810 |
+| center | http://localhost:12101 |
+| server | http://localhost:12101 |
+| client | http://localhost:12001 |
 
 ### 自定义连接
 
@@ -264,10 +264,10 @@ SHA-256 (paste into controller cli_tokens[].token_sha256):
 
 ```bash
 # 连接到远程 Controller
-edgion-cli --server http://controller.example.com:5800 get httproute
+edgion-cli --server http://controller.example.com:12101 get httproute
 
 # 连接到远程 Gateway
-edgion-cli -t client --server http://gateway.example.com:5810 get service
+edgion-cli -t client --server http://gateway.example.com:12001 get service
 ```
 
 ## 输出格式
@@ -304,14 +304,14 @@ edgion-cli -t client --server http://gateway.example.com:5810 get service
 如果连接失败，`edgion-cli` 会显示详细的错误信息和提示：
 
 ```
-Error: Request to http://localhost:5800/api/v1/namespaced/httproute failed
+Error: Request to http://localhost:12101/api/v1/namespaced/httproute failed
 
 Connection failed:
   - Is the controller running?
   - Check if the server address is correct
-  - Try: curl -v http://localhost:5800/api/v1/namespaced/httproute
+  - Try: curl -v http://localhost:12101/api/v1/namespaced/httproute
 
-Hint: edgion-cli is trying to connect to: http://localhost:5800
+Hint: edgion-cli is trying to connect to: http://localhost:12101
       Target: Center (controller)
       Use --server to specify a different address
 ```

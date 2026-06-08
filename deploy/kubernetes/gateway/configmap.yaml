@@ -10,10 +10,10 @@ data:
     work_dir: /usr/local/edgion
 
     gateway:
-      server_addr: http://edgion-controller-leader.edgion-system.svc.cluster.local:50051
-      # Admin API stays loopback (default 127.0.0.1:5810); not exposed cluster-wide.
+      server_addr: http://edgion-controller-leader.edgion-system.svc.cluster.local:12151
+      # Admin API stays loopback (default 127.0.0.1:12001); not exposed cluster-wide.
       # Liveness/readiness are served on the dedicated probe port (default
-      # 0.0.0.0:28000), which the kubelet httpGet probes hit over the pod IP.
+      # 0.0.0.0:12000), which the kubelet httpGet probes hit over the pod IP.
 
     logging:
       log_dir: logs

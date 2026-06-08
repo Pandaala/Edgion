@@ -14,7 +14,7 @@ Entry point: `src/bin/edgion_center.rs`; startup logic: `src/core/center/cli/mod
 
 ```
 Controller A ──┐
-Controller B ──┼── gRPC FederationSync (:50052) ──► Center ──► HTTP Admin API (:5810)
+Controller B ──┼── gRPC FederationSync (:12251) ──► Center ──► HTTP Admin API (:12201)
 Controller C ──┘     (bidirectional stream)           │
                                                        └── SQLite (controller registry)
 ```

@@ -68,7 +68,7 @@ One Gateway with two HTTP Listeners on same port but different hostnames:
 ./examples/test/scripts/utils/load_conf.sh Gateway/PortConflict
 
 # Verify via admin API
-curl http://127.0.0.1:5810/admin/Gateway | jq '.data[] | {name: .metadata.name, status: .status}'
+curl http://127.0.0.1:12001/admin/Gateway | jq '.data[] | {name: .metadata.name, status: .status}'
 ```
 
 ## Verifying Results
@@ -77,8 +77,8 @@ Check Gateway status for conflict conditions:
 
 ```bash
 # Check for Conflicted condition on Listeners
-curl -s http://127.0.0.1:5810/admin/Gateway | jq '.data[].status.listeners[] | {name, conditions}'
+curl -s http://127.0.0.1:12001/admin/Gateway | jq '.data[].status.listeners[] | {name, conditions}'
 
 # Check for ListenersNotValid condition on Gateway
-curl -s http://127.0.0.1:5810/admin/Gateway | jq '.data[] | select(.status.conditions[]? | .type == "ListenersNotValid")'
+curl -s http://127.0.0.1:12001/admin/Gateway | jq '.data[] | select(.status.conditions[]? | .type == "ListenersNotValid")'
 ```

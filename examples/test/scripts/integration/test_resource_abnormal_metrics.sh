@@ -44,7 +44,9 @@ PID_DIR="${WORK_DIR}/pids"
 
 CONTROLLER_ADMIN_PORT=15810
 CONTROLLER_GRPC_PORT=15811
-METRICS_URL="http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/metrics"
+CONTROLLER_PROBE_PORT=15812
+CONTROLLER_METRICS_PORT=15819
+METRICS_URL="http://127.0.0.1:${CONTROLLER_METRICS_PORT}/metrics"
 TICK_SECS=30
 
 CONTROLLER_PID=""
@@ -96,6 +98,8 @@ work_dir: "${WORK_DIR}"
 server:
   grpc_listen: "127.0.0.1:${CONTROLLER_GRPC_PORT}"
   admin_listen: "127.0.0.1:${CONTROLLER_ADMIN_PORT}"
+  probe_listen: "127.0.0.1:${CONTROLLER_PROBE_PORT}"
+  metrics_listen: "127.0.0.1:${CONTROLLER_METRICS_PORT}"
 
 logging:
   log_dir: "${LOG_DIR}"
@@ -152,7 +156,7 @@ log_info "Controller started PID=$CONTROLLER_PID"
 log_info "Waiting for controller readiness..."
 READY=0
 for i in $(seq 1 30); do
-    if curl -sf "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/health" > /dev/null 2>&1; then
+    if curl -sf "http://127.0.0.1:${CONTROLLER_PROBE_PORT}/health" > /dev/null 2>&1; then
         READY=1
         break
     fi

@@ -35,9 +35,10 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 CONF_DIR="${PROJECT_ROOT}/examples/test/conf/conf-sync-leak-test"
 EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 
-CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:5800}"
-GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:5810}"
-GATEWAY_PROBE_URL="${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:28000}"
+CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:12101}"
+CONTROLLER_PROBE_URL="${CONTROLLER_PROBE_URL:-http://127.0.0.1:12100}"
+GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:12001}"
+GATEWAY_PROBE_URL="${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"
 
 SYNC_WAIT=2
 CLEANUP_WAIT=5
@@ -112,8 +113,8 @@ ctl_delete() {
 # =============================================================================
 check_prerequisites() {
     if [ ! -f "$EDGION_CLI" ]; then log_error "edgion-cli not found"; exit 1; fi
-    if ! curl -sf "${CONTROLLER_URL}/health" > /dev/null 2>&1; then
-        log_error "Controller not reachable at ${CONTROLLER_URL}"; exit 1
+    if ! curl -sf "${CONTROLLER_PROBE_URL}/health" > /dev/null 2>&1; then
+        log_error "Controller not reachable at ${CONTROLLER_PROBE_URL}"; exit 1
     fi
     if ! curl -sf "${GATEWAY_PROBE_URL}/health" > /dev/null 2>&1; then
         log_error "Gateway probe not reachable at ${GATEWAY_PROBE_URL}"; exit 1

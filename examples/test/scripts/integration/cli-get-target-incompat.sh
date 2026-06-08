@@ -17,7 +17,7 @@ CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 [[ -x "$CLI" ]] || { echo "SKIP: edgion-cli not built"; exit 0; }
 
 set +e
-STDERR=$("$CLI" --target server --server "http://127.0.0.1:5800" get httproute --metadata-only 2>&1 >/dev/null)
+STDERR=$("$CLI" --target server --server "http://127.0.0.1:12101" get httproute --metadata-only 2>&1 >/dev/null)
 EXIT_CODE=$?
 set -e
 

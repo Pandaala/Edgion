@@ -220,7 +220,7 @@ kubectl patch svc edgion-gateway -n edgion-system -p '{"spec":{"type":"NodePort"
 kubectl patch svc edgion-gateway -n edgion-system -p '{"spec":{"type":"LoadBalancer"}}'
 ```
 
-> **Note**: changing the gateway Service to `NodePort` or `LoadBalancer` publishes all ports declared in the Service to external traffic — including the metrics port (5901). The admin port (5810) and the probe port (28000) are intentionally **not** included in the gateway Service and are therefore never externally published, regardless of Service type.
+> **Note**: changing the gateway Service to `NodePort` or `LoadBalancer` publishes all ports declared in the Service to external traffic — including the metrics port (12090). The admin port (12001) and the probe port (12000) are intentionally **not** included in the gateway Service and are therefore never externally published, regardless of Service type.
 
 ## Cleanup
 

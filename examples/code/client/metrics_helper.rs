@@ -89,7 +89,7 @@ impl MetricsClient {
         Self {
             client,
             base_urls: if filtered.is_empty() {
-                vec!["http://127.0.0.1:5901".to_string()]
+                vec!["http://127.0.0.1:12090".to_string()]
             } else {
                 filtered
             },

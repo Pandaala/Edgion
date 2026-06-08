@@ -9,15 +9,16 @@ use tracing;
 /// (which serves secret-bearing `/configclient` introspection) is not exposed to the
 /// cluster unless the operator opts in via `admin_listen`. Liveness/readiness live on
 /// the separate probe port (`DEFAULT_GATEWAY_PROBE_LISTEN`), so kubelet never needs to
-/// reach the admin port and the shipped manifests keep this on loopback. (Port 5810
-/// avoids the macOS Screen Sharing / VNC conflict on 5900.)
-pub const DEFAULT_GATEWAY_ADMIN_LISTEN: &str = "127.0.0.1:5810";
+/// reach the admin port and the shipped manifests keep this on loopback.
+/// Port is in the Gateway management block (120xx): 12001 = admin.
+pub const DEFAULT_GATEWAY_ADMIN_LISTEN: &str = "127.0.0.1:12001";
 
 /// Default probe API listen address. The probe API serves only the non-sensitive
 /// liveness/readiness endpoints (`/health`, `/ready`) and binds `0.0.0.0` by default
 /// so a kubelet `httpGet` probe can reach it over the pod IP. The sensitive admin API
 /// stays loopback (`DEFAULT_GATEWAY_ADMIN_LISTEN`) and need never be `0.0.0.0`.
-pub const DEFAULT_GATEWAY_PROBE_LISTEN: &str = "0.0.0.0:28000";
+/// Port is in the Gateway management block (120xx): 12000 = probe.
+pub const DEFAULT_GATEWAY_PROBE_LISTEN: &str = "0.0.0.0:12000";
 
 /// Edgion Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
@@ -157,7 +158,7 @@ pub struct EdgionGatewayConfig {
 /// Gateway configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
 pub struct GatewayConfig {
-    /// Operator gRPC address (e.g., http://127.0.0.1:50051)
+    /// Operator gRPC address (e.g., http://127.0.0.1:12151)
     #[arg(long = "server-addr", value_name = "ADDR")]
     #[serde(default)]
     pub server_addr: Option<String>,
@@ -310,7 +311,7 @@ pub struct MetricsConfig {
 impl Default for MetricsConfig {
     fn default() -> Self {
         Self {
-            listen: "0.0.0.0:5901".to_string(),
+            listen: "0.0.0.0:12090".to_string(),
             request_duration: RequestDurationConfig::default(),
             backend_requests: BackendRequestsConfig::default(),
         }
@@ -931,7 +932,7 @@ mod tests {
         // would reopen the unauthenticated admin-surface exposure (harden Task 2).
         let cfg = EdgionGatewayConfig::default();
         assert_eq!(cfg.admin_listen(), None);
-        assert_eq!(cfg.admin_listen_or_default(), "127.0.0.1:5810");
+        assert_eq!(cfg.admin_listen_or_default(), "127.0.0.1:12001");
     }
 
     #[test]
@@ -949,7 +950,7 @@ mod tests {
         // binds 0.0.0.0 by default so a kubelet httpGet can reach it over the pod IP.
         let cfg = EdgionGatewayConfig::default();
         assert_eq!(cfg.probe_listen(), None);
-        assert_eq!(cfg.probe_listen_or_default(), "0.0.0.0:28000");
+        assert_eq!(cfg.probe_listen_or_default(), "0.0.0.0:12000");
     }
 
     #[test]
@@ -1008,5 +1009,13 @@ wrap_suffix = "</E>"
             crate::types::sensitive::SensitiveMode::Wrap
         ));
         assert_eq!(cfg.access_log_sensitive.wrap_prefix, "<E>");
+    }
+
+    #[test]
+    fn test_metrics_listen_defaults_to_management_block() {
+        // The metrics listener default must use the Gateway management port block
+        // (120xx). Changing this would silently break the port-unification plan.
+        let cfg = MetricsConfig::default();
+        assert_eq!(cfg.listen, "0.0.0.0:12090");
     }
 }

@@ -32,8 +32,10 @@ fi
 # config
 CONF_DIR="${PROJECT_ROOT}/examples/test/conf"
 EDGION_CLI="${BIN_DIR}/edgion-cli"
-CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:5800}"
-GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:5810}"
+CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:12101}"
+CONTROLLER_PROBE_PORT="${CONTROLLER_PROBE_PORT:-12100}"
+CONTROLLER_PROBE_URL="${CONTROLLER_PROBE_URL:-http://127.0.0.1:${CONTROLLER_PROBE_PORT}}"
+GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:12001}"
 
 # =============================================================================
 # log
@@ -135,8 +137,8 @@ check_services() {
     log_info "Checkservicestatus..."
     
     # Check controller health (liveness)
-    if ! curl -sf "${CONTROLLER_URL}/health" > /dev/null 2>&1; then
-        log_error "Controller Run (${CONTROLLER_URL})"
+    if ! curl -sf "${CONTROLLER_PROBE_URL}/health" > /dev/null 2>&1; then
+        log_error "Controller Run (${CONTROLLER_PROBE_URL})"
         return 1
     fi
     
@@ -154,7 +156,7 @@ wait_for_ready() {
     log_info " Controller ConfigServer ..."
     
     while [ $attempt -lt $max_attempts ]; do
-        if curl -sf "${CONTROLLER_URL}/ready" > /dev/null 2>&1; then
+        if curl -sf "${CONTROLLER_PROBE_URL}/ready" > /dev/null 2>&1; then
             log_success "Controller ConfigServer "
             return 0
         fi
@@ -257,7 +259,7 @@ verify_sync() {
     "${BIN_DIR}/examples/resource_diff" \
         --controller-url "$CONTROLLER_URL" \
         --gateway-url "$GATEWAY_ADMIN_URL" \
-        --gateway-probe-url "${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:28000}"
+        --gateway-probe-url "${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"
     
     return $?
 }

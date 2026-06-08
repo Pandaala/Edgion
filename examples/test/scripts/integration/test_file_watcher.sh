@@ -43,6 +43,7 @@ PID_DIR="${WORK_DIR}/pids"
 STAGING_DIR="${WORK_DIR}/staging"   # outside CONFIG_DIR, used by mv-in/mv-out tests
 
 CONTROLLER_ADMIN_PORT=15800
+CONTROLLER_PROBE_PORT="${CONTROLLER_PROBE_PORT:-12100}"
 WAIT_SECS=3
 
 CONTROLLER_PID=""
@@ -133,7 +134,7 @@ start_controller() {
     log_info "Waiting for controller /health..."
     local waited=0
     while [ $waited -lt 30 ]; do
-        if curl -s "http://localhost:${CONTROLLER_ADMIN_PORT}/health" > /dev/null 2>&1; then
+        if curl -s "http://localhost:${CONTROLLER_PROBE_PORT}/health" > /dev/null 2>&1; then
             log_success "Controller ready"
             return 0
         fi

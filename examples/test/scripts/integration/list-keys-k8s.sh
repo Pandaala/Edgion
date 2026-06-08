@@ -18,7 +18,7 @@
 #   - ADMIN_TOKEN env var with a valid bearer token (or unauthenticated admin)
 #   - jq
 #
-# Default ADMIN_URL: http://127.0.0.1:5800
+# Default ADMIN_URL: http://127.0.0.1:12101
 # =============================================================================
 set -euo pipefail
 
@@ -47,7 +47,7 @@ if ! kubectl get crd httproutes.gateway.networking.k8s.io > /dev/null 2>&1; then
     exit 0
 fi
 
-ADMIN_URL="${ADMIN_URL:-http://127.0.0.1:5800}"
+ADMIN_URL="${ADMIN_URL:-http://127.0.0.1:12101}"
 if ! curl -sf --max-time 3 "${ADMIN_URL}/health" > /dev/null 2>&1; then
     log_warn "edgion-controller admin endpoint not reachable at $ADMIN_URL; SKIP"
     exit 0

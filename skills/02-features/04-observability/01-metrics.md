@@ -9,9 +9,9 @@ description: Prometheus Metrics endpoints and available metrics.
 
 | Endpoint | Port | Path | Auth | Description |
 |----------|------|------|------|-------------|
-| Gateway Metrics | `:5901` | `/metrics` | None | Independent listening port, started via `serve_with_shutdown` |
-| Controller Metrics | Admin API (default `:8080`) | `/metrics` | No auth (unified_auth skip_paths) | Mounted under the existing admin router |
-| Center Metrics | Admin API (default `:5810`) | `/metrics` | No auth (unified_auth skip_paths) | Mounted under the existing router |
+| Gateway Metrics | `:12090` | `/metrics` | None | Independent listening port, started via `serve_with_shutdown` |
+| Controller Metrics | `:12190` | `/metrics` | No auth | Independent listener, separate from admin port `:12101` |
+| Center Metrics | `:12290` | `/metrics` | No auth | Independent listener, separate from admin port `:12201` |
 
 > Prometheus scrape skips auth following K8s controller-manager convention. `/metrics` content is aggregated numbers and does not contain resource names or request bodies.
 

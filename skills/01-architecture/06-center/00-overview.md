@@ -12,8 +12,10 @@ It binds two ports (defaults in `src/core/center/config/mod.rs`, `CenterConfig`)
 
 | Port | Protocol | Purpose |
 |------|----------|---------|
-| `:50052` | gRPC (optionally mTLS) | `FederationSync` — Controllers connect here |
-| `:5810` | HTTP | Admin API + auth endpoints |
+| `:12251` | gRPC (optionally mTLS) | `FederationSync` — Controllers connect here |
+| `:12201` | HTTP | Admin API + auth endpoints |
+| `:12200` | HTTP | Liveness/readiness probe (`/health`, `/ready`) |
+| `:12290` | HTTP | Prometheus metrics (`/metrics`) |
 
 TLS posture for the gRPC port is governed by the `grpc_security` field of `CenterConfig`
 (`src/core/center/config/mod.rs`). Omitting that section keeps plaintext gRPC

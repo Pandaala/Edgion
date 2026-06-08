@@ -221,6 +221,16 @@ pub struct ServerConfig {
     #[arg(long, value_name = "ADDR")]
     #[serde(default)]
     pub admin_listen: Option<String>,
+
+    /// HTTP listen address for the dedicated liveness/readiness probe listener
+    #[arg(long, value_name = "ADDR")]
+    #[serde(default)]
+    pub probe_listen: Option<String>,
+
+    /// HTTP listen address for the dedicated Prometheus metrics listener
+    #[arg(long, value_name = "ADDR")]
+    #[serde(default)]
+    pub metrics_listen: Option<String>,
     // Note: gateway_class, watch_namespaces, label_selector moved to ConfCenterConfig::Kubernetes
 }
 
@@ -536,11 +546,19 @@ pub enum MtlsRefusal {
 
 // Default values
 fn default_grpc_listen() -> String {
-    "0.0.0.0:50051".to_string()
+    "0.0.0.0:12151".to_string()
 }
 
 fn default_admin_listen() -> String {
-    "0.0.0.0:8080".to_string()
+    "0.0.0.0:12101".to_string()
+}
+
+fn default_probe_listen() -> String {
+    "0.0.0.0:12100".to_string()
+}
+
+fn default_metrics_listen() -> String {
+    "0.0.0.0:12190".to_string()
 }
 
 fn default_log_dir() -> String {
@@ -732,6 +750,12 @@ impl EdgionControllerConfig {
         if cli.server.admin_listen.is_some() {
             base.server.admin_listen = cli.server.admin_listen.clone();
         }
+        if cli.server.probe_listen.is_some() {
+            base.server.probe_listen = cli.server.probe_listen.clone();
+        }
+        if cli.server.metrics_listen.is_some() {
+            base.server.metrics_listen = cli.server.metrics_listen.clone();
+        }
 
         // Logging config
         if cli.logging.log_dir.is_some() {
@@ -756,6 +780,19 @@ impl EdgionControllerConfig {
     /// Get admin_listen with default fallback
     pub fn admin_listen(&self) -> String {
         self.server.admin_listen.clone().unwrap_or_else(default_admin_listen)
+    }
+
+    /// Get probe_listen with default fallback
+    pub fn probe_listen(&self) -> String {
+        self.server.probe_listen.clone().unwrap_or_else(default_probe_listen)
+    }
+
+    /// Get metrics_listen with default fallback
+    pub fn metrics_listen(&self) -> String {
+        self.server
+            .metrics_listen
+            .clone()
+            .unwrap_or_else(default_metrics_listen)
     }
 
     /// Get log_dir with default fallback
@@ -1413,7 +1450,7 @@ metrics:
     #[test]
     fn center_enabled_defaults_to_true() {
         let cfg: CenterClientConfig =
-            serde_yaml::from_str("address: \"https://c:50052\"\nname: n\ncluster: c\n").unwrap();
+            serde_yaml::from_str("address: \"https://c:12251\"\nname: n\ncluster: c\n").unwrap();
         assert!(cfg.enabled, "enabled must default to true (backward compatible)");
         assert!(cfg.rbac.is_none(), "absent rbac => None => deny-all downstream");
     }
@@ -1451,5 +1488,16 @@ rbac:
             }],
         };
         assert!(rbac.validate().is_err(), "a rule with no verbs is malformed");
+    }
+
+    // ── Group J: listen address defaults ────────────────────────────────────
+
+    #[test]
+    fn test_listen_address_defaults() {
+        let cfg = EdgionControllerConfig::default();
+        assert_eq!(cfg.grpc_listen(), "0.0.0.0:12151");
+        assert_eq!(cfg.admin_listen(), "0.0.0.0:12101");
+        assert_eq!(cfg.probe_listen(), "0.0.0.0:12100");
+        assert_eq!(cfg.metrics_listen(), "0.0.0.0:12190");
     }
 }

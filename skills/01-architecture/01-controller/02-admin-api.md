@@ -1,11 +1,19 @@
 ---
 name: controller-admin-api
-description: edgion-controller Admin HTTP API (Axum :5800) — full endpoint list, AdminState, health check, CRUD, and ConfigServer endpoints.
+description: edgion-controller HTTP listeners — Admin API (:12101), probe listener (:12100), and metrics listener (:12190) — full endpoint list, AdminState, CRUD, and ConfigServer endpoints.
 ---
 
-# Admin API (:5800)
+# Admin API (:12101)
 
-The Controller exposes an HTTP Admin API via Axum, listening on port 5800, used by the edgion-cli command-line tool and operations workflows.
+The Controller exposes three HTTP listeners:
+
+| Listener | Config field | Default | Serves |
+|----------|-------------|---------|--------|
+| Probe | `probe_listen` | `0.0.0.0:12100` | `/health`, `/ready` |
+| Metrics | `metrics_listen` | `0.0.0.0:12190` | `/metrics` |
+| Admin | `admin_listen` | `0.0.0.0:12101` | `/api/v1/*`, `/configclient` |
+
+The Admin API listens on port 12101 (default) via Axum, used by the edgion-cli command-line tool and operations workflows. `/health` and `/ready` are served exclusively on the **probe listener** (`:12100`); `/metrics` is served exclusively on the **metrics listener** (`:12190`). Neither endpoint is available on `:12101`.
 
 ## Router Composition (compose_admin_routes)
 
@@ -51,12 +59,19 @@ Helper methods:
 
 ## Full Endpoint List
 
-### Health and Status
+### Health and Status (Probe Listener :12100)
+
+The following endpoints are served on the **probe listener** (`:12100`, `probe_listen`), **not** on the Admin API port:
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Liveness probe. Returns `200` as soon as the service starts; response body `{"success":true,"data":"OK"}` |
 | GET | `/ready` | Readiness probe. Returns `200` once ConfigSyncServer is ready, otherwise `503` |
+
+### Admin API Status (Admin Listener :12101)
+
+| Method | Path | Description |
+|--------|------|-------------|
 | GET | `/api/v1/server-info` | Get the current `server_id` and ready state. After reload `server_id` changes, which can be used to confirm the reload took effect |
 
 ### Reload
@@ -154,10 +169,25 @@ Error responses use standard HTTP status codes (no JSON body):
 
 ## Health and Readiness Semantics
 
-| Probe | Endpoint | Semantics | K8s usage |
-|-------|----------|-----------|-----------|
-| Liveness | `/health` | Returns 200 as long as the process is alive | `livenessProbe` — failing causes the Pod to restart |
-| Readiness | `/ready` | Returns 200 after ConfigSyncServer initialization is complete and all Processors are ready | `readinessProbe` — when not ready, the pod is removed from the Service endpoints |
+Both probes are served on the **probe listener** (`:12100`, `probe_listen`). Use `httpGet.port: 12100` in your Kubernetes pod spec.
+
+| Probe | Endpoint | Listener | Semantics | K8s usage |
+|-------|----------|----------|-----------|-----------|
+| Liveness | `/health` | `:12100` (`probe_listen`) | Returns 200 as long as the process is alive | `livenessProbe` — failing causes the Pod to restart |
+| Readiness | `/ready` | `:12100` (`probe_listen`) | Returns 200 after ConfigSyncServer initialization is complete and all Processors are ready | `readinessProbe` — when not ready, the pod is removed from the Service endpoints |
+
+Example Kubernetes probe configuration:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 12100
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 12100
+```
 
 Readiness is determined via `AdminState::is_ready()` -> `ConfMgr::is_ready()` -> `ConfCenter::is_ready()`, ultimately checking whether ConfigSyncServer has been created.
 
@@ -173,7 +203,7 @@ While the controller is in init or reload (`is_ready() == false`), these endpoin
 Endpoints intentionally not gated:
 
 - `GET` endpoints on `/api/v1/...` (reads may return partial data during init — explicit operator/debug choice).
-- `/health`, `/ready`, `/metrics`, `/api/v1/auth/*` — probes and auth must stay reachable.
+- `/api/v1/auth/*` — auth must stay reachable. (`/health`, `/ready`, `/metrics` are on separate listeners and are not routed through the Admin API router at all.)
 - `/api/v1/reload` — `request_reload` itself returns an error when the center is not started, and reload is the mechanism for recovering from a stuck init.
 - `/api/v1/services/acme/.../trigger` — notify-only, does not touch the storage layer.
 - `/api/v1/diagnostics/...` and `/api/v1/server-info` — read-only diagnostic surface.
@@ -226,7 +256,7 @@ Module location: `src/core/common/unified_auth/mod.rs`
 
 Request authentication order:
 
-1. Match against `skip_paths` (defaults: `/health`, `/ready`, `/metrics`) → pass through directly
+1. Match against `skip_paths` (defaults: `/health`, `/ready`, `/metrics`) → pass through directly (these paths are also served on dedicated listeners; the skip list covers any residual routing that reaches the Admin API router)
 2. Public auth endpoints (`/api/v1/auth/*`) → pass through directly
 3. Try OIDC Bearer token validation (requires `[auth]` to be configured)
 4. Try local JWT (HS256) Bearer token validation

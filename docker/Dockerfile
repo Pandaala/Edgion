@@ -162,7 +162,7 @@ ENV RUST_LOG=info
 ENV RUST_BACKTRACE=0
 
 # Expose ports
-EXPOSE 80 443 10080 10443 18443 19000 19002 19010 50051 5800
+EXPOSE 80 443 10080 10443 18443 19000 19002 19010 12151 12101
 
 # Restart-loop entrypoint: when the binary is killed (e.g. by kubectl exec pkill during hot-patch),
 # the shell restarts it automatically without triggering a K8s pod restart.

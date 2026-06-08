@@ -55,7 +55,7 @@ echo "Using pod: ${POD}"
 echo "Target host: ${TARGET_HOST}"
 
 # --- Resolve DirectEndpoint IP (once) ---
-# The gateway admin API (port 5810) is loopback-only and is no longer reachable
+# The gateway admin API (port 12001) is loopback-only and is no longer reachable
 # over Service DNS, so kubectl is the primary (and only) resolver here.
 DIRECT_ENDPOINT_IP="${EDGION_TEST_DIRECT_ENDPOINT_IP:-}"
 if [[ -z "${DIRECT_ENDPOINT_IP}" ]]; then
@@ -92,19 +92,19 @@ GATEWAY_METRICS_ENDPOINTS="${EDGION_TEST_GATEWAY_METRICS_ENDPOINTS:-}"
 if [[ -z "${GATEWAY_METRICS_ENDPOINTS}" ]]; then
   GATEWAY_METRICS_ENDPOINTS="$(
     kubectl get endpointslices -n edgion-system -l kubernetes.io/service-name=edgion-gateway -o json 2>/dev/null \
-      | jq -r '[.items[]?.endpoints[]? | select(.conditions.ready != false) | .addresses[]? | "\(.):5901"] | unique | join(",")' 2>/dev/null || true
+      | jq -r '[.items[]?.endpoints[]? | select(.conditions.ready != false) | .addresses[]? | "\(.):12090"] | unique | join(",")' 2>/dev/null || true
   )"
 fi
 
 if [[ -z "${GATEWAY_METRICS_ENDPOINTS}" || "${GATEWAY_METRICS_ENDPOINTS}" == "null" ]]; then
   GATEWAY_METRICS_ENDPOINTS="$(
     kubectl get endpoints -n edgion-system edgion-gateway -o json 2>/dev/null \
-      | jq -r '[.subsets[]?.addresses[]?.ip | "\(.):5901"] | unique | join(",")' 2>/dev/null || true
+      | jq -r '[.subsets[]?.addresses[]?.ip | "\(.):12090"] | unique | join(",")' 2>/dev/null || true
   )"
 fi
 
 if [[ -z "${GATEWAY_METRICS_ENDPOINTS}" || "${GATEWAY_METRICS_ENDPOINTS}" == "null" ]]; then
-  GATEWAY_METRICS_ENDPOINTS="edgion-gateway.edgion-system.svc.cluster.local:5901"
+  GATEWAY_METRICS_ENDPOINTS="edgion-gateway.edgion-system.svc.cluster.local:12090"
 fi
 
 METRICS_ENDPOINT_COUNT="$(echo "${GATEWAY_METRICS_ENDPOINTS}" | tr ',' '\n' | awk 'NF{count++} END{print count+0}')"
@@ -115,7 +115,7 @@ echo "Gateway metrics endpoints (${METRICS_ENDPOINT_COUNT}): ${GATEWAY_METRICS_E
 generate_inner_script() {
   cat <<HEADER
 #!/bin/sh
-export EDGION_TEST_ADMIN_API_URL="${EDGION_CONTROLLER_ADMIN_URL:-http://edgion-controller.edgion-system.svc.cluster.local:5800}"
+export EDGION_TEST_ADMIN_API_URL="${EDGION_CONTROLLER_ADMIN_URL:-http://edgion-controller.edgion-system.svc.cluster.local:12101}"
 export EDGION_TEST_K8S_MODE="true"
 export EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}"
 export EDGION_TEST_GATEWAY_METRICS_ENDPOINTS="${GATEWAY_METRICS_ENDPOINTS}"

@@ -1,8 +1,11 @@
 //! Admin HTTP API for edgion-center.
 //!
-//! Routes:
-//!   GET  /health                                          → health check
-//!   GET  /ready                                           → readiness check
+//! Listeners:
+//!   - Admin API (http_addr / 12201):  business routes + auth middleware
+//!   - Probe     (probe_addr / 12200): GET /health, GET /ready (no auth)
+//!   - Metrics   (metrics_addr / 12290): GET /metrics (no auth)
+//!
+//! Admin routes:
 //!   GET  /api/v1/server-info                              → {"mode":"center"}
 //!   GET  /api/v1/controllers                              → list all controller summaries
 //!   GET  /api/v1/clusters                                 → list distinct cluster names
@@ -83,14 +86,6 @@ impl ApiState {
 
 pub fn router(state: ApiState) -> Router {
     Router::new()
-        // Health/ready (no /api/v1 prefix, consistent with controller)
-        .route("/health", get(health_check))
-        .route("/ready", get(ready_check))
-        // Prometheus scrape endpoint (auth-skipped, K8s controller-manager convention)
-        .route(
-            "/metrics",
-            get(crate::core::common::observe::metrics_api::metrics_handler),
-        )
         // Center-specific endpoints
         .route("/api/v1/server-info", get(server_info))
         .route("/api/v1/controllers", get(list_controllers))
@@ -169,6 +164,22 @@ pub fn router(state: ApiState) -> Router {
         // HTTP proxy to controllers
         .route("/api/v1/proxy/{controller_id}/{*rest}", any(proxy_handler))
         .with_state(state)
+}
+
+/// Dedicated liveness/readiness router (own listener).
+pub fn create_probe_router(state: ApiState) -> Router {
+    Router::new()
+        .route("/health", get(health_check))
+        .route("/ready", get(ready_check))
+        .with_state(state)
+}
+
+/// Dedicated Prometheus metrics router (own listener, stateless handler).
+pub fn create_metrics_router() -> Router {
+    Router::new().route(
+        "/metrics",
+        get(crate::core::common::observe::metrics_api::metrics_handler),
+    )
 }
 
 async fn health_check() -> impl IntoResponse {

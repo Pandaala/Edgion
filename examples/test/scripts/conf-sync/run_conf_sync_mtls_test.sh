@@ -31,9 +31,10 @@ EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 
 # Ports — use different gRPC port to avoid conflict with plain-text tests
 CONTROLLER_GRPC_PORT="${EDGION_TEST_MTLS_GRPC_PORT:-50061}"
-CONTROLLER_ADMIN_PORT=5800
-GATEWAY_ADMIN_PORT=5810
-GATEWAY_PROBE_PORT=28000
+CONTROLLER_ADMIN_PORT=12101
+CONTROLLER_PROBE_PORT="${CONTROLLER_PROBE_PORT:-12100}"
+GATEWAY_ADMIN_PORT=12001
+GATEWAY_PROBE_PORT=12000
 TEST_SERVER_HTTP_PORT=30001
 
 # Controller admin auth credentials (used by local_auth in the generated config)
@@ -421,7 +422,7 @@ EOF
         tail -30 "${log_dir}/controller.log" 2>/dev/null || true
         exit 1
     fi
-    wait_for_health "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/health" "controller" 10
+    wait_for_health "http://127.0.0.1:${CONTROLLER_PROBE_PORT}/health" "controller" 10
 
     if ! wait_for_port $CONTROLLER_GRPC_PORT "controller gRPC (mTLS)" $ctrl_pid 30; then
         log_error "Controller gRPC (mTLS) port failed. Log:"
@@ -437,7 +438,7 @@ EOF
     fi
 
     # ── 8. Wait for ConfigServer ready, login, load base config ──
-    wait_for_ready "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/ready" "controller ConfigServer" 30
+    wait_for_ready "http://127.0.0.1:${CONTROLLER_PROBE_PORT}/ready" "controller ConfigServer" 30
 
     log_section "Logging in to Controller admin API"
     CTRL_ADMIN_TOKEN=$(do_login \
@@ -567,7 +568,7 @@ test_mtls_log_entries() {
 # Test: Controller and Gateway health
 # =============================================================================
 test_health() {
-    curl -sf "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/health" >/dev/null 2>&1 && \
+    curl -sf "http://127.0.0.1:${CONTROLLER_PROBE_PORT}/health" >/dev/null 2>&1 && \
     curl -sf "http://127.0.0.1:${GATEWAY_PROBE_PORT}/health" >/dev/null 2>&1
 }
 

@@ -46,11 +46,13 @@ work_dir: "."
 server:
   # gRPC
   #  Gateway
-  grpc_listen: "0.0.0.0:50051"
+  grpc_listen: "0.0.0.0:12151"
 
-  # Admin HTTP
-  # ， Web Dashboard
-  admin_listen: "0.0.0.0:5800"
+  # Admin HTTP API (/api/v1, /configclient); used by edgion-cli and Web Dashboard
+  admin_listen: "0.0.0.0:12101"
+
+  # probe_listen: "0.0.0.0:12100"    # Liveness/readiness (/health, /ready); default 0.0.0.0:12100
+  # metrics_listen: "0.0.0.0:12190"  # Prometheus metrics (/metrics); default 0.0.0.0:12190
 
 logging:
   #
@@ -138,7 +140,7 @@ conf_sync:
 # Omit this section entirely if you are not using federation.
 #
 # center:
-#   address: "https://center.example.com:50052"
+#   address: "https://center.example.com:12251"
 #   name: "ctrl-1"
 #   cluster: "prod"
 #

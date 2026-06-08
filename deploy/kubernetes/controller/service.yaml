@@ -11,12 +11,16 @@ spec:
     app: edgion-controller
   ports:
   - name: grpc
-    port: 50051
-    targetPort: 50051
+    port: 12151
+    targetPort: 12151
     protocol: TCP
   - name: http
-    port: 5800
-    targetPort: 5800
+    port: 12101
+    targetPort: 12101
+    protocol: TCP
+  - name: metrics
+    port: 12190
+    targetPort: 12190
     protocol: TCP
 ---
 apiVersion: v1
@@ -33,10 +37,14 @@ spec:
     edgion.io/leader: "true"
   ports:
   - name: grpc
-    port: 50051
-    targetPort: 50051
+    port: 12151
+    targetPort: 12151
     protocol: TCP
   - name: http
-    port: 5800
-    targetPort: 5800
+    port: 12101
+    targetPort: 12101
+    protocol: TCP
+  - name: metrics
+    port: 12190
+    targetPort: 12190
     protocol: TCP

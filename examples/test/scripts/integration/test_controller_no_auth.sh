@@ -30,7 +30,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 CONTROLLER_BIN="${EDGION_CONTROLLER_BIN:-$REPO_ROOT/target/debug/edgion-controller}"
 
-# Ports chosen to avoid conflicts with the main integration stack (5800/50051)
+# Ports chosen to avoid conflicts with the main integration stack (12101/12151)
 # and the Center no-auth test (58100/58110).
 NOAUTH_ADMIN_PORT=58200
 NOAUTH_GRPC_PORT=58201

@@ -80,7 +80,7 @@ most standard deployments.
 
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   name: "ctrl-1"
   cluster: "prod"
   security:
@@ -100,7 +100,7 @@ only, with no write access and no failover.
 
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   name: "ctrl-1"
   cluster: "prod"
   security:
@@ -129,7 +129,7 @@ region-route failover) but should have no read access to other resources.
 
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   name: "ctrl-1"
   cluster: "prod"
   security:
@@ -159,7 +159,7 @@ Controller operator are the same team and you accept the risks listed below.**
 
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   name: "ctrl-1"
   cluster: "prod"
   security:
@@ -182,7 +182,7 @@ exactly what is needed — nothing more.
 
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   name: "ctrl-1"
   cluster: "prod"
   security:

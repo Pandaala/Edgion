@@ -92,9 +92,9 @@ runtime.block_on(Self::start_auxiliary_services(config_client.clone()));
 `start_auxiliary_services()` starts five components:
 1. **BackendCleaner**: `BackendCleaner::new().start()`, cleans up stale backend state for LeastConnection LB.
 2. **Health Check Manager**: `get_hc_config_store()` + `get_health_check_manager()` initialize the health-check configuration store and manager.
-3. **Admin API**: `tokio::spawn(api::serve(config_client, admin_listen))`, listens on the address from `gateway.admin_listen` (default `127.0.0.1:5810`, loopback-only; serves `/configclient`, `/api/v1/server-info`, and other sensitive endpoints).
-4. **Probe server**: `tokio::spawn(api::serve_probe_with_shutdown(config_client, probe_listen, ...))`, listens on the address from `gateway.probe_listen` (default `0.0.0.0:28000`); serves `/health` and `/ready` only; binds all interfaces so kubelet can reach the pod IP. Not included in the gateway Service.
-5. **Metrics API**: `tokio::spawn(metrics::serve(5901))`, port 5901, exposes Prometheus metrics.
+3. **Admin API**: `tokio::spawn(api::serve(config_client, admin_listen))`, listens on the address from `gateway.admin_listen` (default `127.0.0.1:12001`, loopback-only; serves `/configclient`, `/api/v1/server-info`, and other sensitive endpoints).
+4. **Probe server**: `tokio::spawn(api::serve_probe_with_shutdown(config_client, probe_listen, ...))`, listens on the address from `gateway.probe_listen` (default `0.0.0.0:12000`); serves `/health` and `/ready` only; binds all interfaces so kubelet can reach the pod IP. Not included in the gateway Service.
+5. **Metrics API**: `tokio::spawn(metrics::serve(12090))`, port 12090, exposes Prometheus metrics.
 
 ### Step 9: Wait for all caches to be ready
 

@@ -216,9 +216,9 @@ impl AccessLogClient {
         Self::new(format!("http://{}:{}", host, port))
     }
 
-    /// Create with default gateway admin port (5810)
+    /// Create with default gateway admin port (12001)
     pub fn default_gateway() -> Self {
-        Self::from_host_port("127.0.0.1", 5810)
+        Self::from_host_port("127.0.0.1", 12001)
     }
 
     /// Check if integration testing mode is enabled

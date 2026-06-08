@@ -35,9 +35,9 @@ skipped; validation is lazy (401 = unknown token, 403 = permission denied).
 
 | Target | Component | Default Port | Supported Commands | Description |
 |--------|----------|-------------|-------------------|-------------|
-| `center` | Controller/ConfCenter | 5800 | get, apply, delete, reload | Full CRUD operations |
-| `server` | Controller/ConfigServer | 5800 | get (read-only) | View ConfigServer cache |
-| `client` | Gateway/ConfigClient | 5810 | get (read-only) | View Gateway cache |
+| `center` | Controller/ConfCenter | 12101 | get, apply, delete, reload | Full CRUD operations |
+| `server` | Controller/ConfigServer | 12101 | get (read-only) | View ConfigServer cache |
+| `client` | Gateway/ConfigClient | 12001 | get (read-only) | View Gateway cache |
 
 ### Usage Examples
 
@@ -53,7 +53,7 @@ edgion-cli -t server get httproute -n prod
 
 # client - view Gateway's ConfigClient cache
 edgion-cli -t client get httproute
-edgion-cli -t client --server http://gateway:5810 get service -n default
+edgion-cli -t client --server http://gateway:12001 get service -n default
 ```
 
 ## Command Reference
@@ -265,9 +265,9 @@ Based on the target type, `edgion-cli` uses the following default connections:
 
 | Target | Default Address |
 |--------|----------------|
-| center | http://localhost:5800 |
-| server | http://localhost:5800 |
-| client | http://localhost:5810 |
+| center | http://localhost:12101 |
+| server | http://localhost:12101 |
+| client | http://localhost:12001 |
 
 ### Custom Connections
 
@@ -275,10 +275,10 @@ Use the `--server` option to specify a server address:
 
 ```bash
 # Connect to a remote Controller
-edgion-cli --server http://controller.example.com:5800 get httproute
+edgion-cli --server http://controller.example.com:12101 get httproute
 
 # Connect to a remote Gateway
-edgion-cli -t client --server http://gateway.example.com:5810 get service
+edgion-cli -t client --server http://gateway.example.com:12001 get service
 ```
 
 ## Output Formats
@@ -315,14 +315,14 @@ Extended table display with additional fields.
 If the connection fails, `edgion-cli` displays detailed error information and hints:
 
 ```
-Error: Request to http://localhost:5800/api/v1/namespaced/httproute failed
+Error: Request to http://localhost:12101/api/v1/namespaced/httproute failed
 
 Connection failed:
   - Is the controller running?
   - Check if the server address is correct
-  - Try: curl -v http://localhost:5800/api/v1/namespaced/httproute
+  - Try: curl -v http://localhost:12101/api/v1/namespaced/httproute
 
-Hint: edgion-cli is trying to connect to: http://localhost:5800
+Hint: edgion-cli is trying to connect to: http://localhost:12101
       Target: Center (controller)
       Use --server to specify a different address
 ```

@@ -27,7 +27,7 @@ IMAGE_CONFIG_FILE="${IMAGE_CONFIG_FILE:-$SCRIPT_DIR/conf.env}"
 STATE_NAMESPACE="${STATE_NAMESPACE:-edgion-system}"
 STATE_CONFIGMAP_NAME="${STATE_CONFIGMAP_NAME:-edgion-k8s-integration-state}"
 
-CONTROLLER_ADMIN_URL="${EDGION_CONTROLLER_ADMIN_URL:-http://edgion-controller.edgion-system.svc.cluster.local:5800}"
+CONTROLLER_ADMIN_URL="${EDGION_CONTROLLER_ADMIN_URL:-http://edgion-controller.edgion-system.svc.cluster.local:12101}"
 
 START_FROM="${START_FROM:-}"
 ONLY_RESOURCE=""
@@ -817,12 +817,12 @@ get_server_id() {
 
 # Fetch the Gateway's current server_id.
 #
-# The Gateway admin API (port 5810) is loopback-only and dropped from the Gateway
+# The Gateway admin API (port 12001) is loopback-only and dropped from the Gateway
 # Service, so it cannot be reached over Service DNS from the host. The Gateway image
 # ships no curl/wget either, so a `kubectl exec ... curl` is not possible. Instead we
 # open a short-lived port-forward to the Gateway Pod and curl it on 127.0.0.1.
 # Gateway is replicas:1 and this suite is sequential. We request an ephemeral local
-# port (`:5810`) and parse the chosen port from the port-forward output so a leaked
+# port (`:12001`) and parse the chosen port from the port-forward output so a leaked
 # forward from a prior run cannot cause a fixed-port collision. The PID is tracked in
 # `_PF_PIDS` so the top-level trap reaps it even on interrupt.
 get_gateway_server_id() {
@@ -836,12 +836,12 @@ get_gateway_server_id() {
   fi
 
   pf_log="$(mktemp)"
-  kubectl port-forward -n edgion-system "pod/${gw_pod}" :5810 >"${pf_log}" 2>&1 &
+  kubectl port-forward -n edgion-system "pod/${gw_pod}" :12001 >"${pf_log}" 2>&1 &
   pf_pid="$!"
   _PF_PIDS+=("${pf_pid}")
 
   # Discover the ephemeral local port kubectl picked, e.g.
-  # "Forwarding from 127.0.0.1:54321 -> 5810".
+  # "Forwarding from 127.0.0.1:54321 -> 12001".
   local attempt
   local_port=""
   for attempt in $(seq 1 20); do

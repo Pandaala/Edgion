@@ -83,7 +83,7 @@ Logging infrastructure:
 
 ### Exposed port
 
-Metrics are exposed on port `:5901` via Axum routes:
+Metrics are exposed on port `:12090` via Axum routes:
 - `GET /metrics` — Prometheus-format metrics.
 - `GET /health` — health-check endpoint.
 
@@ -167,7 +167,7 @@ src/core/gateway/observe/
 │   ├── logger_factory.rs     # logger factory
 │   └── mod.rs
 └── metrics/                  # Prometheus metrics
-    ├── api.rs                # Axum HTTP endpoint (:5901)
+    ├── api.rs                # Axum HTTP endpoint (:12090)
     ├── registry.rs           # GatewayMetrics definition
     ├── test_metrics.rs       # test-only metric injection
     └── mod.rs

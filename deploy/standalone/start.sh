@@ -85,7 +85,7 @@ echo "  Controller PID: ${CONTROLLER_PID}"
 
 echo "Waiting for controller to be ready..."
 for i in $(seq 1 30); do
-  if curl -sf http://127.0.0.1:5800/health >/dev/null 2>&1; then
+  if curl -sf http://127.0.0.1:12100/health >/dev/null 2>&1; then
     echo "  Controller is ready."
     break
   fi
@@ -114,9 +114,10 @@ echo "  Gateway PID: ${GATEWAY_PID}"
 
 echo ""
 echo "Edgion is running."
-echo "  Controller admin: http://127.0.0.1:5800"
-echo "  Gateway admin:    http://127.0.0.1:5810"
-echo "  Gateway probe:    http://127.0.0.1:28000 (/health, /ready)"
+echo "  Controller admin: http://127.0.0.1:12101"
+echo "  Controller probe: http://127.0.0.1:12100 (/health, /ready)"
+echo "  Gateway admin:    http://127.0.0.1:12001"
+echo "  Gateway probe:    http://127.0.0.1:12000 (/health, /ready)"
 echo "  Gateway HTTP:     http://127.0.0.1:80"
 echo ""
 echo "PIDs: controller=${CONTROLLER_PID}, gateway=${GATEWAY_PID}"

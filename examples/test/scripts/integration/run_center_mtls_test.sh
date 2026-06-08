@@ -8,10 +8,10 @@
 #   3. plaintext_fail_close  — center with no TLS and no allow_plaintext exits non-zero
 #
 # Port allocation (different from run_center_test.sh to avoid collisions):
-#   center:       gRPC 50962, HTTP 5920
-#   controller-1: gRPC 50963, admin 5921  (east-cluster/ctrl-east)
-#   controller-2: gRPC 50964, admin 5922  (west-cluster/ctrl-west)
-#   controller-bad: gRPC 50965, admin 5923 (east-cluster/ctrl-east — bad cert)
+#   center:         gRPC 50962, HTTP 5920, probe 5929, metrics 5928
+#   controller-1:   gRPC 50963, admin 5921, probe 5934, metrics 5944  (east-cluster/ctrl-east)
+#   controller-2:   gRPC 50964, admin 5922, probe 5935, metrics 5945  (west-cluster/ctrl-west)
+#   controller-bad: gRPC 50965, admin 5923, probe 5936, metrics 5946  (east-cluster/ctrl-east — bad cert)
 #
 # Usage:
 #   ./run_center_mtls_test.sh             # Full run (build + test + cleanup)
@@ -31,14 +31,23 @@ CONF_SRC="$REPO_ROOT/examples/test/conf/Center"
 # Ports — distinct from run_center_test.sh (50952/5910/50953/50954/5911/5912)
 CENTER_GRPC_PORT=50962
 CENTER_HTTP_PORT=5920
+CENTER_PROBE_PORT=5929
+CENTER_METRICS_PORT=5928
 CTRL1_GRPC_PORT=50963
 CTRL1_ADMIN_PORT=5921
+CTRL1_PROBE_PORT=5934
+CTRL1_METRICS_PORT=5944
 CTRL2_GRPC_PORT=50964
 CTRL2_ADMIN_PORT=5922
+CTRL2_PROBE_PORT=5935
+CTRL2_METRICS_PORT=5945
 CTRL_BAD_GRPC_PORT=50965
 CTRL_BAD_ADMIN_PORT=5923
+CTRL_BAD_PROBE_PORT=5936
+CTRL_BAD_METRICS_PORT=5946
 
 CENTER_HTTP="http://127.0.0.1:${CENTER_HTTP_PORT}"
+CENTER_PROBE="http://127.0.0.1:${CENTER_PROBE_PORT}"
 
 AUTH_USER="admin"
 AUTH_PASS="test-center-mtls-pass"
@@ -275,6 +284,8 @@ cat > "$WORK_DIR/center.yaml" <<EOF
 server:
   grpc_addr: "0.0.0.0:${CENTER_GRPC_PORT}"
   http_addr: "0.0.0.0:${CENTER_HTTP_PORT}"
+  probe_addr: "0.0.0.0:${CENTER_PROBE_PORT}"
+  metrics_addr: "0.0.0.0:${CENTER_METRICS_PORT}"
 
 sync:
   command_timeout_secs: 10
@@ -304,7 +315,8 @@ EOF
 
 # ── Write controller configs ──────────────────────────────────────────────────
 write_controller_config() {
-  local idx="$1" grpc_port="$2" admin_port="$3" cluster="$4" ctrl_name="$5" cert_base="$6"
+  local idx="$1" grpc_port="$2" admin_port="$3" probe_port="$4" metrics_port="$5"
+  local cluster="$6" ctrl_name="$7" cert_base="$8"
   local dir="$WORK_DIR/ctrl${idx}"
   cat > "${dir}/controller.yaml" <<EOF
 work_dir: "${dir}"
@@ -312,6 +324,8 @@ work_dir: "${dir}"
 server:
   grpc_listen: "0.0.0.0:${grpc_port}"
   admin_listen: "0.0.0.0:${admin_port}"
+  probe_listen: "0.0.0.0:${probe_port}"
+  metrics_listen: "0.0.0.0:${metrics_port}"
 
 logging:
   log_dir: "${dir}/logs"
@@ -343,8 +357,8 @@ EOF
   mkdir -p "${dir}/logs"
 }
 
-write_controller_config 1 "$CTRL1_GRPC_PORT" "$CTRL1_ADMIN_PORT" "east-cluster" "ctrl-east" "ctrl-east"
-write_controller_config 2 "$CTRL2_GRPC_PORT" "$CTRL2_ADMIN_PORT" "west-cluster" "ctrl-west" "ctrl-west"
+write_controller_config 1 "$CTRL1_GRPC_PORT" "$CTRL1_ADMIN_PORT" "$CTRL1_PROBE_PORT" "$CTRL1_METRICS_PORT" "east-cluster" "ctrl-east" "ctrl-east"
+write_controller_config 2 "$CTRL2_GRPC_PORT" "$CTRL2_ADMIN_PORT" "$CTRL2_PROBE_PORT" "$CTRL2_METRICS_PORT" "west-cluster" "ctrl-west" "ctrl-west"
 
 # Bad controller: east-cluster/ctrl-bad with wrong trust domain cert.
 # name=ctrl-bad and cluster=east-cluster matches the cert path (east-cluster/ctrl-bad),
@@ -356,6 +370,8 @@ work_dir: "${WORK_DIR}/ctrl_bad"
 server:
   grpc_listen: "0.0.0.0:${CTRL_BAD_GRPC_PORT}"
   admin_listen: "0.0.0.0:${CTRL_BAD_ADMIN_PORT}"
+  probe_listen: "0.0.0.0:${CTRL_BAD_PROBE_PORT}"
+  metrics_listen: "0.0.0.0:${CTRL_BAD_METRICS_PORT}"
 
 logging:
   log_dir: "${WORK_DIR}/ctrl_bad/logs"
@@ -415,7 +431,7 @@ if ! kill -0 "$CENTER_PID" 2>/dev/null; then
   tail -20 "$WORK_DIR/logs/center.log" >&2
   exit 1
 fi
-wait_for_http "$CENTER_HTTP/health" 15
+wait_for_http "$CENTER_PROBE/health" 15
 
 # Check center log for mTLS enabled message
 if grep -q "Federation gRPC mTLS enabled" "$WORK_DIR/logs/center.log" 2>/dev/null; then
@@ -511,7 +527,7 @@ else
 fi
 
 # Assert center metrics show peer identity check ok
-metrics_out=$(curl -sf --max-time 10 "$CENTER_HTTP/metrics" 2>/dev/null || echo "")
+metrics_out=$(curl -sf --max-time 10 "http://127.0.0.1:${CENTER_METRICS_PORT}/metrics" 2>/dev/null || echo "")
 if [[ -n "$metrics_out" ]]; then
   # Look for edgion_fed_peer_identity_check_total{result="ok"} with a positive value
   ok_val=$(echo "$metrics_out" | grep 'edgion_fed_peer_identity_check_total' | grep 'result="ok"' | awk '{print $NF}' | head -1)
@@ -574,7 +590,7 @@ if [[ "${center_rejected:-0}" -ge 1 ]] 2>/dev/null; then
   pass "wrong_san_rejected/center_log_rejection"
 else
   # Also check metrics for mismatch
-  metrics_out=$(curl -sf --max-time 10 "$CENTER_HTTP/metrics" 2>/dev/null || echo "")
+  metrics_out=$(curl -sf --max-time 10 "http://127.0.0.1:${CENTER_METRICS_PORT}/metrics" 2>/dev/null || echo "")
   mismatch_val=$(echo "$metrics_out" | grep 'edgion_fed_peer_identity_check_total' | grep 'result="mismatch"' | awk '{print $NF}' | head -1 || true)
   if [[ -n "$mismatch_val" ]] && python3 -c "import sys; v=float('$mismatch_val'); sys.exit(0 if v>0 else 1)" 2>/dev/null; then
     pass "wrong_san_rejected/center_log_rejection"
@@ -590,7 +606,7 @@ fi
 log "watch-status after bad controller attempt: $out"
 
 # Sub-assert C: metrics show mismatch counter > 0
-metrics_out=$(curl -sf --max-time 10 "$CENTER_HTTP/metrics" 2>/dev/null || echo "")
+metrics_out=$(curl -sf --max-time 10 "http://127.0.0.1:${CENTER_METRICS_PORT}/metrics" 2>/dev/null || echo "")
 mismatch_val=$(echo "$metrics_out" | grep 'edgion_fed_peer_identity_check_total' | grep 'result="mismatch"' | awk '{print $NF}' | head -1 || true)
 if [[ -n "$mismatch_val" ]] && python3 -c "import sys; v=float('$mismatch_val'); sys.exit(0 if v>0 else 1)" 2>/dev/null; then
   pass "wrong_san_rejected/metrics_mismatch_counter"

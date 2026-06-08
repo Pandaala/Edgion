@@ -168,6 +168,8 @@ impl EdgionCenterCli {
         };
         let http_addr: std::net::SocketAddr = config.server.http_addr.parse()?;
         let grpc_addr: std::net::SocketAddr = config.server.grpc_addr.parse()?;
+        let probe_addr: std::net::SocketAddr = config.server.probe_addr.parse()?;
+        let metrics_addr: std::net::SocketAddr = config.server.metrics_addr.parse()?;
 
         tracing::info!(component = "center", grpc_addr = %grpc_addr, http_addr = %http_addr, "Starting edgion-center");
 
@@ -206,6 +208,7 @@ impl EdgionCenterCli {
         let auth_config = config.auth.clone();
         let local_auth_config = config.local_auth.clone();
 
+        let api_state_for_probe = api_state.clone();
         let http_handle = tokio::spawn(async move {
             let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
             // Authentication is mandatory; no-auth mode was removed. require_auth is
@@ -248,6 +251,32 @@ impl EdgionCenterCli {
             let app = crate::core::common::api::compose_admin_routes(base_router, auth_state, local_auth_intent);
             let listener = tokio::net::TcpListener::bind(http_addr).await.unwrap();
             axum::serve(listener, app).await.unwrap();
+        });
+
+        // Dedicated probe listener (liveness/readiness) — own socket, no auth.
+        let _probe_handle = tokio::spawn(async move {
+            let app = crate::core::center::api::create_probe_router(api_state_for_probe);
+            match tokio::net::TcpListener::bind(probe_addr).await {
+                Ok(listener) => {
+                    let _ = axum::serve(listener, app).await;
+                }
+                Err(e) => {
+                    tracing::error!(component = "center", error = %e, addr = %probe_addr, "Center probe listener failed to bind")
+                }
+            }
+        });
+
+        // Dedicated metrics listener (Prometheus scrape) — own socket, no auth.
+        let _metrics_handle = tokio::spawn(async move {
+            let app = crate::core::center::api::create_metrics_router();
+            match tokio::net::TcpListener::bind(metrics_addr).await {
+                Ok(listener) => {
+                    let _ = axum::serve(listener, app).await;
+                }
+                Err(e) => {
+                    tracing::error!(component = "center", error = %e, addr = %metrics_addr, "Center metrics listener failed to bind")
+                }
+            }
         });
 
         // Wait for any task to exit or Ctrl-C

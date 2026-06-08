@@ -17,17 +17,17 @@ use std::time::Duration;
 #[command(about = "Verify resource synchronization between controller and gateway")]
 struct Args {
     /// Controller admin API URL
-    #[arg(long, default_value = "http://127.0.0.1:5800")]
+    #[arg(long, default_value = "http://127.0.0.1:12101")]
     controller_url: String,
 
     /// Gateway admin API URL
-    #[arg(long, default_value = "http://127.0.0.1:5810")]
+    #[arg(long, default_value = "http://127.0.0.1:12001")]
     gateway_url: String,
 
     /// Gateway probe URL serving /health and /ready. These endpoints live on a
-    /// dedicated probe port (default 28000), separate from the admin API
-    /// (gateway_url, 5810) which serves the /configclient/* resource endpoints.
-    #[arg(long, default_value = "http://127.0.0.1:28000")]
+    /// dedicated probe port (default 12000), separate from the admin API
+    /// (gateway_url, 12001) which serves the /configclient/* resource endpoints.
+    #[arg(long, default_value = "http://127.0.0.1:12000")]
     gateway_probe_url: String,
 
     /// Output format (text or json)

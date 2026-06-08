@@ -7,7 +7,7 @@
 # its own teardown — this script only sequences them, captures their logs, and
 # emits a unified report.
 #
-# All children currently share controller/gateway ports (5800/5810) so they
+# All children currently share controller/gateway ports (12101/12001) so they
 # MUST run sequentially. test_file_watcher.sh and run_center_test.sh use
 # different ports but are still sequenced for predictable resource usage.
 #

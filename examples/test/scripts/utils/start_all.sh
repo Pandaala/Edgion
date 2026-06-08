@@ -47,7 +47,8 @@ GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.yaml"
 
 # serviceport
 TEST_SERVER_HTTP_PORT=30001
-CONTROLLER_ADMIN_PORT=5800
+CONTROLLER_ADMIN_PORT=12101
+CONTROLLER_PROBE_PORT="${CONTROLLER_PROBE_PORT:-12100}"
 GATEWAY_HTTP_PORT=10080
 
 # =============================================================================
@@ -258,7 +259,7 @@ start_controller() {
     fi
     
     # healthCheck
-    if ! wait_for_health "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/health" "edgion-controller" 10; then
+    if ! wait_for_health "http://127.0.0.1:${CONTROLLER_PROBE_PORT}/health" "edgion-controller" 10; then
         log_error "edgion-controller healthCheckfailed"
         exit 1
     fi

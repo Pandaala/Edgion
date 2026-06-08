@@ -26,9 +26,9 @@ fn build_list_url_with_pagination(base: &str, limit: Option<u32>, continue_token
 }
 
 /// Default server ports for different targets
-const DEFAULT_PORT_CENTER: u16 = 5800;
-const DEFAULT_PORT_SERVER: u16 = 5800;
-const DEFAULT_PORT_CLIENT: u16 = 5810;
+const DEFAULT_PORT_CENTER: u16 = 12101; // Controller ConfCenter CRUD API
+const DEFAULT_PORT_SERVER: u16 = 12101; // Controller ConfigServer cache
+const DEFAULT_PORT_CLIENT: u16 = 12001; // Gateway admin
 
 /// EdgionClient for interacting with Controller/Gateway APIs
 pub struct EdgionClient {

@@ -9,9 +9,13 @@
 
 server:
   # gRPC listen address for federation sync (Controller → Center)
-  grpc_addr: "0.0.0.0:50052"
+  grpc_addr: "0.0.0.0:12251"
   # HTTP listen address for Admin API
-  http_addr: "0.0.0.0:5810"
+  http_addr: "0.0.0.0:12201"
+  # Liveness/readiness probe listen address (serves /health and /ready only)
+  probe_addr: "0.0.0.0:12200"
+  # Prometheus metrics listen address (independent listener)
+  metrics_addr: "0.0.0.0:12290"
 
 sync:
   # How often to send ListRequest to each controller (seconds, default: 300 = 5min)

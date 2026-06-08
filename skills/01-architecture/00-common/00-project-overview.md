@@ -14,8 +14,10 @@ flowchart TD
 
     subgraph Controller["edgion-controller"]
         CC["ConfCenter\n(File/K8s)"] --> WQ["Workqueue\n(per-kind)"] --> RP["ResourceProcessor\n(validate/preparse/parse)"]
-        AdminCtrl["Admin API (:5800)"]
-        SyncServer["ConfigSyncServer\n(gRPC :50051)"]
+        AdminCtrl["Admin API (:12101)"]
+        ProbeCtrl["Probe (:12100)"]
+        MetricsCtrl["Metrics (:12190)"]
+        SyncServer["ConfigSyncServer\n(gRPC :12151)"]
     end
 
     SyncServer -- "gRPC Watch/List" --> SyncClient
@@ -35,8 +37,8 @@ flowchart TD
             ProxyHttp --- Logging
             StreamRoutes["TCP/UDP/TLS Routes"]
         end
-        AdminGw["Admin API (:5810 default)"]
-        MetricsGw["Metrics API (:5901)"]
+        AdminGw["Admin API (:12001 default)"]
+        MetricsGw["Metrics API (:12090)"]
     end
 ```
 

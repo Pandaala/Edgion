@@ -26,7 +26,7 @@
 #
 # Environment:
 #   EDGION_WORK_DIR   — overrides the work directory detection (used by auto_auth)
-#   CONTROLLER_URL    — default: http://127.0.0.1:5800
+#   CONTROLLER_URL    — default: http://127.0.0.1:12101
 # =============================================================================
 set -euo pipefail
 
@@ -48,8 +48,9 @@ else
 fi
 
 CLI="${BIN_DIR}/edgion-cli"
-CONTROLLER_URL="${CONTROLLER_URL:-http://127.0.0.1:5800}"
-CONTROLLER_ADMIN_PORT=5800
+CONTROLLER_URL="${CONTROLLER_URL:-http://127.0.0.1:12101}"
+CONTROLLER_PROBE_URL="${CONTROLLER_PROBE_URL:-http://127.0.0.1:12100}"
+CONTROLLER_ADMIN_PORT=12101
 
 # ---------------------------------------------------------------------------
 # Colours
@@ -225,9 +226,9 @@ stop_services() {
 wait_for_controller() {
     local timeout=30
     local elapsed=0
-    log_info "Waiting for controller at $CONTROLLER_URL..."
+    log_info "Waiting for controller at $CONTROLLER_PROBE_URL..."
     while [ "$elapsed" -lt "$timeout" ]; do
-        if curl -sf "${CONTROLLER_URL}/health" > /dev/null 2>&1; then
+        if curl -sf "${CONTROLLER_PROBE_URL}/health" > /dev/null 2>&1; then
             log_info "Controller ready"
             return 0
         fi

@@ -16,7 +16,7 @@ trap cleanup SIGTERM SIGINT
 
 case "${ALL_IN_ONE_MODE}" in
     controller-gateway)
-        echo "[all-in-one] starting edgion-controller (0.0.0.0:8080)..."
+        echo "[all-in-one] starting edgion-controller (admin 0.0.0.0:12101, probe 0.0.0.0:12100)..."
         /usr/local/bin/edgion-controller &
 
         echo "[all-in-one] starting edgion-gateway..."
@@ -26,7 +26,7 @@ case "${ALL_IN_ONE_MODE}" in
         nginx -g 'daemon off;' &
         ;;
     center)
-        echo "[all-in-one] starting edgion-center (internal :5811, dashboard on :5810)..."
+        echo "[all-in-one] starting edgion-center (admin 0.0.0.0:12201, probe 0.0.0.0:12200, dashboard on :5810)..."
         /usr/local/bin/edgion-center -c /etc/edgion/edgion-center.yaml &
 
         echo "[all-in-one] starting nginx (dashboard on :5810)..."

@@ -46,10 +46,16 @@ spec:
           done
         ports:
         - name: grpc
-          containerPort: 50051
+          containerPort: 12151
           protocol: TCP
         - name: http
-          containerPort: 5800
+          containerPort: 12101
+          protocol: TCP
+        - name: probe
+          containerPort: 12100
+          protocol: TCP
+        - name: metrics
+          containerPort: 12190
           protocol: TCP
         env:
         - name: RUST_LOG

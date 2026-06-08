@@ -22,7 +22,7 @@ use std::time::Duration;
 #[command(about = "Validate that all YAML configs are loaded by controller")]
 struct Args {
     /// Controller admin API URL
-    #[arg(long, default_value = "http://127.0.0.1:5800")]
+    #[arg(long, default_value = "http://127.0.0.1:12101")]
     controller_url: String,
 
     /// Config directory to validate

@@ -52,7 +52,7 @@ center:
 
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   name: "ctrl-1"
   cluster: "prod"
   security:
@@ -71,7 +71,7 @@ center:
 
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   name: "ctrl-1"
   cluster: "prod"
   security:
@@ -98,7 +98,7 @@ center:
 
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   name: "ctrl-1"
   cluster: "prod"
   security:
@@ -125,7 +125,7 @@ center:
 
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   name: "ctrl-1"
   cluster: "prod"
   security:
@@ -147,7 +147,7 @@ center:
 
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   name: "ctrl-1"
   cluster: "prod"
   security:

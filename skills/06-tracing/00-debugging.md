@@ -42,7 +42,7 @@ Symptoms:
 - Retry count differs from expectation
 
 Use first:
-- `http://127.0.0.1:5901/metrics`
+- `http://127.0.0.1:12090/metrics`
 - `MetricsClient`
 - `resource_diff`
 
@@ -85,24 +85,26 @@ This will:
 ### Controller
 
 ```bash
-curl -sf http://127.0.0.1:5800/health
-curl -sf http://127.0.0.1:5800/ready
-curl -sf http://127.0.0.1:5800/api/v1/server-info
+# health/ready are on the dedicated probe port 12100; metrics on 12190; admin/business on 12101
+curl -sf http://127.0.0.1:12100/health
+curl -sf http://127.0.0.1:12100/ready
+curl -sf http://127.0.0.1:12190/metrics
+curl -sf http://127.0.0.1:12101/api/v1/server-info
 ```
 
 ### Gateway
 
 ```bash
-curl -sf http://127.0.0.1:28000/health
-curl -sf http://127.0.0.1:28000/ready
-curl -sf http://127.0.0.1:5810/api/v1/server-info
-curl -sf http://127.0.0.1:5901/health
+curl -sf http://127.0.0.1:12000/health
+curl -sf http://127.0.0.1:12000/ready
+curl -sf http://127.0.0.1:12001/api/v1/server-info
+curl -sf http://127.0.0.1:12090/metrics
 ```
 
 Things to remember:
-- The Gateway probe port (liveness/readiness) is `28000` (default `0.0.0.0:28000`), configurable via `gateway.probe_listen` in the config file or `--probe-listen` on the command line
-- The Gateway Admin API default port is `5810` (loopback-only), configurable via `gateway.admin_listen` or `--admin-listen`; serves `/configclient`, `/api/v1/server-info`, and other internal endpoints
-- The Gateway Metrics API port is fixed at `5901`
+- The Gateway probe port (liveness/readiness) is `12000` (default `0.0.0.0:12000`), configurable via `gateway.probe_listen` in the config file or `--probe-listen` on the command line
+- The Gateway Admin API default port is `12001` (loopback-only), configurable via `gateway.admin_listen` or `--admin-listen`; serves `/configclient`, `/api/v1/server-info`, and other internal endpoints
+- The Gateway Metrics API port is `12090` (independent listener)
 
 ## Step 2: use the center / server / client three views to locate the issue layer
 
@@ -133,8 +135,8 @@ Or specify the addresses:
 
 ```bash
 ./target/debug/examples/resource_diff \
-  --controller-url http://127.0.0.1:5800 \
-  --gateway-url http://127.0.0.1:5810
+  --controller-url http://127.0.0.1:12101 \
+  --gateway-url http://127.0.0.1:12001
 ```
 
 ## Step 3: check key Admin APIs
@@ -152,8 +154,8 @@ Examples (all Controller-side endpoints require a Bearer token when authenticati
 
 ```bash
 TOKEN=$(cat ~/.edgion/token)
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5800/configserver/httproute/list | jq .
-curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:5800/configserver/httproute?namespace=default&name=my-route" | jq .
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:12101/configserver/httproute/list | jq .
+curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:12101/configserver/httproute?namespace=default&name=my-route" | jq .
 ```
 
 ### Gateway side
@@ -166,8 +168,8 @@ curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:5800/configserver/ht
 Examples:
 
 ```bash
-curl -s http://127.0.0.1:5810/configclient/httproute/list | jq .
-curl -s http://127.0.0.1:5810/api/v1/debug/store-stats | jq .
+curl -s http://127.0.0.1:12001/configclient/httproute/list | jq .
+curl -s http://127.0.0.1:12001/api/v1/debug/store-stats | jq .
 ```
 
 `store-stats` is especially good for seeing:
@@ -186,8 +188,8 @@ Prerequisite: the Gateway must start with `--integration-testing-mode`.
 2. Then query:
 
 ```bash
-curl -s http://127.0.0.1:5810/api/v1/testing/status | jq .
-curl -s http://127.0.0.1:5810/api/v1/testing/access-log/<trace-id> | jq .
+curl -s http://127.0.0.1:12001/api/v1/testing/status | jq .
+curl -s http://127.0.0.1:12001/api/v1/testing/access-log/<trace-id> | jq .
 ```
 
 ### Focus on these fields
@@ -209,7 +211,7 @@ A ready-made client on the code side:
 The metrics service is at:
 
 ```bash
-curl -s http://127.0.0.1:5901/metrics
+curl -s http://127.0.0.1:12090/metrics
 ```
 
 Good for verifying:

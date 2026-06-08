@@ -22,9 +22,9 @@ description: Full schema for the edgion-gateway YAML configuration.
 work_dir: "."
 
 gateway:
-  server_addr: "http://127.0.0.1:50051"   # Required: Controller gRPC address
-  admin_listen: "127.0.0.1:5810"          # Admin API listen address (default: 127.0.0.1:5810, loopback-only)
-  # probe_listen: "0.0.0.0:28000"         # Liveness/readiness probe port (default: 0.0.0.0:28000); binds 0.0.0.0 so kubelet can reach the pod IP
+  server_addr: "http://127.0.0.1:12151"   # Required: Controller gRPC address
+  admin_listen: "127.0.0.1:12001"         # Admin API listen address (default: 127.0.0.1:12001, loopback-only)
+  # probe_listen: "0.0.0.0:12000"         # Liveness/readiness probe port (default: 0.0.0.0:12000); binds 0.0.0.0 so kubelet can reach the pod IP
 
 # ─── gRPC channel security (optional mTLS) ───
 # conf_sync_security:
@@ -114,15 +114,15 @@ access_log_sensitive:
 
 | Port | Default bind | Purpose |
 |------|-------------|---------|
-| Admin | `127.0.0.1:5810` | Admin API (`/configclient`, `/api/v1/server-info`) — loopback-only |
-| Probe | `0.0.0.0:28000` | Liveness/readiness (`/health`, `/ready`) — outward-facing, kubelet probes pod IP |
-| Metrics | `0.0.0.0:5901` | Prometheus metrics — fixed, outward-facing |
+| Admin | `127.0.0.1:12001` | Admin API (`/configclient`, `/api/v1/server-info`) — loopback-only |
+| Probe | `0.0.0.0:12000` | Liveness/readiness (`/health`, `/ready`) — outward-facing, kubelet probes pod IP |
+| Metrics | `0.0.0.0:12090` | Prometheus metrics — independent listener, outward-facing |
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `server_addr` | `String` | **Required** | Controller gRPC address |
-| `admin_listen` | `String` | `127.0.0.1:5810` | Admin API listen address. Defaults to loopback — sensitive endpoints not reachable cluster-wide. Remote access: `kubectl port-forward pod/<name> 5810:5810`. |
-| `probe_listen` | `String` | `0.0.0.0:28000` | Probe listen address. Serves `/health` and `/ready` only. Binds all interfaces so kubelet can probe the pod IP directly. Not included in the gateway Service. |
+| `admin_listen` | `String` | `127.0.0.1:12001` | Admin API listen address. Defaults to loopback — sensitive endpoints not reachable cluster-wide. Remote access: `kubectl port-forward pod/<name> 12001:12001`. |
+| `probe_listen` | `String` | `0.0.0.0:12000` | Probe listen address. Serves `/health` and `/ready` only. Binds all interfaces so kubelet can probe the pod IP directly. Not included in the gateway Service. |
 
 ### conf_sync_security.tls
 

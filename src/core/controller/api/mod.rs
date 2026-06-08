@@ -318,6 +318,41 @@ async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> Json<A
 
 // ============= Router Setup =============
 
+/// Build the shared admin state. Used by the admin router and the dedicated
+/// probe listener (readiness reads the same `conf_mgr`-backed state).
+pub fn build_admin_state(
+    conf_mgr: Arc<ConfMgr>,
+    schema_validator: Arc<SchemaValidator>,
+    config_file: Option<String>,
+    authorizer: Arc<crate::core::controller::authz::Authorizer>,
+    center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
+) -> Arc<AdminState> {
+    Arc::new(AdminState {
+        conf_mgr,
+        schema_validator,
+        config_file,
+        authorizer,
+        center_reload_tx,
+    })
+}
+
+/// Dedicated liveness/readiness router (own listener, no auth, no business routes).
+pub fn create_probe_router(state: Arc<AdminState>) -> Router {
+    Router::new()
+        .route("/health", get(health_check))
+        .route("/ready", get(readiness_check))
+        .with_state(state)
+}
+
+/// Dedicated Prometheus metrics router. Mounts the Controller-specific handler
+/// (`status_metrics::metrics_handler`) so the `resource_abnormal` block is preserved.
+pub fn create_metrics_router() -> Router {
+    Router::new().route(
+        "/metrics",
+        get(crate::core::controller::observe::status_metrics::metrics_handler),
+    )
+}
+
 /// Create the admin API router with unified K8s-style endpoints
 pub fn create_admin_router(
     conf_mgr: Arc<ConfMgr>,
@@ -326,13 +361,7 @@ pub fn create_admin_router(
     authorizer: Arc<crate::core::controller::authz::Authorizer>,
     center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
 ) -> Router {
-    let admin_state = Arc::new(AdminState {
-        conf_mgr,
-        schema_validator,
-        config_file,
-        authorizer,
-        center_reload_tx,
-    });
+    let admin_state = build_admin_state(conf_mgr, schema_validator, config_file, authorizer, center_reload_tx);
 
     // Write routes — gated by readiness middleware so requests arriving during
     // controller init / reload are rejected with 503 instead of racing the
@@ -362,15 +391,6 @@ pub fn create_admin_router(
         ));
 
     let mut router = Router::new()
-        // Health check (liveness)
-        .route("/health", get(health_check))
-        // Readiness check (ready to serve traffic - ConfigServer ready)
-        .route("/ready", get(readiness_check))
-        // Prometheus scrape endpoint (auth-skipped, K8s controller-manager convention)
-        .route(
-            "/metrics",
-            get(crate::core::controller::observe::status_metrics::metrics_handler),
-        )
         // Cross-namespace query - List all resources of a kind
         .route(
             "/api/v1/namespaced/{kind}",

@@ -8,13 +8,13 @@ Edgion exposes Prometheus metrics from the Gateway, Controller, and Center proce
 
 ## Overview
 
-Each process exposes a `/metrics` endpoint in Prometheus text format. The Gateway uses an independent listener; the Controller and Center mount `/metrics` on their existing admin/API port.
+Each process exposes a `/metrics` endpoint in Prometheus text format on its own independent listener. For the Controller and Center this is a dedicated metrics port (`12190` / `12290`), separate from the admin/API port — `/metrics` is no longer served on the admin port.
 
 | Process | Default endpoint | Path | Auth |
 |---------|------------------|------|------|
-| Gateway | `:5901` | `/metrics` | None (independent listener) |
-| Controller | Admin API (default `:8080`) | `/metrics` | None (skipped, like the K8s controller-manager) |
-| Center | Admin API (default `:5810`) | `/metrics` | None (skipped) |
+| Gateway | `:12090` | `/metrics` | None (independent listener) |
+| Controller | `:12190` | `/metrics` | None (independent listener; separate from admin port `12101`) |
+| Center | `:12290` | `/metrics` | None (independent listener; separate from admin port `12201`) |
 
 `/metrics` deliberately skips authentication, following the Kubernetes controller-manager convention. The output is aggregated numbers only — it never contains request bodies, and by default it does not contain resource names (see the cardinality notes below).
 
@@ -48,11 +48,15 @@ scrape_configs:
   - job_name: edgion-gateway
     metrics_path: /metrics
     static_configs:
-      - targets: ["10.0.0.10:5901"]
+      - targets: ["10.0.0.10:12090"]
   - job_name: edgion-controller
     metrics_path: /metrics
     static_configs:
-      - targets: ["10.0.0.11:8080"]
+      - targets: ["10.0.0.11:12190"]   # dedicated metrics listener, not the admin port
+  - job_name: edgion-center
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["10.0.0.12:12290"]   # dedicated metrics listener, not the admin port
 ```
 
 ## Gateway metrics
@@ -109,7 +113,7 @@ Like `backend_requests`, the histogram's labels are individually toggleable (gat
 
 ## Controller metrics
 
-The Controller exposes control-plane metrics under the `edgion_controller_*` prefix on its admin `/metrics` endpoint.
+The Controller exposes control-plane metrics under the `edgion_controller_*` prefix on its dedicated metrics listener (`:12190`), separate from the admin port (`:12101`).
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|

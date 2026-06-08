@@ -52,6 +52,8 @@ cat > "$TMPDIR/center.yaml" <<EOF
 server:
   http_addr: "127.0.0.1:58100"
   grpc_addr: "127.0.0.1:58110"
+  probe_addr: "127.0.0.1:58101"
+  metrics_addr: "127.0.0.1:58109"
 database:
   enabled: false
 sync:
@@ -70,7 +72,7 @@ EOF
 cd "$REPO_ROOT"
 
 # Port precheck: avoid unclear startup errors caused by leftover processes or parallel CI holding the port.
-for port in 58100 58110; do
+for port in 58100 58101 58109 58110; do
     if lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
         echo "FAIL: port $port already in use; stop the conflicting process or rerun later"
         lsof -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -3
@@ -97,7 +99,7 @@ trap cleanup EXIT
 # Wait for the HTTP port to become ready
 READY=false
 for _ in $(seq 1 20); do
-    if curl -sf http://127.0.0.1:58100/health > /dev/null 2>&1; then
+    if curl -sf http://127.0.0.1:58101/health > /dev/null 2>&1; then
         READY=true
         break
     fi
@@ -116,7 +118,7 @@ if ! $READY; then
 fi
 
 echo "[1/4] Testing /health..."
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:58100/health)
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:58101/health)
 if [ "$STATUS" != "200" ]; then
     echo "FAIL: /health returned $STATUS (expected 200)"
     cat "$TMPDIR/center.log"

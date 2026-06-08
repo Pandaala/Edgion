@@ -40,7 +40,7 @@ which is exactly where Option B applies the projection.
 ## Relationship to the broader admin-API hardening
 
 This is the narrow, targeted fix for the **private-key disclosure** consequence only.
-The general "gateway admin API binds `0.0.0.0:5810` with no auth and unconditionally
+The general "gateway admin API binds `0.0.0.0:12001` with no auth and unconditionally
 mounts `/configclient/*`" problem (companion finding `types-misc-01`) is tracked
 separately in `tasks/todo/gateway-admin-api-harden.md` (move sensitive endpoints behind
 the `is_integration_testing_mode()` gate + default the bind to `127.0.0.1`). The secret

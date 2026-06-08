@@ -13,8 +13,10 @@ data:
     work_dir: /usr/local/edgion
 
     server:
-      grpc_listen: 0.0.0.0:50051
-      admin_listen: 0.0.0.0:5800
+      grpc_listen: 0.0.0.0:12151
+      admin_listen: 0.0.0.0:12101
+      probe_listen: 0.0.0.0:12100
+      metrics_listen: 0.0.0.0:12190
 
     logging:
       log_dir: logs

@@ -24,11 +24,29 @@ spec:
         - "/usr/local/edgion/config/edgion-controller.yaml"
         ports:
         - name: grpc
-          containerPort: 50051
+          containerPort: 12151
           protocol: TCP
         - name: http
-          containerPort: 5800
+          containerPort: 12101
           protocol: TCP
+        - name: probe
+          containerPort: 12100
+          protocol: TCP
+        - name: metrics
+          containerPort: 12190
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 12100
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 12100
+          initialDelaySeconds: 5
+          periodSeconds: 10
         env:
         - name: RUST_LOG
           value: "info"

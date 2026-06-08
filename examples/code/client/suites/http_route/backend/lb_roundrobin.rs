@@ -62,7 +62,7 @@ impl LBRoundRobinTestSuite {
 
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                    let metrics_client = MetricsClient::from_host_port(&ctx.target_host, 5901);
+                    let metrics_client = MetricsClient::from_host_port(&ctx.target_host, 12090);
                     match metrics_client.analyze_lb_distribution("lb-rr-test").await {
                         Ok(analysis) => {
                             if analysis.total_requests == 0 {
@@ -145,7 +145,7 @@ impl LBRoundRobinTestSuite {
 
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                    let metrics_client = MetricsClient::from_host_port(&ctx.target_host, 5901);
+                    let metrics_client = MetricsClient::from_host_port(&ctx.target_host, 12090);
                     match metrics_client.analyze_lb_distribution("lb-rr-test").await {
                         Ok(analysis) => {
                             if analysis.total_requests == 0 {

@@ -62,13 +62,14 @@ export EDGION_ADMIN_JWT_SECRET="${EDGION_ADMIN_JWT_SECRET:-edgion-integration-te
 
 # serviceport
 TEST_SERVER_HTTP_PORT=30001
-CONTROLLER_ADMIN_PORT=5800
-CONTROLLER_GRPC_PORT="${EDGION_TEST_CONTROLLER_GRPC_PORT:-50051}"
+CONTROLLER_ADMIN_PORT=12101
+CONTROLLER_PROBE_PORT="${CONTROLLER_PROBE_PORT:-12100}"
+CONTROLLER_GRPC_PORT="${EDGION_TEST_CONTROLLER_GRPC_PORT:-12151}"
 # Gateway portuse http Testsuiteport（31000）
 GATEWAY_HTTP_PORT=31000
-GATEWAY_ADMIN_PORT="${EDGION_TEST_GATEWAY_ADMIN_PORT:-5810}"
+GATEWAY_ADMIN_PORT="${EDGION_TEST_GATEWAY_ADMIN_PORT:-12001}"
 export EDGION_GATEWAY_ADMIN_URL="http://127.0.0.1:${GATEWAY_ADMIN_PORT}"
-GATEWAY_PROBE_PORT="${GATEWAY_PROBE_PORT:-28000}"
+GATEWAY_PROBE_PORT="${GATEWAY_PROBE_PORT:-12000}"
 
 # LoadTestsuite（default，Loadall）
 SUITES=""
@@ -407,7 +408,7 @@ start_controller() {
     fi
     
     # healthCheck
-    if ! wait_for_health "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/health" "edgion-controller" 10; then
+    if ! wait_for_health "http://127.0.0.1:${CONTROLLER_PROBE_PORT}/health" "edgion-controller" 10; then
         log_error "edgion-controller healthCheckfailed"
         exit 1
     fi
@@ -442,7 +443,7 @@ start_gateway() {
     local pid=$!
     echo $pid > "${PID_DIR}/gateway.pid"
     
-    # Wait for Gateway Admin port (default 5810, overridable via EDGION_TEST_GATEWAY_ADMIN_PORT)
+    # Wait for Gateway Admin port (default 12001, overridable via EDGION_TEST_GATEWAY_ADMIN_PORT)
     if ! wait_for_port $GATEWAY_ADMIN_PORT "edgion-gateway" $pid 30; then
         log_error "edgion-gateway Startfailed，viewlog: ${LOG_DIR}/gateway.log"
         tail -20 "${LOG_DIR}/gateway.log" 2>/dev/null || true
@@ -869,7 +870,7 @@ main() {
     start_controller
     
     # :  ConfigServer 
-    if ! wait_for_ready "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/ready" "edgion-controller" 30; then
+    if ! wait_for_ready "http://127.0.0.1:${CONTROLLER_PROBE_PORT}/ready" "edgion-controller" 30; then
         log_error "edgion-controller ConfigServer "
         exit 1
     fi

@@ -11,16 +11,16 @@ edgion-cli is Edgion's command-line management tool, built on clap. It interacts
 
 | Target | Connection target | Default port | Capability | Data source |
 |--------|---------|---------|------|--------|
-| **center** (default) | Controller Admin API | :5800 | Full CRUD + reload | ConfCenter (configuration center) |
-| **server** | Controller Admin API | :5800 | Read-only query | ServerCache (gRPC server-side cache) |
-| **client** | Gateway Admin API | :5810 | Read-only query | ClientCache (gRPC client-side cache) |
+| **center** (default) | Controller Admin API | :12101 | Full CRUD + reload | ConfCenter (configuration center) |
+| **server** | Controller Admin API | :12101 | Read-only query | ServerCache (gRPC server-side cache) |
+| **client** | Gateway Admin API | :12001 | Read-only query | ClientCache (gRPC client-side cache) |
 
 ```
                     edgion-cli
                    ┌──────────┐
-                   │ -t center│──── HTTP :5800 ──► Controller ConfCenter (read/write)
-                   │ -t server│──── HTTP :5800 ──► Controller ServerCache (read-only)
-                   │ -t client│──── HTTP :5810 ──► Gateway    ClientCache (read-only)
+                   │ -t center│──── HTTP :12101 ──► Controller ConfCenter (read/write)
+                   │ -t server│──── HTTP :12101 ──► Controller ServerCache (read-only)
+                   │ -t client│──── HTTP :12001 ──► Gateway    ClientCache (read-only)
                    └──────────┘
 ```
 
@@ -78,7 +78,7 @@ The HTTP client implementation; encapsulates the HTTP communication logic with C
 ```rust
 pub struct EdgionClient {
     client: Client,         // reqwest HTTP client
-    base_url: String,       // Base URL (e.g., http://localhost:5800)
+    base_url: String,       // Base URL (e.g., http://localhost:12101)
     target: TargetType,     // Target type
     socket_path: Option<PathBuf>,  // Unix socket path (optional)
 }
@@ -86,7 +86,7 @@ pub struct EdgionClient {
 
 ### Connection methods
 
-- **HTTP**: the default; the port is chosen based on target type (center/server → 5800, client → 5810)
+- **HTTP**: the default; the port is chosen based on target type (center/server → 12101, client → 12001)
 - **Unix Socket**: specified via the `--socket` argument, suitable for local communication on the same node
 
 ### Error handling
@@ -142,7 +142,7 @@ edgion-cli -t client get httproute -o json | jq length
 | Argument | Short | Description |
 |------|--------|------|
 | `--target` | `-t` | Target mode: center (default), server, client |
-| `--server` | | Server address (e.g., `http://10.0.0.1:5800`) |
+| `--server` | | Server address (e.g., `http://10.0.0.1:12101`) |
 | `--socket` | | Unix socket path |
 | `--namespace` | `-n` | Namespace filter |
 | `--output` | `-o` | Output format: table, json, yaml, wide |

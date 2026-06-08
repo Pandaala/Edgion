@@ -53,13 +53,14 @@ CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.yaml"
 GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.yaml"
 
 # ── Ports ───────────────────────────────────────────────────────────────────
-CONTROLLER_ADMIN_PORT=5800
-GATEWAY_ADMIN_PORT=5810
+CONTROLLER_ADMIN_PORT=12101
+GATEWAY_ADMIN_PORT=12001
 ETCD_PORT=12379
 
 CONTROLLER_URL="http://127.0.0.1:${CONTROLLER_ADMIN_PORT}"
+CONTROLLER_PROBE_URL="${CONTROLLER_PROBE_URL:-http://127.0.0.1:12100}"
 GATEWAY_URL="http://127.0.0.1:${GATEWAY_ADMIN_PORT}"
-GATEWAY_PROBE_URL="${GATEWAY_PROBE_URL:-http://127.0.0.1:28000}"
+GATEWAY_PROBE_URL="${GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"
 
 # ── Working directory (timestamped, same pattern as start_all_with_conf.sh) ─
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -358,7 +359,7 @@ log_info "Controller PID: $(cat "${PID_DIR}/controller.pid")"
 
 # Wait for controller ready
 for i in $(seq 1 30); do
-    if curl -sf "${CONTROLLER_URL}/ready" > /dev/null 2>&1; then
+    if curl -sf "${CONTROLLER_PROBE_URL}/ready" > /dev/null 2>&1; then
         log_success "Controller ready (waited ${i}s)"
         break
     fi

@@ -20,10 +20,10 @@
 # Federation runs mTLS (SPIFFE peer-identity binding).
 #
 # Port allocation (all on 127.0.0.1, avoids loopback alias):
-#   center:       gRPC 50952, HTTP 5910
-#   controller-1: gRPC 50953, admin 5911  (cluster=east-cluster, name=ctrl-east)
-#   controller-2: gRPC 50954, admin 5912  (cluster=west-cluster, name=ctrl-west)
-#   controller-3: gRPC 50955, admin 5913  (cluster=silo-cluster,  name=ctrl-silo)
+#   center:       gRPC 50952, HTTP 5910, probe 5919, metrics 5918
+#   controller-1: gRPC 50953, admin 5911, probe 5931, metrics 5941  (cluster=east-cluster, name=ctrl-east)
+#   controller-2: gRPC 50954, admin 5912, probe 5932, metrics 5942  (cluster=west-cluster, name=ctrl-west)
+#   controller-3: gRPC 50955, admin 5913, probe 5933, metrics 5943  (cluster=silo-cluster,  name=ctrl-silo)
 #                 kill-switch test: started with center.enabled=false, never connects
 #
 # Test cases — RegionRoute (6):
@@ -73,15 +73,24 @@ CONF_SRC="$REPO_ROOT/examples/test/conf/Center"
 # Ports
 CENTER_GRPC_PORT=50952
 CENTER_HTTP_PORT=5910
+CENTER_PROBE_PORT=5919
+CENTER_METRICS_PORT=5918
 CTRL1_GRPC_PORT=50953
 CTRL1_ADMIN_PORT=5911
+CTRL1_PROBE_PORT=5931
+CTRL1_METRICS_PORT=5941
 CTRL2_GRPC_PORT=50954
 CTRL2_ADMIN_PORT=5912
+CTRL2_PROBE_PORT=5932
+CTRL2_METRICS_PORT=5942
 # controller-3: kill-switch test (center.enabled=false) + explicit-rbac test
 CTRL3_GRPC_PORT=50955
 CTRL3_ADMIN_PORT=5913
+CTRL3_PROBE_PORT=5933
+CTRL3_METRICS_PORT=5943
 
 CENTER_HTTP="http://127.0.0.1:${CENTER_HTTP_PORT}"
+CENTER_PROBE="http://127.0.0.1:${CENTER_PROBE_PORT}"
 CTRL1_HTTP="http://127.0.0.1:${CTRL1_ADMIN_PORT}"
 CTRL2_HTTP="http://127.0.0.1:${CTRL2_ADMIN_PORT}"
 
@@ -319,6 +328,8 @@ cat > "$WORK_DIR/center.yaml" <<EOF
 server:
   grpc_addr: "0.0.0.0:${CENTER_GRPC_PORT}"
   http_addr: "0.0.0.0:${CENTER_HTTP_PORT}"
+  probe_addr: "0.0.0.0:${CENTER_PROBE_PORT}"
+  metrics_addr: "0.0.0.0:${CENTER_METRICS_PORT}"
 
 sync:
   list_interval_secs: 5
@@ -349,16 +360,17 @@ local_auth:
 EOF
 
 # ── Write controller configs ─────────────────────────────────────────────────
-# write_controller_config IDX GRPC_PORT ADMIN_PORT CLUSTER CTRL_NAME [CENTER_ENABLED] [RBAC_YAML]
+# write_controller_config IDX GRPC_PORT ADMIN_PORT PROBE_PORT METRICS_PORT CLUSTER CTRL_NAME [CENTER_ENABLED] [RBAC_YAML]
 #
 # CENTER_ENABLED defaults to "true".  Pass "false" for the kill-switch test.
 # RBAC_YAML is an optional indented YAML block that is appended verbatim under
 # the "center:" key (must start with newline + 2-space indent per the YAML schema).
 # Pass "" to omit (use built-in default policy).
 write_controller_config() {
-  local idx="$1" grpc_port="$2" admin_port="$3" cluster="$4" ctrl_name="$5"
-  local center_enabled="${6:-true}"
-  local rbac_yaml="${7:-}"
+  local idx="$1" grpc_port="$2" admin_port="$3" probe_port="$4" metrics_port="$5"
+  local cluster="$6" ctrl_name="$7"
+  local center_enabled="${8:-true}"
+  local rbac_yaml="${9:-}"
   local dir="$WORK_DIR/ctrl${idx}"
   cat > "${dir}/controller.yaml" <<EOF
 work_dir: "${dir}"
@@ -366,6 +378,8 @@ work_dir: "${dir}"
 server:
   grpc_listen: "0.0.0.0:${grpc_port}"
   admin_listen: "0.0.0.0:${admin_port}"
+  probe_listen: "0.0.0.0:${probe_port}"
+  metrics_listen: "0.0.0.0:${metrics_port}"
 
 logging:
   log_dir: "${dir}/logs"
@@ -398,8 +412,8 @@ EOF
   mkdir -p "${dir}/logs"
 }
 
-write_controller_config 1 "$CTRL1_GRPC_PORT" "$CTRL1_ADMIN_PORT" "east-cluster" "ctrl-east"
-write_controller_config 2 "$CTRL2_GRPC_PORT" "$CTRL2_ADMIN_PORT" "west-cluster" "ctrl-west"
+write_controller_config 1 "$CTRL1_GRPC_PORT" "$CTRL1_ADMIN_PORT" "$CTRL1_PROBE_PORT" "$CTRL1_METRICS_PORT" "east-cluster" "ctrl-east"
+write_controller_config 2 "$CTRL2_GRPC_PORT" "$CTRL2_ADMIN_PORT" "$CTRL2_PROBE_PORT" "$CTRL2_METRICS_PORT" "west-cluster" "ctrl-west"
 
 # controller-3: kill-switch + explicit-deny-all rbac test.
 #
@@ -415,7 +429,7 @@ write_controller_config 2 "$CTRL2_GRPC_PORT" "$CTRL2_ADMIN_PORT" "west-cluster" 
 CTRL3_DENY_ALL_RBAC='
   rbac:
     allow: []'
-write_controller_config 3 "$CTRL3_GRPC_PORT" "$CTRL3_ADMIN_PORT" "silo-cluster" "ctrl-silo" \
+write_controller_config 3 "$CTRL3_GRPC_PORT" "$CTRL3_ADMIN_PORT" "$CTRL3_PROBE_PORT" "$CTRL3_METRICS_PORT" "silo-cluster" "ctrl-silo" \
   "false" "$CTRL3_DENY_ALL_RBAC"
 
 # ── Copy CRD schemas + test resources ────────────────────────────────────────
@@ -443,7 +457,7 @@ if ! kill -0 "$CENTER_PID" 2>/dev/null; then
   tail -20 "$WORK_DIR/logs/center.log" >&2
   exit 1
 fi
-wait_for_http "$CENTER_HTTP/health" 15
+wait_for_http "$CENTER_PROBE/health" 15
 
 # ── Login to center ──────────────────────────────────────────────────────────
 log "Logging in to center..."

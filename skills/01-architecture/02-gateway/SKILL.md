@@ -54,7 +54,7 @@ description: edgion-gateway data plane architecture — Pingora integration, rou
 │  ├── TCP/TLS Routes (per-listener routing)                   │
 │  └── UDP Routes (per-listener routing)                       │
 │                                                              │
-│  Admin API (:5810 default)   Metrics API (:5901)             │
+│  Admin API (:12001 default)  Probe (:12000)  Metrics (:12090) │
 │                                                              │
 │  Backends                                                    │
 │  ├── Service/EndpointSlice/Endpoint discovery                │

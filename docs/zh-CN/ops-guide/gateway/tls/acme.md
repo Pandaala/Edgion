@@ -280,7 +280,7 @@ kubectl annotate edgionacme example-acme -n production \
 > **需要认证**：所有 Controller Admin API 调用都需要 Bearer Token。将 `EDGION_TOKEN` 设置为 `edgion-cli gen-token` 生成的 token，或直接使用 `edgion-cli acme trigger`。详见[联邦 RBAC — CLI Token RBAC](../../federation-rbac.md#cli-token-rbac)。
 
 ```bash
-curl -X POST "http://<controller-admin>:8080/api/v1/services/acme/<namespace>/<name>/trigger" \
+curl -X POST "http://<controller-admin>:12101/api/v1/services/acme/<namespace>/<name>/trigger" \
   -H "Authorization: Bearer $EDGION_TOKEN"
 ```
 
@@ -474,13 +474,13 @@ kubectl annotate edgionacme example-acme -n default edgion.io/trigger="$(date +%
 Controller 的 Admin API 提供专用触发接口：
 
 ```bash
-curl -X POST "http://<controller-admin>:8080/api/v1/services/acme/<namespace>/<name>/trigger"
+curl -X POST "http://<controller-admin>:12101/api/v1/services/acme/<namespace>/<name>/trigger"
 ```
 
 示例：触发 `default` 命名空间下 `example-acme` 的 ACME 流程：
 
 ```bash
-curl -X POST "http://localhost:8080/api/v1/services/acme/default/example-acme/trigger"
+curl -X POST "http://localhost:12101/api/v1/services/acme/default/example-acme/trigger"
 ```
 
 返回示例：

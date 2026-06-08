@@ -220,8 +220,8 @@ impl BandwidthLimitTestSuite {
 
                     // Fetch metrics
                     // Use route name to filter since we don't have unique test key per request without dynamic config.
-                    // Fetch metrics from Gateway Metrics API (port 5901)
-                    let metrics_client = crate::metrics_helper::MetricsClient::from_host_port(&ctx.target_host, 5901);
+                    // Fetch metrics from Gateway Metrics API (port 12090)
+                    let metrics_client = crate::metrics_helper::MetricsClient::from_host_port(&ctx.target_host, 12090);
                     let metrics = metrics_client.fetch_backend_metrics().await;
 
                     if let Err(e) = metrics {

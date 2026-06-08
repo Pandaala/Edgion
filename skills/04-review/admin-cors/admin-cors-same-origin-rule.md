@@ -7,7 +7,7 @@ description: Use when reviewing Admin API CORS findings; documents why no CORS l
 
 ## Conclusion
 
-Edgion's Admin API (Controller `:5800` / Center `:5810`) **does not** attach a CORS layer. This is an **architectural decision**, not a missing config. If a review/audit report contains "Admin API CORS `allow_origin(Any)` is too open / should add allowlist" findings, treat them as "no code fix" unless a newly emerging cross-origin browser consumer can be pointed out.
+Edgion's Admin API (Controller `:12101` / Center `:12201`) **does not** attach a CORS layer. This is an **architectural decision**, not a missing config. If a review/audit report contains "Admin API CORS `allow_origin(Any)` is too open / should add allowlist" findings, treat them as "no code fix" unless a newly emerging cross-origin browser consumer can be pointed out.
 
 ## Reasons
 
@@ -17,7 +17,7 @@ The actual consumers of the Admin API and its deployment shape determine that CO
 - **Prometheus `/metrics` scraping**: server-to-server, does not involve browser CORS
 - **K8s `/health` `/ready` probes**: do not involve browser CORS
 - **`edgion-dashboard` (browser UI, repo `ws3/edgion-dashboard`)**:
-  - dev: Vite `server.proxy` proxies `/api`, `/health` to `localhost:5810`; the browser sees it as same-origin (see `edgion-dashboard/vite.config.ts`)
+  - dev: Vite `server.proxy` proxies `/api`, `/health` to `localhost:12101`; the browser sees it as same-origin (see `edgion-dashboard/vite.config.ts`)
   - prod: the dashboard build artifact is embedded in the Controller binary, same-origin with the Admin API (see `edgion-dashboard/README.md` "Production environment" section)
 
 There are 0 cross-origin browser consumers under the current deployment shape; attaching a CORS layer (whether permissive or allowlist) is preserving code and config surface for non-existent scenarios.

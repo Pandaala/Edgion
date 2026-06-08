@@ -40,9 +40,11 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 BIN_DIR="${PROJECT_ROOT}/target/debug"
 
 CONTROLLER_HOST="${EDGION_CONTROLLER_HOST:-127.0.0.1}"
-CONTROLLER_ADMIN_PORT="${EDGION_CONTROLLER_ADMIN_PORT:-5800}"
+CONTROLLER_ADMIN_PORT="${EDGION_CONTROLLER_ADMIN_PORT:-12101}"
 CONTROLLER_URL="http://${CONTROLLER_HOST}:${CONTROLLER_ADMIN_PORT}"
-CONTROLLER_GRPC_PORT="${EDGION_TEST_CONTROLLER_GRPC_PORT:-50051}"
+CONTROLLER_PROBE_PORT="${EDGION_CONTROLLER_PROBE_PORT:-12100}"
+CONTROLLER_PROBE_URL="http://${CONTROLLER_HOST}:${CONTROLLER_PROBE_PORT}"
+CONTROLLER_GRPC_PORT="${EDGION_TEST_CONTROLLER_GRPC_PORT:-12151}"
 RESTART_TIMEOUT=30
 PORT_FREE_TIMEOUT=15
 
@@ -136,8 +138,8 @@ check_prerequisites() {
         log_error "Run: cargo build --bin edgion-controller (or use prepare.sh)"
         exit 1
     fi
-    if ! curl -sf "${CONTROLLER_URL}/health" > /dev/null 2>&1; then
-        log_error "Controller not reachable at ${CONTROLLER_URL}"
+    if ! curl -sf "${CONTROLLER_PROBE_URL}/health" > /dev/null 2>&1; then
+        log_error "Controller not reachable at ${CONTROLLER_PROBE_URL}"
         exit 1
     fi
     log_success "Prerequisites OK"
@@ -230,7 +232,7 @@ restart_controller() {
     # require_ready_middleware.
     local elapsed=0
     while [ $elapsed -lt $RESTART_TIMEOUT ]; do
-        if curl -sf "${CONTROLLER_URL}/ready" > /dev/null 2>&1; then
+        if curl -sf "${CONTROLLER_PROBE_URL}/ready" > /dev/null 2>&1; then
             log_success "Controller ready after ${elapsed}s"
             return 0
         fi

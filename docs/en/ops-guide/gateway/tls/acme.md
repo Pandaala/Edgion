@@ -280,7 +280,7 @@ kubectl annotate edgionacme example-acme -n production \
 > **Authentication required**: all Controller Admin API calls need a Bearer token. Set `EDGION_TOKEN` to a token from `edgion-cli gen-token`, or use `edgion-cli acme trigger` directly. See [Federation RBAC — CLI Token RBAC](../../federation-rbac.md#cli-token-rbac).
 
 ```bash
-curl -X POST "http://<controller-admin>:8080/api/v1/services/acme/<namespace>/<name>/trigger" \
+curl -X POST "http://<controller-admin>:12101/api/v1/services/acme/<namespace>/<name>/trigger" \
   -H "Authorization: Bearer $EDGION_TOKEN"
 ```
 

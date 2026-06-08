@@ -185,7 +185,7 @@ grpc_security:
 **Controller federation client (`config/edgion-controller.yaml`):**
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   security:
     active: primary
     certs:

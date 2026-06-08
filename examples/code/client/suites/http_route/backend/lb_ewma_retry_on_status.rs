@@ -139,7 +139,7 @@ impl LBEwmaRetryOnStatusTestSuite {
 
                     // ── Metrics: healthy phase must hit >= 2 endpoints ──────────
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    let metrics = MetricsClient::from_host_port(&ctx.target_host, 5901);
+                    let metrics = MetricsClient::from_host_port(&ctx.target_host, 12090);
                     let analysis = match metrics.analyze_lb_distribution("lb-ewma-rs").await {
                         Ok(a) => a,
                         Err(e) => return TestResult::failed(start.elapsed(), format!("metrics fetch failed: {}", e)),

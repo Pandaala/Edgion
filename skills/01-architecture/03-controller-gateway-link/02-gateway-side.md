@@ -22,7 +22,7 @@ pub struct ConfigSyncClient {
 
 ### Startup sync sequence
 
-1. **Connection establishment**: connect to the Controller's gRPC port (default :50051) via tonic
+1. **Connection establishment**: connect to the Controller's gRPC port (default :12151) via tonic
 2. **GetServerInfo**: fetch `server_id`, `supported_kinds`
 3. **Per-kind List**: for each resource in `supported_kinds`, issue a List call and fetch the full snapshot
 4. **Per-kind Watch**: use the `sync_version` returned by List as `from_version` and start the Watch stream

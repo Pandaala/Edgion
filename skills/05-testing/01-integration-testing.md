@@ -56,7 +56,7 @@ Read this page first to get the main workflow; for specific mappings read these 
 ./examples/test/scripts/integration/run_all_integration.sh --skip acme,center
 ```
 
-Each job's stdout/stderr is captured to `integration_testing/run_all_<timestamp>/<job>.log` plus a machine-readable `summary.txt`. Job names: `main`, `linksys_etcd`, `linksys_es`, `acme`, `center`, `cli`, `file_watcher`. All children share controller/gateway ports (5800/5900) so they run sequentially even when their topologies differ.
+Each job's stdout/stderr is captured to `integration_testing/run_all_<timestamp>/<job>.log` plus a machine-readable `summary.txt`. Job names: `main`, `linksys_etcd`, `linksys_es`, `acme`, `center`, `cli`, `file_watcher`. All children share controller/gateway ports (12101/12001) so they run sequentially even when their topologies differ.
 
 ## Memorize the actual directory layout
 
@@ -252,7 +252,7 @@ A scenario internally schedules suites via `ctx.assert_phase(scenario, "initial"
 # Run only the initial-phase assertions
 ./target/debug/examples/test_client -g -r <Resource> -i <Item> --phase initial
 # After manually applying updates/, run the update-phase assertions
-./target/debug/edgion-cli --server http://127.0.0.1:5800 \
+./target/debug/edgion-cli --server http://127.0.0.1:12101 \
     apply -f examples/test/conf/<Resource>/<Item>/DynamicTest/updates/
 sleep 3
 ./target/debug/examples/test_client -g -r <Resource> -i <Item> --phase update

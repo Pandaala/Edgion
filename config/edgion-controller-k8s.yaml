@@ -5,10 +5,10 @@ work_dir: /usr/local/edgion
 
 server:
   # gRPC server for Gateway config sync
-  grpc_listen: "0.0.0.0:50051"
+  grpc_listen: "0.0.0.0:12151"
 
   # Admin HTTP server for health check and dashboard
-  admin_listen: "0.0.0.0:5800"
+  admin_listen: "0.0.0.0:12101"
 
 # Configuration Center - Use Kubernetes mode in K8s deployment
 conf_center:

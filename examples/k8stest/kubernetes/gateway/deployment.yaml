@@ -56,16 +56,19 @@ spec:
           containerPort: 18443
           protocol: TCP
         - name: admin
-          containerPort: 5810
+          containerPort: 12001
           protocol: TCP
         - name: metrics
-          containerPort: 5901
+          containerPort: 12090
+          protocol: TCP
+        - name: probe
+          containerPort: 12000
           protocol: TCP
         env:
         - name: RUST_LOG
           value: "info"
         - name: EDGION_CONTROLLER_ADDR
-          value: "edgion-controller-leader.edgion-system.svc.cluster.local:50051"
+          value: "edgion-controller-leader.edgion-system.svc.cluster.local:12151"
         resources:
           requests:
             cpu: 250m

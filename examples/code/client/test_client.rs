@@ -64,7 +64,7 @@ struct Cli {
     #[arg(long, default_value = "18443")]
     grpc_https_port: u16,
 
-    #[arg(long, default_value = "5800")]
+    #[arg(long, default_value = "12101")]
     admin_port: u16,
 
     #[arg(long)]
@@ -1602,7 +1602,7 @@ async fn run_dynamic_scenario(cli: &Cli, sid: &str) -> Result<()> {
         conf_root,
         conf_path: scenario.conf_path.to_string(),
         controller_url: format!("http://127.0.0.1:{}", cli.admin_port),
-        gateway_url: "http://127.0.0.1:5810".to_string(),
+        gateway_url: "http://127.0.0.1:12001".to_string(),
         project_root,
     };
 

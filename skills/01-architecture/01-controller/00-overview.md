@@ -112,7 +112,7 @@ Core capabilities:
 
 ```text
 src/core/controller/
-├── api/                        # Admin REST API (Axum, :5800)
+├── api/                        # Admin REST API (Axum, :12101)
 │   ├── mod.rs                  # Route registration and health-check handler
 │   ├── types.rs                # AdminState, ApiResponse, ListResponse
 │   ├── common.rs               # parse_kind, validate_resource, error mapping

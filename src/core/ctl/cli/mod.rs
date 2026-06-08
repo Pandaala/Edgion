@@ -43,13 +43,13 @@ impl std::fmt::Display for TargetType {
 #[command(version)]
 pub struct Cli {
     /// Target API to connect to:
-    /// - center: ConfCenter API (default, port 5800)
-    /// - server: ConfigServer cache (port 5800)
-    /// - client: ConfigClient cache (port 5810)
+    /// - center: ConfCenter API (default, port 12101)
+    /// - server: ConfigServer cache (port 12101)
+    /// - client: ConfigClient cache (port 12001)
     #[arg(long, short = 't', value_enum, default_value = "center")]
     pub target: TargetType,
 
-    /// Server address (e.g., http://localhost:5800)
+    /// Server address (e.g., http://localhost:12101)
     #[arg(long)]
     pub server: Option<String>,
 
@@ -181,8 +181,8 @@ impl Cli {
                 format!(
                     "http://localhost:{}",
                     match self.target {
-                        TargetType::Center | TargetType::Server => 5800,
-                        TargetType::Client => 5810,
+                        TargetType::Center | TargetType::Server => 12101,
+                        TargetType::Client => 12001,
                     }
                 )
             });

@@ -23,8 +23,10 @@ description: Full schema for the edgion-controller YAML configuration.
 work_dir: "."
 
 server:
-  grpc_listen: "0.0.0.0:50051"    # gRPC listen address (ConfigSyncServer)
-  admin_listen: "0.0.0.0:5800"    # Admin HTTP API address
+  grpc_listen: "0.0.0.0:12151"    # gRPC listen address (ConfigSyncServer)
+  admin_listen: "0.0.0.0:12101"   # Admin HTTP API address (/api/v1, /configclient)
+  # probe_listen: "0.0.0.0:12100"   # Liveness/readiness (/health, /ready); default 0.0.0.0:12100
+  # metrics_listen: "0.0.0.0:12190" # Prometheus metrics (/metrics); default 0.0.0.0:12190
 
 logging:
   log_dir: logs                    # Log directory
@@ -92,10 +94,10 @@ conf_center:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `grpc_listen` | `String` | `0.0.0.0:50051` | ConfigSyncServer gRPC address |
-| `admin_listen` | `String` | `0.0.0.0:5800` | Admin API HTTP address |
-
-> Note: in everyday development, `config/edgion-controller.yaml` is loaded by default, so what you typically see is `5800`, not the code fallback `8080`.
+| `grpc_listen` | `String` | `0.0.0.0:12151` | ConfigSyncServer gRPC address |
+| `admin_listen` | `String` | `0.0.0.0:12101` | Admin HTTP API address — serves `/api/v1/*` and `/configclient` |
+| `probe_listen` | `String` | `0.0.0.0:12100` | Probe listener — serves `/health` (liveness) and `/ready` (readiness) |
+| `metrics_listen` | `String` | `0.0.0.0:12190` | Metrics listener — serves `/metrics` (Prometheus) |
 
 ### [logging]
 
@@ -264,7 +266,7 @@ Connects this Controller to a Federation Center. Omit this section entirely if y
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `address` | `String` | **Required** | gRPC address of the Center server (e.g. `https://center.example.com:50052`) |
+| `address` | `String` | **Required** | gRPC address of the Center server (e.g. `https://center.example.com:12251`) |
 | `name` | `String` | **Required** | Logical name of this Controller, reported to Center |
 | `cluster` | `String` | **Required** | Cluster name, used for routing and aggregation |
 | `enabled` | `bool` | `true` | Hot-reloadable kill-switch. `false` stops the federation client without a restart. Reloaded via `POST /api/v1/reload`. |
@@ -293,7 +295,7 @@ Connects this Controller to a Federation Center. Omit this section entirely if y
 
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   name: "ctrl-1"
   cluster: "prod"
   enabled: true

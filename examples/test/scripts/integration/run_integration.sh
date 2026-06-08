@@ -55,7 +55,7 @@ REDIS_PORT=16379
 REDIS_PASSWORD="edgion-test-pwd"
 REDIS_CONTAINER_NAME="edgion-test-redis"
 
-CONTROLLER_GRPC_PORT=50051
+CONTROLLER_GRPC_PORT=12151
 
 # Controller admin token — populated lazily by ensure_ctrl_admin_token()
 # by logging in with the EDGION_ADMIN_* credentials exported before Step 2.
@@ -110,7 +110,7 @@ ensure_ctrl_admin_token() {
     fi
     CTRL_ADMIN_TOKEN=$(curl -s -H "Content-Type: application/json" \
         -d "{\"username\":\"${user}\",\"password\":\"${pass}\"}" \
-        "http://127.0.0.1:5800/api/v1/auth/login" \
+        "http://127.0.0.1:12101/api/v1/auth/login" \
         | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('token',''))" 2>/dev/null || true)
     if [ -z "$CTRL_ADMIN_TOKEN" ]; then
         log_error "Controller admin login failed"
@@ -703,7 +703,7 @@ start_redis_service_if_needed() {
 # Get server_id from controller
 # =============================================================================
 get_controller_server_id() {
-    local controller_url="${1:-http://127.0.0.1:5800}"
+    local controller_url="${1:-http://127.0.0.1:12101}"
     # Controller admin API requires authentication; obtain a token first.
     ensure_ctrl_admin_token || true
     local response=$(curl -s -H "Authorization: Bearer ${CTRL_ADMIN_TOKEN}" \
@@ -719,7 +719,7 @@ get_controller_server_id() {
 # Get server_id from gateway (the server_id it received from controller)
 # =============================================================================
 get_gateway_server_id() {
-    local gateway_url="${1:-http://127.0.0.1:5810}"
+    local gateway_url="${1:-http://127.0.0.1:12001}"
     # Gateway admin API has no authentication — call tokenless.
     local response=$(curl -s "${gateway_url}/api/v1/server-info" 2>/dev/null)
     local server_id=$(echo "$response" | grep -o '"server_id":"[^"]*"' | cut -d'"' -f4)
@@ -776,7 +776,7 @@ verify_metrics_labels() {
 # Trigger reload via Admin API
 # =============================================================================
 trigger_reload() {
-    local controller_url="${1:-http://127.0.0.1:5800}"
+    local controller_url="${1:-http://127.0.0.1:12101}"
     log_info "Triggering reload via Admin API..."
     # Controller admin API requires authentication.
     ensure_ctrl_admin_token || true
@@ -808,7 +808,7 @@ show_help() {
     echo "  --no-start             Skip start step"
     echo "  --keep-alive           Keep services running after end (default will stop)"
     echo "  --full-test            Run all tests including slow tests (timeout, etc.)"
-    echo "  --controller-grpc-port <port>  Override controller/gateway gRPC sync port (default: 50051)"
+    echo "  --controller-grpc-port <port>  Override controller/gateway gRPC sync port (default: 12151)"
     echo "  --suites <list>        Specify test suites to load (comma separated)"
     echo "  --with-reload          Run tests twice with reload in between (verify server_id changes)"
     echo "  --skip-residue-check   Skip cache residue detection after tests (also set via SKIP_RESIDUE_CHECK=true)"
@@ -1565,16 +1565,16 @@ main() {
     }
     
     local test_failed=false
-    local controller_url="http://127.0.0.1:5800"
-    
+    local controller_url="http://127.0.0.1:12101"
+
     # =============================================================================
     # Test execution with optional reload
     # =============================================================================
     if $with_reload; then
         # ========== Round 1: Initial tests ==========
         log_section "📋 Round 1: Initial tests (before reload)"
-        
-        local gateway_url="http://127.0.0.1:5810"
+
+        local gateway_url="http://127.0.0.1:12001"
         
         # Get initial server_id from both Controller and Gateway
         local controller_id_before=$(get_controller_server_id "$controller_url")
@@ -1683,7 +1683,7 @@ main() {
     # Final Step: Metrics Label Whitelist
     # =============================================================================
     log_section "Final Step: Metrics Label Whitelist"
-    if ! verify_metrics_labels "http://127.0.0.1:5800/metrics" "controller"; then
+    if ! verify_metrics_labels "http://127.0.0.1:12190/metrics" "controller"; then
         log_error "Metrics label validation FAILED"
         test_failed=true
     fi
@@ -1731,8 +1731,8 @@ main() {
             # error) is captured into $rc and handled below instead of aborting.
             set +e
             "$residue_bin" \
-                --controller-addr "http://127.0.0.1:5800" \
-                --gateway-addr    "http://127.0.0.1:5810" \
+                --controller-addr "http://127.0.0.1:12101" \
+                --gateway-addr    "http://127.0.0.1:12001" \
                 --controller-token "$CTRL_ADMIN_TOKEN" \
                 --timeout-secs 30 \
                 --mode fail

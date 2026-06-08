@@ -21,7 +21,7 @@ flowchart TD
         WQ --> RP["ResourceProcessor\n(validate/preparse/parse)"]
         RP --> SC["ServerCache"]
         CrossRef["Cross-resource dependencies\nSecretRefManager\nServiceRefManager\nCrossNamespaceRefManager\nRequeueChain"]
-        CtrlServices["Admin API (:5800)\nConfigSyncServer (:50051)\nACME Service (optional, Leader only)"]
+        CtrlServices["Admin API (:12101)\nConfigSyncServer (:12151)\nACME Service (optional, Leader only)"]
     end
 
     SC -- "gRPC Watch/List" --> SyncClient
@@ -36,7 +36,7 @@ flowchart TD
         PingoraServer --- ProxyHttp
         PingoraServer --- StreamRoutes
         TLS["TLS subsystem\nDownstream TLS (client → gateway)\nUpstream TLS (gateway → backend mTLS)"]
-        GwServices["Admin API (:5810 default)\nMetrics (:5901)"]
+        GwServices["Admin API (:12001 default)\nProbe (:12000)\nMetrics (:12090)"]
     end
 
     subgraph CLI["edgion-cli (CLI tool)"]
@@ -88,7 +88,7 @@ Internal architecture of the control plane, broken down by module:
 |------|--------|
 | Overall architecture | ConfMgr facade, ProcessorRegistry |
 | Startup / shutdown | Leader election, HA mode, event-driven main loop |
-| Admin API | port :5800, CRUD, health/ready |
+| Admin API | port :12101, CRUD, health/ready |
 | ConfigCenter | ConfCenter trait, FileSystem / Kubernetes implementations |
 | Workqueue | deduplication, delayed (coalesced) requeue, dirty requeue |
 | ResourceProcessor | 11-step processing pipeline, 20 Handler kinds |

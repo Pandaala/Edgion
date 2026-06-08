@@ -142,8 +142,8 @@ This is the correct design behavior: it ensures the Gateway is fully consistent 
 
 | HA mode | Gateway configuration | Description |
 |---------|----------------------|-------------|
-| leader-only | `server_addr = "http://edgion-controller-leader.edgion-system.svc:50051"` | Connect only to the leader |
-| all-serve | `server_addr = "http://edgion-controller.edgion-system.svc:50051"` | Any replica |
+| leader-only | `server_addr = "http://edgion-controller-leader.edgion-system.svc:12151"` | Connect only to the leader |
+| all-serve | `server_addr = "http://edgion-controller.edgion-system.svc:12151"` | Any replica |
 
 ## K8s Service Topology
 

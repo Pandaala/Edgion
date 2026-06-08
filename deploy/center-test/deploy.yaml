@@ -15,15 +15,15 @@ data:
     work_dir: /edgion
 
     server:
-      grpc_listen: 0.0.0.0:50051
-      admin_listen: 0.0.0.0:5800
+      grpc_listen: 0.0.0.0:12151
+      admin_listen: 0.0.0.0:12101
 
     conf_center:
       type: file_system
       conf_dir: /edgion/data
 
     center:
-      address: http://center:50052
+      address: http://center:12251
       name: ctrl-01
       cluster: cluster-east
       env: [testing]
@@ -49,15 +49,15 @@ data:
     work_dir: /edgion
 
     server:
-      grpc_listen: 0.0.0.0:50051
-      admin_listen: 0.0.0.0:5800
+      grpc_listen: 0.0.0.0:12151
+      admin_listen: 0.0.0.0:12101
 
     conf_center:
       type: file_system
       conf_dir: /edgion/data
 
     center:
-      address: http://center:50052
+      address: http://center:12251
       name: ctrl-02
       cluster: cluster-west
       env: [testing]
@@ -81,8 +81,10 @@ metadata:
 data:
   edgion-center.yaml: |
     server:
-      grpc_addr: 0.0.0.0:50052
-      http_addr: 0.0.0.0:5810
+      grpc_addr: 0.0.0.0:12251
+      http_addr: 0.0.0.0:12201
+      probe_addr: 0.0.0.0:12200
+      metrics_addr: 0.0.0.0:12290
 
     sync:
       list_interval_secs: 30
@@ -113,11 +115,17 @@ spec:
     app: edgion-center
   ports:
     - name: grpc
-      port: 50052
-      targetPort: 50052
+      port: 12251
+      targetPort: 12251
     - name: http
-      port: 5810
-      targetPort: 5810
+      port: 12201
+      targetPort: 12201
+    - name: probe
+      port: 12200
+      targetPort: 12200
+    - name: metrics
+      port: 12290
+      targetPort: 12290
 
 ---
 # === Center Pod ===
@@ -136,10 +144,14 @@ spec:
       command: ["edgion-center"]
       args: ["-c", "/edgion/config/edgion-center.yaml"]
       ports:
-        - containerPort: 50052
+        - containerPort: 12251
           name: grpc
-        - containerPort: 5810
+        - containerPort: 12201
           name: http
+        - containerPort: 12200
+          name: probe
+        - containerPort: 12290
+          name: metrics
       volumeMounts:
         - name: config
           mountPath: /edgion/config/edgion-center.yaml
@@ -177,9 +189,9 @@ spec:
       command: ["edgion-controller"]
       args: ["-c", "/edgion/config/edgion-controller.yaml"]
       ports:
-        - containerPort: 50051
+        - containerPort: 12151
           name: grpc
-        - containerPort: 5800
+        - containerPort: 12101
           name: http
       volumeMounts:
         - name: config
@@ -225,9 +237,9 @@ spec:
       command: ["edgion-controller"]
       args: ["-c", "/edgion/config/edgion-controller.yaml"]
       ports:
-        - containerPort: 50051
+        - containerPort: 12151
           name: grpc
-        - containerPort: 5800
+        - containerPort: 12101
           name: http
       volumeMounts:
         - name: config
@@ -257,15 +269,15 @@ data:
     work_dir: /edgion
 
     server:
-      grpc_listen: 0.0.0.0:50051
-      admin_listen: 0.0.0.0:5800
+      grpc_listen: 0.0.0.0:12151
+      admin_listen: 0.0.0.0:12101
 
     conf_center:
       type: file_system
       conf_dir: /edgion/data
 
     center:
-      address: http://center:50052
+      address: http://center:12251
       name: ctrl-03
       cluster: cluster-north
       env: [testing]
@@ -291,15 +303,15 @@ data:
     work_dir: /edgion
 
     server:
-      grpc_listen: 0.0.0.0:50051
-      admin_listen: 0.0.0.0:5800
+      grpc_listen: 0.0.0.0:12151
+      admin_listen: 0.0.0.0:12101
 
     conf_center:
       type: file_system
       conf_dir: /edgion/data
 
     center:
-      address: http://center:50052
+      address: http://center:12251
       name: ctrl-04
       cluster: cluster-south
       env: [testing]
@@ -325,15 +337,15 @@ data:
     work_dir: /edgion
 
     server:
-      grpc_listen: 0.0.0.0:50051
-      admin_listen: 0.0.0.0:5800
+      grpc_listen: 0.0.0.0:12151
+      admin_listen: 0.0.0.0:12101
 
     conf_center:
       type: file_system
       conf_dir: /edgion/data
 
     center:
-      address: http://center:50052
+      address: http://center:12251
       name: ctrl-05
       cluster: cluster-dr-east
       env: [testing]
@@ -359,15 +371,15 @@ data:
     work_dir: /edgion
 
     server:
-      grpc_listen: 0.0.0.0:50051
-      admin_listen: 0.0.0.0:5800
+      grpc_listen: 0.0.0.0:12151
+      admin_listen: 0.0.0.0:12101
 
     conf_center:
       type: file_system
       conf_dir: /edgion/data
 
     center:
-      address: http://center:50052
+      address: http://center:12251
       name: ctrl-06
       cluster: cluster-dr-west
       env: [testing]
@@ -409,9 +421,9 @@ spec:
       command: ["edgion-controller"]
       args: ["-c", "/edgion/config/edgion-controller.yaml"]
       ports:
-        - containerPort: 50051
+        - containerPort: 12151
           name: grpc
-        - containerPort: 5800
+        - containerPort: 12101
           name: http
       volumeMounts:
         - name: config
@@ -457,9 +469,9 @@ spec:
       command: ["edgion-controller"]
       args: ["-c", "/edgion/config/edgion-controller.yaml"]
       ports:
-        - containerPort: 50051
+        - containerPort: 12151
           name: grpc
-        - containerPort: 5800
+        - containerPort: 12101
           name: http
       volumeMounts:
         - name: config
@@ -505,9 +517,9 @@ spec:
       command: ["edgion-controller"]
       args: ["-c", "/edgion/config/edgion-controller.yaml"]
       ports:
-        - containerPort: 50051
+        - containerPort: 12151
           name: grpc
-        - containerPort: 5800
+        - containerPort: 12101
           name: http
       volumeMounts:
         - name: config
@@ -553,9 +565,9 @@ spec:
       command: ["edgion-controller"]
       args: ["-c", "/edgion/config/edgion-controller.yaml"]
       ports:
-        - containerPort: 50051
+        - containerPort: 12151
           name: grpc
-        - containerPort: 5800
+        - containerPort: 12101
           name: http
       volumeMounts:
         - name: config

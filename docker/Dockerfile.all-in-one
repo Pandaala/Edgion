@@ -60,7 +60,7 @@ RUN --mount=type=bind,source=config,target=/tmp/config \
     mkdir -p /etc/edgion && \
     cp -r /tmp/config/*.toml /etc/edgion/ 2>/dev/null; \
     if [ "$ALL_IN_ONE_MODE" = "center" ]; then \
-      printf 'server:\n  http_addr: "0.0.0.0:5811"\n  grpc_addr: "0.0.0.0:50052"\n' > /etc/edgion/edgion-center.yaml; \
+      printf 'server:\n  http_addr: "0.0.0.0:12201"\n  grpc_addr: "0.0.0.0:12251"\n  probe_addr: "0.0.0.0:12200"\n  metrics_addr: "0.0.0.0:12290"\n' > /etc/edgion/edgion-center.yaml; \
     fi; true
 
 COPY --chmod=755 docker/all-in-one-entrypoint.sh /usr/local/bin/all-in-one-entrypoint.sh
@@ -70,12 +70,12 @@ ENV RUST_LOG=info
 ENV RUST_BACKTRACE=0
 
 # Expose ports:
-#   5800 — dashboard + controller API (controller-gateway mode)
-#   5810 — dashboard + center API (center mode)
+#   5800 — dashboard + controller API (controller-gateway mode, nginx external listen)
+#   5810 — dashboard + center API (center mode, nginx external listen)
 #   80, 443 — gateway data plane (controller-gateway mode only)
-#   50051 — controller gRPC (controller-gateway mode)
-#   50052 — center federation gRPC (center mode)
-EXPOSE 80 443 5800 5810 50051 50052
+#   12151 — controller gRPC (controller-gateway mode)
+#   12251 — center federation gRPC (center mode)
+EXPOSE 80 443 5800 5810 12151 12251
 
 ENTRYPOINT ["/usr/local/bin/all-in-one-entrypoint.sh"]
 

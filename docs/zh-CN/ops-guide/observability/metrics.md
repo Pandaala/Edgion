@@ -8,13 +8,13 @@ Edgion 从 Gateway（数据面）、Controller（控制器）和 Center（联邦
 
 ## 概述
 
-每个进程以 Prometheus 文本格式暴露 `/metrics` 端点。Gateway 使用独立监听器；Controller 和 Center 将 `/metrics` 挂载在各自现有的管理/API 端口上。
+每个进程以 Prometheus 文本格式暴露 `/metrics` 端点，均使用独立监听器。Controller 和 Center 的 `/metrics` 位于各自专用的 metrics 端口（`12190` / `12290`），与管理/API 端口分离——`/metrics` 不再挂载在管理端口上。
 
 | 进程 | 默认端点 | 路径 | 认证 |
 |------|---------|------|------|
-| Gateway | `:5901` | `/metrics` | 无（独立监听器） |
-| Controller | Admin API（默认 `:8080`） | `/metrics` | 无（跳过，与 K8s controller-manager 一致） |
-| Center | Admin API（默认 `:5810`） | `/metrics` | 无（跳过） |
+| Gateway | `:12090` | `/metrics` | 无（独立监听器） |
+| Controller | `:12190` | `/metrics` | 无（独立监听器，与 Admin 端口 `12101` 分离） |
+| Center | `:12290` | `/metrics` | 无（独立监听器，与 Admin 端口 `12201` 分离） |
 
 `/metrics` 故意跳过认证，遵循 Kubernetes controller-manager 惯例。输出仅包含聚合数字——不含请求体，默认情况下不含资源名称（见下方基数说明）。
 
@@ -48,11 +48,15 @@ scrape_configs:
   - job_name: edgion-gateway
     metrics_path: /metrics
     static_configs:
-      - targets: ["10.0.0.10:5901"]
+      - targets: ["10.0.0.10:12090"]
   - job_name: edgion-controller
     metrics_path: /metrics
     static_configs:
-      - targets: ["10.0.0.11:8080"]
+      - targets: ["10.0.0.11:12190"]   # 独立指标监听器，非 Admin 端口
+  - job_name: edgion-center
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["10.0.0.12:12290"]   # 独立指标监听器，非 Admin 端口
 ```
 
 ## Gateway 指标
@@ -108,7 +112,7 @@ metrics:
 
 ## Controller 指标
 
-Controller 在其管理 `/metrics` 端点上以 `edgion_controller_*` 前缀暴露控制面指标。
+Controller 在独立的指标监听器（`:12190`，与 Admin 端口 `:12101` 分离）上以 `edgion_controller_*` 前缀暴露控制面指标。
 
 | 指标 | 类型 | 标签 | 说明 |
 |------|------|------|------|

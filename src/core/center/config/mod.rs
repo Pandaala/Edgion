@@ -87,13 +87,19 @@ pub struct CenterServerConfig {
     pub grpc_addr: String,
     /// HTTP listen address for admin API
     pub http_addr: String,
+    /// HTTP listen address for the dedicated liveness/readiness probe listener
+    pub probe_addr: String,
+    /// HTTP listen address for the dedicated Prometheus metrics listener
+    pub metrics_addr: String,
 }
 
 impl Default for CenterServerConfig {
     fn default() -> Self {
         Self {
-            grpc_addr: "0.0.0.0:50052".to_string(),
-            http_addr: "0.0.0.0:5810".to_string(),
+            grpc_addr: "0.0.0.0:12251".to_string(),
+            http_addr: "0.0.0.0:12201".to_string(),
+            probe_addr: "0.0.0.0:12200".to_string(),
+            metrics_addr: "0.0.0.0:12290".to_string(),
         }
     }
 }
@@ -123,8 +129,10 @@ mod tests {
     #[test]
     fn test_center_config_defaults() {
         let config = CenterConfig::default();
-        assert_eq!(config.server.grpc_addr, "0.0.0.0:50052");
-        assert_eq!(config.server.http_addr, "0.0.0.0:5810");
+        assert_eq!(config.server.grpc_addr, "0.0.0.0:12251");
+        assert_eq!(config.server.http_addr, "0.0.0.0:12201");
+        assert_eq!(config.server.probe_addr, "0.0.0.0:12200");
+        assert_eq!(config.server.metrics_addr, "0.0.0.0:12290");
         assert_eq!(config.sync.ping_interval_secs, 30);
         assert_eq!(config.sync.command_timeout_secs, 30);
     }

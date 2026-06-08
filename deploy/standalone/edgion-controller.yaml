@@ -1,8 +1,8 @@
 work_dir: /usr/local/edgion
 
 server:
-  grpc_listen: "0.0.0.0:50051"
-  admin_listen: "0.0.0.0:5800"
+  grpc_listen: "0.0.0.0:12151"
+  admin_listen: "0.0.0.0:12101"
 
 logging:
   log_dir: logs

@@ -108,19 +108,19 @@ DynamicTest/
 
 ```bash
 # Apply updated manifests
-./target/debug/edgion-cli --server http://127.0.0.1:5800 \
+./target/debug/edgion-cli --server http://127.0.0.1:12101 \
     apply -f examples/test/conf/Gateway/DynamicTest/updates/
 
 # Delete resources listed in the delete file
 while read -r resource; do
     [ -z "$resource" ] || [[ "$resource" =~ ^# ]] && continue
-    ./target/debug/edgion-cli --server http://127.0.0.1:5800 delete "$resource"
+    ./target/debug/edgion-cli --server http://127.0.0.1:12101 delete "$resource"
 done < examples/test/conf/Gateway/DynamicTest/delete/resources_to_delete.txt
 
 # Verify controller and gateway state stay in sync
 ./target/debug/examples/resource_diff \
-    --controller-url http://127.0.0.1:5800 \
-    --gateway-url http://127.0.0.1:5810
+    --controller-url http://127.0.0.1:12101 \
+    --gateway-url http://127.0.0.1:12001
 
 # Give the runtime a moment to swap in the new config
 sleep 3

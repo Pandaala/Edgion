@@ -167,7 +167,7 @@ Calls `POST /api/v1/reload`. After the Controller receives the request:
 edgion-cli reload
 
 # Connect to a Controller at a specific address
-edgion-cli --server http://10.0.0.1:5800 reload
+edgion-cli --server http://10.0.0.1:12101 reload
 ```
 
 ## gen-certs

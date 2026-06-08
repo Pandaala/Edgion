@@ -326,7 +326,7 @@ mod tests {
     fn policy_only_reload_does_not_restart_client() {
         let base = CenterClientConfig {
             enabled: true,
-            address: "http://center:50052".to_string(),
+            address: "http://center:12251".to_string(),
             name: "ctrl-1".to_string(),
             cluster: "prod".to_string(),
             rbac: None, // deny-all initially
@@ -369,7 +369,7 @@ mod tests {
     fn enabled_flip_triggers_lifecycle_restart() {
         let enabled = CenterClientConfig {
             enabled: true,
-            address: "http://center:50052".to_string(),
+            address: "http://center:12251".to_string(),
             name: "ctrl-1".to_string(),
             cluster: "prod".to_string(),
             rbac: None,
@@ -398,13 +398,13 @@ mod tests {
     fn address_change_triggers_lifecycle_restart() {
         let base = CenterClientConfig {
             enabled: true,
-            address: "http://center-a:50052".to_string(),
+            address: "http://center-a:12251".to_string(),
             name: "ctrl-1".to_string(),
             cluster: "prod".to_string(),
             ..Default::default()
         };
         let new_addr = CenterClientConfig {
-            address: "http://center-b:50052".to_string(),
+            address: "http://center-b:12251".to_string(),
             ..base.clone()
         };
         assert_eq!(

@@ -5,7 +5,7 @@
 # Verifies `edgion-cli get httproute --limit 10 --all` returns 25 unique
 # names across pages when the cluster has 25 HTTPRoute fixtures (Card 05).
 #
-# Requires K8s mode + a running edgion-controller at ADMIN_URL (default 5800).
+# Requires K8s mode + a running edgion-controller at ADMIN_URL (default 12101).
 # Self-SKIPs if kubectl, jq, the binary, or the controller is unavailable.
 # =============================================================================
 set -euo pipefail
@@ -17,7 +17,7 @@ command -v python3 >/dev/null || { echo "SKIP: python3 required"; exit 0; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
-ADMIN_URL="${ADMIN_URL:-http://127.0.0.1:5800}"
+ADMIN_URL="${ADMIN_URL:-http://127.0.0.1:12101}"
 
 [[ -x "$CLI" ]] || { echo "SKIP: edgion-cli not built"; exit 0; }
 

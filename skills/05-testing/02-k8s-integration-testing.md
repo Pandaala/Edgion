@@ -117,7 +117,7 @@ The following types of suites must be rewritten to be "environment-agnostic":
 
 - No hard-coded `http://127.0.0.1:<port>`.
 - Use `TestContext` uniformly (`ctx.target_host` + `ctx.*_port`) to construct URLs.
-- Use `ctx.metrics_client()` for metric scraping; do not hard-code `127.0.0.1:5901`.
+- Use `ctx.metrics_client()` for metric scraping; do not hard-code `127.0.0.1:12090`.
 
 ### 6.2 Key suite rework (P0/P1)
 

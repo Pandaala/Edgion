@@ -112,8 +112,10 @@ controller is restarted. `/health`, `/ready`, and `/metrics` remain accessible.
 work_dir: "/usr/local/edgion"
 
 server:
-  grpc_listen: "0.0.0.0:50051"    # gRPC for gateway sync
-  admin_listen: "0.0.0.0:5800"    # Admin API (health, apply)
+  grpc_listen: "0.0.0.0:12151"    # gRPC for gateway sync
+  admin_listen: "0.0.0.0:12101"   # Admin API (config apply, /api/v1, /configclient)
+  # probe_listen: "0.0.0.0:12100"   # Liveness/readiness (/health, /ready); default 0.0.0.0:12100
+  # metrics_listen: "0.0.0.0:12190" # Prometheus metrics (/metrics); default 0.0.0.0:12190
 
 logging:
   log_dir: logs
@@ -139,9 +141,9 @@ Key difference from Kubernetes mode: `conf_center.type: file_system` replaces `k
 work_dir: "/usr/local/edgion"
 
 gateway:
-  server_addr: "http://127.0.0.1:50051"   # Controller gRPC address
-  admin_listen: "127.0.0.1:5810"          # Admin API (loopback-only; /configclient, /server-info)
-  # probe_listen: "0.0.0.0:28000"         # Liveness/readiness (/health, /ready); default 0.0.0.0:28000
+  server_addr: "http://127.0.0.1:12151"   # Controller gRPC address
+  admin_listen: "127.0.0.1:12001"         # Admin API (loopback-only; /configclient, /server-info)
+  # probe_listen: "0.0.0.0:12000"         # Liveness/readiness (/health, /ready); default 0.0.0.0:12000
 
 logging:
   log_dir: logs
@@ -227,7 +229,7 @@ Use `edgion-cli` to apply configuration changes without restarting:
 
 ```bash
 # Apply a new route
-edgion-cli --server http://127.0.0.1:5800 apply -f my-route.yaml
+edgion-cli --server http://127.0.0.1:12101 apply -f my-route.yaml
 
 # Or simply place YAML files in the conf/ directory — the controller watches for changes
 cp my-route.yaml /usr/local/edgion/conf/
@@ -285,22 +287,24 @@ sudo systemctl enable --now edgion-controller edgion-gateway
 
 | Service | Port | Bind | Description |
 |---------|------|------|-------------|
-| Controller gRPC | 50051 | 0.0.0.0 | Gateway config sync |
-| Controller Admin | 5800 | 0.0.0.0 | Health check, config apply |
+| Controller gRPC | 12151 | 0.0.0.0 | Gateway config sync |
+| Controller Admin | 12101 | 0.0.0.0 | Config apply, `/api/v1`, `/configclient` |
+| Controller Probe | 12100 | 0.0.0.0 | Liveness/readiness (`/health`, `/ready`) |
+| Controller Metrics | 12190 | 0.0.0.0 | Prometheus metrics (`/metrics`) |
 | Gateway HTTP | 80 | 0.0.0.0 | Default HTTP listener |
 | Gateway HTTPS | 443 | 0.0.0.0 | Default HTTPS listener |
-| Gateway Admin | 5810 | 127.0.0.1 (loopback) | Internal admin API (`/configclient`, `/api/v1/server-info`) |
-| Gateway Probe | 28000 | 0.0.0.0 | Liveness/readiness (`/health`, `/ready`) |
-| Gateway Metrics | 5901 | 0.0.0.0 | Prometheus metrics |
+| Gateway Admin | 12001 | 127.0.0.1 (loopback) | Internal admin API (`/configclient`, `/api/v1/server-info`) |
+| Gateway Probe | 12000 | 0.0.0.0 | Liveness/readiness (`/health`, `/ready`) |
+| Gateway Metrics | 12090 | 0.0.0.0 | Prometheus metrics |
 
 ## Troubleshooting
 
 ```bash
-# Check controller health
-curl http://127.0.0.1:5800/health
+# Check controller health (probe listener)
+curl http://127.0.0.1:12100/health
 
 # Check gateway readiness
-curl http://127.0.0.1:28000/ready
+curl http://127.0.0.1:12000/ready
 
 # View controller logs
 tail -f /usr/local/edgion/logs/edgion-controller.*.log
@@ -309,5 +313,5 @@ tail -f /usr/local/edgion/logs/edgion-controller.*.log
 tail -f /usr/local/edgion/logs/edgion_access.log
 
 # Inspect current config via edgion-cli
-edgion-cli --server http://127.0.0.1:5800 get routes
+edgion-cli --server http://127.0.0.1:12101 get routes
 ```

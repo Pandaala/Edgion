@@ -231,6 +231,8 @@ impl EdgionControllerCli {
         schema_validator: Arc<SchemaValidator>,
         grpc_addr: SocketAddr,
         admin_addr: SocketAddr,
+        probe_addr: SocketAddr,
+        metrics_addr: SocketAddr,
         security: ConfSyncSecurityConfig,
         auth_config: Option<crate::core::common::auth::AdminAuthConfig>,
         local_auth_config: Option<crate::core::common::local_auth::LocalAuthConfig>,
@@ -245,7 +247,9 @@ impl EdgionControllerCli {
             event = "services_starting",
             grpc_addr = %grpc_addr,
             admin_addr = %admin_addr,
-            "Starting gRPC and Admin API servers with graceful shutdown support"
+            probe_addr = %probe_addr,
+            metrics_addr = %metrics_addr,
+            "Starting gRPC, Admin API, probe, and metrics servers with graceful shutdown support"
         );
 
         // Create shutdown signals with ordered shutdown:
@@ -285,6 +289,57 @@ impl EdgionControllerCli {
         // Create gRPC server with dynamic provider
         // Note: gRPC server will return UNAVAILABLE until ConfigSyncServer is ready
         let grpc_server = ConfigSyncGrpcServer::new(provider, grpc_shutdown_token);
+
+        // Dedicated probe listener (liveness/readiness) — own socket, no auth.
+        {
+            let probe_state = crate::core::controller::api::build_admin_state(
+                conf_mgr.clone(),
+                schema_validator.clone(),
+                config_file.clone(),
+                authorizer.clone(),
+                center_reload_tx.clone(),
+            );
+            let mut probe_signal = shutdown_handle.signal();
+            tokio::spawn(async move {
+                let app = crate::core::controller::api::create_probe_router(probe_state);
+                match tokio::net::TcpListener::bind(probe_addr).await {
+                    Ok(listener) => {
+                        let _ = axum::serve(listener, app)
+                            .with_graceful_shutdown(async move { probe_signal.wait().await })
+                            .await;
+                    }
+                    Err(e) => tracing::error!(
+                        component = COMPONENT_EDGION_CONTROLLER,
+                        event = "probe_listener_error",
+                        error = %e,
+                        addr = %probe_addr,
+                        "Controller probe listener failed to bind"
+                    ),
+                }
+            });
+        }
+
+        // Dedicated metrics listener (Prometheus scrape) — own socket, no auth.
+        {
+            let mut metrics_signal = shutdown_handle.signal();
+            tokio::spawn(async move {
+                let app = crate::core::controller::api::create_metrics_router();
+                match tokio::net::TcpListener::bind(metrics_addr).await {
+                    Ok(listener) => {
+                        let _ = axum::serve(listener, app)
+                            .with_graceful_shutdown(async move { metrics_signal.wait().await })
+                            .await;
+                    }
+                    Err(e) => tracing::error!(
+                        component = COMPONENT_EDGION_CONTROLLER,
+                        event = "metrics_listener_error",
+                        error = %e,
+                        addr = %metrics_addr,
+                        "Controller metrics listener failed to bind"
+                    ),
+                }
+            });
+        }
 
         // Run both services concurrently with shutdown support and global timeout.
         // In K8s, kubelet sends SIGKILL after terminationGracePeriodSeconds (default 30s).
@@ -591,7 +646,9 @@ impl EdgionControllerCli {
         // 8. Parse addresses and start services with shutdown support
         // Note: Services start immediately but return UNAVAILABLE until ConfigServer is ready
         let grpc_addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
-        let admin_addr = utils::parse_listen_addr(Some(&config.admin_listen()), "0.0.0.0:8080")?;
+        let admin_addr = utils::parse_listen_addr(Some(&config.admin_listen()), "0.0.0.0:12101")?;
+        let probe_addr = utils::parse_listen_addr(Some(&config.probe_listen()), "0.0.0.0:12100")?;
+        let metrics_addr = utils::parse_listen_addr(Some(&config.metrics_listen()), "0.0.0.0:12190")?;
         let security = config.conf_sync_security.clone();
         security.validate()?;
         let auth_config = config.auth.clone();
@@ -616,6 +673,8 @@ impl EdgionControllerCli {
             schema_validator,
             grpc_addr,
             admin_addr,
+            probe_addr,
+            metrics_addr,
             security,
             auth_config,
             local_auth_config,

@@ -10,8 +10,10 @@ edgion-controller 从 YAML 文件读取配置，默认路径为 `config/edgion-c
 work_dir: "."
 
 server:
-  grpc_listen: "0.0.0.0:50051"   # ConfigSyncServer gRPC 监听地址
-  admin_listen: "0.0.0.0:5800"   # Admin HTTP API 地址
+  grpc_listen: "0.0.0.0:12151"   # ConfigSyncServer gRPC 监听地址
+  admin_listen: "0.0.0.0:12101"  # Admin HTTP API 地址（/api/v1、/configclient）
+  # probe_listen: "0.0.0.0:12100"   # 存活/就绪探针（/health、/ready）；默认 0.0.0.0:12100
+  # metrics_listen: "0.0.0.0:12190" # Prometheus 指标（/metrics）；默认 0.0.0.0:12190
 
 logging:
   log_dir: logs                   # 系统日志目录（相对于 work_dir）
@@ -78,8 +80,10 @@ conf_center:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `grpc_listen` | `String` | `0.0.0.0:50051` | ConfigSyncServer gRPC 监听地址，Gateway 连接此地址同步配置 |
-| `admin_listen` | `String` | `0.0.0.0:5800` | Admin HTTP API 监听地址 |
+| `grpc_listen` | `String` | `0.0.0.0:12151` | ConfigSyncServer gRPC 监听地址，Gateway 连接此地址同步配置 |
+| `admin_listen` | `String` | `0.0.0.0:12101` | Admin HTTP API 监听地址，提供 `/api/v1/*` 和 `/configclient` |
+| `probe_listen` | `String` | `0.0.0.0:12100` | 探针监听地址，提供 `/health`（存活）和 `/ready`（就绪）；Kubernetes pod spec 中使用 `httpGet.port: 12100` |
+| `metrics_listen` | `String` | `0.0.0.0:12190` | 指标监听地址，提供 `/metrics`（Prometheus 抓取目标） |
 
 ### [logging]
 
@@ -275,7 +279,7 @@ Token 生成工作流、轮换说明和所有安全注意事项，详见[联邦 
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `address` | `String` | **必填** | Center 服务器的 gRPC 地址（如 `https://center.example.com:50052`） |
+| `address` | `String` | **必填** | Center 服务器的 gRPC 地址（如 `https://center.example.com:12251`） |
 | `name` | `String` | **必填** | 此 Controller 的逻辑名称，上报给 Center |
 | `cluster` | `String` | **必填** | 集群名称，用于路由和聚合 |
 | `enabled` | `Boolean` | `true` | 热重载开关；`false` 可停止联邦客户端而无需重启（通过 `POST /api/v1/reload` 重载） |
@@ -287,7 +291,7 @@ Token 生成工作流、轮换说明和所有安全注意事项，详见[联邦 
 
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   name: "ctrl-1"
   cluster: "prod"
   enabled: true
