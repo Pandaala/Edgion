@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: panic-svc
+  namespace: edgion-default
+  annotations:
+    # Health-check probe points at an always-503 path, so every backend is
+    # marked unhealthy even though the real backend serves /health fine. This
+    # mirrors the "misconfigured health-check path" outage scenario.
+    edgion.io/health-check: |
+      active:
+        type: http
+        path: /status/503
+        interval: 1s
+        timeout: 1s
+        healthyThreshold: 1
+        unhealthyThreshold: 1
+        expectedStatuses:
+          - 200
+    # Panic threshold: when the healthy fraction drops below 50%, ignore health
+    # filtering and route to all backends. With every backend unhealthy this
+    # engages and keeps the service serving instead of returning 503.
+    edgion.io/panic-threshold: "50"
+spec:
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP

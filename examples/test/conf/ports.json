@@ -26,6 +26,9 @@
     "HTTPRoute/Backend/HealthCheck": {
       "http": 31141
     },
+    "HTTPRoute/Backend/PanicThreshold": {
+      "http": 31145
+    },
     "HTTPRoute/Backend/GrpcHealthCheck": {
       "http": 31144
     },

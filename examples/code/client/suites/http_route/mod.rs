@@ -22,9 +22,9 @@ pub use backend::{
     BackendTlsSniHostOverrideTestSuite, CircuitBreakerTestSuite, DnsResolutionFailureTestSuite,
     GrpcHealthCheckTestSuite, H2MtlsPersistenceTestSuite, HealthCheckTestSuite, HealthCheckTransitionTestSuite,
     LBConsistentHashTestSuite, LBEwmaRetryOnStatusTestSuite, LBEwmaTestSuite, LBLeastConnRetryOnStatusTestSuite,
-    LBLeastConnTestSuite, LBRoundRobinTestSuite, PartiallyInvalidTestSuite, RetryOnStatusTestSuite,
-    SessionPersistenceTestSuite, SpChangeFinalTestSuite, SpChangeInitialTestSuite, TimeoutTestSuite,
-    WeightedBackendTestSuite,
+    LBLeastConnTestSuite, LBRoundRobinTestSuite, PanicThresholdTestSuite, PartiallyInvalidTestSuite,
+    RetryOnStatusTestSuite, SessionPersistenceTestSuite, SpChangeFinalTestSuite, SpChangeInitialTestSuite,
+    TimeoutTestSuite, WeightedBackendTestSuite,
 };
 pub use filters::{
     FilterConflictTestSuite, HeaderModifierTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite,

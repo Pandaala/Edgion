@@ -367,6 +367,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::GrpcHealthCheckTestSuite));
             runner.add_suite(Box::new(suites::RetryOnStatusTestSuite));
             runner.add_suite(Box::new(suites::CircuitBreakerTestSuite));
+            runner.add_suite(Box::new(suites::PanicThresholdTestSuite));
             runner.add_suite(Box::new(suites::SessionPersistenceTestSuite));
         }
         "HTTPRoute/Backend/LBRoundRobin" => {
@@ -445,6 +446,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::HealthCheckTestSuite));
+        }
+        "HTTPRoute/Backend/PanicThreshold" => {
+            if !gateway {
+                eprintln!("Error: PanicThreshold tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PanicThresholdTestSuite));
         }
         "HTTPRoute/Backend/GrpcHealthCheck" => {
             if !gateway {
@@ -1508,6 +1516,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 runner.add_suite(Box::new(suites::GrpcHealthCheckTestSuite));
                 runner.add_suite(Box::new(suites::RetryOnStatusTestSuite));
                 runner.add_suite(Box::new(suites::CircuitBreakerTestSuite));
+                runner.add_suite(Box::new(suites::PanicThresholdTestSuite));
                 runner.add_suite(Box::new(suites::MtlsTestSuite));
             }
         }
