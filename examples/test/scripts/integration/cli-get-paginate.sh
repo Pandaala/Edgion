@@ -18,14 +18,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 ADMIN_URL="${ADMIN_URL:-http://127.0.0.1:12101}"
+# /health lives on the dedicated probe listener, not the admin API.
+PROBE_URL="${PROBE_URL:-http://127.0.0.1:12100}"
 
 [[ -x "$CLI" ]] || { echo "SKIP: edgion-cli not built"; exit 0; }
 
 kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1 \
     || { echo "SKIP: Gateway API CRDs not installed"; exit 0; }
 
-curl -sf --max-time 3 "${ADMIN_URL}/health" >/dev/null 2>&1 \
-    || { echo "SKIP: controller not reachable at $ADMIN_URL"; exit 0; }
+curl -sf --max-time 3 "${PROBE_URL}/health" >/dev/null 2>&1 \
+    || { echo "SKIP: controller not reachable at $PROBE_URL"; exit 0; }
 
 # Authenticate: the test assumes a token is already saved in ~/.edgion/token
 # (e.g., from a prior `edgion-cli login`). If not present, skip gracefully.

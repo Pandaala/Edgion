@@ -20,6 +20,12 @@ struct Args {
     #[arg(long, default_value = "http://127.0.0.1:12101")]
     controller_url: String,
 
+    /// Controller probe URL serving /health and /ready. These endpoints live on a
+    /// dedicated probe port (default 12100), separate from the admin API
+    /// (controller_url, 12101) which serves the resource endpoints.
+    #[arg(long, default_value = "http://127.0.0.1:12100")]
+    controller_probe_url: String,
+
     /// Gateway admin API URL
     #[arg(long, default_value = "http://127.0.0.1:12001")]
     gateway_url: String,
@@ -146,6 +152,7 @@ struct SecretReference {
 struct AdminClient {
     client: Client,
     controller_url: String,
+    controller_probe_url: String,
     gateway_url: String,
     gateway_probe_url: String,
     max_retries: u32,
@@ -154,6 +161,7 @@ struct AdminClient {
 impl AdminClient {
     fn new(
         controller_url: String,
+        controller_probe_url: String,
         gateway_url: String,
         gateway_probe_url: String,
         timeout: Duration,
@@ -167,6 +175,7 @@ impl AdminClient {
         Self {
             client,
             controller_url,
+            controller_probe_url,
             gateway_url,
             gateway_probe_url,
             max_retries,
@@ -253,7 +262,8 @@ impl AdminClient {
 
     /// Check if controller is reachable
     async fn check_controller_health(&self) -> bool {
-        let url = format!("{}/health", self.controller_url);
+        // /health is served by the probe port, not the admin port.
+        let url = format!("{}/health", self.controller_probe_url);
         self.client
             .get(&url)
             .send()
@@ -621,6 +631,7 @@ async fn main() {
     // Create admin client
     let client = AdminClient::new(
         args.controller_url.clone(),
+        args.controller_probe_url.clone(),
         args.gateway_url.clone(),
         args.gateway_probe_url.clone(),
         Duration::from_secs(args.timeout),

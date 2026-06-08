@@ -304,6 +304,18 @@ pub struct GlobalHttpRouteManagers {
 
     /// listener -> per-listener manager (stable Arc held by request filter)
     pub(crate) by_listener: DashMap<ListenerKey, Arc<HttpPortRouteManager>>,
+
+    /// Serializes the read-snapshot-then-rewrite sequences that mutate
+    /// `route_cache` + `by_listener`. Two independent dispatch tasks reach this
+    /// manager concurrently: the HTTPRoute cache task (`full_set`/`partial_update`)
+    /// and the Gateway cache task (`rebuild_all_listener_managers` via
+    /// `runtime::handler` on listener changes). Both run under their own per-kind
+    /// `CacheData` lock, which gives no mutual exclusion against each other, so
+    /// without this lock a Gateway-driven `rebuild_all` can read a pre-deletion
+    /// `route_cache` snapshot and write a stale route table after a concurrent
+    /// `partial_update` already cleared it (orphan listener-bucket leak).
+    /// Held only across synchronous work (no `.await` in the critical region).
+    rebuild_lock: parking_lot::Mutex<()>,
 }
 
 impl Default for GlobalHttpRouteManagers {
@@ -317,7 +329,16 @@ impl GlobalHttpRouteManagers {
         Self {
             route_cache: DashMap::new(),
             by_listener: DashMap::new(),
+            rebuild_lock: parking_lot::Mutex::new(()),
         }
+    }
+
+    /// Acquire the rebuild lock. Callers that mutate `route_cache`/`by_listener`
+    /// (`full_set`, `partial_update`, the public `rebuild_all_listener_managers`)
+    /// hold this for their whole body so the three paths are mutually exclusive.
+    /// NOT reentrant — internal callers must use the `*_locked` variants.
+    pub(crate) fn lock_rebuild(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.rebuild_lock.lock()
     }
 
     /// Get or create a per-listener `HttpPortRouteManager`.
@@ -333,7 +354,17 @@ impl GlobalHttpRouteManagers {
     }
 
     /// Rebuild all per-listener managers from the current route cache.
+    /// Public entry point (called from `runtime::handler` on listener changes).
+    /// Acquires the rebuild lock so it cannot race a concurrent HTTPRoute
+    /// `full_set`/`partial_update` on this manager. `full_set` calls the
+    /// unlocked `*_locked` variant instead (it already holds the lock).
     pub fn rebuild_all_listener_managers(&self) {
+        let _guard = self.rebuild_lock.lock();
+        self.rebuild_all_listener_managers_locked();
+    }
+
+    /// Rebuild body. The caller MUST hold `rebuild_lock`.
+    pub(crate) fn rebuild_all_listener_managers_locked(&self) {
         // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
         let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
         // Physical listener keys the request path reads from; routes whose
@@ -391,6 +422,9 @@ impl GlobalHttpRouteManagers {
     }
 
     /// Rebuild only the per-listener managers for the given set of affected listeners.
+    ///
+    /// The caller MUST hold `rebuild_lock` — this is only invoked from
+    /// `partial_update`, which acquires the lock for its whole body.
     pub fn rebuild_affected_listener_managers(&self, affected_listeners: &HashSet<ListenerKey>) {
         if affected_listeners.is_empty() {
             return;

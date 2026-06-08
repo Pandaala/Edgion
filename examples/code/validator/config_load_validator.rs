@@ -25,6 +25,12 @@ struct Args {
     #[arg(long, default_value = "http://127.0.0.1:12101")]
     controller_url: String,
 
+    /// Controller probe URL serving /health and /ready. These endpoints live on a
+    /// dedicated probe port (default 12100), separate from the admin API
+    /// (controller_url, 12101) which serves the resource endpoints.
+    #[arg(long, default_value = "http://127.0.0.1:12100")]
+    controller_probe_url: String,
+
     /// Config directory to validate
     #[arg(long, default_value = "examples/conf")]
     config_dir: String,
@@ -111,11 +117,12 @@ struct Metadata {
 struct AdminClient {
     client: Client,
     controller_url: String,
+    controller_probe_url: String,
     max_retries: u32,
 }
 
 impl AdminClient {
-    fn new(controller_url: String, timeout: Duration, max_retries: u32) -> Self {
+    fn new(controller_url: String, controller_probe_url: String, timeout: Duration, max_retries: u32) -> Self {
         let client = Client::builder()
             .timeout(timeout)
             .build()
@@ -124,13 +131,15 @@ impl AdminClient {
         Self {
             client,
             controller_url,
+            controller_probe_url,
             max_retries,
         }
     }
 
     /// Check if controller is reachable
     async fn check_health(&self) -> bool {
-        let url = format!("{}/health", self.controller_url);
+        // /health is served by the probe port, not the admin port.
+        let url = format!("{}/health", self.controller_probe_url);
         self.client
             .get(&url)
             .send()
@@ -440,6 +449,7 @@ async fn main() {
     // Create admin client
     let client = AdminClient::new(
         args.controller_url.clone(),
+        args.controller_probe_url.clone(),
         Duration::from_secs(args.timeout),
         args.max_retries,
     );

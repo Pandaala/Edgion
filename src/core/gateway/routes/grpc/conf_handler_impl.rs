@@ -10,6 +10,8 @@ use std::time::Instant;
 
 impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
     fn full_set(&self, data: &HashMap<String, Arc<GRPCRoute>>) {
+        // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
+        let _guard = self.lock_rebuild();
         let start_time = Instant::now();
         tracing::info!(component = "grpc_route_manager", count = data.len(), "full set start");
 
@@ -25,8 +27,8 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
 
         *self.route_units_cache.lock() = new_units_cache;
 
-        // Step 2: Rebuild all per-listener managers
-        self.rebuild_all_listener_managers();
+        // Step 2: Rebuild all per-listener managers (lock already held above).
+        self.rebuild_all_listener_managers_locked();
 
         tracing::info!(
             component = "grpc_route_manager",
@@ -41,6 +43,8 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
         update: HashMap<String, Arc<GRPCRoute>>,
         remove: HashSet<String>,
     ) {
+        // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
+        let _guard = self.lock_rebuild();
         let start_time = Instant::now();
         tracing::info!(
             component = "grpc_route_manager",

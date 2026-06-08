@@ -743,6 +743,7 @@ verify_sync() {
         # Note: resource_diff now skips ReferenceGrant and Secret by default (--skip-kinds)
         if "$resource_diff" \
             --controller-url "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}" \
+            --controller-probe-url "http://127.0.0.1:${CONTROLLER_PROBE_PORT}" \
             --gateway-url "http://127.0.0.1:${GATEWAY_ADMIN_PORT}" \
             --gateway-probe-url "http://127.0.0.1:${GATEWAY_PROBE_PORT}" \
             > "${LOG_DIR}/resource_diff.log" 2>&1; then

@@ -48,8 +48,10 @@ if ! kubectl get crd httproutes.gateway.networking.k8s.io > /dev/null 2>&1; then
 fi
 
 ADMIN_URL="${ADMIN_URL:-http://127.0.0.1:12101}"
-if ! curl -sf --max-time 3 "${ADMIN_URL}/health" > /dev/null 2>&1; then
-    log_warn "edgion-controller admin endpoint not reachable at $ADMIN_URL; SKIP"
+# /health lives on the dedicated probe listener, not the admin API.
+PROBE_URL="${PROBE_URL:-http://127.0.0.1:12100}"
+if ! curl -sf --max-time 3 "${PROBE_URL}/health" > /dev/null 2>&1; then
+    log_warn "edgion-controller probe endpoint not reachable at $PROBE_URL; SKIP"
     exit 0
 fi
 

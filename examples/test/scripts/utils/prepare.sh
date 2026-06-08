@@ -110,7 +110,14 @@ main() {
         log_error "Build failed! Exiting..."
         exit 1
     fi
-    
+
+    # Build edgion-center
+    log_section "Build edgion-center"
+    if ! build_binary "edgion-center" "--bin edgion-center"; then
+        log_error "Build failed! Exiting..."
+        exit 1
+    fi
+
     # Build test_server
     log_section "Build test_server"
     if ! build_binary "test_server" "--example test_server"; then

@@ -67,6 +67,14 @@ pub struct GlobalTlsRouteManagers {
 
     /// listener -> per-listener manager (stable Arc held by listeners)
     by_listener: DashMap<ListenerKey, Arc<TlsRouteManager>>,
+
+    /// Serializes the read-snapshot-then-rewrite sequences that mutate
+    /// `route_cache` + `by_listener`. The TLSRoute cache task
+    /// (`full_set`/`partial_update`) and the Gateway cache task
+    /// (`rebuild_all_listener_managers` via `runtime::handler`) reach this manager
+    /// concurrently under different per-kind locks; this is the only lock both
+    /// contend on, preventing a stale-snapshot rebuild leak. Synchronous only.
+    rebuild_lock: parking_lot::Mutex<()>,
 }
 
 impl Default for GlobalTlsRouteManagers {
@@ -80,7 +88,15 @@ impl GlobalTlsRouteManagers {
         Self {
             route_cache: DashMap::new(),
             by_listener: DashMap::new(),
+            rebuild_lock: parking_lot::Mutex::new(()),
         }
+    }
+
+    /// Acquire the rebuild lock. Held for the whole body of `full_set`,
+    /// `partial_update`, and the public `rebuild_all_listener_managers`.
+    /// NOT reentrant — internal callers use the `*_locked` variants.
+    pub(crate) fn lock_rebuild(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.rebuild_lock.lock()
     }
 
     /// Get or create a per-listener `TlsRouteManager`.
@@ -123,6 +139,12 @@ impl GlobalTlsRouteManagers {
     /// function's docs for invariants — bucket / rebuild / stale-sweep /
     /// clear-pass).
     pub fn rebuild_all_listener_managers(&self) {
+        let _guard = self.rebuild_lock.lock();
+        self.rebuild_all_listener_managers_locked();
+    }
+
+    /// Rebuild body. The caller MUST hold `rebuild_lock`.
+    pub(crate) fn rebuild_all_listener_managers_locked(&self) {
         let active = crate::core::gateway::runtime::store::get_listener_gateway_info_store().all_listener_keys();
         crate::core::gateway::routes::l4_rebuild::rebuild_all_l4_listener_managers(
             "global_tls_route_managers",

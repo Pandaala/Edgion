@@ -37,7 +37,13 @@ LOG_DIR="${WORK_DIR}/logs"
 
 CONTROLLER_ADMIN_PORT=15834
 CONTROLLER_GRPC_PORT=15835
+# /health and /ready live on the dedicated probe listener, not the admin API.
+# Pin it (and the metrics listener) to test-specific ports so they do not fall
+# back to the shared defaults (12100 / 12190) and collide with the main stack.
+CONTROLLER_PROBE_PORT=15836
+CONTROLLER_METRICS_PORT=15837
 ADMIN_URL="http://127.0.0.1:${CONTROLLER_ADMIN_PORT}"
+PROBE_URL="http://127.0.0.1:${CONTROLLER_PROBE_PORT}"
 
 CONTROLLER_PID=""
 TEST_PASSED=0
@@ -67,6 +73,8 @@ work_dir: "${WORK_DIR}"
 server:
   grpc_listen: "127.0.0.1:${CONTROLLER_GRPC_PORT}"
   admin_listen: "127.0.0.1:${CONTROLLER_ADMIN_PORT}"
+  probe_listen: "127.0.0.1:${CONTROLLER_PROBE_PORT}"
+  metrics_listen: "127.0.0.1:${CONTROLLER_METRICS_PORT}"
 
 logging:
   log_dir: "${LOG_DIR}"
@@ -118,7 +126,7 @@ CONTROLLER_PID=$!
 log_info "Controller PID=$CONTROLLER_PID"
 
 for i in $(seq 1 30); do
-    if curl -sf "${ADMIN_URL}/health" > /dev/null 2>&1; then
+    if curl -sf "${PROBE_URL}/health" > /dev/null 2>&1; then
         log_success "Controller ready"
         break
     fi

@@ -58,7 +58,13 @@ LOG_DIR="${WORK_DIR}/logs"
 
 CONTROLLER_ADMIN_PORT=15826
 CONTROLLER_GRPC_PORT=15827
+# /health and /ready live on the dedicated probe listener, not the admin API.
+# Pin it (and the metrics listener) to test-specific ports so they do not fall
+# back to the shared defaults (12100 / 12190) and collide with the main stack.
+CONTROLLER_PROBE_PORT=15822
+CONTROLLER_METRICS_PORT=15823
 ADMIN_URL="http://127.0.0.1:${CONTROLLER_ADMIN_PORT}"
+PROBE_URL="http://127.0.0.1:${CONTROLLER_PROBE_PORT}"
 ETCD_PREFIX="/edgion-list-keys-test-${TIMESTAMP}"
 
 CONTROLLER_PID=""
@@ -89,6 +95,8 @@ work_dir: "${WORK_DIR}"
 server:
   grpc_listen: "127.0.0.1:${CONTROLLER_GRPC_PORT}"
   admin_listen: "127.0.0.1:${CONTROLLER_ADMIN_PORT}"
+  probe_listen: "127.0.0.1:${CONTROLLER_PROBE_PORT}"
+  metrics_listen: "127.0.0.1:${CONTROLLER_METRICS_PORT}"
 
 logging:
   log_dir: "${LOG_DIR}"
@@ -113,7 +121,7 @@ log_section "Start Controller (Etcd mode)"
 CONTROLLER_PID=$!
 
 for i in $(seq 1 30); do
-    if curl -sf "${ADMIN_URL}/health" > /dev/null 2>&1; then
+    if curl -sf "${PROBE_URL}/health" > /dev/null 2>&1; then
         log_success "Controller ready"
         break
     fi

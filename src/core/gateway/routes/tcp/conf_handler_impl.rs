@@ -16,6 +16,8 @@ pub fn create_tcp_route_handler() -> Box<dyn ConfHandler<TCPRoute> + Send + Sync
 
 impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
     fn full_set(&self, data: &HashMap<String, Arc<TCPRoute>>) {
+        // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
+        let _guard = self.lock_rebuild();
         let start_time = Instant::now();
         tracing::info!(component = "tcp_route_manager", cnt = data.len(), "full set start");
 
@@ -36,7 +38,7 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
             }
         }
 
-        self.rebuild_all_listener_managers();
+        self.rebuild_all_listener_managers_locked();
         tracing::info!(
             component = "tcp_route_manager",
             ms = Instant::now().saturating_duration_since(start_time).as_millis(),
@@ -50,6 +52,8 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
         update: HashMap<String, Arc<TCPRoute>>,
         remove: HashSet<String>,
     ) {
+        // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
+        let _guard = self.lock_rebuild();
         tracing::info!(
             component = "tcp_route_manager",
             add = add.len(),

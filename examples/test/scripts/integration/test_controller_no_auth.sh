@@ -32,10 +32,20 @@ CONTROLLER_BIN="${EDGION_CONTROLLER_BIN:-$REPO_ROOT/target/debug/edgion-controll
 
 # Ports chosen to avoid conflicts with the main integration stack (12101/12151)
 # and the Center no-auth test (58100/58110).
+#
+# /health and /ready are served on the dedicated probe listener (not the admin
+# API), and /metrics on the dedicated metrics listener. We pin both to
+# test-specific ports via --probe-listen / --metrics-listen so they do not fall
+# back to the shared defaults (0.0.0.0:12100 / 0.0.0.0:12190), which would
+# collide with the main integration controller.
 NOAUTH_ADMIN_PORT=58200
 NOAUTH_GRPC_PORT=58201
+NOAUTH_PROBE_PORT=58202
+NOAUTH_METRICS_PORT=58203
 ENVAUTH_ADMIN_PORT=58210
 ENVAUTH_GRPC_PORT=58211
+ENVAUTH_PROBE_PORT=58212
+ENVAUTH_METRICS_PORT=58213
 
 # =============================================================================
 # Prerequisites
@@ -149,6 +159,7 @@ EOF
     # Port prechecks
     precheck_port "$NOAUTH_ADMIN_PORT" "controller-noauth admin" || return 1
     precheck_port "$NOAUTH_GRPC_PORT"  "controller-noauth gRPC"  || return 1
+    precheck_port "$NOAUTH_PROBE_PORT" "controller-noauth probe" || return 1
 
     echo ""
     echo "=== Phase 1: Controller no-auth startup ==="
@@ -159,11 +170,14 @@ EOF
         --log-dir "$LOG_DIR" \
         --admin-listen "127.0.0.1:${NOAUTH_ADMIN_PORT}" \
         --grpc-listen "127.0.0.1:${NOAUTH_GRPC_PORT}" \
+        --probe-listen "127.0.0.1:${NOAUTH_PROBE_PORT}" \
+        --metrics-listen "127.0.0.1:${NOAUTH_METRICS_PORT}" \
         > "$LOG_DIR/controller.log" 2>&1 &
     CTRL_PID=$!
 
+    # /health and /ready live on the dedicated probe listener (probe port).
     if ! wait_for_health \
-            "http://127.0.0.1:${NOAUTH_ADMIN_PORT}/health" \
+            "http://127.0.0.1:${NOAUTH_PROBE_PORT}/health" \
             "$CTRL_PID" \
             "controller (no-auth)"; then
         cat "$LOG_DIR/controller.log"
@@ -171,19 +185,19 @@ EOF
     fi
 
     assert_status "1/6" \
-        "http://127.0.0.1:${NOAUTH_ADMIN_PORT}/health" \
+        "http://127.0.0.1:${NOAUTH_PROBE_PORT}/health" \
         "200" "$LOG_DIR/controller.log" || return 1
 
     # /ready reflects ConfMgr initialization state (not auth); poll until 200.
     echo "[2/6] Waiting for /ready..."
     if ! wait_for_url_200 \
-            "http://127.0.0.1:${NOAUTH_ADMIN_PORT}/ready" \
+            "http://127.0.0.1:${NOAUTH_PROBE_PORT}/ready" \
             "$CTRL_PID" \
             "controller /ready (no-auth)"; then
         cat "$LOG_DIR/controller.log"
         return 1
     fi
-    echo "PASS [2/6]: http://127.0.0.1:${NOAUTH_ADMIN_PORT}/ready -> 200"
+    echo "PASS [2/6]: http://127.0.0.1:${NOAUTH_PROBE_PORT}/ready -> 200"
 
     assert_status "3/6" \
         "http://127.0.0.1:${NOAUTH_ADMIN_PORT}/api/v1/auth/status" \
@@ -255,6 +269,7 @@ EOF
 
     precheck_port "$ENVAUTH_ADMIN_PORT" "controller-envauth admin" || return 1
     precheck_port "$ENVAUTH_GRPC_PORT"  "controller-envauth gRPC"  || return 1
+    precheck_port "$ENVAUTH_PROBE_PORT" "controller-envauth probe" || return 1
 
     echo ""
     echo "=== Phase 2: Controller env-var auth startup ==="
@@ -265,13 +280,27 @@ EOF
         --log-dir "$LOG_DIR" \
         --admin-listen "127.0.0.1:${ENVAUTH_ADMIN_PORT}" \
         --grpc-listen "127.0.0.1:${ENVAUTH_GRPC_PORT}" \
+        --probe-listen "127.0.0.1:${ENVAUTH_PROBE_PORT}" \
+        --metrics-listen "127.0.0.1:${ENVAUTH_METRICS_PORT}" \
         > "$LOG_DIR/controller.log" 2>&1 &
     CTRL_PID=$!
 
+    # /health lives on the dedicated probe listener (probe port).
     if ! wait_for_health \
-            "http://127.0.0.1:${ENVAUTH_ADMIN_PORT}/health" \
+            "http://127.0.0.1:${ENVAUTH_PROBE_PORT}/health" \
             "$CTRL_PID" \
             "controller (env-auth)"; then
+        cat "$LOG_DIR/controller.log"
+        return 1
+    fi
+
+    # The probe listener binds before the admin API, so a healthy probe does not
+    # guarantee the admin API is accepting connections yet. Wait for the admin
+    # API (unauthenticated /api/v1/auth/status returns 200) before logging in.
+    if ! wait_for_url_200 \
+            "http://127.0.0.1:${ENVAUTH_ADMIN_PORT}/api/v1/auth/status" \
+            "$CTRL_PID" \
+            "controller admin API (env-auth)"; then
         cat "$LOG_DIR/controller.log"
         return 1
     fi

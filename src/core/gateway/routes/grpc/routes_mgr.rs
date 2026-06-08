@@ -188,6 +188,14 @@ pub struct GlobalGrpcRouteManagers {
 
     /// Cached parsed route units per resource_key.
     pub(crate) route_units_cache: Mutex<HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>>,
+
+    /// Serializes the read-snapshot-then-rewrite sequences that mutate
+    /// `route_cache` + `route_units_cache` + `by_listener`. The GRPCRoute cache
+    /// task (`full_set`/`partial_update`) and the Gateway cache task
+    /// (`rebuild_all_listener_managers` via `runtime::handler`) reach this manager
+    /// concurrently under different per-kind locks; this is the only lock both
+    /// contend on, preventing a stale-snapshot rebuild leak. Synchronous only.
+    rebuild_lock: parking_lot::Mutex<()>,
 }
 
 impl Default for GlobalGrpcRouteManagers {
@@ -202,7 +210,15 @@ impl GlobalGrpcRouteManagers {
             route_cache: DashMap::new(),
             by_listener: DashMap::new(),
             route_units_cache: Mutex::new(HashMap::new()),
+            rebuild_lock: parking_lot::Mutex::new(()),
         }
+    }
+
+    /// Acquire the rebuild lock. Held for the whole body of `full_set`,
+    /// `partial_update`, and the public `rebuild_all_listener_managers`.
+    /// NOT reentrant — internal callers use the `*_locked` variants.
+    pub(crate) fn lock_rebuild(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.rebuild_lock.lock()
     }
 
     /// Get or create a per-listener `GrpcPortRouteManager`.
@@ -215,7 +231,16 @@ impl GlobalGrpcRouteManagers {
     }
 
     /// Rebuild all per-listener managers from the current route cache and units cache.
+    ///
+    /// Public entry point (called from `runtime::handler` on listener changes);
+    /// acquires the rebuild lock. `full_set` uses `*_locked` (it already holds it).
     pub fn rebuild_all_listener_managers(&self) {
+        let _guard = self.rebuild_lock.lock();
+        self.rebuild_all_listener_managers_locked();
+    }
+
+    /// Rebuild body. The caller MUST hold `rebuild_lock`.
+    pub(crate) fn rebuild_all_listener_managers_locked(&self) {
         // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
         let pgis = crate::core::gateway::runtime::store::get_listener_gateway_info_store();
         for key in pgis.all_listener_keys() {

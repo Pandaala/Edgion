@@ -51,6 +51,8 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
     // whose LB policy is still stale (or missing). Regression tests in this file
     // pin the end-state for full_set / partial_update / mixed scenarios.
     fn full_set(&self, data: &HashMap<String, Arc<HTTPRoute>>) {
+        // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
+        let _guard = self.lock_rebuild();
         let data_owned = arc_map_to_owned(data);
         // Step 1: sync LB policies (must precede cache mutation — see invariant above).
         sync_lb_policies_for_routes(&data_owned);
@@ -64,8 +66,8 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             self.route_cache.insert(key, route);
         }
 
-        // Step 3: Rebuild all per-listener managers
-        self.rebuild_all_listener_managers();
+        // Step 3: Rebuild all per-listener managers (lock already held above).
+        self.rebuild_all_listener_managers_locked();
 
         let elapsed = Instant::now().saturating_duration_since(start_time);
         tracing::info!(
@@ -81,6 +83,10 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         update: HashMap<String, Arc<HTTPRoute>>,
         remove: HashSet<String>,
     ) {
+        // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
+        // Covers the affected-set computation, route_cache mutation, and rebuild as one
+        // critical section so rebuild_all cannot interleave on a stale snapshot.
+        let _guard = self.lock_rebuild();
         let mut add_or_update_owned = arc_map_into_owned(add);
         add_or_update_owned.extend(arc_map_into_owned(update));
         // Step 1: sync/cleanup LB policies before touching route_cache (see invariant

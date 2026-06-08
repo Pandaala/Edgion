@@ -16,6 +16,8 @@ pub fn create_tls_route_handler() -> Box<dyn ConfHandler<TLSRoute> + Send + Sync
 
 impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
     fn full_set(&self, data: &HashMap<String, Arc<TLSRoute>>) {
+        // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
+        let _guard = self.lock_rebuild();
         let start_time = Instant::now();
         tracing::info!(
             component = "global_tls_route_managers",
@@ -40,7 +42,7 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
             }
         }
 
-        self.rebuild_all_listener_managers();
+        self.rebuild_all_listener_managers_locked();
         tracing::info!(
             component = "global_tls_route_managers",
             ms = Instant::now().saturating_duration_since(start_time).as_millis(),
@@ -54,6 +56,8 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
         update: HashMap<String, Arc<TLSRoute>>,
         remove: HashSet<String>,
     ) {
+        // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
+        let _guard = self.lock_rebuild();
         tracing::info!(
             component = "global_tls_route_managers",
             add = add.len(),
