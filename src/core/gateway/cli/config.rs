@@ -1099,8 +1099,8 @@ access_log_sensitive:
             },
             ..Default::default()
         };
-        let toml = toml::to_string(&cfg).unwrap();
-        assert!(!toml.contains("must-not-leak"), "admin_token must not serialize out");
+        let serialized = serde_yaml::to_string(&cfg).unwrap();
+        assert!(!serialized.contains("must-not-leak"), "admin_token must not serialize out");
     }
 
     #[test]

@@ -810,6 +810,43 @@ mod local_reply_tests {
         );
         assert_eq!(h.headers.get("content-length").unwrap().to_str().unwrap(), "2");
     }
+
+    #[test]
+    fn apply_pending_ops_is_nondestructive_and_applies() {
+        let mut ctx = EdgionHttpContext::default();
+        ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+            name: "x-foo".to_string(),
+            value: "bar".to_string(),
+        });
+        let mut hdr = ResponseHeader::build(200, None).unwrap();
+        ctx.apply_pending_response_header_ops(&mut hdr);
+        // Applied onto the header...
+        assert_eq!(hdr.headers.get("x-foo").unwrap().to_str().unwrap(), "bar");
+        // ...but the queue is left intact (non-destructive) for a later local reply.
+        assert_eq!(ctx.pending_response_header_ops.len(), 1);
+    }
+
+    #[test]
+    fn queued_ops_survive_phase6_apply_onto_local_reply() {
+        // filter-04c: simulates the fixed flow. Phase 6 applies queued ops onto
+        // the (soon-discarded) upstream header non-destructively; a response-phase
+        // plugin then replaces the response, and build_response_local_reply
+        // re-applies the still-intact queue onto the fresh reply. Proves BOTH the
+        // sync (Phase 6) and async (Phase 7) local-reply paths preserve the ops,
+        // since after the fix neither pre-drains the queue.
+        let mut ctx = EdgionHttpContext::default();
+        ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+            name: "x-foo".to_string(),
+            value: "bar".to_string(),
+        });
+        let mut upstream = ResponseHeader::build(200, None).unwrap();
+        ctx.apply_pending_response_header_ops(&mut upstream);
+        assert!(build_response_local_reply(&mut ctx, 403, Some("denied".into()), false));
+        let reply = ctx.local_reply_header.as_ref().unwrap();
+        assert_eq!(reply.headers.get("x-foo").unwrap().to_str().unwrap(), "bar");
+        // The builder's destructive drain consumed the queue.
+        assert!(ctx.pending_response_header_ops.is_empty());
+    }
 }
 
 #[cfg(test)]

@@ -609,9 +609,12 @@ pub enum MirrorState {
 /// A response-header mutation queued by a plugin in a stage where the real
 /// `ResponseHeader` is not yet available (typically `request_filter`).
 ///
-/// Drained onto the real `ResponseHeader` at the upstream-response stage
-/// (`run_upstream_response_plugins_sync`) and at request-stage termination
-/// points that build their own response (`ErrResponse`, gRPC errors).
+/// Applied non-destructively onto the forwarded header at the upstream-response
+/// stage (`upstream_response_filter` via `apply_pending_response_header_ops`),
+/// and drained destructively (`drain_pending_response_header_ops`) when building
+/// a response-phase local reply (`build_response_local_reply`) and at
+/// request-stage termination points that build their own response (`ErrResponse`,
+/// gRPC errors).
 #[derive(Debug, Clone)]
 pub enum PendingHeaderOp {
     Set { name: String, value: String },
@@ -744,9 +747,11 @@ pub struct EdgionHttpContext {
     /// Response-header mutations queued by plugins running before the real
     /// `ResponseHeader` is available (typically request stage). Drained onto
     /// the real `ResponseHeader` at four sites:
-    ///   1. `run_upstream_response_plugins_sync` — applied before any
-    ///      response-stage plugin runs, so they can further mutate the
-    ///      already-merged headers.
+    ///   1. `upstream_response_filter` (Phase 6) — applied NON-DESTRUCTIVELY via
+    ///      `apply_pending_response_header_ops` before any response-stage plugin
+    ///      runs, so they can further mutate the already-merged headers. The queue
+    ///      is left intact so a subsequent response-phase local reply can re-apply
+    ///      the ops onto its fresh header (filter-04c).
     ///   2. `ErrResponse` request-stage termination handler (HTTP route) —
     ///      applied after runtime defaults (`content-type: text/plain`,
     ///      `content-length`) so plugin Set ops override defaults. The gRPC
@@ -850,6 +855,23 @@ impl EdgionHttpContext {
         let ops = std::mem::take(&mut self.pending_response_header_ops);
         for op in ops {
             op.apply(response_header);
+        }
+    }
+
+    /// Apply queued response-header ops onto `response_header` WITHOUT consuming
+    /// the queue (each op is cloned). This is the single application point on the
+    /// normal forward path, called at the upstream-response stage
+    /// (`upstream_response_filter`). The queue is deliberately left intact so that
+    /// if a response-phase plugin subsequently replaces the response with a local
+    /// reply, `build_response_local_reply` can re-apply the same ops onto the
+    /// fresh reply header via `drain_pending_response_header_ops` (filter-04c).
+    ///
+    /// Placed before the response-stage sync plugin runners so those plugins still
+    /// observe the merged headers (the semantic the former in-runner pre-drain
+    /// provided).
+    pub fn apply_pending_response_header_ops(&self, response_header: &mut ResponseHeader) {
+        for op in &self.pending_response_header_ops {
+            op.clone().apply(response_header);
         }
     }
 

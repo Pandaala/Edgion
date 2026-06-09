@@ -5,8 +5,8 @@ description: Use when reviewing link_sys runtime/store.rs "dispatch_full_set / d
 
 # LinkSys store.rs dispatch functions — Extract-Function / Dedup — DESIGN-TRADEOFF
 
-**Audit date**: 2026-05-25
-**Linked issues**: link-sys F-013 (extract-function), link-sys F-008 (duplicate provider match arms) — both closed, not further refactored.
+**Audit date**: 2026-05-25 (re-confirmed 2026-06-09)
+**Linked issues**: link-sys F-013 (extract-function), link-sys F-008 (duplicate provider match arms) — both closed, not further refactored. A merged follow-up todo (`link-sys-dispatch-dedup-followup.md`) was re-evaluated with a skeptical design pass on 2026-06-09 and deleted: verdict unchanged (NO-GO-FOR-NOW).
 
 ## Conclusion
 
@@ -73,7 +73,7 @@ readability gain. Same disposition class as
 
 Re-open only if:
 
-- A fifth (or more) LinkSys provider is added and the duplication cost can be amortized across a broader rewrite.
+- A fifth LinkSys provider is **actually implemented** and the duplication cost can be amortized across a broader rewrite. Note: the `SystemConfig` enum already has five variants — Redis, Etcd, Elasticsearch, Webhook, and `Kafka`. `Kafka` is a no-runtime stub (`KafkaClientConfig { brokers }`, documented "placeholder / future release", no roadmap date) caught today by the `_ => debug!` fallthrough, so the natural trigger is Kafka gaining a real runtime — at which point the change is one explicit arm in each dispatch function plus one line in the remove loop, and only then is a small per-arm macro worth reassessing. Adding the arm is also not a silent gap: the failure mode is benign (`_ => debug!("runtime not yet implemented")`), and `SystemConfig::system_type()` is an exhaustive `_`-free match that compile-errors on any new variant.
 - The `full_set` carry-over-from-snapshot and `partial_update` preserve-in-place semantics genuinely converge, so a single dispatch path no longer has to encode two flows.
 - A real bug is traced to a provider arm being added/changed in one function but not the other.
 

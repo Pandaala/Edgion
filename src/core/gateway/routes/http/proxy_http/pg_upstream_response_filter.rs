@@ -47,6 +47,16 @@ pub fn upstream_response_filter(
                                 .as_downstream()
                                 .digest()
                                 .map_or(false, |d| d.ssl_digest.is_some());
+                            // NOTE (filter-04c): this Set-Cookie is appended
+                            // directly onto the upstream header, NOT via
+                            // pending_response_header_ops. If a response-phase
+                            // plugin replaces this response with a local reply,
+                            // build_response_local_reply discards the upstream
+                            // header, so sticky-session continuity is
+                            // intentionally LOST on a replaced response — matching
+                            // Envoy (no cookie carry-over onto a local/error
+                            // reply). Accepted as designed; see
+                            // skills/04-review/architecture/local-reply-drops-sticky-set-cookie.md
                             let cookie_value = session_persistence::build_set_cookie_value(&sp, &token, is_tls);
                             let _ = upstream_response.append_header("Set-Cookie", &cookie_value);
                         }
@@ -120,6 +130,15 @@ pub fn upstream_response_filter(
             }
         }
     }
+
+    // filter-04c: apply request-stage-queued response-header ops onto the
+    // upstream header NON-DESTRUCTIVELY (queue kept intact). On the normal
+    // forward path this is the single application point, replacing the former
+    // per-runner pre-drain. Placed before the sync runners so response-stage
+    // plugins still observe the merged headers. If a response-phase plugin then
+    // replaces the response with a local reply, the still-intact queue is
+    // re-applied onto the fresh reply by build_response_local_reply.
+    ctx.apply_pending_response_header_ops(upstream_response);
 
     // Run rule-level upstream_response edgion_plugins (sync)
     if let Some(route_unit) = ctx.route_unit.clone() {

@@ -1066,11 +1066,6 @@ impl PluginRuntime {
         ctx: &mut EdgionHttpContext,
         response_header: &mut ResponseHeader,
     ) {
-        // Apply queued response-header ops from request stage. Each op carries
-        // its own kind (Set/Append/Remove) so semantics are preserved across
-        // the deferral.
-        ctx.drain_pending_response_header_ops(response_header);
-
         if self.upstream_response_plugins.is_empty() {
             return;
         }
