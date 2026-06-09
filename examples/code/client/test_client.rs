@@ -136,6 +136,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "grpc-match" | "grpcmatch" => "GRPCRoute/Match".to_string(),
             "grpc-tls" | "grpctls" => "EdgionTls/grpctls".to_string(),
             "tcp" => "TCPRoute/Basic".to_string(),
+            "tcp-keepalive-smoke" | "tcpkeepalivesmoke" => "TCPRoute/KeepaliveSmoke".to_string(),
             "udp" => "UDPRoute/Basic".to_string(),
             "mtls" => "EdgionTls/mTLS".to_string(),
             "security" => "Gateway/Security".to_string(),
@@ -247,6 +248,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         // TCPRoute
         "TCPRoute/Basic" | "TCPRoute" => "TCPRoute/Basic",
         "TCPRoute/IdleTimeout" => "TCPRoute/Basic",
+        "TCPRoute/KeepaliveSmoke" => "TCPRoute/Basic",
         "TCPRoute/StreamPlugins" => "TCPRoute/StreamPlugins",
         "TCPRoute/GlobalConnectionIpRestriction" => "TCPRoute/GlobalConnectionIpRestriction",
         // TLSRoute
@@ -675,6 +677,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::TcpIdleTimeoutTestSuite));
+        }
+        "TCPRoute/KeepaliveSmoke" => {
+            if !gateway {
+                eprintln!("Error: TCPRoute/KeepaliveSmoke tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TcpKeepaliveSmokeTestSuite));
         }
         // TLSRoute
         "TLSRoute" | "TLSRoute/Basic" => {
@@ -1496,6 +1505,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::UdpTestSuite));
             if gateway {
                 runner.add_suite(Box::new(suites::TcpIdleTimeoutTestSuite));
+                runner.add_suite(Box::new(suites::TcpKeepaliveSmokeTestSuite));
                 runner.add_suite(Box::new(suites::HttpMatchTestSuite));
                 runner.add_suite(Box::new(suites::HttpsTestSuite));
                 runner.add_suite(Box::new(suites::GrpcMatchTestSuite));

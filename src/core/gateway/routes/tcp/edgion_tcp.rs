@@ -196,7 +196,8 @@ impl EdgionTcpProxy {
         }
 
         // 7. Connect to upstream
-        let peer = BasicPeer::new(&upstream_addr_str);
+        let mut peer = BasicPeer::new(&upstream_addr_str);
+        peer.options.tcp_keepalive = rule.tcp_keepalive.as_ref().map(|k| k.to_pingora());
         let upstream = match self.connector.new_stream(&peer).await {
             Ok(stream) => stream,
             Err(_) => {

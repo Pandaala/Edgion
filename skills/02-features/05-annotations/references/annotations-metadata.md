@@ -84,6 +84,9 @@ Notes:
 | `edgion.io/edgion-stream-plugins` | `TCPRoute`, `TLSRoute`, `UDPRoute` | `name` or `namespace/name` | none | Resolves dynamic `EdgionStreamPlugins` lookup key. Short names are expanded with the route namespace. On `UDPRoute` only the Stage-1 ConnectionFilter (`spec.plugins`, IP-based) runs — there is no TLS stage. |
 | `edgion.io/proxy-protocol` | `TLSRoute` | currently `"v2"` is recognized | disabled | Sends Proxy Protocol v2 to upstream. Other values are ignored. |
 | `edgion.io/max-connect-retries` | `TLSRoute` | unsigned integer string | `2` | Max upstream connect attempts. Values below `1` are normalized to `1`; values above `5` are capped to `5`. |
+| `edgion.io/tcp-keepalive-time` | `TCPRoute`, `TLSRoute` | positive integer string | disabled (absent) | Idle seconds before the first TCP keepalive probe on the upstream L4 connection. Presence (a valid positive integer) enables keepalive; absent disables it entirely (no probes sent). Clamped to 1–7200; out-of-range values are clamped with a warning at config-load time. Mitigates half-open connections after NAT/firewall drops (~15 min silent stall without keepalive). |
+| `edgion.io/tcp-keepalive-interval` | `TCPRoute`, `TLSRoute` | integer string | `75` (OS default) | Seconds between consecutive keepalive probes. Only applied when `tcp-keepalive-time` is also set. Clamped to 1–75; absent or invalid value falls back to `75`. |
+| `edgion.io/tcp-keepalive-probes` | `TCPRoute`, `TLSRoute` | integer string | `9` (OS default) | Number of consecutive failed probes before the connection is declared dead and closed. Only applied when `tcp-keepalive-time` is also set. Clamped to 1–20; absent or invalid value falls back to `9`. |
 
 Current implementation note:
 

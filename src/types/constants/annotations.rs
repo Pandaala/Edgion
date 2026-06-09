@@ -40,6 +40,22 @@ pub mod edgion {
     /// Gateway API TLSRoute has no retry spec, so this is Edgion-specific.
     pub const MAX_CONNECT_RETRIES: &str = "edgion.io/max-connect-retries";
 
+    /// Idle seconds before the first TCP keepalive probe on L4 upstream
+    /// connections. Presence of this annotation (parsed to a positive integer)
+    /// is the enablement trigger for upstream keepalive; absent = disabled.
+    /// Value: integer seconds, clamped to 1-7200.
+    pub const TCP_KEEPALIVE_TIME: &str = "edgion.io/tcp-keepalive-time";
+
+    /// Seconds between TCP keepalive probes on L4 upstream connections.
+    /// Only applied when `TCP_KEEPALIVE_TIME` is set. Value: integer seconds,
+    /// clamped to 1-75; absent = 75 (OS default).
+    pub const TCP_KEEPALIVE_INTERVAL: &str = "edgion.io/tcp-keepalive-interval";
+
+    /// Number of failed TCP keepalive probes before the upstream connection is
+    /// considered dead. Only applied when `TCP_KEEPALIVE_TIME` is set.
+    /// Value: integer, clamped to 1-20; absent = 9 (OS default).
+    pub const TCP_KEEPALIVE_PROBES: &str = "edgion.io/tcp-keepalive-probes";
+
     /// Sync version injected by gateway after gRPC sync.
     /// Used for correlating data-plane logs with control-plane events.
     pub const SYNC_VERSION: &str = "edgion.io/sync-version";

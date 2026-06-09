@@ -192,6 +192,7 @@ mod fail_close_tests {
             proxy_protocol_version: None,
             stream_plugin_store_key: key,
             max_connect_retries: 1,
+            tcp_keepalive: None,
         }
     }
 

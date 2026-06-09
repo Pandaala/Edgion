@@ -12,6 +12,7 @@ use super::common::{ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::gateway::lb::BackendSelector;
 use crate::core::gateway::plugins::PluginRuntime;
+use crate::core::gateway::routes::common::TcpKeepaliveConfig;
 use crate::types::ListenerKey;
 
 /// API group for TLSRoute
@@ -93,6 +94,12 @@ pub struct TLSRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub max_connect_retries: u32,
+
+    /// Resolved upstream TCP keepalive (runtime only, from annotations).
+    /// None = disabled (default). See `resolve_tcp_keepalive`.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub tcp_keepalive: Option<TcpKeepaliveConfig>,
 }
 
 impl Clone for TLSRouteRule {
@@ -104,6 +111,7 @@ impl Clone for TLSRouteRule {
             proxy_protocol_version: self.proxy_protocol_version,
             stream_plugin_store_key: self.stream_plugin_store_key.clone(),
             max_connect_retries: self.max_connect_retries,
+            tcp_keepalive: self.tcp_keepalive.clone(),
         }
     }
 }
@@ -117,6 +125,7 @@ impl fmt::Debug for TLSRouteRule {
             .field("proxy_protocol_version", &self.proxy_protocol_version)
             .field("stream_plugin_store_key", &self.stream_plugin_store_key)
             .field("max_connect_retries", &self.max_connect_retries)
+            .field("tcp_keepalive", &self.tcp_keepalive)
             .finish()
     }
 }
@@ -276,6 +285,7 @@ mod tests {
                     proxy_protocol_version: None,
                     stream_plugin_store_key: None,
                     max_connect_retries: 1,
+                    tcp_keepalive: None,
                 }]),
                 resolved_listeners: None,
                 effective_hostnames: None,

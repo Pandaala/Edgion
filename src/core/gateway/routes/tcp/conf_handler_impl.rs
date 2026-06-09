@@ -1,5 +1,7 @@
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
-use crate::core::gateway::routes::common::{is_core_service_backend_ref, resolve_stream_plugin_store_key};
+use crate::core::gateway::routes::common::{
+    is_core_service_backend_ref, resolve_stream_plugin_store_key, resolve_tcp_keepalive,
+};
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::tcp::routes_mgr::{
     get_global_tcp_route_managers, resolved_listeners_for_route, GlobalTcpRouteManagers,
@@ -91,6 +93,8 @@ impl GlobalTcpRouteManagers {
         let route_key = route.key_name();
 
         let store_key = resolve_stream_plugin_store_key(&route.metadata);
+        let annotations = route.metadata.annotations.as_ref();
+        let tcp_keepalive = resolve_tcp_keepalive(annotations, &route_key);
 
         if let Some(rules) = route.spec.rules.as_mut() {
             for (rule_idx, rule) in rules.iter_mut().enumerate() {
@@ -120,7 +124,17 @@ impl GlobalTcpRouteManagers {
                         "Set stream plugin store key for TCPRoute rule (dynamic lookup)"
                     );
                 }
+
+                rule.tcp_keepalive = tcp_keepalive.clone();
             }
+        }
+
+        if tcp_keepalive.is_some() {
+            tracing::info!(
+                route = %route_key,
+                keepalive = ?tcp_keepalive,
+                "TCPRoute configured with extended options"
+            );
         }
 
         Ok(Arc::new(route))
@@ -176,11 +190,71 @@ mod tests {
                     stream_plugin_runtime: Default::default(),
                     stream_plugin_store_key: None,
                     backend_finder: Default::default(),
+                    tcp_keepalive: None,
                 }]),
                 resolved_listeners: Some(vec![listener_key]),
             },
             status: None,
         }
+    }
+
+    fn create_annotated_tcp_route(
+        namespace: &str,
+        name: &str,
+        gateway: &str,
+        listener_name: &str,
+        port: u16,
+        listener_key: ListenerKey,
+        annotations: std::collections::BTreeMap<String, String>,
+    ) -> TCPRoute {
+        let mut route = create_test_tcp_route(namespace, name, gateway, listener_name, port, listener_key);
+        route.metadata.annotations = Some(annotations);
+        route
+    }
+
+    #[test]
+    fn test_tcp_keepalive_annotation_resolved_on_tcp_rule() {
+        let managers = GlobalTcpRouteManagers::new();
+        let key = make_listener_key(9000, "TCP");
+        let mut annotations = std::collections::BTreeMap::new();
+        annotations.insert("edgion.io/tcp-keepalive-time".to_string(), "90".to_string());
+        let route = create_annotated_tcp_route("default", "ka", "gw1", "tcp-9000", 9000, key, annotations);
+        let initialized = managers.initialize_route(route).unwrap();
+
+        let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
+        let ka = rule.tcp_keepalive.as_ref().expect("keepalive enabled");
+        assert_eq!(ka.idle, std::time::Duration::from_secs(90));
+        assert_eq!(ka.interval, std::time::Duration::from_secs(75)); // default
+        assert_eq!(ka.count, 9); // default
+    }
+
+    #[test]
+    fn test_no_keepalive_annotation_leaves_field_none_on_tcp_rule() {
+        let managers = GlobalTcpRouteManagers::new();
+        let key = make_listener_key(9000, "TCP");
+        let route = create_test_tcp_route("default", "plain", "gw1", "tcp-9000", 9000, key);
+        let initialized = managers.initialize_route(route).unwrap();
+        let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
+        assert!(rule.tcp_keepalive.is_none());
+    }
+
+    #[test]
+    fn test_tcp_keepalive_applied_to_all_rules() {
+        let managers = GlobalTcpRouteManagers::new();
+        let key = make_listener_key(9000, "TCP");
+        let mut annotations = std::collections::BTreeMap::new();
+        annotations.insert("edgion.io/tcp-keepalive-time".to_string(), "60".to_string());
+        let mut route = create_annotated_tcp_route("default", "ka2", "gw1", "tcp-9000", 9000, key, annotations);
+        if let Some(rules) = route.spec.rules.as_mut() {
+            let second = rules[0].clone();
+            rules.push(second);
+        }
+        let initialized = managers.initialize_route(route).unwrap();
+        let rules = initialized.spec.rules.as_ref().unwrap();
+        assert_eq!(rules.len(), 2);
+        assert!(rules[0].tcp_keepalive.is_some());
+        assert!(rules[1].tcp_keepalive.is_some());
+        assert_eq!(rules[0].tcp_keepalive, rules[1].tcp_keepalive);
     }
 
     #[test]

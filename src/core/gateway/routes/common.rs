@@ -1,7 +1,10 @@
 use crate::types::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
+use crate::types::constants::annotations::edgion::{TCP_KEEPALIVE_INTERVAL, TCP_KEEPALIVE_PROBES, TCP_KEEPALIVE_TIME};
 use crate::types::resources::common::ParentReference;
 use crate::types::resources::http_route::RouteParentStatus;
 use kube::api::ObjectMeta;
+use std::collections::BTreeMap;
+use std::time::Duration;
 
 /// Canonical access-log string for an upstream address rejected by the
 /// SSRF guard (`validate_endpoint_backend_addr`). Centralized so the
@@ -129,6 +132,136 @@ pub(crate) fn resolve_stream_plugin_store_key(metadata: &ObjectMeta) -> Option<S
     Some(store_key)
 }
 
+/// Inclusive bounds for the keepalive annotation values. Out-of-range inputs
+/// are clamped (not rejected) with a WARN, mirroring `cap_tls_connect_retries`.
+///
+/// Note: the `_MIN` lower bounds (all 1) are unreachable in practice — the
+/// `> 0` filter on the parsed `i64` already guarantees every value reaching
+/// `clamp_warn_*` is >= 1. The constants are kept for documentation and
+/// symmetry only.
+const KEEPALIVE_TIME_MIN_SECS: u64 = 1;
+const KEEPALIVE_TIME_MAX_SECS: u64 = 7200;
+const KEEPALIVE_INTERVAL_MIN_SECS: u64 = 1;
+const KEEPALIVE_INTERVAL_MAX_SECS: u64 = 75;
+const KEEPALIVE_PROBES_MIN: usize = 1;
+const KEEPALIVE_PROBES_MAX: usize = 20;
+
+/// OS-default fallbacks (Linux `TCP_KEEPINTVL` / `TCP_KEEPCNT`) used when only
+/// the enabling `time` annotation is present. Pingora pushes all of
+/// idle/interval/count to setsockopt unconditionally once keepalive is enabled,
+/// so we must supply concrete values here rather than relying on the kernel.
+// Intentionally equals KEEPALIVE_INTERVAL_MAX_SECS (75s) — the OS default
+// matches the ceiling, so this is not a copy-paste mistake.
+const KEEPALIVE_INTERVAL_DEFAULT_SECS: u64 = 75;
+const KEEPALIVE_PROBES_DEFAULT: usize = 9;
+
+/// Resolved, comparable TCP keepalive configuration for an L4 upstream.
+///
+/// Deliberately an Edgion-local type rather than Pingora's `TcpKeepalive`:
+/// it is `PartialEq`/`Eq` (Pingora's is not) and keeps `pingora` out of the
+/// CRD resource types. Converted to Pingora's runtime type at the data-plane
+/// edge via [`TcpKeepaliveConfig::to_pingora`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TcpKeepaliveConfig {
+    pub idle: Duration,
+    pub interval: Duration,
+    pub count: usize,
+}
+
+impl TcpKeepaliveConfig {
+    /// Convert to Pingora's runtime keepalive type. `user_timeout` is
+    /// Linux-only; `Duration::ZERO` tells the kernel to use the system default.
+    pub fn to_pingora(&self) -> pingora_core::protocols::l4::ext::TcpKeepalive {
+        pingora_core::protocols::l4::ext::TcpKeepalive {
+            idle: self.idle,
+            interval: self.interval,
+            count: self.count,
+            #[cfg(target_os = "linux")]
+            user_timeout: Duration::ZERO,
+        }
+    }
+}
+
+fn clamp_warn_secs(v: u64, min: u64, max: u64, route_key: &str, field: &str) -> u64 {
+    let clamped = v.clamp(min, max);
+    if clamped != v {
+        tracing::warn!(route = %route_key, field, requested = v, clamped, "tcp keepalive value clamped");
+    }
+    clamped
+}
+
+fn clamp_warn_count(v: usize, min: usize, max: usize, route_key: &str, field: &str) -> usize {
+    let clamped = v.clamp(min, max);
+    if clamped != v {
+        tracing::warn!(route = %route_key, field, requested = v, clamped, "tcp keepalive value clamped");
+    }
+    clamped
+}
+
+/// Resolve the `edgion.io/tcp-keepalive-*` annotations into a keepalive config.
+///
+/// Returns `None` (keepalive disabled — current default behavior) unless
+/// `tcp-keepalive-time` is present and parses to a positive integer. When
+/// enabled, `interval` and `probes` fall back to the OS defaults (75s / 9) if
+/// absent/invalid, and every field is clamped to a sane range with a WARN.
+///
+/// Single source of truth shared by the TCP and TLS conf-handlers.
+pub fn resolve_tcp_keepalive(
+    annotations: Option<&BTreeMap<String, String>>,
+    route_key: &str,
+) -> Option<TcpKeepaliveConfig> {
+    let annotations = annotations?;
+
+    // Enablement trigger: time present and > 0.
+    let raw_time = annotations.get(TCP_KEEPALIVE_TIME)?.trim().parse::<i64>().ok()?;
+    if raw_time <= 0 {
+        return None;
+    }
+    let time = clamp_warn_secs(
+        raw_time as u64,
+        KEEPALIVE_TIME_MIN_SECS,
+        KEEPALIVE_TIME_MAX_SECS,
+        route_key,
+        "time",
+    );
+
+    let interval = annotations
+        .get(TCP_KEEPALIVE_INTERVAL)
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|v| *v > 0)
+        .map(|v| {
+            clamp_warn_secs(
+                v as u64,
+                KEEPALIVE_INTERVAL_MIN_SECS,
+                KEEPALIVE_INTERVAL_MAX_SECS,
+                route_key,
+                "interval",
+            )
+        })
+        .unwrap_or(KEEPALIVE_INTERVAL_DEFAULT_SECS);
+
+    let count = annotations
+        .get(TCP_KEEPALIVE_PROBES)
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|v| *v > 0)
+        .map(|v| {
+            clamp_warn_count(
+                v as usize,
+                KEEPALIVE_PROBES_MIN,
+                KEEPALIVE_PROBES_MAX,
+                route_key,
+                "probes",
+            )
+        })
+        .unwrap_or(KEEPALIVE_PROBES_DEFAULT);
+
+    Some(TcpKeepaliveConfig {
+        idle: Duration::from_secs(time),
+        interval: Duration::from_secs(interval),
+        count,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,5 +329,185 @@ mod tests {
             resolve_stream_plugin_store_key(&meta),
             Some("default/plugins-1".to_string())
         );
+    }
+
+    fn ka_annotations(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        let mut a = BTreeMap::new();
+        for (k, v) in pairs {
+            a.insert(k.to_string(), v.to_string());
+        }
+        a
+    }
+
+    #[test]
+    fn resolve_tcp_keepalive_none_when_no_annotations() {
+        assert_eq!(resolve_tcp_keepalive(None, "ns/r"), None);
+    }
+
+    #[test]
+    fn resolve_tcp_keepalive_none_when_time_absent() {
+        let a = ka_annotations(&[("edgion.io/tcp-keepalive-interval", "10")]);
+        assert_eq!(resolve_tcp_keepalive(Some(&a), "ns/r"), None);
+    }
+
+    #[test]
+    fn resolve_tcp_keepalive_none_when_time_nonpositive_or_invalid() {
+        let zero = ka_annotations(&[("edgion.io/tcp-keepalive-time", "0")]);
+        assert_eq!(resolve_tcp_keepalive(Some(&zero), "ns/r"), None);
+        let neg = ka_annotations(&[("edgion.io/tcp-keepalive-time", "-5")]);
+        assert_eq!(resolve_tcp_keepalive(Some(&neg), "ns/r"), None);
+        let nan = ka_annotations(&[("edgion.io/tcp-keepalive-time", "abc")]);
+        assert_eq!(resolve_tcp_keepalive(Some(&nan), "ns/r"), None);
+    }
+
+    #[test]
+    fn resolve_tcp_keepalive_defaults_when_only_time_set() {
+        let a = ka_annotations(&[("edgion.io/tcp-keepalive-time", "300")]);
+        let got = resolve_tcp_keepalive(Some(&a), "ns/r").expect("enabled");
+        assert_eq!(got.idle, std::time::Duration::from_secs(300));
+        assert_eq!(got.interval, std::time::Duration::from_secs(75));
+        assert_eq!(got.count, 9);
+    }
+
+    #[test]
+    fn resolve_tcp_keepalive_all_fields_in_range() {
+        let a = ka_annotations(&[
+            ("edgion.io/tcp-keepalive-time", "60"),
+            ("edgion.io/tcp-keepalive-interval", "10"),
+            ("edgion.io/tcp-keepalive-probes", "4"),
+        ]);
+        let got = resolve_tcp_keepalive(Some(&a), "ns/r").expect("enabled");
+        assert_eq!(got.idle, std::time::Duration::from_secs(60));
+        assert_eq!(got.interval, std::time::Duration::from_secs(10));
+        assert_eq!(got.count, 4);
+    }
+
+    #[test]
+    fn resolve_tcp_keepalive_clamps_out_of_range() {
+        let a = ka_annotations(&[
+            ("edgion.io/tcp-keepalive-time", "999999"),
+            ("edgion.io/tcp-keepalive-interval", "9999"),
+            ("edgion.io/tcp-keepalive-probes", "9999"),
+        ]);
+        let got = resolve_tcp_keepalive(Some(&a), "ns/r").expect("enabled");
+        assert_eq!(got.idle, std::time::Duration::from_secs(7200));
+        assert_eq!(got.interval, std::time::Duration::from_secs(75));
+        assert_eq!(got.count, 20);
+    }
+
+    #[test]
+    fn to_pingora_maps_fields() {
+        let cfg = TcpKeepaliveConfig {
+            idle: std::time::Duration::from_secs(120),
+            interval: std::time::Duration::from_secs(30),
+            count: 5,
+        };
+        let ka = cfg.to_pingora();
+        assert_eq!(ka.idle, std::time::Duration::from_secs(120));
+        assert_eq!(ka.interval, std::time::Duration::from_secs(30));
+        assert_eq!(ka.count, 5);
+        #[cfg(target_os = "linux")]
+        assert_eq!(ka.user_timeout, std::time::Duration::ZERO);
+    }
+
+    #[test]
+    fn resolve_tcp_keepalive_invalid_interval_and_probes_fall_back_to_defaults() {
+        let a = ka_annotations(&[
+            ("edgion.io/tcp-keepalive-time", "300"),
+            ("edgion.io/tcp-keepalive-interval", "0"),
+            ("edgion.io/tcp-keepalive-probes", "abc"),
+        ]);
+        let got = resolve_tcp_keepalive(Some(&a), "ns/r").expect("enabled");
+        assert_eq!(got.idle, std::time::Duration::from_secs(300));
+        assert_eq!(got.interval, std::time::Duration::from_secs(75));
+        assert_eq!(got.count, 9);
+    }
+
+    #[test]
+    fn resolve_tcp_keepalive_exact_boundaries() {
+        // time: 7200 kept, 7201 clamped to 7200
+        let a = ka_annotations(&[("edgion.io/tcp-keepalive-time", "7200")]);
+        assert_eq!(
+            resolve_tcp_keepalive(Some(&a), "r").unwrap().idle,
+            std::time::Duration::from_secs(7200)
+        );
+        let a = ka_annotations(&[("edgion.io/tcp-keepalive-time", "7201")]);
+        assert_eq!(
+            resolve_tcp_keepalive(Some(&a), "r").unwrap().idle,
+            std::time::Duration::from_secs(7200)
+        );
+        // interval: 75 kept, 76 clamped
+        let a = ka_annotations(&[
+            ("edgion.io/tcp-keepalive-time", "300"),
+            ("edgion.io/tcp-keepalive-interval", "75"),
+        ]);
+        assert_eq!(
+            resolve_tcp_keepalive(Some(&a), "r").unwrap().interval,
+            std::time::Duration::from_secs(75)
+        );
+        let a = ka_annotations(&[
+            ("edgion.io/tcp-keepalive-time", "300"),
+            ("edgion.io/tcp-keepalive-interval", "76"),
+        ]);
+        assert_eq!(
+            resolve_tcp_keepalive(Some(&a), "r").unwrap().interval,
+            std::time::Duration::from_secs(75)
+        );
+        // probes: 20 kept, 21 clamped
+        let a = ka_annotations(&[
+            ("edgion.io/tcp-keepalive-time", "300"),
+            ("edgion.io/tcp-keepalive-probes", "20"),
+        ]);
+        assert_eq!(resolve_tcp_keepalive(Some(&a), "r").unwrap().count, 20);
+        let a = ka_annotations(&[
+            ("edgion.io/tcp-keepalive-time", "300"),
+            ("edgion.io/tcp-keepalive-probes", "21"),
+        ]);
+        assert_eq!(resolve_tcp_keepalive(Some(&a), "r").unwrap().count, 20);
+    }
+
+    #[test]
+    fn resolve_tcp_keepalive_clamps_interval_independently() {
+        let a = ka_annotations(&[
+            ("edgion.io/tcp-keepalive-time", "300"),
+            ("edgion.io/tcp-keepalive-interval", "9999"),
+            ("edgion.io/tcp-keepalive-probes", "5"),
+        ]);
+        let got = resolve_tcp_keepalive(Some(&a), "r").unwrap();
+        assert_eq!(got.idle, std::time::Duration::from_secs(300));
+        assert_eq!(got.interval, std::time::Duration::from_secs(75));
+        assert_eq!(got.count, 5);
+    }
+
+    #[test]
+    fn resolve_tcp_keepalive_clamps_probes_independently() {
+        let a = ka_annotations(&[
+            ("edgion.io/tcp-keepalive-time", "300"),
+            ("edgion.io/tcp-keepalive-interval", "30"),
+            ("edgion.io/tcp-keepalive-probes", "9999"),
+        ]);
+        let got = resolve_tcp_keepalive(Some(&a), "r").unwrap();
+        assert_eq!(got.interval, std::time::Duration::from_secs(30));
+        assert_eq!(got.count, 20);
+    }
+
+    #[test]
+    fn resolve_tcp_keepalive_partial_field_defaults() {
+        // interval explicit, probes absent -> probes defaults to 9
+        let a = ka_annotations(&[
+            ("edgion.io/tcp-keepalive-time", "60"),
+            ("edgion.io/tcp-keepalive-interval", "15"),
+        ]);
+        let got = resolve_tcp_keepalive(Some(&a), "r").unwrap();
+        assert_eq!(got.interval, std::time::Duration::from_secs(15));
+        assert_eq!(got.count, 9);
+        // probes explicit, interval absent -> interval defaults to 75
+        let a = ka_annotations(&[
+            ("edgion.io/tcp-keepalive-time", "60"),
+            ("edgion.io/tcp-keepalive-probes", "5"),
+        ]);
+        let got = resolve_tcp_keepalive(Some(&a), "r").unwrap();
+        assert_eq!(got.interval, std::time::Duration::from_secs(75));
+        assert_eq!(got.count, 5);
     }
 }

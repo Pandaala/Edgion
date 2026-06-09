@@ -11,6 +11,7 @@ use std::sync::Arc;
 use super::common::{ParentReference, RefDenied};
 use crate::core::gateway::lb::BackendSelector;
 use crate::core::gateway::plugins::StreamPluginRuntime;
+use crate::core::gateway::routes::common::TcpKeepaliveConfig;
 use crate::types::ListenerKey;
 
 /// API group for TCPRoute
@@ -72,6 +73,12 @@ pub struct TCPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub stream_plugin_store_key: Option<String>,
+
+    /// Resolved upstream TCP keepalive (runtime only, from annotations).
+    /// None = disabled (default). See `resolve_tcp_keepalive`.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub tcp_keepalive: Option<TcpKeepaliveConfig>,
 }
 
 impl Clone for TCPRouteRule {
@@ -81,6 +88,7 @@ impl Clone for TCPRouteRule {
             backend_finder: BackendSelector::new(),
             stream_plugin_runtime: self.stream_plugin_runtime.clone(),
             stream_plugin_store_key: self.stream_plugin_store_key.clone(),
+            tcp_keepalive: self.tcp_keepalive.clone(),
         }
     }
 }
@@ -92,6 +100,7 @@ impl fmt::Debug for TCPRouteRule {
             .field("backend_finder", &"<skipped>")
             .field("stream_plugin_runtime", &self.stream_plugin_runtime)
             .field("stream_plugin_store_key", &self.stream_plugin_store_key)
+            .field("tcp_keepalive", &self.tcp_keepalive)
             .finish()
     }
 }

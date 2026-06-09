@@ -807,6 +807,7 @@ mod tests {
                     proxy_protocol_version: None,
                     stream_plugin_store_key: None,
                     max_connect_retries: 1,
+                    tcp_keepalive: None,
                 }]),
                 resolved_listeners: None,
                 effective_hostnames: None,

@@ -41,6 +41,9 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
 | `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins binding (TCPRoute / TLSRoute / UDPRoute) |
 | `edgion.io/proxy-protocol` | `"v2"` | Send Proxy Protocol v2 to upstream (TLSRoute only; other values ignored) |
 | `edgion.io/max-connect-retries` | `u32` | Max upstream connect attempts (TLSRoute only; clamped to 1..=5, default 2) |
+| `edgion.io/tcp-keepalive-time` | positive integer string | Idle seconds before the first keepalive probe on the upstream L4 connection (clamped 1–7200). Presence enables keepalive; absent = disabled (TCPRoute / TLSRoute) |
+| `edgion.io/tcp-keepalive-interval` | integer string | Seconds between keepalive probes; clamped 1–75; absent or invalid = 75. Only applied when `tcp-keepalive-time` is set (TCPRoute / TLSRoute) |
+| `edgion.io/tcp-keepalive-probes` | integer string | Failed probe count before connection is declared dead; clamped 1–20; absent or invalid = 9. Only applied when `tcp-keepalive-time` is set (TCPRoute / TLSRoute) |
 
 - On `UDPRoute`, `edgion.io/edgion-stream-plugins` runs only the Stage-1 ConnectionFilter (`spec.plugins`, IP-based, fail-close); there is no TLS stage.
 

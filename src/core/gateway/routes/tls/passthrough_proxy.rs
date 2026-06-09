@@ -281,7 +281,8 @@ impl EdgionTlsPassthroughProxy {
                 return;
             }
 
-            let peer = BasicPeer::new(&upstream_addr_str);
+            let mut peer = BasicPeer::new(&upstream_addr_str);
+            peer.options.tcp_keepalive = rule.tcp_keepalive.as_ref().map(|k| k.to_pingora());
             match self.connector.new_stream(&peer).await {
                 Ok(stream) => {
                     if let Some(info) = ctx.current_upstream_mut() {

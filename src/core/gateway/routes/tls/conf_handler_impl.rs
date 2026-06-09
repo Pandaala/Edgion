@@ -1,6 +1,8 @@
 use super::{cap_tls_connect_retries, DEFAULT_TLS_CONNECT_RETRIES, MAX_TLS_CONNECT_RETRIES};
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
-use crate::core::gateway::routes::common::{is_core_service_backend_ref, resolve_stream_plugin_store_key};
+use crate::core::gateway::routes::common::{
+    is_core_service_backend_ref, resolve_stream_plugin_store_key, resolve_tcp_keepalive,
+};
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::tls::routes_mgr::resolved_listeners_for_route;
 use crate::core::gateway::routes::tls::{get_global_tls_route_managers, GlobalTlsRouteManagers};
@@ -121,6 +123,8 @@ impl GlobalTlsRouteManagers {
             );
         }
 
+        let tcp_keepalive = resolve_tcp_keepalive(annotations, &route_key);
+
         if let Some(rules) = route.spec.rules.as_mut() {
             for (rule_idx, rule) in rules.iter_mut().enumerate() {
                 if let Some(backend_refs) = &rule.backend_refs {
@@ -142,6 +146,7 @@ impl GlobalTlsRouteManagers {
 
                 rule.proxy_protocol_version = proxy_protocol_version;
                 rule.max_connect_retries = max_connect_retries;
+                rule.tcp_keepalive = tcp_keepalive.clone();
 
                 if let Some(ref key) = store_key {
                     rule.stream_plugin_store_key = Some(key.clone());
@@ -155,11 +160,12 @@ impl GlobalTlsRouteManagers {
             }
         }
 
-        if proxy_protocol_version.is_some() || max_connect_retries > 1 {
+        if proxy_protocol_version.is_some() || max_connect_retries > 1 || tcp_keepalive.is_some() {
             tracing::info!(
                 route = %route_key,
                 proxy_protocol = ?proxy_protocol_version,
                 max_connect_retries,
+                keepalive = ?tcp_keepalive,
                 "TLSRoute configured with extended options"
             );
         }
@@ -223,6 +229,7 @@ mod tests {
 
                     stream_plugin_store_key: None,
                     max_connect_retries: 1,
+                    tcp_keepalive: None,
                 }]),
                 resolved_listeners: Some(vec![listener_key]),
                 effective_hostnames: Some(vec![hostname.to_string()]),
@@ -277,6 +284,7 @@ mod tests {
 
                     stream_plugin_store_key: None,
                     max_connect_retries: 1,
+                    tcp_keepalive: None,
                 }]),
                 resolved_listeners: Some(vec![listener_key]),
                 effective_hostnames: Some(vec![hostname.to_string()]),
@@ -580,6 +588,57 @@ mod tests {
             mgr9443.load_route_table().match_route("svc.example.com").is_some(),
             "L9443 should have route after migration"
         );
+    }
+
+    #[test]
+    fn test_tcp_keepalive_annotation_resolved_on_tls_rule() {
+        let managers = GlobalTlsRouteManagers::new();
+        let mut annotations = std::collections::BTreeMap::new();
+        annotations.insert("edgion.io/tcp-keepalive-time".to_string(), "120".to_string());
+        annotations.insert("edgion.io/tcp-keepalive-interval".to_string(), "20".to_string());
+        annotations.insert("edgion.io/tcp-keepalive-probes".to_string(), "4".to_string());
+        let key = make_listener_key(443, "TLS");
+
+        let route = create_annotated_tls_route("default", "ka-route", "gw1", "ka.example.com", 443, key, annotations);
+        let initialized = managers.initialize_route(route).unwrap();
+
+        let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
+        let ka = rule.tcp_keepalive.as_ref().expect("keepalive enabled");
+        assert_eq!(ka.idle, std::time::Duration::from_secs(120));
+        assert_eq!(ka.interval, std::time::Duration::from_secs(20));
+        assert_eq!(ka.count, 4);
+    }
+
+    #[test]
+    fn test_no_keepalive_annotation_leaves_field_none_on_tls_rule() {
+        let managers = GlobalTlsRouteManagers::new();
+        let key = make_listener_key(443, "TLS");
+        let route = create_test_tls_route("default", "plain", "gw1", "test.com", 443, key);
+        let initialized = managers.initialize_route(route).unwrap();
+        let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
+        assert!(rule.tcp_keepalive.is_none());
+    }
+
+    #[test]
+    fn test_tls_keepalive_applied_to_all_rules() {
+        // The conf-handler loop must set tcp_keepalive on every rule, not just
+        // the first. Guards against a regression that breaks out of the loop
+        // early and leaves rules[1..] with None.
+        let managers = GlobalTlsRouteManagers::new();
+        let mut annotations = std::collections::BTreeMap::new();
+        annotations.insert("edgion.io/tcp-keepalive-time".to_string(), "60".to_string());
+        let key = make_listener_key(443, "TLS");
+        let mut route = create_annotated_tls_route("default", "ka2", "gw1", "ka2.example.com", 443, key, annotations);
+        if let Some(rules) = route.spec.rules.as_mut() {
+            let second = rules[0].clone();
+            rules.push(second);
+        }
+        let initialized = managers.initialize_route(route).unwrap();
+        let rules = initialized.spec.rules.as_ref().unwrap();
+        assert_eq!(rules.len(), 2);
+        assert!(rules[0].tcp_keepalive.is_some());
+        assert!(rules[1].tcp_keepalive.is_some());
+        assert_eq!(rules[0].tcp_keepalive, rules[1].tcp_keepalive);
     }
 
     #[test]

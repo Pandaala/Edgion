@@ -28,7 +28,7 @@ pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite, GrpcUnmatchedRouteTestSu
 
 pub use tcp_route::{
     GcirEnforcementTestSuite, TcpEspReloadAllowTestSuite, TcpEspReloadDenyTestSuite, TcpIdleTimeoutTestSuite,
-    TcpStreamPluginsTestSuite, TcpTestSuite,
+    TcpKeepaliveSmokeTestSuite, TcpStreamPluginsTestSuite, TcpTestSuite,
 };
 
 pub use tls_route::{
