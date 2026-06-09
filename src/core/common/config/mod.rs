@@ -231,6 +231,13 @@ pub struct ServerConfig {
     #[arg(long, value_name = "ADDR")]
     #[serde(default)]
     pub metrics_listen: Option<String>,
+
+    /// CIDR allowlist for the Admin API listener. Empty/unset = allow all
+    /// (backward compatible). Matched against the TCP peer address only;
+    /// X-Forwarded-For is never trusted. Comma-separated on the CLI.
+    #[arg(long, value_name = "CIDR", value_delimiter = ',')]
+    #[serde(default)]
+    pub allow_admin_ips: Vec<String>,
     // Note: gateway_class, watch_namespaces, label_selector moved to ConfCenterConfig::Kubernetes
 }
 
@@ -697,6 +704,7 @@ impl EdgionControllerConfig {
         Self::merge(&mut file_config, &cli_config);
 
         file_config.validate_metrics()?;
+        crate::core::common::api::ip_allowlist::validate_admin_ips(&file_config.server.allow_admin_ips)?;
 
         Ok(file_config)
     }
@@ -807,6 +815,11 @@ impl EdgionControllerConfig {
         }
         if cli.server.metrics_listen.is_some() {
             base.server.metrics_listen = cli.server.metrics_listen.clone();
+        }
+        // Vec field: an empty CLI value (flag absent on argv) must NOT clobber the
+        // YAML allowlist — that would silently disable the allowlist (fail-open).
+        if !cli.server.allow_admin_ips.is_empty() {
+            base.server.allow_admin_ips = cli.server.allow_admin_ips.clone();
         }
 
         // Logging config
@@ -1088,6 +1101,30 @@ mod tests {
         cfg.logging.console = Some(false);
         let log_cfg = cfg.to_log_config();
         assert!(!log_cfg.console);
+    }
+
+    #[test]
+    fn merge_keeps_yaml_allowlist_when_cli_omits_flag() {
+        // Simulates the K8s case: allowlist from YAML, flag absent on argv (clap → empty Vec).
+        let mut base = EdgionControllerConfig::default();
+        base.server.allow_admin_ips = vec!["10.0.0.0/8".to_string()];
+        let cli = EdgionControllerConfig::default(); // allow_admin_ips empty
+        EdgionControllerConfig::merge(&mut base, &cli);
+        assert_eq!(
+            base.server.allow_admin_ips,
+            vec!["10.0.0.0/8".to_string()],
+            "an empty CLI allowlist must not clobber the YAML allowlist"
+        );
+    }
+
+    #[test]
+    fn merge_cli_allowlist_overrides_when_present() {
+        let mut base = EdgionControllerConfig::default();
+        base.server.allow_admin_ips = vec!["10.0.0.0/8".to_string()];
+        let mut cli = EdgionControllerConfig::default();
+        cli.server.allow_admin_ips = vec!["192.168.0.0/16".to_string()];
+        EdgionControllerConfig::merge(&mut base, &cli);
+        assert_eq!(base.server.allow_admin_ips, vec!["192.168.0.0/16".to_string()]);
     }
 
     #[test]

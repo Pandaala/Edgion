@@ -1,4 +1,5 @@
 pub mod compose;
+pub mod ip_allowlist;
 mod types;
 
 pub use compose::compose_admin_routes;

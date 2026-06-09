@@ -132,6 +132,9 @@ impl EdgionCenterCli {
                 .map_err(|e| anyhow::anyhow!("Invalid admin_tls config: {}", e))?;
         }
 
+        // Fail-fast: reject malformed allow_admin_ips CIDRs before spawning listeners.
+        crate::core::common::api::ip_allowlist::validate_admin_ips(&config.server.allow_admin_ips)?;
+
         let trust_domain = config.peer_identity.as_ref().map(|p| p.trust_domain.clone());
         let transport = decide_transport(&config.grpc_security, trust_domain.as_deref());
         if transport == TransportDecision::FailClose {
@@ -216,6 +219,7 @@ impl EdgionCenterCli {
         let auth_config = config.auth.clone();
         let local_auth_config = config.local_auth.clone();
         let admin_tls = config.server.admin_tls.clone();
+        let allow_admin_ips = config.server.allow_admin_ips.clone();
         // Startup diagnostic only — does not change cookie runtime behavior.
         if let Some(local) = config.local_auth.as_ref() {
             // Args are (admin_tls_present, cookie_secure) — keep this order.
@@ -266,8 +270,27 @@ impl EdgionCenterCli {
             // compose hard-codes the assembly order: business routes + auth routes + middleware + CORS.
             // The returned app is final; do not call .route() / .layer() afterwards -- see the function doc.
             let app = crate::core::common::api::compose_admin_routes(base_router, auth_state, local_auth_intent);
-            // Shared make-service with connect-info: forward-compatible with admin-api-02's
-            // IP allowlist (which needs ConnectInfo<SocketAddr>); harmless without it.
+            // admin-api-02: outermost IP allowlist — rejects unauthorized peers before auth.
+            // Not mounted when the allowlist is empty (allow-all, backward compatible).
+            let app = match crate::core::common::api::ip_allowlist::build_admin_ip_matcher(&allow_admin_ips)? {
+                Some(m) => {
+                    tracing::info!(
+                        component = "center",
+                        entries = allow_admin_ips.len(),
+                        "admin IP allowlist active"
+                    );
+                    app.layer(axum::middleware::from_fn_with_state(
+                        m,
+                        crate::core::common::api::ip_allowlist::ip_allowlist_middleware,
+                    ))
+                }
+                None => {
+                    tracing::info!(component = "center", "admin IP allowlist inactive (allow all)");
+                    app
+                }
+            };
+            // Shared make-service with connect-info, required by the IP allowlist
+            // (ConnectInfo<SocketAddr>) and used by both HTTP and HTTPS serve branches.
             let make_service = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
             match admin_tls {
                 Some(tls) => {

@@ -485,6 +485,7 @@ pub async fn serve(
     config_file: Option<String>,
     authorizer: Arc<crate::core::controller::authz::Authorizer>,
     center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
+    allow_admin_ips: Vec<String>,
 ) -> anyhow::Result<()> {
     serve_with_shutdown(
         conf_mgr,
@@ -496,6 +497,7 @@ pub async fn serve(
         config_file,
         authorizer,
         center_reload_tx,
+        allow_admin_ips,
         std::future::pending::<()>(),
     )
     .await
@@ -516,6 +518,7 @@ pub async fn serve_with_shutdown(
     config_file: Option<String>,
     authorizer: Arc<crate::core::controller::authz::Authorizer>,
     center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
+    allow_admin_ips: Vec<String>,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let auth_state = crate::core::common::unified_auth::UnifiedAuthState::from_configs(
@@ -576,6 +579,26 @@ pub async fn serve_with_shutdown(
             cli_auth_status_augment,
         ));
 
+    // admin-api-02: outermost IP allowlist — rejects unauthorized peers before auth.
+    // Not mounted when the allowlist is empty (allow-all, backward compatible).
+    let app = match crate::core::common::api::ip_allowlist::build_admin_ip_matcher(&allow_admin_ips)? {
+        Some(m) => {
+            tracing::info!(
+                component = "admin_api",
+                entries = allow_admin_ips.len(),
+                "admin IP allowlist active"
+            );
+            app.layer(axum::middleware::from_fn_with_state(
+                m,
+                crate::core::common::api::ip_allowlist::ip_allowlist_middleware,
+            ))
+        }
+        None => {
+            tracing::info!(component = "admin_api", "admin IP allowlist inactive (allow all)");
+            app
+        }
+    };
+
     tracing::info!(
         component = "admin_api",
         addr = %addr,
@@ -583,9 +606,12 @@ pub async fn serve_with_shutdown(
     );
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal)
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal)
+    .await?;
 
     tracing::info!(component = "admin_api", "Admin API server stopped");
     Ok(())

@@ -95,6 +95,10 @@ pub struct CenterServerConfig {
     /// When omitted, the admin listener serves plain HTTP.
     /// When set, the admin listener serves HTTPS; probe and metrics listeners remain HTTP.
     pub admin_tls: Option<AdminTlsConfig>,
+    /// CIDR allowlist for the admin HTTP API. Empty/unset = allow all.
+    /// Matched against the TCP peer address only; X-Forwarded-For is never trusted.
+    #[serde(default)]
+    pub allow_admin_ips: Vec<String>,
 }
 
 impl Default for CenterServerConfig {
@@ -105,6 +109,7 @@ impl Default for CenterServerConfig {
             probe_addr: "0.0.0.0:12200".to_string(),
             metrics_addr: "0.0.0.0:12290".to_string(),
             admin_tls: None,
+            allow_admin_ips: Vec::new(),
         }
     }
 }

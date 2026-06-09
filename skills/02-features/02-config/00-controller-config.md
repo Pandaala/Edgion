@@ -27,6 +27,10 @@ server:
   admin_listen: "0.0.0.0:12101"   # Admin HTTP API address (/api/v1, /configclient)
   # probe_listen: "0.0.0.0:12100"   # Liveness/readiness (/health, /ready); default 0.0.0.0:12100
   # metrics_listen: "0.0.0.0:12190" # Prometheus metrics (/metrics); default 0.0.0.0:12190
+  # allow_admin_ips:                 # Optional IP allowlist for the Admin API listener; unset/empty = allow all
+  #   - "10.0.0.0/8"
+  #   - "127.0.0.1/32"
+  #   - "::1/128"
 
 logging:
   log_dir: logs                    # Log directory
@@ -98,6 +102,7 @@ conf_center:
 | `admin_listen` | `String` | `0.0.0.0:12101` | Admin HTTP API address — serves `/api/v1/*` and `/configclient` |
 | `probe_listen` | `String` | `0.0.0.0:12100` | Probe listener — serves `/health` (liveness) and `/ready` (readiness) |
 | `metrics_listen` | `String` | `0.0.0.0:12190` | Metrics listener — serves `/metrics` (Prometheus) |
+| `allow_admin_ips` | `Vec<String>` | `[]` (allow all) | CIDR allowlist for the Admin API listener. **Unset or empty = allow all** (backward compatible). Matched against the **TCP peer address only**; `X-Forwarded-For` is never trusted, so it is meaningful only for direct connections to the admin socket (behind an L7 proxy it degrades to matching the proxy IP). Probe/metrics run on dedicated ports and are unaffected. Dual-stack: when the listener binds `::`, list CIDRs for both families; NAT64 `64:ff9b::/96` embedded IPv4 is not extracted. Example: `["10.0.0.0/8", "127.0.0.1/32", "::1/128"]` |
 
 ### [logging]
 

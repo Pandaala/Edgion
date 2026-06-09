@@ -240,6 +240,7 @@ impl EdgionControllerCli {
         config_file: Option<String>,
         authorizer: std::sync::Arc<crate::core::controller::authz::Authorizer>,
         center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
+        allow_admin_ips: Vec<String>,
         shutdown_handle: ShutdownHandle,
     ) -> Result<()> {
         tracing::info!(
@@ -361,6 +362,7 @@ impl EdgionControllerCli {
                     config_file,
                     authorizer,
                     center_reload_tx,
+                    allow_admin_ips,
                     admin_shutdown
                 )
             )
@@ -682,6 +684,7 @@ impl EdgionControllerCli {
             config_file,
             authorizer,
             center_reload_tx,
+            config.server.allow_admin_ips.clone(),
             shutdown_handle,
         )
         .await
