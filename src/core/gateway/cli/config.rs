@@ -156,7 +156,7 @@ pub struct EdgionGatewayConfig {
 }
 
 /// Gateway configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
+#[derive(Clone, Serialize, Deserialize, Args, Default)]
 pub struct GatewayConfig {
     /// Operator gRPC address (e.g., http://127.0.0.1:12151)
     #[arg(long = "server-addr", value_name = "ADDR")]
@@ -172,6 +172,46 @@ pub struct GatewayConfig {
     #[arg(long = "probe-listen", value_name = "ADDR")]
     #[serde(default)]
     pub probe_listen: Option<String>,
+
+    /// Shared bearer token for the Gateway admin API. Config-file only (no CLI
+    /// flag, so it never lands in process args / `ps`). In Kubernetes, prefer
+    /// the `EDGION_GATEWAY_ADMIN_TOKEN` env var injected from a Secret; this
+    /// field is the fallback for a Secret-mounted config file. Never serialized
+    /// out, and redacted in `Debug` (see the manual impl below).
+    #[arg(skip)]
+    #[serde(default, skip_serializing)]
+    pub admin_token: Option<String>,
+}
+
+impl std::fmt::Debug for GatewayConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayConfig")
+            .field("server_addr", &self.server_addr)
+            .field("admin_listen", &self.admin_listen)
+            .field("probe_listen", &self.probe_listen)
+            .field("admin_token", &self.admin_token.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
+}
+
+/// Resolve the gateway admin token from its sources, highest precedence first:
+/// the `EDGION_GATEWAY_ADMIN_TOKEN` env var, then the config field. Values are
+/// trimmed; empty/whitespace-only is treated as absent (so a present-but-empty
+/// env var does not shadow a real config value). Returns `None` when no token is
+/// configured (the caller then fails closed with 503).
+pub fn resolve_admin_token(env_value: Option<String>, config_value: Option<&str>) -> Option<String> {
+    let cleaned = |v: &str| {
+        let t = v.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    };
+    if let Some(env) = env_value.as_deref().and_then(cleaned) {
+        return Some(env);
+    }
+    config_value.and_then(cleaned)
 }
 
 // Default log configurations
@@ -1017,5 +1057,60 @@ access_log_sensitive:
         // (120xx). Changing this would silently break the port-unification plan.
         let cfg = MetricsConfig::default();
         assert_eq!(cfg.listen, "0.0.0.0:12090");
+    }
+
+    #[test]
+    fn resolve_admin_token_prefers_nonempty_env() {
+        assert_eq!(
+            resolve_admin_token(Some("env-token".into()), Some("config-token")),
+            Some("env-token".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_admin_token_empty_env_falls_through_to_config() {
+        // present-but-empty env must not shadow a real config value
+        assert_eq!(
+            resolve_admin_token(Some("   ".into()), Some("config-token")),
+            Some("config-token".to_string())
+        );
+        assert_eq!(
+            resolve_admin_token(Some("".into()), Some("config-token")),
+            Some("config-token".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_admin_token_trims_and_treats_empty_as_none() {
+        assert_eq!(resolve_admin_token(None, None), None);
+        assert_eq!(resolve_admin_token(None, Some("  ")), None);
+        assert_eq!(
+            resolve_admin_token(Some("  spaced  ".into()), None),
+            Some("spaced".to_string())
+        );
+    }
+
+    #[test]
+    fn admin_token_is_not_serialized() {
+        let cfg = EdgionGatewayConfig {
+            gateway: GatewayConfig {
+                admin_token: Some("must-not-leak".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let toml = toml::to_string(&cfg).unwrap();
+        assert!(!toml.contains("must-not-leak"), "admin_token must not serialize out");
+    }
+
+    #[test]
+    fn admin_token_is_redacted_in_debug() {
+        let cfg = GatewayConfig {
+            admin_token: Some("must-not-leak".to_string()),
+            ..Default::default()
+        };
+        let dbg = format!("{:?}", cfg);
+        assert!(!dbg.contains("must-not-leak"), "admin_token must be redacted in Debug");
+        assert!(dbg.contains("[redacted]"));
     }
 }

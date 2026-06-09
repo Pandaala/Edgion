@@ -67,6 +67,14 @@ spec:
         env:
         - name: RUST_LOG
           value: "info"
+        # Gateway admin API token injected from the edgion-gateway-admin-credentials
+        # Secret. Resolved by the kubelet (secretKeyRef); the gateway never calls
+        # the API server.
+        - name: EDGION_GATEWAY_ADMIN_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: edgion-gateway-admin-credentials
+              key: token
         - name: EDGION_CONTROLLER_ADDR
           value: "edgion-controller-leader.edgion-system.svc.cluster.local:12151"
         resources:

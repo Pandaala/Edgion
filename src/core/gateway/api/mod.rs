@@ -9,6 +9,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+mod admin_auth;
+
 /// Query parameters for resource lookup
 #[derive(Deserialize)]
 struct ResourceQuery {
@@ -163,8 +165,14 @@ async fn get_resource(
     }
 }
 
-/// Create the admin API router with dynamic endpoints
-pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
+/// Create the admin API router with dynamic endpoints, guarded by the
+/// bearer-token auth middleware.
+///
+/// `admin_token` is the resolved shared token (env > config), or `None` when no
+/// token is configured (fail-close). The auth layer wraps the fully-merged
+/// router (including the integration-testing routes) so no admin route is left
+/// unauthenticated.
+pub fn create_admin_router(config_client: Arc<ConfigClient>, admin_token: Option<String>) -> Router {
     let mut router = Router::new()
         // Dynamic endpoints for all resource types (secrets redacted via the
         // AdminRedactGuard inside list_client_resources).
@@ -177,7 +185,13 @@ pub fn create_admin_router(config_client: Arc<ConfigClient>) -> Router {
         router = router.merge(create_testing_router(config_client));
     }
 
-    router
+    // Auth layer LAST, on the fully-merged router — covers the testing/destructive
+    // routes as well as /configclient.
+    let auth_state = admin_auth::AdminAuthState::from_token(admin_token);
+    router.layer(axum::middleware::from_fn_with_state(
+        auth_state,
+        admin_auth::admin_auth_middleware,
+    ))
 }
 
 /// Create the probe router: only the non-sensitive liveness/readiness endpoints.
@@ -1451,16 +1465,22 @@ async fn es_bulk_send(
 /// kept as a public entry point for callers that don't need graceful shutdown plumbing.
 pub async fn serve(config_client: Arc<ConfigClient>, port: u16) -> anyhow::Result<()> {
     let addr_str = format!("0.0.0.0:{}", port);
-    serve_with_shutdown(config_client, &addr_str, std::future::pending::<()>()).await
+    // No token plumbing on this convenience entry point: fail-close (503) until a
+    // caller that resolves a token uses `serve_with_shutdown` directly.
+    serve_with_shutdown(config_client, &addr_str, None, std::future::pending::<()>()).await
 }
 
-/// Serve the admin API on the specified listen address with graceful shutdown support
+/// Serve the admin API on the specified listen address with graceful shutdown support.
+///
+/// `admin_token` is the resolved shared bearer token (env > config), or `None`
+/// when unconfigured (the admin API then fails closed with 503).
 pub async fn serve_with_shutdown(
     config_client: Arc<ConfigClient>,
     listen_addr: &str,
+    admin_token: Option<String>,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    let app = create_admin_router(config_client);
+    let app = create_admin_router(config_client, admin_token);
     let addr: std::net::SocketAddr = listen_addr.parse()?;
 
     tracing::info!(
@@ -1698,13 +1718,25 @@ mod router_shape_tests {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt; // for `oneshot`
 
+    /// Token used by the admin-router shape tests. The admin router is now
+    /// auth-guarded, so these routing-presence tests configure a token and send
+    /// it on every request — letting the request reach (or miss) the route so we
+    /// assert routing, not auth. The probe router ignores the header.
+    const TEST_ADMIN_TOKEN: &str = "router-shape-test-admin-token-0123456789";
+
     fn test_client() -> Arc<ConfigClient> {
         Arc::new(ConfigClient::new("test".to_string(), "test".to_string()))
     }
 
     async fn status_of(router: Router, path: &str) -> StatusCode {
         router
-            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header(axum::http::header::AUTHORIZATION, format!("Bearer {TEST_ADMIN_TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap()
             .status()
@@ -1720,7 +1752,7 @@ mod router_shape_tests {
 
     #[tokio::test]
     async fn admin_router_drops_health_and_ready_but_keeps_configclient() {
-        let r = create_admin_router(test_client());
+        let r = create_admin_router(test_client(), Some(TEST_ADMIN_TOKEN.to_string()));
         assert_eq!(status_of(r.clone(), "/health").await, StatusCode::NOT_FOUND);
         assert_eq!(status_of(r.clone(), "/ready").await, StatusCode::NOT_FOUND);
         assert_eq!(status_of(r, "/configclient/httproute/list").await, StatusCode::OK);
@@ -1730,7 +1762,7 @@ mod router_shape_tests {
     async fn admin_router_drops_server_info_keeps_configclient() {
         // Production admin router (integration testing mode off in unit tests):
         // server-info is testing-only and must be absent; /configclient stays mounted.
-        let r = create_admin_router(test_client());
+        let r = create_admin_router(test_client(), Some(TEST_ADMIN_TOKEN.to_string()));
         assert_eq!(status_of(r.clone(), "/api/v1/server-info").await, StatusCode::NOT_FOUND);
         assert_eq!(status_of(r, "/configclient/httproute/list").await, StatusCode::OK);
     }

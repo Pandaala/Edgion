@@ -69,6 +69,10 @@ CONTROLLER_GRPC_PORT="${EDGION_TEST_CONTROLLER_GRPC_PORT:-12151}"
 GATEWAY_HTTP_PORT=31000
 GATEWAY_ADMIN_PORT="${EDGION_TEST_GATEWAY_ADMIN_PORT:-12001}"
 export EDGION_GATEWAY_ADMIN_URL="http://127.0.0.1:${GATEWAY_ADMIN_PORT}"
+# Gateway admin API now requires a bearer token. Export a fixed test token so the
+# gateway process reads it from env and the test scripts can reuse it on every
+# admin-port call. Override via EDGION_GATEWAY_ADMIN_TOKEN if already set.
+export EDGION_GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-integration-gateway-admin-token-0123456789}"
 GATEWAY_PROBE_PORT="${GATEWAY_PROBE_PORT:-12000}"
 
 # LoadTestsuite（default，Loadall）

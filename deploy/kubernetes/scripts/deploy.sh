@@ -77,6 +77,16 @@ kubectl -n edgion-system get secret edgion-admin-credentials >/dev/null 2>&1 || 
     --from-literal=jwt_secret="$(openssl rand -base64 32)"
 (( step++ ))
 
+# Ensure the gateway admin API token Secret exists before the gateway starts.
+# Kept independent of the controller credentials so the two rotate separately.
+# Idempotent: if the Secret already exists, it is left untouched so the current
+# token is preserved. The gateway reads the token via secretKeyRef (env var).
+echo "[${step}] Ensure gateway admin token Secret"
+kubectl -n edgion-system get secret edgion-gateway-admin-credentials >/dev/null 2>&1 || \
+  kubectl -n edgion-system create secret generic edgion-gateway-admin-credentials \
+    --from-literal=token="$(openssl rand -hex 32)"
+(( step++ ))
+
 if [[ "${SKIP_CRD}" == false ]]; then
   echo "[${step}] Install CRDs"
   "${SCRIPT_DIR}/install_crds.sh"

@@ -36,6 +36,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/../../../../.." && pwd)}"
 
 GATEWAY_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:12001}"
+# Gateway admin API requires a bearer token. Inherited from start_all_with_conf.sh
+# in normal runs; default here for standalone invocation.
+: "${EDGION_GATEWAY_ADMIN_TOKEN:=integration-gateway-admin-token-0123456789}"
 CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:12101}"
 PLUGIN_GATEWAY_PORT="${EDGION_PLUGIN_GATEWAY_PORT:-31180}"
 EDGION_CLI="${EDGION_CLI:-${PROJECT_ROOT}/target/debug/edgion-cli}"
@@ -164,6 +167,7 @@ gw_api() {
     shift 2
     local result
     result=$(curl -s -X "$method" "${GATEWAY_URL}${path}" \
+        -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" \
         -H "Content-Type: application/json" "$@" 2>/dev/null)
     if [ -z "$result" ]; then
         echo '{"success":false,"error":"empty response"}'

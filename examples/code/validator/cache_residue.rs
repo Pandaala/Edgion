@@ -24,10 +24,14 @@ struct Args {
     gateway_addr: String,
 
     /// Bearer token for the controller admin API. The controller's test-only
-    /// diagnostic routes (wipe-all, store-stats) require standard auth; gateway
-    /// admin is loopback-only and unauthenticated, so no token is needed there.
+    /// diagnostic routes (wipe-all, store-stats) require standard auth.
     #[arg(long)]
     controller_token: Option<String>,
+
+    /// Bearer token for the gateway admin API. Defaults from the
+    /// EDGION_GATEWAY_ADMIN_TOKEN env var (exported by the test harness).
+    #[arg(long, env = "EDGION_GATEWAY_ADMIN_TOKEN")]
+    gateway_token: Option<String>,
 
     #[arg(long, default_value_t = false)]
     no_wipe: bool,
@@ -115,7 +119,7 @@ async fn main() {
 
     // Step 2: clear access logs (gateway side, removes TTL false positive)
     if args.skip.as_deref() != Some("gateway") {
-        let _ = clear_access_logs(&client, &args.gateway_addr).await;
+        let _ = clear_access_logs(&client, &args.gateway_addr, args.gateway_token.as_deref()).await;
     }
 
     // Step 3: poll until empty or timeout
@@ -149,8 +153,8 @@ async fn main() {
     }
 }
 
-/// Attach a Bearer token to a controller-bound request when one is configured.
-/// Gateway requests stay unauthenticated (gateway admin is loopback-only, no auth).
+/// Attach a Bearer token to an admin-bound request when one is configured.
+/// Both controller and gateway admin APIs require auth on their diagnostic routes.
 fn with_bearer(rb: reqwest::RequestBuilder, token: Option<&str>) -> reqwest::RequestBuilder {
     match token {
         Some(t) => rb.bearer_auth(t),
@@ -174,9 +178,12 @@ async fn wipe_all(client: &Client, controller: &str, token: Option<&str>) -> req
     Ok(())
 }
 
-async fn clear_access_logs(client: &Client, gateway: &str) -> reqwest::Result<()> {
+async fn clear_access_logs(client: &Client, gateway: &str, token: Option<&str>) -> reqwest::Result<()> {
     let url = format!("{}/api/v1/testing/access-logs", gateway);
-    client.delete(&url).send().await?.error_for_status()?;
+    with_bearer(client.delete(&url), token)
+        .send()
+        .await?
+        .error_for_status()?;
     Ok(())
 }
 
@@ -198,7 +205,12 @@ async fn collect(client: &Client, args: &Args) -> reqwest::Result<Snapshot> {
 
     if args.skip.as_deref() != Some("gateway") {
         let url = format!("{}/api/v1/debug/store-stats", args.gateway_addr);
-        let body: Value = client.get(&url).send().await?.error_for_status()?.json().await?;
+        let body: Value = with_bearer(client.get(&url), args.gateway_token.as_deref())
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
         if let Some(data) = body.get("data") {
             walk_json("gateway", data, &mut snap);
         }
@@ -242,7 +254,13 @@ async fn fetch_samples(client: &Client, args: &Args, path: &str) -> Option<Vec<S
     }
     if let Some(rest) = path.strip_prefix("gateway.client_caches.by_kind.") {
         let url = format!("{}/configclient/{}/list", args.gateway_addr, rest);
-        let body: Value = client.get(&url).send().await.ok()?.json().await.ok()?;
+        let body: Value = with_bearer(client.get(&url), args.gateway_token.as_deref())
+            .send()
+            .await
+            .ok()?
+            .json()
+            .await
+            .ok()?;
         let items = body.get("data")?.as_array()?;
         let names: Vec<String> = items
             .iter()
@@ -372,6 +390,7 @@ mod e2e_tests {
             controller_addr: ctrl.uri(),
             gateway_addr: gw.uri(),
             controller_token: None,
+            gateway_token: None,
             no_wipe: true,
             timeout_secs: 1,
             poll_interval_ms: 100,

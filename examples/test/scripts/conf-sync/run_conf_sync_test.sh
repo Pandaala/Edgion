@@ -31,6 +31,8 @@ EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:12101}"
 CONTROLLER_PROBE_URL="${CONTROLLER_PROBE_URL:-http://127.0.0.1:12100}"
 GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:12001}"
+# Gateway admin API requires a bearer token; default for standalone invocation.
+: "${EDGION_GATEWAY_ADMIN_TOKEN:=integration-gateway-admin-token-0123456789}"
 GATEWAY_PROBE_URL="${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"
 
 CYCLES=${CYCLES:-5}
@@ -102,7 +104,7 @@ check_prerequisites() {
         exit 1
     fi
     local status
-    status=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/testing/status" 2>/dev/null || echo "")
+    status=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/testing/status" 2>/dev/null || echo "")
     if [ -z "$status" ]; then
         log_error "Gateway not in integration-testing-mode"
         exit 1
@@ -169,11 +171,11 @@ capture_baseline() {
     local kinds=(httproute grpcroute tcproute udproute tlsroute edgiontls edgionplugins edgionstreamplugins backendtlspolicy service endpointslice)
     for kind in "${kinds[@]}"; do
         local resp count
-        resp=$(curl -sf "${GATEWAY_ADMIN_URL}/configclient/${kind}/list" 2>/dev/null || echo '{"count":0}')
+        resp=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/configclient/${kind}/list" 2>/dev/null || echo '{"count":0}')
         count=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',0))" 2>/dev/null || echo "0")
         echo "$count" > "${BASELINE_DIR}/cc_${kind}"
     done
-    BASELINE_STORE_STATS=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+    BASELINE_STORE_STATS=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
     local bl_http=$(cat "${BASELINE_DIR}/cc_httproute")
     local bl_svc=$(cat "${BASELINE_DIR}/cc_service")
     log_success "Baseline captured (httproute=${bl_http}, service=${bl_svc})"
@@ -200,7 +202,7 @@ verify_configclient_empty() {
     local kinds=(httproute grpcroute tcproute udproute tlsroute edgiontls edgionplugins edgionstreamplugins backendtlspolicy service endpointslice)
     for kind in "${kinds[@]}"; do
         local resp count baseline
-        resp=$(curl -sf "${GATEWAY_ADMIN_URL}/configclient/${kind}/list" 2>/dev/null || echo '{"count":-1}')
+        resp=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/configclient/${kind}/list" 2>/dev/null || echo '{"count":-1}')
         count=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',-1))" 2>/dev/null || echo "-1")
         baseline=$(get_baseline_cc "$kind")
         if [ "$count" != "$baseline" ]; then
@@ -222,7 +224,7 @@ verify_no_secret_leak() {
     local kinds=(httproute grpcroute tcproute udproute tlsroute edgiontls edgionplugins edgionstreamplugins backendtlspolicy service endpointslice)
     for kind in "${kinds[@]}"; do
         local resp
-        resp=$(curl -sf "${GATEWAY_ADMIN_URL}/configclient/${kind}/list" 2>/dev/null || echo '{}')
+        resp=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/configclient/${kind}/list" 2>/dev/null || echo '{}')
         # No PEM private key and no raw kubernetes.io/tls Secret data keys may appear.
         if echo "$resp" | grep -Eq 'BEGIN (RSA |EC |)PRIVATE KEY|"tls\.key"|"tls\.crt"'; then
             all_ok=false
@@ -230,7 +232,7 @@ verify_no_secret_leak() {
         fi
     done
     local secret_val
-    secret_val=$(curl -sf "${GATEWAY_ADMIN_URL}/configclient/edgiontls/list" 2>/dev/null | python3 -c "
+    secret_val=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/configclient/edgiontls/list" 2>/dev/null | python3 -c "
 import sys, json
 try:
     rows = json.load(sys.stdin).get('data', [])
@@ -257,7 +259,7 @@ else:
 
 verify_store_stats_empty() {
     local stats
-    stats=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+    stats=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
     if [ -z "$stats" ]; then log_error "  Failed to fetch store-stats"; return 1; fi
 
     local all_ok=true
@@ -322,7 +324,7 @@ verify_configs_present() {
     local all_present=true
     for kind in "${kinds[@]}"; do
         local resp count
-        resp=$(curl -sf "${GATEWAY_ADMIN_URL}/configclient/${kind}/list" 2>/dev/null || echo '{"count":0}')
+        resp=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/configclient/${kind}/list" 2>/dev/null || echo '{"count":0}')
         count=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',0))" 2>/dev/null || echo "0")
         if [ "$count" = "0" ]; then
             all_present=false
@@ -359,7 +361,7 @@ run_cycle() {
 
     # Snapshot port_counts after injection for diagnostic
     local mid_stats
-    mid_stats=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+    mid_stats=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
     local pc_http pc_grpc pc_tcp pc_udp pc_tls
     pc_http=$(json_field "$mid_stats" ".data.http_routes.port_count")
     pc_grpc=$(json_field "$mid_stats" ".data.grpc_routes.port_count")
@@ -387,7 +389,7 @@ run_cycle() {
         log_error "Cycle ${cycle}: LEAK DETECTED — stores not fully cleaned"
         log_error "  Dumping current store-stats vs baseline:"
         local leak_stats
-        leak_stats=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+        leak_stats=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
         local leak_fields=(
             ".data.http_routes.http_routes" ".data.http_routes.port_count"
             ".data.grpc_routes.grpc_routes" ".data.grpc_routes.port_count"

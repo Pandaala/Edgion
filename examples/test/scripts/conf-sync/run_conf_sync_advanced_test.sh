@@ -38,6 +38,8 @@ EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:12101}"
 CONTROLLER_PROBE_URL="${CONTROLLER_PROBE_URL:-http://127.0.0.1:12100}"
 GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:12001}"
+# Gateway admin API requires a bearer token; default for standalone invocation.
+: "${EDGION_GATEWAY_ADMIN_TOKEN:=integration-gateway-admin-token-0123456789}"
 GATEWAY_PROBE_URL="${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"
 
 SYNC_WAIT=2
@@ -120,7 +122,7 @@ check_prerequisites() {
         log_error "Gateway probe not reachable at ${GATEWAY_PROBE_URL}"; exit 1
     fi
     local status
-    status=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/testing/status" 2>/dev/null || echo "")
+    status=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/testing/status" 2>/dev/null || echo "")
     if [ -z "$status" ]; then log_error "Gateway not in integration-testing-mode"; exit 1; fi
     log_success "Prerequisites OK"
 }
@@ -151,11 +153,11 @@ capture_baseline() {
     local kinds=(httproute grpcroute tcproute udproute tlsroute edgiontls edgionplugins edgionstreamplugins backendtlspolicy service endpointslice)
     for kind in "${kinds[@]}"; do
         local resp count
-        resp=$(curl -sf "${GATEWAY_ADMIN_URL}/configclient/${kind}/list" 2>/dev/null || echo '{"count":0}')
+        resp=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/configclient/${kind}/list" 2>/dev/null || echo '{"count":0}')
         count=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',0))" 2>/dev/null || echo "0")
         echo "$count" > "${BASELINE_DIR}/cc_${kind}"
     done
-    BASELINE_STORE_STATS=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+    BASELINE_STORE_STATS=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
     log_success "Baseline captured"
 }
 
@@ -166,7 +168,7 @@ verify_configclient_baseline() {
     local kinds=(httproute grpcroute tcproute udproute tlsroute edgiontls edgionplugins edgionstreamplugins backendtlspolicy service endpointslice)
     for kind in "${kinds[@]}"; do
         local resp count baseline
-        resp=$(curl -sf "${GATEWAY_ADMIN_URL}/configclient/${kind}/list" 2>/dev/null || echo '{"count":-1}')
+        resp=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/configclient/${kind}/list" 2>/dev/null || echo '{"count":-1}')
         count=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',-1))" 2>/dev/null || echo "-1")
         baseline=$(get_baseline_cc "$kind")
         if [ "$count" != "$baseline" ]; then
@@ -179,7 +181,7 @@ verify_configclient_baseline() {
 
 verify_store_stats_baseline() {
     local stats
-    stats=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+    stats=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
     if [ -z "$stats" ]; then log_error "  Failed to fetch store-stats"; return 1; fi
 
     local all_ok=true
@@ -249,7 +251,7 @@ record_result() {
         FAILED=$((FAILED + 1))
         log_error "Scenario '${name}': FAIL — LEAK DETECTED"
         local leak_stats
-        leak_stats=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+        leak_stats=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
         local diff_fields=(
             ".data.http_routes.http_routes" ".data.http_routes.port_count"
             ".data.grpc_routes.grpc_routes" ".data.grpc_routes.route_units_cache" ".data.grpc_routes.port_count"
@@ -311,7 +313,7 @@ scenario_wildcard_catchall() {
     ctl_apply "${CONF_DIR}/inject/HTTPRoute_leak-catchall.yaml"
     sleep "$SYNC_WAIT"
     local stats ca wd wd_bl
-    stats=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+    stats=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
     ca=$(json_field "$stats" ".data.http_routes.has_catch_all")
     wd=$(json_field "$stats" ".data.http_routes.wildcard_domains")
     wd_bl=$(json_field "$BASELINE_STORE_STATS" ".data.http_routes.wildcard_domains")
@@ -402,7 +404,7 @@ scenario_stream_plugin() {
     ctl_apply "${CONF_DIR}/inject/TCPRoute_leak-tcp-sp.yaml"
     sleep "$SYNC_WAIT"
     local stats sp sp_bl
-    stats=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+    stats=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
     sp=$(json_field "$stats" ".data.stream_plugin_store_v2.total")
     sp_bl=$(json_field "$BASELINE_STORE_STATS" ".data.stream_plugin_store_v2.total")
     log_info "  stream_plugin_store_v2.total: ${sp} (baseline=${sp_bl})"
@@ -422,7 +424,7 @@ scenario_backend_tls_policy() {
     ctl_apply "${CONF_DIR}/inject/BackendTLSPolicy_leak-btls.yaml"
     sleep "$SYNC_WAIT"
     local stats btls btls_bl
-    stats=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+    stats=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
     btls=$(json_field "$stats" ".data.backend_tls_policy.policies")
     btls_bl=$(json_field "$BASELINE_STORE_STATS" ".data.backend_tls_policy.policies")
     log_info "  backend_tls_policy.policies: ${btls} (baseline=${btls_bl})"
@@ -459,7 +461,7 @@ scenario_port_manager_lifecycle() {
     log_scenario "Port manager lifecycle (verify by_port cleanup)"
 
     local stats_before pc_http_before pc_grpc_before pc_tcp_before pc_udp_before
-    stats_before=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+    stats_before=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
     pc_http_before=$(json_field "$stats_before" ".data.http_routes.port_count")
     pc_grpc_before=$(json_field "$stats_before" ".data.grpc_routes.port_count")
     pc_tcp_before=$(json_field "$stats_before" ".data.tcp_routes.port_count")
@@ -475,7 +477,7 @@ scenario_port_manager_lifecycle() {
     sleep "$SYNC_WAIT"
 
     local stats_mid pc_http_mid pc_grpc_mid pc_tcp_mid pc_udp_mid
-    stats_mid=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+    stats_mid=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
     pc_http_mid=$(json_field "$stats_mid" ".data.http_routes.port_count")
     pc_grpc_mid=$(json_field "$stats_mid" ".data.grpc_routes.port_count")
     pc_tcp_mid=$(json_field "$stats_mid" ".data.tcp_routes.port_count")
@@ -492,7 +494,7 @@ scenario_port_manager_lifecycle() {
 
     if verify_all_baseline; then
         local stats_after pc_http_after pc_grpc_after pc_tcp_after pc_udp_after
-        stats_after=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+        stats_after=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
         pc_http_after=$(json_field "$stats_after" ".data.http_routes.port_count")
         pc_grpc_after=$(json_field "$stats_after" ".data.grpc_routes.port_count")
         pc_tcp_after=$(json_field "$stats_after" ".data.tcp_routes.port_count")
@@ -509,7 +511,7 @@ scenario_full_blast() {
     for file in "${CONF_DIR}/inject/"*.yaml; do ctl_apply "$file"; done
     sleep "$SYNC_WAIT"
     local stats hr hr_bl
-    stats=$(curl -sf "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
+    stats=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/api/v1/debug/store-stats" 2>/dev/null || echo "")
     hr=$(json_field "$stats" ".data.http_routes.http_routes")
     hr_bl=$(json_field "$BASELINE_STORE_STATS" ".data.http_routes.http_routes")
     log_info "  http_routes: ${hr} (baseline=${hr_bl})"

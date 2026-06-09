@@ -114,7 +114,57 @@ The probe port is intentionally **not** added to the gateway Service; kubelet pr
 |-----------|------|---------|-------------|
 | `server_addr` | `String` | **Required** | Controller gRPC address, e.g. `http://127.0.0.1:12151` |
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API listen address. Defaults to loopback (`127.0.0.1:12001`) — sensitive endpoints (`/configclient`, `/api/v1/server-info`) are not exposed cluster-wide. Access remotely via `kubectl port-forward pod/<name> 12001:12001`. |
+| `admin_token` | `String` | — | Shared bearer token for the admin API (config-file fallback). Prefer the `EDGION_GATEWAY_ADMIN_TOKEN` env var in Kubernetes. Never serialized out, redacted in logs. See [Gateway admin API authentication](#gateway-admin-api-authentication). |
 | `probe_listen` | `String` | `0.0.0.0:12000` | Liveness/readiness probe listen address. Binds all interfaces so kubelet can reach the pod IP. Serves only `/health` and `/ready`. Not included in the gateway Service. |
+
+### Gateway admin API authentication
+
+The admin API (`gateway.admin_listen`, default `127.0.0.1:12001`) is protected by a
+**static bearer token**. Every admin route — including the integration-testing /
+destructive routes — requires `Authorization: Bearer <token>`. The probe port
+(`:12000`, `/health` `/ready`) is intentionally left auth-free.
+
+**Configuring the token (highest precedence first):**
+
+1. **`EDGION_GATEWAY_ADMIN_TOKEN` env var** — recommended for Kubernetes. Injected
+   from the `edgion-gateway-admin-credentials` Secret (key `token`) via
+   `secretKeyRef`. `deploy.sh` creates this Secret idempotently with a random value
+   (`openssl rand -hex 32`); an existing Secret is left untouched.
+2. **`gateway.admin_token` config-file field** — fallback for a Secret-mounted
+   config file only. It is never serialized out and is redacted in `Debug` / logs.
+
+**Reading the token** (for `edgion-cli` or `curl`):
+
+```bash
+kubectl -n <ns> get secret edgion-gateway-admin-credentials \
+  -o jsonpath='{.data.token}' | base64 -d
+```
+
+```bash
+curl -H "Authorization: Bearer $(kubectl -n <ns> get secret \
+  edgion-gateway-admin-credentials -o jsonpath='{.data.token}' | base64 -d)" \
+  http://127.0.0.1:12001/configclient/gateway/list
+```
+
+**Fail-close behavior:**
+
+| Condition | Response |
+|-----------|----------|
+| No token configured server-side | `503` on all admin routes (with a startup `WARN`) |
+| Missing or wrong token | `401` |
+| Correct token | request proceeds |
+
+> **Security caveat:** a non-loopback admin bind (`admin_listen: 0.0.0.0:...`)
+> sends a **replayable, non-expiring static token in cleartext** unless fronted by
+> mesh mTLS. A `NetworkPolicy` is L3/L4 access control, **not** confidentiality.
+> Require mesh mTLS for any non-loopback exposure. The token has no `exp` — on any
+> suspected exposure, rotate the Secret and restart the pod immediately:
+>
+> ```bash
+> kubectl -n <ns> delete secret edgion-gateway-admin-credentials
+> # re-run deploy.sh (or recreate the Secret), then:
+> kubectl -n <ns> rollout restart deployment/edgion-gateway
+> ```
 
 ### conf_sync_security.tls
 

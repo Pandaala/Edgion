@@ -25,7 +25,7 @@ RFC-divergence-accepted findings are recorded as per-finding files under [`rfc-d
 | Topic | Sub-directory / file |
 |-------|----------------------|
 | **Security iron rules** (timing, weak passwords, cache keys — cross-feature) | [security/iron-rules.md](security/iron-rules.md) |
-| **Authentication** (basic / key / jwt / hmac / ldap / oidc / cert / forward / webhook) | [auth-timing/](auth-timing/), [basic-auth/](basic-auth/), [key-auth/](key-auth/), [jwt-auth/](jwt-auth/), [hmac-auth/](hmac-auth/), [ldap-auth/](ldap-auth/), [oidc/](oidc/), [local-auth/](local-auth/), [header-cert-auth/](header-cert-auth/), [forward-auth/](forward-auth/), [webhook-key/](webhook-key/), [admin-cors/](admin-cors/), [cors/](cors/) |
+| **Authentication** (basic / key / jwt / hmac / ldap / oidc / cert / forward / webhook) | [auth-timing/](auth-timing/), [basic-auth/](basic-auth/), [key-auth/](key-auth/), [jwt-auth/](jwt-auth/), [hmac-auth/](hmac-auth/), [ldap-auth/](ldap-auth/), [oidc/](oidc/), [local-auth/](local-auth/), [header-cert-auth/](header-cert-auth/), [forward-auth/](forward-auth/), [webhook-key/](webhook-key/), [admin-cors/](admin-cors/), [cors/](cors/), [gateway-admin-auth/](gateway-admin-auth/) |
 | **CSRF** (token cookie attributes) | [csrf/](csrf/) |
 | **Network access control** | [ip-restriction/](ip-restriction/), [real-ip/](real-ip/), [ssrf/](ssrf/) |
 | **TLS** (downstream / upstream / EdgionTls) | [edgion-tls/](edgion-tls/), [ssl/](ssl/) |

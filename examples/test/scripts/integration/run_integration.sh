@@ -57,6 +57,15 @@ REDIS_CONTAINER_NAME="edgion-test-redis"
 
 CONTROLLER_GRPC_PORT=12151
 
+# Gateway admin bearer token. The gateway admin API (incl. the /api/v1/testing/*
+# access-log endpoints) is auth-guarded, so test_client's AccessLogClient must
+# present this token. start_all_with_conf.sh defaults the same value, but it runs
+# in a command-substitution subshell, so its export does not reach this process or
+# the test_client children launched here — export it here so the token is shared
+# across the start script, the bash admin helpers, and test_client. Honors an
+# operator-provided value.
+export EDGION_GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-integration-gateway-admin-token-0123456789}"
+
 # Controller admin token — populated lazily by ensure_ctrl_admin_token()
 # by logging in with the EDGION_ADMIN_* credentials exported before Step 2.
 CTRL_ADMIN_TOKEN=""
@@ -720,8 +729,10 @@ get_controller_server_id() {
 # =============================================================================
 get_gateway_server_id() {
     local gateway_url="${1:-http://127.0.0.1:12001}"
-    # Gateway admin API has no authentication — call tokenless.
-    local response=$(curl -s "${gateway_url}/api/v1/server-info" 2>/dev/null)
+    # Gateway admin API now requires a bearer token (see start_all_with_conf.sh).
+    : "${EDGION_GATEWAY_ADMIN_TOKEN:=integration-gateway-admin-token-0123456789}"
+    local response=$(curl -s -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" \
+        "${gateway_url}/api/v1/server-info" 2>/dev/null)
     local server_id=$(echo "$response" | grep -o '"server_id":"[^"]*"' | cut -d'"' -f4)
     if [ -z "$server_id" ]; then
         server_id="unknown"
@@ -1456,6 +1467,21 @@ main() {
         log_success "Controller no-auth and env-var-auth startup passed"
     fi
 
+    # Step 1.7: Gateway admin API auth (standalone preflight, boots its own
+    # minimal Controller as the gRPC sync backend). Only runs in the default full
+    # sweep (no -r / -i targeting). Verifies: no token configured ->
+    # /configclient/* 503 fail-close (+ startup WARN); token configured -> 401
+    # without a header and 200 with the correct Bearer token; the probe port
+    # (/health, /ready) stays auth-free (200 without any token).
+    if [ -z "$G_RESOURCE" ]; then
+        log_section "Gateway admin auth"
+        if ! "${SCRIPT_DIR}/test_gateway_admin_auth.sh"; then
+            log_error "FAIL: Gateway admin auth"
+            exit 1
+        fi
+        log_success "Gateway admin auth passed"
+    fi
+
     # Admin credentials for the main suite.
     #
     # The Controller no longer auto-generates admin credentials (see
@@ -1724,8 +1750,10 @@ main() {
             # block the build (default: fail — opt out with RESIDUE_MODE=warn).
             # The controller's test-only diagnostic routes (wipe-all, store-stats)
             # require standard auth like any other admin route, so the validator
-            # is given the admin Bearer token obtained at login. Gateway admin is
-            # loopback-only and unauthenticated, so no token is passed for it.
+            # is given the admin Bearer token obtained at login. The gateway admin
+            # API also requires a bearer token; the residue validator reads it from
+            # the EDGION_GATEWAY_ADMIN_TOKEN env var (exported by start_all_with_conf.sh
+            # and inherited here), so gateway-side residue checks run as well.
             local residue_mode="${RESIDUE_MODE:-fail}"
             # Disable errexit around the call so a non-zero exit (residue / infra
             # error) is captured into $rc and handled below instead of aborting.

@@ -91,6 +91,21 @@ impl EdgionGatewayCli {
         let config_client_for_admin = config_client.clone();
         let mut admin_shutdown = shutdown_rx.clone();
         let admin_listen_clone = admin_listen.clone();
+        // Resolve the gateway admin token (env > config). When unconfigured the
+        // admin API fails closed (503); the auth state is built inside
+        // `serve_with_shutdown` from this resolved value.
+        let admin_token = crate::core::gateway::cli::config::resolve_admin_token(
+            std::env::var("EDGION_GATEWAY_ADMIN_TOKEN").ok(),
+            config.gateway.admin_token.as_deref(),
+        );
+        if admin_token.is_none() {
+            tracing::warn!(
+                component = "admin_api_gateway",
+                event = "no_admin_token",
+                "No gateway admin token configured. Admin API will return 503 until \
+                 EDGION_GATEWAY_ADMIN_TOKEN or gateway.admin_token is set."
+            );
+        }
         tokio::spawn(async move {
             let shutdown_future = async move {
                 while !*admin_shutdown.borrow() {
@@ -99,8 +114,13 @@ impl EdgionGatewayCli {
                     }
                 }
             };
-            if let Err(e) =
-                api::serve_with_shutdown(config_client_for_admin, &admin_listen_clone, shutdown_future).await
+            if let Err(e) = api::serve_with_shutdown(
+                config_client_for_admin,
+                &admin_listen_clone,
+                admin_token,
+                shutdown_future,
+            )
+            .await
             {
                 tracing::error!(
                     component = "admin_api_gateway",

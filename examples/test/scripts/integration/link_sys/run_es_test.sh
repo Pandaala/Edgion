@@ -56,6 +56,9 @@ ES_PORT=19200
 CONTROLLER_URL="http://127.0.0.1:${CONTROLLER_ADMIN_PORT}"
 CONTROLLER_PROBE_URL="${CONTROLLER_PROBE_URL:-http://127.0.0.1:12100}"
 GATEWAY_URL="http://127.0.0.1:${GATEWAY_ADMIN_PORT}"
+# Gateway admin API requires a bearer token. Inherited from start_all_with_conf.sh
+# in normal runs; default here for standalone invocation.
+: "${EDGION_GATEWAY_ADMIN_TOKEN:=integration-gateway-admin-token-0123456789}"
 GATEWAY_PROBE_URL="${GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"
 ES_URL="http://127.0.0.1:${ES_PORT}"
 
@@ -231,6 +234,7 @@ gw_api() {
     shift 2
     local result
     result=$(curl -s -X "$method" "${GATEWAY_URL}${path}" \
+        -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" \
         -H "Content-Type: application/json" "$@" 2>/dev/null)
     if [ -z "$result" ]; then
         echo '{"success":false,"error":"empty response"}'

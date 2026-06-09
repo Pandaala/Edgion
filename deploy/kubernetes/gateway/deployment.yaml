@@ -56,6 +56,14 @@ spec:
         env:
         - name: RUST_LOG
           value: "info"
+        # Gateway admin API token injected from the edgion-gateway-admin-credentials
+        # Secret. The Secret is created by deploy.sh before the gateway is applied.
+        # Resolved by the kubelet (secretKeyRef); the gateway never calls the API server.
+        - name: EDGION_GATEWAY_ADMIN_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: edgion-gateway-admin-credentials
+              key: token
         startupProbe:
           httpGet:
             path: /health

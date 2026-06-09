@@ -29,6 +29,12 @@ STATE_CONFIGMAP_NAME="${STATE_CONFIGMAP_NAME:-edgion-k8s-integration-state}"
 
 CONTROLLER_ADMIN_URL="${EDGION_CONTROLLER_ADMIN_URL:-http://edgion-controller.edgion-system.svc.cluster.local:12101}"
 
+# Gateway admin API (port 12001) requires a Bearer token. The gateway Deployment reads
+# it from the edgion-gateway-admin-credentials Secret (key: token) via secretKeyRef, and
+# this harness sends the same value when curling the gateway admin API through a
+# port-forward. Define the token once here so the Secret and the curls always match.
+GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-integration-gateway-admin-token-0123456789}"
+
 START_FROM="${START_FROM:-}"
 ONLY_RESOURCE=""
 ONLY_ITEM=""
@@ -860,13 +866,15 @@ get_gateway_server_id() {
 
   # Wait for the tunnel to come up (port accepting connections).
   for attempt in $(seq 1 20); do
-    if curl -fsS "http://127.0.0.1:${local_port}/api/v1/server-info" >/dev/null 2>&1; then
+    if curl -fsS -H "Authorization: Bearer ${GATEWAY_ADMIN_TOKEN}" \
+      "http://127.0.0.1:${local_port}/api/v1/server-info" >/dev/null 2>&1; then
       break
     fi
     sleep 0.5
   done
 
-  sid="$(curl -fsS "http://127.0.0.1:${local_port}/api/v1/server-info" 2>/dev/null \
+  sid="$(curl -fsS -H "Authorization: Bearer ${GATEWAY_ADMIN_TOKEN}" \
+    "http://127.0.0.1:${local_port}/api/v1/server-info" 2>/dev/null \
     | jq -r '.data.server_id // .server_id // "unknown"' || true)"
 
   kill "${pf_pid}" >/dev/null 2>&1 || true
@@ -1235,6 +1243,14 @@ if should_run_prepare; then
     exit 1
   fi
   kubectl apply --server-side --force-conflicts --field-manager=edgion-k8s-test -f "${GENERATED_SECRET_DIR}"
+
+  # The gateway Deployment mounts EDGION_GATEWAY_ADMIN_TOKEN from this Secret via
+  # secretKeyRef; without it the gateway Pod is stuck in CreateContainerConfigError.
+  # Create it (idempotent apply) before the Deployment is applied below.
+  echo "Ensure gateway admin token Secret (edgion-gateway-admin-credentials)..."
+  kubectl -n edgion-system create secret generic edgion-gateway-admin-credentials \
+    --from-literal=token="${GATEWAY_ADMIN_TOKEN}" \
+    --dry-run=client -o yaml | kubectl apply -f -
 
   if [[ "${SKIP_DEPLOY}" == "false" ]]; then
     export CONTROLLER_IMAGE GATEWAY_IMAGE TEST_CLIENT_IMAGE TEST_SERVER_IMAGE PULL_POLICY_OVERRIDE

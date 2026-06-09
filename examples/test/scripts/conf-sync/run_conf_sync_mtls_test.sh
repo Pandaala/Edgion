@@ -36,6 +36,9 @@ CONTROLLER_PROBE_PORT="${CONTROLLER_PROBE_PORT:-12100}"
 GATEWAY_ADMIN_PORT=12001
 GATEWAY_PROBE_PORT=12000
 TEST_SERVER_HTTP_PORT=30001
+# Gateway admin API requires a bearer token; default for standalone invocation.
+# Export so the gateway process launched below inherits it from the environment.
+export EDGION_GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-integration-gateway-admin-token-0123456789}"
 
 # Controller admin auth credentials (used by local_auth in the generated config)
 CTRL_AUTH_USER="admin"
@@ -588,8 +591,9 @@ test_server_id_match() {
     ctrl_id=$(curl -sf -H "Authorization: Bearer ${CTRL_ADMIN_TOKEN}" \
         "http://127.0.0.1:${CONTROLLER_ADMIN_PORT}/api/v1/server-info" 2>/dev/null \
         | grep -o '"server_id":"[^"]*"' | cut -d'"' -f4)
-    # Gateway admin API has no auth — call tokenless.
-    gw_id=$(curl -sf "http://127.0.0.1:${GATEWAY_ADMIN_PORT}/api/v1/server-info" 2>/dev/null \
+    # Gateway admin API requires a Bearer token (auth is mandatory).
+    gw_id=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" \
+        "http://127.0.0.1:${GATEWAY_ADMIN_PORT}/api/v1/server-info" 2>/dev/null \
         | grep -o '"server_id":"[^"]*"' | cut -d'"' -f4)
 
     if [ -z "$ctrl_id" ] || [ -z "$gw_id" ]; then
@@ -640,7 +644,8 @@ test_resource_diff() {
 # =============================================================================
 test_gateway_has_resources() {
     local resp
-    resp=$(curl -sf "http://127.0.0.1:${GATEWAY_ADMIN_PORT}/configclient/gateway/list" 2>/dev/null || echo '{"count":0}')
+    resp=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" \
+        "http://127.0.0.1:${GATEWAY_ADMIN_PORT}/configclient/gateway/list" 2>/dev/null || echo '{"count":0}')
     local count
     count=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',0))" 2>/dev/null || echo "0")
 

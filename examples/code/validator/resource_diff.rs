@@ -52,6 +52,11 @@ struct Args {
     /// Default: ReferenceGrant,Secret
     #[arg(long, value_delimiter = ',', default_value = "ReferenceGrant,Secret")]
     skip_kinds: Vec<String>,
+
+    /// Bearer token for the gateway admin API. Defaults from the
+    /// EDGION_GATEWAY_ADMIN_TOKEN env var (exported by the test harness).
+    #[arg(long, env = "EDGION_GATEWAY_ADMIN_TOKEN")]
+    gateway_token: Option<String>,
 }
 
 /// Resource identifier (kind, name, namespace)
@@ -155,6 +160,7 @@ struct AdminClient {
     controller_probe_url: String,
     gateway_url: String,
     gateway_probe_url: String,
+    gateway_token: Option<String>,
     max_retries: u32,
 }
 
@@ -164,6 +170,7 @@ impl AdminClient {
         controller_probe_url: String,
         gateway_url: String,
         gateway_probe_url: String,
+        gateway_token: Option<String>,
         timeout: Duration,
         max_retries: u32,
     ) -> Self {
@@ -178,6 +185,7 @@ impl AdminClient {
             controller_probe_url,
             gateway_url,
             gateway_probe_url,
+            gateway_token,
             max_retries,
         }
     }
@@ -226,7 +234,11 @@ impl AdminClient {
         let url = format!("{}{}", self.gateway_url, endpoint);
 
         for attempt in 1..=self.max_retries {
-            match self.client.get(&url).send().await {
+            let mut rb = self.client.get(&url);
+            if let Some(t) = &self.gateway_token {
+                rb = rb.bearer_auth(t);
+            }
+            match rb.send().await {
                 Ok(response) => {
                     if response.status().is_success() {
                         match response.json::<ListApiResponse>().await {
@@ -276,12 +288,11 @@ impl AdminClient {
     async fn check_gateway_health(&self) -> bool {
         // /health is served by the probe port, not the admin port.
         let url = format!("{}/health", self.gateway_probe_url);
-        self.client
-            .get(&url)
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
+        let mut rb = self.client.get(&url);
+        if let Some(t) = &self.gateway_token {
+            rb = rb.bearer_auth(t);
+        }
+        rb.send().await.map(|r| r.status().is_success()).unwrap_or(false)
     }
 }
 
@@ -634,6 +645,7 @@ async fn main() {
         args.controller_probe_url.clone(),
         args.gateway_url.clone(),
         args.gateway_probe_url.clone(),
+        args.gateway_token.clone(),
         Duration::from_secs(args.timeout),
         args.max_retries,
     );

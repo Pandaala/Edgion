@@ -47,6 +47,8 @@ GATEWAY_HOST="127.0.0.1"
 CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:12101}"
 CONTROLLER_PROBE_URL="${CONTROLLER_PROBE_URL:-http://127.0.0.1:12100}"
 GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:12001}"
+# Gateway admin API requires a bearer token; default for standalone invocation.
+: "${EDGION_GATEWAY_ADMIN_TOKEN:=integration-gateway-admin-token-0123456789}"
 GATEWAY_PROBE_URL="${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"
 CONTROLLER_ADMIN_PORT=12101
 CONTROLLER_GRPC_PORT="${EDGION_TEST_CONTROLLER_GRPC_PORT:-12151}"
@@ -194,7 +196,7 @@ wait_for_gateway_routes() {
     log_info "Waiting up to ${timeout}s for Gateway to show routes after reconnect..."
     while [ $elapsed -lt $timeout ]; do
         local resp count
-        resp=$(curl -sf "${GATEWAY_ADMIN_URL}/configclient/httproute/list" 2>/dev/null || echo '{"count":0}')
+        resp=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/configclient/httproute/list" 2>/dev/null || echo '{"count":0}')
         count=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',0))" 2>/dev/null || echo "0")
         if [ "$count" -gt 0 ] 2>/dev/null; then
             log_success "Gateway configclient shows ${count} HTTPRoute(s) after ${elapsed}s"
@@ -377,7 +379,7 @@ main() {
     if wait_for_gateway_routes "$RECONNECT_TIMEOUT"; then
         assert_pass "gateway_admin_shows_routes" "pass"
     else
-        RESP=$(curl -sf "${GATEWAY_ADMIN_URL}/configclient/httproute/list" 2>/dev/null || echo "unreachable")
+        RESP=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/configclient/httproute/list" 2>/dev/null || echo "unreachable")
         assert_pass "gateway_admin_shows_routes" "fail" \
             "configclient/httproute/list returned: ${RESP}"
     fi

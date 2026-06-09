@@ -198,6 +198,11 @@ pub struct AccessLogStoreStatus {
 pub struct AccessLogClient {
     client: Client,
     base_url: String,
+    /// Bearer token for the gateway admin API. The testing endpoints are mounted
+    /// on the auth-guarded admin router, so every request must carry this token.
+    /// Defaults from the `EDGION_GATEWAY_ADMIN_TOKEN` env var exported by the test
+    /// harness (start_all_with_conf.sh); `None` falls back to unauthenticated.
+    admin_token: Option<String>,
 }
 
 impl AccessLogClient {
@@ -208,7 +213,24 @@ impl AccessLogClient {
             .build()
             .expect("Failed to create HTTP client");
 
-        Self { client, base_url }
+        let admin_token = std::env::var("EDGION_GATEWAY_ADMIN_TOKEN")
+            .ok()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty());
+
+        Self {
+            client,
+            base_url,
+            admin_token,
+        }
+    }
+
+    /// Attach the gateway admin bearer token when one is configured.
+    fn authed(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.admin_token {
+            Some(t) => rb.bearer_auth(t),
+            None => rb,
+        }
     }
 
     /// Create from host and port
@@ -224,7 +246,7 @@ impl AccessLogClient {
     /// Check if integration testing mode is enabled
     pub async fn check_status(&self) -> Result<TestingStatus> {
         let url = format!("{}/api/v1/testing/status", self.base_url);
-        let response = self.client.get(&url).send().await?;
+        let response = self.authed(self.client.get(&url)).send().await?;
 
         if !response.status().is_success() {
             return Err(anyhow!(
@@ -244,7 +266,7 @@ impl AccessLogClient {
     /// The trace_id should match the `x-trace-id` header sent with the request.
     pub async fn get_access_log(&self, trace_id: &str) -> Result<AccessLogEntry> {
         let url = format!("{}/api/v1/testing/access-log/{}", self.base_url, trace_id);
-        let response = self.client.get(&url).send().await?;
+        let response = self.authed(self.client.get(&url)).send().await?;
 
         if !response.status().is_success() {
             return Err(anyhow!("Failed to get access log: HTTP {}", response.status()));
@@ -289,7 +311,7 @@ impl AccessLogClient {
     /// Delete access log by trace_id
     pub async fn delete_access_log(&self, trace_id: &str) -> Result<bool> {
         let url = format!("{}/api/v1/testing/access-log/{}", self.base_url, trace_id);
-        let response = self.client.delete(&url).send().await?;
+        let response = self.authed(self.client.delete(&url)).send().await?;
 
         if !response.status().is_success() {
             return Err(anyhow!("Failed to delete access log: HTTP {}", response.status()));
@@ -302,7 +324,7 @@ impl AccessLogClient {
     /// List all stored access logs
     pub async fn list_access_logs(&self) -> Result<AccessLogListResponse> {
         let url = format!("{}/api/v1/testing/access-logs", self.base_url);
-        let response = self.client.get(&url).send().await?;
+        let response = self.authed(self.client.get(&url)).send().await?;
 
         if !response.status().is_success() {
             return Err(anyhow!("Failed to list access logs: HTTP {}", response.status()));
@@ -314,7 +336,7 @@ impl AccessLogClient {
     /// Clear all stored access logs
     pub async fn clear_access_logs(&self) -> Result<()> {
         let url = format!("{}/api/v1/testing/access-logs", self.base_url);
-        let response = self.client.delete(&url).send().await?;
+        let response = self.authed(self.client.delete(&url)).send().await?;
 
         if !response.status().is_success() {
             return Err(anyhow!("Failed to clear access logs: HTTP {}", response.status()));

@@ -135,6 +135,7 @@ indexmap = "2"
 nom = "7"
 bcrypt = "0.18"
 sha2 = "0.10"
+subtle = "2"
 crc32fast = "1.4"
 hmac = "0.12"
 aes-gcm = "0.10"
@@ -168,7 +169,7 @@ metrics-exporter-prometheus = "0.18"
 metrics-util = "0.20"
 
 # CLI
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 rpassword = "7"
 zeroize = { version = "1", features = ["derive"] }
 tracing = "0.1"
