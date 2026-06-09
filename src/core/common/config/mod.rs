@@ -535,6 +535,58 @@ impl ConfSyncTlsConfig {
     }
 }
 
+/// Server-side TLS certificate file paths for the admin HTTP API.
+///
+/// Unlike `ConfSyncTlsConfig` (mTLS — requires `ca`), this is server-only TLS:
+/// only `cert` + `key` are needed, with no client-certificate verification. Lives
+/// in `common` so the Controller can reuse it later (see admin-api-03).
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminTlsConfig {
+    /// PEM server certificate path (relative to work_dir or absolute).
+    pub cert: String,
+    /// PEM private key path (relative to work_dir or absolute).
+    pub key: String,
+}
+
+impl std::fmt::Debug for AdminTlsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdminTlsConfig")
+            .field("cert", &self.cert)
+            .field("key", &"***")
+            .finish()
+    }
+}
+
+impl AdminTlsConfig {
+    /// Validate that the cert and key paths are non-empty.
+    /// Called before attempting to load certificates at startup.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.cert.trim().is_empty() {
+            anyhow::bail!("admin_tls.cert must not be empty");
+        }
+        if self.key.trim().is_empty() {
+            anyhow::bail!("admin_tls.key must not be empty");
+        }
+        Ok(())
+    }
+
+    /// Resolve a path: absolute paths used as-is, relative paths joined with work_dir.
+    fn resolve_path(path: &str) -> PathBuf {
+        crate::types::work_dir().resolve(path)
+    }
+
+    /// Resolve the cert path: absolute as-is, relative joined with work_dir.
+    pub fn cert_path(&self) -> PathBuf {
+        Self::resolve_path(&self.cert)
+    }
+
+    /// Resolve the key path: absolute as-is, relative joined with work_dir.
+    pub fn key_path(&self) -> PathBuf {
+        Self::resolve_path(&self.key)
+    }
+}
+
 /// Why a federation channel refused the configured security.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MtlsRefusal {
@@ -1499,5 +1551,40 @@ rbac:
         assert_eq!(cfg.admin_listen(), "0.0.0.0:12101");
         assert_eq!(cfg.probe_listen(), "0.0.0.0:12100");
         assert_eq!(cfg.metrics_listen(), "0.0.0.0:12190");
+    }
+
+    // ── Group K: AdminTlsConfig ──────────────────────────────────────────────
+
+    #[test]
+    fn test_admin_tls_validate() {
+        let ok = AdminTlsConfig {
+            cert: "c".into(),
+            key: "k".into(),
+        };
+        assert!(ok.validate().is_ok());
+
+        let no_cert = AdminTlsConfig {
+            cert: "   ".into(),
+            key: "k".into(),
+        };
+        assert!(no_cert.validate().is_err());
+
+        let no_key = AdminTlsConfig {
+            cert: "c".into(),
+            key: "".into(),
+        };
+        assert!(no_key.validate().is_err());
+    }
+
+    #[test]
+    fn test_admin_tls_debug_redacts_key() {
+        let c = AdminTlsConfig {
+            cert: "certs/admin/server.crt".into(),
+            key: "certs/admin/private.key".into(),
+        };
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("***"), "key must be redacted: {dbg}");
+        assert!(!dbg.contains("private.key"), "key path leaked: {dbg}");
+        assert!(dbg.contains("server.crt"), "cert path should be visible: {dbg}");
     }
 }

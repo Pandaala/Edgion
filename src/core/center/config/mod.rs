@@ -1,5 +1,5 @@
 use crate::core::common::auth::AdminAuthConfig;
-use crate::core::common::config::ConfSyncSecurityConfig;
+use crate::core::common::config::{AdminTlsConfig, ConfSyncSecurityConfig};
 use crate::core::common::local_auth::LocalAuthConfig;
 use serde::{Deserialize, Serialize};
 
@@ -91,6 +91,10 @@ pub struct CenterServerConfig {
     pub probe_addr: String,
     /// HTTP listen address for the dedicated Prometheus metrics listener
     pub metrics_addr: String,
+    /// Optional server-side TLS for the admin HTTP API.
+    /// When omitted, the admin listener serves plain HTTP.
+    /// When set, the admin listener serves HTTPS; probe and metrics listeners remain HTTP.
+    pub admin_tls: Option<AdminTlsConfig>,
 }
 
 impl Default for CenterServerConfig {
@@ -100,6 +104,7 @@ impl Default for CenterServerConfig {
             http_addr: "0.0.0.0:12201".to_string(),
             probe_addr: "0.0.0.0:12200".to_string(),
             metrics_addr: "0.0.0.0:12290".to_string(),
+            admin_tls: None,
         }
     }
 }
@@ -166,5 +171,63 @@ peer_identity:
 "#;
         let c: CenterConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(c.peer_identity.unwrap().trust_domain, "edgion.io");
+    }
+
+    #[test]
+    fn test_admin_tls_deserializes_from_yaml() {
+        let yaml = r#"
+server:
+  http_addr: "0.0.0.0:5900"
+  admin_tls:
+    cert: "certs/admin/server.crt"
+    key: "certs/admin/server.key"
+"#;
+        let cfg: CenterConfig = serde_yaml::from_str(yaml).unwrap();
+        let tls = cfg.server.admin_tls.expect("admin_tls should parse");
+        assert_eq!(tls.cert, "certs/admin/server.crt");
+        assert_eq!(tls.key, "certs/admin/server.key");
+    }
+
+    #[test]
+    fn test_admin_tls_absent_is_none() {
+        let yaml = r#"
+server:
+  http_addr: "0.0.0.0:5900"
+"#;
+        let cfg: CenterConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(cfg.server.admin_tls.is_none(), "omitted admin_tls must be None");
+    }
+
+    /// Parity guard: the production config load (`EdgionCenterCli::run`) does NOT use
+    /// `serde_yaml::from_str` — it uses `singleton_map_recursive::deserialize`, which
+    /// changes how enums/maps are treated. The other `admin_tls` tests use `from_str`,
+    /// so this test exercises the REAL production deserializer to ensure
+    /// `Option<AdminTlsConfig>` round-trips identically (Some with correct fields when
+    /// present, None when absent).
+    #[test]
+    fn test_admin_tls_parses_via_production_singleton_deserializer() {
+        let yaml = r#"
+server:
+  http_addr: "0.0.0.0:5900"
+  admin_tls:
+    cert: "certs/admin/server.crt"
+    key: "certs/admin/server.key"
+"#;
+        let de = serde_yaml::Deserializer::from_str(yaml);
+        let cfg: CenterConfig = serde_yaml::with::singleton_map_recursive::deserialize(de)
+            .expect("admin_tls must parse through the production singleton_map_recursive path");
+        let tls = cfg
+            .server
+            .admin_tls
+            .expect("admin_tls Some via singleton_map_recursive");
+        assert_eq!(tls.cert, "certs/admin/server.crt");
+        assert_eq!(tls.key, "certs/admin/server.key");
+
+        let de_absent = serde_yaml::Deserializer::from_str("server:\n  http_addr: \"0.0.0.0:5900\"\n");
+        let cfg_absent: CenterConfig = serde_yaml::with::singleton_map_recursive::deserialize(de_absent).unwrap();
+        assert!(
+            cfg_absent.server.admin_tls.is_none(),
+            "omitted admin_tls must be None via singleton_map_recursive"
+        );
     }
 }

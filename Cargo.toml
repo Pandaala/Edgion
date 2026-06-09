@@ -119,6 +119,7 @@ futures = "0.3.31"
 
 # HTTP server
 axum = { version = "0.8.8", features = ["macros", "ws"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 
 # Utilities
 bytes = "1.11.1"
@@ -210,7 +211,6 @@ mockall = "0.14.0"
 colored = "2.2"
 console = "0.16"
 expect-test = "1.5"
-axum-server = { version = "0.8", features = ["tls-rustls"] }
 proxy-header = "0.1.2"
 tower = "0.5"
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }

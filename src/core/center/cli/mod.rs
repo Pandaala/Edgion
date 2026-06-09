@@ -124,6 +124,14 @@ impl EdgionCenterCli {
             .grpc_security
             .validate()
             .map_err(|e| anyhow::anyhow!("Invalid grpc_security config: {}", e))?;
+
+        // Validate admin TLS paths up front (cheap, sync) before spawning listeners,
+        // mirroring the grpc_security.validate()? gate above.
+        if let Some(tls) = config.server.admin_tls.as_ref() {
+            tls.validate()
+                .map_err(|e| anyhow::anyhow!("Invalid admin_tls config: {}", e))?;
+        }
+
         let trust_domain = config.peer_identity.as_ref().map(|p| p.trust_domain.clone());
         let transport = decide_transport(&config.grpc_security, trust_domain.as_deref());
         if transport == TransportDecision::FailClose {
@@ -207,6 +215,15 @@ impl EdgionCenterCli {
         // Center does not use the Controller's auto-generated Secret path; credentials come only from operator configuration.
         let auth_config = config.auth.clone();
         let local_auth_config = config.local_auth.clone();
+        let admin_tls = config.server.admin_tls.clone();
+        // Startup diagnostic only — does not change cookie runtime behavior.
+        if let Some(local) = config.local_auth.as_ref() {
+            // Args are (admin_tls_present, cookie_secure) — keep this order.
+            let admin_tls_present = admin_tls.is_some();
+            if let Some(msg) = admin_tls_cookie_warning(admin_tls_present, local.cookie_secure) {
+                tracing::warn!(component = "center", "{}", msg);
+            }
+        }
 
         let api_state_for_probe = api_state.clone();
         let http_handle = tokio::spawn(async move {
@@ -249,8 +266,38 @@ impl EdgionCenterCli {
             // compose hard-codes the assembly order: business routes + auth routes + middleware + CORS.
             // The returned app is final; do not call .route() / .layer() afterwards -- see the function doc.
             let app = crate::core::common::api::compose_admin_routes(base_router, auth_state, local_auth_intent);
-            let listener = tokio::net::TcpListener::bind(http_addr).await.unwrap();
-            axum::serve(listener, app).await.unwrap();
+            // Shared make-service with connect-info: forward-compatible with admin-api-02's
+            // IP allowlist (which needs ConnectInfo<SocketAddr>); harmless without it.
+            let make_service = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
+            match admin_tls {
+                Some(tls) => {
+                    let cert_path = tls.cert_path();
+                    let key_path = tls.key_path();
+                    let rustls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!(component = "center", error = %e, "Failed to load admin TLS cert/key");
+                            anyhow::anyhow!("admin TLS load failed: {}", e)
+                        })?;
+                    // Logged before serve() binds the socket; a bind failure (e.g. address
+                    // in use) is reported by the error returned from serve() below.
+                    tracing::info!(component = "center", addr = %http_addr, "Center admin API HTTPS enabled");
+                    axum_server::bind_rustls(http_addr, rustls_config)
+                        .serve(make_service)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("admin HTTPS server error: {}", e))?;
+                }
+                None => {
+                    let listener = tokio::net::TcpListener::bind(http_addr)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("admin HTTP bind error: {}", e))?;
+                    tracing::info!(component = "center", addr = %http_addr, "Center admin API HTTP enabled (no TLS)");
+                    axum::serve(listener, make_service)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("admin HTTP server error: {}", e))?;
+                }
+            }
+            Ok::<(), anyhow::Error>(())
         });
 
         // Dedicated probe listener (liveness/readiness) — own socket, no auth.
@@ -290,16 +337,41 @@ impl EdgionCenterCli {
                 Err(anyhow::anyhow!("federation gRPC server exited unexpectedly"))
             }
             r = http_handle => {
-                tracing::error!(component = "center", "HTTP server exited: {:?}", r);
-                Err(anyhow::anyhow!("admin HTTP server exited unexpectedly"))
+                // The admin listener may be HTTP or HTTPS depending on admin_tls.
+                tracing::error!(component = "center", "admin server exited: {:?}", r);
+                Err(anyhow::anyhow!("admin server exited unexpectedly"))
             }
         }
     }
 }
 
+/// Decide which admin-TLS / cookie_secure startup warning to emit, if any.
+///
+/// Pure (no logging) so it is unit-testable without a tracing capture layer.
+/// Returns `None` when the combination is safe. Only meaningful when local auth
+/// is configured (otherwise no cookie is ever issued — the caller gates on that).
+fn admin_tls_cookie_warning(admin_tls_present: bool, cookie_secure: bool) -> Option<&'static str> {
+    match (admin_tls_present, cookie_secure) {
+        // Center itself terminates HTTPS but the auth cookie is non-Secure.
+        (true, false) => Some(
+            "admin_tls is enabled but local_auth.cookie_secure=false: the auth cookie is issued \
+             without the Secure attribute, so browsers may transmit it back over plain HTTP. \
+             Set cookie_secure=true.",
+        ),
+        // Secure cookie but plain-HTTP listener: a direct http:// browser reach silently
+        // drops the session cookie. Fine behind a TLS-terminating proxy (warn-only).
+        (false, true) => Some(
+            "local_auth.cookie_secure=true but admin_tls is not configured: if Center is reached \
+             directly over http:// the browser will drop the session cookie. Ensure a \
+             TLS-terminating proxy fronts the admin listener.",
+        ),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{decide_transport, TransportDecision};
+    use super::{admin_tls_cookie_warning, decide_transport, TransportDecision};
     use crate::core::center::config::CenterConfig;
     use crate::core::common::config::{ConfSyncSecurityConfig, ConfSyncTlsConfig};
     use crate::core::common::unified_auth::UnifiedAuthState;
@@ -423,5 +495,61 @@ mod tests {
             config.auth.as_ref().is_none_or(|a| !a.enabled),
             "default CenterConfig should not enable OIDC auth"
         );
+    }
+
+    #[test]
+    fn test_admin_tls_cookie_warning_combinations() {
+        // Contradiction: Center terminates HTTPS but cookie is non-Secure -> warn.
+        // Assert a substring UNIQUE to this arm so a swapped match arm would fail the test.
+        // ("admin_tls is enabled" appears only here; "cookie_secure=true" appears in BOTH arms.)
+        let msg = admin_tls_cookie_warning(true, false).expect("contradiction case should warn");
+        assert!(msg.contains("admin_tls is enabled"), "unexpected message: {msg}");
+        // Silent-drop risk: Secure cookie but admin listener is plain HTTP -> warn.
+        // "admin_tls is not configured" is unique to this arm.
+        let msg = admin_tls_cookie_warning(false, true).expect("silent-drop case should warn");
+        assert!(msg.contains("admin_tls is not configured"), "unexpected message: {msg}");
+        // Safe: HTTPS + Secure cookie.
+        assert!(admin_tls_cookie_warning(true, true).is_none());
+        // Safe: plain HTTP + non-Secure cookie (consistent dev setup).
+        assert!(admin_tls_cookie_warning(false, false).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_rustls_config_loads_self_signed_pem() {
+        use rcgen::{CertificateParams, KeyPair};
+        // ServerConfig needs a process CryptoProvider; main installs it, tests must too.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let key_pair = KeyPair::generate().expect("rcgen key generation failed");
+        let params = CertificateParams::new(vec!["localhost".to_string()]).expect("rcgen params failed");
+        let cert = params.self_signed(&key_pair).expect("rcgen self-sign failed");
+
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("server.crt");
+        let key_path = dir.path().join("server.key");
+        std::fs::write(&cert_path, cert.pem()).unwrap();
+        std::fs::write(&key_path, key_pair.serialize_pem()).unwrap();
+
+        let res = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path).await;
+        assert!(res.is_ok(), "valid self-signed PEM should load: {:?}", res.err());
+    }
+
+    #[tokio::test]
+    async fn test_rustls_config_rejects_malformed_pem() {
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("bad.crt");
+        let key_path = dir.path().join("bad.key");
+        std::fs::write(&cert_path, b"not a pem at all").unwrap();
+        std::fs::write(&key_path, b"also not a key").unwrap();
+
+        let res = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path).await;
+        assert!(res.is_err(), "malformed PEM must return Err, not panic");
+    }
+
+    #[tokio::test]
+    async fn test_rustls_config_rejects_missing_path() {
+        let res =
+            axum_server::tls_rustls::RustlsConfig::from_pem_file("/no/such/dir/cert.crt", "/no/such/dir/key.key").await;
+        assert!(res.is_err(), "missing cert/key files must return Err, not panic");
     }
 }
