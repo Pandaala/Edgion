@@ -188,14 +188,23 @@ pub(crate) fn resolved_listeners_for_route(route: &TCPRoute) -> &[ListenerKey] {
 pub struct TcpRouteManagerStats {
     pub route_cache: usize,
     pub listener_count: usize,
+    /// Sum of per-listener route-table sizes across `by_listener`. Mirrors
+    /// HTTP's `exact_domains` so orphan residue in any per-listener table is
+    /// observable via stats even when `route_cache` is empty.
+    pub total_routes_in_tables: usize,
 }
 
 impl GlobalTcpRouteManagers {
     /// Collect size statistics for leak-detection tests.
     pub fn stats(&self) -> TcpRouteManagerStats {
+        let mut total_routes_in_tables = 0usize;
+        for entry in self.by_listener.iter() {
+            total_routes_in_tables += entry.value().load_route_table().route_count();
+        }
         TcpRouteManagerStats {
             route_cache: self.route_cache.len(),
             listener_count: self.by_listener.len(),
+            total_routes_in_tables,
         }
     }
 }

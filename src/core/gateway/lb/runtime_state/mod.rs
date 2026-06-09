@@ -122,6 +122,21 @@ pub fn all_draining_backends() -> Vec<(String, Arc<EdgionBackend>)> {
 }
 
 /// Remove the entire lifecycle state for a service (service deleted).
+///
+/// Concurrency window (documented, not fixed): `retain()` is a compound
+/// multi-key scan-and-delete that can interleave with concurrent per-key
+/// writers — `begin_draining` / `remove_backend` driven by the EndpointSlice
+/// dispatch task, and `remove_backend` driven by the background
+/// `BackendCleaner`. A `begin_draining` insert landing in a DashMap shard
+/// that `retain` has already scanned can survive this sweep, leaving a
+/// draining backend whose owning service has been removed.
+///
+/// Accepted because DRAINING_BACKENDS is self-healing runtime lifecycle
+/// state — `BackendCleaner` (see `lb/leastconn/cleaner.rs`) removes any
+/// backend whose `conn()` reaches zero. The orphan is bounded by connection
+/// lifetime, not a permanent residue. See
+/// `docs/superpowers/specs/2026-06-09-gateway-cross-kind-derived-state-race-audit-design.md`
+/// for the full audit.
 pub fn remove_service(service_key: &str) {
     let prefix = format!("{}\0", service_key);
     DRAINING_BACKENDS.retain(|k, _| !k.starts_with(&prefix));

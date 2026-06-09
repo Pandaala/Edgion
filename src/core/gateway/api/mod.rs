@@ -1637,6 +1637,7 @@ mod store_stats_tests {
             tcp_routes: crate::core::gateway::routes::tcp::TcpRouteManagerStats {
                 route_cache: 0,
                 listener_count: 0,
+                total_routes_in_tables: 0,
             },
             udp_routes: crate::core::gateway::routes::udp::UdpRouteManagerStats {
                 route_cache: 0,

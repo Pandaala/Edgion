@@ -67,6 +67,23 @@ impl Snapshot {
     }
 }
 
+// Stat paths exempted from the residue check.
+//
+// - `controller.event_store.next_resource_version`: monotonic version
+//   counter; never resets. Structural, not residue.
+// - `controller.watch_objects.count`: count of live watch subscriptions; not
+//   tied to a resource lifecycle. Structural.
+// - `gateway.gateway_config.gateways` and
+//   `gateway.listener_gateway_info.listener_count`: SUSPECT LEAK, not by
+//   design. `wipe-all` (see `src/core/controller/api/wipe_handlers.rs`
+//   Tier 2) deletes the Gateway resource; both stores' clear/rebuild paths
+//   would zero these counts if the delete event reached the gateway-process
+//   handler. Exempted today to keep the residue check green; the underlying
+//   leak is tracked in
+//   `tasks/todo/cache-residue-ignore-paths-real-leak.md`. DO NOT add new
+//   entries here without investigating the same way — and DO NOT add
+//   `gateway.tcp_routes.total_routes_in_tables` (added by the cross-kind
+//   audit specifically so L4 orphan residue is OBSERVABLE).
 const IGNORE_PATHS: &[&str] = &[
     "controller.event_store.next_resource_version",
     "controller.watch_objects.count",
