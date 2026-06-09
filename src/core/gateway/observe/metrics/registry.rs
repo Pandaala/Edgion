@@ -430,7 +430,7 @@ pub fn record_lb_panic_mode(service_key: &str, engaged: bool) {
 
 /// Record an ACME HTTP-01 challenge token lookup event.
 ///
-/// `result` must be one of: `"hit"`, `"expired"`, `"domain_mismatch"`, `"not_found"`.
+/// `result` must be one of: `"hit"`, `"expired"`, `"domain_mismatch"`, `"not_found"`, `"empty_host"`.
 /// Low, fixed cardinality — safe as a label.
 pub fn record_acme_challenge_lookup(result: &'static str) {
     counter!(names::ACME_CHALLENGE_LOOKUP_TOTAL, "result" => result).increment(1);

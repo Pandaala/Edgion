@@ -85,8 +85,16 @@ impl AcmeChallengeStore {
                 return None;
             }
 
-            // Check domain matches
-            if entry.domain == host || host.is_empty() {
+            // Check domain matches (ASCII-case-insensitive per RFC 4343).
+            // An empty/unparseable host can no longer match: ACME HTTP-01
+            // validation always carries a Host header equal to the domain being
+            // validated, so an empty host is never a legitimate hit and must not
+            // bypass the per-domain binding.
+            if host.is_empty() {
+                record_acme_challenge_lookup("empty_host");
+                return None;
+            }
+            if entry.domain.eq_ignore_ascii_case(host) {
                 record_acme_challenge_lookup("hit");
                 return Some(entry.key_authorization.clone());
             }
@@ -324,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_host_matches_any() {
+    fn test_empty_host_no_longer_matches() {
         let store = AcmeChallengeStore::new();
         let ft = future_time();
 
@@ -335,8 +343,38 @@ mod tests {
         );
         store.full_set(&data);
 
-        // Empty host should match (for cases where Host header is missing)
-        assert!(store.lookup("token-1", "").is_some());
+        // An empty/unparseable Host must NOT match: it can no longer bypass the
+        // per-domain binding the domain check enforces. The token still exists
+        // and is unexpired, so this exercises the new `empty_host` miss path.
+        assert!(store.lookup("token-1", "").is_none());
+    }
+
+    #[test]
+    fn test_lookup_case_insensitive_domain() {
+        let store = AcmeChallengeStore::new();
+        let ft = future_time();
+
+        let mut data = HashMap::new();
+        data.insert(
+            "ns/acme1".to_string(),
+            make_acme(vec![challenge("Example.COM", "token-1", "auth-1", ft)]),
+        );
+        store.full_set(&data);
+
+        // Stored domain is mixed-case; request host in lower-case must hit
+        // (RFC 4343: DNS/Host comparisons are case-insensitive).
+        assert_eq!(
+            store.lookup("token-1", "example.com"),
+            Some(Bytes::from_static(b"auth-1"))
+        );
+        // Request host in a different mixed-case must also hit.
+        assert_eq!(
+            store.lookup("token-1", "EXAMPLE.com"),
+            Some(Bytes::from_static(b"auth-1"))
+        );
+        // Negative guard: a genuinely different domain still misses
+        // (case-insensitivity must not collapse into "match any").
+        assert!(store.lookup("token-1", "other.com").is_none());
     }
 
     #[test]
