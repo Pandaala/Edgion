@@ -1,6 +1,6 @@
 //! Etcd ConfCenter configuration types
 //!
-//! Provides TOML-friendly (snake_case) configuration for the etcd backend.
+//! Provides YAML-friendly (snake_case) configuration for the etcd backend.
 //! Converts to `EtcdClientConfig` internally for `EtcdLinkClient::from_config()`.
 
 use k8s_openapi::api::core::v1::Secret;
@@ -15,27 +15,25 @@ use crate::types::resources::common::{SecretObjectReference, SecretSlot, TlsCert
 use crate::types::resources::link_sys::etcd::{EtcdAuth, EtcdClientConfig, EtcdKeepAlive, EtcdTimeout};
 
 // ============================================================================
-// EtcdConfig — TOML top-level config
+// EtcdConfig — YAML top-level config
 // ============================================================================
 
 /// Etcd configuration center settings
 ///
-/// ## Example (TOML)
+/// ## Example (YAML)
 ///
-/// ```toml
-/// [conf_center]
-/// type = "etcd"
-/// endpoints = ["http://127.0.0.1:2379"]
-/// key_prefix = "/edgion"
-///
-/// [conf_center.auth]
-/// username = "root"
-/// password = "changeme"
-///
-/// [conf_center.tls]
-/// ca_cert_file = "/etc/edgion/certs/etcd-ca.pem"
-/// client_cert_file = "/etc/edgion/certs/etcd-client.pem"
-/// client_key_file = "/etc/edgion/certs/etcd-client-key.pem"
+/// ```yaml
+/// conf_center:
+///   type: etcd
+///   endpoints: ["http://127.0.0.1:2379"]
+///   key_prefix: /edgion
+///   auth:
+///     username: root
+///     password: changeme
+///   tls:
+///     ca_cert_file: /etc/edgion/certs/etcd-ca.pem
+///     client_cert_file: /etc/edgion/certs/etcd-client.pem
+///     client_key_file: /etc/edgion/certs/etcd-client-key.pem
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EtcdConfig {
@@ -75,7 +73,7 @@ fn default_key_prefix() -> String {
     "/edgion".to_string()
 }
 
-/// Authentication configuration for etcd (TOML snake_case)
+/// Authentication configuration for etcd (YAML snake_case)
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EtcdAuthConfig {
     pub username: String,
@@ -91,7 +89,7 @@ impl std::fmt::Debug for EtcdAuthConfig {
     }
 }
 
-/// TLS configuration for etcd (TOML snake_case, file paths)
+/// TLS configuration for etcd (YAML snake_case, file paths)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EtcdTlsConfig {
     /// CA certificate file path (PEM)
@@ -115,21 +113,21 @@ impl EtcdConfig {
     ///
     /// TLS certificate file paths are read from disk and embedded as PEM strings.
     ///
-    /// Auth note: Controller's ConfCenter uses file-based credentials (TOML
-    /// `[conf_center.auth]`), not `SecretObjectReference`. To reuse the same
+    /// Auth note: Controller's ConfCenter uses file-based credentials (YAML
+    /// `conf_center.auth`), not `SecretObjectReference`. To reuse the same
     /// `build_connect_options` code path as the LinkSys CRD flow, we:
     /// - fill `EtcdClientConfig.auth` with a synthetic `EtcdAuth` placeholder
     ///   (the `secret_ref` is never read by the Gateway provider; only
     ///   `crd.auth.is_some()` is inspected as the "auth configured" gate);
-    /// - return a [`CredentialState::Resolved`] carrying the TOML material so
+    /// - return a [`CredentialState::Resolved`] carrying the YAML material so
     ///   the provider's auth arm gets the plaintext `username` / `password`.
     ///
-    /// If no `[conf_center.auth]` section is configured, returns
+    /// If no `conf_center.auth` section is configured, returns
     /// `(EtcdClientConfig { auth: None, .. }, CredentialState::NotRequired)`.
     pub fn to_client_config(&self) -> anyhow::Result<(EtcdClientConfig, CredentialState<BasicAuthMaterial>)> {
-        // Auth: wire TOML username/password into CredentialState::Resolved so
+        // Auth: wire YAML username/password into CredentialState::Resolved so
         // `build_connect_options` picks it up — previously this path hard-coded
-        // `auth = None` which silently dropped the TOML credentials (a
+        // `auth = None` which silently dropped the YAML credentials (a
         // silent-fallback regression of the credential-state contract).
         let (auth, auth_state): (Option<EtcdAuth>, CredentialState<BasicAuthMaterial>) = match &self.auth {
             Some(cfg) => (
@@ -142,7 +140,7 @@ impl EtcdConfig {
                         secret_ref: SecretObjectReference {
                             group: None,
                             kind: None,
-                            name: "conf-center-toml".to_string(),
+                            name: "conf-center-yaml".to_string(),
                             namespace: None,
                         },
                         secret: None,
@@ -318,8 +316,8 @@ auth:
     }
 
     #[test]
-    fn test_to_client_config_with_auth_wires_toml_credentials_into_state() {
-        // Regression guard (B1): TOML `[conf_center.auth]` must flow through
+    fn test_to_client_config_with_auth_wires_yaml_credentials_into_state() {
+        // Regression guard (B1): YAML `conf_center.auth` must flow through
         // to `CredentialState::Resolved` — previously it was silently dropped.
         let config = EtcdConfig {
             endpoints: vec!["http://127.0.0.1:2379".to_string()],

@@ -159,7 +159,7 @@ Created in `new_ctx()` and consumed in `logging()`. Plugins interact with it thr
 | **gRPC** | `tonic`, `tonic-reflection`, `prost` | Controller ↔ Gateway communication |
 | **HTTP API** | `axum`, `tower-http`, `hyper-util` | Admin API |
 | **K8s** | `kube`, `k8s-openapi`, `schemars` | K8s integration + CRD Schema |
-| **Serialization** | `serde`, `serde_json`, `serde_yaml`, `toml` | Configuration parsing |
+| **Serialization** | `serde`, `serde_json`, `serde_yaml` | Configuration parsing |
 | **TLS** | `rustls`, `tokio-rustls`, `boring-sys` | TLS termination (rustls or BoringSSL) |
 | **Observability** | `tracing`, `metrics` | Logging + metrics |
 | **Security** | `jsonwebtoken`, `bcrypt`, `base64`, `sha1` | `bcrypt` is used by Controller `local_auth` only; gateway plugins use `jsonwebtoken` (jwt_auth), `sha1`/`md5` (basic_auth htpasswd), `base64` (everywhere) |

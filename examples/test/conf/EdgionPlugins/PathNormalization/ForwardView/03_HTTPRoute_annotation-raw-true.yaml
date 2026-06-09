@@ -5,7 +5,7 @@
 #
 # Annotation edgion.io/forward-raw-path: "true" forces the gateway to forward the
 # entry-time raw (un-normalized) path to upstream, regardless of the global
-# forward_normalized_path TOML setting.
+# forward_normalized_path YAML setting.
 #
 # Routing still uses the normalized path for matching (/%61pi matches /api prefix),
 # but upstream receives the original /%61pi/data encoding.

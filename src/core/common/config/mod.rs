@@ -115,7 +115,7 @@ pub struct EdgionControllerConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work_dir: Option<PathBuf>,
 
-    /// Configuration file path (TOML format)
+    /// Configuration file path (YAML format)
     #[arg(
         short = 'c',
         long,
@@ -388,7 +388,7 @@ impl ConfSyncConfig {
 pub struct ConfSyncSecurityConfig {
     /// Name of the active certificate set. Must match `name` of one entry in `certs`.
     pub active: Option<String>,
-    /// Certificate sets (TOML [[conf_sync_security.certs]] array).
+    /// Certificate sets (YAML `conf_sync_security.certs` list).
     pub certs: Vec<ConfSyncTlsConfig>,
     /// Legacy single-cert format [conf_sync_security.tls] — kept for backward compat.
     pub tls: Option<ConfSyncTlsConfig>,
@@ -624,7 +624,7 @@ impl Default for ConfSyncConfig {
 // Default implementation is now derived
 
 impl EdgionControllerConfig {
-    /// Load configuration from TOML file if config_file is specified,
+    /// Load configuration from YAML file if config_file is specified,
     /// then merge with CLI arguments (CLI takes precedence)
     pub fn load(cli_config: Self) -> Result<Self> {
         // Load from file if specified

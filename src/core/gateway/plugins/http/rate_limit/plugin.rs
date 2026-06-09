@@ -75,7 +75,7 @@ impl RateLimit {
     /// using the configured interval and estimator slots.
     ///
     /// Global configuration (default_estimator_slots, max_estimator_slots) is
-    /// automatically loaded from the toml config file via `validate()`.
+    /// automatically loaded from the YAML config file via `validate()`.
     pub fn create(config: &RateLimitConfig) -> Box<dyn RequestFilter> {
         let mut validated_config = config.clone();
         let _ = validated_config.validate();

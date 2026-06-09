@@ -1132,7 +1132,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             // NOTE: This suite requires the gateway to be started with
-            // preserve_path_parameters = true in [path_normalization] TOML config.
+            // preserve_path_parameters: true in the `path_normalization` YAML config.
             // TC-C is excluded from automation (manual curl verifies preserve-mode bypass
             // behaviour, see fixture); TC-B is mode-agnostic and passes in both strip and
             // preserve modes.
@@ -1147,7 +1147,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             //   TC-A: default (no annotation) → normalized path forwarded
             //   TC-B: annotation forward-raw-path: "true" → raw path forwarded
             //   TC-C: annotation forward-raw-path: "false" → normalized path forwarded
-            // Scenarios that require gateway TOML restart (global forward_normalized_path = false,
+            // Scenarios that require gateway YAML restart (global forward_normalized_path: false,
             // region_route with no annotation) are documented in the fixture YAMLs and suite
             // header comment for manual verification.
             runner.add_suite(Box::new(suites::PathNormalizationForwardViewTestSuite));

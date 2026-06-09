@@ -8,7 +8,7 @@ use pingora_core::server::configuration::ServerConf;
 use pingora_core::server::Server;
 use std::sync::Arc;
 
-/// Create Pingora ServerConf from local toml configuration
+/// Create Pingora ServerConf from local YAML configuration
 fn create_server_conf(config: &EdgionGatewayConfig) -> ServerConf {
     // Number of worker threads (default: number of CPU cores)
     let threads = config
@@ -57,7 +57,7 @@ fn create_server_conf(config: &EdgionGatewayConfig) -> ServerConf {
 /// Phase 1: Create and configure Pingora server with listeners
 ///
 /// This function:
-/// 1. Creates Pingora ServerConf from local toml configuration
+/// 1. Creates Pingora ServerConf from local YAML configuration
 /// 2. Creates and bootstraps Pingora Server
 /// 3. Fetches all Gateway resources from ConfigClient
 /// 4. Delegates to GatewayBase to configure listeners for each Gateway
@@ -67,10 +67,10 @@ fn create_server_conf(config: &EdgionGatewayConfig) -> ServerConf {
 /// - ConfigClient must be ready with Gateway/GatewayClass/EdgionGatewayConfig
 pub fn create_and_configure_server(
     config_client: Arc<ConfigClient>,
-    toml_config: &EdgionGatewayConfig,
+    gateway_config: &EdgionGatewayConfig,
 ) -> Result<Server> {
-    // 1. Create ServerConf from local toml configuration
-    let server_conf = create_server_conf(toml_config);
+    // 1. Create ServerConf from local YAML configuration
+    let server_conf = create_server_conf(gateway_config);
 
     // 2. Create and bootstrap Pingora Server
     let mut pingora_server = Server::new_with_opt_and_conf(None, server_conf);

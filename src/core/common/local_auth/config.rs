@@ -1,19 +1,19 @@
 //! Local authentication configuration.
 //!
 //! Provides built-in username/password authentication with JWT for the Admin API.
-//! Credentials come only from configuration (this `[local_auth]` section, the
-//! `EDGION_ADMIN_*` environment variables, or `[auth]` OIDC). They are never
+//! Credentials come only from configuration (this `local_auth` section, the
+//! `EDGION_ADMIN_*` environment variables, or `auth` OIDC). They are never
 //! auto-generated. When nothing valid is configured the Admin API returns 503
 //! fail-close.
 //!
-//! Example TOML:
-//! ```toml
-//! [local_auth]
-//! enabled = true
-//! username = "admin"
-//! password = "my-secure-password"
-//! jwt_secret = "change-me-in-production"
-//! jwt_expiry_hours = 24
+//! Example YAML:
+//! ```yaml
+//! local_auth:
+//!   enabled: true
+//!   username: admin
+//!   password: my-secure-password
+//!   jwt_secret: change-me-in-production
+//!   jwt_expiry_hours: 24
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 /// Local authentication configuration.
 ///
 /// Credentials come only from configuration (this section, the `EDGION_ADMIN_*`
-/// environment variables, or `[auth]` OIDC); they are never auto-generated. When
+/// environment variables, or `auth` OIDC); they are never auto-generated. When
 /// nothing valid is configured, no auth provider loads and the Admin API returns
 /// 503 fail-close.
 #[derive(Debug, Clone, Serialize, Deserialize)]

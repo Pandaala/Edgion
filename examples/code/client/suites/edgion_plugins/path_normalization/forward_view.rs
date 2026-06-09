@@ -11,10 +11,10 @@
 //
 // ## Globally-scoped options (NOT automatable without gateway restart)
 //
-// Scenario 04: Global `forward_normalized_path = false` in gateway TOML makes ALL routes
+// Scenario 04: Global `forward_normalized_path = false` in gateway YAML makes ALL routes
 //   forward raw by default.  Manual verification:
 //
-//   # Set in gateway TOML: [path_normalization]  forward_normalized_path = false
+//   # Set in gateway YAML: path_normalization.forward_normalized_path: false
 //   curl -i -H "Host: path-fwd-default.example.com" \
 //     "http://127.0.0.1:31180/%61pi/data?x=1"
 //   # Expected: backend echoes Path: /%61pi/data (raw — global default is now raw)

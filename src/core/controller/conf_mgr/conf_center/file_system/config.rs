@@ -92,7 +92,7 @@ conf_dir: /etc/edgion/conf
 
     #[test]
     fn test_file_system_config_rejects_unknown_fields() {
-        // Stale TOML/YAML with endpoint_mode must be rejected
+        // Stale YAML with endpoint_mode must be rejected
         let yaml = r#"
 conf_dir: /etc/edgion/conf
 endpoint_mode: endpoint_slice

@@ -4,7 +4,7 @@
 # also verifies the §14.4 path-parameter bypass commitment degradation (operator explicitly accepts the side effect).
 #
 # Configuration requirement:
-#   This scenario requires the gateway to start with preserve_path_parameters = true (gateway TOML config).
+#   This scenario requires the gateway to start with preserve_path_parameters: true (gateway YAML config).
 #   The default integration tests use strip mode (false); ;param is stripped and ..;/ bypass is blocked.
 #
 # Behavior (when preserve_path_parameters = true):

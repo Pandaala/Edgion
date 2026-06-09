@@ -141,7 +141,7 @@ examples/test/scripts/gen_certs/
 `run_conf_sync_mtls_test.sh` tests the conf_sync gRPC mTLS feature end-to-end:
 
 1. Generates two cert sets (`primary`, `secondary`) via `edgion-cli gen-certs --cert-name <name> --output file`
-2. Creates TOML configs with multi-cert `[[conf_sync_security.certs]]` format (`active = "primary"`, secondary pre-staged but inactive)
+2. Creates YAML configs with multi-cert `conf_sync_security.certs` list (`active = "primary"`, secondary pre-staged but inactive)
 3. Starts Controller with server TLS + client CA verification
 4. Starts Gateway with client cert + server CA trust
 5. Verifies: mTLS log entries, health, readiness, server_id match, resource sync, plaintext rejection

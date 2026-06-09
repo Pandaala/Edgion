@@ -47,7 +47,7 @@ impl LogConfig {
 
 /// Access log output options that are not part of the generic [`LogConfig`].
 ///
-/// Sits alongside `[access_log]` in TOML (e.g. `[access_log_options]`).
+/// Sits alongside the `access_log` section in YAML (e.g. `access_log_options`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AccessLogOptions {

@@ -230,4 +230,4 @@ Do not use `EdgionGatewayConfig` to solve these problems:
 
 - Which Controller the Gateway process connects to: that is `server_addr` in the Gateway YAML.
 - Gateway Admin / Metrics ports: that is the process startup layer.
-- Whether the Controller uses file_system or kubernetes: that is `conf_center` in the Controller TOML.
+- Whether the Controller uses file_system or kubernetes: that is `conf_center` in the Controller YAML.

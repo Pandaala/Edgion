@@ -8,7 +8,7 @@
 //!
 //! ## Sub-modules
 //!
-//! - **config**: `LocalAuthConfig` — TOML-based configuration and defaults.
+//! - **config**: `LocalAuthConfig` — YAML-based configuration and defaults.
 //! - **handlers**: Login and me HTTP handlers.
 //! - **middleware**: `LocalAuthState` shared with `unified_auth` for local
 //!   validation fallback. The actual middleware lives in `unified_auth`.

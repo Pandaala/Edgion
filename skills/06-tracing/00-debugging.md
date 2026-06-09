@@ -345,7 +345,7 @@ Distinguish:
 
 ## If it is a configuration-layer issue
 
-Many "why my TOML / work_dir / conf_dir change didn't take effect" issues are not about debugging but about choosing the wrong configuration layer.
+Many "why my YAML / work_dir / conf_dir change didn't take effect" issues are not about debugging but about choosing the wrong configuration layer.
 For those, jump to:
 
 - [../02-features/02-config/SKILL.md](../02-features/02-config/SKILL.md)

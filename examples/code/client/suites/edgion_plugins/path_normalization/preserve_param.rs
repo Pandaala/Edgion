@@ -10,14 +10,14 @@
 // The behaviour that DIFFERS between modes (TC-C: ..;jsessionid bypass) is
 // documented in the fixture YAML and README but excluded from the automated
 // integration test, because it requires the gateway to be started with a
-// specific TOML configuration:
+// specific YAML configuration:
 //
 //   [path_normalization]
 //   preserve_path_parameters = true
 //
 // To manually verify the bypass scenario (§14.4 trade-off):
 //
-//   # With preserve_path_parameters = true in gateway TOML:
+//   # With preserve_path_parameters: true in gateway YAML:
 //   curl -H "host: path-norm-preserve.example.com" \
 //     "http://127.0.0.1:31180/test/preserve/..;jsessionid=x/secret"
 //   # Expected: 200 (bypass accepted, /secret deny does not fire)

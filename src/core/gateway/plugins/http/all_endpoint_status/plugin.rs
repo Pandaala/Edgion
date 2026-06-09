@@ -28,7 +28,7 @@ use crate::types::resources::edgion_plugins::plugin_configs::all_endpoint_status
 use crate::types::resources::edgion_plugins::AllEndpointStatusConfig;
 
 /// Global configuration for AllEndpointStatus plugin.
-/// Stored in TOML config, loaded at gateway startup, applies to all instances.
+/// Stored in YAML config, loaded at gateway startup, applies to all instances.
 /// These values act as security ceilings that per-plugin config cannot exceed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -64,7 +64,7 @@ impl Default for AllEndpointStatusGlobalConfig {
     }
 }
 
-/// Global config store, initialized from TOML at startup.
+/// Global config store, initialized from YAML at startup.
 static ALL_ENDPOINT_STATUS_GLOBAL_CONFIG: LazyLock<RwLock<AllEndpointStatusGlobalConfig>> =
     LazyLock::new(|| RwLock::new(AllEndpointStatusGlobalConfig::default()));
 
@@ -73,7 +73,7 @@ pub fn get_all_endpoint_status_global_config() -> AllEndpointStatusGlobalConfig 
 }
 
 /// Initialize the global AllEndpointStatus configuration.
-/// Called once during gateway startup with the loaded TOML config.
+/// Called once during gateway startup with the loaded YAML config.
 pub fn init_all_endpoint_status_global_config(config: &AllEndpointStatusGlobalConfig) {
     let mut c = ALL_ENDPOINT_STATUS_GLOBAL_CONFIG.write();
     *c = config.clone();
@@ -96,7 +96,7 @@ static GLOBAL_CONCURRENCY: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new
 
 /// Process-level rate limiter: tracks the timestamp (ms since process start)
 /// of the last successful plugin execution. New requests must wait at least
-/// `min_interval_ms` (from global TOML config) since this timestamp.
+/// `min_interval_ms` (from global YAML config) since this timestamp.
 /// Uses AtomicU64 + Instant for lock-free, monotonic timing.
 static LAST_EXECUTION_MS: AtomicU64 = AtomicU64::new(0);
 static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);

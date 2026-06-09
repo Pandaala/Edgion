@@ -312,7 +312,7 @@ pub struct RateLimitConfig {
     ///
     /// Controls the precision of the Count-Min Sketch algorithm.
     /// Value is in K units (1K = 1024 slots).
-    /// If not specified, uses the global `default_estimator_slots_k` from toml config.
+    /// If not specified, uses the global `default_estimator_slots_k` from YAML config.
     /// Value is capped at global `max_estimator_slots_k`.
     ///
     /// Memory per Rate instance ≈ slots_k × 64KB
@@ -383,7 +383,7 @@ pub use crate::core::gateway::cli::config::{
 impl RateLimitConfig {
     /// Validate and compile the configuration.
     ///
-    /// Uses the global RateLimit configuration from toml config file.
+    /// Uses the global RateLimit configuration from YAML config file.
     /// Returns `Err(message)` if invalid; on success, `interval_duration` and
     /// `effective_slots` are populated.
     pub fn validate(&mut self) -> Result<(), String> {

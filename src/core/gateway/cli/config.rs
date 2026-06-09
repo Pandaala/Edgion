@@ -38,7 +38,7 @@ pub struct EdgionGatewayConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work_dir: Option<PathBuf>,
 
-    /// Configuration file path (TOML format)
+    /// Configuration file path (YAML format)
     #[arg(
         short = 'c',
         long = "config-file",
@@ -62,25 +62,25 @@ pub struct EdgionGatewayConfig {
 
     /// Sensitive data masking for access logs. Disabled by default.
     ///
-    /// TOML example (replace mode):
-    ///   [access_log_sensitive]
-    ///   mode = "replace"
-    ///   replace_with = "***"
+    /// YAML example (replace mode):
+    ///   access_log_sensitive:
+    ///     mode: replace
+    ///     replace_with: "***"
     ///
-    /// TOML example (wrap mode):
-    ///   [access_log_sensitive]
-    ///   mode = "wrap"
-    ///   wrap_prefix = "<E>"
-    ///   wrap_suffix = "</E>"
+    /// YAML example (wrap mode):
+    ///   access_log_sensitive:
+    ///     mode: wrap
+    ///     wrap_prefix: "<E>"
+    ///     wrap_suffix: "</E>"
     #[arg(skip)]
     #[serde(default, skip_serializing)]
     pub access_log_sensitive: crate::types::sensitive::SensitiveMaskConfig,
 
     /// Access log output options that don't fit into the shared `LogConfig`.
     ///
-    /// TOML example:
-    ///   [access_log_options]
-    ///   include_raw_uri = true
+    /// YAML example:
+    ///   access_log_options:
+    ///     include_raw_uri: true
     #[arg(skip)]
     #[serde(default)]
     pub access_log_options: crate::types::observe::AccessLogOptions,
@@ -146,10 +146,10 @@ pub struct EdgionGatewayConfig {
     /// Controls rejection behaviour for unusual but technically valid encodings.
     /// Both flags default to `false`; the BASE normalization algorithm always runs.
     ///
-    /// TOML example:
-    ///   [path_normalization]
-    ///   reject_escaped_slashes = true
-    ///   reject_invalid_percent_encoding = false
+    /// YAML example:
+    ///   path_normalization:
+    ///     reject_escaped_slashes: true
+    ///     reject_invalid_percent_encoding: false
     #[arg(skip)]
     #[serde(default)]
     pub path_normalization: crate::core::gateway::path_normalization::PathNormalizationConfig,
@@ -296,7 +296,7 @@ impl Default for LoggingConfig {
 // Metrics Configuration
 // ============================================
 
-/// Metrics configuration section (`[metrics]` in TOML)
+/// Metrics configuration section (`metrics` in YAML)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MetricsConfig {
@@ -318,7 +318,7 @@ impl Default for MetricsConfig {
     }
 }
 
-/// Request duration histogram configuration (`[metrics.request_duration]` in TOML)
+/// Request duration histogram configuration (`metrics.request_duration` in YAML)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RequestDurationConfig {
@@ -401,7 +401,7 @@ pub fn get_request_duration_config() -> &'static RequestDurationConfig {
 // Backend Requests Counter Configuration
 // ============================================
 
-/// `edgion_backend_requests_total` configuration (`[metrics.backend_requests]` in TOML).
+/// `edgion_backend_requests_total` configuration (`metrics.backend_requests` in YAML).
 ///
 /// The counter itself is always on; this struct controls **which labels** get
 /// emitted, so operators can trade observability depth for Prometheus
@@ -542,11 +542,11 @@ pub const DEFAULT_MAX_ESTIMATOR_SLOTS_K: usize = 1024;
 /// All slot values are in K units (1K = 1024 slots).
 /// Memory per Rate instance ≈ slots_k × 64KB
 ///
-/// ## TOML Configuration Example:
-/// ```toml
-/// [rate_limit]
-/// default_estimator_slots_k = 64     # 64K slots = ~4MB
-/// max_estimator_slots_k = 1024       # 1024K slots = ~64MB
+/// ## YAML Configuration Example:
+/// ```yaml
+/// rate_limit:
+///   default_estimator_slots_k: 64     # 64K slots = ~4MB
+///   max_estimator_slots_k: 1024       # 1024K slots = ~64MB
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -697,11 +697,11 @@ fn default_lru_cache_capacity() -> usize {
 /// Global LRU cache configuration for plugins.
 /// Per-plugin `capacity = 0` falls back to this value.
 ///
-/// ## TOML Configuration Example:
-/// ```toml
-/// [lru_cache]
-/// default_capacity = 1024
-/// default_shards = 0
+/// ## YAML Configuration Example:
+/// ```yaml
+/// lru_cache:
+///   default_capacity: 1024
+///   default_shards: 0
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -756,7 +756,7 @@ pub fn get_default_lru_cache_shards() -> usize {
 
 // ============================================
 impl EdgionGatewayConfig {
-    /// Load configuration from TOML file if config_file is specified,
+    /// Load configuration from YAML file if config_file is specified,
     /// then merge with CLI arguments (CLI takes precedence)
     pub fn load(cli_config: Self) -> Result<Self> {
         // Load from file if specified
@@ -973,7 +973,7 @@ mod tests {
 
     #[test]
     fn test_access_log_sensitive_default_is_off() {
-        let cfg: EdgionGatewayConfig = toml::from_str("").unwrap();
+        let cfg: EdgionGatewayConfig = serde_yaml::from_str("{}").unwrap();
         assert!(matches!(
             cfg.access_log_sensitive.mode,
             crate::types::sensitive::SensitiveMode::Off
@@ -982,12 +982,12 @@ mod tests {
 
     #[test]
     fn test_access_log_sensitive_replace_mode() {
-        let toml_str = r#"
-[access_log_sensitive]
-mode = "replace"
-replace_with = "{MSKED}"
+        let yaml_str = r#"
+access_log_sensitive:
+  mode: replace
+  replace_with: "{MSKED}"
 "#;
-        let cfg: EdgionGatewayConfig = toml::from_str(toml_str).unwrap();
+        let cfg: EdgionGatewayConfig = serde_yaml::from_str(yaml_str).unwrap();
         assert!(matches!(
             cfg.access_log_sensitive.mode,
             crate::types::sensitive::SensitiveMode::Replace
@@ -997,13 +997,13 @@ replace_with = "{MSKED}"
 
     #[test]
     fn test_access_log_sensitive_wrap_mode() {
-        let toml_str = r#"
-[access_log_sensitive]
-mode = "wrap"
-wrap_prefix = "<E>"
-wrap_suffix = "</E>"
+        let yaml_str = r#"
+access_log_sensitive:
+  mode: wrap
+  wrap_prefix: "<E>"
+  wrap_suffix: "</E>"
 "#;
-        let cfg: EdgionGatewayConfig = toml::from_str(toml_str).unwrap();
+        let cfg: EdgionGatewayConfig = serde_yaml::from_str(yaml_str).unwrap();
         assert!(matches!(
             cfg.access_log_sensitive.mode,
             crate::types::sensitive::SensitiveMode::Wrap

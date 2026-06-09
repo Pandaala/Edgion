@@ -4,7 +4,7 @@
 # Gateway: reuses edgion-plugins-gateway (edgion-test namespace)
 #
 # No annotation on this route; the gateway forwards the normalized path by default
-# (forward_normalized_path = true in gateway TOML is the compiled-in default).
+# (forward_normalized_path: true in gateway YAML is the compiled-in default).
 #
 # TC-A manual verification:
 #   curl -i -H "Host: path-fwd-default.example.com" \

@@ -31,11 +31,11 @@ deploy/kubernetes/
 ├── versions.env                # Default image versions
 ├── controller/
 │   ├── rbac.yaml               # ServiceAccount, ClusterRole, ClusterRoleBinding
-│   ├── configmap.yaml          # Controller TOML configuration
+│   ├── configmap.yaml          # Controller YAML configuration
 │   ├── deployment.yaml         # Controller deployment (2 replicas)
 │   └── service.yaml            # Controller + leader services
 ├── gateway/
-│   ├── configmap.yaml          # Gateway TOML configuration
+│   ├── configmap.yaml          # Gateway YAML configuration
 │   ├── deployment.yaml         # Gateway deployment (2 replicas)
 │   └── service.yaml            # Gateway service (80, 443, 8080, 8443, admin, metrics)
 ├── base-config/

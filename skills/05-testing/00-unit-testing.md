@@ -83,7 +83,7 @@ Unit tests mainly cover the following areas:
 | Plugin configuration | `src/types/resources/edgion_plugins/plugin_configs/*.rs` | `validate_and_init()`, default values, edge cases |
 | LinkSys configuration | `src/types/resources/link_sys/*.rs` | Connector config parsing and validation |
 | Core utility functions | `src/core/common/utils/mod.rs` | String handling, path utilities, common logic |
-| Configuration system | `src/core/common/config/mod.rs` | TOML parsing, config merging, default values |
+| Configuration system | `src/core/common/config/mod.rs` | YAML parsing, config merging, default values |
 | Gateway backends | `src/core/gateway/backends/mod.rs` | Backend selection, load-balancing logic |
 | Working directory | `src/types/work_dir.rs` | Path resolution, directory creation, permission checks |
 

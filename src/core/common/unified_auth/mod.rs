@@ -216,7 +216,7 @@ impl UnifiedAuthState {
 
     /// Derive the pre-computed auth status from the live state.
     ///
-    /// Reads from the actual assembled state (not TOML intent) — so transient
+    /// Reads from the actual assembled state (not YAML config intent) — so transient
     /// states like "configured but Secret not yet fetched" are reported as
     /// `Initializing` instead of claiming `Ready`. Intended to be called
     /// per-request from the `/api/v1/auth/status` handler.

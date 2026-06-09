@@ -34,7 +34,7 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 |-----------|---------|
 | **System architecture** — relationship between the four Controller/Gateway/Center/Ctl binaries, internal modules, development guides | [01-architecture/SKILL.md](01-architecture/SKILL.md) |
 | **Binary startup and deployment** — CLI arguments, deployment modes | [02-features/01-binary-and-deployment/](02-features/01-binary-and-deployment/SKILL.md) |
-| **Config Schema** — Controller (TOML) / Gateway (YAML) configuration | [02-features/02-config/](02-features/02-config/SKILL.md) |
+| **Config Schema** — Controller (YAML) / Gateway (YAML) configuration | [02-features/02-config/](02-features/02-config/SKILL.md) |
 | **Controller authentication & authorization** — admin login, cli token RBAC, the (verb,kind) engine, middleware onion, default Center policy | [01-architecture/01-controller/11-authentication-authorization.md](01-architecture/01-controller/11-authentication-authorization.md) |
 | **Resource feature Schema** — Gateway/Route/TLS/Plugin/Backend/LinkSys | [02-features/03-resources/](02-features/03-resources/SKILL.md) |
 | **Observability** — Access Log, Metrics, protocol logs | [02-features/04-observability/](02-features/04-observability/SKILL.md) |

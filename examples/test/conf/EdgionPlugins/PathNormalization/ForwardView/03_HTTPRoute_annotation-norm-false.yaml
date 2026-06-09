@@ -5,7 +5,7 @@
 #
 # Annotation edgion.io/forward-raw-path: "false" explicitly forces the gateway to
 # forward the normalized path to upstream.  This annotation overrides both:
-#   - The global forward_normalized_path = false TOML setting (if set)
+#   - The global forward_normalized_path: false YAML setting (if set)
 #   - The region_route plugin's preserve_raw_path = true (if attached)
 #
 # In a scenario where region_route is also configured with preserve_raw_path = true,

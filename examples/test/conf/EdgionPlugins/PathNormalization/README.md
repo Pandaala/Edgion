@@ -36,11 +36,11 @@ Item: `EdgionPlugins/PathNormalization/ForwardView`
 
 Tests the spec §14 single-point upstream forwarding decision: per-route
 `edgion.io/forward-raw-path` annotation tri-state (`"true"` force raw / `"false"` force
-normalized / absent default flow). Uses the **default** gateway TOML config — no special
-`[path_normalization]` settings required.
+normalized / absent default flow). Uses the **default** gateway YAML config — no special
+`path_normalization` settings required.
 
 The global `forward_normalized_path` rollback switch is documented in Scenario 04 below
-and requires a gateway restart with custom TOML; the region_route default-raw behavior is
+and requires a gateway restart with custom YAML; the region_route default-raw behavior is
 documented in Scenario 05. See
 `docs/superpowers/specs/2026-04-26-uri-normalization-design.md` §14 for the full decision
 matrix.
@@ -275,15 +275,15 @@ curl -i -H "Host: path-fwd-invalid.example.com" \
 # NOT raw /%61pi/data which would mean 'yes' was misinterpreted as truthy
 ```
 
-### Non-automatable scenarios (require gateway TOML restart)
+### Non-automatable scenarios (require gateway YAML restart)
 
-**Scenario 04**: Global `forward_normalized_path = false` in gateway TOML — all routes
+**Scenario 04**: Global `forward_normalized_path = false` in gateway YAML — all routes
 forward raw by default.
 
-```toml
-# gateway TOML config
-[path_normalization]
-forward_normalized_path = false
+```yaml
+# gateway YAML config
+path_normalization:
+  forward_normalized_path: false
 ```
 
 ```bash
@@ -313,7 +313,7 @@ for the region_route test setup.
 
 ## Notes on Global-Only Config Options
 
-Two options in `[path_normalization]` are **global gateway config** (gateway TOML config) and
+Two options in `path_normalization` are **global gateway config** (gateway YAML config) and
 cannot be toggled per-scenario without a dedicated gateway instance:
 
 - `reject_escaped_slashes = true` — returns 400 for requests whose raw path contains `%2F`/`%5C`

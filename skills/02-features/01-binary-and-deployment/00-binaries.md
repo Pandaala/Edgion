@@ -38,7 +38,7 @@ edgion-controller [OPTIONS]
 |----------|-------|------|---------|-------------|
 | `--work-dir` | `-w` | `PathBuf` | `"."` | Working directory |
 | `--config-file` | `-c` | `String` | `config/edgion-controller.yaml` | YAML configuration file path |
-| `--conf-dir` | — | `PathBuf` | — | Configuration directory for FileSystem mode (overrides conf_center.conf_dir in TOML) |
+| `--conf-dir` | — | `PathBuf` | — | Configuration directory for FileSystem mode (overrides conf_center.conf_dir in YAML) |
 | `--test-mode` | — | `bool` | `false` | Enable test mode (metrics testing features) |
 | `--grpc-listen` | — | `String` | `0.0.0.0:12151` | gRPC listen address |
 | `--admin-listen` | — | `String` | `0.0.0.0:12101` | Admin HTTP API address |

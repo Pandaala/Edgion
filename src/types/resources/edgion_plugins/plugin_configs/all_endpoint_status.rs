@@ -144,7 +144,7 @@ impl AllEndpointStatusConfig {
         self.wall_timeout_ms.min(MAX_WALL_TIMEOUT_MS)
     }
 
-    /// Clamp max_endpoints using three-layer min: plugin config, global TOML, hard cap.
+    /// Clamp max_endpoints using three-layer min: plugin config, global YAML config, hard cap.
     pub fn effective_max_endpoints(&self, global_max: usize) -> usize {
         self.max_endpoints.min(global_max).min(MAX_ENDPOINTS_LIMIT)
     }

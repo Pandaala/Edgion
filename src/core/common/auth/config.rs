@@ -1,21 +1,21 @@
 //! Admin API authentication configuration.
 //!
-//! When `[auth]` section is present in the Controller or Center config file,
+//! When the `auth` section is present in the Controller or Center config file,
 //! the Admin API endpoints (except health/ready probes) require a valid JWT
 //! Bearer token from the configured OIDC provider.
 //!
-//! Example TOML:
-//! ```toml
-//! [auth]
-//! discovery = "https://keycloak.example.com/realms/edgion/.well-known/openid-configuration"
-//! audiences = ["edgion-admin"]
+//! Example YAML:
+//! ```yaml
+//! auth:
+//!   discovery: "https://keycloak.example.com/realms/edgion/.well-known/openid-configuration"
+//!   audiences: ["edgion-admin"]
 //! ```
 
 use serde::{Deserialize, Serialize};
 
 /// Admin API authentication configuration.
 ///
-/// Omit the entire `[auth]` section to disable authentication (backward compatible).
+/// Omit the entire `auth` section to disable authentication (backward compatible).
 /// When present, all Admin API endpoints (except `skip_paths`) require a valid Bearer JWT.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

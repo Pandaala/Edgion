@@ -16,15 +16,14 @@ The `ha_mode` configuration option supports two multi-replica modes for differen
 
 ### Configuration
 
-```toml
-[conf_center]
-type = "kubernetes"
-gateway_class = "edgion"
-ha_mode = "leader-only"    # or "all-serve"
-
-[conf_center.leader_election]
-lease_name = "edgion-controller-leader"
-lease_namespace = "edgion-system"
+```yaml
+conf_center:
+  type: kubernetes
+  gateway_class: edgion
+  ha_mode: leader-only    # or "all-serve"
+  leader_election:
+    lease_name: edgion-controller-leader
+    lease_namespace: edgion-system
 ```
 
 ## Architecture Comparison

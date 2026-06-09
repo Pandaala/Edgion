@@ -15,14 +15,14 @@ use serde::{Deserialize, Serialize};
 /// - `forward_normalized_path`: `true` (forward normalized path to upstream;
 ///    set to `false` for v3.1-compatible raw forwarding)
 ///
-/// ## TOML Configuration Example
+/// ## YAML Configuration Example
 ///
-/// ```toml
-/// [path_normalization]
-/// reject_escaped_slashes = true
-/// reject_invalid_percent_encoding = true
-/// forward_normalized_path = false
-/// preserve_path_parameters = true
+/// ```yaml
+/// path_normalization:
+///   reject_escaped_slashes: true
+///   reject_invalid_percent_encoding: true
+///   forward_normalized_path: false
+///   preserve_path_parameters: true
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -89,12 +89,12 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_from_toml() {
-        let toml_str = r#"
-            reject_escaped_slashes = true
-            reject_invalid_percent_encoding = true
+    fn deserialize_from_yaml() {
+        let yaml_str = r#"
+            reject_escaped_slashes: true
+            reject_invalid_percent_encoding: true
         "#;
-        let cfg: PathNormalizationConfig = toml::from_str(toml_str).unwrap();
+        let cfg: PathNormalizationConfig = serde_yaml::from_str(yaml_str).unwrap();
         assert!(cfg.reject_escaped_slashes);
         assert!(cfg.reject_invalid_percent_encoding);
     }
@@ -102,8 +102,8 @@ mod tests {
     #[test]
     fn deserialize_partial() {
         // Only one field set, the other defaults
-        let toml_str = r#"reject_escaped_slashes = true"#;
-        let cfg: PathNormalizationConfig = toml::from_str(toml_str).unwrap();
+        let yaml_str = r#"reject_escaped_slashes: true"#;
+        let cfg: PathNormalizationConfig = serde_yaml::from_str(yaml_str).unwrap();
         assert!(cfg.reject_escaped_slashes);
         assert!(!cfg.reject_invalid_percent_encoding);
     }
@@ -116,8 +116,8 @@ mod tests {
 
     #[test]
     fn deserialize_preserve_path_parameters() {
-        let toml_str = r#"preserve_path_parameters = true"#;
-        let cfg: PathNormalizationConfig = toml::from_str(toml_str).unwrap();
+        let yaml_str = r#"preserve_path_parameters: true"#;
+        let cfg: PathNormalizationConfig = serde_yaml::from_str(yaml_str).unwrap();
         assert!(cfg.preserve_path_parameters);
     }
 
@@ -129,8 +129,8 @@ mod tests {
 
     #[test]
     fn deserialize_forward_normalized_path_false() {
-        let toml_str = r#"forward_normalized_path = false"#;
-        let cfg: PathNormalizationConfig = toml::from_str(toml_str).unwrap();
+        let yaml_str = r#"forward_normalized_path: false"#;
+        let cfg: PathNormalizationConfig = serde_yaml::from_str(yaml_str).unwrap();
         assert!(!cfg.forward_normalized_path);
     }
 }

@@ -85,7 +85,7 @@ spec:
 
 ### Security Note
 
-All parameters have hard limits. The effective value is the three-layer minimum: `min(user config, global TOML limit, hard limit)`. Values exceeding the limit are silently clamped without returning an error.
+All parameters have hard limits. The effective value is the three-layer minimum: `min(user config, global YAML config limit, hard limit)`. Values exceeding the limit are silently clamped without returning an error.
 
 ---
 
