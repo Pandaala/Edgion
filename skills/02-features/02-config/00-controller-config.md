@@ -31,6 +31,7 @@ server:
   #   - "10.0.0.0/8"
   #   - "127.0.0.1/32"
   #   - "::1/128"
+  # allow_tcp_ips:                   # Optional L4 pre-filter (Center HTTPS only); drops non-matching peers before TLS handshake; unset/empty = allow all
 
 logging:
   log_dir: logs                    # Log directory
@@ -103,6 +104,7 @@ conf_center:
 | `probe_listen` | `String` | `0.0.0.0:12100` | Probe listener — serves `/health` (liveness) and `/ready` (readiness) |
 | `metrics_listen` | `String` | `0.0.0.0:12190` | Metrics listener — serves `/metrics` (Prometheus) |
 | `allow_admin_ips` | `Vec<String>` | `[]` (allow all) | CIDR allowlist for the Admin API listener. **Unset or empty = allow all** (backward compatible). Matched against the **TCP peer address only**; `X-Forwarded-For` is never trusted, so it is meaningful only for direct connections to the admin socket (behind an L7 proxy it degrades to matching the proxy IP). Probe/metrics run on dedicated ports and are unaffected. Dual-stack: when the listener binds `::`, list CIDRs for both families; NAT64 `64:ff9b::/96` embedded IPv4 is not extracted. Example: `["10.0.0.0/8", "127.0.0.1/32", "::1/128"]` |
+| `allow_tcp_ips` | `Vec<String>` | `[]` (allow all) | **Center HTTPS only.** L4 pre-filter CIDR allowlist: peers not matching are dropped **before the rustls handshake** (saves TLS-handshake CPU, mitigates TLS-handshake DoS). **Independent** from `allow_admin_ips` (L7) — separate list. **Unset or empty = allow all** (backward compatible). Matched against the **TCP peer address only**. **Precondition:** correct only when the kernel TCP peer is the real client — behind an SNAT load balancer / terminating proxy `peer_addr()` is the LB IP, so the filter either no-ops (LB allowlisted) or drops all traffic (LB not allowlisted). Recommended operator invariant: keep `allow_tcp_ips` ⊇ `allow_admin_ips` (a stricter L4 silently drops L7-allowed IPs with no 403). Ignored when `admin_tls` is unset (plaintext) — a startup WARN is logged. Observability: the `edgion_l4_tcp_denied_total` counter on the metrics listener. |
 
 ### [logging]
 

@@ -99,6 +99,11 @@ pub struct CenterServerConfig {
     /// Matched against the TCP peer address only; X-Forwarded-For is never trusted.
     #[serde(default)]
     pub allow_admin_ips: Vec<String>,
+    /// L4 TCP-layer allowlist: peers not matching are dropped before the TLS
+    /// handshake on the HTTPS admin listener. Independent from `allow_admin_ips`
+    /// (L7). Empty/unset = allow all. Matched against the TCP peer address only.
+    #[serde(default)]
+    pub allow_tcp_ips: Vec<String>,
 }
 
 impl Default for CenterServerConfig {
@@ -110,6 +115,7 @@ impl Default for CenterServerConfig {
             metrics_addr: "0.0.0.0:12290".to_string(),
             admin_tls: None,
             allow_admin_ips: Vec::new(),
+            allow_tcp_ips: Vec::new(),
         }
     }
 }
@@ -234,5 +240,31 @@ server:
             cfg_absent.server.admin_tls.is_none(),
             "omitted admin_tls must be None via singleton_map_recursive"
         );
+    }
+}
+
+#[cfg(test)]
+mod allow_tcp_ips_tests {
+    use super::*;
+
+    #[test]
+    fn default_allow_tcp_ips_is_empty() {
+        let c = CenterServerConfig::default();
+        assert!(c.allow_tcp_ips.is_empty());
+    }
+
+    #[test]
+    fn yaml_without_field_defaults_to_empty() {
+        // Omitting allow_tcp_ips must deserialize to an empty Vec (backward compat).
+        let yaml = "grpc_addr: \"0.0.0.0:1\"\nhttp_addr: \"0.0.0.0:2\"\nprobe_addr: \"0.0.0.0:3\"\nmetrics_addr: \"0.0.0.0:4\"\n";
+        let c: CenterServerConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(c.allow_tcp_ips.is_empty());
+    }
+
+    #[test]
+    fn yaml_with_field_parses() {
+        let yaml = "allow_tcp_ips:\n  - \"10.0.0.0/8\"\n";
+        let c: CenterServerConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(c.allow_tcp_ips, vec!["10.0.0.0/8".to_string()]);
     }
 }

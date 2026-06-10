@@ -134,6 +134,13 @@ impl EdgionCenterCli {
 
         // Fail-fast: reject malformed allow_admin_ips CIDRs before spawning listeners.
         crate::core::common::api::ip_allowlist::validate_admin_ips(&config.server.allow_admin_ips)?;
+        crate::core::common::api::ip_acceptor::validate_tcp_ips(&config.server.allow_tcp_ips)?;
+        if !config.server.allow_tcp_ips.is_empty() && config.server.admin_tls.is_none() {
+            tracing::warn!(
+                component = "center",
+                "allow_tcp_ips is set but admin_tls is disabled; the L4 filter has no effect"
+            );
+        }
 
         let trust_domain = config.peer_identity.as_ref().map(|p| p.trust_domain.clone());
         let transport = decide_transport(&config.grpc_security, trust_domain.as_deref());
@@ -220,6 +227,7 @@ impl EdgionCenterCli {
         let local_auth_config = config.local_auth.clone();
         let admin_tls = config.server.admin_tls.clone();
         let allow_admin_ips = config.server.allow_admin_ips.clone();
+        let allow_tcp_ips = config.server.allow_tcp_ips.clone();
         // Startup diagnostic only — does not change cookie runtime behavior.
         if let Some(local) = config.local_auth.as_ref() {
             // Args are (admin_tls_present, cookie_secure) — keep this order.
@@ -305,10 +313,31 @@ impl EdgionCenterCli {
                     // Logged before serve() binds the socket; a bind failure (e.g. address
                     // in use) is reported by the error returned from serve() below.
                     tracing::info!(component = "center", addr = %http_addr, "Center admin API HTTPS enabled");
-                    axum_server::bind_rustls(http_addr, rustls_config)
-                        .serve(make_service)
-                        .await
-                        .map_err(|e| anyhow::anyhow!("admin HTTPS server error: {}", e))?;
+                    // admin-api-04: L4 pre-filter — when allow_tcp_ips is set, reject
+                    // unauthorized peers before the rustls handshake. When empty, serve via
+                    // the original bind_rustls path (zero overhead, behavior unchanged).
+                    match crate::core::common::api::ip_acceptor::build_tcp_ip_matcher(&allow_tcp_ips)? {
+                        Some(m) => {
+                            tracing::info!(
+                                component = "center",
+                                entries = allow_tcp_ips.len(),
+                                "L4 TCP IP pre-filter active (HTTPS)"
+                            );
+                            let acceptor = axum_server::tls_rustls::RustlsAcceptor::new(rustls_config)
+                                .acceptor(crate::core::common::api::ip_acceptor::TcpIpAcceptor::new(m));
+                            axum_server::bind(http_addr)
+                                .acceptor(acceptor)
+                                .serve(make_service)
+                                .await
+                                .map_err(|e| anyhow::anyhow!("admin HTTPS server error: {}", e))?;
+                        }
+                        None => {
+                            axum_server::bind_rustls(http_addr, rustls_config)
+                                .serve(make_service)
+                                .await
+                                .map_err(|e| anyhow::anyhow!("admin HTTPS server error: {}", e))?;
+                        }
+                    }
                 }
                 None => {
                     let listener = tokio::net::TcpListener::bind(http_addr)
