@@ -48,6 +48,10 @@ pub struct CenterConfig {
     /// trust_domain) under mTLS.
     #[serde(default)]
     pub peer_identity: Option<PeerIdentityConfig>,
+    /// Dashboard web UI hosting. Controls where the embedded dashboard is served
+    /// from; see [`WebConfig`].
+    #[serde(default)]
+    pub web: WebConfig,
 }
 
 impl Default for CenterConfig {
@@ -60,8 +64,25 @@ impl Default for CenterConfig {
             local_auth: None,
             grpc_security: ConfSyncSecurityConfig::default(),
             peer_identity: None,
+            web: WebConfig::default(),
         }
     }
+}
+
+/// Dashboard web UI hosting configuration.
+///
+/// Asset-source resolution at runtime (highest precedence first):
+/// 1. `EDGION_WEB_DIR` env var → serve that directory from the filesystem.
+/// 2. `web.dir` (this field) → serve that directory from the filesystem.
+/// 3. neither set → serve the assets embedded in the binary (requires the
+///    `embed-dashboard` build feature). When the feature is off and no directory
+///    is configured, no UI is served (pure-API mode).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct WebConfig {
+    /// Filesystem directory to serve the dashboard from. When unset, the embedded
+    /// assets are served. Overridden by the `EDGION_WEB_DIR` environment variable.
+    pub dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

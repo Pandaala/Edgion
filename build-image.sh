@@ -33,9 +33,15 @@ IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
 RUST_VERSION="${RUST_VERSION:-1.92}"
 FEATURES="${FEATURES:-default}"
-BINARIES="gateway controller"
+# edgion-center is built separately with the `embed-dashboard` feature so the
+# dashboard UI is compiled into the binary (see compile_binaries). The other
+# binaries stay slim. Set BINARIES without `center` to skip the frontend build.
+BINARIES="gateway controller center"
 EXAMPLES="test_server test_client"
 DASHBOARD_REPO="https://github.com/Pandaala/edgion-dashboard.git"
+# Source folder embedded into edgion-center by rust-embed (must match the
+# `#[folder = "web/dashboard/"]` attribute in src/core/center/api/web.rs).
+EMBED_WEB_DIR="web/dashboard"
 
 # =============================================================================
 # Internal variables  (no need to change unless you know what you're doing)
@@ -44,8 +50,10 @@ DASHBOARD_REPO="https://github.com/Pandaala/edgion-dashboard.git"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${SCRIPT_DIR}"
 BUILDER_IMAGE="edgion-builder"
-# Prefer local sibling edgion-dashboard if present; fall back to GitHub clone
-DASHBOARD_LOCAL="$(dirname "${PROJECT_DIR}")/edgion-dashboard"
+# Prefer local dashboard checkout if present; fall back to GitHub clone.
+# Override DASHBOARD_LOCAL to build from a dashboard repo outside the sibling
+# path, e.g. DASHBOARD_LOCAL=/path/to/edgion-dashboard ./build-image.sh
+DASHBOARD_LOCAL="${DASHBOARD_LOCAL:-$(dirname "${PROJECT_DIR}")/edgion-dashboard}"
 DASHBOARD_CLONE="${PROJECT_DIR}/docker/.all-in-one-dashboard"
 
 # Map all-in-one mode to Docker image name
@@ -145,18 +153,22 @@ Options:
     --with-example               Alias of --with-examples
     --all-in-one-controller-gateway     Build all-in-one image: dashboard + controller + gateway
                                  Image: edgion-all-in-one (standalone, skips standard images)
-    --all-in-one-center                 Build all-in-one image: dashboard + center
-                                 Image: edgion-all-in-one-center (standalone, skips standard images)
     -h, --help                   Show this help message
 
-All-in-One Notes:
-    --all-in-one-* options produce standalone images that bundle the frontend dashboard
-    with backend binaries and nginx. Dashboard source priority:
+Dashboard / edgion-center:
+    The standard edgion-center image now embeds the dashboard UI directly in the
+    binary (the `embed-dashboard` Cargo feature) and serves it same-origin on the
+    admin API — no nginx. It is built automatically as part of the standard images
+    (BINARIES includes "center"). Dashboard source priority:
       1. Local sibling directory ../edgion-dashboard (if present)
       2. Previous GitHub clone (auto-updated)
       3. Fresh clone from ${DASHBOARD_REPO}
-    When any --all-in-one-* option is specified, standard images are NOT built.
-    Both --all-in-one-* options can be combined to build both all-in-one images in one run.
+    (--all-in-one-center has been retired; use the standard center image instead.)
+
+All-in-One Notes:
+    --all-in-one-controller-gateway produces a standalone image that bundles the
+    frontend dashboard with controller + gateway and nginx. Dashboard source
+    priority is the same as above. When specified, standard images are NOT built.
 
 Environment Variables:
     IMAGE_REGISTRY      Docker registry (default: docker.io)
@@ -190,12 +202,6 @@ Examples:
 
     # Build all-in-one: dashboard + controller + gateway
     $0 --all-in-one-controller-gateway
-
-    # Build all-in-one: dashboard + center
-    $0 --all-in-one-center --push
-
-    # Build both all-in-one images at once
-    $0 --all-in-one-controller-gateway --all-in-one-center --arch arm64,amd64 --push
 
 Build Flow:
     Stage 1: Build Docker builder image (one-time)
@@ -342,6 +348,38 @@ compile_binaries() {
         log_error "Compilation failed for ${arch}"
             exit 1
         fi
+
+    # edgion-center is compiled separately WITH the dashboard embedded
+    # (`embed-dashboard` feature) so gateway/controller stay slim. The frontend
+    # must already be staged into web/dashboard/ by build_frontend_into_web.
+    if [[ " ${BINARIES} " == *" center "* ]]; then
+        local center_cmd="cargo build --release \
+                --target \"${target}\" \
+                --bin edgion-center \
+                --features \"${FEATURES},embed-dashboard\""
+
+        if [[ "${force_rebuild}" == "true" ]]; then
+            # Do not clean: the trio above (incl. edgion-cli, needed by the
+            # center image) was just built into the same target dir.
+            log_info "Force rebuild: compiling edgion-center without target clean"
+        fi
+
+        log_info "Compiling edgion-center (embedded dashboard) for ${arch}..."
+        docker run --rm \
+            --platform "${platform}" \
+            -v "${PROJECT_DIR}":/project \
+            -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
+            -v "${HOME}/.cargo/git":/usr/local/cargo/git \
+            -v "edgion-rustup-${suffix}":/usr/local/rustup \
+            -w /project \
+            "${builder_tag}" \
+            bash -c "${center_cmd}"
+
+        if [[ $? -ne 0 ]]; then
+            log_error "edgion-center compilation failed for ${arch}"
+            exit 1
+        fi
+    fi
 
     log_success "Compiled binaries for ${arch}"
 }
@@ -711,6 +749,52 @@ compile_frontend() {
 }
 
 # =============================================================================
+# Embedded center: build the dashboard and stage it into web/dashboard/ so the
+# `embed-dashboard` feature compiles it into edgion-center. Run ONCE (frontend
+# build is arch-independent) before the per-arch compile loop.
+# =============================================================================
+
+build_frontend_into_web() {
+    log_stage "Building frontend dashboard for embedding into edgion-center"
+
+    prepare_dashboard
+
+    log_info "Running npm ci + npm run build inside Docker (node:20-slim)..."
+    local ver="${VERSION#v}"   # strip leading 'v' so package.json gets e.g. 0.1.22
+    local pkg_json="${DASHBOARD_DIR}/package.json"
+    local pkg_json_orig
+    pkg_json_orig=$(cat "${pkg_json}")   # backup before docker modifies it
+
+    docker run --rm \
+        -v "${DASHBOARD_DIR}":/app \
+        -w /app \
+        node:20-slim \
+        bash -c "npm pkg set version='${ver}' && npm ci --prefer-offline && npm run build"
+    local rc=$?
+
+    echo "${pkg_json_orig}" > "${pkg_json}"   # restore to avoid dirty working tree
+
+    if [[ ${rc} -ne 0 ]]; then
+        log_error "Frontend build failed"
+        exit 1
+    fi
+
+    # Stage dist into the rust-embed source folder (gitignored, not vendored).
+    rm -rf "${PROJECT_DIR}/${EMBED_WEB_DIR}"
+    mkdir -p "${PROJECT_DIR}/${EMBED_WEB_DIR}"
+    cp -r "${DASHBOARD_DIR}/dist/." "${PROJECT_DIR}/${EMBED_WEB_DIR}/"
+
+    log_success "Frontend staged into ${EMBED_WEB_DIR}/ for embedding"
+}
+
+# Drop the staged dashboard build output so the working tree is clean after a
+# build. The whole web/ tree is gitignored and not vendored; a build.rs
+# placeholder is regenerated on the next `--features embed-dashboard` compile.
+cleanup_embed_staging() {
+    rm -rf "${PROJECT_DIR}/${EMBED_WEB_DIR}"
+}
+
+# =============================================================================
 # All-in-One: Compile backend binaries needed for a specific all-in-one mode
 # =============================================================================
 
@@ -968,8 +1052,12 @@ main() {
                 shift
                 ;;
             --all-in-one-center)
-                all_in_one_center=true
-                shift
+                log_error "--all-in-one-center has been retired."
+                log_error "The dashboard is now embedded directly into edgion-center."
+                log_error "Build the standard center image instead:"
+                log_error "  ./build-image.sh                 # builds edgion-center (UI embedded)"
+                log_error "  BINARIES=center ./build-image.sh  # center only"
+                exit 1
                 ;;
             -h|--help)
                 show_usage
@@ -1151,6 +1239,12 @@ main() {
     # Standard path — gateway + controller (+ optional examples)
     # =========================================================================
 
+    # Stage 2a: Build + stage the dashboard once (arch-independent) when an
+    # embedded edgion-center image is being built.
+    if [[ " ${BINARIES} " == *" center "* ]]; then
+        build_frontend_into_web
+    fi
+
     # Stage 2: Compile binaries
     log_stage "Stage 2: Compiling binaries"
     for arch in "${archs[@]}"; do
@@ -1167,6 +1261,7 @@ main() {
 
     if [[ "${compile_only}" == "true" ]]; then
         log_success "Compilation completed (--compile-only)"
+        [[ " ${BINARIES} " == *" center "* ]] && cleanup_embed_staging
         exit 0
     fi
 
@@ -1175,6 +1270,10 @@ main() {
     for arch in "${archs[@]}"; do
         build_images "${arch}" "${push}" "${version}"
     done
+
+    # Images are packaged; drop the staged dashboard build output and restore the
+    # committed placeholder so the working tree is clean.
+    [[ " ${BINARIES} " == *" center "* ]] && cleanup_embed_staging
 
     # Stage 3b: Build example images (only with --with-examples)
     if [[ "${with_examples}" == "true" ]]; then

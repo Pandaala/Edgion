@@ -228,6 +228,7 @@ impl EdgionCenterCli {
         let admin_tls = config.server.admin_tls.clone();
         let allow_admin_ips = config.server.allow_admin_ips.clone();
         let allow_tcp_ips = config.server.allow_tcp_ips.clone();
+        let web_dir = config.web.dir.clone();
         // Startup diagnostic only — does not change cookie runtime behavior.
         if let Some(local) = config.local_auth.as_ref() {
             // Args are (admin_tls_present, cookie_secure) — keep this order.
@@ -278,6 +279,27 @@ impl EdgionCenterCli {
             // compose hard-codes the assembly order: business routes + auth routes + middleware + CORS.
             // The returned app is final; do not call .route() / .layer() afterwards -- see the function doc.
             let app = crate::core::common::api::compose_admin_routes(base_router, auth_state, local_auth_intent);
+            // Dashboard UI: a public SPA fallback mounted AFTER compose_admin_routes.
+            // Because it is added after compose returns its final (auth-wrapped) router,
+            // the fallback is NOT covered by unified_auth — so the login page and its
+            // JS/CSS load pre-auth, while every registered /api route (added before)
+            // stays auth-protected. The fallback only ever receives unmatched paths.
+            // Mounted only when an asset source resolves (embedded feature on, or
+            // web.dir/EDGION_WEB_DIR set); otherwise Center runs in pure-API mode.
+            let app = match crate::core::center::api::web::WebSource::resolve(web_dir.as_deref()) {
+                Some(source) => {
+                    let source: std::sync::Arc<crate::core::center::api::web::WebSource> = std::sync::Arc::new(source);
+                    tracing::info!(component = "center", "dashboard UI hosting enabled");
+                    app.fallback(move |uri: axum::http::Uri| {
+                        let source = source.clone();
+                        async move { crate::core::center::api::web::serve(source, uri).await }
+                    })
+                }
+                None => {
+                    tracing::info!(component = "center", "dashboard UI hosting disabled (pure-API mode)");
+                    app
+                }
+            };
             // admin-api-02: outermost IP allowlist — rejects unauthorized peers before auth.
             // Not mounted when the allowlist is empty (allow-all, backward compatible).
             let app = match crate::core::common::api::ip_allowlist::build_admin_ip_matcher(&allow_admin_ips)? {

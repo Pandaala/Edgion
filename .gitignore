@@ -48,6 +48,11 @@ examples/k8stest/scripts/config/images.env
 docker/.all-in-one-dist/
 docker/.all-in-one-dashboard/
 
+# Embedded dashboard: NOT vendored. The edgion-dashboard build output is staged
+# here at image-build time and a build.rs placeholder is generated for local
+# `--features embed-dashboard` compiles. Never commit it.
+/web/
+
 docs/superpowers/
 .worktrees/
 

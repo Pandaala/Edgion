@@ -77,6 +77,12 @@ rustls = [
 # Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
 legacy_route_tests = []
 
+# Embed the edgion-dashboard web UI (`web/dashboard/`) into the binary.
+# Enabled for the Center build only; off by default so the other binaries
+# (Gateway/Controller) stay slim. When off, the dashboard can still be served
+# at runtime from a filesystem directory (`web.dir` / `EDGION_WEB_DIR`).
+embed-dashboard = ["dep:rust-embed"]
+
 [dependencies]
 # Memory allocators (optional, controlled by features)
 tikv-jemallocator = { version = "0.6", optional = true }
@@ -120,6 +126,10 @@ futures = "0.3.31"
 # HTTP server
 axum = { version = "0.8.8", features = ["macros", "ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
+
+# Embedded web UI assets (feature `embed-dashboard`). Optional so non-Center
+# binaries do not compile them in.
+rust-embed = { version = "8", optional = true }
 
 # Utilities
 bytes = "1.11.1"

@@ -1,6 +1,7 @@
 #!/bin/sh
 # All-in-One entrypoint: starts backend process(es) + nginx
-# ALL_IN_ONE_MODE is set at build time: "controller-gateway" or "center"
+# ALL_IN_ONE_MODE is set at build time: "controller-gateway"
+# (the "center" mode was retired; edgion-center embeds the dashboard itself)
 
 set -e
 
@@ -23,13 +24,6 @@ case "${ALL_IN_ONE_MODE}" in
         /usr/local/bin/edgion-gateway &
 
         echo "[all-in-one] starting nginx (dashboard on :5800)..."
-        nginx -g 'daemon off;' &
-        ;;
-    center)
-        echo "[all-in-one] starting edgion-center (admin 0.0.0.0:12201, probe 0.0.0.0:12200, dashboard on :5810)..."
-        /usr/local/bin/edgion-center -c /etc/edgion/edgion-center.yaml &
-
-        echo "[all-in-one] starting nginx (dashboard on :5810)..."
         nginx -g 'daemon off;' &
         ;;
     *)

@@ -1,17 +1,20 @@
 # Edgion All-in-One Dockerfile
 # Packages pre-built backend binaries + pre-built frontend (dist) + nginx
 #
-# Two modes:
+# Mode:
 #   controller-gateway: edgion-controller + edgion-gateway + frontend dashboard
-#   center:             edgion-center + frontend dashboard
+#
+# Note: the `center` all-in-one mode has been retired. edgion-center now embeds
+# the dashboard directly into the binary (the `embed-dashboard` Cargo feature)
+# and serves it same-origin — build the standard center image instead.
 #
 # Build arguments:
-#   ALL_IN_ONE_MODE:     "controller-gateway" or "center"
+#   ALL_IN_ONE_MODE:     "controller-gateway"
 #   BINARY_PATH:         Path to pre-built backend binaries (e.g. target/aarch64-unknown-linux-gnu/release)
 #   DASHBOARD_DIST_PATH: Path to pre-built frontend dist directory
 #   RUNTIME_BASE:        Runtime base image (default: ubuntu:24.04)
 #
-# Usage (called by build-image.sh --all-in-one-controller-gateway or --all-in-one-center):
+# Usage (called by build-image.sh --all-in-one-controller-gateway):
 #   docker buildx build -f docker/Dockerfile.all-in-one \
 #     --build-arg ALL_IN_ONE_MODE=controller-gateway \
 #     --build-arg BINARY_PATH=target/aarch64-unknown-linux-gnu/release \
@@ -33,17 +36,13 @@ RUN apt-get update && apt-get install -y \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy pre-built backend binaries based on mode
+# Copy pre-built backend binaries (controller-gateway mode)
 RUN --mount=type=bind,source=${BINARY_PATH},target=/tmp/binaries \
     if [ "$ALL_IN_ONE_MODE" = "controller-gateway" ]; then \
       cp /tmp/binaries/edgion-controller /usr/local/bin/edgion-controller && \
       cp /tmp/binaries/edgion-gateway /usr/local/bin/edgion-gateway && \
       cp /tmp/binaries/edgion-cli /usr/local/bin/edgion-cli && \
       chmod +x /usr/local/bin/edgion-controller /usr/local/bin/edgion-gateway /usr/local/bin/edgion-cli; \
-    elif [ "$ALL_IN_ONE_MODE" = "center" ]; then \
-      cp /tmp/binaries/edgion-center /usr/local/bin/edgion-center && \
-      cp /tmp/binaries/edgion-cli /usr/local/bin/edgion-cli && \
-      chmod +x /usr/local/bin/edgion-center /usr/local/bin/edgion-cli; \
     fi
 
 # Copy frontend dist
@@ -55,13 +54,10 @@ RUN --mount=type=bind,source=${DASHBOARD_DIST_PATH},target=/tmp/dist \
 COPY docker/nginx/all-in-one-${ALL_IN_ONE_MODE}.conf /etc/nginx/sites-enabled/default
 RUN rm -f /etc/nginx/conf.d/default.conf
 
-# Copy config files + generate center override if needed (single layer)
+# Copy config files
 RUN --mount=type=bind,source=config,target=/tmp/config \
     mkdir -p /etc/edgion && \
-    cp -r /tmp/config/*.toml /etc/edgion/ 2>/dev/null; \
-    if [ "$ALL_IN_ONE_MODE" = "center" ]; then \
-      printf 'server:\n  http_addr: "0.0.0.0:12201"\n  grpc_addr: "0.0.0.0:12251"\n  probe_addr: "0.0.0.0:12200"\n  metrics_addr: "0.0.0.0:12290"\n' > /etc/edgion/edgion-center.yaml; \
-    fi; true
+    cp -r /tmp/config/*.toml /etc/edgion/ 2>/dev/null; true
 
 COPY --chmod=755 docker/all-in-one-entrypoint.sh /usr/local/bin/all-in-one-entrypoint.sh
 
@@ -70,12 +66,10 @@ ENV RUST_LOG=info
 ENV RUST_BACKTRACE=0
 
 # Expose ports:
-#   5800 — dashboard + controller API (controller-gateway mode, nginx external listen)
-#   5810 — dashboard + center API (center mode, nginx external listen)
-#   80, 443 — gateway data plane (controller-gateway mode only)
-#   12151 — controller gRPC (controller-gateway mode)
-#   12251 — center federation gRPC (center mode)
-EXPOSE 80 443 5800 5810 12151 12251
+#   5800 — dashboard + controller API (nginx external listen)
+#   80, 443 — gateway data plane
+#   12151 — controller gRPC
+EXPOSE 80 443 5800 12151
 
 ENTRYPOINT ["/usr/local/bin/all-in-one-entrypoint.sh"]
 

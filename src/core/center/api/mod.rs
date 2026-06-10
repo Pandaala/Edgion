@@ -42,6 +42,7 @@ use std::sync::Arc;
 mod consistency_handlers;
 mod global_connection_ip_restriction_handlers;
 mod region_route_handlers;
+pub mod web;
 
 use crate::core::center::aggregator::ResourceAggregator;
 use crate::core::center::commander::Commander;
