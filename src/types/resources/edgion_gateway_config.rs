@@ -175,7 +175,11 @@ pub struct BackendTimeout {
     #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub default_connect_timeout: String,
 
-    /// Total request timeout including retries
+    /// Default per-attempt backend request timeout — the fallback for the
+    /// Gateway API `timeouts.backendRequest` field when a route does not set
+    /// it. Applied per upstream attempt (NOT including retries); with a retry
+    /// policy present it also acts as the per-try timeout (GEP-1731): an
+    /// attempt exceeding it is canceled and retried. `"0s"` disables the bound.
     /// Format: Duration string (e.g., "60s", "1m", "500ms")
     /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_backend_request_timeout")]

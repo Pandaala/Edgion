@@ -427,9 +427,61 @@ fn backend_select_status(e: &EdError) -> EdgionStatus {
     }
 }
 
+/// Fold the three read/write upper bounds into the tightest one, labeled
+/// with its source. `BackendRequest` is listed first and comparison is
+/// strict (`<`), so it wins ties: when it is exactly as tight as a
+/// deadline-derived bound, the per-try retry semantics (GEP-1731) apply;
+/// whether a retry actually runs is still gated by the deadline checks in
+/// `error_while_proxy`.
+#[inline]
+fn fold_peer_timeouts(
+    backend: Option<std::time::Duration>,
+    request_remaining: Option<std::time::Duration>,
+    grpc_remaining: Option<std::time::Duration>,
+) -> Option<(std::time::Duration, crate::types::PeerTimeoutSource)> {
+    use crate::types::PeerTimeoutSource;
+    let mut best: Option<(std::time::Duration, PeerTimeoutSource)> = None;
+    for (candidate, source) in [
+        (backend, PeerTimeoutSource::BackendRequest),
+        (request_remaining, PeerTimeoutSource::RequestDeadline),
+        (grpc_remaining, PeerTimeoutSource::GrpcDeadline),
+    ] {
+        if let Some(d) = candidate {
+            if best.is_none_or(|(b, _)| d < b) {
+                best = Some((d, source));
+            }
+        }
+    }
+    best
+}
+
+/// Resolve the effective `backendRequest` bound for one upstream attempt.
+/// Three-state per Gateway API spec:
+/// - Unset (or no route timeouts) → global default
+/// - Disabled (`"0s"`) → `None` (no I/O bound; only deadline sources clamp)
+/// - Duration → the route value
+///
+/// A zero duration is filtered out as disabled: route-level `"0s"` already
+/// parses to `Disabled`, but a global `defaultRequestTimeout: "0s"` reaches
+/// here as `Duration::ZERO` and would otherwise become an instant read/write
+/// timeout — and, with a retry policy present, an instant-retry loop.
+#[inline]
+fn effective_backend_bound(
+    route: Option<&crate::types::resources::http_route::RouteTimeout>,
+    global_default: std::time::Duration,
+) -> Option<std::time::Duration> {
+    use crate::types::resources::http_route::RouteTimeout;
+    match route {
+        Some(RouteTimeout::Disabled) => None,
+        Some(RouteTimeout::Duration(d)) => Some(*d),
+        _ => Some(global_default),
+    }
+    .filter(|d| !d.is_zero())
+}
+
 /// Configure peer timeouts from global and route-level configs (inline for performance)
 #[inline]
-pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<HttpPeer>, ctx: &EdgionHttpContext) {
+pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<HttpPeer>, ctx: &mut EdgionHttpContext) {
     let backend_timeout = &edgion_http.parsed_timeouts.backend;
     let route_timeouts = ctx
         .route_unit
@@ -441,18 +493,8 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
                 .and_then(|unit| unit.rule.parsed_timeouts.as_ref())
         });
 
-    // Backend request timeout: three-state per Gateway API spec
-    // - Unset: use global default
-    // - Disabled ("0s"): no timeout (don't set peer options, Pingora defaults to no timeout)
-    // - Duration: use the specified value
-    use crate::types::resources::http_route::RouteTimeout;
     let route_backend_timeout = route_timeouts.map(|rt| &rt.backend_request_timeout);
-
-    let effective_backend_timeout = match route_backend_timeout {
-        Some(RouteTimeout::Disabled) => None, // "0s" = no timeout
-        Some(RouteTimeout::Duration(d)) => Some(*d),
-        _ => Some(backend_timeout.request_timeout), // Unset or no route timeouts → global default
-    };
+    let effective_backend_timeout = effective_backend_bound(route_backend_timeout, backend_timeout.request_timeout);
 
     // connection_timeout: use route backendRequest timeout, or fall back to global default.
     // "0s" on backendRequest disables I/O timeouts, not connection establishment — always set a floor.
@@ -475,21 +517,22 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
     // so we apply the same zero-guard as request_remaining.
     let grpc_remaining = ctx.grpc_remaining().filter(|r| !r.is_zero());
 
-    // Fold three independent upper bounds via `min`:
-    //   - `effective_backend_timeout` is `None` only when the route explicitly
-    //     disabled it via `backendRequestTimeout: "0s"` (RouteTimeout::Disabled),
-    //     in which case the route operator opted out and only the remaining
-    //     two bounds clamp.
+    // Fold three independent upper bounds via labeled min (see
+    // `fold_peer_timeouts` for tie-break semantics):
+    //   - `effective_backend_timeout` is `None` when the route explicitly
+    //     disabled it via `backendRequestTimeout: "0s"` (or the global default
+    //     is zero — see `effective_backend_bound`), in which case only the
+    //     remaining two bounds clamp.
     //   - `request_remaining` is the route-level `request_timeout` minus elapsed
     //     wall-clock.
     //   - `grpc_remaining` is the client-supplied `grpc-timeout` minus elapsed.
-    // Any None value is skipped; the tightest non-None bound wins.
-    let effective_read_write_timeout = [effective_backend_timeout, request_remaining, grpc_remaining]
-        .into_iter()
-        .flatten()
-        .min();
+    // The winning source is recorded so `error_while_proxy` can distinguish a
+    // retryable per-try timeout (BackendRequest, GEP-1731) from a final
+    // deadline expiry.
+    let folded = fold_peer_timeouts(effective_backend_timeout, request_remaining, grpc_remaining);
+    ctx.peer_timeout_source = folded.map(|(_, source)| source);
 
-    if let Some(timeout) = effective_read_write_timeout {
+    if let Some((timeout, _)) = folded {
         peer.options.read_timeout = Some(timeout);
         peer.options.write_timeout = Some(timeout);
     }
@@ -781,7 +824,9 @@ fn decide_want_raw(annotation: Option<bool>, external_jump_preserve_raw: bool, c
 
 #[cfg(test)]
 mod tests {
-    use super::decide_want_raw;
+    use super::{decide_want_raw, fold_peer_timeouts};
+    use crate::types::PeerTimeoutSource;
+    use std::time::Duration;
 
     #[test]
     fn default_writes_normalized() {
@@ -878,5 +923,138 @@ mod tests {
         assert!(absolute.to_string().contains("example.com"));
         // The pg_upstream_peer.rs idempotency check at upstream_peer_http uses
         // path() so absolute-form requests don't trigger spurious set_uri writes.
+    }
+
+    fn s(n: u64) -> Option<Duration> {
+        Some(Duration::from_secs(n))
+    }
+
+    #[test]
+    fn fold_backend_only() {
+        assert_eq!(
+            fold_peer_timeouts(s(5), None, None),
+            Some((Duration::from_secs(5), PeerTimeoutSource::BackendRequest))
+        );
+    }
+
+    #[test]
+    fn fold_request_deadline_tighter() {
+        assert_eq!(
+            fold_peer_timeouts(s(5), s(2), None),
+            Some((Duration::from_secs(2), PeerTimeoutSource::RequestDeadline))
+        );
+    }
+
+    #[test]
+    fn fold_grpc_deadline_tightest() {
+        assert_eq!(
+            fold_peer_timeouts(s(5), s(4), s(1)),
+            Some((Duration::from_secs(1), PeerTimeoutSource::GrpcDeadline))
+        );
+    }
+
+    #[test]
+    fn fold_tie_backend_wins() {
+        // Equal bounds: BackendRequest wins so the operator-opted retry
+        // semantics apply; deadline guards still gate the actual retry.
+        assert_eq!(
+            fold_peer_timeouts(s(3), s(3), s(3)),
+            Some((Duration::from_secs(3), PeerTimeoutSource::BackendRequest))
+        );
+    }
+
+    #[test]
+    fn fold_two_way_tie_backend_wins() {
+        // Backend ties with a single deadline bound: BackendRequest still wins.
+        assert_eq!(
+            fold_peer_timeouts(s(3), s(3), None),
+            Some((Duration::from_secs(3), PeerTimeoutSource::BackendRequest))
+        );
+    }
+
+    #[test]
+    fn fold_deadline_tie_request_wins() {
+        // Deadline-vs-deadline tie: iteration order makes RequestDeadline win.
+        // Pinned here because the order is observable in access-log error
+        // attribution even though both deadlines expire simultaneously.
+        assert_eq!(
+            fold_peer_timeouts(None, s(3), s(3)),
+            Some((Duration::from_secs(3), PeerTimeoutSource::RequestDeadline))
+        );
+    }
+
+    #[test]
+    fn fold_backend_disabled_request_wins() {
+        // backendRequest: "0s" (Disabled) → backend bound is None.
+        assert_eq!(
+            fold_peer_timeouts(None, s(7), None),
+            Some((Duration::from_secs(7), PeerTimeoutSource::RequestDeadline))
+        );
+    }
+
+    #[test]
+    fn fold_grpc_only() {
+        assert_eq!(
+            fold_peer_timeouts(None, None, s(1)),
+            Some((Duration::from_secs(1), PeerTimeoutSource::GrpcDeadline))
+        );
+    }
+
+    #[test]
+    fn fold_backend_grpc_tie_backend_wins() {
+        assert_eq!(
+            fold_peer_timeouts(s(3), None, s(3)),
+            Some((Duration::from_secs(3), PeerTimeoutSource::BackendRequest))
+        );
+    }
+
+    #[test]
+    fn fold_all_none() {
+        assert_eq!(fold_peer_timeouts(None, None, None), None);
+    }
+
+    // ─── effective_backend_bound: route three-state + global-default fallback ───
+
+    use super::effective_backend_bound;
+    use crate::types::resources::http_route::RouteTimeout;
+
+    #[test]
+    fn backend_bound_unset_falls_back_to_global() {
+        let global = Duration::from_secs(60);
+        assert_eq!(effective_backend_bound(None, global), Some(global));
+        assert_eq!(
+            effective_backend_bound(Some(&RouteTimeout::Unset), global),
+            Some(global)
+        );
+    }
+
+    #[test]
+    fn backend_bound_disabled_is_none() {
+        assert_eq!(
+            effective_backend_bound(Some(&RouteTimeout::Disabled), Duration::from_secs(60)),
+            None
+        );
+    }
+
+    #[test]
+    fn backend_bound_route_duration_wins_over_global() {
+        assert_eq!(
+            effective_backend_bound(
+                Some(&RouteTimeout::Duration(Duration::from_secs(1))),
+                Duration::from_secs(60)
+            ),
+            Some(Duration::from_secs(1))
+        );
+    }
+
+    #[test]
+    fn backend_bound_zero_global_treated_as_disabled() {
+        // A `defaultRequestTimeout: "0s"` global must not become an instant
+        // read/write timeout (instant-retry loop with a retry policy present).
+        assert_eq!(effective_backend_bound(None, Duration::ZERO), None);
+        assert_eq!(
+            effective_backend_bound(Some(&RouteTimeout::Unset), Duration::ZERO),
+            None
+        );
     }
 }

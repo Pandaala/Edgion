@@ -121,6 +121,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "weighted-backend" | "weightedbackend" => "HTTPRoute/Backend/WeightedBackend".to_string(),
             "timeout" => "HTTPRoute/Backend/Timeout".to_string(),
             "retry-on-status" | "retryonstatus" => "HTTPRoute/Backend/RetryOnStatus".to_string(),
+            "per-try-timeout" | "pertrytimeout" => "HTTPRoute/Backend/PerTryTimeout".to_string(),
             "circuit-breaker" | "circuitbreaker" => "HTTPRoute/Backend/CircuitBreaker".to_string(),
             "health-check" | "healthcheck" => "HTTPRoute/Backend/HealthCheck".to_string(),
             "grpc-health-check" | "grpchealthcheck" => "HTTPRoute/Backend/GrpcHealthCheck".to_string(),
@@ -219,6 +220,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Backend/WeightedBackend" => "HTTPRoute/Backend/WeightedBackend",
         "HTTPRoute/Backend/Timeout" => "HTTPRoute/Backend/Timeout",
         "HTTPRoute/Backend/RetryOnStatus" => "HTTPRoute/Backend/RetryOnStatus",
+        "HTTPRoute/Backend/PerTryTimeout" => "HTTPRoute/Backend/PerTryTimeout",
         "HTTPRoute/Backend/CircuitBreaker" => "HTTPRoute/Backend/CircuitBreaker",
         "HTTPRoute/Backend/HealthCheck" => "HTTPRoute/Backend/HealthCheck",
         "HTTPRoute/Backend/GrpcHealthCheck" => "HTTPRoute/Backend/GrpcHealthCheck",
@@ -368,6 +370,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             runner.add_suite(Box::new(suites::HealthCheckTestSuite));
             runner.add_suite(Box::new(suites::GrpcHealthCheckTestSuite));
             runner.add_suite(Box::new(suites::RetryOnStatusTestSuite));
+            runner.add_suite(Box::new(suites::PerTryTimeoutTestSuite));
             runner.add_suite(Box::new(suites::CircuitBreakerTestSuite));
             runner.add_suite(Box::new(suites::PanicThresholdTestSuite));
             runner.add_suite(Box::new(suites::SessionPersistenceTestSuite));
@@ -434,6 +437,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::RetryOnStatusTestSuite));
+        }
+        "HTTPRoute/Backend/PerTryTimeout" => {
+            if !gateway {
+                eprintln!("Error: PerTryTimeout tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::PerTryTimeoutTestSuite));
         }
         "HTTPRoute/Backend/CircuitBreaker" => {
             if !gateway {
@@ -1525,6 +1535,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 runner.add_suite(Box::new(suites::HealthCheckTestSuite));
                 runner.add_suite(Box::new(suites::GrpcHealthCheckTestSuite));
                 runner.add_suite(Box::new(suites::RetryOnStatusTestSuite));
+                runner.add_suite(Box::new(suites::PerTryTimeoutTestSuite));
                 runner.add_suite(Box::new(suites::CircuitBreakerTestSuite));
                 runner.add_suite(Box::new(suites::PanicThresholdTestSuite));
                 runner.add_suite(Box::new(suites::MtlsTestSuite));

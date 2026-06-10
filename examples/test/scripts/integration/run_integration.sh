@@ -134,6 +134,7 @@ ensure_ctrl_admin_token() {
 # Slow tests list (skipped by default, run with --full-test)
 SLOW_TESTS=(
     "HTTPRoute_Backend_Timeout"
+    "HTTPRoute_Backend_PerTryTimeout"
     "HTTPRoute_Backend_HealthCheckTransition"
     "EdgionPlugins_AllEndpointStatus"
     "EdgionPlugins_LdapAuth"
@@ -1080,6 +1081,11 @@ run_all_tests() {
             log_info "Skipping slow test: HTTPRoute_Backend_HealthCheckTransition (use --full-test to run)"
         fi
         run_test "HTTPRoute_Backend_RetryOnStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/RetryOnStatus" || test_failed=true
+        if ! should_skip_test "HTTPRoute_Backend_PerTryTimeout"; then
+            run_test "HTTPRoute_Backend_PerTryTimeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/PerTryTimeout" || test_failed=true
+        else
+            log_info "Skipping slow test: HTTPRoute_Backend_PerTryTimeout (use --full-test to run)"
+        fi
         run_test "HTTPRoute_Backend_CircuitBreaker" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/CircuitBreaker" || test_failed=true
         run_test "HTTPRoute_Backend_SessionPersistence" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/SessionPersistence" || test_failed=true
         run_test "HTTPRoute_Backend_H2BackendMtlsPersistence" "${PROJECT_ROOT}/target/debug/examples/test_client -g h2-mtls-sp" || test_failed=true

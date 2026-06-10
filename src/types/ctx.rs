@@ -644,6 +644,20 @@ impl PendingHeaderOp {
     }
 }
 
+/// Which upper bound won the read/write-timeout fold in
+/// `configure_peer_timeouts` for the current upstream attempt.
+/// Consumed by `error_while_proxy` to decide whether a timeout is a
+/// per-try timeout (retryable, GEP-1731) or a deadline expiry (final).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerTimeoutSource {
+    /// Route `timeouts.backendRequest`, or the global default fallback.
+    BackendRequest,
+    /// Route `timeouts.request` remaining budget.
+    RequestDeadline,
+    /// Client-supplied `grpc-timeout` remaining budget.
+    GrpcDeadline,
+}
+
 pub struct EdgionHttpContext {
     /// Request start time for latency calculation
     pub start_time: Instant,
@@ -695,6 +709,11 @@ pub struct EdgionHttpContext {
     /// Consumed by error_while_proxy to trigger retry via e.set_retry(true).
     /// Reset to false after each retry attempt.
     pub retry_on_status: bool,
+
+    /// Source of the read/write timeout applied to the current upstream
+    /// attempt's peer. Overwritten by `configure_peer_timeouts` on every
+    /// attempt; `None` when no read/write bound was applied.
+    pub peer_timeout_source: Option<PeerTimeoutSource>,
 
     /// Time when first upstream connection was initiated
     /// Set only once on first connection attempt
@@ -893,6 +912,7 @@ impl EdgionHttpContext {
             plugin_running_result: PluginRunningResult::Nothing,
             try_cnt: 0,
             retry_on_status: false,
+            peer_timeout_source: None,
             upstream_start_time: None,
             hash_key: None,
             ctx_map: HashMap::new(),
@@ -1022,6 +1042,17 @@ impl EdgionHttpContext {
                     .and_then(|u| u.rule.parsed_retry.as_ref())
                     .and_then(|r| r.backoff)
             })
+    }
+
+    /// True when the matched rule (HTTP or gRPC route unit) carries a retry
+    /// policy — i.e. `rules[].retry` was present with at least one recognized field.
+    #[inline]
+    pub fn retry_configured(&self) -> bool {
+        self.route_unit.as_ref().is_some_and(|u| u.rule.parsed_retry.is_some())
+            || self
+                .grpc_route_unit
+                .as_ref()
+                .is_some_and(|u| u.rule.parsed_retry.is_some())
     }
 
     /// Initialize backend context for the resource-selected path (HTTP/gRPC backend ref).
@@ -1199,6 +1230,13 @@ mod sensitive_tests {
         let guard = MODE_LOCK.lock().unwrap();
         let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
         ModeGuard { prev, _lock: guard }
+    }
+
+    #[test]
+    fn retry_configured_false_without_route_units() {
+        let ctx = EdgionHttpContext::new();
+        assert!(!ctx.retry_configured());
+        assert!(ctx.peer_timeout_source.is_none());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 {
-  "current_max": 31388,
+  "current_max": 31391,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -37,6 +37,9 @@
     },
     "HTTPRoute/Backend/RetryOnStatus": {
       "http": 31143
+    },
+    "HTTPRoute/Backend/PerTryTimeout": {
+      "http": 31391
     },
     "HTTPRoute/Filters/Redirect": {
       "http": 31040

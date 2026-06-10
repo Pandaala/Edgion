@@ -146,6 +146,14 @@ pub enum EdgionStatus {
     /// via the standard 504 → grpc-status mapping.
     GrpcClientDeadlineExceeded = 504_02,
 
+    /// An upstream attempt was canceled because its read/write timeout fired
+    /// with `timeouts.backendRequest` as the operative bound while a retry
+    /// policy was configured — the per-try timeout semantics of GEP-1731.
+    /// Recorded per canceled-and-retried attempt (the final exhausted
+    /// attempt's timeout is not tagged); informational if a later attempt
+    /// succeeds, otherwise the request surfaces as 504.
+    BackendRequestTimeoutRetry = 504_03,
+
     /// A response-phase plugin replaced the upstream response with a local reply
     /// (status + headers + body). Informational: this is the normal, intended
     /// outcome of the `sendLocalReply` equivalent. No fixed HTTP status (the
@@ -229,6 +237,7 @@ mod tests {
             EdgionStatus::ForwardAuthServiceUnreachable => Some(503),
             EdgionStatus::RequestTimeoutExceeded => Some(504),
             EdgionStatus::GrpcClientDeadlineExceeded => Some(504),
+            EdgionStatus::BackendRequestTimeoutRetry => Some(504),
             EdgionStatus::PluginResponseReplaced => None,
             EdgionStatus::PluginResponseReplaceUnsupportedGrpc => None,
         }
@@ -279,6 +288,7 @@ mod tests {
             EdgionStatus::ForwardAuthServiceUnreachable,
             EdgionStatus::RequestTimeoutExceeded,
             EdgionStatus::GrpcClientDeadlineExceeded,
+            EdgionStatus::BackendRequestTimeoutRetry,
             EdgionStatus::PluginResponseReplaced,
             EdgionStatus::PluginResponseReplaceUnsupportedGrpc,
         ];

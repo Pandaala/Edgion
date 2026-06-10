@@ -667,16 +667,32 @@ async fn mirror_reset_handler() -> impl IntoResponse {
 
 /// /retry-sequence/{test_id}/{status_list}
 /// Returns status codes in sequence per test_id.
-/// status_list format: "502,503,200" — returns 502 on 1st call, 503 on 2nd, 200 on 3rd+
+/// status_list format: "502,503,200" — returns 502 on 1st call, 503 on 2nd, 200 on 3rd+.
+/// An entry may carry a delay: "200d3000" — sleep 3000ms then return 200
+/// (delay capped at 10s); out-of-range calls reuse the last entry including its delay.
 async fn retry_sequence_handler(Path((test_id, status_list)): Path<(String, String)>) -> impl IntoResponse {
     use axum::http::StatusCode;
 
-    let statuses: Vec<u16> = status_list
+    // Entry syntax: "STATUS" or "STATUSdDELAY_MS" (e.g. "200d3000" = sleep
+    // 3000ms then return 200). Delay is capped at 10s for safety.
+    let entries: Vec<(u16, u64)> = status_list
         .split(',')
-        .filter_map(|s| s.trim().parse::<u16>().ok())
+        .filter_map(|s| {
+            let s = s.trim();
+            let (status_part, delay_part) = match s.split_once('d') {
+                Some((st, d)) => (st, Some(d)),
+                None => (s, None),
+            };
+            let status = status_part.parse::<u16>().ok()?;
+            let delay_ms = match delay_part {
+                Some(d) => d.parse::<u64>().ok()?.min(10_000),
+                None => 0,
+            };
+            Some((status, delay_ms))
+        })
         .collect();
 
-    if statuses.is_empty() {
+    if entries.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             [
@@ -690,15 +706,19 @@ async fn retry_sequence_handler(Path((test_id, status_list)): Path<(String, Stri
             .into_response();
     }
 
-    let (attempt, current_status) = {
+    let (attempt, current_status, delay_ms) = {
         let mut store = RETRY_SEQUENCE_COUNTER.lock();
         let history = store.entry(test_id.clone()).or_default();
         let idx = history.len();
-        // Use last status code for out-of-range attempts
-        let status = statuses.get(idx).copied().unwrap_or(*statuses.last().unwrap());
+        // Use last entry for out-of-range attempts
+        let (status, delay_ms) = entries.get(idx).copied().unwrap_or(*entries.last().unwrap());
         history.push(status);
-        (idx + 1, status)
+        (idx + 1, status, delay_ms)
     };
+
+    if delay_ms > 0 {
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+    }
 
     let history_str = {
         let store = RETRY_SEQUENCE_COUNTER.lock();

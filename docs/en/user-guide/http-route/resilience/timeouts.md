@@ -24,8 +24,8 @@ rules:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `request` | Duration | EdgionGatewayConfig global value | Total time from receiving the request to returning the response, **including all retries** |
-| `backendRequest` | Duration | EdgionGatewayConfig global value | Timeout for a single attempt to a backend (one try, excluding retries) |
+| `request` | Duration | none (no end-to-end limit) | Total time from receiving the request to returning the response, **including all retries** |
+| `backendRequest` | Duration | EdgionGatewayConfig `defaultRequestTimeout` (default `60s`) | Timeout for a single attempt to a backend (one try, excluding retries) |
 
 Both accept Gateway API duration strings such as `"500ms"`, `"10s"`, `"1m"`, `"1h"`.
 
@@ -37,14 +37,19 @@ The end-to-end budget for the whole transaction. It covers every retry attempt a
 
 ### backendRequest
 
-The budget for a single attempt to a backend: from when the gateway starts sending the request until the full response is received. With retries configured, each attempt gets its own `backendRequest` budget while the total stays bounded by `request`.
+The budget for a single attempt to a backend: from when the gateway starts sending the request until the full response is received. When the rule also has a retry policy, `backendRequest` acts as the per-try timeout: each attempt gets its own `backendRequest` budget, an attempt exceeding it is canceled and retried, and the total stays bounded by `request` (see [Retry — per-try timeout](./retry.md#per-try-timeout-via-backendrequest)).
+
+Precision: Edgion enforces both timeouts as per-I/O-operation read/write
+timeouts, so an attempt that keeps making progress is not killed mid-stream;
+see the [precision note](./retry.md#per-try-timeout-via-backendrequest) in the
+retry documentation.
 
 ## Special values and behavior
 
 | Value | Meaning |
 |-------|---------|
 | `"0s"` | Disables the timeout (no limit / infinite) — useful for long-lived streaming |
-| Omitted | Falls back to the global default from `EdgionGatewayConfig` |
+| Omitted | `backendRequest` falls back to the global default from `EdgionGatewayConfig` (`defaultRequestTimeout`, default `60s`); `request` has **no** global default — omitted means no end-to-end limit |
 | Positive duration | Explicit limit |
 
 ### backendRequest is clamped to request
@@ -53,7 +58,7 @@ The budget for a single attempt to a backend: from when the gateway starts sendi
 
 ### Interaction with retry
 
-Because `request` bounds the entire transaction including retries, set it large enough to allow your retry `attempts` (plus their backoff waits) to complete. `backendRequest` bounds each individual attempt. See [Retry policy](./retry.md).
+Because `request` bounds the entire transaction including retries, set it large enough to allow your retry `attempts` (plus their backoff waits) to complete. `backendRequest` bounds each individual attempt. See [Retry policy — per-try timeout](./retry.md#per-try-timeout-via-backendrequest).
 
 ## Examples
 

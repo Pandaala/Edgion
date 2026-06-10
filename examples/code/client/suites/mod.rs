@@ -20,8 +20,9 @@ pub use http_route::{
     HealthCheckTransitionTestSuite, HttpMatchTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite, HttpTestSuite,
     LBConsistentHashTestSuite, LBEwmaRetryOnStatusTestSuite, LBEwmaTestSuite, LBLeastConnRetryOnStatusTestSuite,
     LBLeastConnTestSuite, LBRoundRobinTestSuite, MultiPortTestSuite, PanicThresholdTestSuite,
-    PartiallyInvalidTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite,
-    SpChangeFinalTestSuite, SpChangeInitialTestSuite, TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
+    PartiallyInvalidTestSuite, PerTryTimeoutTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite,
+    SessionPersistenceTestSuite, SpChangeFinalTestSuite, SpChangeInitialTestSuite, TimeoutTestSuite,
+    WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
 pub use grpc_route::{GrpcMatchTestSuite, GrpcTestSuite, GrpcUnmatchedRouteTestSuite, GrpcWebTestSuite};

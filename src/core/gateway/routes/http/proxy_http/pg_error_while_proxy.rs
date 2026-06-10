@@ -1,7 +1,7 @@
 use super::EdgionHttpProxy;
-use crate::types::EdgionHttpContext;
+use crate::types::{EdgionHttpContext, EdgionStatus, PeerTimeoutSource};
 use pingora_core::prelude::HttpPeer;
-use pingora_core::Error;
+use pingora_core::{Error, ErrorSource, ErrorType};
 use pingora_proxy::Session;
 
 #[inline]
@@ -42,6 +42,45 @@ pub fn error_while_proxy(
         ctx.retry_on_status = false; // reset for next attempt
         e.set_retry(true);
         return e;
+    }
+
+    // Case 1.5: per-try timeout (GEP-1731). An UPSTREAM read/write timeout
+    // whose operative bound was `backendRequest` cancels the attempt; when the
+    // rule carries a retry policy, the attempt is retried within the usual
+    // budget/deadline/buffer guards. Timeouts sourced from the route `request`
+    // deadline or the client `grpc-timeout` deadline are never retried — the
+    // caller is out of budget. Downstream-sourced timeouts (slow client) are
+    // excluded: retrying the upstream cannot help them.
+    // Also requires that nothing has been written downstream yet: once response
+    // headers are committed, a retry would corrupt the already-started response.
+    if matches!(e.etype(), ErrorType::ReadTimedout | ErrorType::WriteTimedout)
+        && matches!(e.esource(), ErrorSource::Upstream)
+        && ctx.peer_timeout_source == Some(PeerTimeoutSource::BackendRequest)
+        && ctx.retry_configured()
+        && session.as_ref().response_written().is_none()
+    {
+        let max_retries = ctx
+            .retry_attempts()
+            .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
+        let deadline_exceeded = ctx.request_timeout_exceeded() || ctx.grpc_deadline_exceeded();
+        if buffer_ok && ctx.try_cnt <= max_retries && !deadline_exceeded {
+            // Stamp the canceled attempt's per-upstream log entry so it is
+            // self-describing (mirrors pg_fail_to_connect): without this the
+            // entry shows neither status nor error and operators must infer
+            // the cancellation from the request-level error chain.
+            if let Some(upstream) = ctx.get_current_upstream_mut() {
+                upstream.status = Some(504);
+                upstream.err.push(e.etype().as_str().to_string());
+                upstream.et = Some(
+                    std::time::Instant::now()
+                        .saturating_duration_since(upstream.start_time)
+                        .as_millis() as u64,
+                );
+            }
+            ctx.add_error(EdgionStatus::BackendRequestTimeoutRetry);
+            e.set_retry(true);
+            return e;
+        }
     }
 
     // Case 2: connection reuse retry (Pingora built-in: stale keepalive connection)

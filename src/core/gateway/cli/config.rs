@@ -1100,7 +1100,10 @@ access_log_sensitive:
             ..Default::default()
         };
         let serialized = serde_yaml::to_string(&cfg).unwrap();
-        assert!(!serialized.contains("must-not-leak"), "admin_token must not serialize out");
+        assert!(
+            !serialized.contains("must-not-leak"),
+            "admin_token must not serialize out"
+        );
     }
 
     #[test]

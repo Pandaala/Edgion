@@ -128,7 +128,7 @@ GRPCRoute supports `retry.attempts` (max retry attempts) and `retry.backoff` (ex
 
 **`retry.codes` limitation**: GRPCRoute's `codes` field contains gRPC status codes (0-16), not HTTP status codes. gRPC status codes live in HTTP/2 trailers (`grpc-status`), and the current Pingora proxy architecture cannot intercept the trailers stage to trigger retries. As a result, the `codes` field is parsed but **ignored at runtime**, and a warning log is emitted. Once trailers interception is implemented, this feature will be supported.
 
-Currently, retries are only triggered on connection failure (`fail_to_connect`) and proxy errors (`error_while_proxy`), consistent with HTTPRoute's connection-level retry behavior.
+Currently, retries are triggered on connection failure (`fail_to_connect`), proxy errors (`error_while_proxy`), and per-try timeouts — with a retry policy present, an attempt exceeding `backendRequest` is canceled and retried while nothing has been sent downstream (GEP-1731, shared with HTTPRoute; see [04-httproute.md](04-httproute.md)). Caution for long-lived gRPC streams: a tight `backendRequest` combined with a retry policy cuts idle streams — size it for the longest expected quiet period.
 
 ## Differences from HTTPRoute
 
