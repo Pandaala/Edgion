@@ -216,6 +216,12 @@ impl LeaderElection {
         // Tracks the last successful renew/acquire. Local to this loop because
         // only the run loop reads/writes it.
         let mut last_renewed: Option<Instant> = None;
+        // Tracks whether the pod's `edgion.io/leader` label matches the actual
+        // leadership state. The label is the selector of the leader Service, so
+        // a patch failure at a state transition must not be permanent: when
+        // false, the loop re-patches with the current state on every tick until
+        // it converges.
+        let mut label_synced = true;
 
         loop {
             // Single sleep cadence (matches client-go's RetryPeriod): a
@@ -235,6 +241,10 @@ impl LeaderElection {
                         );
                         if self.is_leader.swap(false, Ordering::Release) {
                             controller_metrics().set_leader(false);
+                            // Best-effort: the loop exits here, so there is no
+                            // tick left to retry on. A restarting pod resets the
+                            // label in preflight, and a terminating pod drops
+                            // out of Service endpoints anyway.
                             self.update_pod_leader_label(false).await;
                         }
                         return Ok(());
@@ -242,6 +252,14 @@ impl LeaderElection {
                 }
             } else {
                 tokio::time::sleep(sleep_duration).await;
+            }
+
+            // Re-converge the pod label if a previous patch failed. Without
+            // this, a transient apiserver error at a state transition would
+            // leave the leader Service selector permanently out of sync (no
+            // further transition would ever rewrite the label).
+            if !label_synced {
+                label_synced = self.update_pod_leader_label(self.is_leader()).await;
             }
 
             match self.try_acquire_or_renew(&lease_api).await {
@@ -254,7 +272,7 @@ impl LeaderElection {
                             "Acquired leadership"
                         );
                         controller_metrics().set_leader(true);
-                        self.update_pod_leader_label(true).await;
+                        label_synced = self.update_pod_leader_label(true).await;
                     }
                 }
                 Ok(false) => {
@@ -269,7 +287,7 @@ impl LeaderElection {
                             "Lost leadership"
                         );
                         controller_metrics().set_leader(false);
-                        self.update_pod_leader_label(false).await;
+                        label_synced = self.update_pod_leader_label(false).await;
                     }
                 }
                 Err(e) => {
@@ -303,7 +321,7 @@ impl LeaderElection {
                                 "Lost leadership: lease resource was deleted out-of-band"
                             );
                             controller_metrics().set_leader(false);
-                            self.update_pod_leader_label(false).await;
+                            label_synced = self.update_pod_leader_label(false).await;
                         }
                         last_renewed = None;
                         if let Err(recreate_err) = self.ensure_lease_exists(&lease_api).await {
@@ -355,7 +373,7 @@ impl LeaderElection {
                                 "Lost leadership: renew deadline exceeded after lease error"
                             );
                             controller_metrics().set_leader(false);
-                            self.update_pod_leader_label(false).await;
+                            label_synced = self.update_pod_leader_label(false).await;
                         }
                         // Reset unconditionally for symmetry with the 404 branch:
                         // any future re-acquire should start a fresh deadline
@@ -416,8 +434,10 @@ impl LeaderElection {
     }
 
     /// Patch the current Pod's `edgion.io/leader` label.
-    /// Fire-and-forget on error: logged but does not block the election loop.
-    async fn update_pod_leader_label(&self, is_leader: bool) {
+    /// Returns whether the patch succeeded. Does not retry internally: the run
+    /// loop tracks the result via `label_synced` and re-patches with the
+    /// current leadership state on subsequent ticks until it converges.
+    async fn update_pod_leader_label(&self, is_leader: bool) -> bool {
         match self.try_patch_pod_leader_label(is_leader).await {
             Ok(_) => {
                 tracing::info!(
@@ -427,6 +447,7 @@ impl LeaderElection {
                     is_leader = is_leader,
                     "Updated pod leader label"
                 );
+                true
             }
             Err(e) => {
                 tracing::error!(
@@ -435,8 +456,9 @@ impl LeaderElection {
                     pod_namespace = %self.config.pod_namespace,
                     is_leader = is_leader,
                     error = %e,
-                    "Failed to update pod leader label"
+                    "Failed to update pod leader label; will retry on next election tick"
                 );
+                false
             }
         }
     }
