@@ -28,7 +28,7 @@ set -eo pipefail
 # Fallback version used when HEAD has no git tag.
 # Normal release flow: git tag v0.x.y  →  script auto-detects via `git describe --tags --exact-match`
 # or pass --from-tag / --version explicitly.
-DEFAULT_VERSION="0.1.33"
+DEFAULT_VERSION="0.3.0"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
 RUST_VERSION="${RUST_VERSION:-1.92}"
@@ -38,7 +38,7 @@ FEATURES="${FEATURES:-default}"
 # binaries stay slim. Set BINARIES without `center` to skip the frontend build.
 BINARIES="gateway controller center"
 EXAMPLES="test_server test_client"
-DASHBOARD_REPO="https://github.com/Pandaala/edgion-dashboard.git"
+DASHBOARD_REPO="git@github.com:Pandaala/edgion-dashboard.git"
 # Source folder embedded into edgion-center by rust-embed (must match the
 # `#[folder = "web/dashboard/"]` attribute in src/core/center/api/web.rs).
 EMBED_WEB_DIR="web/dashboard"
@@ -50,10 +50,7 @@ EMBED_WEB_DIR="web/dashboard"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${SCRIPT_DIR}"
 BUILDER_IMAGE="edgion-builder"
-# Prefer local dashboard checkout if present; fall back to GitHub clone.
-# Override DASHBOARD_LOCAL to build from a dashboard repo outside the sibling
-# path, e.g. DASHBOARD_LOCAL=/path/to/edgion-dashboard ./build-image.sh
-DASHBOARD_LOCAL="${DASHBOARD_LOCAL:-$(dirname "${PROJECT_DIR}")/edgion-dashboard}"
+# The dashboard is always pulled fresh from the remote (never vendored locally).
 DASHBOARD_CLONE="${PROJECT_DIR}/docker/.all-in-one-dashboard"
 
 # Map all-in-one mode to Docker image name
@@ -159,16 +156,14 @@ Dashboard / edgion-center:
     The standard edgion-center image now embeds the dashboard UI directly in the
     binary (the `embed-dashboard` Cargo feature) and serves it same-origin on the
     admin API — no nginx. It is built automatically as part of the standard images
-    (BINARIES includes "center"). Dashboard source priority:
-      1. Local sibling directory ../edgion-dashboard (if present)
-      2. Previous GitHub clone (auto-updated)
-      3. Fresh clone from ${DASHBOARD_REPO}
+    (BINARIES includes "center"). The dashboard is always pulled fresh from the
+    remote ${DASHBOARD_REPO} (never vendored locally).
     (--all-in-one-center has been retired; use the standard center image instead.)
 
 All-in-One Notes:
     --all-in-one-controller-gateway produces a standalone image that bundles the
-    frontend dashboard with controller + gateway and nginx. Dashboard source
-    priority is the same as above. When specified, standard images are NOT built.
+    frontend dashboard with controller + gateway and nginx. The dashboard is pulled
+    fresh from the remote (same as above). When specified, standard images are NOT built.
 
 Environment Variables:
     IMAGE_REGISTRY      Docker registry (default: docker.io)
@@ -684,24 +679,15 @@ merge_example_manifests() {
 # =============================================================================
 
 prepare_dashboard() {
-    # 1. Use local sibling directory if it exists (typical dev setup)
-    if [[ -f "${DASHBOARD_LOCAL}/package.json" ]]; then
-        DASHBOARD_DIR="${DASHBOARD_LOCAL}"
-        log_info "Using local dashboard at ${DASHBOARD_DIR}"
-    # 2. Reuse previous clone if it exists
-    elif [[ -d "${DASHBOARD_CLONE}/.git" ]]; then
-        DASHBOARD_DIR="${DASHBOARD_CLONE}"
-        log_info "Updating dashboard clone at ${DASHBOARD_DIR}..."
-        git -C "${DASHBOARD_DIR}" pull --ff-only || {
-            log_warning "git pull failed, using existing checkout"
-        }
-    # 3. Clone from GitHub as fallback
-    else
-        DASHBOARD_DIR="${DASHBOARD_CLONE}"
-        log_info "Cloning dashboard from ${DASHBOARD_REPO}..."
-        rm -rf "${DASHBOARD_DIR}"
-        git clone --depth 1 "${DASHBOARD_REPO}" "${DASHBOARD_DIR}"
-    fi
+    # Always pull a fresh shallow clone from the remote — the dashboard is never
+    # vendored or read from a local checkout.
+    DASHBOARD_DIR="${DASHBOARD_CLONE}"
+    log_info "Cloning dashboard from ${DASHBOARD_REPO}..."
+    rm -rf "${DASHBOARD_DIR}"
+    git clone --depth 1 "${DASHBOARD_REPO}" "${DASHBOARD_DIR}" || {
+        log_error "Failed to clone dashboard from ${DASHBOARD_REPO}"
+        exit 1
+    }
 
     if [[ ! -f "${DASHBOARD_DIR}/package.json" ]]; then
         log_error "Dashboard not found — package.json missing"
