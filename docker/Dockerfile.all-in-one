@@ -4,10 +4,6 @@
 # Mode:
 #   controller-gateway: edgion-controller + edgion-gateway + frontend dashboard
 #
-# Note: the `center` all-in-one mode has been retired. edgion-center now embeds
-# the dashboard directly into the binary (the `embed-dashboard` Cargo feature)
-# and serves it same-origin — build the standard center image instead.
-#
 # Build arguments:
 #   ALL_IN_ONE_MODE:     "controller-gateway"
 #   BINARY_PATH:         Path to pre-built backend binaries (e.g. target/aarch64-unknown-linux-gnu/release)

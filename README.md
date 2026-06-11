@@ -108,7 +108,7 @@ graph TD;
 
 | Component | Binary | Role |
 |-----------|--------|------|
-| **Center** | `edgion-center` | Federated control plane. Connects multiple Controllers across clusters or regions, enabling global routing policies and cross-cluster visibility. |
+| **Center** | `edgion-center` *(separate repo: **EdgionCenter**)* | Federated control plane. Connects multiple Controllers across clusters or regions, enabling global routing policies and cross-cluster visibility. Maintained and built in the standalone EdgionCenter repository; this repo's Controller connects to it as a federation client. |
 | **Controller** | `edgion-controller` | Watches Kubernetes CRDs or local YAML, validates and pre-parses resources, streams configuration to Gateways via gRPC. Handles ACME and status updates. |
 | **Gateway** | `edgion-gateway` | Stateless data plane built on Pingora. Receives config from Controller, executes routing, plugin chains, load balancing, TLS, and access logging. |
 | **CLI** | `edgion-cli` | Management tool for inspecting and operating Controller and Gateway instances. |

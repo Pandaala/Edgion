@@ -33,15 +33,9 @@ IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
 RUST_VERSION="${RUST_VERSION:-1.92}"
 FEATURES="${FEATURES:-default}"
-# edgion-center is built separately with the `embed-dashboard` feature so the
-# dashboard UI is compiled into the binary (see compile_binaries). The other
-# binaries stay slim. Set BINARIES without `center` to skip the frontend build.
-BINARIES="gateway controller center"
+BINARIES="gateway controller"
 EXAMPLES="test_server test_client"
 DASHBOARD_REPO="git@github.com:Pandaala/edgion-dashboard.git"
-# Source folder embedded into edgion-center by rust-embed (must match the
-# `#[folder = "web/dashboard/"]` attribute in src/core/center/api/web.rs).
-EMBED_WEB_DIR="web/dashboard"
 
 # =============================================================================
 # Internal variables  (no need to change unless you know what you're doing)
@@ -151,14 +145,6 @@ Options:
     --all-in-one-controller-gateway     Build all-in-one image: dashboard + controller + gateway
                                  Image: edgion-all-in-one (standalone, skips standard images)
     -h, --help                   Show this help message
-
-Dashboard / edgion-center:
-    The standard edgion-center image now embeds the dashboard UI directly in the
-    binary (the `embed-dashboard` Cargo feature) and serves it same-origin on the
-    admin API — no nginx. It is built automatically as part of the standard images
-    (BINARIES includes "center"). The dashboard is always pulled fresh from the
-    remote ${DASHBOARD_REPO} (never vendored locally).
-    (--all-in-one-center has been retired; use the standard center image instead.)
 
 All-in-One Notes:
     --all-in-one-controller-gateway produces a standalone image that bundles the
@@ -343,38 +329,6 @@ compile_binaries() {
         log_error "Compilation failed for ${arch}"
             exit 1
         fi
-
-    # edgion-center is compiled separately WITH the dashboard embedded
-    # (`embed-dashboard` feature) so gateway/controller stay slim. The frontend
-    # must already be staged into web/dashboard/ by build_frontend_into_web.
-    if [[ " ${BINARIES} " == *" center "* ]]; then
-        local center_cmd="cargo build --release \
-                --target \"${target}\" \
-                --bin edgion-center \
-                --features \"${FEATURES},embed-dashboard\""
-
-        if [[ "${force_rebuild}" == "true" ]]; then
-            # Do not clean: the trio above (incl. edgion-cli, needed by the
-            # center image) was just built into the same target dir.
-            log_info "Force rebuild: compiling edgion-center without target clean"
-        fi
-
-        log_info "Compiling edgion-center (embedded dashboard) for ${arch}..."
-        docker run --rm \
-            --platform "${platform}" \
-            -v "${PROJECT_DIR}":/project \
-            -v "${HOME}/.cargo/registry":/usr/local/cargo/registry \
-            -v "${HOME}/.cargo/git":/usr/local/cargo/git \
-            -v "edgion-rustup-${suffix}":/usr/local/rustup \
-            -w /project \
-            "${builder_tag}" \
-            bash -c "${center_cmd}"
-
-        if [[ $? -ne 0 ]]; then
-            log_error "edgion-center compilation failed for ${arch}"
-            exit 1
-        fi
-    fi
 
     log_success "Compiled binaries for ${arch}"
 }
@@ -735,59 +689,13 @@ compile_frontend() {
 }
 
 # =============================================================================
-# Embedded center: build the dashboard and stage it into web/dashboard/ so the
-# `embed-dashboard` feature compiles it into edgion-center. Run ONCE (frontend
-# build is arch-independent) before the per-arch compile loop.
-# =============================================================================
-
-build_frontend_into_web() {
-    log_stage "Building frontend dashboard for embedding into edgion-center"
-
-    prepare_dashboard
-
-    log_info "Running npm ci + npm run build inside Docker (node:20-slim)..."
-    local ver="${VERSION#v}"   # strip leading 'v' so package.json gets e.g. 0.1.22
-    local pkg_json="${DASHBOARD_DIR}/package.json"
-    local pkg_json_orig
-    pkg_json_orig=$(cat "${pkg_json}")   # backup before docker modifies it
-
-    docker run --rm \
-        -v "${DASHBOARD_DIR}":/app \
-        -w /app \
-        node:20-slim \
-        bash -c "npm pkg set version='${ver}' && npm ci --prefer-offline && npm run build"
-    local rc=$?
-
-    echo "${pkg_json_orig}" > "${pkg_json}"   # restore to avoid dirty working tree
-
-    if [[ ${rc} -ne 0 ]]; then
-        log_error "Frontend build failed"
-        exit 1
-    fi
-
-    # Stage dist into the rust-embed source folder (gitignored, not vendored).
-    rm -rf "${PROJECT_DIR}/${EMBED_WEB_DIR}"
-    mkdir -p "${PROJECT_DIR}/${EMBED_WEB_DIR}"
-    cp -r "${DASHBOARD_DIR}/dist/." "${PROJECT_DIR}/${EMBED_WEB_DIR}/"
-
-    log_success "Frontend staged into ${EMBED_WEB_DIR}/ for embedding"
-}
-
-# Drop the staged dashboard build output so the working tree is clean after a
-# build. The whole web/ tree is gitignored and not vendored; a build.rs
-# placeholder is regenerated on the next `--features embed-dashboard` compile.
-cleanup_embed_staging() {
-    rm -rf "${PROJECT_DIR}/${EMBED_WEB_DIR}"
-}
-
-# =============================================================================
 # All-in-One: Compile backend binaries needed for a specific all-in-one mode
 # =============================================================================
 
 compile_all_in_one_binaries() {
     local arch=$1
     local force_rebuild=$2
-    local all_in_one_mode=$3   # "controller-gateway" or "center"
+    local all_in_one_mode=$3   # "controller-gateway"
 
     local arch_info
     arch_info=$(get_arch_info "${arch}")
@@ -799,12 +707,6 @@ compile_all_in_one_binaries() {
     case "${all_in_one_mode}" in
         controller-gateway)
             bins="${bins} --bin edgion-gateway --bin edgion-controller"
-            ;;
-        center)
-            bins="${bins} --bin edgion-center"
-            ;;
-        both)
-            bins="${bins} --bin edgion-gateway --bin edgion-controller --bin edgion-center"
             ;;
     esac
 
@@ -849,7 +751,7 @@ build_all_in_one_image() {
     local arch=$1
     local push=$2
     local version=$3
-    local all_in_one_mode=$4   # "controller-gateway" or "center"
+    local all_in_one_mode=$4   # "controller-gateway"
 
     local arch_info
     arch_info=$(get_arch_info "${arch}")
@@ -999,7 +901,6 @@ main() {
     local compile_only=false
     local with_examples=false
     local all_in_one_controller_gateway=false
-    local all_in_one_center=false
     local from_tag=false
     local version="${VERSION}"
 
@@ -1037,14 +938,6 @@ main() {
                 all_in_one_controller_gateway=true
                 shift
                 ;;
-            --all-in-one-center)
-                log_error "--all-in-one-center has been retired."
-                log_error "The dashboard is now embedded directly into edgion-center."
-                log_error "Build the standard center image instead:"
-                log_error "  ./build-image.sh                 # builds edgion-center (UI embedded)"
-                log_error "  BINARIES=center ./build-image.sh  # center only"
-                exit 1
-                ;;
             -h|--help)
                 show_usage
                 exit 0
@@ -1059,7 +952,7 @@ main() {
 
     # Derived flag: any all-in-one mode requested?
     local any_all_in_one=false
-    if [[ "${all_in_one_controller_gateway}" == "true" ]] || [[ "${all_in_one_center}" == "true" ]]; then
+    if [[ "${all_in_one_controller_gateway}" == "true" ]]; then
         any_all_in_one=true
     fi
 
@@ -1131,7 +1024,6 @@ main() {
     if [[ "${any_all_in_one}" == "true" ]]; then
         log_info "Mode: All-in-One (standalone images)"
         [[ "${all_in_one_controller_gateway}" == "true" ]] && log_info "  → edgion-all-in-one (dashboard + controller + gateway)"
-        [[ "${all_in_one_center}" == "true" ]]             && log_info "  → edgion-all-in-one-center (dashboard + center)"
     else
         log_info "Mode: Standard"
         [[ "${with_examples}" == "true" ]] && log_info "  → With examples"
@@ -1148,16 +1040,7 @@ main() {
     if [[ "${any_all_in_one}" == "true" ]]; then
 
         # --- Compile backend binaries ---
-        # "both" compiles all four binaries in a single cargo invocation;
-        # single mode compiles only what's needed.
-        local compile_mode=""
-        if [[ "${all_in_one_controller_gateway}" == "true" ]] && [[ "${all_in_one_center}" == "true" ]]; then
-            compile_mode="both"
-        elif [[ "${all_in_one_controller_gateway}" == "true" ]]; then
-            compile_mode="controller-gateway"
-        else
-            compile_mode="center"
-        fi
+        local compile_mode="controller-gateway"
 
         log_stage "All-in-One: Compiling backend binaries (${compile_mode})"
         for arch in "${archs[@]}"; do
@@ -1177,14 +1060,12 @@ main() {
         log_stage "All-in-One: Building Docker images"
         for arch in "${archs[@]}"; do
             [[ "${all_in_one_controller_gateway}" == "true" ]] && build_all_in_one_image "${arch}" "${push}" "${version}" "controller-gateway"
-            [[ "${all_in_one_center}" == "true" ]]             && build_all_in_one_image "${arch}" "${push}" "${version}" "center"
         done
 
         # --- Merge manifests ---
         if [[ "${push}" == "true" ]] && [[ ${#archs[@]} -gt 1 ]]; then
             log_stage "All-in-One: Creating multi-architecture manifests"
             [[ "${all_in_one_controller_gateway}" == "true" ]] && merge_all_in_one_manifest "${version}" "controller-gateway" "${archs[@]}"
-            [[ "${all_in_one_center}" == "true" ]]             && merge_all_in_one_manifest "${version}" "center" "${archs[@]}"
         elif [[ "${push}" == "true" ]]; then
             log_info "Single architecture, creating simple tags..."
             local version_no_v="${version#v}"
@@ -1192,7 +1073,7 @@ main() {
             arch_info=$(get_arch_info "${archs[0]}")
             IFS=':' read -r _ _ suffix <<< "${arch_info}"
 
-            for all_in_one_mode in controller-gateway center; do
+            for all_in_one_mode in controller-gateway; do
                 local flag_var="all_in_one_${all_in_one_mode//-/_}"
                 [[ "${!flag_var}" != "true" ]] && continue
 
@@ -1213,7 +1094,6 @@ main() {
         log_info "Built all-in-one images:"
         local version_no_v="${version#v}"
         [[ "${all_in_one_controller_gateway}" == "true" ]] && print_all_in_one_summary "${version_no_v}" "${push}" "controller-gateway" "${archs[@]}"
-        [[ "${all_in_one_center}" == "true" ]]             && print_all_in_one_summary "${version_no_v}" "${push}" "center" "${archs[@]}"
 
         # Cleanup temporary frontend dist
         rm -rf "${PROJECT_DIR}/docker/.all-in-one-dist"
@@ -1224,12 +1104,6 @@ main() {
     # =========================================================================
     # Standard path — gateway + controller (+ optional examples)
     # =========================================================================
-
-    # Stage 2a: Build + stage the dashboard once (arch-independent) when an
-    # embedded edgion-center image is being built.
-    if [[ " ${BINARIES} " == *" center "* ]]; then
-        build_frontend_into_web
-    fi
 
     # Stage 2: Compile binaries
     log_stage "Stage 2: Compiling binaries"
@@ -1247,7 +1121,6 @@ main() {
 
     if [[ "${compile_only}" == "true" ]]; then
         log_success "Compilation completed (--compile-only)"
-        [[ " ${BINARIES} " == *" center "* ]] && cleanup_embed_staging
         exit 0
     fi
 
@@ -1256,10 +1129,6 @@ main() {
     for arch in "${archs[@]}"; do
         build_images "${arch}" "${push}" "${version}"
     done
-
-    # Images are packaged; drop the staged dashboard build output and restore the
-    # committed placeholder so the working tree is clean.
-    [[ " ${BINARIES} " == *" center "* ]] && cleanup_embed_staging
 
     # Stage 3b: Build example images (only with --with-examples)
     if [[ "${with_examples}" == "true" ]]; then

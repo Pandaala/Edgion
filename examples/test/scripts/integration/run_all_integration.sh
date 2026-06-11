@@ -8,8 +8,8 @@
 # emits a unified report.
 #
 # All children currently share controller/gateway ports (12101/12001) so they
-# MUST run sequentially. test_file_watcher.sh and run_center_test.sh use
-# different ports but are still sequenced for predictable resource usage.
+# MUST run sequentially. test_file_watcher.sh uses different ports but is still
+# sequenced for predictable resource usage.
 #
 # Usage:
 #   run_all_integration.sh                   # run every job, fast mode
@@ -51,8 +51,6 @@ JOB_NAMES=(
     "linksys_etcd"
     "linksys_es"
     "acme"
-    "center"
-    "center_mtls"
     "cli"
     "file_watcher"
 )
@@ -63,8 +61,6 @@ job_command() {
         linksys_etcd) echo "${SCRIPT_DIR}/link_sys/run_etcd_test.sh --no-build" ;;
         linksys_es)   echo "${SCRIPT_DIR}/link_sys/run_es_test.sh --no-build" ;;
         acme)         echo "${SCRIPT_DIR}/run_acme_test.sh" ;;
-        center)       echo "${SCRIPT_DIR}/run_center_test.sh" ;;
-        center_mtls)  echo "${SCRIPT_DIR}/run_center_mtls_test.sh --no-build" ;;
         cli)          echo "${SCRIPT_DIR}/test_cli_commands.sh" ;;
         file_watcher) echo "${SCRIPT_DIR}/test_file_watcher.sh" ;;
         *)            return 1 ;;
@@ -177,7 +173,7 @@ log_info "Run-all work directory: $WORK_DIR"
 if $DO_PREPARE; then
     log_section "Build: cargo build (top-level, once)"
     if (cd "$PROJECT_ROOT" && cargo build --bin edgion-controller --bin edgion-gateway \
-        --bin edgion-cli --bin edgion-center --example test_server) \
+        --bin edgion-cli --example test_server) \
         2>&1 | tee "${WORK_DIR}/build.log" | tail -5; then
         log_success "Build complete"
     else

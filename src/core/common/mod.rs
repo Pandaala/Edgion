@@ -7,7 +7,6 @@ pub mod grpc_tls;
 pub mod http_util;
 pub mod jwt_common;
 pub mod local_auth;
-pub mod metadata_conf_handler;
 pub mod observe;
 pub mod startup;
 pub mod unified_auth;

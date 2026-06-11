@@ -44,14 +44,15 @@ flowchart TD
 
 ## Crate structure
 
-A single Crate (not a workspace) with four `[[bin]]` targets:
+A single Crate (not a workspace) with three `[[bin]]` targets:
 
 | Binary | Entry file | Runtime model | Role |
 |--------|---------|-----------|------|
 | `edgion-gateway` | `src/bin/edgion_gateway.rs` | Synchronous entry; internally manages its own Tokio + Pingora main loop | Data plane |
 | `edgion-controller` | `src/bin/edgion_controller.rs` | `#[tokio::main(multi_thread)]` | Control plane |
 | `edgion-cli` | `src/bin/edgion_ctl.rs` | `#[tokio::main]` single-threaded | CLI tool |
-| `edgion-center` | `src/bin/edgion_center.rs` | `#[tokio::main(multi_thread)]` | Federation Center |
+
+> The federation Center binary (`edgion-center`) has been extracted to the separate EdgionCenter repository.
 
 Example binaries (used in testing): `test_server`, `test_client`, `test_client_direct`, `resource_diff`, `config_load_validator`.
 
@@ -64,8 +65,7 @@ src/
 ├── bin/                         # Thin entry wrappers
 │   ├── edgion_gateway.rs        #   → EdgionGatewayCli::run()
 │   ├── edgion_controller.rs     #   → EdgionControllerCli::run()
-│   ├── edgion_ctl.rs            #   → Cli::run() (edgion-cli)
-│   └── edgion_center.rs         #   → EdgionCenterCli::run()
+│   └── edgion_ctl.rs            #   → Cli::run() (edgion-cli)
 ├── lib.rs                       # Crate root: pub mod core, pub mod types
 ├── core/                        # All business logic
 │   ├── controller/              # Code belonging to edgion-controller
@@ -91,14 +91,6 @@ src/
 │   │   └── tls/                 #   TLS runtime / certificate store / validation
 │   ├── ctl/                     # Code belonging to edgion-cli
 │   │   └── cli/                 #   commands / output / client
-│   ├── center/                  # Code belonging to edgion-center (federation center)
-│   │   ├── aggregator/          #   Multi-Controller state aggregation
-│   │   ├── api/                 #   Center API
-│   │   ├── commander/           #   Command dispatch toward Controllers
-│   │   ├── db/                  #   Persistence
-│   │   ├── fed_sync/            #   Federation gRPC sync
-│   │   ├── metadata_store/      #   Metadata store
-│   │   └── proxy/               #   Reverse proxy toward Controllers
 │   └── common/                  # Cross-bin shared modules
 │       ├── config/              #   Shared startup configuration (test mode, cache config)
 │       ├── conf_sync/           #   gRPC proto / traits / shared types
@@ -115,7 +107,7 @@ src/
     └── err.rs                   # Error types
 ```
 
-**Design principles**: `types/` only holds pure data definitions; `core/` holds all logic. `core/` is layered by bin ownership (controller / gateway / ctl / center / common); no top-level shim modules are used.
+**Design principles**: `types/` only holds pure data definitions; `core/` holds all logic. `core/` is layered by bin ownership (controller / gateway / ctl / common); no top-level shim modules are used.
 
 ## EdgionHttpContext — per-request state container
 

@@ -92,7 +92,7 @@ Load, in order, only what applies to the finding's area:
    - `ws` findings → `skills/01-architecture/02-gateway/03-routes/SKILL.md` (WS is a transparent tunnel; document this)
    - `tls` findings → `skills/01-architecture/02-gateway/04-tls/SKILL.md`
    - `cookie-auth` findings → `skills/04-review/local-auth/`, `skills/04-review/oidc/`, `skills/04-review/cors/`, `skills/04-review/auth-timing/`, `skills/04-review/forward-auth/` as applicable
-   - `admin-rest` findings → `skills/01-architecture/01-controller/SKILL.md`, `skills/01-architecture/06-center/SKILL.md`
+   - `admin-rest` findings → `skills/01-architecture/01-controller/SKILL.md`
 7. **Source code at the cited `file:line`** — never proceed past Step 1 without confirming the cited code still says what the finding claims it says (the rfc-review batch was produced at a snapshot; code may have moved)
 
 ### P3 — Identify the finding's Type

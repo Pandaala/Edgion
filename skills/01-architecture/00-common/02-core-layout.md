@@ -139,11 +139,9 @@ src/core/controller/
 
 ## Center layout
 
-`src/core/center/` owns the federation Center binary (edgion-center). It accepts gRPC streams from
-multiple Controllers and aggregates their state. Subgroups include `aggregator/`, `api/`, `cli/`,
-`commander/`, `config/`, `db/`, `fed_sync/`, `metadata_store/`, and `proxy/`. Per the dependency rules
-below, `center` must not depend on `controller`; cross-bin types live in `types/` and shared logic in
-`common/`. See `../06-center/SKILL.md` for the architecture.
+The federation Center binary (edgion-center) and its `src/core/center/` tree have been extracted to the
+separate EdgionCenter repository. The Controller side still depends on the shared federation-sync proto in
+`common/fed_sync/`; cross-bin types live in `types/`.
 
 ## Common layout
 
@@ -167,7 +165,6 @@ src/core/common/
 ├── startup.rs    # Common process startup helpers
 ├── grpc_tls.rs   # Shared gRPC TLS setup
 ├── http_util.rs  # Shared HTTP utilities
-├── metadata_conf_handler.rs # Shared metadata config handling
 ├── matcher/      # Shared matching algorithms
 │   ├── host_match/   # Domain matching (Hash + Radix)
 │   ├── ip_radix_tree/ # IP Radix tree
@@ -183,7 +180,6 @@ src/core/common/
 **Dependency direction constraints**:
 - `common` must not depend on `gateway`
 - `common` must not depend on `controller` (2 historical legacy exceptions remain to be cleaned up; see below)
-- `center` must not depend on `controller`
 
 Types shared across bins (such as RegionRoute Entry types) must live in `types/`, so each side depends on `types` rather than depending on each other. JWT/JWK utilities and other logic shared by both sides must live in `common/`, with gateway/center depending on it.
 

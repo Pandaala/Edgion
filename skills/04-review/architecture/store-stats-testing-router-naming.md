@@ -48,11 +48,6 @@ binaries:
 - Gateway: `src/core/gateway/api/mod.rs:513` — gated by `is_integration_testing_mode()`
 - Controller: `src/core/controller/api/mod.rs:441` — gated by `is_test_mode()`
 
-(Center has no equivalent registration today — `src/core/center/api/mod.rs` is
-a federation proxy / admin surface only. If a Center leak-detection surface is
-added later, the precedent set here is that it should use the same path under
-the same gate.)
-
 Auth/authz wiring follows: `src/core/common/unified_auth/mod.rs:144` adds the
 path to the auth skip set, and `src/core/controller/api/authz_classifier.rs:62`
 classifies it under `Verb::Debug`. The `Verb::Debug` taxonomy is the canonical
@@ -128,8 +123,6 @@ Re-open this decision only if:
   to be re-evaluated holistically — not just for `store-stats`.
 - Gateway and Controller diverge for an unrelated reason such that the
   symmetry argument no longer holds.
-- Center grows its own leak-detection / store-stats surface in a way that
-  breaks the "same path, same gate" precedent set here.
 
 ## Reference Cases
 

@@ -59,7 +59,7 @@ Federation requests are served by a **separate admin router instance** (`fed_rou
 
 The authz engine lives in `src/core/controller/authz/mod.rs` — **Controller-private**. It was relocated out of `common/authz` so the Center can never take a dependency on the Controller's policy/identity model. The shared config *data* types (`FedRbacConfig`, `FedAllowRule`) stay in `common/config` (they are referenced by `CenterClientConfig` there); only the engine is Controller-private.
 
-> **Center scoping**: Center uses the shared `unified_auth` for authentication (mandatory; no auto-generated credentials; 503 fail-close when unconfigured) but has **no authz layer** — there is no `(verb, kind)` RBAC engine, no `Role`, no `CenterPolicy` in `src/core/center/`. See [`../06-center/SKILL.md`](../06-center/SKILL.md) for Center auth details.
+> **Center scoping**: Center uses the shared `unified_auth` for authentication (mandatory; no auto-generated credentials; 503 fail-close when unconfigured) but has **no authz layer** — there is no `(verb, kind)` RBAC engine, no `Role`, no `CenterPolicy` on the Center side. The Center has been extracted to the separate EdgionCenter repository; see that repository for Center auth details.
 
 ### Role model
 

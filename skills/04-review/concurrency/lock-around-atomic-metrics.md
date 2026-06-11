@@ -17,6 +17,4 @@ But the **structural concern is legitimate**: a future metrics backend swap (pus
 - **Control plane / event-driven** (register, disconnect, reconcile, admin API): if the lock holds the whole map and the metric call iterates the map, prefer the split (`compute_*_snapshot` inside lock → `emit_*` outside). The cost is one local `HashMap` per event; the events fire ~minutes apart.
 - **Single-call, single-label** under lock (e.g. `gauge!("foo").set(1.0)` in a control-plane setter): not worth touching — one atomic store inside a write lock that's already held for actual mutation.
 
-**Already applied**: `src/core/center/aggregator/mod.rs::ResourceAggregator` (`set_controller_info` / `mark_offline` / `remove`) was refactored 2026-05-16 from `refresh_controller_gauges(&map)` (called under lock, iterating + emitting) to `compute_gauge_snapshot` (under lock, returns `HashMap<String, u64>`) + `emit_gauges` (called after the lock is released). The `remove` path also delays `record_evict_stale` and the explicit "zero disappeared cluster" emit until after the lock. See `P3-cc-009` for the original finding.
-
 **When to re-report**: only if a *new* control-plane path holds a `RwLock`/`Mutex` write lock around iteration-and-emit AND the call rate could plausibly exceed 100/sec. Single-shot gauges or sub-iteration emits are accepted as-is.

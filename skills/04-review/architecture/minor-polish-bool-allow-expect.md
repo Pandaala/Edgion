@@ -25,7 +25,7 @@ Location: `src/core/common/api/compose.rs::compose_admin_routes`.
 
 ### (b) `#[allow(dead_code)] sync_version: u64` on `WatchEventRaw` should carry a `// TODO: …` comment
 
-Location: `src/core/center/fed_sync/server/mod.rs:50-51`.
+Location: the Center `fed_sync::server` `WatchEventRaw` struct (Center code is now maintained in the separate EdgionCenter repository).
 
 **Why not accepted**:
 

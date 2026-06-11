@@ -46,7 +46,6 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **User documentation conventions** — writing conventions for authoring/reviewing docs/ documentation | [11-doc/SKILL.md](11-doc/SKILL.md) |
 | **Pre-commit / local checks** (fmt + check + clippy + check-agent-docs) | [09-misc/SKILL.md](09-misc/SKILL.md) |
 | **GitHub Actions / Docker / Release** — tag pushes, Docker images, release-notes files | [09-misc/cicd/02-github-workflow.md](09-misc/cicd/02-github-workflow.md) |
-| **Center architecture** — federation gRPC, reverse Watch, CenterWatchCache, CenterMetaDataStore, SQLite persistence | [01-architecture/06-center/SKILL.md](01-architecture/06-center/SKILL.md) |
 | **Dev-deployment hot-swap** — native image + shell loop + cross-compilation + kubectl cp | [09-misc/03-dev-deploy-hot-replace.md](09-misc/03-dev-deploy-hot-replace.md) |
 
 > For finer-grained locators inside the architecture (Controller/Gateway/Link/resources/plugin development/route matching, etc.) see [01-architecture/SKILL.md](01-architecture/SKILL.md).

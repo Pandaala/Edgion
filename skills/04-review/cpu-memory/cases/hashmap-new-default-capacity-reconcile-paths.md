@@ -7,7 +7,7 @@ description: Use when reviewing findings that suggest adding with_capacity() to 
 
 # `HashMap::new()` Default Capacity on Reconcile / Full-Sync Paths
 
-**False-positive scenario**: the audit flags Center `metadata_store::full_set` (`src/core/center/metadata_store/mod.rs:182-184`'s `new_cluster` / `new_service` / `new_gir`) and other `full_set` / reconcile paths' `HashMap::new()` for not using `with_capacity(data.len())`; suggests preallocation to reduce rehashing.
+**False-positive scenario**: the audit flags `full_set` / reconcile paths' `HashMap::new()` (e.g. the `new_cluster` / `new_service` / `new_gir` map builders) for not using `with_capacity(data.len())`; suggests preallocation to reduce rehashing.
 
 **Reality**:
 

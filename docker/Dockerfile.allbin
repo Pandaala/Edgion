@@ -1,4 +1,4 @@
-# Build all edgion binaries in one pass: controller, center, cli
+# Build all edgion binaries in one pass: controller, cli
 # Uses BuildKit cache mounts for fast incremental builds.
 #
 # First build:  ~5-8 min (full compile)
@@ -31,15 +31,14 @@ COPY examples/test/conf examples/test/conf
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     cargo build --release --features default \
-      --bin edgion-controller --bin edgion-center --bin edgion-cli \
-    && cp target/release/edgion-controller target/release/edgion-center target/release/edgion-cli /usr/local/bin/
+      --bin edgion-controller --bin edgion-cli \
+    && cp target/release/edgion-controller target/release/edgion-cli /usr/local/bin/
 
 # Runtime
 FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y ca-certificates curl iproute2 net-tools procps vim \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/bin/edgion-controller /usr/local/bin/
-COPY --from=builder /usr/local/bin/edgion-center /usr/local/bin/
 COPY --from=builder /usr/local/bin/edgion-cli /usr/local/bin/
 COPY --from=builder /app/config /edgion/config
 COPY --from=builder /app/examples/test/conf /edgion/test-conf

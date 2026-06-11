@@ -768,10 +768,10 @@ verify_metrics_labels() {
     while IFS= read -r line; do
         [ -z "$line" ] && continue
         case "$line" in
-            'role="center"'|'role="controller"')
+            'role="controller"')
                 ;;
             *)
-                log_error "[$component] /metrics has unexpected role label: $line (allowed: center, controller)"
+                log_error "[$component] /metrics has unexpected role label: $line (allowed: controller)"
                 bad=1
                 ;;
         esac
@@ -1443,23 +1443,8 @@ main() {
         log_info "Skip build step"
     fi
 
-    # Step 1.5: Center no-auth startup (standalone, no Controller/Gateway).
-    # Only runs in the default full sweep (no -r / -i targeting). Verifies that
-    # when no [local_auth] / [auth] is configured: server starts without panic,
-    # business routes return 503 fail-close, /health and /api/v1/auth/status stay
-    # reachable, and startup emits the "No authentication configured" WARN.
-    if [ -z "$G_RESOURCE" ]; then
-        log_section "Center no-auth startup"
-        if ! "${SCRIPT_DIR}/test_center_no_auth.sh"; then
-            log_error "FAIL: Center no-auth startup"
-            exit 1
-        fi
-        log_success "Center no-auth startup passed"
-    fi
-
     # Step 1.6: Controller no-auth + env-var-auth startup (standalone, no Gateway).
-    # Only runs in the default full sweep (no -r / -i targeting). Mirrors the Center
-    # test above but for the Controller.  Two phases:
+    # Only runs in the default full sweep (no -r / -i targeting). Two phases:
     #   Phase 1 (no-auth): no [local_auth]/[auth] + no EDGION_ADMIN_* env vars →
     #     /health and /api/v1/auth/status 200; business route 503 fail-close;
     #     startup WARN "No authentication configured" present.

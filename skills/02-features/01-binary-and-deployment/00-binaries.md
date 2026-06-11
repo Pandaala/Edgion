@@ -12,9 +12,10 @@ description: Entry points of the four binaries, full CLI argument reference, wor
 | `edgion-controller` | Control plane: resource ingestion/validation/processing/distribution | gRPC `:12151`, Admin `:12101`, Probe `:12100`, Metrics `:12190` | `src/bin/edgion_controller.rs` |
 | `edgion-gateway` | Data plane: high-performance proxy (based on Pingora) | Admin `:12001` (loopback, configurable), Probe `:12000` (outward, liveness+readiness), Metrics `:12090` (outward) | `src/bin/edgion_gateway.rs` |
 | `edgion-cli` | CLI tool: resource CRUD and operations | — | `src/bin/edgion_ctl.rs` |
-| `edgion-center` | Federation center: aggregates resources across federated controllers, serves Center API | — | `src/bin/edgion_center.rs` |
 
-All four binaries follow the **thin entry point** pattern — `src/bin/*.rs` does the minimum amount of work: install the rustls crypto provider → parse arguments → `run()`.
+> The federation center (`edgion-center`) has been extracted to the separate EdgionCenter repository and is no longer built from this monorepo.
+
+All three binaries follow the **thin entry point** pattern — `src/bin/*.rs` does the minimum amount of work: install the rustls crypto provider → parse arguments → `run()`.
 
 ## work_dir Priority
 

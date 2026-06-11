@@ -9,7 +9,7 @@ description: Use when understanding how Edgion works internally — Controller/G
 
 ## Overall architecture
 
-Edgion is a single-Crate, four-binary project. **Controller decides, Gateway executes, Ctl operates, Center federates.**
+Edgion is a single-Crate, three-binary project. **Controller decides, Gateway executes, Ctl operates.**
 
 ```mermaid
 flowchart TD
@@ -43,10 +43,6 @@ flowchart TD
         CliOps["apply/delete/get/reload\n3 targets: center/server/client"]
     end
 
-    subgraph Center["edgion-center (federation center)"]
-        CenterNode["Aggregates resources across federated controllers\nServes Center API"]
-    end
-
     CLI -- "HTTP API" --> Controller
 ```
 
@@ -61,7 +57,6 @@ flowchart TD
 | How Controller and Gateway sync | [03-controller-gateway-link/](03-controller-gateway-link/SKILL.md) |
 | edgion-cli commands and target modes | [04-ctl/](04-ctl/SKILL.md) |
 | The full processing chain for a specific resource | [05-resources/](05-resources/SKILL.md) |
-| How edgion-center federates multi-cluster Controllers | [06-center/](06-center/SKILL.md) |
 | Troubleshoot route mismatch | [02-gateway/03-routes/](02-gateway/03-routes/SKILL.md) |
 | Troubleshoot TLS certificate issues | [02-gateway/04-tls/](02-gateway/04-tls/SKILL.md) |
 | Troubleshoot gRPC sync issues | [03-controller-gateway-link/00-overview.md](03-controller-gateway-link/00-overview.md) |
@@ -143,19 +138,6 @@ For resource Schema (field definitions, default values) see [02-features/03-reso
 | Backends / services | Service, EndpointSlice |
 | Automation | EdgionAcme |
 | Infrastructure | LinkSys |
-
-### [06-center/](06-center/SKILL.md) — edgion-center architecture
-
-Federation center: accepts gRPC streams from multiple Controllers, reverse-Watch
-aggregates PluginMetaData, persists controller registry to SQLite, and exposes an
-HTTP Admin API.
-
-| Module | Keywords |
-|--------|---------|
-| Overview | Deployment shape, ports, TLS posture, startup lifecycle, failure modes; mandatory auth + 503 fail-close if unconfigured; no auto-generated credentials; no authz engine (Controller-private) |
-| Federation gRPC server | `RegisterRequest` validation caps, bidirectional stream protocol, error handling |
-| Aggregator / watch cache | `ResourceAggregator`, `CenterWatchCache`, `CenterMetaDataStore`, reverse-Watch data flow |
-| Persistence | SQLite `controllers` table, `CenterDb`, Admin API, Docker build notes |
 
 ### [06-gateway-api.md](06-gateway-api.md) — Gateway API conformance
 

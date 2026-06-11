@@ -5,7 +5,7 @@
 Edgion is a Kubernetes gateway built on Rust + Pingora, using a Controller–Gateway split architecture with gRPC-based configuration sync.
 It supports HTTP/1.1, HTTP/2, gRPC, TCP, UDP, TLS, and WebSocket, and includes a plugin system, load balancing, and TLS/mTLS.
 
-**Four binaries**: Controller (handles K8s resources), Gateway (data-plane proxy), edgion-cli (CLI debugging tool), Center (federation center).
+**Three binaries**: Controller (handles K8s resources), Gateway (data-plane proxy), edgion-cli (CLI debugging tool). The federation Center has been extracted to the separate EdgionCenter repository.
 
 **Feature Flags** (mutually exclusive — pay attention at build time):
 - TLS backend: `boringssl` (default) | `rustls`
