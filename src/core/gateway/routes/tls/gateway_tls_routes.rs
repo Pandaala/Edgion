@@ -1,5 +1,5 @@
 use crate::core::common::matcher::HashHost;
-use crate::types::resources::TLSRoute;
+use crate::core::gateway::routes::tls::route_unit::TlsRouteUnit;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -19,11 +19,15 @@ pub struct TlsRouteTable {
     /// `HashHost` supports both exact and wildcard (`*.example.com`) lookups
     /// with O(W) wildcard matching where W = number of distinct wildcard suffix
     /// lengths, and automatically returns the most-specific wildcard match.
-    host_map: HashHost<Vec<Arc<TLSRoute>>>,
+    ///
+    /// Entries are gateway-side [`TlsRouteUnit`]s. A route serving multiple SNI
+    /// hostnames shares ONE `Arc<TlsRouteUnit>` across all its buckets so the
+    /// per-route WRR cursor is not split per hostname.
+    host_map: HashHost<Vec<Arc<TlsRouteUnit>>>,
 
     /// Routes with no hostname specified.
     /// Reserved for future use; not populated in phase 1.
-    catch_all_routes: Option<Vec<Arc<TLSRoute>>>,
+    catch_all_routes: Option<Vec<Arc<TlsRouteUnit>>>,
 }
 
 /// Deterministic precedence for TLSRoutes colliding on the same hostname.
@@ -32,23 +36,24 @@ pub struct TlsRouteTable {
 /// wins, then namespace/name), matching `BackendTLSPolicyStore` precedence. The
 /// winner is `routes.first()` after this sort, so equal-precedence overlapping
 /// routes select deterministically instead of by HashMap iteration order.
-fn tls_route_precedence(a: &Arc<TLSRoute>, b: &Arc<TLSRoute>) -> std::cmp::Ordering {
-    a.metadata
+fn tls_route_precedence(a: &Arc<TlsRouteUnit>, b: &Arc<TlsRouteUnit>) -> std::cmp::Ordering {
+    a.route
+        .metadata
         .creation_timestamp
-        .cmp(&b.metadata.creation_timestamp)
-        .then_with(|| a.metadata.namespace.cmp(&b.metadata.namespace))
-        .then_with(|| a.metadata.name.cmp(&b.metadata.name))
+        .cmp(&b.route.metadata.creation_timestamp)
+        .then_with(|| a.route.metadata.namespace.cmp(&b.route.metadata.namespace))
+        .then_with(|| a.route.metadata.name.cmp(&b.route.metadata.name))
 }
 
 /// Warn (route-rebuild path only — never `match_route`) when several TLSRoutes share
 /// one hostname bucket. `routes` must already be sorted by [`tls_route_precedence`],
 /// so `first()` is the selected route.
-fn warn_tls_route_collision(hostname: &str, routes: &[Arc<TLSRoute>]) {
-    let fmt = |r: &Arc<TLSRoute>| {
+fn warn_tls_route_collision(hostname: &str, routes: &[Arc<TlsRouteUnit>]) {
+    let fmt = |r: &Arc<TlsRouteUnit>| {
         format!(
             "{}/{}",
-            r.metadata.namespace.as_deref().unwrap_or(""),
-            r.metadata.name.as_deref().unwrap_or("")
+            r.route.metadata.namespace.as_deref().unwrap_or(""),
+            r.route.metadata.name.as_deref().unwrap_or("")
         )
     };
     let participants = routes.iter().map(fmt).collect::<Vec<_>>().join(", ");
@@ -78,11 +83,17 @@ impl TlsRouteTable {
     /// Otherwise we fall back to raw `spec.hostnames` for backward compat.
     /// A processed route with explicit hostnames but an empty intersection must
     /// not become catch-all.
-    pub fn from_routes(routes: &HashMap<String, Arc<TLSRoute>>) -> Self {
-        let mut buckets: HashMap<String, Vec<Arc<TLSRoute>>> = HashMap::new();
-        let mut catch_all: Vec<Arc<TLSRoute>> = Vec::new();
+    pub fn from_units(units: &HashMap<String, Arc<TlsRouteUnit>>) -> Self {
+        let mut buckets: HashMap<String, Vec<Arc<TlsRouteUnit>>> = HashMap::new();
+        let mut catch_all: Vec<Arc<TlsRouteUnit>> = Vec::new();
 
-        for route in routes.values() {
+        for unit in units.values() {
+            // The unit is built ONCE per route (in the conf-handler) and cached.
+            // Here we only Arc-clone the SAME unit into every hostname bucket, so
+            // the per-route WRR cursor is shared across SNI hostnames AND
+            // preserved across unrelated route-table rebuilds.
+            let route = &unit.route;
+
             let hostnames: Vec<String> = if route.spec.resolved_listeners.is_some() {
                 // Controller has processed this route; use the computed intersection.
                 route.spec.effective_hostnames.as_ref().cloned().unwrap_or_default()
@@ -97,17 +108,17 @@ impl TlsRouteTable {
                 {
                     continue;
                 }
-                catch_all.push(route.clone());
+                catch_all.push(unit.clone());
                 continue;
             }
 
             for hostname in &hostnames {
                 let lower = hostname.to_ascii_lowercase();
-                buckets.entry(lower).or_default().push(route.clone());
+                buckets.entry(lower).or_default().push(unit.clone());
             }
         }
 
-        let mut host_map: HashHost<Vec<Arc<TLSRoute>>> = HashHost::new();
+        let mut host_map: HashHost<Vec<Arc<TlsRouteUnit>>> = HashHost::new();
         for (hostname, mut route_vec) in buckets {
             if route_vec.len() > 1 {
                 // Several TLSRoutes claim the same hostname on this listener. `match_route`
@@ -135,7 +146,7 @@ impl TlsRouteTable {
     /// Priority: exact hostname > most-specific wildcard > catch-all.
     /// `HashHost` handles exact-vs-wildcard priority and most-specific-wildcard
     /// ordering internally.
-    pub fn match_route(&self, sni_hostname: &str) -> Option<Arc<TLSRoute>> {
+    pub fn match_route(&self, sni_hostname: &str) -> Option<Arc<TlsRouteUnit>> {
         // Case normalization is handled inside HashHost::get() — no need to
         // pre-lowercase here. Callers may pass raw SNI strings.
         if let Some(routes) = self.host_map.get(sni_hostname) {
@@ -169,7 +180,6 @@ mod tests {
     use super::*;
     use crate::types::resources::common::ParentReference;
     use crate::types::resources::tls_route::*;
-    use crate::types::ResourceMeta;
 
     fn create_test_tls_route(namespace: &str, name: &str, hostname: &str) -> TLSRoute {
         create_test_tls_route_ts(namespace, name, hostname, None)
@@ -206,16 +216,20 @@ mod tests {
         }
     }
 
+    fn unit(route: TLSRoute) -> Arc<TlsRouteUnit> {
+        Arc::new(TlsRouteUnit::from_route(Arc::new(route)))
+    }
+
     #[test]
     fn test_exact_match() {
-        let route1 = Arc::new(create_test_tls_route("default", "route1", "test.example.com"));
-        let route2 = Arc::new(create_test_tls_route("default", "route2", "api.example.com"));
+        let route1 = unit(create_test_tls_route("default", "route1", "test.example.com"));
+        let route2 = unit(create_test_tls_route("default", "route2", "api.example.com"));
 
-        let mut routes = HashMap::new();
-        routes.insert(route1.key_name(), route1);
-        routes.insert(route2.key_name(), route2);
+        let mut units = HashMap::new();
+        units.insert(route1.key_name(), route1);
+        units.insert(route2.key_name(), route2);
 
-        let table = TlsRouteTable::from_routes(&routes);
+        let table = TlsRouteTable::from_units(&units);
 
         assert!(table.match_route("test.example.com").is_some());
         assert!(table.match_route("api.example.com").is_some());
@@ -238,24 +252,46 @@ mod tests {
         let newer = Some(Time(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()));
 
         // incumbent is lexically larger (zzz) but older; must win regardless of input order.
-        let incumbent = Arc::new(create_test_tls_route_ts("team-z", "zzz", "shared.example.com", older));
-        let newcomer = Arc::new(create_test_tls_route_ts("team-a", "aaa", "shared.example.com", newer));
+        let incumbent = unit(create_test_tls_route_ts("team-z", "zzz", "shared.example.com", older));
+        let newcomer = unit(create_test_tls_route_ts("team-a", "aaa", "shared.example.com", newer));
 
         for (a, b) in [
             (incumbent.clone(), newcomer.clone()),
             (newcomer.clone(), incumbent.clone()),
         ] {
-            let mut routes = HashMap::new();
-            routes.insert(a.key_name(), a);
-            routes.insert(b.key_name(), b);
+            let mut units = HashMap::new();
+            units.insert(a.key_name(), a);
+            units.insert(b.key_name(), b);
 
-            let table = TlsRouteTable::from_routes(&routes);
+            let table = TlsRouteTable::from_units(&units);
             let winner = table.match_route("shared.example.com").unwrap();
             assert_eq!(
-                winner.metadata.name.as_deref(),
+                winner.route.metadata.name.as_deref(),
                 Some("zzz"),
                 "older TLSRoute must win regardless of name or input order"
             );
         }
+    }
+
+    /// Per-route sharing invariant: one TLSRoute serving multiple SNI hostnames
+    /// must share ONE `TlsRouteUnit` Arc across all its hostname buckets, so the
+    /// per-route `backend_finder` WRR cursor is not split per SNI. Two lookups
+    /// for different hostnames of the same route must return the same `Arc`.
+    #[test]
+    fn test_same_unit_shared_across_sni_hostnames() {
+        let mut route = create_test_tls_route("default", "multi", "a.example.com");
+        route.spec.hostnames = Some(vec!["a.example.com".to_string(), "b.example.com".to_string()]);
+        let u = unit(route);
+
+        let mut units = HashMap::new();
+        units.insert(u.key_name(), u);
+        let table = TlsRouteTable::from_units(&units);
+
+        let a = table.match_route("a.example.com").unwrap();
+        let b = table.match_route("b.example.com").unwrap();
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "both SNI hostname buckets must reference the same unit Arc (shared WRR cursor)"
+        );
     }
 }

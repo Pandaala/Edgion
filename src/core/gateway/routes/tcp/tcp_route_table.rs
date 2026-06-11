@@ -1,5 +1,4 @@
-use crate::types::resources::TCPRoute;
-use crate::types::ResourceMeta;
+use crate::core::gateway::routes::tcp::route_unit::TcpRouteUnit;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -10,10 +9,13 @@ use std::sync::Arc;
 /// most one TCPRoute, so the table stores a flat list with first-match
 /// semantics.
 ///
+/// Each entry is a gateway-side [`TcpRouteUnit`] (compiled companion) built
+/// from the initialised `Arc<TCPRoute>` once at rebuild time.
+///
 /// A new snapshot is built and atomically swapped on every route change,
 /// ensuring all readers always see consistent data without locking.
 pub struct TcpRouteTable {
-    routes: Vec<Arc<TCPRoute>>,
+    routes: Vec<Arc<TcpRouteUnit>>,
 }
 
 impl TcpRouteTable {
@@ -21,7 +23,11 @@ impl TcpRouteTable {
         Self { routes: Vec::new() }
     }
 
-    /// Build a TcpRouteTable from a flat set of routes belonging to one port.
+    /// Build a TcpRouteTable from already-compiled units belonging to one port.
+    ///
+    /// Units are built ONCE in the conf-handler and cached, so this only
+    /// Arc-clones them into the snapshot — the per-route `backend_finder` (and
+    /// its WRR cursor) is preserved across unrelated route-table rebuilds.
     ///
     /// Sort by resource key (`namespace/name`) so `match_route`'s first-match
     /// pick is deterministic across `HashMap` iteration order, process restarts,
@@ -29,17 +35,17 @@ impl TcpRouteTable {
     /// the sort only matters as a stable fallback when that invariant is violated
     /// (operator misconfig or a controller event race), mirroring the
     /// `AlphabeticalRoute` tiebreak.
-    pub fn from_routes(routes: &HashMap<String, Arc<TCPRoute>>) -> Self {
-        let mut routes: Vec<Arc<TCPRoute>> = routes.values().cloned().collect();
-        routes.sort_by_key(|a| a.key_name());
-        Self { routes }
+    pub fn from_units(units: &HashMap<String, Arc<TcpRouteUnit>>) -> Self {
+        let mut units: Vec<Arc<TcpRouteUnit>> = units.values().cloned().collect();
+        units.sort_by_key(|u| u.key_name());
+        Self { routes: units }
     }
 
     /// Match a TCPRoute (first-match semantics).
     ///
     /// TCP has no hostname dimension, so we simply return the first available
     /// route for this port.
-    pub fn match_route(&self) -> Option<Arc<TCPRoute>> {
+    pub fn match_route(&self) -> Option<Arc<TcpRouteUnit>> {
         self.routes.first().cloned()
     }
 
@@ -96,11 +102,11 @@ mod tests {
         let route_b = Arc::new(create_test_tcp_route("b", "route", 9000));
         let route_a = Arc::new(create_test_tcp_route("a", "route", 9000));
 
-        let mut routes = HashMap::new();
-        routes.insert(route_b.key_name(), route_b);
-        routes.insert(route_a.key_name(), route_a);
+        let mut units = HashMap::new();
+        units.insert(route_b.key_name(), Arc::new(TcpRouteUnit::from_route(route_b)));
+        units.insert(route_a.key_name(), Arc::new(TcpRouteUnit::from_route(route_a)));
 
-        let table = TcpRouteTable::from_routes(&routes);
+        let table = TcpRouteTable::from_units(&units);
         assert_eq!(table.route_count(), 2);
         assert_eq!(table.match_route().unwrap().key_name(), "a/route");
     }

@@ -1,0 +1,50 @@
+# gRPC shared-CMS regression route.
+#
+# ONE rule with TWO match-items (variant=a / variant=b) => the gateway builds
+# two GrpcRouteRuleUnits for this rule. Both units MUST share the rule's single
+# Arc<PluginRuntime> (and therefore the RateLimit Count-Min-Sketch state). A
+# per-unit rebuild would give each match-item its own CMS, doubling the
+# effective limit — this scenario pins that the limit stays GLOBAL per rule.
+#
+# Both match-items route the same method (SayHello, unary) so the client
+# assertion is a plain success/RESOURCE_EXHAUSTED count.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-ratelimit-shared
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-ratelimit-gateway
+      namespace: edgion-test
+      sectionName: grpc
+
+  hostnames:
+    - "grpc-ratelimit.example.com"
+
+  rules:
+    # Single rule, two header-based match-items, one rule-level RateLimit filter.
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+          headers:
+            - name: x-variant
+              value: a
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+          headers:
+            - name: x-variant
+              value: b
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: grpc-rate-limit-shared
+      backendRefs:
+        - name: test-grpc
+          port: 30021

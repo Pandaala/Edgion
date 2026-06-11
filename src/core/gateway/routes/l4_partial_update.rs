@@ -12,20 +12,26 @@ use std::sync::Arc;
 ///
 /// 2. **Operation order**: `remove → update → add` — "vacate before occupy"
 ///    semantics, consistent with TCP/UDP convention.
+// Type parameters:
+//   `R` — the owned, freshly-synced route type carried in `add`/`update`
+//   `C` — the cached companion type returned by `get_existing` (e.g. the
+//         gateway-side `*RouteUnit`). `R` and `C` may differ: the data plane
+//         caches a compiled companion built from `R` in `init_and_insert`.
+//
 // Parameters:
-//   get_existing    — look up an existing (cached) route by key
-//   get_listeners   — extract resolved ListenerKeys from a cached route
-//   remove_cached   — remove a route from the cache
-//   init_and_insert — initialize a new route and insert it into the cache;
-//                     returns the resolved ListenerKeys on success
+//   get_existing    — look up an existing (cached) companion by key
+//   get_listeners   — extract resolved ListenerKeys from a cached companion
+//   remove_cached   — remove a companion from the cache
+//   init_and_insert — build a companion from a new route and insert it into the
+//                     cache; returns the resolved ListenerKeys on success
 //   rebuild         — rebuild only the listener managers that were affected
-pub(crate) fn apply_l4_partial_update<R>(
+pub(crate) fn apply_l4_partial_update<R, C>(
     route_kind: &'static str,
     add: HashMap<String, R>,
     update: HashMap<String, R>,
     remove: HashSet<String>,
-    get_existing: impl Fn(&str) -> Option<Arc<R>>,
-    get_listeners: impl Fn(&Arc<R>) -> Vec<ListenerKey>,
+    get_existing: impl Fn(&str) -> Option<Arc<C>>,
+    get_listeners: impl Fn(&Arc<C>) -> Vec<ListenerKey>,
     remove_cached: impl Fn(&str),
     init_and_insert: impl Fn(R) -> Result<Vec<ListenerKey>, String>,
     rebuild: impl Fn(&HashSet<ListenerKey>),

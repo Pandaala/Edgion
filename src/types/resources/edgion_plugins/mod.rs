@@ -6,11 +6,9 @@ use crate::types::resources::common::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-
-use crate::core::gateway::plugins::PluginRuntime;
 
 // Submodules
+pub mod conditions;
 pub mod custom_plugins;
 pub mod edgion_plugin;
 pub mod entry;
@@ -56,7 +54,7 @@ pub const EDGION_PLUGINS_GROUP: &str = "edgion.io";
 pub const EDGION_PLUGINS_KIND: &str = "EdgionPlugins";
 
 /// EdgionPlugins defines reusable plugin configurations
-#[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
+#[derive(CustomResource, Serialize, Deserialize, Debug, Default, Clone, JsonSchema)]
 #[kube(
     group = "edgion.io",
     version = "v1",
@@ -84,18 +82,6 @@ pub struct EdgionPluginsSpec {
     /// Upstream response stage plugins (async)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_response_plugins: Option<Vec<UpstreamResponseEntry>>,
-
-    /// Plugin runtime (runtime only, not serialized)
-    /// This is computed from edgion_plugins at runtime
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub plugin_runtime: Arc<PluginRuntime>,
-
-    /// Preparse validation errors (runtime only, not serialized)
-    /// Collected during preparse() for status reporting
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub preparse_errors: Vec<String>,
 }
 
 /// Status of EdgionPlugins
@@ -103,19 +89,6 @@ pub struct EdgionPluginsSpec {
 pub struct EdgionPluginsStatus {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
-}
-
-impl Default for EdgionPluginsSpec {
-    fn default() -> Self {
-        Self {
-            request_plugins: None,
-            upstream_response_filter_plugins: None,
-            upstream_response_body_filter_plugins: None,
-            upstream_response_plugins: None,
-            plugin_runtime: Arc::new(PluginRuntime::new()),
-            preparse_errors: Vec::new(),
-        }
-    }
 }
 
 impl EdgionPlugins {
@@ -187,107 +160,5 @@ impl EdgionPlugins {
     /// Get upstream response entries as a slice
     pub fn upstream_response_entries(&self) -> &[UpstreamResponseEntry] {
         self.spec.upstream_response_plugins.as_deref().unwrap_or(&[])
-    }
-
-    /// Preparse after deserialization to populate runtime fields
-    ///
-    /// This method should be called after deserializing EdgionPlugins from YAML/JSON
-    /// to populate the runtime-only plugin_runtime field.
-    ///
-    /// Validation errors from plugin configs are collected and stored in preparse_errors
-    /// for status reporting.
-    pub fn preparse(&mut self) {
-        let mut runtime = PluginRuntime::new();
-        let mut errors = Vec::new();
-        let namespace = self.metadata.namespace.clone().unwrap_or_else(|| "default".to_string());
-
-        // Compile regex conditions on all plugin entries once, before building PluginRuntime.
-        // This avoids per-request Regex::new() in the fallback path of condition evaluators.
-        self.compile_conditions(&mut errors);
-
-        if let Some(request_plugins) = &self.spec.request_plugins {
-            let request_errors = runtime.add_from_request_filters(request_plugins, &namespace);
-            errors.extend(request_errors);
-        }
-
-        if let Some(upstream_response_filter_plugins) = &self.spec.upstream_response_filter_plugins {
-            let filter_errors =
-                runtime.add_from_upstream_response_filters(upstream_response_filter_plugins, &namespace);
-            errors.extend(filter_errors);
-        }
-
-        if let Some(upstream_response_body_filter_plugins) = &self.spec.upstream_response_body_filter_plugins {
-            let body_filter_errors =
-                runtime.add_from_upstream_response_body_filters(upstream_response_body_filter_plugins, &namespace);
-            errors.extend(body_filter_errors);
-        }
-
-        if let Some(upstream_response_plugins) = &self.spec.upstream_response_plugins {
-            let response_errors = runtime.add_from_upstream_responses(upstream_response_plugins, &namespace);
-            errors.extend(response_errors);
-        }
-
-        // Fail closed: if any plugin (any stage) had an invalid config, prepend a
-        // request-stage RejectFilter so every request through this EdgionPlugins
-        // is rejected with 500 before reaching upstream, rather than silently
-        // running with the misconfigured plugin absent from the chain.
-        runtime.seal_fail_closed();
-
-        self.spec.plugin_runtime = Arc::new(runtime);
-        self.spec.preparse_errors = errors;
-    }
-
-    /// Compile regex patterns and validate static config in conditions for all plugin entries.
-    ///
-    /// Both compile failures (regex) and validate failures (e.g. malformed
-    /// `timeRange.after`/`before` timestamps) push into the shared `errors`
-    /// vec, which `preparse()` then forwards to `seal_fail_closed` — every
-    /// request through a misconfigured EdgionPlugins is rejected with HTTP
-    /// 500, and the Controller writes the message into the resource's K8s
-    /// status condition.
-    fn compile_conditions(&mut self, errors: &mut Vec<String>) {
-        // Both `compile()` and `validate()` now return every error collected
-        // across `skip` and `run`, so a single entry with N bad regex / N
-        // malformed bounds surfaces N preparse_errors strings (one K8s status
-        // condition line per defect) and the operator can fix them in one pass.
-        macro_rules! compile_entries {
-            ($entries:expr, $label:expr) => {
-                if let Some(entries) = &mut $entries {
-                    for (i, entry) in entries.iter_mut().enumerate() {
-                        if let Some(conds) = entry.conditions.as_mut() {
-                            if let Err(errs) = conds.compile() {
-                                for e in errs {
-                                    let msg = format!("{}[{}] conditions regex: {}", $label, i, e);
-                                    tracing::warn!("{}", msg);
-                                    errors.push(msg);
-                                }
-                            }
-                            if let Err(errs) = conds.validate() {
-                                for e in errs {
-                                    let msg = format!("{}[{}] conditions: {}", $label, i, e);
-                                    tracing::warn!("{}", msg);
-                                    errors.push(msg);
-                                }
-                            }
-                        }
-                    }
-                }
-            };
-        }
-        compile_entries!(self.spec.request_plugins, "requestPlugins");
-        compile_entries!(
-            self.spec.upstream_response_filter_plugins,
-            "upstreamResponseFilterPlugins"
-        );
-        compile_entries!(
-            self.spec.upstream_response_body_filter_plugins,
-            "upstreamResponseBodyFilterPlugins"
-        );
-        compile_entries!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
-    }
-
-    /// Get preparse validation errors
-    pub fn get_preparse_errors(&self) -> &[String] {
-        &self.spec.preparse_errors
     }
 }

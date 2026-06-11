@@ -186,15 +186,16 @@ impl EdgionTlsPassthroughProxy {
             return;
         }
 
-        // 1. Match TLSRoute by SNI
+        // 1. Match TLSRoute unit by SNI
         let route_table = self.tls_route_manager.load_route_table();
-        let tls_route = match route_table.match_route(sni) {
-            Some(route) => route,
+        let unit = match route_table.match_route(sni) {
+            Some(unit) => unit,
             None => {
                 ctx.err_log = Some("no match".to_string());
                 return;
             }
         };
+        let tls_route = &unit.route;
 
         ctx.matched = Some(MatchedInfo {
             rsc: Rsc {
@@ -206,27 +207,34 @@ impl EdgionTlsPassthroughProxy {
             sv: tls_route.get_sync_version(),
         });
 
-        // 2. Get the first rule
-        let rule = match tls_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
-            Some(rule) => rule,
-            None => {
-                ctx.err_log = Some("no rules".to_string());
-                return;
-            }
-        };
+        // 2. Require at least one rule. The compiled runtime lives on the unit
+        // and is built from the first rule.
+        if tls_route.spec.rules.as_ref().and_then(|rules| rules.first()).is_none() {
+            ctx.err_log = Some("no rules".to_string());
+            return;
+        }
 
         // 3. Execute TLS route plugins (Stage 2: post-route-match)
-        if !super::run_tls_route_plugins(rule, ctx, sni, self.listener_port, None, false).await {
+        if !super::run_tls_route_plugins(
+            unit.stream_plugin_store_key.as_deref(),
+            ctx,
+            sni,
+            self.listener_port,
+            None,
+            false,
+        )
+        .await
+        {
             return;
         }
 
         // 4. Connect upstream with retry
-        let max_attempts = rule.max_connect_retries;
+        let max_attempts = unit.max_connect_retries;
         let mut upstream = None;
         let mut last_err = String::new();
 
         for attempt in 0..max_attempts {
-            let backend_ref = match rule.backend_finder.select() {
+            let backend_ref = match unit.backend_finder.select() {
                 Ok(b) => b,
                 Err(_) => {
                     ctx.err_log = Some("no backend".to_string());
@@ -283,7 +291,7 @@ impl EdgionTlsPassthroughProxy {
             }
 
             let mut peer = BasicPeer::new(&upstream_addr_str);
-            peer.options.tcp_keepalive = rule.tcp_keepalive.as_ref().map(|k| k.to_pingora());
+            peer.options.tcp_keepalive = unit.tcp_keepalive.as_ref().map(|k| k.to_pingora());
             match self.connector.new_stream(&peer).await {
                 Ok(stream) => {
                     if let Some(info) = ctx.current_upstream_mut() {
@@ -317,7 +325,7 @@ impl EdgionTlsPassthroughProxy {
         };
 
         // 4. Send Proxy Protocol v2 if configured
-        if let Some(2) = rule.proxy_protocol_version {
+        if let Some(2) = unit.proxy_protocol_version {
             if let Ok(src_ip) = ctx.client_addr.parse::<IpAddr>() {
                 // Use the already-bracketed upstream_addr_str (SocketAddr Display) for the PP2
                 // destination. Re-deriving it from the bare-IP info.addr would drop the IPv6

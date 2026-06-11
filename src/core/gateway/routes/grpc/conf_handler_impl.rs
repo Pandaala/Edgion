@@ -2,7 +2,9 @@ use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::core::gateway::routes::common::{
     effective_hostnames, filter_accepted_parent_refs, gateways_from_parent_refs,
 };
-use crate::core::gateway::routes::grpc::match_unit::{GrpcMatchInfo, GrpcMatchSpecificity, GrpcRouteInfo};
+use crate::core::gateway::routes::grpc::match_unit::{
+    GrpcMatchInfo, GrpcMatchSpecificity, GrpcRouteInfo, GrpcRuleRuntime,
+};
 use crate::core::gateway::routes::grpc::routes_mgr::{resolved_listeners_for_grpc_route, GlobalGrpcRouteManagers};
 use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, GrpcRouteRuleUnit};
 use crate::types::{GRPCRoute, GRPCRouteRule, ListenerKey, ResourceMeta};
@@ -161,6 +163,14 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
             }
             let rule_arc = Arc::new(rule.clone());
 
+            // Compile rule runtime ONCE per rule (plugin chains + compiled backends).
+            // All match-item units of this rule share the same Arc fields so that
+            // in-memory RateLimit CMS state is never split across units.
+            let rule_runtime: GrpcRuleRuntime = GrpcRouteRuleUnit::compile_grpc_rule(rule, route_namespace);
+            let rule_plugin_runtime = rule_runtime.plugin_runtime;
+            let rule_backends = rule_runtime.backends;
+            let backend_finder = GrpcRouteRuleUnit::build_backend_selector(&rule_backends);
+
             let effective_matches: &[crate::types::GRPCRouteMatch] = rule.matches.as_deref().unwrap_or(&[]);
 
             if effective_matches.is_empty() {
@@ -200,6 +210,8 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
                             &grpc_backends_from_rule(rule, route_namespace),
                         ),
                     ),
+                    plugin_runtime: rule_plugin_runtime.clone(),
+                    backend_finder: backend_finder.clone(),
                 }));
             } else {
                 for (match_id, match_item) in effective_matches.iter().enumerate() {
@@ -233,6 +245,8 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
                                 &grpc_backends_from_rule(rule, route_namespace),
                             ),
                         ),
+                        plugin_runtime: rule_plugin_runtime.clone(),
+                        backend_finder: backend_finder.clone(),
                     }));
                 }
             }

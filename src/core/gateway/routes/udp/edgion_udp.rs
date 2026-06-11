@@ -155,8 +155,8 @@ impl EdgionUdpProxy {
         }
 
         let route_table = self.udp_route_manager.load_route_table();
-        let udp_route = match route_table.match_route() {
-            Some(route) => route,
+        let unit = match route_table.match_route() {
+            Some(unit) => unit,
             None => {
                 log_udp(&UdpLogEntry::failure(
                     self.listener_port,
@@ -168,20 +168,21 @@ impl EdgionUdpProxy {
                 return;
             }
         };
+        let udp_route = &unit.route;
 
-        let rule = match udp_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
-            Some(rule) => rule,
-            None => {
-                log_udp(&UdpLogEntry::failure(
-                    self.listener_port,
-                    client_ip,
-                    client_port,
-                    "NoRuleAvailable",
-                ))
-                .await;
-                return;
-            }
-        };
+        // Require at least one rule. The compiled runtime (backend_finder,
+        // stream-plugin store key) lives on the unit and is built from the
+        // first rule, so a route with no rules cannot serve traffic.
+        if udp_route.spec.rules.as_ref().and_then(|rules| rules.first()).is_none() {
+            log_udp(&UdpLogEntry::failure(
+                self.listener_port,
+                client_ip,
+                client_port,
+                "NoRuleAvailable",
+            ))
+            .await;
+            return;
+        }
 
         // Stream plugin enforcement (dynamic lookup from StreamPluginStore, fail-close).
         // Mirrors the TCPRoute path: a packet whose rule references an
@@ -194,7 +195,7 @@ impl EdgionUdpProxy {
         // returns Allow immediately and the non-annotated path pays only one
         // Option check.
         if let StreamPluginCheck::Deny(reason) =
-            check_stream_plugins(rule.stream_plugin_store_key.as_deref(), &client_ip, self.listener_port).await
+            check_stream_plugins(unit.stream_plugin_store_key.as_deref(), &client_ip, self.listener_port).await
         {
             log_udp(&UdpLogEntry::failure(
                 self.listener_port,
@@ -206,7 +207,7 @@ impl EdgionUdpProxy {
             return;
         }
 
-        let backend_ref = match rule.backend_finder.select() {
+        let backend_ref = match unit.backend_finder.select() {
             Ok(backend) => backend,
             Err(_) => {
                 log_udp(&UdpLogEntry::failure(

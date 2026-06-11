@@ -4,10 +4,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+use crate::core::gateway::routes::udp::route_unit::UdpRouteUnit;
 use crate::core::gateway::routes::udp::udp_route_table::UdpRouteTable;
 use crate::types::resources::UDPRoute;
 use crate::types::ListenerKey;
-use crate::types::ResourceMeta;
 
 /// Per-listener UDP route manager.
 ///
@@ -39,14 +39,14 @@ impl UdpPortRouteManager {
         self.route_table.load()
     }
 
-    /// Rebuild the route table from routes belonging to this listener.
+    /// Rebuild the route table from units belonging to this listener.
     /// Called by `GlobalUdpRouteManagers` during rebuild.
-    pub fn rebuild(&self, routes: &HashMap<String, Arc<UDPRoute>>) {
-        let new_table = UdpRouteTable::from_routes(routes);
+    pub fn rebuild(&self, units: &HashMap<String, Arc<UdpRouteUnit>>) {
+        let new_table = UdpRouteTable::from_units(units);
 
         tracing::debug!(
             component = "udp_port_route_manager",
-            routes = routes.len(),
+            routes = units.len(),
             "Rebuilt per-listener UDP route table"
         );
 
@@ -61,8 +61,12 @@ impl UdpPortRouteManager {
 /// per-listener managers by resolving each route's target listeners from its
 /// `spec.resolved_listeners`.
 pub struct GlobalUdpRouteManagers {
-    /// Canonical route store: resource_key -> initialized Arc<UDPRoute>
-    route_cache: DashMap<String, Arc<UDPRoute>>,
+    /// Canonical route store: resource_key -> compiled Arc<UdpRouteUnit>.
+    ///
+    /// Units (and their `backend_finder` WRR cursor) are built ONCE in the
+    /// conf-handler and reused across listener rebuilds, so an unrelated route
+    /// change on the same listener does not reset a sibling route's selector.
+    route_cache: DashMap<String, Arc<UdpRouteUnit>>,
 
     /// listener -> per-listener manager (stable Arc held by listeners)
     by_listener: DashMap<ListenerKey, Arc<UdpPortRouteManager>>,
@@ -110,14 +114,14 @@ impl GlobalUdpRouteManagers {
             .clone()
     }
 
-    /// Insert an initialized route into the cache.
-    pub fn insert_route(&self, route: Arc<UDPRoute>) {
-        let key = route.key_name();
-        self.route_cache.insert(key, route);
+    /// Insert a compiled route unit into the cache.
+    pub fn insert_route(&self, unit: Arc<UdpRouteUnit>) {
+        let key = unit.key_name();
+        self.route_cache.insert(key, unit);
     }
 
-    /// Get a route from the cache by key.
-    pub fn get_route(&self, key: &str) -> Option<Arc<UDPRoute>> {
+    /// Get a route unit from the cache by key.
+    pub fn get_route(&self, key: &str) -> Option<Arc<UdpRouteUnit>> {
         self.route_cache.get(key).map(|entry| entry.value().clone())
     }
 
@@ -150,9 +154,9 @@ impl GlobalUdpRouteManagers {
             &self.by_listener,
             &self.route_cache,
             active,
-            |r| resolved_listeners_for_route(r).to_vec(),
+            |u| resolved_listeners_for_route(&u.route).to_vec(),
             |k| self.get_or_create_listener_manager(k),
-            |m, routes| m.rebuild(routes),
+            |m, units| m.rebuild(units),
         );
     }
 
@@ -167,9 +171,9 @@ impl GlobalUdpRouteManagers {
             &self.route_cache,
             affected_listeners,
             active,
-            |r| resolved_listeners_for_route(r).to_vec(),
+            |u| resolved_listeners_for_route(&u.route).to_vec(),
             |k| self.get_or_create_listener_manager(k),
-            |m, routes| m.rebuild(routes),
+            |m, units| m.rebuild(units),
         );
     }
 }
@@ -238,6 +242,14 @@ mod tests {
         }
     }
 
+    fn test_unit(namespace: &str, name: &str, listener_key: ListenerKey) -> Arc<UdpRouteUnit> {
+        Arc::new(UdpRouteUnit::from_route(Arc::new(create_test_udp_route(
+            namespace,
+            name,
+            listener_key,
+        ))))
+    }
+
     #[test]
     fn test_get_or_create_listener_manager() {
         let managers = GlobalUdpRouteManagers::new();
@@ -255,10 +267,10 @@ mod tests {
     fn test_insert_and_get_route() {
         let managers = GlobalUdpRouteManagers::new();
         let key = make_listener_key(9000, "UDP");
-        let route = Arc::new(create_test_udp_route("default", "route1", key));
-        let route_key = route.key_name();
+        let unit = test_unit("default", "route1", key);
+        let route_key = unit.key_name();
 
-        managers.insert_route(route.clone());
+        managers.insert_route(unit.clone());
         let found = managers.get_route(&route_key);
         assert!(found.is_some());
 
@@ -271,8 +283,7 @@ mod tests {
     fn test_stats() {
         let managers = GlobalUdpRouteManagers::new();
         let key = make_listener_key(9000, "UDP");
-        let route = Arc::new(create_test_udp_route("default", "route1", key.clone()));
-        managers.insert_route(route);
+        managers.insert_route(test_unit("default", "route1", key.clone()));
         let _ = managers.get_or_create_listener_manager(&key);
 
         let stats = managers.stats();
@@ -284,8 +295,7 @@ mod tests {
     fn test_clear_route_cache() {
         let managers = GlobalUdpRouteManagers::new();
         let key = make_listener_key(9000, "UDP");
-        let route = Arc::new(create_test_udp_route("default", "route1", key));
-        managers.insert_route(route);
+        managers.insert_route(test_unit("default", "route1", key));
 
         assert_eq!(managers.stats().route_cache, 1);
         managers.clear_route_cache();
@@ -300,9 +310,9 @@ mod tests {
             &managers.by_listener,
             &managers.route_cache,
             active,
-            |r| resolved_listeners_for_route(r).to_vec(),
+            |u| resolved_listeners_for_route(&u.route).to_vec(),
             |k| managers.get_or_create_listener_manager(k),
-            |m, routes| m.rebuild(routes),
+            |m, units| m.rebuild(units),
         );
     }
 
@@ -317,9 +327,9 @@ mod tests {
             &managers.route_cache,
             affected,
             active,
-            |r| resolved_listeners_for_route(r).to_vec(),
+            |u| resolved_listeners_for_route(&u.route).to_vec(),
             |k| managers.get_or_create_listener_manager(k),
-            |m, routes| m.rebuild(routes),
+            |m, units| m.rebuild(units),
         );
     }
 
@@ -332,14 +342,15 @@ mod tests {
         let listener_b = make_listener_key(9501, "UDP");
 
         let mgr_b = managers.get_or_create_listener_manager(&listener_b);
-        let prior_route = Arc::new(create_test_udp_route("default", "prior", listener_b.clone()));
-        let mut prior: HashMap<String, Arc<UDPRoute>> = HashMap::new();
-        prior.insert("default/prior".to_string(), prior_route);
+        let mut prior: HashMap<String, Arc<UdpRouteUnit>> = HashMap::new();
+        prior.insert(
+            "default/prior".to_string(),
+            test_unit("default", "prior", listener_b.clone()),
+        );
         mgr_b.rebuild(&prior);
         assert_eq!(mgr_b.load_route_table().route_count(), 1, "precondition: B has 1 route");
 
-        let route_a = Arc::new(create_test_udp_route("default", "route-a", listener_a.clone()));
-        managers.insert_route(route_a);
+        managers.insert_route(test_unit("default", "route-a", listener_a.clone()));
 
         drive_rebuild_all(&managers, vec![listener_a.clone(), listener_b.clone()]);
 
@@ -364,9 +375,11 @@ mod tests {
         let listener = make_listener_key(9600, "UDP");
 
         let mgr = managers.get_or_create_listener_manager(&listener);
-        let prior_route = Arc::new(create_test_udp_route("default", "prior", listener.clone()));
-        let mut prior: HashMap<String, Arc<UDPRoute>> = HashMap::new();
-        prior.insert("default/prior".to_string(), prior_route);
+        let mut prior: HashMap<String, Arc<UdpRouteUnit>> = HashMap::new();
+        prior.insert(
+            "default/prior".to_string(),
+            test_unit("default", "prior", listener.clone()),
+        );
         mgr.rebuild(&prior);
         assert_eq!(mgr.load_route_table().route_count(), 1);
 

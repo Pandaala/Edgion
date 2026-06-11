@@ -77,8 +77,8 @@ impl ConnectionFilter for StreamPluginConnectionFilter {
             return false;
         };
 
-        // Use the pre-computed runtime (initialized at config sync time)
-        let runtime = &stream_plugins.spec.stream_plugin_runtime;
+        // Use the pre-computed runtime (built at config sync time by the store)
+        let runtime = &stream_plugins.stream_plugin_runtime;
         if runtime.is_empty() {
             return true; // No active plugins, allow
         }
@@ -94,6 +94,7 @@ impl ConnectionFilter for StreamPluginConnectionFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::gateway::plugins::stream::compile_stream_plugins;
     use crate::types::resources::edgion_stream_plugins::EdgionStreamPlugins;
 
     fn empty_esp_yaml() -> EdgionStreamPlugins {
@@ -124,7 +125,7 @@ spec: {}
     async fn admit_when_store_has_empty_runtime() {
         let store = Arc::new(StreamPluginStore::new());
         let mut map = std::collections::HashMap::new();
-        map.insert("default/empty".to_string(), Arc::new(empty_esp_yaml()));
+        map.insert("default/empty".to_string(), compile_stream_plugins(&empty_esp_yaml()));
         store.replace_all(map);
 
         let filter = StreamPluginConnectionFilter::new(store, "default/empty".to_string(), 8080);

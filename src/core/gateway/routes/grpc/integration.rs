@@ -3,6 +3,7 @@
 //! This module provides clean integration interfaces for the HTTP pipeline to call,
 //! encapsulating all gRPC-specific logic within the `grpc` module.
 
+use crate::core::gateway::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::EdgionHttpContext;
 use crate::types::err::EdError;
@@ -10,8 +11,6 @@ use crate::types::filters::PluginRunningResult;
 use crate::types::EdgionStatus;
 use pingora_proxy::Session;
 use std::sync::Arc;
-
-use super::GrpcRouteRules;
 
 /// Check if the request is a gRPC request (based on context)
 ///
@@ -81,8 +80,26 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
         None => return Ok(None), // No gRPC route
     };
 
-    // Select gRPC backend
-    let mut backend_ref = GrpcRouteRules::select_backend(&grpc_route_unit.rule)?;
+    // Select gRPC backend from the compiled unit's pre-built selector.
+    let mut backend_ref = grpc_route_unit
+        .backend_finder
+        .select()
+        .map_err(|err_code| match err_code {
+            ERR_NO_BACKEND_REFS => EdError::BackendNotFound(),
+            ERR_INCONSISTENT_WEIGHT => EdError::InconsistentWeight(),
+            _ => EdError::BackendNotFound(),
+        })?;
+
+    if let Some(ref denied) = backend_ref.ref_denied {
+        return Err(EdError::RefDenied {
+            target_namespace: denied.target_namespace.clone(),
+            target_name: denied.target_name.clone(),
+            reason: denied
+                .reason
+                .clone()
+                .unwrap_or_else(|| "NoMatchingReferenceGrant".to_string()),
+        });
+    }
 
     // Query BackendTLSPolicy using route namespace for proper namespace inheritance
     let service_name = &backend_ref.name;
@@ -92,7 +109,7 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
         .as_deref()
         .or(Some(grpc_route_unit.matched_info.rsc.ns.as_str()));
 
-    backend_ref.backend_tls_policy = crate::core::gateway::backends::query_backend_tls_policy_for_service(
+    backend_ref.schema.backend_tls_policy = crate::core::gateway::backends::query_backend_tls_policy_for_service(
         service_name,
         service_namespace,
         backend_ref.port,

@@ -70,6 +70,15 @@ help: ## Show this help message
 check-agent-docs: ## Validate AGENTS/skills/dev-guide links and metadata
 	python3 tools/validate_agent_docs.py
 
+.PHONY: check-types-purity
+check-types-purity: ## Enforce: src/types/ must not reference core::gateway or core::controller
+	@if grep -rqE "crate::core::(gateway|controller)" src/types/ --include='*.rs'; then \
+		echo "$(RED)ERROR: src/types/ must not reference core::gateway or core::controller$(NC)"; \
+		grep -rnE "crate::core::(gateway|controller)" src/types/ --include='*.rs'; \
+		exit 1; \
+	fi
+	@echo "$(GREEN)✓ src/types/ is free of core::gateway / core::controller edges$(NC)"
+
 .PHONY: check-docker
 check-docker: ## Check if Docker is available
 	@which docker > /dev/null || (echo "$(RED)Error: Docker not found. Please install Docker.$(NC)" && exit 1)

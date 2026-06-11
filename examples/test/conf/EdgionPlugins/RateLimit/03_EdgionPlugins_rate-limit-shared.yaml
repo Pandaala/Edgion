@@ -1,0 +1,30 @@
+# Rule-level RateLimit plugin for the HTTP shared-CMS regression scenario.
+#
+# Lives in the same namespace as the HTTPRoute (edgion-default): the gateway
+# resolves a rule-level ExtensionRef using the route's namespace.
+#
+# A fixed X-Rate-Key value (sent by the client) forces ALL requests into one CMS
+# bucket, so the limit is keyed only by the rule's shared PluginRuntime — exactly
+# what the decouple must keep shared across the rule's two match-item units.
+#
+# rate=10 / interval=60s mirror GRPCRoute_rate-limit-shared.yaml: a long window so
+# the 11-request burst stays inside one window, with the 11th request rejected.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: rate-limit-shared
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RateLimit
+      config:
+        rate: 10               # 10 requests per window, enforced per-rule (global)
+        interval: "60s"        # long window so the 11-request burst stays inside it
+        key:
+          - type: header
+            name: "X-Rate-Key" # fixed value => all traffic shares one CMS bucket
+        onMissingKey: Deny     # every request carries the key; Deny makes a missing key fail loudly
+        rejectStatus: 429
+        rejectMessage: "Rate limit exceeded"
+        showLimitHeaders: true

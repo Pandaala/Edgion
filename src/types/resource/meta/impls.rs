@@ -74,20 +74,13 @@ impl_resource_meta!(
 // Namespaced
 impl_resource_meta!(EdgionTls, EdgionTls, "EdgionTls");
 
-// With pre_parse
-impl_resource_meta!(EdgionPlugins, EdgionPlugins, "EdgionPlugins", |self| {
-    self.preparse();
-});
+// Runtime (PluginRuntime) is now built gateway-side via `compile_plugins`; the
+// schema needs no pre_parse step.
+impl_resource_meta!(EdgionPlugins, EdgionPlugins, "EdgionPlugins");
 
-impl_resource_meta!(
-    EdgionStreamPlugins,
-    EdgionStreamPlugins,
-    "EdgionStreamPlugins",
-    |self| {
-        self.init_stream_plugin_runtime();
-        self.init_tls_route_plugin_runtime();
-    }
-);
+// Stream runtimes are now built gateway-side via `compile_stream_plugins`; the
+// schema needs no pre_parse step.
+impl_resource_meta!(EdgionStreamPlugins, EdgionStreamPlugins, "EdgionStreamPlugins");
 
 impl_resource_meta!(LinkSys, LinkSys, "LinkSys", |self| {
     // Data-plane side: log validation errors but don't fail the pre_parse step.

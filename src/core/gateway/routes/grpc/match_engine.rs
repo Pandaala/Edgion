@@ -464,8 +464,6 @@ mod tests {
             timeouts: None,
             retry: None,
             session_persistence: None,
-            backend_finder: BackendSelector::new(),
-            plugin_runtime: Arc::new(PluginRuntime::new()),
             parsed_timeouts: None,
             parsed_retry: None,
         });
@@ -484,6 +482,8 @@ mod tests {
             metric_handles: Arc::new(
                 crate::core::gateway::observe::metrics::route_handles::RouteMetricHandles::empty(),
             ),
+            plugin_runtime: Arc::new(PluginRuntime::new()),
+            backend_finder: Arc::new(BackendSelector::new()),
         })
     }
 
@@ -707,8 +707,6 @@ mod tests {
             timeouts: None,
             retry: None,
             session_persistence: None,
-            backend_finder: BackendSelector::new(),
-            plugin_runtime: Arc::new(PluginRuntime::new()),
             parsed_timeouts: None,
             parsed_retry: None,
         });
@@ -727,6 +725,8 @@ mod tests {
             metric_handles: Arc::new(
                 crate::core::gateway::observe::metrics::route_handles::RouteMetricHandles::empty(),
             ),
+            plugin_runtime: Arc::new(PluginRuntime::new()),
+            backend_finder: Arc::new(BackendSelector::new()),
         })
     }
 

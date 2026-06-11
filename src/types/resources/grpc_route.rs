@@ -14,8 +14,6 @@ use super::http_route::{
     ParsedRouteTimeouts as HttpParsedRouteTimeouts, RouteTimeout as HttpRouteTimeout, SessionPersistence,
 };
 use super::http_route_preparse::BackendExtensionInfo;
-use crate::core::gateway::lb::BackendSelector;
-use crate::core::gateway::plugins::PluginRuntime;
 use crate::types::ListenerKey;
 
 /// API group for GRPCRoute
@@ -102,17 +100,6 @@ pub struct GRPCRouteRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_persistence: Option<SessionPersistence>,
 
-    /// Backend finder for load balancing (not serialized/deserialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub backend_finder: BackendSelector<GRPCBackendRef>,
-
-    /// Filter runtime (runtime only, not serialized)
-    /// This is computed from plugins at runtime
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub plugin_runtime: Arc<PluginRuntime>,
-
     /// Pre-parsed route-level timeout configurations (not serialized)
     /// Parsed once when route is loaded, used at runtime
     #[serde(skip)]
@@ -136,10 +123,6 @@ impl Clone for GRPCRouteRule {
             timeouts: self.timeouts.clone(),
             retry: self.retry.clone(),
             session_persistence: self.session_persistence.clone(),
-            // Create a new uninitialized selector for cloned instance
-            // The selector will be initialized lazily when needed
-            backend_finder: BackendSelector::new(),
-            plugin_runtime: self.plugin_runtime.clone(),
             parsed_timeouts: self.parsed_timeouts.clone(),
             parsed_retry: self.parsed_retry.clone(),
         }
@@ -151,13 +134,11 @@ impl fmt::Debug for GRPCRouteRule {
         f.debug_struct("GRPCRouteRule")
             .field("name", &self.name)
             .field("matches", &self.matches)
-            .field("plugins", &self.filters)
+            .field("filters", &self.filters)
             .field("backend_refs", &self.backend_refs)
             .field("timeouts", &self.timeouts)
             .field("retry", &self.retry)
             .field("session_persistence", &self.session_persistence)
-            .field("backend_finder", &"<skipped>")
-            .field("plugin_runtime", &self.plugin_runtime)
             .finish()
     }
 }
@@ -248,12 +229,6 @@ pub struct GRPCBackendRef {
     #[serde(skip)]
     #[schemars(skip)]
     pub extension_info: BackendExtensionInfo,
-
-    /// Filter runtime (runtime only, not serialized)
-    /// This is computed from plugins at runtime
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub plugin_runtime: Arc<PluginRuntime>,
 
     /// BackendTLSPolicy for this backend (runtime only, not serialized)
     /// Queried and populated during select_backend
@@ -388,16 +363,15 @@ pub struct GRPCRouteRetry {
 
 /// Extension trait for GRPCRoute to parse hidden logic
 impl GRPCRoute {
-    /// Parse all extension_ref in backend_refs and populate extension_info fields.
+    /// Populate `extension_info` on each backend ref from its `ExtensionRef` filter.
     ///
-    /// This method should be called after deserializing GRPCRoute from YAML/JSON
-    /// to populate the runtime-only extension_info fields.
+    /// This is pure schema normalization (controller-side). It does **not** build
+    /// plugin runtimes — that is gateway-side work done by `compile_grpc_rule()`.
     ///
     /// # Incomplete by itself
     ///
-    /// `preparse()` only covers plugin runtimes. It does **not** parse timeouts
-    /// or retry configurations. A fully pre-processed `GRPCRoute` requires all
-    /// three calls:
+    /// `preparse()` does not parse timeouts or retry configurations.
+    /// A fully pre-processed `GRPCRoute` requires all three calls:
     ///
     /// ```ignore
     /// route.preparse();
@@ -414,22 +388,15 @@ impl GRPCRoute {
             return;
         };
 
-        // Get namespace for ExtensionRef lookups
-        let namespace = self.metadata.namespace.as_deref().unwrap_or("default");
-
         for rule in rules.iter_mut() {
-            // Initialize rule-level plugin_runtime from rule.plugins
-            if let Some(filters) = &rule.filters {
-                rule.plugin_runtime = Arc::new(PluginRuntime::from_grpcroute_filters_for_rule(filters, namespace));
-            }
-
             let Some(backend_refs) = rule.backend_refs.as_mut() else {
                 continue;
             };
 
             for backend_ref in backend_refs.iter_mut() {
-                // Find ExtensionRef filter in backend_ref.plugins
-                let extension_info = backend_ref
+                // Populate extension_info from the ExtensionRef filter (schema normalization).
+                // Plugin runtime construction has moved to gateway compile_grpc_rule().
+                backend_ref.extension_info = backend_ref
                     .filters
                     .as_ref()
                     .and_then(|filters| {
@@ -440,14 +407,6 @@ impl GRPCRoute {
                             .map(BackendExtensionInfo::from_extension_ref)
                     })
                     .unwrap_or_default();
-
-                backend_ref.extension_info = extension_info;
-
-                // Initialize plugin_runtime from plugins
-                if let Some(filters) = &backend_ref.filters {
-                    backend_ref.plugin_runtime =
-                        Arc::new(PluginRuntime::from_grpcroute_filters_for_backend(filters, namespace));
-                }
             }
         }
     }

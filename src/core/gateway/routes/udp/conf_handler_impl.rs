@@ -1,10 +1,10 @@
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
-use crate::core::gateway::routes::common::{is_core_service_backend_ref, resolve_stream_plugin_store_key};
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
+use crate::core::gateway::routes::udp::route_unit::UdpRouteUnit;
 use crate::core::gateway::routes::udp::routes_mgr::{
     get_global_udp_route_managers, resolved_listeners_for_route, GlobalUdpRouteManagers,
 };
-use crate::types::{ResourceMeta, UDPRoute};
+use crate::types::UDPRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
@@ -71,12 +71,12 @@ impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
             update_owned,
             remove,
             |key| self.get_route(key),
-            |r| resolved_listeners_for_route(r).to_vec(),
+            |u| resolved_listeners_for_route(&u.route).to_vec(),
             |key| self.remove_route(key),
             |route| {
-                self.initialize_route(route).map(|initialized| {
-                    let lks = resolved_listeners_for_route(&initialized).to_vec();
-                    self.insert_route(initialized);
+                self.initialize_route(route).map(|unit| {
+                    let lks = resolved_listeners_for_route(&unit.route).to_vec();
+                    self.insert_route(unit);
                     lks
                 })
             },
@@ -86,44 +86,15 @@ impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
 }
 
 impl GlobalUdpRouteManagers {
-    /// Initialize a UDPRoute by setting up BackendSelector and stream plugin store key.
-    fn initialize_route(&self, mut route: UDPRoute) -> Result<Arc<UDPRoute>, String> {
-        let route_key = route.key_name();
-
-        let store_key = resolve_stream_plugin_store_key(&route.metadata);
-
-        if let Some(rules) = route.spec.rules.as_mut() {
-            for (rule_idx, rule) in rules.iter_mut().enumerate() {
-                if let Some(backend_refs) = &rule.backend_refs {
-                    let (backends, weights): (Vec<_>, Vec<_>) = backend_refs
-                        .iter()
-                        .filter(|br| is_core_service_backend_ref(br.group.as_deref(), br.kind.as_deref()))
-                        .map(|br| (br.clone(), br.weight))
-                        .unzip();
-
-                    rule.backend_finder.init(backends, weights);
-
-                    tracing::debug!(
-                        route = %route_key,
-                        rule_idx,
-                        backend_count = backend_refs.len(),
-                        "Initialized BackendSelector for UDPRoute rule"
-                    );
-                }
-
-                if let Some(ref key) = store_key {
-                    rule.stream_plugin_store_key = Some(key.clone());
-                    tracing::info!(
-                        route = %route_key,
-                        rule_idx,
-                        store_key = %key,
-                        "Set stream plugin store key for UDPRoute rule (dynamic lookup)"
-                    );
-                }
-            }
-        }
-
-        Ok(Arc::new(route))
+    /// Compile a raw UDPRoute schema into its gateway-side [`UdpRouteUnit`].
+    ///
+    /// Built ONCE per route here (in the conf-handler), then cached and reused
+    /// across listener rebuilds, so a sibling route change on the same listener
+    /// never resets this route's `backend_finder` WRR cursor. The compiled
+    /// runtime (BackendSelector, stream-plugin store key) no longer lives on the
+    /// schema — see [`UdpRouteUnit::from_route`].
+    fn initialize_route(&self, route: UDPRoute) -> Result<Arc<UdpRouteUnit>, String> {
+        Ok(Arc::new(UdpRouteUnit::from_route(Arc::new(route))))
     }
 }
 
@@ -172,13 +143,8 @@ mod tests {
                         group: None,
                         kind: None,
                         extension_info: Default::default(),
-                        plugin_runtime: Default::default(),
                         ref_denied: None,
                     }]),
-                    stream_plugin_runtime: Default::default(),
-                    stream_plugin_store_key: None,
-                    backend_finder: Default::default(),
-                    plugin_runtime: Default::default(),
                 }]),
                 resolved_listeners: Some(vec![listener_key]),
             },

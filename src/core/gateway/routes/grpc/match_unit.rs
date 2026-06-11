@@ -1,15 +1,46 @@
+use crate::core::gateway::lb::BackendSelector;
+use crate::core::gateway::plugins::PluginRuntime;
 use crate::core::gateway::runtime::matching::route::{check_gateway_listener_match, hostname_matches_listener};
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::err::EdError;
 use crate::types::resources::common::ParentReference;
-use crate::types::{GRPCRouteMatch, GRPCRouteRule};
+use crate::types::{GRPCBackendRef, GRPCRouteMatch, GRPCRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::sync::Arc;
+
+/// A gRPC backend ref paired with its compiled plugin runtime.
+/// Mirrors `CompiledBackend` for HTTP routes (two-type split).
+#[derive(Clone)]
+pub struct CompiledGrpcBackend {
+    /// Pure backend-ref schema. Owned (not Arc) so the per-request
+    /// `backend_tls_policy` mutation in `handle_grpc_upstream` stays cheap
+    /// (clone-on-select matches the old GRPCBackendRef clone cost).
+    pub schema: GRPCBackendRef,
+    /// Compiled backend-level plugin chain (built from `schema.filters`).
+    pub plugin_runtime: Arc<PluginRuntime>,
+}
+
+impl std::ops::Deref for CompiledGrpcBackend {
+    type Target = GRPCBackendRef;
+    fn deref(&self) -> &GRPCBackendRef {
+        &self.schema
+    }
+}
+
+/// Per-rule compiled runtime, built ONCE per rule and Arc-shared across all
+/// match-item units of that rule. In-memory RateLimit owns per-rule CMS state,
+/// so rebuilding per-unit would split the counter N×.
+pub struct GrpcRuleRuntime {
+    /// Rule-level compiled plugin chain.
+    pub plugin_runtime: Arc<PluginRuntime>,
+    /// Compiled backends (each with its own plugin runtime).
+    pub backends: Arc<Vec<CompiledGrpcBackend>>,
+}
 
 /// Pre-computed match specificity for GRPCRoute Gateway API precedence ordering.
 ///
@@ -206,9 +237,54 @@ pub struct GrpcRouteRuleUnit {
     /// §6); `backend_refs` is never mutated in place, so indices stay valid
     /// for the lifetime of this `Arc<GrpcRouteRuleUnit>`.
     pub metric_handles: Arc<crate::core::gateway::observe::metrics::route_handles::RouteMetricHandles>,
+    /// Compiled rule-level plugin chain. Shared across ALL match-item units of
+    /// this rule — in-memory RateLimit owns per-rule CMS state.
+    pub plugin_runtime: Arc<PluginRuntime>,
+    /// Per-rule WRR selector over compiled backends (one per rule; gRPC has no
+    /// hostname fan-out so there is no per-hostname duplication).
+    pub backend_finder: Arc<BackendSelector<CompiledGrpcBackend>>,
 }
 
 impl GrpcRouteRuleUnit {
+    /// Compile a rule's runtime ONCE (rule plugin chain + compiled backends).
+    /// Call once per rule, above the match-item fan-out, and share the Arc
+    /// fields into every unit — RateLimit CMS state must not be split.
+    pub fn compile_grpc_rule(rule: &GRPCRouteRule, namespace: &str) -> GrpcRuleRuntime {
+        let plugin_runtime = Arc::new(match &rule.filters {
+            Some(filters) => PluginRuntime::from_grpcroute_filters_for_rule(filters, namespace),
+            None => PluginRuntime::new(),
+        });
+        let backends: Vec<CompiledGrpcBackend> = rule.backend_refs.as_ref().map_or_else(Vec::new, |refs| {
+            refs.iter()
+                .map(|br| {
+                    let plugin_runtime = Arc::new(match &br.filters {
+                        Some(filters) => PluginRuntime::from_grpcroute_filters_for_backend(filters, namespace),
+                        None => PluginRuntime::new(),
+                    });
+                    CompiledGrpcBackend {
+                        schema: br.clone(),
+                        plugin_runtime,
+                    }
+                })
+                .collect()
+        });
+        GrpcRuleRuntime {
+            plugin_runtime,
+            backends: Arc::new(backends),
+        }
+    }
+
+    /// Build a WRR selector over a rule's compiled backends.
+    /// gRPC has no hostname fan-out, so one selector per rule suffices.
+    pub fn build_backend_selector(backends: &[CompiledGrpcBackend]) -> Arc<BackendSelector<CompiledGrpcBackend>> {
+        let selector = BackendSelector::new();
+        if !backends.is_empty() {
+            let weights: Vec<Option<i32>> = backends.iter().map(|b| b.schema.weight.or(Some(1))).collect();
+            selector.init(backends.to_vec(), weights);
+        }
+        Arc::new(selector)
+    }
+
     /// Deep match: check hostname, Gateway/sectionName, and headers.
     ///
     /// Unlike HTTP routes which are bucketed by domain, gRPC routes share a single

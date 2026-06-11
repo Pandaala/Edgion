@@ -72,9 +72,9 @@ mod tests {
     /// existing convention in `extension_ref.rs` tests.
     static TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-    /// Build a minimal preparsed EdgionPlugins keyed by `{ns}/{name}`.
+    /// Build a minimal EdgionPlugins keyed by `{ns}/{name}`.
     fn make_plugin(ns: &str, name: &str) -> (String, EdgionPlugins) {
-        let mut ep = EdgionPlugins {
+        let ep = EdgionPlugins {
             metadata: ObjectMeta {
                 namespace: Some(ns.to_string()),
                 name: Some(name.to_string()),
@@ -92,16 +92,16 @@ mod tests {
             },
             status: None,
         };
-        ep.preparse();
         (format!("{}/{}", ns, name), ep)
     }
 
     /// Replace the entire global store contents with the given plugins.
     fn install_plugins(entries: Vec<(&str, &str)>) {
+        use crate::core::gateway::plugins::http::compile_plugins;
         let mut map = HashMap::new();
         for (ns, name) in entries {
             let (k, ep) = make_plugin(ns, name);
-            map.insert(k, ep);
+            map.insert(k, compile_plugins(&ep));
         }
         get_global_plugin_store().replace_all(map);
     }

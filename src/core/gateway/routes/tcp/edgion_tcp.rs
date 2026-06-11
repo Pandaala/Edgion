@@ -125,28 +125,28 @@ impl ServerApp for EdgionTcpProxy {
 
 impl EdgionTcpProxy {
     async fn handle_connection(&self, downstream: Stream, ctx: &mut TcpContext) {
-        // 1. Match TCPRoute from per-port route table
+        // 1. Match TCPRoute unit from per-port route table
         let route_table = self.tcp_route_manager.load_route_table();
-        let tcp_route = match route_table.match_route() {
-            Some(route) => route,
+        let unit = match route_table.match_route() {
+            Some(unit) => unit,
             None => {
                 ctx.status = TcpStatus::NoRouteMatched;
                 return;
             }
         };
+        let tcp_route = &unit.route;
 
-        // 2. Get the first rule
-        let rule = match tcp_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
-            Some(rule) => rule,
-            None => {
-                ctx.status = TcpStatus::NoRuleAvailable;
-                return;
-            }
-        };
+        // 2. Require at least one rule. The compiled runtime (backend_finder,
+        // stream-plugin store key, keepalive) lives on the unit and is built
+        // from the first rule, so a route with no rules cannot serve traffic.
+        if tcp_route.spec.rules.as_ref().and_then(|rules| rules.first()).is_none() {
+            ctx.status = TcpStatus::NoRuleAvailable;
+            return;
+        }
 
         // 3. Execute stream plugins (dynamic lookup from StreamPluginStore)
         if let StreamPluginCheck::Deny(reason) = check_stream_plugins(
-            rule.stream_plugin_store_key.as_deref(),
+            unit.stream_plugin_store_key.as_deref(),
             &ctx.client_addr,
             self.listener_port,
         )
@@ -158,7 +158,7 @@ impl EdgionTcpProxy {
         }
 
         // 4. Select backend
-        let backend_ref = match rule.backend_finder.select() {
+        let backend_ref = match unit.backend_finder.select() {
             Ok(backend) => backend,
             Err(_) => {
                 ctx.status = TcpStatus::NoBackendSelected;
@@ -197,7 +197,7 @@ impl EdgionTcpProxy {
 
         // 7. Connect to upstream
         let mut peer = BasicPeer::new(&upstream_addr_str);
-        peer.options.tcp_keepalive = rule.tcp_keepalive.as_ref().map(|k| k.to_pingora());
+        peer.options.tcp_keepalive = unit.tcp_keepalive.as_ref().map(|k| k.to_pingora());
         let upstream = match self.connector.new_stream(&peer).await {
             Ok(stream) => stream,
             Err(_) => {
@@ -313,7 +313,7 @@ pub(crate) async fn check_stream_plugins(
         return StreamPluginCheck::Deny("stream plugin resource not found");
     };
 
-    let runtime = &resource.spec.stream_plugin_runtime;
+    let runtime = &resource.stream_plugin_runtime;
     if runtime.is_empty() {
         // Empty runtime is operator intent — pass through silently.
         return StreamPluginCheck::Allow;

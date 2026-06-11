@@ -6,10 +6,13 @@
 //! - Per-port route table ([`tcp_route_table`])
 
 mod conf_handler_impl;
+mod route_unit;
 mod routes_mgr;
 pub(crate) mod tcp_route_table;
 
 pub mod edgion_tcp;
+
+pub use route_unit::TcpRouteUnit;
 
 pub use routes_mgr::{
     get_global_tcp_route_managers, GlobalTcpRouteManagers, TcpPortRouteManager, TcpRouteManagerStats,

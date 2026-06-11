@@ -1,10 +1,18 @@
-//! Global store for EdgionStreamPlugins resources
+//! Global store for EdgionStreamPlugins resources.
+//!
+//! The store holds **compiled** stream plugins (`Arc<CompiledStreamPlugins>`):
+//! the immutable `EdgionStreamPlugins` schema paired with the two gateway-built
+//! stream runtimes (Stage 1 ConnectionFilter, Stage 2 TlsRoute). The runtimes
+//! are built once per (namespace/name) by `compile_stream_plugins` and
+//! Arc-shared via the store, supporting hot reload through the dynamic store key.
 
 use arc_swap::ArcSwap;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
+use super::stream_plugin_runtime::StreamPluginRuntime;
+use super::tls_route::TlsRoutePluginRuntime;
 use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::types::resources::EdgionStreamPlugins;
 
@@ -20,8 +28,47 @@ pub fn create_stream_plugin_handler() -> Box<dyn ConfHandler<EdgionStreamPlugins
     Box::new(get_global_stream_plugin_store())
 }
 
-/// Type alias for the stream plugin map (key: namespace/name)
-type StreamPluginMap = HashMap<String, Arc<EdgionStreamPlugins>>;
+/// Compiled EdgionStreamPlugins: immutable schema + the two gateway stream runtimes.
+///
+/// Gateway-side companion to the `EdgionStreamPlugins` schema. The schema
+/// (`types`) carries no runtime; both runtimes are constructed here in
+/// `compile_stream_plugins`.
+pub struct CompiledStreamPlugins {
+    /// The serializable EdgionStreamPlugins schema (retained for store stats).
+    pub spec: Arc<EdgionStreamPlugins>,
+    /// Stage 1 (ConnectionFilter) runtime — pre-TLS, IP-only.
+    pub stream_plugin_runtime: Arc<StreamPluginRuntime>,
+    /// Stage 2 (TlsRoute) runtime — post-handshake, post-route-match.
+    pub tls_route_plugin_runtime: Arc<TlsRoutePluginRuntime>,
+}
+
+/// Build the compiled runtimes for an EdgionStreamPlugins resource.
+///
+/// Mirrors the former `EdgionStreamPlugins::init_stream_plugin_runtime` +
+/// `init_tls_route_plugin_runtime`: when a stage's entries are absent, the
+/// runtime defaults to empty (operator intent: declare an ESP with no rules as
+/// a no-op pass-through). Built **once per (ns/name)** and Arc-shared.
+pub fn compile_stream_plugins(esp: &EdgionStreamPlugins) -> Arc<CompiledStreamPlugins> {
+    let ns = esp.metadata.namespace.as_deref().unwrap_or("default");
+
+    let stream_plugin_runtime = match &esp.spec.plugins {
+        Some(plugins) => Arc::new(StreamPluginRuntime::from_stream_plugins(plugins, ns)),
+        None => Arc::<StreamPluginRuntime>::default(),
+    };
+    let tls_route_plugin_runtime = match &esp.spec.tls_route_plugins {
+        Some(entries) => Arc::new(TlsRoutePluginRuntime::from_entries(entries)),
+        None => Arc::<TlsRoutePluginRuntime>::default(),
+    };
+
+    Arc::new(CompiledStreamPlugins {
+        spec: Arc::new(esp.clone()),
+        stream_plugin_runtime,
+        tls_route_plugin_runtime,
+    })
+}
+
+/// Type alias for the compiled stream plugin map (key: namespace/name)
+type StreamPluginMap = HashMap<String, Arc<CompiledStreamPlugins>>;
 
 pub struct StreamPluginStore {
     plugins: ArcSwap<StreamPluginMap>,
@@ -40,34 +87,34 @@ impl StreamPluginStore {
         map.contains_key(key)
     }
 
-    /// Get a stream plugin by key (namespace/name)
-    pub fn get(&self, key: &str) -> Option<Arc<EdgionStreamPlugins>> {
+    /// Get the compiled stream plugins by key (namespace/name)
+    pub fn get(&self, key: &str) -> Option<Arc<CompiledStreamPlugins>> {
         let map = self.plugins.load();
         map.get(key).cloned()
     }
 
-    /// Get a stream plugin by namespace and name
-    pub fn get_by_ns_name(&self, namespace: &str, name: &str) -> Option<Arc<EdgionStreamPlugins>> {
+    /// Get the compiled stream plugins by namespace and name
+    pub fn get_by_ns_name(&self, namespace: &str, name: &str) -> Option<Arc<CompiledStreamPlugins>> {
         let key = format!("{}/{}", namespace, name);
         self.get(&key)
     }
 
-    /// Execute a function with the plugin reference
+    /// Execute a function with the compiled stream plugins reference
     pub fn with_plugin<F, R>(&self, key: &str, f: F) -> Option<R>
     where
-        F: FnOnce(&EdgionStreamPlugins) -> R,
+        F: FnOnce(&CompiledStreamPlugins) -> R,
     {
         let map = self.plugins.load();
-        map.get(key).map(|p| f(p))
+        map.get(key).map(|c| f(c))
     }
 
-    /// Replace all stream plugins atomically
-    pub fn replace_all(&self, plugins: HashMap<String, Arc<EdgionStreamPlugins>>) {
+    /// Replace all compiled stream plugins atomically
+    pub fn replace_all(&self, plugins: HashMap<String, Arc<CompiledStreamPlugins>>) {
         self.plugins.store(Arc::new(plugins));
     }
 
-    /// Update stream plugins atomically (clone map + modify + swap)
-    pub fn update(&self, add_or_update: HashMap<String, Arc<EdgionStreamPlugins>>, remove: &HashSet<String>) {
+    /// Update compiled stream plugins atomically (clone map + modify + swap)
+    pub fn update(&self, add_or_update: HashMap<String, Arc<CompiledStreamPlugins>>, remove: &HashSet<String>) {
         let current = self.plugins.load();
         let mut new_map = (**current).clone();
 
@@ -84,7 +131,7 @@ impl StreamPluginStore {
         self.plugins.store(Arc::new(new_map));
     }
 
-    /// Get all plugins
+    /// Get all compiled plugins
     pub fn get_all(&self) -> Arc<StreamPluginMap> {
         self.plugins.load_full()
     }
@@ -102,7 +149,8 @@ impl StreamPluginStore {
     pub fn count_by_kind(&self) -> BTreeMap<String, usize> {
         let mut out = BTreeMap::new();
         let map = self.plugins.load();
-        for esp in map.values() {
+        for compiled in map.values() {
+            let esp = &compiled.spec;
             if let Some(entries) = &esp.spec.plugins {
                 for entry in entries {
                     *out.entry(entry.plugin.type_name().to_string()).or_insert(0) += 1;
@@ -122,7 +170,8 @@ impl StreamPluginStore {
     pub fn keys_by_kind(&self, kind: &str) -> Vec<String> {
         let mut out = Vec::new();
         let map = self.plugins.load();
-        for (key, esp) in map.iter() {
+        for (key, compiled) in map.iter() {
+            let esp = &compiled.spec;
             let in_stage1 = esp
                 .spec
                 .plugins
@@ -147,12 +196,19 @@ impl Default for StreamPluginStore {
     }
 }
 
+/// Compile every incoming EdgionStreamPlugins into its gateway runtime companion.
+fn compile_map(data: HashMap<String, Arc<EdgionStreamPlugins>>) -> HashMap<String, Arc<CompiledStreamPlugins>> {
+    data.into_iter().map(|(k, v)| (k, compile_stream_plugins(&v))).collect()
+}
+
 impl ConfHandler<EdgionStreamPlugins> for StreamPluginStore {
     fn full_set(&self, data: &HashMap<String, Arc<EdgionStreamPlugins>>) {
         tracing::info!(component = "stream_plugin_store", cnt = data.len(), "full set");
-        let plugins: HashMap<String, Arc<EdgionStreamPlugins>> =
-            data.iter().map(|(k, v)| (k.clone(), Arc::clone(v))).collect();
-        self.replace_all(plugins);
+        let compiled = data
+            .iter()
+            .map(|(k, v)| (k.clone(), compile_stream_plugins(v)))
+            .collect();
+        self.replace_all(compiled);
     }
 
     fn partial_update(
@@ -168,8 +224,8 @@ impl ConfHandler<EdgionStreamPlugins> for StreamPluginStore {
             rm = remove.len(),
             "partial update"
         );
-        let mut add_or_update: HashMap<String, Arc<EdgionStreamPlugins>> = add;
-        add_or_update.extend(update);
+        let mut add_or_update = compile_map(add);
+        add_or_update.extend(compile_map(update));
         self.update(add_or_update, &remove);
     }
 }

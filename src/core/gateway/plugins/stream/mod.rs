@@ -16,6 +16,9 @@ pub use connection_filter_bridge::StreamPluginConnectionFilter;
 pub use global_connection_ip_restriction::GlobalConnectionIpRestrictionPlugin;
 pub use ip_restriction::StreamIpRestriction;
 pub use stream_plugin_runtime::StreamPluginRuntime;
-pub use stream_plugin_store::{create_stream_plugin_handler, get_global_stream_plugin_store, StreamPluginStore};
+pub use stream_plugin_store::{
+    compile_stream_plugins, create_stream_plugin_handler, get_global_stream_plugin_store, CompiledStreamPlugins,
+    StreamPluginStore,
+};
 pub use stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
 pub use tls_route::{TlsRouteContext, TlsRoutePlugin, TlsRoutePluginRuntime};

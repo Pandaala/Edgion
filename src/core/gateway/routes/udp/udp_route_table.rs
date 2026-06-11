@@ -1,5 +1,4 @@
-use crate::types::resources::UDPRoute;
-use crate::types::ResourceMeta;
+use crate::core::gateway::routes::udp::route_unit::UdpRouteUnit;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -10,10 +9,13 @@ use std::sync::Arc;
 /// most one UDPRoute, so the table stores a flat list with first-match
 /// semantics.
 ///
+/// Each entry is a gateway-side [`UdpRouteUnit`] (compiled companion) built
+/// from the cached `Arc<UDPRoute>` once at rebuild time.
+///
 /// A new snapshot is built and atomically swapped on every route change,
 /// ensuring all readers always see consistent data without locking.
 pub struct UdpRouteTable {
-    routes: Vec<Arc<UDPRoute>>,
+    routes: Vec<Arc<UdpRouteUnit>>,
 }
 
 impl UdpRouteTable {
@@ -21,7 +23,11 @@ impl UdpRouteTable {
         Self { routes: Vec::new() }
     }
 
-    /// Build a UdpRouteTable from a flat set of routes belonging to one port.
+    /// Build a UdpRouteTable from already-compiled units belonging to one port.
+    ///
+    /// Units are built ONCE in the conf-handler and cached, so this only
+    /// Arc-clones them into the snapshot — the per-route `backend_finder` (and
+    /// its WRR cursor) is preserved across unrelated route-table rebuilds.
     ///
     /// Sort by resource key (`namespace/name`) so `match_route`'s first-match
     /// pick is deterministic across `HashMap` iteration order, process restarts,
@@ -29,17 +35,17 @@ impl UdpRouteTable {
     /// the sort only matters as a stable fallback when that invariant is violated
     /// (operator misconfig or a controller event race), mirroring the
     /// `AlphabeticalRoute` tiebreak.
-    pub fn from_routes(routes: &HashMap<String, Arc<UDPRoute>>) -> Self {
-        let mut routes: Vec<Arc<UDPRoute>> = routes.values().cloned().collect();
-        routes.sort_by_key(|a| a.key_name());
-        Self { routes }
+    pub fn from_units(units: &HashMap<String, Arc<UdpRouteUnit>>) -> Self {
+        let mut units: Vec<Arc<UdpRouteUnit>> = units.values().cloned().collect();
+        units.sort_by_key(|u| u.key_name());
+        Self { routes: units }
     }
 
     /// Match a UDPRoute (first-match semantics).
     ///
     /// UDP has no hostname dimension, so we simply return the first available
     /// route for this port.
-    pub fn match_route(&self) -> Option<Arc<UDPRoute>> {
+    pub fn match_route(&self) -> Option<Arc<UdpRouteUnit>> {
         self.routes.first().cloned()
     }
 
@@ -63,7 +69,6 @@ mod tests {
     use super::*;
     use crate::types::resources::common::ParentReference;
     use crate::types::resources::udp_route::*;
-    use crate::types::ResourceMeta;
 
     fn create_test_udp_route(namespace: &str, name: &str, port: u16) -> UDPRoute {
         UDPRoute {
@@ -88,16 +93,23 @@ mod tests {
         }
     }
 
+    fn test_unit(namespace: &str, name: &str, port: u16) -> Arc<UdpRouteUnit> {
+        Arc::new(UdpRouteUnit::from_route(Arc::new(create_test_udp_route(
+            namespace, name, port,
+        ))))
+    }
+
     #[test]
     fn test_match_route_returns_first() {
-        let route = Arc::new(create_test_udp_route("default", "route1", 9000));
-        let mut routes = HashMap::new();
-        routes.insert(route.key_name(), route.clone());
+        let unit = test_unit("default", "route1", 9000);
+        let key = unit.key_name();
+        let mut units = HashMap::new();
+        units.insert(key.clone(), unit);
 
-        let table = UdpRouteTable::from_routes(&routes);
+        let table = UdpRouteTable::from_units(&units);
         let matched = table.match_route();
         assert!(matched.is_some());
-        assert_eq!(matched.unwrap().key_name(), route.key_name());
+        assert_eq!(matched.unwrap().key_name(), key);
     }
 
     #[test]
@@ -113,28 +125,28 @@ mod tests {
         // Two routes on the same listener (invariant violation). Insert in the
         // order "b/route" then "a/route"; match_route must return "a/route"
         // regardless of HashMap iteration order, proving the build-time sort.
-        let route_b = Arc::new(create_test_udp_route("b", "route", 9000));
-        let route_a = Arc::new(create_test_udp_route("a", "route", 9000));
+        let unit_b = test_unit("b", "route", 9000);
+        let unit_a = test_unit("a", "route", 9000);
 
-        let mut routes = HashMap::new();
-        routes.insert(route_b.key_name(), route_b);
-        routes.insert(route_a.key_name(), route_a);
+        let mut units = HashMap::new();
+        units.insert(unit_b.key_name(), unit_b);
+        units.insert(unit_a.key_name(), unit_a);
 
-        let table = UdpRouteTable::from_routes(&routes);
+        let table = UdpRouteTable::from_units(&units);
         assert_eq!(table.route_count(), 2);
         assert_eq!(table.match_route().unwrap().key_name(), "a/route");
     }
 
     #[test]
     fn test_from_routes() {
-        let route1 = Arc::new(create_test_udp_route("default", "route1", 9000));
-        let route2 = Arc::new(create_test_udp_route("default", "route2", 9000));
+        let unit1 = test_unit("default", "route1", 9000);
+        let unit2 = test_unit("default", "route2", 9000);
 
-        let mut routes = HashMap::new();
-        routes.insert(route1.key_name(), route1);
-        routes.insert(route2.key_name(), route2);
+        let mut units = HashMap::new();
+        units.insert(unit1.key_name(), unit1);
+        units.insert(unit2.key_name(), unit2);
 
-        let table = UdpRouteTable::from_routes(&routes);
+        let table = UdpRouteTable::from_units(&units);
         assert_eq!(table.route_count(), 2);
         assert!(table.match_route().is_some());
     }

@@ -388,7 +388,7 @@ impl PluginRuntime {
                 // surface the error, and skip construction so an invalid config
                 // can never run in the request path. `seal_fail_closed` later
                 // turns a non-empty `invalid_plugins` into a fail-closed 500.
-                if let Some(error) = entry.plugin.validation_error() {
+                if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
                     self.invalid_plugins.push(plugin_name);
@@ -488,7 +488,7 @@ impl PluginRuntime {
                 // surface the error, and skip construction so an invalid config
                 // can never run in the request path. `seal_fail_closed` later
                 // turns a non-empty `invalid_plugins` into a fail-closed 500.
-                if let Some(error) = entry.plugin.validation_error() {
+                if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!(
                         "upstreamResponseFilterPlugins[{}] ({}): {}",
@@ -568,7 +568,7 @@ impl PluginRuntime {
                 // surface the error, and skip construction so an invalid config
                 // can never run in the request path. `seal_fail_closed` later
                 // turns a non-empty `invalid_plugins` into a fail-closed 500.
-                if let Some(error) = entry.plugin.validation_error() {
+                if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!(
                         "upstreamResponsePlugins[{}] ({}): {}",
@@ -646,7 +646,7 @@ impl PluginRuntime {
                 // surface the error, and skip construction so an invalid config
                 // can never run in the request path. `seal_fail_closed` later
                 // turns a non-empty `invalid_plugins` into a fail-closed 500.
-                if let Some(error) = entry.plugin.validation_error() {
+                if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!(
                         "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
@@ -709,6 +709,27 @@ impl PluginRuntime {
         }
 
         errors
+    }
+
+    /// Gateway-side plugin validation gate.
+    ///
+    /// Runs the schema-layer light checks (`EdgionPlugin::validation_error`)
+    /// plus the heavy DSL checks (compiling `source` / decoding `bytecode` /
+    /// resolving `linkSysRefs` against redis links) that require the DSL VM.
+    /// The VM lives in this crate, so it cannot sit on the `types` schema
+    /// layer's `DslConfig::validation_error()`; running it here preserves the
+    /// specific compile-error message that `seal_fail_closed` surfaces into the
+    /// resource's K8s status condition (and the data-plane fail-closed 500).
+    fn plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
+        if let Some(e) = plugin.validation_error() {
+            return Some(e);
+        }
+        if let EdgionPlugin::Dsl(cfg) = plugin {
+            if let Err(e) = DslPlugin::validate_config(cfg) {
+                return Some(e);
+            }
+        }
+        None
     }
 
     /// Create a RequestFilter instance from EdgionPlugin enum

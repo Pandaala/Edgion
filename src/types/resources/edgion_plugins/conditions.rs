@@ -109,16 +109,6 @@ pub enum Condition {
 }
 
 /// Key existence condition
-///
-/// Checks if a specified key exists in the given source.
-///
-/// ## Example
-/// ```yaml
-/// keyExist:
-///   key:
-///     type: header
-///     name: "X-Request-ID"
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyExistCondition {
@@ -127,41 +117,6 @@ pub struct KeyExistCondition {
 }
 
 /// Key match condition
-///
-/// Checks if a key's value matches a specific value or regex pattern.
-/// At least one of `value`, `values`, or `regex` must be specified.
-///
-/// ## Example (exact match - single)
-/// ```yaml
-/// keyMatch:
-///   key:
-///     type: header
-///     name: "X-Environment"
-///   value: "production"
-/// ```
-///
-/// ## Example (exact match - multiple values)
-/// ```yaml
-/// keyMatch:
-///   key:
-///     type: header
-///     name: "X-Environment"
-///   values:
-///     - "production"
-///     - "staging"
-/// ```
-///
-/// ## Example (regex match - multiple patterns)
-/// ```yaml
-/// keyMatch:
-///   key:
-///     type: header
-///     name: "User-Agent"
-///   regex:
-///     - "^Mozilla.*"
-///     - "^Chrome.*"
-///     - "(?i:^safari.*)"  # case-insensitive
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyMatchCondition {
@@ -177,7 +132,6 @@ pub struct KeyMatchCondition {
     pub values: Option<Vec<String>>,
 
     /// Regex patterns to match (merged into single regex with | operator)
-    /// Use (?i:pattern) for case-insensitive matching of specific patterns
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regex: Option<Vec<String>>,
 
@@ -193,16 +147,6 @@ pub struct KeyMatchCondition {
 }
 
 /// Time range condition
-///
-/// Checks if the current time falls within a specified range.
-/// Both `after` and `before` are optional - if omitted, that bound is not checked.
-///
-/// ## Example
-/// ```yaml
-/// timeRange:
-///   after: "2024-01-01T00:00:00Z"
-///   before: "2024-12-31T23:59:59Z"
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TimeRangeCondition {
@@ -216,11 +160,7 @@ pub struct TimeRangeCondition {
 }
 
 impl TimeRangeCondition {
-    /// Validate that `after` / `before` are parseable as RFC3339. Called from
-    /// `compile_conditions` during preparse so a mistyped timestamp surfaces
-    /// through `preparse_errors` → `seal_fail_closed` (fail-closed at HTTP 500
-    /// + K8s status condition) instead of being silently ignored at evaluation
-    /// time, which would leave the time-gate permanently inert.
+    /// Validate that `after` / `before` are parseable as RFC3339.
     pub fn validate(&self) -> Result<(), String> {
         if let Some(s) = &self.after {
             chrono::DateTime::parse_from_rfc3339(s)
@@ -235,74 +175,18 @@ impl TimeRangeCondition {
 }
 
 /// Probability condition
-///
-/// Executes with a specified probability. Useful for:
-/// - Canary deployments (gradual rollout)
-/// - Sampling for debugging/logging
-/// - A/B testing
-///
-/// ## Example (10% probability)
-/// ```yaml
-/// probability:
-///   ratio: 0.1
-/// ```
-///
-/// ## Example (deterministic sampling based on user ID)
-/// ```yaml
-/// probability:
-///   ratio: 0.1
-///   key:
-///     type: header
-///     name: "X-User-ID"
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProbabilityCondition {
     /// Probability ratio (0.0 to 1.0)
-    /// 0.1 means 10% chance of execution
     pub ratio: f64,
 
     /// Optional key for deterministic sampling (unified KeyGet accessor)
-    /// When specified, the same key value will always produce the same result
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<KeyGet>,
 }
 
 /// Include condition
-///
-/// Condition is satisfied if the key value matches ANY value in the list
-/// or any regex pattern.
-/// For path matching, supports prefix matching with `*` suffix.
-///
-/// ## Example (path include with wildcards)
-/// ```yaml
-/// include:
-///   key:
-///     type: path
-///   values:
-///     - "/api/*"
-///     - "/admin/*"
-/// ```
-///
-/// ## Example (method include)
-/// ```yaml
-/// include:
-///   key:
-///     type: method
-///   values: ["GET", "POST"]
-/// ```
-///
-/// ## Example (with regex patterns)
-/// ```yaml
-/// include:
-///   key:
-///     type: path
-///   values:
-///     - "/static/*"
-///   regex:
-///     - "^/api/v[0-9]+/.*"
-///     - "(?i:^/internal/.*)"  # case-insensitive
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IncludeCondition {
@@ -323,10 +207,6 @@ pub struct IncludeCondition {
     pub values_set: Option<HashSet<String>>,
 
     /// Wildcard-only subset of `values` (entries containing `*`).
-    /// Populated by `compile()` together with `values_set` so the eval-time loop
-    /// only iterates wildcards instead of rescanning exact entries already
-    /// covered by the HashSet. `None` means "no compiled split"; the matcher
-    /// falls back to iterating `values` directly.
     #[serde(skip)]
     #[schemars(skip)]
     pub wildcard_patterns: Option<Vec<String>>,
@@ -338,33 +218,6 @@ pub struct IncludeCondition {
 }
 
 /// Exclude condition
-///
-/// Condition is satisfied if the key value does NOT match ANY value in the list
-/// or any regex pattern.
-/// This is the inverse of IncludeCondition.
-///
-/// ## Example (exclude health check paths)
-/// ```yaml
-/// exclude:
-///   key:
-///     type: path
-///   values:
-///     - "/health"
-///     - "/ready"
-///     - "/metrics"
-/// ```
-///
-/// ## Example (with regex patterns)
-/// ```yaml
-/// exclude:
-///   key:
-///     type: path
-///   values:
-///     - "/internal/*"
-///   regex:
-///     - "^/debug/.*"
-///     - "^/admin/.*"
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ExcludeCondition {
@@ -385,10 +238,6 @@ pub struct ExcludeCondition {
     pub values_set: Option<HashSet<String>>,
 
     /// Wildcard-only subset of `values` (entries containing `*`).
-    /// Populated by `compile()` together with `values_set` so the eval-time loop
-    /// only iterates wildcards instead of rescanning exact entries already
-    /// covered by the HashSet. `None` means "no compiled split"; the matcher
-    /// falls back to iterating `values` directly.
     #[serde(skip)]
     #[schemars(skip)]
     pub wildcard_patterns: Option<Vec<String>>,
@@ -401,7 +250,6 @@ pub struct ExcludeCondition {
 
 impl Condition {
     /// Compile regex patterns in this condition.
-    /// No-op for condition types without regex (KeyExist, TimeRange, Probability).
     pub fn compile(&mut self) -> Result<(), regex::Error> {
         match self {
             Condition::KeyMatch(c) => c.compile(),
@@ -411,9 +259,7 @@ impl Condition {
         }
     }
 
-    /// Validate non-regex configuration that must parse correctly at preparse time.
-    /// Currently only `TimeRange` carries unparsed string fields; other variants
-    /// have nothing to validate beyond regex (handled by `compile`).
+    /// Validate non-regex configuration.
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Condition::TimeRange(c) => c.validate(),
@@ -422,7 +268,6 @@ impl Condition {
     }
 
     /// Clear regex patterns so the uncompiled-regex runtime guard cannot fire.
-    /// Called after a compile failure to prevent per-request push_err flooding.
     pub fn clear_regex(&mut self) {
         match self {
             Condition::KeyMatch(c) => c.regex = None,
@@ -434,44 +279,31 @@ impl Condition {
 }
 
 impl PluginConditions {
-    /// Create an empty conditions (no skip, no run conditions)
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Check if there are any conditions defined
     pub fn is_empty(&self) -> bool {
         self.skip.as_ref().is_none_or(|v| v.is_empty()) && self.run.as_ref().is_none_or(|v| v.is_empty())
     }
 
-    /// Add a skip condition
     pub fn add_skip(mut self, condition: Condition) -> Self {
         self.skip.get_or_insert_with(Vec::new).push(condition);
         self
     }
 
-    /// Add a run condition
     pub fn add_run(mut self, condition: Condition) -> Self {
         self.run.get_or_insert_with(Vec::new).push(condition);
         self
     }
 
-    /// Compile all conditions in this PluginConditions instance.
-    /// Should be called once after deserialization (during preparse).
-    ///
-    /// Compiles every condition independently (no early-return on first error).
-    /// On failure, clears the failing condition's `regex` field so the runtime
-    /// "uncompiled regex" guard is never reached; returns every error collected
-    /// across `skip` and `run` (in that order) so the operator sees all bad
-    /// patterns in one apply cycle instead of one fix-and-retry round per pattern.
+    /// Compile all conditions. Collects every error instead of short-circuiting.
     pub fn compile(&mut self) -> Result<(), Vec<regex::Error>> {
         let mut errors: Vec<regex::Error> = Vec::new();
         for conds in [&mut self.skip, &mut self.run] {
             if let Some(conditions) = conds {
                 for c in conditions {
                     if let Err(e) = c.compile() {
-                        // Prevent per-request push_err flooding: clear the regex so
-                        // the uncompiled-regex guard in evaluator.rs is never triggered.
                         c.clear_regex();
                         errors.push(e);
                     }
@@ -485,14 +317,7 @@ impl PluginConditions {
         }
     }
 
-    /// Validate non-regex configuration on every condition. Should be called
-    /// alongside `compile` during preparse so that malformed values (e.g. a
-    /// `TimeRange` bound that fails RFC3339 parsing) surface through the same
-    /// `preparse_errors` → `seal_fail_closed` pipeline as regex compile errors.
-    ///
-    /// Returns every error collected across `skip` and `run` (in that order),
-    /// mirroring `compile`'s behavior so the operator sees all malformed values
-    /// in one apply cycle.
+    /// Validate non-regex configuration. Collects every error instead of short-circuiting.
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors: Vec<String> = Vec::new();
         for conds in [&self.skip, &self.run] {
@@ -513,28 +338,21 @@ impl PluginConditions {
 }
 
 impl KeyMatchCondition {
-    /// Compile the condition: merge regex patterns and build HashSet for large value lists
-    /// Returns Err if any regex pattern is invalid
     pub fn compile(&mut self) -> Result<(), regex::Error> {
-        // 1. Merge multiple regex patterns into a single regex with | operator
         if let Some(patterns) = &self.regex {
             if !patterns.is_empty() {
                 let combined = patterns.join("|");
                 self.compiled_regex = Some(regex::Regex::new(&combined)?);
             }
         }
-
-        // 2. Build HashSet for O(1) lookup when values exceed threshold
         if let Some(values) = &self.values {
             if values.len() > VALUES_HASHSET_THRESHOLD {
                 self.values_set = Some(values.iter().cloned().collect());
             }
         }
-
         Ok(())
     }
 
-    /// Backward compatible alias for compile()
     #[deprecated(note = "Use compile() instead")]
     pub fn compile_regex(&mut self) -> Result<(), regex::Error> {
         self.compile()
@@ -542,24 +360,13 @@ impl KeyMatchCondition {
 }
 
 impl IncludeCondition {
-    /// Compile the condition: merge regex patterns and build HashSet for exact values
-    /// Returns Err if any regex pattern is invalid
     pub fn compile(&mut self) -> Result<(), regex::Error> {
-        // 1. Merge multiple regex patterns into a single regex with | operator
         if let Some(patterns) = &self.regex {
             if !patterns.is_empty() {
                 let combined = patterns.join("|");
                 self.compiled_regex = Some(regex::Regex::new(&combined)?);
             }
         }
-
-        // 2. Extract exact values (without wildcards) and build HashSet if above threshold.
-        //    When the HashSet is built, also split wildcard entries into a separate bucket
-        //    so the eval-time loop only iterates wildcards (the HashSet covers exact entries).
-        //    `wildcard_patterns` is set to `Some(_)` even when empty so the matcher's
-        //    `else if` always short-circuits `self.values` when `values_set` is active —
-        //    this is critical for the canonical W=0 (all-exact allowlist) case, where
-        //    falling back to `self.values` would reintroduce the redundant O(N) rescan.
         if let Some(values) = &self.values {
             let exact_values: Vec<_> = values.iter().filter(|v| !v.contains('*')).cloned().collect();
             if exact_values.len() > VALUES_HASHSET_THRESHOLD {
@@ -568,30 +375,18 @@ impl IncludeCondition {
                 self.wildcard_patterns = Some(wildcards);
             }
         }
-
         Ok(())
     }
 }
 
 impl ExcludeCondition {
-    /// Compile the condition: merge regex patterns and build HashSet for exact values
-    /// Returns Err if any regex pattern is invalid
     pub fn compile(&mut self) -> Result<(), regex::Error> {
-        // 1. Merge multiple regex patterns into a single regex with | operator
         if let Some(patterns) = &self.regex {
             if !patterns.is_empty() {
                 let combined = patterns.join("|");
                 self.compiled_regex = Some(regex::Regex::new(&combined)?);
             }
         }
-
-        // 2. Extract exact values (without wildcards) and build HashSet if above threshold.
-        //    When the HashSet is built, also split wildcard entries into a separate bucket
-        //    so the eval-time loop only iterates wildcards (the HashSet covers exact entries).
-        //    `wildcard_patterns` is set to `Some(_)` even when empty so the matcher's
-        //    `else if` always short-circuits `self.values` when `values_set` is active —
-        //    this is critical for the canonical W=0 (all-exact denylist) case, where
-        //    falling back to `self.values` would reintroduce the redundant O(N) rescan.
         if let Some(values) = &self.values {
             let exact_values: Vec<_> = values.iter().filter(|v| !v.contains('*')).cloned().collect();
             if exact_values.len() > VALUES_HASHSET_THRESHOLD {
@@ -600,11 +395,9 @@ impl ExcludeCondition {
                 self.wildcard_patterns = Some(wildcards);
             }
         }
-
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -11,6 +11,7 @@ use std::time::Duration;
 
 mod conf_handler_impl;
 pub(crate) mod gateway_tls_routes;
+mod route_unit;
 mod routes_mgr;
 
 // TLS proxy modules
@@ -86,14 +87,14 @@ impl DuplexHooks for TlsDuplexHooks<'_> {
 /// Used by both terminate and passthrough proxy.
 /// `tls_id` and `is_mtls` differ by mode: passthrough passes `None`/`false`.
 pub(super) async fn run_tls_route_plugins(
-    rule: &crate::types::resources::tls_route::TLSRouteRule,
+    store_key: Option<&str>,
     ctx: &mut TlsContext,
     sni: &str,
     listener_port: u16,
     tls_id: Option<String>,
     is_mtls: bool,
 ) -> bool {
-    let Some(store_key) = &rule.stream_plugin_store_key else {
+    let Some(store_key) = store_key else {
         return true;
     };
     // Fail-close: if the client address cannot be parsed (e.g. Pingora set it
@@ -122,7 +123,7 @@ pub(super) async fn run_tls_route_plugins(
     };
 
     // Prefer Stage 2 (TlsRoute) runtime
-    let tls_runtime = &resource.spec.tls_route_plugin_runtime;
+    let tls_runtime = &resource.tls_route_plugin_runtime;
     if !tls_runtime.is_empty() {
         let mut tls_ctx = TlsRouteContext {
             client_ip,
@@ -154,7 +155,7 @@ pub(super) async fn run_tls_route_plugins(
     }
 
     // Backward compat: fall back to Stage 1 (ConnectionFilter) runtime
-    let stream_runtime = &resource.spec.stream_plugin_runtime;
+    let stream_runtime = &resource.stream_plugin_runtime;
     if !stream_runtime.is_empty() {
         let stream_ctx = StreamContext::new(client_ip, listener_port);
         return match stream_runtime.run(&stream_ctx).await {
@@ -173,6 +174,7 @@ pub(super) async fn run_tls_route_plugins(
 }
 
 pub use gateway_tls_routes::TlsRouteTable;
+pub use route_unit::TlsRouteUnit;
 
 // Export TLS proxy types
 pub use passthrough_proxy::EdgionTlsPassthroughProxy;
@@ -181,20 +183,6 @@ pub use proxy::EdgionTlsTcpProxy;
 #[cfg(test)]
 mod fail_close_tests {
     use super::*;
-    use crate::core::gateway::lb::BackendSelector;
-    use crate::types::resources::tls_route::TLSRouteRule;
-
-    fn empty_rule_with_store_key(key: Option<String>) -> TLSRouteRule {
-        TLSRouteRule {
-            backend_refs: None,
-            backend_finder: BackendSelector::new(),
-            plugin_runtime: Default::default(),
-            proxy_protocol_version: None,
-            stream_plugin_store_key: key,
-            max_connect_retries: 1,
-            tcp_keepalive: None,
-        }
-    }
 
     #[tokio::test]
     async fn fail_close_when_store_key_not_in_store() {
@@ -207,10 +195,9 @@ mod fail_close_tests {
         let key = "default/__fail_close_missing__".to_string();
         assert!(store.get(&key).is_none(), "test precondition: key must not be in store");
 
-        let rule = empty_rule_with_store_key(Some(key.clone()));
         let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000);
 
-        let allowed = run_tls_route_plugins(&rule, &mut ctx, "example.com", 443, None, false).await;
+        let allowed = run_tls_route_plugins(Some(key.as_str()), &mut ctx, "example.com", 443, None, false).await;
         assert!(!allowed, "missing ESP must fail-close");
         let err = ctx.err_log.as_deref().unwrap_or("");
         assert!(
@@ -226,9 +213,8 @@ mod fail_close_tests {
     #[tokio::test]
     async fn admit_when_store_key_is_none() {
         // No ESP attached to the rule — intentional pass-through, must allow.
-        let rule = empty_rule_with_store_key(None);
         let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000);
-        let allowed = run_tls_route_plugins(&rule, &mut ctx, "example.com", 443, None, false).await;
+        let allowed = run_tls_route_plugins(None, &mut ctx, "example.com", 443, None, false).await;
         assert!(allowed, "rule with no store_key must pass through");
         assert!(ctx.err_log.is_none());
     }
@@ -239,9 +225,8 @@ mod fail_close_tests {
         // literal "unknown" set when Pingora cannot extract the peer addr).
         // Without a parseable client IP we cannot evaluate an IP-allowlist
         // policy, so the connection must be rejected (fail-close).
-        let rule = empty_rule_with_store_key(Some("default/anything".to_string()));
         let mut ctx = TlsContext::new(443, "unknown".to_string(), 0);
-        let allowed = run_tls_route_plugins(&rule, &mut ctx, "example.com", 443, None, false).await;
+        let allowed = run_tls_route_plugins(Some("default/anything"), &mut ctx, "example.com", 443, None, false).await;
         assert!(!allowed, "unparseable client_addr must fail-close");
         let err = ctx.err_log.as_deref().unwrap_or("");
         assert!(

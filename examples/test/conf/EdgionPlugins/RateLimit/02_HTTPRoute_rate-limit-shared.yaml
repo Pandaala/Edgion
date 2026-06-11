@@ -1,0 +1,49 @@
+# HTTP shared-CMS regression route (mirrors GRPCRoute_rate-limit-shared.yaml).
+#
+# ONE rule with TWO match-items (x-variant=a / x-variant=b, both PathPrefix
+# /shared) => the gateway builds two HttpRouteRuleUnits for this rule. Both units
+# MUST share the rule's single Arc<PluginRuntime> (and therefore the RateLimit
+# Count-Min-Sketch state). A per-unit rebuild would give each match-item its own
+# CMS, doubling the effective limit — this scenario pins that the limit stays
+# GLOBAL per rule, which is the single failure mode the HTTP types/compiled
+# decouple is designed to prevent.
+#
+# Rule-level RateLimit (under `filters:`, not per-backend) is what produces the
+# shared rule-level runtime; the fixed X-Rate-Key the client sends forces all
+# traffic into one CMS bucket so the limit is keyed only by the shared runtime.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: rate-limit-shared-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "http-ratelimit-shared.example.com"
+  rules:
+    # Single rule, two header-based match-items, one rule-level RateLimit filter.
+    - matches:                       # >= 2 match-items => 2+ HttpRouteRuleUnits
+        - headers:
+            - name: x-variant
+              value: a
+          path:
+            type: PathPrefix
+            value: /shared
+        - headers:
+            - name: x-variant
+              value: b
+          path:
+            type: PathPrefix
+            value: /shared
+      filters:                       # RULE-LEVEL plugin => shared Arc<PluginRuntime>
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: rate-limit-shared
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

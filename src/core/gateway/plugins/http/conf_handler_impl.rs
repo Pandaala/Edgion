@@ -3,8 +3,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use super::{get_global_plugin_store, PluginStore};
-use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
+use super::{compile_plugins, get_global_plugin_store, CompiledPlugins, PluginStore};
+use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::types::resources::EdgionPlugins;
 
 /// Create a PluginStore handler for registration with ConfigClient
@@ -12,10 +12,17 @@ pub fn create_plugin_handler() -> Box<dyn ConfHandler<EdgionPlugins> + Send + Sy
     Box::new(get_global_plugin_store())
 }
 
+/// Compile every incoming EdgionPlugins into its gateway runtime companion,
+/// keyed by the same map key. The runtime is built once per (ns/name) here.
+fn compile_map(data: HashMap<String, Arc<EdgionPlugins>>) -> HashMap<String, Arc<CompiledPlugins>> {
+    data.into_iter().map(|(k, v)| (k, compile_plugins(&v))).collect()
+}
+
 impl ConfHandler<EdgionPlugins> for PluginStore {
     fn full_set(&self, data: &HashMap<String, Arc<EdgionPlugins>>) {
         tracing::info!(component = "plugin_store", cnt = data.len(), "full set");
-        self.replace_all(arc_map_to_owned(data));
+        let compiled = data.iter().map(|(k, v)| (k.clone(), compile_plugins(v))).collect();
+        self.replace_all(compiled);
     }
 
     fn partial_update(
@@ -32,8 +39,8 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
             "partial update"
         );
 
-        let mut add_or_update = arc_map_into_owned(add);
-        add_or_update.extend(arc_map_into_owned(update));
+        let mut add_or_update = compile_map(add);
+        add_or_update.extend(compile_map(update));
 
         self.update(add_or_update, &remove);
     }
@@ -46,7 +53,7 @@ mod tests {
     use crate::types::resources::http_route::HTTPHeaderFilter;
 
     fn create_test_plugin(namespace: &str, name: &str) -> EdgionPlugins {
-        let mut plugin = EdgionPlugins {
+        EdgionPlugins {
             metadata: kube::core::ObjectMeta {
                 namespace: Some(namespace.to_string()),
                 name: Some(name.to_string()),
@@ -63,9 +70,7 @@ mod tests {
                 ..Default::default()
             },
             status: None,
-        };
-        plugin.preparse();
-        plugin
+        }
     }
 
     #[test]

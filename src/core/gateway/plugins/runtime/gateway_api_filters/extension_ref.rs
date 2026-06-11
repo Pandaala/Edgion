@@ -329,7 +329,7 @@ impl UpstreamResponseBodyFilter for ExtensionRefFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::gateway::plugins::http::get_global_plugin_store;
+    use crate::core::gateway::plugins::http::{compile_plugins, get_global_plugin_store};
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
     use crate::types::resources::edgion_plugins::EdgionPlugin;
     use crate::types::resources::edgion_plugins::{EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry};
@@ -339,7 +339,7 @@ mod tests {
     use std::collections::HashMap;
 
     fn make_plugin(key_ns: &str, name: &str) {
-        let mut ep = EdgionPlugins {
+        let ep = EdgionPlugins {
             metadata: ObjectMeta {
                 namespace: Some(key_ns.to_string()),
                 name: Some(name.to_string()),
@@ -357,10 +357,9 @@ mod tests {
             },
             status: None,
         };
-        ep.preparse();
 
         let mut map = HashMap::new();
-        map.insert(format!("{}/{}", key_ns, name), ep);
+        map.insert(format!("{}/{}", key_ns, name), compile_plugins(&ep));
         get_global_plugin_store().replace_all(map);
     }
 

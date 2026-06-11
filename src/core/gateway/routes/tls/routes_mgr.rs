@@ -5,9 +5,9 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use crate::core::gateway::routes::tls::gateway_tls_routes::TlsRouteTable;
+use crate::core::gateway::routes::tls::route_unit::TlsRouteUnit;
 use crate::types::resources::TLSRoute;
 use crate::types::ListenerKey;
-use crate::types::ResourceMeta;
 
 /// Per-listener TLS route manager.
 ///
@@ -39,14 +39,14 @@ impl TlsRouteManager {
         self.route_table.load()
     }
 
-    /// Rebuild the route table from routes belonging to this listener.
+    /// Rebuild the route table from units belonging to this listener.
     /// Called by `GlobalTlsRouteManagers` during rebuild.
-    pub fn rebuild(&self, routes: &HashMap<String, Arc<TLSRoute>>) {
-        let new_table = TlsRouteTable::from_routes(routes);
+    pub fn rebuild(&self, units: &HashMap<String, Arc<TlsRouteUnit>>) {
+        let new_table = TlsRouteTable::from_units(units);
 
         tracing::debug!(
             component = "tls_route_manager",
-            routes = routes.len(),
+            routes = units.len(),
             catch_all = new_table.has_catch_all(),
             "Rebuilt per-listener TLS route table"
         );
@@ -62,8 +62,13 @@ impl TlsRouteManager {
 /// per-listener managers by resolving each route's target listeners from its
 /// `spec.resolved_listeners`.
 pub struct GlobalTlsRouteManagers {
-    /// Canonical route store: resource_key -> initialized Arc<TLSRoute>
-    route_cache: DashMap<String, Arc<TLSRoute>>,
+    /// Canonical route store: resource_key -> compiled Arc<TlsRouteUnit>.
+    ///
+    /// Units (and their `backend_finder` WRR cursor) are built ONCE in the
+    /// conf-handler and reused across listener rebuilds, so an unrelated route
+    /// change on the same listener does not reset a sibling route's selector.
+    /// A single unit is shared across all SNI hostname buckets of its route.
+    route_cache: DashMap<String, Arc<TlsRouteUnit>>,
 
     /// listener -> per-listener manager (stable Arc held by listeners)
     by_listener: DashMap<ListenerKey, Arc<TlsRouteManager>>,
@@ -111,14 +116,14 @@ impl GlobalTlsRouteManagers {
             .clone()
     }
 
-    /// Insert an initialized route into the cache.
-    pub fn insert_route(&self, route: Arc<TLSRoute>) {
-        let key = route.key_name();
-        self.route_cache.insert(key, route);
+    /// Insert a compiled route unit into the cache.
+    pub fn insert_route(&self, unit: Arc<TlsRouteUnit>) {
+        let key = unit.key_name();
+        self.route_cache.insert(key, unit);
     }
 
-    /// Get a route from the cache by key.
-    pub fn get_route(&self, key: &str) -> Option<Arc<TLSRoute>> {
+    /// Get a route unit from the cache by key.
+    pub fn get_route(&self, key: &str) -> Option<Arc<TlsRouteUnit>> {
         self.route_cache.get(key).map(|entry| entry.value().clone())
     }
 
@@ -151,9 +156,9 @@ impl GlobalTlsRouteManagers {
             &self.by_listener,
             &self.route_cache,
             active,
-            |r| resolved_listeners_for_route(r).to_vec(),
+            |u| resolved_listeners_for_route(&u.route).to_vec(),
             |k| self.get_or_create_listener_manager(k),
-            |m, routes| m.rebuild(routes),
+            |m, units| m.rebuild(units),
         );
     }
 
@@ -168,9 +173,9 @@ impl GlobalTlsRouteManagers {
             &self.route_cache,
             affected_listeners,
             active,
-            |r| resolved_listeners_for_route(r).to_vec(),
+            |u| resolved_listeners_for_route(&u.route).to_vec(),
             |k| self.get_or_create_listener_manager(k),
-            |m, routes| m.rebuild(routes),
+            |m, units| m.rebuild(units),
         );
     }
 }
@@ -244,6 +249,14 @@ mod tests {
         }
     }
 
+    fn test_unit(namespace: &str, name: &str, listener_key: ListenerKey) -> Arc<TlsRouteUnit> {
+        Arc::new(TlsRouteUnit::from_route(Arc::new(create_test_tls_route(
+            namespace,
+            name,
+            listener_key,
+        ))))
+    }
+
     /// Drive the shared helper directly with a synthetic `active` PGIS
     /// snapshot so tests do not race against the global store.
     fn drive_rebuild_all(managers: &GlobalTlsRouteManagers, active: Vec<ListenerKey>) {
@@ -252,9 +265,9 @@ mod tests {
             &managers.by_listener,
             &managers.route_cache,
             active,
-            |r| resolved_listeners_for_route(r).to_vec(),
+            |u| resolved_listeners_for_route(&u.route).to_vec(),
             |k| managers.get_or_create_listener_manager(k),
-            |m, routes| m.rebuild(routes),
+            |m, units| m.rebuild(units),
         );
     }
 
@@ -269,9 +282,9 @@ mod tests {
             &managers.route_cache,
             affected,
             active,
-            |r| resolved_listeners_for_route(r).to_vec(),
+            |u| resolved_listeners_for_route(&u.route).to_vec(),
             |k| managers.get_or_create_listener_manager(k),
-            |m, routes| m.rebuild(routes),
+            |m, units| m.rebuild(units),
         );
     }
 
@@ -285,9 +298,11 @@ mod tests {
 
         // Pre-seed B's manager with a prior route.
         let mgr_b = managers.get_or_create_listener_manager(&listener_b);
-        let prior_route = Arc::new(create_test_tls_route("default", "prior", listener_b.clone()));
-        let mut prior: HashMap<String, Arc<TLSRoute>> = HashMap::new();
-        prior.insert("default/prior".to_string(), prior_route);
+        let mut prior: HashMap<String, Arc<TlsRouteUnit>> = HashMap::new();
+        prior.insert(
+            "default/prior".to_string(),
+            test_unit("default", "prior", listener_b.clone()),
+        );
         mgr_b.rebuild(&prior);
         assert!(
             mgr_b.load_route_table().has_catch_all(),
@@ -295,8 +310,7 @@ mod tests {
         );
 
         // route_cache only references A.
-        let route_a = Arc::new(create_test_tls_route("default", "route-a", listener_a.clone()));
-        managers.insert_route(route_a);
+        managers.insert_route(test_unit("default", "route-a", listener_a.clone()));
 
         drive_rebuild_all(&managers, vec![listener_a.clone(), listener_b.clone()]);
 
@@ -329,9 +343,11 @@ mod tests {
         let listener = make_listener_key(8446, "TLS");
 
         let mgr = managers.get_or_create_listener_manager(&listener);
-        let prior_route = Arc::new(create_test_tls_route("default", "prior", listener.clone()));
-        let mut prior: HashMap<String, Arc<TLSRoute>> = HashMap::new();
-        prior.insert("default/prior".to_string(), prior_route);
+        let mut prior: HashMap<String, Arc<TlsRouteUnit>> = HashMap::new();
+        prior.insert(
+            "default/prior".to_string(),
+            test_unit("default", "prior", listener.clone()),
+        );
         mgr.rebuild(&prior);
         assert!(
             mgr.load_route_table().has_catch_all(),
@@ -356,8 +372,7 @@ mod tests {
         let orphan_key = make_listener_key(8448, "TLS");
 
         managers.get_or_create_listener_manager(&orphan_key);
-        let route = Arc::new(create_test_tls_route("default", "route-x", affected_key.clone()));
-        managers.insert_route(route);
+        managers.insert_route(test_unit("default", "route-x", affected_key.clone()));
 
         let mut affected: HashSet<ListenerKey> = HashSet::new();
         affected.insert(affected_key.clone());

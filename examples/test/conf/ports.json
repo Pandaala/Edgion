@@ -71,6 +71,9 @@
     "GRPCRoute/UnmatchedRoute": {
       "grpc": 31062
     },
+    "GRPCRoute/RateLimit": {
+      "grpc": 31063
+    },
     "TCPRoute/Basic": {
       "tcp": 31090,
       "tcp_filtered": 31091

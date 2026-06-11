@@ -49,7 +49,7 @@ pub use key_auth::KeyAuth;
 pub use ldap_auth::LdapAuth;
 pub use mock::Mock;
 pub use openid_connect::OpenidConnect;
-pub use plugin_store::{get_global_plugin_store, PluginStore};
+pub use plugin_store::{compile_plugins, get_global_plugin_store, CompiledPlugins, PluginStore};
 pub use proxy_rewrite::ProxyRewrite;
 pub use rate_limit::RateLimit;
 pub use rate_limit_redis::RateLimitRedis;

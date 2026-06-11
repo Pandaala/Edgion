@@ -10,9 +10,6 @@ use crate::types::resources::common::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-
-use crate::core::gateway::plugins::{StreamPluginRuntime, TlsRoutePluginRuntime};
 
 // Submodules
 pub mod connection_ip_restriction_rules;
@@ -51,19 +48,9 @@ pub struct EdgionStreamPluginsSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<Vec<StreamPluginEntry>>,
 
-    /// Stage 1 runtime (computed from `plugins` at preparse time)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub stream_plugin_runtime: Arc<StreamPluginRuntime>,
-
     /// Stage 2 (TlsRoute) plugin configurations — post-handshake, post-route-match
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_route_plugins: Option<Vec<TlsRoutePluginEntry>>,
-
-    /// Stage 2 runtime (computed from `tls_route_plugins` at preparse time)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub tls_route_plugin_runtime: Arc<TlsRoutePluginRuntime>,
 }
 
 /// Stream plugin entry with enable switch
@@ -161,20 +148,5 @@ impl EdgionStreamPlugins {
             .as_ref()
             .map(|entries| entries.iter().filter(|e| e.is_enabled()).map(|e| &e.plugin).collect())
             .unwrap_or_default()
-    }
-
-    /// Initialize Stage 1 (ConnectionFilter) plugin runtime from `plugins`.
-    pub fn init_stream_plugin_runtime(&mut self) {
-        if let Some(plugins) = &self.spec.plugins {
-            let ns = self.metadata.namespace.as_deref().unwrap_or("default");
-            self.spec.stream_plugin_runtime = Arc::new(StreamPluginRuntime::from_stream_plugins(plugins, ns));
-        }
-    }
-
-    /// Initialize Stage 2 (TlsRoute) plugin runtime from `tls_route_plugins`.
-    pub fn init_tls_route_plugin_runtime(&mut self) {
-        if let Some(entries) = &self.spec.tls_route_plugins {
-            self.spec.tls_route_plugin_runtime = Arc::new(TlsRoutePluginRuntime::from_entries(entries));
-        }
     }
 }

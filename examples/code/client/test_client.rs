@@ -135,6 +135,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             }
             "grpc" => "GRPCRoute/Basic".to_string(),
             "grpc-match" | "grpcmatch" => "GRPCRoute/Match".to_string(),
+            "grpc-rate-limit" | "grpcratelimit" => "GRPCRoute/RateLimit".to_string(),
             "grpc-tls" | "grpctls" => "EdgionTls/grpctls".to_string(),
             "tcp" => "TCPRoute/Basic".to_string(),
             "tcp-keepalive-smoke" | "tcpkeepalivesmoke" => "TCPRoute/KeepaliveSmoke".to_string(),
@@ -247,6 +248,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "GRPCRoute/Basic" | "GRPCRoute" => "GRPCRoute/Basic",
         "GRPCRoute/Match" => "GRPCRoute/Match",
         "GRPCRoute/UnmatchedRoute" => "GRPCRoute/UnmatchedRoute",
+        "GRPCRoute/RateLimit" => "GRPCRoute/RateLimit",
         // TCPRoute
         "TCPRoute/Basic" | "TCPRoute" => "TCPRoute/Basic",
         "TCPRoute/IdleTimeout" => "TCPRoute/Basic",
@@ -655,6 +657,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::GrpcUnmatchedRouteTestSuite));
+        }
+        "GRPCRoute/RateLimit" => {
+            if !gateway {
+                eprintln!("Error: GRPCRoute/RateLimit tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GrpcRateLimitTestSuite));
         }
         "GRPCRoute/TLS" => {
             if !gateway {

@@ -1,12 +1,9 @@
-use super::{cap_tls_connect_retries, DEFAULT_TLS_CONNECT_RETRIES, MAX_TLS_CONNECT_RETRIES};
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
-use crate::core::gateway::routes::common::{
-    is_core_service_backend_ref, resolve_stream_plugin_store_key, resolve_tcp_keepalive,
-};
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
+use crate::core::gateway::routes::tls::route_unit::TlsRouteUnit;
 use crate::core::gateway::routes::tls::routes_mgr::resolved_listeners_for_route;
 use crate::core::gateway::routes::tls::{get_global_tls_route_managers, GlobalTlsRouteManagers};
-use crate::types::{ResourceMeta, TLSRoute};
+use crate::types::TLSRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
@@ -77,12 +74,12 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
             update_owned,
             remove,
             |key| self.get_route(key),
-            |r| resolved_listeners_for_route(r).to_vec(),
+            |u| resolved_listeners_for_route(&u.route).to_vec(),
             |key| self.remove_route(key),
             |route| {
-                self.initialize_route(route).map(|initialized| {
-                    let lks = resolved_listeners_for_route(&initialized).to_vec();
-                    self.insert_route(initialized);
+                self.initialize_route(route).map(|unit| {
+                    let lks = resolved_listeners_for_route(&unit.route).to_vec();
+                    self.insert_route(unit);
                     lks
                 })
             },
@@ -92,85 +89,17 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
 }
 
 impl GlobalTlsRouteManagers {
-    /// Initialize a TLSRoute by setting up BackendSelector, proxy protocol,
-    /// and stream plugin store key from annotations.
-    fn initialize_route(&self, mut route: TLSRoute) -> Result<Arc<TLSRoute>, String> {
-        let route_key = route.key_name();
-        let annotations = route.metadata.annotations.as_ref();
-
-        let proxy_protocol_version = annotations
-            .and_then(|a| a.get(crate::types::constants::annotations::edgion::PROXY_PROTOCOL))
-            .and_then(|v| match v.trim() {
-                "v2" => Some(2u8),
-                _ => None,
-            });
-
-        let store_key = resolve_stream_plugin_store_key(&route.metadata);
-
-        let configured_max_connect_retries = annotations
-            .and_then(|a| a.get(crate::types::constants::annotations::edgion::MAX_CONNECT_RETRIES))
-            .and_then(|v| v.trim().parse::<u32>().ok())
-            .map(|v| v.max(1))
-            .unwrap_or(DEFAULT_TLS_CONNECT_RETRIES);
-        let max_connect_retries = cap_tls_connect_retries(configured_max_connect_retries);
-
-        if configured_max_connect_retries > MAX_TLS_CONNECT_RETRIES {
-            tracing::warn!(
-                route = %route_key,
-                configured_max_connect_retries,
-                max_connect_retries,
-                "TLSRoute max_connect_retries capped"
-            );
-        }
-
-        let tcp_keepalive = resolve_tcp_keepalive(annotations, &route_key);
-
-        if let Some(rules) = route.spec.rules.as_mut() {
-            for (rule_idx, rule) in rules.iter_mut().enumerate() {
-                if let Some(backend_refs) = &rule.backend_refs {
-                    let (backends, weights): (Vec<_>, Vec<_>) = backend_refs
-                        .iter()
-                        .filter(|br| is_core_service_backend_ref(br.group.as_deref(), br.kind.as_deref()))
-                        .map(|br| (br.clone(), br.weight))
-                        .unzip();
-
-                    rule.backend_finder.init(backends, weights);
-
-                    tracing::debug!(
-                        route = %route_key,
-                        rule_idx,
-                        backend_count = backend_refs.len(),
-                        "Initialized BackendSelector for TLSRoute rule"
-                    );
-                }
-
-                rule.proxy_protocol_version = proxy_protocol_version;
-                rule.max_connect_retries = max_connect_retries;
-                rule.tcp_keepalive = tcp_keepalive.clone();
-
-                if let Some(ref key) = store_key {
-                    rule.stream_plugin_store_key = Some(key.clone());
-                    tracing::info!(
-                        route = %route_key,
-                        rule_idx,
-                        store_key = %key,
-                        "Set stream plugin store key for TLSRoute rule (dynamic lookup)"
-                    );
-                }
-            }
-        }
-
-        if proxy_protocol_version.is_some() || max_connect_retries > 1 || tcp_keepalive.is_some() {
-            tracing::info!(
-                route = %route_key,
-                proxy_protocol = ?proxy_protocol_version,
-                max_connect_retries,
-                keepalive = ?tcp_keepalive,
-                "TLSRoute configured with extended options"
-            );
-        }
-
-        Ok(Arc::new(route))
+    /// Compile a raw TLSRoute schema into its gateway-side [`TlsRouteUnit`].
+    ///
+    /// Built ONCE per route here (in the conf-handler), then cached and reused
+    /// across listener rebuilds (and shared across all SNI hostname buckets), so
+    /// a sibling route change on the same listener never resets this route's
+    /// `backend_finder` WRR cursor. The compiled runtime (BackendSelector,
+    /// proxy-protocol version, connect retry budget, keepalive config,
+    /// stream-plugin store key) no longer lives on the schema — see
+    /// [`TlsRouteUnit::from_route`].
+    fn initialize_route(&self, route: TLSRoute) -> Result<Arc<TlsRouteUnit>, String> {
+        Ok(Arc::new(TlsRouteUnit::from_route(Arc::new(route))))
     }
 }
 
@@ -220,71 +149,8 @@ mod tests {
                         group: None,
                         kind: None,
                         extension_info: Default::default(),
-                        plugin_runtime: Default::default(),
                         ref_denied: None,
                     }]),
-                    backend_finder: Default::default(),
-                    plugin_runtime: Default::default(),
-                    proxy_protocol_version: None,
-
-                    stream_plugin_store_key: None,
-                    max_connect_retries: 1,
-                    tcp_keepalive: None,
-                }]),
-                resolved_listeners: Some(vec![listener_key]),
-                effective_hostnames: Some(vec![hostname.to_string()]),
-            },
-            status: None,
-        }
-    }
-
-    fn create_annotated_tls_route(
-        namespace: &str,
-        name: &str,
-        gateway: &str,
-        hostname: &str,
-        port: u16,
-        listener_key: ListenerKey,
-        annotations: std::collections::BTreeMap<String, String>,
-    ) -> TLSRoute {
-        use crate::types::resources::tls_route::*;
-
-        TLSRoute {
-            metadata: kube::api::ObjectMeta {
-                namespace: Some(namespace.to_string()),
-                name: Some(name.to_string()),
-                annotations: Some(annotations),
-                ..Default::default()
-            },
-            spec: TLSRouteSpec {
-                parent_refs: Some(vec![ParentReference {
-                    group: Some("gateway.networking.k8s.io".to_string()),
-                    kind: Some("Gateway".to_string()),
-                    namespace: Some(namespace.to_string()),
-                    name: gateway.to_string(),
-                    section_name: None,
-                    port: Some(port as i32),
-                }]),
-                hostnames: Some(vec![hostname.to_string()]),
-                rules: Some(vec![TLSRouteRule {
-                    backend_refs: Some(vec![TLSBackendRef {
-                        name: "test-service".to_string(),
-                        namespace: Some(namespace.to_string()),
-                        port: Some(8080),
-                        weight: Some(1),
-                        group: None,
-                        kind: None,
-                        extension_info: Default::default(),
-                        plugin_runtime: Default::default(),
-                        ref_denied: None,
-                    }]),
-                    backend_finder: Default::default(),
-                    plugin_runtime: Default::default(),
-                    proxy_protocol_version: None,
-
-                    stream_plugin_store_key: None,
-                    max_connect_retries: 1,
-                    tcp_keepalive: None,
                 }]),
                 resolved_listeners: Some(vec![listener_key]),
                 effective_hostnames: Some(vec![hostname.to_string()]),
@@ -314,6 +180,60 @@ mod tests {
         assert!(table.match_route("other.example.com").is_none());
     }
 
+    /// Regression for the WRR-cursor-reset blocker, driven through the REAL
+    /// ConfHandler path (`full_set` then a sibling `partial_update`). Two
+    /// TLSRoutes share one `:443` listener (bucketed by SNI). Adding a sibling
+    /// route B must NOT rebuild route A's unit — the data plane must keep
+    /// serving the SAME `Arc<TlsRouteUnit>` for A, so A's `backend_finder` WRR
+    /// cursor (and load-balancing distribution) is preserved across B's churn.
+    #[test]
+    fn test_sibling_route_add_preserves_route_a_unit_arc() {
+        let managers = GlobalTlsRouteManagers::new();
+        let key443 = make_listener_key(443, "TLS");
+        let mgr = managers.get_or_create_listener_manager(&key443);
+
+        // full_set with only route A on :443.
+        let mut full = HashMap::new();
+        full.insert(
+            "default/route-a".to_string(),
+            Arc::new(create_test_tls_route(
+                "default",
+                "route-a",
+                "gw1",
+                "a.example.com",
+                443,
+                key443.clone(),
+            )),
+        );
+        managers.full_set(&full);
+        let a_before = mgr.load_route_table().match_route("a.example.com").unwrap();
+
+        // Add a SIBLING route B on the same listener via partial_update.
+        let mut add = HashMap::new();
+        add.insert(
+            "default/route-b".to_string(),
+            Arc::new(create_test_tls_route(
+                "default",
+                "route-b",
+                "gw1",
+                "b.example.com",
+                443,
+                key443.clone(),
+            )),
+        );
+        managers.partial_update(add, HashMap::new(), HashSet::new());
+
+        let a_after = mgr.load_route_table().match_route("a.example.com").unwrap();
+        assert!(
+            Arc::ptr_eq(&a_before, &a_after),
+            "sibling add must not rebuild route A's unit (WRR cursor must be preserved)"
+        );
+        assert!(
+            mgr.load_route_table().match_route("b.example.com").is_some(),
+            "sibling route B must be routable after the add"
+        );
+    }
+
     #[test]
     fn test_tls_route_partial_update() {
         let managers = GlobalTlsRouteManagers::new();
@@ -335,98 +255,6 @@ mod tests {
 
         let table = mgr.load_route_table();
         assert!(table.match_route("test.example.com").is_none());
-    }
-
-    #[test]
-    fn test_proxy_protocol_annotation_v2() {
-        let managers = GlobalTlsRouteManagers::new();
-        let mut annotations = std::collections::BTreeMap::new();
-        annotations.insert("edgion.io/proxy-protocol".to_string(), "v2".to_string());
-        let key = make_listener_key(443, "TLS");
-
-        let route = create_annotated_tls_route("default", "pp2-route", "gw1", "*.sandbox.com", 443, key, annotations);
-        let initialized = managers.initialize_route(route).unwrap();
-
-        let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
-        assert_eq!(rule.proxy_protocol_version, Some(2));
-        assert!(rule.stream_plugin_store_key.is_none());
-    }
-
-    #[test]
-    fn test_proxy_protocol_annotation_invalid() {
-        let managers = GlobalTlsRouteManagers::new();
-        let mut annotations = std::collections::BTreeMap::new();
-        annotations.insert("edgion.io/proxy-protocol".to_string(), "v1".to_string());
-        let key = make_listener_key(443, "TLS");
-
-        let route = create_annotated_tls_route("default", "pp1-route", "gw1", "*.sandbox.com", 443, key, annotations);
-        let initialized = managers.initialize_route(route).unwrap();
-
-        let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
-        assert_eq!(rule.proxy_protocol_version, None);
-    }
-
-    #[test]
-    fn test_stream_plugin_store_key_full_path() {
-        let managers = GlobalTlsRouteManagers::new();
-        let mut annotations = std::collections::BTreeMap::new();
-        annotations.insert(
-            "edgion.io/edgion-stream-plugins".to_string(),
-            "sandbox/sandbox-stream-plugins".to_string(),
-        );
-        let key = make_listener_key(443, "TLS");
-
-        let route = create_annotated_tls_route("default", "sp-route", "gw1", "test.com", 443, key, annotations);
-        let initialized = managers.initialize_route(route).unwrap();
-
-        let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
-        assert_eq!(
-            rule.stream_plugin_store_key,
-            Some("sandbox/sandbox-stream-plugins".to_string())
-        );
-    }
-
-    #[test]
-    fn test_stream_plugin_store_key_short_name() {
-        let managers = GlobalTlsRouteManagers::new();
-        let mut annotations = std::collections::BTreeMap::new();
-        annotations.insert("edgion.io/edgion-stream-plugins".to_string(), "my-plugins".to_string());
-        let key = make_listener_key(443, "TLS");
-
-        let route = create_annotated_tls_route("sandbox", "sp-route", "gw1", "test.com", 443, key, annotations);
-        let initialized = managers.initialize_route(route).unwrap();
-
-        let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
-        assert_eq!(rule.stream_plugin_store_key, Some("sandbox/my-plugins".to_string()));
-    }
-
-    #[test]
-    fn test_combined_annotations() {
-        let managers = GlobalTlsRouteManagers::new();
-        let mut annotations = std::collections::BTreeMap::new();
-        annotations.insert("edgion.io/proxy-protocol".to_string(), "v2".to_string());
-        annotations.insert("edgion.io/edgion-stream-plugins".to_string(), "ns/plugins".to_string());
-        let key = make_listener_key(443, "TLS");
-
-        let route = create_annotated_tls_route("default", "combo", "gw1", "*.sandbox.com", 443, key, annotations);
-        let initialized = managers.initialize_route(route).unwrap();
-
-        let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
-        assert_eq!(rule.proxy_protocol_version, Some(2));
-        assert_eq!(rule.stream_plugin_store_key, Some("ns/plugins".to_string()));
-    }
-
-    #[test]
-    fn test_no_annotations() {
-        let managers = GlobalTlsRouteManagers::new();
-        let key = make_listener_key(443, "TLS");
-        let route = create_test_tls_route("default", "plain", "gw1", "test.com", 443, key);
-        let initialized = managers.initialize_route(route).unwrap();
-
-        let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
-        assert_eq!(rule.proxy_protocol_version, None);
-        assert!(rule.stream_plugin_store_key.is_none());
-        assert_eq!(rule.max_connect_retries, 2);
     }
 
     #[test]
@@ -588,57 +416,6 @@ mod tests {
             mgr9443.load_route_table().match_route("svc.example.com").is_some(),
             "L9443 should have route after migration"
         );
-    }
-
-    #[test]
-    fn test_tcp_keepalive_annotation_resolved_on_tls_rule() {
-        let managers = GlobalTlsRouteManagers::new();
-        let mut annotations = std::collections::BTreeMap::new();
-        annotations.insert("edgion.io/tcp-keepalive-time".to_string(), "120".to_string());
-        annotations.insert("edgion.io/tcp-keepalive-interval".to_string(), "20".to_string());
-        annotations.insert("edgion.io/tcp-keepalive-probes".to_string(), "4".to_string());
-        let key = make_listener_key(443, "TLS");
-
-        let route = create_annotated_tls_route("default", "ka-route", "gw1", "ka.example.com", 443, key, annotations);
-        let initialized = managers.initialize_route(route).unwrap();
-
-        let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
-        let ka = rule.tcp_keepalive.as_ref().expect("keepalive enabled");
-        assert_eq!(ka.idle, std::time::Duration::from_secs(120));
-        assert_eq!(ka.interval, std::time::Duration::from_secs(20));
-        assert_eq!(ka.count, 4);
-    }
-
-    #[test]
-    fn test_no_keepalive_annotation_leaves_field_none_on_tls_rule() {
-        let managers = GlobalTlsRouteManagers::new();
-        let key = make_listener_key(443, "TLS");
-        let route = create_test_tls_route("default", "plain", "gw1", "test.com", 443, key);
-        let initialized = managers.initialize_route(route).unwrap();
-        let rule = initialized.spec.rules.as_ref().unwrap().first().unwrap();
-        assert!(rule.tcp_keepalive.is_none());
-    }
-
-    #[test]
-    fn test_tls_keepalive_applied_to_all_rules() {
-        // The conf-handler loop must set tcp_keepalive on every rule, not just
-        // the first. Guards against a regression that breaks out of the loop
-        // early and leaves rules[1..] with None.
-        let managers = GlobalTlsRouteManagers::new();
-        let mut annotations = std::collections::BTreeMap::new();
-        annotations.insert("edgion.io/tcp-keepalive-time".to_string(), "60".to_string());
-        let key = make_listener_key(443, "TLS");
-        let mut route = create_annotated_tls_route("default", "ka2", "gw1", "ka2.example.com", 443, key, annotations);
-        if let Some(rules) = route.spec.rules.as_mut() {
-            let second = rules[0].clone();
-            rules.push(second);
-        }
-        let initialized = managers.initialize_route(route).unwrap();
-        let rules = initialized.spec.rules.as_ref().unwrap();
-        assert_eq!(rules.len(), 2);
-        assert!(rules[0].tcp_keepalive.is_some());
-        assert!(rules[1].tcp_keepalive.is_some());
-        assert_eq!(rules[0].tcp_keepalive, rules[1].tcp_keepalive);
     }
 
     #[test]

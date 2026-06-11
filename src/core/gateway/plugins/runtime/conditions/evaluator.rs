@@ -3,12 +3,12 @@
 //! This module provides the logic to evaluate conditions at runtime
 //! to determine whether a plugin should be executed or skipped.
 
-use super::{
+use crate::core::gateway::plugins::runtime::log::PluginLog;
+use crate::core::gateway::plugins::runtime::PluginSession;
+use crate::types::resources::edgion_plugins::conditions::{
     Condition, ExcludeCondition, IncludeCondition, KeyExistCondition, KeyMatchCondition, PluginConditions,
     ProbabilityCondition, TimeRangeCondition,
 };
-use crate::core::gateway::plugins::runtime::log::PluginLog;
-use crate::core::gateway::plugins::runtime::PluginSession;
 use chrono::Utc;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;

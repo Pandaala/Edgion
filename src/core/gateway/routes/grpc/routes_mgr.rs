@@ -5,12 +5,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use crate::core::gateway::ctx::EdgionHttpContext;
-use crate::core::gateway::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::core::gateway::routes::grpc::{GrpcMatchEngine, GrpcRouteRuleUnit};
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::err::EdError;
-use crate::types::{GRPCBackendRef, GRPCRoute, GRPCRouteRule, ListenerKey};
+use crate::types::{GRPCRoute, ListenerKey};
 
 /// gRPC route rules for a specific domain.
 ///
@@ -68,40 +67,6 @@ impl GrpcRouteRules {
         } else {
             Err(EdError::RouteNotFound())
         }
-    }
-
-    /// Select backend from the matched GRPCRouteRule
-    pub fn select_backend(rule: &Arc<GRPCRouteRule>) -> Result<GRPCBackendRef, EdError> {
-        if !rule.backend_finder.is_initialized() {
-            let (items, weights) = match &rule.backend_refs {
-                Some(refs) if !refs.is_empty() => {
-                    let items: Vec<GRPCBackendRef> = refs.clone();
-                    let weights: Vec<Option<i32>> = refs.iter().map(|br| br.weight.or(Some(1))).collect();
-                    (items, weights)
-                }
-                _ => (vec![], vec![]),
-            };
-            rule.backend_finder.init(items, weights);
-        }
-
-        let backend_ref = rule.backend_finder.select().map_err(|err_code| match err_code {
-            ERR_NO_BACKEND_REFS => EdError::BackendNotFound(),
-            ERR_INCONSISTENT_WEIGHT => EdError::InconsistentWeight(),
-            _ => EdError::BackendNotFound(),
-        })?;
-
-        if let Some(ref denied) = backend_ref.ref_denied {
-            return Err(EdError::RefDenied {
-                target_namespace: denied.target_namespace.clone(),
-                target_name: denied.target_name.clone(),
-                reason: denied
-                    .reason
-                    .clone()
-                    .unwrap_or_else(|| "NoMatchingReferenceGrant".to_string()),
-            });
-        }
-
-        Ok(backend_ref)
     }
 }
 

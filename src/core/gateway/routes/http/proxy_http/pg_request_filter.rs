@@ -186,7 +186,7 @@ pub async fn request_filter(
         if ctx.resolved_route_ext_refs.is_none() {
             let resolved = match (&ctx.route_unit, &ctx.grpc_route_unit) {
                 (Some(unit), _) => resolve_route_ext_refs(&plugin_store, unit.plugin_runtime.ext_ref_keys()),
-                (_, Some(unit)) => resolve_route_ext_refs(&plugin_store, unit.rule.plugin_runtime.ext_ref_keys()),
+                (_, Some(unit)) => resolve_route_ext_refs(&plugin_store, unit.plugin_runtime.ext_ref_keys()),
                 _ => Vec::new(),
             };
             ctx.resolved_route_ext_refs = Some(Arc::new(resolved));
@@ -210,11 +210,7 @@ pub async fn request_filter(
 
     // Step 3: Run route-level plugins based on matched route type
     if let Some(grpc_route_unit) = ctx.grpc_route_unit.clone() {
-        grpc_route_unit
-            .rule
-            .plugin_runtime
-            .run_request_plugins(session, ctx)
-            .await;
+        grpc_route_unit.plugin_runtime.run_request_plugins(session, ctx).await;
         if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
             let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
             return Ok(true);
@@ -638,7 +634,7 @@ fn extract_cors_config_from_route_filters(
 
         let key = format!("{}/{}", namespace, ext_ref.name);
         let cors = get_global_plugin_store()
-            .with_plugin(&key, |p| p.spec.plugin_runtime.cors_config_arc())
+            .with_plugin(&key, |c| c.plugin_runtime.cors_config_arc())
             .flatten();
         if cors.is_some() {
             return cors;

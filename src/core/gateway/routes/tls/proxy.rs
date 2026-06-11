@@ -191,15 +191,16 @@ impl EdgionTlsTcpProxy {
 
     /// Core logic for handling TLS-terminated connections
     async fn handle_connection(&self, downstream: Stream, ctx: &mut TlsContext, sni: &str) {
-        // 1. Match TLSRoute by SNI from per-port route table
+        // 1. Match TLSRoute unit by SNI from per-port route table
         let route_table = self.tls_route_manager.load_route_table();
-        let tls_route = match route_table.match_route(sni) {
-            Some(route) => route,
+        let unit = match route_table.match_route(sni) {
+            Some(unit) => unit,
             None => {
                 ctx.err_log = Some("no match".to_string());
                 return;
             }
         };
+        let tls_route = &unit.route;
 
         ctx.matched = Some(MatchedInfo {
             rsc: Rsc {
@@ -211,28 +212,30 @@ impl EdgionTlsTcpProxy {
             sv: tls_route.get_sync_version(),
         });
 
-        // 2. Get the first rule
-        let rule = match tls_route.spec.rules.as_ref().and_then(|rules| rules.first()) {
-            Some(rule) => rule,
-            None => {
-                ctx.err_log = Some("no rules".to_string());
-                return;
-            }
-        };
+        // 2. Require at least one rule. The compiled runtime (backend_finder,
+        // retries, keepalive, proxy-protocol, stream-plugin key) lives on the
+        // unit and is built from the first rule.
+        if tls_route.spec.rules.as_ref().and_then(|rules| rules.first()).is_none() {
+            ctx.err_log = Some("no rules".to_string());
+            return;
+        }
 
         // 3. Execute TLS route plugins (Stage 2: post-handshake, post-route-match)
-        if !self.run_tls_route_plugins(rule, ctx, sni).await {
+        if !self
+            .run_tls_route_plugins(unit.stream_plugin_store_key.as_deref(), ctx, sni)
+            .await
+        {
             return;
         }
 
         // 4. Connect upstream with retry
-        let max_attempts = rule.max_connect_retries;
+        let max_attempts = unit.max_connect_retries;
         let mut upstream = None;
         let mut last_err = String::new();
 
         for attempt in 0..max_attempts {
             // 4a. Select backend (re-select on each retry for load-balancing rotation)
-            let backend_ref = match rule.backend_finder.select() {
+            let backend_ref = match unit.backend_finder.select() {
                 Ok(b) => b,
                 Err(_) => {
                     ctx.err_log = Some("no backend".to_string());
@@ -291,7 +294,7 @@ impl EdgionTlsTcpProxy {
 
             // 4c. TCP connect
             let mut peer = BasicPeer::new(&upstream_addr_str);
-            peer.options.tcp_keepalive = rule.tcp_keepalive.as_ref().map(|k| k.to_pingora());
+            peer.options.tcp_keepalive = unit.tcp_keepalive.as_ref().map(|k| k.to_pingora());
             match self.connector.new_stream(&peer).await {
                 Ok(stream) => {
                     if let Some(info) = ctx.current_upstream_mut() {
@@ -326,7 +329,13 @@ impl EdgionTlsTcpProxy {
 
         // 5. Send Proxy Protocol v2 header if configured
         if !self
-            .send_proxy_protocol_v2(rule, ctx, sni, &upstream_addr_str, &mut upstream_stream)
+            .send_proxy_protocol_v2(
+                unit.proxy_protocol_version,
+                ctx,
+                sni,
+                &upstream_addr_str,
+                &mut upstream_stream,
+            )
             .await
         {
             return;
@@ -340,13 +349,13 @@ impl EdgionTlsTcpProxy {
     /// Returns `false` if the write fails (caller should abort the connection).
     async fn send_proxy_protocol_v2(
         &self,
-        rule: &crate::types::resources::tls_route::TLSRouteRule,
+        proxy_protocol_version: Option<u8>,
         ctx: &mut TlsContext,
         sni: &str,
         upstream_addr_str: &str,
         upstream: &mut Stream,
     ) -> bool {
-        let Some(2) = rule.proxy_protocol_version else {
+        let Some(2) = proxy_protocol_version else {
             return true;
         };
         let Ok(src_ip) = ctx.client_addr.parse::<IpAddr>() else {
@@ -377,13 +386,8 @@ impl EdgionTlsTcpProxy {
     }
 
     /// Execute TLS route plugins (Stage 2).
-    async fn run_tls_route_plugins(
-        &self,
-        rule: &crate::types::resources::tls_route::TLSRouteRule,
-        ctx: &mut TlsContext,
-        sni: &str,
-    ) -> bool {
-        super::run_tls_route_plugins(rule, ctx, sni, self.listener_port, ctx.tls_id.clone(), ctx.is_mtls).await
+    async fn run_tls_route_plugins(&self, store_key: Option<&str>, ctx: &mut TlsContext, sni: &str) -> bool {
+        super::run_tls_route_plugins(store_key, ctx, sni, self.listener_port, ctx.tls_id.clone(), ctx.is_mtls).await
     }
 
     /// Bidirectional data transfer between downstream (TLS-terminated) and upstream (TCP)

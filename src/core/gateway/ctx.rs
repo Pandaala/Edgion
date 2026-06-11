@@ -3,14 +3,14 @@ use crate::core::gateway::lb::edgion_backend::EdgionBackend;
 use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::plugins::runtime::PluginRuntime;
 use crate::core::gateway::plugins::{EdgionPluginsLog, StageLogs};
-use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
+use crate::core::gateway::routes::grpc::{CompiledGrpcBackend, GrpcRouteRuleUnit};
 use crate::core::gateway::routes::http::match_unit::CompiledBackend;
 use crate::core::gateway::routes::HttpRouteRuleUnit;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::http_route_preparse::ParsedLBPolicy;
 use crate::types::uri_utils;
-use crate::types::{EdgionStatus, GRPCBackendRef, HTTPBackendRef, HTTPRouteMatch};
+use crate::types::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
 use bytes::Bytes;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_http::ResponseHeader;
@@ -692,8 +692,8 @@ pub struct EdgionHttpContext {
     /// Matched gRPC route unit (for gRPC routes)
     pub grpc_route_unit: Option<Arc<GrpcRouteRuleUnit>>,
 
-    /// Selected gRPC backend (for gRPC routes)
-    pub selected_grpc_backend: Option<GRPCBackendRef>,
+    /// Selected gRPC backend (schema + compiled plugin runtime, for gRPC routes)
+    pub selected_grpc_backend: Option<CompiledGrpcBackend>,
 
     /// Whether this request is handled by GRPCRoute (not just gRPC protocol)
     /// Used to determine backend peer selection and plugin execution

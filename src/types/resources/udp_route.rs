@@ -5,13 +5,9 @@
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::sync::Arc;
 
 use super::common::{ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
-use crate::core::gateway::lb::BackendSelector;
-use crate::core::gateway::plugins::{PluginRuntime, StreamPluginRuntime};
 use crate::types::ListenerKey;
 
 /// API group for UDPRoute
@@ -48,60 +44,12 @@ pub struct UDPRouteSpec {
 }
 
 /// UDPRouteRule defines UDP routing rules
-#[derive(Deserialize, Serialize, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UDPRouteRule {
     /// BackendRefs defines the backends where matching requests should be sent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_refs: Option<Vec<UDPBackendRef>>,
-
-    /// Backend finder for load balancing (not serialized/deserialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub backend_finder: BackendSelector<UDPBackendRef>,
-
-    /// Filter runtime (runtime only, not serialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub plugin_runtime: Arc<PluginRuntime>,
-
-    /// Stream plugin runtime (runtime only, not serialized)
-    /// This is populated from route annotations during pre-processing
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub stream_plugin_runtime: Arc<StreamPluginRuntime>,
-
-    /// Store key for dynamic stream plugin lookup (runtime only, not serialized)
-    /// Format: "namespace/name" referencing an EdgionStreamPlugins resource.
-    /// Used for dynamic lookup from StreamPluginStore on each packet,
-    /// avoiding resource loading order issues and supporting hot-reloading.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub stream_plugin_store_key: Option<String>,
-}
-
-impl Clone for UDPRouteRule {
-    fn clone(&self) -> Self {
-        Self {
-            backend_refs: self.backend_refs.clone(),
-            backend_finder: BackendSelector::new(),
-            plugin_runtime: self.plugin_runtime.clone(),
-            stream_plugin_runtime: self.stream_plugin_runtime.clone(),
-            stream_plugin_store_key: self.stream_plugin_store_key.clone(),
-        }
-    }
-}
-
-impl fmt::Debug for UDPRouteRule {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("UDPRouteRule")
-            .field("backend_refs", &self.backend_refs)
-            .field("backend_finder", &"<skipped>")
-            .field("plugin_runtime", &self.plugin_runtime)
-            .field("stream_plugin_runtime", &self.stream_plugin_runtime)
-            .field("stream_plugin_store_key", &self.stream_plugin_store_key)
-            .finish()
-    }
 }
 
 /// UDPBackendRef defines a backend for UDP traffic
@@ -135,11 +83,6 @@ pub struct UDPBackendRef {
     #[serde(skip)]
     #[schemars(skip)]
     pub extension_info: BackendExtensionInfo,
-
-    /// Filter runtime (runtime only, not serialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub plugin_runtime: Arc<PluginRuntime>,
 
     /// Cross-namespace reference denial info
     /// Set by Controller when this backend's cross-namespace reference

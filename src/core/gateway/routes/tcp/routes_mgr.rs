@@ -4,10 +4,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+use crate::core::gateway::routes::tcp::route_unit::TcpRouteUnit;
 use crate::core::gateway::routes::tcp::tcp_route_table::TcpRouteTable;
 use crate::types::resources::TCPRoute;
 use crate::types::ListenerKey;
-use crate::types::ResourceMeta;
 
 /// Per-listener TCP route manager.
 ///
@@ -39,14 +39,14 @@ impl TcpPortRouteManager {
         self.route_table.load()
     }
 
-    /// Rebuild the route table from routes belonging to this listener.
+    /// Rebuild the route table from units belonging to this listener.
     /// Called by `GlobalTcpRouteManagers` during rebuild.
-    pub fn rebuild(&self, routes: &HashMap<String, Arc<TCPRoute>>) {
-        let new_table = TcpRouteTable::from_routes(routes);
+    pub fn rebuild(&self, units: &HashMap<String, Arc<TcpRouteUnit>>) {
+        let new_table = TcpRouteTable::from_units(units);
 
         tracing::debug!(
             component = "tcp_port_route_manager",
-            routes = routes.len(),
+            routes = units.len(),
             "Rebuilt per-listener TCP route table"
         );
 
@@ -61,8 +61,12 @@ impl TcpPortRouteManager {
 /// per-listener managers by resolving each route's target listeners from its
 /// `spec.resolved_listeners`.
 pub struct GlobalTcpRouteManagers {
-    /// Canonical route store: resource_key -> initialized Arc<TCPRoute>
-    route_cache: DashMap<String, Arc<TCPRoute>>,
+    /// Canonical route store: resource_key -> compiled Arc<TcpRouteUnit>.
+    ///
+    /// Units (and their `backend_finder` WRR cursor) are built ONCE in the
+    /// conf-handler and reused across listener rebuilds, so an unrelated route
+    /// change on the same listener does not reset a sibling route's selector.
+    route_cache: DashMap<String, Arc<TcpRouteUnit>>,
 
     /// listener -> per-listener manager (stable Arc held by listeners)
     by_listener: DashMap<ListenerKey, Arc<TcpPortRouteManager>>,
@@ -110,14 +114,14 @@ impl GlobalTcpRouteManagers {
             .clone()
     }
 
-    /// Insert an initialized route into the cache.
-    pub fn insert_route(&self, route: Arc<TCPRoute>) {
-        let key = route.key_name();
-        self.route_cache.insert(key, route);
+    /// Insert a compiled route unit into the cache.
+    pub fn insert_route(&self, unit: Arc<TcpRouteUnit>) {
+        let key = unit.key_name();
+        self.route_cache.insert(key, unit);
     }
 
-    /// Get a route from the cache by key.
-    pub fn get_route(&self, key: &str) -> Option<Arc<TCPRoute>> {
+    /// Get a route unit from the cache by key.
+    pub fn get_route(&self, key: &str) -> Option<Arc<TcpRouteUnit>> {
         self.route_cache.get(key).map(|entry| entry.value().clone())
     }
 
@@ -152,9 +156,9 @@ impl GlobalTcpRouteManagers {
             &self.by_listener,
             &self.route_cache,
             active,
-            |r| resolved_listeners_for_route(r).to_vec(),
+            |u| resolved_listeners_for_route(&u.route).to_vec(),
             |k| self.get_or_create_listener_manager(k),
-            |m, routes| m.rebuild(routes),
+            |m, units| m.rebuild(units),
         );
     }
 
@@ -169,9 +173,9 @@ impl GlobalTcpRouteManagers {
             &self.route_cache,
             affected_listeners,
             active,
-            |r| resolved_listeners_for_route(r).to_vec(),
+            |u| resolved_listeners_for_route(&u.route).to_vec(),
             |k| self.get_or_create_listener_manager(k),
-            |m, routes| m.rebuild(routes),
+            |m, units| m.rebuild(units),
         );
     }
 }
@@ -252,6 +256,14 @@ mod tests {
         }
     }
 
+    fn test_unit(namespace: &str, name: &str, listener_key: ListenerKey) -> Arc<TcpRouteUnit> {
+        Arc::new(TcpRouteUnit::from_route(Arc::new(create_test_tcp_route(
+            namespace,
+            name,
+            listener_key,
+        ))))
+    }
+
     /// Drive the shared helper directly with a synthetic `active` PGIS snapshot
     /// so tests do not race against the global `ListenerGatewayInfoStore`.
     fn drive_rebuild_all(managers: &GlobalTcpRouteManagers, active: Vec<ListenerKey>) {
@@ -260,9 +272,9 @@ mod tests {
             &managers.by_listener,
             &managers.route_cache,
             active,
-            |r| resolved_listeners_for_route(r).to_vec(),
+            |u| resolved_listeners_for_route(&u.route).to_vec(),
             |k| managers.get_or_create_listener_manager(k),
-            |m, routes| m.rebuild(routes),
+            |m, units| m.rebuild(units),
         );
     }
 
@@ -277,9 +289,9 @@ mod tests {
             &managers.route_cache,
             affected,
             active,
-            |r| resolved_listeners_for_route(r).to_vec(),
+            |u| resolved_listeners_for_route(&u.route).to_vec(),
             |k| managers.get_or_create_listener_manager(k),
-            |m, routes| m.rebuild(routes),
+            |m, units| m.rebuild(units),
         );
     }
 
@@ -297,15 +309,16 @@ mod tests {
         // Seed B's manager with a prior route to mimic state from an earlier
         // rebuild_all (the by_listener entry pre-exists).
         let mgr_b = managers.get_or_create_listener_manager(&listener_b);
-        let prior_route = Arc::new(create_test_tcp_route("default", "prior", listener_b.clone()));
-        let mut prior: HashMap<String, Arc<TCPRoute>> = HashMap::new();
-        prior.insert("default/prior".to_string(), prior_route);
+        let mut prior: HashMap<String, Arc<TcpRouteUnit>> = HashMap::new();
+        prior.insert(
+            "default/prior".to_string(),
+            test_unit("default", "prior", listener_b.clone()),
+        );
         mgr_b.rebuild(&prior);
         assert_eq!(mgr_b.load_route_table().route_count(), 1, "precondition: B has 1 route");
 
         // Current route_cache only references listener A.
-        let route_a = Arc::new(create_test_tcp_route("default", "route-a", listener_a.clone()));
-        managers.insert_route(route_a);
+        managers.insert_route(test_unit("default", "route-a", listener_a.clone()));
 
         // Both A and B are still active in PGIS.
         drive_rebuild_all(&managers, vec![listener_a.clone(), listener_b.clone()]);
@@ -357,9 +370,11 @@ mod tests {
 
         // Pre-seed the listener with a route so the route_table is non-empty.
         let mgr = managers.get_or_create_listener_manager(&listener);
-        let prior_route = Arc::new(create_test_tcp_route("default", "prior", listener.clone()));
-        let mut prior: HashMap<String, Arc<TCPRoute>> = HashMap::new();
-        prior.insert("default/prior".to_string(), prior_route);
+        let mut prior: HashMap<String, Arc<TcpRouteUnit>> = HashMap::new();
+        prior.insert(
+            "default/prior".to_string(),
+            test_unit("default", "prior", listener.clone()),
+        );
         mgr.rebuild(&prior);
         assert_eq!(mgr.load_route_table().route_count(), 1);
 
@@ -392,8 +407,7 @@ mod tests {
         // it is not in the active set).
         managers.get_or_create_listener_manager(&orphan_key);
         // And the affected listener which currently has a route.
-        let route = Arc::new(create_test_tcp_route("default", "route-x", affected_key.clone()));
-        managers.insert_route(route);
+        managers.insert_route(test_unit("default", "route-x", affected_key.clone()));
 
         let mut affected: HashSet<ListenerKey> = HashSet::new();
         affected.insert(affected_key.clone());
@@ -404,5 +418,47 @@ mod tests {
             "orphan by_listener entry should be swept"
         );
         assert!(managers.by_listener.contains_key(&affected_key));
+    }
+
+    /// Regression for the WRR-cursor-reset blocker: a listener-table rebuild
+    /// must Arc-CLONE the cached unit, never rebuild it. If the served unit is
+    /// the same `Arc` as the cached one, its `backend_finder` (and WRR cursor)
+    /// is preserved across rebuilds, so an unrelated route/listener change does
+    /// not reset a route's load-balancing distribution. A reintroduction of
+    /// "build the unit inside `from_units`" would make `ptr_eq` fail here.
+    #[test]
+    fn test_unit_arc_reused_across_table_rebuild() {
+        let managers = GlobalTcpRouteManagers::new();
+        let key = make_listener_key(9700, "TCP");
+        managers.insert_route(test_unit("default", "route1", key.clone()));
+        let cached = managers.get_route("default/route1").unwrap();
+
+        // Gateway-driven rebuild of the listener's table.
+        drive_rebuild_all(&managers, vec![key.clone()]);
+        let served = managers
+            .by_listener
+            .get(&key)
+            .unwrap()
+            .load_route_table()
+            .match_route()
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(&cached, &served),
+            "table must serve the cached unit Arc, not a freshly-built one"
+        );
+
+        // A second rebuild must still serve the very same Arc.
+        drive_rebuild_all(&managers, vec![key.clone()]);
+        let served2 = managers
+            .by_listener
+            .get(&key)
+            .unwrap()
+            .load_route_table()
+            .match_route()
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(&cached, &served2),
+            "unit Arc must survive repeated rebuilds"
+        );
     }
 }

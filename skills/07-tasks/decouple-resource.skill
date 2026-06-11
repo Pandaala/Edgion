@@ -1,0 +1,177 @@
+---
+name: decouple-resource
+description: Use when the user invokes /decouple or asks to "decouple a resource", "do a types-decouple task", or hands a tasks/todo/types-decouple-*.md file — runs the standard two-type (schema/compiled) split for ONE resource group, A→B→C with cargo-check gates and a mandatory two-route subagent review, and STOPS before committing. Equivalent phrases in other languages also trigger this skill.
+---
+
+# Decouple-Resource Workflow (types two-type split, per resource)
+
+Executes the schema↔compiled-runtime split for ONE resource group, moving compiled runtime
+(`BackendSelector`, `PluginRuntime`, stream/DSL runtimes) OFF the `src/types` schema ONTO a
+gateway-side compiled companion. This is the established pattern; HTTP is already done as the
+reference. **One invocation handles exactly ONE task file.**
+
+## Iron Law
+
+```
+NO PHASE WITHOUT `cargo check` GREEN
+NO HANDOFF WITHOUT THE TWO-ROUTE SUBAGENT REVIEW (correctness + adversarial)
+NEVER COMMIT — hand off to the user for integration test + commit
+NEVER build `plugin_runtime` per-unit — per-rule Arc-sharing is CORRECTNESS-CRITICAL
+```
+
+Violating the letter is violating the spirit. These gates exist because this is a data-plane
+hot-path refactor where state-splitting bugs (e.g. rate-limit) and behavior changes leak in
+silently and only surface under load.
+
+## Red Flags — STOP if you think any of these
+
+- "I'll build the runtime in the unit builder" → NO. Per-unit build splits per-rule RateLimit
+  state N×. Build ONCE per rule, Arc-share into every unit. Re-read invariant 1.
+- "I don't need to read the parent doc, I get the gist" → Step 0 is mandatory. The 5 invariants
+  are non-obvious and each one is a real bug someone already hit.
+- "cargo check passed, skip clippy/fmt" → Phase C requires clippy + fmt.
+- "The change is small, skip the subagent review" → the review is what caught the rate-limit
+  bug on HTTP. No exceptions.
+- "I'll just commit it since it's green" → NEVER commit. The user runs integration tests first.
+- "Both `.rule.plugin_runtime` lines look the same, I'll change both" → the gRPC arm
+  (`(_, Some(unit))`) and other route types share files; change ONLY the target resource's.
+
+## Communication rules
+
+1. **Match the user's language** for narrative (explanations, summaries). Code, paths, error
+   messages, quoted source stay in their original language.
+2. **Every response ends with a status line:**
+   ```
+   [decouple] <resource> · phase A/B/C/review/handoff · cargo: green/red · clippy: -/green ·
+   review: -/pending/passed · committed: NO
+   ```
+
+## Input
+
+`$ARGUMENTS` = path to a `tasks/todo/types-decouple-*.md` task file (e.g.
+`tasks/todo/types-decouple-grpc.md`). If empty, ask which task file. Do NOT auto-pick.
+
+## Parallel-safety note
+
+Multiple `/decouple` runs in separate sessions are fine for DISJOINT resources, but several
+tasks touch shared files (`src/core/gateway/ctx.rs` for `selected_*backend`, the `proxy_http/*`
+filters, `conf_handler` patterns). If you detect the target task overlaps a file another run is
+likely editing, warn the user and suggest serializing those two. Never assume isolation.
+
+---
+
+## Step 0 — Read the design (GATE: mandatory before any edit)
+
+1. Read `$ARGUMENTS` (the per-resource task) AND its parent
+   `tasks/todo/types-decouple-from-gateway-controller.md`.
+2. From the parent, internalize: the locked architecture, the **HTTP recipe** (Phase A/B/C),
+   and the **5 correctness invariants**.
+3. **Prove you read them**: restate the 5 invariants in your own words.
+
+Do not edit code until Step 0.5 is presented and confirmed.
+
+## Step 0.5 — Pre-flight compile audit (GATE: the most important step)
+
+> **Each resource's compile path is DIFFERENT.** The HTTP recipe is the *general* shape; it does
+> NOT capture this resource's specific traps. What de-risked HTTP was not the template — it was an
+> upfront audit that mapped the real compile path + sharing topology + stateful-plugin behavior
+> (that audit is what caught the RateLimit state-splitting bug). **Do that audit for THIS resource
+> before writing any code.** Do NOT assume "same as HTTP".
+
+Produce a written **compile profile** for this resource, answering with file:line evidence:
+
+1. **Today's compile path** — where/how is the runtime built for this resource RIGHT NOW? (a
+   `preparse`/`init_*` on the type? the conf_handler? lazy on first request?) Trace it end to end.
+2. **Sharing topology / fan-out** — how does ONE rule/resource fan out into units/listeners/store
+   entries? HTTP = H hostnames × K matches per rule. THIS resource may differ: gRPC (its own arm),
+   TCP/UDP (port-keyed, maybe no hostname fan-out), TLS (SNI host), plugins (store keyed by ns/name,
+   not a rule at all). **Determine exactly where "compile once" must sit so the post-change sharing
+   is byte-for-byte the same as today.** Getting this wrong splits per-rule state.
+3. **Stateful-state audit** — which plugins/runtimes apply here, and does ANY hold per-rule (or
+   per-key) mutable state that would change behavior if duplicated/split? Re-run the rate-limit-style
+   audit for THIS resource's plugin set (stream plugins, DSL, etc.). Name each stateful one and
+   where its state lives (in-instance vs identity-keyed global store).
+4. **Per-request mutation** — does the selected backend / matched unit get a schema field mutated
+   per-request (the `backend_tls_policy` pattern)? That dictates owned-vs-`Arc` for the compiled
+   schema.
+5. **Carrier** — does a `*RuleUnit` / store already exist, or must one be built (and the route/plugin
+   store re-pointed to hold it)?
+6. **Shared-file / cross-resource arms** — which files does this resource share with other route
+   types (`ctx.rs`, `proxy_http/*`, conf_handler patterns), and which exact arms must stay untouched?
+
+**Risk-scale the audit:**
+- LOW (existing unit, mirrors HTTP — e.g. gRPC): trace the 6 points yourself; explicitly note each
+  "same as HTTP" vs "differs".
+- MED/HIGH (no unit, store-based, DSL — e.g. L4, plugins): **dispatch 2–3 investigation subagents**
+  (compile-path tracer, sharing-topology + stateful-state auditor, carrier/store analyzer), exactly
+  as was done for HTTP. Do not skip — this is where the resource-specific bug hides.
+
+**Deliverable:** present the compile profile + a resource-specific plan stated as a DIFF from the
+HTTP recipe ("same as HTTP except: …"), and the exact edges to remove (file:line). Get user
+confirmation before Phase A.
+
+## Step 1 — Phase A: additive gateway compile (GATE: cargo check green)
+
+Add the compiled companion WITHOUT removing schema fields yet (so it stays compilable and
+behavior-neutral — the request path still uses the schema):
+- `Compiled<Backend>{ schema: <BackendRef> OWNED, plugin_runtime: Arc<PluginRuntime> }` + `Deref→schema`.
+- `<Rule>Runtime{ plugin_runtime, backends: Arc<Vec<Compiled<Backend>>> }`.
+- `compile_<rule>(rule, ns)` — build from `rule.filters` / `br.filters`, **ONCE PER RULE**.
+- `build_backend_selector(&[..])` — eager init, **PER (rule, hostname/listener)**.
+- Unit fields `plugin_runtime` / `backends` / `backend_finder`; if no `*RuleUnit` exists for this
+  resource, introduce one and move its route store to hold it.
+- Route-table build: compile `rule_runtimes` ONCE per rule ABOVE the hostname/listener fan-out;
+  selector per hostname; thread Arcs via the unit-ctx; builders Arc-clone in.
+
+`cargo check --lib` → green. (Phase A unit fields are unused yet — confirm the request path is
+unchanged = behavior-neutral.)
+
+## Step 2 — Phase B: repoint the request path (GATE: cargo check green)
+
+- `select_backend` / by-name lookup / the `pick_backend_ref`-equivalent → take the unit, return
+  `Compiled<Backend>` (use `unit.backend_finder` / `unit.backends`).
+- `ctx.selected_*backend` → `Option<Compiled<Backend>>`; jump/direct writes wrap (empty runtime
+  for synthetic endpoints).
+- Access sites: `unit.rule.plugin_runtime` → `unit.plugin_runtime`; backend `.plugin_runtime` is
+  the compiled field; field reads ride `Deref` unchanged; the ONE per-request schema mutation
+  (e.g. `backend_tls_policy`) uses explicit `.schema.`.
+- Watch the shared-file traps: change ONLY this resource's arms, not other route types' / gRPC's.
+
+`cargo check --all-targets` → green.
+
+## Step 3 — Phase C: remove schema fields (GATE: cargo check + clippy + fmt)
+
+- Delete the `#[serde(skip)]` runtime fields from the schema (Rule + BackendRef); fix manual
+  `Clone`/`Debug`; delete runtime-building from `preparse`/parse; remove the gateway imports;
+  switch `compile_<rule>` to build from filters (if it was temporarily cloning the schema's).
+- Let `cargo check` pinpoint every now-broken `.rule.plugin_runtime` site; fix each, distinguishing
+  this resource from the others that share files.
+- `cargo check --all-targets` → green; `cargo clippy --all-targets` → green; `cargo fmt --all`.
+- Verify `grep -rnE "crate::core::(gateway|controller)" <the resource's types files>` is EMPTY.
+
+## Step 4 — Two-route subagent review (GATE: mandatory, no exceptions)
+
+Dispatch 2 subagents IN PARALLEL on the uncommitted diff (`git diff`):
+1. **Correctness**: behavior-neutral where intended? per-rule sharing topology EXACTLY matches
+   today (plugin_runtime once per rule Arc-shared; selector per rule/hostname)? index/panic risk?
+   edge cases (no backends, empty matches, default match)? any accidental hot-path read of new
+   fields before they should be live?
+2. **Adversarial**: try to break it — hidden per-rule state-splitting (RateLimit CMS), the
+   shared-file/gRPC-arm trap, clone semantics (is the unit ever value-cloned?), selector
+   order/weights vs the old path, borrow traps from `Deref`.
+
+If either returns a BLOCKER → fix → re-run the relevant review. Do not proceed to handoff with an
+open blocker. Summarize both verdicts to the user.
+
+## Step 5 — HANDOFF (NO COMMIT)
+
+STOP. Present to the user:
+- what changed (the resource is now decoupled; `grep` confirms zero gateway edges in its types files);
+- `cargo check`/`clippy` green; both subagent reviews passed (with their key findings);
+- **Ask the user to run** `./examples/test/scripts/integration/run_integration.sh -r <Resource>`
+  (and any behavior-specific scenarios named in the task: LB distribution, rate limit, jumps,
+  backend TLS, backend-level plugins);
+- The diff is staged-ready but **NOT committed** — the user commits after integration tests pass.
+- Update the parent task doc's progress line (mark this resource done, ⏳ awaiting integration test).
+
+Never run `git commit`. End on the status line with `committed: NO`.

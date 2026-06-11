@@ -6,10 +6,13 @@
 //! - Per-port route table ([`udp_route_table`])
 
 mod conf_handler_impl;
+mod route_unit;
 mod routes_mgr;
 pub(crate) mod udp_route_table;
 
 pub mod edgion_udp;
+
+pub use route_unit::UdpRouteUnit;
 
 pub use routes_mgr::{
     get_global_udp_route_managers, GlobalUdpRouteManagers, UdpPortRouteManager, UdpRouteManagerStats,

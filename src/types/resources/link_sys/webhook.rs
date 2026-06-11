@@ -6,8 +6,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::core::gateway::backends::service_kind::EdgionService;
-use crate::types::resources::common::{SecretSlot, TlsConfig};
+use crate::types::resources::common::{EdgionService, SecretSlot, TlsConfig};
 
 // ============================================================
 // WebhookAuth — authentication configuration

@@ -74,8 +74,13 @@ impl EdgionPluginsHandler {
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
     fn preparse(&self, ep: &mut EdgionPlugins, _ctx: &HandlerContext) -> Vec<String> {
-        ep.preparse();
-        ep.get_preparse_errors().to_vec()
+        // The plugin runtime is now built gateway-side (`compile_plugins`); the
+        // schema carries no runtime. The controller only needs the validation
+        // errors for the K8s status condition, so compile and take the errors,
+        // discarding the runtime (it is serialized away to the gateway anyway).
+        crate::core::gateway::plugins::http::compile_plugins(ep)
+            .preparse_errors
+            .clone()
     }
 
     async fn parse(&self, mut ep: EdgionPlugins, ctx: &HandlerContext) -> ProcessResult<EdgionPlugins> {

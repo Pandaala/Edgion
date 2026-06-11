@@ -4,10 +4,11 @@
 //! enabling conditional execution of plugins based on various criteria.
 
 mod evaluator;
-mod types;
 
 pub use evaluator::{ConditionEvalResult, EvaluationResult};
-pub use types::{
+// Condition config types now live in the `types` schema layer (leaf crate).
+// Re-export them here so existing `runtime::conditions::*` consumers are unaffected.
+pub use crate::types::resources::edgion_plugins::conditions::{
     Condition, ExcludeCondition, IncludeCondition, KeyExistCondition, KeyMatchCondition, PluginConditions,
     ProbabilityCondition, TimeRangeCondition,
 };

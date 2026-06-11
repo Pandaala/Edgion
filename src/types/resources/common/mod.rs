@@ -3,10 +3,12 @@
 pub mod group_name;
 pub mod secret_object_ref;
 pub mod secret_slot;
+pub mod service_kind;
 pub mod tls;
 
 pub use secret_object_ref::SecretObjectReference;
 pub use secret_slot::SecretSlot;
+pub use service_kind::EdgionService;
 pub use tls::{TlsCerts, TlsConfig};
 
 // ---- Types shared across all route resources ----

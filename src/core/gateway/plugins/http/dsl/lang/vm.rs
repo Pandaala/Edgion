@@ -111,21 +111,11 @@ impl Default for VmLimits {
 
 // ==================== Error Policy ====================
 
-/// DSL error handling policy — user-configurable per plugin
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum DslErrorPolicy {
-    /// Ignore error, continue to next plugin (GoodNext) — fail-open
-    #[serde(alias = "ignore")]
-    #[default]
-    Ignore,
-    /// Return error response to client (default 500)
-    #[serde(alias = "deny")]
-    Deny,
-    /// Return a specific status code + body
-    #[serde(alias = "denyWith")]
-    DenyWith { status: u16, body: Option<String> },
-}
+// `DslErrorPolicy` is serializable schema and now lives in the `types` leaf
+// layer. Re-export it here so existing `vm::DslErrorPolicy` references (config,
+// plugin, tests) keep resolving; `apply_error_policy` below maps its variants
+// onto runtime `PluginRunningResult`s.
+pub use crate::types::resources::edgion_plugins::plugin_configs::dsl::DslErrorPolicy;
 
 // ==================== VM State ====================
 

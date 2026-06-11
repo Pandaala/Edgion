@@ -889,6 +889,7 @@ run_all_tests() {
                 if [ -z "$G_ITEM" ]; then
                     run_test "GRPCRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Basic" || test_failed=true
                     run_test "GRPCRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Match" || test_failed=true
+                    run_test "GRPCRoute_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i RateLimit" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     run_test "GRPCRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i ${G_ITEM}" || test_failed=true
@@ -1103,6 +1104,7 @@ run_all_tests() {
         # GRPCRoute Tests
         run_test "GRPCRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Basic" || test_failed=true
         run_test "GRPCRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Match" || test_failed=true
+        run_test "GRPCRoute_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i RateLimit" || test_failed=true
         
         # TCPRoute Tests
         run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true

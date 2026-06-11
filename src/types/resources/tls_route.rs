@@ -5,14 +5,9 @@
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::sync::Arc;
 
 use super::common::{ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
-use crate::core::gateway::lb::BackendSelector;
-use crate::core::gateway::plugins::PluginRuntime;
-use crate::types::resources::common::TcpKeepaliveConfig;
 use crate::types::ListenerKey;
 
 /// API group for TLSRoute
@@ -60,74 +55,12 @@ pub struct TLSRouteSpec {
 }
 
 /// TLSRouteRule defines TLS routing rules
-#[derive(Deserialize, Serialize, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TLSRouteRule {
     /// BackendRefs defines the backends where matching requests should be sent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_refs: Option<Vec<TLSBackendRef>>,
-
-    /// Backend finder for load balancing (not serialized/deserialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub backend_finder: BackendSelector<TLSBackendRef>,
-
-    /// Filter runtime (runtime only, not serialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub plugin_runtime: Arc<PluginRuntime>,
-
-    /// Proxy Protocol version to send to upstream (runtime only, from annotation).
-    /// None = disabled, Some(2) = PP2.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub proxy_protocol_version: Option<u8>,
-
-    /// Store key for dynamic stream plugin lookup (runtime only, from annotation).
-    /// Format: "namespace/name" referencing an EdgionStreamPlugins resource.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub stream_plugin_store_key: Option<String>,
-
-    /// Max upstream connect attempts (runtime only, from annotation).
-    /// 1 = no retry (default). Values > 1 enable retry with next-backend selection.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub max_connect_retries: u32,
-
-    /// Resolved upstream TCP keepalive (runtime only, from annotations).
-    /// None = disabled (default). See `resolve_tcp_keepalive`.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub tcp_keepalive: Option<TcpKeepaliveConfig>,
-}
-
-impl Clone for TLSRouteRule {
-    fn clone(&self) -> Self {
-        Self {
-            backend_refs: self.backend_refs.clone(),
-            backend_finder: BackendSelector::new(),
-            plugin_runtime: self.plugin_runtime.clone(),
-            proxy_protocol_version: self.proxy_protocol_version,
-            stream_plugin_store_key: self.stream_plugin_store_key.clone(),
-            max_connect_retries: self.max_connect_retries,
-            tcp_keepalive: self.tcp_keepalive.clone(),
-        }
-    }
-}
-
-impl fmt::Debug for TLSRouteRule {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TLSRouteRule")
-            .field("backend_refs", &self.backend_refs)
-            .field("backend_finder", &"<skipped>")
-            .field("plugin_runtime", &self.plugin_runtime)
-            .field("proxy_protocol_version", &self.proxy_protocol_version)
-            .field("stream_plugin_store_key", &self.stream_plugin_store_key)
-            .field("max_connect_retries", &self.max_connect_retries)
-            .field("tcp_keepalive", &self.tcp_keepalive)
-            .finish()
-    }
 }
 
 /// TLSBackendRef defines a backend for TLS traffic
@@ -161,11 +94,6 @@ pub struct TLSBackendRef {
     #[serde(skip)]
     #[schemars(skip)]
     pub extension_info: BackendExtensionInfo,
-
-    /// Filter runtime (runtime only, not serialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub plugin_runtime: Arc<PluginRuntime>,
 
     /// Cross-namespace reference denial info
     /// Set by Controller when this backend's cross-namespace reference
@@ -277,15 +205,8 @@ mod tests {
                         group: None,
                         kind: None,
                         extension_info: Default::default(),
-                        plugin_runtime: Default::default(),
                         ref_denied: None,
                     }]),
-                    backend_finder: BackendSelector::new(),
-                    plugin_runtime: Default::default(),
-                    proxy_protocol_version: None,
-                    stream_plugin_store_key: None,
-                    max_connect_retries: 1,
-                    tcp_keepalive: None,
                 }]),
                 resolved_listeners: None,
                 effective_hostnames: None,

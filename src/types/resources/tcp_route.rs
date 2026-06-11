@@ -5,13 +5,8 @@
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::sync::Arc;
 
 use super::common::{ParentReference, RefDenied};
-use crate::core::gateway::lb::BackendSelector;
-use crate::core::gateway::plugins::StreamPluginRuntime;
-use crate::types::resources::common::TcpKeepaliveConfig;
 use crate::types::ListenerKey;
 
 /// API group for TCPRoute
@@ -48,61 +43,12 @@ pub struct TCPRouteSpec {
 }
 
 /// TCPRouteRule defines TCP routing rules
-#[derive(Deserialize, Serialize, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TCPRouteRule {
     /// BackendRefs defines the backends where matching requests should be sent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_refs: Option<Vec<TCPBackendRef>>,
-
-    /// Backend finder for load balancing (not serialized/deserialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub backend_finder: BackendSelector<TCPBackendRef>,
-
-    /// Stream plugin runtime (runtime only, not serialized)
-    /// This is populated from route annotations during pre-processing
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub stream_plugin_runtime: Arc<StreamPluginRuntime>,
-
-    /// Store key for dynamic stream plugin lookup (runtime only, not serialized)
-    /// Format: "namespace/name" referencing an EdgionStreamPlugins resource.
-    /// Used for dynamic lookup from StreamPluginStore on each connection,
-    /// avoiding resource loading order issues and supporting hot-reloading.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub stream_plugin_store_key: Option<String>,
-
-    /// Resolved upstream TCP keepalive (runtime only, from annotations).
-    /// None = disabled (default). See `resolve_tcp_keepalive`.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub tcp_keepalive: Option<TcpKeepaliveConfig>,
-}
-
-impl Clone for TCPRouteRule {
-    fn clone(&self) -> Self {
-        Self {
-            backend_refs: self.backend_refs.clone(),
-            backend_finder: BackendSelector::new(),
-            stream_plugin_runtime: self.stream_plugin_runtime.clone(),
-            stream_plugin_store_key: self.stream_plugin_store_key.clone(),
-            tcp_keepalive: self.tcp_keepalive.clone(),
-        }
-    }
-}
-
-impl fmt::Debug for TCPRouteRule {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TCPRouteRule")
-            .field("backend_refs", &self.backend_refs)
-            .field("backend_finder", &"<skipped>")
-            .field("stream_plugin_runtime", &self.stream_plugin_runtime)
-            .field("stream_plugin_store_key", &self.stream_plugin_store_key)
-            .field("tcp_keepalive", &self.tcp_keepalive)
-            .finish()
-    }
 }
 
 /// TCPBackendRef defines a backend for TCP traffic
