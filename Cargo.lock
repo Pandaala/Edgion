@@ -1301,6 +1301,7 @@ dependencies = [
  "cookie",
  "crc32fast",
  "dashmap",
+ "edgion-resources",
  "etcd-client",
  "expect-test",
  "fred",
@@ -1374,6 +1375,33 @@ dependencies = [
  "walkdir",
  "wiremock",
  "x509-parser 0.18.1",
+ "zeroize",
+]
+
+[[package]]
+name = "edgion-resources"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "clap",
+ "http",
+ "jsonwebtoken",
+ "k8s-openapi",
+ "kube",
+ "parking_lot",
+ "pingora-core",
+ "prost 0.13.5",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "smallvec",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
  "zeroize",
 ]
 

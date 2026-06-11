@@ -1,0 +1,19 @@
+//! DebugAccessLogToHeader plugin configuration
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// DebugAccessLogToHeader plugin configuration
+///
+/// This plugin adds the current access log as a JSON string to the response header
+/// for debugging purposes. No configuration is required - simply enable the plugin.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct DebugAccessLogToHeaderConfig {}
+
+use crate::resources::edgion_plugins::PluginValidation;
+
+impl PluginValidation for DebugAccessLogToHeaderConfig {
+    fn validation_error(&self) -> Option<String> {
+        None
+    }
+}

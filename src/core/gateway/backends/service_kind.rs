@@ -1,1 +1,1 @@
-pub use crate::types::resources::common::EdgionService;
+pub use edgion_resources::resources::common::EdgionService;

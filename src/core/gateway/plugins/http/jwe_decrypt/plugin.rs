@@ -18,8 +18,8 @@ use crate::core::gateway::plugins::http::common::auth_common::{
     apply_auth_failure_delay, send_gateway_auth_error_response, set_claims_headers,
 };
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{JweContentEncryption, JweDecryptConfig};
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::{JweContentEncryption, JweDecryptConfig};
 
 #[derive(Debug, Clone, Copy)]
 enum JweFailure {
@@ -399,7 +399,7 @@ impl RequestFilter for JweDecrypt {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-    use crate::types::resources::edgion_plugins::ResolvedJweCredential;
+    use edgion_resources::resources::edgion_plugins::ResolvedJweCredential;
     use serde_json::json;
 
     fn test_key() -> Vec<u8> {

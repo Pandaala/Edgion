@@ -9,7 +9,7 @@ use futures::StreamExt;
 
 use super::health::{record_passive_result, should_halfopen_probe};
 use super::runtime::WebhookRuntime;
-use crate::types::resources::link_sys::webhook::WebhookAuth;
+use edgion_resources::resources::link_sys::webhook::WebhookAuth;
 
 // ============================================================
 // Public types
@@ -348,7 +348,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::core::gateway::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
-    use crate::types::resources::link_sys::webhook::{WebhookRetry, WebhookServiceConfig, WebhookTarget};
+    use edgion_resources::resources::link_sys::webhook::{WebhookRetry, WebhookServiceConfig, WebhookTarget};
 
     // ============================================================
     // Test helpers
@@ -610,8 +610,8 @@ mod tests {
     /// 6. Bearer auth injection: Authorization: Bearer tok123 is sent to the server.
     #[tokio::test]
     async fn bearer_auth_injects_authorization_header() {
-        use crate::types::resources::common::SecretObjectReference;
-        use crate::types::resources::link_sys::webhook::WebhookAuth;
+        use edgion_resources::resources::common::SecretObjectReference;
+        use edgion_resources::resources::link_sys::webhook::WebhookAuth;
         use wiremock::matchers::{header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -626,7 +626,7 @@ mod tests {
         let secret = make_secret("bearerToken", "tok123");
         let runtime = make_runtime(format!("{}/auth", server.uri()), |c| {
             c.max_response_bytes = 1024;
-            use crate::types::resources::common::SecretSlot;
+            use edgion_resources::resources::common::SecretSlot;
             c.auth = Some(WebhookAuth::Bearer {
                 slot: SecretSlot {
                     secret_ref: SecretObjectReference {
@@ -648,8 +648,8 @@ mod tests {
     /// 7. ApiKey header auth injection: X-API-Key: k123 is sent to the server.
     #[tokio::test]
     async fn api_key_header_auth_injects_custom_header() {
-        use crate::types::resources::common::SecretObjectReference;
-        use crate::types::resources::link_sys::webhook::WebhookAuth;
+        use edgion_resources::resources::common::SecretObjectReference;
+        use edgion_resources::resources::link_sys::webhook::WebhookAuth;
         use wiremock::matchers::{header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -664,7 +664,7 @@ mod tests {
         let secret = make_secret("apiKey", "k123");
         let runtime = make_runtime(format!("{}/key", server.uri()), |c| {
             c.max_response_bytes = 1024;
-            use crate::types::resources::common::SecretSlot;
+            use edgion_resources::resources::common::SecretSlot;
             c.auth = Some(WebhookAuth::ApiKey {
                 slot: SecretSlot {
                     secret_ref: SecretObjectReference {

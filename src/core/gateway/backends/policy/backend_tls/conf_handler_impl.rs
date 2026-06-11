@@ -1,6 +1,6 @@
 use super::{get_global_backend_tls_policy_store, BackendTLSPolicyStore};
 use crate::core::common::conf_sync::traits::ConfHandler;
-use crate::types::resources::BackendTLSPolicy;
+use edgion_resources::resources::BackendTLSPolicy;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -45,7 +45,7 @@ pub fn create_backend_tls_policy_handler() -> Box<dyn ConfHandler<BackendTLSPoli
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::backend_tls_policy::*;
+    use edgion_resources::resources::backend_tls_policy::*;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
     fn create_test_policy(namespace: &str, name: &str, target_name: &str) -> BackendTLSPolicy {

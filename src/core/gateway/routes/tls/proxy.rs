@@ -23,8 +23,8 @@ use crate::core::gateway::routes::common::{is_core_service_backend_ref, UNSAFE_U
 use crate::core::gateway::routes::l4_duplex::bidirectional_relay;
 use crate::core::gateway::routes::tls::TlsRouteManager;
 use crate::core::gateway::{MatchedInfo, Rsc, TlsConnMeta};
-use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::types::{ListenerKey, ResourceMeta};
+use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
+use edgion_resources::{ListenerKey, ResourceMeta};
 use serde::Serialize;
 
 use super::{tls_connect_retry_backoff, TlsDuplexHooks};
@@ -392,7 +392,7 @@ impl EdgionTlsTcpProxy {
 
     /// Bidirectional data transfer between downstream (TLS-terminated) and upstream (TCP)
     async fn duplex(&self, downstream: Stream, upstream: Stream, ctx: &mut TlsContext) {
-        let idle = crate::types::resources::edgion_gateway_config::resolve_tcp_idle_timeout(
+        let idle = edgion_resources::resources::edgion_gateway_config::resolve_tcp_idle_timeout(
             self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
         );
         bidirectional_relay(downstream, upstream, TlsDuplexHooks { ctx }, idle).await;

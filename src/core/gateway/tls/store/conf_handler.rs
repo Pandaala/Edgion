@@ -1,6 +1,6 @@
 use super::tls_store::{get_global_tls_store, TlsStore};
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
-use crate::types::EdgionTls;
+use edgion_resources::EdgionTls;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -30,9 +30,9 @@ pub fn create_tls_handler() -> Box<dyn ConfHandler<EdgionTls> + Send + Sync> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::constants::secret_keys::tls::{CERT, KEY};
-    use crate::types::resources::edgion_tls::EdgionTlsSpec;
-    use crate::types::resources::gateway::SecretObjectReference;
+    use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
+    use edgion_resources::resources::edgion_tls::EdgionTlsSpec;
+    use edgion_resources::resources::gateway::SecretObjectReference;
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use k8s_openapi::ByteString;

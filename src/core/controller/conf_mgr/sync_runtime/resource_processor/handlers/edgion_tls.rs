@@ -13,11 +13,11 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler,
     ResolvedRefsError, ResourceRef,
 };
-use crate::types::prelude_resources::EdgionTls;
-use crate::types::resources::common::SecretObjectReference;
-use crate::types::resources::edgion_tls::EdgionTlsStatus;
-use crate::types::resources::http_route::RouteParentStatus;
-use crate::types::ResourceKind;
+use edgion_resources::prelude_resources::EdgionTls;
+use edgion_resources::resources::common::SecretObjectReference;
+use edgion_resources::resources::edgion_tls::EdgionTlsStatus;
+use edgion_resources::resources::http_route::RouteParentStatus;
+use edgion_resources::ResourceKind;
 
 /// Returns `true` when `secret_ref` points at a different namespace than `owner_ns`,
 /// ReferenceGrant validation is enabled, and no `ReferenceGrant` authorizes the
@@ -91,7 +91,7 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         {
             // Secret found — check cert/key matching
             if let Some(data) = secret.data.as_ref() {
-                use crate::types::constants::secret_keys::tls::{CERT, KEY};
+                use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
 
                 let cert_pem = data.get(CERT).and_then(|b| std::str::from_utf8(&b.0).ok());
                 let key_pem = data.get(KEY).and_then(|b| std::str::from_utf8(&b.0).ok());
@@ -399,9 +399,9 @@ mod tests {
     use super::*;
     use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
-    use crate::types::prelude_resources::Gateway;
-    use crate::types::resources::common::ParentReference;
-    use crate::types::resources::gateway::{GatewaySpec, Listener as GatewayListener, SecretObjectReference};
+    use edgion_resources::prelude_resources::Gateway;
+    use edgion_resources::resources::common::ParentReference;
+    use edgion_resources::resources::gateway::{GatewaySpec, Listener as GatewayListener, SecretObjectReference};
     use kube::api::ObjectMeta;
     use std::sync::Arc;
 
@@ -483,7 +483,7 @@ mod tests {
                 generation: Some(1),
                 ..Default::default()
             },
-            spec: crate::types::resources::edgion_tls::EdgionTlsSpec {
+            spec: edgion_resources::resources::edgion_tls::EdgionTlsSpec {
                 parent_refs,
                 hosts: vec!["example.com".to_string()],
                 secret_ref: SecretObjectReference {
@@ -686,7 +686,7 @@ mod tests {
     /// Build a HandlerContext with a Secret (cert_pem + key_pem) populated in the secret store.
     fn make_ctx_with_cert_secret(cert_pem: &str, key_pem: &str) -> HandlerContext {
         use crate::core::controller::conf_mgr::ControllerRuntime;
-        use crate::types::constants::secret_keys::tls::{CERT, KEY};
+        use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
         use k8s_openapi::api::core::v1::Secret;
         use k8s_openapi::ByteString;
         use std::collections::{BTreeMap, HashMap};
@@ -742,8 +742,8 @@ mod tests {
     /// namespace to reference `""/Secret`.
     fn make_ctx_cross_ns(secret_ns: &str, secret_name: &str, grant_from_ns: Option<&str>) -> HandlerContext {
         use crate::core::controller::conf_mgr::ControllerRuntime;
-        use crate::types::constants::secret_keys::tls::{CERT, KEY};
-        use crate::types::resources::{ReferenceGrant, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
+        use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
+        use edgion_resources::resources::{ReferenceGrant, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
         use k8s_openapi::api::core::v1::Secret;
         use k8s_openapi::ByteString;
         use std::collections::{BTreeMap, HashMap};

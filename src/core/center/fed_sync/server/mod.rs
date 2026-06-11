@@ -29,8 +29,8 @@ use crate::core::common::fed_sync::proto::{
     RegisterRequest,
 };
 use crate::core::common::observe::fed_metrics;
-use crate::types::resource::meta::ResourceMeta;
-use crate::types::resources::plugin_metadata::PluginMetaData;
+use edgion_resources::resource::meta::ResourceMeta;
+use edgion_resources::resources::plugin_metadata::PluginMetaData;
 
 /// Label value used on fed-sync metrics whose `kind` dimension is
 /// currently hardcoded. The federation server only streams PluginMetaData

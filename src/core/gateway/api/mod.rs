@@ -1,11 +1,11 @@
 use crate::core::gateway::conf_sync::ConfigClient;
-use crate::types::ResourceKind;
 use axum::{
     extract::{Path, Query, State},
     response::Json,
     routing::get,
     Router,
 };
+use edgion_resources::ResourceKind;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -108,7 +108,7 @@ async fn get_server_info(State(client): State<Arc<ConfigClient>>) -> Json<ApiRes
 /// Kinds not cached on the gateway (e.g. `ReferenceGrant`, `Secret`) resolve to
 /// `None` and yield an empty list.
 fn list_client_resources(client: &ConfigClient, kind: ResourceKind) -> Vec<serde_json::Value> {
-    let _guard = crate::types::redact::AdminRedactGuard::new();
+    let _guard = edgion_resources::redact::AdminRedactGuard::new();
     client
         .get_dyn_cache(kind)
         .map(|cache| cache.list_json_dyn())
@@ -125,7 +125,7 @@ fn get_client_resource(
     namespace: Option<&str>,
     name: &str,
 ) -> Option<serde_json::Value> {
-    let cluster_scoped = crate::types::resource::is_kind_cluster_scoped(kind);
+    let cluster_scoped = edgion_resources::resource::is_kind_cluster_scoped(kind);
     list_client_resources(client, kind).into_iter().find(|value| {
         let meta = value.get("metadata");
         let name_matches = meta.and_then(|m| m.get("name")).and_then(|n| n.as_str()) == Some(name);
@@ -1526,8 +1526,8 @@ pub async fn serve_probe_with_shutdown(
 #[cfg(test)]
 mod edgion_tls_scrub_tests {
     use super::*;
-    use crate::types::resources::common::SecretObjectReference;
-    use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls, EdgionTlsSpec};
+    use edgion_resources::resources::common::SecretObjectReference;
+    use edgion_resources::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls, EdgionTlsSpec};
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use kube::api::ObjectMeta;

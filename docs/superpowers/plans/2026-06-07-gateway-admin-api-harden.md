@@ -4,7 +4,7 @@
 
 **Goal:** Make the gateway data-plane admin API `/configclient/{kind}` mandatorily redact every resolved/inline secret it serializes, and move the test-only `/api/v1/server-info` endpoint into the integration-testing-gated router.
 
-**Architecture:** A new `src/types/redact.rs` module provides a gateway-only thread-local RAII guard (`AdminRedactGuard`) and two generic serde `serialize_with` adapters (`redact_opt` for `Option<T>`, `redact_required` for bare fields). Secret-bearing fields on the synced resource structs carry the adapter; the guard is constructed inside the synchronous `list_client_resources` function so both the list and single-get admin paths serialize under it. Default (no guard) emits real values, so the controller's conf_sync transport serialization — in a separate process — is unaffected. This reuses the existing access-log "sensitive field" idiom (`src/types/sensitive.rs`) but with independent, always-on ambient state.
+**Architecture:** A new `edgion-resources/src/redact.rs` module provides a gateway-only thread-local RAII guard (`AdminRedactGuard`) and two generic serde `serialize_with` adapters (`redact_opt` for `Option<T>`, `redact_required` for bare fields). Secret-bearing fields on the synced resource structs carry the adapter; the guard is constructed inside the synchronous `list_client_resources` function so both the list and single-get admin paths serialize under it. Default (no guard) emits real values, so the controller's conf_sync transport serialization — in a separate process — is unaffected. This reuses the existing access-log "sensitive field" idiom (`edgion-resources/src/sensitive.rs`) but with independent, always-on ambient state.
 
 **Tech Stack:** Rust, serde / serde_json, axum 0.8, k8s_openapi, tokio. Spec: `docs/superpowers/specs/2026-06-07-gateway-admin-api-harden-design.md`.
 
@@ -17,21 +17,21 @@
 ## File map
 
 **Create:**
-- `src/types/redact.rs` — the redaction guard + two serde adapters + unit tests.
+- `edgion-resources/src/redact.rs` — the redaction guard + two serde adapters + unit tests.
 
 **Modify (wiring):**
-- `src/types/mod.rs` — register `pub mod redact;`.
+- `edgion-resources/src/mod.rs` — register `pub mod redact;`.
 - `src/core/gateway/api/mod.rs` — guard inside `list_client_resources`; delete EdgionTls imperative scrub; move `/api/v1/server-info` to the testing router; rewrite the EdgionTls test; add a router-shape test.
 
 **Modify (field annotations — add `serialize_with`):**
-- `src/types/resources/common/secret_slot.rs`, `src/types/resources/common/tls.rs`
-- `src/types/resources/edgion_tls.rs`
-- `src/types/resources/gateway.rs`
-- `src/types/resources/backend_tls_policy.rs`
-- `src/types/resources/edgion_plugins/plugin_configs/{jwe_decrypt,jwt_auth,basic_auth,hmac_auth,openid_connect,key_auth,header_cert_auth,csrf}.rs`
-- `src/types/resources/link_sys/redis.rs`
-- `src/types/resources/edgion_acme.rs`
-- `src/types/resources/plugin_metadata/key_list.rs`
+- `edgion-resources/src/resources/common/secret_slot.rs`, `edgion-resources/src/resources/common/tls.rs`
+- `edgion-resources/src/resources/edgion_tls.rs`
+- `edgion-resources/src/resources/gateway.rs`
+- `edgion-resources/src/resources/backend_tls_policy.rs`
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/{jwe_decrypt,jwt_auth,basic_auth,hmac_auth,openid_connect,key_auth,header_cert_auth,csrf}.rs`
+- `edgion-resources/src/resources/link_sys/redis.rs`
+- `edgion-resources/src/resources/edgion_acme.rs`
+- `edgion-resources/src/resources/plugin_metadata/key_list.rs`
 
 **Modify (docs/cleanup, final task):**
 - doc comments in `api/mod.rs`, `conf_sync/conf_client/config_client.rs`, `conf_sync/cache_client/cache.rs`
@@ -40,15 +40,15 @@
 
 ---
 
-## Task 1: Redaction module (`src/types/redact.rs`)
+## Task 1: Redaction module (`edgion-resources/src/redact.rs`)
 
 **Files:**
-- Create: `src/types/redact.rs`
-- Modify: `src/types/mod.rs` (add `pub mod redact;`)
+- Create: `edgion-resources/src/redact.rs`
+- Modify: `edgion-resources/src/mod.rs` (add `pub mod redact;`)
 
 - [ ] **Step 1: Register the module**
 
-In `src/types/mod.rs`, add the line `pub mod redact;` in the alphabetical `pub mod` block (it sits between `pub mod public...`/`resources` — place it right after `pub mod resources;` on line 12, or anywhere in that contiguous list). Resulting neighbourhood:
+In `edgion-resources/src/mod.rs`, add the line `pub mod redact;` in the alphabetical `pub mod` block (it sits between `pub mod public...`/`resources` — place it right after `pub mod resources;` on line 12, or anywhere in that contiguous list). Resulting neighbourhood:
 
 ```rust
 pub mod resources;
@@ -57,9 +57,9 @@ pub mod schema;
 pub mod sensitive;
 ```
 
-- [ ] **Step 2: Write `src/types/redact.rs` with the guard, adapters, and failing-first unit tests**
+- [ ] **Step 2: Write `edgion-resources/src/redact.rs` with the guard, adapters, and failing-first unit tests**
 
-Create `src/types/redact.rs` with this exact content:
+Create `edgion-resources/src/redact.rs` with this exact content:
 
 ```rust
 //! Mandatory secret redaction for the gateway admin `/configclient` output.
@@ -236,7 +236,7 @@ Expected: 4 tests pass (`redacts_when_guard_active`, `emits_real_value_without_g
 Run: `cargo fmt --all`
 
 ```bash
-git add src/types/redact.rs src/types/mod.rs
+git add edgion-resources/src/redact.rs edgion-resources/src/mod.rs
 git commit -m "feat(gateway): add admin-scope secret redaction module (types/redact.rs)"
 ```
 
@@ -246,11 +246,11 @@ git commit -m "feat(gateway): add admin-scope secret redaction module (types/red
 
 **Files:**
 - Modify: `src/core/gateway/api/mod.rs` (`list_client_resources`, delete `scrub_edgion_tls_secrets` + `to_json_vec_edgion_tls`, the top-level `use`, doc comments, the EdgionTls test)
-- Modify: `src/types/resources/edgion_tls.rs` (annotate `spec.secret` + `client_auth.ca_secret`)
+- Modify: `edgion-resources/src/resources/edgion_tls.rs` (annotate `spec.secret` + `client_auth.ca_secret`)
 
 - [ ] **Step 1: Annotate the two EdgionTls secret fields**
 
-In `src/types/resources/edgion_tls.rs`, the `EdgionTlsSpec.secret` field currently reads (line ~170-172):
+In `edgion-resources/src/resources/edgion_tls.rs`, the `EdgionTlsSpec.secret` field currently reads (line ~170-172):
 
 ```rust
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -401,7 +401,7 @@ Expected: `clean` (the moved import compiles; no `unused_imports`).
 Run: `cargo fmt --all`
 
 ```bash
-git add src/core/gateway/api/mod.rs src/types/resources/edgion_tls.rs
+git add src/core/gateway/api/mod.rs edgion-resources/src/resources/edgion_tls.rs
 git commit -m "feat(gateway): redact EdgionTls secrets via serde adapter + admin guard"
 ```
 
@@ -420,25 +420,25 @@ Every field below currently has a `#[serde(...)]` attribute containing `skip_ser
 
 **Files / fields to annotate:**
 
-- `src/types/resources/common/secret_slot.rs` — `SecretSlot.secret` (line ~25 attr; field line 27)
-- `src/types/resources/common/tls.rs` — `TlsCerts.secret` (attr line ~89; field 91)
-- `src/types/resources/gateway.rs` — `GatewayTLSConfig.secrets` (attr ~189), `GatewayTLSConfig.resolved_frontend_ca_secrets` (attr ~198), `GatewayBackendTLS.resolved_client_certificate` (attr ~121)
-- `src/types/resources/backend_tls_policy.rs` — `resolved_ca_certificates` and `resolved_client_certificate` in BOTH the v1 spec (lines ~52, ~57) and the v1alpha3 spec (lines ~93, ~98)
-- `src/types/resources/edgion_plugins/plugin_configs/jwe_decrypt.rs` — `resolved_credential` (field line ~143)
-- `src/types/resources/edgion_plugins/plugin_configs/jwt_auth.rs` — `resolved_groups_by_iss` (field line ~202)
-- `src/types/resources/edgion_plugins/plugin_configs/basic_auth.rs` — `resolved_users` (attr ~78; field 80)
-- `src/types/resources/edgion_plugins/plugin_configs/hmac_auth.rs` — `resolved_credentials` (field line ~157)
-- `src/types/resources/edgion_plugins/plugin_configs/openid_connect.rs` — `resolved_client_secret` (field ~207) AND `resolved_session_secret` (field ~210)
-- `src/types/resources/edgion_plugins/plugin_configs/key_auth.rs` — `resolved_keys` (attr ~107; field 109)
-- `src/types/resources/edgion_plugins/plugin_configs/header_cert_auth.rs` — `resolved_ca_secrets` (field ~122)
-- `src/types/resources/link_sys/redis.rs` — `RedisSentinel.password` (attr ~162; field 163)
-- `src/types/resources/edgion_acme.rs` — `EdgionAcmeSpec.external_account_binding` (attr ~280; field 281)
+- `edgion-resources/src/resources/common/secret_slot.rs` — `SecretSlot.secret` (line ~25 attr; field line 27)
+- `edgion-resources/src/resources/common/tls.rs` — `TlsCerts.secret` (attr line ~89; field 91)
+- `edgion-resources/src/resources/gateway.rs` — `GatewayTLSConfig.secrets` (attr ~189), `GatewayTLSConfig.resolved_frontend_ca_secrets` (attr ~198), `GatewayBackendTLS.resolved_client_certificate` (attr ~121)
+- `edgion-resources/src/resources/backend_tls_policy.rs` — `resolved_ca_certificates` and `resolved_client_certificate` in BOTH the v1 spec (lines ~52, ~57) and the v1alpha3 spec (lines ~93, ~98)
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/jwe_decrypt.rs` — `resolved_credential` (field line ~143)
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/jwt_auth.rs` — `resolved_groups_by_iss` (field line ~202)
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/basic_auth.rs` — `resolved_users` (attr ~78; field 80)
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/hmac_auth.rs` — `resolved_credentials` (field line ~157)
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/openid_connect.rs` — `resolved_client_secret` (field ~207) AND `resolved_session_secret` (field ~210)
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/key_auth.rs` — `resolved_keys` (attr ~107; field 109)
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/header_cert_auth.rs` — `resolved_ca_secrets` (field ~122)
+- `edgion-resources/src/resources/link_sys/redis.rs` — `RedisSentinel.password` (attr ~162; field 163)
+- `edgion-resources/src/resources/edgion_acme.rs` — `EdgionAcmeSpec.external_account_binding` (attr ~280; field 281)
 
 > For each: open the file, find the field, and add the `serialize_with` key to its existing `#[serde(...)]`. If a field's `#[serde(...)]` is written on one line, just append `, serialize_with = "crate::types::redact::redact_opt::serialize"` before the closing `)`. If multi-line, add it as another entry.
 
 - [ ] **Step 1: Add a real-field redaction + transport-regression test in `secret_slot.rs`**
 
-`SecretSlot` is the shared holder for all LinkSys auth secrets and has the same `Option<Secret>` shape as the Gateway/BackendTLSPolicy/EdgionTls fields, so it is the representative end-to-end check for the `redact_opt` annotation on a real type. Add this test module at the end of `src/types/resources/common/secret_slot.rs` (if the file already has a `#[cfg(test)] mod tests`, add these two functions inside it and reuse its imports):
+`SecretSlot` is the shared holder for all LinkSys auth secrets and has the same `Option<Secret>` shape as the Gateway/BackendTLSPolicy/EdgionTls fields, so it is the representative end-to-end check for the `redact_opt` annotation on a real type. Add this test module at the end of `edgion-resources/src/resources/common/secret_slot.rs` (if the file already has a `#[cfg(test)] mod tests`, add these two functions inside it and reuse its imports):
 
 ```rust
 #[cfg(test)]
@@ -503,7 +503,7 @@ Expected: builds with no errors (confirms all `serialize_with` paths resolve and
 Run: `cargo fmt --all`
 
 ```bash
-git add src/types/resources/
+git add edgion-resources/src/resources/
 git commit -m "feat(gateway): redact resolved secrets across Gateway/BTP/plugins/linksys/acme"
 ```
 
@@ -515,7 +515,7 @@ These two fields are bare `String` (not `Option`), so they use `redact_required`
 
 - [ ] **Step 1: Annotate `CsrfConfig.key` and add a test**
 
-In `src/types/resources/edgion_plugins/plugin_configs/csrf.rs`, the field (line 27) is:
+In `edgion-resources/src/resources/edgion_plugins/plugin_configs/csrf.rs`, the field (line 27) is:
 
 ```rust
     pub key: String,
@@ -554,7 +554,7 @@ Then add this test to the existing `#[cfg(test)] mod` in `csrf.rs` (the module t
 
 - [ ] **Step 2: Annotate `MetaDataItem.key` and add a test**
 
-In `src/types/resources/plugin_metadata/key_list.rs`, the field (line 63) is:
+In `edgion-resources/src/resources/plugin_metadata/key_list.rs`, the field (line 63) is:
 
 ```rust
     pub key: String,
@@ -602,7 +602,7 @@ Expected: all csrf tests pass.
 Run: `cargo fmt --all`
 
 ```bash
-git add src/types/resources/edgion_plugins/plugin_configs/csrf.rs src/types/resources/plugin_metadata/key_list.rs
+git add edgion-resources/src/resources/edgion_plugins/plugin_configs/csrf.rs edgion-resources/src/resources/plugin_metadata/key_list.rs
 git commit -m "feat(gateway): redact CsrfConfig.key and KeyList MetaDataItem.key"
 ```
 
@@ -731,10 +731,10 @@ This catches any missed annotation. Run:
 ```bash
 cd /Volumes/ExtStore/ws4/Edgion
 echo "Fields that hold Option<Secret>/Vec<Secret> but lack a redact adapter:"
-grep -rEn "Option<Secret>|Option<Vec<Secret>>" src/types/resources/ \
+grep -rEn "Option<Secret>|Option<Vec<Secret>>" edgion-resources/src/resources/ \
   | grep -v "redact_opt" || echo "  (none on the same line — verify manually below)"
 echo "--- adapter usage count (expect ~17+ redact_opt + 2 redact_required) ---"
-grep -rEc "redact_opt::serialize|redact_required::serialize" src/types/resources/ | grep -v ':0' | sort
+grep -rEc "redact_opt::serialize|redact_required::serialize" edgion-resources/src/resources/ | grep -v ':0' | sort
 ```
 
 Manually confirm each `Option<Secret>` / `Option<Vec<Secret>>` field listed in the spec's inventory now has `serialize_with = "crate::types::redact::redact_opt::serialize"` on its `#[serde(...)]`, and that `CsrfConfig.key` + `MetaDataItem.key` have `redact_required`. (The grep prints the `#[serde(...)]` and field on separate lines, so eyeball the spec's "Field annotations — complete inventory" list against the matches.)
@@ -774,7 +774,7 @@ Create `skills/04-review/architecture/gateway-admin-configclient-redaction.md`:
 (loopback by default), but every resolved/inline secret they serialize is mandatorily
 redacted to `"[redacted]"`.
 
-**Mechanism:** `src/types/redact.rs` provides a gateway-only thread-local RAII
+**Mechanism:** `edgion-resources/src/redact.rs` provides a gateway-only thread-local RAII
 `AdminRedactGuard` and two generic serde `serialize_with` adapters (`redact_opt`,
 `redact_required`). Secret-bearing fields on the synced resource structs carry the
 adapter; the guard is constructed inside the synchronous `list_client_resources`
@@ -782,7 +782,7 @@ adapter; the guard is constructed inside the synchronous `list_client_resources`
 (no guard) emits real values, so the controller's conf_sync transport serialization
 — a different process that never constructs the guard — is unaffected.
 
-**Why independent from access-log masking:** access-log masking (`src/types/sensitive.rs`,
+**Why independent from access-log masking:** access-log masking (`edgion-resources/src/sensitive.rs`,
 `SENSITIVE_MODE`) is operator-configurable (Off/Replace/Wrap). Admin redaction is a
 mandatory security invariant with no config knob; reusing `SENSITIVE_MODE` would let an
 operator disable security redaction by turning off log masking. They share the serde-adapter

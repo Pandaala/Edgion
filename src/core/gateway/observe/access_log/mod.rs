@@ -21,7 +21,7 @@ static ACCESS_LOGGER: OnceLock<Arc<AccessLogger>> = OnceLock::new();
 /// the disabled case a no-op `AccessLogger` with zero senders is installed,
 /// so downstream callers (e.g. startup listener configuration) can rely on
 /// `get_access_logger_unchecked()` being safe after this returns.
-pub async fn init_access_logger(config: &crate::types::LogConfig) -> Result<()> {
+pub async fn init_access_logger(config: &edgion_resources::LogConfig) -> Result<()> {
     let logger = match create_async_logger(config, LogType::Access).await? {
         Some(logger) => {
             tracing::info!("Global AccessLogger initialized");

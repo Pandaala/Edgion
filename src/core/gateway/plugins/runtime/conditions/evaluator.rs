@@ -5,11 +5,11 @@
 
 use crate::core::gateway::plugins::runtime::log::PluginLog;
 use crate::core::gateway::plugins::runtime::PluginSession;
-use crate::types::resources::edgion_plugins::conditions::{
+use chrono::Utc;
+use edgion_resources::resources::edgion_plugins::conditions::{
     Condition, ExcludeCondition, IncludeCondition, KeyExistCondition, KeyMatchCondition, PluginConditions,
     ProbabilityCondition, TimeRangeCondition,
 };
-use chrono::Utc;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -32,15 +32,87 @@ pub struct ConditionEvalResult<'a> {
     pub matched: Option<&'a Condition>,
 }
 
-impl PluginConditions {
+// === Gateway-side evaluation extension traits ===
+//
+// The condition *data* types live in `edgion-resources` (the shared schema
+// crate). Their runtime evaluation depends on gateway types (`PluginSession`,
+// `PluginLog`, `EvaluationResult`), so the evaluation methods cannot be inherent
+// impls on the foreign types — the orphan rule forbids it across the crate
+// boundary. They are provided here as gateway-local extension traits instead;
+// call sites get the methods by importing the trait. Behavior is byte-identical
+// to the previous inherent impls.
+
+#[allow(async_fn_in_trait)]
+pub(crate) trait PluginConditionsExt {
+    // Convenience wrapper over `evaluate_detail`; only exercised by unit tests,
+    // hence `dead_code` allow for the non-test lib build.
+    #[allow(dead_code)]
+    async fn evaluate(&self, session: &dyn PluginSession) -> EvaluationResult;
+    async fn evaluate_detail<'a>(&'a self, session: &dyn PluginSession, log: &mut PluginLog)
+        -> ConditionEvalResult<'a>;
+    fn evaluate_sync(&self, session: &dyn PluginSession) -> EvaluationResult;
+    fn evaluate_detail_sync<'a>(&'a self, session: &dyn PluginSession, log: &mut PluginLog) -> ConditionEvalResult<'a>;
+    fn should_evaluate(&self) -> bool;
+}
+
+#[allow(async_fn_in_trait)]
+pub(crate) trait ConditionExt {
+    async fn evaluate(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool;
+    fn evaluate_sync(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool;
+    fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool;
+    fn cond_type(&self) -> &'static str;
+    fn cond_detail(&self) -> String;
+}
+
+#[allow(async_fn_in_trait)]
+pub(crate) trait KeyExistConditionExt {
+    async fn evaluate(&self, session: &dyn PluginSession) -> bool;
+    fn evaluate_sync(&self, session: &dyn PluginSession) -> bool;
+}
+
+#[allow(async_fn_in_trait)]
+pub(crate) trait KeyMatchConditionExt {
+    async fn evaluate(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool;
+    fn evaluate_sync(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool;
+    fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool;
+    fn match_value(&self, value: &str, log: Option<&mut PluginLog>) -> bool;
+}
+
+pub(crate) trait TimeRangeConditionExt {
+    fn evaluate(&self) -> bool;
+}
+
+#[allow(async_fn_in_trait)]
+pub(crate) trait ProbabilityConditionExt {
+    async fn evaluate(&self, session: &dyn PluginSession) -> bool;
+    fn evaluate_sync(&self, session: &dyn PluginSession) -> bool;
+}
+
+#[allow(async_fn_in_trait)]
+pub(crate) trait IncludeConditionExt {
+    async fn evaluate(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool;
+    fn evaluate_sync(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool;
+    fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool;
+    fn matches_value(&self, value: &str, log: Option<&mut PluginLog>) -> bool;
+}
+
+#[allow(async_fn_in_trait)]
+pub(crate) trait ExcludeConditionExt {
+    async fn evaluate(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool;
+    fn evaluate_sync(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool;
+    fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool;
+    fn matches_value(&self, value: &str, log: Option<&mut PluginLog>) -> bool;
+}
+
+impl PluginConditionsExt for PluginConditions {
     /// Evaluate whether the plugin should run based on conditions
-    pub async fn evaluate(&self, session: &dyn PluginSession) -> EvaluationResult {
+    async fn evaluate(&self, session: &dyn PluginSession) -> EvaluationResult {
         let mut log = PluginLog::new("cond");
         self.evaluate_detail(session, &mut log).await.result
     }
 
     /// Evaluate conditions and return matched condition for logging
-    pub async fn evaluate_detail<'a>(
+    async fn evaluate_detail<'a>(
         &'a self,
         session: &dyn PluginSession,
         log: &mut PluginLog,
@@ -86,7 +158,7 @@ impl PluginConditions {
     /// would emit ("regex not compiled") is silently dropped — that condition
     /// indicates a build-time compile failure and should already be visible
     /// through `EdgionPlugin::validation_error`.
-    pub fn evaluate_sync(&self, session: &dyn PluginSession) -> EvaluationResult {
+    fn evaluate_sync(&self, session: &dyn PluginSession) -> EvaluationResult {
         if let Some(skip_conditions) = &self.skip {
             for condition in skip_conditions {
                 if condition.evaluate_sync_silent(session) {
@@ -111,11 +183,7 @@ impl PluginConditions {
     ///
     /// This uses key_get_local() which only supports local key sources.
     /// Conditions should never use Webhook as a key source, so this is always safe.
-    pub fn evaluate_detail_sync<'a>(
-        &'a self,
-        session: &dyn PluginSession,
-        log: &mut PluginLog,
-    ) -> ConditionEvalResult<'a> {
+    fn evaluate_detail_sync<'a>(&'a self, session: &dyn PluginSession, log: &mut PluginLog) -> ConditionEvalResult<'a> {
         // Check skip conditions (OR logic) - any match causes skip
         if let Some(skip_conditions) = &self.skip {
             for condition in skip_conditions {
@@ -150,14 +218,14 @@ impl PluginConditions {
     }
 
     /// Check if conditions should be evaluated
-    pub fn should_evaluate(&self) -> bool {
+    fn should_evaluate(&self) -> bool {
         !self.is_empty()
     }
 }
 
-impl Condition {
+impl ConditionExt for Condition {
     /// Evaluate a single condition
-    pub async fn evaluate(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
+    async fn evaluate(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
         match self {
             Condition::KeyExist(c) => c.evaluate(session).await,
             Condition::KeyMatch(c) => c.evaluate(session, log).await,
@@ -170,7 +238,7 @@ impl Condition {
 
     /// Synchronous version of evaluate for use in sync filter contexts.
     /// Uses key_get_local() which only supports local key sources.
-    pub fn evaluate_sync(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
+    fn evaluate_sync(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
         match self {
             Condition::KeyExist(c) => c.evaluate_sync(session),
             Condition::KeyMatch(c) => c.evaluate_sync(session, log),
@@ -186,7 +254,7 @@ impl Condition {
     /// KeyExist / TimeRange / Probability never write to a log; KeyMatch /
     /// Include / Exclude only push "regex not compiled" on a build-time bug
     /// path, which is intentionally suppressed here.
-    pub fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool {
+    fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool {
         match self {
             Condition::KeyExist(c) => c.evaluate_sync(session),
             Condition::KeyMatch(c) => c.evaluate_sync_silent(session),
@@ -198,7 +266,7 @@ impl Condition {
     }
 
     /// Get condition type name
-    pub fn cond_type(&self) -> &'static str {
+    fn cond_type(&self) -> &'static str {
         match self {
             Condition::KeyExist(_) => "keyExist",
             Condition::KeyMatch(_) => "keyMatch",
@@ -210,7 +278,7 @@ impl Condition {
     }
 
     /// Get brief condition detail: key info
-    pub fn cond_detail(&self) -> String {
+    fn cond_detail(&self) -> String {
         match self {
             Condition::KeyExist(c) => c.key.as_log_str(),
             Condition::KeyMatch(c) => c.key.as_log_str(),
@@ -222,21 +290,21 @@ impl Condition {
     }
 }
 
-impl KeyExistCondition {
+impl KeyExistConditionExt for KeyExistCondition {
     /// Evaluate key existence condition
-    pub async fn evaluate(&self, session: &dyn PluginSession) -> bool {
+    async fn evaluate(&self, session: &dyn PluginSession) -> bool {
         session.key_get(&self.key).await.is_some()
     }
 
     /// Sync version using key_get_local
-    pub fn evaluate_sync(&self, session: &dyn PluginSession) -> bool {
+    fn evaluate_sync(&self, session: &dyn PluginSession) -> bool {
         session.key_get_local(&self.key).is_some()
     }
 }
 
-impl KeyMatchCondition {
+impl KeyMatchConditionExt for KeyMatchCondition {
     /// Evaluate key match condition
-    pub async fn evaluate(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
+    async fn evaluate(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
         let value = match session.key_get(&self.key).await {
             Some(v) => v,
             None => return false,
@@ -245,7 +313,7 @@ impl KeyMatchCondition {
     }
 
     /// Sync version using key_get_local
-    pub fn evaluate_sync(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
+    fn evaluate_sync(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
         let value = match session.key_get_local(&self.key) {
             Some(v) => v,
             None => return false,
@@ -254,7 +322,7 @@ impl KeyMatchCondition {
     }
 
     /// Sync version with no log surface (body-stage path)
-    pub fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool {
+    fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool {
         let value = match session.key_get_local(&self.key) {
             Some(v) => v,
             None => return false,
@@ -300,9 +368,9 @@ impl KeyMatchCondition {
     }
 }
 
-impl TimeRangeCondition {
+impl TimeRangeConditionExt for TimeRangeCondition {
     /// Evaluate time range condition
-    pub fn evaluate(&self) -> bool {
+    fn evaluate(&self) -> bool {
         let now = Utc::now();
 
         // Check 'after' bound
@@ -327,9 +395,9 @@ impl TimeRangeCondition {
     }
 }
 
-impl ProbabilityCondition {
+impl ProbabilityConditionExt for ProbabilityCondition {
     /// Evaluate probability condition
-    pub async fn evaluate(&self, session: &dyn PluginSession) -> bool {
+    async fn evaluate(&self, session: &dyn PluginSession) -> bool {
         // Clamp ratio to valid range
         let ratio = self.ratio.clamp(0.0, 1.0);
 
@@ -358,7 +426,7 @@ impl ProbabilityCondition {
     }
 
     /// Sync version using key_get_local
-    pub fn evaluate_sync(&self, session: &dyn PluginSession) -> bool {
+    fn evaluate_sync(&self, session: &dyn PluginSession) -> bool {
         let ratio = self.ratio.clamp(0.0, 1.0);
         if ratio <= 0.0 {
             return false;
@@ -379,22 +447,22 @@ impl ProbabilityCondition {
     }
 }
 
-impl IncludeCondition {
+impl IncludeConditionExt for IncludeCondition {
     /// Evaluate include condition
     /// Returns true if value matches ANY item in the list or any regex pattern
-    pub async fn evaluate(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
+    async fn evaluate(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
         let value = session.key_get(&self.key).await.unwrap_or_default();
         self.matches_value(&value, Some(log))
     }
 
     /// Sync version using key_get_local
-    pub fn evaluate_sync(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
+    fn evaluate_sync(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
         let value = session.key_get_local(&self.key).unwrap_or_default();
         self.matches_value(&value, Some(log))
     }
 
     /// Sync version with no log surface (body-stage path)
-    pub fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool {
+    fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool {
         let value = session.key_get_local(&self.key).unwrap_or_default();
         self.matches_value(&value, None)
     }
@@ -413,22 +481,22 @@ impl IncludeCondition {
     }
 }
 
-impl ExcludeCondition {
+impl ExcludeConditionExt for ExcludeCondition {
     /// Evaluate exclude condition
     /// Returns true if value does NOT match ANY item in the list or any regex pattern
-    pub async fn evaluate(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
+    async fn evaluate(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
         let value = session.key_get(&self.key).await.unwrap_or_default();
         !self.matches_value(&value, Some(log))
     }
 
     /// Sync version using key_get_local
-    pub fn evaluate_sync(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
+    fn evaluate_sync(&self, session: &dyn PluginSession, log: &mut PluginLog) -> bool {
         let value = session.key_get_local(&self.key).unwrap_or_default();
         !self.matches_value(&value, Some(log))
     }
 
     /// Sync version with no log surface (body-stage path)
-    pub fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool {
+    fn evaluate_sync_silent(&self, session: &dyn PluginSession) -> bool {
         let value = session.key_get_local(&self.key).unwrap_or_default();
         !self.matches_value(&value, None)
     }
@@ -542,7 +610,7 @@ fn matches_pattern(value: &str, pattern: &str) -> bool {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-    use crate::types::common::KeyGet;
+    use edgion_resources::common::KeyGet;
 
     /// Create a mock session with key_get that returns values based on the key
     fn create_mock_session_with_key_get(key_values: Vec<(KeyGet, Option<String>)>) -> MockPluginSession {

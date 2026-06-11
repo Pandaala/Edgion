@@ -13,7 +13,7 @@ description: Decide on "consolidate scattered small helpers / different styles i
 
 ### (a) "Three-line trivial helper duplicated across multiple files; should extract common"
 
-Typical example: `fn default_true() -> bool { true }`, `fn is_true(v: &bool) -> bool { *v }` scattered in 13+ places under `src/types/resources/**`.
+Typical example: `fn default_true() -> bool { true }`, `fn is_true(v: &bool) -> bool { *v }` scattered in 13+ places under `edgion-resources/src/resources/**`.
 
 **Why not accepted**:
 
@@ -58,8 +58,8 @@ not, by itself, a finding.
 
 - External task numbers like `tasks/fix-change/I*/M*/R*/C1/D2/S3` scattered in comments (linked tasks no longer exist) have been removed in the following files, while keeping substantive semantics:
   - `src/core/gateway/link_sys/credential.rs`
-  - `src/types/resources/common/tls.rs`
-  - `src/types/credentials/materials.rs`
+  - `edgion-resources/src/resources/common/tls.rs`
+  - `edgion-resources/src/credentials/materials.rs`
   - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs`
   - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs`
   - `src/core/controller/conf_mgr/conf_center/etcd/config.rs`

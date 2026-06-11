@@ -13,7 +13,7 @@ use k8s_openapi::ByteString;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, HandlerContext, ProcessResult, ProcessorHandler,
 };
-use crate::types::ResourceKind;
+use edgion_resources::ResourceKind;
 
 /// Secret handler
 ///

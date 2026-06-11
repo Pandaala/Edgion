@@ -36,7 +36,7 @@ Most keys fall into one of two paths:
 
 Always register the key string as a named constant first:
 
-1. Open `src/types/constants/annotations.rs`.
+1. Open `edgion-resources/src/constants/annotations.rs`.
 2. Add a `pub const YOUR_KEY: &str = "edgion.io/your-key";` entry under the
    appropriate submodule (`edgion` module for standard keys; `test_only` for
    test/diagnostics keys).
@@ -48,9 +48,9 @@ Always register the key string as a named constant first:
 
 | Step | File | What to do |
 |------|------|------------|
-| 1 | `src/types/resources/<resource>_preparse.rs` or the resource's main `rs` file | Add a parsed field (e.g., `pub parsed_your_key: Option<bool>`) to the preparse struct |
+| 1 | `edgion-resources/src/resources/<resource>_preparse.rs` or the resource's main `rs` file | Add a parsed field (e.g., `pub parsed_your_key: Option<bool>`) to the preparse struct |
 | 2 | `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs` | Read the annotation in `on_change` / parse phase; populate the parsed field |
-| 3 | `src/types/constants/annotations.rs` | Constant (Step 2 above) |
+| 3 | `edgion-resources/src/constants/annotations.rs` | Constant (Step 2 above) |
 | 4 | `skills/02-features/05-annotations/references/annotations-metadata.md` | Add a row to the relevant table and describe behavior, default, and effect |
 | 5 | `skills/02-features/05-annotations/00-annotations-overview.md` | Add a row to the quick-lookup table for the resource type |
 
@@ -60,7 +60,7 @@ Always register the key string as a named constant first:
 
 | Step | File | What to do |
 |------|------|------------|
-| 1 | `src/types/constants/annotations.rs` | Constant (Step 2 above) |
+| 1 | `edgion-resources/src/constants/annotations.rs` | Constant (Step 2 above) |
 | 2 | Gateway runtime consumer — varies by resource type (see table below) | Read the annotation at the correct point in the processing pipeline |
 | 3 | `skills/02-features/05-annotations/references/annotations-metadata.md` | Document the key |
 | 4 | `skills/02-features/05-annotations/00-annotations-overview.md` | Quick-lookup row |
@@ -72,13 +72,13 @@ Gateway runtime consumer locations by resource:
 | Gateway listeners | `src/core/gateway/runtime/server/listener_builder.rs`, `src/core/gateway/runtime/store/listener_gateway_info.rs` |
 | TCPRoute / TLSRoute | `src/core/gateway/routes/tcp/conf_handler_impl.rs`, `src/core/gateway/routes/tls/conf_handler_impl.rs` |
 | Service / health | `src/core/gateway/backends/health/check/annotation.rs` |
-| EdgionTls | `src/types/resources/edgion_tls.rs` |
+| EdgionTls | `edgion-resources/src/resources/edgion_tls.rs` |
 
 ### 3c. `spec.options` path (listener options / policy options)
 
 | Step | File | What to do |
 |------|------|------------|
-| 1 | `src/types/constants/annotations.rs` | Constant |
+| 1 | `edgion-resources/src/constants/annotations.rs` | Constant |
 | 2 | The resource type file that parses `spec.options` | Add the options key read |
 | 3 | `skills/02-features/05-annotations/references/annotations-options-and-labels.md` | Document the key |
 
@@ -125,6 +125,6 @@ Gateway runtime consumer locations by resource:
 - [references/annotations-metadata.md](references/annotations-metadata.md) — detailed per-key reference; lists exact source files verified per key
 - [references/annotations-options-and-labels.md](references/annotations-options-and-labels.md) — `spec.options` and Labels reference
 - [references/annotations-system-and-test-keys.md](references/annotations-system-and-test-keys.md) — system-managed and test-only keys; check before naming a new key
-- `src/types/constants/annotations.rs` — single source of truth for key string constants
+- `edgion-resources/src/constants/annotations.rs` — single source of truth for key string constants
 - [../../01-architecture/01-controller/09-add-new-resource/00-guide.md](../../01-architecture/01-controller/09-add-new-resource/00-guide.md) — resource-level wiring guide (required companion when the annotation is part of a new resource)
 - [../../05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md) — integration test structure and dynamic-scenario guide

@@ -13,8 +13,8 @@ EdgionPlugins is Edgion's custom-extension resource that defines HTTP-layer plug
 
 - Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs`
 - Gateway ConfHandler: `src/core/gateway/plugins/http/conf_handler_impl.rs`
-- Plugin type definitions: `src/types/resources/edgion_plugins/`
-- Plugin config types: `src/types/resources/edgion_plugins/plugin_configs/`
+- Plugin type definitions: `edgion-resources/src/resources/edgion_plugins/`
+- Plugin config types: `edgion-resources/src/resources/edgion_plugins/plugin_configs/`
 
 ## Controller-side processing
 

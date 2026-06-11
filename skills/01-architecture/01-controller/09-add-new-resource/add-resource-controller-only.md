@@ -11,11 +11,11 @@ Use `ReferenceGrant` as the reference pattern when the new resource:
 
 ### 1. Resource Type And Registration
 
-- `src/types/resources/reference_grant.rs`
-- `src/types/resources/mod.rs`
-- `src/types/resource/kind.rs`
-- `src/types/resource/defs.rs`
-- `src/types/resource/meta/impls.rs`
+- `edgion-resources/src/resources/reference_grant.rs`
+- `edgion-resources/src/resources/mod.rs`
+- `edgion-resources/src/resource/kind.rs`
+- `edgion-resources/src/resource/defs.rs`
+- `edgion-resources/src/resource/meta/impls.rs`
 
 Important note:
 
@@ -24,7 +24,7 @@ Important note:
 
 ### 2. Default No-Sync Behavior
 
-- `src/types/resource/defs.rs`
+- `edgion-resources/src/resource/defs.rs`
 - `src/core/controller/conf_mgr/processor_registry.rs`
 - `src/core/controller/conf_mgr/conf_center/kubernetes/center.rs`
 

@@ -23,9 +23,9 @@ use crate::core::gateway::backends::validate_endpoint_backend_addr;
 use crate::core::gateway::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::plugin_configs::all_endpoint_status::MAX_GLOBAL_CONCURRENCY;
-use crate::types::resources::edgion_plugins::AllEndpointStatusConfig;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::plugin_configs::all_endpoint_status::MAX_GLOBAL_CONCURRENCY;
+use edgion_resources::resources::edgion_plugins::AllEndpointStatusConfig;
 
 /// Global configuration for AllEndpointStatus plugin.
 /// Stored in YAML config, loaded at gateway startup, applies to all instances.

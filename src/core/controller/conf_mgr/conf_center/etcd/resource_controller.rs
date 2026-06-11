@@ -25,7 +25,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     extract_status_value, make_resource_key, LocalRawStore, ResourceProcessor, WorkItemResult,
 };
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
-use crate::types::ResourceMeta;
+use edgion_resources::ResourceMeta;
 
 /// EtcdResourceController — handles events for a single resource type.
 pub struct EtcdResourceController<K>

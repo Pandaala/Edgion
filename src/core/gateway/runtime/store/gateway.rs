@@ -2,8 +2,8 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::types::{Gateway, ResourceMeta};
 use anyhow::{anyhow, Result};
+use edgion_resources::{Gateway, ResourceMeta};
 
 pub struct GatewayStore {
     gateways: HashMap<String, Gateway>,

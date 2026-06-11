@@ -100,7 +100,7 @@ Net production effect: the admin port (loopback 5810) serves `/configclient` wit
 ## Part B — mandatory admin-scope secret redaction (serde field adapter)
 
 The project already has a blessed idiom for "do not emit sensitive data during serialization": the
-access-log sensitive subsystem (`src/types/sensitive.rs`) annotates fields with
+access-log sensitive subsystem (`edgion-resources/src/sensitive.rs`) annotates fields with
 `#[serde(serialize_with = "...masked_opt::serialize")]`, where the adapter consults an ambient mode.
 Part B extends this idiom rather than inventing a parallel mechanism (proc-macro derive) or an
 imperative clone-and-scrub pass.
@@ -119,7 +119,7 @@ to Off would also disable the security redaction, which is unacceptable. The two
 ### Why serde-layer redaction is viable here but not globally
 
 `conf_sync` transport and the admin API use the **same** `#[derive(Serialize)]` on the resource
-structs in `src/types/resources/`, but they run in **different binaries**:
+structs in `edgion-resources/src/resources/`, but they run in **different binaries**:
 
 - **Transport serialization runs in the CONTROLLER binary**, in the config-sync cache server:
   `serialize_snapshot_json()` (`src/core/controller/conf_sync/cache_server/store.rs:134`,
@@ -139,7 +139,7 @@ handlers. Default behavior (no scope) emits the real value, so transport — in 
 is structurally incapable of being redacted. We cannot instead make the foreign `k8s_openapi::Secret`
 type self-redact (orphan rule, and it would break transport).
 
-### New module `src/types/redact.rs`
+### New module `edgion-resources/src/redact.rs`
 
 1. **Scope guard** — a thread-local flag plus an RAII `AdminRedactGuard` that sets it on construction
    and clears it on `Drop`; a `pub fn redact_active() -> bool`. There is **no** Off/Replace/Wrap and
@@ -191,11 +191,11 @@ satisfy the invariant: *every field holding resolved or plaintext secret materia
 `/configclient` serializer carries a redaction adapter.*
 
 **Shared holders (annotate once each):**
-- `SecretSlot.secret: Option<Secret>` — `src/types/resources/common/secret_slot.rs`. Covers LinkSys
+- `SecretSlot.secret: Option<Secret>` — `edgion-resources/src/resources/common/secret_slot.rs`. Covers LinkSys
   Redis/Etcd/Elasticsearch/Webhook `auth.*` and is reused widely.
-- `TlsCerts.secret: Option<Secret>` — `src/types/resources/common/tls.rs`. Covers all `tls.certs.*`.
+- `TlsCerts.secret: Option<Secret>` — `edgion-resources/src/resources/common/tls.rs`. Covers all `tls.certs.*`.
 
-**EdgionTls** (`src/types/resources/edgion_tls.rs`): `spec.secret`, `spec.client_auth.ca_secret`
+**EdgionTls** (`edgion-resources/src/resources/edgion_tls.rs`): `spec.secret`, `spec.client_auth.ca_secret`
 (both `Option<Secret>`). **Remove** the imperative EdgionTls special-casing in `api/mod.rs` and route
 EdgionTls through the uniform path. The actual edit sites (verified against current code — there is
 **no** `find_edgion_tls`; `list_client_resources`/`get_client_resource` are plain `fn`s, not macros):
@@ -215,16 +215,16 @@ EdgionTls through the uniform path. The actual edit sites (verified against curr
   scrub through their typed path" note). Left unchanged they actively mislead, since redaction now
   happens uniformly at the serde layer.
 
-**Gateway** (`src/types/resources/gateway.rs`) — note the review-added listener fields:
+**Gateway** (`edgion-resources/src/resources/gateway.rs`) — note the review-added listener fields:
 - `spec.listeners[].tls.secrets: Option<Vec<Secret>>` — **listener serving cert + private key
   (`tls.key`)**. HIGH: omitted from the first draft; the most important addition.
 - `spec.listeners[].tls.resolved_frontend_ca_secrets: Option<Vec<Secret>>` — frontend mTLS CA.
 - `spec.tls.backend.resolved_client_certificate: Option<Secret>` (`GatewayBackendTLS`).
 
-**BackendTLSPolicy** (v1 + v1alpha3, `src/types/resources/backend_tls_policy.rs`):
+**BackendTLSPolicy** (v1 + v1alpha3, `edgion-resources/src/resources/backend_tls_policy.rs`):
 `resolved_ca_certificates: Option<Vec<Secret>>`, `resolved_client_certificate: Option<Secret>`.
 
-**EdgionPlugins** (`src/types/resources/edgion_plugins/plugin_configs/`):
+**EdgionPlugins** (`edgion-resources/src/resources/edgion_plugins/plugin_configs/`):
 - JweDecrypt `resolved_credential: Option<ResolvedJweCredential>`
 - JwtAuth `resolved_groups_by_iss: Option<HashMap<String, ResolvedJwtIssuerGroup>>`
 - BasicAuth `resolved_users: Option<HashMap<String, ResolvedBasicAuthUser>>`
@@ -238,13 +238,13 @@ EdgionTls through the uniform path. The actual edit sites (verified against curr
   is present with no guard active — it relies on `redact_required` defaulting to the real value, which
   it does, so that test still passes.)
 
-**LinkSys** (`src/types/resources/link_sys/`): covered by the shared `SecretSlot` / `TlsCerts`
+**LinkSys** (`edgion-resources/src/resources/link_sys/`): covered by the shared `SecretSlot` / `TlsCerts`
 annotations above, **except**:
 - **`RedisSentinel.password: Option<String>`** (review-added) — an inline Sentinel password that does
   **not** go through `SecretSlot`; must be annotated directly. (Corrects the earlier "shared holders
   cover all of LinkSys" claim.)
 
-**EdgionAcme** (`src/types/resources/edgion_acme.rs`) — review-added; the second review round confirmed
+**EdgionAcme** (`edgion-resources/src/resources/edgion_acme.rs`) — review-added; the second review round confirmed
 EdgionAcme **is** gateway-synced (`config_client.rs:263`,
 `ResourceKind::EdgionAcme => Some(&self.edgion_acme)`) and reachable at `/configclient/EdgionAcme`.
 (The original task file's "EdgionAcme is not synced to gateway" assumption is outdated.) Annotate the
@@ -255,7 +255,7 @@ EdgionAcme **is** gateway-synced (`config_client.rs:263`,
 name) is synced — so no further field is needed. `ActiveHttpChallenge.token` / `key_authorization` in
 status are the publicly-served HTTP-01 response, not secrets.)
 
-**PluginMetaData** (`src/types/resources/plugin_metadata/`) — review-added. The resource carries a
+**PluginMetaData** (`edgion-resources/src/resources/plugin_metadata/`) — review-added. The resource carries a
 `MetaDataEntry` enum (`mod.rs`) with, among others, two relevant variants:
 - **`KeyList(KeyListData)`** → `MetaDataItem.key: String` (`key_list.rs:63`) — key values / regex used
   by **KeyAuth**, i.e. the set of valid **API keys**. This is credential material of the same class as
@@ -329,7 +329,7 @@ called out in code comments where relevant:
    `Serialize` reaching each annotated field. A hand-written `impl Serialize`, `#[serde(into=...)]`, or
    container-level `serialize_with`/`with` on any type ABOVE a secret field (e.g. `GatewayTLSConfig`,
    `EdgionPluginsSpec`, `SecretSlot`, `TlsCerts`, the EAB struct) would bypass the inner adapter.
-   (Verified today: there are zero manual `impl Serialize` and zero `#[serde(into)]` in `src/types/`;
+   (Verified today: there are zero manual `impl Serialize` and zero `#[serde(into)]` in `edgion-resources/src/`;
    `#[serde(flatten)]` is fine — it still drives the flattened struct's derived `Serialize`, so inner
    adapters fire.)
 

@@ -4,10 +4,10 @@ use crate::core::gateway::lb::BackendSelector;
 use crate::core::gateway::routes::common::{
     is_core_service_backend_ref, resolve_stream_plugin_store_key, resolve_tcp_keepalive,
 };
-use crate::types::resources::common::TcpKeepaliveConfig;
-use crate::types::resources::tcp_route::TCPBackendRef;
-use crate::types::resources::TCPRoute;
-use crate::types::ResourceMeta;
+use edgion_resources::resources::common::TcpKeepaliveConfig;
+use edgion_resources::resources::tcp_route::TCPBackendRef;
+use edgion_resources::resources::TCPRoute;
+use edgion_resources::ResourceMeta;
 
 /// Gateway-side compiled companion for a TCPRoute.
 ///
@@ -79,8 +79,8 @@ fn build_backend_selector(route: &TCPRoute) -> Arc<BackendSelector<TCPBackendRef
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::common::ParentReference;
-    use crate::types::resources::tcp_route::{TCPBackendRef, TCPRouteRule, TCPRouteSpec};
+    use edgion_resources::resources::common::ParentReference;
+    use edgion_resources::resources::tcp_route::{TCPBackendRef, TCPRouteRule, TCPRouteSpec};
 
     fn make_route(annotations: Option<std::collections::BTreeMap<String, String>>) -> Arc<TCPRoute> {
         Arc::new(TCPRoute {

@@ -1,6 +1,6 @@
 //! Unit tests for `tls.rs` (see `super`).
 use super::*;
-use crate::types::resources::gateway::{GatewaySpec, GatewayTLSConfig, GatewayTlsMode, Listener};
+use edgion_resources::resources::gateway::{GatewaySpec, GatewayTLSConfig, GatewayTlsMode, Listener};
 use kube::api::ObjectMeta;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -533,8 +533,8 @@ fn test_catchall_with_hostname_priority() {
 
 #[test]
 fn test_programmed_false_listener_not_registered() {
-    use crate::types::resources::common::Condition;
-    use crate::types::resources::gateway::{GatewayStatus, ListenerStatus};
+    use edgion_resources::resources::common::Condition;
+    use edgion_resources::resources::gateway::{GatewayStatus, ListenerStatus};
 
     let matcher = GatewayTlsMatcher::new();
     let key = test_listener_key(443);
@@ -775,8 +775,8 @@ fn test_cross_gateway_catchall_collision_is_deterministic() {
 
 #[test]
 fn test_programmed_false_does_not_shadow_valid_listener() {
-    use crate::types::resources::common::Condition;
-    use crate::types::resources::gateway::{GatewayStatus, ListenerStatus};
+    use edgion_resources::resources::common::Condition;
+    use edgion_resources::resources::gateway::{GatewayStatus, ListenerStatus};
 
     let matcher = GatewayTlsMatcher::new();
     let key = test_listener_key(443);

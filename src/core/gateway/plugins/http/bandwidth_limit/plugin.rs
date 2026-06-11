@@ -38,7 +38,7 @@
 use std::time::Duration;
 
 use crate::core::gateway::plugins::runtime::traits::{PluginSession, UpstreamResponseBodyFilter};
-use crate::types::resources::edgion_plugins::plugin_configs::BandwidthLimitConfig;
+use edgion_resources::resources::edgion_plugins::plugin_configs::BandwidthLimitConfig;
 
 /// BandwidthLimit plugin
 ///

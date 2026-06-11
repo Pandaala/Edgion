@@ -3,7 +3,7 @@
 use crate::core::gateway::plugins::StageLogs;
 use crate::core::gateway::routes::grpc::GrpcMatchInfo;
 use crate::core::gateway::{BackendContext, EdgionHttpContext, MatchInfo, RequestInfo};
-use crate::types::EdgionStatus;
+use edgion_resources::EdgionStatus;
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -35,7 +35,7 @@ pub struct AccessLogEntry<'a> {
     /// the client sent, before any path normalization.
     #[serde(
         skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::types::sensitive::masked_opt::serialize"
+        serialize_with = "edgion_resources::sensitive::masked_opt::serialize"
     )]
     pub request_uri: Option<String>,
 

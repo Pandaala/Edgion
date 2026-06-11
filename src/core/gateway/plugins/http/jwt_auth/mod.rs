@@ -13,7 +13,7 @@ mod tests;
 
 pub use plugin::JwtAuth;
 
-use crate::types::resources::edgion_plugins::JwtAlgorithm;
+use edgion_resources::resources::edgion_plugins::JwtAlgorithm;
 use jsonwebtoken::Algorithm;
 
 /// Unit error: failure kind already lives in the `PluginLog` tag pushed at the

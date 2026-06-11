@@ -1,4 +1,3 @@
-use crate::core::common::matcher::host_match::radix_match::RadixHostMatchEngine;
 use crate::core::gateway::ctx::EdgionHttpContext;
 use crate::core::gateway::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::core::gateway::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
@@ -7,11 +6,12 @@ use crate::core::gateway::routes::http::match_unit::CompiledBackend;
 use crate::core::gateway::routes::http::match_unit::RouteMatchResult;
 use crate::core::gateway::routes::http::HttpRouteRuleUnit;
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
-use crate::types::err::EdError;
-use crate::types::HTTPRoute;
-use crate::types::ListenerKey;
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
+use edgion_resources::err::EdError;
+use edgion_resources::matcher::host_match::radix_match::RadixHostMatchEngine;
+use edgion_resources::HTTPRoute;
+use edgion_resources::ListenerKey;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 

@@ -7,11 +7,11 @@
 Edgion no longer uses a single handwritten `resource_registry.rs` file as the primary source of truth.
 The current model is split into three layers:
 
-1. `src/types/resource/kind.rs`
+1. `edgion-resources/src/resource/kind.rs`
    - defines the exhaustive `ResourceKind` enum and conversions
-2. `src/types/resource/defs.rs`
+2. `edgion-resources/src/resource/defs.rs`
    - uses `define_resources!` as the single source of truth for resource metadata
-3. `src/types/resource/registry.rs`
+3. `edgion-resources/src/resource/registry.rs`
    - exposes compatibility helpers such as `RESOURCE_TYPES`, `all_resource_type_names()`, and `get_resource_metadata()`
 
 ```mermaid
@@ -25,7 +25,7 @@ graph LR
 
 ## What Lives In `define_resources!`
 
-Each resource entry in `src/types/resource/defs.rs` carries the metadata that the rest of the system depends on:
+Each resource entry in `edgion-resources/src/resource/defs.rs` carries the metadata that the rest of the system depends on:
 
 - `enum_value`
 - `kind_name`
@@ -43,13 +43,13 @@ That metadata is then reused by helper functions and registry views instead of b
 
 | API | Current path | Purpose |
 |-----|--------------|---------|
-| `resource_kind_from_name()` | `src/types/resource/defs.rs` | Resolve a kind from CLI/API/user input |
-| `get_resource_info()` | `src/types/resource/defs.rs` | Fetch metadata for a `ResourceKind` |
-| `all_resource_kind_names()` | `src/types/resource/defs.rs` | List cache-field names for all defined kinds |
-| `registry_resource_names()` | `src/types/resource/defs.rs` | List only registry-visible kinds |
-| `all_resource_type_names()` | `src/types/resource/registry.rs` | Registry-visible names after endpoint-mode filtering |
-| `base_conf_resource_names()` | `src/types/resource/registry.rs` | Registry-visible base-conf names |
-| `get_resource_metadata()` | `src/types/resource/registry.rs` | Compatibility lookup for `RESOURCE_TYPES` |
+| `resource_kind_from_name()` | `edgion-resources/src/resource/defs.rs` | Resolve a kind from CLI/API/user input |
+| `get_resource_info()` | `edgion-resources/src/resource/defs.rs` | Fetch metadata for a `ResourceKind` |
+| `all_resource_kind_names()` | `edgion-resources/src/resource/defs.rs` | List cache-field names for all defined kinds |
+| `registry_resource_names()` | `edgion-resources/src/resource/defs.rs` | List only registry-visible kinds |
+| `all_resource_type_names()` | `edgion-resources/src/resource/registry.rs` | Registry-visible names after endpoint-mode filtering |
+| `base_conf_resource_names()` | `edgion-resources/src/resource/registry.rs` | Registry-visible base-conf names |
+| `get_resource_metadata()` | `edgion-resources/src/resource/registry.rs` | Compatibility lookup for `RESOURCE_TYPES` |
 
 ## What `in_registry` Means
 
@@ -69,10 +69,10 @@ Current example:
 Adding a new resource is not “edit one registry file”.
 The current flow is:
 
-1. Add the Rust resource type under `src/types/resources/`.
-2. Add the enum variant and conversions in `src/types/resource/kind.rs`.
-3. Add the metadata entry to `define_resources!` in `src/types/resource/defs.rs`.
-4. Add the `ResourceMeta` implementation in `src/types/resource/meta/impls.rs`.
+1. Add the Rust resource type under `edgion-resources/src/resources/`.
+2. Add the enum variant and conversions in `edgion-resources/src/resource/kind.rs`.
+3. Add the metadata entry to `define_resources!` in `edgion-resources/src/resource/defs.rs`.
+4. Add the `ResourceMeta` implementation in `edgion-resources/src/resource/meta/impls.rs`.
 5. Wire controller processing, sync behavior, and gateway runtime as needed.
 
 For the full workflow, use [Adding New Resource Types Guide](./add-new-resource-guide.md).

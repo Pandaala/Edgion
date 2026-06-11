@@ -7,7 +7,7 @@ description: Resource system architecture — define_resources! macro, ResourceM
 
 ## Single source of truth — `define_resources!`
 
-All resources are declared centrally in `src/types/resource/defs.rs` via the `define_resources!` macro:
+All resources are declared centrally in `edgion-resources/src/resource/defs.rs` via the `define_resources!` macro:
 
 ```rust
 define_resources! {

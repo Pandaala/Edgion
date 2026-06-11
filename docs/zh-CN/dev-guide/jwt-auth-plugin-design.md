@@ -9,7 +9,7 @@
 - **插件目录**: `src/core/gateway/plugins/http/jwt_auth/`
   - `mod.rs`: 导出 `JwtAuth`
   - `plugin.rs`: 插件实现（当前为 stub，审核通过后补全运行时逻辑）
-- **配置类型**: `src/types/resources/edgion_plugins/plugin_configs/jwt_auth.rs`
+- **配置类型**: `edgion-resources/src/resources/edgion_plugins/plugin_configs/jwt_auth.rs`
   - `JwtAuthConfig`、`JwtAlgorithm`
 - **注册**: `EdgionPlugin::JwtAuth(JwtAuthConfig)` 已在 `edgion_plugin.rs` 与 `runtime.rs` 中注册。
 

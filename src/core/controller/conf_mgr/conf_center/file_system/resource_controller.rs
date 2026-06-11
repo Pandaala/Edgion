@@ -21,8 +21,8 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     extract_status_value, make_resource_key, LocalRawStore, ResourceProcessor, WorkItemResult,
 };
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
-use crate::types::ResourceMeta;
 use anyhow::Result;
+use edgion_resources::ResourceMeta;
 use kube::Resource;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -694,12 +694,12 @@ fn extract_key_from_path(path: &std::path::Path, expected_kind: &str) -> Option<
 #[cfg(test)]
 mod tests {
     use super::parse_resource_content;
-    use crate::types::prelude_resources::{
+    use edgion_resources::prelude_resources::{
         BackendTLSPolicy, BackendTLSPolicyAlpha3, BackendTLSPolicyAlpha3Spec, BackendTLSPolicySpec,
         BackendTLSPolicyStatus, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation, TLSBackendRef, TLSRoute,
         TLSRouteAlpha3, TLSRouteAlpha3Spec, TLSRouteRule, TLSRouteSpec, TLSRouteStatus,
     };
-    use crate::types::resources::common::ParentReference;
+    use edgion_resources::resources::common::ParentReference;
 
     fn make_policy() -> BackendTLSPolicy {
         BackendTLSPolicy {

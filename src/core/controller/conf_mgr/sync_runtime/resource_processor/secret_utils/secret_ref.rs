@@ -19,7 +19,7 @@ pub fn new_secret_ref_manager() -> SecretRefManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ResourceKind;
+    use edgion_resources::ResourceKind;
 
     #[test]
     fn test_add_and_get_ref() {

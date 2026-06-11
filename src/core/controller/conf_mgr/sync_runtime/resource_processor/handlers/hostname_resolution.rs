@@ -8,8 +8,8 @@
 use std::collections::HashSet;
 
 use crate::core::controller::conf_mgr::ControllerRuntime;
-use crate::types::prelude_resources::Gateway;
-use crate::types::resources::common::ParentReference;
+use edgion_resources::prelude_resources::Gateway;
+use edgion_resources::resources::common::ParentReference;
 
 pub struct ResolvedHostnames {
     pub hostnames: Vec<String>,

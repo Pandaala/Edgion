@@ -5,8 +5,8 @@
 
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, UpstreamResponseFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::ResponseRewriteConfig;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::ResponseRewriteConfig;
 
 /// Response Rewrite plugin
 ///
@@ -112,7 +112,7 @@ impl UpstreamResponseFilter for ResponseRewrite {
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
     ) -> PluginRunningResult {
-        use crate::types::resources::edgion_plugins::PluginValidation;
+        use edgion_resources::resources::edgion_plugins::PluginValidation;
         // Check if configuration is valid
         if self.config.validation_error().is_some() {
             plugin_log.push_err("config invalid");
@@ -134,7 +134,7 @@ impl UpstreamResponseFilter for ResponseRewrite {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-    use crate::types::resources::edgion_plugins::{HeaderRename, ResponseHeaderActions};
+    use edgion_resources::resources::edgion_plugins::{HeaderRename, ResponseHeaderActions};
 
     #[test]
     fn test_headers_rename_nonexistent() {

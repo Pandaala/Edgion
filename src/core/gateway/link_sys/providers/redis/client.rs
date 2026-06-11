@@ -18,8 +18,8 @@ use async_trait::async_trait;
 
 use crate::core::gateway::link_sys::credential::CredentialState;
 use crate::core::gateway::link_sys::lifecycle::LinkSysLifecycle;
-use crate::types::credentials::materials::BasicAuthMaterial;
-use crate::types::resources::link_sys::redis::RedisClientConfig;
+use edgion_resources::credentials::materials::BasicAuthMaterial;
+use edgion_resources::resources::link_sys::redis::RedisClientConfig;
 
 use super::config_mapping::{build_fred_config, build_fred_pool};
 

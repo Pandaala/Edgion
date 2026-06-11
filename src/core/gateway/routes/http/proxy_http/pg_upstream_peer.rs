@@ -1,5 +1,4 @@
 use super::EdgionHttpProxy;
-use crate::core::common::path_normalization::get_path_normalization_config;
 use crate::core::common::utils::net::{classify_backend_addr, resolve_domain, BlockedBackendReason};
 use crate::core::gateway::backends::EdgionService;
 use crate::core::gateway::backends::{get_peer, try_get_peer};
@@ -12,9 +11,10 @@ use crate::core::gateway::{
     end_response_500, end_response_503, end_response_grpc_unavailable, terminate_with_fallback,
 };
 use crate::core::gateway::{EdgionHttpContext, SessionPersistenceState, UpstreamJumpTarget};
-use crate::types::err::EdError;
-use crate::types::filters::PluginRunningResult;
-use crate::types::EdgionStatus;
+use edgion_resources::err::EdError;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::path_normalization::get_path_normalization_config;
+use edgion_resources::EdgionStatus;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use pingora_core::upstreams::peer::Peer;
@@ -308,7 +308,7 @@ pub async fn select_http_backend(
 fn sp_extract_token(
     session: &Session,
     sp_state: &mut SessionPersistenceState,
-    rule: &crate::types::HTTPRouteRule,
+    rule: &edgion_resources::HTTPRouteRule,
 ) -> Option<String> {
     let sp = rule.session_persistence.as_ref()?;
     let token = session_persistence::extract_session_token(session, sp);
@@ -329,7 +329,7 @@ fn sp_extract_token(
 #[inline]
 fn sp_resolve_target(
     ctx: &mut EdgionHttpContext,
-    backend_ref: &crate::types::HTTPBackendRef,
+    backend_ref: &edgion_resources::HTTPBackendRef,
     route_ns: &str,
     token: Option<&str>,
 ) {
@@ -471,10 +471,10 @@ fn fold_peer_timeouts(
 /// timeout — and, with a retry policy present, an instant-retry loop.
 #[inline]
 fn effective_backend_bound(
-    route: Option<&crate::types::resources::http_route::RouteTimeout>,
+    route: Option<&edgion_resources::resources::http_route::RouteTimeout>,
     global_default: std::time::Duration,
 ) -> Option<std::time::Duration> {
-    use crate::types::resources::http_route::RouteTimeout;
+    use edgion_resources::resources::http_route::RouteTimeout;
     match route {
         Some(RouteTimeout::Disabled) => None,
         Some(RouteTimeout::Duration(d)) => Some(*d),
@@ -1039,7 +1039,7 @@ mod tests {
     // ─── effective_backend_bound: route three-state + global-default fallback ───
 
     use super::effective_backend_bound;
-    use crate::types::resources::http_route::RouteTimeout;
+    use edgion_resources::resources::http_route::RouteTimeout;
 
     #[test]
     fn backend_bound_unset_falls_back_to_global() {

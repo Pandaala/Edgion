@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 use crate::core::gateway::backends::service_kind::EdgionService;
 use crate::core::gateway::lb::WeightedRoundRobin;
 use crate::core::gateway::plugins::http::common::http_client::{build_webhook_client, get_http_client_arc};
-use crate::types::resources::link_sys::webhook::{WebhookAuth, WebhookServiceConfig, WebhookTarget};
+use edgion_resources::resources::link_sys::webhook::{WebhookAuth, WebhookServiceConfig, WebhookTarget};
 
 use super::health::spawn_active_health_check;
 use super::runtime::{SlidingWindowCounter, WebhookResolvedTarget, WebhookRuntime};
@@ -291,7 +291,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_upsert_and_get() {
-        use crate::types::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
             target: WebhookTarget::Uri {
@@ -311,7 +311,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_remove() {
-        use crate::types::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
             target: WebhookTarget::Uri {
@@ -332,7 +332,7 @@ mod tests {
     #[tokio::test]
     async fn test_manager_service_cluster_ip_builds_dns_url() {
         use crate::core::gateway::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
-        use crate::types::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
@@ -363,7 +363,7 @@ mod tests {
     #[tokio::test]
     async fn test_manager_service_cluster_ip_uses_linksys_ns_fallback() {
         use crate::core::gateway::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
-        use crate::types::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
@@ -394,7 +394,7 @@ mod tests {
     #[tokio::test]
     async fn test_manager_service_with_endpoints_builds_wrr() {
         use crate::core::gateway::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
-        use crate::types::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
@@ -429,7 +429,7 @@ mod tests {
     #[tokio::test]
     async fn test_manager_service_empty_endpoints_is_pending() {
         use crate::core::gateway::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
-        use crate::types::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
@@ -461,7 +461,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_unsupported_service_kind_returns_error() {
-        use crate::types::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
@@ -481,8 +481,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_hmac_auth_returns_error() {
-        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
-        use crate::types::resources::link_sys::webhook::{WebhookAuth, WebhookTarget};
+        use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
+        use edgion_resources::resources::link_sys::webhook::{WebhookAuth, WebhookTarget};
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {

@@ -1,5 +1,4 @@
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
-use crate::core::common::matcher::host_match::radix_match::{RadixHost, RadixHostMatchEngine};
 use crate::core::gateway::lb::BackendSelector;
 use crate::core::gateway::plugins::PluginRuntime;
 use crate::core::gateway::routes::common::{
@@ -14,8 +13,9 @@ use crate::core::gateway::routes::http::routes_mgr::{
 };
 use crate::core::gateway::routes::http::{get_global_http_route_managers, HttpRouteRuleUnit};
 use crate::core::gateway::MatchInfo;
-use crate::types::resources::common::ParentReference;
-use crate::types::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, ResourceMeta};
+use edgion_resources::matcher::host_match::radix_match::{RadixHost, RadixHostMatchEngine};
+use edgion_resources::resources::common::ParentReference;
+use edgion_resources::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, ResourceMeta};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -29,7 +29,7 @@ type DomainRouteRulesMap = HashMap<DomainStr, RouteRulesPair>;
 
 /// Validated HTTPRoute data extracted from an HTTPRoute resource
 struct ValidatedHttpRoute<'a> {
-    rules: &'a Vec<crate::types::HTTPRouteRule>,
+    rules: &'a Vec<edgion_resources::HTTPRouteRule>,
     namespace: String,
     name: String,
 }
@@ -602,7 +602,7 @@ fn http_backends_from_rule(rule: &HTTPRouteRule, route_ns: &str) -> Vec<(String,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::HTTPRoute;
+    use edgion_resources::HTTPRoute;
 
     fn create_test_httproute(
         namespace: &str,

@@ -13,8 +13,8 @@
 
 use crate::core::gateway::runtime::server::server_header::ServerHeaderOpts;
 use crate::core::gateway::EdgionHttpContext;
-use crate::types::EdgionStatus;
 use bytes::Bytes;
+use edgion_resources::EdgionStatus;
 use http::HeaderMap;
 use percent_encoding::{utf8_percent_encode, CONTROLS};
 use pingora_core::modules::http::grpc_web::GrpcWebBridge;
@@ -298,7 +298,7 @@ pub async fn end_response_502(
 }
 
 /// Fail-safe for plugins that returned
-/// [`ErrTerminateRequest`](crate::types::filters::PluginRunningResult::ErrTerminateRequest)
+/// [`ErrTerminateRequest`](edgion_resources::filters::PluginRunningResult::ErrTerminateRequest)
 /// without writing a response.
 ///
 /// - If `response_committed` is already true (spec-compliant plugin wrote its own
@@ -344,7 +344,7 @@ pub async fn end_response_503(
 mod tests {
     use super::*;
     use crate::core::gateway::EdgionHttpContext;
-    use crate::types::EdgionStatus;
+    use edgion_resources::EdgionStatus;
 
     /// When `response_committed` is true, `terminate_with_fallback` must be a no-op:
     /// it must NOT push `PluginTerminateWithoutResponse` into `ctx.edgion_status`.

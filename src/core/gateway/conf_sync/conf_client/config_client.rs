@@ -2,10 +2,10 @@ use crate::core::common::conf_sync::types::ListData;
 use crate::core::gateway::backends::{create_ep_slice_handler, create_service_handler};
 use crate::core::gateway::conf_sync::cache_client::{ClientCache, DynClientCache};
 use crate::core::gateway::routes::create_route_manager_handler;
-use crate::types::prelude_resources::*;
-use crate::types::resource_defs::get_resource_info;
-use crate::types::{all_resource_type_names, GatewayBaseConf, ResourceKind};
 use anyhow::Result;
+use edgion_resources::prelude_resources::*;
+use edgion_resources::resource_defs::get_resource_info;
+use edgion_resources::{all_resource_type_names, GatewayBaseConf, ResourceKind};
 use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use parking_lot::RwLock;
@@ -197,11 +197,11 @@ impl ConfigClient {
         &self,
         client: crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient<tonic::transport::Channel>,
     ) {
-        use crate::types::resource_defs::all_resource_kind_names;
+        use edgion_resources::resource_defs::all_resource_kind_names;
 
         // Use all_resource_kind_names to get every defined kind, then dispatch
         for cache_field in all_resource_kind_names() {
-            if let Some(kind) = crate::types::resource_defs::resource_kind_from_cache_field(cache_field) {
+            if let Some(kind) = edgion_resources::resource_defs::resource_kind_from_cache_field(cache_field) {
                 if let Some(cache) = self.get_dyn_cache(kind) {
                     cache.set_grpc_client_dyn(client.clone()).await;
                 }
@@ -275,7 +275,7 @@ impl ConfigClient {
     /// Get cache ready status by name (delegates to get_dyn_cache)
     fn get_cache_status(&self, name: &str) -> Option<bool> {
         // Map cache field name -> ResourceKind
-        let kind = crate::types::resource_defs::resource_kind_from_cache_field(name)?;
+        let kind = edgion_resources::resource_defs::resource_kind_from_cache_field(name)?;
         self.get_dyn_cache(kind).map(|c| c.is_ready())
     }
 
@@ -408,7 +408,7 @@ impl ConfigClient {
     /// new `ResourceKind` automatically appears here as soon as it is wired into
     /// `get_dyn_cache()` — no separate string table to keep in sync.
     pub fn client_cache_stats(&self) -> std::collections::BTreeMap<String, usize> {
-        use crate::types::resource_defs::ALL_RESOURCE_INFOS;
+        use edgion_resources::resource_defs::ALL_RESOURCE_INFOS;
 
         let mut out = std::collections::BTreeMap::new();
         for info in ALL_RESOURCE_INFOS {
@@ -427,7 +427,7 @@ impl ConfigClient {
     /// not cached on Gateway (Secret, ConfigMap, ReferenceGrant).
     #[allow(dead_code)] // Consumed by validator binary (Task 15/16); allow until then.
     pub fn client_cache_keys(&self, kind: &str, max: usize) -> Vec<String> {
-        use crate::types::resource_defs::ALL_RESOURCE_INFOS;
+        use edgion_resources::resource_defs::ALL_RESOURCE_INFOS;
 
         for info in ALL_RESOURCE_INFOS {
             let Some(cache) = self.get_dyn_cache(info.kind) else {
@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn client_cache_stats_all_zero_initially() {
-        use crate::types::resource_defs::ALL_RESOURCE_INFOS;
+        use edgion_resources::resource_defs::ALL_RESOURCE_INFOS;
 
         let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
         let _enter = rt.enter();

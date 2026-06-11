@@ -20,7 +20,7 @@
 
 use crate::core::common::config::{FedAllowRule, FedRbacConfig};
 use crate::core::controller::authz::CenterPolicy;
-use crate::types::resource::kind::ResourceKind;
+use edgion_resources::resource::kind::ResourceKind;
 
 // ---------------------------------------------------------------------------
 // Compile-time exhaustiveness gate

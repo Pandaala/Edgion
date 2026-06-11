@@ -109,7 +109,7 @@ Re-evaluation triggers (re-open under a new ID, not this one):
 - Code:
   - `src/core/gateway/tls/store/cert_matcher.rs` — `TlsCertMatcher`
   - `src/core/gateway/runtime/matching/tls.rs` — `GatewayTlsMatcher`
-  - `src/core/common/matcher/` — shared `HashHost::get_rfc6125`
+  - `edgion-resources/src/matcher/` — shared `HashHost::get_rfc6125`
 - Related rules:
   - `edgion-tls/wildcard-depth-gateway-api-vs-rfc6125.md` (the shared SNI
     semantics this entry depends on)

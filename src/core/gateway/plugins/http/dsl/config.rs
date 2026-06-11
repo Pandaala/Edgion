@@ -6,4 +6,4 @@
 //! gateway module. Existing `super::config::DslConfig` references keep working
 //! via this re-export.
 
-pub use crate::types::resources::edgion_plugins::plugin_configs::dsl::{DslConfig, DslErrorPolicy};
+pub use edgion_resources::resources::edgion_plugins::plugin_configs::dsl::{DslConfig, DslErrorPolicy};

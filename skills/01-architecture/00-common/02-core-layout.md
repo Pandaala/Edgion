@@ -198,7 +198,7 @@ Do not move code into `common/` simply to avoid a cross-module import. Keep owne
 ## Types layout
 
 ```
-src/types/
+edgion-resources/src/
 ├── resource/         # Resource system infrastructure
 │   ├── kind/         #   ResourceKind enum
 │   ├── defs/         #   define_resources! macro declarations

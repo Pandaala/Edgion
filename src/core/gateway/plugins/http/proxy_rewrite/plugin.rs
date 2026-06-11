@@ -10,8 +10,8 @@ use std::sync::LazyLock;
 
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::ProxyRewriteConfig;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::ProxyRewriteConfig;
 
 /// Regex for matching $arg_<name> variables
 static ARG_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$arg_(\w+)").unwrap());
@@ -350,7 +350,7 @@ impl RequestFilter for ProxyRewrite {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        use crate::types::resources::edgion_plugins::PluginValidation;
+        use edgion_resources::resources::edgion_plugins::PluginValidation;
         // Check if configuration is valid
         if self.config.validation_error().is_some() {
             plugin_log.push_err("config invalid");
@@ -395,11 +395,11 @@ impl RequestFilter for ProxyRewrite {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-    use crate::types::resources::edgion_plugins::RegexUri;
+    use edgion_resources::resources::edgion_plugins::RegexUri;
 
     #[tokio::test]
     async fn test_invalid_config() {
-        use crate::types::resources::edgion_plugins::PluginValidation;
+        use edgion_resources::resources::edgion_plugins::PluginValidation;
         let mut config = ProxyRewriteConfig {
             uri: None,
             regex_uri: Some(RegexUri {

@@ -1,6 +1,6 @@
 //! Unit tests for `cert.rs` (see `super`).
 use super::*;
-use crate::types::constants::secret_keys::tls::{CERT, KEY};
+use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
 use std::collections::BTreeMap;
@@ -16,10 +16,10 @@ fn create_test_tls(cert_pem: Option<&str>, key_pem: Option<&str>, hosts: Vec<Str
 
     EdgionTls {
         metadata: Default::default(),
-        spec: crate::types::EdgionTlsSpec {
+        spec: edgion_resources::EdgionTlsSpec {
             parent_refs: None,
             hosts,
-            secret_ref: crate::types::resources::gateway::SecretObjectReference {
+            secret_ref: edgion_resources::resources::gateway::SecretObjectReference {
                 group: None,
                 kind: None,
                 name: "test-secret".to_string(),
@@ -206,7 +206,7 @@ fn test_validate_cert_single_wildcard_not_flagged() {
 
 #[test]
 fn test_validate_mtls_config_mutual_no_ca() {
-    use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
+    use edgion_resources::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
 
     let config = ClientAuthConfig {
         mode: ClientAuthMode::Mutual,
@@ -228,8 +228,8 @@ fn test_validate_mtls_config_mutual_no_ca() {
 
 #[test]
 fn test_validate_mtls_config_verify_depth_out_of_range() {
-    use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
-    use crate::types::resources::gateway::SecretObjectReference;
+    use edgion_resources::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
+    use edgion_resources::resources::gateway::SecretObjectReference;
 
     let config = ClientAuthConfig {
         mode: ClientAuthMode::Mutual,
@@ -256,8 +256,8 @@ fn test_validate_mtls_config_verify_depth_out_of_range() {
 
 #[test]
 fn test_validate_mtls_config_invalid_san_pattern() {
-    use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
-    use crate::types::resources::gateway::SecretObjectReference;
+    use edgion_resources::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
+    use edgion_resources::resources::gateway::SecretObjectReference;
 
     let config = ClientAuthConfig {
         mode: ClientAuthMode::Mutual,
@@ -284,8 +284,8 @@ fn test_validate_mtls_config_invalid_san_pattern() {
 
 #[test]
 fn test_validate_mtls_config_valid() {
-    use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
-    use crate::types::resources::gateway::SecretObjectReference;
+    use edgion_resources::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
+    use edgion_resources::resources::gateway::SecretObjectReference;
 
     let config = ClientAuthConfig {
         mode: ClientAuthMode::Mutual,
@@ -309,7 +309,7 @@ fn test_validate_mtls_config_valid() {
 
 #[test]
 fn test_validate_mtls_config_terminate_mode() {
-    use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
+    use edgion_resources::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
 
     let config = ClientAuthConfig {
         mode: ClientAuthMode::Terminate,
@@ -611,7 +611,7 @@ fn test_single_cert_still_works() {
 
 #[test]
 fn test_deprecated_min_tls_version_is_not_rejected() {
-    use crate::types::resources::edgion_tls::TlsVersion;
+    use edgion_resources::resources::edgion_tls::TlsVersion;
 
     // RFC 8996 divergence: TLS 1.0/1.1 stay admissible as an operator opt-in
     // escape hatch. Setting them must emit a warn but must NOT invalidate the
@@ -630,7 +630,7 @@ fn test_deprecated_min_tls_version_is_not_rejected() {
 
 #[test]
 fn test_unimplemented_revocation_config_is_not_rejected() {
-    use crate::types::resources::edgion_tls::{
+    use edgion_resources::resources::edgion_tls::{
         EdgionTlsExtend, OcspStaplingConfig, RevocationCheckConfig, RevocationMode,
     };
 

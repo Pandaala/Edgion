@@ -37,8 +37,8 @@ use super::secret_io::{
     account_credentials_from_json, create_account_secret, extract_account_json_string,
     patch_account_key_into_existing_secret,
 };
-use crate::types::resources::common::SecretObjectReference;
-use crate::types::resources::edgion_acme::{
+use edgion_resources::resources::common::SecretObjectReference;
+use edgion_resources::resources::edgion_acme::{
     AcmeCertPhase, AcmeChallenge, ActiveHttpChallenge, EdgionAcme, EdgionAcmeStatus,
 };
 

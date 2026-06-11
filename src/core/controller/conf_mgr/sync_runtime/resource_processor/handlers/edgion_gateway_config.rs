@@ -6,8 +6,8 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_types, update_condition, HandlerContext, ProcessResult,
     ProcessorHandler,
 };
-use crate::types::prelude_resources::EdgionGatewayConfig;
-use crate::types::resources::edgion_gateway_config::EdgionGatewayConfigStatus;
+use edgion_resources::prelude_resources::EdgionGatewayConfig;
+use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigStatus;
 
 /// Requeue every GatewayClass so its ResolvedRefs/Accepted conditions are recomputed after an
 /// EdgionGatewayConfig change or delete. GatewayClass cardinality is tiny, so a brute-force

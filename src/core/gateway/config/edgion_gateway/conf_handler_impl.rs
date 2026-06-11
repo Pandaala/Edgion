@@ -1,6 +1,6 @@
 use crate::core::common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
 use crate::core::gateway::link_sys::providers::webhook::manager::configure_webhook_global_max;
-use crate::types::prelude_resources::EdgionGatewayConfig;
+use edgion_resources::prelude_resources::EdgionGatewayConfig;
 use kube::ResourceExt;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -133,7 +133,7 @@ pub fn create_edgion_gateway_config_handler() -> Box<dyn ConfHandler<EdgionGatew
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::edgion_gateway_config::EdgionGatewayConfigSpec;
+    use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigSpec;
     use std::collections::HashMap;
 
     // Serialize tests to avoid global-store interference
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_link_sys_config_webhook_max() {
-        use crate::types::resources::edgion_gateway_config::{EdgionGatewayConfigSpec, LinkSysGlobalConfig};
+        use edgion_resources::resources::edgion_gateway_config::{EdgionGatewayConfigSpec, LinkSysGlobalConfig};
         let spec = EdgionGatewayConfigSpec {
             link_sys: Some(LinkSysGlobalConfig {
                 webhook_max_response_bytes: 65536,
@@ -297,7 +297,7 @@ mod tests {
     }
 
     fn make_config_with_link_sys(name: &str, max_bytes: usize) -> EdgionGatewayConfig {
-        use crate::types::resources::edgion_gateway_config::LinkSysGlobalConfig;
+        use edgion_resources::resources::edgion_gateway_config::LinkSysGlobalConfig;
         let mut config = make_config(name);
         config.spec.link_sys = Some(LinkSysGlobalConfig {
             webhook_max_response_bytes: max_bytes,
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn test_load_balancing_panic_threshold_applied() {
         use crate::core::gateway::backends::panic_threshold::get_lb_panic_default;
-        use crate::types::resources::edgion_gateway_config::LoadBalancingConfig;
+        use edgion_resources::resources::edgion_gateway_config::LoadBalancingConfig;
 
         let _g = TEST_MUTEX.lock();
         clear_store();

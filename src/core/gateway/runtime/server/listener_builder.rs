@@ -25,10 +25,10 @@ use crate::core::gateway::routes::tls::{get_global_tls_route_managers, EdgionTls
 use crate::core::gateway::routes::udp::{get_global_udp_route_managers, get_udp_listener_registry, EdgionUdpProxy};
 #[cfg(feature = "boringssl")]
 use crate::core::gateway::tls::runtime::gateway::tls_pingora::TlsCallback;
-use crate::types::constants::annotations::edgion;
-use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::types::resources::gateway::{GatewayTlsMode, Listener};
-use crate::types::ListenerKey;
+use edgion_resources::constants::annotations::edgion;
+use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
+use edgion_resources::resources::gateway::{GatewayTlsMode, Listener};
+use edgion_resources::ListenerKey;
 use tokio_util::sync::CancellationToken;
 
 /// Context passed to listener builders containing gateway-level information and listener config

@@ -60,7 +60,7 @@ pub use request_restriction::RequestRestriction;
 pub use response_rewrite::ResponseRewrite;
 
 // Re-export plugin configs from types
-pub use crate::types::resources::edgion_plugins::{
+pub use edgion_resources::resources::edgion_plugins::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig, DslConfig,
     DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ForwardAuthConfig, HeaderCertAuthConfig,
     HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig,

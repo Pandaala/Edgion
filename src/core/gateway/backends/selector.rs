@@ -3,9 +3,9 @@ use crate::core::gateway::backends::discovery::get_roundrobin_store;
 use crate::core::gateway::backends::health;
 use crate::core::gateway::backends::health::get_health_status_store;
 use crate::core::gateway::lb::{compiled_selector, EdgionBackend, PolicyKind};
-use crate::types::edgion_status::EdgionStatus;
-use crate::types::uri_utils;
-use crate::types::{ConsistentHashOn, ParsedLBPolicy};
+use edgion_resources::edgion_status::EdgionStatus;
+use edgion_resources::uri_utils;
+use edgion_resources::{ConsistentHashOn, ParsedLBPolicy};
 use pingora_proxy::Session;
 use std::sync::Arc;
 

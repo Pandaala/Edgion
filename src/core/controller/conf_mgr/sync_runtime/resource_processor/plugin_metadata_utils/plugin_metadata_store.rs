@@ -8,7 +8,7 @@
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 
-use crate::types::prelude_resources::PluginMetaData;
+use edgion_resources::prelude_resources::PluginMetaData;
 
 /// Store for PluginMetaData resources.
 ///

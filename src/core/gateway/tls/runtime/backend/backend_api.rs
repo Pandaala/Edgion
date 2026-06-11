@@ -1,4 +1,4 @@
-use crate::types::resources::edgion_tls::EdgionTls;
+use edgion_resources::resources::edgion_tls::EdgionTls;
 use pingora_core::tls::ssl::{SslRef, SslVerifyMode};
 use std::sync::Arc;
 

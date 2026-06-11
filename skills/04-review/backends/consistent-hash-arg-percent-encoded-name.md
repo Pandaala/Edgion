@@ -48,7 +48,7 @@ percent/plus-encoded, so the mismatch only surfaces for an exotic arg-name confi
 
 ## Why the fix is correct
 
-`uri_utils::url_decode` (lives in `src/types/uri_utils.rs`; same helper
+`uri_utils::url_decode` (lives in `edgion-resources/src/uri_utils.rs`; same helper
 backing route-matching `parse_query_string`) is already exhaustively unit-tested
 in `uri_utils.rs` (`%20`→space, `+`→space, invalid `%XX` preserved literally,
 multibyte UTF-8). The new branch is a thin wrapper over it, gated so the decode
@@ -82,6 +82,6 @@ Re-open only if:
 ## Reference Cases
 
 - backends-F014 (review finding, fixed 2026-05-24)
-- `uri_utils::url_decode` unit tests (`src/types/uri_utils.rs`)
+- `uri_utils::url_decode` unit tests (`edgion-resources/src/uri_utils.rs`)
 - Existing integration scenario `HTTPRoute_default_lb-ch-arg.yaml` (`arg.user_id`,
   plain-identifier no-regression path)

@@ -1,6 +1,6 @@
 use super::discovery_impl::EndpointSliceExt;
 use crate::core::gateway::lb::EdgionBackend;
-use crate::types::constants::labels::k8s::SERVICE_NAME;
+use edgion_resources::constants::labels::k8s::SERVICE_NAME;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use parking_lot::{Mutex, RwLock};
 use pingora_load_balancing::selection::{BackendSelection, RoundRobin};

@@ -10,10 +10,10 @@ use parking_lot::RwLock;
 
 use crate::core::center::watch_cache::CenterConfHandler;
 use crate::core::common::metadata_conf_handler::{parse_region_route, ParsedRegionRoute};
-use crate::types::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
-use crate::types::resources::plugin_metadata::PluginMetaData;
-use crate::types::resources::plugin_metadata::{ClusterRegionRouteEntry, ServiceRegionRouteEntry};
-use crate::types::resources::plugin_metadata::{GlobalConnectionIpRestrictionData, MetaDataEntry, ProfileRules};
+use edgion_resources::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
+use edgion_resources::resources::plugin_metadata::PluginMetaData;
+use edgion_resources::resources::plugin_metadata::{ClusterRegionRouteEntry, ServiceRegionRouteEntry};
+use edgion_resources::resources::plugin_metadata::{GlobalConnectionIpRestrictionData, MetaDataEntry, ProfileRules};
 
 /// View of aggregated ClusterRegionRoute entries from all controllers for a single pm_key.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -399,7 +399,7 @@ fn canonical_hash(data: &GlobalConnectionIpRestrictionData) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::plugin_metadata::{
+    use edgion_resources::resources::plugin_metadata::{
         ClusterRegionRouteConfig, MetaDataEntry, PluginMetaDataSpec, ServiceRegionRouteConfig,
     };
 
@@ -541,8 +541,8 @@ mod tests {
     // ── GlobalConnectionIpRestriction helpers ──────────────────────────────────
 
     fn make_gir_pm(namespace: &str, name: &str) -> PluginMetaData {
-        use crate::types::resources::edgion_plugins::DefaultAction;
-        use crate::types::resources::plugin_metadata::{IpGroup, ProfileRules};
+        use edgion_resources::resources::edgion_plugins::DefaultAction;
+        use edgion_resources::resources::plugin_metadata::{IpGroup, ProfileRules};
 
         let mut profiles = HashMap::new();
         profiles.insert(
@@ -662,8 +662,8 @@ mod tests {
 
     #[test]
     fn canonical_hash_stable_across_profile_insert_order() {
-        use crate::types::resources::edgion_plugins::DefaultAction;
-        use crate::types::resources::plugin_metadata::{IpGroup, ProfileRules};
+        use edgion_resources::resources::edgion_plugins::DefaultAction;
+        use edgion_resources::resources::plugin_metadata::{IpGroup, ProfileRules};
 
         fn mk_profile() -> ProfileRules {
             ProfileRules {

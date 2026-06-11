@@ -21,11 +21,11 @@
 use super::super::gateway_info::GatewayInfo;
 use crate::core::gateway::observe::metrics::TestType;
 use crate::core::gateway::runtime::matching::route::hostname_matches_listener;
-use crate::types::constants::annotations::edgion as annotations;
-use crate::types::listener_key::{resolve_listener_addr, ListenerKey};
-use crate::types::resources::gateway::AllowedRoutes;
-use crate::types::Gateway;
 use arc_swap::ArcSwap;
+use edgion_resources::constants::annotations::edgion as annotations;
+use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
+use edgion_resources::resources::gateway::AllowedRoutes;
+use edgion_resources::Gateway;
 use kube::ResourceExt;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -404,8 +404,8 @@ pub fn rebuild_listener_gateway_infos(gateways: &[Gateway]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::common::Condition;
-    use crate::types::resources::gateway::{GatewaySpec, GatewayStatus, Listener, ListenerStatus};
+    use edgion_resources::resources::common::Condition;
+    use edgion_resources::resources::gateway::{GatewaySpec, GatewayStatus, Listener, ListenerStatus};
     use kube::api::ObjectMeta;
 
     fn make_condition(type_: &str, status: &str) -> Condition {
@@ -514,7 +514,7 @@ mod tests {
         let invalid_gw = make_gateway("https", vec![make_condition("Programmed", "False")]);
         store.rebuild(&[invalid_gw]);
 
-        use crate::types::listener_key::ListenerKey;
+        use edgion_resources::listener_key::ListenerKey;
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let key = ListenerKey::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 443), "HTTPS");
         assert!(
@@ -533,7 +533,7 @@ mod tests {
         );
         store.rebuild(&[valid_gw]);
 
-        use crate::types::listener_key::ListenerKey;
+        use edgion_resources::listener_key::ListenerKey;
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let key = ListenerKey::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 443), "HTTPS");
         assert!(

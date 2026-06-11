@@ -36,11 +36,11 @@ pub fn commit_attempt(upstream: &mut crate::core::gateway::UpstreamInfo) {
         return;
     };
     upstream.lb_committed = match &upstream.lb_policy {
-        Some(crate::types::ParsedLBPolicy::LeastConn) => {
+        Some(edgion_resources::ParsedLBPolicy::LeastConn) => {
             backend.inc_conn();
             Some(LbCommit::LeastConn)
         }
-        Some(crate::types::ParsedLBPolicy::Ewma) => Some(LbCommit::Ewma {
+        Some(edgion_resources::ParsedLBPolicy::Ewma) => Some(LbCommit::Ewma {
             started: upstream.start_time,
         }),
         _ => None,
@@ -75,7 +75,7 @@ mod tests {
     use super::*;
     use crate::core::gateway::lb::edgion_backend::EdgionBackend;
     use crate::core::gateway::UpstreamInfo;
-    use crate::types::ParsedLBPolicy;
+    use edgion_resources::ParsedLBPolicy;
     use pingora_core::protocols::l4::socket::SocketAddr;
     use pingora_load_balancing::Backend;
     use std::net::SocketAddr as StdSocketAddr;

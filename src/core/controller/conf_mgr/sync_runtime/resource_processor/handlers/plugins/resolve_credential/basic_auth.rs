@@ -9,9 +9,9 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::credent
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, HandlerContext, ResourceRef,
 };
-use crate::types::prelude_resources::EdgionPlugins;
-use crate::types::resources::edgion_plugins::plugin_configs::ResolvedBasicAuthUser;
-use crate::types::resources::edgion_plugins::EdgionPlugin;
+use edgion_resources::prelude_resources::EdgionPlugins;
+use edgion_resources::resources::edgion_plugins::plugin_configs::ResolvedBasicAuthUser;
+use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 
 /// Pure helper for first-wins duplicate-username detection.
 ///
@@ -41,7 +41,7 @@ fn first_wins_insert(
 #[allow(clippy::too_many_arguments)]
 fn resolve_group(
     group_name: &str,
-    secret_refs: &[crate::types::resources::gateway::SecretObjectReference],
+    secret_refs: &[edgion_resources::resources::gateway::SecretObjectReference],
     all_users: &mut HashMap<String, ResolvedBasicAuthUser>,
     seen: &mut HashMap<String, String>,
     ep_namespace: Option<&String>,

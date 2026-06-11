@@ -3,7 +3,7 @@ mod route_matching_tests {
     use crate::core::common::conf_sync::traits::ConfHandler;
     use crate::core::gateway::routes::http::routes_mgr::{HttpPortRouteManager, RouteManager};
     use crate::core::gateway::runtime::store::get_global_gateway_store;
-    use crate::types::{Gateway, HTTPRoute};
+    use edgion_resources::{Gateway, HTTPRoute};
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 

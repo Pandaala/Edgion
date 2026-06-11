@@ -17,8 +17,8 @@ use crate::core::gateway::plugins::http::common::auth_common::{
 };
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::LdapAuthConfig;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::LdapAuthConfig;
 
 /// LDAP Authentication plugin
 pub struct LdapAuth {
@@ -315,7 +315,7 @@ impl RequestFilter for LdapAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::edgion_plugins::LruCacheConfig;
+    use edgion_resources::resources::edgion_plugins::LruCacheConfig;
 
     fn test_config() -> LdapAuthConfig {
         LdapAuthConfig {

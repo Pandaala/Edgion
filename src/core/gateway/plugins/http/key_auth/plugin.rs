@@ -13,10 +13,10 @@ use crate::core::gateway::plugins::http::common::auth_common::{
 };
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::common::KeyGet;
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::plugin_configs::{KeyAuthConfig, KeyMetadata};
-use crate::types::uri_utils::url_decode;
+use edgion_resources::common::KeyGet;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::plugin_configs::{KeyAuthConfig, KeyMetadata};
+use edgion_resources::uri_utils::url_decode;
 
 fn sha256_of(s: &str) -> [u8; 32] {
     Sha256::digest(s.as_bytes()).into()

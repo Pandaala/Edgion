@@ -21,12 +21,12 @@ If any of the three is missing, it is a "based on line count / looks similar"-dr
 
 ## Already-Audited Specific Points (covered in this scan; not to be filed again)
 
-### (a) `src/types/resources/common/mod.rs` (124 lines) "route vs LinkSys mixed"
+### (a) `edgion-resources/src/resources/common/mod.rs` (124 lines) "route vs LinkSys mixed"
 
 - **Premise wrong**: the `secret_object_ref` / `secret_slot` / `tls` submodules are **shared by all resource types** including `gateway.rs`, `edgion_acme`, `EdgionTls`, `EdgionPlugins`, `link_sys`; not LinkSys-only.
 - **Verdict**: false positive. 124 lines is also far below any threshold worth splitting.
 
-### (b) `src/types/mod.rs:53` `pub use self::resources::*` "new resources automatically become public API"
+### (b) `edgion-resources/src/mod.rs:53` `pub use self::resources::*` "new resources automatically become public API"
 
 - **Premise does not apply**: Edgion is a binary project (Controller / Gateway / edgion-cli / Center); does not publish a lib; there is no concept of "stable public API boundary".
 - **Verdict**: not applicable. Glob re-export inside a binary is a reasonable choice.

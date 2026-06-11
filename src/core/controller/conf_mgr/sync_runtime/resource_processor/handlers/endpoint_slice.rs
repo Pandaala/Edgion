@@ -79,7 +79,7 @@ mod tests {
     use super::*;
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
-    use crate::types::ResourceKind;
+    use edgion_resources::ResourceKind;
     use k8s_openapi::api::discovery::v1::EndpointSlice;
     use kube::api::ObjectMeta;
     use std::collections::BTreeMap;

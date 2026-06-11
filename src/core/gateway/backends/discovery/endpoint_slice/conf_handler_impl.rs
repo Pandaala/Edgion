@@ -6,7 +6,7 @@ use crate::core::gateway::backends::health::check::{
 };
 use crate::core::gateway::lb::compiled_selector;
 use crate::core::gateway::lb::runtime_state;
-use crate::types::resources::health_check::ActiveHealthCheckConfig;
+use edgion_resources::resources::health_check::ActiveHealthCheckConfig;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

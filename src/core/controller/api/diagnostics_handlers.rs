@@ -16,8 +16,8 @@
 
 use crate::core::common::api::ApiResponse;
 use crate::core::controller::api::types::AdminState;
-use crate::types::ResourceKind;
 use axum::{extract::State, http::StatusCode, response::Json};
+use edgion_resources::ResourceKind;
 use serde::Serialize;
 use std::sync::Arc;
 

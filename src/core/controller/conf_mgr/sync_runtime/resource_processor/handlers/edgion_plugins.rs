@@ -14,10 +14,10 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_types, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
-use crate::types::prelude_resources::EdgionPlugins;
-use crate::types::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsStatus};
-use crate::types::resources::plugin_metadata::MetaDataEntry;
-use crate::types::ResourceKind;
+use edgion_resources::prelude_resources::EdgionPlugins;
+use edgion_resources::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsStatus};
+use edgion_resources::resources::plugin_metadata::MetaDataEntry;
+use edgion_resources::ResourceKind;
 
 use super::plugins::resolve_credential as cred;
 
@@ -274,14 +274,14 @@ mod tests {
         HandlerContext, ProcessResult, ProcessorHandler,
     };
     use crate::core::controller::conf_mgr::ControllerRuntime;
-    use crate::types::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
-    use crate::types::resources::edgion_plugins::{
+    use edgion_resources::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
+    use edgion_resources::resources::edgion_plugins::{
         BasicAuthConfig, BasicAuthSecretGroup, CertSourceMode, EdgionPlugin, EdgionPlugins, EdgionPluginsSpec,
         HeaderCertAuthConfig, HmacAuthConfig, HmacAuthSecretGroup, JweDecryptConfig, OpenidConnectConfig,
         RegionRouteConfig, RequestFilterEntry,
     };
-    use crate::types::resources::gateway::SecretObjectReference;
-    use crate::types::resources::plugin_metadata::{
+    use edgion_resources::resources::gateway::SecretObjectReference;
+    use edgion_resources::resources::plugin_metadata::{
         MetaDataEntry, PluginMetaData, PluginMetaDataSpec, ServiceRegionRouteConfig,
     };
     use k8s_openapi::api::core::v1::Secret;

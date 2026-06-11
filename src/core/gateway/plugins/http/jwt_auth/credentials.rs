@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use jsonwebtoken::DecodingKey;
 
-use crate::types::resources::edgion_plugins::plugin_configs::{
+use edgion_resources::resources::edgion_plugins::plugin_configs::{
     JwtAlgorithm, JwtAuthConfig, ResolvedJwtCredential, ResolvedJwtIssuerGroup,
 };
 

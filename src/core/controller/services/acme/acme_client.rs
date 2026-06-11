@@ -24,7 +24,7 @@ use instant_acme::{
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use zeroize::Zeroizing;
 
-use crate::types::resources::edgion_acme::AcmeKeyType;
+use edgion_resources::resources::edgion_acme::AcmeKeyType;
 
 /// ACME client wrapper
 pub struct AcmeClient {

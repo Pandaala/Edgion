@@ -40,7 +40,7 @@ A snapshot cannot express the invariant being checked in these cases — it can 
 |----------|--------------------|
 | Data-structure invariants | `src/core/gateway/cache/lru.rs` — LRU underflow / hit-ratio NaN |
 | Error message text | `src/core/controller/conf_mgr/sync_runtime/resource_processor/status_utils.rs` Condition mapping |
-| Algorithmic correctness | `src/types/resources/tests/edgion_tls_test.rs` hostname wildcard tests |
+| Algorithmic correctness | `edgion-resources/src/resources/tests/edgion_tls_test.rs` hostname wildcard tests |
 | Spec compliance | `src/core/gateway/routes/grpc/match_engine.rs` sort tests |
 | Wire-format / serialization compatibility | `src/core/common/local_auth/handlers.rs` `AuthStatus` JSON wire format |
 | Security boundaries | `src/core/gateway/tls/validation/cert.rs` mTLS `verify_depth` / SAN coverage |
@@ -54,7 +54,7 @@ Yellow-light tests mix several distinct assertion kinds in a single body.
 Merging them into one `expect!` block loses field-by-field intent and couples unrelated behavioral changes
 (adding a new field forces a refill even when the new field is irrelevant to the test's concern).
 
-**Worked counter-example:** `src/types/resources/link_sys/tests/webhook_test.rs::test_default_config` (lines 5–18).
+**Worked counter-example:** `edgion-resources/src/resources/link_sys/tests/webhook_test.rs::test_default_config` (lines 5–18).
 
 That test has ~10 assertions: five `assert!`, four `assert_eq!`, and one `matches!` guard.
 Each targets a distinct contract: `auth` absent, method `"GET"`, timeout 5 000 ms, target variant `Uri`.

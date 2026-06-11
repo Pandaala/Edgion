@@ -8,17 +8,17 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::credent
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, HandlerContext, ResourceRef,
 };
-use crate::types::prelude_resources::EdgionPlugins;
-use crate::types::resources::edgion_plugins::plugin_configs::{
+use edgion_resources::prelude_resources::EdgionPlugins;
+use edgion_resources::resources::edgion_plugins::plugin_configs::{
     JwtIssuerGroup, ResolvedJwtCredential, ResolvedJwtIssuerGroup,
 };
-use crate::types::resources::edgion_plugins::EdgionPlugin;
+use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 
 /// Resolve all Secret refs for a single JwtIssuerGroup. Snapshot-merges
 /// `algorithm` + `audiences` from group override or plugin-level default.
 /// Returns `None` if no credentials could be parsed (logged as warn).
 fn resolve_group(
-    config: &crate::types::resources::edgion_plugins::plugin_configs::JwtAuthConfig,
+    config: &edgion_resources::resources::edgion_plugins::plugin_configs::JwtAuthConfig,
     group: &JwtIssuerGroup,
     ep_namespace: Option<&String>,
     resource_ref: &ResourceRef,
@@ -199,8 +199,8 @@ pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::hand
 
 #[cfg(test)]
 mod tests {
-    use crate::types::resources::edgion_plugins::plugin_configs::{JwtAlgorithm, JwtIssuerGroup};
-    use crate::types::resources::gateway::SecretObjectReference;
+    use edgion_resources::resources::edgion_plugins::plugin_configs::{JwtAlgorithm, JwtIssuerGroup};
+    use edgion_resources::resources::gateway::SecretObjectReference;
 
     fn make_group_with_overrides(
         name: &str,

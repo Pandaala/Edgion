@@ -1,5 +1,5 @@
 use crate::core::common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
-use crate::types::prelude_resources::GatewayClass;
+use edgion_resources::prelude_resources::GatewayClass;
 use kube::ResourceExt;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -112,7 +112,7 @@ pub fn create_gateway_class_handler() -> Box<dyn ConfHandler<GatewayClass> + Sen
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::gateway_class::GatewayClassSpec;
+    use edgion_resources::resources::gateway_class::GatewayClassSpec;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use std::collections::HashMap;
 

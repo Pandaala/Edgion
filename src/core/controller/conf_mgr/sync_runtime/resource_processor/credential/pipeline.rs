@@ -18,8 +18,8 @@
 
 use k8s_openapi::api::core::v1::Secret;
 
-use crate::types::credentials::{ResolveError, SecretMaterialResolver};
-use crate::types::resources::common::SecretObjectReference;
+use edgion_resources::credentials::{ResolveError, SecretMaterialResolver};
+use edgion_resources::resources::common::SecretObjectReference;
 
 use super::super::{format_secret_key, HandlerContext, ResourceRef};
 
@@ -276,8 +276,8 @@ mod tests {
     use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef};
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
-    use crate::types::credentials::BasicAuthResolver;
-    use crate::types::ResourceKind;
+    use edgion_resources::credentials::BasicAuthResolver;
+    use edgion_resources::ResourceKind;
 
     fn make_ctx(secrets: HashMap<String, Secret>) -> (HandlerContext, Arc<ControllerRuntime>) {
         let runtime = Arc::new(ControllerRuntime::default());

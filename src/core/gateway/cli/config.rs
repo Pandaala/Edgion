@@ -1,7 +1,7 @@
-use crate::core::common::rate_limit_config::RateLimitGlobalConfig;
-use crate::types::LogConfig;
 use anyhow::{Context, Result};
 use clap::Args;
+use edgion_resources::rate_limit_config::RateLimitGlobalConfig;
+use edgion_resources::LogConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -74,7 +74,7 @@ pub struct EdgionGatewayConfig {
     ///     wrap_suffix: "</E>"
     #[arg(skip)]
     #[serde(default, skip_serializing)]
-    pub access_log_sensitive: crate::types::sensitive::SensitiveMaskConfig,
+    pub access_log_sensitive: edgion_resources::sensitive::SensitiveMaskConfig,
 
     /// Access log output options that don't fit into the shared `LogConfig`.
     ///
@@ -83,7 +83,7 @@ pub struct EdgionGatewayConfig {
     ///     include_raw_uri: true
     #[arg(skip)]
     #[serde(default)]
-    pub access_log_options: crate::types::observe::AccessLogOptions,
+    pub access_log_options: edgion_resources::observe::AccessLogOptions,
 
     #[arg(skip)]
     #[serde(default = "default_ssl_log_config")]
@@ -152,7 +152,7 @@ pub struct EdgionGatewayConfig {
     ///     reject_invalid_percent_encoding: false
     #[arg(skip)]
     #[serde(default)]
-    pub path_normalization: crate::core::common::path_normalization::PathNormalizationConfig,
+    pub path_normalization: edgion_resources::path_normalization::PathNormalizationConfig,
 }
 
 /// Gateway configuration
@@ -519,10 +519,10 @@ pub fn get_backend_requests_config() -> &'static BackendRequestsConfig {
 // ============================================
 
 /// Global access log options, initialized once at startup.
-static ACCESS_LOG_OPTIONS: OnceLock<crate::types::observe::AccessLogOptions> = OnceLock::new();
+static ACCESS_LOG_OPTIONS: OnceLock<edgion_resources::observe::AccessLogOptions> = OnceLock::new();
 
 /// Initialize the global access log options (call once at startup).
-pub fn init_access_log_options(options: crate::types::observe::AccessLogOptions) {
+pub fn init_access_log_options(options: edgion_resources::observe::AccessLogOptions) {
     let result = ACCESS_LOG_OPTIONS.set(options);
     debug_assert!(result.is_ok(), "init_access_log_options called more than once");
 }
@@ -532,8 +532,8 @@ pub fn init_access_log_options(options: crate::types::observe::AccessLogOptions)
 /// Returns the default (all flags off) if `init_access_log_options` was not
 /// called, e.g. unit tests that don't boot the full Gateway.
 #[inline]
-pub fn get_access_log_options() -> &'static crate::types::observe::AccessLogOptions {
-    ACCESS_LOG_OPTIONS.get_or_init(crate::types::observe::AccessLogOptions::default)
+pub fn get_access_log_options() -> &'static edgion_resources::observe::AccessLogOptions {
+    ACCESS_LOG_OPTIONS.get_or_init(edgion_resources::observe::AccessLogOptions::default)
 }
 
 // ============================================
@@ -717,7 +717,7 @@ impl EdgionGatewayConfig {
     /// Convert to SysLogConfig (for system logging)
     pub fn to_log_config(&self) -> crate::core::gateway::observe::SysLogConfig {
         use crate::core::gateway::observe::SysLogConfig;
-        use crate::types::work_dir;
+        use edgion_resources::work_dir;
 
         // Use work_dir to resolve the log directory path
         // This ensures relative paths like "logs" are resolved to work_dir/logs
@@ -736,7 +736,7 @@ impl EdgionGatewayConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::common::rate_limit_config::{
+    use edgion_resources::rate_limit_config::{
         get_gateway_instance_count, set_gateway_instance_count, DEFAULT_ESTIMATOR_SLOTS_K,
         DEFAULT_MAX_ESTIMATOR_SLOTS_K,
     };
@@ -833,7 +833,7 @@ mod tests {
         let cfg: EdgionGatewayConfig = serde_yaml::from_str("{}").unwrap();
         assert!(matches!(
             cfg.access_log_sensitive.mode,
-            crate::types::sensitive::SensitiveMode::Off
+            edgion_resources::sensitive::SensitiveMode::Off
         ));
     }
 
@@ -847,7 +847,7 @@ access_log_sensitive:
         let cfg: EdgionGatewayConfig = serde_yaml::from_str(yaml_str).unwrap();
         assert!(matches!(
             cfg.access_log_sensitive.mode,
-            crate::types::sensitive::SensitiveMode::Replace
+            edgion_resources::sensitive::SensitiveMode::Replace
         ));
         assert_eq!(cfg.access_log_sensitive.replace_with, "{MSKED}");
     }
@@ -863,7 +863,7 @@ access_log_sensitive:
         let cfg: EdgionGatewayConfig = serde_yaml::from_str(yaml_str).unwrap();
         assert!(matches!(
             cfg.access_log_sensitive.mode,
-            crate::types::sensitive::SensitiveMode::Wrap
+            edgion_resources::sensitive::SensitiveMode::Wrap
         ));
         assert_eq!(cfg.access_log_sensitive.wrap_prefix, "<E>");
     }

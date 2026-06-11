@@ -82,10 +82,10 @@ The usual failure is not “forgot to implement a trait.” It is one of the mid
 
 When adding or extending a stream plugin, start with:
 
-- `src/types/resources/edgion_stream_plugins/mod.rs`
-- `src/types/resources/edgion_stream_plugins/stream_plugins.rs`
-- `src/types/resources/edgion_stream_plugins/tls_route_plugins.rs`
-- `src/types/resource/meta/impls.rs`
+- `edgion-resources/src/resources/edgion_stream_plugins/mod.rs`
+- `edgion-resources/src/resources/edgion_stream_plugins/stream_plugins.rs`
+- `edgion-resources/src/resources/edgion_stream_plugins/tls_route_plugins.rs`
+- `edgion-resources/src/resource/meta/impls.rs`
 
 These currently own:
 

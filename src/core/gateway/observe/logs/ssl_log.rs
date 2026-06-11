@@ -52,7 +52,7 @@ impl SslLogger {
 }
 
 /// Initialize the global SSL logger from configuration
-pub async fn init_ssl_logger(config: &crate::types::LogConfig) -> anyhow::Result<()> {
+pub async fn init_ssl_logger(config: &edgion_resources::LogConfig) -> anyhow::Result<()> {
     if let Some(logger) = create_sync_logger(config).await? {
         SSL_LOGGER
             .set(logger)

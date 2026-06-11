@@ -8,7 +8,7 @@ use std::sync::Arc;
 use super::credentials::{build_decoding_key, JwtIssuerGroupStore};
 use super::to_jwt_algorithm;
 use crate::core::gateway::plugins::runtime::PluginLog;
-use crate::types::resources::edgion_plugins::plugin_configs::{JwtAuthConfig, ResolvedJwtIssuerGroup};
+use edgion_resources::resources::edgion_plugins::plugin_configs::{JwtAuthConfig, ResolvedJwtIssuerGroup};
 
 #[derive(Debug)]
 pub(super) struct VerifyOk {
@@ -169,7 +169,7 @@ fn classify_jwt_decode_error(e: &jsonwebtoken::errors::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::edgion_plugins::plugin_configs::{
+    use edgion_resources::resources::edgion_plugins::plugin_configs::{
         JwtAlgorithm, JwtAuthConfig, ResolvedJwtCredential, ResolvedJwtIssuerGroup,
     };
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};

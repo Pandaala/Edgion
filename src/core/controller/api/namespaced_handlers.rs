@@ -1,11 +1,11 @@
 use crate::core::controller::conf_mgr::ListOptions;
-use crate::types::prelude_resources::*;
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
     http::{header::LOCATION, HeaderMap, HeaderValue, StatusCode},
     response::Json,
 };
+use edgion_resources::prelude_resources::*;
 use k8s_openapi::api::core::v1::{ConfigMap, Secret, Service};
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use serde::Deserialize;
@@ -129,7 +129,7 @@ pub async fn create_namespaced(
     // In K8s mode: skip validation (K8s API Server validates) and don't update version
     // In non-K8s mode: validate and update resource version
     match kind {
-        crate::types::ResourceKind::HTTPRoute => {
+        edgion_resources::ResourceKind::HTTPRoute => {
             let route: HTTPRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -138,7 +138,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::GRPCRoute => {
+        edgion_resources::ResourceKind::GRPCRoute => {
             let route: GRPCRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -147,7 +147,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::TCPRoute => {
+        edgion_resources::ResourceKind::TCPRoute => {
             let route: TCPRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -156,7 +156,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::UDPRoute => {
+        edgion_resources::ResourceKind::UDPRoute => {
             let route: UDPRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -165,7 +165,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::TLSRoute => {
+        edgion_resources::ResourceKind::TLSRoute => {
             let route: TLSRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -174,7 +174,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::Service => {
+        edgion_resources::ResourceKind::Service => {
             let service: Service = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &service, is_k8s)?;
             let json_content = serde_json::to_string(&service).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -183,7 +183,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::EndpointSlice => {
+        edgion_resources::ResourceKind::EndpointSlice => {
             let ep: EndpointSlice = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &ep, is_k8s)?;
             let json_content = serde_json::to_string(&ep).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -192,7 +192,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::EdgionTls => {
+        edgion_resources::ResourceKind::EdgionTls => {
             let tls: EdgionTls = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &tls, is_k8s)?;
             let json_content = serde_json::to_string(&tls).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -201,7 +201,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::EdgionPlugins => {
+        edgion_resources::ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -210,7 +210,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::PluginMetaData => {
+        edgion_resources::ResourceKind::PluginMetaData => {
             let metadata: PluginMetaData = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &metadata, is_k8s)?;
             let json_content = serde_json::to_string(&metadata).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -219,7 +219,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::LinkSys => {
+        edgion_resources::ResourceKind::LinkSys => {
             let linksys: LinkSys = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &linksys, is_k8s)?;
             let json_content = serde_json::to_string(&linksys).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -228,7 +228,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::Secret => {
+        edgion_resources::ResourceKind::Secret => {
             let secret: Secret = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &secret, is_k8s)?;
             let json_content = serde_json::to_string(&secret).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -237,7 +237,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::ConfigMap => {
+        edgion_resources::ResourceKind::ConfigMap => {
             let cm: ConfigMap = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &cm, is_k8s)?;
             let json_content = serde_json::to_string(&cm).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -246,7 +246,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::Gateway => {
+        edgion_resources::ResourceKind::Gateway => {
             let gateway: Gateway = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &gateway, is_k8s)?;
             let json_content = serde_json::to_string(&gateway).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -255,7 +255,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::ReferenceGrant => {
+        edgion_resources::ResourceKind::ReferenceGrant => {
             let rg: ReferenceGrant = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &rg, is_k8s)?;
             let json_content = serde_json::to_string(&rg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -264,7 +264,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::BackendTLSPolicy => {
+        edgion_resources::ResourceKind::BackendTLSPolicy => {
             let policy: BackendTLSPolicy = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &policy, is_k8s)?;
             let json_content = serde_json::to_string(&policy).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -273,7 +273,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::EdgionStreamPlugins => {
+        edgion_resources::ResourceKind::EdgionStreamPlugins => {
             let plugins: EdgionStreamPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -282,7 +282,7 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::EdgionAcme => {
+        edgion_resources::ResourceKind::EdgionAcme => {
             let acme: EdgionAcme = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &acme, is_k8s)?;
             let json_content = serde_json::to_string(&acme).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -350,7 +350,7 @@ pub async fn update_namespaced(
     // In K8s mode: skip validation (K8s API Server validates) and don't update version
     // In non-K8s mode: validate and update resource version
     match kind {
-        crate::types::ResourceKind::HTTPRoute => {
+        edgion_resources::ResourceKind::HTTPRoute => {
             let route: HTTPRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -359,7 +359,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::GRPCRoute => {
+        edgion_resources::ResourceKind::GRPCRoute => {
             let route: GRPCRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -368,7 +368,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::TCPRoute => {
+        edgion_resources::ResourceKind::TCPRoute => {
             let route: TCPRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -377,7 +377,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::UDPRoute => {
+        edgion_resources::ResourceKind::UDPRoute => {
             let route: UDPRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -386,7 +386,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::TLSRoute => {
+        edgion_resources::ResourceKind::TLSRoute => {
             let route: TLSRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -395,7 +395,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::Service => {
+        edgion_resources::ResourceKind::Service => {
             let service: Service = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &service, is_k8s)?;
             let json_content = serde_json::to_string(&service).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -404,7 +404,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::EndpointSlice => {
+        edgion_resources::ResourceKind::EndpointSlice => {
             let ep: EndpointSlice = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &ep, is_k8s)?;
             let json_content = serde_json::to_string(&ep).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -413,7 +413,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::EdgionTls => {
+        edgion_resources::ResourceKind::EdgionTls => {
             let tls: EdgionTls = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &tls, is_k8s)?;
             let json_content = serde_json::to_string(&tls).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -422,7 +422,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::EdgionPlugins => {
+        edgion_resources::ResourceKind::EdgionPlugins => {
             let plugins: EdgionPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -431,7 +431,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::PluginMetaData => {
+        edgion_resources::ResourceKind::PluginMetaData => {
             let metadata: PluginMetaData = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &metadata, is_k8s)?;
             let json_content = serde_json::to_string(&metadata).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -446,7 +446,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::LinkSys => {
+        edgion_resources::ResourceKind::LinkSys => {
             let linksys: LinkSys = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &linksys, is_k8s)?;
             let json_content = serde_json::to_string(&linksys).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -455,7 +455,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::Secret => {
+        edgion_resources::ResourceKind::Secret => {
             let secret: Secret = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &secret, is_k8s)?;
             let json_content = serde_json::to_string(&secret).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -464,7 +464,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::ConfigMap => {
+        edgion_resources::ResourceKind::ConfigMap => {
             let cm: ConfigMap = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &cm, is_k8s)?;
             let json_content = serde_json::to_string(&cm).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -473,7 +473,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::Gateway => {
+        edgion_resources::ResourceKind::Gateway => {
             let gateway: Gateway = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &gateway, is_k8s)?;
             let json_content = serde_json::to_string(&gateway).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -482,7 +482,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::ReferenceGrant => {
+        edgion_resources::ResourceKind::ReferenceGrant => {
             let rg: ReferenceGrant = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &rg, is_k8s)?;
             let json_content = serde_json::to_string(&rg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -491,7 +491,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::BackendTLSPolicy => {
+        edgion_resources::ResourceKind::BackendTLSPolicy => {
             let policy: BackendTLSPolicy = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &policy, is_k8s)?;
             let json_content = serde_json::to_string(&policy).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -500,7 +500,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::EdgionStreamPlugins => {
+        edgion_resources::ResourceKind::EdgionStreamPlugins => {
             let plugins: EdgionStreamPlugins = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -509,7 +509,7 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::EdgionAcme => {
+        edgion_resources::ResourceKind::EdgionAcme => {
             let acme: EdgionAcme = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &acme, is_k8s)?;
             let json_content = serde_json::to_string(&acme).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

@@ -1,5 +1,5 @@
 use crate::core::common::conf_sync::traits::{ConfHandler, ResourceChange};
-use crate::types::ResourceMeta;
+use edgion_resources::ResourceMeta;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

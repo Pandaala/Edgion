@@ -62,8 +62,8 @@ use crate::core::gateway::plugins::http::common::http_client::{
 };
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::ForwardAuthConfig;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::ForwardAuthConfig;
 
 pub struct ForwardAuth {
     name: String,
@@ -232,7 +232,7 @@ impl RequestFilter for ForwardAuth {
                 // Auth service unreachable (connection refused / DNS fail / timeout).
                 // Surface in access log `errors` for gateway-level visibility; PluginLog
                 // short tag captures the per-request plugin-side detail.
-                session.add_error(crate::types::EdgionStatus::ForwardAuthServiceUnreachable);
+                session.add_error(edgion_resources::EdgionStatus::ForwardAuthServiceUnreachable);
                 if self.config.allow_degradation {
                     plugin_log.push_err("upstream unreachable:degraded");
                     return PluginRunningResult::GoodNext;

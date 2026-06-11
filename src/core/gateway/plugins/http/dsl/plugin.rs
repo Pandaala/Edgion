@@ -10,7 +10,7 @@ use async_trait::async_trait;
 
 use crate::core::gateway::plugins::runtime::traits::UpstreamResponseFilter;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
+use edgion_resources::filters::PluginRunningResult;
 
 use super::config::DslConfig;
 use super::lang::bytecode::{CompiledScript, OpCode};
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn validate_config_accepts_redis_with_multi_instruction_sibling_arg() {
         use super::super::config::DslConfig;
-        use crate::types::resources::edgion_plugins::plugin_configs::LinkSysRef;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::LinkSysRef;
         // Regression for F-015: a non-literal (multi-instruction) argument after
         // the link name used to shift the i-argc positional guess onto an
         // unrelated LoadConst ("X-Key"), wrongly rejecting this valid config and

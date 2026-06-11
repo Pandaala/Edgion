@@ -3,7 +3,7 @@
 //! Validates TLS certificates before adding them to the TlsCertMatcher.
 //! Checks: existence, parsing, expiration, SAN matching, and key matching.
 
-use crate::types::EdgionTls;
+use edgion_resources::EdgionTls;
 use std::fmt;
 use x509_parser::pem::Pem;
 use x509_parser::prelude::*;
@@ -157,7 +157,7 @@ impl fmt::Display for CertValidationError {
 /// 8. allowed_sans patterns are valid (if configured)
 /// 9. allowed_cns patterns are valid (if configured)
 pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
-    use crate::types::resources::edgion_tls::TlsVersion;
+    use edgion_resources::resources::edgion_tls::TlsVersion;
 
     let mut errors = Vec::new();
 
@@ -186,7 +186,7 @@ pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
     // plane), once per apply.
     // See skills/04-review/rfc-divergence/tls-07-revocation-config-not-implemented.md
     if let Some(extend) = &tls.spec.extend {
-        use crate::types::resources::edgion_tls::RevocationMode;
+        use edgion_resources::resources::edgion_tls::RevocationMode;
         let revocation_requested = extend
             .revocation_check
             .as_ref()
@@ -505,10 +505,10 @@ pub(crate) fn check_key_matches_cert(cert_pem: &str, key_pem: &str) -> Result<()
 
 /// Validate mTLS client authentication configuration
 fn validate_mtls_config(
-    client_auth: &crate::types::resources::edgion_tls::ClientAuthConfig,
+    client_auth: &edgion_resources::resources::edgion_tls::ClientAuthConfig,
     errors: &mut Vec<CertValidationError>,
 ) {
-    use crate::types::resources::edgion_tls::ClientAuthMode;
+    use edgion_resources::resources::edgion_tls::ClientAuthMode;
 
     // 1. Check CA Secret reference when mode requires it
     match client_auth.mode {

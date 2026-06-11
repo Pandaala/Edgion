@@ -1,15 +1,15 @@
-use crate::types::prelude_resources::*;
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
     http::{header::LOCATION, HeaderMap, HeaderValue, StatusCode},
     response::Json,
 };
+use edgion_resources::prelude_resources::*;
 use std::sync::Arc;
 
 use super::common::{map_writer_error, parse_kind, parse_resource_and_update_version, validate_resource};
 use super::types::*;
-use crate::types::resource::is_kind_cluster_scoped;
+use edgion_resources::resource::is_kind_cluster_scoped;
 
 /// List all cluster-scoped resources of a kind
 pub async fn list_cluster(
@@ -64,7 +64,7 @@ pub async fn create_cluster(
     // In K8s mode: skip validation (K8s API Server validates) and don't update version
     // In non-K8s mode: validate and update resource version
     match kind {
-        crate::types::ResourceKind::GatewayClass => {
+        edgion_resources::ResourceKind::GatewayClass => {
             let gc: GatewayClass = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &gc, is_k8s)?;
             let json_content = serde_json::to_string(&gc).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -73,7 +73,7 @@ pub async fn create_cluster(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::EdgionGatewayConfig => {
+        edgion_resources::ResourceKind::EdgionGatewayConfig => {
             let cfg: EdgionGatewayConfig = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &cfg, is_k8s)?;
             let json_content = serde_json::to_string(&cfg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -138,7 +138,7 @@ pub async fn update_cluster(
     // In K8s mode: skip validation (K8s API Server validates) and don't update version
     // In non-K8s mode: validate and update resource version
     match kind {
-        crate::types::ResourceKind::GatewayClass => {
+        edgion_resources::ResourceKind::GatewayClass => {
             let gc: GatewayClass = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &gc, is_k8s)?;
             let json_content = serde_json::to_string(&gc).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -147,7 +147,7 @@ pub async fn update_cluster(
                 .await
                 .map_err(map_writer_error)?;
         }
-        crate::types::ResourceKind::EdgionGatewayConfig => {
+        edgion_resources::ResourceKind::EdgionGatewayConfig => {
             let cfg: EdgionGatewayConfig = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &cfg, is_k8s)?;
             let json_content = serde_json::to_string(&cfg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

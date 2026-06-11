@@ -9,8 +9,8 @@ use crate::core::gateway::runtime::matching::rebuild_gateway_tls_matcher;
 use crate::core::gateway::runtime::store::{
     get_global_gateway_store, get_listener_gateway_info_store, rebuild_listener_gateway_infos,
 };
-use crate::types::prelude_resources::Gateway;
-use crate::types::ListenerKey;
+use edgion_resources::prelude_resources::Gateway;
+use edgion_resources::ListenerKey;
 use kube::ResourceExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

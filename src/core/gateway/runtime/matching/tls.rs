@@ -15,12 +15,12 @@
 //! fast path: when no Gateway TLS is configured, lookups return immediately
 //! without touching any HashMap.
 
-use crate::core::common::matcher::HashHost;
 use crate::core::gateway::runtime::store::listener_gateway_info::is_listener_not_programmed;
-use crate::types::listener_key::{resolve_listener_addr, ListenerKey};
-use crate::types::prelude_resources::Gateway;
-use crate::types::resources::gateway::{FrontendTLSValidation, SecretObjectReference};
 use arc_swap::ArcSwapOption;
+use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
+use edgion_resources::matcher::HashHost;
+use edgion_resources::prelude_resources::Gateway;
+use edgion_resources::resources::gateway::{FrontendTLSValidation, SecretObjectReference};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kube::ResourceExt;

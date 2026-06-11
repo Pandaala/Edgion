@@ -155,7 +155,7 @@ Starting from Gateway API v1.5.0:
 
 ## Edgion implementation notes
 
-1. **Type layer**: internal structs in `src/types/resources/` are version-independent; the conversion layer isolates API version differences
+1. **Type layer**: internal structs in `edgion-resources/src/resources/` are version-independent; the conversion layer isolates API version differences
 2. **Controller watch**: probe versions at init; prefer the higher version; single-active watch
 3. **Path consistency**: watch, preflight, storage, and status patch use the same version selection
 4. **Progressive migration**: first add new-version support → coexist multiple served versions → remove the older version after downstream clusters have migrated

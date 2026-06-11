@@ -299,7 +299,7 @@ status:
 ## Runtime Behavior
 
 - **Controller side**: parse `secretRef` → register an owner→secret dependency in `SecretRefManager` (Secret update/delete cascades requeue this resource) → embed the entire `Secret` into `spec.config.<auth>.secret` / `spec.config.tls.certs.secret` → sync to the Gateway via conf_sync gRPC. The `Secret` itself is a `no_sync_kind` and is not synced separately.
-- **Gateway side**: after `LinkSysStore` receives the spec, it uses the resolvers in `src/types/credentials` to recompute `Material` from the embedded `Secret.data` and hands it to the Redis / Etcd / ES / Webhook client to build the connection. Of the four credential states (`NotRequired` / `Pending` / `Invalid` / `Resolved`), only the former or `Resolved` allows building a client; the rest fail-fast and **do not** degrade to anonymous connections.
+- **Gateway side**: after `LinkSysStore` receives the spec, it uses the resolvers in `edgion-resources/src/credentials` to recompute `Material` from the embedded `Secret.data` and hands it to the Redis / Etcd / ES / Webhook client to build the connection. Of the four credential states (`NotRequired` / `Pending` / `Invalid` / `Resolved`), only the former or `Resolved` allows building a client; the rest fail-fast and **do not** degrade to anonymous connections.
 - **Hot reload**: when a Secret pointed to by secretRef changes → the Controller recomputes → pushes the new spec via conf_sync → the Gateway rebuilds the corresponding provider client and the old connections drain gracefully.
 
 ## Cross-references and Dependencies

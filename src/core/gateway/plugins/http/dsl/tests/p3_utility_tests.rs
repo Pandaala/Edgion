@@ -1,7 +1,7 @@
 //! Tests for P3 utility functions: hmac_sha256, json_get, uuid, hex encode/decode, time_format, ip_in_cidr, join, log_warn, log_error.
 
 use super::*;
-use crate::types::sensitive::SENSITIVE_MODE;
+use edgion_resources::sensitive::SENSITIVE_MODE;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 

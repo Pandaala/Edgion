@@ -11,11 +11,11 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, set_parent_conditions_full, update_condition,
     AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
-use crate::types::prelude_resources::HTTPRoute;
-use crate::types::resources::common::RefDenied;
-use crate::types::resources::http_route::{HTTPRouteFilterType, HTTPRouteStatus, RouteParentStatus};
-use crate::types::resources::http_route_preparse::is_lb_policy_kind;
-use crate::types::ResourceKind;
+use edgion_resources::prelude_resources::HTTPRoute;
+use edgion_resources::resources::common::RefDenied;
+use edgion_resources::resources::http_route::{HTTPRouteFilterType, HTTPRouteStatus, RouteParentStatus};
+use edgion_resources::resources::http_route_preparse::is_lb_policy_kind;
+use edgion_resources::ResourceKind;
 
 /// HTTPRoute handler
 pub struct HttpRouteHandler {
@@ -417,7 +417,9 @@ fn collect_ref_denied_list(route: &HTTPRoute) -> Vec<Option<&RefDenied>> {
 /// Check if a filter list contains both URLRewrite and RequestRedirect.
 ///
 /// Per Gateway API spec, these two filters are mutually exclusive within a single rule.
-fn has_rewrite_redirect_conflict(filters: Option<&Vec<crate::types::resources::http_route::HTTPRouteFilter>>) -> bool {
+fn has_rewrite_redirect_conflict(
+    filters: Option<&Vec<edgion_resources::resources::http_route::HTTPRouteFilter>>,
+) -> bool {
     let Some(filters) = filters else { return false };
     let has_rewrite = filters.iter().any(|f| f.filter_type == HTTPRouteFilterType::URLRewrite);
     let has_redirect = filters
@@ -435,8 +437,8 @@ fn has_rewrite_redirect_conflict(filters: Option<&Vec<crate::types::resources::h
 /// while the route stays `Accepted=True`. This matches the rewrite/redirect
 /// filter-conflict precedent and avoids dropping the entire route from the
 /// data-plane route table on misconfiguration.
-fn invalid_cors_reason(rule: &crate::types::resources::http_route::HTTPRouteRule) -> Option<String> {
-    let filter_reason = |f: &crate::types::resources::http_route::HTTPRouteFilter| -> Option<String> {
+fn invalid_cors_reason(rule: &edgion_resources::resources::http_route::HTTPRouteRule) -> Option<String> {
+    let filter_reason = |f: &edgion_resources::resources::http_route::HTTPRouteFilter| -> Option<String> {
         if f.filter_type != HTTPRouteFilterType::CORS {
             return None;
         }
@@ -480,8 +482,8 @@ fn invalid_cors_reason(rule: &crate::types::resources::http_route::HTTPRouteRule
 /// Anything else is a static config error knowable without the runtime store;
 /// flagging it here excludes the rule from the data-plane route table instead
 /// of leaving it to a silent runtime `GoodNext`.
-fn invalid_extension_ref_reason(rule: &crate::types::resources::http_route::HTTPRouteRule) -> Option<String> {
-    let filter_reason = |f: &crate::types::resources::http_route::HTTPRouteFilter| -> Option<String> {
+fn invalid_extension_ref_reason(rule: &edgion_resources::resources::http_route::HTTPRouteRule) -> Option<String> {
+    let filter_reason = |f: &edgion_resources::resources::http_route::HTTPRouteFilter| -> Option<String> {
         if f.filter_type != HTTPRouteFilterType::ExtensionRef {
             return None;
         }

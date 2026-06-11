@@ -22,8 +22,8 @@ use async_trait::async_trait;
 
 use crate::core::gateway::link_sys::credential::CredentialState;
 use crate::core::gateway::link_sys::lifecycle::LinkSysLifecycle;
-use crate::types::credentials::materials::BasicAuthMaterial;
-use crate::types::resources::link_sys::etcd::EtcdClientConfig;
+use edgion_resources::credentials::materials::BasicAuthMaterial;
+use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
 
 use super::config_mapping::{build_connect_options, default_connect_options};
 
@@ -312,7 +312,6 @@ impl LinkSysLifecycle for EtcdLinkClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::link_sys::etcd::*;
 
     fn minimal_config() -> EtcdClientConfig {
         EtcdClientConfig {

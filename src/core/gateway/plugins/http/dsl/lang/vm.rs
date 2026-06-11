@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession};
-use crate::types::filters::PluginRunningResult;
+use edgion_resources::filters::PluginRunningResult;
 
 use super::super::runtime::DslRuntime;
 use super::bytecode::*;
@@ -115,7 +115,7 @@ impl Default for VmLimits {
 // layer. Re-export it here so existing `vm::DslErrorPolicy` references (config,
 // plugin, tests) keep resolving; `apply_error_policy` below maps its variants
 // onto runtime `PluginRunningResult`s.
-pub use crate::types::resources::edgion_plugins::plugin_configs::dsl::DslErrorPolicy;
+pub use edgion_resources::resources::edgion_plugins::plugin_configs::dsl::DslErrorPolicy;
 
 // ==================== VM State ====================
 

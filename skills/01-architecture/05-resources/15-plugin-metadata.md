@@ -15,7 +15,7 @@ PluginMetaData is Edgion's custom-extension resource that carries one `MetaDataE
 
 ## Source code locations
 
-- Type definitions: `src/types/resources/plugin_metadata/mod.rs` (main module), `src/types/resources/plugin_metadata/region_route.rs` (RegionRoute config structs)
+- Type definitions: `edgion-resources/src/resources/plugin_metadata/mod.rs` (main module), `edgion-resources/src/resources/plugin_metadata/region_route.rs` (RegionRoute config structs)
 - Plugin types: `MetaDataPlugin` enum (ClusterRegionRoute / ServiceRegionRoute variants)
 - Controller Handler: `handlers/plugin_metadata.rs`
 - EdgionPlugins Handler (validation logic): `handlers/edgion_plugins.rs`

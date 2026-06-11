@@ -2,9 +2,9 @@ use crate::core::common::utils::net::{classify_backend_addr, BlockedBackendReaso
 use crate::core::gateway::backends::discovery::get_global_service_store;
 use crate::core::gateway::backends::gateway_backend_tls_store::get_global_gateway_backend_tls_store;
 use crate::core::gateway::EdgionHttpContext;
-use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
-use crate::types::edgion_status::EdgionStatus;
-use crate::types::resources::BackendTLSPolicy;
+use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
+use edgion_resources::edgion_status::EdgionStatus;
+use edgion_resources::resources::BackendTLSPolicy;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr;
 #[cfg(feature = "boringssl")]
@@ -192,11 +192,11 @@ pub(crate) fn create_tls_peer(
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             for san in policy_sans.iter() {
                 match san.san_type {
-                    crate::types::resources::backend_tls_policy::SubjectAltNameType::Hostname => {
+                    edgion_resources::resources::backend_tls_policy::SubjectAltNameType::Hostname => {
                         "H".hash(&mut hasher);
                         san.hostname.hash(&mut hasher);
                     }
-                    crate::types::resources::backend_tls_policy::SubjectAltNameType::URI => {
+                    edgion_resources::resources::backend_tls_policy::SubjectAltNameType::URI => {
                         "U".hash(&mut hasher);
                         san.uri.hash(&mut hasher);
                     }

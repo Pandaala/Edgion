@@ -5,10 +5,10 @@ use crate::core::gateway::lb::BackendSelector;
 use crate::core::gateway::routes::common::{
     is_core_service_backend_ref, resolve_stream_plugin_store_key, resolve_tcp_keepalive,
 };
-use crate::types::resources::common::TcpKeepaliveConfig;
-use crate::types::resources::tls_route::TLSBackendRef;
-use crate::types::resources::TLSRoute;
-use crate::types::ResourceMeta;
+use edgion_resources::resources::common::TcpKeepaliveConfig;
+use edgion_resources::resources::tls_route::TLSBackendRef;
+use edgion_resources::resources::TLSRoute;
+use edgion_resources::ResourceMeta;
 
 /// Gateway-side compiled companion for a TLSRoute.
 ///
@@ -49,7 +49,7 @@ impl TlsRouteUnit {
         let annotations = route.metadata.annotations.as_ref();
 
         let proxy_protocol_version = annotations
-            .and_then(|a| a.get(crate::types::constants::annotations::edgion::PROXY_PROTOCOL))
+            .and_then(|a| a.get(edgion_resources::constants::annotations::edgion::PROXY_PROTOCOL))
             .and_then(|v| match v.trim() {
                 "v2" => Some(2u8),
                 _ => None,
@@ -58,7 +58,7 @@ impl TlsRouteUnit {
         let stream_plugin_store_key = resolve_stream_plugin_store_key(&route.metadata);
 
         let configured_max_connect_retries = annotations
-            .and_then(|a| a.get(crate::types::constants::annotations::edgion::MAX_CONNECT_RETRIES))
+            .and_then(|a| a.get(edgion_resources::constants::annotations::edgion::MAX_CONNECT_RETRIES))
             .and_then(|v| v.trim().parse::<u32>().ok())
             .map(|v| v.max(1))
             .unwrap_or(DEFAULT_TLS_CONNECT_RETRIES);
@@ -112,8 +112,8 @@ fn build_backend_selector(route: &TLSRoute) -> Arc<BackendSelector<TLSBackendRef
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::common::ParentReference;
-    use crate::types::resources::tls_route::{TLSBackendRef, TLSRouteRule, TLSRouteSpec};
+    use edgion_resources::resources::common::ParentReference;
+    use edgion_resources::resources::tls_route::{TLSBackendRef, TLSRouteRule, TLSRouteSpec};
 
     fn make_route(annotations: Option<std::collections::BTreeMap<String, String>>) -> Arc<TLSRoute> {
         Arc::new(TLSRoute {

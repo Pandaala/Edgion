@@ -4,7 +4,7 @@ use crate::core::gateway::routes::udp::route_unit::UdpRouteUnit;
 use crate::core::gateway::routes::udp::routes_mgr::{
     get_global_udp_route_managers, resolved_listeners_for_route, GlobalUdpRouteManagers,
 };
-use crate::types::UDPRoute;
+use edgion_resources::UDPRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
@@ -102,9 +102,9 @@ impl GlobalUdpRouteManagers {
 mod tests {
     use super::*;
     use crate::core::common::conf_sync::traits::ConfHandler;
-    use crate::types::resources::common::ParentReference;
-    use crate::types::resources::udp_route::*;
-    use crate::types::ListenerKey;
+    use edgion_resources::resources::common::ParentReference;
+    use edgion_resources::resources::udp_route::*;
+    use edgion_resources::ListenerKey;
 
     fn make_listener_key(port: u16, protocol: &str) -> ListenerKey {
         let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);

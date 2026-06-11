@@ -67,8 +67,8 @@ impl Default for UdpRouteTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::common::ParentReference;
-    use crate::types::resources::udp_route::*;
+    use edgion_resources::resources::common::ParentReference;
+    use edgion_resources::resources::udp_route::*;
 
     fn create_test_udp_route(namespace: &str, name: &str, port: u16) -> UDPRoute {
         UDPRoute {

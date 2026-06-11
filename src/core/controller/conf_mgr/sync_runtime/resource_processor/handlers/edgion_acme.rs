@@ -24,11 +24,11 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::controller::services::acme::notify_resource_changed;
-use crate::types::credentials::resolvers::{AcmeAccountResolver, DnsCredentialResolver};
-use crate::types::prelude_resources::EdgionAcme;
-use crate::types::resources::common::Condition;
-use crate::types::resources::edgion_acme::{AcmeChallenge, EdgionAcmeStatus};
-use crate::types::ResourceKind;
+use edgion_resources::credentials::resolvers::{AcmeAccountResolver, DnsCredentialResolver};
+use edgion_resources::prelude_resources::EdgionAcme;
+use edgion_resources::resources::common::Condition;
+use edgion_resources::resources::edgion_acme::{AcmeChallenge, EdgionAcmeStatus};
+use edgion_resources::ResourceKind;
 
 /// EdgionAcme handler
 ///

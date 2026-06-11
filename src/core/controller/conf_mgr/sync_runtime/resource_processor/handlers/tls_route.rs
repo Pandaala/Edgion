@@ -10,11 +10,11 @@ use super::{
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
-use crate::types::prelude_resources::{TLSRoute, TLSRouteAlpha3};
-use crate::types::resources::common::RefDenied;
-use crate::types::resources::http_route::RouteParentStatus;
-use crate::types::resources::tls_route::TLSRouteStatus;
-use crate::types::ResourceKind;
+use edgion_resources::prelude_resources::{TLSRoute, TLSRouteAlpha3};
+use edgion_resources::resources::common::RefDenied;
+use edgion_resources::resources::http_route::RouteParentStatus;
+use edgion_resources::resources::tls_route::TLSRouteStatus;
+use edgion_resources::ResourceKind;
 
 /// TLSRoute handler
 pub struct TlsRouteHandler {

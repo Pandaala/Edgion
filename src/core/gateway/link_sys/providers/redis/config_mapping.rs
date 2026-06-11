@@ -11,8 +11,8 @@ use fred::types::config::{Config, ReconnectPolicy, ServerConfig, TcpConfig};
 use fred::types::Builder;
 
 use crate::core::gateway::link_sys::credential::CredentialState;
-use crate::types::credentials::materials::BasicAuthMaterial;
-use crate::types::resources::link_sys::redis::{RedisClientConfig, RedisTopologyMode};
+use edgion_resources::credentials::materials::BasicAuthMaterial;
+use edgion_resources::resources::link_sys::redis::{RedisClientConfig, RedisTopologyMode};
 
 // ============================================================================
 // Safety ceilings for connection configuration
@@ -243,7 +243,7 @@ pub(crate) fn parse_host_port(addr: &str) -> Result<(String, u16)> {
 mod tests {
     use super::*;
     use crate::core::gateway::link_sys::credential::{CredentialState, InvalidReason};
-    use crate::types::resources::link_sys::redis::*;
+    use edgion_resources::resources::link_sys::redis::*;
 
     /// Create a minimal RedisClientConfig for testing
     fn minimal_config(endpoints: Vec<String>) -> RedisClientConfig {
@@ -358,7 +358,7 @@ mod tests {
     }
 
     fn crd_with_secret_ref() -> RedisClientConfig {
-        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
+        use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
         RedisClientConfig {
             auth: Some(RedisAuth {
                 slot: SecretSlot {

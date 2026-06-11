@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::core::gateway::observe::metrics::record_webhook_resolve_error;
 use crate::core::gateway::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
 use crate::core::gateway::plugins::runtime::PluginSession;
-use crate::types::common::WebhookExtract;
+use edgion_resources::common::WebhookExtract;
 
 use super::call::{webhook_call, WebhookCallError, WebhookCallRequest, WebhookCallResult};
 use super::manager::{get_webhook_global_max, get_webhook_manager};
@@ -165,7 +165,7 @@ mod tests {
         webhook_ref: &'a str,
         forward_headers: Option<&'a [String]>,
         path_suffix: Option<&'a str>,
-        extract: &'a crate::types::common::WebhookExtract,
+        extract: &'a edgion_resources::common::WebhookExtract,
     ) -> Option<String> {
         super::resolve_webhook_key(session, webhook_ref, forward_headers, path_suffix, extract).await
     }

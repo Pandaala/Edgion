@@ -52,8 +52,8 @@ pub use udp_route::UdpRouteHandler;
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::HandlerContext;
 use crate::core::controller::conf_mgr::ControllerRuntime;
-use crate::types::resources::common::ParentReference;
-use crate::types::ResourceKind;
+use edgion_resources::resources::common::ParentReference;
+use edgion_resources::ResourceKind;
 
 /// Requeue parent Gateways referenced by route parentRefs.
 pub(crate) async fn requeue_parent_gateways(

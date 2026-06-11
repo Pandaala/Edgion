@@ -22,7 +22,6 @@ use tokio::sync::Mutex;
 use super::error::{map_jwt_decode_error_typed, OidcVerifyError};
 use crate::core::common::auth::jwks_provider::{DiscoveryDoc, DiscoveryValidator, JwksProvider, JwksProviderConfig};
 use crate::core::common::jwt_common::{resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError};
-use crate::core::common::path_normalization::normalize_config_path;
 use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::core::gateway::plugins::http::common::auth_common::{
@@ -30,8 +29,9 @@ use crate::core::gateway::plugins::http::common::auth_common::{
 };
 use crate::core::gateway::plugins::http::common::http_client::get_http_client_with_ssl_verify;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::path_normalization::normalize_config_path;
+use edgion_resources::resources::edgion_plugins::{
     EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode,
 };
 
@@ -181,7 +181,7 @@ impl OpenidConnect {
         // config-side and request-side paths inhabit the same normalized space.
         // See docs/superpowers/specs/2026-04-26-uri-normalization-design.md §3.5.
         let mut config = config.clone();
-        let path_cfg = crate::core::common::path_normalization::get_path_normalization_config();
+        let path_cfg = edgion_resources::path_normalization::get_path_normalization_config();
         let normalized_logout_path = normalize_config_path(&config.logout_path, path_cfg);
         if normalized_logout_path != config.logout_path {
             tracing::info!(

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::super::ref_grant::ReferenceGrantChangedEvent;
 use super::super::{HandlerContext, ProcessResult, ProcessorHandler};
-use crate::types::prelude_resources::{ReferenceGrant, ReferenceGrantBeta};
+use edgion_resources::prelude_resources::{ReferenceGrant, ReferenceGrantBeta};
 
 /// ReferenceGrant handler
 ///
@@ -274,7 +274,7 @@ mod tests {
     };
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
-    use crate::types::resources::{
+    use edgion_resources::resources::{
         ReferenceGrantBeta, ReferenceGrantBetaSpec, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo,
     };
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;

@@ -9,12 +9,12 @@ use std::sync::Arc;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::attached_route_tracker::Attachment;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{AcceptedError, ResolvedRefsError};
 use crate::core::controller::conf_mgr::ControllerRuntime;
-use crate::types::listener_key::{resolve_listener_addr, ListenerKey};
-use crate::types::prelude_resources::Gateway;
-use crate::types::resources::common::{ParentReference, RefDenied};
-use crate::types::resources::gateway::AllowedRoutes;
-use crate::types::resources::http_route::RouteParentStatus;
-use crate::types::ResourceKind;
+use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
+use edgion_resources::prelude_resources::Gateway;
+use edgion_resources::resources::common::{ParentReference, RefDenied};
+use edgion_resources::resources::gateway::AllowedRoutes;
+use edgion_resources::resources::http_route::RouteParentStatus;
+use edgion_resources::ResourceKind;
 
 /// Result of validating a parentRef for acceptance.
 pub struct AcceptedResult {
@@ -193,7 +193,7 @@ pub(super) fn protocol_default_route_kinds(protocol: &str) -> &'static [&'static
 ///
 /// Non-route resources (e.g. EdgionTls) always pass — `allowedRoutes.kinds` only
 /// governs Gateway API route kinds, not policy/config attachments.
-fn listener_supports_route_kind(listener: &crate::types::resources::gateway::Listener, route_kind: &str) -> bool {
+fn listener_supports_route_kind(listener: &edgion_resources::resources::gateway::Listener, route_kind: &str) -> bool {
     if !GATEWAY_API_ROUTE_KINDS.contains(&route_kind) {
         return true;
     }
@@ -410,7 +410,7 @@ pub fn update_tracker_accepted_only(
 /// Tracks which Services this route depends on, so that when a Service
 /// changes, the route is requeued to re-evaluate its ResolvedRefs status.
 pub fn register_service_backend_refs(
-    route_kind: crate::types::ResourceKind,
+    route_kind: edgion_resources::ResourceKind,
     route_ns: &str,
     route_name: &str,
     backend_refs: &[(Option<&str>, Option<&str>, Option<&str>, &str)], // (group, kind, namespace, name)
@@ -440,7 +440,7 @@ pub fn register_service_backend_refs(
 
 /// Clear Service backend references for a deleted route.
 pub fn clear_service_backend_refs(
-    route_kind: crate::types::ResourceKind,
+    route_kind: edgion_resources::ResourceKind,
     route_ns: &str,
     route_name: &str,
     runtime: &ControllerRuntime,
@@ -549,7 +549,7 @@ fn resolve_listeners_inner(
             "parentRef parent Gateway found; resolving matching listeners"
         );
 
-        let mut collect = |l: &crate::types::resources::gateway::Listener| {
+        let mut collect = |l: &edgion_resources::resources::gateway::Listener| {
             if listener_allows_route_namespace(&l.allowed_routes, route_namespace, gw_ns, runtime) {
                 let addr = resolve_listener_addr(gw_addresses, l.port);
                 listener_keys.push(ListenerKey::new(addr, &l.protocol));
@@ -650,7 +650,7 @@ fn hostname_intersection<'a>(a: &'a str, b: &'a str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::gateway::{AllowedRoutes, RouteNamespaces};
+    use edgion_resources::resources::gateway::{AllowedRoutes, RouteNamespaces};
 
     #[test]
     fn test_hostnames_intersect_concrete() {

@@ -9,8 +9,8 @@ use std::net::{IpAddr, SocketAddr};
 use crate::core::common::utils::RealIpExtractor;
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::RealIpConfig;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::RealIpConfig;
 
 /// RealIp plugin for extracting real client IP
 ///
@@ -120,7 +120,7 @@ mod tests {
     use super::*;
 
     fn create_test_config() -> RealIpConfig {
-        use crate::types::resources::plugin_metadata::IpGroup;
+        use edgion_resources::resources::plugin_metadata::IpGroup;
         RealIpConfig {
             trusted_ips: vec![IpGroup {
                 name: "private".to_string(),

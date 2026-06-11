@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::core::gateway::observe::AccessLogger;
-use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
+use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 
 #[derive(Serialize)]
 struct RedirectRequestInfo<'a> {
@@ -212,7 +212,7 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::edgion_gateway_config::EdgionGatewayConfigSpec;
+    use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigSpec;
 
     fn test_access_logger() -> Arc<AccessLogger> {
         Arc::new(AccessLogger::new())

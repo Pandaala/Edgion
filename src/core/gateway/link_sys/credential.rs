@@ -16,18 +16,18 @@
 //! `&CredentialState<_>` so that Pending / Invalid produce a fail-fast `bail!`
 //! instead of a silent empty-credential fallback.
 
-use crate::types::credentials::materials::{
+use anyhow::{bail, Result};
+use edgion_resources::credentials::materials::{
     BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial, HmacMaterial, WebhookApiKeyMaterial,
 };
-use crate::types::credentials::resolvers::{
+use edgion_resources::credentials::resolvers::{
     BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver, WebhookApiKeyResolver,
 };
-use crate::types::credentials::SecretMaterialResolver;
-use crate::types::resources::common::TlsConfig;
-use crate::types::resources::link_sys::elasticsearch::ElasticsearchAuth;
-use crate::types::resources::link_sys::webhook::WebhookAuth;
-use crate::types::resources::link_sys::{LinkSys, SystemConfig};
-use anyhow::{bail, Result};
+use edgion_resources::credentials::SecretMaterialResolver;
+use edgion_resources::resources::common::TlsConfig;
+use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchAuth;
+use edgion_resources::resources::link_sys::webhook::WebhookAuth;
+use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 use k8s_openapi::api::core::v1::Secret;
 
 // ============================================================================
@@ -355,9 +355,9 @@ pub fn tls_ready(ls: &LinkSys) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::common::{SecretObjectReference, TlsCerts, TlsConfig as CommonTlsConfig};
-    use crate::types::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
-    use crate::types::resources::link_sys::LinkSysSpec;
+    use edgion_resources::resources::common::{SecretObjectReference, TlsCerts, TlsConfig as CommonTlsConfig};
+    use edgion_resources::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
+    use edgion_resources::resources::link_sys::LinkSysSpec;
     use k8s_openapi::ByteString;
     use kube::api::ObjectMeta;
     use std::collections::BTreeMap;
@@ -398,7 +398,7 @@ mod tests {
     }
 
     fn mk_redis_auth(secret: Option<Secret>) -> RedisAuth {
-        use crate::types::resources::common::SecretSlot;
+        use edgion_resources::resources::common::SecretSlot;
         RedisAuth {
             slot: SecretSlot {
                 secret_ref: SecretObjectReference {
@@ -516,7 +516,7 @@ mod tests {
     // ------------------------------------------------------------
 
     fn mk_es_linksys(auth: Option<ElasticsearchAuth>) -> LinkSys {
-        use crate::types::resources::link_sys::elasticsearch::ElasticsearchClientConfig;
+        use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchClientConfig;
         LinkSys {
             metadata: ObjectMeta {
                 name: Some("es".into()),
@@ -535,7 +535,7 @@ mod tests {
 
     #[test]
     fn resolved_state_es_basic_resolved() {
-        use crate::types::resources::common::SecretSlot;
+        use edgion_resources::resources::common::SecretSlot;
         let ls = mk_es_linksys(Some(ElasticsearchAuth::Basic {
             slot: SecretSlot {
                 secret_ref: SecretObjectReference {
@@ -553,7 +553,7 @@ mod tests {
 
     #[test]
     fn resolved_state_es_api_key_pending() {
-        use crate::types::resources::common::SecretSlot;
+        use edgion_resources::resources::common::SecretSlot;
         let ls = mk_es_linksys(Some(ElasticsearchAuth::ApiKey {
             slot: SecretSlot {
                 secret_ref: SecretObjectReference {
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn resolved_state_es_bearer_invalid_on_missing_key() {
-        use crate::types::resources::common::SecretSlot;
+        use edgion_resources::resources::common::SecretSlot;
         let ls = mk_es_linksys(Some(ElasticsearchAuth::Bearer {
             slot: SecretSlot {
                 secret_ref: SecretObjectReference {
@@ -604,7 +604,7 @@ mod tests {
     // ------------------------------------------------------------
 
     fn mk_webhook_linksys(auth: Option<WebhookAuth>) -> LinkSys {
-        use crate::types::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
+        use edgion_resources::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
         LinkSys {
             metadata: ObjectMeta {
                 name: Some("wh".into()),
@@ -625,7 +625,7 @@ mod tests {
     }
 
     fn mk_webhook_bearer(secret: Option<Secret>) -> WebhookAuth {
-        use crate::types::resources::common::SecretSlot;
+        use edgion_resources::resources::common::SecretSlot;
         WebhookAuth::Bearer {
             slot: SecretSlot {
                 secret_ref: SecretObjectReference {

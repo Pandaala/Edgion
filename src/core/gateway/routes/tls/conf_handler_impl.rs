@@ -3,7 +3,7 @@ use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::tls::route_unit::TlsRouteUnit;
 use crate::core::gateway::routes::tls::routes_mgr::resolved_listeners_for_route;
 use crate::core::gateway::routes::tls::{get_global_tls_route_managers, GlobalTlsRouteManagers};
-use crate::types::TLSRoute;
+use edgion_resources::TLSRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
@@ -106,8 +106,8 @@ impl GlobalTlsRouteManagers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::common::ParentReference;
-    use crate::types::ListenerKey;
+    use edgion_resources::resources::common::ParentReference;
+    use edgion_resources::ListenerKey;
 
     fn make_listener_key(port: u16, protocol: &str) -> ListenerKey {
         let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);
@@ -122,7 +122,7 @@ mod tests {
         port: u16,
         listener_key: ListenerKey,
     ) -> TLSRoute {
-        use crate::types::resources::tls_route::*;
+        use edgion_resources::resources::tls_route::*;
 
         TLSRoute {
             metadata: kube::api::ObjectMeta {

@@ -8,8 +8,8 @@ use crate::core::gateway::plugins::http::common::auth_common::{
 };
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{BasicAuthConfig, ResolvedBasicAuthUser};
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::{BasicAuthConfig, ResolvedBasicAuthUser};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};

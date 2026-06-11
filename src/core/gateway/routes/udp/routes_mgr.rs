@@ -6,8 +6,8 @@ use std::sync::OnceLock;
 
 use crate::core::gateway::routes::udp::route_unit::UdpRouteUnit;
 use crate::core::gateway::routes::udp::udp_route_table::UdpRouteTable;
-use crate::types::resources::UDPRoute;
-use crate::types::ListenerKey;
+use edgion_resources::resources::UDPRoute;
+use edgion_resources::ListenerKey;
 
 /// Per-listener UDP route manager.
 ///
@@ -211,7 +211,7 @@ pub fn get_global_udp_route_managers() -> &'static GlobalUdpRouteManagers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::udp_route::*;
+    use edgion_resources::resources::udp_route::*;
 
     fn make_listener_key(port: u16, protocol: &str) -> ListenerKey {
         let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);
@@ -219,7 +219,7 @@ mod tests {
     }
 
     fn create_test_udp_route(namespace: &str, name: &str, listener_key: ListenerKey) -> UDPRoute {
-        use crate::types::resources::common::ParentReference;
+        use edgion_resources::resources::common::ParentReference;
         UDPRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some(namespace.to_string()),

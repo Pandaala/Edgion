@@ -9,8 +9,8 @@ use pingora_http::ResponseHeader;
 
 use crate::core::gateway::plugins::runtime::log::PluginLog;
 use crate::core::gateway::plugins::runtime::traits::{PluginSession, RequestFilter, UpstreamResponseFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::HTTPCORSFilter;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::HTTPCORSFilter;
 
 #[derive(Clone, Debug)]
 pub struct GapiCorsFilter {

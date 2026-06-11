@@ -388,7 +388,7 @@ impl EtcdWatcher {
     fn parse_kind_from_key(&self, key: &str) -> Option<&'static str> {
         let stripped = key.strip_prefix(&self.conf_prefix)?;
         let kind_str = stripped.split('/').next()?;
-        let rk = crate::types::ResourceKind::from_kind_name(kind_str)?;
+        let rk = edgion_resources::ResourceKind::from_kind_name(kind_str)?;
         Some(rk.as_str())
     }
 }

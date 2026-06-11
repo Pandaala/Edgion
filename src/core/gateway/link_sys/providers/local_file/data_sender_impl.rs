@@ -12,7 +12,7 @@ use super::rotation::{
 use super::{LocalFileWriter, LogType};
 use crate::core::gateway::link_sys::DataSender;
 use crate::core::gateway::observe::global_metrics;
-use crate::types::output::RotationStrategy;
+use edgion_resources::output::RotationStrategy;
 
 /// Write a single log line, tracking size and surfacing write errors.
 ///

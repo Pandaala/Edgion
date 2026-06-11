@@ -6,7 +6,7 @@
 //! before `RustlsAcceptor`: returning `Err` aborts the connection pre-handshake.
 //!
 //! Independent from the L7 `ip_allowlist` middleware — separate config field,
-//! module, and denial counter. Only the lower-level `core::common::matcher`
+//! module, and denial counter. Only the lower-level `edgion_resources::matcher`
 //! library is shared.
 //!
 //! Precondition: the decision input is `TcpStream::peer_addr()` (the kernel TCP
@@ -22,8 +22,8 @@ use std::sync::Arc;
 use metrics::counter;
 use tokio::net::TcpStream;
 
-use crate::core::common::matcher::ip_cidr_helpers::{to_cidr_format, validate_ip_or_cidr};
-use crate::core::common::matcher::ip_radix_tree::IpRadixMatcher;
+use edgion_resources::matcher::ip_cidr_helpers::{to_cidr_format, validate_ip_or_cidr};
+use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 
 /// Single group label for the flat L4 allowlist matcher.
 const TCP_ALLOW_GROUP: &str = "tcp-allow";

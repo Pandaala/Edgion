@@ -16,7 +16,7 @@ use async_trait::async_trait;
 
 use crate::core::gateway::plugins::runtime::log::PluginLog;
 use crate::core::gateway::plugins::runtime::traits::{PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
+use edgion_resources::filters::PluginRunningResult;
 
 /// Response body returned to the client when a route is sealed fail-closed
 /// because its EdgionPlugins carries an invalid plugin config. Intentionally

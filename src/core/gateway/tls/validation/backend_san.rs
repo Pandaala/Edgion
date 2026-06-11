@@ -2,7 +2,7 @@
 //!
 //! Validates server certificate SANs against BackendTLSPolicy SubjectAltName requirements.
 
-use crate::types::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
+use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
 use std::fmt;
 
 /// Result of backend SAN validation.

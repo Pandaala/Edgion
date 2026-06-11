@@ -27,8 +27,8 @@
 //! Result: remote_addr = "203.0.113.1"
 //! ```
 
-use crate::core::common::matcher::ip_radix_tree::IpRadixMatcher;
-use crate::types::resources::plugin_metadata::IpGroup;
+use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
+use edgion_resources::resources::plugin_metadata::IpGroup;
 use pingora_http::RequestHeader;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -81,7 +81,7 @@ impl RealIpExtractor {
 
         for group in trusted_ips {
             for cidr in &group.cidrs {
-                match crate::core::common::matcher::ip_cidr_helpers::to_cidr_format(cidr) {
+                match edgion_resources::matcher::ip_cidr_helpers::to_cidr_format(cidr) {
                     Ok(norm) => match builder.insert(&norm, &group.name) {
                         Ok(_) => valid_count += 1,
                         Err(e) => {
@@ -268,6 +268,7 @@ pub fn extract_ip_string(addr: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::resources::edgion_plugins::RealIpConfig;
 
     fn group(name: &str, cidrs: &[&str]) -> IpGroup {
         IpGroup {
@@ -275,6 +276,82 @@ mod tests {
             description: None,
             cidrs: cidrs.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    // Moved from `types::resources::edgion_plugins::plugin_configs::real_ip` tests: these
+    // exercise the gateway-side `RealIpExtractor` built from the pure `RealIpConfig` schema,
+    // so they live next to the extractor rather than in the schema crate.
+    #[test]
+    fn test_valid_ipv4_single() {
+        let config = RealIpConfig {
+            trusted_ips: vec![group("default", &["192.168.1.1"])],
+            ..Default::default()
+        };
+        let extractor = RealIpExtractor::new(
+            &config.trusted_ips,
+            config.real_ip_header.clone(),
+            config.recursive,
+            config.max_trusted_hops,
+        )
+        .unwrap();
+        assert!(extractor.is_trusted_proxy(&"192.168.1.1".parse().unwrap()));
+        assert!(!extractor.is_trusted_proxy(&"192.168.1.2".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_valid_ipv4_cidr() {
+        let config = RealIpConfig {
+            trusted_ips: vec![group("a", &["10.0.0.0/8"]), group("b", &["192.168.1.0/24"])],
+            ..Default::default()
+        };
+        let extractor = RealIpExtractor::new(
+            &config.trusted_ips,
+            config.real_ip_header.clone(),
+            config.recursive,
+            config.max_trusted_hops,
+        )
+        .unwrap();
+        assert!(extractor.is_trusted_proxy(&"10.0.0.1".parse().unwrap()));
+        assert!(extractor.is_trusted_proxy(&"192.168.1.50".parse().unwrap()));
+        assert!(!extractor.is_trusted_proxy(&"172.16.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_valid_ipv6() {
+        let config = RealIpConfig {
+            trusted_ips: vec![group("a", &["::1"]), group("b", &["2001:db8::/32"])],
+            ..Default::default()
+        };
+        let extractor = RealIpExtractor::new(
+            &config.trusted_ips,
+            config.real_ip_header.clone(),
+            config.recursive,
+            config.max_trusted_hops,
+        )
+        .unwrap();
+        assert!(extractor.is_trusted_proxy(&"::1".parse().unwrap()));
+        assert!(extractor.is_trusted_proxy(&"2001:db8::1".parse().unwrap()));
+        assert!(!extractor.is_trusted_proxy(&"2001:db9::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_mixed_valid_invalid() {
+        // Strict structural validation rejects any invalid CIDR — so a group
+        // mixing valid and invalid CIDRs is now a hard error at validate
+        // time. Use only valid CIDRs and verify membership via extractor.
+        let config = RealIpConfig {
+            trusted_ips: vec![group("a", &["10.0.0.0/8"]), group("b", &["172.16.0.0/12"])],
+            ..Default::default()
+        };
+        let extractor = RealIpExtractor::new(
+            &config.trusted_ips,
+            config.real_ip_header.clone(),
+            config.recursive,
+            config.max_trusted_hops,
+        )
+        .unwrap();
+        assert!(extractor.is_trusted_proxy(&"10.0.0.1".parse().unwrap()));
+        assert!(extractor.is_trusted_proxy(&"172.16.0.1".parse().unwrap()));
     }
 
     #[test]

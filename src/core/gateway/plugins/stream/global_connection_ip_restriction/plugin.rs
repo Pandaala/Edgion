@@ -7,7 +7,7 @@ use crate::core::gateway::plugins::runtime::plugin_metadata::get_global_plugin_m
 use crate::core::gateway::plugins::stream::stream_plugin_trait::{
     access_decision_to_stream_result, StreamContext, StreamPlugin, StreamPluginResult,
 };
-use crate::types::resources::edgion_gateway_config::PluginReference;
+use edgion_resources::resources::edgion_gateway_config::PluginReference;
 
 const PLUGIN_NAME: &str = "GlobalConnectionIpRestriction";
 

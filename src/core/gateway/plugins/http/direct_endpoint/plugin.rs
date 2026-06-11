@@ -5,9 +5,11 @@ use crate::core::gateway::backends::{validate_endpoint_backend_addr, validate_en
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::core::gateway::{DirectEndpointPreset, SetJumpOutcome, UpstreamJumpTarget};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing};
-use crate::types::HTTPBackendRef;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::{
+    DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing,
+};
+use edgion_resources::HTTPBackendRef;
 
 pub struct DirectEndpoint {
     name: String,

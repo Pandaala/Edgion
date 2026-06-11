@@ -15,8 +15,8 @@ use crate::core::gateway::observe::{log_udp, UdpLogEntry};
 use crate::core::gateway::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::core::gateway::routes::tcp::edgion_tcp::{check_stream_plugins, StreamPluginCheck};
 use crate::core::gateway::routes::udp::UdpPortRouteManager;
-use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::types::ListenerKey;
+use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
+use edgion_resources::ListenerKey;
 
 /// UDP session timeout (60 seconds of inactivity)
 const SESSION_TIMEOUT: Duration = Duration::from_secs(60);

@@ -8,12 +8,12 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_types, HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
 };
-use crate::types::prelude_resources::{EdgionStreamPlugins, PluginMetaData};
-use crate::types::resources::edgion_plugins::PluginValidation;
-use crate::types::resources::edgion_stream_plugins::{
+use edgion_resources::prelude_resources::{EdgionStreamPlugins, PluginMetaData};
+use edgion_resources::resources::edgion_plugins::PluginValidation;
+use edgion_resources::resources::edgion_stream_plugins::{
     EdgionStreamPlugin, EdgionStreamPluginsStatus, TlsRouteStreamPlugin,
 };
-use crate::types::resources::plugin_metadata::MetaDataEntry;
+use edgion_resources::resources::plugin_metadata::MetaDataEntry;
 
 const SELF_KIND: &str = "EdgionStreamPlugins";
 
@@ -254,7 +254,7 @@ mod tests {
     use super::*;
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
-    use crate::types::prelude_resources::EdgionStreamPlugins;
+    use edgion_resources::prelude_resources::EdgionStreamPlugins;
     use std::sync::Arc;
 
     fn make_ctx() -> HandlerContext {

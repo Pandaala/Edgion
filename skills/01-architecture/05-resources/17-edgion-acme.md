@@ -14,7 +14,7 @@ EdgionAcme is Edgion's custom-extension resource that implements automatic certi
 - Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_acme.rs`
 - ACME Service: `src/core/controller/services/acme/`
 - Gateway ConfHandler: `src/core/gateway/services/acme/conf_handler_impl.rs`
-- Type definitions: `src/types/resources/edgion_acme.rs`
+- Type definitions: `edgion-resources/src/resources/edgion_acme.rs`
 
 ## Controller-side processing
 

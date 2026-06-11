@@ -25,8 +25,8 @@
 ## T1. 类型层：新增 `resolved_hostnames` 字段
 
 ### 文件
-- `src/types/resources/http_route.rs`（+5 行）
-- `src/types/resources/grpc_route.rs`（+5 行）
+- `edgion-resources/src/resources/http_route.rs`（+5 行）
+- `edgion-resources/src/resources/grpc_route.rs`（+5 行）
 
 ### 改动
 在 `HTTPRouteSpec` 和 `GRPCRouteSpec` 中新增：
@@ -475,8 +475,8 @@ export EDGION_WORK_DIR="${WORK_DIR}"
 
 | 文件 | Task | +/- |
 |------|------|-----|
-| `src/types/resources/http_route.rs` | T1 | +5 |
-| `src/types/resources/grpc_route.rs` | T1 | +5 |
+| `edgion-resources/src/resources/http_route.rs` | T1 | +5 |
+| `edgion-resources/src/resources/grpc_route.rs` | T1 | +5 |
 | `src/core/conf_mgr/.../handlers/http_route.rs` | T3 | +29 |
 | `src/core/conf_mgr/.../handlers/grpc_route.rs` | T3 | +29 |
 | `src/core/conf_mgr/.../handlers/mod.rs` | T4 | +21 |

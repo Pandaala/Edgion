@@ -9,7 +9,7 @@
 use http::Method;
 
 use crate::core::controller::authz::Verb;
-use crate::types::ResourceKind;
+use edgion_resources::ResourceKind;
 
 /// Normalize a wire kind param to the canonical kind string, falling back to the
 /// raw value (which the policy will not match) for unknown kinds.

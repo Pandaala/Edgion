@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::core::gateway::link_sys::credential::CredentialState;
-use crate::types::credentials::materials::BasicAuthMaterial;
-use crate::types::credentials::resolvers::tls::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
-use crate::types::resources::common::{SecretObjectReference, SecretSlot, TlsCerts, TlsConfig};
-use crate::types::resources::link_sys::etcd::{EtcdAuth, EtcdClientConfig, EtcdKeepAlive, EtcdTimeout};
+use edgion_resources::credentials::materials::BasicAuthMaterial;
+use edgion_resources::credentials::resolvers::tls::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
+use edgion_resources::resources::common::{SecretObjectReference, SecretSlot, TlsCerts, TlsConfig};
+use edgion_resources::resources::link_sys::etcd::{EtcdAuth, EtcdClientConfig, EtcdKeepAlive, EtcdTimeout};
 
 // ============================================================================
 // EtcdConfig — YAML top-level config

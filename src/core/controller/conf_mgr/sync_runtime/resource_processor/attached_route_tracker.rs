@@ -30,7 +30,7 @@
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 
-use crate::types::ResourceKind;
+use edgion_resources::ResourceKind;
 
 /// Identifies a specific route resource.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

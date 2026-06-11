@@ -74,7 +74,7 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
 }
 
 async fn collect_conf_center_counts(state: &AdminState) -> BTreeMap<String, usize> {
-    use crate::types::ResourceKind;
+    use edgion_resources::ResourceKind;
 
     let kinds = [
         ResourceKind::HTTPRoute,

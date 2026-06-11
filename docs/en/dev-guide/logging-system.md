@@ -657,7 +657,7 @@ impl DataSender<String> for ElasticsearchSender {
 ### 2. Add Configuration Type
 
 ```rust
-// src/types/output.rs
+// edgion-resources/src/output.rs
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum StringOutput {
@@ -736,7 +736,7 @@ match &config.output {
 ### Configuration
 
 - `src/core/gateway/cli/config.rs` - Gateway configuration structure
-- `src/types/output.rs` - Log output configuration types (StringOutput, LocalFileWriterCfg)
+- `edgion-resources/src/output.rs` - Log output configuration types (StringOutput, LocalFileWriterCfg)
 - `config/edgion-gateway.yaml` - Configuration example
 
 ### User Documentation

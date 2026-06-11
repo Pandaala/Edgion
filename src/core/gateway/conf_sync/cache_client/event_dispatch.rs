@@ -2,7 +2,7 @@ use crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient 
 use crate::core::common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::core::gateway::conf_sync::cache_client::cache_data::CacheData;
 use crate::core::gateway::observe::metrics::{global_metrics, record_config_event_parse_error};
-use crate::types::{
+use edgion_resources::{
     ResourceMeta, WATCH_ERR_NOT_READY, WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD,
     WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED,
 };
@@ -99,7 +99,7 @@ where
 
         for resource in resources.iter_mut() {
             resource.pre_parse();
-            crate::types::resource::meta::set_sync_version(resource.meta_mut(), list_data.sync_version);
+            edgion_resources::resource::meta::set_sync_version(resource.meta_mut(), list_data.sync_version);
         }
 
         tracing::info!(kind = T::kind_name(), count = resources.len(), "Parsed resources");
@@ -323,7 +323,7 @@ where
                                             match serde_json::from_value::<T>(event_data.clone()) {
                                                 Ok(mut resource) => {
                                                     resource.pre_parse();
-                                                    crate::types::resource::meta::set_sync_version(
+                                                    edgion_resources::resource::meta::set_sync_version(
                                                         resource.meta_mut(),
                                                         event_sv,
                                                     );

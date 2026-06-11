@@ -2,7 +2,7 @@
 //!
 //! Each provider (Redis / Etcd / Elasticsearch / Webhook) used to build its own
 //! TLS config from the per-resource `*Tls` struct. After R1 these are all
-//! unified behind [`crate::types::resources::common::TlsConfig`]; this module
+//! unified behind [`edgion_resources::resources::common::TlsConfig`]; this module
 //! centralizes the lookup / merge logic so every provider consumes the same
 //! [`TlsMaterial`] shape. It also houses the reqwest-specific helpers
 //! ([`apply_insecure_skip_verify`], [`apply_to_reqwest_builder`]) so all
@@ -21,8 +21,8 @@ use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig, RootCertStore};
 use zeroize::Zeroizing;
 
-use crate::types::credentials::{SecretMaterialResolver, TlsCertsResolver, TlsMaterial};
-use crate::types::resources::common::TlsConfig;
+use edgion_resources::credentials::{SecretMaterialResolver, TlsCertsResolver, TlsMaterial};
+use edgion_resources::resources::common::TlsConfig;
 
 /// Produce a [`TlsMaterial`] from a CRD-level [`TlsConfig`], merging inline
 /// fields with the resolved Kubernetes Secret.
@@ -262,7 +262,7 @@ pub fn apply_insecure_skip_verify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::common::{TlsCerts, TlsConfig};
+    use edgion_resources::resources::common::{TlsCerts, TlsConfig};
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use std::collections::BTreeMap;

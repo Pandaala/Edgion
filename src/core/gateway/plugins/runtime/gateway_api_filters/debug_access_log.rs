@@ -6,8 +6,8 @@
 use crate::core::gateway::observe::access_log::AccessLogEntry;
 use crate::core::gateway::plugins::runtime::log::PluginLog;
 use crate::core::gateway::plugins::runtime::traits::{PluginSession, UpstreamResponseFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::DebugAccessLogToHeaderConfig;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::DebugAccessLogToHeaderConfig;
 
 pub struct DebugAccessLogToHeaderFilter {}
 

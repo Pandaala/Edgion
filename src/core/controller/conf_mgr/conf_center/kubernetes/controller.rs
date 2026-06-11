@@ -56,8 +56,8 @@ use super::ShutdownSignal;
 use crate::core::controller::conf_mgr::conf_center::MetadataFilterConfig;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor};
 use crate::core::controller::conf_mgr::ControllerRuntime;
-use crate::types::prelude_resources::*;
-use crate::types::ResourceMeta;
+use edgion_resources::prelude_resources::*;
+use edgion_resources::ResourceMeta;
 
 // Import handlers from conf_mgr
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
@@ -297,7 +297,7 @@ async fn requeue_selector_gateways(runtime: Arc<ControllerRuntime>) {
         let Some(any) = processor.get_raw_any(&key) else {
             continue;
         };
-        let Ok(gw) = any.downcast::<crate::types::prelude_resources::Gateway>() else {
+        let Ok(gw) = any.downcast::<edgion_resources::prelude_resources::Gateway>() else {
             continue;
         };
         let uses_selector = gw.spec.listeners.as_deref().unwrap_or_default().iter().any(|l| {

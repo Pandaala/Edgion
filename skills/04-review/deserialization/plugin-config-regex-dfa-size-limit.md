@@ -13,12 +13,12 @@ closed: 2026-05-31
 The plugin config structs compile operator-supplied regex patterns with bare
 `regex::Regex::new(pattern)` (no `size_limit` / `dfa_size_limit`) at the following sites:
 
-- `src/types/resources/edgion_plugins/plugin_configs/proxy_rewrite.rs` (`check_fields`, `precompile`)
-- `src/types/resources/edgion_plugins/plugin_configs/ctx_set.rs` (`validate` — extract + transform)
-- `src/types/resources/edgion_plugins/plugin_configs/direct_endpoint.rs` (`validate` — extract)
-- `src/types/resources/edgion_plugins/plugin_configs/dynamic_external_upstream.rs` (`check_fields`, `validate`)
-- `src/types/resources/edgion_plugins/plugin_configs/dynamic_internal_upstream.rs` (`validate`)
-- `src/types/resources/edgion_plugins/plugin_configs/cors.rs`, `request_restriction.rs` (same pattern, adjacent)
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/proxy_rewrite.rs` (`check_fields`, `precompile`)
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/ctx_set.rs` (`validate` — extract + transform)
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/direct_endpoint.rs` (`validate` — extract)
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/dynamic_external_upstream.rs` (`check_fields`, `validate`)
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/dynamic_internal_upstream.rs` (`validate`)
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/cors.rs`, `request_restriction.rs` (same pattern, adjacent)
 
 Proposals to replace these with the P3-g5-015 capped builder
 (`RegexBuilder::new(pattern).size_limit(1 << 20).dfa_size_limit(1 << 20).build()`) are

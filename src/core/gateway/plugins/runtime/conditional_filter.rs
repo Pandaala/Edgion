@@ -12,8 +12,10 @@ use super::log::PluginLog;
 use super::traits::{
     PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
-use crate::core::gateway::plugins::runtime::conditions::{EvaluationResult, PluginConditions};
-use crate::types::filters::PluginRunningResult;
+use crate::core::gateway::plugins::runtime::conditions::{
+    ConditionExt, EvaluationResult, PluginConditions, PluginConditionsExt,
+};
+use edgion_resources::filters::PluginRunningResult;
 
 // ==================== PluginSession Integration ====================
 //
@@ -310,7 +312,7 @@ mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::conditions::{Condition, IncludeCondition, KeyExistCondition};
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-    use crate::types::common::KeyGet;
+    use edgion_resources::common::KeyGet;
     use mockall::predicate::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

@@ -35,8 +35,8 @@ use std::net::IpAddr;
 
 use crate::core::gateway::plugins::http::common::auth_common::send_gateway_plain_error_response;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig, IpSource};
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig, IpSource};
 
 /// IP Restriction plugin
 pub struct IpRestriction {
@@ -98,7 +98,7 @@ impl RequestFilter for IpRestriction {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        use crate::types::resources::edgion_plugins::AccessDecision;
+        use edgion_resources::resources::edgion_plugins::AccessDecision;
 
         // Fail-closed: if matcher compilation failed at construction, deny every
         // request rather than fall through to the (uncompiled) default action.
@@ -181,8 +181,8 @@ impl RequestFilter for IpRestriction {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-    use crate::types::resources::edgion_plugins::DefaultAction;
-    use crate::types::resources::plugin_metadata::IpGroup;
+    use edgion_resources::resources::edgion_plugins::DefaultAction;
+    use edgion_resources::resources::plugin_metadata::IpGroup;
 
     fn create_ip_config_allow_list() -> IpRestrictionConfig {
         let config = IpRestrictionConfig {

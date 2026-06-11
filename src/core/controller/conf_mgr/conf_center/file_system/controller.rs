@@ -31,7 +31,7 @@ use crate::core::controller::conf_mgr::conf_center::non_kube_common::{spawn_all_
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::core::controller::conf_mgr::ControllerRuntime;
-use crate::types::ResourceMeta;
+use edgion_resources::ResourceMeta;
 
 /// Backend implementation that wires `FileSystemWatcher` and
 /// `FileSystemResourceController` into the shared [`LocalControllerBackend`]

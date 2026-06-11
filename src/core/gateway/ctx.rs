@@ -7,11 +7,11 @@ use crate::core::gateway::routes::grpc::{CompiledGrpcBackend, GrpcRouteRuleUnit}
 use crate::core::gateway::routes::http::match_unit::CompiledBackend;
 use crate::core::gateway::routes::HttpRouteRuleUnit;
 use crate::core::gateway::runtime::GatewayInfo;
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::http_route_preparse::ParsedLBPolicy;
-use crate::types::uri_utils;
-use crate::types::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
 use bytes::Bytes;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::http_route_preparse::ParsedLBPolicy;
+use edgion_resources::uri_utils;
+use edgion_resources::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
@@ -85,18 +85,18 @@ impl fmt::Display for MatchInfo {
 #[derive(Debug, Clone, Serialize)]
 pub struct ClientCertInfo {
     /// Certificate subject DN (Distinguished Name)
-    #[serde(serialize_with = "crate::types::sensitive::masked::serialize")]
+    #[serde(serialize_with = "edgion_resources::sensitive::masked::serialize")]
     pub subject: String,
     /// Subject Alternative Names (SANs) from certificate
     #[serde(
         skip_serializing_if = "Vec::is_empty",
-        serialize_with = "crate::types::sensitive::masked_vec::serialize"
+        serialize_with = "edgion_resources::sensitive::masked_vec::serialize"
     )]
     pub sans: Vec<String>,
     /// Common Name (CN) extracted from subject
     #[serde(
         skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::types::sensitive::masked_opt::serialize"
+        serialize_with = "edgion_resources::sensitive::masked_opt::serialize"
     )]
     pub cn: Option<String>,
     /// Certificate fingerprint (SHA256 hex) — not PII
@@ -225,7 +225,7 @@ pub struct RequestInfo {
     /// TCP client IP address (direct connection, immutable)
     #[serde(
         rename = "client-addr",
-        serialize_with = "crate::types::sensitive::masked::serialize"
+        serialize_with = "edgion_resources::sensitive::masked::serialize"
     )]
     pub client_addr: String,
     /// TCP client port (direct connection, 0 if unknown)
@@ -234,7 +234,7 @@ pub struct RequestInfo {
     /// Real client address (extracted from headers if behind trusted proxy)
     #[serde(
         rename = "remote-addr",
-        serialize_with = "crate::types::sensitive::masked::serialize"
+        serialize_with = "edgion_resources::sensitive::masked::serialize"
     )]
     pub remote_addr: String,
     /// Trace ID from x-trace-id header
@@ -262,7 +262,7 @@ pub struct RequestInfo {
     /// refreshed by session_adapter::set_upstream_uri after rewrite.
     /// Source for `path()` / `uri()` views.
     /// Serializes as JSON field "path" for backward-compatible access_log output.
-    #[serde(rename = "path", serialize_with = "crate::types::sensitive::masked::serialize")]
+    #[serde(rename = "path", serialize_with = "edgion_resources::sensitive::masked::serialize")]
     pub normalized_current_path: String,
     /// Response status code (e.g., 200, 400, 404, 500)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -271,14 +271,14 @@ pub struct RequestInfo {
     #[serde(
         rename = "x-forwarded-for",
         skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::types::sensitive::masked_opt::serialize"
+        serialize_with = "edgion_resources::sensitive::masked_opt::serialize"
     )]
     pub x_forwarded_for: Option<String>,
     /// SNI (Server Name Indication) from TLS handshake
     /// Only present for HTTPS connections; HTTP connections will have None
     #[serde(
         skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::types::sensitive::masked_opt::serialize"
+        serialize_with = "edgion_resources::sensitive::masked_opt::serialize"
     )]
     pub sni: Option<String>,
     /// Auto-discovered protocol (e.g., "grpc", "grpc-web", "websocket")
@@ -963,7 +963,7 @@ impl EdgionHttpContext {
     /// `raw_query` is consulted only on first access. Subsequent calls return
     /// the already-cached map regardless of the argument.
     ///
-    /// Decoding follows `crate::types::uri_utils::parse_query_string` —
+    /// Decoding follows `edgion_resources::uri_utils::parse_query_string` —
     /// `%XX` percent-decoded and `+` translated to space, matching what the
     /// route matcher sees in `queryParams`.
     pub fn cached_query(&self, raw_query: Option<&str>) -> &HashMap<String, String> {
@@ -1189,14 +1189,14 @@ impl EdgionHttpContext {
     pub fn refresh_normalized_path(
         &mut self,
         req_header: &pingora_http::RequestHeader,
-        cfg: &crate::core::common::path_normalization::PathNormalizationConfig,
+        cfg: &edgion_resources::path_normalization::PathNormalizationConfig,
     ) {
         let raw = req_header.uri.path();
-        self.request_info.normalized_current_path =
-            match crate::core::common::path_normalization::normalize_path(raw, cfg) {
-                Some(s) => s,
-                None => raw.to_string(),
-            };
+        self.request_info.normalized_current_path = match edgion_resources::path_normalization::normalize_path(raw, cfg)
+        {
+            Some(s) => s,
+            None => raw.to_string(),
+        };
     }
 
     /// First-write-wins setter for the unified upstream-jump slot. Returns
@@ -1231,7 +1231,7 @@ fn compose_uri(path: &str, query: Option<&str>) -> String {
 #[cfg(test)]
 mod sensitive_tests {
     use super::*;
-    use crate::types::sensitive::SENSITIVE_MODE;
+    use edgion_resources::sensitive::SENSITIVE_MODE;
     use parking_lot::Mutex;
     use std::sync::atomic::Ordering;
 
@@ -1343,9 +1343,9 @@ mod path_view_tests {
         let mut ctx = EdgionHttpContext::new();
         ctx.request_info.entry_raw_path = entry_path.to_string();
         ctx.request_info.entry_raw_query = entry_query.map(str::to_string);
-        let path_cfg = crate::core::common::path_normalization::PathNormalizationConfig::default();
+        let path_cfg = edgion_resources::path_normalization::PathNormalizationConfig::default();
         ctx.request_info.normalized_current_path =
-            match crate::core::common::path_normalization::normalize_path(entry_path, &path_cfg) {
+            match edgion_resources::path_normalization::normalize_path(entry_path, &path_cfg) {
                 Some(s) => s,
                 None => entry_path.to_string(),
             };
@@ -1374,7 +1374,7 @@ mod path_view_tests {
     fn refresh_after_rewrite() {
         let mut ctx = make_ctx("/api/old", None);
         let req = RequestHeader::build("GET", b"/api/new", None).unwrap();
-        let path_cfg = crate::core::common::path_normalization::PathNormalizationConfig::default();
+        let path_cfg = edgion_resources::path_normalization::PathNormalizationConfig::default();
         ctx.refresh_normalized_path(&req, &path_cfg);
         assert_eq!(ctx.path(), "/api/new");
         assert_eq!(ctx.request_path(), "/api/old");
@@ -1407,7 +1407,7 @@ mod jump_tests {
     }
 
     fn sample_direct() -> (DirectEndpointPreset, Box<HTTPBackendRef>) {
-        use crate::types::resources::http_route_preparse::BackendExtensionInfo;
+        use edgion_resources::resources::http_route_preparse::BackendExtensionInfo;
         let preset = DirectEndpointPreset {
             addr: "10.0.0.1:8080".parse().unwrap(),
             use_tls: false,

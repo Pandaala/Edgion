@@ -13,16 +13,16 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     ConflictKey, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::controller::conf_mgr::ControllerRuntime;
-use crate::types::constants::annotations;
-use crate::types::constants::app::GATEWAY_NAME;
-use crate::types::listener_key::resolve_listener_addr;
-use crate::types::prelude_resources::Gateway;
-use crate::types::resources::common::is_core_api_group;
-use crate::types::resources::gateway::{
+use edgion_resources::constants::annotations;
+use edgion_resources::constants::app::GATEWAY_NAME;
+use edgion_resources::listener_key::resolve_listener_addr;
+use edgion_resources::prelude_resources::Gateway;
+use edgion_resources::resources::common::is_core_api_group;
+use edgion_resources::resources::gateway::{
     FrontendValidationMode, GatewayAddress, GatewayStatus, GatewayStatusAddress, GatewayTLSConfig, GatewayTlsMode,
     Listener as GatewayListener, ListenerStatus, RouteGroupKind,
 };
-use crate::types::ResourceKind;
+use edgion_resources::ResourceKind;
 use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::ByteString;
 use std::collections::BTreeMap;
@@ -811,7 +811,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 /// For ConfigMap refs, creates a synthetic Secret with the `ca.crt` data.
 #[allow(clippy::too_many_arguments)]
 fn resolve_frontend_ca_refs(
-    ca_refs: &[crate::types::resources::gateway::SecretObjectReference],
+    ca_refs: &[edgion_resources::resources::gateway::SecretObjectReference],
     gateway_namespace: &Option<String>,
     gateway_ns: &str,
     resource_ref: &ResourceRef,
@@ -959,8 +959,8 @@ fn lookup_service_cluster_ip(namespace: &str, name: &str, runtime: &ControllerRu
 
 /// Update or insert a condition in Gateway conditions list
 fn update_gateway_condition(
-    conditions: &mut Vec<crate::types::resources::common::Condition>,
-    new_condition: crate::types::resources::common::Condition,
+    conditions: &mut Vec<edgion_resources::resources::common::Condition>,
+    new_condition: edgion_resources::resources::common::Condition,
 ) {
     if let Some(existing) = conditions.iter_mut().find(|c| c.type_ == new_condition.type_) {
         let status_changed = existing.status != new_condition.status;
@@ -1179,7 +1179,7 @@ fn validate_listener_resolved_refs(
                 });
             }
             Some(secret) => {
-                use crate::types::constants::secret_keys::tls;
+                use edgion_resources::constants::secret_keys::tls;
                 if let Some(data) = &secret.data {
                     if !data.contains_key(tls::CERT) || !data.contains_key(tls::KEY) {
                         errors.push(GatewayResolvedRefsError::SecretInvalid {
@@ -1300,7 +1300,7 @@ fn validate_listener_resolved_refs(
                                 });
                             }
                             Some(secret) => {
-                                use crate::types::constants::secret_keys::tls;
+                                use edgion_resources::constants::secret_keys::tls;
                                 if let Some(data) = &secret.data {
                                     if !data.contains_key(tls::CA_CERT) {
                                         errors.push(GatewayResolvedRefsError::InvalidCACertificateRef {
@@ -1600,10 +1600,10 @@ mod tests {
         validate_gateway_stream_plugin_ref, GatewayResolvedRefsError,
     };
     use crate::core::controller::conf_mgr::ControllerRuntime;
-    use crate::types::constants::app::GATEWAY_NAME;
-    use crate::types::prelude_resources::Gateway;
-    use crate::types::resources::common::SecretObjectReference;
-    use crate::types::resources::gateway::{
+    use edgion_resources::constants::app::GATEWAY_NAME;
+    use edgion_resources::prelude_resources::Gateway;
+    use edgion_resources::resources::common::SecretObjectReference;
+    use edgion_resources::resources::gateway::{
         FrontendTLSValidation, GatewaySpec, GatewayTLSConfig, GatewayTlsMode, Listener as GatewayListener,
     };
     use std::collections::BTreeMap;

@@ -7,8 +7,8 @@
 use crate::core::gateway::plugins::http::common::auth_common::apply_auth_failure_delay;
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::JwtAuthConfig;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::JwtAuthConfig;
 
 use async_trait::async_trait;
 

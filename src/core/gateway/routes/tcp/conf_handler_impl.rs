@@ -4,7 +4,7 @@ use crate::core::gateway::routes::tcp::route_unit::TcpRouteUnit;
 use crate::core::gateway::routes::tcp::routes_mgr::{
     get_global_tcp_route_managers, resolved_listeners_for_route, GlobalTcpRouteManagers,
 };
-use crate::types::TCPRoute;
+use edgion_resources::TCPRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
@@ -102,9 +102,9 @@ impl GlobalTcpRouteManagers {
 mod tests {
     use super::*;
     use crate::core::common::conf_sync::traits::ConfHandler;
-    use crate::types::resources::common::ParentReference;
-    use crate::types::resources::tcp_route::*;
-    use crate::types::ListenerKey;
+    use edgion_resources::resources::common::ParentReference;
+    use edgion_resources::resources::tcp_route::*;
+    use edgion_resources::ListenerKey;
 
     fn make_listener_key(port: u16, protocol: &str) -> ListenerKey {
         let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);

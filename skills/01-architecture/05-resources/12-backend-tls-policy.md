@@ -14,7 +14,7 @@ BackendTLSPolicy is a Gateway API standard policy resource used to configure ups
 - Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/backend_tls_policy.rs`
 - Conflict detection: `src/core/controller/conf_mgr/sync_runtime/resource_processor/backend_tls_policy_ref.rs`
 - Gateway ConfHandler: `src/core/gateway/backends/policy/backend_tls/conf_handler_impl.rs`
-- Type definitions: `src/types/resources/backend_tls_policy.rs`
+- Type definitions: `edgion-resources/src/resources/backend_tls_policy.rs`
 
 ## Controller-side processing
 

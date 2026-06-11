@@ -82,10 +82,10 @@ graph TD
 
 如果你要新增或扩展 stream plugin，通常先看这些文件：
 
-- `src/types/resources/edgion_stream_plugins/mod.rs`
-- `src/types/resources/edgion_stream_plugins/stream_plugins.rs`
-- `src/types/resources/edgion_stream_plugins/tls_route_plugins.rs`
-- `src/types/resource/meta/impls.rs`
+- `edgion-resources/src/resources/edgion_stream_plugins/mod.rs`
+- `edgion-resources/src/resources/edgion_stream_plugins/stream_plugins.rs`
+- `edgion-resources/src/resources/edgion_stream_plugins/tls_route_plugins.rs`
+- `edgion-resources/src/resource/meta/impls.rs`
 
 这里分别负责：
 

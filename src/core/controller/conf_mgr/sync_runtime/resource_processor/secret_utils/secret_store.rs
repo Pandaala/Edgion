@@ -122,7 +122,7 @@ mod stats_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::constants::secret_keys::tls::{CERT, KEY};
+    use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
     use k8s_openapi::ByteString;
     use kube::api::ObjectMeta;
 

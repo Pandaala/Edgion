@@ -8,8 +8,8 @@ use crate::core::gateway::ctx::EdgionHttpContext;
 use crate::core::gateway::routes::grpc::{GrpcMatchEngine, GrpcRouteRuleUnit};
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
-use crate::types::err::EdError;
-use crate::types::{GRPCRoute, ListenerKey};
+use edgion_resources::err::EdError;
+use edgion_resources::{GRPCRoute, ListenerKey};
 
 /// gRPC route rules for a specific domain.
 ///

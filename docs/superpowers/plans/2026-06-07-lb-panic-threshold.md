@@ -16,9 +16,9 @@
 
 - **Create** `src/core/gateway/backends/panic_threshold.rs` — per-service threshold store (`DashMap<String, u8>`), process-global default `AtomicU8`, annotation parser, and the pure `resolve_panic_threshold` / `panic_floor` helpers. One responsibility: "what is the effective panic threshold and the survivor floor".
 - **Modify** `src/core/gateway/backends/mod.rs` — declare the new module and re-export its public API.
-- **Modify** `src/types/constants/annotations.rs` — add the `PANIC_THRESHOLD` annotation constant.
+- **Modify** `edgion-resources/src/constants/annotations.rs` — add the `PANIC_THRESHOLD` annotation constant.
 - **Modify** `src/core/gateway/backends/discovery/services/conf_handler_impl.rs` — parse the annotation and feed the store on full/partial/remove.
-- **Modify** `src/types/resources/edgion_gateway_config.rs` — add `loadBalancing.panicThreshold` to the CRD spec.
+- **Modify** `edgion-resources/src/resources/edgion_gateway_config.rs` — add `loadBalancing.panicThreshold` to the CRD spec.
 - **Modify** `src/core/gateway/config/edgion_gateway/conf_handler_impl.rs` — push the global default into the atomic on apply.
 - **Modify** `src/core/gateway/observe/metrics/registry.rs` — add the `lb_panic_mode` gauge metric.
 - **Modify** `src/core/gateway/lb/compiled_selector.rs` — add `CompiledSelector::panic_should_engage` (counts over the selector's own backend list).
@@ -234,7 +234,7 @@ Expected: FAIL to **compile** — `PANIC_THRESHOLD` is not yet defined in `annot
 
 - [ ] **Step 3: Add the annotation constant**
 
-Modify `src/types/constants/annotations.rs` — inside `pub mod edgion`, after the `CIRCUIT_BREAKER` constant:
+Modify `edgion-resources/src/constants/annotations.rs` — inside `pub mod edgion`, after the `CIRCUIT_BREAKER` constant:
 
 ```rust
     /// Per-service load-balancing panic threshold (percent, 0-100).
@@ -258,7 +258,7 @@ tests are unaffected (they don't depend on the global).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/gateway/backends/panic_threshold.rs src/core/gateway/backends/mod.rs src/types/constants/annotations.rs
+git add src/core/gateway/backends/panic_threshold.rs src/core/gateway/backends/mod.rs edgion-resources/src/constants/annotations.rs
 git commit -m "feat(lb): panic threshold store, global default, annotation parse"
 ```
 
@@ -360,7 +360,7 @@ git commit -m "feat(lb): plumb edgion.io/panic-threshold annotation into service
 ## Task 3: Global default via EdgionGatewayConfig.loadBalancing.panicThreshold
 
 **Files:**
-- Modify: `src/types/resources/edgion_gateway_config.rs`
+- Modify: `edgion-resources/src/resources/edgion_gateway_config.rs`
 - Modify: `src/core/gateway/config/edgion_gateway/conf_handler_impl.rs`
 
 - [ ] **Step 1: Write the failing test**
@@ -395,7 +395,7 @@ Expected: FAIL to compile — `LoadBalancingConfig` / `load_balancing` field do 
 
 - [ ] **Step 3: Add the CRD field**
 
-In `src/types/resources/edgion_gateway_config.rs`, add a field to `EdgionGatewayConfigSpec` (after `tcp_timeout`):
+In `edgion-resources/src/resources/edgion_gateway_config.rs`, add a field to `EdgionGatewayConfigSpec` (after `tcp_timeout`):
 
 ```rust
     /// Load-balancing-wide settings (panic threshold, etc.).
@@ -447,7 +447,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/types/resources/edgion_gateway_config.rs src/core/gateway/config/edgion_gateway/conf_handler_impl.rs
+git add edgion-resources/src/resources/edgion_gateway_config.rs src/core/gateway/config/edgion_gateway/conf_handler_impl.rs
 git commit -m "feat(lb): EdgionGatewayConfig.loadBalancing.panicThreshold global default"
 ```
 

@@ -5,7 +5,7 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::types::resources::common::Condition;
+use edgion_resources::resources::common::Condition;
 
 // ============================================================================
 // Shared controller constants and helpers (FileSystem and Etcd backends)
@@ -73,8 +73,8 @@ impl ErrorStatus {
 // Shared resource parsing (used by both FileSystem and Etcd backends)
 // ============================================================================
 
-use crate::types::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3, TLSRoute, TLSRouteAlpha3};
-use crate::types::{ResourceKind, ResourceMeta};
+use edgion_resources::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3, TLSRoute, TLSRouteAlpha3};
+use edgion_resources::{ResourceKind, ResourceMeta};
 use kube::Resource;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;

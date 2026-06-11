@@ -136,7 +136,7 @@ init_work_dir(base_work_dir)?;
 ### 2. 验证目录
 
 ```rust
-// src/types/work_dir.rs
+// edgion-resources/src/work_dir.rs
 impl WorkDir {
     pub fn validate(&self) -> anyhow::Result<()> {
         // 1. 检查 base 目录是否存在，不存在则创建
@@ -337,8 +337,8 @@ mkdir -p /usr/local/edgion/{config,logs,runtime}
 ## 相关文件
 
 ### 核心实现
-- `src/types/work_dir.rs` - WorkDir 实现
-- `src/types/mod.rs` - 导出 work_dir API
+- `edgion-resources/src/work_dir.rs` - WorkDir 实现
+- `edgion-resources/src/mod.rs` - 导出 work_dir API
 
 ### 使用位置
 - `src/core/gateway/cli/mod.rs` - Gateway 初始化

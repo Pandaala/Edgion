@@ -1,5 +1,5 @@
-use crate::types::resources::edgion_gateway_config::{BackendTimeout, ClientTimeout};
-use crate::types::EdgionGatewayConfig;
+use edgion_resources::resources::edgion_gateway_config::{BackendTimeout, ClientTimeout};
+use edgion_resources::EdgionGatewayConfig;
 use std::time::Duration;
 
 /// Pre-parsed timeout configurations for runtime use
@@ -39,7 +39,7 @@ impl ParsedTimeouts {
 
 impl ParsedClientTimeout {
     fn from_config(config: &ClientTimeout) -> Self {
-        use crate::core::common::utils::parse_duration;
+        use edgion_resources::duration::parse_duration;
 
         let read_timeout = parse_duration(&config.read_timeout).unwrap_or_else(|e| {
             tracing::warn!(
@@ -90,7 +90,7 @@ impl Default for ParsedClientTimeout {
 
 impl ParsedBackendTimeout {
     fn from_config(config: &BackendTimeout) -> Self {
-        use crate::core::common::utils::parse_duration;
+        use edgion_resources::duration::parse_duration;
 
         let connect_timeout = parse_duration(&config.default_connect_timeout).unwrap_or_else(|e| {
             tracing::warn!(

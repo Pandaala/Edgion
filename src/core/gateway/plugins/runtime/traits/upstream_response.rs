@@ -2,8 +2,8 @@
 
 use super::session::PluginSession;
 use crate::core::gateway::plugins::runtime::log::PluginLog;
-use crate::types::filters::PluginRunningResult;
 use async_trait::async_trait;
+use edgion_resources::filters::PluginRunningResult;
 
 /// UpstreamResponse trait for upstream response stage plugins
 /// Runs during response_filter hook (async)

@@ -30,7 +30,7 @@ use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
-use crate::types::resources::BackendTLSPolicy;
+use edgion_resources::resources::BackendTLSPolicy;
 
 static GLOBAL_BACKEND_TLS_POLICY_STORE: LazyLock<Arc<BackendTLSPolicyStore>> =
     LazyLock::new(|| Arc::new(BackendTLSPolicyStore::new()));
@@ -113,7 +113,7 @@ impl BackendTLSPolicyStore {
     #[inline]
     fn build_target_key(
         policy_namespace: &str,
-        target_ref: &crate::types::resources::backend_tls_policy::BackendTLSPolicyTargetRef,
+        target_ref: &edgion_resources::resources::backend_tls_policy::BackendTLSPolicyTargetRef,
     ) -> String {
         let target_name = &target_ref.name;
         format!("{}/{}", policy_namespace, target_name)

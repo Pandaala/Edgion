@@ -7,9 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(super) use super::super::JwtAuth;
 pub(super) use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
 pub(super) use crate::core::gateway::plugins::runtime::{PluginLog, RequestFilter};
-pub(super) use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::plugin_configs::{ResolvedJwtCredential, ResolvedJwtIssuerGroup};
-pub(super) use crate::types::resources::edgion_plugins::{JwtAlgorithm, JwtAuthConfig};
+pub(super) use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::plugin_configs::{ResolvedJwtCredential, ResolvedJwtIssuerGroup};
+pub(super) use edgion_resources::resources::edgion_plugins::{JwtAlgorithm, JwtAuthConfig};
 
 /// Default secret used across most HS256 tests.
 pub(super) const TEST_SECRET: &str = "test-secret-key-for-jwt-auth-testing-min-32-bytes";

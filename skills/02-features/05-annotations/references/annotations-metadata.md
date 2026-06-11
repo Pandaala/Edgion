@@ -4,16 +4,16 @@ Use this file when the task is about real Kubernetes object annotations under `m
 
 ## Verify In Code
 
-- `src/types/constants/annotations.rs`
+- `edgion-resources/src/constants/annotations.rs`
 - `src/core/gateway/runtime/server/listener_builder.rs`
 - `src/core/gateway/runtime/store/listener_gateway_info.rs`
 - `src/core/gateway/routes/tcp/conf_handler_impl.rs`
 - `src/core/gateway/routes/tls/conf_handler_impl.rs`
-- `src/types/resources/http_route_preparse.rs`
+- `edgion-resources/src/resources/http_route_preparse.rs`
 - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs`
 - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/grpc_route.rs`
 - `src/core/gateway/backends/health/check/annotation.rs`
-- `src/types/resources/edgion_tls.rs`
+- `edgion-resources/src/resources/edgion_tls.rs`
 
 ## Gateway `metadata.annotations`
 

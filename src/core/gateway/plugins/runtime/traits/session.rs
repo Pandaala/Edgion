@@ -3,10 +3,10 @@
 use crate::core::gateway::ctx::ClientCertInfo;
 use crate::core::gateway::plugins::runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use crate::core::gateway::{EdgionHttpContext, MirrorState, SetJumpOutcome, UpstreamJumpTarget};
-use crate::types::common::{KeyGet, KeySet};
-use crate::types::EdgionStatus;
 use async_trait::async_trait;
 use bytes::Bytes;
+use edgion_resources::common::{KeyGet, KeySet};
+use edgion_resources::EdgionStatus;
 use pingora_http::ResponseHeader;
 
 pub type PluginSessionError = Box<dyn std::error::Error + Send + Sync>;

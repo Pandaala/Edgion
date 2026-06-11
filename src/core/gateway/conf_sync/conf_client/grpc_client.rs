@@ -1,9 +1,9 @@
 use crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::common::conf_sync::proto::{ServerInfoRequest, ServerInfoResponse, WatchServerMetaRequest};
 use crate::core::common::config::ConfSyncSecurityConfig;
-use crate::core::common::rate_limit_config::set_gateway_instance_count;
 use crate::core::gateway::conf_sync::conf_client::ConfigClient;
-use crate::types::ResourceKind;
+use edgion_resources::rate_limit_config::set_gateway_instance_count;
+use edgion_resources::ResourceKind;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::Channel;

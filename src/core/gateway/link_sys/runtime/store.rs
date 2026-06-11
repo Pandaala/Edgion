@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
-use crate::types::resources::link_sys::LinkSys;
+use edgion_resources::resources::link_sys::LinkSys;
 
 use crate::core::gateway::link_sys::credential;
 use crate::core::gateway::link_sys::lifecycle::LinkSysLifecycle;
@@ -555,7 +555,7 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
 
     for (key, ls) in data {
         match &ls.spec.config {
-            crate::types::resources::link_sys::SystemConfig::Webhook(config) => {
+            edgion_resources::resources::link_sys::SystemConfig::Webhook(config) => {
                 // Gate on credential readiness: a webhook whose `auth.secretRef`
                 // is configured but whose Secret is not yet injected (Pending) or
                 // is malformed (Invalid) must not be registered — otherwise
@@ -590,7 +590,7 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                     &mut new_webhook_map,
                 );
             }
-            crate::types::resources::link_sys::SystemConfig::Redis(redis_config) => {
+            edgion_resources::resources::link_sys::SystemConfig::Redis(redis_config) => {
                 let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
                 if carry_over_if_not_ready(
                     key,
@@ -611,7 +611,7 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                     &mut new_redis_map,
                 );
             }
-            crate::types::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
+            edgion_resources::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
                 let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
                 if carry_over_if_not_ready(
                     key,
@@ -632,7 +632,7 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                     &mut new_etcd_map,
                 );
             }
-            crate::types::resources::link_sys::SystemConfig::Elasticsearch(es_config) => {
+            edgion_resources::resources::link_sys::SystemConfig::Elasticsearch(es_config) => {
                 let (ready, tls_ok, auth) = credential_readiness(ls, credential::resolved_state);
                 if carry_over_if_not_ready(
                     key,
@@ -675,7 +675,7 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
     // Handle add/update
     for (key, ls) in add_or_update {
         match &ls.spec.config {
-            crate::types::resources::link_sys::SystemConfig::Webhook(config) => {
+            edgion_resources::resources::link_sys::SystemConfig::Webhook(config) => {
                 // Gate on credential readiness so a webhook whose secretRef is
                 // configured but whose Secret is not yet injected (Pending) or is
                 // malformed (Invalid) is not registered with an unresolved
@@ -700,7 +700,7 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                     &WEBHOOK_RUNTIME,
                 );
             }
-            crate::types::resources::link_sys::SystemConfig::Redis(redis_config) => {
+            edgion_resources::resources::link_sys::SystemConfig::Redis(redis_config) => {
                 let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
                 if preserve_if_not_ready(key, "Redis", auth.kind(), tls_ok, ready, &REDIS_RUNTIME) {
                     continue;
@@ -712,7 +712,7 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                     &REDIS_RUNTIME,
                 );
             }
-            crate::types::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
+            edgion_resources::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
                 let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
                 if preserve_if_not_ready(key, "Etcd", auth.kind(), tls_ok, ready, &ETCD_RUNTIME) {
                     continue;
@@ -724,7 +724,7 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                     &ETCD_RUNTIME,
                 );
             }
-            crate::types::resources::link_sys::SystemConfig::Elasticsearch(es_config) => {
+            edgion_resources::resources::link_sys::SystemConfig::Elasticsearch(es_config) => {
                 let (ready, tls_ok, auth) = credential_readiness(ls, credential::resolved_state);
                 if preserve_if_not_ready(key, "Elasticsearch", auth.kind(), tls_ok, ready, &ES_RUNTIME) {
                     continue;
@@ -775,8 +775,8 @@ mod tests {
     use super::*;
 
     fn create_test_webhook_linksys(namespace: &str, name: &str) -> LinkSys {
-        use crate::types::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
-        use crate::types::resources::link_sys::{LinkSysSpec, SystemConfig};
+        use edgion_resources::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
+        use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
 
         LinkSys {
             metadata: kube::core::ObjectMeta {
@@ -897,9 +897,9 @@ mod tests {
     }
 
     fn create_redis_linksys(namespace: &str, name: &str, inject: InjectedSecret) -> LinkSys {
-        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
-        use crate::types::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
-        use crate::types::resources::link_sys::{LinkSysSpec, SystemConfig};
+        use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
+        use edgion_resources::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
+        use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
         use k8s_openapi::api::core::v1::Secret;
         use k8s_openapi::ByteString;
         use std::collections::BTreeMap;
@@ -1095,8 +1095,8 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_partial_update_replace_webhook_keeps_runtime_arc_swap() {
-        use crate::types::resources::link_sys::webhook::WebhookServiceConfig;
-        use crate::types::resources::link_sys::{LinkSysSpec, SystemConfig};
+        use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
+        use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
 
         // Share a global lock with other tests that call dispatch_* directly
         // (I5/M4 series) to serialize. Without holding the lock, their
@@ -1108,7 +1108,7 @@ mod tests {
         let key = "t13-ns/wh-arc-swap".to_string();
 
         let make_ls = |uri: &str| {
-            use crate::types::resources::link_sys::webhook::WebhookTarget;
+            use edgion_resources::resources::link_sys::webhook::WebhookTarget;
             LinkSys {
                 metadata: kube::core::ObjectMeta {
                     namespace: Some("t13-ns".into()),

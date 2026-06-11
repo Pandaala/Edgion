@@ -25,7 +25,7 @@ pub async fn connected_to_upstream(
         if let Some(ssl_digest) = &digest.ssl_digest {
             if let Some(san_result) = ssl_digest.extension.get::<BackendSanValidationResult>() {
                 if !san_result.passed {
-                    ctx.add_error(crate::types::EdgionStatus::BackendTlsSanValidationFailed);
+                    ctx.add_error(edgion_resources::EdgionStatus::BackendTlsSanValidationFailed);
                     return Err(pingora_core::Error::explain(
                         pingora_core::ErrorType::InvalidCert,
                         format!("Backend cert SAN mismatch: {}", san_result.reason),

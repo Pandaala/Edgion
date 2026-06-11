@@ -16,7 +16,7 @@ use async_trait::async_trait;
 
 use crate::core::gateway::link_sys::lifecycle::LinkSysLifecycle;
 use crate::core::gateway::link_sys::providers::webhook::manager::{StaticWebhookManagerAdapter, WebhookManagerOps};
-use crate::types::resources::link_sys::webhook::WebhookServiceConfig;
+use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
 
 pub struct WebhookLinkClient {
     key: String,
@@ -102,7 +102,7 @@ mod tests {
     }
 
     fn config() -> WebhookServiceConfig {
-        use crate::types::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
         WebhookServiceConfig {
             target: WebhookTarget::Uri {
                 uri: "http://example/x".into(),

@@ -2,7 +2,7 @@ use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::types::ListenerKey;
+use edgion_resources::ListenerKey;
 
 /// Shared orchestration for L4 (TCP/TLS/UDP) `rebuild_all_listener_managers`.
 ///

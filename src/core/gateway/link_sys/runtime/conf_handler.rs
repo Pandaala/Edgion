@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use super::store::{get_global_link_sys_store, LinkSysStore};
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
-use crate::types::resources::link_sys::LinkSys;
+use edgion_resources::resources::link_sys::LinkSys;
 
 /// Create a LinkSysStore handler for registration with ConfigClient
 pub fn create_link_sys_handler() -> Box<dyn ConfHandler<LinkSys> + Send + Sync> {
@@ -47,8 +47,8 @@ impl ConfHandler<LinkSys> for LinkSysStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
-    use crate::types::resources::link_sys::{LinkSysSpec, SystemConfig};
+    use edgion_resources::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
+    use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
 
     fn create_test_linksys(namespace: &str, name: &str) -> LinkSys {
         LinkSys {

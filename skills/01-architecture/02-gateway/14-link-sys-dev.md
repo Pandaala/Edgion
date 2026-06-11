@@ -8,7 +8,7 @@ Use this for tasks such as:
 
 ## Read these real entry points first
 
-- [../../../src/types/resources/link_sys/mod.rs](../../../src/types/resources/link_sys/mod.rs)
+- [../../../edgion-resources/src/resources/link_sys/mod.rs](../../../edgion-resources/src/resources/link_sys/mod.rs)
 - [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs)
 - [../../../src/core/gateway/conf_sync/conf_client/config_client.rs](../../../src/core/gateway/conf_sync/conf_client/config_client.rs)
 - [../../../src/core/gateway/link_sys/runtime/conf_handler.rs](../../../src/core/gateway/link_sys/runtime/conf_handler.rs)
@@ -67,7 +67,7 @@ These three follow the pattern "CRD config -> runtime client -> typed store / op
 
 The directory typically looks like:
 
-- `src/types/resources/link_sys/<system>.rs`
+- `edgion-resources/src/resources/link_sys/<system>.rs`
 - `src/core/gateway/link_sys/providers/<system>/client.rs`
 - `src/core/gateway/link_sys/providers/<system>/config_mapping.rs`
 - `src/core/gateway/link_sys/providers/<system>/ops.rs`
@@ -164,8 +164,8 @@ Don't build a parallel watcher of your own.
 
 If you are adding a new system variant within the existing `LinkSys` resource, you typically touch at least:
 
-1. `src/types/resources/link_sys/<system>.rs`
-2. `src/types/resources/link_sys/mod.rs`
+1. `edgion-resources/src/resources/link_sys/<system>.rs`
+2. `edgion-resources/src/resources/link_sys/mod.rs`
 3. `config/crd/edgion-crd/link_sys_crd.yaml`
 4. `src/core/gateway/link_sys/providers/<system>/`
 5. `src/core/gateway/link_sys/runtime/store.rs`

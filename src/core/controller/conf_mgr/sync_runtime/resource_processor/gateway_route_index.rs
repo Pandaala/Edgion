@@ -28,8 +28,8 @@
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 
-use crate::types::resources::common::ParentReference;
-use crate::types::ResourceKind;
+use edgion_resources::resources::common::ParentReference;
+use edgion_resources::ResourceKind;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RouteEntry {

@@ -91,7 +91,7 @@ impl UdpLogEntry {
 }
 
 /// Initialize the global UDP logger from configuration
-pub async fn init_udp_logger(config: &crate::types::LogConfig) -> Result<()> {
+pub async fn init_udp_logger(config: &edgion_resources::LogConfig) -> Result<()> {
     if let Some(logger) = create_async_logger(config, LogType::Udp).await? {
         UDP_LOGGER
             .set(logger)

@@ -3,9 +3,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub mod net;
 pub use net::*;
 
-pub mod duration;
-pub use duration::parse_duration;
-
 pub mod real_ip_extractor;
 pub use real_ip_extractor::{extract_ip_string, RealIpExtractor};
 

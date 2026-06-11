@@ -1,6 +1,6 @@
 use crate::core::controller::conf_mgr::ConfWriterError;
-use crate::types::ResourceKind;
 use axum::http::StatusCode;
+use edgion_resources::ResourceKind;
 
 /// Helper function to validate a resource against its schema
 ///

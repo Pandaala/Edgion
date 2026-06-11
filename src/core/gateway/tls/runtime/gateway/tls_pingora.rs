@@ -6,14 +6,14 @@ use crate::core::gateway::tls::runtime::backend::cert_extractor::extract_client_
 use crate::core::gateway::tls::runtime::backend::set_mtls_verify_callback;
 use crate::core::gateway::tls::store::cert_matcher::match_sni;
 use crate::core::gateway::{MatchedInfo, Rsc, TlsConnMeta};
-use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
-use crate::types::listener_key::ListenerKey;
-use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
-use crate::types::resources::gateway::FrontendValidationMode;
-use crate::types::ResourceMeta;
 use anyhow::anyhow;
 use anyhow::Result;
+use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
+use edgion_resources::listener_key::ListenerKey;
+use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
+use edgion_resources::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
+use edgion_resources::resources::gateway::FrontendValidationMode;
+use edgion_resources::ResourceMeta;
 use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::listeners::TlsAccept;
 use pingora_core::protocols::tls::TlsRef;
@@ -380,8 +380,8 @@ impl TlsAccept for TlsCallback {
 
 /// Map EdgionTls `TlsVersion` (CRD enum) to BoringSSL `SslVersion`. Free fn
 /// so the select_cb closure can call it without borrowing `&TlsCallback`.
-fn map_tls_version(v: crate::types::resources::edgion_tls::TlsVersion) -> pingora_core::tls::ssl::SslVersion {
-    use crate::types::resources::edgion_tls::TlsVersion;
+fn map_tls_version(v: edgion_resources::resources::edgion_tls::TlsVersion) -> pingora_core::tls::ssl::SslVersion {
+    use edgion_resources::resources::edgion_tls::TlsVersion;
     use pingora_core::tls::ssl::SslVersion;
     match v {
         TlsVersion::Tls10 => SslVersion::TLS1,

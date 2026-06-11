@@ -7,7 +7,7 @@ use std::sync::Arc;
 use super::ReferenceGrantStore;
 use crate::core::common::config::is_reference_grant_validation_enabled;
 use crate::core::controller::conf_mgr::ControllerRuntime;
-use crate::types::resources::{gateway::SecretObjectReference, http_route::BackendObjectReference};
+use edgion_resources::resources::{gateway::SecretObjectReference, http_route::BackendObjectReference};
 
 /// Validator for cross-namespace references
 pub struct CrossNamespaceValidator {
@@ -177,7 +177,7 @@ fn check_regex_pattern(pattern: &str, kind: &str, field: &str, ns: &str, name: &
 /// They are handled by parse() (sets ref_denied on each backend) and update_status()
 /// (sets ResolvedRefs=False). Returning them here would cause Accepted=False, which
 /// violates Gateway API spec — ref_denied routes must remain Accepted=True.
-pub fn validate_http_route_if_enabled(route: &crate::types::resources::HTTPRoute) -> Vec<String> {
+pub fn validate_http_route_if_enabled(route: &edgion_resources::resources::HTTPRoute) -> Vec<String> {
     let mut errors = Vec::new();
     let ns = route.metadata.namespace.as_deref().unwrap_or("");
     let name = route.metadata.name.as_deref().unwrap_or("");
@@ -241,8 +241,8 @@ pub fn validate_http_route_if_enabled(route: &crate::types::resources::HTTPRoute
 /// They are handled by parse() (sets ref_denied on each backend) and update_status()
 /// (sets ResolvedRefs=False). Returning them here would cause Accepted=False, which
 /// violates Gateway API spec — ref_denied routes must remain Accepted=True.
-pub fn validate_grpc_route_if_enabled(route: &crate::types::resources::GRPCRoute) -> Vec<String> {
-    use crate::types::resources::grpc_route::GRPCMethodMatchType;
+pub fn validate_grpc_route_if_enabled(route: &edgion_resources::resources::GRPCRoute) -> Vec<String> {
+    use edgion_resources::resources::grpc_route::GRPCMethodMatchType;
     let mut errors = Vec::new();
     let ns = route.metadata.namespace.as_deref().unwrap_or("");
     let name = route.metadata.name.as_deref().unwrap_or("");
@@ -288,7 +288,7 @@ pub fn validate_grpc_route_if_enabled(route: &crate::types::resources::GRPCRoute
 ///
 /// Cross-namespace backend ref violations are handled by parse() (sets ref_denied)
 /// and update_status() (sets ResolvedRefs=False), not here.
-pub fn validate_tcp_route_if_enabled(_route: &crate::types::resources::TCPRoute) -> Vec<String> {
+pub fn validate_tcp_route_if_enabled(_route: &edgion_resources::resources::TCPRoute) -> Vec<String> {
     Vec::new()
 }
 
@@ -296,7 +296,7 @@ pub fn validate_tcp_route_if_enabled(_route: &crate::types::resources::TCPRoute)
 ///
 /// Cross-namespace backend ref violations are handled by parse() (sets ref_denied)
 /// and update_status() (sets ResolvedRefs=False), not here.
-pub fn validate_udp_route_if_enabled(_route: &crate::types::resources::UDPRoute) -> Vec<String> {
+pub fn validate_udp_route_if_enabled(_route: &edgion_resources::resources::UDPRoute) -> Vec<String> {
     Vec::new()
 }
 
@@ -304,14 +304,14 @@ pub fn validate_udp_route_if_enabled(_route: &crate::types::resources::UDPRoute)
 ///
 /// Cross-namespace backend ref violations are handled by parse() (sets ref_denied)
 /// and update_status() (sets ResolvedRefs=False), not here.
-pub fn validate_tls_route_if_enabled(_route: &crate::types::resources::TLSRoute) -> Vec<String> {
+pub fn validate_tls_route_if_enabled(_route: &edgion_resources::resources::TLSRoute) -> Vec<String> {
     Vec::new()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::{ReferenceGrant, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
+    use edgion_resources::resources::{ReferenceGrant, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use std::collections::HashMap;
 

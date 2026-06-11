@@ -4,7 +4,7 @@
 //! and synchronizing them with the global policy store.
 
 use crate::core::gateway::lb::lb_policy::{get_global_policy_store, LbPolicy};
-use crate::types::{HTTPRoute, ParsedLBPolicy};
+use edgion_resources::{HTTPRoute, ParsedLBPolicy};
 use std::collections::{HashMap, HashSet};
 
 /// Extract load balancing policies from HTTPRoute and update the global policy store
@@ -118,7 +118,7 @@ pub fn cleanup_lb_policies_for_routes(removed_routes: &HashSet<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ResourceMeta;
+    use edgion_resources::ResourceMeta;
     use std::collections::HashMap;
 
     /// Helper function to create a test HTTPRoute with LB policy

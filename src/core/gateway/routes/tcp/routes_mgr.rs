@@ -6,8 +6,8 @@ use std::sync::OnceLock;
 
 use crate::core::gateway::routes::tcp::route_unit::TcpRouteUnit;
 use crate::core::gateway::routes::tcp::tcp_route_table::TcpRouteTable;
-use crate::types::resources::TCPRoute;
-use crate::types::ListenerKey;
+use edgion_resources::resources::TCPRoute;
+use edgion_resources::ListenerKey;
 
 /// Per-listener TCP route manager.
 ///
@@ -225,8 +225,8 @@ mod tests {
     use crate::core::gateway::routes::l4_rebuild::{
         rebuild_affected_l4_listener_managers, rebuild_all_l4_listener_managers,
     };
-    use crate::types::resources::common::ParentReference;
-    use crate::types::resources::tcp_route::TCPRouteSpec;
+    use edgion_resources::resources::common::ParentReference;
+    use edgion_resources::resources::tcp_route::TCPRouteSpec;
 
     fn make_listener_key(port: u16, protocol: &str) -> ListenerKey {
         let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);

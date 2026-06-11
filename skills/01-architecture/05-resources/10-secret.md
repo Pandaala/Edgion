@@ -12,7 +12,7 @@ Secret is a Kubernetes core resource. In Edgion it stores TLS certificates, auth
 ## Source code locations
 
 - Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/secret.rs`
-- Credential resolution layer (Controller + Gateway shared): `src/types/credentials/`
+- Credential resolution layer (Controller + Gateway shared): `edgion-resources/src/credentials/`
 - Controller-side credential pipeline: `src/core/controller/conf_mgr/sync_runtime/resource_processor/credential/`
 - Gateway-side credential four-state: `src/core/gateway/link_sys/credential.rs`
 
@@ -36,7 +36,7 @@ A process-level global cache: `SecretHandler.parse` writes; other Handlers (Gate
 
 ## Secret → Material resolution layer
 
-The `SecretMaterialResolver` trait under `src/types/credentials/` maps `Secret.data` (`BTreeMap<String, ByteString>`) into a strongly-typed `Material`. Controller and Gateway **share the same set of resolvers**, avoiding duplicated implementations on either end.
+The `SecretMaterialResolver` trait under `edgion-resources/src/credentials/` maps `Secret.data` (`BTreeMap<String, ByteString>`) into a strongly-typed `Material`. Controller and Gateway **share the same set of resolvers**, avoiding duplicated implementations on either end.
 
 ### trait
 

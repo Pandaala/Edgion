@@ -26,14 +26,14 @@ graph TD
 
 ## 模块边界
 
-### `src/types/`
+### `edgion-resources/src/`
 
 这里存放跨二进制共享的数据定义。
 
-- `src/types/resources/`：具体资源结构体，如 `Gateway`、`HTTPRoute`、`EdgionTls`、`EdgionPlugins`
-- `src/types/resource/`：资源系统核心，包括 `kind.rs`、`defs.rs`、`meta/`、`registry.rs`
-- `src/types/ctx.rs`：请求级上下文 `EdgionHttpContext`
-- `src/types/constants/`：注解、标签、Header、Secret Key 等常量
+- `edgion-resources/src/resources/`：具体资源结构体，如 `Gateway`、`HTTPRoute`、`EdgionTls`、`EdgionPlugins`
+- `edgion-resources/src/resource/`：资源系统核心，包括 `kind.rs`、`defs.rs`、`meta/`、`registry.rs`
+- `edgion-resources/src/ctx.rs`：请求级上下文 `EdgionHttpContext`
+- `edgion-resources/src/constants/`：注解、标签、Header、Secret Key 等常量
 
 ### `src/core/controller/`
 
@@ -118,6 +118,6 @@ graph TD
 ## 相关文档
 
 - [资源架构总览](./resource-architecture-overview.md)：单个资源从类型注册到运行时的完整链路
-- [资源注册指南](./resource-registry-guide.md)：`src/types/resource/` 下的统一注册模型
+- [资源注册指南](./resource-registry-guide.md)：`edgion-resources/src/resource/` 下的统一注册模型
 - [添加新资源类型指南](./add-new-resource-guide.md)：贡献者新增资源的落地流程
 - [AI 协作与 Skills 使用指南](./ai-agent-collaboration.md)：人和 AI 如何进入这棵知识树

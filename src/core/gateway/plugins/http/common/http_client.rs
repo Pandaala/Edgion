@@ -102,7 +102,7 @@ pub fn get_http_client_with_ssl_verify(ssl_verify: bool) -> &'static Client {
 /// [`link_sys::tls::apply_insecure_skip_verify`] helper, which refuses to honour the flag
 /// when `EDGION_ENV=production`.
 pub fn build_webhook_client(
-    config: &crate::types::resources::link_sys::webhook::WebhookServiceConfig,
+    config: &edgion_resources::resources::link_sys::webhook::WebhookServiceConfig,
 ) -> Option<anyhow::Result<Client>> {
     let tls = config.tls.as_ref()?;
 

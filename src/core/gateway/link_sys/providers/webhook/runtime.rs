@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::core::gateway::lb::WeightedRoundRobin;
-use crate::types::resources::link_sys::webhook::WebhookServiceConfig;
+use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
 use reqwest::Client;
 
 // ============================================================

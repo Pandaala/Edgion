@@ -47,7 +47,7 @@ impl OpenidConnect {
         };
         // Normalize the path so config-side and request-side inhabit the same
         // normalized space. See §3.5 of the URI normalization spec.
-        let path_cfg = crate::core::common::path_normalization::get_path_normalization_config();
+        let path_cfg = edgion_resources::path_normalization::get_path_normalization_config();
         normalize_config_path(&raw_path, path_cfg)
     }
 

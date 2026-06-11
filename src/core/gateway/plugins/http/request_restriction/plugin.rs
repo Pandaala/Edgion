@@ -51,8 +51,8 @@ use bytes::Bytes;
 use pingora_http::ResponseHeader;
 
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::{
     RequestRestrictionConfig, RestrictionRule, RestrictionSource, RuleMatchMode,
 };
 
@@ -160,7 +160,7 @@ impl RequestFilter for RequestRestriction {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        use crate::types::resources::edgion_plugins::PluginValidation;
+        use edgion_resources::resources::edgion_plugins::PluginValidation;
         // Check for configuration errors
         if self.config.validation_error().is_some() {
             plugin_log.push_err("restriction config invalid");
@@ -234,7 +234,7 @@ impl RequestFilter for RequestRestriction {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-    use crate::types::resources::edgion_plugins::OnMissing;
+    use edgion_resources::resources::edgion_plugins::OnMissing;
 
     #[tokio::test]
     async fn test_missing_header_denied_when_configured() {

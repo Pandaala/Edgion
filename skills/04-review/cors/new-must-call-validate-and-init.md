@@ -90,4 +90,4 @@ Re-open only if:
   (fr-auth2-01 — why `allow_origins_by_regex` + credentials is rejected at preparse).
 - Source: `src/core/gateway/plugins/http/cors/plugin.rs` (`Cors::new`),
   `src/core/gateway/plugins/runtime/plugin_runtime.rs` (`add_from_request_filters` CORS cache),
-  `src/types/resources/edgion_plugins/plugin_configs/cors.rs` (`validate_and_init`, `is_origin_allowed`).
+  `edgion-resources/src/resources/edgion_plugins/plugin_configs/cors.rs` (`validate_and_init`, `is_origin_allowed`).

@@ -3,8 +3,8 @@ use crate::core::controller::conf_mgr::{
     CenterLifeCycle, ConfCenter, ConfMgr, ConfWriterError, ControllerRuntime, SchemaValidator,
 };
 use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
-use crate::types::ResourceKind;
 use axum::http::StatusCode;
+use edgion_resources::ResourceKind;
 use std::sync::Arc;
 
 /// Admin state containing ConfMgr and SchemaValidator

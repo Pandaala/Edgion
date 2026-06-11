@@ -15,8 +15,8 @@ use cookie::time::Duration;
 use cookie::{Cookie, CookieBuilder, SameSite};
 
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::CsrfConfig;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::CsrfConfig;
 
 use super::token::CsrfToken;
 

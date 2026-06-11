@@ -179,7 +179,7 @@ Other GRPCRoute retry fields work normally:
 Current behavior: when the Controller parses a GRPCRoute, if `retry.codes` is non-empty it logs a warning `"GRPCRoute retry.codes is not yet supported (requires gRPC trailers interception); codes will be ignored"`, then sets `ParsedRouteRetry.codes` to `None`. Retries trigger only on connection error / upstream unreachable; gRPC status codes are not used to differentiate.
 
 - Workaround: configure a retry policy in the client gRPC SDK (such as `retryPolicy.retryableStatusCodes` in the gRPC service config); the client can read trailers in full and retry by status code
-- Related code: `src/types/resources/grpc_route.rs` lines 526–541
+- Related code: `edgion-resources/src/resources/grpc_route.rs` lines 526–541
 
 ## GATEWAY-TLS ConformanceProfile
 

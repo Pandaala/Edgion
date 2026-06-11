@@ -11,12 +11,12 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, set_parent_conditions_full, update_condition,
     AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
-use crate::types::prelude_resources::GRPCRoute;
-use crate::types::resources::common::RefDenied;
-use crate::types::resources::grpc_route::{GRPCRouteFilter, GRPCRouteFilterType, GRPCRouteStatus};
-use crate::types::resources::http_route::RouteParentStatus;
-use crate::types::resources::http_route_preparse::is_lb_policy_kind;
-use crate::types::ResourceKind;
+use edgion_resources::prelude_resources::GRPCRoute;
+use edgion_resources::resources::common::RefDenied;
+use edgion_resources::resources::grpc_route::{GRPCRouteFilter, GRPCRouteFilterType, GRPCRouteStatus};
+use edgion_resources::resources::http_route::RouteParentStatus;
+use edgion_resources::resources::http_route_preparse::is_lb_policy_kind;
+use edgion_resources::ResourceKind;
 
 /// GRPCRoute handler
 pub struct GrpcRouteHandler {

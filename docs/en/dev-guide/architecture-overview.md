@@ -26,14 +26,14 @@ graph TD
 
 ## Module Boundaries
 
-### `src/types/`
+### `edgion-resources/src/`
 
 Shared data definitions live here.
 
-- `src/types/resources/`: concrete resource structs such as `Gateway`, `HTTPRoute`, `EdgionTls`, `EdgionPlugins`
-- `src/types/resource/`: resource system core, including `kind.rs`, `defs.rs`, `meta/`, and `registry.rs`
-- `src/types/ctx.rs`: request-scoped `EdgionHttpContext`
-- `src/types/constants/`: annotations, labels, header keys, secret keys
+- `edgion-resources/src/resources/`: concrete resource structs such as `Gateway`, `HTTPRoute`, `EdgionTls`, `EdgionPlugins`
+- `edgion-resources/src/resource/`: resource system core, including `kind.rs`, `defs.rs`, `meta/`, and `registry.rs`
+- `edgion-resources/src/ctx.rs`: request-scoped `EdgionHttpContext`
+- `edgion-resources/src/constants/`: annotations, labels, header keys, secret keys
 
 ### `src/core/controller/`
 
@@ -118,6 +118,6 @@ Comparing `server` and `client` views is often the fastest way to tell whether a
 ## Related Docs
 
 - [Resource Architecture Overview](./resource-architecture-overview.md): per-resource flow from type registration to runtime
-- [Resource Registry Guide](./resource-registry-guide.md): the unified registry model under `src/types/resource/`
+- [Resource Registry Guide](./resource-registry-guide.md): the unified registry model under `edgion-resources/src/resource/`
 - [Adding New Resource Types Guide](./add-new-resource-guide.md): contributor-facing workflow
 - [AI Collaboration and Skill Usage Guide](./ai-agent-collaboration.md): how humans and AI tools should enter this knowledge tree

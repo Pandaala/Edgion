@@ -2,8 +2,8 @@ use async_trait::async_trait;
 
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::core::gateway::{InternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::{
     DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch, DynamicInternalUpstreamConfig,
 };
 

@@ -7,9 +7,9 @@ use crate::core::gateway::observe::logs::{
     init_logging, init_ssl_logger, init_tcp_logger, init_tls_logger, init_udp_logger,
 };
 use crate::core::gateway::observe::metrics;
-use crate::types::{init_work_dir, work_dir};
 use anyhow::{anyhow, Result};
 use clap::Parser;
+use edgion_resources::{init_work_dir, work_dir};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -247,9 +247,9 @@ impl EdgionGatewayCli {
         let _log_guard = runtime.block_on(init_logging(log_config))?;
 
         // 5. Initialize RateLimit / LRU cache / access-log sensitive global configurations
-        crate::core::common::rate_limit_config::init_rate_limit_global_config(&config.rate_limit);
+        edgion_resources::rate_limit_config::init_rate_limit_global_config(&config.rate_limit);
         config::init_lru_cache_global_config(&config.lru_cache);
-        crate::types::sensitive::init_sensitive(config.access_log_sensitive.clone());
+        edgion_resources::sensitive::init_sensitive(config.access_log_sensitive.clone());
 
         // 6. Initialize AllEndpointStatus global configuration
         crate::core::gateway::plugins::http::all_endpoint_status::plugin::init_all_endpoint_status_global_config(
@@ -313,7 +313,7 @@ impl EdgionGatewayCli {
         config::init_backend_requests_config(config.metrics.backend_requests.clone());
 
         // 15. Initialize path normalization config (global OnceLock for hot-path access)
-        crate::core::common::path_normalization::init_path_normalization_config(config.path_normalization.clone());
+        edgion_resources::path_normalization::init_path_normalization_config(config.path_normalization.clone());
 
         // 16. Initialize access log options (global OnceLock for hot-path access)
         config::init_access_log_options(config.access_log_options.clone());

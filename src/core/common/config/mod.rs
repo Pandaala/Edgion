@@ -80,7 +80,7 @@ pub fn get_no_sync_kinds() -> Vec<String> {
         .get()
         .map(|c| c.conf_sync.get_no_sync_kinds().iter().map(|s| s.to_string()).collect())
         .unwrap_or_else(|| {
-            crate::types::DEFAULT_NO_SYNC_KINDS
+            edgion_resources::DEFAULT_NO_SYNC_KINDS
                 .iter()
                 .map(|s| s.to_string())
                 .collect()
@@ -94,7 +94,7 @@ pub fn get_cache_capacity(kind_name: &str) -> usize {
     CONTROLLER_CONFIG
         .get()
         .map(|c| c.conf_sync.get_capacity(kind_name) as usize)
-        .unwrap_or_else(|| crate::types::default_capacity_for_kind(kind_name).unwrap_or(1000) as usize)
+        .unwrap_or_else(|| edgion_resources::default_capacity_for_kind(kind_name).unwrap_or(1000) as usize)
 }
 
 /// Edgion Controller configuration
@@ -367,7 +367,7 @@ impl ConfSyncConfig {
     pub fn get_no_sync_kinds(&self) -> Vec<&str> {
         match &self.no_sync_kinds {
             Some(kinds) => kinds.iter().map(|s| s.as_str()).collect(),
-            None => crate::types::DEFAULT_NO_SYNC_KINDS.to_vec(),
+            None => edgion_resources::DEFAULT_NO_SYNC_KINDS.to_vec(),
         }
     }
 
@@ -526,7 +526,7 @@ impl ConfSyncTlsConfig {
 
     /// Resolve a path: absolute paths used as-is, relative paths joined with work_dir.
     fn resolve_path(path: &str) -> PathBuf {
-        crate::types::work_dir().resolve(path)
+        edgion_resources::work_dir().resolve(path)
     }
 
     pub fn cert_path(&self) -> PathBuf {
@@ -580,7 +580,7 @@ impl AdminTlsConfig {
 
     /// Resolve a path: absolute paths used as-is, relative paths joined with work_dir.
     fn resolve_path(path: &str) -> PathBuf {
-        crate::types::work_dir().resolve(path)
+        edgion_resources::work_dir().resolve(path)
     }
 
     /// Resolve the cert path: absolute as-is, relative joined with work_dir.
@@ -893,7 +893,7 @@ impl EdgionControllerConfig {
     /// Convert to SysLogConfig (for system logging)
     pub fn to_log_config(&self) -> crate::core::gateway::observe::SysLogConfig {
         use crate::core::gateway::observe::SysLogConfig;
-        use crate::types::work_dir;
+        use edgion_resources::work_dir;
 
         // Use work_dir to resolve the log directory path
         // This ensures relative paths like "logs" are resolved to work_dir/logs

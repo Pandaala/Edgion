@@ -1,8 +1,8 @@
-use crate::core::common::matcher::HashHost;
 use crate::core::gateway::tls::validation::cert::{validate_cert, CertValidationResult};
-use crate::types::listener_key::ListenerKey;
-use crate::types::EdgionTls;
 use arc_swap::ArcSwap;
+use edgion_resources::listener_key::ListenerKey;
+use edgion_resources::matcher::HashHost;
+use edgion_resources::EdgionTls;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
@@ -399,9 +399,9 @@ pub fn get_global_tls_store() -> Arc<TlsStore> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::edgion_tls::EdgionTlsSpec;
-    use crate::types::resources::gateway::SecretObjectReference;
     use chrono::{TimeZone, Utc};
+    use edgion_resources::resources::edgion_tls::EdgionTlsSpec;
+    use edgion_resources::resources::gateway::SecretObjectReference;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
     use kube::api::ObjectMeta;
 

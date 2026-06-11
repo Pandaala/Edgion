@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use crate::core::gateway::plugins::http::PluginStore;
 use crate::core::gateway::plugins::runtime::PluginRuntime;
-use crate::types::resources::edgion_gateway_config::PluginReference;
+use edgion_resources::resources::edgion_gateway_config::PluginReference;
 
 /// Resolve `EdgionGatewayConfig.spec.global_plugins_ref` to a Vec of plugin
 /// runtimes, preserving order. Dangling refs are silently dropped from the
@@ -59,8 +59,10 @@ pub fn resolve_route_ext_refs(store: &PluginStore, keys: &[(String, String)]) ->
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::http::get_global_plugin_store;
-    use crate::types::resources::edgion_plugins::{EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry};
-    use crate::types::resources::http_route::HTTPHeaderFilter;
+    use edgion_resources::resources::edgion_plugins::{
+        EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry,
+    };
+    use edgion_resources::resources::http_route::HTTPHeaderFilter;
     use kube::core::ObjectMeta;
     use parking_lot::Mutex;
     use std::collections::HashMap;

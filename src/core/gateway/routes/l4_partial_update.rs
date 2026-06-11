@@ -1,4 +1,4 @@
-use crate::types::ListenerKey;
+use edgion_resources::ListenerKey;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 

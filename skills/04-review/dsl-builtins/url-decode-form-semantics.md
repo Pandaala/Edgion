@@ -13,7 +13,7 @@ decodes both `%XX` AND literal `+` (`+` → space), implementing
 The name-vs-semantics mismatch is **documented** (api-reference §`url_decode` carries
 an explicit security warning, plus an in-source doc-comment above the arm) and is
 **locked** as a design choice: the form semantics intentionally mirror
-`uri_utils::url_decode` (`src/types/uri_utils.rs`) so the
+`uri_utils::url_decode` (`edgion-resources/src/uri_utils.rs`) so the
 DSL, route matching, and consistent-hash arg-name comparison (`backends-F014`) all
 agree on the same decoded form. Re-introducing the asymmetry by renaming or
 splitting the builtin would create a cross-layer divergence.
@@ -26,7 +26,7 @@ Fix suggestions of the form "rename to `form_decode` and introduce a new RFC 398
 
 **1. Cross-layer consistency with route matching**
 
-`uri_utils::url_decode` (in `src/types/uri_utils.rs`) is the canonical decoder used
+`uri_utils::url_decode` (in `edgion-resources/src/uri_utils.rs`) is the canonical decoder used
 by HTTP route matching and is shared with `backends-F014` (consistent-hash arg-name
 percent-decoding). It uses form semantics (`+` → space). The DSL `url_decode` was
 intentionally written to behave the same so operators writing

@@ -43,7 +43,7 @@ use crate::core::controller::conf_mgr::conf_center::MetadataFilterConfig;
 use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::controller::conf_sync::conf_server::WatchObj;
 use crate::core::controller::conf_sync::ServerCache;
-use crate::types::ResourceMeta;
+use edgion_resources::ResourceMeta;
 
 use super::context::HandlerContext;
 use super::handler::{ProcessResult, ProcessorHandler};
@@ -349,7 +349,7 @@ where
     /// Returns WorkItemResult for status persistence handling by caller.
     pub async fn on_init_apply(&self, obj: K, existing_status_json: Option<String>) -> WorkItemResult<K> {
         // Reconstruct the resource_version floor from persisted rv before init proceeds.
-        let rv = crate::types::resource::meta::extract_version(obj.meta());
+        let rv = edgion_resources::resource::meta::extract_version(obj.meta());
         crate::core::common::utils::bump_resource_version_floor(rv);
 
         let ctx = self.create_context(TriggerChain::default());
@@ -491,7 +491,7 @@ where
         // Extract name/namespace/version early for logging (owned strings to avoid borrow issues)
         let name = obj.meta().name.clone().unwrap_or_default();
         let namespace = obj.meta().namespace.clone().unwrap_or_default();
-        let rv = crate::types::resource::meta::extract_version(obj.meta());
+        let rv = edgion_resources::resource::meta::extract_version(obj.meta());
 
         // Generate sv early so the entire processing span carries it for telemetry correlation
         let sv = crate::core::common::utils::next_resource_version();
@@ -790,8 +790,8 @@ mod tests {
         fn get_sync_version(&self) -> u64 {
             0
         }
-        fn resource_kind() -> crate::types::ResourceKind {
-            crate::types::ResourceKind::Unspecified
+        fn resource_kind() -> edgion_resources::ResourceKind {
+            edgion_resources::ResourceKind::Unspecified
         }
         fn kind_name() -> &'static str {
             "TestResource"
@@ -919,9 +919,9 @@ mod tests {
 
     #[test]
     fn test_gateway_class_status_change_detection() {
-        use crate::types::prelude_resources::GatewayClass;
-        use crate::types::resources::common::Condition;
-        use crate::types::resources::gateway_class::GatewayClassStatus;
+        use edgion_resources::prelude_resources::GatewayClass;
+        use edgion_resources::resources::common::Condition;
+        use edgion_resources::resources::gateway_class::GatewayClassStatus;
 
         let gc = GatewayClass {
             metadata: ObjectMeta {
@@ -929,7 +929,7 @@ mod tests {
                 generation: Some(1),
                 ..Default::default()
             },
-            spec: crate::types::resources::gateway_class::GatewayClassSpec {
+            spec: edgion_resources::resources::gateway_class::GatewayClassSpec {
                 controller_name: "example.com/controller".to_string(),
                 description: None,
                 parameters_ref: None,

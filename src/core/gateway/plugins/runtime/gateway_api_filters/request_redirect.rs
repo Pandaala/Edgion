@@ -9,8 +9,8 @@ use pingora_http::ResponseHeader;
 use crate::core::common::utils::net::host_without_port;
 use crate::core::gateway::plugins::runtime::log::{la, PluginLog};
 use crate::core::gateway::plugins::runtime::traits::{PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::HTTPRequestRedirectFilter;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::HTTPRequestRedirectFilter;
 
 fn default_port_for_scheme(scheme: &str) -> u16 {
     match scheme {

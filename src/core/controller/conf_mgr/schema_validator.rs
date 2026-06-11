@@ -1,5 +1,5 @@
-use crate::types::ResourceKind;
 use anyhow::{Context, Result};
+use edgion_resources::ResourceKind;
 use jsonschema::Validator;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;

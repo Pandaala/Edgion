@@ -8,9 +8,9 @@ Use this for tasks such as:
 
 ## Read these real entry points first
 
-- [../../../src/types/resources/edgion_plugins/mod.rs](../../../src/types/resources/edgion_plugins/mod.rs)
-- [../../../src/types/resources/edgion_plugins/entry.rs](../../../src/types/resources/edgion_plugins/entry.rs)
-- [../../../src/types/resources/edgion_plugins/edgion_plugin.rs](../../../src/types/resources/edgion_plugins/edgion_plugin.rs)
+- [../../../edgion-resources/src/resources/edgion_plugins/mod.rs](../../../edgion-resources/src/resources/edgion_plugins/mod.rs)
+- [../../../edgion-resources/src/resources/edgion_plugins/entry.rs](../../../edgion-resources/src/resources/edgion_plugins/entry.rs)
+- [../../../edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs](../../../edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs)
 - [../../../src/core/gateway/plugins/runtime/plugin_runtime.rs](../../../src/core/gateway/plugins/runtime/plugin_runtime.rs)
 - [../../../src/core/gateway/plugins/runtime/conditional_filter.rs](../../../src/core/gateway/plugins/runtime/conditional_filter.rs)
 - [../../../src/core/gateway/plugins/runtime/traits/session.rs](../../../src/core/gateway/plugins/runtime/traits/session.rs)
@@ -91,10 +91,10 @@ If you don't need upstream response info, don't push the logic into a later phas
 
 You typically touch at least these locations:
 
-1. `src/types/resources/edgion_plugins/plugin_configs/<your_plugin>.rs`
-2. `src/types/resources/edgion_plugins/plugin_configs/mod.rs`
-3. `src/types/resources/edgion_plugins/mod.rs`
-4. `src/types/resources/edgion_plugins/edgion_plugin.rs`
+1. `edgion-resources/src/resources/edgion_plugins/plugin_configs/<your_plugin>.rs`
+2. `edgion-resources/src/resources/edgion_plugins/plugin_configs/mod.rs`
+3. `edgion-resources/src/resources/edgion_plugins/mod.rs`
+4. `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs`
 5. `src/core/gateway/plugins/http/<your_plugin>/mod.rs`
 6. `src/core/gateway/plugins/http/<your_plugin>/plugin.rs`
 7. `src/core/gateway/plugins/http/mod.rs`
@@ -126,7 +126,7 @@ If your new plugin also depends on a Secret, add Secret resolution and `secret_r
 
 Typically located in:
 
-- `src/types/resources/edgion_plugins/plugin_configs/`
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/`
 
 Notes for the configuration struct:
 
@@ -140,7 +140,7 @@ If you can reuse an existing configuration, do not copy a near-duplicate schema.
 
 Modify:
 
-- [../../../src/types/resources/edgion_plugins/edgion_plugin.rs](../../../src/types/resources/edgion_plugins/edgion_plugin.rs)
+- [../../../edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs](../../../edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs)
 
 At minimum, add:
 
@@ -430,7 +430,7 @@ This is a general repo-wide convention; stay consistent with existing plugins.
 
 ## Validation
 
-All plugin configs must `impl PluginValidation` (trait defined in `src/types/resources/edgion_plugins/plugin_validation.rs`):
+All plugin configs must `impl PluginValidation` (trait defined in `edgion-resources/src/resources/edgion_plugins/plugin_validation.rs`):
 
 ```rust
 use crate::types::resources::edgion_plugins::PluginValidation;
@@ -450,7 +450,7 @@ impl PluginValidation for MyPluginConfig {
 - Implementation must be stateless (`&self`, no side effects) — safe to call during controller preparse
 - **Do not** introduce `validation_error: Option<String>` cached fields — this legacy pattern causes preparse path to miss errors (see t1-002 root cause)
 - If config needs runtime compilation (regex / template / DashMap), keep that logic in `compile()` / constructors returning `Result<(), String>` — **separate field validation from compilation**
-- Add the new arm to `EdgionPlugin::validation_error()` match in `src/types/resources/edgion_plugins/edgion_plugin.rs` — the exhaustive match enforces this at compile time (missing arm = compile error)
+- Add the new arm to `EdgionPlugin::validation_error()` match in `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs` — the exhaustive match enforces this at compile time (missing arm = compile error)
 
 **Required regression test (add to every new plugin):**
 ```rust
@@ -486,7 +486,7 @@ Verifying initial state is not enough — add a dynamic scenario that exercises 
 
 Other references:
 
-- `src/types/resources/edgion_plugins/tests.rs`
+- `edgion-resources/src/resources/edgion_plugins/tests.rs`
 - Each plugin's own `plugin.rs` / `tests.rs`
 - [../../05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md)
 

@@ -8,9 +8,9 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::credent
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, HandlerContext, ResourceRef,
 };
-use crate::types::prelude_resources::EdgionPlugins;
-use crate::types::resources::edgion_plugins::plugin_configs::ResolvedJweCredential;
-use crate::types::resources::edgion_plugins::EdgionPlugin;
+use edgion_resources::prelude_resources::EdgionPlugins;
+use edgion_resources::resources::edgion_plugins::plugin_configs::ResolvedJweCredential;
+use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 
 /// Resolve JWE decrypt credentials from Secrets and register references.
 pub(in crate::core::controller::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(

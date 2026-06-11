@@ -1,5 +1,5 @@
-use crate::types::resources::health_check::ActiveHealthCheckConfig;
 use arc_swap::ArcSwap;
+use edgion_resources::resources::health_check::ActiveHealthCheckConfig;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
@@ -158,7 +158,7 @@ mod stats_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::health_check::{ActiveHealthCheckConfig, HealthCheckType};
+    use edgion_resources::resources::health_check::{ActiveHealthCheckConfig, HealthCheckType};
 
     fn test_config(tp: HealthCheckType) -> ActiveHealthCheckConfig {
         ActiveHealthCheckConfig {

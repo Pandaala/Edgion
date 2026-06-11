@@ -2,9 +2,9 @@
 use super::*;
 use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
 use crate::core::controller::conf_mgr::ControllerRuntime;
-use crate::types::resources::common::ParentReference;
-use crate::types::resources::common::SecretObjectReference;
-use crate::types::resources::edgion_acme::AcmeStorageConfig;
+use edgion_resources::resources::common::ParentReference;
+use edgion_resources::resources::common::SecretObjectReference;
+use edgion_resources::resources::edgion_acme::AcmeStorageConfig;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
 use kube::api::ObjectMeta;
@@ -48,7 +48,7 @@ fn make_acme(ns: &str, name: &str, secret_name: &str) -> EdgionAcme {
             generation: Some(1),
             ..Default::default()
         },
-        spec: crate::types::resources::edgion_acme::EdgionAcmeSpec {
+        spec: edgion_resources::resources::edgion_acme::EdgionAcmeSpec {
             server: "https://acme-v02.api.letsencrypt.org/directory".to_string(),
             email: "admin@example.com".to_string(),
             private_key_secret_ref: SecretObjectReference {
@@ -408,7 +408,7 @@ fn make_acme_dns01(
             generation: Some(1),
             ..Default::default()
         },
-        spec: crate::types::resources::edgion_acme::EdgionAcmeSpec {
+        spec: edgion_resources::resources::edgion_acme::EdgionAcmeSpec {
             server: "https://acme-v02.api.letsencrypt.org/directory".to_string(),
             email: "admin@example.com".to_string(),
             private_key_secret_ref: SecretObjectReference {

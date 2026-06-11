@@ -7,8 +7,8 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, update_condition, HandlerContext,
     ProcessResult, ProcessorHandler,
 };
-use crate::types::prelude_resources::GatewayClass;
-use crate::types::resources::gateway_class::{GatewayClassStatus, SupportedFeature};
+use edgion_resources::prelude_resources::GatewayClass;
+use edgion_resources::resources::gateway_class::{GatewayClassStatus, SupportedFeature};
 
 /// Outcome of resolving `GatewayClass.spec.parametersRef`.
 enum ParamsRefState {
@@ -197,9 +197,9 @@ mod tests {
     use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
-    use crate::types::prelude_resources::EdgionGatewayConfig;
-    use crate::types::resources::edgion_gateway_config::EdgionGatewayConfigSpec;
-    use crate::types::resources::gateway_class::{GatewayClassSpec, ParametersReference};
+    use edgion_resources::prelude_resources::EdgionGatewayConfig;
+    use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigSpec;
+    use edgion_resources::resources::gateway_class::{GatewayClassSpec, ParametersReference};
     use kube::api::ObjectMeta;
     use std::sync::Arc;
 

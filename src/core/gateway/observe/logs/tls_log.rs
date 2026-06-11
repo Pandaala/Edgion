@@ -14,7 +14,7 @@ use crate::core::gateway::observe::AccessLogger;
 static TLS_LOGGER: OnceLock<Arc<AccessLogger>> = OnceLock::new();
 
 /// Initialize the global TLS logger from configuration
-pub async fn init_tls_logger(config: &crate::types::LogConfig) -> Result<()> {
+pub async fn init_tls_logger(config: &edgion_resources::LogConfig) -> Result<()> {
     if let Some(logger) = create_async_logger(config, LogType::Tls).await? {
         TLS_LOGGER
             .set(logger)

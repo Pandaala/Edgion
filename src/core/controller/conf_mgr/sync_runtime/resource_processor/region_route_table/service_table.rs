@@ -7,7 +7,7 @@
 use parking_lot::RwLock;
 use std::collections::HashMap;
 
-pub use crate::types::resources::plugin_metadata::{RefPluginEntry, ServiceRegionRouteEntry};
+pub use edgion_resources::resources::plugin_metadata::{RefPluginEntry, ServiceRegionRouteEntry};
 
 pub struct RegionRouteServiceTable {
     data: RwLock<HashMap<String, ServiceRegionRouteEntry>>,

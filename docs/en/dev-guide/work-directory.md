@@ -136,7 +136,7 @@ init_work_dir(base_work_dir)?;
 ### 2. Validate Directory
 
 ```rust
-// src/types/work_dir.rs
+// edgion-resources/src/work_dir.rs
 impl WorkDir {
     pub fn validate(&self) -> anyhow::Result<()> {
         // 1. Check if base directory exists, create if not
@@ -337,8 +337,8 @@ mkdir -p /usr/local/edgion/{config,logs,runtime}
 ## Related Files
 
 ### Core Implementation
-- `src/types/work_dir.rs` - WorkDir implementation
-- `src/types/mod.rs` - Export work_dir API
+- `edgion-resources/src/work_dir.rs` - WorkDir implementation
+- `edgion-resources/src/mod.rs` - Export work_dir API
 
 ### Usage Locations
 - `src/core/gateway/cli/mod.rs` - Gateway initialization

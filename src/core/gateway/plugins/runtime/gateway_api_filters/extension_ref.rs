@@ -15,8 +15,8 @@ use crate::core::gateway::plugins::runtime::traits::{
     PluginSession, RequestFilter, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
 use crate::core::gateway::plugins::runtime::PluginRuntime;
-use crate::types::filters::{PluginRunningResult, PluginRunningStage};
-use crate::types::resources::LocalObjectReference;
+use edgion_resources::filters::{PluginRunningResult, PluginRunningStage};
+use edgion_resources::resources::LocalObjectReference;
 
 /// Error response body written when an ExtensionRef cannot be resolved
 /// (cycle, depth exceeded, referenced EdgionPlugins not found).
@@ -331,9 +331,9 @@ mod tests {
     use super::*;
     use crate::core::gateway::plugins::http::{compile_plugins, get_global_plugin_store};
     use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
-    use crate::types::resources::edgion_plugins::EdgionPlugin;
-    use crate::types::resources::edgion_plugins::{EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry};
-    use crate::types::resources::http_route::HTTPHeaderFilter;
+    use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+    use edgion_resources::resources::edgion_plugins::{EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry};
+    use edgion_resources::resources::http_route::HTTPHeaderFilter;
     use kube::core::ObjectMeta;
     use mockall::predicate::eq;
     use std::collections::HashMap;

@@ -38,11 +38,11 @@ Edgion 采用**单一数据源 + 宏生成**的架构：
 
 ### 必须修改
 
-1. **`src/types/resources/<resource>.rs`** - 定义资源结构体
-2. **`src/types/resources/mod.rs`** - 导出新模块
-3. **`src/types/resource/kind.rs`** - 添加 `ResourceKind` 变体和名称映射
-4. **`src/types/resource/defs.rs`** - 在 `define_resources!` 中添加元数据
-5. **`src/types/resource/meta/impls.rs`** - 使用 `impl_resource_meta!` 实现 `ResourceMeta`
+1. **`edgion-resources/src/resources/<resource>.rs`** - 定义资源结构体
+2. **`edgion-resources/src/resources/mod.rs`** - 导出新模块
+3. **`edgion-resources/src/resource/kind.rs`** - 添加 `ResourceKind` 变体和名称映射
+4. **`edgion-resources/src/resource/defs.rs`** - 在 `define_resources!` 中添加元数据
+5. **`edgion-resources/src/resource/meta/impls.rs`** - 使用 `impl_resource_meta!` 实现 `ResourceMeta`
 6. **`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs`** - 实现 `ProcessorHandler`
 7. **`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`** - 导出新 handler
 8. **`src/core/controller/conf_mgr/conf_center/file_system/controller.rs`** - 注册 FileSystem 模式 processor
@@ -77,8 +77,8 @@ Edgion 采用**单一数据源 + 宏生成**的架构：
 
 通常要更新：
 
-- `src/types/resources/<resource>.rs` 或 `src/types/resources/<resource>/mod.rs`
-- `src/types/resources/mod.rs`
+- `edgion-resources/src/resources/<resource>.rs` 或 `edgion-resources/src/resources/<resource>/mod.rs`
+- `edgion-resources/src/resources/mod.rs`
 
 这一步要确认的重点是：
 
@@ -91,9 +91,9 @@ Edgion 采用**单一数据源 + 宏生成**的架构：
 
 当前仓库里，这是新增资源最核心的一组文件：
 
-- `src/types/resource/kind.rs`
-- `src/types/resource/defs.rs`
-- `src/types/resource/meta/impls.rs`
+- `edgion-resources/src/resource/kind.rs`
+- `edgion-resources/src/resource/defs.rs`
+- `edgion-resources/src/resource/meta/impls.rs`
 
 职责分工：
 
@@ -237,9 +237,9 @@ graph TD
 
 | 名称 | 位置 | 作用 |
 |------|------|------|
-| `ResourceKind` | `src/types/resource/kind.rs` | 新资源的枚举入口和名称映射 |
-| `define_resources!` | `src/types/resource/defs.rs` | 单一数据源，定义 scope、cache field、capacity、registry 行为 |
-| `impl_resource_meta!` | `src/types/resource/meta/impls.rs` | 把资源接入 `ResourceMeta` |
+| `ResourceKind` | `edgion-resources/src/resource/kind.rs` | 新资源的枚举入口和名称映射 |
+| `define_resources!` | `edgion-resources/src/resource/defs.rs` | 单一数据源，定义 scope、cache field、capacity、registry 行为 |
+| `impl_resource_meta!` | `edgion-resources/src/resource/meta/impls.rs` | 把资源接入 `ResourceMeta` |
 | `ProcessorHandler<T>` | `src/core/controller/conf_mgr/sync_runtime/resource_processor/handler.rs` | 定义控制器侧 filter / validate / parse / status / requeue 逻辑 |
 | `ConfHandler<T>` | `src/core/common/conf_sync/traits.rs` | 定义 Gateway 侧 full_set / partial_update 逻辑 |
 | `ConfigClient` | `src/core/gateway/conf_sync/conf_client/config_client.rs` | Gateway 侧 cache 和变更分发入口 |
@@ -263,7 +263,7 @@ graph TD
 
 ### Q: `enum_value` 怎么分配？
 
-A: 看 `src/types/resource/kind.rs` 和 `src/types/resource/defs.rs` 当前最大的编号，保持二者一致地使用下一个可用值。
+A: 看 `edgion-resources/src/resource/kind.rs` 和 `edgion-resources/src/resource/defs.rs` 当前最大的编号，保持二者一致地使用下一个可用值。
 
 ### Q: 什么时候需要 `preparse()`？
 

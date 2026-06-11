@@ -25,7 +25,7 @@ Terminate (F-006)" are **not accepted** — both are no longer true.
 the client CA store, and only reached the `client_auth.mode` branch afterwards (the
 `Terminate => return Ok(())` arm was the *last* statement before the verify-mode block).
 
-`ca_cert_pem()` (`src/types/resources/edgion_tls.rs`) returns
+`ca_cert_pem()` (`edgion-resources/src/resources/edgion_tls.rs`) returns
 `Err("CA secret not loaded by controller")` when `client_auth.ca_secret` is `None`. The
 controller only populates `ca_secret` for resources that carry a `ca_secret_ref`. The
 validator (`validate_mtls_config`, `src/core/gateway/tls/validation/cert.rs`) explicitly

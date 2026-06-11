@@ -11,7 +11,7 @@ description: Use when reviewing `TimeRangeCondition::evaluate` / `PluginConditio
 
 `compile_plugin_conditions` (`src/core/gateway/plugins/http/plugin_store.rs`) now calls `PluginConditions::validate()` alongside `PluginConditions::compile()`, and `Condition::validate()` dispatches `TimeRangeCondition::validate()` which re-runs `chrono::DateTime::parse_from_rfc3339` on each non-`None` `after` / `before` string. A parse failure pushes `"<stage>[<i>] conditions: timeRange.<field> '<value>' is not a valid RFC3339 timestamp: <err>"` into the compiled `preparse_errors`, which `compile_plugins()` forwards to `seal_fail_closed`; every request through that EdgionPlugins is then rejected with HTTP 500 and the Controller writes the message into the resource's K8s status condition.
 
-> **Location note (2026-06-11, types-decouple):** the condition types + `PluginConditions::validate()` now live in `src/types/resources/edgion_plugins/conditions.rs` (schema leaf); the preparse gate that drives them moved from `EdgionPlugins::compile_conditions`/`preparse` (deleted from `types`) to the gateway's `compile_plugin_conditions`/`compile_plugins` in `plugin_store.rs`. The behavior below is unchanged — only the file locations moved.
+> **Location note (2026-06-11, types-decouple):** the condition types + `PluginConditions::validate()` now live in `edgion-resources/src/resources/edgion_plugins/conditions.rs` (schema leaf); the preparse gate that drives them moved from `EdgionPlugins::compile_conditions`/`preparse` (deleted from `types`) to the gateway's `compile_plugin_conditions`/`compile_plugins` in `plugin_store.rs`. The behavior below is unchanged — only the file locations moved.
 
 Fix suggestions of the form "add `tracing::warn!` + `return false` in `TimeRangeCondition::evaluate`" (Option B in the original issue) are **not accepted** — they would catch the error only at first request instead of at preparse, would leave no K8s status visibility, and would diverge from the regex compile-failure handling pipeline.
 
@@ -40,5 +40,5 @@ Re-open this decision only if:
 
 - `tasks/plugins/plugins-runtime-F002-time-range-condition-silent-parse-fail.md` (closed 2026-05-26)
 - `src/core/gateway/plugins/http/plugin_store.rs::compile_plugin_conditions` (preparse gate)
-- `src/types/resources/edgion_plugins/conditions.rs::{Condition,PluginConditions,TimeRangeCondition}::validate`
+- `edgion-resources/src/resources/edgion_plugins/conditions.rs::{Condition,PluginConditions,TimeRangeCondition}::validate`
 - Regression tests: `test_time_range_validate_rejects_malformed_{after,before}` + `test_time_range_validate_accepts_{well_formed_bounds,unset_bounds}` in `src/core/gateway/plugins/runtime/conditions/evaluator.rs`

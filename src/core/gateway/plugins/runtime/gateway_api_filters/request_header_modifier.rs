@@ -4,9 +4,9 @@
 
 use crate::core::gateway::plugins::runtime::log::PluginLog;
 use crate::core::gateway::plugins::runtime::traits::{PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::{GRPCHeaderFilter, HTTPHeaderFilter};
 use async_trait::async_trait;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::{GRPCHeaderFilter, HTTPHeaderFilter};
 
 /// Filter that modifies request headers
 pub struct RequestHeaderModifierFilter {

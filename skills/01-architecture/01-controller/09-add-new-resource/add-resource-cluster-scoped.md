@@ -11,12 +11,12 @@ Use `GatewayClass` as the primary reference pattern, and compare with `EdgionGat
 
 ### 1. Resource Type And Registration
 
-- `src/types/resources/gateway_class.rs`
-- `src/types/resources/edgion_gateway_config.rs`
-- `src/types/resources/mod.rs`
-- `src/types/resource/kind.rs`
-- `src/types/resource/defs.rs`
-- `src/types/resource/meta/impls.rs`
+- `edgion-resources/src/resources/gateway_class.rs`
+- `edgion-resources/src/resources/edgion_gateway_config.rs`
+- `edgion-resources/src/resources/mod.rs`
+- `edgion-resources/src/resource/kind.rs`
+- `edgion-resources/src/resource/defs.rs`
+- `edgion-resources/src/resource/meta/impls.rs`
 
 Important note:
 

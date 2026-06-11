@@ -79,13 +79,13 @@ Unit tests mainly cover the following areas:
 
 | Area | Example path | Test focus |
 |------|---------|---------|
-| Resource type parsing | `src/types/resources/*.rs` | CRD struct deserialization, field validation, preparse |
-| Plugin configuration | `src/types/resources/edgion_plugins/plugin_configs/*.rs` | `validate_and_init()`, default values, edge cases |
-| LinkSys configuration | `src/types/resources/link_sys/*.rs` | Connector config parsing and validation |
+| Resource type parsing | `edgion-resources/src/resources/*.rs` | CRD struct deserialization, field validation, preparse |
+| Plugin configuration | `edgion-resources/src/resources/edgion_plugins/plugin_configs/*.rs` | `validate_and_init()`, default values, edge cases |
+| LinkSys configuration | `edgion-resources/src/resources/link_sys/*.rs` | Connector config parsing and validation |
 | Core utility functions | `src/core/common/utils/mod.rs` | String handling, path utilities, common logic |
 | Configuration system | `src/core/common/config/mod.rs` | YAML parsing, config merging, default values |
 | Gateway backends | `src/core/gateway/backends/mod.rs` | Backend selection, load-balancing logic |
-| Working directory | `src/types/work_dir.rs` | Path resolution, directory creation, permission checks |
+| Working directory | `edgion-resources/src/work_dir.rs` | Path resolution, directory creation, permission checks |
 
 ## How to run
 
@@ -194,8 +194,8 @@ When pruning / merging unit tests (parameterizing, removing tests covered equiva
 | `src/core/controller/conf_mgr/sync_runtime/resource_processor/status_utils.rs` Condition mapping | reason/message text |
 | `src/core/controller/conf_mgr/sync_runtime/resource_processor/listener_port_manager.rs` port-conflict matrix | Protocol mixing rules |
 | `src/core/controller/conf_mgr/conf_center/file_system/resource_controller.rs` v1alpha3→v1 | Version compatibility |
-| `src/core/common/matcher/**` | IP / host matching algorithm |
-| `src/core/common/utils/duration.rs` / `real_ip_extractor.rs` | Duration expression / header priority algorithm |
+| `edgion-resources/src/matcher/**` | IP / host matching algorithm |
+| `edgion-resources/src/duration.rs` / `real_ip_extractor.rs` | Duration expression / header priority algorithm |
 | `src/core/common/unified_auth/mod.rs` `from_configs` / `require_auth` | Multi-source auth assembly |
 | `src/core/common/local_auth/handlers.rs` `AuthStatus` JSON wire format | CLI hard-parsing dependency |
 

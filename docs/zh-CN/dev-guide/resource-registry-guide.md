@@ -7,11 +7,11 @@
 Edgion 已经不再使用一个手写的 `resource_registry.rs` 文件作为唯一事实源。
 当前模型分成 3 层：
 
-1. `src/types/resource/kind.rs`
+1. `edgion-resources/src/resource/kind.rs`
    - 定义穷举的 `ResourceKind` 枚举及其转换逻辑
-2. `src/types/resource/defs.rs`
+2. `edgion-resources/src/resource/defs.rs`
    - 通过 `define_resources!` 维护资源元数据的单一事实源
-3. `src/types/resource/registry.rs`
+3. `edgion-resources/src/resource/registry.rs`
    - 对外暴露兼容层 API，例如 `RESOURCE_TYPES`、`all_resource_type_names()`、`get_resource_metadata()`
 
 ```mermaid
@@ -25,7 +25,7 @@ graph LR
 
 ## `define_resources!` 里到底放什么
 
-`src/types/resource/defs.rs` 里的每一个资源条目都承载了系统后续会复用的关键元数据：
+`edgion-resources/src/resource/defs.rs` 里的每一个资源条目都承载了系统后续会复用的关键元数据：
 
 - `enum_value`
 - `kind_name`
@@ -43,13 +43,13 @@ graph LR
 
 | API | 当前路径 | 用途 |
 |-----|----------|------|
-| `resource_kind_from_name()` | `src/types/resource/defs.rs` | 从 CLI/API/用户输入解析 kind |
-| `get_resource_info()` | `src/types/resource/defs.rs` | 获取某个 `ResourceKind` 的元数据 |
-| `all_resource_kind_names()` | `src/types/resource/defs.rs` | 列出所有已定义 kind 的 cache-field 名 |
-| `registry_resource_names()` | `src/types/resource/defs.rs` | 只列出 registry 可见的 kind |
-| `all_resource_type_names()` | `src/types/resource/registry.rs` | 在 endpoint mode 过滤后返回 registry 可见名称 |
-| `base_conf_resource_names()` | `src/types/resource/registry.rs` | 返回 registry 可见的 base-conf 名称 |
-| `get_resource_metadata()` | `src/types/resource/registry.rs` | 面向 `RESOURCE_TYPES` 的兼容查询 |
+| `resource_kind_from_name()` | `edgion-resources/src/resource/defs.rs` | 从 CLI/API/用户输入解析 kind |
+| `get_resource_info()` | `edgion-resources/src/resource/defs.rs` | 获取某个 `ResourceKind` 的元数据 |
+| `all_resource_kind_names()` | `edgion-resources/src/resource/defs.rs` | 列出所有已定义 kind 的 cache-field 名 |
+| `registry_resource_names()` | `edgion-resources/src/resource/defs.rs` | 只列出 registry 可见的 kind |
+| `all_resource_type_names()` | `edgion-resources/src/resource/registry.rs` | 在 endpoint mode 过滤后返回 registry 可见名称 |
+| `base_conf_resource_names()` | `edgion-resources/src/resource/registry.rs` | 返回 registry 可见的 base-conf 名称 |
+| `get_resource_metadata()` | `edgion-resources/src/resource/registry.rs` | 面向 `RESOURCE_TYPES` 的兼容查询 |
 
 ## `in_registry` 的含义
 
@@ -69,10 +69,10 @@ graph LR
 新增资源并不是“只改一个注册表文件”。
 当前正确流程是：
 
-1. 在 `src/types/resources/` 下添加 Rust 资源类型。
-2. 在 `src/types/resource/kind.rs` 里添加枚举 variant 和转换。
-3. 在 `src/types/resource/defs.rs` 的 `define_resources!` 里添加元数据条目。
-4. 在 `src/types/resource/meta/impls.rs` 里补上 `ResourceMeta` 实现。
+1. 在 `edgion-resources/src/resources/` 下添加 Rust 资源类型。
+2. 在 `edgion-resources/src/resource/kind.rs` 里添加枚举 variant 和转换。
+3. 在 `edgion-resources/src/resource/defs.rs` 的 `define_resources!` 里添加元数据条目。
+4. 在 `edgion-resources/src/resource/meta/impls.rs` 里补上 `ResourceMeta` 实现。
 5. 再按需要接上 controller 处理、同步行为和 gateway 运行时。
 
 完整流程见 [添加新资源类型指南](./add-new-resource-guide.md)。

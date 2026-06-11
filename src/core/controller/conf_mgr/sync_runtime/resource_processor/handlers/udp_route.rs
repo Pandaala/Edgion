@@ -10,11 +10,11 @@ use super::{
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
-use crate::types::prelude_resources::UDPRoute;
-use crate::types::resources::common::RefDenied;
-use crate::types::resources::http_route::RouteParentStatus;
-use crate::types::resources::udp_route::UDPRouteStatus;
-use crate::types::ResourceKind;
+use edgion_resources::prelude_resources::UDPRoute;
+use edgion_resources::resources::common::RefDenied;
+use edgion_resources::resources::http_route::RouteParentStatus;
+use edgion_resources::resources::udp_route::UDPRouteStatus;
+use edgion_resources::ResourceKind;
 
 /// UDPRoute handler
 pub struct UdpRouteHandler {

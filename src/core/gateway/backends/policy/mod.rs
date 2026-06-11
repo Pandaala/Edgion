@@ -6,7 +6,7 @@ pub use backend_tls::{
 };
 
 use crate::core::gateway::backends::port_resolver::resolve_port_name;
-use crate::types::resources::BackendTLSPolicy;
+use edgion_resources::resources::BackendTLSPolicy;
 use std::sync::Arc;
 
 /// Query BackendTLSPolicy for a given Service, optionally scoped to a specific port.
@@ -80,7 +80,7 @@ fn select_policy_for_service<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::backend_tls_policy::*;
+    use edgion_resources::resources::backend_tls_policy::*;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
     /// Build a policy named `name` with the given `(target_service, section_name)` refs.

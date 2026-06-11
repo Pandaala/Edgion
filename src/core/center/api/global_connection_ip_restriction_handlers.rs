@@ -234,7 +234,7 @@ fn fanout_status(success: &[ControllerOpResult], failed: &[ControllerOpResult]) 
 // POST /api/v1/center/global-connection-ip-restrictions
 // =====================================================================
 
-use crate::types::resources::plugin_metadata::GlobalConnectionIpRestrictionData;
+use edgion_resources::resources::plugin_metadata::GlobalConnectionIpRestrictionData;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -693,7 +693,7 @@ pub async fn sync_global_ip_restriction(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::plugin_metadata::ProfileRules;
+    use edgion_resources::resources::plugin_metadata::ProfileRules;
 
     fn make_pm_json(data: &GlobalConnectionIpRestrictionData) -> serde_json::Value {
         serde_json::json!({

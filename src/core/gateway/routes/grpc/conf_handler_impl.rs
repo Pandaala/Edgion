@@ -7,7 +7,7 @@ use crate::core::gateway::routes::grpc::match_unit::{
 };
 use crate::core::gateway::routes::grpc::routes_mgr::{resolved_listeners_for_grpc_route, GlobalGrpcRouteManagers};
 use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, GrpcRouteRuleUnit};
-use crate::types::{GRPCRoute, GRPCRouteRule, ListenerKey, ResourceMeta};
+use edgion_resources::{GRPCRoute, GRPCRouteRule, ListenerKey, ResourceMeta};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
@@ -171,7 +171,7 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
             let rule_backends = rule_runtime.backends;
             let backend_finder = GrpcRouteRuleUnit::build_backend_selector(&rule_backends);
 
-            let effective_matches: &[crate::types::GRPCRouteMatch] = rule.matches.as_deref().unwrap_or(&[]);
+            let effective_matches: &[edgion_resources::GRPCRouteMatch] = rule.matches.as_deref().unwrap_or(&[]);
 
             if effective_matches.is_empty() {
                 // Per Gateway API spec, a rule with no matches (or an empty matches list)
@@ -192,7 +192,7 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
                         route_name.to_string(),
                         rule_id,
                         0,
-                        crate::types::GRPCRouteMatch {
+                        edgion_resources::GRPCRouteMatch {
                             method: None,
                             headers: None,
                         },

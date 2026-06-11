@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use crate::core::gateway::plugins::runtime::PluginRuntime;
-use crate::types::resources::EdgionPlugins;
+use edgion_resources::resources::EdgionPlugins;
 
 static GLOBAL_PLUGIN_STORE: LazyLock<Arc<PluginStore>> = LazyLock::new(|| Arc::new(PluginStore::new()));
 
@@ -273,10 +273,10 @@ mod kind_stats_tests {
 #[cfg(test)]
 mod compile_plugins_tests {
     use super::*;
-    use crate::types::resources::edgion_plugins::{
+    use edgion_resources::resources::edgion_plugins::{
         EdgionPlugin, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry,
     };
-    use crate::types::resources::http_route::{HTTPHeader, HTTPHeaderFilter};
+    use edgion_resources::resources::http_route::{HTTPHeader, HTTPHeaderFilter};
 
     fn header_modifier() -> EdgionPlugin {
         EdgionPlugin::RequestHeaderModifier(HTTPHeaderFilter {

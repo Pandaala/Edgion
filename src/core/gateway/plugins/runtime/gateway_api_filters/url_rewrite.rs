@@ -6,8 +6,8 @@ use async_trait::async_trait;
 
 use crate::core::gateway::plugins::runtime::log::PluginLog;
 use crate::core::gateway::plugins::runtime::traits::{PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::{HTTPPathModifierType, HTTPURLRewriteFilter};
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::{HTTPPathModifierType, HTTPURLRewriteFilter};
 
 pub struct URLRewriteFilter {
     config: HTTPURLRewriteFilter,

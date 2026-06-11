@@ -7,8 +7,8 @@
 //! `EdgionGatewayConfig.loadBalancing.panicThreshold` global default → 0.
 //! A threshold of 0 disables panic mode (opt-in; matches Istio's k8s default).
 
-use crate::types::constants::annotations::edgion::PANIC_THRESHOLD;
 use dashmap::DashMap;
+use edgion_resources::constants::annotations::edgion::PANIC_THRESHOLD;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock};

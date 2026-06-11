@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use crate::core::common::conf_sync::traits::ConfHandler;
-use crate::types::resources::plugin_metadata::{
+use edgion_resources::resources::plugin_metadata::{
     ClusterRegionRouteConfig, GlobalConnectionIpRestrictionData, IpListData, KeyListData, MetaDataEntry,
     PluginMetaData, ServiceRegionRouteConfig,
 };
@@ -290,7 +290,7 @@ impl ConfHandler<PluginMetaData> for PluginMetaDataGatewayStore {
 #[cfg(test)]
 mod stats_tests {
     use super::*;
-    use crate::types::resources::plugin_metadata::{IpGroup, KeyGroup, PluginMetaDataSpec};
+    use edgion_resources::resources::plugin_metadata::{IpGroup, KeyGroup, PluginMetaDataSpec};
 
     #[test]
     fn count_returns_zero_initially() {

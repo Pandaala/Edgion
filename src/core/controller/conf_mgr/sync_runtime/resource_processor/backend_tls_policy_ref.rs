@@ -169,7 +169,7 @@ pub fn make_target_conflict_key(namespace: &str, name: &str, section_name: Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ResourceKind;
+    use edgion_resources::ResourceKind;
 
     fn make_policy_ref(ns: &str, name: &str) -> ResourceRef {
         ResourceRef::new(ResourceKind::BackendTLSPolicy, Some(ns.to_string()), name.to_string())

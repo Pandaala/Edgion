@@ -1,5 +1,5 @@
-use crate::types::constants::annotations::edgion::HEALTH_CHECK;
-use crate::types::resources::health_check::{ActiveHealthCheckConfig, ServiceHealthCheck};
+use edgion_resources::constants::annotations::edgion::HEALTH_CHECK;
+use edgion_resources::resources::health_check::{ActiveHealthCheckConfig, ServiceHealthCheck};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
 /// Parse `edgion.io/health-check` annotation from K8s object metadata.

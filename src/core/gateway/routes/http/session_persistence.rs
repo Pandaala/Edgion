@@ -3,7 +3,7 @@
 //! Provides token generation, cookie/header extraction, and Set-Cookie building
 //! for Gateway API SessionPersistence support.
 
-use crate::types::resources::http_route::{CookieLifetimeType, SessionPersistence, SessionPersistenceType};
+use edgion_resources::resources::http_route::{CookieLifetimeType, SessionPersistence, SessionPersistenceType};
 use pingora_proxy::Session;
 
 /// Default session persistence cookie/header name.
@@ -132,7 +132,7 @@ pub fn parse_duration_to_seconds(duration: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::http_route::CookieConfig;
+    use edgion_resources::resources::http_route::CookieConfig;
 
     #[test]
     fn test_token_generation_determinism() {

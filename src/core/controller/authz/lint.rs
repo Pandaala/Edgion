@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::core::common::config::{CliTokenConfig, EdgionControllerConfig, FedRbacConfig};
 use crate::core::controller::authz::{CenterPolicy, CliTokenEntry, Verb};
-use crate::types::resource::kind::ResourceKind;
+use edgion_resources::resource::kind::ResourceKind;
 
 /// Synthetic classifier kinds that are valid in a policy but are NOT `ResourceKind`s.
 const SYNTHETIC_KINDS: &[&str] = &["RegionRoute"];

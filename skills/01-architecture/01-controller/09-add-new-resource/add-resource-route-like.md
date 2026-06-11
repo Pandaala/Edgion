@@ -12,11 +12,11 @@ Use `TLSRoute` as the reference pattern when the new resource:
 
 ### 1. Resource Type And Registration
 
-- `src/types/resources/tls_route.rs`
-- `src/types/resources/mod.rs`
-- `src/types/resource/kind.rs`
-- `src/types/resource/defs.rs`
-- `src/types/resource/meta/impls.rs`
+- `edgion-resources/src/resources/tls_route.rs`
+- `edgion-resources/src/resources/mod.rs`
+- `edgion-resources/src/resource/kind.rs`
+- `edgion-resources/src/resource/defs.rs`
+- `edgion-resources/src/resource/meta/impls.rs`
 
 Why it matters:
 

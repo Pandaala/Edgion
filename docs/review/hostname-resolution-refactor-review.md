@@ -34,8 +34,8 @@
 ### Task A: 类型定义 — `resolved_hostnames` 字段
 
 **涉及文件：**
-- `src/types/resources/http_route.rs` (L42-45)
-- `src/types/resources/grpc_route.rs` (L46-49)
+- `edgion-resources/src/resources/http_route.rs` (L42-45)
+- `edgion-resources/src/resources/grpc_route.rs` (L46-49)
 
 **改动内容：** 在 `HTTPRouteSpec` 和 `GRPCRouteSpec` 中新增 `resolved_hostnames: Option<Vec<String>>` 字段。
 

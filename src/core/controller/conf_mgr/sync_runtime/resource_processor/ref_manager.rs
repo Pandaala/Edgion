@@ -29,7 +29,7 @@ use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-use crate::types::ResourceKind;
+use edgion_resources::ResourceKind;
 
 // ---------------------------------------------------------------------------
 // RefValue trait

@@ -21,8 +21,8 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
 };
-use crate::types::prelude_resources::PluginMetaData;
-use crate::types::resources::plugin_metadata::{MetaDataEntry, PluginMetaDataStatus};
+use edgion_resources::prelude_resources::PluginMetaData;
+use edgion_resources::resources::plugin_metadata::{MetaDataEntry, PluginMetaDataStatus};
 
 /// Kind string used when a PluginMetaData registers a cross-PM reference in the shared
 /// `plugin_metadata_refs` manager. The existing `requeue_pm_referrers` splits refs on `:`

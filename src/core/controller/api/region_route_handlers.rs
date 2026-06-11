@@ -178,7 +178,7 @@ async fn patch_plugin_metadata_failover(
     region_name: &str,
     failover_to: &str,
 ) -> Result<bool, String> {
-    use crate::types::ResourceKind;
+    use edgion_resources::ResourceKind;
 
     // Serialize the whole get -> patch -> write below against other writers to the
     // same resource so concurrent failover requests, and a concurrent generic

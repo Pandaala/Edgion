@@ -5,8 +5,8 @@
 
 use crate::core::gateway::runtime::gateway_info::GatewayInfo;
 use crate::core::gateway::runtime::store::listener_gateway_info::{format_gateway_key, GatewayInfoIndex};
-use crate::types::resources::common::ParentReference;
-use crate::types::resources::gateway::AllowedRoutes;
+use edgion_resources::resources::common::ParentReference;
+use edgion_resources::resources::gateway::AllowedRoutes;
 
 /// Check if request hostname matches listener hostname constraint.
 ///
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_allowed_routes_same_namespace() {
-        use crate::types::resources::gateway::RouteNamespaces;
+        use edgion_resources::resources::gateway::RouteNamespaces;
 
         let allowed = AllowedRoutes {
             namespaces: Some(RouteNamespaces {
@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_allowed_routes_all_namespace() {
-        use crate::types::resources::gateway::RouteNamespaces;
+        use edgion_resources::resources::gateway::RouteNamespaces;
 
         let allowed = AllowedRoutes {
             namespaces: Some(RouteNamespaces {
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_allowed_routes_selector_trusts_controller() {
-        use crate::types::resources::gateway::RouteNamespaces;
+        use edgion_resources::resources::gateway::RouteNamespaces;
 
         let allowed = AllowedRoutes {
             namespaces: Some(RouteNamespaces {
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn test_allowed_routes_kind_filtering() {
-        use crate::types::resources::gateway::{RouteGroupKind, RouteNamespaces};
+        use edgion_resources::resources::gateway::{RouteGroupKind, RouteNamespaces};
 
         // Only HTTPRoute allowed
         let allowed = AllowedRoutes {
@@ -291,7 +291,7 @@ mod tests {
 
     #[test]
     fn test_allowed_routes_kind_case_insensitive() {
-        use crate::types::resources::gateway::{RouteGroupKind, RouteNamespaces};
+        use edgion_resources::resources::gateway::{RouteGroupKind, RouteNamespaces};
 
         let allowed = AllowedRoutes {
             namespaces: Some(RouteNamespaces {
@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn test_allowed_routes_empty_kinds_allows_all() {
-        use crate::types::resources::gateway::RouteNamespaces;
+        use edgion_resources::resources::gateway::RouteNamespaces;
 
         let allowed = AllowedRoutes {
             namespaces: Some(RouteNamespaces {

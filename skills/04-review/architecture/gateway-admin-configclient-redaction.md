@@ -4,7 +4,7 @@
 (loopback by default), but every resolved/inline secret they serialize is mandatorily
 redacted to `"[redacted]"`.
 
-**Mechanism:** `src/types/redact.rs` provides a gateway-only thread-local RAII
+**Mechanism:** `edgion-resources/src/redact.rs` provides a gateway-only thread-local RAII
 `AdminRedactGuard` and two generic serde `serialize_with` adapters (`redact_opt`,
 `redact_required`). Secret-bearing fields on the synced resource structs carry the
 adapter; the guard is constructed inside the synchronous `list_client_resources`
@@ -12,7 +12,7 @@ adapter; the guard is constructed inside the synchronous `list_client_resources`
 (no guard) emits real values, so the controller's conf_sync transport serialization
 — a different process that never constructs the guard — is unaffected.
 
-**Why independent from access-log masking:** access-log masking (`src/types/sensitive.rs`,
+**Why independent from access-log masking:** access-log masking (`edgion-resources/src/sensitive.rs`,
 `SENSITIVE_MODE`) is operator-configurable (Off/Replace/Wrap). Admin redaction is a
 mandatory security invariant with no config knob; reusing `SENSITIVE_MODE` would let an
 operator disable security redaction by turning off log masking. They share the serde-adapter

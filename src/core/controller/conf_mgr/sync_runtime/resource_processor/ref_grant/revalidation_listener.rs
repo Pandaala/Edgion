@@ -246,7 +246,7 @@ impl RevalidationListener for CrossNsRevalidationListener {
 mod tests {
     use super::*;
     use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ref_manager::ResourceRef;
-    use crate::types::ResourceKind;
+    use edgion_resources::ResourceKind;
     use std::collections::HashSet;
 
     #[test]

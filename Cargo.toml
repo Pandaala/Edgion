@@ -1,3 +1,12 @@
+[workspace]
+members = [".", "edgion-resources"]
+# Pin resolver v2 explicitly: the root package builds with resolver 2 (edition
+# 2021), but a workspace defaults to resolver 1 unless stated. Resolver 1 would
+# union features across the dependency graph and could enable both
+# `boringssl` and `rustls` on pingora-core simultaneously (they are mutually
+# exclusive) — keep v2 so per-target feature selection is preserved.
+resolver = "2"
+
 [package]
 name = "edgion"
 version = "0.1.0"
@@ -87,6 +96,9 @@ embed-dashboard = ["dep:rust-embed"]
 # Memory allocators (optional, controlled by features)
 tikv-jemallocator = { version = "0.6", optional = true }
 mimalloc = { version = "0.1", default-features = false, optional = true }
+
+# Shared resource/config schema crate (leaf; reused by the future EdgionCenter)
+edgion-resources = { path = "edgion-resources" }
 
 # Core async runtime and error handling
 tokio = { version = "1.49", features = ["full"] }

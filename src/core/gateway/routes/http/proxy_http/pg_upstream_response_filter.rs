@@ -1,7 +1,7 @@
 use super::EdgionHttpProxy;
 use crate::core::gateway::routes::http::session_persistence;
 use crate::core::gateway::{EdgionHttpContext, SessionPersistenceState};
-use crate::types::resources::http_route::SessionPersistenceType;
+use edgion_resources::resources::http_route::SessionPersistenceType;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 use std::time::Instant;

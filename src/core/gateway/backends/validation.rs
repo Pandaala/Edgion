@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
 use crate::core::gateway::backends::get_roundrobin_store;
-use crate::types::HTTPBackendRef;
+use edgion_resources::HTTPBackendRef;
 
 /// Validate that a given IP is a valid EndpointSlice address for one of the route's backend_refs.
 ///

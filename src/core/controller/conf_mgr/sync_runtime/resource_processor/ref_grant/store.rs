@@ -7,7 +7,7 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::types::resources::ReferenceGrant;
+use edgion_resources::resources::ReferenceGrant;
 
 /// Type alias for the raw grant map (key: namespace/name)
 type RawGrantMap = HashMap<String, Arc<ReferenceGrant>>;
@@ -275,7 +275,7 @@ impl Default for ReferenceGrantStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::{ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
+    use edgion_resources::resources::{ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
     fn create_test_grant(

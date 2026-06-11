@@ -14,7 +14,7 @@ TLSRoute defines TLS-layer routing rules, supporting both TLS passthrough and te
 - Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/tls_route.rs`
 - Gateway ConfHandler: `src/core/gateway/routes/tls/conf_handler_impl.rs`
 - Route manager: `src/core/gateway/routes/tls/routes_mgr.rs` (GlobalTlsRouteManagers)
-- Type definitions: `src/types/resources/tls_route.rs`
+- Type definitions: `edgion-resources/src/resources/tls_route.rs`
 
 ## Controller-side processing
 

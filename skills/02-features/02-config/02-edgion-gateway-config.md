@@ -21,7 +21,7 @@ Entry relationship: `GatewayClass.spec.parametersRef` -> `EdgionGatewayConfig`
 ## Files to Reference
 
 - Example file: `examples/test/conf/base/EdgionGatewayConfig.yaml`
-- Code definition: `src/types/resources/edgion_gateway_config.rs`
+- Code definition: `edgion-resources/src/resources/edgion_gateway_config.rs`
 
 ## How to Associate
 

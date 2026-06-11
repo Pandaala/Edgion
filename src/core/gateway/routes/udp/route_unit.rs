@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use crate::core::gateway::lb::BackendSelector;
 use crate::core::gateway::routes::common::{is_core_service_backend_ref, resolve_stream_plugin_store_key};
-use crate::types::resources::udp_route::UDPBackendRef;
-use crate::types::resources::UDPRoute;
-use crate::types::ResourceMeta;
+use edgion_resources::resources::udp_route::UDPBackendRef;
+use edgion_resources::resources::UDPRoute;
+use edgion_resources::ResourceMeta;
 
 /// Gateway-side compiled companion for a UDPRoute.
 ///
@@ -68,8 +68,8 @@ fn build_backend_selector(route: &UDPRoute) -> Arc<BackendSelector<UDPBackendRef
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::common::ParentReference;
-    use crate::types::resources::udp_route::{UDPBackendRef, UDPRouteRule, UDPRouteSpec};
+    use edgion_resources::resources::common::ParentReference;
+    use edgion_resources::resources::udp_route::{UDPBackendRef, UDPRouteRule, UDPRouteSpec};
 
     fn make_route(annotations: Option<std::collections::BTreeMap<String, String>>) -> Arc<UDPRoute> {
         Arc::new(UDPRoute {

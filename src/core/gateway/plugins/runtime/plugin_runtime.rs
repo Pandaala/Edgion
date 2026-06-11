@@ -9,14 +9,14 @@ use pingora_proxy::Session;
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::runtime::server::http_to_grpc_status;
 use crate::core::gateway::EdgionHttpContext;
-use crate::types::filters::PluginRunningResult;
-use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
-use crate::types::resources::edgion_plugins::CorsConfig;
-use crate::types::resources::http_route_preparse::is_lb_policy_kind;
-use crate::types::resources::{
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::filters::PluginRunningResult::ErrTerminateRequest;
+use edgion_resources::resources::edgion_plugins::CorsConfig;
+use edgion_resources::resources::http_route_preparse::is_lb_policy_kind;
+use edgion_resources::resources::{
     EdgionPlugin, GRPCRouteFilter, GRPCRouteFilterType, HTTPRouteFilter, HTTPRouteFilterType,
 };
-use crate::types::resources::{
+use edgion_resources::resources::{
     RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry,
 };
 
@@ -1259,7 +1259,7 @@ fn check_response_stage_terminate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::{EdgionPlugin, KeyAuthConfig, RequestFilterEntry};
+    use edgion_resources::resources::{EdgionPlugin, KeyAuthConfig, RequestFilterEntry};
 
     #[test]
     fn add_from_request_filters_reports_alias_validation_error_and_threads_alias() {
@@ -1294,7 +1294,7 @@ mod tests {
 
     #[test]
     fn invalid_plugin_config_is_skipped_and_sealed_fail_closed() {
-        use crate::types::resources::edgion_plugins::ForwardAuthConfig;
+        use edgion_resources::resources::edgion_plugins::ForwardAuthConfig;
 
         let mut runtime = PluginRuntime::new();
 
@@ -1348,7 +1348,7 @@ mod tests {
 
     #[test]
     fn invalid_response_stage_plugin_seals_request_stage_fail_closed() {
-        use crate::types::resources::edgion_plugins::{BandwidthLimitConfig, UpstreamResponseBodyFilterEntry};
+        use edgion_resources::resources::edgion_plugins::{BandwidthLimitConfig, UpstreamResponseBodyFilterEntry};
 
         let mut runtime = PluginRuntime::new();
 
@@ -1385,7 +1385,7 @@ mod tests {
 
     #[test]
     fn dsl_construction_failure_seals_fail_closed() {
-        use crate::types::resources::edgion_plugins::DslConfig;
+        use edgion_resources::resources::edgion_plugins::DslConfig;
 
         let mut runtime = PluginRuntime::new();
 
@@ -1416,7 +1416,7 @@ mod tests {
 #[cfg(test)]
 mod ext_ref_index_tests {
     use super::*;
-    use crate::types::resources::LocalObjectReference;
+    use edgion_resources::resources::LocalObjectReference;
 
     fn make_ext_ref_filter(name: &str) -> HTTPRouteFilter {
         make_ext_ref_filter_with_kind("EdgionPlugins", name)

@@ -11,9 +11,9 @@ use etcd_client::{Certificate, ConnectOptions, Identity, TlsOptions};
 
 use crate::core::gateway::link_sys::credential::CredentialState;
 use crate::core::gateway::link_sys::tls as tls_helper;
-use crate::types::credentials::materials::BasicAuthMaterial;
-use crate::types::resources::common::TlsConfig;
-use crate::types::resources::link_sys::etcd::EtcdClientConfig;
+use edgion_resources::credentials::materials::BasicAuthMaterial;
+use edgion_resources::resources::common::TlsConfig;
+use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
 
 // ============================================================================
 // Safety ceilings for connection configuration
@@ -136,7 +136,7 @@ pub fn default_connect_options() -> ConnectOptions {
 mod tests {
     use super::*;
     use crate::core::gateway::link_sys::credential::{CredentialState, InvalidReason};
-    use crate::types::resources::link_sys::etcd::*;
+    use edgion_resources::resources::link_sys::etcd::*;
 
     /// Shorthand: `NotRequired` state (no auth configured).
     fn no_auth() -> CredentialState<BasicAuthMaterial> {
@@ -162,7 +162,7 @@ mod tests {
     }
 
     fn crd_with_secret_ref() -> EtcdClientConfig {
-        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
+        use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
         EtcdClientConfig {
             auth: Some(EtcdAuth {
                 slot: SecretSlot {

@@ -37,7 +37,7 @@ The preparse wrapper string stayed identical: `"plugins[{idx}] (IpRestriction): 
 
 ## Fix Suggestions Not Accepted
 
-- "ConnectionIpRestrictionRules is missing `PluginValidation`" — already implemented; verify `src/types/resources/edgion_stream_plugins/connection_ip_restriction_rules.rs` before filing.
+- "ConnectionIpRestrictionRules is missing `PluginValidation`" — already implemented; verify `edgion-resources/src/resources/edgion_stream_plugins/connection_ip_restriction_rules.rs` before filing.
 - "Controller preparse uses non-standard `clone().validate_and_init()` for L4 ip-restriction" — Stage 1 now calls `validation_error()`; confirm by reading the `EdgionStreamPlugin::IpRestriction` arm in `EdgionStreamPluginsHandler::preparse`.
 - "Replace Stage 2 TlsRoute `clone().validate_and_init()` too" — out of scope for F-009; file as a separate finding if surfaced. Stage 2's `IpRestrictionConfig` already has a `PluginValidation` impl, so the switch would be one-line, but it does not belong inside an F-009 re-report.
 
@@ -54,4 +54,4 @@ Re-open only if:
 - `plugins-stream-F009` — original finding, fixed 2026-05-27 (this file).
 - `tasks/gateway-deep-review/plugins-stream/INDEX.md` row 23.
 - Sibling design note: [`stream-init-failed-pattern-duplication-not-extracted.md`](./stream-init-failed-pattern-duplication-not-extracted.md) — data-plane `validate_and_init` duplication is deliberately kept; do not conflate.
-- Source: `src/types/resources/edgion_stream_plugins/connection_ip_restriction_rules.rs` (`impl PluginValidation`), `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs` (preparse Stage 1).
+- Source: `edgion-resources/src/resources/edgion_stream_plugins/connection_ip_restriction_rules.rs` (`impl PluginValidation`), `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs` (preparse Stage 1).

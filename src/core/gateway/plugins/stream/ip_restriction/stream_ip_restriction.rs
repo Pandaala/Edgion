@@ -6,7 +6,7 @@ use std::net::IpAddr;
 use crate::core::gateway::plugins::stream::stream_plugin_trait::{
     access_decision_to_stream_result, StreamContext, StreamPlugin, StreamPluginResult,
 };
-use crate::types::resources::edgion_stream_plugins::ConnectionIpRestrictionRules;
+use edgion_resources::resources::edgion_stream_plugins::ConnectionIpRestrictionRules;
 
 const PLUGIN_NAME: &str = "StreamIpRestriction";
 

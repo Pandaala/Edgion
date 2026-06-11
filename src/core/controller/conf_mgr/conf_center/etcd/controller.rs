@@ -22,7 +22,7 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::Resourc
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::gateway::link_sys::providers::etcd::EtcdLinkClient;
-use crate::types::ResourceMeta;
+use edgion_resources::ResourceMeta;
 
 /// Backend implementation that wires `EtcdWatcher` and `EtcdResourceController`
 /// into the shared [`LocalControllerBackend`] interface.

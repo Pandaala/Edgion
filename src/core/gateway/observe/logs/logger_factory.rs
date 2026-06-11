@@ -7,7 +7,7 @@ use crate::core::gateway::link_sys::providers::local_file::LogType;
 use crate::core::gateway::link_sys::{DataSender, LocalFileWriter};
 use crate::core::gateway::observe::logs::ssl_log::SslLogger;
 use crate::core::gateway::observe::AccessLogger;
-use crate::types::{LocalFileWriterConfig, LogConfig, StringOutput};
+use edgion_resources::{LocalFileWriterConfig, LogConfig, StringOutput};
 
 /// Build a `LocalFileWriterConfig` from the common `LogConfig` front-end.
 ///

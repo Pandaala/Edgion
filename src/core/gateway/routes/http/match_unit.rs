@@ -5,9 +5,9 @@ use crate::core::gateway::runtime::matching::route::check_gateway_listener_match
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::core::gateway::MatchInfo;
-use crate::types::err::EdError;
-use crate::types::resources::common::ParentReference;
-use crate::types::{HTTPBackendRef, HTTPRouteRule};
+use edgion_resources::err::EdError;
+use edgion_resources::resources::common::ParentReference;
+use edgion_resources::{HTTPBackendRef, HTTPRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
 use std::cmp::Ordering;
@@ -205,7 +205,7 @@ impl HttpRouteRuleUnit {
     /// Call once at route creation time; the returned vecs are positionally aligned
     /// with the `headers` / `query_params` slices in `HTTPRouteMatch`.
     pub fn compile_match_regexes(
-        match_item: &crate::types::HTTPRouteMatch,
+        match_item: &edgion_resources::HTTPRouteMatch,
     ) -> (Vec<Option<Regex>>, Vec<Option<Regex>>) {
         // Controller validates regex patterns at preparse (see ref_grant/validator.rs::check_regex_pattern),
         // so compilation failures here indicate a controller/gateway sync invariant violation.
@@ -300,7 +300,7 @@ impl HttpRouteRuleUnit {
     /// `compiled_regex`: pre-compiled regex for this header matcher (if RegularExpression).
     pub(crate) fn match_header(
         req_header: &pingora_http::RequestHeader,
-        header_match: &crate::types::HTTPHeaderMatch,
+        header_match: &edgion_resources::HTTPHeaderMatch,
         compiled_regex: Option<&Regex>,
     ) -> Result<bool, EdError> {
         let header_value = match req_header.headers.get(&header_match.name) {
@@ -324,7 +324,7 @@ impl HttpRouteRuleUnit {
     /// `compiled_regex`: pre-compiled regex for this query matcher (if RegularExpression).
     pub(crate) fn match_query_param(
         query_params: &HashMap<String, String>,
-        query_param_match: &crate::types::HTTPQueryParamMatch,
+        query_param_match: &edgion_resources::HTTPQueryParamMatch,
         compiled_regex: Option<&Regex>,
     ) -> Result<bool, EdError> {
         let param_value = match query_params.get(&query_param_match.name) {

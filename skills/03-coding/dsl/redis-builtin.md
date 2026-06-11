@@ -39,7 +39,7 @@ in the plugin's `linkSysRefs` list. This allows scripts to access multiple Redis
 | `src/core/gateway/plugins/http/dsl/runtime.rs` | `DslRuntime.redis_links: HashMap<String, String>` |
 | `src/core/gateway/plugins/http/dsl/config.rs` | `DslConfig.linksys_refs: Vec<LinkSysRef>` |
 | `src/core/gateway/plugins/http/dsl/plugin.rs` | Compile-time bytecode scan, client resolution via `get_redis_client()` |
-| `src/types/resources/edgion_plugins/plugin_configs/linksys_ref.rs` | `LinkSysRef { namespace, name }` type |
+| `edgion-resources/src/resources/edgion_plugins/plugin_configs/linksys_ref.rs` | `LinkSysRef { namespace, name }` type |
 | `src/core/gateway/link_sys/providers/redis/ops.rs` | Actual Redis operations (`get`, `set`, `set_px`, `incr`, ...) |
 | `src/core/gateway/link_sys/runtime/store.rs` | `get_redis_client("ns/name") -> Option<Arc<RedisLinkClient>>` |
 

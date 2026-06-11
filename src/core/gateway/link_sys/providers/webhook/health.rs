@@ -171,7 +171,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 
     use crate::core::gateway::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
-    use crate::types::resources::link_sys::webhook::{
+    use edgion_resources::resources::link_sys::webhook::{
         PassiveBackoff, PassiveHealthCheck, WebhookHealthCheck, WebhookServiceConfig, WebhookTarget,
     };
 

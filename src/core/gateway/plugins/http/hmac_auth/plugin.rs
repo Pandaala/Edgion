@@ -21,8 +21,8 @@ use crate::core::gateway::plugins::http::common::auth_common::{
 };
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{HmacAlgorithm, HmacAuthConfig, HmacCredential};
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::{HmacAlgorithm, HmacAuthConfig, HmacCredential};
 
 type HmacSha256 = Hmac<Sha256>;
 type HmacSha384 = Hmac<Sha384>;

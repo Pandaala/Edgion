@@ -17,9 +17,9 @@ LinkSys defines external system connectors (Redis / Etcd / Elasticsearch / Webho
 |------|------|
 | Controller Handler | `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs` |
 | Credential pipeline (Controller) | `src/core/controller/conf_mgr/sync_runtime/resource_processor/credential/` |
-| Resource type definitions | `src/types/resources/link_sys/` (mod.rs, redis.rs, etcd.rs, elasticsearch.rs, webhook.rs, common.rs) |
-| Shared SecretObjectReference / SecretSlot / TLS types | `src/types/resources/common/{secret_object_ref,secret_slot,tls}.rs` |
-| Credential resolution layer (Controller + Gateway shared) | `src/types/credentials/` (materials / resolver / resolvers) |
+| Resource type definitions | `edgion-resources/src/resources/link_sys/` (mod.rs, redis.rs, etcd.rs, elasticsearch.rs, webhook.rs, common.rs) |
+| Shared SecretObjectReference / SecretSlot / TLS types | `edgion-resources/src/resources/common/{secret_object_ref,secret_slot,tls}.rs` |
+| Credential resolution layer (Controller + Gateway shared) | `edgion-resources/src/credentials/` (materials / resolver / resolvers) |
 | Gateway credential four-state | `src/core/gateway/link_sys/credential.rs` |
 | Gateway TLS assembly | `src/core/gateway/link_sys/tls.rs` |
 | Gateway runtime Store | `src/core/gateway/link_sys/runtime/store.rs` |
@@ -44,7 +44,7 @@ The module path `crate::types::link_sys` **no longer exists**. If you still see 
 - `config`'s type is determined by `type`: `redis` → `RedisClientConfig`, `etcd` → `EtcdClientConfig`, `elasticsearch` → `ElasticsearchClientConfig`, `webhook` → `WebhookServiceConfig`, `kafka` → `KafkaClientConfig` (placeholder)
 - The legacy nested `spec.config.type` / `spec.config.config` form is no longer accepted
 
-`SecretObjectReference` (`src/types/resources/common/secret_object_ref.rs`), `SecretSlot` (`src/types/resources/common/secret_slot.rs`), and `TlsConfig` / `TlsCerts` (`src/types/resources/common/tls.rs`) have been extracted from each provider module into a shared common module to avoid multiple near-duplicate copies. `SecretObjectReference` carries `group / kind / name / namespace` (the first two are optional, defaulting to `core/Secret`), reserving room for non-Secret credential sources (Vault / ExternalSecret) in the future. `SecretSlot` is the `{ secret_ref: SecretObjectReference, secret: Option<Secret> }` slot, embedded into each `*Auth` via `#[serde(flatten)]`, with no change in YAML form. The LinkSys subcrates keep stable paths via `pub use`.
+`SecretObjectReference` (`edgion-resources/src/resources/common/secret_object_ref.rs`), `SecretSlot` (`edgion-resources/src/resources/common/secret_slot.rs`), and `TlsConfig` / `TlsCerts` (`edgion-resources/src/resources/common/tls.rs`) have been extracted from each provider module into a shared common module to avoid multiple near-duplicate copies. `SecretObjectReference` carries `group / kind / name / namespace` (the first two are optional, defaulting to `core/Secret`), reserving room for non-Secret credential sources (Vault / ExternalSecret) in the future. `SecretSlot` is the `{ secret_ref: SecretObjectReference, secret: Option<Secret> }` slot, embedded into each `*Auth` via `#[serde(flatten)]`, with no change in YAML form. The LinkSys subcrates keep stable paths via `pub use`.
 
 ## Controller-side processing
 

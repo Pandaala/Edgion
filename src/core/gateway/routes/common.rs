@@ -1,7 +1,9 @@
-use crate::types::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
-use crate::types::constants::annotations::edgion::{TCP_KEEPALIVE_INTERVAL, TCP_KEEPALIVE_PROBES, TCP_KEEPALIVE_TIME};
-use crate::types::resources::common::{ParentReference, TcpKeepaliveConfig};
-use crate::types::resources::http_route::RouteParentStatus;
+use edgion_resources::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
+use edgion_resources::constants::annotations::edgion::{
+    TCP_KEEPALIVE_INTERVAL, TCP_KEEPALIVE_PROBES, TCP_KEEPALIVE_TIME,
+};
+use edgion_resources::resources::common::{ParentReference, TcpKeepaliveConfig};
+use edgion_resources::resources::http_route::RouteParentStatus;
 use kube::api::ObjectMeta;
 use std::collections::BTreeMap;
 use std::time::Duration;

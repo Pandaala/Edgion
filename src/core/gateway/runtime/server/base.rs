@@ -3,10 +3,10 @@ use crate::core::gateway::observe::access_log::get_access_logger_unchecked;
 use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::runtime::server::listener_builder;
 use crate::core::gateway::runtime::store::listener_gateway_info::is_listener_conflicted;
-use crate::types::listener_key::{resolve_listener_addr, ListenerKey};
-use crate::types::resources::edgion_gateway_config::{EdgionGatewayConfig, EdgionGatewayConfigSpec};
-use crate::types::{Gateway, ResourceMeta};
 use anyhow::{anyhow, Result};
+use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
+use edgion_resources::resources::edgion_gateway_config::{EdgionGatewayConfig, EdgionGatewayConfigSpec};
+use edgion_resources::{Gateway, ResourceMeta};
 use kube::ResourceExt;
 use pingora_core::server::Server;
 use std::collections::HashSet;
@@ -24,7 +24,7 @@ fn parse_enable_http2_annotation(gateway: &Gateway) -> bool {
         .metadata
         .annotations
         .as_ref()
-        .and_then(|annotations| annotations.get(crate::types::constants::annotations::edgion::ENABLE_HTTP2))
+        .and_then(|annotations| annotations.get(edgion_resources::constants::annotations::edgion::ENABLE_HTTP2))
         .map(|value| !matches!(value.to_lowercase().as_str(), "false" | "0" | "no" | "off"))
         .unwrap_or(true) // Default to true if annotation is not present
 }
@@ -52,7 +52,11 @@ impl GatewayBase {
     /// method. This is enforced by `cli/mod.rs` step 18 (`wait_for_ready`),
     /// which blocks until the gateway cache's `reset()` has synchronously
     /// driven `full_set` (`cache_data.rs::CacheData::reset`).
-    pub fn configure_listeners(&self, pingora_server: &mut Server, gateways: Vec<crate::types::Gateway>) -> Result<()> {
+    pub fn configure_listeners(
+        &self,
+        pingora_server: &mut Server,
+        gateways: Vec<edgion_resources::Gateway>,
+    ) -> Result<()> {
         if gateways.is_empty() {
             // The cache is marked ready as soon as the first gRPC list response arrives,
             // regardless of item count, so reaching this branch means the controller pushed

@@ -13,10 +13,10 @@ Use this to answer questions like:
 
 ## Read these real entry points first
 
-- [../../../src/types/resources/edgion_stream_plugins/mod.rs](../../../src/types/resources/edgion_stream_plugins/mod.rs)
-- [../../../src/types/resources/edgion_stream_plugins/stream_plugins.rs](../../../src/types/resources/edgion_stream_plugins/stream_plugins.rs)
-- [../../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs](../../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs)
-- [../../../src/types/resource/meta/impls.rs](../../../src/types/resource/meta/impls.rs)
+- [../../../edgion-resources/src/resources/edgion_stream_plugins/mod.rs](../../../edgion-resources/src/resources/edgion_stream_plugins/mod.rs)
+- [../../../edgion-resources/src/resources/edgion_stream_plugins/stream_plugins.rs](../../../edgion-resources/src/resources/edgion_stream_plugins/stream_plugins.rs)
+- [../../../edgion-resources/src/resources/edgion_stream_plugins/tls_route_plugins.rs](../../../edgion-resources/src/resources/edgion_stream_plugins/tls_route_plugins.rs)
+- [../../../edgion-resources/src/resource/meta/impls.rs](../../../edgion-resources/src/resource/meta/impls.rs)
 - [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs)
 - [../../../src/core/gateway/plugins/stream/mod.rs](../../../src/core/gateway/plugins/stream/mod.rs)
 - [../../../src/core/gateway/plugins/stream/stream_plugin_trait.rs](../../../src/core/gateway/plugins/stream/stream_plugin_trait.rs)
@@ -43,7 +43,7 @@ The current real path in this repo is:
 ## Current code layout
 
 ```text
-src/types/resources/edgion_stream_plugins/
+edgion-resources/src/resources/edgion_stream_plugins/
   mod.rs                    # CRD, spec/status, runtime initialization entry
   stream_plugins.rs         # Stage 1 plugin enum: EdgionStreamPlugin
   tls_route_plugins.rs      # Stage 2 plugin enum: TlsRouteStreamPlugin
@@ -96,7 +96,7 @@ src/core/gateway/plugins/stream/
 
 The current `IpRestriction` reuses `IpRestrictionConfig` from the HTTP plugin side directly:
 
-- [../../../src/types/resources/edgion_plugins/plugin_configs/](../../../src/types/resources/edgion_plugins/plugin_configs/)
+- [../../../edgion-resources/src/resources/edgion_plugins/plugin_configs/](../../../edgion-resources/src/resources/edgion_plugins/plugin_configs/)
 
 If your stream plugin can also share configuration with the HTTP layer, prefer reuse; otherwise add a dedicated configuration.
 
@@ -104,11 +104,11 @@ If your stream plugin can also share configuration with the HTTP layer, prefer r
 
 Stage 1:
 
-- Modify [../../../src/types/resources/edgion_stream_plugins/stream_plugins.rs](../../../src/types/resources/edgion_stream_plugins/stream_plugins.rs).
+- Modify [../../../edgion-resources/src/resources/edgion_stream_plugins/stream_plugins.rs](../../../edgion-resources/src/resources/edgion_stream_plugins/stream_plugins.rs).
 
 Stage 2:
 
-- Modify [../../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs](../../../src/types/resources/edgion_stream_plugins/tls_route_plugins.rs).
+- Modify [../../../edgion-resources/src/resources/edgion_stream_plugins/tls_route_plugins.rs](../../../edgion-resources/src/resources/edgion_stream_plugins/tls_route_plugins.rs).
 
 At minimum, add:
 
@@ -152,7 +152,7 @@ This is the actual "resource configuration → runtime plugin object" assembly p
 
 Currently, runtime initialization for `EdgionStreamPlugins` is not done in the handler — it lives in:
 
-- [../../../src/types/resource/meta/impls.rs](../../../src/types/resource/meta/impls.rs)
+- [../../../edgion-resources/src/resource/meta/impls.rs](../../../edgion-resources/src/resource/meta/impls.rs)
 
 That is, the `ResourceMeta` preprocessing phase calls:
 
@@ -224,7 +224,7 @@ metadata:
 
 ## Validation
 
-All plugin configs must `impl PluginValidation` (trait defined in `src/types/resources/edgion_plugins/plugin_validation.rs`):
+All plugin configs must `impl PluginValidation` (trait defined in `edgion-resources/src/resources/edgion_plugins/plugin_validation.rs`):
 
 ```rust
 use crate::types::resources::edgion_plugins::PluginValidation;
@@ -244,7 +244,7 @@ impl PluginValidation for MyPluginConfig {
 - Implementation must be stateless (`&self`, no side effects) — safe to call during controller preparse
 - **Do not** introduce `validation_error: Option<String>` cached fields — this legacy pattern causes preparse path to miss errors (see t1-002 root cause)
 - If config needs runtime compilation (regex / template / DashMap), keep that logic in `compile()` / constructors returning `Result<(), String>` — **separate field validation from compilation**
-- Add the new arm to `EdgionPlugin::validation_error()` match in `src/types/resources/edgion_plugins/edgion_plugin.rs` — the exhaustive match enforces this at compile time (missing arm = compile error)
+- Add the new arm to `EdgionPlugin::validation_error()` match in `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs` — the exhaustive match enforces this at compile time (missing arm = compile error)
 
 **Required regression test (add to every new plugin):**
 ```rust

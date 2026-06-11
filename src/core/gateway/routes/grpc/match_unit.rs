@@ -3,9 +3,9 @@ use crate::core::gateway::plugins::PluginRuntime;
 use crate::core::gateway::runtime::matching::route::{check_gateway_listener_match, hostname_matches_listener};
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
-use crate::types::err::EdError;
-use crate::types::resources::common::ParentReference;
-use crate::types::{GRPCBackendRef, GRPCRouteMatch, GRPCRouteRule};
+use edgion_resources::err::EdError;
+use edgion_resources::resources::common::ParentReference;
+use edgion_resources::{GRPCBackendRef, GRPCRouteMatch, GRPCRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
 use schemars::JsonSchema;
@@ -169,7 +169,7 @@ impl GrpcMatchInfo {
         };
 
         // Pre-compile regex patterns for service/method matching
-        use crate::types::resources::grpc_route::GRPCMethodMatchType;
+        use edgion_resources::resources::grpc_route::GRPCMethodMatchType;
         let (compiled_service_regex, compiled_method_regex) = if let Some(ref method_match) = matched.method {
             let is_regex = method_match.match_type.as_ref() == Some(&GRPCMethodMatchType::RegularExpression);
             let compile = |field: &Option<String>, label: &str| -> Option<Regex> {
@@ -340,7 +340,7 @@ impl GrpcRouteRuleUnit {
     /// invariant violation — fail-closed instead of recompiling on every request.
     fn match_header(
         req_header: &pingora_http::RequestHeader,
-        header_match: &crate::types::GRPCHeaderMatch,
+        header_match: &edgion_resources::GRPCHeaderMatch,
         compiled_regex: Option<&Regex>,
     ) -> Result<bool, EdError> {
         let header_value = match req_header.headers.get(&header_match.name) {

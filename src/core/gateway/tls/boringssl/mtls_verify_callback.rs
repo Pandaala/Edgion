@@ -7,7 +7,7 @@ use crate::core::gateway::observe::logs::ssl_log::log_ssl;
 use crate::core::gateway::tls::runtime::backend::cert_extractor::extract_client_cert_info;
 use crate::core::gateway::tls::runtime::gateway::tls_pingora::peek_tls_conn_meta;
 use crate::core::gateway::tls::validation::mtls::{validate_cn_whitelist, validate_san_whitelist};
-use crate::types::resources::edgion_tls::{ClientAuthConfig, EdgionTls};
+use edgion_resources::resources::edgion_tls::{ClientAuthConfig, EdgionTls};
 use pingora_core::tls::ssl::SslRef;
 use std::os::raw::{c_int, c_void};
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -151,11 +151,11 @@ fn perform_whitelist_validation(ssl: &SslRef, client_auth: &ClientAuthConfig) ->
             // Mirror the redaction ClientCertInfo gets via serde when normally
             // serialized — err_log embeds these as plain strings, so we have to
             // apply sensitive mode by hand here.
-            let subject = crate::types::sensitive::apply_sensitive(&cert_info.subject, |s| s.to_string());
+            let subject = edgion_resources::sensitive::apply_sensitive(&cert_info.subject, |s| s.to_string());
             let sans: Vec<String> = cert_info
                 .sans
                 .iter()
-                .map(|s| crate::types::sensitive::apply_sensitive(s, |w| w.to_string()))
+                .map(|s| edgion_resources::sensitive::apply_sensitive(s, |w| w.to_string()))
                 .collect();
             return Err(format!(
                 "mTLS SAN whitelist failed: subject={}, sans={:?}",
@@ -166,11 +166,11 @@ fn perform_whitelist_validation(ssl: &SslRef, client_auth: &ClientAuthConfig) ->
 
     if let Some(ref allowed_cns) = client_auth.allowed_cns {
         if !validate_cn_whitelist(&cert_info, allowed_cns) {
-            let subject = crate::types::sensitive::apply_sensitive(&cert_info.subject, |s| s.to_string());
+            let subject = edgion_resources::sensitive::apply_sensitive(&cert_info.subject, |s| s.to_string());
             let cn = cert_info
                 .cn
                 .as_ref()
-                .map(|s| crate::types::sensitive::apply_sensitive(s, |w| w.to_string()));
+                .map(|s| edgion_resources::sensitive::apply_sensitive(s, |w| w.to_string()));
             return Err(format!("mTLS CN whitelist failed: subject={}, cn={:?}", subject, cn));
         }
     }

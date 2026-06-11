@@ -2,8 +2,8 @@
 
 use crate::core::gateway::plugins::runtime::log::PluginLog;
 use crate::core::gateway::plugins::runtime::traits::{PluginSession, UpstreamResponseFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::{GRPCHeaderFilter, HTTPHeaderFilter};
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::{GRPCHeaderFilter, HTTPHeaderFilter};
 
 pub struct ResponseHeaderModifierFilter {
     config: HTTPHeaderFilter,

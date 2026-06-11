@@ -30,7 +30,7 @@ description: Use when reviewing ctx_set plugin findings; covers cross-rule ctx v
 **Fix**: At config load time, templates are precompiled into `Vec<TemplateSegment>` (`Literal` / `Variable`); at runtime only segment iteration and concatenation is done, with no `find("${")` search at all. Equivalent to the SQL prepared statement approach — structure and data thoroughly separated.
 
 **Files involved**:
-- `src/types/resources/edgion_plugins/plugin_configs/ctx_set.rs` — `CompiledTemplate`, `TemplateSegment`
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/ctx_set.rs` — `CompiledTemplate`, `TemplateSegment`
 - `src/core/gateway/plugins/http/ctx_set/plugin.rs` — `evaluate_template`, `resolve_var`
 
 **Verdict**: Fixed. In future reviews, if a ctx_set template-related issue is seen again, first confirm whether the precompiled path is in use.

@@ -10,7 +10,7 @@ pub const NAME_CAPACITY: usize = 36;
 /// A single argument to [`PluginLog::push_fmt`].
 ///
 /// - `Plain` — written as-is regardless of sensitive mode.
-/// - `Sensitive` — passed through [`crate::types::sensitive::apply_sensitive`]; masked or wrapped
+/// - `Sensitive` — passed through [`edgion_resources::sensitive::apply_sensitive`]; masked or wrapped
 ///   when the active mode is Replace or Wrap.
 ///
 /// Construct via `From<&str>` (plain) or [`sensitive()`] (sensitive).
@@ -69,7 +69,7 @@ fn format_into<A: smallvec::Array<Item = u8>>(buf: &mut SmallVec<A>, fmt: &str, 
             match arg {
                 LogArg::Plain(s) => buf.extend_from_slice(s.as_bytes()),
                 LogArg::Sensitive(s) => {
-                    crate::types::sensitive::apply_sensitive(s, |w| buf.extend_from_slice(w.as_bytes()));
+                    edgion_resources::sensitive::apply_sensitive(s, |w| buf.extend_from_slice(w.as_bytes()));
                 }
             }
         }
@@ -286,14 +286,14 @@ impl PluginLog {
         // Reserve bytes for wrap prefix+suffix so the final entry fits the tier-1
         // 128-byte LogBuffer. Default wrap overhead is 7 bytes ("<E>" + "</E>");
         // operators can configure longer strings.
-        let overhead = crate::types::sensitive::wrap_overhead();
+        let overhead = edgion_resources::sensitive::wrap_overhead();
         let max_value_bytes = (128usize.saturating_sub(overhead)).min(64);
         let end = (0..=value.len().min(max_value_bytes))
             .rev()
             .find(|&i| value.is_char_boundary(i))
             .unwrap_or(0);
         let truncated = &value[..end];
-        crate::types::sensitive::apply_sensitive(truncated, |w| self.push_via(|b| b.push(w), |u| u.push(w)))
+        edgion_resources::sensitive::apply_sensitive(truncated, |w| self.push_via(|b| b.push(w), |u| u.push(w)))
     }
 
     /// Push an error entry whose value is dynamic — atomically writes
@@ -307,7 +307,7 @@ impl PluginLog {
     /// wrap overhead.
     pub fn push_err_sensitive(&mut self, value: &str) -> bool {
         const PREFIX: &str = "err: ";
-        let overhead = crate::types::sensitive::wrap_overhead();
+        let overhead = edgion_resources::sensitive::wrap_overhead();
         let max_value_bytes = (128usize.saturating_sub(PREFIX.len() + overhead)).min(64);
         let end = (0..=value.len().min(max_value_bytes))
             .rev()
@@ -316,7 +316,7 @@ impl PluginLog {
         let truncated = &value[..end];
         let mut entry = String::with_capacity(PREFIX.len() + max_value_bytes + overhead);
         entry.push_str(PREFIX);
-        crate::types::sensitive::apply_sensitive(truncated, |w| entry.push_str(w));
+        edgion_resources::sensitive::apply_sensitive(truncated, |w| entry.push_str(w));
         self.push_via(|b| b.push(&entry), |u| u.push(&entry))
     }
 
@@ -463,7 +463,7 @@ pub struct StageLogs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::sensitive::SENSITIVE_MODE;
+    use edgion_resources::sensitive::SENSITIVE_MODE;
     use std::sync::atomic::Ordering;
     use std::sync::Mutex;
 

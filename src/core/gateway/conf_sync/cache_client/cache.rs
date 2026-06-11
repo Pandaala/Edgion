@@ -1,7 +1,7 @@
 use super::cache_data::CacheData;
 use crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use crate::core::common::conf_sync::types::ListData;
-use crate::types::ResourceMeta;
+use edgion_resources::ResourceMeta;
 use kube::Resource;
 use parking_lot::RwLock;
 use std::sync::Arc;

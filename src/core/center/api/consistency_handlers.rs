@@ -13,7 +13,7 @@ use axum::Json;
 use serde::Serialize;
 
 use crate::core::common::observe::fed_metrics;
-use crate::types::resources::plugin_metadata::{ClusterRegionRouteEntry, ServiceRegionRouteEntry};
+use edgion_resources::resources::plugin_metadata::{ClusterRegionRouteEntry, ServiceRegionRouteEntry};
 
 use super::ApiState;
 

@@ -3,11 +3,11 @@ use super::*;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::condition_reasons;
 use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
 use crate::core::controller::conf_mgr::ControllerRuntime;
-use crate::types::credentials::resolvers::{BasicAuthResolver, EsApiKeyResolver};
-use crate::types::resources::common::{Condition, SecretSlot};
-use crate::types::resources::link_sys::elasticsearch::ElasticsearchAuth;
-use crate::types::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
-use crate::types::resources::link_sys::LinkSysSpec;
+use edgion_resources::credentials::resolvers::{BasicAuthResolver, EsApiKeyResolver};
+use edgion_resources::resources::common::{Condition, SecretSlot};
+use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchAuth;
+use edgion_resources::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
+use edgion_resources::resources::link_sys::LinkSysSpec;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
 use kube::api::ObjectMeta;
@@ -55,7 +55,7 @@ fn make_redis_link_sys(ns: &str, name: &str, secret_name: &str, secret_ns: Optio
             config: SystemConfig::Redis(RedisClientConfig {
                 endpoints: vec!["redis://localhost:6379".to_string()],
                 auth: Some(RedisAuth {
-                    slot: crate::types::resources::common::SecretSlot {
+                    slot: edgion_resources::resources::common::SecretSlot {
                         secret_ref: SecretObjectReference {
                             group: None,
                             kind: None,
@@ -79,7 +79,7 @@ fn make_redis_link_sys(ns: &str, name: &str, secret_name: &str, secret_ns: Optio
 }
 
 fn make_es_link_sys_apikey(ns: &str, name: &str, secret_name: &str) -> LinkSys {
-    use crate::types::resources::link_sys::elasticsearch::ElasticsearchClientConfig;
+    use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchClientConfig;
     LinkSys {
         metadata: ObjectMeta {
             name: Some(name.to_string()),
@@ -535,8 +535,8 @@ fn test_update_status_sets_accepted_false_on_validation_errors() {
 
 #[tokio::test]
 async fn test_redis_tls_secret_ref_resolution() {
-    use crate::types::credentials::resolvers::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
-    use crate::types::resources::common::{TlsCerts, TlsConfig};
+    use edgion_resources::credentials::resolvers::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
+    use edgion_resources::resources::common::{TlsCerts, TlsConfig};
 
     let (key, mut secret) = make_secret(
         "default",
@@ -614,8 +614,8 @@ async fn test_redis_tls_secret_ref_resolution() {
 /// - `message` joins both error texts so operators see both problems
 #[tokio::test]
 async fn test_auth_and_tls_both_fail_collects_both_errors() {
-    use crate::types::credentials::resolvers::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
-    use crate::types::resources::common::{TlsCerts, TlsConfig};
+    use edgion_resources::credentials::resolvers::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
+    use edgion_resources::resources::common::{TlsCerts, TlsConfig};
 
     // tls Secret exists but with a rejected type — surfaces as
     // `InvalidSecretType` from the pipeline's type-check step.
@@ -638,7 +638,7 @@ async fn test_auth_and_tls_both_fail_collects_both_errors() {
     ls.spec.config = SystemConfig::Redis(RedisClientConfig {
         endpoints: vec!["rediss://localhost:6380".to_string()],
         auth: Some(RedisAuth {
-            slot: crate::types::resources::common::SecretSlot {
+            slot: edgion_resources::resources::common::SecretSlot {
                 secret_ref: SecretObjectReference {
                     group: None,
                     kind: None,
@@ -747,7 +747,7 @@ async fn test_spec_serde_round_trip_preserves_secret() {
 }
 
 fn make_webhook_link_sys(ns: &str, name: &str, svc_name: &str, svc_ns: Option<&str>) -> LinkSys {
-    use crate::types::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
+    use edgion_resources::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
     LinkSys {
         metadata: ObjectMeta {
             name: Some(name.to_string()),
@@ -809,8 +809,8 @@ async fn test_webhook_service_target_clears_stale_ref_on_target_change() {
             ..Default::default()
         },
         spec: LinkSysSpec {
-            config: SystemConfig::Webhook(crate::types::resources::link_sys::webhook::WebhookServiceConfig {
-                target: crate::types::resources::link_sys::webhook::WebhookTarget::Uri {
+            config: SystemConfig::Webhook(edgion_resources::resources::link_sys::webhook::WebhookServiceConfig {
+                target: edgion_resources::resources::link_sys::webhook::WebhookTarget::Uri {
                     uri: "http://external.example.com/hook".to_string(),
                 },
                 ..Default::default()

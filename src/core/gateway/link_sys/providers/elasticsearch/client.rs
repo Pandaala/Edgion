@@ -24,7 +24,7 @@ use async_trait::async_trait;
 
 use crate::core::gateway::link_sys::credential::{CredentialState, ResolvedCredential};
 use crate::core::gateway::link_sys::lifecycle::LinkSysLifecycle;
-use crate::types::resources::link_sys::elasticsearch::ElasticsearchClientConfig;
+use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchClientConfig;
 
 use super::bulk::bulk_ingest_loop;
 use super::config_mapping::{build_es_client, EsBulkConfig};

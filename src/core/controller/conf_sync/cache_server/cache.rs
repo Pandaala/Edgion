@@ -10,7 +10,7 @@ use super::types::{EventType, ListData, WatchClient, WatchResponse};
 use crate::core::common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::core::common::utils;
 use crate::core::controller::conf_sync::conf_server::{WatchObj, WatchResponseSimple};
-use crate::types::ResourceMeta;
+use edgion_resources::ResourceMeta;
 
 pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {
     // wait for init complete
@@ -164,7 +164,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
                                     "Events lost detected: version jumped without events, triggering client relist"
                                 );
                                 let response = WatchResponse::from_error(
-                                    crate::types::WATCH_ERR_EVENTS_LOST.to_string(),
+                                    edgion_resources::WATCH_ERR_EVENTS_LOST.to_string(),
                                     current_version,
                                 );
                                 let _ = sender.send(response).await;
@@ -425,7 +425,7 @@ mod tests {
     use super::*;
     use crate::core::common::conf_sync::traits::ResourceChange;
     use crate::core::common::conf_sync::CacheEventDispatch;
-    use crate::types::{ResourceKind, ResourceMeta};
+    use edgion_resources::{ResourceKind, ResourceMeta};
     use kube::api::ObjectMeta;
     use serde::{Deserialize, Serialize};
 

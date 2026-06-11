@@ -1,4 +1,4 @@
-use crate::types::constants::annotations::edgion::CIRCUIT_BREAKER;
+use edgion_resources::constants::annotations::edgion::CIRCUIT_BREAKER;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use serde::Deserialize;
 use std::time::Duration;

@@ -610,7 +610,7 @@ Named repo examples:
 
 | Category | Example |
 |----------|---------|
-| Algorithmic correctness | `src/types/resources/tests/edgion_tls_test.rs` hostname wildcard tests |
+| Algorithmic correctness | `edgion-resources/src/resources/tests/edgion_tls_test.rs` hostname wildcard tests |
 | Data-structure invariants | `src/core/gateway/cache/lru.rs` underflow / hit_ratio |
 | Security boundaries | `src/core/gateway/tls/validation/cert.rs` mTLS verify_depth |
 | Wire-format | `src/core/common/local_auth/handlers.rs` AuthStatus JSON shape |
@@ -618,7 +618,7 @@ Named repo examples:
 
 ### Yellow light — usually refuse, with a worked counter-example
 
-`src/types/resources/link_sys/tests/webhook_test.rs::test_default_config`
+`edgion-resources/src/resources/link_sys/tests/webhook_test.rs::test_default_config`
 (lines 5–18) is the canonical anti-pattern. It checks ~10 mixed
 assertions over independent default-value fields — 5 × `assert!`, 4 ×
 `assert_eq!`, 1 × `matches!` pattern — each asserting a different field

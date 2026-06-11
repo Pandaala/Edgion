@@ -44,6 +44,6 @@ Re-open only if **any** of the following is observed:
 
 - Finding `plugins-http-dsl-F010` (2026-05-26) — closed as accepted tradeoff.
 - `src/core/gateway/plugins/http/dsl/plugin.rs` — `resolve_script`, `validate_config`, `resolve_parts`, `from_config`, `from_config_response`.
-- `src/types/resources/edgion_plugins/plugin_configs/dsl.rs` — `DslConfig::validation_error`.
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/dsl.rs` — `DslConfig::validation_error`.
 - `src/core/gateway/plugins/runtime/plugin_runtime.rs` — the generic validate gate vs construct dispatch.
 - [plugin-runtime-god-match.md](plugin-runtime-god-match.md) — related plugin-runtime construction design decisions.

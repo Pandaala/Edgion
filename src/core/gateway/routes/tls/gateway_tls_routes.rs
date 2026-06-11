@@ -1,5 +1,5 @@
-use crate::core::common::matcher::HashHost;
 use crate::core::gateway::routes::tls::route_unit::TlsRouteUnit;
+use edgion_resources::matcher::HashHost;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -178,8 +178,8 @@ impl Default for TlsRouteTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::common::ParentReference;
-    use crate::types::resources::tls_route::*;
+    use edgion_resources::resources::common::ParentReference;
+    use edgion_resources::resources::tls_route::*;
 
     fn create_test_tls_route(namespace: &str, name: &str, hostname: &str) -> TLSRoute {
         create_test_tls_route_ts(namespace, name, hostname, None)

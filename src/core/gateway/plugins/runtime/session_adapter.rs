@@ -9,9 +9,9 @@ use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
 use crate::core::gateway::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
 use crate::core::gateway::{EdgionHttpContext, MirrorState, PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget};
-use crate::types::common::{KeyGet, KeySet, WebhookExtract};
-use crate::types::filters::PluginRunningResult;
-use crate::types::EdgionStatus;
+use edgion_resources::common::{KeyGet, KeySet, WebhookExtract};
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::EdgionStatus;
 
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
@@ -519,7 +519,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn set_upstream_uri(&mut self, uri: &str) -> PluginSessionResult<()> {
         let parsed_uri = uri.parse::<Uri>().map_err(|e| Box::new(e) as PluginSessionError)?;
         self.inner.req_header_mut().set_uri(parsed_uri);
-        let cfg = crate::core::common::path_normalization::get_path_normalization_config();
+        let cfg = edgion_resources::path_normalization::get_path_normalization_config();
         self.ctx.refresh_normalized_path(self.inner.req_header(), cfg);
         self.ctx.uri_finalized = true;
         Ok(())
@@ -583,7 +583,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx
     }
 
-    fn add_error(&mut self, status: crate::types::EdgionStatus) {
+    fn add_error(&mut self, status: edgion_resources::EdgionStatus) {
         self.ctx.add_error(status);
     }
 

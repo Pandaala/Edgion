@@ -8,9 +8,9 @@
 //! with active_challenges are synced from the Controller.
 
 use crate::core::gateway::observe::metrics::record_acme_challenge_lookup;
-use crate::types::resources::edgion_acme::EdgionAcme;
 use arc_swap::ArcSwap;
 use bytes::Bytes;
+use edgion_resources::resources::edgion_acme::EdgionAcme;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -206,7 +206,7 @@ pub fn get_global_challenge_store() -> &'static AcmeChallengeStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::edgion_acme::ActiveHttpChallenge;
+    use edgion_resources::resources::edgion_acme::ActiveHttpChallenge;
 
     /// Helper: build a minimal EdgionAcme from JSON with optional active challenges.
     fn make_acme(challenges: Vec<ActiveHttpChallenge>) -> EdgionAcme {

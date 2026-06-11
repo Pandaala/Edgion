@@ -34,7 +34,7 @@ Closed cases (do not reopen without new requirement): see the "Closed: not group
 | **Group struct** | `{ name: String, items: Vec<…> }`. **Always use `String` for `name`** — `Arc<str>` is not `serde::{Serialize,Deserialize}` (serde `rc` feature only covers `Arc<T: Sized>`). |
 | **Mutual exclusion with the flat field** | The legacy flat field (`secret_refs`, `issuer_refs`, …) and the new `*_groups` must be **preparse-validated as exclusive** in `validate_and_check` / `detect_validation_error`. Emit a precise error pointing at which two fields collided. |
 | **Rolling-upgrade safety** | Any new field added to a struct that crosses the controller → gateway gRPC boundary (`ResolvedKey`, `HmacCredential`, `ResolvedJwtCredential`, `ResolvedUser`, `KeyMetadata`, …) **must** carry `#[serde(default = "…")]` with a reasonable default. Otherwise a new gateway deserializing an old controller's payload fails for the whole `EdgionPlugins` resource. |
-| **Group name validation** | Reuse [`validate_group_name`](../../../src/types/resources/common/group_name.rs) (≤ 63 chars, K8s label-value charset `^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`). Do not invent a per-plugin variant. |
+| **Group name validation** | Reuse [`validate_group_name`](../../../edgion-resources/src/resources/common/group_name.rs) (≤ 63 chars, K8s label-value charset `^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`). Do not invent a per-plugin variant. |
 | **CRD schema shape** | For nested `config:` under `requestPlugins[]`, declare grouped fields with `properties:` + `x-kubernetes-preserve-unknown-fields: true`. Do **not** try to use `oneOf` keyed on the sibling `type` field — CRDs cannot cross-field branch without `x-kubernetes-validations` CEL. |
 | **Fixture coverage** | Update both `examples/test/conf/EdgionPlugins/<Plugin>/` **and** `examples/k8stest/conf/EdgionPlugins/<Plugin>/`. K8s integration breaks with `unknown field` if one side is missed. |
 
@@ -42,7 +42,7 @@ Closed cases (do not reopen without new requirement): see the "Closed: not group
 
 - Resolve each group independently in `resolve_credential/<plugin>.rs` (or the equivalent reconcile path) and emit a merged map keyed by the lookup token, with the **group name** stored alongside the value.
 - **Cross-group duplicate items**: use **first-wins** (groups are iterated in array order) and emit a `tracing::warn!` carrying both the *existing* and *incoming* group plus the offending item identifier (`secret_key`, `iss`, `cidr`, …). Rationale: grouping is a management / audit aid, **not** a tenant isolation primitive — a single misconfigured partner Secret must not take the whole plugin down. **Forbidden**: fail-fast (kills the resource) and last-wins (order-dependent, operator-unpredictable).
-- Cross-group uniqueness validation reuses the helper pattern in `validate_groups_structure` (see `src/core/common/matcher/ip_cidr_helpers.rs`); abstract a `HashSet`-based helper rather than re-implementing per plugin.
+- Cross-group uniqueness validation reuses the helper pattern in `validate_groups_structure` (see `edgion-resources/src/matcher/ip_cidr_helpers.rs`); abstract a `HashSet`-based helper rather than re-implementing per plugin.
 
 ## 4. Gateway runtime / observability contract
 

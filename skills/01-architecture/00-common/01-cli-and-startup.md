@@ -121,7 +121,7 @@ access_log:
 
 ## Working directory
 
-### WorkDir layout (`src/types/work_dir.rs`)
+### WorkDir layout (`edgion-resources/src/work_dir.rs`)
 
 ```
 work_dir/

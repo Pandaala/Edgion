@@ -15,7 +15,7 @@ GRPCRoute defines gRPC-layer routing rules. Its Controller-side processing is hi
 - Gateway ConfHandler: `src/core/gateway/routes/grpc/conf_handler_impl.rs`
 - Route manager: `src/core/gateway/routes/grpc/routes_mgr.rs`
 - Match unit: `src/core/gateway/routes/grpc/match_unit.rs`
-- Type definitions: `src/types/resources/grpc_route.rs`
+- Type definitions: `edgion-resources/src/resources/grpc_route.rs`
 
 ## Controller-side processing
 

@@ -12,14 +12,14 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key, update_condition,
     HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
-use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
-use crate::types::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3};
-use crate::types::resources::backend_tls_policy::{
+use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
+use edgion_resources::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3};
+use edgion_resources::resources::backend_tls_policy::{
     BackendTLSPolicyCACertificateRef, BackendTLSPolicyStatus, BackendTLSPolicyTargetRef, BtpSpecView,
     PolicyAncestorStatus,
 };
-use crate::types::resources::common::{is_core_api_group, ParentReference};
-use crate::types::ResourceKind;
+use edgion_resources::resources::common::{is_core_api_group, ParentReference};
+use edgion_resources::ResourceKind;
 
 /// Decide whether sibling BackendTLSPolicies (those targeting the same
 /// resource) must be requeued after this policy was processed.
@@ -676,11 +676,11 @@ mod tests {
     use super::*;
     use crate::core::controller::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::core::controller::conf_mgr::ControllerRuntime;
-    use crate::types::resources::backend_tls_policy::{
+    use chrono::{DateTime, Utc};
+    use edgion_resources::resources::backend_tls_policy::{
         BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation, WellKnownCACertificates,
     };
-    use crate::types::ResourceKind;
-    use chrono::{DateTime, Utc};
+    use edgion_resources::ResourceKind;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
     use kube::api::ObjectMeta;
     use std::sync::Arc;

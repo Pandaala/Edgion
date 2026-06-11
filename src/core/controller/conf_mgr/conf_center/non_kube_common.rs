@@ -27,8 +27,8 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
 use crate::core::controller::conf_mgr::sync_runtime::{ShutdownHandle, ShutdownSignal};
 use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
-use crate::types::prelude_resources::*;
-use crate::types::ResourceMeta;
+use edgion_resources::prelude_resources::*;
+use edgion_resources::ResourceMeta;
 
 /// Shared state for non-Kubernetes configuration center backends.
 ///

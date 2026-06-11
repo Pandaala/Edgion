@@ -45,8 +45,8 @@ use crate::core::gateway::plugins::http::common::{format_duration, resolve_rate_
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::RateLimitConfig;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::RateLimitConfig;
 
 // CMS estimator configuration
 // HASHES is fixed at 4 (4 hash functions for CMS)

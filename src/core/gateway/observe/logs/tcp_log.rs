@@ -54,7 +54,7 @@ impl TcpLogEntry {
     }
 }
 
-pub async fn init_tcp_logger(config: &crate::types::LogConfig) -> Result<()> {
+pub async fn init_tcp_logger(config: &edgion_resources::LogConfig) -> Result<()> {
     if let Some(logger) = create_async_logger(config, LogType::Tcp).await? {
         TCP_LOGGER
             .set(logger)

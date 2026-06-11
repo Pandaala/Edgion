@@ -19,7 +19,7 @@ use crate::core::common::conf_sync::proto::{
 };
 use crate::core::common::config::ConfSyncSecurityConfig;
 use crate::core::controller::conf_mgr::sync_runtime::metrics::reload_metrics;
-use crate::types::{WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD};
+use edgion_resources::{WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD};
 
 use super::ConfigSyncServer;
 

@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use std::net::IpAddr;
 
-use crate::types::resources::edgion_plugins::{AccessDecision, DefaultAction};
+use edgion_resources::resources::edgion_plugins::{AccessDecision, DefaultAction};
 
 /// Result of stream plugin execution
 #[derive(Debug, Clone)]

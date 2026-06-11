@@ -8,7 +8,7 @@
 //!
 //! Note: the resolved Secret is embedded into the corresponding `*Auth.secret` field,
 //! which is serialized across conf_sync to the Gateway. Material parsing happens on
-//! the Gateway side via `crate::types::credentials`.
+//! the Gateway side via `edgion_resources::credentials`.
 
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::credential::{
     resolve_secret, InvalidCredentialError, PendingReason, ResolveOutcome,
@@ -18,14 +18,14 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     ProcessResult, ProcessorHandler, ResolvedRefsError, ResourceRef,
 };
 use crate::core::gateway::backends::service_kind::EdgionService;
-use crate::types::credentials::SecretMaterialResolver;
-use crate::types::prelude_resources::LinkSys;
-use crate::types::resources::common::SecretObjectReference;
-use crate::types::resources::link_sys::webhook::WebhookTarget;
-use crate::types::resources::link_sys::{LinkSysStatus, SystemConfig};
+use edgion_resources::credentials::SecretMaterialResolver;
+use edgion_resources::prelude_resources::LinkSys;
+use edgion_resources::resources::common::SecretObjectReference;
+use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+use edgion_resources::resources::link_sys::{LinkSysStatus, SystemConfig};
 
 use super::auth_spec::{AuthSpec, TlsSpec};
-use crate::types::ResourceKind;
+use edgion_resources::ResourceKind;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 

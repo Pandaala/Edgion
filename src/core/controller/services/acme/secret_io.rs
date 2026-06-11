@@ -10,7 +10,7 @@ use kube::api::{Api, Patch, PatchParams};
 use std::collections::BTreeMap;
 use zeroize::Zeroizing;
 
-use crate::types::credentials::ACME_ACCOUNT_KEY;
+use edgion_resources::credentials::ACME_ACCOUNT_KEY;
 
 /// Legacy data key (pre-`ACME_ACCOUNT_KEY`); read-only for migration.
 const LEGACY_ACME_ACCOUNT_KEY: &str = "credentials";
@@ -22,7 +22,7 @@ const EDGION_IO_ACME_RESOURCE: &str = "edgion.io/acme-resource";
 ///
 /// # Zeroize scope
 ///
-/// See docs on [`crate::types::credentials::AcmeAccountMaterial`]. The
+/// See docs on [`edgion_resources::credentials::AcmeAccountMaterial`]. The
 /// intermediate `String::from_utf8(raw.0.clone())` allocation below materializes
 /// a plaintext copy of the account JSON that is **not** zero-wiped (only the
 /// returned `Zeroizing<String>` is). Additionally, the raw `ByteString` inside

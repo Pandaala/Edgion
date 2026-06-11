@@ -4,8 +4,8 @@ use pingora_http::ResponseHeader;
 use std::sync::Arc;
 
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::CorsConfig;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::CorsConfig;
 
 type CorsError = Box<dyn std::error::Error + Send + Sync>;
 type CorsResult<T> = Result<T, CorsError>;

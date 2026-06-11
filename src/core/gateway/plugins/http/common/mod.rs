@@ -7,8 +7,8 @@
 use std::time::Duration;
 
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession};
-use crate::types::common::KeyGet;
-use crate::types::resources::edgion_plugins::OnMissingKey;
+use edgion_resources::common::KeyGet;
+use edgion_resources::resources::edgion_plugins::OnMissingKey;
 
 pub mod auth_common;
 pub mod http_client;

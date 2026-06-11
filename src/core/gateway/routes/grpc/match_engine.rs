@@ -2,8 +2,8 @@ use crate::core::gateway::ctx::EdgionHttpContext;
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
-use crate::types::err::EdError;
-use crate::types::resources::grpc_route::GRPCMethodMatchType;
+use edgion_resources::err::EdError;
+use edgion_resources::resources::grpc_route::GRPCMethodMatchType;
 use pingora_proxy::Session;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -406,8 +406,8 @@ pub fn parse_grpc_path(path: &str) -> Result<(&str, &str), EdError> {
 mod tests {
     use super::*;
     use crate::core::gateway::routes::grpc::match_unit::GrpcMatchInfo;
-    use crate::types::resources::grpc_route::GRPCRouteRule;
-    use crate::types::{GRPCHeaderMatch, GRPCMethodMatch, GRPCRouteMatch};
+    use edgion_resources::resources::grpc_route::GRPCRouteRule;
+    use edgion_resources::{GRPCHeaderMatch, GRPCMethodMatch, GRPCRouteMatch};
 
     #[test]
     fn test_parse_grpc_path_valid() {

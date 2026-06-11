@@ -8,9 +8,9 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::credent
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, HandlerContext, ResourceRef,
 };
-use crate::types::prelude_resources::EdgionPlugins;
-use crate::types::resources::edgion_plugins::plugin_configs::KeyMetadata;
-use crate::types::resources::edgion_plugins::EdgionPlugin;
+use edgion_resources::prelude_resources::EdgionPlugins;
+use edgion_resources::resources::edgion_plugins::plugin_configs::KeyMetadata;
+use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 
 /// Resolve all Secret refs for a single group, appending entries to
 /// `all_keys`. Cross-group duplicate keys follow **first-wins**: if a
@@ -21,7 +21,7 @@ fn resolve_group(
     config_key_field: &str,
     whitelist: &HashSet<&str>,
     group_name: &str,
-    secret_refs: &[crate::types::resources::gateway::SecretObjectReference],
+    secret_refs: &[edgion_resources::resources::gateway::SecretObjectReference],
     all_keys: &mut HashMap<String, KeyMetadata>,
     seen_groups_for_key: &mut HashMap<String, String>,
     ep_namespace: Option<&String>,

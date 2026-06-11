@@ -10,7 +10,7 @@ pub(super) use super::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
 pub(super) use super::runtime::DslRuntime;
 pub(super) use crate::core::gateway::plugins::runtime::traits::session::{MockPluginSession, PluginSession};
 pub(super) use crate::core::gateway::plugins::runtime::PluginLog;
-pub(super) use crate::types::filters::PluginRunningResult;
+pub(super) use edgion_resources::filters::PluginRunningResult;
 
 mod api_errors;
 mod bytecode_deserialization;

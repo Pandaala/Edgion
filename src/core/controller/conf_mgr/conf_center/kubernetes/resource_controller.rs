@@ -27,8 +27,8 @@ use super::ShutdownSignal;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     extract_status_value, KubeRawStore, ResourceProcessor, WorkItemResult,
 };
-use crate::types::ResourceMeta;
 use anyhow::Result;
+use edgion_resources::ResourceMeta;
 use futures::StreamExt;
 use kube::api::{Patch, PatchParams};
 use kube::runtime::reflector::{ObjectRef, Store};

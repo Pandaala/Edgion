@@ -35,7 +35,7 @@ pub trait DnsProvider: Send + Sync {
 ///
 /// Key-presence preconditions (`api-token` for Cloudflare, `access-key-id` /
 /// `access-key-secret` for AliDNS) are enforced up-front by
-/// [`crate::types::credentials::resolvers::DnsCredentialResolver`] in the
+/// [`edgion_resources::credentials::resolvers::DnsCredentialResolver`] in the
 /// Controller's credential pipeline — a Secret missing those keys surfaces
 /// as `ResolvedRefs=False/MissingKeys` long before we reach this code path.
 /// The `ok_or_else` checks below are kept as defense in depth for direct

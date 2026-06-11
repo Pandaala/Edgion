@@ -3,8 +3,8 @@ use crate::core::gateway::plugins::http::common::http_client::get_http_client_wi
 use crate::core::gateway::plugins::runtime::traits::session::MockPluginSession;
 use crate::core::gateway::plugins::runtime::PluginLog;
 use crate::core::gateway::plugins::runtime::RequestFilter;
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{OpenidConnectConfig, UnauthAction, VerificationMode};
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::{OpenidConnectConfig, UnauthAction, VerificationMode};
 use parking_lot::Mutex;
 use serde_json::json;
 use std::collections::HashMap;

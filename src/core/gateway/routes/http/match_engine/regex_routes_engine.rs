@@ -1,7 +1,7 @@
 use crate::core::gateway::ctx::EdgionHttpContext;
 use crate::core::gateway::routes::http::match_unit::{HttpRouteRuleUnit, RouteMatchResult};
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
-use crate::types::err::EdError;
+use edgion_resources::err::EdError;
 use pingora_proxy::Session;
 use regex::RegexSet;
 use std::sync::Arc;
@@ -137,7 +137,7 @@ mod tests {
     use super::*;
     use crate::core::gateway::routes::http::match_unit::MatchSpecificity;
     use crate::core::gateway::MatchInfo;
-    use crate::types::{HTTPPathMatch, HTTPRouteMatch, HTTPRouteRule};
+    use edgion_resources::{HTTPPathMatch, HTTPRouteMatch, HTTPRouteRule};
     use regex::Regex;
 
     /// Helper function to create a test HttpRouteRuleUnit with regex pattern

@@ -65,9 +65,9 @@ When adding or extending an HTTP plugin, you usually touch these areas.
 
 ### Resource and config
 
-- `src/types/resources/edgion_plugins/`
-- `src/types/resources/edgion_plugins/plugin_configs/`
-- `src/types/resources/edgion_plugins/edgion_plugin.rs`
+- `edgion-resources/src/resources/edgion_plugins/`
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/`
+- `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs`
 
 These own:
 

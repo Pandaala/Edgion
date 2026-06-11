@@ -1,5 +1,5 @@
 use super::types::{EventType, WatcherEvent};
-use crate::types::{WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
+use edgion_resources::{WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED};
 use kube::{Resource, ResourceExt};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -238,7 +238,7 @@ mod tests {
     use kube::api::ObjectMeta;
 
     // Test resource type that implements Resource trait
-    use crate::types::{ResourceKind, ResourceMeta};
+    use edgion_resources::{ResourceKind, ResourceMeta};
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, Serialize, Deserialize)]

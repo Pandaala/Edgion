@@ -1,6 +1,6 @@
 use super::EdgionHttpProxy;
 use crate::core::gateway::{EdgionHttpContext, PeerTimeoutSource};
-use crate::types::EdgionStatus;
+use edgion_resources::EdgionStatus;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error, ErrorSource, ErrorType};
 use pingora_proxy::Session;

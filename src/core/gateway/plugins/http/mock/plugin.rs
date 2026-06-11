@@ -14,8 +14,8 @@ use tokio::time::{sleep, Duration};
 
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::MockConfig;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::MockConfig;
 
 pub struct Mock {
     name: String,

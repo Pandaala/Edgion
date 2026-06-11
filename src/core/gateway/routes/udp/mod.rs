@@ -24,7 +24,7 @@ pub use udp_route_table::UdpRouteTable;
 
 pub use edgion_udp::EdgionUdpProxy;
 
-use crate::types::ListenerKey;
+use edgion_resources::ListenerKey;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::OnceLock;

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use super::{compile_plugins, get_global_plugin_store, CompiledPlugins, PluginStore};
 use crate::core::common::conf_sync::traits::ConfHandler;
-use crate::types::resources::EdgionPlugins;
+use edgion_resources::resources::EdgionPlugins;
 
 /// Create a PluginStore handler for registration with ConfigClient
 pub fn create_plugin_handler() -> Box<dyn ConfHandler<EdgionPlugins> + Send + Sync> {
@@ -49,8 +49,8 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsSpec, RequestFilterEntry};
-    use crate::types::resources::http_route::HTTPHeaderFilter;
+    use edgion_resources::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsSpec, RequestFilterEntry};
+    use edgion_resources::resources::http_route::HTTPHeaderFilter;
 
     fn create_test_plugin(namespace: &str, name: &str) -> EdgionPlugins {
         EdgionPlugins {

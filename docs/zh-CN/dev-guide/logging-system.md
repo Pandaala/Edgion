@@ -670,7 +670,7 @@ impl DataSender<String> for ElasticsearchSender {
 ### 2. 添加配置类型
 
 ```rust
-// src/types/output.rs
+// edgion-resources/src/output.rs
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum StringOutput {
@@ -749,7 +749,7 @@ match &config.output {
 ### 配置
 
 - `src/core/gateway/cli/config.rs` - Gateway 配置结构
-- `src/types/output.rs` - 日志输出配置类型
+- `edgion-resources/src/output.rs` - 日志输出配置类型
 - `config/edgion-gateway.yaml` - 配置示例
 
 ### 用户文档

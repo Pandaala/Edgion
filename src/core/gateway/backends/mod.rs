@@ -11,12 +11,12 @@ pub mod selector;
 pub mod service_kind;
 pub mod validation;
 
-use crate::types::resources::BackendTLSPolicy;
 pub use circuit_breaker::{get_circuit_breaker_store, parse_circuit_breaker_annotation};
 pub use discovery::{
     create_ep_slice_handler, create_service_handler, get_global_service_store, get_roundrobin_store, EndpointSliceExt,
     EpSliceStore, ServiceStore,
 };
+use edgion_resources::resources::BackendTLSPolicy;
 pub use panic_threshold::{
     configure_lb_panic_default, get_lb_panic_default, get_panic_threshold_store, panic_floor,
     parse_panic_threshold_annotation, resolve_panic_threshold,
@@ -40,8 +40,8 @@ use crate::core::gateway::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::core::gateway::runtime::ServerHeaderOpts;
 use crate::core::gateway::EdgionHttpContext;
 use crate::core::gateway::{end_response_500, end_response_503};
-use crate::types::edgion_status::EdgionStatus;
-use crate::types::ParsedLBPolicy;
+use edgion_resources::edgion_status::EdgionStatus;
+use edgion_resources::ParsedLBPolicy;
 use peer_builder::{
     apply_backend_app_protocol, create_tls_peer, detect_backend_app_protocol_key, extract_tls_config,
     record_tls_to_upstream, validate_backend_addr, BackendAppProtocol,

@@ -15,14 +15,14 @@ use super::link_sys::resolve_one;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::context::HandlerContext;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ref_manager::ResourceRef;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRefsError;
-use crate::types::credentials::resolvers::{
+use edgion_resources::credentials::resolvers::{
     BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver, TlsCertsResolver, WebhookApiKeyResolver,
 };
-use crate::types::resources::common::{SecretSlot, TlsConfig};
-use crate::types::resources::link_sys::elasticsearch::ElasticsearchAuth;
-use crate::types::resources::link_sys::etcd::EtcdAuth;
-use crate::types::resources::link_sys::redis::RedisAuth;
-use crate::types::resources::link_sys::webhook::WebhookAuth;
+use edgion_resources::resources::common::{SecretSlot, TlsConfig};
+use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchAuth;
+use edgion_resources::resources::link_sys::etcd::EtcdAuth;
+use edgion_resources::resources::link_sys::redis::RedisAuth;
+use edgion_resources::resources::link_sys::webhook::WebhookAuth;
 
 /// Bind an auth-bearing CRD type to its resolver and resolution path.
 ///
@@ -198,7 +198,7 @@ impl TlsSpec for TlsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::resources::common::{SecretObjectReference, SecretSlot};
+    use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
 
     fn slot(name: &str) -> SecretSlot {
         SecretSlot {

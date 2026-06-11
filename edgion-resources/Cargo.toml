@@ -1,0 +1,48 @@
+[package]
+name = "edgion-resources"
+version = "0.1.0"
+edition = "2021"
+authors = ["pandalaa"]
+
+[lib]
+name = "edgion_resources"
+path = "src/lib.rs"
+
+[dependencies]
+# Serialization / schema
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+schemars = { version = "1" }
+
+# Kubernetes resource model
+kube = { version = "2.0.1", features = ["derive"] }
+k8s-openapi = { version = "0.26.1", features = ["latest", "schemars"] }
+
+# Matcher / config helpers
+regex = "1.12"
+smallvec = "1.15"
+parking_lot = "0.12"
+
+# Errors
+thiserror = "2.0.18"
+anyhow = "1.0"
+
+# Pingora (err.rs `Error`, `TcpKeepaliveConfig::to_pingora`); TLS backend feature
+# is supplied by the workspace via feature unification with the main crate.
+pingora-core = { version = "0.8.1" }
+
+# Auth / crypto config helpers
+jsonwebtoken = "9"
+zeroize = { version = "1", features = ["derive"] }
+base64 = "0.22"
+
+# Misc
+clap = { version = "4.5", features = ["derive", "env"] }
+chrono = "0.4"
+prost = "0.13"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+http = "1.4.0"

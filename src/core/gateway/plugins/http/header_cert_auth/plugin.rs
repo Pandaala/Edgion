@@ -19,8 +19,8 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_sec
 use crate::core::gateway::ctx::ClientCertInfo;
 use crate::core::gateway::plugins::http::common::auth_common::send_gateway_auth_error_response;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig};
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig};
 
 /// Pre-parsed CA entry kept in the trust pool.
 ///

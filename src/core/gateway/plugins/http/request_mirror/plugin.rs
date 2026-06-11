@@ -17,8 +17,8 @@ use crate::core::gateway::observe::metrics::record_mirror_metric;
 use crate::core::gateway::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::core::gateway::{MirrorConfig, MirrorState};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::http_route::HTTPRequestMirrorFilter;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::http_route::HTTPRequestMirrorFilter;
 
 use super::mirror_log::{emit_mirror_log, new_entry};
 

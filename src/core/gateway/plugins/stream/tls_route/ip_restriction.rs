@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use super::tls_route_plugin_trait::{TlsRouteContext, TlsRoutePlugin};
 use crate::core::gateway::plugins::stream::stream_plugin_trait::access_decision_to_stream_result;
 use crate::core::gateway::plugins::stream::StreamPluginResult;
-use crate::types::resources::edgion_plugins::IpRestrictionConfig;
+use edgion_resources::resources::edgion_plugins::IpRestrictionConfig;
 
 const PLUGIN_NAME: &str = "TlsRouteIpRestriction";
 

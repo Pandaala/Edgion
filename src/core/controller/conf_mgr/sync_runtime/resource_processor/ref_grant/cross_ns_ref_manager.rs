@@ -26,7 +26,7 @@ pub fn new_cross_ns_ref_manager() -> CrossNamespaceRefManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ResourceKind;
+    use edgion_resources::ResourceKind;
 
     #[test]
     fn test_multiple_resources_same_target() {

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::core::gateway::link_sys::credential::{CredentialState, ResolvedCredential};
 use crate::core::gateway::link_sys::tls as tls_helper;
-use crate::types::resources::link_sys::elasticsearch::*;
+use edgion_resources::resources::link_sys::elasticsearch::*;
 
 // ============================================================================
 // Safety ceilings
@@ -235,7 +235,7 @@ mod tests {
     use base64::engine::general_purpose::STANDARD as BASE64;
 
     use crate::core::gateway::link_sys::credential::{CredentialState, InvalidReason, ResolvedCredential};
-    use crate::types::credentials::materials::{BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial};
+    use edgion_resources::credentials::materials::{BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial};
 
     /// Shorthand: `NotRequired` state.
     fn no_auth() -> CredentialState<ResolvedCredential> {
@@ -243,7 +243,7 @@ mod tests {
     }
 
     fn basic_auth_crd() -> ElasticsearchClientConfig {
-        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
+        use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
         ElasticsearchClientConfig {
             auth: Some(ElasticsearchAuth::Basic {
                 slot: SecretSlot {
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_build_es_client_api_key_auth() {
-        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
+        use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
         let crd = ElasticsearchClientConfig {
             auth: Some(ElasticsearchAuth::ApiKey {
                 slot: SecretSlot {
@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn test_build_es_client_bearer_auth() {
-        use crate::types::resources::common::{SecretObjectReference, SecretSlot};
+        use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
         let crd = ElasticsearchClientConfig {
             auth: Some(ElasticsearchAuth::Bearer {
                 slot: SecretSlot {
@@ -453,7 +453,7 @@ mod tests {
     /// the same test binary otherwise.
     #[test]
     fn test_tls_disabled_ignores_insecure_skip_verify_even_in_prod() {
-        use crate::types::resources::common::TlsConfig;
+        use edgion_resources::resources::common::TlsConfig;
 
         let _env_guard = crate::core::gateway::link_sys::tls::ENV_TEST_MUTEX.lock();
 

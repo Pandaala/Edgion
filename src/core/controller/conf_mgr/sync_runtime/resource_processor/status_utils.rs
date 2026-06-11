@@ -11,8 +11,8 @@
 //! require data-plane feedback unavailable in our async gRPC architecture.
 //! PartiallyInvalid condition is supported for routes with partially invalid rules.
 
-use crate::types::resources::common::Condition;
 use chrono::{SecondsFormat, Utc};
+use edgion_resources::resources::common::Condition;
 
 /// Standard Gateway API condition types
 pub mod condition_types {

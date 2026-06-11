@@ -24,8 +24,8 @@ use crate::core::gateway::link_sys::providers::redis::RedisLinkClient;
 use crate::core::gateway::plugins::http::common::{format_duration, resolve_rate_limit_key, RateLimitKey};
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use crate::types::filters::PluginRunningResult;
-use crate::types::resources::edgion_plugins::{OnRedisFailure, RateLimitAlgorithm, RateLimitRedisConfig};
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::{OnRedisFailure, RateLimitAlgorithm, RateLimitRedisConfig};
 
 use super::scripts::{FIXED_WINDOW_SCRIPT, SLIDING_WINDOW_SCRIPT, TOKEN_BUCKET_SCRIPT};
 
@@ -490,7 +490,7 @@ impl RequestFilter for RateLimitRedis {
         // diagnostics go to metrics instead.
 
         // 1. Validate config
-        use crate::types::resources::edgion_plugins::PluginValidation;
+        use edgion_resources::resources::edgion_plugins::PluginValidation;
         if self.config.validation_error().is_some() {
             plugin_log.push_err("cfg load fail");
             // invariant: 500 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.

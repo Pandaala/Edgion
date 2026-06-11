@@ -1,7 +1,7 @@
-use crate::core::common::matcher::HashHost;
-use crate::types::listener_key::ListenerKey;
-use crate::types::EdgionTls;
 use arc_swap::ArcSwap;
+use edgion_resources::listener_key::ListenerKey;
+use edgion_resources::matcher::HashHost;
+use edgion_resources::EdgionTls;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 

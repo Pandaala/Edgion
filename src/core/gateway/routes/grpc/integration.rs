@@ -6,9 +6,9 @@
 use crate::core::gateway::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::EdgionHttpContext;
-use crate::types::err::EdError;
-use crate::types::filters::PluginRunningResult;
-use crate::types::EdgionStatus;
+use edgion_resources::err::EdError;
+use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::EdgionStatus;
 use pingora_proxy::Session;
 use std::sync::Arc;
 

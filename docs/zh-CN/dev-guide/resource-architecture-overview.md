@@ -6,10 +6,10 @@
 
 ```mermaid
 graph TD
-    YAML["YAML / K8s 对象"] --> Type["Rust 资源类型<br/>src/types/resources/"]
-    Type --> Kind["ResourceKind<br/>src/types/resource/kind.rs"]
-    Type --> Defs["define_resources!<br/>src/types/resource/defs.rs"]
-    Type --> Meta["ResourceMeta 实现<br/>src/types/resource/meta/impls.rs"]
+    YAML["YAML / K8s 对象"] --> Type["Rust 资源类型<br/>edgion-resources/src/resources/"]
+    Type --> Kind["ResourceKind<br/>edgion-resources/src/resource/kind.rs"]
+    Type --> Defs["define_resources!<br/>edgion-resources/src/resource/defs.rs"]
+    Type --> Meta["ResourceMeta 实现<br/>edgion-resources/src/resource/meta/impls.rs"]
     Defs --> Processor["ResourceProcessor<T>"]
     Meta --> Processor
     Processor --> Registry["PROCESSOR_REGISTRY"]
@@ -26,10 +26,10 @@ graph TD
 
 | 面向 | 当前路径 | 作用 |
 |------|----------|------|
-| Rust 类型 | `src/types/resources/` | 资源本体结构，定义 CRD 或 K8s 对象字段 |
-| Kind 枚举 | `src/types/resource/kind.rs` | 控制面、同步层、网关运行时共用的穷举枚举 |
-| 统一元数据 | `src/types/resource/defs.rs` | `define_resources!` 单一事实源，维护 cache 名、base-conf 标记、registry 可见性、endpoint 行为 |
-| Meta 实现 | `src/types/resource/meta/impls.rs` | `ResourceMeta` 实现，包括 `key_name()`、版本读取、可选 `pre_parse()` |
+| Rust 类型 | `edgion-resources/src/resources/` | 资源本体结构，定义 CRD 或 K8s 对象字段 |
+| Kind 枚举 | `edgion-resources/src/resource/kind.rs` | 控制面、同步层、网关运行时共用的穷举枚举 |
+| 统一元数据 | `edgion-resources/src/resource/defs.rs` | `define_resources!` 单一事实源，维护 cache 名、base-conf 标记、registry 可见性、endpoint 行为 |
+| Meta 实现 | `edgion-resources/src/resource/meta/impls.rs` | `ResourceMeta` 实现，包括 `key_name()`、版本读取、可选 `pre_parse()` |
 
 `define_resources!` 条目里最关键的元数据通常包括：
 
@@ -64,7 +64,7 @@ graph TD
 - 每个 processor 都会暴露一个 watch object。
 - `PROCESSOR_REGISTRY.all_watch_objs()` 把这些 watch object 汇总起来。
 - `ConfigSyncServer.register_all()` 通过 gRPC `List` / `Watch` 对外发布。
-- `src/types/resource/defs.rs` 里的 `DEFAULT_NO_SYNC_KINDS` 定义了默认 controller-only 资源。
+- `edgion-resources/src/resource/defs.rs` 里的 `DEFAULT_NO_SYNC_KINDS` 定义了默认 controller-only 资源。
 
 例子：
 

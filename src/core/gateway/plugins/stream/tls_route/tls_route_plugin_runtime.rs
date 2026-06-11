@@ -2,7 +2,7 @@
 
 use super::tls_route_plugin_trait::{TlsRouteContext, TlsRoutePlugin};
 use crate::core::gateway::plugins::stream::stream_plugin_trait::StreamPluginResult;
-use crate::types::resources::edgion_stream_plugins::{TlsRoutePluginEntry, TlsRouteStreamPlugin};
+use edgion_resources::resources::edgion_stream_plugins::{TlsRoutePluginEntry, TlsRouteStreamPlugin};
 use std::sync::Arc;
 
 use super::ip_restriction::TlsRouteIpRestriction;

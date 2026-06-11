@@ -14,8 +14,8 @@
 use super::event::{FileSystemEvent, ParsedFileInfo};
 use super::path_registry::{ForgetOutcome, PathRegistry, RecordOutcome, ResourceKey};
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
-use crate::types::ResourceKind;
 use anyhow::{Context, Result};
+use edgion_resources::ResourceKind;
 use notify::event::{ModifyKind, RenameMode};
 use notify::{Config, Event, EventKind, PollWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;

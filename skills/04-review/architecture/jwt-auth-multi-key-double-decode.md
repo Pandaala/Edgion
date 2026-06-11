@@ -14,7 +14,7 @@ description: Decide on jwt_auth multi-key path `verify_token` "decodes payload t
 - `src/core/gateway/plugins/http/jwt_auth/verify.rs:83-129` — `Credentials::Multi` branch
   - First `decode::<Claims>` with `insecure_disable_signature_validation` → reads the `key_claim_name` value from the payload to look up the matching credential in the multi-key map.
   - Second `decode::<Claims>` with full validation → produces the verified claims that downstream code consumes.
-- `src/types/resources/edgion_plugins/plugin_configs/jwt_auth.rs:93-95` — `key_claim_name` field documented as "Claim name in JWT **payload** that identifies the credential key (default: `key`)".
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/jwt_auth.rs:93-95` — `key_claim_name` field documented as "Claim name in JWT **payload** that identifies the credential key (default: `key`)".
 - `docs/en/dev-guide/jwt-auth-plugin-design.md` / `docs/zh-CN/dev-guide/jwt-auth-plugin-design.md` — `key_claim_name` semantics explicitly aligned with APISIX/Kong.
 
 ## Points That Look Like Issues (will not be fixed)

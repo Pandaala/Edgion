@@ -95,7 +95,7 @@ impl ConnectionFilter for StreamPluginConnectionFilter {
 mod tests {
     use super::*;
     use crate::core::gateway::plugins::stream::compile_stream_plugins;
-    use crate::types::resources::edgion_stream_plugins::EdgionStreamPlugins;
+    use edgion_resources::resources::edgion_stream_plugins::EdgionStreamPlugins;
 
     fn empty_esp_yaml() -> EdgionStreamPlugins {
         let yaml = r#"

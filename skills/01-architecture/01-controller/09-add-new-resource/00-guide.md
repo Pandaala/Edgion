@@ -62,9 +62,9 @@ Replace `EdgionAcme` with the closest analog for your new resource.
 
 Always update:
 
-- `src/types/resources/<resource>.rs` or `src/types/resources/<resource>/mod.rs`
-- `src/types/resources/mod.rs`
-- `src/types/mod.rs` only if you introduce a new export pattern beyond the normal `resources::*` flow
+- `edgion-resources/src/resources/<resource>.rs` or `edgion-resources/src/resources/<resource>/mod.rs`
+- `edgion-resources/src/resources/mod.rs`
+- `edgion-resources/src/mod.rs` only if you introduce a new export pattern beyond the normal `resources::*` flow
 
 Notes:
 
@@ -75,16 +75,16 @@ Notes:
 
 Always update:
 
-- `src/types/resource/kind.rs`
-- `src/types/resource/defs.rs`
-- `src/types/resource/meta/impls.rs`
+- `edgion-resources/src/resource/kind.rs`
+- `edgion-resources/src/resource/defs.rs`
+- `edgion-resources/src/resource/meta/impls.rs`
 
 Notes:
 
 - `kind.rs` is still manual in this repo. Add the enum variant, `as_str()`, and `from_kind_name()` support.
 - `defs.rs` is the single source of truth for cache field names, capacities, aliases, and registry behavior.
 - `meta/impls.rs` is where `impl_resource_meta!` lives, including any `pre_parse` hook.
-- If the resource should stay controller-only by default, consider whether `DEFAULT_NO_SYNC_KINDS` in `src/types/resource/defs.rs` should include it.
+- If the resource should stay controller-only by default, consider whether `DEFAULT_NO_SYNC_KINDS` in `edgion-resources/src/resource/defs.rs` should include it.
 
 ### 3. Wire The Controller Side
 
