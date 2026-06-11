@@ -154,11 +154,11 @@ hex = "0.4"
 jsonwebtoken = "9"
 
 # Pingora
-pingora-core = { version = "0.8.0", features = ["connection_filter"] }
-pingora-http = "0.8.0"
-pingora-limits = "0.8.0"
-pingora-load-balancing = "0.8.0"
-pingora-proxy = { version = "0.8.0" }
+pingora-core = { version = "0.8.1", features = ["connection_filter"] }
+pingora-http = "0.8.1"
+pingora-limits = "0.8.1"
+pingora-load-balancing = "0.8.1"
+pingora-proxy = { version = "0.8.1" }
 etcd-client = { version = "0.18", features = ["tls"] }
 fred = { version = "10", default-features = false, features = [
     "enable-rustls",       # TLS via rustls (consistent with Edgion)
@@ -204,7 +204,7 @@ time = { version = "0.3", features = ["std"] }
 sha1 = "0.10.6"
 # Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
-pingora-ketama = "0.8.0"
+pingora-ketama = "0.8.1"
 tower = { version = "0.5", features = ["util"] }
 
 [build-dependencies]
