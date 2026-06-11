@@ -73,22 +73,12 @@ impl Snapshot {
 //   counter; never resets. Structural, not residue.
 // - `controller.watch_objects.count`: count of live watch subscriptions; not
 //   tied to a resource lifecycle. Structural.
-// - `gateway.gateway_config.gateways` and
-//   `gateway.listener_gateway_info.listener_count`: SUSPECT LEAK, not by
-//   design. `wipe-all` (see `src/core/controller/api/wipe_handlers.rs`
-//   Tier 2) deletes the Gateway resource; both stores' clear/rebuild paths
-//   would zero these counts if the delete event reached the gateway-process
-//   handler. Exempted today to keep the residue check green; the underlying
-//   leak is tracked in
-//   `tasks/todo/cache-residue-ignore-paths-real-leak.md`. DO NOT add new
-//   entries here without investigating the same way — and DO NOT add
-//   `gateway.tcp_routes.total_routes_in_tables` (added by the cross-kind
-//   audit specifically so L4 orphan residue is OBSERVABLE).
+//
+// DO NOT add `gateway.tcp_routes.total_routes_in_tables` (added by the
+// cross-kind audit specifically so L4 orphan residue is OBSERVABLE).
 const IGNORE_PATHS: &[&str] = &[
     "controller.event_store.next_resource_version",
     "controller.watch_objects.count",
-    "gateway.gateway_config.gateways",
-    "gateway.listener_gateway_info.listener_count",
 ];
 
 enum ExitDecision {
@@ -453,13 +443,5 @@ mod walk_tests {
         let v = json!({ "service_store": { "count": 0 } });
         walk_json("gateway", &v, &mut snap);
         assert!(snap.is_empty());
-    }
-
-    #[test]
-    fn ignored_gateway_paths() {
-        let mut snap = Snapshot::default();
-        let v = json!({ "gateway_config": { "gateways": 1 } });
-        walk_json("gateway", &v, &mut snap);
-        assert!(snap.is_empty(), "ignored gateway_config.gateways must not appear");
     }
 }
