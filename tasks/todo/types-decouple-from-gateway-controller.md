@@ -143,8 +143,20 @@ moves above (ctx → gateway; path_normalization relocation).
    consumers (all in `core/gateway`): `crate::types::ctx::*` → `crate::core::gateway::ctx::*`,
    and root re-exported ctx symbols (`EdgionHttpContext`, `Rsc`, `MatchInfo`, …) →
    `crate::core::gateway::*`. `cargo check --all-targets` + `cargo clippy` pass.
-3. **Relocate helpers** (`path_normalization`, `TcpKeepaliveConfig`, rate-limit config)
-   to a `types`-visible layer (Groups B/C helper edges).
+3. ✅ **DONE (2026-06-11) — Relocate helpers** (Groups B/C helper edges):
+   - `core::gateway::path_normalization` → `core::common::path_normalization` (pure
+     module, zero crate deps). Moved its global static + `init/get_path_normalization_config`
+     out of `cli::config` into the module too.
+   - `TcpKeepaliveConfig` (struct + `to_pingora`) → `types::resources::common`
+     (`types` already depends on pingora via `err.rs`; `gateway::routes::common` now
+     imports it back).
+   - Rate-limit globals (`RateLimitGlobalConfig`, `GATEWAY_INSTANCE_COUNT`,
+     `RATE_LIMIT_GLOBAL_CONFIG`, estimator-slot consts + getters, `init_rate_limit_global_config`)
+     extracted from `gateway::cli::config` → new `core::common::rate_limit_config`.
+     Redirected consumers (types `rate_limit.rs`, gateway `cli/{mod,config}.rs`,
+     `conf_sync/conf_client/grpc_client.rs`). Removed now-unused `use tracing;` from cli/config.rs.
+   - `cargo check --all-targets` + `cargo clippy` pass. `request_restriction.rs` and the
+     path-norm part of `http_route_preparse.rs` are now fully clean.
 4. **Peel route runtime** into `PreparedRoute` wrappers (Group B).
 5. **Peel plugin runtime** incl. the DSL VM (Group C) — expect this to be the longest.
 6. **Add the CI guard**; run full `cargo check --all-targets` + `cargo clippy` + tests.
