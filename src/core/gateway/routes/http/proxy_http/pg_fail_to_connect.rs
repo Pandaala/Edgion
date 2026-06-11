@@ -1,5 +1,5 @@
 use super::EdgionHttpProxy;
-use crate::types::EdgionHttpContext;
+use crate::core::gateway::EdgionHttpContext;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error, ErrorType};
 use pingora_proxy::Session;

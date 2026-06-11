@@ -12,7 +12,8 @@ use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::routes::grpc::GrpcPortRouteManager;
 use crate::core::gateway::routes::http::routes_mgr::HttpPortRouteManager;
 use crate::core::gateway::runtime::server::server_header::ServerHeaderOpts;
-use crate::types::{EdgionGatewayConfig, EdgionHttpContext, Listener, ListenerKey};
+use crate::core::gateway::EdgionHttpContext;
+use crate::types::{EdgionGatewayConfig, Listener, ListenerKey};
 
 // Sub-modules
 pub mod global_plugins_resolve;

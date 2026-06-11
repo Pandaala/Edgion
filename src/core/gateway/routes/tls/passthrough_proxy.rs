@@ -31,9 +31,10 @@ use crate::core::gateway::routes::common::{is_core_service_backend_ref, UNSAFE_U
 use crate::core::gateway::routes::l4_duplex::bidirectional_relay;
 use crate::core::gateway::runtime::matching::route::hostname_matches_listener;
 use crate::core::gateway::runtime::store::get_listener_gateway_info_store;
+use crate::core::gateway::{MatchedInfo, Rsc};
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
+use crate::types::ListenerKey;
 use crate::types::ResourceMeta;
-use crate::types::{ListenerKey, MatchedInfo, Rsc};
 
 use super::tls_connect_retry_backoff;
 

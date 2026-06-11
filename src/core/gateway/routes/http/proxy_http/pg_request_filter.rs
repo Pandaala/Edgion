@@ -1,6 +1,7 @@
 use super::{resolve_global_plugins, resolve_route_ext_refs, EdgionHttpProxy};
 use crate::core::common::utils::net::host_without_port;
 use crate::core::gateway::cli::config::get_path_normalization_config;
+use crate::core::gateway::ctx::NormalizedHostname;
 use crate::core::gateway::path_normalization::{
     contains_escaped_slash, has_invalid_percent_encoding, normalize_path, PathNormalizationConfig,
 };
@@ -14,10 +15,10 @@ use crate::core::gateway::{
     end_response_400, end_response_404, end_response_421, end_response_500, end_response_grpc_unimplemented,
     terminate_with_fallback,
 };
-use crate::types::ctx::NormalizedHostname;
+use crate::core::gateway::{EdgionHttpContext, TlsConnId, TlsConnMeta};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::{CorsConfig, HTTPRouteFilter, HTTPRouteFilterType};
-use crate::types::{EdgionHttpContext, EdgionStatus, TlsConnId, TlsConnMeta};
+use crate::types::EdgionStatus;
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::Session;
 use std::sync::Arc;

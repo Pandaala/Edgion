@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use crate::core::gateway::link_sys::{DataSender, LocalFileWriter};
 use crate::core::gateway::observe::logs::create_sync_logger;
 use crate::core::gateway::observe::metrics::global_metrics;
-use crate::types::TlsConnMeta;
+use crate::core::gateway::TlsConnMeta;
 
 /// Global SSL logger instance
 static SSL_LOGGER: OnceLock<SslLogger> = OnceLock::new();

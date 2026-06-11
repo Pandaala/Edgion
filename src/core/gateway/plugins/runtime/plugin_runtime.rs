@@ -8,6 +8,7 @@ use pingora_proxy::Session;
 
 use crate::core::gateway::plugins::runtime::log::la;
 use crate::core::gateway::runtime::server::http_to_grpc_status;
+use crate::core::gateway::EdgionHttpContext;
 use crate::types::filters::PluginRunningResult;
 use crate::types::filters::PluginRunningResult::ErrTerminateRequest;
 use crate::types::resources::edgion_plugins::CorsConfig;
@@ -18,7 +19,6 @@ use crate::types::resources::{
 use crate::types::resources::{
     RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry,
 };
-use crate::types::EdgionHttpContext;
 
 use super::conditional_filter::{
     ConditionalRequestFilter, ConditionalUpstreamResponse, ConditionalUpstreamResponseBodyFilter,

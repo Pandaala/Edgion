@@ -19,11 +19,11 @@ use crate::core::common::utils::net::host_without_port;
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::plugin_metadata::get_global_plugin_metadata_store;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::core::gateway::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use crate::types::common::KeyGet;
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{HashAlgorithm, RegionDef, RegionRouteConfig, RouteRule};
 use crate::types::resources::plugin_metadata::{ClusterRegionRouteConfig, ServiceRegionRouteConfig};
-use crate::types::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 
 // Hash function
 fn compute_hash(key: &str, algorithm: &HashAlgorithm, modulo: u16) -> u16 {

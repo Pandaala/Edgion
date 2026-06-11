@@ -1,6 +1,7 @@
 use super::EdgionHttpProxy;
 use crate::core::gateway::send_grpc_trailers_only;
-use crate::types::{EdgionHttpContext, EdgionStatus};
+use crate::core::gateway::EdgionHttpContext;
+use crate::types::EdgionStatus;
 use pingora_core::{ConnectionClosed, Error, ErrorSource, ErrorType, HTTPStatus, ReadError, WriteError};
 use pingora_proxy::{FailToProxy, Session};
 #[inline]

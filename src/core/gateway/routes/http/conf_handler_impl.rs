@@ -11,8 +11,9 @@ use crate::core::gateway::routes::http::routes_mgr::{
     resolved_listeners_for_route, DomainRouteRules, GlobalHttpRouteManagers, RouteRules,
 };
 use crate::core::gateway::routes::http::{get_global_http_route_managers, HttpRouteRuleUnit};
+use crate::core::gateway::MatchInfo;
 use crate::types::resources::common::ParentReference;
-use crate::types::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, MatchInfo, ResourceMeta};
+use crate::types::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, ResourceMeta};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

@@ -22,8 +22,9 @@ use crate::core::gateway::observe::AccessLogger;
 use crate::core::gateway::routes::common::{is_core_service_backend_ref, UNSAFE_UPSTREAM_ADDRESS_LOG};
 use crate::core::gateway::routes::l4_duplex::bidirectional_relay;
 use crate::core::gateway::routes::tls::TlsRouteManager;
+use crate::core::gateway::{MatchedInfo, Rsc, TlsConnMeta};
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
-use crate::types::{ListenerKey, MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
+use crate::types::{ListenerKey, ResourceMeta};
 use serde::Serialize;
 
 use super::{tls_connect_retry_backoff, TlsDuplexHooks};

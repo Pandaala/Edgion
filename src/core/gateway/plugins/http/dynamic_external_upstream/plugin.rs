@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::core::gateway::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use crate::types::filters::PluginRunningResult;
 use crate::types::resources::edgion_plugins::{
     DynamicExternalUpstreamConfig, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch,
 };
-use crate::types::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 
 pub struct DynamicExternalUpstream {
     name: String,

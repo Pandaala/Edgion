@@ -12,7 +12,8 @@
 //! handled here automatically and uniformly.
 
 use crate::core::gateway::runtime::server::server_header::ServerHeaderOpts;
-use crate::types::{EdgionHttpContext, EdgionStatus};
+use crate::core::gateway::EdgionHttpContext;
+use crate::types::EdgionStatus;
 use bytes::Bytes;
 use http::HeaderMap;
 use percent_encoding::{utf8_percent_encode, CONTROLS};
@@ -342,7 +343,8 @@ pub async fn end_response_503(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{EdgionHttpContext, EdgionStatus};
+    use crate::core::gateway::EdgionHttpContext;
+    use crate::types::EdgionStatus;
 
     /// When `response_committed` is true, `terminate_with_fallback` must be a no-op:
     /// it must NOT push `PluginTerminateWithoutResponse` into `ctx.edgion_status`.

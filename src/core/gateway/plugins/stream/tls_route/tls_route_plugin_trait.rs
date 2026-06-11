@@ -18,7 +18,7 @@ pub struct TlsRouteContext {
     pub listener_port: u16,
     pub sni: String,
     pub tls_id: Option<String>,
-    pub rsc: crate::types::Rsc,
+    pub rsc: crate::core::gateway::Rsc,
     pub is_mtls: bool,
     /// Per-connection plugin log buffer; callers may leave as `LogBuffer::new()`.
     pub log: LogBuffer,

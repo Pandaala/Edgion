@@ -1,7 +1,7 @@
 use super::EdgionHttpProxy;
 use crate::core::gateway::observe::AccessLogEntry;
 use crate::core::gateway::tls::validation::backend_san::BackendSanValidationResult;
-use crate::types::EdgionHttpContext;
+use crate::core::gateway::EdgionHttpContext;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::Digest;
 use pingora_proxy::Session;

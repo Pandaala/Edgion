@@ -1,10 +1,11 @@
+use crate::core::gateway::ctx::EdgionHttpContext;
 use crate::core::gateway::runtime::matching::route::check_gateway_listener_match;
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
-use crate::types::ctx::EdgionHttpContext;
+use crate::core::gateway::MatchInfo;
 use crate::types::err::EdError;
 use crate::types::resources::common::ParentReference;
-use crate::types::{HTTPRouteRule, MatchInfo};
+use crate::types::HTTPRouteRule;
 use pingora_proxy::Session;
 use regex::Regex;
 use std::cmp::Ordering;

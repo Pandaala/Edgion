@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::EdgionHttpProxy;
-use crate::types::{EdgionHttpContext, MirrorState};
+use crate::core::gateway::{EdgionHttpContext, MirrorState};
 use bytes::Bytes;
 use pingora_proxy::Session;
 use tokio::sync::mpsc;

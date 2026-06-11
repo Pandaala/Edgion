@@ -2,7 +2,7 @@
 //!
 //! Validates client certificate SAN/CN against whitelist after TLS handshake
 
-use crate::types::ctx::ClientCertInfo;
+use crate::core::gateway::ctx::ClientCertInfo;
 
 /// Validate client certificate against SAN whitelist
 /// Returns true if certificate matches whitelist or no whitelist configured

@@ -83,7 +83,7 @@ mod tests {
             listener_port: 443,
             sni: "test.example.com".to_string(),
             tls_id: Some("abcd1234".to_string()),
-            rsc: crate::types::Rsc {
+            rsc: crate::core::gateway::Rsc {
                 kind: "TLSRoute".to_string(),
                 ns: "default".to_string(),
                 name: "test-route".to_string(),

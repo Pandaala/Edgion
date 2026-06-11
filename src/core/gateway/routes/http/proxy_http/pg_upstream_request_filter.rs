@@ -1,6 +1,6 @@
 use super::EdgionHttpProxy;
 use crate::core::gateway::routes::grpc::format_grpc_timeout;
-use crate::types::EdgionHttpContext;
+use crate::core::gateway::EdgionHttpContext;
 use pingora_http::RequestHeader;
 use pingora_proxy::Session;
 

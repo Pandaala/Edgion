@@ -4,7 +4,7 @@ use crate::core::gateway::observe::metrics::{
     global_metrics, record_backend_request, record_request_duration, status_group, TestData, TestType,
 };
 use crate::core::gateway::observe::AccessLogEntry;
-use crate::types::EdgionHttpContext;
+use crate::core::gateway::EdgionHttpContext;
 use pingora_core::Error as PingoraError;
 use pingora_proxy::Session;
 use std::time::Instant;
@@ -287,7 +287,7 @@ mod tests {
     use super::*;
     use crate::core::gateway::lb::edgion_backend::EdgionBackend;
     use crate::core::gateway::lb::LbCommit;
-    use crate::types::BackendContext;
+    use crate::core::gateway::BackendContext;
     use pingora_core::protocols::l4::socket::SocketAddr;
     use pingora_load_balancing::Backend;
     use std::sync::Arc;
@@ -318,7 +318,7 @@ mod tests {
             });
         }
         let bc = ctx.backend_context.as_mut().unwrap();
-        bc.upstreams.push(crate::types::UpstreamInfo {
+        bc.upstreams.push(crate::core::gateway::UpstreamInfo {
             ip: None,
             port: None,
             status: None,

@@ -5,12 +5,13 @@ use crate::core::gateway::runtime::matching::{match_gateway_tls, GatewayTlsEntry
 use crate::core::gateway::tls::runtime::backend::cert_extractor::extract_client_cert_info;
 use crate::core::gateway::tls::runtime::backend::set_mtls_verify_callback;
 use crate::core::gateway::tls::store::cert_matcher::match_sni;
+use crate::core::gateway::{MatchedInfo, Rsc, TlsConnMeta};
 use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use crate::types::listener_key::ListenerKey;
 use crate::types::resources::edgion_gateway_config::EdgionGatewayConfig;
 use crate::types::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
 use crate::types::resources::gateway::FrontendValidationMode;
-use crate::types::{MatchedInfo, ResourceMeta, Rsc, TlsConnMeta};
+use crate::types::ResourceMeta;
 use anyhow::anyhow;
 use anyhow::Result;
 use pingora_core::listeners::tls::TlsSettings;
@@ -176,7 +177,9 @@ mod ssl_ctx_ex_data {
     ///
     /// # Safety
     /// `ssl_ptr` must be a valid SSL pointer during the call.
-    pub(super) unsafe fn peek_tls_conn_meta(ssl_ptr: *const boring_sys::SSL) -> Option<crate::types::ctx::TlsConnMeta> {
+    pub(super) unsafe fn peek_tls_conn_meta(
+        ssl_ptr: *const boring_sys::SSL,
+    ) -> Option<crate::core::gateway::ctx::TlsConnMeta> {
         let idx = SSL_CTX_EX_DATA_IDX.load(Ordering::Acquire);
         if idx < 0 {
             return None;
@@ -239,7 +242,9 @@ use ssl_ctx_ex_data::{store_ssl_ctx, take_ssl_ctx};
 /// # Safety
 /// `ssl_ptr` must be a valid SSL pointer during the call.
 #[cfg(feature = "boringssl")]
-pub(crate) unsafe fn peek_tls_conn_meta(ssl_ptr: *const boring_sys::SSL) -> Option<crate::types::ctx::TlsConnMeta> {
+pub(crate) unsafe fn peek_tls_conn_meta(
+    ssl_ptr: *const boring_sys::SSL,
+) -> Option<crate::core::gateway::ctx::TlsConnMeta> {
     ssl_ctx_ex_data::peek_tls_conn_meta(ssl_ptr)
 }
 

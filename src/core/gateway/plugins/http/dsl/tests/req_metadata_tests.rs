@@ -1,7 +1,7 @@
 //! Tests for request metadata builtins: protocol, grpc_service, grpc_method, content_length, client cert.
 
 use super::*;
-use crate::types::ctx::ClientCertInfo;
+use crate::core::gateway::ctx::ClientCertInfo;
 
 #[test]
 fn test_req_protocol_default() {

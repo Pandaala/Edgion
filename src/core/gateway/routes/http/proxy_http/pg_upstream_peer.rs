@@ -3,6 +3,7 @@ use crate::core::common::utils::net::{classify_backend_addr, resolve_domain, Blo
 use crate::core::gateway::backends::EdgionService;
 use crate::core::gateway::backends::{get_peer, try_get_peer};
 use crate::core::gateway::cli::config::get_path_normalization_config;
+use crate::core::gateway::ctx::BackendSource;
 use crate::core::gateway::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::core::gateway::routes::grpc::handle_grpc_upstream;
 use crate::core::gateway::routes::http::routes_mgr::RouteRules;
@@ -10,10 +11,10 @@ use crate::core::gateway::routes::http::session_persistence;
 use crate::core::gateway::{
     end_response_500, end_response_503, end_response_grpc_unavailable, terminate_with_fallback,
 };
-use crate::types::ctx::BackendSource;
+use crate::core::gateway::{EdgionHttpContext, SessionPersistenceState, UpstreamJumpTarget};
 use crate::types::err::EdError;
 use crate::types::filters::PluginRunningResult;
-use crate::types::{EdgionHttpContext, EdgionStatus, SessionPersistenceState, UpstreamJumpTarget};
+use crate::types::EdgionStatus;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use pingora_core::upstreams::peer::Peer;
@@ -403,9 +404,9 @@ async fn get_peer_with_sp_fallback(
 fn pick_backend_ref(
     rule: &std::sync::Arc<crate::types::HTTPRouteRule>,
     route_ns: &str,
-    jump: Option<&crate::types::UpstreamJumpTarget>,
+    jump: Option<&crate::core::gateway::UpstreamJumpTarget>,
 ) -> Result<crate::types::HTTPBackendRef, EdError> {
-    if let Some(crate::types::UpstreamJumpTarget::Internal(j)) = jump {
+    if let Some(crate::core::gateway::UpstreamJumpTarget::Internal(j)) = jump {
         if let Ok(b) =
             RouteRules::find_backend_by_name(rule, &j.backend_ref_name, j.backend_ref_namespace.as_deref(), route_ns)
         {
@@ -438,8 +439,8 @@ fn fold_peer_timeouts(
     backend: Option<std::time::Duration>,
     request_remaining: Option<std::time::Duration>,
     grpc_remaining: Option<std::time::Duration>,
-) -> Option<(std::time::Duration, crate::types::PeerTimeoutSource)> {
-    use crate::types::PeerTimeoutSource;
+) -> Option<(std::time::Duration, crate::core::gateway::PeerTimeoutSource)> {
+    use crate::core::gateway::PeerTimeoutSource;
     let mut best: Option<(std::time::Duration, PeerTimeoutSource)> = None;
     for (candidate, source) in [
         (backend, PeerTimeoutSource::BackendRequest),
@@ -646,7 +647,7 @@ async fn try_external_jump_peer(
     // Seed before validation so failure-path record_unsafe_resolved_upstream_attempt
     // has a backend_context to push onto. No K8s resource → rsc/service_key stay None.
     if ctx.backend_context.is_none() {
-        ctx.backend_context = Some(crate::types::ctx::BackendContext {
+        ctx.backend_context = Some(crate::core::gateway::ctx::BackendContext {
             source: Some(BackendSource::ExternalJump),
             rsc: None,
             service_key: None,
@@ -738,7 +739,7 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
     };
 
     let service_key = format!("{}/{}", namespace, name);
-    let rsc = crate::types::Rsc {
+    let rsc = crate::core::gateway::Rsc {
         kind: "Service".to_string(),
         ns: namespace,
         name,
@@ -844,7 +845,7 @@ fn decide_want_raw(annotation: Option<bool>, external_jump_preserve_raw: bool, c
 #[cfg(test)]
 mod tests {
     use super::{decide_want_raw, fold_peer_timeouts};
-    use crate::types::PeerTimeoutSource;
+    use crate::core::gateway::PeerTimeoutSource;
     use std::time::Duration;
 
     #[test]

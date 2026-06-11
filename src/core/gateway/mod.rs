@@ -4,6 +4,7 @@ pub mod cache;
 pub mod cli;
 pub mod conf_sync;
 pub mod config;
+pub mod ctx;
 pub mod lb;
 pub mod link_sys;
 pub mod observe;
@@ -13,6 +14,12 @@ pub mod routes;
 pub mod runtime;
 pub mod services;
 pub mod tls;
+
+pub use ctx::{
+    BackendContext, BackendTlsInfo, DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset,
+    MatchInfo, MatchedInfo, MirrorConfig, MirrorState, PeerTimeoutSource, PendingHeaderOp, RequestInfo, Rsc,
+    SessionPersistenceState, SetJumpOutcome, TlsConnId, TlsConnMeta, UpstreamInfo, UpstreamJumpTarget,
+};
 
 pub use cli::EdgionGatewayCli;
 pub(crate) use runtime::send_grpc_trailers_only;

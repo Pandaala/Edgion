@@ -1,10 +1,10 @@
 //! PluginSession trait - shared across all filter stages
 
+use crate::core::gateway::ctx::ClientCertInfo;
 use crate::core::gateway::plugins::runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
+use crate::core::gateway::{EdgionHttpContext, MirrorState, SetJumpOutcome, UpstreamJumpTarget};
 use crate::types::common::{KeyGet, KeySet};
-use crate::types::ctx::ClientCertInfo;
 use crate::types::EdgionStatus;
-use crate::types::{EdgionHttpContext, MirrorState, SetJumpOutcome, UpstreamJumpTarget};
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;

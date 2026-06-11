@@ -1226,8 +1226,8 @@ fn compose_uri(path: &str, query: Option<&str>) -> String {
 mod sensitive_tests {
     use super::*;
     use crate::types::sensitive::SENSITIVE_MODE;
-    use std::sync::atomic::Ordering;
     use parking_lot::Mutex;
+    use std::sync::atomic::Ordering;
 
     static MODE_LOCK: Mutex<()> = Mutex::new(());
 

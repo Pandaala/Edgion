@@ -1,6 +1,6 @@
+use crate::core::gateway::ctx::EdgionHttpContext;
 use crate::core::gateway::routes::http::match_unit::{HttpRouteRuleUnit, RouteMatchResult};
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
-use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use pingora_proxy::Session;
 use regex::RegexSet;
@@ -138,7 +138,8 @@ mod tests {
     use crate::core::gateway::lb::BackendSelector;
     use crate::core::gateway::plugins::PluginRuntime;
     use crate::core::gateway::routes::http::match_unit::MatchSpecificity;
-    use crate::types::{HTTPPathMatch, HTTPRouteMatch, HTTPRouteRule, MatchInfo};
+    use crate::core::gateway::MatchInfo;
+    use crate::types::{HTTPPathMatch, HTTPRouteMatch, HTTPRouteRule};
     use regex::Regex;
 
     /// Helper function to create a test HttpRouteRuleUnit with regex pattern

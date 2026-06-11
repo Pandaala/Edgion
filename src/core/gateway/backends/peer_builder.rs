@@ -1,10 +1,10 @@
 use crate::core::common::utils::net::{classify_backend_addr, BlockedBackendReason};
 use crate::core::gateway::backends::discovery::get_global_service_store;
 use crate::core::gateway::backends::gateway_backend_tls_store::get_global_gateway_backend_tls_store;
+use crate::core::gateway::EdgionHttpContext;
 use crate::types::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use crate::types::edgion_status::EdgionStatus;
 use crate::types::resources::BackendTLSPolicy;
-use crate::types::EdgionHttpContext;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr;
 #[cfg(feature = "boringssl")]
@@ -231,7 +231,7 @@ pub(crate) fn create_tls_peer(
 pub(crate) fn record_tls_to_upstream(ctx: &mut EdgionHttpContext, use_tls: bool, sni: &str) {
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         upstream.tls = if use_tls {
-            Some(crate::types::BackendTlsInfo {
+            Some(crate::core::gateway::BackendTlsInfo {
                 sni: if sni.is_empty() { None } else { Some(sni.to_string()) },
                 handshake_ok: None,
                 protocol: None,

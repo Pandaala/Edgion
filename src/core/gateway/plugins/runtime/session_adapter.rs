@@ -8,9 +8,10 @@ use std::collections::HashMap;
 use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
 use crate::core::gateway::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
+use crate::core::gateway::{EdgionHttpContext, MirrorState, PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget};
 use crate::types::common::{KeyGet, KeySet, WebhookExtract};
 use crate::types::filters::PluginRunningResult;
-use crate::types::{EdgionHttpContext, EdgionStatus, MirrorState, PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget};
+use crate::types::EdgionStatus;
 
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
@@ -574,7 +575,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         Ok(())
     }
 
-    fn client_cert_info(&self) -> Option<crate::types::ctx::ClientCertInfo> {
+    fn client_cert_info(&self) -> Option<crate::core::gateway::ctx::ClientCertInfo> {
         self.ctx.request_info.client_cert_info.clone()
     }
 
@@ -736,7 +737,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 #[cfg(test)]
 mod local_reply_tests {
     use super::*;
-    use crate::types::EdgionHttpContext;
+    use crate::core::gateway::EdgionHttpContext;
 
     #[test]
     fn build_stashes_status_and_framed_body() {

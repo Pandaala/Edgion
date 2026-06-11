@@ -4,9 +4,10 @@
 //! encapsulating all gRPC-specific logic within the `grpc` module.
 
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
+use crate::core::gateway::EdgionHttpContext;
 use crate::types::err::EdError;
 use crate::types::filters::PluginRunningResult;
-use crate::types::{EdgionHttpContext, EdgionStatus};
+use crate::types::EdgionStatus;
 use pingora_proxy::Session;
 use std::sync::Arc;
 

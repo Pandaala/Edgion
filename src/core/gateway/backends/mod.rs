@@ -38,9 +38,10 @@ pub use validation::validate_endpoint_in_route;
 use crate::core::common::utils::net::resolve_domain;
 use crate::core::gateway::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::core::gateway::runtime::ServerHeaderOpts;
+use crate::core::gateway::EdgionHttpContext;
 use crate::core::gateway::{end_response_500, end_response_503};
 use crate::types::edgion_status::EdgionStatus;
-use crate::types::{EdgionHttpContext, ParsedLBPolicy};
+use crate::types::ParsedLBPolicy;
 use peer_builder::{
     apply_backend_app_protocol, create_tls_peer, detect_backend_app_protocol_key, extract_tls_config,
     record_tls_to_upstream, validate_backend_addr, BackendAppProtocol,

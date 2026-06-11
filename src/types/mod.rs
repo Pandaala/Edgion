@@ -1,7 +1,6 @@
 pub mod common;
 pub mod constants;
 pub mod credentials;
-pub mod ctx;
 pub mod edgion_status;
 pub mod err;
 pub mod filters;
@@ -41,11 +40,6 @@ pub use self::resource::{
 
 // Re-export from other modules
 pub use self::constants::app::*;
-pub use self::ctx::{
-    BackendContext, BackendTlsInfo, DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset,
-    MatchInfo, MatchedInfo, MirrorConfig, MirrorState, PeerTimeoutSource, PendingHeaderOp, RequestInfo, Rsc,
-    SessionPersistenceState, SetJumpOutcome, TlsConnId, TlsConnMeta, UpstreamInfo, UpstreamJumpTarget,
-};
 pub use self::edgion_status::EdgionStatus;
 pub use self::err::{
     EdError, WATCH_ERR_EVENTS_LOST, WATCH_ERR_NOT_READY, WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD,
@@ -56,11 +50,6 @@ pub use self::observe::{LogConfig, LogType};
 pub use self::resources::*;
 pub use self::schema::*;
 pub use self::work_dir::{init_work_dir, work_dir, WorkDir};
-
-// Re-export from conf_mgr for backward compatibility
-pub use crate::core::controller::conf_mgr::{
-    CenterApi as ResourceStore, ConfEntry as ResourceEntry, ConfStoreError as ResourceStoreError,
-};
 
 // Backward compatibility re-exports (old paths)
 pub mod resource_kind {

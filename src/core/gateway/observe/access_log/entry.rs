@@ -2,7 +2,8 @@
 
 use crate::core::gateway::plugins::StageLogs;
 use crate::core::gateway::routes::grpc::GrpcMatchInfo;
-use crate::types::{BackendContext, EdgionHttpContext, EdgionStatus, MatchInfo, RequestInfo};
+use crate::core::gateway::{BackendContext, EdgionHttpContext, MatchInfo, RequestInfo};
+use crate::types::EdgionStatus;
 use serde::Serialize;
 use std::collections::HashMap;
 

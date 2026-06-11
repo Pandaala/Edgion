@@ -1,5 +1,5 @@
 use super::EdgionHttpProxy;
-use crate::types::EdgionHttpContext;
+use crate::core::gateway::EdgionHttpContext;
 use pingora_core::modules::http::grpc_web::GrpcWebBridge;
 use pingora_proxy::Session;
 

@@ -66,7 +66,7 @@ pub struct GrpcRouteInfo {
 pub struct GrpcMatchInfo {
     /// Resource identifier (kind="GRPCRoute")
     #[schemars(skip)]
-    pub rsc: crate::types::Rsc,
+    pub rsc: crate::core::gateway::Rsc,
     /// Rule id in GRPCRoute
     pub rule_id: usize,
     /// Rule name (from GRPCRouteRule.name, if set)
@@ -75,7 +75,7 @@ pub struct GrpcMatchInfo {
     /// Match id at rule id
     pub match_id: usize,
     /// sync_version from gRPC sync (0 = not set)
-    #[serde(default, skip_serializing_if = "crate::types::ctx::is_zero")]
+    #[serde(default, skip_serializing_if = "crate::core::gateway::ctx::is_zero")]
     pub sv: u64,
     /// Matched item (contains service/method in matched.method)
     pub matched: GRPCRouteMatch,
@@ -170,7 +170,7 @@ impl GrpcMatchInfo {
         };
 
         Self {
-            rsc: crate::types::Rsc {
+            rsc: crate::core::gateway::Rsc {
                 kind: "GRPCRoute".to_string(),
                 ns: route_ns,
                 name: route_name,

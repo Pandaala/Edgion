@@ -10,9 +10,9 @@ use crate::core::gateway::plugins::http::cors::Cors;
 use crate::core::gateway::plugins::runtime::log::PluginLog;
 use crate::core::gateway::plugins::runtime::session_adapter::PingoraSessionAdapter;
 use crate::core::gateway::plugins::runtime::traits::request_filter::RequestFilter;
+use crate::core::gateway::EdgionHttpContext;
 use crate::types::resources::edgion_gateway_config::{PreflightMode, PreflightPolicy};
 use crate::types::resources::CorsConfig;
-use crate::types::EdgionHttpContext;
 
 pub struct PreflightHandler {
     policy: Option<PreflightPolicy>,

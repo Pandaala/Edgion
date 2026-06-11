@@ -1,7 +1,7 @@
+use crate::core::gateway::ctx::EdgionHttpContext;
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
-use crate::types::ctx::EdgionHttpContext;
 use crate::types::err::EdError;
 use crate::types::resources::grpc_route::GRPCMethodMatchType;
 use pingora_proxy::Session;
@@ -70,10 +70,7 @@ impl GrpcMatchEngine {
                     }
                     // Exact service only (no method)
                     (Some(service), None, false) => {
-                        service_routes
-                            .entry(service.clone())
-                            .or_default()
-                            .push(route);
+                        service_routes.entry(service.clone()).or_default().push(route);
                     }
                     // Regex: service + method both present
                     (Some(_service), Some(_method), true) => {

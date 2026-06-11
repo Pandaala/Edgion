@@ -1,6 +1,6 @@
 use super::EdgionHttpProxy;
 use crate::core::gateway::observe::global_metrics;
-use crate::types::EdgionHttpContext;
+use crate::core::gateway::EdgionHttpContext;
 
 #[inline]
 pub fn new_ctx(edgion_http: &EdgionHttpProxy) -> EdgionHttpContext {

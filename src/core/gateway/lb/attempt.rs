@@ -28,7 +28,7 @@ pub enum FinalizeMode {
 /// Reads `upstream.lb_policy` and `upstream.lb_edgion_backend`, writes
 /// `upstream.lb_committed`. Idempotent: a second call is a no-op.
 #[inline]
-pub fn commit_attempt(upstream: &mut crate::types::UpstreamInfo) {
+pub fn commit_attempt(upstream: &mut crate::core::gateway::UpstreamInfo) {
     if upstream.lb_committed.is_some() {
         return;
     }
@@ -50,7 +50,7 @@ pub fn commit_attempt(upstream: &mut crate::types::UpstreamInfo) {
 /// Finalize and consume the commit on this upstream entry.
 /// Idempotent: a second call sees `None` from `take()` and does nothing.
 #[inline]
-pub fn finalize_attempt(upstream: &mut crate::types::UpstreamInfo, mode: FinalizeMode) {
+pub fn finalize_attempt(upstream: &mut crate::core::gateway::UpstreamInfo, mode: FinalizeMode) {
     let Some(commit) = upstream.lb_committed.take() else {
         return;
     };
@@ -74,7 +74,8 @@ pub fn finalize_attempt(upstream: &mut crate::types::UpstreamInfo, mode: Finaliz
 mod tests {
     use super::*;
     use crate::core::gateway::lb::edgion_backend::EdgionBackend;
-    use crate::types::{ParsedLBPolicy, UpstreamInfo};
+    use crate::core::gateway::UpstreamInfo;
+    use crate::types::ParsedLBPolicy;
     use pingora_core::protocols::l4::socket::SocketAddr;
     use pingora_load_balancing::Backend;
     use std::net::SocketAddr as StdSocketAddr;
