@@ -90,4 +90,4 @@ if req.request_path matches ".*%2[fF].*" { deny }
 - DSL builtin registration: `src/core/gateway/plugins/http/dsl/lang/compiler/builtins.rs`
 - DSL builtin evaluation: `src/core/gateway/plugins/http/dsl/lang/builtins.rs`
 - session trait: `src/core/gateway/plugins/runtime/traits/session.rs`
-- ctx canonical API: `src/types/ctx.rs`
+- ctx canonical API: `src/core/gateway/ctx.rs`

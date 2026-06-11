@@ -31,7 +31,7 @@ gRPC status" are **not accepted**.
 
 1. **Conflicts with the documented HTTP-status-centric model.** The model is recorded in
    three places: the `error_response.rs` module doc, the four-path drain note in
-   `src/types/ctx.rs` (`pending_response_header_ops`), and an independent twin
+   `src/core/gateway/ctx.rs` (`pending_response_header_ops`), and an independent twin
    `send_grpc_error_three_frame` in `session_adapter.rs`. Changing the signature to a
    `GrpcStatus` enum would split the single "HTTP status is the source of truth" contract.
 2. **Blast radius is ~10 call sites across 4 modules, not "1 direct caller".**

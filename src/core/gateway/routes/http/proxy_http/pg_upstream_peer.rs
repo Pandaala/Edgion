@@ -1,8 +1,8 @@
 use super::EdgionHttpProxy;
+use crate::core::common::path_normalization::get_path_normalization_config;
 use crate::core::common::utils::net::{classify_backend_addr, resolve_domain, BlockedBackendReason};
 use crate::core::gateway::backends::EdgionService;
 use crate::core::gateway::backends::{get_peer, try_get_peer};
-use crate::core::gateway::cli::config::get_path_normalization_config;
 use crate::core::gateway::ctx::BackendSource;
 use crate::core::gateway::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::core::gateway::routes::grpc::handle_grpc_upstream;

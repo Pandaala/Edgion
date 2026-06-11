@@ -345,7 +345,7 @@ Field semantics:
 
 ## Key Files
 
-- `src/types/ctx.rs` — `EdgionHttpContext`, `MatchInfo` (with `sv` field), `MatchedInfo` (with `sv` field)
+- `src/core/gateway/ctx.rs` — `EdgionHttpContext`, `MatchInfo` (with `sv` field), `MatchedInfo` (with `sv` field)
 - `src/core/gateway/observe/access_log/entry.rs` — `AccessLogEntry`
 - `src/core/gateway/observe/access_log/logger.rs` — `AccessLogger`
 - `src/core/gateway/observe/logs/logger_factory.rs` — `create_async_logger()`

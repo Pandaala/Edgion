@@ -387,7 +387,7 @@ cli_tokens:
 
 ## `path_normalization` — Path Normalization (Gateway-side configuration)
 
-Path normalization configuration is read on the Gateway side (`src/core/gateway/path_normalization/config.rs`); the Controller config does not directly own this section, but skills documentation records it here for unified reference.
+Path normalization configuration is read on the Gateway side (`src/core/common/path_normalization/config.rs`); the Controller config does not directly own this section, but skills documentation records it here for unified reference.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|

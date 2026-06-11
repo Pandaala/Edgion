@@ -376,7 +376,7 @@ impl Default for RateLimitConfig {
 }
 
 // Re-export from cli config for convenience
-pub use crate::core::gateway::cli::config::{
+pub use crate::core::common::rate_limit_config::{
     get_default_estimator_slots, get_gateway_instance_count, get_max_estimator_slots, get_min_estimator_slots, SLOTS_K,
 };
 
@@ -547,7 +547,7 @@ impl PluginValidation for RateLimitConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::gateway::cli::config::set_gateway_instance_count;
+    use crate::core::common::rate_limit_config::set_gateway_instance_count;
     use parking_lot::Mutex;
     use std::sync::OnceLock;
 

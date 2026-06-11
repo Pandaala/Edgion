@@ -22,9 +22,9 @@ use tokio::sync::Mutex;
 use super::error::{map_jwt_decode_error_typed, OidcVerifyError};
 use crate::core::common::auth::jwks_provider::{DiscoveryDoc, DiscoveryValidator, JwksProvider, JwksProviderConfig};
 use crate::core::common::jwt_common::{resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError};
+use crate::core::common::path_normalization::normalize_config_path;
 use crate::core::gateway::cache::ShardedLruCache;
 use crate::core::gateway::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
-use crate::core::gateway::path_normalization::normalize_config_path;
 use crate::core::gateway::plugins::http::common::auth_common::{
     send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
 };
@@ -181,7 +181,7 @@ impl OpenidConnect {
         // config-side and request-side paths inhabit the same normalized space.
         // See docs/superpowers/specs/2026-04-26-uri-normalization-design.md §3.5.
         let mut config = config.clone();
-        let path_cfg = crate::core::gateway::cli::config::get_path_normalization_config();
+        let path_cfg = crate::core::common::path_normalization::get_path_normalization_config();
         let normalized_logout_path = normalize_config_path(&config.logout_path, path_cfg);
         if normalized_logout_path != config.logout_path {
             tracing::info!(

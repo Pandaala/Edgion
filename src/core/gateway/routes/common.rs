@@ -1,6 +1,6 @@
 use crate::types::constants::annotations::edgion::EDGION_STREAM_PLUGINS;
 use crate::types::constants::annotations::edgion::{TCP_KEEPALIVE_INTERVAL, TCP_KEEPALIVE_PROBES, TCP_KEEPALIVE_TIME};
-use crate::types::resources::common::ParentReference;
+use crate::types::resources::common::{ParentReference, TcpKeepaliveConfig};
 use crate::types::resources::http_route::RouteParentStatus;
 use kube::api::ObjectMeta;
 use std::collections::BTreeMap;
@@ -177,33 +177,6 @@ const KEEPALIVE_PROBES_MAX: usize = 20;
 // matches the ceiling, so this is not a copy-paste mistake.
 const KEEPALIVE_INTERVAL_DEFAULT_SECS: u64 = 75;
 const KEEPALIVE_PROBES_DEFAULT: usize = 9;
-
-/// Resolved, comparable TCP keepalive configuration for an L4 upstream.
-///
-/// Deliberately an Edgion-local type rather than Pingora's `TcpKeepalive`:
-/// it is `PartialEq`/`Eq` (Pingora's is not) and keeps `pingora` out of the
-/// CRD resource types. Converted to Pingora's runtime type at the data-plane
-/// edge via [`TcpKeepaliveConfig::to_pingora`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TcpKeepaliveConfig {
-    pub idle: Duration,
-    pub interval: Duration,
-    pub count: usize,
-}
-
-impl TcpKeepaliveConfig {
-    /// Convert to Pingora's runtime keepalive type. `user_timeout` is
-    /// Linux-only; `Duration::ZERO` tells the kernel to use the system default.
-    pub fn to_pingora(&self) -> pingora_core::protocols::l4::ext::TcpKeepalive {
-        pingora_core::protocols::l4::ext::TcpKeepalive {
-            idle: self.idle,
-            interval: self.interval,
-            count: self.count,
-            #[cfg(target_os = "linux")]
-            user_timeout: Duration::ZERO,
-        }
-    }
-}
 
 fn clamp_warn_secs(v: u64, min: u64, max: u64, route_key: &str, field: &str) -> u64 {
     let clamped = v.clamp(min, max);

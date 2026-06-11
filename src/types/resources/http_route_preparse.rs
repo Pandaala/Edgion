@@ -2,7 +2,7 @@
 //! These structures are not serialized, only used for runtime analysis
 
 use super::{HTTPRoute, HTTPRouteFilterType, LocalObjectReference};
-use crate::core::gateway::path_normalization::normalize_config_path;
+use crate::core::common::path_normalization::normalize_config_path;
 use crate::core::gateway::plugins::PluginRuntime;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -228,7 +228,7 @@ impl HTTPRoute {
             return;
         };
 
-        let path_cfg = crate::core::gateway::cli::config::get_path_normalization_config();
+        let path_cfg = crate::core::common::path_normalization::get_path_normalization_config();
         for rule in rules.iter_mut() {
             let Some(matches) = rule.matches.as_mut() else {
                 continue;

@@ -8,7 +8,6 @@ pub mod ctx;
 pub mod lb;
 pub mod link_sys;
 pub mod observe;
-pub mod path_normalization;
 pub mod plugins;
 pub mod routes;
 pub mod runtime;

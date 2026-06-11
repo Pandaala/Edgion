@@ -1,10 +1,10 @@
 use super::{resolve_global_plugins, resolve_route_ext_refs, EdgionHttpProxy};
-use crate::core::common::utils::net::host_without_port;
-use crate::core::gateway::cli::config::get_path_normalization_config;
-use crate::core::gateway::ctx::NormalizedHostname;
-use crate::core::gateway::path_normalization::{
+use crate::core::common::path_normalization::get_path_normalization_config;
+use crate::core::common::path_normalization::{
     contains_escaped_slash, has_invalid_percent_encoding, normalize_path, PathNormalizationConfig,
 };
+use crate::core::common::utils::net::host_without_port;
+use crate::core::gateway::ctx::NormalizedHostname;
 use crate::core::gateway::plugins::http::get_global_plugin_store;
 use crate::core::gateway::routes::grpc::{parse_grpc_timeout, try_match_grpc_route};
 use crate::core::gateway::runtime::hostname_matches_listener;

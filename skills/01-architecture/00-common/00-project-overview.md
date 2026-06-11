@@ -119,7 +119,7 @@ src/
 
 ## EdgionHttpContext — per-request state container
 
-Defined in `src/types/ctx.rs`, the "backpack" carried through the entire HTTP request lifecycle:
+Defined in `src/core/gateway/ctx.rs`, the "backpack" carried through the entire HTTP request lifecycle:
 
 | Field | Purpose |
 |------|------|

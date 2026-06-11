@@ -1188,11 +1188,11 @@ impl EdgionHttpContext {
     pub fn refresh_normalized_path(
         &mut self,
         req_header: &pingora_http::RequestHeader,
-        cfg: &crate::core::gateway::path_normalization::PathNormalizationConfig,
+        cfg: &crate::core::common::path_normalization::PathNormalizationConfig,
     ) {
         let raw = req_header.uri.path();
         self.request_info.normalized_current_path =
-            match crate::core::gateway::path_normalization::normalize_path(raw, cfg) {
+            match crate::core::common::path_normalization::normalize_path(raw, cfg) {
                 Some(s) => s,
                 None => raw.to_string(),
             };
@@ -1337,9 +1337,9 @@ mod path_view_tests {
         let mut ctx = EdgionHttpContext::new();
         ctx.request_info.entry_raw_path = entry_path.to_string();
         ctx.request_info.entry_raw_query = entry_query.map(str::to_string);
-        let path_cfg = crate::core::gateway::path_normalization::PathNormalizationConfig::default();
+        let path_cfg = crate::core::common::path_normalization::PathNormalizationConfig::default();
         ctx.request_info.normalized_current_path =
-            match crate::core::gateway::path_normalization::normalize_path(entry_path, &path_cfg) {
+            match crate::core::common::path_normalization::normalize_path(entry_path, &path_cfg) {
                 Some(s) => s,
                 None => entry_path.to_string(),
             };
@@ -1368,7 +1368,7 @@ mod path_view_tests {
     fn refresh_after_rewrite() {
         let mut ctx = make_ctx("/api/old", None);
         let req = RequestHeader::build("GET", b"/api/new", None).unwrap();
-        let path_cfg = crate::core::gateway::path_normalization::PathNormalizationConfig::default();
+        let path_cfg = crate::core::common::path_normalization::PathNormalizationConfig::default();
         ctx.refresh_normalized_path(&req, &path_cfg);
         assert_eq!(ctx.path(), "/api/new");
         assert_eq!(ctx.request_path(), "/api/old");

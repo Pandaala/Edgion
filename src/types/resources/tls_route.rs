@@ -12,7 +12,7 @@ use super::common::{ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::core::gateway::lb::BackendSelector;
 use crate::core::gateway::plugins::PluginRuntime;
-use crate::core::gateway::routes::common::TcpKeepaliveConfig;
+use crate::types::resources::common::TcpKeepaliveConfig;
 use crate::types::ListenerKey;
 
 /// API group for TLSRoute

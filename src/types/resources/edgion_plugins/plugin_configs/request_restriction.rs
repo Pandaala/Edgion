@@ -11,7 +11,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use crate::core::gateway::path_normalization::normalize_config_path;
+use crate::core::common::path_normalization::normalize_config_path;
 
 /// Threshold for pre-compiling values into a HashSet for O(1) lookup.
 /// When values.len() > this threshold, a HashSet will be built during compilation.
@@ -372,7 +372,7 @@ impl RestrictionRule {
 
         // For Path source, normalize exact-match values at load time.
         if self.source == RestrictionSource::Path {
-            let path_cfg = crate::core::gateway::cli::config::get_path_normalization_config();
+            let path_cfg = crate::core::common::path_normalization::get_path_normalization_config();
             if let Some(values) = self.allow.as_mut() {
                 for v in values.iter_mut() {
                     let normalized = normalize_config_path(v, path_cfg);
