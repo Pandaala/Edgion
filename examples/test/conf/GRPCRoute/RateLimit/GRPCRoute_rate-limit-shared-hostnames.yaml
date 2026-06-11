@@ -1,23 +1,19 @@
-# gRPC shared-CMS regression route — HOSTNAME (H) dimension.
+# gRPC RateLimit end-to-end smoke route — HOSTNAME (H) dimension.
 #
-# ONE rule with TWO hostnames (a.shared / b.shared) and a SINGLE match-item.
-# The rule-level Arc<PluginRuntime> (and the RateLimit Count-Min-Sketch state
-# inside it) MUST be shared across both hostnames so the limit stays GLOBAL per
-# rule, not multiplied by the hostname count.
+# ONE rule with TWO hostnames (a.shared / b.shared) and a SINGLE match-item, under
+# one rule-level RateLimit. The client asserts the rule enforces ONE global budget
+# across both hostnames (11th request rejected).
 #
-# NOTE ON SCOPE: gRPC uses a flat match engine — `effective_hostnames` is a Vec
-# on the shared route_info and a rule's plugin_runtime is built once per rule
-# regardless of hostname count (grpc/conf_handler_impl.rs has no per-hostname
-# unit fan-out, unlike http/conf_handler_impl.rs which loops over hostnames).
-# So today both hostnames structurally resolve to the same unit; this scenario
-# pins that observable contract and future-proofs it against a refactor that
-# would fan gRPC units out per (rule, hostname) without re-sharing the runtime.
-# The STRONG H-dimension guard lives on the HTTP side (where the per-hostname
-# build site actually exists) — tracked in
-# tasks/review-decouple/http-01-missing-shared-cms-regression-test.md.
-#
-# A fixed `x-rate-key` value forces ALL requests into one CMS bucket, so the
-# limit is keyed only by the rule's shared PluginRuntime.
+# SCOPE NOTE: this is a smoke test, NOT a "rule-runtime shared across hostnames" pin.
+# RateLimit is an ExtensionRef -> EdgionPlugins plugin; its CMS lives in the global
+# PluginStore keyed by EdgionPlugins identity (plugins/http/plugin_store.rs:132,173),
+# resolved per request (gateway_api_filters/extension_ref.rs:131-146). Even a future
+# per-(rule,hostname) unit fan-out that rebuilt the runtime per hostname would leave
+# both hostnames resolving the SAME global CMS, so the global-budget assertion holds
+# regardless of rule-runtime sharing. (There is also no per-hostname unit fan-out in
+# gRPC today — the flat match engine keeps `effective_hostnames` as a Vec on the
+# shared route_info — so there is no per-hostname build site to guard here at all.)
+# A fixed `x-rate-key` forces ALL requests into one CMS bucket.
 apiVersion: gateway.networking.k8s.io/v1
 kind: GRPCRoute
 metadata:

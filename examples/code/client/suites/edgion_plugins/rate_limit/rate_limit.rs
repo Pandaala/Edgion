@@ -484,27 +484,33 @@ impl RateLimitTestSuite {
         )
     }
 
-    /// Shared-CMS regression: a rule with two match-items shares one RateLimit window.
+    /// Rule-level RateLimit is enforced across ALL match-items of a single rule.
     ///
-    /// Pins the highest-risk invariant of the HTTP types/compiled split (the
-    /// pattern-establishing pilot, tasks/review-decouple/http-01-*): a rule with
-    /// >= 2 match-items builds >= 2 HttpRouteRuleUnits, but the rule-level
-    /// Arc<PluginRuntime> (and the RateLimit Count-Min-Sketch inside it) MUST be
-    /// built ONCE and shared across all of the rule's units. If a regression
-    /// rebuilds the runtime per-unit, each match-item gets its own CMS and the
-    /// effective limit becomes N x (N = match-item count).
+    /// Guards the HTTP types/compiled split (the pattern-establishing pilot,
+    /// tasks/review-decouple/http-01-*) on the `match_unit.rs` fan-out path: a rule
+    /// with >= 2 match-items builds >= 2 HttpRouteRuleUnits, and `compile_http_rule`
+    /// builds the rule's `Arc<PluginRuntime>` ONCE and shares it into every unit.
+    /// This test pins that every match-item unit actually routes AND executes the
+    /// rule-level ExtensionRef plugin chain, so both variants count against the one
+    /// rule-level RateLimit budget. A regression that dropped the rule-level filters
+    /// from a non-first match-item unit would let `x-variant: b` traffic skip the
+    /// limiter, and the (RATE+1)th request would wrongly pass.
     ///
-    /// Scenario (conf/EdgionPlugins/RateLimit/02_HTTPRoute_rate-limit-shared.yaml):
+    /// Note on what this does NOT test: the RateLimit Count-Min-Sketch is not held
+    /// in the rule runtime — it lives in the global plugin store, compiled once per
+    /// EdgionPlugins ns/name and resolved by key at request time (plugin_store.rs /
+    /// resolve_route_ext_refs). So a hypothetical per-unit rebuild of the rule
+    /// runtime would NOT split the CMS (both units resolve the same store entry).
+    /// Store-level cross-route CMS sharing is covered by the sibling
+    /// `test_shared_counter_across_routes`; this scenario covers the orthogonal
+    /// single-rule / multi-match-item fan-out.
+    ///
+    /// Scenario (conf/EdgionPlugins/RateLimit/03_HTTPRoute_rate-limit-shared.yaml):
     /// one rule, two match-items distinguished by `x-variant: a` / `x-variant: b`,
     /// both PathPrefix `/shared`, one rule-level RateLimit (rate=10, fixed
-    /// `X-Rate-Key` => one shared bucket).
-    ///
-    /// Send RATE_SHARED (=10) requests split across BOTH variants (5x a + 5x b) —
-    /// all must succeed (the global budget is not yet exhausted). The (RATE+1)th
-    /// must return 429 because the budget is shared by the rule, not the match-item.
-    /// Under a per-unit-split regression each variant would get an independent
-    /// budget of 10; after 5a+5b each bucket holds only 5, so the 11th request
-    /// would wrongly succeed and this test would fail on the "expected 429" assertion.
+    /// `X-Rate-Key` => one shared bucket). Send RATE_SHARED (=10) requests split
+    /// across both variants (5x a + 5x b) — all must succeed — then a (RATE+1)th
+    /// that must return 429 because the budget is per-rule, not per-match-item.
     fn test_shared_limit_across_match_items() -> TestCase {
         TestCase::new(
             "rate_limit_shared_across_match_items",
@@ -531,6 +537,7 @@ impl RateLimitTestSuite {
                         match response {
                             Ok(resp) => {
                                 let status = resp.status().as_u16();
+                                let _ = resp.text().await; // drain body so the pooled conn is reusable
                                 if status != 200 {
                                     return TestResult::failed(
                                         start.elapsed(),
@@ -554,8 +561,8 @@ impl RateLimitTestSuite {
                     }
 
                     // The (RATE+1)th request must be rejected — the rule's single budget is now spent.
-                    // Use variant `a` (it has only consumed 5 so far); under the shared invariant the
-                    // rule budget is exhausted, under a per-unit-split regression it would still pass.
+                    // Use variant `a` (it has only consumed 5 so far); if every match-item unit shares
+                    // the rule's RateLimit the budget is exhausted, so this must return 429.
                     let response = client
                         .get(&url)
                         .header("host", "http-ratelimit-shared.example.com")
@@ -567,6 +574,7 @@ impl RateLimitTestSuite {
                     match response {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
+                            let _ = resp.text().await; // drain body so the pooled conn is reusable
                             if status == 429 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
@@ -582,8 +590,9 @@ impl RateLimitTestSuite {
                                     start.elapsed(),
                                     format!(
                                         "Request {} (variant a) returned {} but should have been rate-limited (429). \
-                                         The rule-level RateLimit budget is NOT shared across match-items — \
-                                         likely a per-unit PluginRuntime split (effective limit inflated to 2x).",
+                                         The rule-level RateLimit budget is NOT enforced across all the rule's \
+                                         match-items — likely a non-first match-item unit missing the rule-level \
+                                         plugin chain (x-variant=b traffic skipped the limiter).",
                                         RATE_SHARED + 1,
                                         status
                                     ),
@@ -680,9 +689,9 @@ impl TestSuite for RateLimitTestSuite {
             // Cross-route reuse guard: the same key shares one CMS budget across
             // two routes that ExtensionRef the same EdgionPlugins.
             Self::test_shared_counter_across_routes(),
-            // Cross-match-item reuse guard (http-01): a rule with >= 2 match-items
-            // builds >= 2 units that must share the rule's single Arc<PluginRuntime>
-            // (and its CMS), so the budget stays global per rule, not per match-item.
+            // Across-match-items guard (http-01): a rule with >= 2 match-items builds
+            // >= 2 units that must all execute the rule-level RateLimit, so the budget
+            // stays global per rule, not per match-item (match_unit.rs fan-out path).
             Self::test_shared_limit_across_match_items(),
             // NOTE: test_headers_present() stays disabled — separate response-header
             // surfacing issue, unrelated to the runtime-reuse invariant.

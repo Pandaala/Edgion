@@ -1,23 +1,33 @@
-// gRPC rule-level RateLimit — shared-CMS regression suite.
+// gRPC rule-level RateLimit — end-to-end test.
 //
-// Pins the highest-risk invariant of the gRPC types/compiled split
-// (tasks/review-decouple/grpc-01-missing-shared-cms-regression-test.md):
+// Scope (tasks/review-decouple/grpc-01-...): this suite guards the gRPC
+// types/compiled split's match_unit.rs fan-out, mirroring the HTTP
+// `edgion_plugins::rate_limit::test_shared_limit_across_match_items`. The split moved
+// `plugin_runtime` off the schema onto a PER-UNIT field that conf_handler must populate
+// for EVERY match-item unit (`compile_grpc_rule` builds it once per rule and Arc-shares
+// it into each unit). The K-dimension case pins exactly that: every match-item unit of
+// one rule must route AND execute the rule-level ExtensionRef plugin chain, so both
+// variants count against the one rule budget. A regression that dropped the rule-level
+// filters from a non-first match-item unit would let `x-variant: b` traffic skip the
+// limiter and the (RATE+1)th request would wrongly succeed — this test catches that.
 //
-//   A GRPCRoute rule with >= 2 match-items builds >= 2 GrpcRouteRuleUnits, but
-//   the rule-level Arc<PluginRuntime> (and the RateLimit Count-Min-Sketch state
-//   inside it) MUST be built ONCE and shared across all of the rule's units.
-//   If a regression rebuilds the runtime per-unit, each match-item gets its own
-//   CMS and the effective limit becomes N x (N = match-item count).
+// What this does NOT pin: the RateLimit Count-Min-Sketch is NOT held in the rule
+// runtime — it lives in the global PluginStore, one instance per EdgionPlugins ns/name,
+// resolved by key at request time (plugins/http/plugin_store.rs:132,173,
+// global_plugins_resolve.rs:49, gateway_api_filters/extension_ref.rs:131-146). So a
+// hypothetical per-unit rebuild that still carried the same ExtensionRef would NOT split
+// the CMS (both units resolve the same store entry); CMS instance uniqueness is
+// unobservable and not pinnable via RateLimit. Store-level cross-route CMS sharing is
+// covered on the HTTP side by `edgion_plugins::rate_limit::test_shared_counter_across_routes`.
 //
-// Scenario (conf/GRPCRoute/RateLimit): one rule, two match-items distinguished
-// by `x-variant: a` / `x-variant: b`, both routing SayHello, one rule-level
-// RateLimit (rate=10, fixed `x-rate-key` => one shared bucket). The gateway maps
-// the plugin's HTTP 429 to gRPC status 8 RESOURCE_EXHAUSTED (http_to_grpc_status).
+// Also verified end-to-end (this is the first gRPC plugin test): gRPC rule-level
+// ExtensionRef plugins execute on the gRPC path, and a RateLimit rejection maps
+// HTTP 429 -> gRPC status 8 RESOURCE_EXHAUSTED (runtime/server/error_response.rs).
 //
-// A sibling case pins the orthogonal HOSTNAME (H) dimension: one rule, two
-// hostnames, one match-item, asserting the budget stays shared across hostnames.
-// gRPC has no per-hostname unit fan-out (flat engine), so that pin is a weaker
-// contract guard than the HTTP analog; see GRPCRoute_rate-limit-shared-hostnames.yaml.
+// Scenario (conf/GRPCRoute/RateLimit): one rule, two match-items distinguished by
+// `x-variant: a` / `x-variant: b`, both routing SayHello, one rule-level RateLimit
+// (rate=10, fixed `x-rate-key` => one shared bucket). A sibling case covers the
+// hostname dimension (one rule, two hostnames, one match-item) — weaker, see its doc.
 //
 // Required config files (conf/GRPCRoute/RateLimit/):
 // - Gateway.yaml                              # grpc listener :31063
@@ -99,18 +109,23 @@ impl GrpcRateLimitTestSuite {
         client.say_hello(request).await.map(|_| ()).map_err(|s| s.code())
     }
 
-    /// THE pin: a rule with two match-items shares one RateLimit window.
+    /// Pin: every match-item unit of one rule executes the rule-level plugin chain.
     ///
     /// Send RATE (=10) requests split across BOTH variants (5x a + 5x b) — all must
-    /// succeed (global budget not yet exhausted). The (RATE+1)th must be rejected
-    /// with RESOURCE_EXHAUSTED because the budget is shared by the rule, not the
-    /// match-item.
+    /// succeed (global budget not yet exhausted). The (RATE+1)th must be rejected with
+    /// RESOURCE_EXHAUSTED.
     ///
-    /// Regression behavior this catches: if the runtime were rebuilt per match-item,
-    /// variant `a` and `b` would each get an independent budget of 10. After 5a+5b
-    /// each bucket holds only 5, so the 11th request (variant a => 6th in its bucket)
-    /// would still SUCCEED — this test would then fail on the "expected rejection"
-    /// assertion, flagging the N x limit inflation.
+    /// WHAT IT PINS: the split moved `plugin_runtime` onto a per-unit field; conf_handler
+    /// must Arc-share the rule's compiled runtime into EVERY match-item unit. If a
+    /// regression left a non-first match-item unit without the rule-level filters,
+    /// `x-variant: b` would skip the limiter, only 5 (variant a) requests would count,
+    /// and the 11th (variant a) would wrongly return Ok instead of RESOURCE_EXHAUSTED —
+    /// this assertion catches it.
+    ///
+    /// WHAT IT DOES NOT PIN: CMS instance uniqueness. The RateLimit CMS lives in the
+    /// global PluginStore (keyed by EdgionPlugins identity), so a per-unit rebuild that
+    /// still carried the same ExtensionRef would resolve the SAME CMS and stay green.
+    /// See the suite-level comment.
     fn test_shared_limit_across_match_items() -> TestCase {
         TestCase::new(
             "grpc_ratelimit_shared_across_match_items",
@@ -188,26 +203,22 @@ impl GrpcRateLimitTestSuite {
         )
     }
 
-    /// THE pin (H dimension): a rule with two HOSTNAMES shares one RateLimit window.
-    ///
-    /// gRPC uses a flat match engine — `effective_hostnames` is a Vec on the shared
-    /// route_info and a rule's plugin_runtime is built once per rule regardless of
-    /// hostname count (grpc/conf_handler_impl.rs has no per-hostname unit fan-out),
-    /// so today both hostnames structurally resolve to the same unit. This case pins
-    /// that observable contract (one global budget across hostnames) and future-proofs
-    /// it against a refactor that would fan gRPC units out per (rule, hostname) — the
-    /// HTTP topology — without re-sharing the runtime.
+    /// Smoke (H dimension, WEAKER than the K case): one rule enforces one global
+    /// RateLimit budget across its hostnames.
     ///
     /// Send RATE (=10) requests split across BOTH hostnames (5x a + 5x b) over two
     /// channels with distinct `:authority`, all carrying the same fixed `x-rate-key` —
     /// all must succeed (global budget not yet exhausted). The (RATE+1)th must be
-    /// rejected with RESOURCE_EXHAUSTED because the budget is shared by the rule, not
-    /// split per hostname.
+    /// rejected with RESOURCE_EXHAUSTED because the budget is shared.
     ///
-    /// Regression behavior this catches: if a future per-hostname runtime split gave
-    /// each hostname its own budget of 10, after 5a+5b each bucket holds only 5, so the
-    /// 11th request (hostname a => 6th in its bucket) would still SUCCEED — this test
-    /// would then fail on the "expected rejection" assertion, flagging the H x inflation.
+    /// SCOPE: unlike the K (match-item) case, this does NOT pin per-unit plugin
+    /// execution. gRPC uses a flat match engine with NO per-hostname unit fan-out
+    /// (`effective_hostnames` is a Vec on the shared route_info), so both hostnames
+    /// resolve to the same single unit — there is no per-hostname build site to guard.
+    /// It verifies only the user-visible "one rule = one budget across hostnames"
+    /// contract, which here is guaranteed by both the single shared unit and the global
+    /// PluginStore. (The HTTP side, which DOES fan units out per hostname, is where a
+    /// per-hostname execution pin would have teeth.)
     fn test_shared_limit_across_hostnames() -> TestCase {
         TestCase::new(
             "grpc_ratelimit_shared_across_hostnames",
@@ -351,7 +362,7 @@ impl GrpcRateLimitTestSuite {
 #[async_trait]
 impl TestSuite for GrpcRateLimitTestSuite {
     fn name(&self) -> &str {
-        "gRPC RateLimit (shared CMS)"
+        "gRPC RateLimit (fan-out + e2e)"
     }
 
     fn test_cases(&self) -> Vec<TestCase> {

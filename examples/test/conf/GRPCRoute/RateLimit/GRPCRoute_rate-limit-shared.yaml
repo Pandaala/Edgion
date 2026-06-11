@@ -1,13 +1,16 @@
-# gRPC shared-CMS regression route.
+# gRPC RateLimit end-to-end smoke route (match-item / K dimension).
 #
-# ONE rule with TWO match-items (variant=a / variant=b) => the gateway builds
-# two GrpcRouteRuleUnits for this rule. Both units MUST share the rule's single
-# Arc<PluginRuntime> (and therefore the RateLimit Count-Min-Sketch state). A
-# per-unit rebuild would give each match-item its own CMS, doubling the
-# effective limit — this scenario pins that the limit stays GLOBAL per rule.
+# ONE rule with TWO match-items (variant=a / variant=b) routing the same method
+# (SayHello, unary) under one rule-level RateLimit. The client asserts that the
+# rule enforces ONE global budget across both match-items (11th request rejected).
 #
-# Both match-items route the same method (SayHello, unary) so the client
-# assertion is a plain success/RESOURCE_EXHAUSTED count.
+# SCOPE NOTE: this is a smoke test, NOT a "rule-runtime shared across units" pin.
+# RateLimit is an ExtensionRef -> EdgionPlugins plugin; its CMS lives in the global
+# PluginStore keyed by EdgionPlugins identity (plugins/http/plugin_store.rs:132,173),
+# resolved per request (gateway_api_filters/extension_ref.rs:131-146). A per-unit
+# runtime rebuild would NOT split the CMS — both match-items still resolve the same
+# global instance — so the global-budget assertion holds regardless of rule-runtime
+# sharing. See tasks/review-decouple/grpc-01-... for the analysis.
 apiVersion: gateway.networking.k8s.io/v1
 kind: GRPCRoute
 metadata:
