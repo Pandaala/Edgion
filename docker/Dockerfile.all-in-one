@@ -63,7 +63,7 @@ COPY --chmod=755 docker/all-in-one-entrypoint.sh /usr/local/bin/all-in-one-entry
 
 ENV ALL_IN_ONE_MODE=${ALL_IN_ONE_MODE}
 ENV RUST_LOG=info
-ENV RUST_BACKTRACE=0
+ENV RUST_BACKTRACE=full
 
 # Expose ports:
 #   5800 — dashboard + controller API (nginx external listen)
