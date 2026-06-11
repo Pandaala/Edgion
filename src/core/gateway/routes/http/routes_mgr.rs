@@ -3,13 +3,13 @@ use crate::core::gateway::ctx::EdgionHttpContext;
 use crate::core::gateway::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
 use crate::core::gateway::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::core::gateway::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
+use crate::core::gateway::routes::http::match_unit::CompiledBackend;
 use crate::core::gateway::routes::http::match_unit::RouteMatchResult;
 use crate::core::gateway::routes::http::HttpRouteRuleUnit;
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::types::err::EdError;
 use crate::types::HTTPRoute;
 use crate::types::ListenerKey;
-use crate::types::{HTTPBackendRef, HTTPRouteRule};
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
@@ -51,30 +51,17 @@ impl Clone for RouteRules {
 
 impl RouteRules {
     /// Select backend from the matched route rule
-    pub fn select_backend(rule: &Arc<HTTPRouteRule>) -> Result<HTTPBackendRef, EdError> {
-        // Initialize selector if not yet initialized
-        if !rule.backend_finder.is_initialized() {
-            let (items, weights) = match &rule.backend_refs {
-                Some(refs) if !refs.is_empty() => {
-                    let items: Vec<HTTPBackendRef> = refs.clone();
-                    // Default weight to 1 if not specified
-                    let weights: Vec<Option<i32>> = refs.iter().map(|br| br.weight.or(Some(1))).collect();
-                    (items, weights)
-                }
-                _ => (vec![], vec![]),
-            };
-            rule.backend_finder.init(items, weights);
-        }
-
-        // Select backend
-        let backend_ref = rule.backend_finder.select().map_err(|err_code| match err_code {
+    pub fn select_backend(unit: &Arc<HttpRouteRuleUnit>) -> Result<CompiledBackend, EdError> {
+        // The unit's `backend_finder` is eagerly initialized at unit construction
+        // (`build_backend_selector`), so no lazy init is needed here.
+        let backend = unit.backend_finder.select().map_err(|err_code| match err_code {
             ERR_NO_BACKEND_REFS => EdError::BackendNotFound(),
             ERR_INCONSISTENT_WEIGHT => EdError::InconsistentWeight(),
             _ => EdError::BackendNotFound(),
         })?;
 
         // Check if this backend reference is denied (no matching ReferenceGrant)
-        if let Some(ref denied) = backend_ref.ref_denied {
+        if let Some(ref denied) = backend.schema.ref_denied {
             return Err(EdError::RefDenied {
                 target_namespace: denied.target_namespace.clone(),
                 target_name: denied.target_name.clone(),
@@ -88,7 +75,7 @@ impl RouteRules {
         // Note: BackendTLSPolicy query is performed in pg_upstream_peer.rs
         // where route namespace is available for proper namespace inheritance
 
-        Ok(backend_ref)
+        Ok(backend)
     }
 
     /// Find a specific backend_ref by name from the route rule's backend_refs.
@@ -104,18 +91,17 @@ impl RouteRules {
     /// A backend_ref with weight=0 can still be targeted via DynamicInternalUpstream,
     /// enabling "hidden backend" patterns for debugging/testing.
     pub fn find_backend_by_name(
-        rule: &Arc<HTTPRouteRule>,
+        unit: &Arc<HttpRouteRuleUnit>,
         target_name: &str,
         target_namespace: Option<&str>,
         route_namespace: &str,
-    ) -> Result<HTTPBackendRef, EdError> {
-        let backend_refs = rule
-            .backend_refs
-            .as_ref()
-            .filter(|refs| !refs.is_empty())
-            .ok_or(EdError::BackendNotFound())?;
+    ) -> Result<CompiledBackend, EdError> {
+        if unit.backends.is_empty() {
+            return Err(EdError::BackendNotFound());
+        }
 
-        for br in backend_refs {
+        for cb in unit.backends.iter() {
+            let br = &cb.schema;
             // Match by name
             if br.name != target_name {
                 continue;
@@ -141,7 +127,7 @@ impl RouteRules {
                 });
             }
 
-            return Ok(br.clone());
+            return Ok(cb.clone());
         }
 
         Err(EdError::BackendNotFound())

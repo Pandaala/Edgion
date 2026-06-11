@@ -135,8 +135,6 @@ impl RegexRoutesEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::gateway::lb::BackendSelector;
-    use crate::core::gateway::plugins::PluginRuntime;
     use crate::core::gateway::routes::http::match_unit::MatchSpecificity;
     use crate::core::gateway::MatchInfo;
     use crate::types::{HTTPPathMatch, HTTPRouteMatch, HTTPRouteRule};
@@ -169,8 +167,6 @@ mod tests {
             timeouts: None,
             retry: None,
             session_persistence: None,
-            backend_finder: BackendSelector::new(),
-            plugin_runtime: Arc::new(PluginRuntime::new()),
             parsed_timeouts: None,
             parsed_retry: None,
             parsed_forward_raw_path: None,
@@ -180,7 +176,14 @@ mod tests {
 
         let (chr, cqr) = HttpRouteRuleUnit::compile_match_regexes(&match_item);
         let has_qm = match_item.query_params.as_ref().is_some_and(|qp| !qp.is_empty());
+        let rule_rt = HttpRouteRuleUnit::compile_http_rule(&rule, namespace);
+        let backend_finder = HttpRouteRuleUnit::build_backend_selector(&rule_rt.backends);
+        let backends = rule_rt.backends;
+        let plugin_runtime = rule_rt.plugin_runtime;
         Arc::new(HttpRouteRuleUnit {
+            plugin_runtime,
+            backends,
+            backend_finder,
             resource_key: format!("{}/{}", namespace, name),
             matched_info: MatchInfo::new(namespace.to_string(), name.to_string(), rule_id, 0, match_item, 0),
             rule,

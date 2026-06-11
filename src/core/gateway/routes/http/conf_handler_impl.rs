@@ -1,12 +1,14 @@
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use crate::core::common::matcher::host_match::radix_match::{RadixHost, RadixHostMatchEngine};
+use crate::core::gateway::lb::BackendSelector;
+use crate::core::gateway::plugins::PluginRuntime;
 use crate::core::gateway::routes::common::{
     effective_hostnames, filter_accepted_parent_refs, gateways_from_parent_refs,
 };
 use crate::core::gateway::routes::http::lb_policy_sync::{cleanup_lb_policies_for_routes, sync_lb_policies_for_routes};
 use crate::core::gateway::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::core::gateway::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
-use crate::core::gateway::routes::http::match_unit::MatchSpecificity;
+use crate::core::gateway::routes::http::match_unit::{CompiledBackend, HttpRuleRuntime, MatchSpecificity};
 use crate::core::gateway::routes::http::routes_mgr::{
     resolved_listeners_for_route, DomainRouteRules, GlobalHttpRouteManagers, RouteRules,
 };
@@ -219,6 +221,13 @@ struct RouteUnitCtx<'a> {
     /// pre-resolved from `parent_refs` against the accepted status.
     /// Drives `RouteMetricHandles::build`.
     attached_gateways: &'a [(String, String)],
+    /// Rule-level compiled plugin runtime, built ONCE per rule and Arc-shared
+    /// into every match-item unit (see `HttpRouteRuleUnit::compile_http_rule`).
+    plugin_runtime: Arc<PluginRuntime>,
+    /// Per-(rule,hostname) LB selector, Arc-shared across this rule's units.
+    backend_finder: Arc<BackendSelector<CompiledBackend>>,
+    /// Per-rule compiled backends (Arc-shared), for by-name lookup.
+    backends: Arc<Vec<CompiledBackend>>,
 }
 
 fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, String> {
@@ -240,7 +249,12 @@ fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, S
         ctx.match_id,
     );
 
+    let plugin_runtime = ctx.plugin_runtime.clone();
+    let backend_finder = ctx.backend_finder.clone();
     Ok(HttpRouteRuleUnit {
+        plugin_runtime,
+        backends: ctx.backends.clone(),
+        backend_finder,
         resource_key: ctx.resource_key.to_string(),
         matched_info: MatchInfo::new(
             ctx.namespace.to_string(),
@@ -278,7 +292,12 @@ fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
         ctx.rule_id,
         ctx.match_id,
     );
+    let plugin_runtime = ctx.plugin_runtime.clone();
+    let backend_finder = ctx.backend_finder.clone();
     HttpRouteRuleUnit {
+        plugin_runtime,
+        backends: ctx.backends.clone(),
+        backend_finder,
         resource_key: ctx.resource_key.to_string(),
         matched_info: MatchInfo::new(
             ctx.namespace.to_string(),
@@ -333,6 +352,7 @@ fn append_route_to_hostname(
     invalid_rule_indices: Option<&Vec<usize>>,
     creation_ts_ms: i64,
     route_sv: u64,
+    rule_runtimes: &[HttpRuleRuntime],
 ) {
     let default_matches = vec![HTTPRouteMatch {
         path: Some(HTTPPathMatch {
@@ -351,6 +371,11 @@ fn append_route_to_hostname(
             continue;
         }
         let rule_arc = Arc::new(rule.clone());
+        // Compiled runtime is built ONCE per rule (`rule_runtimes[rule_id]`);
+        // the LB selector is built once per (rule, hostname) and shared across
+        // this rule's match-item units — mirroring today's sharing topology.
+        let rule_rt = &rule_runtimes[rule_id];
+        let backend_finder = HttpRouteRuleUnit::build_backend_selector(&rule_rt.backends);
         let matches = match &rule.matches {
             Some(m) if !m.is_empty() => m,
             _ => &default_matches,
@@ -371,6 +396,9 @@ fn append_route_to_hostname(
                     creation_ts_ms,
                     route_sv,
                     attached_gateways: &attached_gateways,
+                    plugin_runtime: rule_rt.plugin_runtime.clone(),
+                    backend_finder: backend_finder.clone(),
+                    backends: rule_rt.backends.clone(),
                 },
             );
         }
@@ -409,6 +437,14 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
         let route_sv = route.get_sync_version();
         let creation_ts_ms = extract_creation_ts_ms(route);
         let resource_key = route.key_name();
+        // Compile each rule's runtime ONCE per route (shared across all hostnames
+        // and match-items). Correctness-critical: in-memory RateLimit owns per-rule
+        // state, so building a runtime per hostname/match would split that state.
+        let rule_runtimes: Vec<HttpRuleRuntime> = validated
+            .rules
+            .iter()
+            .map(|r| HttpRouteRuleUnit::compile_http_rule(r, &validated.namespace))
+            .collect();
 
         for hostname in &get_effective_hostnames(route) {
             append_route_to_hostname(
@@ -420,6 +456,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
                 route.spec.invalid_rule_indices.as_ref(),
                 creation_ts_ms,
                 route_sv,
+                &rule_runtimes,
             );
         }
         processed_routes += 1;

@@ -37,7 +37,6 @@ pub async fn response_filter(
     if ctx.local_reply_header.is_none() {
         if let Some(route_unit) = ctx.route_unit.clone() {
             route_unit
-                .rule
                 .plugin_runtime
                 .run_upstream_response_plugins_async(session, ctx, upstream_response)
                 .await;

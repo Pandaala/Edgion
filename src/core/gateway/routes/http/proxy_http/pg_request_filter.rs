@@ -185,7 +185,7 @@ pub async fn request_filter(
 
         if ctx.resolved_route_ext_refs.is_none() {
             let resolved = match (&ctx.route_unit, &ctx.grpc_route_unit) {
-                (Some(unit), _) => resolve_route_ext_refs(&plugin_store, unit.rule.plugin_runtime.ext_ref_keys()),
+                (Some(unit), _) => resolve_route_ext_refs(&plugin_store, unit.plugin_runtime.ext_ref_keys()),
                 (_, Some(unit)) => resolve_route_ext_refs(&plugin_store, unit.rule.plugin_runtime.ext_ref_keys()),
                 _ => Vec::new(),
             };
@@ -220,7 +220,7 @@ pub async fn request_filter(
             return Ok(true);
         }
     } else if let Some(route_unit) = ctx.route_unit.clone() {
-        route_unit.rule.plugin_runtime.run_request_plugins(session, ctx).await;
+        route_unit.plugin_runtime.run_request_plugins(session, ctx).await;
         if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
             let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
             return Ok(true);

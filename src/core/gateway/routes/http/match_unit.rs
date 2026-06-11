@@ -1,11 +1,13 @@
 use crate::core::gateway::ctx::EdgionHttpContext;
+use crate::core::gateway::lb::BackendSelector;
+use crate::core::gateway::plugins::PluginRuntime;
 use crate::core::gateway::runtime::matching::route::check_gateway_listener_match;
 use crate::core::gateway::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::core::gateway::MatchInfo;
 use crate::types::err::EdError;
 use crate::types::resources::common::ParentReference;
-use crate::types::HTTPRouteRule;
+use crate::types::{HTTPBackendRef, HTTPRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
 use std::cmp::Ordering;
@@ -72,6 +74,31 @@ pub struct RouteMatchResult {
     pub matched_gateway: GatewayInfo,
 }
 
+/// A backend ref paired with its compiled plugin runtime — the unit the LB
+/// selector returns. Keeps the gateway-compiled `PluginRuntime` off the
+/// `HTTPBackendRef` schema (two-type split). Both fields are `Arc`, so cloning
+/// on `select()` is cheap.
+#[derive(Clone)]
+pub struct CompiledBackend {
+    /// The pure backend-ref schema (name, port, weight, extension_info, …). Owned
+    /// (not `Arc`) because the selected backend's per-request `backend_tls_policy`
+    /// is mutated after selection; clone-on-`select()` matches today's cost (the
+    /// old selector also cloned `HTTPBackendRef`).
+    pub schema: HTTPBackendRef,
+    /// Compiled backend-level plugin chain (built from `schema.filters`).
+    pub plugin_runtime: Arc<PluginRuntime>,
+}
+
+impl std::ops::Deref for CompiledBackend {
+    type Target = HTTPBackendRef;
+    /// Deref to the backend schema so existing `selected_backend.name` / `.port` /
+    /// `.extension_info` / `.backend_tls_policy` accesses keep working unchanged.
+    /// `plugin_runtime` is `CompiledBackend`'s own field, so it shadows correctly.
+    fn deref(&self) -> &HTTPBackendRef {
+        &self.schema
+    }
+}
+
 #[derive(Clone)]
 pub struct HttpRouteRuleUnit {
     pub resource_key: String,
@@ -103,9 +130,77 @@ pub struct HttpRouteRuleUnit {
     /// §6); `backend_refs` is never mutated in place, so indices stay valid
     /// for the lifetime of this `Arc<HttpRouteRuleUnit>`.
     pub metric_handles: Arc<crate::core::gateway::observe::metrics::route_handles::RouteMetricHandles>,
+    /// Compiled rule-level plugin chain (built from `rule.filters`). Lives here,
+    /// not on the `HTTPRouteRule` schema (two-type split).
+    pub plugin_runtime: Arc<PluginRuntime>,
+    /// Per-rule compiled backends (each with its own plugin runtime), shared
+    /// across the rule's units. Used for by-name lookup (Internal upstream jumps).
+    pub backends: Arc<Vec<CompiledBackend>>,
+    /// LB backend selector over compiled backends, built at unit construction.
+    /// `Arc` so the `#[derive(Clone)]` unit stays cheap to clone.
+    pub backend_finder: Arc<BackendSelector<CompiledBackend>>,
+}
+
+/// Per-rule compiled runtime, built ONCE per rule (mirroring today's `preparse`,
+/// which builds `rule.plugin_runtime` once per rule). The `Arc<PluginRuntime>` and
+/// the per-backend `plugin_runtime`s MUST be shared across all of a rule's
+/// match-item units — some plugins (in-memory RateLimit) own per-rule mutable
+/// state, so a fresh runtime per match-item would split that state. See
+/// `compile_http_rule`.
+pub struct HttpRuleRuntime {
+    /// Rule-level compiled plugin chain (one per rule, shared across all units).
+    pub plugin_runtime: Arc<PluginRuntime>,
+    /// Compiled backends (each with its own per-rule-shared plugin runtime). The
+    /// per-(rule,hostname) LB selector is built over a clone of these. `Arc` so it
+    /// is shared (not deep-cloned) into each of the rule's units.
+    pub backends: Arc<Vec<CompiledBackend>>,
 }
 
 impl HttpRouteRuleUnit {
+    /// Compile a rule's runtime ONCE (rule plugin chain + compiled backends) from
+    /// the rule/backend `filters`. Call once per rule (above the hostname/match
+    /// fan-out) and share the resulting `Arc`s into every unit — some plugins
+    /// (in-memory RateLimit) own per-rule state, so the runtime must NOT be rebuilt
+    /// per match-item/hostname. Replaces the runtime-building that used to live in
+    /// `HTTPRoute::preparse()`.
+    pub fn compile_http_rule(rule: &HTTPRouteRule, namespace: &str) -> HttpRuleRuntime {
+        let plugin_runtime = Arc::new(match &rule.filters {
+            Some(filters) => PluginRuntime::from_httproute_filters_for_rule(filters, namespace),
+            None => PluginRuntime::new(),
+        });
+        let backends: Vec<CompiledBackend> = rule.backend_refs.as_ref().map_or_else(Vec::new, |refs| {
+            refs.iter()
+                .map(|br| {
+                    let plugin_runtime = Arc::new(match &br.filters {
+                        Some(filters) => PluginRuntime::from_httproute_filters_for_backend(filters, namespace),
+                        None => PluginRuntime::new(),
+                    });
+                    CompiledBackend {
+                        schema: br.clone(),
+                        plugin_runtime,
+                    }
+                })
+                .collect()
+        });
+        HttpRuleRuntime {
+            plugin_runtime,
+            backends: Arc::new(backends),
+        }
+    }
+
+    /// Build a per-(rule,hostname) LB selector over a rule's compiled backends.
+    /// Mirrors today's per-hostname `backend_finder` (each `rule.clone()` per
+    /// hostname gets a fresh selector). The compiled backends are Arc-shared, so
+    /// only the WRR cursor is per-hostname.
+    pub fn build_backend_selector(backends: &[CompiledBackend]) -> Arc<BackendSelector<CompiledBackend>> {
+        let selector = BackendSelector::new();
+        if !backends.is_empty() {
+            let weights: Vec<Option<i32>> = backends.iter().map(|b| b.schema.weight.or(Some(1))).collect();
+            selector.init(backends.to_vec(), weights);
+        }
+        Arc::new(selector)
+    }
+
     /// Pre-compile RegularExpression regexes for header and query param matchers.
     /// Call once at route creation time; the returned vecs are positionally aligned
     /// with the `headers` / `query_params` slices in `HTTPRouteMatch`.

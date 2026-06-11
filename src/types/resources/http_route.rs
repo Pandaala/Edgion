@@ -10,8 +10,6 @@ use std::sync::Arc;
 
 use super::common::{Condition, ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
-use crate::core::gateway::lb::BackendSelector;
-use crate::core::gateway::plugins::PluginRuntime;
 use crate::types::ListenerKey;
 
 /// API group for HTTPRoute
@@ -98,17 +96,6 @@ pub struct HTTPRouteRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_persistence: Option<SessionPersistence>,
 
-    /// Backend finder for load balancing (not serialized/deserialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub backend_finder: BackendSelector<HTTPBackendRef>,
-
-    /// Filter runtime (runtime only, not serialized)
-    /// This is computed from plugins at runtime
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub plugin_runtime: Arc<PluginRuntime>,
-
     /// Pre-parsed route-level timeout configurations (not serialized)
     /// Parsed once when route is loaded, used at runtime
     #[serde(skip)]
@@ -145,10 +132,6 @@ impl Clone for HTTPRouteRule {
             timeouts: self.timeouts.clone(),
             retry: self.retry.clone(),
             session_persistence: self.session_persistence.clone(),
-            // Create a new uninitialized selector for cloned instance
-            // The selector will be initialized lazily when needed
-            backend_finder: BackendSelector::new(),
-            plugin_runtime: self.plugin_runtime.clone(),
             parsed_timeouts: self.parsed_timeouts.clone(),
             parsed_retry: self.parsed_retry.clone(),
             parsed_forward_raw_path: self.parsed_forward_raw_path,
@@ -166,8 +149,6 @@ impl fmt::Debug for HTTPRouteRule {
             .field("timeouts", &self.timeouts)
             .field("retry", &self.retry)
             .field("session_persistence", &self.session_persistence)
-            .field("lb", &"<skipped>")
-            .field("plugin_runtime", &self.plugin_runtime)
             .field("parsed_forward_raw_path", &self.parsed_forward_raw_path)
             .finish()
     }
@@ -285,12 +266,6 @@ pub struct HTTPBackendRef {
     #[serde(skip)]
     #[schemars(skip)]
     pub extension_info: BackendExtensionInfo,
-
-    /// Filter runtime (runtime only, not serialized)
-    /// This is computed from plugins at runtime
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub plugin_runtime: Arc<PluginRuntime>,
 
     /// BackendTLSPolicy for this backend (runtime only, not serialized)
     /// Queried and populated during select_backend

@@ -34,10 +34,9 @@ pub fn upstream_response_body_filter(
 
     // Run route-level body filter plugins
     if let Some(route_unit) = ctx.route_unit.clone() {
-        if route_unit.rule.plugin_runtime.upstream_response_body_plugins_count() > 0 {
+        if route_unit.plugin_runtime.upstream_response_body_plugins_count() > 0 {
             if let Some(delay) =
                 route_unit
-                    .rule
                     .plugin_runtime
                     .run_upstream_response_body_plugins(session, ctx, body, end_of_stream)
             {

@@ -249,7 +249,7 @@ pub async fn select_http_backend(
 
     // Pick backend_ref: InternalJump (plugin-injected) tries by name first and falls back to
     // weighted round-robin on miss; without InternalJump, plain weighted round-robin.
-    let mut backend_ref = match pick_backend_ref(&route_unit.rule, &route_unit.matched_info.rsc.ns, ctx.jump.as_ref()) {
+    let mut backend_ref = match pick_backend_ref(route_unit, &route_unit.matched_info.rsc.ns, ctx.jump.as_ref()) {
         Ok(b) => b,
         Err(e) => {
             ctx.add_error(backend_select_status(&e));
@@ -258,18 +258,21 @@ pub async fn select_http_backend(
         }
     };
 
-    // Query BackendTLSPolicy using route namespace for proper namespace inheritance
-    let service_name = &backend_ref.name;
+    // Query BackendTLSPolicy using route namespace for proper namespace inheritance.
+    // Read the lookup inputs into owned values first so the mutation below does not
+    // conflict with the `Deref` borrows of `backend_ref`.
+    let service_name = backend_ref.name.clone();
     // If backend_ref.namespace is None, inherit from route namespace
     let service_namespace = backend_ref
         .namespace
-        .as_deref()
-        .or(Some(route_unit.matched_info.rsc.ns.as_str()));
+        .clone()
+        .or_else(|| Some(route_unit.matched_info.rsc.ns.clone()));
+    let service_port = backend_ref.port;
 
-    backend_ref.backend_tls_policy = crate::core::gateway::backends::query_backend_tls_policy_for_service(
-        service_name,
-        service_namespace,
-        backend_ref.port,
+    backend_ref.schema.backend_tls_policy = crate::core::gateway::backends::query_backend_tls_policy_for_service(
+        &service_name,
+        service_namespace.as_deref(),
+        service_port,
     );
 
     // BackendTLSPolicy is applied via the peer builder; no per-request logging needed
@@ -402,19 +405,19 @@ async fn get_peer_with_sp_fallback(
 /// plain weighted round-robin.
 #[inline]
 fn pick_backend_ref(
-    rule: &std::sync::Arc<crate::types::HTTPRouteRule>,
+    unit: &std::sync::Arc<crate::core::gateway::routes::http::HttpRouteRuleUnit>,
     route_ns: &str,
     jump: Option<&crate::core::gateway::UpstreamJumpTarget>,
-) -> Result<crate::types::HTTPBackendRef, EdError> {
+) -> Result<crate::core::gateway::routes::http::match_unit::CompiledBackend, EdError> {
     if let Some(crate::core::gateway::UpstreamJumpTarget::Internal(j)) = jump {
         if let Ok(b) =
-            RouteRules::find_backend_by_name(rule, &j.backend_ref_name, j.backend_ref_namespace.as_deref(), route_ns)
+            RouteRules::find_backend_by_name(unit, &j.backend_ref_name, j.backend_ref_namespace.as_deref(), route_ns)
         {
             return Ok(b);
         }
         // Named lookup missed → fall through to weighted RR.
     }
-    RouteRules::select_backend(rule)
+    RouteRules::select_backend(unit)
 }
 
 /// Map a backend-selection `EdError` to its public `EdgionStatus` for access logs.

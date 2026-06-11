@@ -4,6 +4,7 @@ use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::plugins::runtime::PluginRuntime;
 use crate::core::gateway::plugins::{EdgionPluginsLog, StageLogs};
 use crate::core::gateway::routes::grpc::GrpcRouteRuleUnit;
+use crate::core::gateway::routes::http::match_unit::CompiledBackend;
 use crate::core::gateway::routes::HttpRouteRuleUnit;
 use crate::core::gateway::runtime::GatewayInfo;
 use crate::types::filters::PluginRunningResult;
@@ -685,8 +686,8 @@ pub struct EdgionHttpContext {
     /// Matched HTTP route unit containing full route information
     pub route_unit: Option<Arc<HttpRouteRuleUnit>>,
 
-    /// Selected HTTP backend from load balancing
-    pub selected_backend: Option<HTTPBackendRef>,
+    /// Selected HTTP backend from load balancing (schema + compiled plugin runtime)
+    pub selected_backend: Option<CompiledBackend>,
 
     /// Matched gRPC route unit (for gRPC routes)
     pub grpc_route_unit: Option<Arc<GrpcRouteRuleUnit>>,
@@ -1208,7 +1209,12 @@ impl EdgionHttpContext {
             return SetJumpOutcome::Rejected;
         }
         if let UpstreamJumpTarget::Direct { backend_ref, .. } = &target {
-            self.selected_backend = Some(backend_ref.as_ref().clone());
+            // Plugin-injected direct endpoint: no backend-level plugin chain
+            // (matches today, where the synthetic backend's runtime is empty).
+            self.selected_backend = Some(CompiledBackend {
+                schema: backend_ref.as_ref().clone(),
+                plugin_runtime: Arc::new(PluginRuntime::new()),
+            });
         }
         self.jump = Some(target);
         SetJumpOutcome::Set
@@ -1417,7 +1423,6 @@ mod jump_tests {
             kind: None,
             filters: None,
             extension_info: BackendExtensionInfo::default(),
-            plugin_runtime: Arc::new(PluginRuntime::new()),
             backend_tls_policy: None,
             ref_denied: None,
         };

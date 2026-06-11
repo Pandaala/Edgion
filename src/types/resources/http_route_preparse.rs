@@ -3,9 +3,7 @@
 
 use super::{HTTPRoute, HTTPRouteFilterType, LocalObjectReference};
 use crate::core::common::path_normalization::normalize_config_path;
-use crate::core::gateway::plugins::PluginRuntime;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 /// Hash source type for consistent hash LB policy
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,9 +127,6 @@ impl HTTPRoute {
             return;
         };
 
-        // Get namespace for ExtensionRef lookups
-        let namespace = self.metadata.namespace.as_deref().unwrap_or("default");
-
         // Parse `edgion.io/forward-raw-path` annotation. Three-state:
         // "true" / "false" / absent. Invalid values logged INFO and treated as None.
         let parsed_forward_raw_path: Option<bool> = self
@@ -155,11 +150,6 @@ impl HTTPRoute {
             });
 
         for rule in rules.iter_mut() {
-            // Initialize rule-level plugin_runtime from rule.plugins
-            if let Some(filters) = &rule.filters {
-                rule.plugin_runtime = Arc::new(PluginRuntime::from_httproute_filters_for_rule(filters, namespace));
-            }
-
             rule.parsed_forward_raw_path = parsed_forward_raw_path;
 
             let Some(backend_refs) = rule.backend_refs.as_mut() else {
@@ -181,12 +171,6 @@ impl HTTPRoute {
                     .unwrap_or_default();
 
                 backend_ref.extension_info = extension_info;
-
-                // Initialize plugin_runtime from plugins
-                if let Some(filters) = &backend_ref.filters {
-                    backend_ref.plugin_runtime =
-                        Arc::new(PluginRuntime::from_httproute_filters_for_backend(filters, namespace));
-                }
             }
         }
     }
