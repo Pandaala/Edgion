@@ -33,20 +33,52 @@ impl RetryOnStatusTestSuite {
                         .get(format!("{}/retry-sequence/{}/502,200", ctx.http_url(), test_id))
                         .header("Host", "retry-on-status.example.com")
                         .header("x-trace-id", &test_id)
+                        .header("access_log", "test_store")
                         .send()
                         .await;
 
                     match response {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            if status == 200 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Got 200 after retry (status={})", status),
-                                )
-                            } else {
-                                TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
+
+                            // The retried attempt's per-upstream entry must carry the
+                            // explicit reason label (not just the 502 status code).
+                            let al_client = ctx.access_log_client();
+                            let entry = match al_client.get_access_log_with_retry(&test_id, 10, 200).await {
+                                Ok(entry) => entry,
+                                Err(e) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Access log fetch failed: {}", e),
+                                    )
+                                }
+                            };
+                            let has_label = entry.data["backend_context"]["upstreams"]
+                                .as_array()
+                                .is_some_and(|ups| {
+                                    ups.iter().any(|u| {
+                                        u["err"].as_array().is_some_and(|errs| {
+                                            errs.iter().any(|v| v.as_str() == Some("RetryOnStatus"))
+                                        })
+                                    })
+                                });
+                            if !has_label {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Access log upstreams missing RetryOnStatus label: {}",
+                                        entry.data["backend_context"]["upstreams"]
+                                    ),
+                                );
+                            }
+
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                "Got 200 after retry; RetryOnStatus label present in access log".to_string(),
+                            )
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }

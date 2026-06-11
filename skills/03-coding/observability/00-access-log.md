@@ -47,7 +47,7 @@ Each access log entry must contain enough information for an operator to locate 
 | `errors` | Gateway-internal exception/reject/failure reasons |
 | `match_info.sv` | sync_version — gRPC sync version, used to correlate control-plane logs (omitted when 0). See [../00-logging-and-tracing-ids.md](../00-logging-and-tracing-ids.md) |
 | stage_logs | Per-phase plugin logs (see PluginLog below) |
-| upstreams | Upstream connection details (ip, port, ct/ht/bt/et, retry) |
+| upstreams | Upstream connection details (ip, port, ct/ht/bt/et); per-attempt retry reason in `err`: etype strings / `RetryOnStatus` / `ConnectionReuseRetry`. Client-disconnect waste is marked request-level via `errors: ["ClientClosed"]` |
 
 ### When to add a new field
 

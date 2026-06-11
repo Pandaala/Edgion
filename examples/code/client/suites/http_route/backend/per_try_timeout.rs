@@ -244,6 +244,104 @@ impl PerTryTimeoutTestSuite {
             },
         )
     }
+    /// Test: client gives up at 500ms while every attempt sleeps 3s. Probed
+    /// behavior (Pingora 0.8 h1): the downstream EOF is detected almost
+    /// immediately — the gateway aborts the in-flight first attempt (status
+    /// 499, single upstreams entry) instead of running the retry loop to
+    /// exhaustion, and fail_to_proxy records the ClientClosed marker so the
+    /// abandoned work is analyzable offline (log-only decision: the backoff
+    /// TODO in pg_upstream_peer.rs is intentionally NOT implemented).
+    fn test_client_disconnect_is_logged() -> TestCase {
+        TestCase::new(
+            "client_disconnect_is_logged",
+            "Client disconnects at 500ms — access log records ClientClosed",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let test_id = format!("ptt-clientclosed-{}", uuid::Uuid::new_v4());
+
+                    // Reset state
+                    let _ = ctx
+                        .http_client
+                        .get(format!("{}/retry-sequence-reset", ctx.http_url()))
+                        .header("Host", "per-try.example.com")
+                        .send()
+                        .await;
+
+                    // Every attempt sleeps 3s (per-try timeout would cancel each
+                    // at ~1s); the client aborts at 500ms, before the first
+                    // cancellation.
+                    let response = ctx
+                        .http_client
+                        .get(format!("{}/retry-sequence/{}/200d3000", ctx.http_url(), test_id))
+                        .header("Host", "per-try.example.com")
+                        .header("x-trace-id", &test_id)
+                        .header("access_log", "test_store")
+                        .timeout(Duration::from_millis(500))
+                        .send()
+                        .await;
+
+                    if response.is_ok() {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "Expected the client-side 500ms timeout to abort the request".to_string(),
+                        );
+                    }
+
+                    // The gateway aborts on the downstream EOF almost instantly,
+                    // but poll generously in case a slow CI host delays the
+                    // access-log store write.
+                    let al_client = ctx.access_log_client();
+                    let entry = match al_client.get_access_log_with_retry(&test_id, 60, 250).await {
+                        Ok(entry) => entry,
+                        Err(e) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Access log entry not found after client disconnect: {}", e),
+                            )
+                        }
+                    };
+
+                    let has_client_closed = entry.data["errors"]
+                        .as_array()
+                        .is_some_and(|errs| errs.iter().any(|v| v.as_str() == Some("ClientClosed")));
+                    if !has_client_closed {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Access log errors missing ClientClosed: {}", entry.data),
+                        );
+                    }
+
+                    let status = entry.data["request_info"]["status"].as_u64().unwrap_or(0);
+                    if status != 499 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected logged status 499 (client closed), got {}", status),
+                        );
+                    }
+
+                    let attempts = entry.data["backend_context"]["upstreams"]
+                        .as_array()
+                        .map(|u| u.len())
+                        .unwrap_or(0);
+                    if attempts == 0 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected at least one upstream attempt recorded: {}", entry.data),
+                        );
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        format!(
+                            "ClientClosed logged with status 499; {} upstream attempt(s) recorded",
+                            attempts
+                        ),
+                    )
+                })
+            },
+        )
+    }
 }
 
 #[async_trait]
@@ -261,6 +359,7 @@ impl TestSuite for PerTryTimeoutTestSuite {
             Self::test_slow_attempt_is_retried(),
             Self::test_no_retry_without_policy(),
             Self::test_exhaustion_yields_504(),
+            Self::test_client_disconnect_is_logged(),
         ]
     }
 }

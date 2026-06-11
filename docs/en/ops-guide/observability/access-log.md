@@ -150,7 +150,7 @@ When no route matches, the entire `match_info` object is omitted.
 | `ht` | Integer | ms | Header time (time to first response byte) |
 | `bt` | Integer | ms | Body first-byte time |
 | `et` | Integer | ms | Total elapsed time for this attempt |
-| `err` | Array\<String\> | — | Error messages for this attempt (omitted when empty) |
+| `err` | Array\<String\> | — | Error/reason labels for this attempt (omitted when empty). Retry decisions are labeled explicitly: connect failures carry the error type (`ConnectTimedout`, `TLSHandshakeTimedout`, `ConnectRefused`, ...), per-try timeouts carry `ReadTimedout`/`WriteTimedout`, status-code retries carry `RetryOnStatus`, stale-keepalive retries carry `ConnectionReuseRetry` |
 
 When no backend was used (route not matched, or the request was short-circuited by a plugin), `backend_context` is `null` or omitted.
 
@@ -300,8 +300,35 @@ access_log_options:
     "name": "api-service",
     "namespace": "production",
     "upstreams": [
-      { "ip": "10.0.0.5", "port": 8080, "status": 502, "ct": 1, "ht": 100, "et": 100, "err": ["Connection reset"] },
+      { "ip": "10.0.0.5", "port": 8080, "status": 502, "ct": 1, "ht": 100, "et": 100, "err": ["Connection reset", "RetryOnStatus"] },
       { "ip": "10.0.0.6", "port": 8080, "status": 200, "ct": 2, "ht": 50, "bt": 50, "et": 52 }
+    ]
+  }
+}
+```
+
+### Client disconnected before delivery
+
+When the response cannot be delivered because the client already disconnected,
+the request-level `errors` array carries `ClientClosed` (499_01). The status
+is 499 when the disconnect itself ended the proxying; when the disconnect is
+only discovered while writing the final error response, the record keeps the
+original error status (e.g. 504, or 200 for gRPC trailers-only responses).
+Filter on `errors` containing `ClientClosed`, not on `status == 499`. On
+HTTP/1.1 the gateway notices the disconnect while an
+upstream attempt is in flight and aborts within milliseconds, so the typical
+record shows a single canceled attempt; a disconnect that lands in the retry
+backoff/connect window can still leave multiple entries. Joining `ClientClosed`
+with the `upstreams` array identifies and quantifies work spent on callers
+that had already given up:
+
+```json
+{
+  "status": 499,
+  "errors": ["ClientClosed"],
+  "backend_context": {
+    "upstreams": [
+      { "ip": "10.0.0.5", "port": 8080, "status": 499, "ct": 0, "et": 512 }
     ]
   }
 }

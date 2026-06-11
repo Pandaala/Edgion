@@ -118,6 +118,22 @@ Notes:
 - Each canceled-and-retried attempt records `BackendRequestTimeoutRetry`
   (504_03) in the access-log error chain, and its per-upstream entry is
   stamped with status 504 and the timeout error type.
+- Every retry decision made by Edgion is labeled in the attempt's
+  `upstreams[].err` access-log field: connect failures carry the error type
+  (`ConnectTimedout` etc.), per-try timeouts carry the timeout type,
+  status-code retries carry `RetryOnStatus`, and stale-keepalive retries
+  carry `ConnectionReuseRetry` (retries decided inside Pingora itself, e.g. h2
+  GOAWAY re-attempts, may appear as an extra unlabeled entry).
+  Retry rate by reason is therefore computable from access-log aggregation
+  alone; there is deliberately no per-retry Prometheus counter (see the
+  metrics design rules).
+- If the client disconnects before the response can be delivered, the
+  request-level `errors` array records `ClientClosed` (status 499 in the
+  common case; delivery-failure records keep their original error status —
+  filter on `errors`, not status). In-flight
+  attempts are aborted within milliseconds on HTTP/1.1; a `ClientClosed`
+  record with multiple `upstreams` entries quantifies retry work spent on a
+  caller that had already left.
 - Precision: Edgion enforces `backendRequest` as a per-I/O-operation
   read/write timeout, so an attempt that keeps making progress is not killed
   mid-stream (closest to Envoy's `per_try_timeout` for the response-header

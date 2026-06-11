@@ -1,6 +1,6 @@
 use super::EdgionHttpProxy;
 use crate::core::gateway::send_grpc_trailers_only;
-use crate::types::EdgionHttpContext;
+use crate::types::{EdgionHttpContext, EdgionStatus};
 use pingora_core::{ConnectionClosed, Error, ErrorSource, ErrorType, HTTPStatus, ReadError, WriteError};
 use pingora_proxy::{FailToProxy, Session};
 #[inline]
@@ -44,6 +44,15 @@ pub async fn fail_to_proxy(
         },
     };
 
+    // The proxy-ending error was a downstream failure — the client is gone.
+    // Recorded in the request-level error chain so access-log analysis can
+    // join it with the upstreams array to quantify retry work spent on
+    // callers that had already disconnected. HTTPStatus(499) is excluded:
+    // that is an upstream's literal 499 response, not a client disconnect.
+    if code == 499 && !matches!(e.etype(), HTTPStatus(_)) {
+        ctx.add_error(EdgionStatus::ClientClosed);
+    }
+
     if code > 0 {
         if ctx.request_info.status.is_none() {
             ctx.request_info.status = Some(code);
@@ -62,14 +71,24 @@ pub async fn fail_to_proxy(
             // Send proper gRPC error with correct status mapping instead of an HTML error page.
             // send_grpc_trailers_only uses http_to_grpc_status internally
             // (e.g. 502->Internal, 504->DeadlineExceeded, 500->Internal).
-            let _ = send_grpc_trailers_only(session, ctx, &edgion_http.server_header_opts, code).await;
+            if send_grpc_trailers_only(session, ctx, &edgion_http.server_header_opts, code)
+                .await
+                .is_err()
+            {
+                // Delivery failed: the downstream connection is dead.
+                ctx.add_error(EdgionStatus::ClientClosed);
+            }
         } else {
             let mut resp = pingora_core::protocols::http::ServerSession::generate_error(code);
             edgion_http.server_header_opts.apply_to_response(&mut resp);
-            session
+            if session
                 .write_error_response(resp, bytes::Bytes::default())
                 .await
-                .unwrap_or_else(|_| {});
+                .is_err()
+            {
+                // Delivery failed: the downstream connection is dead.
+                ctx.add_error(EdgionStatus::ClientClosed);
+            }
         }
     }
 

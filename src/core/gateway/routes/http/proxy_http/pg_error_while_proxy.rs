@@ -95,7 +95,20 @@ pub fn error_while_proxy(
 
     let can_retry = client_reused && buffer_ok && ctx.try_cnt <= max_retries && !deadline_exceeded;
 
+    // Capture whether the retry decision is ours to make: errors that arrive
+    // already Decided(true) (e.g. h2 GOAWAY / REFUSED_STREAM decided inside
+    // Pingora) must not be labeled as reuse retries.
+    let was_undecided = matches!(e.retry, pingora_core::RetryType::ReusedOnly);
     e.retry.decide_reuse(can_retry);
+
+    // Stamp the attempt when OUR reuse decision accepts the retry so the extra
+    // upstream entry in the access log carries an explicit reason instead of
+    // an unexplained second attempt.
+    if was_undecided && e.retry() {
+        if let Some(upstream) = ctx.get_current_upstream_mut() {
+            upstream.err.push("ConnectionReuseRetry".to_string());
+        }
+    }
 
     e
 }

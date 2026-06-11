@@ -44,6 +44,14 @@ pub enum EdgionStatus {
     /// Client certificate validation failed (HTTP 403)
     ClientCertInvalid = 403_01,
 
+    /// The downstream client was gone before the response could be delivered:
+    /// either the proxy-ending error itself was a downstream read/write/close
+    /// failure (mapped to 499), or writing the final error response failed.
+    /// Nginx-convention 499. Combined with multiple `upstreams` entries in the
+    /// same access-log record this identifies retry work spent on a caller
+    /// that had already disconnected.
+    ClientClosed = 499_01,
+
     /// Upstream route not matched
     UpstreamNotRouteMatched = 500_01,
 
@@ -207,6 +215,7 @@ mod tests {
             EdgionStatus::RouteNotFound => Some(404),
             EdgionStatus::SniHostMismatch => Some(421),
             EdgionStatus::ClientCertInvalid => Some(403),
+            EdgionStatus::ClientClosed => Some(499),
             EdgionStatus::UpstreamNotRouteMatched => Some(500),
             EdgionStatus::UpstreamNotBackendRefs => Some(500),
             EdgionStatus::UpstreamInconsistentWeight => Some(500),
@@ -258,6 +267,7 @@ mod tests {
             EdgionStatus::RouteNotFound,
             EdgionStatus::SniHostMismatch,
             EdgionStatus::ClientCertInvalid,
+            EdgionStatus::ClientClosed,
             EdgionStatus::UpstreamNotRouteMatched,
             EdgionStatus::UpstreamNotBackendRefs,
             EdgionStatus::UpstreamInconsistentWeight,

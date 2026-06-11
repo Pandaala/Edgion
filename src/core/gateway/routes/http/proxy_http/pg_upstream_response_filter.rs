@@ -43,10 +43,7 @@ pub fn upstream_response_filter(
 
                     match session_persistence::get_persistence_type(&sp) {
                         SessionPersistenceType::Cookie => {
-                            let is_tls = session
-                                .as_downstream()
-                                .digest()
-                                .map_or(false, |d| d.ssl_digest.is_some());
+                            let is_tls = session.as_downstream().digest().is_some_and(|d| d.ssl_digest.is_some());
                             // NOTE (filter-04c): this Set-Cookie is appended
                             // directly onto the upstream header, NOT via
                             // pending_response_header_ops. If a response-phase
@@ -109,6 +106,13 @@ pub fn upstream_response_filter(
                     let buffer_ok = !session.as_ref().retry_buffer_truncated();
                     if ctx.try_cnt <= max_retries && !deadline_exceeded && buffer_ok {
                         ctx.retry_on_status = true;
+                        // Stamp the attempt's per-upstream log entry with an
+                        // explicit retry reason so access-log aggregation can
+                        // count retries by reason instead of inferring this
+                        // case from the entry's status code.
+                        if let Some(upstream) = ctx.get_current_upstream_mut() {
+                            upstream.err.push("RetryOnStatus".to_string());
+                        }
                         return Err(pingora_core::Error::explain(
                             pingora_core::ErrorType::HTTPStatus(status_code),
                             format!("retry on status {}", status_code),
