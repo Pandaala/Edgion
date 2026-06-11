@@ -86,15 +86,76 @@ pub async fn logging(
     }
 }
 
-/// Record HTTP request metrics for monitoring and testing
-///
-/// Records request information to Prometheus for each completed request.
-/// Test fields (test_key, test_data) are only populated when --integration-testing-mode is enabled
-/// AND the Gateway has the corresponding annotations set.
 #[inline]
 fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>) {
-    // When route matching fails, gateway_info stays at Default (empty name).
-    // Use "unknown" to stay consistent with route/backend fallback labels.
+    let duration_ms = Instant::now().saturating_duration_since(ctx.start_time).as_secs_f64() * 1000.0;
+
+    if try_record_via_handles(ctx, duration_ms) {
+        return;
+    }
+
+    // Fallback: integration-testing mode, route miss, bypass path,
+    // gateway not in the route's attached set, or unknown protocol.
+    record_request_metrics_fallback(ctx, error, duration_ms);
+}
+
+#[inline]
+fn try_record_via_handles(ctx: &EdgionHttpContext, duration_ms: f64) -> bool {
+    use crate::core::gateway::observe::metrics::route_handles::{
+        protocol_to_idx, ps_index, status_to_idx, RouteMetricHandles,
+    };
+
+    if crate::core::common::config::is_integration_testing_mode() {
+        return false;
+    }
+
+    let handles: &RouteMetricHandles = match (&ctx.route_unit, &ctx.grpc_route_unit) {
+        (Some(r), _) => &r.metric_handles,
+        (None, Some(g)) => &g.metric_handles,
+        (None, None) => return false,
+    };
+
+    let entry = match handles.lookup(ctx.gateway_info.gateway_namespace(), ctx.gateway_info.gateway_name()) {
+        Some(e) => e,
+        None => return false,
+    };
+
+    let bc = match ctx.backend_context.as_ref() {
+        Some(bc) => bc,
+        None => return false,
+    };
+    let b_idx = match bc.backend_ref_idx {
+        Some(i) => i,
+        None => return false,
+    };
+
+    let protocol = ctx.request_info.discover_protocol.as_deref().unwrap_or("http");
+    let p_idx = match protocol_to_idx(protocol) {
+        Some(p) => p,
+        None => return false,
+    };
+    let s_idx = status_to_idx(ctx.request_info.status);
+    let idx = ps_index(p_idx, s_idx);
+
+    if b_idx >= entry.counters.len() {
+        debug_assert!(
+            false,
+            "backend_ref_idx out of bounds — RouteMetricHandles built against stale backend_refs"
+        );
+        return false;
+    }
+    entry.counters[b_idx][idx].increment(1);
+    if let Some(hs) = entry.histograms.as_ref() {
+        hs[b_idx][idx].record(duration_ms);
+    }
+    true
+}
+
+/// Dynamic fallback path. Same code as the previous `record_request_metrics`
+/// body — kept verbatim so route-miss / bypass / integration-testing-mode
+/// requests continue to emit the same time series.
+#[inline]
+fn record_request_metrics_fallback(ctx: &EdgionHttpContext, error: Option<&PingoraError>, duration_ms: f64) {
     let gateway_ns = match ctx.gateway_info.gateway_namespace() {
         "" => "unknown",
         ns => ns,
@@ -104,7 +165,6 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
         name => name,
     };
 
-    // Get matched route information (HTTP or gRPC)
     let (route_ns, route_name) = if let Some(ref route_unit) = ctx.route_unit {
         (
             route_unit.matched_info.rsc.ns.as_str(),
@@ -119,8 +179,6 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
         ("unknown", "unknown")
     };
 
-    // Get backend information. Bypass paths (DirectEndpoint / ExternalJump) have no rsc and
-    // fall back to "unknown" — same fallback as when backend_context itself is missing.
     let (backend_ns, backend_name) = ctx
         .backend_context
         .as_ref()
@@ -128,11 +186,8 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
         .map(|rsc| (rsc.ns.as_str(), rsc.name.as_str()))
         .unwrap_or(("unknown", "unknown"));
 
-    // Get protocol from discover_protocol (default "http", could be "grpc", "websocket", etc.)
     let protocol = ctx.request_info.discover_protocol.as_deref().unwrap_or("http");
 
-    // Get test metrics only when integration_testing_mode is enabled
-    // This prevents processing test annotations in production
     let (test_key, test_data) = if crate::core::common::config::is_integration_testing_mode() {
         let key = ctx.gateway_info.metrics_test_key.as_deref().unwrap_or("");
         let data = build_test_data(ctx, error);
@@ -141,7 +196,6 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
         ("", String::new())
     };
 
-    // Record the metric
     let status = status_group(ctx.request_info.status);
     record_backend_request(
         &get_backend_requests_config().labels,
@@ -157,8 +211,6 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
         &test_data,
     );
 
-    // Record request duration histogram
-    let duration_ms = Instant::now().saturating_duration_since(ctx.start_time).as_secs_f64() * 1000.0;
     record_request_duration(
         get_request_duration_config(),
         gateway_ns,
@@ -262,6 +314,7 @@ mod tests {
                 service_kind: None,
                 upstreams: Vec::new(),
                 current_upstream_id: None,
+                backend_ref_idx: None,
             });
         }
         let bc = ctx.backend_context.as_mut().unwrap();
@@ -303,6 +356,7 @@ mod tests {
             service_kind: None,
             upstreams: Vec::new(),
             current_upstream_id: None,
+            backend_ref_idx: None,
         });
         ctx.push_upstream(None, None);
         // lb_committed stays None (default from push_upstream)
@@ -426,6 +480,7 @@ mod tests {
             service_kind: None,
             upstreams: Vec::new(),
             current_upstream_id: None,
+            backend_ref_idx: None,
         });
         ctx.push_upstream(None, None);
         if let Some(up) = ctx.get_current_upstream_mut() {

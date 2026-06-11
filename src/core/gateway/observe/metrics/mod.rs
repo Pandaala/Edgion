@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod registry;
+pub mod route_handles;
 pub mod test_metrics;
 
 pub use api::{create_metrics_router, serve, serve_with_shutdown};

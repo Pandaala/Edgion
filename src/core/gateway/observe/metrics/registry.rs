@@ -3,7 +3,7 @@
 //! Centralized metrics for monitoring gateway performance.
 //! Uses the `metrics` crate for thread-safe, high-performance counters.
 
-use metrics::{counter, gauge, histogram, Counter, Gauge};
+use metrics::{counter, gauge, histogram, Counter, Gauge, Label};
 use std::sync::{LazyLock, OnceLock};
 
 /// Metric names as constants for consistency
@@ -288,33 +288,35 @@ pub fn record_backend_request(
     test_key: &str,
     test_data: &str,
 ) {
-    // Pre-size: up to 6 resource labels + protocol + status + 2 test labels.
-    let mut labels: Vec<(&'static str, String)> = Vec::with_capacity(10);
+    // Build a `Vec<metrics::Label>` directly so the registry's `IntoLabels`
+    // impl can move it in place; this avoids the per-call `Vec::collect()`
+    // that the `(&str, String)` slice form would trigger inside `counter!`.
+    let mut labels: Vec<Label> = Vec::with_capacity(10);
     if cfg.gateway {
-        labels.push(("gateway_namespace", gateway_ns.to_string()));
-        labels.push(("gateway_name", gateway_name.to_string()));
+        labels.push(Label::new("gateway_namespace", gateway_ns.to_string()));
+        labels.push(Label::new("gateway_name", gateway_name.to_string()));
     }
     if cfg.route {
-        labels.push(("route_namespace", route_ns.to_string()));
-        labels.push(("route_name", route_name.to_string()));
+        labels.push(Label::new("route_namespace", route_ns.to_string()));
+        labels.push(Label::new("route_name", route_name.to_string()));
     }
     if cfg.backend {
-        labels.push(("backend_namespace", backend_ns.to_string()));
-        labels.push(("backend_name", backend_name.to_string()));
+        labels.push(Label::new("backend_namespace", backend_ns.to_string()));
+        labels.push(Label::new("backend_name", backend_name.to_string()));
     }
     if cfg.protocol {
-        labels.push(("protocol", protocol.to_string()));
+        labels.push(Label::new("protocol", protocol.to_string()));
     }
     if cfg.status {
-        labels.push(("status", status.to_string()));
+        labels.push(Label::new("status", status.to_string()));
     }
     if !test_key.is_empty() {
-        labels.push(("test_key", test_key.to_string()));
+        labels.push(Label::new("test_key", test_key.to_string()));
     }
     if !test_data.is_empty() {
-        labels.push(("test_data", test_data.to_string()));
+        labels.push(Label::new("test_data", test_data.to_string()));
     }
-    counter!(names::BACKEND_REQUESTS_TOTAL, &labels[..]).increment(1);
+    counter!(names::BACKEND_REQUESTS_TOTAL, labels).increment(1);
 }
 
 /// Convert HTTP status code to status group
@@ -376,33 +378,36 @@ pub fn record_request_duration(
     }
     let labels = &cfg.labels;
 
-    let mut label_vec: Vec<(&'static str, String)> = Vec::with_capacity(8);
+    // Build a `Vec<metrics::Label>` directly so the registry's `IntoLabels`
+    // impl can move it in place; this avoids the per-call `Vec::collect()`
+    // that the `(&str, String)` slice form would trigger inside `histogram!`.
+    let mut label_vec: Vec<Label> = Vec::with_capacity(8);
     if labels.gateway_namespace {
-        label_vec.push(("gateway_namespace", gateway_namespace.to_string()));
+        label_vec.push(Label::new("gateway_namespace", gateway_namespace.to_string()));
     }
     if labels.gateway_name {
-        label_vec.push(("gateway_name", gateway_name.to_string()));
+        label_vec.push(Label::new("gateway_name", gateway_name.to_string()));
     }
     if labels.route_namespace {
-        label_vec.push(("route_namespace", route_namespace.to_string()));
+        label_vec.push(Label::new("route_namespace", route_namespace.to_string()));
     }
     if labels.route_name {
-        label_vec.push(("route_name", route_name.to_string()));
+        label_vec.push(Label::new("route_name", route_name.to_string()));
     }
     if labels.backend_namespace {
-        label_vec.push(("backend_namespace", backend_namespace.to_string()));
+        label_vec.push(Label::new("backend_namespace", backend_namespace.to_string()));
     }
     if labels.backend_name {
-        label_vec.push(("backend_name", backend_name.to_string()));
+        label_vec.push(Label::new("backend_name", backend_name.to_string()));
     }
     if labels.protocol {
-        label_vec.push(("protocol", protocol.to_string()));
+        label_vec.push(Label::new("protocol", protocol.to_string()));
     }
     if labels.status {
-        label_vec.push(("status", status.to_string()));
+        label_vec.push(Label::new("status", status.to_string()));
     }
 
-    histogram!(names::GATEWAY_REQUEST_DURATION_MS, &label_vec).record(duration_ms);
+    histogram!(names::GATEWAY_REQUEST_DURATION_MS, label_vec).record(duration_ms);
 }
 
 /// Record a circuit breaker ejection event
@@ -563,6 +568,44 @@ mod tests {
                 "still-untouched cold counter must remain absent, got:\n{rendered}"
             );
         });
+    }
+
+    #[test]
+    fn record_backend_request_emits_expected_labels_under_default_cfg() {
+        use crate::core::gateway::cli::config::BackendRequestsLabels;
+        use metrics_util::debugging::DebuggingRecorder;
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let cfg = BackendRequestsLabels::default(); // gateway + protocol + status
+        metrics::with_local_recorder(&recorder, || {
+            record_backend_request(
+                &cfg,
+                "gw_ns",
+                "gw_a",
+                "route_ns",
+                "route_x",
+                "backend_ns",
+                "svc_x",
+                "http",
+                "2xx",
+                "",
+                "",
+            );
+        });
+        let snap = snapshotter.snapshot().into_vec();
+        let key = snap
+            .iter()
+            .find(|(k, _, _, _)| k.key().name() == names::BACKEND_REQUESTS_TOTAL)
+            .expect("counter registered");
+        let labels: Vec<(&str, &str)> = key.0.key().labels().map(|l| (l.key(), l.value())).collect();
+        assert!(labels.contains(&("gateway_namespace", "gw_ns")));
+        assert!(labels.contains(&("gateway_name", "gw_a")));
+        assert!(labels.contains(&("protocol", "http")));
+        assert!(labels.contains(&("status", "2xx")));
+        // route_namespace / backend_namespace must NOT appear under default cfg
+        assert!(!labels.iter().any(|(k, _)| *k == "route_namespace"));
+        assert!(!labels.iter().any(|(k, _)| *k == "backend_namespace"));
     }
 }
 

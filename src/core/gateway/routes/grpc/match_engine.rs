@@ -72,7 +72,7 @@ impl GrpcMatchEngine {
                     (Some(service), None, false) => {
                         service_routes
                             .entry(service.clone())
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push(route);
                     }
                     // Regex: service + method both present
@@ -249,7 +249,7 @@ impl GrpcMatchEngine {
                     .method
                     .as_ref()
                     .and_then(|m| m.service.as_ref())
-                    .map_or(false, |s| s == &service);
+                    .is_some_and(|s| s == service);
                 if !service_matches {
                     return false;
                 }
@@ -257,7 +257,7 @@ impl GrpcMatchEngine {
                     .matched_info
                     .compiled_method_regex
                     .as_ref()
-                    .is_some_and(|re| re.is_match(&method))
+                    .is_some_and(|re| re.is_match(method))
             },
         ) {
             return Ok(hit);
@@ -274,7 +274,7 @@ impl GrpcMatchEngine {
                     .matched_info
                     .compiled_service_regex
                     .as_ref()
-                    .is_some_and(|re| re.is_match(&service));
+                    .is_some_and(|re| re.is_match(service));
                 if !service_ok {
                     return false;
                 }
@@ -284,7 +284,7 @@ impl GrpcMatchEngine {
                     .method
                     .as_ref()
                     .and_then(|m| m.method.as_ref())
-                    .map_or(false, |m| m == &method)
+                    .is_some_and(|m| m == method)
             },
         ) {
             return Ok(hit);
@@ -301,12 +301,12 @@ impl GrpcMatchEngine {
                     .matched_info
                     .compiled_service_regex
                     .as_ref()
-                    .map_or(false, |re| re.is_match(&service));
+                    .is_some_and(|re| re.is_match(service));
                 let method_ok = route_unit
                     .matched_info
                     .compiled_method_regex
                     .as_ref()
-                    .map_or(false, |re| re.is_match(&method));
+                    .is_some_and(|re| re.is_match(method));
                 service_ok && method_ok
             },
         ) {
@@ -328,7 +328,7 @@ impl GrpcMatchEngine {
                 .matched_info
                 .compiled_service_regex
                 .as_ref()
-                .is_some_and(|re| re.is_match(&service))
+                .is_some_and(|re| re.is_match(service))
         }) {
             return Ok(hit);
         }
@@ -484,6 +484,9 @@ mod tests {
                 rule_index: 0,
                 match_index: 0,
             },
+            metric_handles: Arc::new(
+                crate::core::gateway::observe::metrics::route_handles::RouteMetricHandles::empty(),
+            ),
         })
     }
 
@@ -724,6 +727,9 @@ mod tests {
                 rule_index,
                 match_index,
             },
+            metric_handles: Arc::new(
+                crate::core::gateway::observe::metrics::route_handles::RouteMetricHandles::empty(),
+            ),
         })
     }
 

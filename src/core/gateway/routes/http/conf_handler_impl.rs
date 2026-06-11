@@ -1,6 +1,8 @@
 use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use crate::core::common::matcher::host_match::radix_match::{RadixHost, RadixHostMatchEngine};
-use crate::core::gateway::routes::common::{effective_hostnames, filter_accepted_parent_refs};
+use crate::core::gateway::routes::common::{
+    effective_hostnames, filter_accepted_parent_refs, gateways_from_parent_refs,
+};
 use crate::core::gateway::routes::http::lb_policy_sync::{cleanup_lb_policies_for_routes, sync_lb_policies_for_routes};
 use crate::core::gateway::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::core::gateway::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
@@ -212,6 +214,10 @@ struct RouteUnitCtx<'a> {
     parent_refs: Option<Vec<ParentReference>>,
     creation_ts_ms: i64,
     route_sv: u64,
+    /// Concrete `(gateway_ns, gateway_name)` pairs this route attaches to,
+    /// pre-resolved from `parent_refs` against the accepted status.
+    /// Drives `RouteMetricHandles::build`.
+    attached_gateways: &'a [(String, String)],
 }
 
 fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, String> {
@@ -243,13 +249,21 @@ fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, S
             ctx.match_item.clone(),
             ctx.route_sv,
         ),
-        rule: ctx.rule,
+        rule: ctx.rule.clone(),
         path_regex: Some(regex),
         parent_refs: ctx.parent_refs,
         compiled_header_regexes,
         compiled_query_regexes,
         has_query_matchers,
         specificity,
+        metric_handles: Arc::new(
+            crate::core::gateway::observe::metrics::route_handles::RouteMetricHandles::build(
+                ctx.attached_gateways,
+                ctx.namespace,
+                ctx.name,
+                &http_backends_from_rule(&ctx.rule, ctx.namespace),
+            ),
+        ),
     })
 }
 
@@ -273,13 +287,21 @@ fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
             ctx.match_item.clone(),
             ctx.route_sv,
         ),
-        rule: ctx.rule,
+        rule: ctx.rule.clone(),
         path_regex: None,
         parent_refs: ctx.parent_refs,
         compiled_header_regexes,
         compiled_query_regexes,
         has_query_matchers,
         specificity,
+        metric_handles: Arc::new(
+            crate::core::gateway::observe::metrics::route_handles::RouteMetricHandles::build(
+                ctx.attached_gateways,
+                ctx.namespace,
+                ctx.name,
+                &http_backends_from_rule(&ctx.rule, ctx.namespace),
+            ),
+        ),
     }
 }
 
@@ -300,6 +322,7 @@ fn append_match_to_domain(domain_rules: &mut DomainRouteRulesMap, hostname: &str
 }
 
 /// Expand all rules of a single route into `hostname`'s domain bucket.
+#[allow(clippy::too_many_arguments)] // validated route context has 8 interrelated params; grouping would obscure them
 fn append_route_to_hostname(
     domain_rules: &mut DomainRouteRulesMap,
     hostname: &str,
@@ -319,6 +342,8 @@ fn append_route_to_hostname(
         query_params: None,
         method: None,
     }];
+
+    let attached_gateways = gateways_from_parent_refs(parent_refs, &validated.namespace);
 
     for (rule_id, rule) in validated.rules.iter().enumerate() {
         if invalid_rule_indices.is_some_and(|inv| inv.contains(&rule_id)) {
@@ -344,6 +369,7 @@ fn append_route_to_hostname(
                     parent_refs: Some(parent_refs.to_vec()),
                     creation_ts_ms,
                     route_sv,
+                    attached_gateways: &attached_gateways,
                 },
             );
         }
@@ -515,6 +541,24 @@ pub(crate) fn build_domain_route_rules_from_routes(data: &HashMap<String, HTTPRo
         wildcard_engine: wildcard_engine.map(Arc::new),
         catch_all_routes,
     }
+}
+
+/// Extract `(backend_ns, backend_name)` tuples in `backend_refs` order, with
+/// fallback to `route_ns` when the backend ref omits its namespace.
+fn http_backends_from_rule(rule: &HTTPRouteRule, route_ns: &str) -> Vec<(String, String)> {
+    rule.backend_refs
+        .as_ref()
+        .map(|refs| {
+            refs.iter()
+                .map(|b| {
+                    (
+                        b.namespace.clone().unwrap_or_else(|| route_ns.to_string()),
+                        b.name.clone(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

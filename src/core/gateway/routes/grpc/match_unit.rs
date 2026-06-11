@@ -197,6 +197,15 @@ pub struct GrpcRouteRuleUnit {
     pub route_info: Arc<GrpcRouteInfo>,
     /// Pre-computed match specificity for Gateway API precedence ordering.
     pub specificity: GrpcMatchSpecificity,
+    /// Pre-resolved Counter/Histogram handles for the request-end metric
+    /// path. The hot path indexes by
+    /// `lookup(gw_ns, gw_name).counters[backend_ref_idx][ps_index(...)]`.
+    /// Invariants: `BackendRequestsLabels` / `RequestDurationConfig.labels`
+    /// are read once at build time (init-once globals — see
+    /// `docs/superpowers/specs/2026-06-10-observe-f002-route-unit-metric-handles-design.md`
+    /// §6); `backend_refs` is never mutated in place, so indices stay valid
+    /// for the lifetime of this `Arc<GrpcRouteRuleUnit>`.
+    pub metric_handles: Arc<crate::core::gateway::observe::metrics::route_handles::RouteMetricHandles>,
 }
 
 impl GrpcRouteRuleUnit {

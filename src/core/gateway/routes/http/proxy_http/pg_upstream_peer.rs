@@ -653,6 +653,7 @@ async fn try_external_jump_peer(
             service_kind: None,
             upstreams: Vec::new(),
             current_upstream_id: None,
+            backend_ref_idx: None,
         });
     }
 
@@ -696,7 +697,7 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
         return Ok(());
     }
 
-    let (name, namespace, kind_str) = if let Some(grpc_br) = ctx.selected_grpc_backend.as_ref() {
+    let (name, namespace, kind_str, backend_ref_idx) = if let Some(grpc_br) = ctx.selected_grpc_backend.as_ref() {
         let route_ns = ctx
             .grpc_route_unit
             .as_ref()
@@ -704,7 +705,16 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
             .unwrap_or_default()
             .to_string();
         let ns = grpc_br.namespace.clone().unwrap_or(route_ns);
-        (grpc_br.name.clone(), ns, grpc_br.kind.clone())
+        // (name, namespace) is effectively unique per rule's backend_refs
+        // in well-formed routes; position() returns the first match.
+        let idx = ctx.grpc_route_unit.as_ref().and_then(|unit| {
+            let route_ns_str = unit.matched_info.rsc.ns.as_str();
+            unit.rule.backend_refs.as_ref().and_then(|refs| {
+                refs.iter()
+                    .position(|r| r.name == grpc_br.name && r.namespace.as_deref().unwrap_or(route_ns_str) == ns)
+            })
+        });
+        (grpc_br.name.clone(), ns, grpc_br.kind.clone(), idx)
     } else if let Some(http_br) = ctx.selected_backend.as_ref() {
         let route_ns = ctx
             .route_unit
@@ -713,7 +723,16 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
             .unwrap_or_default()
             .to_string();
         let ns = http_br.namespace.clone().unwrap_or(route_ns);
-        (http_br.name.clone(), ns, http_br.kind.clone())
+        // (name, namespace) is effectively unique per rule's backend_refs
+        // in well-formed routes; position() returns the first match.
+        let idx = ctx.route_unit.as_ref().and_then(|unit| {
+            let route_ns_str = unit.matched_info.rsc.ns.as_str();
+            unit.rule.backend_refs.as_ref().and_then(|refs| {
+                refs.iter()
+                    .position(|r| r.name == http_br.name && r.namespace.as_deref().unwrap_or(route_ns_str) == ns)
+            })
+        });
+        (http_br.name.clone(), ns, http_br.kind.clone(), idx)
     } else {
         return Err(PingoraError::new(ErrorType::InternalError));
     };
@@ -725,7 +744,7 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
         name,
     };
     let service_kind = EdgionService::from_kind(kind_str.as_ref());
-    ctx.init_backend_context(rsc, service_key, service_kind);
+    ctx.init_backend_context(rsc, service_key, service_kind, backend_ref_idx);
     Ok(())
 }
 
@@ -766,7 +785,7 @@ fn record_unsafe_resolved_upstream_attempt(
 ///   1. annotation forward-raw-path      → Some(true)/Some(false) forces
 ///   2. ctx.jump == External(preserve_raw_path: true) → gateway-to-gateway default raw
 ///   3. global forward_normalized_path   → false means raw (v3.1 compat / rollback)
-///   Default                              → write normalized
+///      Default                              → write normalized
 #[inline]
 fn finalize_request_uri(session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
     if ctx.uri_finalized {

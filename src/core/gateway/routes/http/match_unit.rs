@@ -93,6 +93,15 @@ pub struct HttpRouteRuleUnit {
     pub has_query_matchers: bool,
     /// Pre-computed match specificity for Gateway API precedence ordering.
     pub specificity: MatchSpecificity,
+    /// Pre-resolved Counter/Histogram handles for the request-end metric
+    /// path. The hot path indexes by
+    /// `lookup(gw_ns, gw_name).counters[backend_ref_idx][ps_index(...)]`.
+    /// Invariants: `BackendRequestsLabels` / `RequestDurationConfig.labels`
+    /// are read once at build time (init-once globals — see
+    /// `docs/superpowers/specs/2026-06-10-observe-f002-route-unit-metric-handles-design.md`
+    /// §6); `backend_refs` is never mutated in place, so indices stay valid
+    /// for the lifetime of this `Arc<HttpRouteRuleUnit>`.
+    pub metric_handles: Arc<crate::core::gateway::observe::metrics::route_handles::RouteMetricHandles>,
 }
 
 impl HttpRouteRuleUnit {
@@ -242,6 +251,7 @@ impl HttpRouteRuleUnit {
     /// Common deep match logic for checking Gateway/sectionName, method, headers, and query parameters.
     ///
     /// Returns `Some(GatewayInfo)` of the matched gateway on success, `None` on failure.
+    #[allow(clippy::too_many_arguments)] // all 8 params are distinct match-time inputs; a context struct would add indirection
     pub(crate) fn deep_match_common(
         matched_info: &MatchInfo,
         req_header: &pingora_http::RequestHeader,

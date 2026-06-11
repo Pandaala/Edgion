@@ -72,6 +72,29 @@ pub(crate) fn filter_accepted_parent_refs(
     }
 }
 
+/// Extract `(gateway_ns, gateway_name)` pairs from accepted parent_refs.
+/// Filters by both `kind == "Gateway"` and `group == "gateway.networking.k8s.io"`
+/// (or absent group, which defaults to Gateway API per K8s convention). Falls
+/// back to `route_ns` when a parent ref omits its namespace.
+pub(crate) fn gateways_from_parent_refs(parent_refs: &[ParentReference], route_ns: &str) -> Vec<(String, String)> {
+    parent_refs
+        .iter()
+        .filter(|pr| {
+            let kind_ok = pr.kind.as_deref().map(|k| k == "Gateway").unwrap_or(true);
+            let group_ok = pr
+                .group
+                .as_deref()
+                .map(|g| g == "gateway.networking.k8s.io")
+                .unwrap_or(true);
+            kind_ok && group_ok
+        })
+        .map(|pr| {
+            let ns = pr.namespace.clone().unwrap_or_else(|| route_ns.to_string());
+            (ns, pr.name.clone())
+        })
+        .collect()
+}
+
 /// Return the effective hostnames for a route.
 ///
 /// Priority:

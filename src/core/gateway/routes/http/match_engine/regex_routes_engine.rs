@@ -197,6 +197,9 @@ mod tests {
                 rule_index: rule_id as u32,
                 match_index: 0,
             },
+            metric_handles: Arc::new(
+                crate::core::gateway::observe::metrics::route_handles::RouteMetricHandles::empty(),
+            ),
         })
     }
 

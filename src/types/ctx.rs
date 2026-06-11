@@ -407,8 +407,8 @@ pub struct UpstreamInfo {
     /// (LeastConn / EWMA). Consumed by `finalize_attempt`:
     ///   - `pg_upstream_peer::begin_upstream_attempt` on retry → FinalizeMode::Discard
     ///   - `pg_logging::lb_runtime_cleanup` at request end    → FinalizeMode::Settle
-    /// Backend reference is read from `lb_edgion_backend` on this same entry;
-    /// do NOT duplicate the Arc here.
+    ///     Backend reference is read from `lb_edgion_backend` on this same entry;
+    ///     do NOT duplicate the Arc here.
     #[serde(skip)]
     pub lb_committed: Option<crate::core::gateway::lb::LbCommit>,
 }
@@ -462,6 +462,14 @@ pub struct BackendContext {
     /// Current upstream index (for status updates)
     #[serde(skip)]
     pub current_upstream_id: Option<usize>,
+    /// Position of the selected backend in `route_unit.rule.backend_refs` (HTTP)
+    /// or the gRPC equivalent. `None` on the ExternalJump path (DNS-resolved
+    /// external domain — no K8s backend ref) and when the route unit or its
+    /// backend_refs list is absent during context initialization. `Some(idx)`
+    /// on the normal HTTP/gRPC path, DirectEndpoint, and InternalJump. The
+    /// hot metric path falls back to the dynamic lookup when this is `None`.
+    #[serde(skip)]
+    pub backend_ref_idx: Option<usize>,
 }
 
 /// Session persistence state for the current request.
@@ -1060,7 +1068,13 @@ impl EdgionHttpContext {
     /// Bypass paths (DirectEndpoint / ExternalJump) construct `BackendContext` directly
     /// at the call site (in `try_direct_endpoint_peer` / `try_external_jump_peer`)
     /// and set their own `Some(source)` tag.
-    pub fn init_backend_context(&mut self, rsc: Rsc, service_key: String, service_kind: EdgionService) {
+    pub fn init_backend_context(
+        &mut self,
+        rsc: Rsc,
+        service_key: String,
+        service_kind: EdgionService,
+        backend_ref_idx: Option<usize>,
+    ) {
         self.backend_context = Some(BackendContext {
             source: None,
             rsc: Some(rsc),
@@ -1068,6 +1082,7 @@ impl EdgionHttpContext {
             service_kind: Some(service_kind),
             upstreams: Vec::new(),
             current_upstream_id: None,
+            backend_ref_idx,
         });
     }
 
@@ -1212,14 +1227,14 @@ mod sensitive_tests {
     use super::*;
     use crate::types::sensitive::SENSITIVE_MODE;
     use std::sync::atomic::Ordering;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     static MODE_LOCK: Mutex<()> = Mutex::new(());
 
     struct ModeGuard<'a> {
         prev: u8,
         // Held purely for RAII: serializes tests that mutate SENSITIVE_MODE.
-        _lock: std::sync::MutexGuard<'a, ()>,
+        _lock: parking_lot::MutexGuard<'a, ()>,
     }
     impl Drop for ModeGuard<'_> {
         fn drop(&mut self) {
@@ -1227,7 +1242,7 @@ mod sensitive_tests {
         }
     }
     fn set_mode(mode: u8) -> ModeGuard<'static> {
-        let guard = MODE_LOCK.lock().unwrap();
+        let guard = MODE_LOCK.lock();
         let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
         ModeGuard { prev, _lock: guard }
     }

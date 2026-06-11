@@ -429,12 +429,15 @@ pub fn init_request_duration_config(config: RequestDurationConfig) {
     debug_assert!(result.is_ok(), "init_request_duration_config called more than once");
 }
 
-/// Get the global request duration config (zero-cost after init).
+/// Get the global request duration config.
+///
+/// Falls back to `RequestDurationConfig::default()` (histogram disabled) if
+/// `init_request_duration_config` has not been called yet. This matches the
+/// `get_or_init` pattern used by `get_backend_requests_config` and allows
+/// route-unit construction in test environments that skip gateway startup.
 #[inline]
 pub fn get_request_duration_config() -> &'static RequestDurationConfig {
-    REQUEST_DURATION_CONFIG
-        .get()
-        .expect("RequestDurationConfig not initialized")
+    REQUEST_DURATION_CONFIG.get_or_init(RequestDurationConfig::default)
 }
 
 // ============================================

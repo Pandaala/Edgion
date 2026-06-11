@@ -1,9 +1,11 @@
 use crate::core::common::conf_sync::traits::ConfHandler;
-use crate::core::gateway::routes::common::{effective_hostnames, filter_accepted_parent_refs};
+use crate::core::gateway::routes::common::{
+    effective_hostnames, filter_accepted_parent_refs, gateways_from_parent_refs,
+};
 use crate::core::gateway::routes::grpc::match_unit::{GrpcMatchInfo, GrpcMatchSpecificity, GrpcRouteInfo};
 use crate::core::gateway::routes::grpc::routes_mgr::{resolved_listeners_for_grpc_route, GlobalGrpcRouteManagers};
 use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, GrpcRouteRuleUnit};
-use crate::types::{GRPCRoute, ListenerKey, ResourceMeta};
+use crate::types::{GRPCRoute, GRPCRouteRule, ListenerKey, ResourceMeta};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
@@ -127,6 +129,9 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
         None => return Vec::new(),
     };
 
+    // Derive attached gateway pairs before accepted_refs is moved into route_info.
+    let attached_gateways = gateways_from_parent_refs(&accepted_refs, route_namespace);
+
     let route_sv = route.get_sync_version();
     let creation_ts_ms = route
         .metadata
@@ -187,6 +192,14 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
                     rule: rule_arc.clone(),
                     route_info: route_info.clone(),
                     specificity,
+                    metric_handles: Arc::new(
+                        crate::core::gateway::observe::metrics::route_handles::RouteMetricHandles::build(
+                            &attached_gateways,
+                            route_namespace,
+                            route_name,
+                            &grpc_backends_from_rule(rule, route_namespace),
+                        ),
+                    ),
                 }));
             } else {
                 for (match_id, match_item) in effective_matches.iter().enumerate() {
@@ -212,10 +225,36 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
                         rule: rule_arc.clone(),
                         route_info: route_info.clone(),
                         specificity,
+                        metric_handles: Arc::new(
+                            crate::core::gateway::observe::metrics::route_handles::RouteMetricHandles::build(
+                                &attached_gateways,
+                                route_namespace,
+                                route_name,
+                                &grpc_backends_from_rule(rule, route_namespace),
+                            ),
+                        ),
                     }));
                 }
             }
         }
     }
     units
+}
+
+/// Extract `(backend_ns, backend_name)` tuples in `backend_refs` order, with
+/// fallback to `route_ns` when the backend ref omits its namespace.
+fn grpc_backends_from_rule(rule: &GRPCRouteRule, route_ns: &str) -> Vec<(String, String)> {
+    rule.backend_refs
+        .as_ref()
+        .map(|refs| {
+            refs.iter()
+                .map(|b| {
+                    (
+                        b.namespace.clone().unwrap_or_else(|| route_ns.to_string()),
+                        b.name.clone(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
