@@ -172,76 +172,57 @@ conf_center:
 
 ## 认证
 
-Controller Admin API 的认证是**必须的**。所有对 `/api/v1/*` 路由的请求都需要有效的 Bearer Token 或会话 Cookie。未认证的请求返回 HTTP 401。
+Controller Admin API 采用 **Istio 风格的纯 Token 认证**。每个对 `/api/v1/*` 业务路由的请求都必须携带 `Authorization: Bearer <token>` 头。**不再有**浏览器登录、会话 Cookie 或 Admin API 的 OIDC——这些已被移除。（浏览器仪表板现已迁移到独立的 Center 项目；Controller 不再托管仪表板。）
 
-> **凭据必须由运维人员显式提供。** Controller 不再自动生成管理员凭据。凭据来源（优先级从高到低）：
->
-> 1. 通过 `valueFrom.secretKeyRef` 从 `edgion-admin-credentials` Secret 注入的环境变量
->    `EDGION_ADMIN_USERNAME` / `EDGION_ADMIN_PASSWORD` / `EDGION_ADMIN_JWT_SECRET`（Kubernetes 推荐方式）。
->    `deploy.sh` 脚本会幂等地创建该 Secret。
-> 2. 挂载为 Secret 的配置文件中的 `[local_auth]` 段。
-> 3. `[auth]` OIDC。
->
-> 若以上均未配置，服务器仍可启动，但所有 Admin API 业务路由返回 **503 fail-close**。
-> `/health`、`/ready`、`/metrics` 和 `/api/v1/auth/status` 保持可访问。
-> 读取密码（使用 `deploy.sh` 部署时）：
->
-> ```bash
-> kubectl -n edgion-system get secret edgion-admin-credentials \
->   -o jsonpath='{.data.password}' | base64 -d
-> ```
->
-> 也可以通过交互方式认证：`edgion-cli login`。
+单个预共享的**管理员 Token** 授予完整（allow-all）访问权限。其来源如下（优先级从高到低）：
 
-Controller 和 Center 使用相同的 `[local_auth]` / `[auth]` schema，引导方式现已一致：两者均未配置时均以 503 失败关闭（见下方 Center 说明）。
+1. 环境变量 `EDGION_ADMIN_TOKEN`，通过 `valueFrom.secretKeyRef` 从 `edgion-admin-credentials` Secret（键 `token`）注入——Kubernetes 推荐方式。`deploy.sh` 脚本会幂等地创建该 Secret。
+2. 顶层 `admin_token` 配置字段（见下文）。
 
-### [local_auth]
+空或缺失的 Token 表示"未配置"。当既未设置管理员 Token **又**未配置 `cli_tokens` 时，服务器仍可启动，但所有 Admin API 业务路由返回 **503 fail-close**。`/health`、`/ready`、`/metrics` 和 `GET /api/v1/auth/status` 保持可访问。
 
-内置用户名/密码认证，向已认证客户端签发 HS256 JWT。Controller 和 Center 均需显式配置（不再自动生成）。
+从 Secret 读取 Token（使用 `deploy.sh` 部署时）：
+
+```bash
+kubectl -n edgion-system get secret edgion-admin-credentials \
+  -o jsonpath='{.data.token}' | base64 -d
+```
+
+用它授权 CLI：
+
+```bash
+edgion-cli login --token <TOKEN>
+```
+
+### 授权模型
+
+Token 映射到一个 RBAC 策略。**本地管理员 Token** 映射到 allow-all（通配符）策略——可对任意 kind 执行任意操作。细粒度的按 Token RBAC 通过 `cli_tokens`（见下文）和联邦（`center.rbac`）提供，两者均保持不变。除 allow-all 管理员 Token 外，不再有独立的"superuser"概念。
+
+认证为 **纯 Bearer**——没有 httpOnly Cookie，也没有服务端会话。
+
+### 认证端点
+
+`GET /api/v1/auth/status` 是唯一的认证端点，始终公开（无需 Token）。返回：
+
+```json
+{ "auth_required": true, "mode": "token", "status": "..." }
+```
+
+原 `/api/v1/auth/login`、`/api/v1/auth/logout` 和 `/api/v1/auth/me` 端点已被移除。
+
+### `admin_token`
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `username` | `String` | `"admin"` | 管理员用户名 |
-| `password` | `String` | _（必填）_ | 管理员密码。必须显式设置；未设置时 Admin API 返回 503 |
-| `jwt_secret` | `String` | _（必填）_ | JWT 签名密钥。必须显式设置；未设置时 Admin API 返回 503 |
-| `jwt_expiry_hours` | `Integer` | `24` | 签发 Token 的有效时长（小时） |
-| `cookie_secure` | `Boolean` | `true` | 在 `edgion_token` 认证 Cookie 上设置 `Secure` 属性。TLS 前置的部署保持 `true`；仅明文 HTTP 的开发/内部环境设为 `false` |
+| `admin_token` | `String` | _（空）_ | 授予 allow-all 访问权限的预共享管理员 Bearer Token。空 = 未配置。优先通过 `EDGION_ADMIN_TOKEN` 环境变量从 Secret 注入，而非在配置文件中以明文写入。 |
 
 ```yaml
-local_auth:
-  username: admin
-  password: "change-me"
-  jwt_secret: "a-long-random-signing-secret"
-  jwt_expiry_hours: 24
-  cookie_secure: true
+# 顶层配置字段。优先通过 EDGION_ADMIN_TOKEN 环境变量从 Secret 注入，
+# 而非将 Token 提交到明文配置文件。
+admin_token: "edg_..."
 ```
 
-> **Center 说明**：Controller 和 Center 行为一致——均无自动生成。若 `[local_auth]` 和 `[auth]` 均未配置，业务路由返回 503（失败关闭），而 `/health`、`/ready`、`/metrics` 和 `/api/v1/auth/status` 保持可访问。
-
-### [auth] — OIDC
-
-可选的 Admin API OIDC 集成。根据 OIDC 提供商的 discovery 文档和 JWKS 验证 JWT Bearer Token。可与 `[local_auth]` 共存；请求按 OIDC → local 顺序尝试。
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `enabled` | `Boolean` | `true`（段存在时） | 启用 OIDC 验证 |
-| `discovery` | `String` | **必填** | OIDC discovery URL（`/.well-known/openid-configuration`） |
-| `audiences` | `Array<String>` | `[]` | 期望的 JWT `aud` 值；为空时跳过 audience 检查 |
-| `issuers` | `Array<String>` | `[]` | 期望的 JWT `iss` 值；为空时根据 discovery 文档的 issuer 验证 |
-| `allowed_algorithms` | `Array<String>` | `[RS256, RS384, RS512, ES256, ES384]` | 允许的签名算法 |
-| `clock_skew_seconds` | `Integer` | `120` | JWT 时间戳容差（秒） |
-| `jwks_cache_ttl` | `Integer` | `300` | JWKS 缓存 TTL（秒） |
-| `jwks_min_refresh_interval` | `Integer` | `10` | JWKS 刷新尝试的最小间隔（防抖），秒 |
-| `skip_paths` | `Array<String>` | `["/health", "/ready"]` | 跳过认证的路径前缀 |
-| `ssl_verify` | `Boolean` | `true` | 获取 discovery/JWKS 时验证 TLS 证书；生产环境必须保持 `true` |
-| `discovery_max_response_bytes` | `Integer` | `65536` | discovery 响应体大小上限 |
-| `jwks_max_response_bytes` | `Integer` | `1048576` | JWKS 响应体大小上限 |
-
-```yaml
-auth:
-  discovery: "https://keycloak.example.com/realms/edgion/.well-known/openid-configuration"
-  audiences: [edgion-admin]
-```
+> **说明**：Center 保留自己的认证引导方式（OIDC / `local_auth`），不受此纯 Token 模型影响；仅 Controller Admin API 发生了变化。加入 Center 的方式见[联邦客户端](#联邦客户端center)章节。
 
 ### [cli_tokens] — 静态 CLI Token
 

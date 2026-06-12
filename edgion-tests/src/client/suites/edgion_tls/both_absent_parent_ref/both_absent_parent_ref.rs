@@ -4,7 +4,7 @@
 // name + namespace (no sectionName, no port) correctly attaches its
 // certificate to all listeners of the referenced Gateway.
 //
-// Required config files (in edgion-tests/conf/EdgionTls/BothAbsentParentRef/):
+// Required config files (in edgion-tests/integration/conf/EdgionTls/BothAbsentParentRef/):
 // - Gateway.yaml         # HTTPS Gateway listener on port 31289
 // - EdgionTls.yaml       # EdgionTls with parentRef (name+ns only)
 // - HTTPRoute.yaml       # Route for both-absent-tls.example.com

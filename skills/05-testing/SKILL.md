@@ -39,19 +39,19 @@ cargo test --all
 # Main runner — every suite that shares the single controller/gateway topology
 # (HTTPRoute, GRPCRoute, EdgionPlugins, EdgionTls, Status, LinkSys/Status,
 # LinkSys/Redis, dynamic scenarios, …)
-./edgion-tests/scripts/integration/run_integration.sh
+./edgion-tests/integration/scripts/integration/run_integration.sh
 
 # Top-level orchestrator — main runner PLUS every standalone integration script
 # (Etcd / Elasticsearch LinkSys, ACME, Center watch-sync, edgion-cli E2E,
 # FileWatcher). Sequential; continues on failure; unified report at the end.
-./edgion-tests/scripts/integration/run_all_integration.sh
+./edgion-tests/integration/scripts/integration/run_all_integration.sh
 ```
 
 ### Run dynamic (hot reload) tests
 Dynamic scenarios run by default as the final step of the full `run_integration.sh` (without `-r`) and the `-r Gateway` path; narrow paths (`-r EdgionPlugins -i ...` etc.) skip them.
 ```bash
 # Default run: includes dynamic scenarios
-./edgion-tests/scripts/integration/run_integration.sh
+./edgion-tests/integration/scripts/integration/run_integration.sh
 
 # List / run a single scenario
 ./target/debug/test_client --list-dynamic-scenarios
@@ -66,8 +66,8 @@ cat ${WORK_DIR}/report.log
 
 ### Key test directories
 - `edgion-tests/src/` — test code (client/server/validator)
-- `edgion-tests/conf/` — test configurations (organized by resource type)
-- `edgion-tests/scripts/` — test scripts
+- `edgion-tests/integration/conf/` — test configurations (organized by resource type)
+- `edgion-tests/integration/scripts/` — test scripts
 - `integration_testing/` — runtime working directory (gitignored)
 
 ### Read on demand

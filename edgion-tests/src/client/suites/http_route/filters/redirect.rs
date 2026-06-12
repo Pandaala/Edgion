@@ -2,7 +2,7 @@
 //
 // Test Gateway annotation edgion.io/http-to-https-redirect feature
 //
-// Required config files (in examples/conf/):
+// Required config files (in edgion-tests/integration/conf/):
 // - Gateway_edge_redirect-gateway.yaml   # Gateway with redirect enabled (port 10081)
 //
 // Test scenarios:

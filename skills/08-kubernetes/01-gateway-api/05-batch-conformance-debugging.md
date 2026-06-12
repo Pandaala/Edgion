@@ -130,4 +130,4 @@ Suggested fix direction: <specific suggestion>
 - Batch 7 details: `tasks/todo/conformance-fix-batches/batch-07-batch-concurrency.md`
 - Controller workqueue: `edgion-controller/src/conf_mgr/sync_runtime/workqueue.rs`
 - Gateway sync: `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs`
-- Conformance test entry point: `examples/gateway-api-conformance/conformance_test.go`
+- Conformance test entry point: `edgion-tests/conformance/conformance_test.go`

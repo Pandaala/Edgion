@@ -1,6 +1,6 @@
 // Weighted Backend Test suite
 //
-// Required config files (in examples/conf/):
+// Required config files (in edgion-tests/integration/conf/):
 // - HTTPRoute_default_weighted-backend.yaml    # Weighted backend test route（50:30:20）
 // - Service_edge_backend-a.yaml                # Backend A service
 // - Service_edge_backend-b.yaml                # Backend B service

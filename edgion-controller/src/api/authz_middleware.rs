@@ -6,17 +6,17 @@
 //! The final onion order achieved in `serve_with_shutdown` is:
 //!
 //! ```text
-//! cli_token_pre_authn  (outermost -- outer `.layer()` on compose result)
-//!   unified_auth  (skips when AuthBypass present -- `.layer()` in compose_admin_routes)
-//!     assign_superuser_if_no_role  (route_layer, added after authz)
-//!       authz_layer  (route_layer, added first -- innermost route_layer)
-//!         handler
+//! require_token_configured_gate  (outermost -- 503 when no token configured)
+//!   cli_token_pre_authn  (injects Role::Restricted for a recognized Bearer token)
+//!     authz_layer  (route_layer -- classifies + enforces the token's policy)
+//!       handler
 //! ```
 //!
-//! Because axum route_layers are applied in LIFO order (later `.route_layer()`
-//! calls wrap around earlier ones), the code in `serve_with_shutdown` must
-//! call `.route_layer(authz_layer)` first and `.route_layer(assign_superuser_if_no_role)`
-//! second so that `assign_superuser_if_no_role` executes before `authz_layer`.
+//! A request reaches a handler only if `cli_token_pre_authn` injected a `Role`
+//! (from a valid token) and `authz_layer` allowed it. There is no allow-all
+//! identity: an "admin" request carries a `Restricted` role whose policy is the
+//! wildcard admin policy. The federation router uses the same `authz_layer` with
+//! `inject_center_identity` supplying the Center `Restricted` role.
 
 use std::sync::Arc;
 
@@ -46,16 +46,17 @@ fn is_skipped(path: &str) -> bool {
 
 /// Authorization route_layer middleware.
 ///
-/// Reads the `Role` from request extensions (inserted by
-/// `assign_superuser_if_no_role` for local admin, or `inject_center_identity`
-/// for the fed path). Classifies the request via `MatchedPath` + the `{kind}` path
-/// param (extracted natively via `RawPathParams`), then calls `Authorizer::authorize`.
-/// Returns 403 on deny; calls `next` on allow.
+/// Reads the `Role` from request extensions (inserted by `cli_token_pre_authn`
+/// for a recognized token, or `inject_center_identity` for the fed path).
+/// Classifies the request via `MatchedPath` + the `{kind}` path param (extracted
+/// natively via `RawPathParams`), then calls `Authorizer::authorize`. Returns 403
+/// on deny; calls `next` on allow.
 ///
-/// Skip-set paths (`/health`, `/ready`, `/metrics`, `/api/v1/auth/{login,logout,status}`)
-/// bypass authz entirely (mirroring the authn skip set).
+/// Skip-set paths (`/health`, `/ready`, `/metrics`, `/api/v1/auth/status`) bypass
+/// authz entirely (the static public set).
 ///
-/// A missing `Role` extension or an unrecognized route both produce 403.
+/// A missing `Role` extension (unauthenticated — no/unknown token) produces
+/// 401; an unrecognized route or a policy denial produces 403.
 ///
 /// `MatchedPath` is read from request extensions rather than used as an extractor
 /// argument because axum 0.8.x's `MatchedPath` does not implement
@@ -67,12 +68,13 @@ pub async fn authz_layer(State(authorizer): State<Arc<Authorizer>>, req: Request
         return next.run(req).await;
     }
 
-    // Role is inserted by authn (Superuser via assign_superuser_if_no_role)
+    // Role is inserted by authn (cli_token_pre_authn for a recognized token)
     // or the fed inject layer (Center via inject_center_identity).
-    // Missing role => deny (never allow anonymous requests through authz).
+    // Missing role => unauthenticated (no/unknown token) => 401, never allow.
+    // (Distinct from 403, which means authenticated-but-forbidden by policy.)
     let role = match req.extensions().get::<Role>() {
         Some(r) => r.clone(),
-        None => return forbidden(),
+        None => return unauthorized(),
     };
 
     // MatchedPath is inserted into request extensions by axum's router for every
@@ -175,6 +177,17 @@ fn forbidden() -> Response {
     (StatusCode::FORBIDDEN, "Forbidden").into_response()
 }
 
+/// 401 for an unauthenticated request (no `Role` — no/unknown token). Carries
+/// `WWW-Authenticate: Bearer` per the HTTP spec for a bearer-token API.
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [(http::header::WWW_AUTHENTICATE, "Bearer")],
+        "Unauthorized",
+    )
+        .into_response()
+}
+
 /// Injects the Center role on the federation path (independent of auth mode).
 ///
 /// Snapshots the current Center policy from the `Authorizer` and injects it as
@@ -189,92 +202,6 @@ pub async fn inject_center_identity(
     next.run(req).await
 }
 
-/// Assign a `Role` to requests that don't already have one.
-///
-/// This layer runs AFTER `cli_token_pre_authn` (which may have already injected
-/// `Role::Restricted`) and AFTER the `unified_auth` middleware (which has verified
-/// the request is authenticated). It enforces fail-closed logic:
-///
-/// - If the path is in the public skip set (`is_skipped`: health/ready/metrics and
-///   the auth endpoints) → pass through unchanged. These are intentionally
-///   unauthenticated and carry no `Role`/claims; `authz_layer` skips them too.
-/// - If a `Role` is already present in extensions (cli-pre injected `Restricted`) →
-///   pass through unchanged.
-/// - If no `Role` is present but `AuthBypass` IS present → the request was
-///   "authenticated" by cli-pre but somehow carries no Role (invariant violation) →
-///   **FAIL CLOSED: 403**. The bug path is made observable via `record_rbac_denied`.
-///   We key the 403 on `AuthBypass` alone (NOT `AuthBypass && CliTokenIdentity`),
-///   which prevents a future AuthBypass-without-CliTokenIdentity from silently
-///   escalating to Superuser.
-/// - If no `Role` and no `AuthBypass`, but `unified_auth` validated a token
-///   (a `UnifiedAuthClaims` is present in extensions) → insert `Role::Superuser`,
-///   granting full access on the local server.
-/// - Otherwise (no Role, no AuthBypass, no `UnifiedAuthClaims`) the request reached
-///   this route_layer WITHOUT being authenticated — the only way that happens is a
-///   `unified_auth` skip_paths bypass on a business route → **FAIL CLOSED: 403**.
-///   Granting Superuser here was the fr-cauth-01 escalation: an operator-configured
-///   `skip_paths` entry on an admin route would otherwise turn an unauthenticated
-///   request into a full admin one.
-///
-/// This layer is a `route_layer`, so it only fires for matched routes (never the
-/// fallback). The authz middleware reads the `Role` extension inserted here.
-pub(crate) async fn assign_superuser_if_no_role(mut req: Request<Body>, next: Next) -> Response {
-    // Case 0: public skip-set paths (`/health`, `/ready`, `/metrics`,
-    // `/api/v1/auth/{login,logout,status}`) bypass authz entirely — `authz_layer`
-    // mirrors this same skip. These are intentionally unauthenticated infrastructure
-    // endpoints, so they legitimately carry no `Role` and no `UnifiedAuthClaims`.
-    // Without this short-circuit they would fall through to the fail-closed Case 4
-    // below and wrongly 403 (this is NOT the fr-cauth-01 business-route bypass —
-    // these paths are public by design). Pass through WITHOUT inserting a `Role`;
-    // `authz_layer`'s own `is_skipped` then lets them reach the handler.
-    if is_skipped(req.uri().path()) {
-        return next.run(req).await;
-    }
-
-    // Case 1: cli-pre already assigned a Restricted role — keep it.
-    if req.extensions().get::<crate::authz::Role>().is_some() {
-        return next.run(req).await;
-    }
-
-    // Case 2: AuthBypass present but no Role — invariant violation, fail closed.
-    // Keyed on AuthBypass alone (not AuthBypass && CliTokenIdentity) so any future
-    // AuthBypass source without a Role is also caught.
-    if req
-        .extensions()
-        .get::<edgion_common::unified_auth::AuthBypass>()
-        .is_some()
-    {
-        // Emit metric so this bug path is observable.
-        edgion_common::observe::fed_metrics::record_rbac_denied(
-            "unknown",
-            "unknown",
-            edgion_common::observe::fed_metrics::labels::rbac_source::UNKNOWN,
-        );
-        return (StatusCode::FORBIDDEN, "Forbidden").into_response();
-    }
-
-    // Case 3: unified_auth actually validated a token (claims present) — assign Superuser.
-    // The `UnifiedAuthClaims` check is the authentication proof: a request that skipped
-    // unified_auth via skip_paths carries no claims and must NOT be treated as admin.
-    if req
-        .extensions()
-        .get::<edgion_common::unified_auth::UnifiedAuthClaims>()
-        .is_some()
-    {
-        req.extensions_mut().insert(crate::authz::Role::Superuser);
-        return next.run(req).await;
-    }
-
-    // Case 4: no Role, no AuthBypass, no claims — unauthenticated (skip_paths bypass on a
-    // business route). Fail closed and make the bug path observable.
-    edgion_common::observe::fed_metrics::record_rbac_denied(
-        "unknown",
-        "unknown",
-        edgion_common::observe::fed_metrics::labels::rbac_source::UNKNOWN,
-    );
-    (StatusCode::FORBIDDEN, "Forbidden").into_response()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,14 +210,12 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    use crate::authz::{Authorizer, CenterPolicy, Role};
+    use crate::api::cli_token_middleware::cli_token_pre_authn;
+    use crate::authz::{sha256_hex, Authorizer, CenterPolicy, CliTokenEntry, Role};
     use crate::config::{FedAllowRule, FedRbacConfig};
 
-    /// Build a test router that:
-    /// 1. Has an outer layer that inserts the given `Role` into request extensions
-    ///    (simulating what authn + assign_superuser or inject_center_identity do).
-    /// 2. Has `authz_layer` as a route_layer (so it only fires on matched routes,
-    ///    not on the 404 fallback).
+    /// Router with an outer layer injecting `role`, and `authz_layer` as a
+    /// route_layer (so it only fires on matched routes, not the fallback).
     fn test_router(role: Role, authorizer: Arc<Authorizer>) -> Router {
         Router::new()
             .route("/api/v1/cluster/{kind}", get(|| async { "ok" }))
@@ -307,6 +232,16 @@ mod tests {
             ))
     }
 
+    /// Router with NO role injected — only `authz_layer`. Simulates an
+    /// unauthenticated request reaching authz.
+    fn test_router_no_role(authorizer: Arc<Authorizer>) -> Router {
+        Router::new()
+            .route("/api/v1/cluster/{kind}", get(|| async { "ok" }))
+            .route("/health", get(|| async { "ok" }))
+            .route("/api/v1/auth/status", get(|| async { "ok" }))
+            .route_layer(axum::middleware::from_fn_with_state(authorizer, authz_layer))
+    }
+
     fn center_policy_list_httproute() -> Arc<Authorizer> {
         Arc::new(Authorizer::new(CenterPolicy::from_config(&FedRbacConfig {
             allow: vec![FedAllowRule {
@@ -316,20 +251,12 @@ mod tests {
         })))
     }
 
-    /// A Superuser (authenticated local admin) must always be allowed through authz.
-    #[tokio::test]
-    async fn superuser_allowed() {
-        let r = test_router(Role::Superuser, Arc::new(Authorizer::new(CenterPolicy::deny_all())));
-        let resp = r
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/cluster/HTTPRoute")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+    async fn status_of(router: Router, method: &str, uri: &str, bearer: Option<&str>) -> StatusCode {
+        let mut b = Request::builder().method(method).uri(uri);
+        if let Some(t) = bearer {
+            b = b.header("Authorization", format!("Bearer {t}"));
+        }
+        router.oneshot(b.body(Body::empty()).unwrap()).await.unwrap().status()
     }
 
     /// A Restricted role with an empty (deny-all) policy must get 403.
@@ -337,16 +264,10 @@ mod tests {
     async fn center_denied_without_grant() {
         let az = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
         let r = test_router(az.center_role(), az);
-        let resp = r
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/cluster/HTTPRoute")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            status_of(r, "GET", "/api/v1/cluster/HTTPRoute", None).await,
+            StatusCode::FORBIDDEN
+        );
     }
 
     /// A Restricted role with a matching grant must be allowed.
@@ -354,16 +275,10 @@ mod tests {
     async fn center_allowed_with_grant() {
         let az = center_policy_list_httproute();
         let r = test_router(az.center_role(), az);
-        let resp = r
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/cluster/HTTPRoute")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            status_of(r, "GET", "/api/v1/cluster/HTTPRoute", None).await,
+            StatusCode::OK
+        );
     }
 
     /// Skip-set paths must always pass through regardless of role or policy.
@@ -371,381 +286,75 @@ mod tests {
     async fn health_is_never_denied() {
         let az = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
         let r = test_router(az.center_role(), az);
-        let resp = r
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(status_of(r, "GET", "/health", None).await, StatusCode::OK);
     }
 
-    /// When `assign_superuser_if_no_role` runs before `authz_layer`
-    /// (the real wiring in `serve_with_shutdown`), an authenticated admin request
-    /// (carrying `UnifiedAuthClaims` from unified_auth) with no explicit `Role`
-    /// extension is assigned `Role::Superuser`, so a deny-all authorizer still
-    /// returns 200.
+    /// An unauthenticated request (no `Role` injected) to a business route is
+    /// 401 (no/unknown token) by authz_layer — there is no allow-all fallback.
     #[tokio::test]
-    async fn assign_layer_inserts_superuser_when_no_role() {
-        use edgion_common::unified_auth::{AuthProvider, UnifiedAuthClaims};
-
-        // Build a router that wires the two layers in the same order as serve_with_shutdown:
-        //   authz_layer first (innermost route_layer), then assign_superuser on top (outermost).
-        // An outer layer injects UnifiedAuthClaims, simulating a request that unified_auth
-        // successfully authenticated (the only legitimate way to reach Case 3 with no Role).
-        let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
-        let router = Router::new()
-            .route("/api/v1/cluster/{kind}", get(|| async { "ok" }))
-            .route_layer(axum::middleware::from_fn_with_state(authorizer, authz_layer))
-            .route_layer(axum::middleware::from_fn(assign_superuser_if_no_role))
-            .layer(axum::middleware::from_fn(
-                move |mut req: Request<Body>, next: axum::middleware::Next| async move {
-                    req.extensions_mut().insert(UnifiedAuthClaims {
-                        provider: AuthProvider::Local,
-                        sub: None,
-                        iss: None,
-                        claims: serde_json::Value::Null,
-                    });
-                    next.run(req).await
-                },
-            ));
-
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/cluster/HTTPRoute")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        // Superuser overrides even a deny-all policy.
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    /// fr-cauth-01 regression: a request that reaches the business route_layer with no
-    /// `Role`, no `AuthBypass`, AND no `UnifiedAuthClaims` was never authenticated (it
-    /// slipped past unified_auth via a misconfigured `skip_paths` entry on a business
-    /// route). It must be denied (403), NOT silently granted Superuser.
-    #[tokio::test]
-    async fn no_claims_no_role_is_denied_not_superuser() {
-        let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
-        let router = Router::new()
-            .route("/api/v1/cluster/{kind}", get(|| async { "ok" }))
-            .route_layer(axum::middleware::from_fn_with_state(authorizer, authz_layer))
-            .route_layer(axum::middleware::from_fn(assign_superuser_if_no_role));
-
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/cluster/HTTPRoute")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        // No authentication proof => fail closed, never Superuser.
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    }
-
-    /// Public skip-set paths (`/health`, `/ready`, `/metrics`, auth endpoints) must
-    /// pass through `assign_superuser_if_no_role` even with no `Role`, no `AuthBypass`,
-    /// and no `UnifiedAuthClaims` — they are intentionally unauthenticated infrastructure
-    /// endpoints. The fr-cauth-01 fail-closed Case 4 must NOT swallow them with a 403.
-    /// (Regression: a deny-all authorizer is wired to prove the skip happens before authz.)
-    #[tokio::test]
-    async fn skip_path_passes_through_without_claims() {
-        let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
-        let router = Router::new()
-            .route("/health", get(|| async { "ok" }))
-            .route_layer(axum::middleware::from_fn_with_state(authorizer, authz_layer))
-            .route_layer(axum::middleware::from_fn(assign_superuser_if_no_role));
-
-        let resp = router
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        // Public skip path reaches the handler despite no auth proof and a deny-all policy.
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    /// Verify the three fail-closed cases of `assign_superuser_if_no_role`:
-    ///
-    /// (a) `Role::Restricted(deny-all)` already in extensions → authz denies (403)
-    /// (b) No Role, no AuthBypass, but `UnifiedAuthClaims` present (authenticated admin) → Superuser → allowed (200)
-    /// (c) `AuthBypass` present but no Role (bug path) → 403, never Superuser
-    #[tokio::test]
-    async fn cli_role_kept_admin_gets_superuser_bypass_without_role_403() {
-        use edgion_common::unified_auth::{AuthBypass, AuthProvider, UnifiedAuthClaims};
-
-        // Helper: build a router with:
-        //   assign_superuser_if_no_role (outermost route_layer) → authz_layer (innermost)
-        // Plus an outer `.layer` that injects whatever the test supplies via a closure.
-        fn make_router(
-            authorizer: Arc<Authorizer>,
-            inject: impl Fn(&mut http::Extensions) + Clone + Send + Sync + 'static,
-        ) -> Router {
-            Router::new()
-                .route("/api/v1/cluster/{kind}", get(|| async { "ok" }))
-                .route_layer(axum::middleware::from_fn_with_state(authorizer.clone(), authz_layer))
-                .route_layer(axum::middleware::from_fn(assign_superuser_if_no_role))
-                .layer(axum::middleware::from_fn(
-                    move |mut req: Request<Body>, next: axum::middleware::Next| {
-                        let inject = inject.clone();
-                        async move {
-                            inject(req.extensions_mut());
-                            next.run(req).await
-                        }
-                    },
-                ))
-        }
-
-        let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
-        let uri = "/api/v1/cluster/HTTPRoute";
-
-        // (a) Role::Restricted(deny-all) already present → authz denies → 403.
-        {
-            let center_role = authorizer.center_role(); // deny-all Restricted
-            let r = make_router(authorizer.clone(), move |ext| {
-                ext.insert(center_role.clone());
-            });
-            let resp = r
-                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
-                .await
-                .unwrap();
-            assert_eq!(
-                resp.status(),
-                StatusCode::FORBIDDEN,
-                "(a) Restricted deny-all must be 403"
-            );
-        }
-
-        // (b) No Role, no AuthBypass, but unified_auth validated a token (claims present)
-        //     → assign_superuser_if_no_role inserts Superuser → 200.
-        {
-            let r = make_router(authorizer.clone(), |ext| {
-                ext.insert(UnifiedAuthClaims {
-                    provider: AuthProvider::Local,
-                    sub: None,
-                    iss: None,
-                    claims: serde_json::Value::Null,
-                });
-            });
-            let resp = r
-                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
-                .await
-                .unwrap();
-            assert_eq!(
-                resp.status(),
-                StatusCode::OK,
-                "(b) no Role + no AuthBypass must be 200 (Superuser)"
-            );
-        }
-
-        // (c) AuthBypass present but no Role → fail-closed → 403, never Superuser.
-        {
-            let r = make_router(authorizer.clone(), |ext| {
-                ext.insert(AuthBypass);
-                // Note: deliberately NOT inserting a Role.
-            });
-            let resp = r
-                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
-                .await
-                .unwrap();
-            assert_eq!(
-                resp.status(),
-                StatusCode::FORBIDDEN,
-                "(c) AuthBypass-without-Role must be fail-closed 403"
-            );
-        }
-    }
-
-    /// Authz fires before the readiness gate: an unauthorized request must receive 403
-    /// (authz fired) and NOT 503 (the readiness gate). Wiring: authz is the outer
-    /// route_layer wrapping an inner route_layer that always returns 503 (stub for
-    /// `require_ready_middleware`). The request carries a deny-all `Restricted` role,
-    /// so authz rejects it before the inner 503 stub is ever reached.
-    #[tokio::test]
-    async fn authz_fires_before_readiness_gate() {
-        use axum::middleware::from_fn;
-
-        // Stub standing in for require_ready_middleware: always returns 503.
-        async fn always_503(req: Request<Body>, next: axum::middleware::Next) -> Response {
-            let _ = (req, next);
-            (StatusCode::SERVICE_UNAVAILABLE, "not ready").into_response()
-        }
-
-        let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
-        let center_role = authorizer.center_role();
-
-        // Wiring mirrors the real router:
-        //   inner route_layer: always-503 stub (innermost, added first)
-        //   outer route_layer: authz (outermost route_layer, added second -- runs first)
-        // Plus an outer layer that injects the center role (simulating inject_center_identity).
-        let router = Router::new()
-            .route("/api/v1/cluster/{kind}", get(|| async { "ok" }))
-            .route_layer(from_fn(always_503))
-            .route_layer(axum::middleware::from_fn_with_state(authorizer, authz_layer))
-            .layer(from_fn(move |mut req: Request<Body>, next: axum::middleware::Next| {
-                let role = center_role.clone();
-                async move {
-                    req.extensions_mut().insert(role);
-                    next.run(req).await
-                }
-            }));
-
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/cluster/HTTPRoute")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        // authz denies before the 503 stub is reached.
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    }
-
-    /// End-to-end: wire cli-pre + compose + authz layers as `serve_with_shutdown` does,
-    /// then assert:
-    ///   (1) a cli token whose policy grants the op → not 403
-    ///   (2) a cli token whose policy denies the op → 403
-    ///   (3) no token, no admin credentials → 401 (unified_auth rejects, not authz)
-    ///
-    /// This test replicates the minimal subset of the real serving stack using
-    /// `create_admin_router` + `compose_admin_routes` + cli-pre outer `.layer()`,
-    /// matching the wiring in `serve_with_shutdown` exactly.
-    #[tokio::test]
-    async fn e2e_cli_token_granted_denied_and_no_token() {
-        use crate::api::create_admin_router;
-        use crate::authz::{sha256_hex, CenterPolicy, CliTokenEntry};
-        use crate::config::{FedAllowRule, FedRbacConfig};
-        use edgion_common::local_auth::LocalAuthConfig;
-
-        // ── Setup: build a real Authorizer with one cli token that can list GatewayClass.
-        // GatewayClass is cluster-scoped, matching /api/v1/cluster/{kind}.
+    async fn no_role_is_unauthorized() {
         let az = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
-        let allowed_tok = "e2e-allowed-token";
-        let denied_tok = "e2e-denied-token";
-        {
-            let allowed_policy = CenterPolicy::from_config(&FedRbacConfig {
-                allow: vec![FedAllowRule {
-                    verbs: vec!["list".into()],
-                    kinds: vec!["GatewayClass".into()],
-                }],
-            });
-            // denied_tok gets a deny-all policy (no allow rules).
-            let denied_policy = CenterPolicy::deny_all();
-            let mut m = std::collections::HashMap::new();
-            m.insert(
-                sha256_hex(allowed_tok),
-                CliTokenEntry {
-                    name: "allowed-bot".into(),
-                    policy: Arc::new(allowed_policy),
-                },
-            );
-            m.insert(
-                sha256_hex(denied_tok),
-                CliTokenEntry {
-                    name: "denied-bot".into(),
-                    policy: Arc::new(denied_policy),
-                },
-            );
-            az.apply(CenterPolicy::deny_all(), m);
-        }
+        let r = test_router_no_role(az);
+        assert_eq!(
+            status_of(r, "GET", "/api/v1/cluster/HTTPRoute", None).await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
 
-        // ── Build the router stack identical to serve_with_shutdown.
-        // Use a temp dir for the ConfMgr backing store.
-        let tmp = tempfile::tempdir().expect("tempdir for e2e test");
-        let base_router = {
-            use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, SchemaValidator};
-            let fs_config = FileSystemConfig::new(tmp.path().to_path_buf());
-            let conf_mgr = Arc::new(
-                ConfMgr::create(ConfCenterConfig::FileSystem(fs_config))
-                    .await
-                    .expect("ConfMgr::create"),
-            );
-            let schema_validator = Arc::new(SchemaValidator::empty());
-            let (tx, _rx) = tokio::sync::watch::channel(crate::config::CenterClientConfig::default());
-            create_admin_router(conf_mgr, schema_validator, None, az.clone(), tx)
-        };
+    /// Static public paths (probes, /api/v1/auth/status) pass authz with no role.
+    #[tokio::test]
+    async fn public_paths_pass_without_role() {
+        let az = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
+        assert_eq!(
+            status_of(test_router_no_role(az.clone()), "GET", "/health", None).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status_of(test_router_no_role(az), "GET", "/api/v1/auth/status", None).await,
+            StatusCode::OK
+        );
+    }
 
-        // Wire authz route_layers (mirrors serve_with_shutdown exactly).
-        let business = base_router
+    /// End-to-end token authn → authz: a valid cli token is granted/denied per
+    /// its policy; an unknown/absent token is role-less and denied (403).
+    #[tokio::test]
+    async fn e2e_token_authn_then_authz() {
+        let az = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
+        let p = CenterPolicy::from_config(&FedRbacConfig {
+            allow: vec![FedAllowRule {
+                verbs: vec!["list".into()],
+                kinds: vec!["HTTPRoute".into()],
+            }],
+        });
+        let mut m = std::collections::HashMap::new();
+        m.insert(
+            sha256_hex("tok1"),
+            CliTokenEntry {
+                name: "bot".into(),
+                policy: Arc::new(p),
+            },
+        );
+        az.apply(CenterPolicy::deny_all(), m);
+
+        let app = Router::new()
+            .route("/api/v1/cluster/{kind}", get(|| async { "ok" }))
             .route_layer(axum::middleware::from_fn_with_state(az.clone(), authz_layer))
-            .route_layer(axum::middleware::from_fn(assign_superuser_if_no_role));
+            .layer(axum::middleware::from_fn_with_state(az.clone(), cli_token_pre_authn));
 
-        // Build a local_auth state so unified_auth is a real gatekeeper.
-        let local_cfg = LocalAuthConfig {
-            enabled: true,
-            username: "admin".to_string(),
-            password: "a_long_enough_password_123".to_string(),
-            jwt_secret: "a_long_enough_jwt_secret_value_abcdef".to_string(),
-            ..LocalAuthConfig::default()
-        };
-        let auth_state =
-            edgion_common::unified_auth::UnifiedAuthState::from_configs(None, Some(&local_cfg), true, "e2e_test")
-                .expect("auth state");
-
-        let composed = edgion_common::api::compose_admin_routes(business, auth_state, true);
-
-        // Wrap with cli-pre as the outermost layer (matching serve_with_shutdown).
-        let app: Router = composed.layer(axum::middleware::from_fn_with_state(
-            az.clone(),
-            crate::api::cli_token_middleware::cli_token_pre_authn,
-        ));
-
-        // We'll construct separate oneshotted requests by cloning the router.
-        // GatewayClass is cluster-scoped, so GET /api/v1/cluster/GatewayClass is valid.
-        let target = "/api/v1/cluster/GatewayClass";
-
-        // (1) cli token with a matching grant → 200 OK.
-        {
-            let resp = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri(target)
-                        .header("Authorization", format!("Bearer {allowed_tok}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(resp.status(), StatusCode::OK, "allowed cli token must pass authz");
-        }
-
-        // (2) cli token with deny-all policy → 403.
-        {
-            let resp = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri(target)
-                        .header("Authorization", format!("Bearer {denied_tok}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(
-                resp.status(),
-                StatusCode::FORBIDDEN,
-                "denied cli token must get 403 from authz"
-            );
-        }
-
-        // (3) No token, no credentials → unified_auth rejects with 401 (not 403).
-        {
-            let resp = app
-                .clone()
-                .oneshot(Request::builder().uri(target).body(Body::empty()).unwrap())
-                .await
-                .unwrap();
-            assert_eq!(
-                resp.status(),
-                StatusCode::UNAUTHORIZED,
-                "unauthenticated request must get 401 from unified_auth"
-            );
-        }
+        // (1) granted: token policy permits list HTTPRoute.
+        assert_eq!(
+            status_of(app.clone(), "GET", "/api/v1/cluster/HTTPRoute", Some("tok1")).await,
+            StatusCode::OK
+        );
+        // (2) denied by policy: valid token, but list Secret is not granted.
+        assert_eq!(
+            status_of(app.clone(), "GET", "/api/v1/cluster/Secret", Some("tok1")).await,
+            StatusCode::FORBIDDEN
+        );
+        // (3) no token: role-less → 401 (unauthenticated).
+        assert_eq!(
+            status_of(app, "GET", "/api/v1/cluster/HTTPRoute", None).await,
+            StatusCode::UNAUTHORIZED
+        );
     }
 }

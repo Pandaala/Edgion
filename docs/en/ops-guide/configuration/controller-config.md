@@ -247,77 +247,57 @@ conf_sync_security:
 
 ## Authentication
 
-Authentication is **mandatory** for the Controller Admin API. All requests to `/api/v1/*` routes require a valid Bearer token or session cookie. Unauthenticated requests are rejected with HTTP 401.
+The Controller Admin API uses **Istio-style, token-only** authentication. Every request to a `/api/v1/*` business route must carry an `Authorization: Bearer <token>` header. There is **no** browser login, **no** session cookie, and **no** OIDC for the Admin API — those were removed. (The browser dashboard now lives in the separate Center project; the Controller no longer hosts one.)
 
-> **Credentials must be supplied explicitly.** The Controller no longer auto-generates admin
-> credentials. Credentials come from (highest precedence first):
->
-> 1. Env vars `EDGION_ADMIN_USERNAME` / `EDGION_ADMIN_PASSWORD` / `EDGION_ADMIN_JWT_SECRET`
->    injected via `valueFrom.secretKeyRef` from the `edgion-admin-credentials` Secret
->    (recommended for Kubernetes). `deploy.sh` creates this Secret idempotently.
-> 2. `[local_auth]` in a Secret-mounted config file.
-> 3. `[auth]` OIDC.
->
-> When nothing is configured, the server starts but all Admin API business routes return
-> **503 fail-close**. `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain
-> accessible. Retrieve the password (if using `deploy.sh`):
->
-> ```bash
-> kubectl -n edgion-system get secret edgion-admin-credentials \
->   -o jsonpath='{.data.password}' | base64 -d
-> ```
->
-> You can also authenticate interactively with `edgion-cli login`.
+A single pre-shared **admin token** grants full (allow-all) access. It is supplied via one of the following (highest precedence first):
 
-The Controller and Center read the same `[local_auth]` / `[auth]` schema and now bootstrap identically: when neither is set, both fail closed with 503 (see the Center note below).
+1. Env var `EDGION_ADMIN_TOKEN`, injected via `valueFrom.secretKeyRef` from the `edgion-admin-credentials` Secret (key `token`) — recommended for Kubernetes. `deploy.sh` creates this Secret idempotently.
+2. The top-level `admin_token` config field (see below).
 
-### [local_auth]
+A blank or absent token means "not configured". When no admin token is set **and** no `cli_tokens` are configured, the server still boots, but all Admin API business routes return **503 fail-close**. `/health`, `/ready`, `/metrics`, and `GET /api/v1/auth/status` remain accessible.
 
-Built-in username/password authentication. Issues HS256 JWTs to authenticated clients. Must be configured explicitly on both Controller and Center (no auto-generation).
+Retrieve the token from the Secret (if using `deploy.sh`):
+
+```bash
+kubectl -n edgion-system get secret edgion-admin-credentials \
+  -o jsonpath='{.data.token}' | base64 -d
+```
+
+Authorize the CLI with it:
+
+```bash
+edgion-cli login --token <TOKEN>
+```
+
+### Authorization model
+
+A token maps to an RBAC policy. The **local admin token** maps to an allow-all (wildcard) policy — it can perform every operation on every kind. Fine-grained, per-token RBAC is available through `cli_tokens` (see below) and through federation (`center.rbac`); both are unchanged. There is no separate "superuser" concept beyond the allow-all admin token.
+
+Authentication is **Bearer-only** — there is no httpOnly cookie and no server-side session.
+
+### Auth endpoint
+
+`GET /api/v1/auth/status` is the only auth endpoint and is always public (no token required). It returns:
+
+```json
+{ "auth_required": true, "mode": "token", "status": "..." }
+```
+
+The former `/api/v1/auth/login`, `/api/v1/auth/logout`, and `/api/v1/auth/me` endpoints have been removed.
+
+### `admin_token`
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `username` | `String` | `"admin"` | Admin username |
-| `password` | `String` | _(required)_ | Admin password. Must be set explicitly; if absent the Admin API returns 503 |
-| `jwt_secret` | `String` | _(required)_ | JWT signing secret. Must be set explicitly; if absent the Admin API returns 503 |
-| `jwt_expiry_hours` | `Integer` | `24` | Issued token lifetime in hours |
-| `cookie_secure` | `Boolean` | `true` | Emit the `Secure` attribute on the `edgion_token` auth cookie. Keep `true` for any TLS-fronted deployment so the bearer-equivalent cookie never traverses plaintext `http://`. Set `false` only for an explicit non-TLS dev/internal setup served over plain HTTP. |
+| `admin_token` | `String` | _(empty)_ | Pre-shared admin bearer token granting allow-all access. Blank = not configured. Prefer injecting via the `EDGION_ADMIN_TOKEN` env var from a Secret over writing it as plaintext in the config file. |
 
 ```yaml
-local_auth:
-  username: admin
-  password: "change-me"
-  jwt_secret: "a-long-random-signing-secret"
-  jwt_expiry_hours: 24
-  cookie_secure: true
+# Top-level config field. Prefer EDGION_ADMIN_TOKEN env injection from a Secret
+# over committing the token to a plaintext config file.
+admin_token: "edg_..."
 ```
 
-> **Note**: Both Controller and Center behave identically — neither auto-generates credentials. If neither `[local_auth]` nor `[auth]` is configured, business routes return 503 (fail-close) while `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain accessible.
-
-### [auth] — OIDC
-
-Optional OIDC integration for the Admin API. Validates JWT Bearer tokens against an OIDC provider's discovery document and JWKS. Can coexist with `[local_auth]`; requests are attempted in the order OIDC → local.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `enabled` | `Boolean` | `true` (when the section is present) | Enable OIDC validation |
-| `discovery` | `String` | **Required** | OIDC discovery URL (`/.well-known/openid-configuration`) |
-| `audiences` | `Array<String>` | `[]` | Expected JWT `aud` values; empty skips the audience check |
-| `issuers` | `Array<String>` | `[]` | Expected JWT `iss` values; empty validates against the discovery document's issuer |
-| `allowed_algorithms` | `Array<String>` | `[RS256, RS384, RS512, ES256, ES384]` | Allowed signing algorithms |
-| `clock_skew_seconds` | `Integer` | `120` | JWT timestamp tolerance in seconds |
-| `jwks_cache_ttl` | `Integer` | `300` | JWKS cache TTL in seconds |
-| `jwks_min_refresh_interval` | `Integer` | `10` | Minimum interval between JWKS refresh attempts (debounce), seconds |
-| `skip_paths` | `Array<String>` | `["/health", "/ready"]` | Path prefixes that skip authentication |
-| `ssl_verify` | `Boolean` | `true` | Verify TLS certificates when fetching discovery/JWKS; production must keep `true` |
-| `discovery_max_response_bytes` | `Integer` | `65536` | Upper bound for the discovery response body |
-| `jwks_max_response_bytes` | `Integer` | `1048576` | Upper bound for the JWKS response body |
-
-```yaml
-auth:
-  discovery: "https://keycloak.example.com/realms/edgion/.well-known/openid-configuration"
-  audiences: [edgion-admin]
-```
+> **Note**: Center keeps its own auth bootstrap (OIDC / `local_auth`) and is unaffected by this token-only model; only the Controller Admin API changed. See the [Federation Client](#federation-client-center) section for joining a Center.
 
 ### [cli_tokens] — Static CLI Tokens
 

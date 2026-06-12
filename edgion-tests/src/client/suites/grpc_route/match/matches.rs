@@ -1,6 +1,6 @@
 // gRPC match rulesTest suite
 //
-// Required config files (in examples/conf/):
+// Required config files (in edgion-tests/integration/conf/):
 // - GRPCRoute_edge_match-test.yaml         # gRPC match rules test route
 // - EndpointSlice_edge_test-grpc.yaml      # gRPC backend service discovery
 // - Service_edge_test-grpc.yaml            # gRPC service definition

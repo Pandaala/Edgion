@@ -27,7 +27,11 @@ impl PortConfig {
     ///  ports.json Port config
     pub fn load() -> Result<Self, String> {
         //
-        let possible_paths = ["edgion-tests/conf/ports.json", "../conf/ports.json", "conf/ports.json"];
+        let possible_paths = [
+            "edgion-tests/integration/conf/ports.json",
+            "../conf/ports.json",
+            "conf/ports.json",
+        ];
 
         for path in &possible_paths {
             if Path::new(path).exists() {

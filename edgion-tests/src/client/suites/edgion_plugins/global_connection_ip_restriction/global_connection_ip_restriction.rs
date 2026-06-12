@@ -3,7 +3,7 @@
 // Verifies that PluginMetaData resources with type=GlobalConnectionIpRestriction are correctly
 // parsed, stored, and accepted by the controller via the configserver API.
 //
-// Required conf files (edgion-tests/conf/EdgionPlugins/GlobalConnectionIpRestriction/):
+// Required conf files (edgion-tests/integration/conf/EdgionPlugins/GlobalConnectionIpRestriction/):
 //   01_PluginMetaData_gcir-smoke.yaml — GCIR PluginMetaData with two profiles (p1 + strict)
 //
 // Scenarios:

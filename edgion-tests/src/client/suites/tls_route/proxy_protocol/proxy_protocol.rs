@@ -7,7 +7,7 @@
 // that parses the PP2 header using the `proxy-header` crate and returns
 // structured JSON with parsed fields for assertion.
 //
-// Required config files (in edgion-tests/conf/TLSRoute/ProxyProtocol/):
+// Required config files (in edgion-tests/integration/conf/TLSRoute/ProxyProtocol/):
 // - 01_Gateway.yaml             # Gateway with tls-pp2 listener on port 31281
 // - 02_EdgionTls.yaml           # Wildcard certificate for *.pp2.example.com
 // - 03_TLSRoute_pp2.yaml        # TLSRoute with proxy-protocol: v2 → test-tcp-pp2:30012

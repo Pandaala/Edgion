@@ -8,7 +8,7 @@
 // 5. Include - path and method matching
 // 6. Exclude - path and method exclusion
 //
-// Required config files (in edgion-tests/conf/EdgionPlugins/PluginCondition/):
+// Required config files (in edgion-tests/integration/conf/EdgionPlugins/PluginCondition/):
 // - EdgionPlugins_default_condition-all-types.yaml
 // - HTTPRoute_default_condition-all-types.yaml
 

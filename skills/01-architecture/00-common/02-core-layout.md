@@ -153,10 +153,9 @@ Deliberately kept small:
 
 ```
 edgion-common/src/
-├── auth/         # OIDC JWT authentication state (AuthMiddlewareState, JWKS cache)
-├── local_auth/   # Local HS256 JWT authentication (login, token issuance)
-├── unified_auth/ # Unified authentication middleware (OIDC + local sequential validation)
-├── api/          # Admin API route composition utilities (compose, auth-layer wrapping)
+├── auth/         # Shared auth primitives only: JwksProvider (gateway OIDC plugin) + public_paths
+├── api/          # Admin API utilities (IP allowlist, cache-control middleware, response types)
+├── secret/       # Secret store
 ├── jwt_common.rs # Common JWT/JWK utility functions (algorithm policy, JWK selection, error mapping)
 │                 #   ← both common and gateway depend on this module; gateway must not be reverse-depended on by common
 ├── conf_sync/    # Shared proto / traits / sync types

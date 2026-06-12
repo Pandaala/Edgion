@@ -196,8 +196,8 @@ When pruning / merging unit tests (parameterizing, removing tests covered equiva
 | `edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs` v1alpha3→v1 | Version compatibility |
 | `edgion-resources/src/matcher/**` | IP / host matching algorithm |
 | `edgion-resources/src/duration.rs` / `real_ip_extractor.rs` | Duration expression / header priority algorithm |
-| `edgion-common/src/unified_auth/mod.rs` `from_configs` / `require_auth` | Multi-source auth assembly |
-| `edgion-common/src/local_auth/handlers.rs` `AuthStatus` JSON wire format | CLI hard-parsing dependency |
+| `edgion-controller/src/authz/mod.rs` `Authorizer` admin-token merge / `cli_lookup` | Token authn + RBAC policy assembly |
+| `edgion-resources/src/auth_dto.rs` `AuthStatusResponse` JSON wire format | CLI hard-parsing dependency |
 
 ### Reviewer checklist (mandatory for pruning PRs)
 

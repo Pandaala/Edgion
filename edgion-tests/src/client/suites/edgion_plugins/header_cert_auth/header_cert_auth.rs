@@ -12,7 +12,7 @@ const TEST_HOST: &str = "header-cert-auth-test.example.com";
 const CERT_HEADER_NAME: &str = "X-Client-Cert";
 
 const COMPILE_TIME_SECRET_YAML: &str = include_str!(
-    "../../../../../../edgion-tests/conf/HTTPRoute/Backend/BackendTLS/ClientCert_edge_backend-client-cert.yaml"
+    "../../../../../../edgion-tests/integration/conf/HTTPRoute/Backend/BackendTLS/ClientCert_edge_backend-client-cert.yaml"
 );
 
 const RUNTIME_SECRET_RELATIVE: &str =

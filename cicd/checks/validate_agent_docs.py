@@ -2,7 +2,7 @@
 """Validate the agent-facing markdown layer.
 
 Three checks, run over every markdown file at the repo root, under ``docs/``,
-``skills/``, and ``examples/README.md``:
+``skills/``, and ``edgion-tests/README.md``:
 
 1. Relative markdown links resolve to a real file on disk.
 2. Every file named ``SKILL.md`` has YAML frontmatter with ``name:`` and
@@ -28,7 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 TARGET_GLOBS = [
     "*.md",
-    "examples/README.md",
+    "edgion-tests/README.md",
     "docs/**/*.md",
     "skills/**/*.md",
 ]

@@ -76,7 +76,7 @@ pub async fn logging(
             .clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         if let Err(e) = store.store(trace_key, json_for_store) {
-            tracing::warn!(
+            tracing::warn!( // tracing-allow: access-log store send failure (registered exception, see 01-log-safety.md)
                 component = "access_log_store",
                 error = %e,
                 "Failed to store access log"

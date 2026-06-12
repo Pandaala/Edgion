@@ -11,7 +11,7 @@
 // keepalive is a no-op stub).  The sole goal is: annotations accepted,
 // route configured, TCP echo still works.
 //
-// Required config files (edgion-tests/conf/TCPRoute/KeepaliveSmoke/):
+// Required config files (edgion-tests/integration/conf/TCPRoute/KeepaliveSmoke/):
 //   Gateway.yaml
 //   Service_test-tcp.yaml
 //   EndpointSlice_test-tcp.yaml

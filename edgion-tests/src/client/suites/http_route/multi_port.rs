@@ -3,7 +3,7 @@
 // Validates per-port route isolation: routes bound to one listener port
 // must NOT be reachable from a different listener port.
 //
-// Gateway config (in edgion-tests/conf/HTTPRoute/MultiPort/):
+// Gateway config (in edgion-tests/integration/conf/HTTPRoute/MultiPort/):
 // - Gateway with two listeners: http-port-a (31300), http-port-b (31301)
 // - HTTPRoute route-port-a → parentRef sectionName=http-port-a
 // - HTTPRoute route-port-b → parentRef sectionName=http-port-b

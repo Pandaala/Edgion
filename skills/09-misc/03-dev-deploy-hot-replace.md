@@ -52,7 +52,7 @@ Both controller and gateway Deployments override the default entrypoint with a
 `while true` shell loop. This is the key enabler for hot-replace:
 
 ```yaml
-# examples/k8stest/kubernetes/controller/deployment.yaml (excerpt)
+# edgion-tests/k8s/kubernetes/controller/deployment.yaml (excerpt)
 command:
 - "/bin/sh"
 - "-c"
@@ -102,7 +102,7 @@ For ARM64 clusters replace with `aarch64-unknown-linux-gnu`.
 ### Conformance runner (Go)
 
 ```bash
-cd examples/gateway-api-conformance
+cd edgion-tests/conformance
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o conformance-test.bin .
 ```
 
@@ -135,7 +135,7 @@ kubectl exec -n $NS $GW_POD   -- pkill -f edgion-gateway
 ### Conformance Runner
 
 ```bash
-kubectl cp --retries=5 examples/gateway-api-conformance/conformance-test.bin \
+kubectl cp --retries=5 edgion-tests/conformance/conformance-test.bin \
   $NS/conformance-runner:/opt/conformance/conformance-test.bin
 ```
 
@@ -176,8 +176,8 @@ overwrite a running binary there (Text file busy). Always stage in `/tmp/` then
 
 ## 7. Related Docs
 
-- Deployment manifests: `examples/k8stest/kubernetes/{controller,gateway}/deployment.yaml`
+- Deployment manifests: `edgion-tests/k8s/kubernetes/{controller,gateway}/deployment.yaml`
 - Local build details: [cicd/00-local-build.md](cicd/00-local-build.md)
 - Hot-replace steps (also in): [../06-tracing/00-debugging.md](../06-tracing/00-debugging.md) §7
 - Conformance in-cluster runner: [../08-kubernetes/01-gateway-api/02-conformance-testing.md](../08-kubernetes/01-gateway-api/02-conformance-testing.md)
-- setup-orbstack.sh (full env setup): `examples/gateway-api-conformance/scripts/setup-orbstack.sh`
+- setup-orbstack.sh (full env setup): `edgion-tests/conformance/scripts/setup-orbstack.sh`

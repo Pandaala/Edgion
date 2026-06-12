@@ -57,15 +57,10 @@ pub struct Cli {
     #[arg(long)]
     pub socket: Option<PathBuf>,
 
-    /// Controller config file path for auto-login.
-    /// Auto-detected from default locations if not specified.
-    #[arg(long, short = 'C', value_name = "FILE")]
-    pub controller_config: Option<String>,
-
-    /// Static CLI token to use as `Authorization: Bearer <token>`.
+    /// Pre-shared bearer token to use as `Authorization: Bearer <token>`.
     /// Takes precedence over the `EDGION_TOKEN` environment variable and the
-    /// cached login token in `~/.edgion/token`.  When supplied, `ensure_auth`
-    /// (including `/auth/status` and `/auth/me`) is skipped entirely; the first
+    /// cached token in `~/.edgion/token`.  When resolved, `ensure_auth`
+    /// (the `/auth/status` pre-flight check) is skipped entirely; the first
     /// real request performs lazy validation (401 = unknown token, 403 = denied).
     /// NOTE: `-t` is taken by `--target`; this flag is long-only.
     #[arg(long, value_name = "TOKEN")]
@@ -148,15 +143,16 @@ pub enum Commands {
     /// Generate mTLS certificates for conf_sync gRPC channel
     GenCerts(commands::gen_certs::GenCertsArgs),
 
-    /// Log in to the controller and save the token locally (~/.edgion/token)
+    /// Persist a pre-shared bearer token locally (~/.edgion/token).
+    ///
+    /// Authentication is token-only — this does not contact a login endpoint with
+    /// credentials. It saves the supplied token so later invocations pick it up
+    /// automatically (lowest precedence, below `--token` and `EDGION_TOKEN`).
     Login {
-        /// Username
-        #[arg(short, long)]
-        username: Option<String>,
-
-        /// Password
-        #[arg(short, long)]
-        password: Option<String>,
+        /// Pre-shared bearer token to persist (the exact `Authorization: Bearer`
+        /// value; pair it with the controller `cli_tokens[].token_sha256`).
+        #[arg(long, value_name = "TOKEN")]
+        token: String,
     },
 
     /// Generate a new CLI token (32 CSPRNG bytes, URL-safe base64, `edg_` prefix).
@@ -175,8 +171,9 @@ impl Cli {
             return commands::gen_certs::execute(args).await;
         }
 
-        // Login does not need an EdgionClient; it uses a raw HTTP call
-        if let Commands::Login { username, password } = &self.command {
+        // Login does not need an EdgionClient; it only persists a token (with an
+        // optional best-effort /auth/status probe).
+        if let Commands::Login { token } = &self.command {
             let base_url = self.server.clone().unwrap_or_else(|| {
                 format!(
                     "http://localhost:{}",
@@ -186,7 +183,7 @@ impl Cli {
                     }
                 )
             });
-            return commands::login::login(&base_url, username.as_deref(), password.as_deref()).await;
+            return commands::login::login(&base_url, token).await;
         }
 
         // GenToken does not contact the controller at all — short-circuit before auth
@@ -210,29 +207,26 @@ impl Cli {
             }
         }
 
-        // Resolve the cli token: --token flag > EDGION_TOKEN env var.
-        // When a cli token is present we inject it as a static Bearer and skip
-        // ensure_auth entirely (no /auth/status, no /auth/me-then-delete path).
-        // Lazy validation: the first real request returns 401 (unknown) or 403 (denied).
-        let cli_token = self
-            .token
-            .clone()
-            .or_else(|| std::env::var("EDGION_TOKEN").ok().filter(|s| !s.is_empty()));
+        // Resolve the bearer token (token-only auth):
+        //   --token flag > EDGION_TOKEN env var > ~/.edgion/token file.
+        // When a token is resolved we inject it as a static Bearer and skip
+        // ensure_auth entirely. Lazy validation: the first real request returns
+        // 401 (unknown token) or 403 (denied).
+        let cli_token = auto_auth::resolve_token(self.token.as_deref());
 
-        if let Some(ref bearer) = cli_token {
-            // Static-bearer path: bypass all session auth machinery
-            let client =
-                EdgionClient::with_static_bearer(self.target, self.server.clone(), self.socket.clone(), bearer)?;
+        if let Some(bearer) = cli_token {
+            let client = EdgionClient::with_static_bearer(
+                self.target,
+                self.server.clone(),
+                self.socket.clone(),
+                bearer.as_str(),
+            )?;
             return self.dispatch(client).await;
         }
 
-        // Session auth path: create client and run ensure_auth
-        let mut client = EdgionClient::new(
-            self.target,
-            self.server.clone(),
-            self.socket.clone(),
-            self.controller_config.clone(),
-        )?;
+        // No token anywhere: create a token-less client and run the friendly
+        // pre-flight check (prints an actionable message if a token is required).
+        let mut client = EdgionClient::new(self.target, self.server.clone(), self.socket.clone())?;
 
         client.ensure_auth().await?;
 

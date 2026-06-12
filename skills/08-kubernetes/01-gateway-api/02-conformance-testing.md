@@ -7,7 +7,7 @@ description: How to run, debug, and incrementally validate Gateway API conforman
 
 ## Script location
 
-`examples/gateway-api-conformance/scripts/run.sh`
+`edgion-tests/conformance/scripts/run.sh`
 
 ## Authoritative source for feature declarations
 
@@ -45,7 +45,7 @@ the certificate-propagation delay of TLS Passthrough data-plane tests:
 ### Single test
 
 ```bash
-cd examples/gateway-api-conformance
+cd edgion-tests/conformance
 GO_RUN_FILTER="TestConformance/GatewayObservedGenerationBump" bash scripts/run.sh
 ```
 
@@ -158,10 +158,10 @@ Look for `[TAL] resolved ...` lines in the test output.
 
 ```bash
 # Update only the controller
-./examples/gateway-api-conformance/scripts/orbstack-dev.sh localpatch c
+./edgion-tests/conformance/scripts/orbstack-dev.sh localpatch c
 
 # Update controller + gateway
-./examples/gateway-api-conformance/scripts/orbstack-dev.sh localpatch
+./edgion-tests/conformance/scripts/orbstack-dev.sh localpatch
 ```
 
 **Note about pod process structure**: PID 1 is a shell loop (`while true; do /usr/local/edgion/edgion-controller; done`). Do not kill PID 1, otherwise OrbStack will restart the container from the original image (losing the new binary that was copied in).
@@ -228,7 +228,7 @@ For details see the profile status table in `SKILL.md` and `reports/README.md`.
 
 For remote clusters, unstable Pod IPs, or unreliable gRPC over `kubectl port-forward`, prefer the script bundled with the repository:
 
-`examples/gateway-api-conformance/scripts/in-cluster-runner.sh`
+`edgion-tests/conformance/scripts/in-cluster-runner.sh`
 
 The script handles uniformly:
 - Cross-compiling the conformance test binary (currently fixed at `linux/amd64`)
@@ -239,7 +239,7 @@ The script handles uniformly:
 ### Most common commands
 
 ```bash
-cd examples/gateway-api-conformance
+cd edgion-tests/conformance
 
 # Full run: compile + deploy/reuse runner + execute
 ./scripts/in-cluster-runner.sh \
@@ -271,7 +271,7 @@ cd examples/gateway-api-conformance
 
 ### Output and notes
 
-- Reports are pulled back into `examples/gateway-api-conformance/reports/`; filenames are derived from the profile:
+- Reports are pulled back into `edgion-tests/conformance/reports/`; filenames are derived from the profile:
   - `gateway-http-grpc-conformance-report.yaml`
   - `gateway-tls-conformance-report.yaml`
 - The script internally always passes `-cleanup-base-resources=false` to prevent the conformance framework from removing the base Gateway and leaving subsequent test cases without bound ports

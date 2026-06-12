@@ -31,7 +31,7 @@ Severity is Low / Admin-only / read-dominated / **no security impact, no runtime
   - **Dashboard** (`edgion-dashboard`) reads `success` / `data` / `count` from list endpoints.
   - **Validator binaries** (`edgion-tests/src/validator/resource_diff.rs`, `cache_residue.rs`) hit `/configclient/<kind>/list` and parse the current shape.
   - **Access-log client** (`edgion-tests/src/client/access_log_client.rs`) deserializes `AccessLogListResponse` as a named struct.
-  - **10+ conf-sync / k8s shell scripts** (`edgion-tests/scripts/conf-sync/*.sh`, `examples/k8stest/scripts/common/*.sh`) poll `/configclient/<kind>/list` with `curl -sf`; flipping unknown-kind to 400 changes `-f`'s behaviour and any typo'd kind path (lowercase variants, hypothetical k8s plural names, etc.) starts to fail loudly instead of silently returning an empty list.
+  - **10+ conf-sync / k8s shell scripts** (`edgion-tests/integration/scripts/conf-sync/*.sh`, `edgion-tests/k8s/scripts/common/*.sh`) poll `/configclient/<kind>/list` with `curl -sf`; flipping unknown-kind to 400 changes `-f`'s behaviour and any typo'd kind path (lowercase variants, hypothetical k8s plural names, etc.) starts to fail loudly instead of silently returning an empty list.
 
 The cost/risk of the contract migration is asymmetric with a Low-severity DX defect that has **zero in-the-wild operational impact** (no incident, no report).
 

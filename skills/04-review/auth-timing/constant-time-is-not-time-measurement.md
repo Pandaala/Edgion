@@ -48,8 +48,8 @@ is not re-run as a "finding":
 | `plugins/http/hmac_auth` | `hmac::Mac::verify_slice` |
 | `plugins/http/csrf` (token sig) | CSPRNG nonce + constant-time XOR-fold (see [../security/iron-rules.md](../security/iron-rules.md) timing rules) |
 | `plugins/http/basic_auth` (htpasswd) | constant-time XOR-fold (SHA-1 / MD5-crypt / APR1) |
-| `common/local_auth` (login) | `bcrypt::verify` + dummy-verify timing equalization |
-| `jwt_auth` / `openid_connect` / `unified_auth` | `jsonwebtoken::decode` (lib-side constant-time MAC/sig) |
+| `controller/authz` (admin/cli token) | SHA-256 (`sha256_hex`) + `HashMap` lookup (token-only admin auth; same class as `key_auth`) |
+| `jwt_auth` / `openid_connect` (gateway plugins) | `jsonwebtoken::decode` (lib-side constant-time MAC/sig) |
 | `header_cert_auth` | X.509 asymmetric `verify_signature` |
 
 The only site this project added `subtle` to is `admin_auth.rs`, and that was

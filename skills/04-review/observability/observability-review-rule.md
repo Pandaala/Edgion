@@ -72,6 +72,8 @@ The data-plane hot path (`request_filter`, `upstream_peer`, `response_filter`, `
 - Before a fatal error panic (`tracing::error!`)
 - Test-infrastructure paths protected by `is_integration_testing_mode()` (e.g., `tracing::warn!` for access_log_store write failure at `pg_logging.rs:89`) — that branch is never entered in production
 
+**Automated enforcement** (`cicd/checks/check_gateway_no_tracing.py`): this rule now has a CI gate. The data/control boundary is *function-level* — one `plugin.rs` holds both `from_config`/`new` (control plane, `tracing` allowed) and the per-request `run_request` (hot path, forbidden) — so the gate works at the function level, not the file level. Over the canonical "Data-plane entry list" files (the dirs/files mirrored in `01-log-safety.md`, including all `plugins/http/*/plugin.rs`, `gateway_api_filters/`, the match engines, `lb/selection`, `backends/`, and the TLS-handshake callbacks), it flags a `tracing` use only when its **enclosing function is not a constructor / config-build / once-init** (recognised by name via the `COLD_FN` knob: `new`, `from_config`, `create`, `build`, `load_*`, `compile_*`, `init_*`, `parse_*`, …). It is **zero-tolerance** (the request/connection functions are already tracing-free), with registered exceptions carrying an inline `// tracing-allow: <reason>` marker. Use `--list` to print current matches. If a genuinely-cold function is ever flagged, rename it to a cold prefix or add its name to `COLD_FN`.
+
 See [coding-standards/01-log-safety.md](../../03-coding/01-log-safety.md) Iron Rule 3 for details.
 
 ---

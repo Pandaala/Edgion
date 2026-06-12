@@ -1,6 +1,6 @@
 // Key Auth Plugin Test Suite
 //
-// Required config files (in edgion-tests/conf/EdgionPlugins/KeyAuth/):
+// Required config files (in edgion-tests/integration/conf/EdgionPlugins/KeyAuth/):
 // - 01_Secret_default_api-keys.yaml                       # API keys with metadata
 // - EdgionPlugins_default_key-auth.yaml                   # KeyAuth plugin with header/query/cookie
 // - HTTPRoute_default_key-auth-test.yaml                  # Route with host: key-auth-test.example.com
@@ -16,7 +16,7 @@
 // - 13_EdgionPlugins_default_key-auth-anon-only.yaml      # anonymous-only (no secretGroups)
 // - 14_HTTPRoute_default_key-auth-anon-only.yaml          # Route for anon-only test
 //
-// Also requires base config (in edgion-tests/conf/EdgionPlugins/base/):
+// Also requires base config (in edgion-tests/integration/conf/EdgionPlugins/base/):
 // - Gateway.yaml                                          # Gateway for EdgionPlugins tests
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};

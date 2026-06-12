@@ -38,17 +38,16 @@ pub struct EdgionClient {
     #[allow(dead_code)]
     socket_path: Option<PathBuf>,
     token: Option<Zeroizing<String>>,
-    controller_config: Option<String>, // for auto-login on 401
 }
 
 impl EdgionClient {
-    /// Create a new client with target type
-    pub fn new(
-        target: TargetType,
-        server: Option<String>,
-        socket: Option<PathBuf>,
-        controller_config: Option<String>,
-    ) -> Result<Self> {
+    /// Create a new client with no bearer token.
+    ///
+    /// Authentication is token-only: when no token is resolved (`--token`,
+    /// `EDGION_TOKEN`, or `~/.edgion/token`), this token-less client is created so
+    /// `ensure_auth` can print a friendly "no token configured" message. With a
+    /// resolved token the caller uses `with_static_bearer` instead.
+    pub fn new(target: TargetType, server: Option<String>, socket: Option<PathBuf>) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(5))
@@ -66,24 +65,16 @@ impl EdgionClient {
             format!("http://localhost:{}", port)
         });
 
-        // Load saved token (if any) from ~/.edgion/token
-        let token = super::token::read_token();
-
         Ok(Self {
             client,
             base_url,
             target,
             socket_path: socket,
-            token,
-            controller_config,
+            token: None,
         })
     }
 
     /// Create a client that uses `bearer` as a static `Authorization: Bearer` token.
-    ///
-    /// Unlike `new`, this constructor:
-    /// - does NOT call `read_token()` (the file-cached session token is ignored)
-    /// - does NOT perform `/auth/me` validation
     ///
     /// The caller is responsible for skipping `ensure_auth`. Validation is lazy:
     /// the first real API call returns 401 (unknown token) or 403 (insufficient permission).
@@ -116,12 +107,18 @@ impl EdgionClient {
             socket_path: socket,
             // Wrap in Zeroizing so the credential is wiped on drop.
             token: Some(Zeroizing::new(bearer.to_string())),
-            controller_config: None,
         })
     }
 
-    /// Ensure we have a valid token. Called before first API request.
-    /// Flow: (1) query auth/status, (2) dispatch on AuthStatus, (3) auto-login if needed.
+    /// Friendly pre-flight auth check. Called before the first API request on the
+    /// token-less path (no `--token`, `EDGION_TOKEN`, or `~/.edgion/token`).
+    ///
+    /// Authentication is token-only: this method never exchanges credentials and
+    /// never POSTs to a login endpoint. It only queries the public
+    /// `GET /api/v1/auth/status` so it can emit a clear, actionable message when a
+    /// token is required but none is configured. When a token *is* present, the
+    /// caller uses `with_static_bearer` and skips this entirely — the token is
+    /// trusted and the first real request performs lazy 401/403 validation.
     pub async fn ensure_auth(&mut self) -> Result<()> {
         use edgion_resources::auth_dto::{AuthStatus, AuthStatusResponse};
 
@@ -164,105 +161,16 @@ impl EdgionClient {
             return Ok(());
         }
 
-        let has_local = status.active_providers.iter().any(|p| p == "local");
-        let has_oidc = status.active_providers.iter().any(|p| p == "oidc");
-        let has_cli = status.active_providers.iter().any(|p| p == "cli");
-
-        // If the only active provider is "cli" and we arrive at ensure_auth, it
-        // means neither --token nor EDGION_TOKEN was supplied. Emit a clear,
-        // actionable message instead of the generic "no known provider" bail.
-        if has_cli && !has_local && !has_oidc {
-            bail!(
-                "this controller requires a cli token; pass --token <TOKEN> or set the EDGION_TOKEN environment variable"
-            );
-        }
-
-        if !has_local && !has_oidc {
-            bail!(
-                "/auth/status reported Ready but no known provider in active_providers: {:?}",
-                status.active_providers
-            );
-        }
-
-        // If we have a cached token, validate it — it may be stale if the controller restarted.
-        if self.token.is_some() {
-            let me_url = format!("{}/api/v1/auth/me", self.base_url);
-            let still_valid = self
-                .send_request(self.client.get(&me_url), &me_url)
-                .await
-                .map(|r| r.status().is_success())
-                .unwrap_or(false);
-            if still_valid {
-                return Ok(());
-            }
-            // Token is stale (e.g., controller restarted with new jwt_secret) — clear and re-auth
-            eprintln!("Cached token is no longer valid, re-authenticating...");
-            self.token = None;
-            super::token::delete_token();
-        }
-
-        if has_local {
-            self.auto_login_local().await
-        } else {
-            self.auto_login_oidc().await
-        }
-    }
-
-    /// Attempt auto-login using local credentials detected from the controller config file.
-    async fn auto_login_local(&mut self) -> Result<()> {
-        if let Some((username, password)) = super::auto_auth::detect_credentials(self.controller_config.as_deref()) {
-            match self.do_login(&username, password.as_str()).await {
-                Ok(token) => {
-                    super::token::save_token(token.as_str())?;
-                    self.token = Some(token);
-                    eprintln!("Auto-login successful (credentials from controller config).");
-                    return Ok(());
-                }
-                Err(e) => {
-                    tracing::debug!("Auto-login failed: {}", e);
-                }
-            }
-        }
-
-        anyhow::bail!("Authentication required. Please run: edgion-cli login -u <username> -p <password>");
-    }
-
-    /// Attempt auto-login via OIDC (not yet supported — inform the user).
-    async fn auto_login_oidc(&mut self) -> Result<()> {
-        anyhow::bail!(
-            "Authentication required. OIDC login is not supported in the CLI. \
-             Please configure local auth or use a valid bearer token."
-        );
-    }
-
-    /// Perform login and return the token wrapped in `Zeroizing` so its buffer is
-    /// wiped on drop.
-    async fn do_login(&self, username: &str, password: &str) -> Result<Zeroizing<String>> {
-        let url = format!("{}/api/v1/auth/login", self.base_url);
-        let body = serde_json::json!({
-            "username": username,
-            "password": password,
-        });
-
-        let resp = self
-            .client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("Login request failed: {}", e))?;
-
-        if !resp.status().is_success() {
-            anyhow::bail!("Login failed: HTTP {}", resp.status());
-        }
-
-        let data: serde_json::Value = resp.json().await?;
-        let token = data["data"]["token"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Invalid login response: missing token"))?
-            .to_string();
-
-        Ok(Zeroizing::new(token))
+        // Ready and auth is required, but we reached ensure_auth with no token —
+        // i.e. none of --token / EDGION_TOKEN / ~/.edgion/token resolved. Emit a
+        // clear, actionable message. The CLI no longer performs any credential
+        // exchange (token-only auth).
+        bail!(
+            "this controller requires a bearer token (mode: {}); \
+             pass --token <TOKEN>, set the EDGION_TOKEN environment variable, \
+             or run `edgion-cli login --token <TOKEN>` to persist one",
+            status.mode
+        )
     }
 
     /// Get the target type
@@ -559,7 +467,6 @@ mod ensure_auth_tests {
             target: crate::cli::TargetType::Center,
             socket_path: None,
             token: None,
-            controller_config: None,
         }
     }
 
@@ -582,13 +489,15 @@ mod ensure_auth_tests {
     }
 
     #[tokio::test]
-    async fn ensure_auth_bails_on_ready_with_empty_providers() {
+    async fn ensure_auth_bails_when_ready_and_auth_required_but_no_token() {
+        // Ready + auth_required and we reached ensure_auth (token-less path): must
+        // bail with an actionable token message — the CLI never exchanges creds.
         let server = MockServer::start().await;
         let body = serde_json::json!({
             "success": true,
             "data": {
                 "auth_required": true,
-                "active_providers": [],
+                "mode": "token",
                 "status": "ready",
             }
         });
@@ -600,11 +509,33 @@ mod ensure_auth_tests {
         let mut client = make_client(server.uri());
         let r = client.ensure_auth().await;
         assert!(r.is_err());
-        let msg = format!("{:?}", r.unwrap_err());
+        let msg = format!("{:?}", r.unwrap_err()).to_lowercase();
         assert!(
-            msg.contains("no known provider"),
-            "err message should mention unknown provider: {msg}"
+            msg.contains("token") && (msg.contains("--token") || msg.contains("edgion_token")),
+            "err should mention how to supply a token: {msg}"
         );
+    }
+
+    #[tokio::test]
+    async fn ensure_auth_continues_when_auth_not_required() {
+        // Ready but auth_required = false: proceed without a token.
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "success": true,
+            "data": {
+                "auth_required": false,
+                "mode": "token",
+                "status": "ready",
+            }
+        });
+        Mock::given(method("GET"))
+            .and(path("/api/v1/auth/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let mut client = make_client(server.uri());
+        let r = client.ensure_auth().await;
+        assert!(r.is_ok(), "auth_required=false should continue, got {:?}", r);
     }
 
     #[tokio::test]
@@ -620,40 +551,13 @@ mod ensure_auth_tests {
     }
 
     #[tokio::test]
-    async fn ensure_auth_bails_on_oidc_only_ready() {
-        // CLI can't do OIDC login interactively — must bail with an actionable message.
-        let server = MockServer::start().await;
-        let body = serde_json::json!({
-            "success": true,
-            "data": {
-                "auth_required": true,
-                "active_providers": ["oidc"],
-                "status": "ready"
-            }
-        });
-        Mock::given(method("GET"))
-            .and(path("/api/v1/auth/status"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body))
-            .mount(&server)
-            .await;
-        let mut client = make_client(server.uri());
-        let r = client.ensure_auth().await;
-        assert!(r.is_err(), "OIDC-only Ready should bail in CLI");
-        let msg = format!("{:?}", r.unwrap_err()).to_lowercase();
-        assert!(
-            msg.contains("oidc") || msg.contains("bearer token"),
-            "err should mention OIDC limitation: {msg}"
-        );
-    }
-
-    #[tokio::test]
     async fn ensure_auth_bails_on_initializing() {
         let server = MockServer::start().await;
         let body = serde_json::json!({
             "success": true,
             "data": {
                 "auth_required": true,
-                "active_providers": [],
+                "mode": "token",
                 "status": "initializing"
             }
         });
@@ -680,7 +584,7 @@ mod ensure_auth_tests {
             "success": true,
             "data": {
                 "auth_required": false,
-                "active_providers": [],
+                "mode": "disabled",
                 "status": "disabled"
             }
         });
@@ -710,40 +614,6 @@ mod ensure_auth_tests {
     async fn ensure_auth_bails_on_unreachable() {
         let mut client = make_client("http://127.0.0.1:1".to_string());
         assert!(client.ensure_auth().await.is_err());
-    }
-
-    /// When the only active provider is "cli" and no token was supplied (i.e. we
-    /// reached `ensure_auth`), the error must be actionable — not the generic
-    /// "no known provider" message.
-    #[tokio::test]
-    async fn ensure_auth_cli_only_provider_emits_clear_error() {
-        let server = MockServer::start().await;
-        let body = serde_json::json!({
-            "success": true,
-            "data": {
-                "auth_required": true,
-                "active_providers": ["cli"],
-                "status": "ready"
-            }
-        });
-        Mock::given(method("GET"))
-            .and(path("/api/v1/auth/status"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body))
-            .mount(&server)
-            .await;
-        let mut client = make_client(server.uri());
-        let r = client.ensure_auth().await;
-        assert!(r.is_err(), "cli-only provider must bail");
-        let msg = format!("{:?}", r.unwrap_err()).to_lowercase();
-        assert!(
-            msg.contains("cli token") || msg.contains("edgion_token"),
-            "error must mention cli token / EDGION_TOKEN: {msg}"
-        );
-        // Must NOT say "no known provider" (the generic message)
-        assert!(
-            !msg.contains("no known provider"),
-            "must not use generic message: {msg}"
-        );
     }
 
     /// `with_static_bearer` stores the supplied token and does not read the

@@ -1558,7 +1558,7 @@ async fn run_dynamic_scenario(cli: &Cli, sid: &str) -> Result<()> {
         dynamic::registry::find(sid).ok_or_else(|| anyhow::anyhow!("Unknown dynamic scenario id: {}", sid))?;
 
     let project_root = std::env::current_dir().context("Failed to get current directory")?;
-    let conf_root = project_root.join("edgion-tests/conf");
+    let conf_root = project_root.join("edgion-tests/integration/conf");
 
     // In Gateway mode, pull the default HTTP port from ports.json; otherwise use the CLI defaults.
     let (http_port, grpc_port, tcp_port, udp_port, https_port, grpc_https_port, http_host, grpc_host) = if cli.gateway {

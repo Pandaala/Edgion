@@ -13,15 +13,7 @@ description: Decide on three recurring "polish" findings — weak-type bool para
 
 ### (a) `compose_admin_routes(.., local_auth_intent: bool)` should be an `enum LocalAuthIntention { Enabled, Disabled }`
 
-Location: `edgion-common/src/api/compose.rs::compose_admin_routes`.
-
-**Why not accepted**:
-
-1. The function-level doc (`compose.rs:46-55`, 10 lines) already explains why this bool cannot be derived from `auth_state.local` — the Controller's K8s Secret auto-generation allows "intended-on but provider not yet ready". This is the load-bearing semantic, and reading the doc once at the function definition site is sufficient.
-2. All 4 call sites pass a clearly named local variable `local_auth_intent` (cli/mod.rs:226,293; controller/api/mod.rs:289) or a literal `true`/`false` in tests; call-site readability is already at parity with an enum.
-3. Introducing the enum forces a new type in the public `core::common::api` surface, changes the signatures of `compose_admin_routes` + `add_local_auth_routes`, and touches every test in `compose.rs`. ~30-line diff for zero semantic gain.
-
-**Exception**: if `local_auth_intent` ever grows a third state (e.g., `PendingBootstrap`), promote to enum at that point — three-state `Option<bool>` would be the actual smell.
+**Obsolete (2026-06-12)**: this finding no longer applies. Admin API auth went **token-only** (Istio-style pre-shared bearer); the browser-login stack was removed, taking `compose_admin_routes` and its `local_auth_intent: bool` parameter with it. There is no longer a bool-vs-enum question here. The Admin API onion is now assembled directly in `edgion-controller/src/api/mod.rs::serve_with_shutdown` with no `local_auth_intent` flag. Do not re-file.
 
 ### (b) `#[allow(dead_code)] sync_version: u64` on `WatchEventRaw` should carry a `// TODO: …` comment
 
@@ -41,7 +33,7 @@ Location: `edgion-common/src/startup.rs:3-7`.
 
 **Why not accepted**:
 
-1. The four callers are top-level `main()` of `edgion_controller` / `edgion_center` / `edgion_gateway` / `edgion_ctl`. Each binary is a single-process entry; **no Rust test or library code calls `init_crypto`**. The "twice-called in a test harness" scenario described in the finding does not exist — integration tests are bash-driven (`edgion-tests/scripts/integration/`) with one binary per process.
+1. The four callers are top-level `main()` of `edgion_controller` / `edgion_center` / `edgion_gateway` / `edgion_ctl`. Each binary is a single-process entry; **no Rust test or library code calls `init_crypto`**. The "twice-called in a test harness" scenario described in the finding does not exist — integration tests are bash-driven (`edgion-tests/integration/scripts/integration/`) with one binary per process.
 2. At a binary entry point, `.expect` is the correct policy: if `install_default()` returns `Err`, it means some other code already installed a different `CryptoProvider`. Silently `.ok()`-ing would let the binary continue with an unknown provider while we believed we installed `ring` — a real-world security configuration drift becomes invisible.
 3. If a Rust integration test ever needs to install crypto in-process, the right shape is `let _ = rustls::crypto::ring::default_provider().install_default();` inside the test (or a `OnceLock`), **not** a permanent downgrade of the production main-entry helper.
 

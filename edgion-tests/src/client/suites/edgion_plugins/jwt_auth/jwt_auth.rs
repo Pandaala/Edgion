@@ -1,6 +1,6 @@
 // JWT Auth Plugin Test Suite
 //
-// Required config files (in edgion-tests/conf/EdgionPlugins/JwtAuth/):
+// Required config files (in edgion-tests/integration/conf/EdgionPlugins/JwtAuth/):
 // - 01_Secret_default_jwt-secret.yaml            # JWT secret: "my-jwt-secret-key-32-chars-long!!"
 // - EdgionPlugins_default_jwt-auth.yaml          # JwtAuth plugin with HS256 (issuerGroups: default)
 // - HTTPRoute_default_jwt-auth-test.yaml         # Route with host: jwt-test.example.com
@@ -8,7 +8,7 @@
 // - 03_EdgionPlugins_default_jwt-auth-grouped.yaml      # JwtAuth with partner-a + partner-b
 // - 04_HTTPRoute_default_jwt-auth-grouped.yaml          # Route for grouped test
 //
-// Also requires base config (in edgion-tests/conf/EdgionPlugins/base/):
+// Also requires base config (in edgion-tests/integration/conf/EdgionPlugins/base/):
 // - Gateway.yaml                              # Gateway for EdgionPlugins tests
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};

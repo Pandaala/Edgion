@@ -10,9 +10,9 @@ pub mod lint;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption};
 
-use crate::config::FedRbacConfig;
+use crate::config::{FedAllowRule, FedRbacConfig};
 
 /// The closed set of verbs the classifier can produce. Safe as a metric label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,10 +81,11 @@ impl Verb {
 /// extensions; axum extensions require `Clone + Send + Sync + 'static`.
 #[derive(Debug, Clone)]
 pub enum Role {
-    /// Authenticated local/OIDC admin: allow-all.
-    Superuser,
     /// A role whose access is evaluated against an attached `CenterPolicy`.
-    /// Used for both the federation Center identity and cli tokens.
+    /// Used for the federation Center identity, the local admin token (which
+    /// carries an allow-all wildcard policy), and scoped cli tokens. There is no
+    /// special allow-all variant: an "admin" identity is simply a `Restricted`
+    /// role holding a wildcard policy.
     Restricted(Arc<CenterPolicy>),
 }
 
@@ -159,6 +160,46 @@ pub fn sha256_hex(token: &str) -> String {
     hex::encode(h.finalize())
 }
 
+/// Reserved name for the operator-supplied local admin token entry.
+///
+/// The local admin token (Istio-style) authenticates `edgion-cli` and local
+/// automation. It carries an allow-all wildcard policy and is registered into the
+/// same cli-token map as the scoped Center tokens, distinguished only by this
+/// name and its policy.
+pub const ADMIN_TOKEN_NAME: &str = "admin";
+
+/// The allow-all (`* × *`) policy carried by the local admin token.
+///
+/// Built through `CenterPolicy::from_config` because the policy's rules are
+/// private; `permits()` treats `"*"` as match-all for both verbs and kinds.
+pub fn admin_wildcard_policy() -> CenterPolicy {
+    CenterPolicy::from_config(&FedRbacConfig {
+        allow: vec![FedAllowRule {
+            verbs: vec!["*".to_string()],
+            kinds: vec!["*".to_string()],
+        }],
+    })
+}
+
+/// Build the `(hash, entry)` for the local admin token, or `None` when no token
+/// is configured.
+///
+/// Rejects blank / whitespace-only tokens (a security guard: otherwise
+/// `sha256_hex("")` would register an allow-all token that authenticates an empty
+/// `Authorization: Bearer ` header). The returned entry carries the wildcard
+/// admin policy and the reserved `ADMIN_TOKEN_NAME`.
+pub fn build_admin_token_entry(raw: Option<&str>) -> Option<(String, CliTokenEntry)> {
+    let tok = raw?.trim();
+    if tok.is_empty() {
+        return None;
+    }
+    let entry = CliTokenEntry {
+        name: ADMIN_TOKEN_NAME.to_string(),
+        policy: Arc::new(admin_wildcard_policy()),
+    };
+    Some((sha256_hex(tok), entry))
+}
+
 /// Shared authorizer holding a hot-swappable Center policy and a cli-token map.
 ///
 /// Construction (`new`) always accepts a single `CenterPolicy` argument so
@@ -168,6 +209,11 @@ pub struct Authorizer {
     center_policy: ArcSwap<CenterPolicy>,
     /// Key = `sha256_hex(raw_token)`.  Value = name + per-token policy.
     cli_tokens: ArcSwap<HashMap<String, CliTokenEntry>>,
+    /// The local admin token entry, if configured. Held here (rather than in the
+    /// config-derived map) so it survives every `apply` — including hot-reloads,
+    /// which rebuild the cli-token map purely from `config.cli_tokens` and would
+    /// otherwise silently drop it.
+    admin_token: ArcSwapOption<(String, CliTokenEntry)>,
 }
 
 impl Authorizer {
@@ -177,7 +223,15 @@ impl Authorizer {
         Self {
             center_policy: ArcSwap::from_pointee(policy),
             cli_tokens: ArcSwap::from_pointee(HashMap::new()),
+            admin_token: ArcSwapOption::const_empty(),
         }
+    }
+
+    /// Install (or clear) the local admin token entry. Must be called BEFORE the
+    /// first `apply` at startup so the admin token is merged into the live map.
+    /// Subsequent `apply` calls (reloads) re-merge it automatically.
+    pub fn set_admin_token(&self, entry: Option<(String, CliTokenEntry)>) {
+        self.admin_token.store(entry.map(Arc::new));
     }
 
     /// Hot-swap the Center policy (per-request snapshots pick this up).
@@ -188,7 +242,14 @@ impl Authorizer {
     /// Atomically replace both the Center policy and the cli-token map.
     ///
     /// This is the single writer path used at startup and on every hot-reload.
-    pub fn apply(&self, center: CenterPolicy, cli: HashMap<String, CliTokenEntry>) {
+    /// The configured admin token (if any) is merged into `cli` so it always
+    /// remains live; an existing map entry with the same hash (operator reusing
+    /// the same raw token as a cli_token) is left untouched.
+    pub fn apply(&self, center: CenterPolicy, mut cli: HashMap<String, CliTokenEntry>) {
+        if let Some(admin) = self.admin_token.load_full() {
+            let (hash, entry) = admin.as_ref();
+            cli.entry(hash.clone()).or_insert_with(|| entry.clone());
+        }
         self.center_policy.store(Arc::new(center));
         self.cli_tokens.store(Arc::new(cli));
     }
@@ -222,7 +283,6 @@ impl Authorizer {
 
     pub fn authorize(&self, role: &Role, verb: Verb, kind: &str) -> Decision {
         match role {
-            Role::Superuser => Decision::Allow,
             Role::Restricted(p) => {
                 if p.permits(verb, kind) {
                     Decision::Allow
@@ -249,12 +309,6 @@ mod tests {
                 })
                 .collect(),
         })
-    }
-
-    #[test]
-    fn superuser_allows_everything() {
-        let az = Authorizer::new(CenterPolicy::deny_all());
-        assert!(az.authorize(&Role::Superuser, Verb::Delete, "Secret").allowed());
     }
 
     #[test]
@@ -352,5 +406,66 @@ mod tests {
             }],
         }));
         assert!(az.authorize(&az.center_role(), Verb::Get, "PluginMetaData").allowed());
+    }
+
+    // --- Local admin token (Istio-style) ---
+
+    #[test]
+    fn admin_wildcard_policy_allows_everything() {
+        let p = admin_wildcard_policy();
+        let role = Role::Restricted(Arc::new(p));
+        let az = Authorizer::new(CenterPolicy::deny_all());
+        assert!(az.authorize(&role, Verb::Delete, "Secret").allowed());
+        assert!(az.authorize(&role, Verb::WipeAll, "AnythingHere").allowed());
+    }
+
+    #[test]
+    fn build_admin_token_entry_rejects_blank() {
+        assert!(build_admin_token_entry(None).is_none());
+        assert!(build_admin_token_entry(Some("")).is_none());
+        assert!(build_admin_token_entry(Some("   ")).is_none());
+        let (hash, entry) = build_admin_token_entry(Some("  tok-xyz  ")).expect("non-blank token");
+        // Whitespace is trimmed before hashing.
+        assert_eq!(hash, sha256_hex("tok-xyz"));
+        assert_eq!(entry.name, ADMIN_TOKEN_NAME);
+    }
+
+    #[test]
+    fn admin_token_survives_apply_reload() {
+        let az = Authorizer::new(CenterPolicy::deny_all());
+        az.set_admin_token(build_admin_token_entry(Some("admin-secret")));
+
+        // Startup apply with an empty config map: admin token must be live.
+        az.apply(CenterPolicy::deny_all(), HashMap::new());
+        let (role, name) = az
+            .cli_lookup("admin-secret")
+            .expect("admin token present after startup");
+        assert_eq!(name, ADMIN_TOKEN_NAME);
+        assert!(az.authorize(&role, Verb::Delete, "Secret").allowed());
+
+        // Reload apply rebuilds the map from config (no admin token) — it must
+        // still be re-merged automatically.
+        let mut reload_map = HashMap::new();
+        reload_map.insert(
+            sha256_hex("center-bot"),
+            CliTokenEntry {
+                name: "bot".into(),
+                policy: Arc::new(CenterPolicy::deny_all()),
+            },
+        );
+        az.apply(CenterPolicy::deny_all(), reload_map);
+        assert!(
+            az.cli_lookup("admin-secret").is_some(),
+            "admin token must survive reload"
+        );
+        assert!(az.cli_lookup("center-bot").is_some(), "center token also present");
+    }
+
+    #[test]
+    fn no_admin_token_means_no_extra_entry() {
+        let az = Authorizer::new(CenterPolicy::deny_all());
+        az.set_admin_token(build_admin_token_entry(Some("   "))); // blank → None
+        az.apply(CenterPolicy::deny_all(), HashMap::new());
+        assert!(!az.cli_tokens_present());
     }
 }

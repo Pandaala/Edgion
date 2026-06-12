@@ -48,8 +48,8 @@ Both manifest files must be applied **before** the gateway pod starts (Edgion
 binds ports at startup only):
 
 ```bash
-kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway.yaml
-kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway-tls.yaml
+kubectl apply -f edgion-tests/conformance/manifests/conformance-gateway.yaml
+kubectl apply -f edgion-tests/conformance/manifests/conformance-gateway-tls.yaml
 ```
 
 Verify key Gateways exist:
@@ -91,8 +91,8 @@ dynamically created Gateways.
   pod** so ports are re-bound:
 
 ```bash
-kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway.yaml
-kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway-tls.yaml
+kubectl apply -f edgion-tests/conformance/manifests/conformance-gateway.yaml
+kubectl apply -f edgion-tests/conformance/manifests/conformance-gateway-tls.yaml
 kubectl rollout restart deployment/edgion-gateway -n edgion-system
 ```
 
@@ -109,8 +109,8 @@ HTTP Gateway → no port-80 bind → every HTTP sub-test burns through its full
 **Fix:** Apply **both** manifest files before starting the gateway:
 
 ```bash
-kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway.yaml
-kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway-tls.yaml
+kubectl apply -f edgion-tests/conformance/manifests/conformance-gateway.yaml
+kubectl apply -f edgion-tests/conformance/manifests/conformance-gateway-tls.yaml
 ```
 
 Then restart the gateway pod to pick up the new ports.

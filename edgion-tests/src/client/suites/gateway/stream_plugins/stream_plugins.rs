@@ -3,7 +3,7 @@
 // Tests the ConnectionFilter feature that blocks/allows TCP connections
 // before TLS handshake or HTTP processing, using EdgionStreamPlugins resources.
 //
-// Required config files (in edgion-tests/conf/Gateway/StreamPlugins/):
+// Required config files (in edgion-tests/integration/conf/Gateway/StreamPlugins/):
 // - 01_EdgionStreamPlugins.yaml           # deny-all-ips resource
 // - 02_EdgionStreamPlugins_allow.yaml     # allow-all-ips resource
 // - 03_Gateway.yaml                       # 3 Gateways: no-filter, deny, allow

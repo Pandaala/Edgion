@@ -94,10 +94,10 @@ cargo test --all
 python3 cicd/checks/validate_agent_docs.py
 
 # Targeted integration test
-./edgion-tests/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
+./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
 
 # Full integration test
-./edgion-tests/scripts/integration/run_integration.sh
+./edgion-tests/integration/scripts/integration/run_integration.sh
 ```
 
 ## Pre-commit checks (trigger phrases)
@@ -129,14 +129,15 @@ Steps 2/3/4 may run in parallel. If any step fails, report the error immediately
 
 ## Authentication system
 
-- **Controller default behavior**: **No auto-generation.** The operator must supply credentials via one of three sources (highest precedence first): (1) env vars `EDGION_ADMIN_USERNAME` / `EDGION_ADMIN_PASSWORD` / `EDGION_ADMIN_JWT_SECRET` injected from a K8s Secret via `secretKeyRef` (recommended for Kubernetes); (2) `local_auth` in a Secret-mounted config file; (3) `auth` OIDC. When nothing valid is configured, the server starts and returns 503 fail-close on all Admin API business routes with a startup WARN — no panic, no `exit(1)`. See `skills/02-features/02-config/03-auth-bootstrap.md` for the full behavior matrix and migration guide.
-- **Center default behavior**: **No auto-generation**. The operator must provide either `local_auth` or `auth`. If neither is provided, the server still starts; `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain accessible, but all business routes reject with 503 (fail-close via `initializing_response`, not panic/exit). See `skills/02-features/02-config/03-auth-bootstrap.md` for details.
-- **View the K8s password**: `kubectl -n edgion-system get secret edgion-admin-credentials -o jsonpath='{.data.password}' | base64 -d`
-- **API authentication**: Bearer token or httpOnly Cookie.
-- **CLI authentication**: `edgion-cli login`, or auto-login by detecting the configuration file.
-- **Authentication endpoints**: `/api/v1/auth/login`, `/api/v1/auth/logout`, `/api/v1/auth/status`, `/api/v1/auth/me`.
-- **Module locations**: `src/core/common/local_auth/`, `src/core/common/unified_auth/`, `src/core/common/api/compose.rs`.
-- **Configuration**: the `local_auth` YAML section (optional; see `skills/02-features/02-config/00-controller-config.md`).
+- **Controller behavior (token-only, Istio-style)**: **No auto-generation.** Admin API auth is a single pre-shared bearer token. The operator supplies it via (highest precedence first): (1) env var `EDGION_ADMIN_TOKEN` injected from a K8s Secret (`edgion-admin-credentials`, key `token`) via `secretKeyRef` (recommended for Kubernetes); (2) the `admin_token` config field in a Secret-mounted config file. A blank token = not configured. The token maps to an allow-all wildcard RBAC policy and survives reloads. When no token (and no `cli_tokens`) is configured, the server starts and returns 503 fail-close on all Admin API business routes with a startup WARN — no panic, no `exit(1)`. There is no username/password and no OIDC admin login. See `skills/02-features/02-config/03-auth-bootstrap.md` for the full behavior matrix and migration guide.
+- **Scoped automation tokens**: configure role-limited tokens via `cli_tokens` (each with a fine-grained RBAC policy; hot-reloadable). See `skills/02-features/02-config/00-controller-config.md`.
+- **View the K8s token**: `kubectl -n edgion-system get secret edgion-admin-credentials -o jsonpath='{.data.token}' | base64 -d`
+- **API authentication**: Bearer token only (`Authorization: Bearer <token>`) — no cookie, no session.
+- **CLI authentication**: `edgion-cli login --token <T>` persists the token to `~/.edgion/token`; token precedence `--token` → `EDGION_TOKEN` → `~/.edgion/token`. No username/password, no OIDC.
+- **Authentication endpoints**: only public `GET /api/v1/auth/status` (`{ auth_required, mode: "token", status }`). The former `/api/v1/auth/login`, `/logout`, `/me` were removed.
+- **Module locations**: `edgion-controller/src/api/cli_token_middleware.rs` (token authn), `edgion-controller/src/authz/mod.rs` (`Authorizer` + admin token), `edgion-controller/src/api/mod.rs` (onion + 503 gate + status handler), `edgion-controller/src/cli/mod.rs` (token resolution). Shared primitives only in `edgion-common/src/auth/` (`jwks_provider`, `public_paths`) and `edgion-common/src/jwt_common.rs`.
+- **Configuration**: the `admin_token` field + `cli_tokens` list (see `skills/02-features/02-config/00-controller-config.md`).
+- **Gateway data-plane auth plugins** (`openid_connect`, `jwt_auth`, `basic_auth`, `header_cert_auth`, ...) are unrelated to Admin API auth and are unchanged.
 
 ## Knowledge source rules
 

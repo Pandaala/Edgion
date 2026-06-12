@@ -46,12 +46,10 @@ If any of the three is missing, it is a "based on line count / looks similar"-dr
 - **Cites a non-existent API**: `required_cache_names` did not appear in repo grep; the file also had no `is_ready` function; its single responsibility was `GatewayListenerConfig` query logic. The whole file has since been removed as orphan code (runtime-F003), which retroactively confirms the original finding's premise as wrong on yet another axis.
 - **Verdict**: finding's premise is wrong; close.
 
-### (f) `edgion-common/src/unified_auth/mod.rs` (808 lines = 559 non-test + 249 test) "should split into state/middleware/oidc/local"
+### (f) `unified_auth/mod.rs` (808 lines) "should split into state/middleware/oidc/local"
 
-- **Story line is complete**: types → state construction → middleware main flow → two validators → helpers; linearly readable, no duplication, no coupling leak.
-- **Splitting is negative-value**: `try_oidc_validation` / `try_local_validation` are thin adapters over `AuthMiddlewareState` / `LocalAuthState` and are not externally referenced; after splitting, readers must jump among 3 files to understand one request.
-- **The only marginally doable small cleanup**: `UnifiedAuthState::from_configs` (~135 lines, startup-time construction) could be moved into `state.rs` separately, with the rationale of "startup vs hot path" separation — but the benefit is weak and does not constitute P2/P3.
-- **Verdict**: split not accepted. 559 non-test lines is not large within this project (compare `edgion_acme.rs` 1491 lines, `config.rs` 622 lines).
+- **Obsolete (2026-06-12)**: the `edgion-common/src/unified_auth/` module no longer exists. Admin API auth went token-only (Istio-style pre-shared bearer); the OIDC/local unified-auth stack was deleted outright. The "should this 808-line file be split" question is moot — the file is gone.
+- **Original verdict (retained for the heuristic)**: split had been rejected because the file told one linear story (types → state → middleware → validators → helpers) with no duplication or coupling leak, and 559 non-test lines is not large within this project (compare `edgion_acme.rs` 1491 lines, `config.rs` 622 lines). The heuristic stands even though this particular file is gone.
 
 ### (g) `edgion-gateway/src/api/mod.rs` (1644 lines) "should split into admin / testing / link_sys submodules + dedup 3 `get_*_client_by_name` helpers + merge `serve` / `serve_with_shutdown`" (infra-cluster-F003, 2026-05-27)
 
@@ -65,7 +63,7 @@ If any of the three is missing, it is a "based on line count / looks similar"-dr
 ## When to Re-Evaluate
 
 - Any of the above files develop **real** line-level duplication (≥ 2 places with 30+ similar blocks); re-evaluate (d).
-- `unified_auth` adds ≥ 1 new provider (e.g., SAML); the split value of (f) rises significantly.
+- (f) is moot — the `unified_auth` module was deleted (token-only admin auth); no file-split question remains there.
 - A grep-verifiable "stable public API commitment" mechanism is added; re-evaluate (b).
 
 ## Fix Suggestions Not Accepted (list)

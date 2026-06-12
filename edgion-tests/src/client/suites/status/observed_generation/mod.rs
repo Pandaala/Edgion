@@ -3,7 +3,7 @@
 //! Tests that Gateway and GatewayClass status conditions include the correct
 //! `observedGeneration` field matching `metadata.generation`.
 //!
-//! Required config files (in edgion-tests/conf/Status/ObservedGeneration/):
+//! Required config files (in edgion-tests/integration/conf/Status/ObservedGeneration/):
 //! - GatewayClass_observed-gen-class.yaml           (with metadata.generation: 5)
 //! - Gateway_edgion-test_observed-gen-gateway.yaml  (with metadata.generation: 3)
 

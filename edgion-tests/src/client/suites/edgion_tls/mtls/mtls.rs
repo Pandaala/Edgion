@@ -1,7 +1,7 @@
 // mTLS (Mutual TLS) Test suite
 // Test mutual TLS authentication
 //
-// Required config files (in examples/conf/):
+// Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-http.yaml         # HTTP backend service discovery
 // - Service_edge_test-http.yaml               # HTTP service definition
 // - HTTPRoute_edge_mtls-test.yaml             # mTLS routing rules（Host: mtls*.example.com）

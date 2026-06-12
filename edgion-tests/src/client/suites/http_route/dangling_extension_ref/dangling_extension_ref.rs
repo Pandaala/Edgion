@@ -14,7 +14,7 @@
 // write_extension_ref_error_response — see
 // `src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs`.
 //
-// Config: edgion-tests/conf/HTTPRoute/DanglingExtensionRef/
+// Config: edgion-tests/integration/conf/HTTPRoute/DanglingExtensionRef/
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;

@@ -5,13 +5,13 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::process::Command;
 
-/// Invoke target/debug/examples/resource_diff to verify that the controller and gateway resource states align.
+/// Invoke target/debug/resource_diff to verify that the controller and gateway resource states align.
 /// Returns Ok(()) when the diff passes; returns Err when there is a mismatch or the call fails.
 pub async fn resource_diff(project_root: &Path, controller_url: &str, gateway_url: &str) -> Result<()> {
-    let binary = project_root.join("target/debug/examples/resource_diff");
+    let binary = project_root.join("target/debug/resource_diff");
     if !binary.exists() {
         anyhow::bail!(
-            "resource_diff binary not found at {}. Run `cargo build --example resource_diff`.",
+            "resource_diff binary not found at {}. Run `cargo build -p edgion-tests --bin resource_diff`.",
             binary.display()
         );
     }

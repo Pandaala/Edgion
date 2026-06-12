@@ -19,7 +19,7 @@ Symptoms:
 
 Use first:
 - `edgion-cli --target center/server/client`
-- `examples/resource_diff`
+- `resource_diff`
 - Controller/Gateway Admin API
 
 ### 2. Routing / plugin runtime issues
@@ -51,7 +51,7 @@ Use first:
 ### Preserve the scene and run a single case
 
 ```bash
-./edgion-tests/scripts/integration/run_integration.sh --keep-alive -r <Resource> -i <Item>
+./edgion-tests/integration/scripts/integration/run_integration.sh --keep-alive -r <Resource> -i <Item>
 ```
 
 Good for:
@@ -62,13 +62,13 @@ Good for:
 ### Skip compile for fast iteration
 
 ```bash
-./edgion-tests/scripts/integration/run_integration.sh --no-prepare --keep-alive -r <Resource> -i <Item>
+./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare --keep-alive -r <Resource> -i <Item>
 ```
 
 ### Manually start the full test environment
 
 ```bash
-./edgion-tests/scripts/utils/start_all_with_conf.sh
+./edgion-tests/integration/scripts/utils/start_all_with_conf.sh
 ```
 
 This will:

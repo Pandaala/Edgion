@@ -1,6 +1,6 @@
 // Header Cert Auth plugin tests
 //
-// Required config files (in edgion-tests/conf/EdgionPlugins/HeaderCertAuth/):
+// Required config files (in edgion-tests/integration/conf/EdgionPlugins/HeaderCertAuth/):
 // - 01_Secret_default_header-cert-ca.yaml
 // - EdgionPlugins_default_header-cert-auth.yaml
 // - HTTPRoute_default_header-cert-auth-test.yaml

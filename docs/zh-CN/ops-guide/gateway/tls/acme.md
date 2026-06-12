@@ -536,10 +536,10 @@ curl -X POST "http://localhost:12101/api/v1/services/acme/default/example-acme/t
 
 ## 示例
 
-- **HTTP-01**：见仓库 `edgion-tests/conf/Services/acme/http01-example.yaml`。
-- **DNS-01（Cloudflare）**：`edgion-tests/conf/Services/acme/dns01-cloudflare-example.yaml`。
-- **DNS-01（阿里云）**：`edgion-tests/conf/Services/acme/dns01-alidns-example.yaml`。
-- **本地集成测试（Pebble）**：`edgion-tests/conf/Services/acme/pebble/` 下的 Docker Compose 与说明。
+- **HTTP-01**：见仓库 `edgion-tests/integration/conf/Services/acme/http01-example.yaml`。
+- **DNS-01（Cloudflare）**：`edgion-tests/integration/conf/Services/acme/dns01-cloudflare-example.yaml`。
+- **DNS-01（阿里云）**：`edgion-tests/integration/conf/Services/acme/dns01-alidns-example.yaml`。
+- **本地集成测试（Pebble）**：`edgion-tests/integration/conf/Services/acme/pebble/` 下的 Docker Compose 与说明。
 
 与 EdgionTls 的配合使用见 [EdgionTls 用户指南](./edgion-tls.md)。
 

@@ -23,11 +23,17 @@ edgion-cli [OPTIONS] <COMMAND>
 | `--help` | `-h` | Show help information | - |
 | `--version` | `-V` | Show version information | - |
 
-`--token` accepts an `edg_`-prefixed token minted by `gen-token`. The environment
-variable `EDGION_TOKEN` is an alternative that avoids exposing the token in shell
-history. Precedence: `--token` > `EDGION_TOKEN` > cached login token.
-When either is set, `ensure_auth` (including `/auth/status` and `/auth/me`) is
-skipped; validation is lazy (401 = unknown token, 403 = permission denied).
+`edgion-cli` is **token-only**: it authenticates to the Controller Admin API with a
+single Bearer token (Istio-style). There is no username/password login and no OIDC
+in the CLI. The token can be the local admin token or an `edg_`-prefixed `cli_tokens`
+token. Token precedence (highest first):
+
+1. `--token <TOKEN>` flag (long-only; `-t` is taken by `--target`)
+2. `EDGION_TOKEN` environment variable (avoids exposing the token in shell history)
+3. The cached login token at `~/.edgion/token`, written by `edgion-cli login --token`
+
+Validation is lazy: the first request returns `401` (unknown token) or `403`
+(permission denied). The only public auth endpoint is `GET /api/v1/auth/status`.
 
 ## Target Types
 
@@ -256,6 +262,28 @@ SHA-256 (paste into controller cli_tokens[].token_sha256):
 
 For RBAC configuration, rotation instructions, and all security notes, see
 [CLI Token RBAC](federation-rbac.md#cli-token-rbac).
+
+### login - Persist a Token
+
+Save a Bearer token to `~/.edgion/token` so subsequent commands authenticate
+without `--token` or `EDGION_TOKEN`. This is token-only — there is no
+username/password or OIDC login.
+
+```bash
+edgion-cli login --token <TOKEN>
+```
+
+`<TOKEN>` may be the local admin token (retrieve it from the
+`edgion-admin-credentials` Secret) or an `edg_`-prefixed `cli_tokens` token from
+`gen-token`. Retrieve the admin token from Kubernetes with:
+
+```bash
+kubectl -n edgion-system get secret edgion-admin-credentials \
+  -o jsonpath='{.data.token}' | base64 -d
+```
+
+The cached token is used only when neither `--token` nor `EDGION_TOKEN` is set
+(see the precedence list under [Global Options](#global-options)).
 
 ## Connection Configuration
 

@@ -3,7 +3,7 @@
 //! Tests that Gateway status.listeners[].attachedRoutes only counts
 //! routes whose hostnames intersect with the listener's hostname.
 //!
-//! Required config files (in edgion-tests/conf/Status/HostnameIntersection/):
+//! Required config files (in edgion-tests/integration/conf/Status/HostnameIntersection/):
 //! - 01_Gateway.yaml
 //! - HTTPRoute_specific-matches-specific.yaml
 //! - HTTPRoute_specific-matches-wildcard.yaml

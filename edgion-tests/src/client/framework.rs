@@ -28,8 +28,11 @@ pub struct TestContext {
     #[allow(dead_code)]
     pub verbose: bool,
     pub access_log_path: PathBuf,
-    /// Bearer token for Controller Admin API calls (local auth).
-    /// Read from EDGION_TEST_ADMIN_TOKEN env var or ~/.edgion/token at startup.
+    /// Bearer token for Controller Admin API calls (token-only model).
+    /// Read from EDGION_TEST_ADMIN_TOKEN / EDGION_ADMIN_TOKEN env vars or
+    /// ~/.edgion/token at startup. The harness exports EDGION_ADMIN_TOKEN for the
+    /// controller process and the same value here, so the bearer always matches
+    /// the controller's registered pre-shared admin token.
     pub admin_token: Option<String>,
 }
 
@@ -90,11 +93,14 @@ impl TestContext {
 
         let http_client = client_builder.build().expect("Failed to create HTTP client");
 
-        // Load admin token for Controller Admin API calls.
-        // Priority: EDGION_TEST_ADMIN_TOKEN env var > ~/.edgion/token file.
+        // Load admin token for Controller Admin API calls (token-only model).
+        // Priority: EDGION_TEST_ADMIN_TOKEN env var > EDGION_ADMIN_TOKEN env var
+        // (the same pre-shared token the controller registers) > ~/.edgion/token
+        // file.
         let admin_token = std::env::var("EDGION_TEST_ADMIN_TOKEN")
             .ok()
             .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("EDGION_ADMIN_TOKEN").ok().filter(|s| !s.is_empty()))
             .or_else(|| {
                 std::env::var("HOME")
                     .ok()

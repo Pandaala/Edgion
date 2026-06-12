@@ -55,7 +55,7 @@ Edgion uses the official Go test suite from `sigs.k8s.io/gateway-api/conformance
 
 ```bash
 # Enter the conformance test directory
-cd examples/gateway-api-conformance
+cd edgion-tests/conformance
 
 # Run the conformance tests (requires a K8s cluster with Edgion deployed)
 go test -v -run TestConformance ./...

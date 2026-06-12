@@ -22,6 +22,11 @@ description: Full schema for the edgion-controller YAML configuration.
 # Priority: CLI --work-dir > ENV EDGION_WORK_DIR > this value > "."
 work_dir: "."
 
+# Local admin token (Istio-style pre-shared bearer). Grants allow-all access to
+# the Admin API. EDGION_ADMIN_TOKEN env var takes precedence; blank = not configured.
+# Prefer the env var (from a K8s Secret) over an in-file value.
+# admin_token: "edg_…"
+
 server:
   grpc_listen: "0.0.0.0:12151"    # gRPC listen address (ConfigSyncServer)
   admin_listen: "0.0.0.0:12101"   # Admin HTTP API address (/api/v1, /configclient)
@@ -193,77 +198,25 @@ CLI special cases:
 | `blocked_annotations` | `Vec<String>` | Common large kubectl/helm annotations | Annotations removed before entering memory |
 | `remove_managed_fields` | `bool` | `true` | Reduce object size |
 
-## `[auth]` — OIDC Authentication (Admin API)
+## `admin_token` — Admin API Authentication
 
-When enabled, the Admin API requires an OIDC JWT Bearer token. Defined in `edgion-common/src/auth/config.rs::AdminAuthConfig`, packed by `UnifiedAuthState::from_configs` into the unified auth state, and ultimately mounted via `common::api::compose_admin_routes` with `unified_auth_middleware`.
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | `bool` | `true` (enabled when the section is present) | Enable OIDC |
-| `discovery` | `String` | — | **Required**. OIDC discovery URL (`/.well-known/openid-configuration`) |
-| `audiences` | `Vec<String>` | `[]` | Expected JWT `aud` claim values; an empty array skips the check |
-| `issuers` | `Vec<String>` | `[]` | Expected JWT `iss` values; when empty, validated against the discovery document's issuer |
-| `allowed_algorithms` | `Vec<String>` | `[RS256, RS384, RS512, ES256, ES384]` | Allowed signing algorithms |
-| `clock_skew_seconds` | `u64` | `120` | JWT timestamp tolerance (seconds) |
-| `jwks_cache_ttl` | `u64` | `300` | JWKS cache TTL (seconds) |
-| `jwks_min_refresh_interval` | `u64` | `10` | Minimum JWKS refresh interval (seconds), used as debouncing |
-| `skip_paths` | `Vec<String>` | `["/health", "/ready"]` | Paths that skip authentication. **Allowlisted**: each entry must be exactly `/health`, `/ready`, `/metrics`, or start with `/api/v1/auth/`; any other value (e.g. a business route) is rejected at startup. This prevents silently exposing an admin route as unauthenticated. |
-| `ssl_verify` | `bool` | `true` | Whether to verify TLS certificates when fetching discovery/JWKS; production must be `true` |
-| `discovery_max_response_bytes` | `usize` | `65536` (64 KB) | Upper bound for the OIDC discovery response body; prevents DoS, compliant IdPs typically < 4 KB |
-| `jwks_max_response_bytes` | `usize` | `1048576` (1 MB) | Upper bound for the JWKS response body; typical JWKS < 10 KB |
-
-```yaml
-auth:
-  discovery: "https://keycloak.example.com/realms/edgion/.well-known/openid-configuration"
-  audiences: [edgion-admin]
-  # Defaults are sufficient for the vast majority of scenarios; the following two lines are usually unnecessary
-  # discovery_max_response_bytes: 65536
-  # jwks_max_response_bytes: 1048576
-```
-
-> `[auth]` and `[local_auth]` may coexist; requests are tried in unified_auth middleware order (OIDC → local). See `skills/01-architecture/01-controller/02-admin-api.md` for details.
-
-## `[local_auth]` — Local Authentication
-
-Built-in username/password authentication that issues HS256 JWTs. Must be configured
-explicitly — the Controller no longer auto-generates credentials. When absent (or empty
-`password`/`jwt_secret`), the Admin API returns 503 fail-close. See
-`skills/02-features/02-config/03-auth-bootstrap.md` for bootstrap options.
+The Admin API uses **token-only** authentication (Istio-style pre-shared bearer token). There is no OIDC admin, no username/password, and no httpOnly cookie. The operator supplies a single admin token that grants allow-all (wildcard `*`/`*` RBAC policy) access to the Admin API.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | `bool` | `true` | Enable local authentication |
-| `username` | `String` | `"admin"` | Username |
-| `password` | `String` | `""` | Password (required; empty → Admin API returns 503) |
-| `jwt_secret` | `String` | `""` | JWT signing secret (required; empty → Admin API returns 503) |
-| `jwt_expiry_hours` | `u64` | `24` | Token expiration (hours) |
-| `skip_paths` | `Vec<String>` | `["/health", "/ready"]` | Paths that skip authentication. **Allowlisted**: each entry must be exactly `/health`, `/ready`, `/metrics`, or start with `/api/v1/auth/`; any other value (e.g. a business route) is rejected at startup. This prevents silently exposing an admin route as unauthenticated. |
-| `cookie_secure` | `bool` | `true` | Emit `Secure` on the `edgion_token` cookie. `false` only for explicit non-TLS (plain HTTP) setups. Mirrors CSRF `cookieSecure` / OIDC `sessionCookieSecure`. |
+| `admin_token` | `Option<String>` | `None` | Raw bearer token. A blank/whitespace value is treated as **not configured**. The `EDGION_ADMIN_TOKEN` env var takes precedence over this field. Maps to an allow-all wildcard policy; survives reloads. |
+
+The token is resolved from two sources (highest precedence first):
+
+1. **Env var** `EDGION_ADMIN_TOKEN`, injected via `valueFrom.secretKeyRef` from the `edgion-admin-credentials` Secret (key `token`; recommended for Kubernetes).
+2. **`admin_token`** config field (a Secret-mounted config file).
 
 ```yaml
-local_auth:
-  enabled: true
-  username: admin
-  password: my-secure-password
-  jwt_secret: my-jwt-signing-secret
-  jwt_expiry_hours: 24
-  cookie_secure: true
+# Prefer the env var over an in-file value:
+admin_token: "edg_…"
 ```
 
-### Admin Credential Bootstrap (Controller)
-
-Admin credential auto-generation has been removed (as of 2026-06-01). The Controller and
-Center now behave identically. Credentials are read from (highest precedence first):
-
-1. **Env vars** `EDGION_ADMIN_USERNAME` / `EDGION_ADMIN_PASSWORD` / `EDGION_ADMIN_JWT_SECRET`
-   injected via `valueFrom.secretKeyRef` from a K8s Secret (recommended for Kubernetes).
-   `deploy.sh` creates the `edgion-admin-credentials` Secret idempotently.
-2. **`[local_auth]`** section in a Secret-mounted config file.
-3. **`[auth]`** OIDC.
-
-When nothing is configured: server starts, all Admin API business routes return 503
-fail-close, and a startup WARN is emitted. `/health` / `/ready` / `/metrics` /
-`/api/v1/auth/status` remain accessible.
+When **no** token is configured (neither `EDGION_ADMIN_TOKEN`/`admin_token` nor any `cli_tokens`), the server still boots, but all Admin API business routes return `503` fail-close with a startup WARN. `/health` / `/ready` / `/metrics` / `/api/v1/auth/status` remain accessible. Scoped, role-limited tokens are configured separately under [`[cli_tokens]`](#cli_tokens--static-cli-tokens-admin-api-access).
 
 See `skills/02-features/02-config/03-auth-bootstrap.md` for the full matrix and migration guide.
 

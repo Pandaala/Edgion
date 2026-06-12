@@ -66,15 +66,15 @@ kubectl apply -f "${ROOT_DIR}/namespace.yaml"
 (( step++ ))
 
 # Ensure the admin-credentials Secret exists before the controller starts.
-# This is idempotent: if the Secret already exists (e.g. from a previous deployment or
-# the old auto-generation), it is left untouched so the current password is preserved.
-# The controller reads credentials from this Secret via env vars (secretKeyRef).
+# This is idempotent: if the Secret already exists (e.g. from a previous deployment),
+# it is left untouched so the current token is preserved.
+# The controller reads the local admin token from this Secret via env var
+# (secretKeyRef -> EDGION_ADMIN_TOKEN). A single pre-shared bearer token grants
+# allow-all Admin API access (Istio-style).
 echo "[${step}] Ensure admin credentials Secret"
 kubectl -n edgion-system get secret edgion-admin-credentials >/dev/null 2>&1 || \
   kubectl -n edgion-system create secret generic edgion-admin-credentials \
-    --from-literal=username=admin \
-    --from-literal=password="$(openssl rand -base64 16)" \
-    --from-literal=jwt_secret="$(openssl rand -base64 32)"
+    --from-literal=token="$(openssl rand -hex 32)"
 (( step++ ))
 
 # Ensure the gateway admin API token Secret exists before the gateway starts.

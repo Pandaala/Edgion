@@ -1,6 +1,6 @@
 // UDP Test suite
 //
-// Required config files (in examples/conf/):
+// Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-udp.yaml          # UDP backend service discovery
 // - Service_edge_test-udp.yaml                # UDP service definition
 // - UDPRoute_edge_test-udp.yaml               # UDP routing rules（listening port）

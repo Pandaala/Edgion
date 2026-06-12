@@ -6,13 +6,13 @@
 // 2. Query the Access Log Store Admin API with that trace_id
 // 3. Verify the complete access log JSON structure
 //
-// Required config files (in edgion-tests/conf/EdgionPlugins/DebugAccessLog/):
+// Required config files (in edgion-tests/integration/conf/EdgionPlugins/DebugAccessLog/):
 // - EdgionPlugins_default_debug-access-log.yaml  # Plugin config (Cors, Csrf, ResponseHeaderModifier)
 // - HTTPRoute_default_plugin-logs-test.yaml      # Plugin logs routing rules (Host: plugin-test.example.com)
 //
 // Also requires:
 // - Gateway started with --integration-testing-mode flag
-// - Base config (in edgion-tests/conf/EdgionPlugins/base/)
+// - Base config (in edgion-tests/integration/conf/EdgionPlugins/base/)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use serde::{Deserialize, Serialize};

@@ -9,7 +9,7 @@ use tokio::time::Instant;
 /// Context provided to each scenario at execution time.
 /// Holds:
 /// - `test_ctx`: the existing suite framework's `TestContext` (used by `assert_phase` to invoke a suite)
-/// - `conf_root`: absolute path of `edgion-tests/conf/`
+/// - `conf_root`: absolute path of `edgion-tests/integration/conf/`
 /// - `conf_path`: the current scenario's relative conf directory (e.g. `Gateway/DynamicTest`)
 /// - `controller_url`: Controller Admin API base URL (used for apply)
 /// - `gateway_url`: Gateway observation endpoint base URL (used for resource_diff)

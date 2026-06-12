@@ -88,7 +88,7 @@ logging:
 
 conf_center:
   type: file_system  # or kubernetes
-  conf_dir: edgion-tests/conf
+  conf_dir: edgion-tests/integration/conf
 
 conf_sync:
   default_capacity: 200

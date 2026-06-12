@@ -4,7 +4,7 @@
 // (Let's Encrypt's official ACME test server).
 //
 // Prerequisites:
-//   cd edgion-tests/conf/Services/acme/pebble
+//   cd edgion-tests/integration/conf/Services/acme/pebble
 //   docker compose up -d
 //
 // These tests exercise:

@@ -1,56 +1,44 @@
 ---
 name: controller-auth-authz
-description: edgion-controller authentication + authorization architecture — the three request entry paths (unified_auth, cli token, federation mTLS), the authz engine (Role/Verb/CenterPolicy), the Admin API middleware onion, the built-in default Center policy, and the CLI token workflow.
+description: edgion-controller authentication + authorization architecture — token-only (Istio-style pre-shared bearer) admin authn, the two request entry paths (local admin token, federation mTLS), the authz engine (Role/Verb/CenterPolicy), the Admin API middleware onion, the built-in default Center policy, and the CLI token workflow.
 ---
 
 # 11 Authentication & Authorization (Controller)
 
-> **Authentication** answers *who are you* (unified_auth session, cli token, or federation mTLS).
+> **Authentication** answers *who are you* — a single pre-shared bearer token (Istio-style), Bearer header only.
 > **Authorization** answers *what may you do* — a default-deny `(verb, kind)` RBAC engine.
-> Both are **mandatory**: no-auth mode was removed (2026-05-24). An unauthenticated request gets `401`; an unauthorized one gets `403`.
+> Authentication is **token-only** (2026-06-12): the browser-login / username-password / OIDC admin stack was removed. An unrecognized or absent token reaches no handler; the request is `403` (or `503` when no token is configured at all). There is no `Role::Superuser` and no allow-all fallback — everything goes through policy.
 
 This file is the architecture entry point for the Controller's auth stack. Configuration schemas live in
 [`../../02-features/02-config/00-controller-config.md`](../../02-features/02-config/00-controller-config.md)
-(the `[local_auth]`, `[auth]`, `[center]`, and `[cli_tokens]` sections); credential bootstrap lives in
+(the `admin_token`, `[center]`, and `[cli_tokens]` sections); credential bootstrap lives in
 [`../../02-features/02-config/03-auth-bootstrap.md`](../../02-features/02-config/03-auth-bootstrap.md).
 
-## At a glance — three request entry paths
+## At a glance — two request entry paths
 
 | Entry path | Authentication | Role assigned | Authorization | Default access |
 |------------|----------------|---------------|---------------|----------------|
-| Browser / admin login | `unified_auth` (OIDC or local JWT, Bearer or httpOnly cookie) | `Superuser` | `authz_layer` (Superuser allows everything) | allow-all |
-| edgion-cli automation | `cli_token_pre_authn` (Bearer, SHA-256 lookup) | `Restricted(policy)` | `authz_layer` against the token's policy | **deny-all** until granted |
+| Local admin (operator + edgion-cli) | `cli_token_pre_authn` (Bearer, SHA-256 lookup) | `Restricted(policy)` | `authz_layer` against the token's policy | admin token → allow-all wildcard; scoped cli tokens → **deny-all** until granted |
 | Federation Center | mTLS peer identity (outbound gRPC channel, no listener) | `Restricted(center_policy)` | `authz_layer` against `center.rbac` | built-in default policy (see below) |
 
-All three converge on the **same** `authz_layer` and the same `Authorizer`. The only difference is which `Role` lands in the request extensions.
+Both paths converge on the **same** `authz_layer` and the same `Authorizer`. The only difference is which `Role` (which `CenterPolicy`) lands in the request extensions. The local admin token is itself just a `Restricted` role carrying an allow-all wildcard (`*`/`*`) policy — there is no separate "superuser" code path.
 
 ## Authentication (who are you)
 
-### unified_auth — the shared session gatekeeper
+### Token-only admin authn — `cli_token_pre_authn`
 
-The shared middleware (`edgion-common/src/unified_auth/mod.rs`) validates OIDC Bearer tokens, local HS256 JWTs, and the httpOnly cookie, in that order. It wraps *every* admin route via `compose_admin_routes`. Full request order, endpoints, cookie behavior, and auto-generated credentials are documented in
-[`02-admin-api.md` → Authentication System](02-admin-api.md#authentication-system).
+Module: `edgion-controller/src/api/cli_token_middleware.rs`. This is the **sole** Admin API authentication layer.
 
-Authentication is mandatory. `require_auth` always derives to `true`; the old `!require_auth` pass-through early-return was deleted. Setting `enabled: false` is ignored with a startup `WARN` (it no longer disables auth). See
-[`03-auth-bootstrap.md` → No-Auth Mode Removed](../../02-features/02-config/03-auth-bootstrap.md#no-auth-mode-removed-as-of-2026-05-24).
+- **Bearer-only**: reads only the `Authorization: Bearer <token>` header (case-insensitive). There is no cookie/session concept and no interactive login.
+- **SHA-256 stored**: the lookup hashes the incoming token (`sha256_hex`) and compares against the `Authorizer` token map (`Authorizer::cli_lookup`). Raw tokens are never held in config or memory.
+- **One map, two sources**: both the local admin token (allow-all wildcard policy, reserved name `"admin"`) and the scoped Center `cli_tokens` live in the same map, so this one middleware authenticates both.
+- **Additive, no bypass**: a recognized token injects `Role::Restricted` + `CliTokenIdentity` (for deny-audit). An unrecognized / absent token injects nothing; the downstream `authz_layer` then `403`s the role-less request — except on the static public paths, which it skips. (There is no `AuthBypass` marker anymore — that was part of the removed session stack.)
 
-### cli_token_pre_authn — static tokens for automation
-
-Module: `edgion-controller/src/api/cli_token_middleware.rs`.
-
-A Controller-private pre-authn layer that runs **outside** `unified_auth`, letting edgion-cli authenticate with a static Bearer token instead of an interactive login. Key properties:
-
-- **Bearer-only**: reads only the `Authorization: Bearer <token>` header (case-insensitive). Cookie callers are browser admins and fall through to `unified_auth`.
-- **SHA-256 stored**: the lookup hashes the incoming token (`sha256_hex`) and compares against `cli_tokens[].token_sha256`. Raw tokens are never held in config or memory.
-- **Hot-reloadable**: the token table lives in an `ArcSwap` and is refreshed on `/api/v1/reload` without restart.
-- **Additive**: a recognized token injects `Role::Restricted` + `AuthBypass` + `CliTokenIdentity`. An unrecognized/absent token is left untouched and falls through to `unified_auth` (which then 401s if no session).
-- **Auth-route skip**: `/api/v1/auth/*` is never processed here — injecting `AuthBypass` there would make `unified_auth` skip while `me_handler` still needs `Extension<UnifiedAuthClaims>`, producing a 500.
-
-The `AuthBypass` marker (`edgion-common/src/unified_auth/`) is the decoupling seam: cli-pre signals "already authenticated" so `unified_auth` skips its own checks, **without** `unified_auth` ever importing the authz engine (a maintained invariant — `common/unified_auth` is authz-free).
+The local admin token is registered onto the `Authorizer` via `set_admin_token` (built by `build_admin_token_entry`, which rejects a blank/whitespace token → not configured) and merged into the live cli-token map by `Authorizer::apply` — so it **survives every reload** even though reloads rebuild the cli-token map purely from `config.cli_tokens`.
 
 ### Federation mTLS — the Center identity
 
-Federation requests are served by a **separate admin router instance** (`fed_router`), built from `create_admin_router` wrapped with only `authz_layer` + `inject_center_identity` — it has **no `unified_auth` and no cli-pre layer**, so the Center path and the local-admin path are fully isolated router stacks. `inject_center_identity` snapshots the current Center policy as `Role::Restricted`. (The Controller↔Center link itself is an outbound gRPC channel from the Controller, not an inbound listener.) Details:
+Federation requests are served by a **separate admin router instance** (`fed_router`), built from `create_admin_router` wrapped with only `authz_layer` + `inject_center_identity` — it has **no token-authn layer and no 503 token gate**, so the Center path and the local-admin path are fully isolated router stacks. `inject_center_identity` snapshots the current Center policy as `Role::Restricted`. (The Controller↔Center link itself is an outbound gRPC channel from the Controller, not an inbound listener.) Details:
 [`../../04-review/architecture/fed-proxy-mtls-fail-close.md`](../../04-review/architecture/fed-proxy-mtls-fail-close.md).
 
 ## Authorization (what may you do)
@@ -59,18 +47,17 @@ Federation requests are served by a **separate admin router instance** (`fed_rou
 
 The authz engine lives in `edgion-controller/src/authz/mod.rs` — **Controller-private**. It was relocated out of `common/authz` so the Center can never take a dependency on the Controller's policy/identity model. The shared config *data* types (`FedRbacConfig`, `FedAllowRule`) stay in `common/config` (they are referenced by `CenterClientConfig` there); only the engine is Controller-private.
 
-> **Center scoping**: Center uses the shared `unified_auth` for authentication (mandatory; no auto-generated credentials; 503 fail-close when unconfigured) but has **no authz layer** — there is no `(verb, kind)` RBAC engine, no `Role`, no `CenterPolicy` on the Center side. The Center has been extracted to the separate EdgionCenter repository; see that repository for Center auth details.
+> **Center scoping**: The Center has been extracted to the separate EdgionCenter repository; see that repository for Center auth details. The Controller side has no Center-internal auth state.
 
 ### Role model
 
 ```rust
 pub enum Role {
-    Superuser,                      // authenticated local/OIDC admin: allow-all
-    Restricted(Arc<CenterPolicy>),  // federation Center identity AND cli tokens
+    Restricted(Arc<CenterPolicy>),  // EVERY identity: admin token, cli tokens, federation Center
 }
 ```
 
-`Restricted` is shared by both the Center and cli tokens — they differ only in *which* `CenterPolicy` they carry. `Authorizer::authorize(role, verb, kind)`: `Superuser → Allow`; `Restricted(p) → p.permits(verb, kind)`.
+There is a single role variant. `Restricted` is shared by the local admin token, the scoped cli tokens, and the Center — they differ only in *which* `CenterPolicy` they carry. The local admin token carries an allow-all wildcard policy (`admin_wildcard_policy`), so "admin = allow everything" falls out of normal policy evaluation rather than a special case. `Authorizer::authorize(role, verb, kind)`: `Restricted(p) → p.permits(verb, kind)`.
 
 ### Verbs & request classification
 
@@ -95,7 +82,7 @@ permits(verb, kind) = any rule where
 
 - **Verb strings are matched lowercase** (config verbs are lowercased at compile time).
 - **Policy config kinds are case-sensitive** — a `cli_tokens` / `center.rbac` rule must name the canonical PascalCase kind exactly (`HTTPRoute`). Incoming request paths are normalized to the canonical kind by the classifier *before* the policy check, so URL casing itself is not significant — only the casing of the kind strings you write in config.
-- `verbs: ["*"]` over the full admin router is effectively Superuser — grant narrowly.
+- `verbs: ["*"]` + `kinds: ["*"]` is the allow-all wildcard — exactly what the local admin token gets. Grant scoped cli tokens narrowly.
 
 ### Built-in default Center policy
 
@@ -113,40 +100,32 @@ A compile-time exhaustiveness gate (`is_default_readable`) forces every new `Res
 `serve_with_shutdown` assembles the layers so the runtime order (outermost first) is:
 
 ```text
-cli_auth_status_augment        (outermost — rewrites the /api/v1/auth/status body only)
-  cli_token_pre_authn          (injects Role + AuthBypass + CliTokenIdentity for known cli tokens)
-    cache_control_no_store     (blanket Cache-Control: no-store; added inside compose_admin_routes)
-      unified_auth             (skips when AuthBypass present)
-        assign_superuser_if_no_role   (route_layer — added second)
-          authz_layer          (route_layer — added first, so it is innermost)
-            handler
+IP allowlist                   (outermost — rejects unauthorized peers before auth; inactive when empty)
+  cache_control_no_store       (blanket Cache-Control: no-store on every response)
+    require_token_configured_gate   (503 token gate — admin app only; skips static public paths)
+      cli_token_pre_authn      (injects Role::Restricted + CliTokenIdentity for a recognized Bearer token)
+        authz_layer            (route_layer — classifies + enforces the token's policy)
+          handler
 ```
 
-The two outermost layers are cross-cutting and do **not** affect auth/authz semantics: `cli_auth_status_augment` only appends `"cli"` to the `/api/v1/auth/status` `active_providers` list when cli tokens are registered, and `cache_control_no_store` sets a blanket `Cache-Control: no-store`. The auth/authz sandwich is the inner four layers: `cli_token_pre_authn → unified_auth → assign_superuser_if_no_role → authz_layer`.
-
-axum `route_layer`s apply in **LIFO** order (the later `.route_layer()` wraps the earlier one), so the code calls `.route_layer(authz_layer)` first and `.route_layer(assign_superuser_if_no_role)` second — making `assign_superuser_if_no_role` run *before* `authz_layer`. `route_layer` (not `.layer`) means these never run on the 404 fallback. The `/api/v1/auth/*` routes are mounted in `compose_admin_routes` *outside* the business router, so they are covered by `unified_auth` but not by the authz `route_layer`.
-
-### assign_superuser_if_no_role — fail-closed role assignment
-
-`edgion-controller/src/api/authz_middleware.rs`. Runs after cli-pre and after `unified_auth`:
-
-1. **Role already present** (cli-pre injected `Restricted`) → pass through unchanged.
-2. **`AuthBypass` present but no `Role`** → invariant violation → **fail closed: `403`** (recorded as a `record_rbac_denied(..., "unknown")` so the bug path is observable). Keyed on `AuthBypass` alone (not `AuthBypass && CliTokenIdentity`) so any future bypass source without a role can never silently escalate to Superuser.
-3. **Authenticated admin via `unified_auth`, no role, no bypass** → insert `Role::Superuser`.
+- **IP allowlist** (`edgion-common/src/api/ip_allowlist.rs`) is mounted only when `allow_admin_ips` is non-empty; otherwise allow-all (backward compatible).
+- **`cache_control_no_store`** (`edgion-common/src/api`) is cross-cutting and does not affect auth/authz semantics.
+- **`require_token_configured_gate`** returns `503` + a startup WARN when no token (admin or cli) is registered, so a tokenless business request on an unconfigured controller yields `503` ("configure a token") rather than a bare `401`. It exempts the static public paths so `/api/v1/auth/status` and the probes stay reachable to report `Initializing`. **Admin app only** — never on the shared fed router (whose Center identity does not come from the token map).
+- The public `GET /api/v1/auth/status` route is merged **after** the `authz_layer` `route_layer`, so it stays reachable without a token. `route_layer` (not `.layer`) means `authz_layer` never runs on the 404 fallback.
 
 ### authz_layer — the decision point
 
-`authz_layer` reads the `Role` (missing role → `403`), classifies the request, and calls `Authorizer::authorize`. Allow → `next`; Deny → `403`. A skip set bypasses authz entirely (mirroring the authn skip set): `/health`, `/ready`, `/metrics`, `/api/v1/auth/{login,logout,status}`.
+`edgion-controller/src/api/authz_middleware.rs`. `authz_layer` reads the `Role` from request extensions (inserted by `cli_token_pre_authn` for a recognized token, or `inject_center_identity` for the fed path), classifies the request, and calls `Authorizer::authorize`. Allow → `next`; Deny or **missing role** → `403`. A skip set bypasses authz entirely (the static public set — `/health`, `/ready`, `/metrics`, `/api/v1/auth/status`); it NEVER references the operator-configurable `skip_paths`. There is no allow-all fallback and no role-assignment middleware — an unauthenticated (role-less) request to a business route is denied `403`.
 
 ## CLI token workflow
 
 1. **Mint**: `edgion-cli gen-token` — generates a CSPRNG token with an `edg_` prefix, prints both the token (for the client) and its SHA-256 (for the controller). The hash covers the **full `edg_`-prefixed string** (exactly what the Bearer header carries).
 2. **Configure**: paste the SHA-256 into a `cli_tokens[]` entry with a `name` and an `rbac.allow` rule set. Schema + examples:
    [`../../02-features/02-config/00-controller-config.md` → `[cli_tokens]`](../../02-features/02-config/00-controller-config.md).
-3. **Reload**: `POST /api/v1/reload` hot-swaps the token table — no restart.
-4. **Use**: `edgion-cli --token <edg_…>` (long-only; `-t` is taken by `--target`) or the `EDGION_TOKEN` env var. Supplying a token short-circuits `ensure_auth` (no `/auth/status`, no auto-login) and does **not** touch `~/.edgion/token` (ephemeral per-invocation).
+3. **Reload**: `POST /api/v1/reload` hot-swaps the token table — no restart. The local admin token survives the reload (re-merged by `Authorizer::apply`).
+4. **Use**: `edgion-cli --token <edg_…>` (long-only; `-t` is taken by `--target`) or the `EDGION_TOKEN` env var, or persist it once with `edgion-cli login --token <edg_…>` (writes `~/.edgion/token`). Token precedence: `--token` → `EDGION_TOKEN` → `~/.edgion/token`.
 
-Operator walkthrough and the full security checklist live in the human-facing ops guide: `docs/en/ops-guide/federation-rbac.md#cli-token-rbac`.
+The local admin token (operator credential) is a distinct concept: it is supplied to the *controller* via `EDGION_ADMIN_TOKEN` / the `admin_token` config field and maps to the allow-all wildcard policy. Operator walkthrough and the full security checklist live in the human-facing ops guide: `docs/en/ops-guide/federation-rbac.md#cli-token-rbac`.
 
 ## Observability
 
@@ -156,19 +135,19 @@ Denials increment `edgion_fed_rbac_denied_total` via `record_rbac_denied(verb, k
 
 | Concern | Path |
 |---------|------|
-| Authz engine (`Role` / `Verb` / `CenterPolicy` / `Authorizer` / `Decision`) | `edgion-controller/src/authz/mod.rs` |
-| authz_layer + assign_superuser_if_no_role + inject_center_identity | `edgion-controller/src/api/authz_middleware.rs` |
+| Authz engine (`Role` / `Verb` / `CenterPolicy` / `Authorizer` / `Decision` / admin-token entry) | `edgion-controller/src/authz/mod.rs` |
+| authz_layer + inject_center_identity | `edgion-controller/src/api/authz_middleware.rs` |
 | Request → `(verb, kind)` classifier | `edgion-controller/src/api/authz_classifier.rs` |
-| cli_token_pre_authn + `CliTokenIdentity` | `edgion-controller/src/api/cli_token_middleware.rs` |
+| Token authn (`cli_token_pre_authn`) + `CliTokenIdentity` | `edgion-controller/src/api/cli_token_middleware.rs` |
+| 503 token gate + `/api/v1/auth/status` handler + onion assembly | `edgion-controller/src/api/mod.rs` |
 | Built-in default Center policy | `edgion-controller/src/fed_sync/default_policy.rs` |
-| Shared session auth (OIDC + local JWT) + `AuthBypass` marker | `edgion-common/src/unified_auth/mod.rs` |
-| Local username/password (config/handlers/secret) | `edgion-common/src/local_auth/` |
-| Admin router composition (`compose_admin_routes`) | `edgion-common/src/api/compose.rs` |
-| `cli_tokens` / `center.rbac` config types (`FedRbacConfig`) | `edgion-controller/src/config/mod.rs` |
+| Local admin token resolution (`EDGION_ADMIN_TOKEN` / `admin_token`) | `edgion-controller/src/cli/mod.rs` |
+| Shared JWKS provider (gateway OIDC plugin) + public paths | `edgion-common/src/auth/jwks_provider.rs`, `edgion-common/src/auth/public_paths.rs` |
+| `cli_tokens` / `center.rbac` / `admin_token` config types | `edgion-controller/src/config/mod.rs` |
 
 ## Related docs
 
-- [`02-admin-api.md`](02-admin-api.md) — Admin API endpoints + `unified_auth` request order.
-- [`../../02-features/02-config/00-controller-config.md`](../../02-features/02-config/00-controller-config.md) — `[local_auth]` / `[auth]` / `[center]` / `[cli_tokens]` schemas.
-- [`../../02-features/02-config/03-auth-bootstrap.md`](../../02-features/02-config/03-auth-bootstrap.md) — credential bootstrap, no-auth removal, JWT revocation.
+- [`02-admin-api.md`](02-admin-api.md) — Admin API endpoints + token authn request order.
+- [`../../02-features/02-config/00-controller-config.md`](../../02-features/02-config/00-controller-config.md) — `admin_token` / `[center]` / `[cli_tokens]` schemas.
+- [`../../02-features/02-config/03-auth-bootstrap.md`](../../02-features/02-config/03-auth-bootstrap.md) — token bootstrap + fail-close behavior matrix.
 - [`../../04-review/architecture/fed-proxy-mtls-fail-close.md`](../../04-review/architecture/fed-proxy-mtls-fail-close.md) — federation mTLS fail-close + Center identity injection.

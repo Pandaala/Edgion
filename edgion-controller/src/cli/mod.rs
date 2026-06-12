@@ -16,86 +16,13 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing_appender::non_blocking::WorkerGuard;
 
-/// Derive whether the operator *expects* admin API authentication.
-///
-/// Authentication is mandatory; no-auth mode was removed. Returns `true` unconditionally.
-///
-/// The parameters are retained to avoid churning ~41 call sites; they are no
-/// longer used to compute the result. When `local_auth.enabled=false` or
-/// `auth.enabled=false` is present, a migration `tracing::warn!` is emitted
-/// at the call site (see `resolve_local_config` / the `run` method).
-pub(crate) fn derive_require_auth(
-    _auth_config: Option<&edgion_common::auth::AdminAuthConfig>,
-    _local_auth_config: Option<&edgion_common::local_auth::LocalAuthConfig>,
-) -> bool {
-    true
-}
-
-/// Resolve the startup `LocalAuthConfig` for the Controller.
-///
-/// Credentials come only from configuration: the `[local_auth]` section, the
-/// `EDGION_ADMIN_*` environment variables, or `[auth]` OIDC. They are never
-/// auto-generated. Returns `Some` only when there is a valid, enabled local-auth
-/// config; otherwise `None` (no provider loads → Admin API 503 fail-close).
-///
-/// Precedence: `[local_auth]` from the config file (if present) is used as the
-/// base; `EDGION_ADMIN_*` env vars override individual fields. If there is no
-/// `[local_auth]` section but at least one env override is set, an effective
-/// config is synthesized from defaults + env (env-only configuration).
-///
-/// A misconfigured-but-enabled local auth (empty password/jwt_secret, etc.) is
-/// treated as unconfigured: it logs a WARN and returns `None`. The process never
-/// panics or exits for missing credentials.
-pub(crate) fn resolve_local_config(
-    config: &crate::config::EdgionControllerConfig,
-    oidc_enabled: bool,
-) -> Option<edgion_common::local_auth::LocalAuthConfig> {
-    use edgion_common::local_auth::LocalAuthConfig;
-
-    let env_present = LocalAuthConfig::env_overrides_present();
-
-    // Build the effective base config.
-    let mut effective = if let Some(c) = config.local_auth.as_ref() {
-        Some(c.clone())
-    } else if env_present {
-        // Env-only: synthesize a config from defaults, then apply env overrides.
-        Some(LocalAuthConfig::default())
-    } else {
-        None
-    };
-
-    if let Some(cfg) = effective.as_mut() {
-        cfg.apply_env_overrides();
-    }
-
-    match effective {
-        Some(cfg) if cfg.enabled => {
-            if let Some(err) = cfg.validate() {
-                tracing::warn!(
-                    component = COMPONENT_EDGION_CONTROLLER,
-                    error = err,
-                    "local_auth is configured but invalid; admin API will return 503 until fixed. \
-                     Credentials are no longer auto-generated — set a non-empty password and jwt_secret \
-                     (or EDGION_ADMIN_PASSWORD / EDGION_ADMIN_JWT_SECRET)."
-                );
-                None
-            } else {
-                Some(cfg)
-            }
-        }
-        // [local_auth] present but enabled=false -> no local provider.
-        Some(_) => None,
-        // No [local_auth] and no env overrides: OIDC handles auth if enabled.
-        None if oidc_enabled => None,
-        None => {
-            tracing::warn!(
-                component = COMPONENT_EDGION_CONTROLLER,
-                "No authentication configured. Admin endpoints will return 503 until you configure \
-                 [local_auth] (or EDGION_ADMIN_PASSWORD / EDGION_ADMIN_JWT_SECRET) or [auth] OIDC."
-            );
-            None
-        }
-    }
+/// Resolve the raw local admin token: `EDGION_ADMIN_TOKEN` env wins over the
+/// `admin_token` config field. The returned value is unvalidated; blank/whitespace
+/// handling (and rejection) happens in `authz::build_admin_token_entry`.
+pub(crate) fn resolve_admin_token_raw(config: &crate::config::EdgionControllerConfig) -> Option<String> {
+    std::env::var("EDGION_ADMIN_TOKEN")
+        .ok()
+        .or_else(|| config.admin_token.clone())
 }
 
 /// Provider that wraps ConfMgr to dynamically provide ConfigSyncServer
@@ -235,9 +162,6 @@ impl EdgionControllerCli {
         probe_addr: SocketAddr,
         metrics_addr: SocketAddr,
         security: ConfSyncSecurityConfig,
-        auth_config: Option<edgion_common::auth::AdminAuthConfig>,
-        local_auth_config: Option<edgion_common::local_auth::LocalAuthConfig>,
-        require_auth: bool,
         config_file: Option<String>,
         authorizer: std::sync::Arc<crate::authz::Authorizer>,
         center_reload_tx: tokio::sync::watch::Sender<crate::config::CenterClientConfig>,
@@ -357,9 +281,6 @@ impl EdgionControllerCli {
                     conf_mgr.clone(),
                     schema_validator,
                     admin_addr,
-                    auth_config.as_ref(),
-                    local_auth_config.as_ref(),
-                    require_auth,
                     config_file,
                     authorizer,
                     center_reload_tx,
@@ -549,7 +470,38 @@ impl EdgionControllerCli {
 
             let cli_map = crate::authz::lint::build_cli_token_map(&config.cli_tokens, "startup");
 
-            // Install center policy + cli_tokens atomically before admin server serves.
+            // Register the local admin token (Istio-style) on the Authorizer. It is
+            // held on the Authorizer (not in the config-derived map) so `apply`
+            // merges it at startup AND on every hot-reload. `EDGION_ADMIN_TOKEN`
+            // env wins over the `admin_token` config field; blank values are
+            // rejected by `build_admin_token_entry`.
+            let raw_admin = resolve_admin_token_raw(&config);
+            let admin_entry = crate::authz::build_admin_token_entry(raw_admin.as_deref());
+            if admin_entry.is_none() && raw_admin.is_some() {
+                tracing::warn!(
+                    component = "admin_token",
+                    context = "startup",
+                    "EDGION_ADMIN_TOKEN / admin_token is set but blank; ignoring (no admin token registered)"
+                );
+            }
+            if admin_entry.is_some()
+                && config
+                    .cli_tokens
+                    .iter()
+                    .any(|t| t.name == crate::authz::ADMIN_TOKEN_NAME)
+            {
+                tracing::warn!(
+                    component = "cli_tokens",
+                    context = "startup",
+                    name = crate::authz::ADMIN_TOKEN_NAME,
+                    "a configured cli_token uses the reserved name \"admin\"; the local admin token \
+                     also uses it — rename the config entry to disambiguate audit logs"
+                );
+            }
+            authorizer.set_admin_token(admin_entry);
+
+            // Install center policy + cli_tokens (admin token merged by `apply`)
+            // atomically before admin server serves.
             authorizer.apply(initial_policy, cli_map);
         }
 
@@ -650,22 +602,6 @@ impl EdgionControllerCli {
         let metrics_addr = utils::parse_listen_addr(Some(&config.metrics_listen()), "0.0.0.0:12190")?;
         let security = config.conf_sync_security.clone();
         security.validate()?;
-        let auth_config = config.auth.clone();
-        let oidc_enabled_for_resolve = auth_config.as_ref().is_some_and(|c| c.enabled);
-        let local_auth_config = resolve_local_config(&config, oidc_enabled_for_resolve);
-        let require_auth = derive_require_auth(auth_config.as_ref(), config.local_auth.as_ref());
-
-        // Migration WARN: if the operator explicitly disabled a provider, auth is still
-        // mandatory. This replaces the old no-auth mode that allowed pass-through.
-        let local_explicitly_disabled = config.local_auth.as_ref().is_some_and(|c| !c.enabled);
-        let oidc_explicitly_disabled = auth_config.as_ref().is_some_and(|c| !c.enabled);
-        if local_explicitly_disabled || oidc_explicitly_disabled {
-            tracing::warn!(
-                component = COMPONENT_EDGION_CONTROLLER,
-                "auth `enabled: false` is no longer supported; authentication is mandatory. \
-                 Configure a real local_auth/auth provider. Ignoring the disable flag."
-            );
-        }
 
         Self::start_services(
             conf_mgr,
@@ -675,9 +611,6 @@ impl EdgionControllerCli {
             probe_addr,
             metrics_addr,
             security,
-            auth_config,
-            local_auth_config,
-            require_auth, // from derive_require_auth (intent-based, not post-resolve)
             config_file,
             authorizer,
             center_reload_tx,
@@ -685,195 +618,5 @@ impl EdgionControllerCli {
             shutdown_handle,
         )
         .await
-    }
-}
-
-#[cfg(test)]
-mod require_auth_tests {
-    use super::*;
-    use edgion_common::auth::AdminAuthConfig;
-    use edgion_common::local_auth::LocalAuthConfig;
-
-    fn oidc_enabled() -> AdminAuthConfig {
-        let mut c = AdminAuthConfig::default();
-        c.enabled = true;
-        c.discovery = "https://example.com".to_string();
-        c
-    }
-
-    fn local_enabled_with_password() -> LocalAuthConfig {
-        let mut c = LocalAuthConfig::default();
-        c.enabled = true;
-        c.username = "admin".to_string();
-        c.password = "somepasswd_long_enough".to_string();
-        c.jwt_secret = "jwtsecret_long_enough_valueeee_ok".to_string();
-        c
-    }
-
-    fn local_disabled() -> LocalAuthConfig {
-        let mut c = LocalAuthConfig::default();
-        c.enabled = false;
-        c
-    }
-
-    fn local_enabled_empty_password() -> LocalAuthConfig {
-        let mut c = LocalAuthConfig::default();
-        c.enabled = true;
-        c.username = "admin".to_string();
-        c.password = String::new(); // unconfigured -> treated as 503 fail-close
-        c
-    }
-
-    const ADMIN_ENV_VARS: [&str; 3] = [
-        "EDGION_ADMIN_USERNAME",
-        "EDGION_ADMIN_PASSWORD",
-        "EDGION_ADMIN_JWT_SECRET",
-    ];
-
-    fn clear_admin_env() {
-        for k in ADMIN_ENV_VARS {
-            std::env::remove_var(k);
-        }
-    }
-
-    #[test]
-    fn require_auth_both_explicit_enabled_true() {
-        let oidc = oidc_enabled();
-        let local = local_enabled_with_password();
-        assert!(derive_require_auth(Some(&oidc), Some(&local)));
-    }
-
-    #[test]
-    fn require_auth_local_disabled_no_oidc_still_true() {
-        // Even when local_auth.enabled=false, authentication is mandatory.
-        // A migration WARN is emitted at startup; the disabled flag is ignored.
-        let local = local_disabled();
-        assert!(derive_require_auth(None, Some(&local)));
-    }
-
-    #[test]
-    fn require_auth_no_config_at_all_true() {
-        assert!(derive_require_auth(None, None));
-    }
-
-    #[test]
-    fn require_auth_local_empty_password_true() {
-        let local = local_enabled_empty_password();
-        assert!(derive_require_auth(None, Some(&local)));
-    }
-
-    #[test]
-    fn require_auth_oidc_only_true() {
-        let oidc = oidc_enabled();
-        assert!(derive_require_auth(Some(&oidc), None));
-    }
-
-    fn oidc_disabled() -> AdminAuthConfig {
-        let mut c = AdminAuthConfig::default();
-        c.enabled = false;
-        c
-    }
-
-    /// Double explicit opt-out: the operator explicitly disabled both sides.
-    /// Authentication is still mandatory; no-auth mode was removed. A migration
-    /// WARN is emitted at startup and the disabled flags are ignored.
-    #[test]
-    fn require_auth_both_explicit_disabled_still_true() {
-        let oidc = oidc_disabled();
-        let local = local_disabled();
-        assert!(derive_require_auth(Some(&oidc), Some(&local)));
-    }
-
-    // --- resolve_local_config (no auto-generation) ---
-
-    fn controller_config_with_local(local: Option<LocalAuthConfig>) -> EdgionControllerConfig {
-        let mut cfg = EdgionControllerConfig::default();
-        cfg.local_auth = local;
-        cfg
-    }
-
-    #[test]
-    fn resolve_nothing_configured_no_oidc_returns_none() {
-        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        clear_admin_env();
-        let config = controller_config_with_local(None);
-        // No [local_auth], no env, no OIDC -> None (caller serves 503 + WARN).
-        assert!(resolve_local_config(&config, false).is_none());
-    }
-
-    #[test]
-    fn resolve_nothing_configured_with_oidc_returns_none() {
-        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        clear_admin_env();
-        let config = controller_config_with_local(None);
-        // OIDC handles auth -> None without a no-auth WARN.
-        assert!(resolve_local_config(&config, true).is_none());
-    }
-
-    #[test]
-    fn resolve_enabled_empty_password_returns_none() {
-        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        clear_admin_env();
-        let config = controller_config_with_local(Some(local_enabled_empty_password()));
-        // Enabled but invalid (empty password) -> treated as unconfigured.
-        assert!(resolve_local_config(&config, false).is_none());
-    }
-
-    #[test]
-    fn resolve_disabled_returns_none() {
-        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        clear_admin_env();
-        let config = controller_config_with_local(Some(local_disabled()));
-        assert!(resolve_local_config(&config, false).is_none());
-    }
-
-    #[test]
-    fn resolve_valid_local_returns_some() {
-        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        clear_admin_env();
-        let config = controller_config_with_local(Some(local_enabled_with_password()));
-        let resolved = resolve_local_config(&config, false).expect("valid local_auth should resolve");
-        assert_eq!(resolved.username, "admin");
-        assert_eq!(resolved.password, "somepasswd_long_enough");
-    }
-
-    #[test]
-    fn resolve_env_overrides_applied_onto_config() {
-        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        clear_admin_env();
-        std::env::set_var("EDGION_ADMIN_PASSWORD", "env-override-pass");
-        let config = controller_config_with_local(Some(local_enabled_with_password()));
-        let resolved = resolve_local_config(&config, false).expect("should resolve with env override");
-        assert_eq!(resolved.password, "env-override-pass");
-        clear_admin_env();
-    }
-
-    #[test]
-    fn resolve_env_only_synthesizes_config() {
-        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        clear_admin_env();
-        // No [local_auth] section at all; env provides everything.
-        std::env::set_var("EDGION_ADMIN_PASSWORD", "env-only-pass");
-        std::env::set_var("EDGION_ADMIN_JWT_SECRET", "env-only-jwt-secret-value");
-        let config = controller_config_with_local(None);
-        let resolved = resolve_local_config(&config, false).expect("env-only should synthesize a config");
-        assert_eq!(resolved.username, "admin"); // default
-        assert_eq!(resolved.password, "env-only-pass");
-        assert_eq!(resolved.jwt_secret, "env-only-jwt-secret-value");
-        clear_admin_env();
     }
 }

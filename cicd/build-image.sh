@@ -343,10 +343,17 @@ compile_examples() {
     # Ensure builder image exists
     ensure_builder_image "${platform}"
 
+    # test_server/test_client are [[bin]] targets of the edgion-tests crate.
+    # They use rustls directly and define no boringssl/rustls feature, so they
+    # build with `-p edgion-tests --bin <name>` and take no `--features` flag.
+    local testbin_args=""
+    for example in ${EXAMPLES}; do
+        testbin_args+=" --bin ${example}"
+    done
+
     local build_cmd="cargo build --release \
             --target \"${target}\" \
-            --examples \
-            --features \"${FEATURES}\""
+            -p edgion-tests${testbin_args}"
 
     if [[ "${force_rebuild}" == "true" ]]; then
         # Do not clean here: binaries compiled in Stage 2 are needed by Stage 3 image packaging.

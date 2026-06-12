@@ -29,7 +29,7 @@ cov_unit() {
 }
 
 cov_integration() {
-    EDGION_COVERAGE=1 ./edgion-tests/scripts/integration/run_integration.sh
+    EDGION_COVERAGE=1 ./edgion-tests/integration/scripts/integration/run_integration.sh
 }
 
 cov_report() {

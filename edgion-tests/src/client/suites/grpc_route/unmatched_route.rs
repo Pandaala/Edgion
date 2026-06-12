@@ -3,7 +3,7 @@
 // Tests that gRPC requests to unmatched routes return the correct gRPC status codes.
 // This reproduces the issue where requests return Internal(13) instead of Unimplemented(12).
 //
-// Required config files (in examples/conf/GRPCRoute/UnmatchedRoute/):
+// Required config files (in edgion-tests/integration/conf/GRPCRoute/UnmatchedRoute/):
 // - GRPCRoute.yaml              # gRPC route with only SayHello method
 // - Service_test-grpc.yaml      # gRPC service definition
 // - EndpointSlice_test-grpc.yaml # gRPC backend service discovery

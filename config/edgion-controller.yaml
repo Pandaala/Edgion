@@ -7,7 +7,7 @@
 #      ./edgion-controller --config-file /usr/local/edgion/config/edgion-controller.yaml
 #
 #   2.  conf_dir:
-#      ./edgion-controller --config-file /usr/local/edgion/config/edgion-controller.yaml --conf-dir ./edgion-tests/conf
+#      ./edgion-controller --config-file /usr/local/edgion/config/edgion-controller.yaml --conf-dir ./edgion-tests/integration/conf
 #
 #   3. :
 #      ./edgion-controller --config-file /usr/local/edgion/config/edgion-controller.yaml --log-level debug
@@ -94,7 +94,7 @@ logging:
 # FileSystem mode example:
 # conf_center:
 #   type: file_system
-#   conf_dir: edgion-tests/conf  # In the current implementation relative paths resolve against the process cwd; use an absolute path for more stable behavior
+#   conf_dir: edgion-tests/integration/conf  # In the current implementation relative paths resolve against the process cwd; use an absolute path for more stable behavior
 #
 # Kubernetes mode example (production):
 # conf_center:
@@ -120,7 +120,7 @@ logging:
 # ============================================================================
 conf_center:
   type: file_system
-  conf_dir: edgion-tests/conf
+  conf_dir: edgion-tests/integration/conf
 
 debug:
   #

@@ -22,7 +22,7 @@ description: Configuration schema reference: complete field definitions for Cont
 | [00-controller-config.md](00-controller-config.md) | Full Controller YAML schema |
 | [01-gateway-config.md](01-gateway-config.md) | Full Gateway YAML schema |
 | [02-edgion-gateway-config.md](02-edgion-gateway-config.md) | EdgionGatewayConfig CRD schema |
-| [03-auth-bootstrap.md](03-auth-bootstrap.md) | Admin credential bootstrap — Controller auto-generation, Center fail-close behavior, operator config paths |
+| [03-auth-bootstrap.md](03-auth-bootstrap.md) | Admin token bootstrap — token-only (Istio-style bearer) auth, EDGION_ADMIN_TOKEN / admin_token, 503 fail-close, token rotation |
 
 ## Quick Decision: Which Layer to Change?
 

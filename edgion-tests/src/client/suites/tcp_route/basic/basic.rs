@@ -1,6 +1,6 @@
 // TCP Test suite
 //
-// Required config files (in examples/conf/):
+// Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-tcp.yaml          # TCP backend service discovery
 // - Service_edge_test-tcp.yaml                # TCP service definition
 // - TCPRoute_edge_test-tcp.yaml               # TCP routing rules（listening port）

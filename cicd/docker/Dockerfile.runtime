@@ -40,10 +40,13 @@ WORKDIR /usr/local/edgion
 RUN chown -R edgion:edgion /usr/local/edgion
 
 # Copy prebuilt binaries based on BUILD_TYPE
-# For bin: copy from release/, for example: copy from release/examples/
+# For bin: product binaries are prefixed `edgion-<name>`; for example: the
+# edgion-tests harness binaries (test_server/test_client) are plain `[[bin]]`
+# targets, so they land directly in the binary dir with no prefix and no
+# `examples/` subdir.
 RUN --mount=type=bind,source=${BINARY_PATH},target=/tmp/binaries \
     if [ "$BUILD_TYPE" = "example" ]; then \
-      cp /tmp/binaries/examples/${BINARY} /usr/local/bin/${BINARY} && \
+      cp /tmp/binaries/${BINARY} /usr/local/bin/${BINARY} && \
       chmod +x /usr/local/bin/${BINARY}; \
     else \
       cp /tmp/binaries/edgion-${BINARY} /usr/local/bin/edgion-${BINARY} && \

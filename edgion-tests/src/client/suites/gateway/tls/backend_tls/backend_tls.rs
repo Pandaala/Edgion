@@ -6,7 +6,7 @@
 // - Gateway → Backend: HTTPS (port 30051, using BackendTLSPolicy)
 // - Backend server: listening on 30051，with self-signed certificate
 //
-// Required config files (in examples/conf/):
+// Required config files (in edgion-tests/integration/conf/):
 // - BackendTLSPolicy_edge_backend-tls.yaml   # BackendTLSPolicy config
 // - Service_edge_test-backend-tls.yaml       # HTTPS backend service definition
 // - EndpointSlice_edge_test-backend-tls.yaml # HTTPS backend endpoint

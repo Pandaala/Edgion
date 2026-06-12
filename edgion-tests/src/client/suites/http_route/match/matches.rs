@@ -1,6 +1,6 @@
 // HTTP match rulesTest suite
 //
-// Required config files (in examples/conf/):
+// Required config files (in edgion-tests/integration/conf/):
 // - HTTPRoute_default_match-test.yaml    # match rules test route（contains 8 rules）
 // - HTTPRoute_default_section-test.yaml  # SectionName test route
 // - EndpointSlice_edge_test-http.yaml    # HTTP backend service discovery

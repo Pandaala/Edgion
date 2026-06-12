@@ -1,6 +1,6 @@
 // Timeout Test suite
 //
-// Required config files (in examples/conf/):
+// Required config files (in edgion-tests/integration/conf/):
 // - HTTPRoute_default_timeout-backend.yaml    # backend timeout test route
 // - HTTPRoute_default_timeout-client.yaml     # client timeout test route
 // - EdgionPlugins_default_timeout-debug.yaml  # Debug config

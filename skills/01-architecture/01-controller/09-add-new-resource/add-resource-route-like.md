@@ -71,7 +71,7 @@ If your new resource must affect request-time behavior, this is the part that di
 ## 5. Manifests And Tests
 
 - `config/crd/gateway-api/gateway-api-experimental-v1.5.0.yaml`
-- `edgion-tests/conf/TLSRoute/`
+- `edgion-tests/integration/conf/TLSRoute/`
 
 What to copy:
 

@@ -23,9 +23,9 @@ Any other prefix returns `false`. Plaintext passwords in Secrets are auto-hashed
 2. **Aligns with industry data-plane peers.** Envoy's `basic_auth` filter only supports `{SHA}` (htpasswd `-s`); Kong stores `SHA1(password || consumer_id)`. Neither caches verify results, neither supports bcrypt. Edgion now matches that layering.
 3. **Heavy auth belongs off the data plane.** When operators need bcrypt-grade or stronger key-stretching, the project recommendation is to delegate to an external auth service via `forward_auth` or external authorization, not to embed it in the gateway hot path.
 
-## What `local_auth` is — and isn't
+## Scope: gateway data-plane only
 
-`edgion-common/src/local_auth/` (Controller admin auth, management plane) **still uses bcrypt** for the admin password. That is correct and unrelated: it computes the hash once at startup and verifies on rare admin-login requests, not on every data-plane request. The `bcrypt = "0.18"` Cargo dep is retained for `local_auth` only.
+This finding is about the gateway `basic_auth` data-plane plugin and is unaffected by the controller auth refactor. The Controller's Admin API auth is now **token-only** (a pre-shared Bearer token, no password), so there is no controller-side password hashing — the former `local_auth` admin-password subsystem was removed. The only password-format discussion that remains is the gateway `basic_auth` htpasswd one above.
 
 ## Review-finding handling
 

@@ -242,7 +242,7 @@ Subcommand entry: `edgion-cli/src/cli/commands/gen_certs.rs`
 
 ### Integration testing
 
-`edgion-tests/scripts/conf-sync/run_conf_sync_mtls_test.sh` — end-to-end mTLS test, verifying certificate generation → configuration injection → mTLS startup → configuration sync → plaintext rejection. See [05-testing/04-conf-sync-leak-testing.md](../../05-testing/04-conf-sync-leak-testing.md) for details.
+`edgion-tests/integration/scripts/conf-sync/run_conf_sync_mtls_test.sh` — end-to-end mTLS test, verifying certificate generation → configuration injection → mTLS startup → configuration sync → plaintext rejection. See [05-testing/04-conf-sync-leak-testing.md](../../05-testing/04-conf-sync-leak-testing.md) for details.
 
 ## Module distribution
 

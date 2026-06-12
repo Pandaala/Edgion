@@ -16,7 +16,6 @@ mod wipe_handlers;
 
 use crate::conf_mgr::{ConfMgr, SchemaValidator};
 use axum::{
-    body::Body,
     extract::{Path, Request, State},
     http::{header, HeaderValue, StatusCode},
     middleware::Next,
@@ -24,73 +23,77 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
-use edgion_common::api::{self, ApiResponse};
+use edgion_common::api::ApiResponse;
+use edgion_resources::auth_dto::{AuthStatus, AuthStatusResponse};
 use serde::Serialize;
 use std::sync::Arc;
 use types::AdminState;
 
-/// Controller-side middleware that augments `/api/v1/auth/status` responses with
-/// the `"cli"` active provider when at least one cli token is registered.
+/// Build the `/api/v1/auth/status` response from the `Authorizer`.
 ///
-/// The `/api/v1/auth/status` handler is mounted by the shared `compose_admin_routes`
-/// and calls `UnifiedAuthState::build_status()`, which knows only about OIDC and
-/// local providers. The `Authorizer` (which knows about cli tokens) lives in
-/// `AdminState`, not in `UnifiedAuthState`. Modifying `unified_auth` to accept an
-/// authz resolver would violate the invariant that `unified_auth` never imports the
-/// authz engine. Instead, this middleware intercepts the status response on the
-/// Controller side and appends `"cli"` when `cli_tokens_present()` is true.
-///
-/// For other paths this is a transparent pass-through with no body buffering.
-async fn cli_auth_status_augment(
+/// The controller authenticates with a single pre-shared bearer token (Istio
+/// style), so `auth_required` is always true and `mode` is `"token"`. `status`
+/// is `Ready` once at least one token (the local admin token or a Center cli
+/// token) is registered, else `Initializing`.
+fn build_token_auth_status(authorizer: &crate::authz::Authorizer) -> AuthStatusResponse {
+    let status = if authorizer.cli_tokens_present() {
+        AuthStatus::Ready
+    } else {
+        AuthStatus::Initializing
+    };
+    AuthStatusResponse {
+        auth_required: true,
+        mode: "token".to_string(),
+        status,
+    }
+}
+
+/// Public `GET /api/v1/auth/status` handler (token-only model).
+async fn auth_status_handler(
     State(authorizer): State<Arc<crate::authz::Authorizer>>,
-    req: Request<Body>,
+) -> Json<ApiResponse<AuthStatusResponse>> {
+    Json(ApiResponse::ok_body(build_token_auth_status(&authorizer)))
+}
+
+/// Build the controller-side public status route.
+fn auth_status_route(authorizer: Arc<crate::authz::Authorizer>) -> Router {
+    Router::new()
+        .route("/api/v1/auth/status", get(auth_status_handler))
+        .with_state(authorizer)
+}
+
+/// Fail-closed token gate for the Admin API.
+///
+/// When no token (admin or Center) is registered, business routes return 503 +
+/// WARN so the operator sees "configure a token" rather than a bare 401. This
+/// preserves the documented "no auto-generation → fail-close, server still
+/// boots" posture.
+///
+/// Mounted on the Admin API app ONLY — never inside `create_admin_router`, which
+/// is shared with the federation router (whose Center identity does not come
+/// from the token map; gating it there would 503 Center sync). It runs before
+/// the token middleware and exempts the static public paths so
+/// `/api/v1/auth/status` and the probes stay reachable to report `Initializing`.
+async fn require_token_configured_gate(
+    State(authorizer): State<Arc<crate::authz::Authorizer>>,
+    request: Request,
     next: Next,
 ) -> Response {
-    // Only act on the exact auth/status path; pass everything else straight through.
-    let is_status = req.uri().path() == "/api/v1/auth/status";
-    let resp = next.run(req).await;
-
-    if !is_status || !authorizer.cli_tokens_present() {
-        return resp;
+    if edgion_common::auth::public_paths::is_static_public(request.uri().path()) {
+        return next.run(request).await;
     }
-
-    // Deserialize the JSON body, append "cli" to active_providers, re-serialize.
-    // If anything fails (body read, parse, serialize) return the original response
-    // unmodified -- this must never 500 on its own.
-    let (parts, body) = resp.into_parts();
-    let Ok(bytes) = axum::body::to_bytes(body, 1 << 20).await else {
-        // Body read failed: reconstruct original response with empty body (best-effort).
-        return Response::from_parts(parts, Body::empty());
-    };
-
-    let mut value: serde_json::Value = match serde_json::from_slice(&bytes) {
-        Ok(v) => v,
-        Err(_) => {
-            // Not JSON (unexpected) -- return as-is.
-            return Response::from_parts(parts, Body::from(bytes));
-        }
-    };
-
-    // Append "cli" to data.active_providers if present and not already listed.
-    if let Some(providers) = value
-        .get_mut("data")
-        .and_then(|d| d.get_mut("active_providers"))
-        .and_then(|p| p.as_array_mut())
-    {
-        if !providers.iter().any(|v| v.as_str() == Some("cli")) {
-            providers.push(serde_json::Value::String("cli".to_string()));
-        }
+    if !authorizer.cli_tokens_present() {
+        tracing::warn!(
+            component = "admin_api",
+            "no admin/cli token configured; Admin API business routes fail closed with 503 \
+             until EDGION_ADMIN_TOKEN (or a cli_token) is set"
+        );
+        let body = Json(ApiResponse::<()>::err_body(
+            "admin API auth not configured: set EDGION_ADMIN_TOKEN or a cli_token".to_string(),
+        ));
+        return (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
     }
-
-    let Ok(new_bytes) = serde_json::to_vec(&value) else {
-        return Response::from_parts(parts, Body::from(bytes));
-    };
-
-    let mut resp = Response::from_parts(parts, Body::from(new_bytes));
-    // Re-set Content-Type (it may have been set to application/json already).
-    resp.headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    resp
+    next.run(request).await
 }
 
 /// Reject admin write requests with `503 Service Unavailable` while the
@@ -476,9 +479,6 @@ pub async fn serve(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
-    auth_config: Option<&edgion_common::auth::AdminAuthConfig>,
-    local_auth_config: Option<&edgion_common::local_auth::LocalAuthConfig>,
-    require_auth: bool,
     config_file: Option<String>,
     authorizer: Arc<crate::authz::Authorizer>,
     center_reload_tx: tokio::sync::watch::Sender<crate::config::CenterClientConfig>,
@@ -488,9 +488,6 @@ pub async fn serve(
         conf_mgr,
         schema_validator,
         addr,
-        auth_config,
-        local_auth_config,
-        require_auth,
         config_file,
         authorizer,
         center_reload_tx,
@@ -509,23 +506,12 @@ pub async fn serve_with_shutdown(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
-    auth_config: Option<&edgion_common::auth::AdminAuthConfig>,
-    local_auth_config: Option<&edgion_common::local_auth::LocalAuthConfig>,
-    require_auth: bool,
     config_file: Option<String>,
     authorizer: Arc<crate::authz::Authorizer>,
     center_reload_tx: tokio::sync::watch::Sender<crate::config::CenterClientConfig>,
     allow_admin_ips: Vec<String>,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    let auth_state = edgion_common::unified_auth::UnifiedAuthState::from_configs(
-        auth_config,
-        local_auth_config,
-        require_auth,
-        "admin_api",
-    )?;
-    let local_auth_intent = local_auth_config.as_ref().is_some_and(|c| c.enabled);
-
     let base_router = create_admin_router(
         conf_mgr.clone(),
         schema_validator,
@@ -534,46 +520,36 @@ pub async fn serve_with_shutdown(
         center_reload_tx,
     );
 
-    // Wire authz route_layers on the local admin router.
-    //
-    // Axum route_layers are applied LIFO: the last `.route_layer()` call becomes
-    // the outermost wrapper (runs first). To achieve:
-    //   assign_superuser_if_no_role (runs before authz)
-    //     -> authz_layer (innermost route_layer, classifies + enforces)
-    //       -> handler
-    //
-    // We must add authz_layer first, then assign_superuser_if_no_role on top.
-    // `authorizer.clone()` is required here: `authorizer` is moved into the
-    // business route_layer, and the outer cli-pre `.layer()` below needs its own
-    // Arc clone — without clone() this would be a borrow-after-move.
-    let business = base_router
-        .route_layer(axum::middleware::from_fn_with_state(
-            authorizer.clone(),
-            authz_middleware::authz_layer,
-        ))
-        .route_layer(axum::middleware::from_fn(authz_middleware::assign_superuser_if_no_role));
+    // Enforce authz on the business routes (route_layer: only matched routes,
+    // never the fallback). A request reaches a handler only with a `Role`
+    // (injected by the token middleware below); `authz_layer` 403s a missing
+    // role and skips the static public paths.
+    let business = base_router.route_layer(axum::middleware::from_fn_with_state(
+        authorizer.clone(),
+        authz_middleware::authz_layer,
+    ));
 
-    // The composition order is fixed inside compose_admin_routes (see its doc).
-    // compose_admin_routes adds unified_auth and then a cache-control layer; both
-    // wrap the route_layers above and run before authz_layer/assign on each request.
-    let composed = api::compose_admin_routes(business, auth_state.clone(), local_auth_intent);
-
-    // Wrap the composed result with cli-token pre-authn as the outermost layer.
-    // This only ADDS authentication (injects Role + AuthBypass for known cli tokens);
-    // it does not add new routes, so compose's "final router" contract is satisfied.
-    let app = composed
+    // Mount the public status route (no authz_layer — it is merged AFTER the
+    // route_layer, so it stays reachable) and compose the Admin API onion. Layer
+    // order (outer → inner), achieved via axum's LIFO `.layer()`:
+    //   IP allowlist → 503 token gate → token authn → [authz_layer] → handler
+    //   (cache-control wraps the lot so every response carries `no-store`).
+    let app = business
+        .merge(auth_status_route(authorizer.clone()))
+        // Token authn: a recognized Bearer token injects `Role::Restricted`.
         .layer(axum::middleware::from_fn_with_state(
             authorizer.clone(),
             cli_token_middleware::cli_token_pre_authn,
         ))
-        // Augment /api/v1/auth/status responses with "cli" active_provider when
-        // cli tokens are registered. This is Controller-side only and does not
-        // touch shared unified_auth code (which must never import authz).
-        // TODO: if compose ever exposes a provider-augmentation hook, migrate this
-        // interceptor to that hook and remove the body-rewriting approach.
+        // 503 fail-close gate: runs BEFORE the token middleware (outer) so a
+        // tokenless business request on a controller with no tokens configured
+        // yields 503, not 401. Admin-app only — never on the shared fed router.
         .layer(axum::middleware::from_fn_with_state(
             authorizer,
-            cli_auth_status_augment,
+            require_token_configured_gate,
+        ))
+        .layer(axum::middleware::from_fn(
+            edgion_common::api::cache_control_no_store_middleware,
         ));
 
     // admin-api-02: outermost IP allowlist — rejects unauthorized peers before auth.
@@ -616,44 +592,46 @@ pub async fn serve_with_shutdown(
 
 #[cfg(test)]
 mod auth_status_tests {
-    use edgion_common::local_auth::{AuthStatus, LocalAuthConfig, LocalAuthState};
-    use edgion_common::unified_auth::UnifiedAuthState;
+    use super::build_token_auth_status;
+    use crate::authz::{sha256_hex, Authorizer, CenterPolicy, CliTokenEntry};
+    use edgion_resources::auth_dto::AuthStatus;
+    use std::sync::Arc;
 
-    fn valid_local() -> LocalAuthConfig {
-        let mut c = LocalAuthConfig::default();
-        c.enabled = true;
-        c.username = "admin".to_string();
-        c.password = "a_long_enough_password_123".to_string();
-        c.jwt_secret = "a_long_enough_jwt_secret_value_abcdef".to_string();
-        c
-    }
-
+    /// No token registered → Initializing, auth always required, mode "token".
     #[test]
-    fn build_auth_status_non_ready_states() {
-        // When auth is required but no provider configured: Initializing, auth_required == true, providers empty
-        // (The Disabled status is unreachable since require_auth is always true in production.)
-        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
-        let resp = state.build_status();
+    fn status_initializing_without_token() {
+        let az = Authorizer::new(CenterPolicy::deny_all());
+        let resp = build_token_auth_status(&az);
         assert!(resp.auth_required);
-        assert!(resp.active_providers.is_empty());
+        assert_eq!(resp.mode, "token");
         assert_eq!(resp.status, AuthStatus::Initializing);
     }
 
+    /// At least one token registered → Ready.
     #[test]
-    fn build_auth_status_ready_states() {
-        // When auth is required and local provider configured from the start: Ready, active_providers == ["local"]
-        let cfg = valid_local();
-        let state = UnifiedAuthState::from_configs(None, Some(&cfg), true, "test").unwrap();
-        let resp = state.build_status();
+    fn status_ready_with_token() {
+        let az = Authorizer::new(CenterPolicy::deny_all());
+        let mut m = std::collections::HashMap::new();
+        m.insert(
+            sha256_hex("tok"),
+            CliTokenEntry {
+                name: "bot".into(),
+                policy: Arc::new(CenterPolicy::deny_all()),
+            },
+        );
+        az.apply(CenterPolicy::deny_all(), m);
+        let resp = build_token_auth_status(&az);
         assert!(resp.auth_required);
-        assert_eq!(resp.active_providers, vec!["local".to_string()]);
         assert_eq!(resp.status, AuthStatus::Ready);
+    }
 
-        // Dynamic update: start Initializing -> call update_local -> becomes Ready
-        let state = UnifiedAuthState::from_configs(None, None, true, "test").unwrap();
-        assert_eq!(state.build_status().status, AuthStatus::Initializing);
-        state.update_local(LocalAuthState::from_config(&valid_local()));
-        assert_eq!(state.build_status().status, AuthStatus::Ready);
+    /// The local admin token alone makes status Ready (it is merged by `apply`).
+    #[test]
+    fn status_ready_with_admin_token_only() {
+        let az = Authorizer::new(CenterPolicy::deny_all());
+        az.set_admin_token(crate::authz::build_admin_token_entry(Some("admin-secret")));
+        az.apply(CenterPolicy::deny_all(), std::collections::HashMap::new());
+        assert_eq!(build_token_auth_status(&az).status, AuthStatus::Ready);
     }
 }
 

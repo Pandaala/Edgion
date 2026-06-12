@@ -68,13 +68,13 @@ cicd/deploy/standalone/start.sh
 
 - `config/edgion-controller.yaml`
 - `config/edgion-gateway.yaml`
-- `examples/k8stest/conf/`
-- `edgion-tests/conf/`
+- `edgion-tests/k8s/conf/`
+- `edgion-tests/integration/conf/`
 
 理解方式建议是：
 
-- Kubernetes 侧看 `examples/k8stest/conf/`
-- 本地集成测试和文件系统模式看 `edgion-tests/conf/`
+- Kubernetes 侧看 `edgion-tests/k8s/conf/`
+- 本地集成测试和文件系统模式看 `edgion-tests/integration/conf/`
 - 进程级配置看 `config/*.yaml`
 
 ## Admin API 认证
@@ -83,24 +83,24 @@ Controller（控制平面）和 Center 的 Admin API 均**强制要求认证**�
 
 ### Controller
 
-凭据必须由运维人员显式提供——Controller 不再自动生成。
-Kubernetes 推荐方式是运行 `deploy.sh`，该脚本会幂等地创建 `edgion-admin-credentials` Secret
-并通过环境变量（`EDGION_ADMIN_USERNAME`、`EDGION_ADMIN_PASSWORD`、`EDGION_ADMIN_JWT_SECRET`）注入到 controller Deployment。
+Controller Admin API 采用**纯 Token**（Istio 风格）认证。预共享管理员 Token 必须由运维人员显式提供——Controller 不再自动生成。
+Kubernetes 推荐方式是运行 `deploy.sh`，该脚本会幂等地创建 `edgion-admin-credentials` Secret（单个 `token` 键）
+并将其作为 `EDGION_ADMIN_TOKEN` 环境变量注入到 controller Deployment。
 
-运行 `deploy.sh` 后读取密码：
+运行 `deploy.sh` 后读取 Token：
 
 ```bash
 kubectl -n edgion-system get secret edgion-admin-credentials \
-  -o jsonpath='{.data.password}' | base64 -d
+  -o jsonpath='{.data.token}' | base64 -d
 ```
 
-也可以通过交互式方式认证：
+然后用它授权 CLI：
 ```bash
-edgion-cli login
+edgion-cli login --token <TOKEN>
 ```
 
-若未配置任何凭据，服务器仍可启动，但所有 Admin API 业务路由返回 **503 fail-close**，直到提供凭据为止。
-完整的凭据引导选项参见 [Controller 配置](../ops-guide/configuration/controller-config.md#authentication)。
+若未配置管理员 Token（且未配置 `cli_tokens`），服务器仍可启动，但所有 Admin API 业务路由返回 **503 fail-close**，直到提供 Token 为止。
+完整的 Token 引导选项参见 [Controller 配置](../ops-guide/configuration/controller-config.md#authentication)。
 
 ### Center
 

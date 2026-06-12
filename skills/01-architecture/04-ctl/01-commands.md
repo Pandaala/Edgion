@@ -282,58 +282,39 @@ edgion-cli gen-token
 |------|------|
 | Token generation | `edgion-cli/src/cli/token.rs` (`gen_token`) |
 
-## login — authentication
+## login — persist a token
 
-Authenticate with the Controller; the token is saved to a local file and automatically attached by subsequent commands.
+Authentication is **token-only** (Istio-style pre-shared bearer token). `login` simply persists the supplied token to `~/.edgion/token` (mode 0600) so subsequent commands pick it up automatically. There is no username/password exchange and no OIDC.
 
 ### Syntax
 
 ```bash
-edgion-cli login -u <username> -p <password>
-edgion-cli login  # Interactive entry
+edgion-cli login --token <edg_…>
 ```
 
-The token is saved to `~/.edgion/token` and automatically attached by subsequent commands.
+`--token` is required (omitting it is a parse error). The token is saved to `~/.edgion/token`; the command optionally probes `/api/v1/auth/status` for a friendly warning but persists the token either way. To mint a token, use `edgion-cli gen-token`.
 
 ### Module location
 
 | Module | Path |
 |------|------|
-| CLI auto-authentication logic | `edgion-cli/src/cli/auto_auth.rs` |
+| Token resolution (`resolve_token`) | `edgion-cli/src/cli/auto_auth.rs` |
 | Token file management | `edgion-cli/src/cli/token.rs` |
+| `login` command | `edgion-cli/src/cli/commands/login.rs` |
 
-## Auto-authentication (ensure_auth)
+## Token resolution (resolve_token)
 
-Before executing a command, edgion-cli automatically detects authentication status without requiring a manual login:
+Before each request, edgion-cli resolves the bearer token to attach. There is no auto-login, no `/api/v1/auth/me` probe, and no Secret reading — just a fixed precedence (highest first):
 
-1. Token already present → use it directly
-2. Query `/api/v1/auth/status` → skip if no authentication required
-3. Auto-detect the Controller configuration file (`--controller-config` / `EDGION_CONTROLLER_CONFIG` / default paths)
-4. Infer conf_dir from the configuration → read the Secret `edgion-admin-credentials` → auto-login
-5. Detection failed → prompt to run `edgion-cli login` manually
+1. `--token` command-line flag (if supplied and non-empty)
+2. `EDGION_TOKEN` environment variable
+3. The cached token file at `~/.edgion/token`
 
-### Controller vs Center asymmetry
-
-Both components now behave identically: credentials must be supplied explicitly; neither
-auto-generates them.
-
-- **Controller**: Step 4 succeeds only when the `edgion-admin-credentials` Secret was
-  pre-created by the operator (e.g., via `deploy.sh`) and the controller Deployment injects
-  it as `EDGION_ADMIN_*` env vars. If the Secret does not exist or env vars are not wired,
-  `ensure_auth` falls through to step 5 (prompt to run `edgion-cli login` manually).
-- **Center**: same behavior — no automatic Secret generation. Operators must explicitly
-  configure `[local_auth]` or `[auth]`; without it both Center and Controller return
-  503 for all business routes.
-
-See `skills/02-features/02-config/03-auth-bootstrap.md` for details.
+Empty values are treated as absent at every level; the token is wrapped in `Zeroizing` so its buffer is wiped on drop. If no token is found, the request is sent without an `Authorization` header (the controller will then `403`, or `503` if it has no token configured).
 
 ### `/api/v1/auth/status` is always reachable
 
-The `/api/v1/auth/status` endpoint is unconditionally mounted in `compose_admin_routes`
-(Controller and Center share the same composition entry; this is the regression
-point of fix #01 round 3). Even when Center returns 503 on all business routes
-under zero configuration, `/api/v1/auth/status` still returns 200 so the CLI's
-`ensure_auth` can query the authentication mode normally.
+The public `GET /api/v1/auth/status` endpoint is mounted outside the authz `route_layer`, so it returns `200` even when the controller has no token configured (reporting `status: Initializing`). This lets `edgion-cli login` probe the controller for a friendly warning without ever blocking token persistence.
 
 ### Configuration file auto-detection paths
 

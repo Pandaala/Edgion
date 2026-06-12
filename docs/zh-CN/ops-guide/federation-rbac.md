@@ -4,7 +4,7 @@ Controller 通过评估从实际匹配路由派生出的 `(verb, kind)` 对，�
 
 ## 工作原理
 
-每个 Center 请求（盲代理 UI 调用、同步操作、failover、reload）都经过与本地管理请求相同的授权层。Center 被分配受限标识（`CenterRestricted`），其允许的操作由 `[center].rbac` 配置块管理。本地管理员用户获得完整（`Superuser`）访问权限，Center 授权不影响他们。
+每个 Center 请求（盲代理 UI 调用、同步操作、failover、reload）都经过与本地管理请求相同的授权层。Center 被分配受限标识（`CenterRestricted`），其允许的操作由 `[center].rbac` 配置块管理。本地管理员 Token 映射到 allow-all（通配符）策略，Center 授权不影响它。
 
 授权按 `(verb, kind)` 决定：
 
@@ -226,7 +226,7 @@ SHA-256 是对**完整的 `edg_` 前缀 Token** 计算的——即作为 `Author
 
 ### Controller 配置
 
-在 Controller YAML 配置中添加 `cli_tokens` 块（可与 `center`、`local_auth` 和 `auth` 共存）：
+在 Controller YAML 配置中添加 `cli_tokens` 块（可与 `center` 和 `admin_token` 共存）：
 
 ```yaml
 cli_tokens:
@@ -270,14 +270,14 @@ export EDGION_TOKEN=edg_<base64url>
 edgion-cli get httproute -n production
 ```
 
-优先级：`--token` > `EDGION_TOKEN` > 缓存的登录 Token（`~/.edgion/token`）。
+优先级：`--token` > `EDGION_TOKEN` > 缓存的登录 Token（`~/.edgion/token`，由 `edgion-cli login --token` 写入）。
 
-提供 Token 时，`ensure_auth`（包括 `/auth/status` 和 `/auth/me`）会被完全跳过。验证是惰性的：第一个真实请求返回 `401 Unauthorized`（未知 Token）或 `403 Forbidden`（权限不足）。
+验证是惰性的：第一个真实请求返回 `401 Unauthorized`（未知 Token）或 `403 Forbidden`（权限不足）。唯一的公开认证端点是 `GET /api/v1/auth/status`。
 
 ### 安全说明
 
-**1. 宽泛的 verb 授权等于 Superuser。**
-`rbac` 授予 `verbs: ["*"]` 覆盖完整 admin router（包括 `reload`、`failover`、`acme-trigger`、`server-info` 和 `diagnostics`）的 Token 实际上是 Superuser。授予消费方实际需要的最小 verb 集。
+**1. 宽泛的 verb 授权等于完整管理员权限。**
+`rbac` 授予 `verbs: ["*"]` 覆盖完整 admin router（包括 `reload`、`failover`、`acme-trigger`、`server-info` 和 `diagnostics`）的 Token 实际上等同于 allow-all 管理员 Token。授予消费方实际需要的最小 verb 集。
 
 **2. 通配符读取会暴露凭据材料。**
 CLI Token 路径上没有服务端 `Secret` 兜底。对读取 verb 使用 `kinds: ["*"]` 允许 Token 通过盲代理读取 `Secret` 和 `EdgionTls` 的私钥材料。对所有读取授权始终枚举具体 kind。见上方[通配符读取会暴露凭据材料](#通配符读取会暴露凭据材料)。
@@ -292,7 +292,7 @@ Verb 字符串不区分大小写匹配（`get`、`GET`、`Get` 均有效）。Ki
 它们**不**修改 `~/.edgion/token`（无缓存——每次调用是临时的）。缓存的登录 Token 不受影响。建议使用 `EDGION_TOKEN` 而非 `--token`，以避免 Token 泄露到 shell 历史记录或进程列表中。
 
 **6. 迁移：无认证模式已移除。**
-以前依赖 `local_auth.enabled: false`（或 `auth.enabled: false`）绕过认证的部署，现在必须配置至少一个认证提供商。升级路径见 [Controller 配置](configuration/controller-config.md)的 `[local_auth]` 和 `[auth]` 章节。
+以前绕过认证的部署，现在必须配置 `admin_token`（或 `EDGION_ADMIN_TOKEN`）和/或 `cli_tokens`。两者均未设置时，Admin API 以 503 失败关闭。纯 Token 认证模型及升级路径见 [Controller 配置](configuration/controller-config.md#认证)。
 
 **7. `list-keys` 会暴露资源名称。**
 `list-keys` verb 即使未授予完整的 `get` 或 `list` 访问权限，也会暴露资源名称（以及 namespace/kind 元数据）。如果资源名称的存在是敏感信息，将 `list-keys` 视为读取授权并明确枚举 kind，而非使用 `kinds: ["*"]`。

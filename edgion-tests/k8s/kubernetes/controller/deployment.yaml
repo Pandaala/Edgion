@@ -1,0 +1,91 @@
+# DEV ONLY — DO NOT USE IN PRODUCTION
+# Uses IfNotPresent + shell restart loop for hot-reload during development.
+#
+# NOTE: This dev profile does NOT inject EDGION_ADMIN_TOKEN and has no cli_tokens
+# in its config. The Controller Admin API will return 503 fail-close for all business routes
+# (no token configured). The k8stest suite does not exercise the Admin API.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edgion-controller
+  namespace: edgion-system
+  labels:
+    app: edgion-controller
+    app.kubernetes.io/name: edgion-controller
+    app.kubernetes.io/component: controller
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: edgion-controller
+  template:
+    metadata:
+      labels:
+        app: edgion-controller
+        app.kubernetes.io/name: edgion-controller
+        app.kubernetes.io/component: controller
+    spec:
+      serviceAccountName: edgion-controller
+      containers:
+      - name: edgion-controller
+        image: docker.io/pandaala/edgion-controller:v0.1.1
+        imagePullPolicy: IfNotPresent
+        command:
+        - "/bin/sh"
+        - "-c"
+        - |
+          while true; do
+            if [ -f /usr/local/edgion/edgion-controller ]; then
+              BINARY=/usr/local/edgion/edgion-controller
+            else
+              BINARY=/usr/local/bin/edgion-controller
+            fi
+            "$BINARY" --config-file /usr/local/edgion/config/edgion-controller.yaml --test-mode || true
+            echo "[restart] edgion-controller exited, restarting in 2s..."
+            sleep 2
+          done
+        ports:
+        - name: grpc
+          containerPort: 12151
+          protocol: TCP
+        - name: http
+          containerPort: 12101
+          protocol: TCP
+        - name: probe
+          containerPort: 12100
+          protocol: TCP
+        - name: metrics
+          containerPort: 12190
+          protocol: TCP
+        env:
+        - name: RUST_LOG
+          value: "info"
+        - name: KUBERNETES_SERVICE_HOST
+          value: "kubernetes.default.svc"
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: config
+          mountPath: /usr/local/edgion/config
+          readOnly: true
+        - name: logs
+          mountPath: /usr/local/edgion/logs
+      volumes:
+      - name: config
+        configMap:
+          name: edgion-controller-config
+      - name: logs
+        emptyDir: {}

@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(out_dir)?;
 
     let proto_candidates = [
-        "examples/proto/test_service.proto",
+        "edgion-tests/proto/test_service.proto",
         "edgion-tests/proto/test_service.proto",
         "edgion-tests/src/proto/test_service.proto",
     ];
@@ -28,7 +28,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         return Err(
-            "test_service.proto not found (checked: examples/proto, edgion-tests/proto, edgion-tests/src/proto)".into(),
+            "test_service.proto not found (checked: edgion-tests/proto, edgion-tests/proto, edgion-tests/src/proto)"
+                .into(),
         );
     };
     let include_dir = Path::new(proto_path)

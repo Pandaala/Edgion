@@ -3,7 +3,7 @@
 // Tests the new PluginMetaData-managed architecture where ServiceRegionRoute PluginMetaDatas are pre-created by administrators.
 // The resolve chain is: EP.serviceRegionRouteRef → ServiceRegionRoute PluginMetaData → ServiceRegionRoute PluginMetaData.clusterRef → ClusterRegionRoute PluginMetaData
 //
-// Required conf files (edgion-tests/conf/EdgionPlugins/plugin-metadata-managed/):
+// Required conf files (edgion-tests/integration/conf/EdgionPlugins/plugin-metadata-managed/):
 //   01_PluginMetaData_pm-managed-global.yaml  — ClusterRegionRoute PluginMetaData (shared by both tests)
 //   01_PluginMetaData_pm-managed.yaml          — ServiceRegionRoute PluginMetaData for pm-managed test
 //   01_PluginMetaData_pm-validated.yaml        — ServiceRegionRoute PluginMetaData for pm-validated test

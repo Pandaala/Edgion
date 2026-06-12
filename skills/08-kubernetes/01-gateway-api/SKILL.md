@@ -45,7 +45,7 @@ HTTP/GRPC and TLS **must be run separately** (port 443 conflict; see cookbook 2.
   --conformance-profiles "GATEWAY-TLS" --timeout 30m
 ```
 
-Reports: `examples/gateway-api-conformance/reports/`
+Reports: `edgion-tests/conformance/reports/`
 
 ### Issues fixed in this round
 
@@ -55,7 +55,7 @@ Reports: `examples/gateway-api-conformance/reports/`
 | TLS cert x509 CA:FALSE | upstream conformance suite self-signed cert lacked `IsCA:true` | Verified that v1.5.1 tests don't trigger this path; no patch needed |
 | Stale TLS-backend cert cache | Pod did not reload after Secret recreation | `--clean-slate` automatically rolls out the TLS backend |
 
-Configuration location: `examples/gateway-api-conformance/conformance_test.go` (`opts.ConformanceProfiles`)
+Configuration location: `edgion-tests/conformance/conformance_test.go` (`opts.ConformanceProfiles`)
 
 ## TLS Certificate Selection
 

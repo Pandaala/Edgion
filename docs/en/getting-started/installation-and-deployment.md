@@ -68,13 +68,13 @@ The repository already contains a few useful starting points:
 
 - `config/edgion-controller.yaml`
 - `config/edgion-gateway.yaml`
-- `examples/k8stest/conf/`
-- `edgion-tests/conf/`
+- `edgion-tests/k8s/conf/`
+- `edgion-tests/integration/conf/`
 
 A practical reading pattern is:
 
-- Kubernetes examples: `examples/k8stest/conf/`
-- local integration and file-system mode: `edgion-tests/conf/`
+- Kubernetes examples: `edgion-tests/k8s/conf/`
+- local integration and file-system mode: `edgion-tests/integration/conf/`
 - process-level configuration: `config/*.yaml`
 
 ## Admin API authentication
@@ -83,27 +83,28 @@ Authentication is **mandatory** for the Controller and Center Admin APIs — all
 
 ### Controller
 
-Credentials must be supplied explicitly — the Controller no longer auto-generates them.
-The recommended Kubernetes approach is to run `deploy.sh`, which idempotently creates the
-`edgion-admin-credentials` Secret and wires it into the controller Deployment as env vars
-(`EDGION_ADMIN_USERNAME`, `EDGION_ADMIN_PASSWORD`, `EDGION_ADMIN_JWT_SECRET`).
+The Controller Admin API uses **token-only** (Istio-style) authentication. A pre-shared
+admin token must be supplied explicitly — the Controller no longer auto-generates one. The
+recommended Kubernetes approach is to run `deploy.sh`, which idempotently creates the
+`edgion-admin-credentials` Secret (single `token` key) and wires it into the controller
+Deployment as the `EDGION_ADMIN_TOKEN` env var.
 
-Retrieve the password after running `deploy.sh`:
+Retrieve the token after running `deploy.sh`:
 
 ```bash
 kubectl -n edgion-system get secret edgion-admin-credentials \
-  -o jsonpath='{.data.password}' | base64 -d
+  -o jsonpath='{.data.token}' | base64 -d
 ```
 
-Alternatively, authenticate interactively:
+Then authorize the CLI with it:
 ```bash
-edgion-cli login
+edgion-cli login --token <TOKEN>
 ```
 
-When no credentials are configured, the server starts but all Admin API business routes
-return **503 fail-close** until credentials are provided. See
+When no admin token (and no `cli_tokens`) is configured, the server starts but all Admin API
+business routes return **503 fail-close** until a token is provided. See
 [Controller Configuration](../ops-guide/configuration/controller-config.md#authentication)
-for the full credential bootstrap options.
+for the full token bootstrap options.
 
 ### Center
 

@@ -89,7 +89,13 @@ docker build \
   -f cicd/docker/Dockerfile .
 ```
 
-### Build an example
+### Build a test-harness binary
+
+`BUILD_TYPE=example` is the build-arg token for the edgion-tests harness
+binaries (`test_server` / `test_client`). They are no longer cargo examples —
+they are `[[bin]]` targets of the `edgion-tests` crate, built internally with
+`cargo build -p edgion-tests --bin <name>` (no `--features` flag, since the crate
+defines none). The build-arg interface below is unchanged.
 
 ```bash
 docker build \

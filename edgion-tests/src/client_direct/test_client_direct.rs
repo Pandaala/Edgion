@@ -2,7 +2,7 @@
 // Direct test of test_server connectivity (without Gateway)
 //
 // Usage:
-//   cargo run --example test_client_direct [OPTIONS] [COMMAND]
+//   cargo run -p edgion-tests --bin test_client_direct [OPTIONS] [COMMAND]
 //
 // Tests:
 //   - http      HTTP basic tests

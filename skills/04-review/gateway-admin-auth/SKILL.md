@@ -38,7 +38,7 @@ Two touchpoints must stay in sync (both were missed once and caused ~20 failures
 - `edgion-tests/src/client/access_log_client.rs` — `AccessLogClient` reads
   `EDGION_GATEWAY_ADMIN_TOKEN` and attaches `bearer_auth` to **every** admin
   request (status, get/delete access-log, list/clear). Do not drop this.
-- `edgion-tests/scripts/integration/run_integration.sh` — must `export`
+- `edgion-tests/integration/scripts/integration/run_integration.sh` — must `export`
   `EDGION_GATEWAY_ADMIN_TOKEN` **in its own process**. `start_all_with_conf.sh`
   also defaults it, but the runner invokes that script via command substitution
   (`output=$(...)`), a subshell whose `export` does **not** reach the runner or

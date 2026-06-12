@@ -479,7 +479,7 @@ Cover these four layers in priority order:
 Verifying initial state is not enough — add a dynamic scenario that exercises the "YAML update → runtime behavior change" path. Templates: remove a credential (BasicAuth) or switch an enum field (RateLimit `onMissingKey`).
 
 - Look at existing scenarios to get started: `edgion-tests/src/client/dynamic/scenarios/basic_auth_dynamic.rs` / `rate_limit_dynamic.rs`.
-- conf directory convention: `edgion-tests/conf/EdgionPlugins/<Plugin>/DynamicTest/{initial,updates}/` (`load_conf.sh` automatically skips `updates/` and `delete/`).
+- conf directory convention: `edgion-tests/integration/conf/EdgionPlugins/<Plugin>/DynamicTest/{initial,updates}/` (`load_conf.sh` automatically skips `updates/` and `delete/`).
 - For the detailed steps, CLI entry, and registration sites: [../../05-testing/01-integration-testing.md "Dynamic (hot reload) testing" section](../../05-testing/01-integration-testing.md).
 
 > **Pitfalls**: state-cached fields such as RateLimit sliding-window counters can false-pass on hot reload (the old cache hits). Prefer verifying **logic-branch** changes such as "the entire ref is removed" or "an enum field is toggled" — do not just verify "password content modified" or "a rate value changed". (BasicAuth no longer keeps a result cache after bcrypt was dropped, so the structural-reload pattern is now mostly a regression-safety template for it rather than a cache-bypass workaround.)

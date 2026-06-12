@@ -1,7 +1,7 @@
 // HTTPS Test suite
 // Only tested in Gateway mode，uses /secure/ path prefix
 //
-// Required config files (in examples/conf/):
+// Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-http.yaml         # HTTPS backend service (reuse HTTP backend)
 // - Service_edge_test-http.yaml               # HTTPS service definition
 // - HTTPRoute_edge_test-http.yaml             # HTTPS routing rules（Host: test.example.com, path: /secure/）

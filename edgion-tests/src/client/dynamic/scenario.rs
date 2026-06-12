@@ -22,7 +22,7 @@ pub struct PhaseSuite {
 pub struct Scenario {
     /// Unique identifier (used by the CLI), e.g. "BasicAuthDynamic".
     pub id: &'static str,
-    /// Scenario conf directory relative to `edgion-tests/conf/`, e.g. "EdgionPlugins/BasicAuth/DynamicTest".
+    /// Scenario conf directory relative to `edgion-tests/integration/conf/`, e.g. "EdgionPlugins/BasicAuth/DynamicTest".
     pub conf_path: &'static str,
     /// Scenario entry function (drives the entire N-phase state machine).
     pub run: ScenarioRunFn,

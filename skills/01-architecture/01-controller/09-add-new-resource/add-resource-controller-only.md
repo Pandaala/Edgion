@@ -80,8 +80,8 @@ This explicit non-wiring is useful because it prevents hidden waits, accidental 
 ### 6. Manifests And Tests
 
 - `config/crd/gateway-api/gateway-api-standard-v1.5.0.yaml`
-- `edgion-tests/conf/base/ReferenceGrant_edgion-test_allow-cross-ns.yaml`
-- `edgion-tests/conf/ref-grant-status/`
+- `edgion-tests/integration/conf/base/ReferenceGrant_edgion-test_allow-cross-ns.yaml`
+- `edgion-tests/integration/conf/ref-grant-status/`
 
 What to test:
 

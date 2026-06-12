@@ -170,9 +170,9 @@ If you are adding a new system variant within the existing `LinkSys` resource, y
 4. `edgion-gateway/src/link_sys/providers/<system>/`
 5. `edgion-gateway/src/link_sys/runtime/store.rs`
 6. If needed, `edgion-gateway/src/api/mod.rs`
-7. `edgion-tests/conf/LinkSys/<System>/`
-8. `edgion-tests/conf/Services/<system>/docker-compose.yaml`
-9. `edgion-tests/scripts/integration/link_sys/run_<system>_test.sh`
+7. `edgion-tests/integration/conf/LinkSys/<System>/`
+8. `edgion-tests/integration/conf/Services/<system>/docker-compose.yaml`
+9. `edgion-tests/integration/scripts/integration/link_sys/run_<system>_test.sh`
 
 Typically you do not need to add a new resource kind, nor do you need to modify the controller processor framework itself.
 
@@ -228,14 +228,14 @@ They are mounted onto the gateway admin API only under `--integration-testing-mo
 
 Existing scripts and drivers:
 
-- `edgion-tests/scripts/integration/run_integration.sh -r LinkSys -i Redis` (Redis is integrated into the main runner; the assertions live in `link_sys/redis_assertions.sh` and Redis docker is auto-started via the runner's `start_redis_service_if_needed` precondition)
-- `edgion-tests/scripts/integration/link_sys/run_etcd_test.sh` (standalone)
-- `edgion-tests/scripts/integration/link_sys/run_es_test.sh` (standalone)
+- `edgion-tests/integration/scripts/integration/run_integration.sh -r LinkSys -i Redis` (Redis is integrated into the main runner; the assertions live in `link_sys/redis_assertions.sh` and Redis docker is auto-started via the runner's `start_redis_service_if_needed` precondition)
+- `edgion-tests/integration/scripts/integration/link_sys/run_etcd_test.sh` (standalone)
+- `edgion-tests/integration/scripts/integration/link_sys/run_es_test.sh` (standalone)
 
 Configurations and dependencies are also layered:
 
-- `edgion-tests/conf/LinkSys/<System>/`
-- `edgion-tests/conf/Services/<system>/docker-compose.yaml`
+- `edgion-tests/integration/conf/LinkSys/<System>/`
+- `edgion-tests/integration/conf/Services/<system>/docker-compose.yaml`
 
 When adding a new system, follow this layout instead of inventing your own test-script naming.
 
@@ -271,11 +271,11 @@ If you modified an existing system, run the corresponding entry point first:
 
 ```bash
 # Redis: now part of the main runner
-./edgion-tests/scripts/integration/run_integration.sh --no-prepare -r LinkSys -i Redis
+./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r LinkSys -i Redis
 
 # Etcd / Elasticsearch: standalone
-./edgion-tests/scripts/integration/link_sys/run_etcd_test.sh
-./edgion-tests/scripts/integration/link_sys/run_es_test.sh
+./edgion-tests/integration/scripts/integration/link_sys/run_etcd_test.sh
+./edgion-tests/integration/scripts/integration/link_sys/run_es_test.sh
 ```
 
 If you modified docs / skill / AI entry points, also run:

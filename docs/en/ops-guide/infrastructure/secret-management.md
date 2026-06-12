@@ -1,6 +1,6 @@
 # Secret Management
 
-Edgion consumes Kubernetes Secrets for TLS certificates, plugin credentials, and the Controller admin password. This page covers how Secrets are referenced, the Secret types involved, the admin credential Secret, and operational recommendations.
+Edgion consumes Kubernetes Secrets for TLS certificates, plugin credentials, and the Controller admin token. This page covers how Secrets are referenced, the Secret types involved, the admin credential Secret, and operational recommendations.
 
 ## How Edgion uses Secrets
 
@@ -10,7 +10,7 @@ Edgion consumes Kubernetes Secrets for TLS certificates, plugin credentials, and
 | Extended TLS (mTLS, ciphers, OCSP) | `EdgionTls.spec.secretRef` and `clientAuth.caSecretRef` | `kubernetes.io/tls` (server), `Opaque` (CA) |
 | Plugin credentials | Plugins such as `jwt-auth`, `basic-auth`, `openid-connect` | `Opaque` |
 | Backend authentication | Backend mTLS client certificates | `kubernetes.io/tls` |
-| Controller admin password | Operator-created `edgion-admin-credentials` (injected as env vars) | `Opaque` |
+| Controller admin token | Operator-created `edgion-admin-credentials` (single `token` key, injected as the `EDGION_ADMIN_TOKEN` env var) | `Opaque` |
 
 ### TLS certificate Secret
 
@@ -43,26 +43,40 @@ data:
 
 ⚠️ Never commit real certificate or key material to source control. All values above are placeholders.
 
-## Admin credentials (`edgion-admin-credentials`)
+## Admin token (`edgion-admin-credentials`)
 
-The Controller reads admin credentials from the `edgion-admin-credentials` Secret
-(namespace: `edgion-system`). This Secret must be created by the operator — the Controller
-no longer auto-generates it (removed as of 2026-06-01).
+The Controller Admin API uses **token-only** authentication. It reads a single pre-shared
+admin token from the `edgion-admin-credentials` Secret (namespace: `edgion-system`), which
+holds one key, `token`. This Secret must be created by the operator — the Controller no
+longer auto-generates it.
 
 The recommended Kubernetes approach is to use `deploy.sh`, which creates the Secret
-idempotently and wires it into the controller Deployment as env vars:
+idempotently and wires it into the controller Deployment as the `EDGION_ADMIN_TOKEN` env var
+(via `valueFrom.secretKeyRef` on the `token` key):
 
-```bash
-# Retrieve the admin password after running deploy.sh
-kubectl -n edgion-system get secret edgion-admin-credentials \
-  -o jsonpath='{.data.password}' | base64 -d
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: edgion-admin-credentials
+  namespace: edgion-system
+type: Opaque
+data:
+  token: <base64-encoded-admin-token>
 ```
 
-Alternatively, configure `[local_auth]` in a Secret-mounted config file, or `[auth]` OIDC.
+```bash
+# Retrieve the admin token after running deploy.sh
+kubectl -n edgion-system get secret edgion-admin-credentials \
+  -o jsonpath='{.data.token}' | base64 -d
+```
 
-When no valid credentials are configured, the server starts but all Admin API business routes
-return **503 fail-close**. `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain
-accessible. Both the Controller and Center follow this same behavior.
+Alternatively, set the token directly via the top-level `admin_token` field in the Controller
+config (prefer env injection from a Secret over plaintext config).
+
+When no admin token is configured (and no `cli_tokens` are set), the server still starts but
+all Admin API business routes return **503 fail-close**. `/health`, `/ready`, `/metrics`, and
+`/api/v1/auth/status` remain accessible.
 
 See `skills/02-features/02-config/03-auth-bootstrap.md` for the full bootstrap matrix.
 
@@ -87,15 +101,15 @@ See `skills/02-features/02-config/03-auth-bootstrap.md` for the full bootstrap m
 - Confirm the certificate has not expired.
 - Confirm the SNI presented by the client matches a SAN in the certificate.
 
-### Cannot log in to the admin API
+### Admin API returns 401/403/503
 
-- Retrieve the password from `edgion-admin-credentials` (see above — created by `deploy.sh`), or configure `[local_auth]` / `[auth]` explicitly.
+- Retrieve the token from `edgion-admin-credentials` (see above — created by `deploy.sh`), or configure `admin_token` explicitly. A 503 means no admin token and no `cli_tokens` are configured; a 401 means the supplied token is unknown; a 403 means the token's RBAC policy denies the operation.
 
 ## FAQ
 
-### Q1: Where is the Controller admin password stored?
+### Q1: Where is the Controller admin token stored?
 
-**A**: In the `edgion-admin-credentials` Secret in the `edgion-system` namespace, created by the operator (e.g., via `deploy.sh`). The controller Deployment injects the Secret values as env vars (`EDGION_ADMIN_USERNAME`, `EDGION_ADMIN_PASSWORD`, `EDGION_ADMIN_JWT_SECRET`). The Controller no longer auto-generates this Secret.
+**A**: In the `edgion-admin-credentials` Secret (single `token` key) in the `edgion-system` namespace, created by the operator (e.g., via `deploy.sh`). The controller Deployment injects the `token` value as the `EDGION_ADMIN_TOKEN` env var. The Controller no longer auto-generates this Secret.
 
 ### Q2: Can I reference a Secret in a different namespace?
 

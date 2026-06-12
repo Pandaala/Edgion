@@ -48,9 +48,10 @@ binaries:
 - Gateway: `edgion-gateway/src/api/mod.rs:513` — gated by `is_integration_testing_mode()`
 - Controller: `edgion-controller/src/api/mod.rs:441` — gated by `is_test_mode()`
 
-Auth/authz wiring follows: `edgion-common/src/unified_auth/mod.rs:144` adds the
-path to the auth skip set, and `edgion-controller/src/api/authz_classifier.rs:62`
-classifies it under `Verb::Debug`. The `Verb::Debug` taxonomy is the canonical
+Authz wiring follows: `edgion-controller/src/api/authz_classifier.rs:62`
+classifies the path under `Verb::Debug`, so under the token-only model it is
+reachable only with a token whose policy grants `Verb::Debug` (the local admin
+wildcard token does). The `Verb::Debug` taxonomy is the canonical
 expression of "this is a diagnostic endpoint regardless of mount condition" —
 again decoupling function from gate.
 
@@ -64,11 +65,10 @@ symmetric availability.
 **3. Renaming the path is high-cost and zero-value**
 
 Proposal 2 in the F-B01 issue file (rename to `/api/v1/testing/store-stats`)
-would touch ~20+ files: `edgion-tests/scripts/conf-sync/run_conf_sync_test.sh`
+would touch ~20+ files: `edgion-tests/integration/scripts/conf-sync/run_conf_sync_test.sh`
 and `run_conf_sync_advanced_test.sh` (~15 call sites combined),
 `edgion-tests/src/validator/cache_residue.rs` (4 occurrences including mock-server
-paths), `edgion-common/src/unified_auth/mod.rs` (auth skip list),
-`edgion-controller/src/api/authz_classifier.rs` (classifier mapping + its unit
+paths), `edgion-controller/src/api/authz_classifier.rs` (classifier mapping + its unit
 test at `:272`), Gateway `mod.rs:513`, Controller `mod.rs:441` +
 `debug_handlers.rs:51` doc comment, and 4 skill docs that document the path as
 canonical (`skills/05-testing/02-cache-residue-detection.md`,
@@ -143,5 +143,4 @@ Re-open this decision only if:
 - `edgion-gateway/src/api/mod.rs:513` (Gateway route),
   `edgion-controller/src/api/mod.rs:441` (Controller route),
   `edgion-controller/src/api/debug_handlers.rs:51` (Controller handler doc),
-  `edgion-common/src/unified_auth/mod.rs:144` (auth skip),
   `edgion-controller/src/api/authz_classifier.rs:62` (Verb::Debug mapping).

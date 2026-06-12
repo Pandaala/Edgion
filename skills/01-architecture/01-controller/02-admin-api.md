@@ -15,22 +15,24 @@ The Controller exposes three HTTP listeners:
 
 The Admin API listens on port 12101 (default) via Axum, used by the edgion-cli command-line tool and operations workflows. `/health` and `/ready` are served exclusively on the **probe listener** (`:12100`); `/metrics` is served exclusively on the **metrics listener** (`:12190`). Neither endpoint is available on `:12101`.
 
-## Router Composition (compose_admin_routes)
+## Router Composition (token-only middleware onion)
 
-Controller and Center share a single admin-router composition entry: `edgion-common/src/api/compose.rs::compose_admin_routes(business, auth_state, local_auth_intent)`.
+The Admin API server is assembled in `edgion-controller/src/api/mod.rs::serve_with_shutdown`. The runtime middleware order (outermost first) is:
 
-The internal composition order is fixed (callers cannot influence it):
+```text
+IP allowlist → cache_control_no_store → require_token_configured_gate (503) → cli_token_pre_authn → [authz_layer route_layer] → handler
+```
 
-1. `business` (per-component business routes)
-2. `/api/v1/auth/{login, logout, me}` (mounted when `local_auth_intent = true`)
-3. `/api/v1/auth/status` (always mounted — fix #01 round 3 regression point; CLI `ensure_auth` requires it to be reachable at all times)
-4. `unified_auth` middleware (wraps every route; `skip_paths` is provided by `auth_state`)
+1. **`business`** — the per-component business routes from `create_admin_router`, wrapped with `authz_layer` as a `route_layer` (matched routes only, never the 404 fallback).
+2. **`/api/v1/auth/status`** — merged *after* the `authz_layer` `route_layer` so it stays reachable without a token (CLI `ensure_auth` requires it at all times).
+3. **`cli_token_pre_authn`** — the sole authn layer: a recognized Bearer token injects `Role::Restricted`; an absent/unknown token injects nothing.
+4. **`require_token_configured_gate`** — returns `503` on business routes when no token (admin or cli) is configured; skips the static public paths.
+5. **`cache_control_no_store`** — blanket `Cache-Control: no-store`.
+6. **IP allowlist** — outermost; mounted only when `allow_admin_ips` is non-empty.
 
-**Final-state contract**: the returned `Router` is final. Callers must not call `.route()` / `.layer()` on it again — any addition would bypass the auth middleware and is equivalent to the P0 bug from fix #01 round 2. New admin routes should be added to the `business` parameter before calling `compose_admin_routes`.
+Authentication is **token-only** (Istio-style pre-shared bearer; Bearer header only). The full model — `Role`/`Verb`/`CenterPolicy`, the local admin token, and federation mTLS — is in [11-authentication-authorization.md](11-authentication-authorization.md).
 
 **CORS note**: the Admin API does not include a CORS layer. For local debugging, `edgion-dashboard`'s Vite `server.proxy` handles it (see `edgion-dashboard/vite.config.ts`); in production, the dashboard is embedded into the Controller and served from the same origin. If a separate-origin deployment is required in the future, introduce a precise origin allowlist (corresponds to the H1 fix record).
-
-The three helpers (`add_local_auth_routes`, `add_auth_status_route`, `wrap_with_unified_auth_layer`) have been demoted to `pub(crate)`; direct external invocation is no longer supported. Use `compose_admin_routes` exclusively.
 
 ## AdminState — Shared State
 
@@ -246,55 +248,39 @@ Mapping from `ConfWriterError` to HTTP status codes:
 
 ## Authentication System
 
-The Admin API integrates a unified authentication middleware that supports OIDC and local JWT modes.
+The Admin API uses **token-only** authentication (2026-06-12): a single pre-shared bearer token (Istio-style), supplied in the `Authorization: Bearer <token>` header. There is no username/password login, no OIDC admin, no httpOnly cookie, and no session. The former browser-login stack (`local_auth` / `unified_auth`) was removed.
 
-> This section covers **authentication** (who you are) only. For **authorization** (the `(verb, kind)` RBAC engine, the `Role` model, cli tokens, and the full middleware onion), see [11-authentication-authorization.md](11-authentication-authorization.md). Authentication is mandatory — no-auth mode was removed (2026-05-24).
+> This section covers **authentication** (who you are) only. For **authorization** (the `(verb, kind)` RBAC engine, the `Role` model, cli tokens, the local admin token, and the full middleware onion), see [11-authentication-authorization.md](11-authentication-authorization.md).
 
-### Authentication Middleware (unified_auth)
+### Authentication Middleware (cli_token_pre_authn)
 
-Module location: `edgion-common/src/unified_auth/mod.rs`
+Module location: `edgion-controller/src/api/cli_token_middleware.rs` — the sole Admin API authn layer.
 
 Request authentication order:
 
-1. Match against `skip_paths` (defaults: `/health`, `/ready`, `/metrics`) → pass through directly (these paths are also served on dedicated listeners; the skip list covers any residual routing that reaches the Admin API router)
-2. Public auth endpoints (`/api/v1/auth/*`) → pass through directly
-3. Try OIDC Bearer token validation (requires `[auth]` to be configured)
-4. Try local JWT (HS256) Bearer token validation
-5. Try reading the token from the httpOnly Cookie → validate as above
-6. All fail → return `401 Unauthorized`
+1. Static public paths (`/health`, `/ready`, `/metrics`, `/api/v1/auth/status`) → pass through (probes are also served on dedicated listeners).
+2. Read the `Authorization: Bearer <token>` header (case-insensitive; no cookie).
+3. Hash the token (`sha256_hex`) and look it up in the `Authorizer` token map (`cli_lookup`). On a hit, inject `Role::Restricted` + `CliTokenIdentity`.
+4. On a miss or no bearer, inject nothing — `authz_layer` then denies any non-public route with `403`.
 
 ### Authentication Endpoints
 
+The only auth endpoint is the public status probe; login/logout/me are gone.
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/v1/auth/login` | not required | Username/password login; the response body contains the token, and an httpOnly Cookie is also set |
-| POST | `/api/v1/auth/logout` | not required | Clear the httpOnly Cookie |
-| GET | `/api/v1/auth/status` | not required (public) | Return the current auth mode (local/oidc/disabled) |
-| GET | `/api/v1/auth/me` | required | Return the currently logged-in user info |
+| GET | `/api/v1/auth/status` | not required (public) | Return `{ auth_required, mode: "token", status }` where `status` is `Ready` (a token is registered) / `Initializing` (none yet) / `Disabled` |
 
-### httpOnly Cookie
+### Admin Token Bootstrap (Controller)
 
-After a successful login, the response sets an httpOnly JWT Cookie. Browsers automatically attach it on subsequent requests, so the front end does not need to manage tokens manually. This is suitable for the Dashboard front end.
+There is no credential auto-generation. The operator supplies a single admin token; when none is configured, the server starts but all Admin API business routes return `503` fail-close (via `require_token_configured_gate`) with a startup WARN.
 
-### Admin Credential Bootstrap (Controller)
+The token is read from the following sources (highest precedence first):
 
-Admin credential auto-generation has been removed (as of 2026-06-01). The Controller now
-behaves identically to the Center: when no valid credentials are configured, the server
-starts but all Admin API business routes return 503 fail-close and a startup WARN is emitted.
+1. **Env var** `EDGION_ADMIN_TOKEN`, injected via `valueFrom.secretKeyRef` from the `edgion-admin-credentials` Secret (key `token`; recommended for Kubernetes).
+2. **`admin_token`** config field (a Secret-mounted config file).
 
-Credentials are read from the following sources (highest precedence first):
-
-1. **Env vars** `EDGION_ADMIN_USERNAME` / `EDGION_ADMIN_PASSWORD` / `EDGION_ADMIN_JWT_SECRET`
-   injected via `valueFrom.secretKeyRef` from the `edgion-admin-credentials` Secret
-   (recommended for Kubernetes). The `deploy.sh` script creates this Secret idempotently.
-2. **`[local_auth]`** section in a Secret-mounted config file.
-3. **`[auth]`** OIDC.
-
-When nothing is configured: server starts, business routes return 503, `/health` / `/ready` /
-`/metrics` / `/api/v1/auth/status` remain accessible.
-
-The `secret_retry_loop` / `ensure_admin_credentials` / `process::exit(1)` machinery is gone.
-The Controller ServiceAccount no longer needs the `secrets: create` RBAC verb.
+A blank/whitespace token is treated as not configured. The admin token maps to an allow-all wildcard RBAC policy and survives reloads (re-merged by `Authorizer::apply`). When nothing is configured: server starts, business routes return `503`, and `/health` / `/ready` / `/metrics` / `/api/v1/auth/status` remain accessible.
 
 See `skills/02-features/02-config/03-auth-bootstrap.md` for the full matrix and migration guide.
 
@@ -302,8 +288,9 @@ See `skills/02-features/02-config/03-auth-bootstrap.md` for the full matrix and 
 
 | Module | Path |
 |--------|------|
-| Local auth (config/handlers/middleware/secret) | `edgion-common/src/local_auth/` |
-| Unified auth middleware (OIDC + local) | `edgion-common/src/unified_auth/mod.rs` |
+| Token authn middleware (`cli_token_pre_authn`) | `edgion-controller/src/api/cli_token_middleware.rs` |
+| Authz engine + admin-token entry (`Authorizer`) | `edgion-controller/src/authz/mod.rs` |
+| Admin token resolution (`EDGION_ADMIN_TOKEN` / `admin_token`) | `edgion-controller/src/cli/mod.rs` |
 
 ## Startup Modes
 

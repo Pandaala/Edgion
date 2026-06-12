@@ -23,7 +23,13 @@ edgion-cli [OPTIONS] <COMMAND>
 | `--help` | `-h` | 显示帮助信息 | - |
 | `--version` | `-V` | 显示版本信息 | - |
 
-`--token` 接受由 `gen-token` 生成的以 `edg_` 为前缀的 Token。环境变量 `EDGION_TOKEN` 是避免 Token 暴露在 shell 历史记录中的替代方式。优先级：`--token` > `EDGION_TOKEN` > 缓存的登录 Token。设置任一方式后，`ensure_auth`（包括 `/auth/status` 和 `/auth/me`）将被跳过；验证为惰性（401 = 未知 Token，403 = 权限不足）。
+`edgion-cli` 采用**纯 Token**方式：使用单个 Bearer Token（Istio 风格）向 Controller Admin API 认证。CLI 中不再有用户名/密码登录，也没有 OIDC。Token 可以是本地管理员 Token，也可以是以 `edg_` 为前缀的 `cli_tokens` Token。Token 优先级（从高到低）：
+
+1. `--token <TOKEN>` 标志（仅长选项，`-t` 已被 `--target` 占用）
+2. `EDGION_TOKEN` 环境变量（避免 Token 暴露在 shell 历史记录中）
+3. 位于 `~/.edgion/token` 的缓存登录 Token，由 `edgion-cli login --token` 写入
+
+验证为惰性：第一个请求返回 `401`（未知 Token）或 `403`（权限不足）。唯一的公开认证端点是 `GET /api/v1/auth/status`。
 
 ## Target 类型
 
@@ -245,6 +251,23 @@ SHA-256 (paste into controller cli_tokens[].token_sha256):
 > **安全说明：** SHA-256 是对完整的 `edg_` 前缀 Token 计算的——即作为 `Authorization: Bearer` 值发送的完整字符串。Controller 配置中只存储 SHA-256 摘要，切勿存储原始 Token。
 
 如需 RBAC 配置、轮换说明及所有安全注意事项，请参见[联邦 RBAC — CLI Token RBAC](federation-rbac.md#cli-token-rbac)。
+
+### login - 持久化 Token
+
+将 Bearer Token 保存到 `~/.edgion/token`，使后续命令无需 `--token` 或 `EDGION_TOKEN` 即可认证。这是纯 Token 方式——没有用户名/密码或 OIDC 登录。
+
+```bash
+edgion-cli login --token <TOKEN>
+```
+
+`<TOKEN>` 可以是本地管理员 Token（从 `edgion-admin-credentials` Secret 读取），也可以是 `gen-token` 生成的以 `edg_` 为前缀的 `cli_tokens` Token。从 Kubernetes 读取管理员 Token：
+
+```bash
+kubectl -n edgion-system get secret edgion-admin-credentials \
+  -o jsonpath='{.data.token}' | base64 -d
+```
+
+仅当既未设置 `--token` 也未设置 `EDGION_TOKEN` 时才使用缓存的 Token（见[全局选项](#全局选项)下的优先级列表）。
 
 ## 连接配置
 

@@ -1,6 +1,6 @@
 // gRPC Test suite
 //
-// Required config files (in examples/conf/):
+// Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-grpc.yaml         # gRPC backend service discovery
 // - Service_edge_test-grpc.yaml               # gRPC service definition
 // - GRPCRoute_edge_test-grpc.yaml             # gRPC routing rules（Host: grpc.test.example.com）

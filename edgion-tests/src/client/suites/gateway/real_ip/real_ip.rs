@@ -1,6 +1,6 @@
 // Real IP extraction test suite
 //
-// Required config files (in examples/conf/):
+// Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-http.yaml         # HTTP backend service discovery
 // - Service_edge_test-http.yaml               # HTTP service definition
 // - httproute_default_example-route.yaml      # HTTP routing rules（Host: test.example.com）

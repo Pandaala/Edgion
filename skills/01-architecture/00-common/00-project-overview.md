@@ -138,9 +138,9 @@ Created in `new_ctx()` and consumed in `logging()`. Plugins interact with it thr
 | `test_server` | `edgion-tests/src/server/test_server.rs` | Multi-protocol echo backend (HTTP, gRPC, WebSocket, TCP, UDP, auth) |
 | `test_client` | `edgion-tests/src/client/test_client.rs` | Test runner based on the TestSuite trait |
 | `resource_diff` | `edgion-tests/src/validator/resource_diff.rs` | Controller ↔ Gateway sync verification |
-| `run_integration.sh` | `edgion-tests/scripts/integration/` | End-to-end integration test orchestration |
-| Test configurations | `edgion-tests/conf/` | YAML resources organized by `Resource/Item/` |
-| Port registry | `edgion-tests/conf/ports.json` | Unique port allocation per test suite |
+| `run_integration.sh` | `edgion-tests/integration/scripts/integration/` | End-to-end integration test orchestration |
+| Test configurations | `edgion-tests/integration/conf/` | YAML resources organized by `Resource/Item/` |
+| Port registry | `edgion-tests/integration/conf/ports.json` | Unique port allocation per test suite |
 
 ## Key dependencies
 
@@ -154,5 +154,5 @@ Created in `new_ctx()` and consumed in `logging()`. Plugins interact with it thr
 | **Serialization** | `serde`, `serde_json`, `serde_yaml` | Configuration parsing |
 | **TLS** | `rustls`, `tokio-rustls`, `boring-sys` | TLS termination (rustls or BoringSSL) |
 | **Observability** | `tracing`, `metrics` | Logging + metrics |
-| **Security** | `jsonwebtoken`, `bcrypt`, `base64`, `sha1` | `bcrypt` is used by Controller `local_auth` only; gateway plugins use `jsonwebtoken` (jwt_auth), `sha1`/`md5` (basic_auth htpasswd), `base64` (everywhere) |
+| **Security** | `jsonwebtoken`, `base64`, `sha1`, `sha2` | Controller admin auth is token-only (SHA-256 token-hash compare, no password hashing); gateway plugins use `jsonwebtoken` (jwt_auth), `sha1`/`md5` (basic_auth htpasswd), `base64` (everywhere) |
 | **Performance** | `tikv-jemallocator`, `dashmap`, `arc-swap`, `smallvec` | Memory allocator, concurrent map, lock-free reads, stack buffers |

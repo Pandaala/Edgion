@@ -7,7 +7,7 @@
 // 2. Different Gateways, same port -> NO conflict (each Gateway healthy)
 // 3. Same port with different hostnames (HTTP) -> NOT a conflict
 //
-// Required config files (in edgion-tests/conf/Gateway/PortConflict/):
+// Required config files (in edgion-tests/integration/conf/Gateway/PortConflict/):
 // - Gateway_internal_conflict.yaml     # Single Gateway with internal port conflict
 // - Gateway_cross_conflict_A.yaml      # First Gateway, same port as B (no conflict)
 // - Gateway_cross_conflict_B.yaml      # Second Gateway, same port as A (no conflict)

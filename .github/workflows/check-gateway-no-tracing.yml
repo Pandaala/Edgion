@@ -1,0 +1,12 @@
+name: check-gateway-no-tracing
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run check
+        run: python3 cicd/checks/check_gateway_no_tracing.py

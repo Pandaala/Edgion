@@ -9,7 +9,7 @@
 // - Runtime-compiled origin matchers (fr-types-02): comma-separated list,
 //   HTTPS subdomain wildcard, and allow_origins_by_regex
 //
-// Configs defined in edgion-tests/conf/EdgionPlugins/Cors/:
+// Configs defined in edgion-tests/integration/conf/EdgionPlugins/Cors/:
 //   cors-basic:       specific origin, no credentials, maxAge=3600
 //   cors-wildcard:    origin=*, no credentials
 //   cors-credentials: specific origin, credentials=true, maxAge=7200

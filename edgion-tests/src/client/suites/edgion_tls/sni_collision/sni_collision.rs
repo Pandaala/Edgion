@@ -12,7 +12,7 @@
 // running gateway (FileSystem mode): a TLS handshake with SNI
 // gateway-tls.test.com must be served the OLDER (RSA) cert.
 //
-// Required config files (in edgion-tests/conf/EdgionTls/sni_collision/):
+// Required config files (in edgion-tests/integration/conf/EdgionTls/sni_collision/):
 //   - Gateway.yaml            # HTTPS listener "https" (port 31390)
 //   - EdgionTls_older.yaml     # older EdgionTls -> edge-tls (RSA)
 //   - EdgionTls_newer.yaml     # newer EdgionTls -> edge-tls-ecdsa (ECDSA)

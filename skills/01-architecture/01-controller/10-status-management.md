@@ -79,7 +79,7 @@ New resources should prefer `k8s_openapi::Condition` (aligned with the kube-rs e
 
 **GatewayClass special:** GatewayClassStatus also has `supported_features: Option<Vec<String>>`,
 populated in `update_status()` with the full list of supported Gateway API features (matching
-the conformance test declaration in `examples/gateway-api-conformance/conformance_test.go`).
+the conformance test declaration in `edgion-tests/conformance/conformance_test.go`).
 
 ```rust
 fn update_status(&self, obj: &mut T, _ctx: &HandlerContext, validation_errors: &[String]) {

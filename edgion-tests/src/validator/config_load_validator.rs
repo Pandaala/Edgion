@@ -1,6 +1,6 @@
 //! Configuration Load Validator
 //!
-//! Validates that all YAML configuration files in examples/conf/ have been
+//! Validates that all YAML configuration files in edgion-tests/integration/conf/ have been
 //! successfully loaded by the edgion-controller without parsing errors.
 //!
 //! This tool runs before resource_diff in the integration test pipeline to
@@ -32,7 +32,7 @@ struct Args {
     controller_probe_url: String,
 
     /// Config directory to validate
-    #[arg(long, default_value = "examples/conf")]
+    #[arg(long, default_value = "edgion-tests/integration/conf")]
     config_dir: String,
 
     /// Request timeout in seconds

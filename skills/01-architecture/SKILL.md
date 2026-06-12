@@ -92,7 +92,7 @@ Internal architecture of the control plane, broken down by module:
 | ACME | Let's Encrypt automated certificates, Leader only |
 | Adding a new resource | workflow + 4 template categories (route-like / controller-only / plugin-like / cluster-scoped) |
 | Status management | update_status implementation conventions, known pitfalls |
-| Authentication & authorization | unified_auth, cli token RBAC, Role/Verb/CenterPolicy, middleware onion, default Center policy |
+| Authentication & authorization | token-only admin authn (Istio-style bearer), cli token RBAC, Role/Verb/CenterPolicy, middleware onion, default Center policy |
 
 ### [02-gateway/](02-gateway/SKILL.md) — edgion-gateway architecture
 

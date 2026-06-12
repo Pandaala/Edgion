@@ -1,106 +1,55 @@
 use anyhow::{Context, Result};
-use serde_json::Value;
-use zeroize::Zeroizing;
 
 use crate::cli::token::save_token;
 
-/// Execute the login command
-pub async fn login(base_url: &str, username: Option<&str>, password: Option<&str>) -> Result<()> {
-    // Resolve username: use flag value or prompt interactively
-    let username = match username {
-        Some(u) => u.to_string(),
-        None => {
-            eprint!("Username: ");
-            let mut buf = String::new();
-            std::io::stdin()
-                .read_line(&mut buf)
-                .context("Failed to read username")?;
-            buf.trim().to_string()
-        }
-    };
-
-    // Resolve password: use flag value or prompt with no echo.
-    //
-    // NOTE: passing the password via `-p` / `--password` puts it in argv where it
-    // is visible to other local users (ps / /proc). Prefer interactive prompt or
-    // stdin pipe; `-p` is retained for backwards compatibility only.
-    let password: Zeroizing<String> = match password {
-        Some(p) => Zeroizing::new(p.to_string()),
-        None => Zeroizing::new(rpassword::prompt_password("Password: ").context("Failed to read password")?),
-    };
-
-    if username.is_empty() {
-        anyhow::bail!("Username cannot be empty");
-    }
-    if password.is_empty() {
-        anyhow::bail!("Password cannot be empty");
+/// Execute the `login` command.
+///
+/// Authentication is now a pre-shared bearer token only — there is no
+/// username/password exchange. This command simply persists the supplied token
+/// to `~/.edgion/token` so subsequent invocations pick it up automatically
+/// (file is the lowest-precedence source, below `--token` and `EDGION_TOKEN`).
+///
+/// As a friendly convenience it first probes `GET /api/v1/auth/status` to warn
+/// when the controller is unreachable or its auth subsystem is not ready. The
+/// probe never blocks persisting: the token is saved regardless, since the token
+/// is validated lazily by the first real API call (401 = unknown, 403 = denied).
+pub async fn login(base_url: &str, token: &str) -> Result<()> {
+    if token.is_empty() {
+        anyhow::bail!("Token cannot be empty");
     }
 
-    // Build login URL and payload
-    let url = format!("{}/api/v1/auth/login", base_url);
-    let payload = serde_json::json!({
-        "username": username,
-        "password": password.as_str(),
-    });
+    // Optional reachability/readiness probe — best-effort, never fatal.
+    probe_status(base_url).await;
 
-    // Send request (no token needed for login)
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .context("Failed to create HTTP client")?;
+    // Persist the token to ~/.edgion/token (0600).
+    save_token(token).context("Failed to save token")?;
 
-    let resp = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await
-        .with_context(|| format!("Failed to connect to {}", url))?;
-
-    let status = resp.status();
-    let body = resp.text().await.context("Failed to read response body")?;
-
-    if !status.is_success() {
-        // Try to extract error message from JSON
-        if let Ok(json) = serde_json::from_str::<Value>(&body) {
-            if let Some(error) = json.get("error") {
-                anyhow::bail!("Login failed: {}", error.as_str().unwrap_or("Unknown error"));
-            }
-            if let Some(msg) = json.get("message") {
-                anyhow::bail!("Login failed: {}", msg.as_str().unwrap_or("Unknown error"));
-            }
-        }
-        anyhow::bail!("Login failed with status {}: {}", status, body);
-    }
-
-    // Parse success response: {"success": true, "data": {"token": "...", "expires_in": 86400}}
-    let json: Value = serde_json::from_str(&body).context("Failed to parse login response")?;
-
-    let token = Zeroizing::new(
-        json.get("data")
-            .and_then(|d| d.get("token"))
-            .and_then(|t| t.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Login response missing 'data.token' field"))?
-            .to_string(),
-    );
-
-    let expires_in = json
-        .get("data")
-        .and_then(|d| d.get("expires_in"))
-        .and_then(|e| e.as_u64());
-
-    // Save token to ~/.edgion/token
-    save_token(token.as_str()).context("Failed to save token")?;
-
-    // Print success message
-    if let Some(secs) = expires_in {
-        let hours = secs / 3600;
-        println!("Login successful. Token saved (expires in {}h).", hours);
-    } else {
-        println!("Login successful. Token saved.");
-    }
-
+    println!("Token saved to ~/.edgion/token.");
     Ok(())
+}
+
+/// Best-effort `GET /api/v1/auth/status` probe. Prints a friendly hint when the
+/// controller is unreachable or its auth subsystem is not ready, but never fails
+/// the command — the token is persisted either way.
+async fn probe_status(base_url: &str) {
+    let url = format!("{}/api/v1/auth/status", base_url);
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    match client.get(&url).send().await {
+        Ok(resp) if resp.status().is_success() => { /* reachable and ready enough */ }
+        Ok(resp) => {
+            eprintln!("warning: {} returned HTTP {} (token saved anyway).", url, resp.status());
+        }
+        Err(_) => {
+            eprintln!("warning: could not reach {} (token saved anyway).", url);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -109,41 +58,20 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn cli_parses_login_with_no_args_leaves_username_and_password_none() {
-        let cli = Cli::try_parse_from(["edgion-cli", "login"]).expect("login with no flags should parse");
+    fn cli_parses_login_with_token() {
+        let cli = Cli::try_parse_from(["edgion-cli", "login", "--token", "edg_abc"])
+            .expect("login with --token should parse");
         match cli.command {
-            Commands::Login { username, password } => {
-                assert!(username.is_none());
-                assert!(password.is_none());
-            }
+            Commands::Login { token } => assert_eq!(token, "edg_abc"),
             other => panic!("expected Login, got {:?}", other),
         }
     }
 
     #[test]
-    fn cli_parses_login_with_username_and_password_long_flags() {
-        let cli = Cli::try_parse_from(["edgion-cli", "login", "--username", "admin", "--password", "secret"])
-            .expect("login with long flags should parse");
-        match cli.command {
-            Commands::Login { username, password } => {
-                assert_eq!(username.as_deref(), Some("admin"));
-                assert_eq!(password.as_deref(), Some("secret"));
-            }
-            _ => panic!("expected Login"),
-        }
-    }
-
-    #[test]
-    fn cli_parses_login_with_short_flags() {
-        let cli = Cli::try_parse_from(["edgion-cli", "login", "-u", "alice", "-p", "pw"])
-            .expect("login with short flags should parse");
-        match cli.command {
-            Commands::Login { username, password } => {
-                assert_eq!(username.as_deref(), Some("alice"));
-                assert_eq!(password.as_deref(), Some("pw"));
-            }
-            _ => panic!("expected Login"),
-        }
+    fn cli_login_without_token_fails() {
+        // `--token` is required; omitting it must be a parse error.
+        let res = Cli::try_parse_from(["edgion-cli", "login"]);
+        assert!(res.is_err(), "login without --token must fail to parse");
     }
 
     #[test]
@@ -153,13 +81,13 @@ mod tests {
             "--server",
             "http://ctl.example.com:5800",
             "login",
-            "-u",
-            "admin",
+            "--token",
+            "edg_abc",
         ])
         .expect("login with --server should parse");
         assert_eq!(cli.server.as_deref(), Some("http://ctl.example.com:5800"));
         match cli.command {
-            Commands::Login { username, .. } => assert_eq!(username.as_deref(), Some("admin")),
+            Commands::Login { token } => assert_eq!(token, "edg_abc"),
             _ => panic!("expected Login"),
         }
     }

@@ -205,13 +205,13 @@ Run the smallest checks that prove the new resource is really wired:
 ```bash
 cargo check
 cargo test
-./edgion-tests/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
+./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
 ```
 
 Also verify that your template resource and the new resource have comparable touchpoints:
 
 ```bash
-rg -n "ResourceKind::<YourKind>|<YourKind>|<your_resource>" src config/crd examples/test
+rg -n "ResourceKind::<YourKind>|<YourKind>|<your_resource>" src config/crd edgion-tests
 ```
 
 ## References

@@ -2,7 +2,7 @@
 //
 // Tests the ServiceRegionRoute PluginMetaData → ClusterRegionRoute PluginMetaData → EdgionPlugins resolve flow.
 //
-// Required conf files (edgion-tests/conf/EdgionPlugins/RegionRoute/):
+// Required conf files (edgion-tests/integration/conf/EdgionPlugins/RegionRoute/):
 //   01_EdgionPlugins_region-route-main.yaml      — ref-only: serviceRegionRouteRef
 //   01_EdgionPlugins_region-route-norules.yaml    — ref-only: serviceRegionRouteRef
 //   01_EdgionPlugins_region-route-myregion.yaml   — ref-only: serviceRegionRouteRef

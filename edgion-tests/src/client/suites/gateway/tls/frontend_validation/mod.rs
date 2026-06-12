@@ -2,7 +2,7 @@
 // Tests Gateway API v1.5 gateway-level spec.tls.frontend config for downstream mTLS.
 // Covers default.validation on one HTTPS listener and perPort override on another.
 //
-// Config files (in edgion-tests/conf/Gateway/FrontendValidation/):
+// Config files (in edgion-tests/integration/conf/Gateway/FrontendValidation/):
 // - Gateway_edgion-test_frontend-validation-gateway.yaml  # Gateway with default + perPort frontend TLS
 // - HTTPRoute_edgion-test_fv-route.yaml                   # Route for default-validation listener
 // - HTTPRoute_edgion-test_fv-route-insecure.yaml          # Route for perPort InsecureFallback listener

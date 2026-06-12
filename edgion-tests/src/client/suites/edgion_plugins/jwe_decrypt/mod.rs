@@ -1,6 +1,6 @@
 // JWE Decrypt plugin tests
 //
-// Required config files (in edgion-tests/conf/EdgionPlugins/JweDecrypt/):
+// Required config files (in edgion-tests/integration/conf/EdgionPlugins/JweDecrypt/):
 // - 01_Secret_default_jwe-secret.yaml
 // - EdgionPlugins_default_jwe-decrypt.yaml
 // - HTTPRoute_default_jwe-decrypt-test.yaml

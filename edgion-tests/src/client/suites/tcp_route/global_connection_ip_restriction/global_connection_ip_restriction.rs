@@ -3,7 +3,7 @@
 // Tests that GlobalConnectionIpRestriction stream plugin correctly allows/denies
 // L4 TCP connections based on the active profile in the referenced PluginMetaData.
 //
-// Required config files (in edgion-tests/conf/TCPRoute/GlobalConnectionIpRestriction/):
+// Required config files (in edgion-tests/integration/conf/TCPRoute/GlobalConnectionIpRestriction/):
 // - 01_PluginMetaData_gcir.yaml            # PM with allow-local + block-local profiles
 // - 02_EdgionStreamPlugins.yaml            # Stream plugin referencing the PM
 // - 03_Gateway.yaml                        # Gateway with single TCP listener on 31296

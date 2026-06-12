@@ -1,6 +1,6 @@
 // tls-F011 mTLS fail-close integration tests
 //
-// Required fixtures (in edgion-tests/conf/EdgionTls/mtls_failclose/):
+// Required fixtures (in edgion-tests/integration/conf/EdgionTls/mtls_failclose/):
 // - Gateway.yaml                            # 31199 (EdgionTls SNI listener) + 31340 (frontendValidation listener)
 // - HTTPRoute.yaml                          # routes for the 3 hostnames
 // - EdgionTls_mtls-ca-missing.yaml          # caSecretRef -> nonexistent-ca

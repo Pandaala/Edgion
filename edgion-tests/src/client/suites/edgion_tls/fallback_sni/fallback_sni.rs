@@ -5,12 +5,12 @@
 //   2. Client with an unknown SNI hits the listener → no Layer 1 / Layer 2
 //      match → select_cb emits "cert not found" + closes the connection.
 //
-// Required config files (in edgion-tests/conf/EdgionTls/fallback_sni/):
+// Required config files (in edgion-tests/integration/conf/EdgionTls/fallback_sni/):
 //   - Gateway.yaml          # Gateway with https-fallback listener (port 31198)
 //   - EdgionTls.yaml        # EdgionTls hosting default.example.com
 //   - HTTPRoute.yaml        # Route for default.example.com
 //
-// Also requires: edgion-tests/conf/base/EdgionGatewayConfig.yaml has
+// Also requires: edgion-tests/integration/conf/base/EdgionGatewayConfig.yaml has
 //   securityProtect.fallbackSni = "default.example.com" (already configured).
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};

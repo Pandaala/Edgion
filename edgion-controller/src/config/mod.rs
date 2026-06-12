@@ -1,7 +1,6 @@
 use crate::config::conf_center::{ConfCenterConfig, FileSystemConfig};
 use anyhow::{Context, Result};
 use clap::Args;
-use edgion_common::auth::AdminAuthConfig;
 use edgion_common::conf_sync_config::{ConfSyncConfig, ConfSyncSecurityConfig};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -141,28 +140,20 @@ pub struct EdgionControllerConfig {
     #[serde(default)]
     pub center: Option<CenterClientConfig>,
 
-    /// Optional Admin API authentication.
-    /// Omit to disable auth (backward compatible). When present, Admin API
-    /// endpoints (except health/ready) require a valid JWT Bearer token.
-    #[arg(skip)]
-    #[serde(default)]
-    pub auth: Option<AdminAuthConfig>,
-
-    /// Optional local authentication (built-in username/password).
-    /// Credentials come from this section or the `EDGION_ADMIN_*` env vars;
-    /// they are never auto-generated. When nothing valid is configured here,
-    /// via `EDGION_ADMIN_*`, or via `[auth]` OIDC, the Admin API fails closed
-    /// (503) until valid credentials are supplied.
-    #[arg(skip)]
-    #[serde(default)]
-    pub local_auth: Option<edgion_common::local_auth::LocalAuthConfig>,
-
     /// Static cli tokens for role-scoped API access.
     /// Each entry names a token (by its SHA-256 hex digest) and assigns it
     /// a fine-grained RBAC policy. Hot-reloadable.
     #[arg(skip)]
     #[serde(default)]
     pub cli_tokens: Vec<CliTokenConfig>,
+
+    /// Local admin token (Istio-style): the raw bearer token granting allow-all
+    /// access to the Admin API, used by `edgion-cli` and local automation. The
+    /// `EDGION_ADMIN_TOKEN` env var takes precedence over this field. Never
+    /// auto-generated; a blank value is treated as "not configured".
+    #[arg(skip)]
+    #[serde(default)]
+    pub admin_token: Option<String>,
 }
 
 /// Server configuration

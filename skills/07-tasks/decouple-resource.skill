@@ -168,7 +168,7 @@ open blocker. Summarize both verdicts to the user.
 STOP. Present to the user:
 - what changed (the resource is now decoupled; `grep` confirms zero gateway edges in its types files);
 - `cargo check`/`clippy` green; both subagent reviews passed (with their key findings);
-- **Ask the user to run** `./edgion-tests/scripts/integration/run_integration.sh -r <Resource>`
+- **Ask the user to run** `./edgion-tests/integration/scripts/integration/run_integration.sh -r <Resource>`
   (and any behavior-specific scenarios named in the task: LB distribution, rate limit, jumps,
   backend TLS, backend-level plugins);
 - The diff is staged-ready but **NOT committed** — the user commits after integration tests pass.

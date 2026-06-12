@@ -6,7 +6,7 @@
 
 This guide is for migrating the existing local-process integration tests to a K8s environment. The focus is on:
 
-- Configuration layer: `edgion-tests/conf` -> `examples/k8stest/conf`
+- Configuration layer: `edgion-tests/integration/conf` -> `edgion-tests/k8s/conf`
 - Execution layer: local processes -> K8s Deployments/Services
 - Assertion layer: fixed IP/port assumptions -> Service/EndpointSlice dynamic behavior
 
@@ -51,9 +51,9 @@ Recommended K8s mode:
 
 ## 4. Current state of the repo
 
-### 4.1 `examples/k8stest/conf` is now the K8s test baseline
+### 4.1 `edgion-tests/k8s/conf` is now the K8s test baseline
 
-K8s integration tests now use `examples/k8stest/conf` as the sole configuration source and remain mostly isomorphic to the shared suites of `edgion-tests/conf`. Note that a small class of **runtime-managed Secret templates** in the K8s directory keep `data: {}` empty in the file itself; the actual content is generated under `examples/k8stest/generated/secrets/` during the prepare phase before being applied.
+K8s integration tests now use `edgion-tests/k8s/conf` as the sole configuration source and remain mostly isomorphic to the shared suites of `edgion-tests/integration/conf`. Note that a small class of **runtime-managed Secret templates** in the K8s directory keep `data: {}` empty in the file itself; the actual content is generated under `edgion-tests/k8s/generated/secrets/` during the prepare phase before being applied.
 
 Constraints to keep in mind:
 
@@ -63,13 +63,13 @@ Constraints to keep in mind:
 
 ### 4.2 The execution chain and config source are settled
 
-`examples/k8stest/scripts/run_k8s_integration.sh` is now the sole entry point for K8s integration tests. prepare / conf apply / test-client batch all run around `examples/k8stest/conf` and no longer rely on an external deploy repo loading `edgion-tests/conf`.
+`edgion-tests/k8s/scripts/run_k8s_integration.sh` is now the sole entry point for K8s integration tests. prepare / conf apply / test-client batch all run around `edgion-tests/k8s/conf` and no longer rely on an external deploy repo loading `edgion-tests/integration/conf`.
 
 ## 5. What must be changed for new conf (landing checklist)
 
 ### 5.1 Directory and naming alignment (P0)
 
-- Add same-named suite directories under `examples/k8stest/conf` that match `edgion-tests/conf`.
+- Add same-named suite directories under `edgion-tests/k8s/conf` that match `edgion-tests/integration/conf`.
 - `LBPolicy` is split or mapped to:
   - `HTTPRoute/Backend/LBRoundRobin`
   - `HTTPRoute/Backend/LBConsistentHash`
@@ -153,7 +153,7 @@ Roll out in stages:
 
 Corresponding script:
 
-- `examples/k8stest/scripts/run_k8s_integration.sh`
+- `edgion-tests/k8s/scripts/run_k8s_integration.sh`
   - `--prepare-only`: only prepare the environment
   - `--skip-prepare`: only run tests
 

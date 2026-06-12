@@ -39,10 +39,12 @@ RUN cargo install cargo-chef
 # =============================================================================
 FROM chef AS planner
 
-# Copy only Cargo files to analyze dependencies
-COPY Cargo.toml Cargo.lock ./
-COPY src/lib.rs src/lib.rs
-COPY src/bin src/bin
+# Virtual workspace (no root package since the crate split): cargo-chef needs the
+# full member manifest graph to compute the recipe. Copying the whole tree is the
+# documented workspace pattern — `cargo chef prepare` only reads the manifests and
+# Cargo.lock, so `recipe.json` stays stable across source-only changes and the
+# expensive `cook` layer below keeps its cache.
+COPY . .
 
 # Generate dependency recipe
 RUN cargo chef prepare --recipe-path recipe.json
@@ -83,11 +85,20 @@ ARG BINARY
 ARG BUILD_TYPE
 ARG PROFILE
 
-# Build dependencies (cached layer)
-RUN if [ "${PROFILE}" = "release" ]; then \
-      cargo chef cook --release --features "${FEATURES}" --recipe-path recipe.json; \
+# Build dependencies (cached layer).
+# In a virtual workspace `--features` is only valid alongside a package selection
+# (`-p`), so cook the feature-bearing crate the final build below produces. Only
+# the product crates (gateway/controller) carry the boringssl/rustls feature —
+# edgion-cli has no such feature, so it is NOT cooked with `--features` here; its
+# few unique deps fall through to the final build (the heavy pingora/boringssl
+# deps belong to the product crate and are already cooked).
+#   - example: the edgion-tests harness crate (defines no TLS feature).
+#   - bin:     the product crate carrying the TLS backend feature.
+RUN PROFILE_FLAG=$([ "${PROFILE}" = "release" ] && echo "--release" || echo ""); \
+    if [ "$BUILD_TYPE" = "example" ]; then \
+      cargo chef cook ${PROFILE_FLAG} -p edgion-tests --recipe-path recipe.json; \
     else \
-      cargo chef cook --features "${FEATURES}" --recipe-path recipe.json; \
+      cargo chef cook ${PROFILE_FLAG} -p "${BINARY}" --features "${FEATURES}" --recipe-path recipe.json; \
     fi
 
 # Copy source code
@@ -100,9 +111,9 @@ RUN mkdir -p /app/config && touch /app/config/.placeholder
 RUN PROFILE_FLAG=$([ "${PROFILE}" = "release" ] && echo "--release" || echo ""); \
     OUT_DIR=$([ "${PROFILE}" = "release" ] && echo "release" || echo "debug"); \
     if [ "$BUILD_TYPE" = "example" ]; then \
-      echo "Building example: ${BINARY} (${PROFILE})"; \
-      cargo build ${PROFILE_FLAG} --features "${FEATURES}" --example "${BINARY}"; \
-      cp /app/target/${OUT_DIR}/examples/${BINARY} /app/edgion-binary; \
+      echo "Building edgion-tests bin: ${BINARY} (${PROFILE})"; \
+      cargo build ${PROFILE_FLAG} -p edgion-tests --bin "${BINARY}"; \
+      cp /app/target/${OUT_DIR}/${BINARY} /app/edgion-binary; \
       touch /app/edgion-cli-binary; \
     else \
       echo "Building bin: ${BINARY} (${PROFILE})"; \

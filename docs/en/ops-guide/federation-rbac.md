@@ -10,8 +10,8 @@ policy, the hot-reloadable kill-switch, and common configuration examples.
 Every Center request (blind-proxy UI calls, sync operations, failover, reload)
 passes through the same authorization layer as local admin requests. Center is
 assigned a restricted identity (`CenterRestricted`) whose allowed operations are
-governed by the `[center].rbac` configuration block. Local admin users receive
-full (`Superuser`) access — Center authorization does not affect them.
+governed by the `[center].rbac` configuration block. The local admin token maps to
+an allow-all (wildcard) policy — Center authorization does not affect it.
 
 Authorization is decided per `(verb, kind)`:
 
@@ -287,8 +287,8 @@ the config.
 
 ### Controller configuration
 
-Add a `cli_tokens` block to the Controller YAML config (can coexist with `center`,
-`local_auth`, and `auth`):
+Add a `cli_tokens` block to the Controller YAML config (can coexist with `center`
+and `admin_token`):
 
 ```yaml
 cli_tokens:
@@ -332,19 +332,20 @@ export EDGION_TOKEN=edg_<base64url>
 edgion-cli get httproute -n production
 ```
 
-Precedence: `--token` > `EDGION_TOKEN` > cached login token (`~/.edgion/token`).
+Precedence: `--token` > `EDGION_TOKEN` > cached login token (`~/.edgion/token`,
+written by `edgion-cli login --token`).
 
-When a token is supplied, `ensure_auth` (including `/auth/status` and `/auth/me`)
-is skipped entirely. Validation is lazy: the first real request returns
-`401 Unauthorized` (unknown token) or `403 Forbidden` (permission denied).
+Validation is lazy: the first real request returns `401 Unauthorized` (unknown
+token) or `403 Forbidden` (permission denied). The only public auth endpoint is
+`GET /api/v1/auth/status`.
 
 ### Security notes
 
-**1. Wide verb grants equal Superuser.**
+**1. Wide verb grants equal full admin access.**
 A token whose `rbac` grants `verbs: ["*"]` on the full admin router — including
 `reload`, `failover`, `acme-trigger`, `server-info`, and `diagnostics` — is
-effectively a Superuser. Grant the minimum set of verbs the consumer actually
-needs.
+effectively equivalent to the allow-all admin token. Grant the minimum set of
+verbs the consumer actually needs.
 
 **2. Wildcard read exposes credential material.**
 There is no server-side `Secret` backstop on the cli-token path. Using
@@ -370,10 +371,11 @@ per-invocation). The cached login token is unaffected. Prefer `EDGION_TOKEN`
 over `--token` to avoid leaking the token in shell history or process listings.
 
 **6. Migration: no-auth mode was removed.**
-Deployments that previously relied on `local_auth.enabled: false` (or
-`auth.enabled: false`) to bypass authentication must now configure at least one
-auth provider. See the [Controller configuration](configuration/controller-config.md)
-guide (the `[local_auth]` and `[auth]` sections) for the upgrade path.
+Deployments that previously bypassed authentication must now configure an
+`admin_token` (or `EDGION_ADMIN_TOKEN`) and/or `cli_tokens`. When neither is set,
+the Admin API fails closed with 503. See the
+[Controller configuration](configuration/controller-config.md#authentication)
+guide for the token-only auth model and the upgrade path.
 
 **7. `list-keys` reveals resource names.**
 The `list-keys` verb exposes resource names (and namespace/kind metadata) even

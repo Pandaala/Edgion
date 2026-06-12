@@ -1,7 +1,9 @@
-pub mod config;
-pub mod jwks_provider;
-pub mod jwt_middleware;
-pub mod public_paths;
+//! Shared authentication primitives.
+//!
+//! After the controller's Admin API moved to a token-only model, this module
+//! keeps only the primitives still shared across crates: the JWKS/discovery
+//! provider used by the gateway OIDC plugin, and the canonical public-path set
+//! used by the controller's authorization layer.
 
-pub use config::AdminAuthConfig;
-pub use jwt_middleware::AuthMiddlewareState;
+pub mod jwks_provider;
+pub mod public_paths;

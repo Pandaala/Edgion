@@ -1,7 +1,7 @@
 // gRPC TLS Test suite
 // Test gRPC over HTTPS (TLS)
 //
-// Required config files (in examples/conf/):
+// Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-grpc.yaml         # gRPC backend service discovery
 // - Service_edge_test-grpc.yaml               # gRPC service definition
 // - GRPCRoute_edge_test-grpc-https.yaml       # gRPC TLS routing rules（Host: grpc-tls.test.example.com）

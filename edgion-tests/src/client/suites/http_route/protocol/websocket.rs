@@ -1,6 +1,6 @@
 // WebSocket Test suite
 //
-// Required config files (in examples/conf/):
+// Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-websocket.yaml    # WebSocket backend service discovery
 // - Service_edge_test-websocket.yaml          # WebSocket service definition
 // - httproute_default_example-route.yaml      # WebSocket routing rules（Host: test.example.com）

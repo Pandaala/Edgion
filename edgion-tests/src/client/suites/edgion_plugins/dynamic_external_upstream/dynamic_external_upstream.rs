@@ -1,6 +1,6 @@
 // DynamicExternalUpstream Integration Test Suite
 //
-// Required config files (in edgion-tests/conf/EdgionPlugins/DynamicExternalUpstream/):
+// Required config files (in edgion-tests/integration/conf/EdgionPlugins/DynamicExternalUpstream/):
 // - 01_EdgionPlugins_default_deu-skip.yaml        (skip mode: onMissing=skip, onNoMatch=skip)
 // - 01_EdgionPlugins_default_deu-reject.yaml      (reject mode: onMissing=reject, onNoMatch=reject)
 // - 01_EdgionPlugins_default_deu-regex.yaml       (regex extraction mode)

@@ -267,9 +267,9 @@ Cover these three areas in priority order:
 
 References for existing samples:
 
-- [../../../edgion-tests/conf/Gateway/StreamPlugins/](../../../edgion-tests/conf/Gateway/StreamPlugins/)
-- [../../../edgion-tests/conf/TCPRoute/StreamPlugins/](../../../edgion-tests/conf/TCPRoute/StreamPlugins/)
-- [../../../edgion-tests/conf/TLSRoute/StreamPlugins/](../../../edgion-tests/conf/TLSRoute/StreamPlugins/)
+- [../../../edgion-tests/integration/conf/Gateway/StreamPlugins/](../../../edgion-tests/integration/conf/Gateway/StreamPlugins/)
+- [../../../edgion-tests/integration/conf/TCPRoute/StreamPlugins/](../../../edgion-tests/integration/conf/TCPRoute/StreamPlugins/)
+- [../../../edgion-tests/integration/conf/TLSRoute/StreamPlugins/](../../../edgion-tests/integration/conf/TLSRoute/StreamPlugins/)
 
 ### Item 3 entry: the dynamic scenario framework
 

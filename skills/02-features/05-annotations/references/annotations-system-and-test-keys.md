@@ -16,7 +16,7 @@ Use this file when a key is reserved, injected by the system, or only intended f
 | `edgion.io/metrics-test-key` | Gateway metrics test helpers | `Gateway.metadata.annotations` | Integration-testing only. |
 | `edgion.io/metrics-test-type` | Gateway metrics test helpers | `Gateway.metadata.annotations` | Integration-testing only. |
 | `edgion.io/skip-load-validation` | `edgion-tests/src/validator/config_load_validator.rs` | example YAML metadata annotations | Lets config-load validation skip a resource. Do not use as normal product config. |
-| `edgion.io/force-sync` | `examples/k8stest/scripts/run_k8s_integration.sh` | temporary annotation on Secrets | Test harness workaround to trigger UPDATE events and dependent requeue. |
+| `edgion.io/force-sync` | `edgion-tests/k8s/scripts/run_k8s_integration.sh` | temporary annotation on Secrets | Test harness workaround to trigger UPDATE events and dependent requeue. |
 | `edgion.io/trigger` | ACME user/admin operations | `EdgionAcme.metadata.annotations` | Manual ACME re-trigger knob. Operational use only. |
 
 ## ACME Internal Labels

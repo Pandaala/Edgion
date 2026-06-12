@@ -1,6 +1,6 @@
 # Secret 管理
 
-Edgion 将 Kubernetes Secret 用于 TLS 证书、插件凭据和 Controller 管理员密码。本页介绍 Secret 的引用方式、涉及的 Secret 类型、自动生成的管理员凭据以及运维建议。
+Edgion 将 Kubernetes Secret 用于 TLS 证书、插件凭据和 Controller 管理员 Token。本页介绍 Secret 的引用方式、涉及的 Secret 类型、管理员凭据 Secret 以及运维建议。
 
 ## Edgion 使用 Secret 的场景
 
@@ -10,7 +10,7 @@ Edgion 将 Kubernetes Secret 用于 TLS 证书、插件凭据和 Controller 管�
 | 扩展 TLS（mTLS、密码套件、OCSP） | `EdgionTls.spec.secretRef` 和 `clientAuth.caSecretRef` | `kubernetes.io/tls`（服务端）、`Opaque`（CA） |
 | 插件凭据 | `jwt-auth`、`basic-auth`、`openid-connect` 等插件 | `Opaque` |
 | 后端认证 | 后端 mTLS 客户端证书 | `kubernetes.io/tls` |
-| Controller 管理员密码 | 运维人员创建的 `edgion-admin-credentials`（注入为环境变量） | `Opaque` |
+| Controller 管理员 Token | 运维人员创建的 `edgion-admin-credentials`（单个 `token` 键，注入为 `EDGION_ADMIN_TOKEN` 环境变量） | `Opaque` |
 
 ### TLS 证书 Secret
 
@@ -43,23 +43,34 @@ data:
 
 ⚠️ 切勿将真实证书或密钥材料提交到源代码控制。上方所有值均为占位符。
 
-## 管理员凭据（`edgion-admin-credentials`）
+## 管理员 Token（`edgion-admin-credentials`）
 
-Controller 从 `edgion-admin-credentials` Secret（命名空间：`edgion-system`）读取管理员凭据。
-该 Secret 必须由运维人员创建——Controller 不再自动生成（已于 2026-06-01 移除）。
+Controller Admin API 采用**纯 Token** 认证。它从 `edgion-admin-credentials` Secret（命名空间：`edgion-system`）读取单个预共享管理员 Token，该 Secret 仅包含一个键 `token`。
+该 Secret 必须由运维人员创建——Controller 不再自动生成。
 
-Kubernetes 推荐方式是使用 `deploy.sh`，该脚本会幂等地创建 Secret 并通过环境变量注入到 controller Deployment：
+Kubernetes 推荐方式是使用 `deploy.sh`，该脚本会幂等地创建 Secret 并将其作为 `EDGION_ADMIN_TOKEN` 环境变量注入到 controller Deployment（通过 `token` 键上的 `valueFrom.secretKeyRef`）：
 
-```bash
-# 运行 deploy.sh 后读取管理员密码
-kubectl -n edgion-system get secret edgion-admin-credentials \
-  -o jsonpath='{.data.password}' | base64 -d
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: edgion-admin-credentials
+  namespace: edgion-system
+type: Opaque
+data:
+  token: <base64-encoded-admin-token>
 ```
 
-也可以在挂载为 Secret 的配置文件中配置 `[local_auth]`，或使用 `[auth]` OIDC。
+```bash
+# 运行 deploy.sh 后读取管理员 Token
+kubectl -n edgion-system get secret edgion-admin-credentials \
+  -o jsonpath='{.data.token}' | base64 -d
+```
 
-若未配置任何有效凭据，服务器仍可启动，但所有 Admin API 业务路由返回 **503 fail-close**。
-`/health`、`/ready`、`/metrics` 和 `/api/v1/auth/status` 保持可访问。Controller 和 Center 遵循相同的行为。
+也可以直接通过 Controller 配置中的顶层 `admin_token` 字段设置 Token（优先从 Secret 注入环境变量，而非明文配置）。
+
+若未配置管理员 Token（且未设置 `cli_tokens`），服务器仍可启动，但所有 Admin API 业务路由返回 **503 fail-close**。
+`/health`、`/ready`、`/metrics` 和 `/api/v1/auth/status` 保持可访问。
 
 完整引导矩阵参见 `skills/02-features/02-config/03-auth-bootstrap.md`。
 
@@ -84,15 +95,15 @@ kubectl -n edgion-system get secret edgion-admin-credentials \
 - 确认证书未过期。
 - 确认客户端发送的 SNI 与证书 SAN 匹配。
 
-### 无法登录管理 API
+### Admin API 返回 401/403/503
 
-- 从 `edgion-admin-credentials` 获取密码（见上文——由 `deploy.sh` 创建），或显式配置 `[local_auth]` / `[auth]`。
+- 从 `edgion-admin-credentials` 获取 Token（见上文——由 `deploy.sh` 创建），或显式配置 `admin_token`。503 表示既未配置管理员 Token 也未配置 `cli_tokens`；401 表示提供的 Token 未知；403 表示该 Token 的 RBAC 策略拒绝该操作。
 
 ## 常见问题
 
-### Q1：Controller 管理员密码存储在哪里？
+### Q1：Controller 管理员 Token 存储在哪里？
 
-**A**：存储在 `edgion-system` 命名空间的 `edgion-admin-credentials` Secret 中，由运维人员通过 `deploy.sh` 创建。controller Deployment 将 Secret 中的值以环境变量（`EDGION_ADMIN_USERNAME`、`EDGION_ADMIN_PASSWORD`、`EDGION_ADMIN_JWT_SECRET`）形式注入。Controller 不再自动生成该 Secret。
+**A**：存储在 `edgion-system` 命名空间的 `edgion-admin-credentials` Secret（单个 `token` 键）中，由运维人员通过 `deploy.sh` 创建。controller Deployment 将 `token` 值以 `EDGION_ADMIN_TOKEN` 环境变量形式注入。Controller 不再自动生成该 Secret。
 
 ### Q2：可以引用其他命名空间的 Secret 吗？
 
