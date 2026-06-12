@@ -30,7 +30,7 @@ Each access log entry must contain enough information for an operator to locate 
 
 ## AccessLogEntry fields
 
-`src/core/gateway/observe/access_log/entry.rs` — produced by `AccessLogEntry::from_context(ctx)` during the `logging()` phase of `pg_logging.rs`:
+`edgion-gateway/src/observe/access_log/entry.rs` — produced by `AccessLogEntry::from_context(ctx)` during the `logging()` phase of `pg_logging.rs`:
 
 | Field | Meaning |
 |------|------|
@@ -96,7 +96,7 @@ Each plugin writes a compact execution summary to the access log via `log: &mut 
 **API**:
 
 ```rust
-// Defined at: src/core/gateway/plugins/runtime/log.rs
+// Defined at: edgion-gateway/src/plugins/runtime/log.rs
 impl PluginLog {
     pub fn push_err(&mut self, kind: &'static str) -> bool;   // Routes through the dual-tier buffer
 }
@@ -345,11 +345,11 @@ Field semantics:
 
 ## Key Files
 
-- `src/core/gateway/ctx.rs` — `EdgionHttpContext`, `MatchInfo` (with `sv` field), `MatchedInfo` (with `sv` field)
-- `src/core/gateway/observe/access_log/entry.rs` — `AccessLogEntry`
-- `src/core/gateway/observe/access_log/logger.rs` — `AccessLogger`
-- `src/core/gateway/observe/logs/logger_factory.rs` — `create_async_logger()`
-- `src/core/gateway/plugins/runtime/log.rs` — `PluginLog`, `LogBuffer` (128-byte SmallVec, tier 1) + `ULogBuffer` (512-byte overflow, tier 2)
+- `edgion-gateway/src/ctx.rs` — `EdgionHttpContext`, `MatchInfo` (with `sv` field), `MatchedInfo` (with `sv` field)
+- `edgion-gateway/src/observe/access_log/entry.rs` — `AccessLogEntry`
+- `edgion-gateway/src/observe/access_log/logger.rs` — `AccessLogger`
+- `edgion-gateway/src/observe/logs/logger_factory.rs` — `create_async_logger()`
+- `edgion-gateway/src/plugins/runtime/log.rs` — `PluginLog`, `LogBuffer` (128-byte SmallVec, tier 1) + `ULogBuffer` (512-byte overflow, tier 2)
 
 ---
 

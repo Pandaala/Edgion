@@ -193,7 +193,7 @@ Readiness is determined via `AdminState::is_ready()` -> `ConfMgr::is_ready()` ->
 
 ## Write-path readiness gate
 
-The router applies `require_ready_middleware` (in `src/core/controller/api/mod.rs`) as a `route_layer` over the resource-CRUD write endpoints:
+The router applies `require_ready_middleware` (in `edgion-controller/src/api/mod.rs`) as a `route_layer` over the resource-CRUD write endpoints:
 
 - `POST /api/v1/cluster/{kind}` / `PUT /api/v1/cluster/{kind}/{name}` / `DELETE /api/v1/cluster/{kind}/{name}`
 - `POST /api/v1/namespaced/{kind}/{namespace}` / `PUT /api/v1/namespaced/{kind}/{namespace}/{name}` / `DELETE /api/v1/namespaced/{kind}/{namespace}/{name}`

@@ -11,7 +11,7 @@ description: EdgionTlsHandler::parse() now enforces a cross-namespace ReferenceG
 ## Conclusion
 
 `EdgionTlsHandler::parse()`
-(`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_tls.rs`)
+(`edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_tls.rs`)
 now calls the module-local `cross_ns_secret_ref_denied(ctx, owner_ns, secret_ref)`
 helper immediately before each `secret_store.get()` — once for the server cert
 (`spec.secret_ref`) and once for the mTLS CA (`spec.client_auth.ca_secret_ref`).

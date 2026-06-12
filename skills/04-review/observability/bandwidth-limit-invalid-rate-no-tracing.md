@@ -7,7 +7,7 @@ description: Decision rule for findings claiming `BandwidthLimit::create` should
 
 ## Conclusion
 
-`BandwidthLimit::create` (`src/core/gateway/plugins/http/bandwidth_limit/plugin.rs`) deliberately
+`BandwidthLimit::create` (`edgion-gateway/src/plugins/http/bandwidth_limit/plugin.rs`) deliberately
 does NOT emit `tracing::warn!` / `tracing::error!` on the `parse_rate().unwrap_or(0)` fallback.
 Fix suggestions of the form
 
@@ -71,4 +71,4 @@ Re-open the decision only if **all** of the following change:
 
 - Original finding: `plugins-http-FB02` (closed 2026-05-27 via doc-comment fix).
 - Related design record: [`../rate-limit/bandwidth-limit-per-stream.md`](../rate-limit/bandwidth-limit-per-stream.md) (per-stream scope decision; the same plugin).
-- Runtime validation gate: `src/core/gateway/plugins/runtime/plugin_runtime.rs` `add_from_upstream_response_body_filters` → `entry.plugin.validation_error()`.
+- Runtime validation gate: `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` `add_from_upstream_response_body_filters` → `entry.plugin.validation_error()`.

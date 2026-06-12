@@ -10,7 +10,7 @@ description: Backend (upstream) TLS CA loading now parses every PEM block via X5
 
 ## Conclusion
 
-`build_ca_chain` in `src/core/gateway/backends/peer_builder.rs` (the trust anchors
+`build_ca_chain` in `edgion-gateway/src/backends/peer_builder.rs` (the trust anchors
 used to verify the **backend** server cert under `BackendTLSPolicy`) now:
 
 - parses the whole `ca.crt` bundle with `X509::stack_from_pem` and `extend`s the

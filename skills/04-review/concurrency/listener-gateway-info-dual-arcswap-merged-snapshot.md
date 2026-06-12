@@ -10,7 +10,7 @@ description: ListenerGatewayInfoStore previously kept two separate ArcSwap field
 
 ## Conclusion
 
-`src/core/gateway/runtime/store/listener_gateway_info.rs` no longer carries two `ArcSwap`
+`edgion-gateway/src/runtime/store/listener_gateway_info.rs` no longer carries two `ArcSwap`
 fields. The struct is now:
 
 ```rust

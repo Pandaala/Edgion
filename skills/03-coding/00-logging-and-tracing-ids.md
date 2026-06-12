@@ -136,7 +136,7 @@ grep 'rv.*12345' controller.log
 |------|------|
 | `edgion-resources/src/constants/annotations.rs` | `edgion::SYNC_VERSION` constant definition |
 | `edgion-resources/src/resource/meta/traits.rs` | `extract_sync_version()` / `set_sync_version()` / `ResourceMeta::get_sync_version()` |
-| `src/core/gateway/conf_sync/cache_client/event_dispatch.rs` | sv injection point (List + Watch) |
-| `src/core/controller/conf_mgr/sync_runtime/resource_processor/processor.rs` | Unified rv logging entry point |
-| `src/core/gateway/ctx.rs` | `MatchInfo.sv` / `MatchedInfo.sv` definitions |
-| `src/core/gateway/routes/grpc/match_unit.rs` | `GrpcMatchInfo.sv` definition |
+| `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` | sv injection point (List + Watch) |
+| `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs` | Unified rv logging entry point |
+| `edgion-gateway/src/ctx.rs` | `MatchInfo.sv` / `MatchedInfo.sv` definitions |
+| `edgion-gateway/src/routes/grpc/match_unit.rs` | `GrpcMatchInfo.sv` definition |

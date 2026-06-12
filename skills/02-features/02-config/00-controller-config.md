@@ -11,9 +11,9 @@ description: Full schema for the edgion-controller YAML configuration.
 
 - Sample configuration: `config/edgion-controller.yaml`
 - Configuration structure: `edgion-common/src/config/mod.rs`
-- `conf_center` top level: `src/core/controller/conf_mgr/conf_center/config.rs`
-- FileSystem mode: `src/core/controller/conf_mgr/conf_center/file_system/config.rs`
-- Kubernetes mode: `src/core/controller/conf_mgr/conf_center/kubernetes/config.rs`
+- `conf_center` top level: `edgion-controller/src/conf_mgr/conf_center/config.rs`
+- FileSystem mode: `edgion-controller/src/conf_mgr/conf_center/file_system/config.rs`
+- Kubernetes mode: `edgion-controller/src/conf_mgr/conf_center/kubernetes/config.rs`
 
 ## Full Schema
 

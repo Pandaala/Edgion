@@ -14,7 +14,7 @@ All L4 (TCP / TLS-terminated / TLS-passthrough) bidirectional relay traffic now
 flows through a single helper:
 
 - `pub(crate) async fn bidirectional_relay(downstream, upstream, hooks)` in
-  `src/core/gateway/routes/l4_duplex.rs`
+  `edgion-gateway/src/routes/l4_duplex.rs`
 - Trait `DuplexHooks { record_sent, record_received, on_error }` plugs in the
   per-context bits.
 - Error variants: `DuplexError::{UpstreamWrite, DownstreamRead, DownstreamWrite,
@@ -22,11 +22,11 @@ flows through a single helper:
 
 Concrete hook impls:
 
-- `TcpDuplexHooks` — in `src/core/gateway/routes/tcp/edgion_tcp.rs`. Maps errors
+- `TcpDuplexHooks` — in `edgion-gateway/src/routes/tcp/edgion_tcp.rs`. Maps errors
   to `TcpStatus::*`. Note: `DownstreamFlush` collapses to
   `TcpStatus::DownstreamWriteError` — this matches pre-refactor TCP behavior
   (which never distinguished flush from write failure).
-- `TlsDuplexHooks` — in `src/core/gateway/routes/tls/mod.rs`, shared by both
+- `TlsDuplexHooks` — in `edgion-gateway/src/routes/tls/mod.rs`, shared by both
   `proxy.rs` (terminate) and `passthrough_proxy.rs`. Writes free-form strings
   into `ctx.err_log`. `DownstreamFlush` produces `"downstream flush err"`.
 

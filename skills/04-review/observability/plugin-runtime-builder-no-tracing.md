@@ -8,7 +8,7 @@ description: Use when reviewing findings that `PluginRuntime::add_upstream_respo
 ## Conclusion
 
 The four `add_*` builder helpers on `PluginRuntime`
-(`src/core/gateway/plugins/runtime/plugin_runtime.rs`) —
+(`edgion-gateway/src/plugins/runtime/plugin_runtime.rs`) —
 `add_request_filter`, `add_upstream_response_filter`,
 `add_upstream_response_body_filter`, `add_upstream_response` —
 **must not** emit any `tracing::*` call. The single outlier

@@ -111,7 +111,7 @@ ResourceProcessor is the data source for ServerCache, which feeds ConfigSyncServ
 ## Module structure
 
 ```
-src/core/controller/conf_sync/
+edgion-controller/src/conf_sync/
 ├── conf_server/
 │   ├── mod.rs                  # Module exports
 │   ├── config_sync_server.rs   # ConfigSyncServer core logic

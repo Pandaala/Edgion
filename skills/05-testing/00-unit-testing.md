@@ -84,7 +84,7 @@ Unit tests mainly cover the following areas:
 | LinkSys configuration | `edgion-resources/src/resources/link_sys/*.rs` | Connector config parsing and validation |
 | Core utility functions | `edgion-common/src/utils/mod.rs` | String handling, path utilities, common logic |
 | Configuration system | `edgion-common/src/config/mod.rs` | YAML parsing, config merging, default values |
-| Gateway backends | `src/core/gateway/backends/mod.rs` | Backend selection, load-balancing logic |
+| Gateway backends | `edgion-gateway/src/backends/mod.rs` | Backend selection, load-balancing logic |
 | Working directory | `edgion-resources/src/work_dir.rs` | Path resolution, directory creation, permission checks |
 
 ## How to run
@@ -186,14 +186,14 @@ When pruning / merging unit tests (parameterizing, removing tests covered equiva
 
 | Location | Reason |
 |---|---|
-| `src/core/gateway/lb/runtime_state/mod.rs` leastconn count | P0-07 regression |
-| `src/core/gateway/tls/validation/cert.rs` | mTLS verify_depth / SAN wildcard |
-| `src/core/gateway/cache/lru.rs` invariant tests | LRU underflow / hit_ratio |
-| `src/core/gateway/routes/grpc/match_engine.rs` sort tests | spec conformance |
-| `src/core/gateway/runtime/matching/route.rs` allowed_routes | spec conformance |
-| `src/core/controller/conf_mgr/sync_runtime/resource_processor/status_utils.rs` Condition mapping | reason/message text |
-| `src/core/controller/conf_mgr/sync_runtime/resource_processor/listener_port_manager.rs` port-conflict matrix | Protocol mixing rules |
-| `src/core/controller/conf_mgr/conf_center/file_system/resource_controller.rs` v1alpha3→v1 | Version compatibility |
+| `edgion-gateway/src/lb/runtime_state/mod.rs` leastconn count | P0-07 regression |
+| `edgion-gateway/src/tls/validation/cert.rs` | mTLS verify_depth / SAN wildcard |
+| `edgion-gateway/src/cache/lru.rs` invariant tests | LRU underflow / hit_ratio |
+| `edgion-gateway/src/routes/grpc/match_engine.rs` sort tests | spec conformance |
+| `edgion-gateway/src/runtime/matching/route.rs` allowed_routes | spec conformance |
+| `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_utils.rs` Condition mapping | reason/message text |
+| `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/listener_port_manager.rs` port-conflict matrix | Protocol mixing rules |
+| `edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs` v1alpha3→v1 | Version compatibility |
 | `edgion-resources/src/matcher/**` | IP / host matching algorithm |
 | `edgion-resources/src/duration.rs` / `real_ip_extractor.rs` | Duration expression / header priority algorithm |
 | `edgion-common/src/unified_auth/mod.rs` `from_configs` / `require_auth` | Multi-source auth assembly |

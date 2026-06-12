@@ -10,7 +10,7 @@ closed: 2026-05-28
 
 ## Conclusion
 
-`ConfigClient::apply_resource_change` (`src/core/gateway/conf_sync/conf_client/config_client.rs:582-665`, `impl ConfigClientEventDispatcher`) emitted `data_preview = &data[..floor_char_boundary(200)]` on all three error paths. Because `EdgionTls` and `LinkSys` are dispatched through the same `apply_change!` macro, a parse failure on a TLS cert/key body or a LinkSys credential body could dump up to the first 200 bytes of secret material into the ConfHandler error log — a direct breach of Iron Rule 1. Fixed by replacing `data_preview` with `data_len = data.len()` at all three sites.
+`ConfigClient::apply_resource_change` (`edgion-gateway/src/conf_sync/conf_client/config_client.rs:582-665`, `impl ConfigClientEventDispatcher`) emitted `data_preview = &data[..floor_char_boundary(200)]` on all three error paths. Because `EdgionTls` and `LinkSys` are dispatched through the same `apply_change!` macro, a parse failure on a TLS cert/key body or a LinkSys credential body could dump up to the first 200 bytes of secret material into the ConfHandler error log — a direct breach of Iron Rule 1. Fixed by replacing `data_preview` with `data_len = data.len()` at all three sites.
 
 Re-reports of the `data_preview = &data[..N]` form on this function are **not accepted**; verify the three `tracing` sites carry `data_len = data.len()` (not a body slice) before re-reporting.
 
@@ -46,4 +46,4 @@ Re-open only if:
 
 - Source: 2026-05-28 conf-sync log-safety review (conf-sync-F005).
 - Iron Rule: `skills/03-coding/01-log-safety.md` Iron Rule 1.
-- Precedent: `src/core/gateway/conf_sync/cache_client/event_dispatch.rs:53`.
+- Precedent: `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:53`.

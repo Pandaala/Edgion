@@ -32,7 +32,7 @@ src/core/
 Organized by subsystem, not by technical primitive:
 
 ```
-src/core/gateway/
+edgion-gateway/src/
 ├── api/          # Admin / test API
 ├── backends/     # Backend discovery / health checks / BackendTLSPolicy
 │   ├── discovery/    # Endpoint / EndpointSlice / Service discovery
@@ -96,7 +96,7 @@ are also flat `.rs` files, not directories. The canonical, fully annotated tree 
 `../01-controller/00-overview.md`; this is the placement-oriented summary.
 
 ```
-src/core/controller/
+edgion-controller/src/
 ├── api/          # Admin API endpoints (flat .rs files)
 │   ├── cluster_handlers.rs       # Cluster-scoped resource CRUD
 │   ├── namespaced_handlers.rs    # Namespaced resource CRUD

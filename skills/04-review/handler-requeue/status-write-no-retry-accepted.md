@@ -95,5 +95,5 @@ Re-open this decision only if:
   `requeue_with_backoff` removal and its rationale.
 - `skills/01-architecture/01-controller/06-requeue-mechanism.md` — the six
   cross-resource requeue trigger paths that self-heal reference errors.
-- `src/core/controller/conf_mgr/conf_center/kubernetes/resource_controller.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs`
   (`persist_k8s_status`, worker at ~537-567, `run_init_apply_once` at ~708).

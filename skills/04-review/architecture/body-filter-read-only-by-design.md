@@ -29,7 +29,7 @@ The finding (`tasks/review-envoy/filter-01`) compares against Envoy's mutable
 `Buffer::Instance&` in `encodeData()` / `decodeData()`. Envoy filters can compress, rewrite,
 transcode, or WAF-inspect bodies at the filter layer. Edgion's body-filter phase was scoped to
 **bandwidth throttling only** — see the deliberate trait doc comment in
-`src/core/gateway/plugins/runtime/traits/upstream_response_body_filter.rs:11-30` ("Plugins can
+`edgion-gateway/src/plugins/runtime/traits/upstream_response_body_filter.rs:11-30` ("Plugins can
 inspect the chunk and return an optional Duration to throttle ... This trait deliberately omits
 the `&mut PluginLog` argument ... Body filters are invoked once per upstream chunk"). The
 behaviour is "this class of plugin cannot be written yet", which harms no in-flight request; the
@@ -86,9 +86,9 @@ Re-open this decision only if:
 - `tasks/review-envoy/filter-01-no-body-modification.md` (closed 2026-05-29, ⚠️ accepted tradeoff)
 - Companion finding `tasks/review-envoy/filter-05-no-request-body-access.md` (request-body side of
   the same boundary)
-- `src/core/gateway/plugins/runtime/traits/upstream_response_body_filter.rs`
-- `src/core/gateway/routes/http/proxy_http/pg_upstream_response_body_filter.rs`
-- `src/core/gateway/plugins/runtime/plugin_runtime.rs:1114-1138`
-- `src/core/gateway/plugins/http/hmac_auth/plugin.rs:361-362`
+- `edgion-gateway/src/plugins/runtime/traits/upstream_response_body_filter.rs`
+- `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs`
+- `edgion-gateway/src/plugins/runtime/plugin_runtime.rs:1114-1138`
+- `edgion-gateway/src/plugins/http/hmac_auth/plugin.rs:361-362`
 </content>
 </invoke>

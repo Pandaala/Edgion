@@ -1,0 +1,166 @@
+[package]
+name = "edgion-controller"
+version = "0.1.0"
+edition = "2021"
+authors = ["pandalaa"]
+
+[lib]
+name = "edgion_controller"
+path = "src/lib.rs"
+
+[[bin]]
+name = "edgion-controller"
+path = "src/bin/edgion_controller.rs"
+
+[features]
+default = ["allocator-jemalloc", "boringssl"]
+
+# Memory allocator selection (mutually exclusive) — lives with the binary.
+allocator-jemalloc = ["tikv-jemallocator"]
+allocator-mimalloc = ["mimalloc"]
+allocator-system = []
+
+# TLS backend selection — the controller has no TLS-gated code of its own; it
+# forwards the choice to edgion-gateway (which it depends on for compile_plugins).
+boringssl = ["edgion-gateway/boringssl"]
+rustls = ["edgion-gateway/rustls"]
+
+[dependencies]
+# Memory allocators (optional, controlled by features)
+tikv-jemallocator = { version = "0.6", optional = true }
+mimalloc = { version = "0.1", default-features = false, optional = true }
+
+# Shared resource/config schema crate (leaf; reused by the future EdgionCenter)
+edgion-resources = { path = "../edgion-resources" }
+
+# Shared common crate (config loader, observe, secret store, link core, etc.)
+edgion-common = { path = "../edgion-common" }
+
+# Data-plane crate — the controller depends on it for plugin compilation
+# (the one intentional controller -> gateway edge).
+edgion-gateway = { path = "../edgion-gateway" }
+
+# Core async runtime and error handling
+tokio = { version = "1.49", features = ["full"] }
+tokio-util = "0.7"
+tokio-stream = "0.1"
+anyhow = "1.0"
+async-trait = "0.1"
+thiserror = "2.0.18"
+
+# Serialization/Deserialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+jsonschema = { version = "0.40", default-features = false }
+
+# Kubernetes conf_client and types
+kube = { version = "2.0.1", features = ["runtime", "derive"] }
+k8s-openapi = { version = "0.26.1", features = ["latest", "schemars"] }
+schemars = { version = "1" }
+
+# gRPC (config sync)
+tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
+# rustls （tonic TLS ）
+rustls = { version = "0.23", features = ["ring"] }
+tokio-rustls = "0.26"
+# System CA roots for building custom rustls ClientConfig (Redis LinkSys TLS)
+rustls-native-certs = "0.8"
+x509-parser = { version = "0.18", features = ["verify"] }  # Certificate parsing and signature verification
+tonic-reflection = "0.12"
+prost = "0.13"
+
+# File system monitoring
+notify = "8.2"
+walkdir = "2"
+futures = "0.3.31"
+
+# HTTP server
+axum = { version = "0.8.8", features = ["macros", "ws"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+
+# Utilities
+bytes = "1.11.1"
+base64 = "0.22"
+chrono = "0.4"
+parking_lot = "0.12"
+uuid = { version = "1.19", features = ["v4"] }
+arc-swap = "1.8"
+dashmap = "6.1"
+regex = "1.12"
+rand = "0.9"
+smallvec = "1.15"
+indexmap = "2"
+nom = "7"
+bcrypt = "0.18"
+sha2 = "0.10"
+subtle = "2"
+crc32fast = "1.4"
+hmac = "0.12"
+aes-gcm = "0.10"
+hex = "0.4"
+jsonwebtoken = "9"
+
+# Pingora
+pingora-core = { version = "0.8.1", features = ["connection_filter"] }
+pingora-http = "0.8.1"
+pingora-limits = "0.8.1"
+pingora-load-balancing = "0.8.1"
+pingora-proxy = { version = "0.8.1" }
+etcd-client = { version = "0.18", features = ["tls"] }
+fred = { version = "10", default-features = false, features = [
+    "enable-rustls",       # TLS via rustls (consistent with Edgion)
+    "i-std",               # Standard data structures (GET, SET, lists, etc.)
+    "i-keys",              # Key commands (EXPIRE, TTL, EXISTS, etc.)
+    "i-hashes",            # Hash commands (HGET, HSET, HGETALL, etc.)
+    "i-scripts",           # Lua scripting (for distributed locks)
+    "i-lists",             # List commands (RPUSH, LPOP, LLEN, LTRIM)
+    "partial-tracing",     # Tracing integration
+] }
+
+# BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)
+boring-sys = { version = "4", optional = true }
+boring = { version = "4", optional = true }
+
+# Metrics
+metrics = "0.24"
+metrics-exporter-prometheus = "0.18"
+metrics-util = { version = "0.20", features = ["debugging"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+rpassword = "7"
+zeroize = { version = "1", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+http = "1.4.0"
+percent-encoding = "2.3"
+
+# Test client dependencies
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2", "stream"] }
+
+# CLI table formatting
+tabled = "0.20"
+
+rusqlite = { version = "0.31", features = ["bundled"] }
+md-5 = "0.10"
+cookie = "0.18.1"
+instant-acme = "0.8.4"
+rcgen = { version = "0.14.7", features = ["x509-parser"] }
+time = { version = "0.3", features = ["std"] }
+sha1 = "0.10.6"
+# Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
+pingora-ketama = "0.8.1"
+tower = { version = "0.5", features = ["util"] }
+
+
+[dev-dependencies]
+edgion-common = { path = "../edgion-common", features = ["test-util"] }
+tempfile = "3"
+mockall = "0.14.0"
+expect-test = "1.5"
+tower = "0.5"
+wiremock = "0.6"
+proptest = "1"

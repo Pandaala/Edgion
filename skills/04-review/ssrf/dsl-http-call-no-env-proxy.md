@@ -8,14 +8,14 @@ description: Use when reviewing the DSL `http.call` shared reqwest client — th
 ## Conclusion
 
 Both `DSL_HTTP_CLIENT` and `DSL_HTTP_CLIENT_GUARDED` in
-`src/core/gateway/plugins/http/dsl/runtime.rs` call `.no_proxy()` on the
+`edgion-gateway/src/plugins/http/dsl/runtime.rs` call `.no_proxy()` on the
 `reqwest::Client::builder()`. This is the intended end state — reqwest's default
 behavior of reading `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` from the process
 environment is deliberately disabled. This matches the project's other internal reqwest
 clients:
 
-- `src/core/gateway/plugins/http/all_endpoint_status/plugin.rs:121`
-- `src/core/gateway/backends/health/check/probes.rs:42`
+- `edgion-gateway/src/plugins/http/all_endpoint_status/plugin.rs:121`
+- `edgion-gateway/src/backends/health/check/probes.rs:42`
 
 ## Why proxy env vars are disabled
 

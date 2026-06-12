@@ -13,7 +13,7 @@ When reviewing `forward_auth::send_error_response` "`let _ = resp.insert_header(
 
 ## Source paths
 
-- `src/core/gateway/plugins/http/forward_auth/plugin.rs` — `send_error_response`
+- `edgion-gateway/src/plugins/http/forward_auth/plugin.rs` — `send_error_response`
 
 ## Re-report guard
 

@@ -9,10 +9,10 @@ description: Use when reviewing findings that flag the per-request String alloca
 
 # AccessLogEntry::from_context Per-Request request_uri String Alloc (include_raw_uri=true) is Not Worth Fixing
 
-**False-positive scenario**: `src/core/gateway/observe/access_log/entry.rs:75-81` —
+**False-positive scenario**: `edgion-gateway/src/observe/access_log/entry.rs:75-81` —
 when `[access_log_options] include_raw_uri = true`, `AccessLogEntry::from_context`
 calls `ctx.request_uri()`, which delegates to `compose_uri()` in
-`src/core/gateway/ctx.rs:1088-1133` and always returns a freshly allocated `String`
+`edgion-gateway/src/ctx.rs:1088-1133` and always returns a freshly allocated `String`
 (`format!("{}?{}", path, q)` or `path.to_string()`). Every other field on
 `AccessLogEntry<'a>` is a `&'a` borrow, so reviewers see this as the lone
 heap-allocating field that "breaks the zero-copy invariant" and propose adding
@@ -39,7 +39,7 @@ heap-allocating field that "breaks the zero-copy invariant" and propose adding
    a regression for `include_raw_uri=false` deployments.
 
 3. **The DSL/plugin path cannot benefit.** `request_uri()` has a second
-   caller at `src/core/gateway/plugins/runtime/session_adapter.rs:259-261`
+   caller at `edgion-gateway/src/plugins/runtime/session_adapter.rs:259-261`
    exposing `fn get_request_uri(&self) -> String` to the plugin runtime
    trait. The trait boundary owns the `String`, so even if `ctx.request_uri()`
    were switched to `Option<&str>`, this site would still `to_string()` back

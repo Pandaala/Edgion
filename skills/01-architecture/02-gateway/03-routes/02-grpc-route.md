@@ -12,7 +12,7 @@ gRPC routing is implemented based on the Gateway API `GRPCRoute` CRD. Service- a
 ## Module structure
 
 ```
-src/core/gateway/routes/grpc/
+edgion-gateway/src/routes/grpc/
 ├── mod.rs                # module entry and type exports
 ├── conf_handler_impl.rs  # ConfHandler<GRPCRoute> implementation
 ├── match_engine.rs       # GrpcMatchEngine: service/method route matching
@@ -121,9 +121,9 @@ Coverage spans pure gRPC (`application/grpc`) and gRPC-Web (`application/grpc-we
 
 | File | Responsibility |
 |------|----------------|
-| `src/core/gateway/routes/grpc/match_engine.rs` | GrpcMatchEngine, parse_grpc_path |
-| `src/core/gateway/routes/grpc/match_unit.rs` | GrpcRouteRuleUnit, GrpcMatchInfo |
-| `src/core/gateway/routes/grpc/routes_mgr.rs` | GlobalGrpcRouteManagers, GrpcRouteRules |
-| `src/core/gateway/routes/grpc/conf_handler_impl.rs` | ConfHandler<GRPCRoute> implementation |
-| `src/core/gateway/routes/grpc/integration.rs` | try_match_grpc_route, handle_grpc_upstream |
-| `src/core/gateway/routes/grpc/grpc_timeout.rs` | parse_grpc_timeout, format_grpc_timeout |
+| `edgion-gateway/src/routes/grpc/match_engine.rs` | GrpcMatchEngine, parse_grpc_path |
+| `edgion-gateway/src/routes/grpc/match_unit.rs` | GrpcRouteRuleUnit, GrpcMatchInfo |
+| `edgion-gateway/src/routes/grpc/routes_mgr.rs` | GlobalGrpcRouteManagers, GrpcRouteRules |
+| `edgion-gateway/src/routes/grpc/conf_handler_impl.rs` | ConfHandler<GRPCRoute> implementation |
+| `edgion-gateway/src/routes/grpc/integration.rs` | try_match_grpc_route, handle_grpc_upstream |
+| `edgion-gateway/src/routes/grpc/grpc_timeout.rs` | parse_grpc_timeout, format_grpc_timeout |

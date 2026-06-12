@@ -10,7 +10,7 @@ description: Gateway admin API /configclient/EdgionTls now scrubs spec.secret an
 
 ## Conclusion
 
-The gateway admin API handlers in `src/core/gateway/api/mod.rs` no longer serialize
+The gateway admin API handlers in `edgion-gateway/src/api/mod.rs` no longer serialize
 resolved private-key material for `EdgionTls`. Both list and get paths route through
 dedicated helpers — `to_json_vec_edgion_tls` and `find_edgion_tls` — that call
 `scrub_edgion_tls_secrets` before `serde_json::to_value`, nulling out:
@@ -49,7 +49,7 @@ never reaches the response body regardless of the auth/bind posture.
 
 ## Tests guarding this
 
-- `src/core/gateway/api/mod.rs::edgion_tls_scrub_tests::admin_serialization_strips_private_keys`
+- `edgion-gateway/src/api/mod.rs::edgion_tls_scrub_tests::admin_serialization_strips_private_keys`
   builds an `EdgionTls` with a populated leaf `secret` (`tls.key`) and an mTLS `ca_secret`,
   runs both `to_json_vec_edgion_tls` and `find_edgion_tls`, and asserts the serialized JSON
   contains neither private-key marker nor the `tls.key` / `secret` / `caSecret` fields,

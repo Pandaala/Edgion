@@ -44,14 +44,14 @@ Frame 3 — HEADERS (END_STREAM=1): grpc-status: N, grpc-message: "..."
 
 ## Code shape today
 
-- `src/core/gateway/runtime/server/error_response.rs:53` — `send_grpc_error_three_frame`:
+- `edgion-gateway/src/runtime/server/error_response.rs:53` — `send_grpc_error_three_frame`:
   all public `end_response_*` functions delegate here for gRPC requests (8 call sites:
   400, 421, 404, 501, 503, 500, 502, 503).
-- `src/core/gateway/plugins/runtime/session_adapter.rs:179` — `send_grpc_error_three_frame`:
+- `edgion-gateway/src/plugins/runtime/session_adapter.rs:179` — `send_grpc_error_three_frame`:
   same pattern for plugin-runtime termination paths.
-- `src/core/gateway/plugins/runtime/session_adapter.rs:68` — `send_grpc_error_direct`:
+- `edgion-gateway/src/plugins/runtime/session_adapter.rs:68` — `send_grpc_error_direct`:
   plugin-facing public API, same three-frame shape.
-- `src/core/gateway/routes/http/proxy_http/pg_fail_to_proxy.rs:49` — external call site
+- `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_proxy.rs:49` — external call site
   that delegates to `send_grpc_error_three_frame` with an error code derived from Pingora's
   error-type matching (proxy/upstream failure path).
 - All three locations carry inline comments documenting the Pingora constraint.

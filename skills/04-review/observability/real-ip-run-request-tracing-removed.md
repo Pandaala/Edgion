@@ -7,7 +7,7 @@ description: Use when reviewing findings that `RealIp::run_request` should emit 
 
 ## Conclusion
 
-`RealIp::run_request` (`src/core/gateway/plugins/http/real_ip/plugin.rs`) **must
+`RealIp::run_request` (`edgion-gateway/src/plugins/http/real_ip/plugin.rs`) **must
 not** emit `tracing::debug!` (or any `tracing::*`) for the matched trusted-proxy
 group name. The `tracing::debug!(group = %group, ip = %client_ip,
 "trusted_proxy_match")` call (with its surrounding `if let Some(group) =

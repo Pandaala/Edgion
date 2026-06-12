@@ -122,10 +122,10 @@ Open a new task and revisit the analysis if **any** of the following is observed
 
 ## Source references for fact-checking the above
 
-- `src/core/gateway/plugins/http/dsl/lang/value.rs:13-26` — current `Value` enum with `Str(Arc<str>)` and `List(Vec<Arc<str>>)`.
-- `src/core/gateway/plugins/http/dsl/lang/value.rs:74-89` — current `into_string` (always allocates `s.to_string()`).
-- `src/core/gateway/plugins/http/dsl/lang/vm.rs:179` — `const_str_cache: Vec<Option<Arc<str>>>` pre-conversion cache.
-- `src/core/gateway/plugins/http/dsl/lang/builtins.rs` — Vec<Arc<str>> construction sites: `:100`, `:218`, `:529`, `:558`; `Value::Str(Arc::from(...))` at `:358`, `:361`, `:523`, `:932`, `:947`.
+- `edgion-gateway/src/plugins/http/dsl/lang/value.rs:13-26` — current `Value` enum with `Str(Arc<str>)` and `List(Vec<Arc<str>>)`.
+- `edgion-gateway/src/plugins/http/dsl/lang/value.rs:74-89` — current `into_string` (always allocates `s.to_string()`).
+- `edgion-gateway/src/plugins/http/dsl/lang/vm.rs:179` — `const_str_cache: Vec<Option<Arc<str>>>` pre-conversion cache.
+- `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` — Vec<Arc<str>> construction sites: `:100`, `:218`, `:529`, `:558`; `Value::Str(Arc::from(...))` at `:358`, `:361`, `:523`, `:932`, `:947`.
 - `tasks/todo/dsl-value-str-arc-smartstring.md` — the original migration proposal (left in place; its conclusions are superseded by this memo).
 - `docs/superpowers/specs/2026-05-15-dsl-value-immutable-string-design.md` — the design spec we wrote and then chose not to adopt (kept as record of the analysis).
 - `kstring` 2.0.2 source — confirmed `into_string` non-zero-copy via `https://github.com/cobalt-org/kstring/blob/master/src/string.rs` and `src/backend.rs` (`HeapStr` trait has no consuming method).

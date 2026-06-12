@@ -40,11 +40,11 @@ them by reference to `dsl-http-call-ip-literal-only.md`.
 
 ## Implementation pointers
 
-- `src/core/gateway/plugins/http/dsl/runtime.rs::dsl_http_client(block_private_ips: bool)`:
+- `edgion-gateway/src/plugins/http/dsl/runtime.rs::dsl_http_client(block_private_ips: bool)`:
   selects `DSL_HTTP_CLIENT_GUARDED` (custom policy) when `true`, else
   `DSL_HTTP_CLIENT` (limited policy). Both are process-global so connection
   pools are reused.
-- `src/core/gateway/plugins/http/dsl/lang/builtins.rs::call_builtin_http`:
+- `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs::call_builtin_http`:
   passes `runtime.block_private_ips` to `dsl_http_client(..)`.
 - `is_ssrf_blocked_ip_literal` is `pub(crate)` so the runtime's redirect
   policy can reuse the same predicate — avoid forking the IP-blocklist logic.

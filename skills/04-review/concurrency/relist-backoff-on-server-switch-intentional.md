@@ -11,7 +11,7 @@ description: Use when reviewing `gateway/conf_sync/cache_client/event_dispatch.r
 ## Conclusion
 
 `ClientCache::start_watch`
-(`src/core/gateway/conf_sync/cache_client/event_dispatch.rs:135-381`) intentionally keeps the
+(`edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:135-381`) intentionally keeps the
 existing outer-loop backoff (`BACKOFF_INIT_SECS = 2s` + `0..3s` jitter, lines 149-160) on every
 non-first iteration, regardless of which `break 'watch_block` exit triggered the relist. After
 a successful list, `backoff_secs` is reset to 2s (line 182), so the loop does **not** escalate
@@ -147,8 +147,8 @@ Re-open this decision only if:
 - [partial-update-under-lock-intentional.md](partial-update-under-lock-intentional.md)
   — sibling conf-sync accepted-tradeoff: a control-plane cost intentionally kept because the
   fix's structural complexity is out of proportion to the cold-path saving.
-- `src/core/gateway/conf_sync/cache_client/event_dispatch.rs:135-381` —
+- `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:135-381` —
   `ClientCache::start_watch` outer backoff loop and all four `break 'watch_block` exits.
-- `src/core/gateway/conf_sync/conf_client/grpc_client.rs:121-218` —
+- `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs:121-218` —
   `start_watch_server_meta`, the asymmetric `server_switched`/`continue` reference cited in
   both F004 and F015.

@@ -13,11 +13,11 @@ closed: 2026-05-31
 The Gateway holds all synced configuration in memory only. A Gateway **process**
 cold start (pod recreate, OOMKill, node drain, rolling image upgrade) begins with
 empty `ClientCache`s (`CacheData::new()` → `ready: false`, empty `data`,
-`src/core/gateway/conf_sync/cache_client/cache_data.rs`); `wait_for_ready`
-(`src/core/gateway/cli/mod.rs`) polls until every kind has completed its initial
+`edgion-gateway/src/conf_sync/cache_client/cache_data.rs`); `wait_for_ready`
+(`edgion-gateway/src/cli/mod.rs`) polls until every kind has completed its initial
 List before Pingora starts accepting connections, so a cold Gateway serves no
 traffic until the first full sync completes. The TODO at
-`src/core/gateway/conf_sync/conf_client/grpc_client.rs:27-32` already acknowledges
+`edgion-gateway/src/conf_sync/conf_client/grpc_client.rs:27-32` already acknowledges
 this gap.
 
 This is an accepted design tradeoff, **not** a defect and **not** a narrow review
@@ -92,8 +92,8 @@ Re-open (as a `tasks/todo/` feature, not a review fix) only if:
 ## Reference Cases
 
 - `tasks/review-envoy/sync-05-no-local-snapshot-persistence.md` (closed 2026-05-31, ⚠️ accepted-tradeoff)
-- `src/core/gateway/conf_sync/conf_client/grpc_client.rs` (TODO lines 27-32 — the acknowledged gap)
-- `src/core/gateway/conf_sync/cache_client/cache_data.rs` (`CacheData::new()` → `ready: false`)
-- `src/core/gateway/cli/mod.rs` (`wait_for_ready` poll loop)
+- `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs` (TODO lines 27-32 — the acknowledged gap)
+- `edgion-gateway/src/conf_sync/cache_client/cache_data.rs` (`CacheData::new()` → `ready: false`)
+- `edgion-gateway/src/cli/mod.rs` (`wait_for_ready` poll loop)
 - `skills/04-review/architecture/listener-port-set-frozen-at-startup.md` (sibling Envoy-comparison limitation)
 - `tasks/review-envoy/sync-02-no-cross-kind-ordering.md` (cross-kind consistency, referenced by the finding's point 3)

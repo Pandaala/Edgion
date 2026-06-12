@@ -7,8 +7,8 @@ description: Use when reviewing `DslPlugin::run_upstream_response_filter` `block
 
 **Status**: Resolved by documentation — see the doc comment on
 `DslPlugin::run_upstream_response_filter` in
-`src/core/gateway/plugins/http/dsl/plugin.rs`.
-**Test**: `src/core/gateway/plugins/http/dsl/tests/response_builtins.rs::test_upstream_response_filter_phase`
+`edgion-gateway/src/plugins/http/dsl/plugin.rs`.
+**Test**: `edgion-gateway/src/plugins/http/dsl/tests/response_builtins.rs::test_upstream_response_filter_phase`
 (uses `#[tokio::test(flavor = "multi_thread")]`).
 
 ## Conclusion
@@ -30,7 +30,7 @@ Fix suggestions of the form "replace `block_in_place` with `spawn_blocking`" or
 
 `UpstreamResponseFilter` is deliberately sync — the Pingora
 `upstream_response_filter` hook is a sync context (see the trait doc in
-`src/core/gateway/plugins/runtime/traits/upstream_response_filter.rs`). DSL is
+`edgion-gateway/src/plugins/runtime/traits/upstream_response_filter.rs`). DSL is
 the only impl that needs to run async work (redis / http builtins), so it must
 bridge sync→async. On a multi-thread runtime a bare `Handle::block_on` from a
 worker thread panics ("Cannot block the current thread from within a runtime");
@@ -81,6 +81,6 @@ Re-open this decision only if:
 ## Reference Cases
 
 - Finding F-008 (`tasks/plugins/`), 2026-05-26 — documented, spawn_blocking rejected.
-- Method doc: `src/core/gateway/plugins/http/dsl/plugin.rs`
+- Method doc: `edgion-gateway/src/plugins/http/dsl/plugin.rs`
   `DslPlugin::run_upstream_response_filter`.
-- Sync trait contract: `src/core/gateway/plugins/runtime/traits/upstream_response_filter.rs`.
+- Sync trait contract: `edgion-gateway/src/plugins/runtime/traits/upstream_response_filter.rs`.

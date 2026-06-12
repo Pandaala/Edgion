@@ -11,7 +11,7 @@ description: RequestRedirectFilter::build_location now preserves the request que
 ## Conclusion
 
 `RequestRedirectFilter::build_location`
-(`src/core/gateway/plugins/runtime/gateway_api_filters/request_redirect.rs`) now appends the
+(`edgion-gateway/src/plugins/runtime/gateway_api_filters/request_redirect.rs`) now appends the
 original request query string (`?<query>`, when non-empty) to the assembled `Location` URL.
 `run_request` reads `session.get_query()` alongside `get_path()` and passes it into
 `build_location`.

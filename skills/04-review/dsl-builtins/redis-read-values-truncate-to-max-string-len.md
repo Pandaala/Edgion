@@ -8,7 +8,7 @@ closed: 2026-05-31
 
 # `redis.get` / `redis.hget` / `redis.hgetall` values: silent truncation at `max_string_len` — RAISING IS NOT ACCEPTED
 
-**Status**: Resolved (fr-dsl-01, 2026-05-31) — `Vm::call_builtin_redis` for `BuiltinId::RedisGet` / `RedisHGet` / `RedisHGetAll` in `src/core/gateway/plugins/http/dsl/lang/builtins.rs`. The shared helper `truncate_to_max_string_len` (defined next to `checked_value_str`) is applied to each value-construction site.
+**Status**: Resolved (fr-dsl-01, 2026-05-31) — `Vm::call_builtin_redis` for `BuiltinId::RedisGet` / `RedisHGet` / `RedisHGetAll` in `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs`. The shared helper `truncate_to_max_string_len` (defined next to `checked_value_str`) is applied to each value-construction site.
 **Tests**: `builtins.rs` inline `mod truncate_tests` (locks under-limit pass-through, over-limit byte truncation, and UTF-8 char-boundary walk-back). The redis client path itself requires a live `RedisLinkClient` and is covered by integration scenarios, not unit tests.
 
 ## Conclusion
@@ -52,7 +52,7 @@ Re-open this decision only if:
 ## Reference Cases
 
 - `tasks/bug/fr-dsl-01-redis-string-values-bypass-max-string-len.md` — original finding (Security/P2, downgraded to P3 on Opus review), closed by this entry.
-- `src/core/gateway/plugins/http/dsl/lang/builtins.rs` — the `truncate_to_max_string_len` helper and the three redis arms that call it.
+- `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` — the `truncate_to_max_string_len` helper and the three redis arms that call it.
 - `docs/en/.../dsl/api-reference.md` and `docs/zh-CN/.../dsl/api-reference.md` — `### redis.get` / `### redis.hget` / `### redis.hgetall` truncation notes.
 - See also `[[http-call-body-truncate-to-max-string-len]]` (FB-03) — the precedent this fix mirrors; the `http.call` body cap establishes the silent-truncate-not-raise pattern.
 - See also `[[string-len-bytes-vs-chars-contract]]` (FB-04) — why `max_string_len` is byte-measured, which is why the truncation walks back to a UTF-8 char boundary.

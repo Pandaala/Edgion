@@ -31,7 +31,7 @@ gRPC status" are **not accepted**.
 
 1. **Conflicts with the documented HTTP-status-centric model.** The model is recorded in
    three places: the `error_response.rs` module doc, the four-path drain note in
-   `src/core/gateway/ctx.rs` (`pending_response_header_ops`), and an independent twin
+   `edgion-gateway/src/ctx.rs` (`pending_response_header_ops`), and an independent twin
    `send_grpc_error_three_frame` in `session_adapter.rs`. Changing the signature to a
    `GrpcStatus` enum would split the single "HTTP status is the source of truth" contract.
 2. **Blast radius is ~10 call sites across 4 modules, not "1 direct caller".**
@@ -53,9 +53,9 @@ polish, not a required fix.
 
 ## Code shape today
 
-- `src/core/gateway/runtime/server/error_response.rs::end_response_grpc_unimplemented` — `send_grpc_error_three_frame(.., 501)`
-- `src/core/gateway/runtime/server/error_response.rs::end_response_grpc_unavailable` — `send_grpc_error_three_frame(.., 503)`
-- `src/core/gateway/runtime/server/error_response.rs::http_to_grpc_status` — the mapping table (`501 → (12, "unimplemented")`, `503 → (14, "unavailable")`)
+- `edgion-gateway/src/runtime/server/error_response.rs::end_response_grpc_unimplemented` — `send_grpc_error_three_frame(.., 501)`
+- `edgion-gateway/src/runtime/server/error_response.rs::end_response_grpc_unavailable` — `send_grpc_error_three_frame(.., 503)`
+- `edgion-gateway/src/runtime/server/error_response.rs::http_to_grpc_status` — the mapping table (`501 → (12, "unimplemented")`, `503 → (14, "unavailable")`)
 
 ## Re-evaluation triggers
 

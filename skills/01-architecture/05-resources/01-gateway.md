@@ -11,8 +11,8 @@ Gateway is Edgion's core resource. It defines the gateway's Listeners (listening
 
 ## Source code locations
 
-- Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs`
-- Gateway ConfHandler: `src/core/gateway/runtime/handler.rs` (drives `GatewayStore`, `ListenerGatewayInfoStore`, and the per-port route managers)
+- Controller Handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs`
+- Gateway ConfHandler: `edgion-gateway/src/runtime/handler.rs` (drives `GatewayStore`, `ListenerGatewayInfoStore`, and the per-port route managers)
 - Type definitions: `edgion-resources/src/resources/gateway.rs`
 
 ## Controller-side processing

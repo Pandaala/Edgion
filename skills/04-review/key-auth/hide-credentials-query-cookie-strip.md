@@ -19,7 +19,7 @@ never travel in the forwarded request.
 
 Re-reports of the form "`hideCredentials` silently no-ops for query/cookie /
 the doc over-promises" are **not accepted** — the gap was closed in
-`src/core/gateway/plugins/http/key_auth/plugin.rs`. Verify
+`edgion-gateway/src/plugins/http/key_auth/plugin.rs`. Verify
 `hide_credentials` has explicit `KeyGet::Query` / `KeyGet::Cookie` arms
 (`strip_query_param` / `strip_cookie`) before re-reporting.
 
@@ -91,7 +91,7 @@ Re-open only if:
 ## Reference Cases
 
 - `fr-auth2-02` (2026-05-30) — Opus-confirmed P3 Security; fixed (code + doc).
-- Code: `src/core/gateway/plugins/http/key_auth/plugin.rs` — `hide_credentials`,
+- Code: `edgion-gateway/src/plugins/http/key_auth/plugin.rs` — `hide_credentials`,
   `strip_query_param`, `strip_cookie`; `PluginSession::set_request_query`
   (`runtime/traits/session.rs` + `runtime/session_adapter.rs`).
 - Docs: `docs/en/.../edgion-plugins/key-auth.md` &

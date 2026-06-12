@@ -87,7 +87,7 @@ if req.request_path matches ".*%2[fF].*" { deny }
 
 ## Implementation locations (internal reference)
 
-- DSL builtin registration: `src/core/gateway/plugins/http/dsl/lang/compiler/builtins.rs`
-- DSL builtin evaluation: `src/core/gateway/plugins/http/dsl/lang/builtins.rs`
-- session trait: `src/core/gateway/plugins/runtime/traits/session.rs`
-- ctx canonical API: `src/core/gateway/ctx.rs`
+- DSL builtin registration: `edgion-gateway/src/plugins/http/dsl/lang/compiler/builtins.rs`
+- DSL builtin evaluation: `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs`
+- session trait: `edgion-gateway/src/plugins/runtime/traits/session.rs`
+- ctx canonical API: `edgion-gateway/src/ctx.rs`

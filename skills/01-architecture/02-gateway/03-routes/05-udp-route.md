@@ -12,7 +12,7 @@ UDPRoute implements the L4 UDP routing capability of the Gateway API. UDP routin
 ## Module structure
 
 ```
-src/core/gateway/routes/udp/
+edgion-gateway/src/routes/udp/
 ├── mod.rs                # module entry and type exports
 ├── conf_handler_impl.rs  # ConfHandler<UDPRoute> implementation
 ├── routes_mgr.rs         # UdpPortRouteManager / GlobalUdpRouteManagers
@@ -53,7 +53,7 @@ pub struct UdpRouteTable {
 
 | File | Responsibility |
 |------|----------------|
-| `src/core/gateway/routes/udp/routes_mgr.rs` | GlobalUdpRouteManagers, UdpPortRouteManager |
-| `src/core/gateway/routes/udp/udp_route_table.rs` | UdpRouteTable |
-| `src/core/gateway/routes/udp/edgion_udp.rs` | EdgionUdpProxy |
-| `src/core/gateway/routes/udp/conf_handler_impl.rs` | ConfHandler<UDPRoute> implementation |
+| `edgion-gateway/src/routes/udp/routes_mgr.rs` | GlobalUdpRouteManagers, UdpPortRouteManager |
+| `edgion-gateway/src/routes/udp/udp_route_table.rs` | UdpRouteTable |
+| `edgion-gateway/src/routes/udp/edgion_udp.rs` | EdgionUdpProxy |
+| `edgion-gateway/src/routes/udp/conf_handler_impl.rs` | ConfHandler<UDPRoute> implementation |

@@ -9,10 +9,10 @@ description: Use when reviewing findings that compare Edgion against Envoy LDS a
 
 Edgion binds every listener socket exactly once, during startup Phase 1
 (`create_and_configure_server()` → `gateway_base.configure_listeners()`,
-`src/core/gateway/cli/pingora.rs`). The Pingora `Server` is then consumed by
+`edgion-gateway/src/cli/pingora.rs`). The Pingora `Server` is then consumed by
 `run_forever()`, so no runtime code path holds a handle to `bind()`/`listen()` a new
 socket or drain an old one. `GatewayHandler::partial_update()`
-(`src/core/gateway/runtime/handler.rs`) rebuilds only routing data (PGIS + per-listener
+(`edgion-gateway/src/runtime/handler.rs`) rebuilds only routing data (PGIS + per-listener
 route managers); it does not touch sockets. Adding a listener port to a live Gateway
 therefore leaves the new port unbound (traffic silently dropped) and removing a port
 leaves an orphan bound socket — a port-set change requires a gateway process restart.
@@ -73,7 +73,7 @@ Re-open only if:
 ## Reference Cases
 
 - `tasks/review-envoy/listener-01-no-runtime-port-add.md` (closed 2026-05-30, 📝 documented limitation)
-- `src/core/gateway/runtime/handler.rs` (`partial_update`, `rebuild_listener_gateway_infos` site)
-- `src/core/gateway/cli/pingora.rs` (`create_and_configure_server`, `run_server`/`run_forever`)
-- `src/core/gateway/runtime/server/listener_builder.rs`
+- `edgion-gateway/src/runtime/handler.rs` (`partial_update`, `rebuild_listener_gateway_infos` site)
+- `edgion-gateway/src/cli/pingora.rs` (`create_and_configure_server`, `run_server`/`run_forever`)
+- `edgion-gateway/src/runtime/server/listener_builder.rs`
 - `skills/01-architecture/02-gateway/01-startup-shutdown.md`

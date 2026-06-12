@@ -8,7 +8,7 @@ description: Use when reviewing Controller federation client / HttpProxy / admin
 ## Conclusion
 
 **FIXED (controller-01, 2026-05-20 + RBAC layer 2026-05-21).** The Controller
-federation client (`src/core/controller/fed_sync/fed_client/mod.rs`) now
+federation client (`edgion-controller/src/fed_sync/fed_client/mod.rs`) now
 **fails closed** unless its gRPC channel to Center is mTLS-authenticated. `run()`
 calls `resolve_mtls_or_refuse(&config.security)`: it returns the active cert set
 only when one is configured **and** `skip_tls` is not set; otherwise `run()` logs

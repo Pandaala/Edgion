@@ -250,18 +250,18 @@ Subcommand entry: `edgion-cli/src/cli/commands/gen_certs.rs`
 |------|------|------|
 | **common/conf_sync** | `edgion-common/src/conf_sync/` | Proto definitions, shared traits (`CacheEventDispatch`, `ConfHandler`, `ResourceChange`), shared event/list/Watch types |
 | **common/config** | `edgion-common/src/config/mod.rs` | `ConfSyncSecurityConfig`, `ConfSyncTlsConfig` configuration structs |
-| **controller/conf_sync** | `src/core/controller/conf_sync/` | Server-side implementation: `ConfigSyncServer`, `ConfigSyncGrpcServer` (with mTLS), `ClientRegistry`, `WatchObj` trait |
-| **gateway/conf_sync** | `src/core/gateway/conf_sync/` | Client-side implementation: `ConfigSyncClient` (with mTLS), `ClientCache<T>`, `CacheData`, event_dispatch |
+| **controller/conf_sync** | `edgion-controller/src/conf_sync/` | Server-side implementation: `ConfigSyncServer`, `ConfigSyncGrpcServer` (with mTLS), `ClientRegistry`, `WatchObj` trait |
+| **gateway/conf_sync** | `edgion-gateway/src/conf_sync/` | Client-side implementation: `ConfigSyncClient` (with mTLS), `ClientCache<T>`, `CacheData`, event_dispatch |
 | **ctl/certs** | `edgion-cli/src/certs/mod.rs` | Certificate generation (rcgen): `generate_certs()` → `CertBundle` |
 
 ### Key files
 
 - `edgion-common/src/conf_sync/proto/config_sync.proto` — Proto definitions
 - `edgion-common/src/conf_sync/traits.rs` — `ResourceChange`, `CacheEventDispatch`, `ConfHandler`
-- `src/core/controller/conf_sync/conf_server/config_sync_server.rs` — `ConfigSyncServer`
-- `src/core/controller/conf_sync/conf_server/grpc_server.rs` — `ConfigSyncGrpcServer`, `ConfigSyncServerProvider`
-- `src/core/controller/conf_sync/conf_server/client_registry.rs` — `ClientRegistry`
-- `src/core/controller/conf_sync/conf_server/traits.rs` — `WatchObj`, `WatchResponseSimple`
-- `src/core/gateway/conf_sync/conf_client/grpc_client.rs` — `ConfigSyncClient`
-- `src/core/gateway/conf_sync/cache_client/cache.rs` — `ClientCache<T>`, `DynClientCache`
-- `src/core/gateway/conf_sync/cache_client/event_dispatch.rs` — Event dispatch logic
+- `edgion-controller/src/conf_sync/conf_server/config_sync_server.rs` — `ConfigSyncServer`
+- `edgion-controller/src/conf_sync/conf_server/grpc_server.rs` — `ConfigSyncGrpcServer`, `ConfigSyncServerProvider`
+- `edgion-controller/src/conf_sync/conf_server/client_registry.rs` — `ClientRegistry`
+- `edgion-controller/src/conf_sync/conf_server/traits.rs` — `WatchObj`, `WatchResponseSimple`
+- `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs` — `ConfigSyncClient`
+- `edgion-gateway/src/conf_sync/cache_client/cache.rs` — `ClientCache<T>`, `DynClientCache`
+- `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` — Event dispatch logic

@@ -6,7 +6,7 @@ description: DSL builtin error-handling contract — which functions silently re
 # DSL builtin error semantics
 
 > User-facing contract: `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md`
-> Engine error variants: `src/core/gateway/plugins/http/dsl/lang/error.rs::RuntimeError`
+> Engine error variants: `edgion-gateway/src/plugins/http/dsl/lang/error.rs::RuntimeError`
 
 ## Three error-handling shapes
 

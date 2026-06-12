@@ -210,9 +210,9 @@ avoiding the risk of partial cache being out of sync with the K8s API.
 
 ## Key Files
 
-- `src/core/controller/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `ResourceController<K>`, `ApiScope`, `RelinkReason`
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/processor.rs` — `ResourceProcessor<K>`, `ProcessorObj` trait
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handler.rs` — `ProcessorHandler<K>` trait
-- `src/core/controller/conf_mgr/sync_runtime/workqueue.rs` — `Workqueue`, `WorkItem`, `WorkqueueConfig`
-- `src/core/controller/conf_mgr/processor_registry.rs` — `PROCESSOR_REGISTRY`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `persist_k8s_status` (inlined; `status.rs` was removed)
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `ResourceController<K>`, `ApiScope`, `RelinkReason`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs` — `ResourceProcessor<K>`, `ProcessorObj` trait
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handler.rs` — `ProcessorHandler<K>` trait
+- `edgion-controller/src/conf_mgr/sync_runtime/workqueue.rs` — `Workqueue`, `WorkItem`, `WorkqueueConfig`
+- `edgion-controller/src/conf_mgr/processor_registry.rs` — `PROCESSOR_REGISTRY`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `persist_k8s_status` (inlined; `status.rs` was removed)

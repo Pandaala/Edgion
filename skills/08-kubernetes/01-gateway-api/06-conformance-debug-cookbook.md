@@ -244,7 +244,7 @@ resources exist in the cluster.
 authority` or `connection refused`. Controller logs show `Graceful shutdown timed
 out 25s after signal, forcing exit` every ~27 seconds.
 
-**Root cause:** `src/core/controller/cli/mod.rs` started the 25s shutdown timer
+**Root cause:** `edgion-controller/src/cli/mod.rs` started the 25s shutdown timer
 at service boot, not at signal receipt, causing the controller to exit 25s after
 start regardless of workload.
 

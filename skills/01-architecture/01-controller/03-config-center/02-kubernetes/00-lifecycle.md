@@ -245,8 +245,8 @@ conf_center:
 
 ## Key Files
 
-- `src/core/controller/conf_mgr/conf_center/kubernetes/center.rs` — lifecycle core (`start`, `run_main_flow`, `run_serving_flow`)
-- `src/core/controller/conf_mgr/conf_center/kubernetes/leader_election.rs` — leader election implementation
-- `src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs` — `KubernetesController` (spawns resource controllers)
-- `src/core/controller/conf_mgr/conf_center/kubernetes/config.rs` — `KubernetesConfig`, `HaMode`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `ResourceController<K>`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs` — lifecycle core (`start`, `run_main_flow`, `run_serving_flow`)
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/leader_election.rs` — leader election implementation
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs` — `KubernetesController` (spawns resource controllers)
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/config.rs` — `KubernetesConfig`, `HaMode`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `ResourceController<K>`

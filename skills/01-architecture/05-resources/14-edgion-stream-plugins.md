@@ -11,7 +11,7 @@ EdgionStreamPlugins is Edgion's custom-extension resource that defines Stream/TC
 
 ## Source code locations
 
-- Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs`
+- Controller Handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs`
 - Type definitions: `edgion-resources/src/resources/edgion_stream_plugins/`
 
 ## Controller-side processing

@@ -13,7 +13,7 @@ description: Use when reviewing openid_connect "handle_callback repeats the 502-
 The repeated `if err.http_status() == 502 { send_plain_error(502) } else { send_unauthorized() }`
 dispatch in the OIDC plugin is now centralized in
 `OpenidConnect::send_oidc_error(&self, session, err: &OidcVerifyError)`
-(`src/core/gateway/plugins/http/openid_connect/callback.rs`, next to `send_plain_error` /
+(`edgion-gateway/src/plugins/http/openid_connect/callback.rs`, next to `send_plain_error` /
 `send_unauthorized`). The six identical call sites — five in `callback.rs::handle_callback`
 (decode state cookie, resolve redirect_uri, token exchange, validate nonce, verify_token)
 and one in `request_filter_impl.rs` (the `UnauthAction::Auth` build-redirect arm) — now call
@@ -60,6 +60,6 @@ Re-open only if:
 ## Reference Cases
 
 - plugins-http F-010 (`tasks/plugins/plugins-http-F010-openid-connect-multi-file-extract-fn.md`), fixed 2026-05-26.
-- `src/core/gateway/plugins/http/openid_connect/callback.rs` — `send_oidc_error` and its five call sites.
-- `src/core/gateway/plugins/http/openid_connect/request_filter_impl.rs` — the `UnauthAction::Auth` call site (folded) vs the `:187` fall-through site (untouched).
+- `edgion-gateway/src/plugins/http/openid_connect/callback.rs` — `send_oidc_error` and its five call sites.
+- `edgion-gateway/src/plugins/http/openid_connect/request_filter_impl.rs` — the `UnauthAction::Auth` call site (folded) vs the `:187` fall-through site (untouched).
 - Sibling leaf-vs-control-flow extraction decisions: [link-sys-dispatch-extract-function.md](link-sys-dispatch-extract-function.md), [webhook-call-extract-function.md](webhook-call-extract-function.md), [style-consolidation-thresholds.md](style-consolidation-thresholds.md).

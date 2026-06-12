@@ -4,11 +4,11 @@ Use this file when the key looks like `edgion.io/*`, but it is not actually stor
 
 ## Verify In Code
 
-- `src/core/gateway/runtime/matching/tls.rs`
+- `edgion-gateway/src/runtime/matching/tls.rs`
 - `edgion-resources/src/resources/backend_tls_policy.rs`
 - `edgion-resources/src/constants/labels.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/leader_election.rs`
-- `src/core/controller/services/acme/service.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/leader_election.rs`
+- `edgion-controller/src/services/acme/service.rs`
 
 ## Gateway Listener `tls.options`
 

@@ -91,15 +91,18 @@ main() {
     fi
 
     # Build Controller (exit immediately on failure)
+    # Now its own workspace crate — needs -p to disambiguate the package from the
+    # equally-named binary.
     log_section "Build edgion-controller"
-    if ! build_binary "edgion-controller" "--bin edgion-controller"; then
+    if ! build_binary "edgion-controller" "-p edgion-controller --bin edgion-controller"; then
         log_error "Build failed! Exiting..."
         exit 1
     fi
     
-    # Build Gateway
+    # Build Gateway (now its own workspace crate — needs -p to disambiguate
+    # the package from the equally-named binary).
     log_section "Build edgion-gateway"
-    if ! build_binary "edgion-gateway" "--bin edgion-gateway"; then
+    if ! build_binary "edgion-gateway" "-p edgion-gateway --bin edgion-gateway"; then
         log_error "Build failed! Exiting..."
         exit 1
     fi

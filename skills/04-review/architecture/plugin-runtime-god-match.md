@@ -11,7 +11,7 @@ description: Decide on "god object / huge file / should use registry / should us
 
 ## Code Involved
 
-- `src/core/gateway/plugins/runtime/plugin_runtime.rs` (~987 lines)
+- `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` (~987 lines)
   - `create_request_filter_from_edgion`
   - `create_upstream_response_filter_from_edgion`
   - `create_upstream_response_body_filter_from_edgion`

@@ -70,7 +70,7 @@ The Gateway runtime provides standardized error response generators:
 ## Directory layout
 
 ```
-src/core/gateway/runtime/
+edgion-gateway/src/runtime/
 └── store/
     ├── mod.rs                # module exports
     ├── gateway.rs            # GatewayStore (CRUD for Gateway resources)

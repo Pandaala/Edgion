@@ -10,7 +10,7 @@ description: configure_mtls now decides verify mode and returns early for Termin
 
 ## Conclusion
 
-`configure_mtls` (`src/core/gateway/tls/runtime/gateway/tls_pingora.rs`) now evaluates the
+`configure_mtls` (`edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs`) now evaluates the
 `client_auth.mode` match **first** and returns `Ok(())` for `ClientAuthMode::Terminate`
 before calling `edgion_tls.ca_cert_pem()` or installing any `X509Store`. CA loading runs only
 on the `Mutual` / `OptionalMutual` arms.
@@ -28,7 +28,7 @@ the client CA store, and only reached the `client_auth.mode` branch afterwards (
 `ca_cert_pem()` (`edgion-resources/src/resources/edgion_tls.rs`) returns
 `Err("CA secret not loaded by controller")` when `client_auth.ca_secret` is `None`. The
 controller only populates `ca_secret` for resources that carry a `ca_secret_ref`. The
-validator (`validate_mtls_config`, `src/core/gateway/tls/validation/cert.rs`) explicitly
+validator (`validate_mtls_config`, `edgion-gateway/src/tls/validation/cert.rs`) explicitly
 allows `Terminate` mode **without** a `caSecretRef`. So a valid Terminate-only EdgionTls with
 no `caSecretRef` passed admission, then failed at runtime: the `?` on `ca_cert_pem()`
 propagated `Err` out of `configure_mtls` → `apply_edgion_tls_cert` set

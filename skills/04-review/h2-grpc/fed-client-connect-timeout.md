@@ -10,7 +10,7 @@ description: fed_client now sets .connect_timeout(10s) before endpoint.connect()
 
 ## Conclusion
 
-`src/core/controller/fed_sync/fed_client/mod.rs:193` now applies
+`edgion-controller/src/fed_sync/fed_client/mod.rs:193` now applies
 `.connect_timeout(Duration::from_secs(10))` before calling `.connect().await?`,
 matching the 10 s value used by the `conf_sync` client (`grpc_client.rs:55`).
 
@@ -35,10 +35,10 @@ internal consistency gap: `conf_sync` capped TCP connection establishment;
 
 ## Code shape today
 
-- `src/core/controller/fed_sync/fed_client/mod.rs:193` — `endpoint`
+- `edgion-controller/src/fed_sync/fed_client/mod.rs:193` — `endpoint`
   chain now includes `.connect_timeout(Duration::from_secs(10))` before
   `.connect().await?`.
-- `src/core/gateway/conf_sync/conf_client/grpc_client.rs:55` — reference
+- `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs:55` — reference
   client (unchanged; 10 s from caller-supplied `timeout`).
 
 ## Re-evaluation triggers

@@ -150,7 +150,7 @@ pub struct AccessLogStore {
 ## Directory layout
 
 ```
-src/core/gateway/observe/
+edgion-gateway/src/observe/
 ├── mod.rs                    # module exports
 ├── access_log/               # access logs
 │   ├── entry.rs              # AccessLogEntry definition (zero-copy)

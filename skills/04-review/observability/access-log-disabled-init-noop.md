@@ -10,7 +10,7 @@ description: init_access_logger now installs a no-op AccessLogger (zero senders)
 
 ## Conclusion
 
-`init_access_logger` (`src/core/gateway/observe/access_log/mod.rs`) now sets `ACCESS_LOGGER` unconditionally:
+`init_access_logger` (`edgion-gateway/src/observe/access_log/mod.rs`) now sets `ACCESS_LOGGER` unconditionally:
 
 - enabled + valid path → `Arc<AccessLogger>` with the `local_file` sender, exactly as before;
 - disabled (`enabled = false` or empty `path`) → `Arc::new(AccessLogger::new())` with zero senders, surfaced via the `"AccessLogger disabled, installing no-op logger"` info log.
@@ -58,5 +58,5 @@ Re-open only if:
 - observe F-B01 (`tasks/observe/observe-FB01-get-access-logger-unchecked-panic-if-disabled.md`, 2026-05-28)
 - [[access-log-all-senders-unhealthy-metric]] — sibling fix at the dispatcher level (F-003); preserved by the `is_empty()` guard
 - [[protocol-logger-oncelock-pattern-not-extracted]] — same class of "minimal change beats wide refactor" decision for the four async logger OnceLock sites
-- `src/core/gateway/cli/mod.rs:285,294` — startup ordering that makes `init_access_logger` the precondition for `get_access_logger_unchecked()`
-- `src/core/gateway/runtime/server/base.rs:38-40` — the single caller of `get_access_logger_unchecked()` on the listener-wiring path
+- `edgion-gateway/src/cli/mod.rs:285,294` — startup ordering that makes `init_access_logger` the precondition for `get_access_logger_unchecked()`
+- `edgion-gateway/src/runtime/server/base.rs:38-40` — the single caller of `get_access_logger_unchecked()` on the listener-wiring path

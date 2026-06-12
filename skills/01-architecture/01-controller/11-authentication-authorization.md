@@ -36,7 +36,7 @@ Authentication is mandatory. `require_auth` always derives to `true`; the old `!
 
 ### cli_token_pre_authn — static tokens for automation
 
-Module: `src/core/controller/api/cli_token_middleware.rs`.
+Module: `edgion-controller/src/api/cli_token_middleware.rs`.
 
 A Controller-private pre-authn layer that runs **outside** `unified_auth`, letting edgion-cli authenticate with a static Bearer token instead of an interactive login. Key properties:
 
@@ -57,7 +57,7 @@ Federation requests are served by a **separate admin router instance** (`fed_rou
 
 ### Engine location
 
-The authz engine lives in `src/core/controller/authz/mod.rs` — **Controller-private**. It was relocated out of `common/authz` so the Center can never take a dependency on the Controller's policy/identity model. The shared config *data* types (`FedRbacConfig`, `FedAllowRule`) stay in `common/config` (they are referenced by `CenterClientConfig` there); only the engine is Controller-private.
+The authz engine lives in `edgion-controller/src/authz/mod.rs` — **Controller-private**. It was relocated out of `common/authz` so the Center can never take a dependency on the Controller's policy/identity model. The shared config *data* types (`FedRbacConfig`, `FedAllowRule`) stay in `common/config` (they are referenced by `CenterClientConfig` there); only the engine is Controller-private.
 
 > **Center scoping**: Center uses the shared `unified_auth` for authentication (mandatory; no auto-generated credentials; 503 fail-close when unconfigured) but has **no authz layer** — there is no `(verb, kind)` RBAC engine, no `Role`, no `CenterPolicy` on the Center side. The Center has been extracted to the separate EdgionCenter repository; see that repository for Center auth details.
 
@@ -99,7 +99,7 @@ permits(verb, kind) = any rule where
 
 ### Built-in default Center policy
 
-Module: `src/core/controller/fed_sync/default_policy.rs`. Applied **only when `center.rbac` is absent** (if the operator supplies `center.rbac`, it is used verbatim and the default is not applied). The default is a minimal, useful-out-of-the-box allow set:
+Module: `edgion-controller/src/fed_sync/default_policy.rs`. Applied **only when `center.rbac` is absent** (if the operator supplies `center.rbac`, it is used verbatim and the default is not applied). The default is a minimal, useful-out-of-the-box allow set:
 
 - **Read** (`get` / `list` / `watch` / `list-keys`) on **every ResourceKind except `Secret`**. `Secret` is excluded so the default policy never exposes credentials to federation clients. (`EdgionTls` is *not* excluded — it is a link reference, not raw key material.)
 - **Write** (`create` / `update` / `delete`) on **`PluginMetaData` only** (the region-route and ip-restriction handlers drive this kind).
@@ -128,7 +128,7 @@ axum `route_layer`s apply in **LIFO** order (the later `.route_layer()` wraps th
 
 ### assign_superuser_if_no_role — fail-closed role assignment
 
-`src/core/controller/api/authz_middleware.rs`. Runs after cli-pre and after `unified_auth`:
+`edgion-controller/src/api/authz_middleware.rs`. Runs after cli-pre and after `unified_auth`:
 
 1. **Role already present** (cli-pre injected `Restricted`) → pass through unchanged.
 2. **`AuthBypass` present but no `Role`** → invariant violation → **fail closed: `403`** (recorded as a `record_rbac_denied(..., "unknown")` so the bug path is observable). Keyed on `AuthBypass` alone (not `AuthBypass && CliTokenIdentity`) so any future bypass source without a role can never silently escalate to Superuser.
@@ -156,11 +156,11 @@ Denials increment `edgion_fed_rbac_denied_total` via `record_rbac_denied(verb, k
 
 | Concern | Path |
 |---------|------|
-| Authz engine (`Role` / `Verb` / `CenterPolicy` / `Authorizer` / `Decision`) | `src/core/controller/authz/mod.rs` |
-| authz_layer + assign_superuser_if_no_role + inject_center_identity | `src/core/controller/api/authz_middleware.rs` |
-| Request → `(verb, kind)` classifier | `src/core/controller/api/authz_classifier.rs` |
-| cli_token_pre_authn + `CliTokenIdentity` | `src/core/controller/api/cli_token_middleware.rs` |
-| Built-in default Center policy | `src/core/controller/fed_sync/default_policy.rs` |
+| Authz engine (`Role` / `Verb` / `CenterPolicy` / `Authorizer` / `Decision`) | `edgion-controller/src/authz/mod.rs` |
+| authz_layer + assign_superuser_if_no_role + inject_center_identity | `edgion-controller/src/api/authz_middleware.rs` |
+| Request → `(verb, kind)` classifier | `edgion-controller/src/api/authz_classifier.rs` |
+| cli_token_pre_authn + `CliTokenIdentity` | `edgion-controller/src/api/cli_token_middleware.rs` |
+| Built-in default Center policy | `edgion-controller/src/fed_sync/default_policy.rs` |
 | Shared session auth (OIDC + local JWT) + `AuthBypass` marker | `edgion-common/src/unified_auth/mod.rs` |
 | Local username/password (config/handlers/secret) | `edgion-common/src/local_auth/` |
 | Admin router composition (`compose_admin_routes`) | `edgion-common/src/api/compose.rs` |

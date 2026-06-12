@@ -7,7 +7,7 @@ description: Use when reviewing findings that flag cache_get_resource full-list 
 
 # `AdminState::cache_get_resource` Full-List + Linear-Scan is Not a Performance Issue
 
-**False-positive scenario**: `cache_get_resource` / `cache_get_cluster_resource` in `src/core/controller/api/types.rs` delegate to `cache_list_resources(kind)` (full serialize + parse of the whole `ServerCache<T>` snapshot to `Vec<serde_json::Value>`) and then linearly scan to find one entry; flagged as "O(N) allocations per single-resource lookup, should expose a `get_by_key` path through `WatchObj` / `ConfigSyncServer`".
+**False-positive scenario**: `cache_get_resource` / `cache_get_cluster_resource` in `edgion-controller/src/api/types.rs` delegate to `cache_list_resources(kind)` (full serialize + parse of the whole `ServerCache<T>` snapshot to `Vec<serde_json::Value>`) and then linearly scan to find one entry; flagged as "O(N) allocations per single-resource lookup, should expose a `get_by_key` path through `WatchObj` / `ConfigSyncServer`".
 
 **Reality**:
 

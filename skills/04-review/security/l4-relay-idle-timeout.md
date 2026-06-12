@@ -10,7 +10,7 @@ closed: 2026-06-02
 
 ## Conclusion
 
-The shared L4 relay `bidirectional_relay` (`src/core/gateway/routes/l4_duplex.rs`) is
+The shared L4 relay `bidirectional_relay` (`edgion-gateway/src/routes/l4_duplex.rs`) is
 bounded by an idle timeout for all three proxies (plain TCP, TLS-terminated,
 TLS-passthrough).
 
@@ -57,4 +57,4 @@ Re-open this decision only if:
 - Spec: `docs/superpowers/specs/2026-06-02-l4-relay-idle-timeout-design.md`
 - Plan: `docs/superpowers/plans/2026-06-02-l4-relay-idle-timeout.md`
 - Architecture note: `skills/04-review/architecture/l4-duplex-relay-centralization.md`
-- Implementation: `src/core/gateway/routes/l4_duplex.rs`
+- Implementation: `edgion-gateway/src/routes/l4_duplex.rs`

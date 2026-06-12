@@ -25,13 +25,13 @@ When adding any in-memory store / cache, it must be wired into store-stats, othe
 ### Gateway side
 
 1. Add `pub fn count(&self) -> usize` and `pub fn keys(&self) -> Vec<String>` to the store.
-2. Add a field in `StoreStatsResponse` of `src/core/gateway/api/mod.rs` and populate it in the `store_stats()` handler.
+2. Add a field in `StoreStatsResponse` of `edgion-gateway/src/api/mod.rs` and populate it in the `store_stats()` handler.
 3. Add a unit test: `empty store reports zero`.
 
 ### Controller side
 
 1. Add the same methods on the store.
-2. Add a field in `ControllerStoreStats` of `src/core/controller/api/debug_handlers.rs` and populate it.
+2. Add a field in `ControllerStoreStats` of `edgion-controller/src/api/debug_handlers.rs` and populate it.
 3. Add a unit test.
 
 ### When **not** to add it
@@ -80,6 +80,6 @@ Diagnosis order:
 - Spec: `docs/superpowers/specs/2026-04-26-cache-residue-detection-design.md`
 - Plan: `docs/superpowers/plans/2026-04-26-cache-residue-detection.md`
 - Validator: `examples/code/validator/cache_residue.rs`
-- Wipe handler: `src/core/controller/api/wipe_handlers.rs`
-- Gateway store-stats: `src/core/gateway/api/mod.rs:312-442`
-- Controller store-stats: `src/core/controller/api/debug_handlers.rs`
+- Wipe handler: `edgion-controller/src/api/wipe_handlers.rs`
+- Gateway store-stats: `edgion-gateway/src/api/mod.rs:312-442`
+- Controller store-stats: `edgion-controller/src/api/debug_handlers.rs`

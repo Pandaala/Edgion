@@ -11,10 +11,10 @@ HTTPRoute is the most complex resource in Edgion. It defines HTTP-layer routing 
 
 ## Source code locations
 
-- Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs`
-- Gateway ConfHandler: `src/core/gateway/routes/http/conf_handler_impl.rs`
-- Route manager: `src/core/gateway/routes/http/routes_mgr.rs`
-- Match engine: `src/core/gateway/routes/http/match_engine/`
+- Controller Handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs`
+- Gateway ConfHandler: `edgion-gateway/src/routes/http/conf_handler_impl.rs`
+- Route manager: `edgion-gateway/src/routes/http/routes_mgr.rs`
+- Match engine: `edgion-gateway/src/routes/http/match_engine/`
 - Type definitions: `edgion-resources/src/resources/http_route.rs`
 - Preparse: `edgion-resources/src/resources/http_route_preparse.rs`
 

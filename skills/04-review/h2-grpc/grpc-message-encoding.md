@@ -27,7 +27,7 @@ or "grpc-message is not percent-encoded" are **not accepted** — the fix is in 
 
 ## Code shape today
 
-- `src/core/gateway/runtime/server/error_response.rs::percent_encode_grpc_message` —
+- `edgion-gateway/src/runtime/server/error_response.rs::percent_encode_grpc_message` —
   `pub(crate)` helper: `utf8_percent_encode(s, CONTROLS).to_string()`. Keeps ASCII
   visible chars (0x21-0x7E) and space (0x20); percent-encodes control chars and non-ASCII
   UTF-8 bytes. Matches the encoding used by `session_adapter::send_grpc_error_direct`.

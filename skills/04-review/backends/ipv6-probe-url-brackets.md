@@ -10,7 +10,7 @@ description: Active health probes now build the target via SocketAddr Display so
 
 ## Conclusion
 
-`probe_http_with_client` and `probe_grpc` (`src/core/gateway/backends/health/check/probes.rs`)
+`probe_http_with_client` and `probe_grpc` (`edgion-gateway/src/backends/health/check/probes.rs`)
 now construct the target with `SocketAddr::new(addr.ip(), port)` and rely on `SocketAddr`'s
 `Display` impl, which brackets IPv6 literals (`[::1]:8080`). `probe_grpc` additionally replaced
 `.parse().expect("valid URI from SocketAddr")` with `.parse().map_err(|_| ProbeError::InvalidUri)?`,
@@ -53,5 +53,5 @@ Re-open only if:
 ## Reference Cases
 
 - backends-F001 (review finding, 2026-05-20)
-- `src/core/gateway/backends/discovery/endpoint_slice/discovery_impl.rs:38` — the pre-existing
+- `edgion-gateway/src/backends/discovery/endpoint_slice/discovery_impl.rs:38` — the pre-existing
   correct `format!("[{}]:{}", address, port)` IPv6 pattern already in the codebase.

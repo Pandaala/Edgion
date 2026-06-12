@@ -16,7 +16,7 @@ IpSource::ClientIp  → session.remote_addr() → ctx.request_info.remote_addr
 KeyGet::ClientIp    → self.remote_addr()    → ctx.request_info.remote_addr
 ```
 
-`remote_addr` is initialized in `src/core/gateway/routes/http/proxy_http/pg_request_filter.rs:261-266`:
+`remote_addr` is initialized in `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs:261-266`:
 
 ```rust
 ctx.request_info.remote_addr = if let Some(extractor) = &edgion_http.real_ip_extractor {

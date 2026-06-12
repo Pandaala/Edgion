@@ -10,7 +10,7 @@ description: Decision record for conf-sync F-013 — added per-kind parse-error 
 `ClientCache::start_watch`'s two `serde_json` parse-failure paths
 (`from_str(&watch_response.data)` for the events array, and
 `from_value::<T>(event_data)` for each per-event payload) in
-`src/core/gateway/conf_sync/cache_client/event_dispatch.rs` now call
+`edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` now call
 `record_config_event_parse_error(T::kind_name())` before the existing
 `tracing::error!` + `continue` / fall-through. The control flow is otherwise
 unchanged — there is **no** consecutive-failure counter, **no**

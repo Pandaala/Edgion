@@ -15,15 +15,15 @@ LinkSys defines external system connectors (Redis / Etcd / Elasticsearch / Webho
 
 | Purpose | Path |
 |------|------|
-| Controller Handler | `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs` |
-| Credential pipeline (Controller) | `src/core/controller/conf_mgr/sync_runtime/resource_processor/credential/` |
+| Controller Handler | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs` |
+| Credential pipeline (Controller) | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/` |
 | Resource type definitions | `edgion-resources/src/resources/link_sys/` (mod.rs, redis.rs, etcd.rs, elasticsearch.rs, webhook.rs, common.rs) |
 | Shared SecretObjectReference / SecretSlot / TLS types | `edgion-resources/src/resources/common/{secret_object_ref,secret_slot,tls}.rs` |
 | Credential resolution layer (Controller + Gateway shared) | `edgion-resources/src/credentials/` (materials / resolver / resolvers) |
 | Gateway credential four-state | `edgion-common/src/link/credential.rs` |
 | Gateway TLS assembly | `edgion-common/src/link/tls.rs` |
-| Gateway runtime Store | `src/core/gateway/link_sys/runtime/store.rs` |
-| Provider clients | `src/core/gateway/link_sys/providers/{redis,etcd,elasticsearch}/` |
+| Gateway runtime Store | `edgion-gateway/src/link_sys/runtime/store.rs` |
+| Provider clients | `edgion-gateway/src/link_sys/providers/{redis,etcd,elasticsearch}/` |
 
 ## Recommended `use` paths (avoiding name confusion)
 

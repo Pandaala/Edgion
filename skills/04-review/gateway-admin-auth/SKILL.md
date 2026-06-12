@@ -7,7 +7,7 @@ description: Review lock for the Gateway admin API bearer-token auth — the loc
 
 The Gateway admin API (`gateway.admin_listen`, default `127.0.0.1:12001`) is
 **authenticated**: a static bearer token enforced by `admin_auth_middleware`
-(`src/core/gateway/api/admin_auth.rs`), layered on the fully-merged admin router.
+(`edgion-gateway/src/api/admin_auth.rs`), layered on the fully-merged admin router.
 
 Do **not** re-report the historical "Gateway admin API has no authentication"
 finding — it was resolved by the design at

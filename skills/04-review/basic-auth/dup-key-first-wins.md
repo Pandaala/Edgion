@@ -12,7 +12,7 @@ the duplicated identity is the **username**; the warn carries `secret_key`
 (the "loser" pointer), `username`, `existing_group`, `incoming_group`.
 
 Implementation:
-`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/basic_auth.rs`
+`edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/basic_auth.rs`
 
 ## Secret data safety iron rule (BasicAuth-specific)
 

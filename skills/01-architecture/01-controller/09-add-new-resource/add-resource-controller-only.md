@@ -25,8 +25,8 @@ Important note:
 ### 2. Default No-Sync Behavior
 
 - `edgion-resources/src/resource/defs.rs`
-- `src/core/controller/conf_mgr/processor_registry.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/center.rs`
+- `edgion-controller/src/conf_mgr/processor_registry.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs`
 
 What this pattern shows:
 
@@ -38,10 +38,10 @@ If a new resource should remain controller-only by default, this is the key patt
 
 ### 3. Controller Processing
 
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/reference_grant.rs`
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/ref_grant/`
-- `src/core/controller/conf_mgr/conf_center/file_system/controller.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/reference_grant.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/`
+- `edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs`
 
 What `ReferenceGrantHandler` demonstrates:
 
@@ -53,8 +53,8 @@ This is the right model for policy resources that influence how other resources 
 
 ### 4. Controller CRUD And K8s Writer
 
-- `src/core/controller/api/namespaced_handlers.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/storage.rs`
+- `edgion-controller/src/api/namespaced_handlers.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/storage.rs`
 
 Important reminder:
 
@@ -65,9 +65,9 @@ Do not confuse “not synced to Gateway” with “not manageable by the control
 
 ### 5. Gateway-Side Explicit Non-Wiring
 
-- `src/core/gateway/conf_sync/conf_client/config_client.rs`
-- `src/core/gateway/conf_sync/conf_client/grpc_client.rs`
-- `src/core/gateway/api/mod.rs`
+- `edgion-gateway/src/conf_sync/conf_client/config_client.rs`
+- `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs`
+- `edgion-gateway/src/api/mod.rs`
 
 What this pattern shows:
 

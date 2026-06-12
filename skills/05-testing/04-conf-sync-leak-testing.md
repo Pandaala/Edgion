@@ -161,5 +161,5 @@ examples/test/scripts/gen_certs/
 3. Add the ConfigClient kind to the `kinds` array in `capture_baseline()`, `verify_configclient_empty()`, `verify_configs_present()`
 4. If the resource has a dedicated derived store:
    - Add a `stats()` method to the store (return a `#[derive(serde::Serialize)]` struct)
-   - Register it in `StoreStatsResponse` and `store_stats()` in `src/core/gateway/api/mod.rs`
+   - Register it in `StoreStatsResponse` and `store_stats()` in `edgion-gateway/src/api/mod.rs`
    - Add the field path to `check_fields` in `verify_store_stats_empty()`

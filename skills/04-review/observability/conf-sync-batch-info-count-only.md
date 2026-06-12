@@ -7,7 +7,7 @@ description: Use when reviewing config-sync batch logs — the batch-level `info
 
 ## Conclusion
 
-Inside the gateway config-sync cache_client path (`src/core/gateway/conf_sync/cache_client/`),
+Inside the gateway config-sync cache_client path (`edgion-gateway/src/conf_sync/cache_client/`),
 any batch-level summary log of `add` / `update` / `remove` resource keys MUST follow this
 shape:
 
@@ -27,7 +27,7 @@ because it already carries the same detail at the same level.
 - Resource keys for kinds like `EdgionTls` / `LinkSys` are sensitive-adjacent; keeping them
   out of permanent info-level logs is the safer default.
 - The canonical pattern lives at
-  `src/core/gateway/conf_sync/cache_client/event_dispatch.rs:105` — `info!` carries
+  `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:105` — `info!` carries
   `kind` + `count`, the matching `debug!` (lines 109-114) dumps the key vector. This entry
   generalizes that rule to all batch summaries in the same module.
 

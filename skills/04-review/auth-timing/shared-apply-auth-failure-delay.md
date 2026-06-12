@@ -9,7 +9,7 @@ The auth-failure delay (brute-force / credential-stuffing mitigation, called
 before sending a 401/403) lives in a single shared helper:
 
 ```rust
-// src/core/gateway/plugins/http/common/auth_common.rs
+// edgion-gateway/src/plugins/http/common/auth_common.rs
 pub async fn apply_auth_failure_delay(delay_ms: u64) {
     if delay_ms > 0 {
         tokio::time::sleep(Duration::from_millis(delay_ms)).await;

@@ -9,7 +9,7 @@ description: Use when reviewing findings that the conf_sync CompressEvent per-ke
 
 ## Conclusion
 
-`CompressEvent.events: HashMap<String, Vec<ResourceChange>>` (`src/core/gateway/conf_sync/cache_client/cache_data.rs`) accumulates one `Vec` element per event for a key inside the 100ms `BATCH_DEBOUNCE` window, and `process_compressed_events` only reads it via the binary `events.iter().any(|e| matches!(e, InitAdd | EventAdd))` scan. The per-key `Vec` and the `any()` scan are therefore `O(event_count)` where the consumer needs only `O(1)`. This is **confirmed-real but accepted won't-fix**: the cost is trivially bounded and lives on the control plane, not the data-plane request path.
+`CompressEvent.events: HashMap<String, Vec<ResourceChange>>` (`edgion-gateway/src/conf_sync/cache_client/cache_data.rs`) accumulates one `Vec` element per event for a key inside the 100ms `BATCH_DEBOUNCE` window, and `process_compressed_events` only reads it via the binary `events.iter().any(|e| matches!(e, InitAdd | EventAdd))` scan. The per-key `Vec` and the `any()` scan are therefore `O(event_count)` where the consumer needs only `O(1)`. This is **confirmed-real but accepted won't-fix**: the cost is trivially bounded and lives on the control plane, not the data-plane request path.
 
 Fix suggestions of the form "collapse `Vec<ResourceChange>` to a single `has_add: bool` flag" / "the per-key Vec is unbounded and risks OOM under a 1000-pod rolling update" / "eliminate the O(N) `any()` scan" are **recognized as a valid but not-accepted optimization** — the change is correct and behavior-preserving, but the churn is not justified at the current scale. Closed won't-fix on 2026-05-21.
 
@@ -44,6 +44,6 @@ Re-open this decision only if:
 ## Reference Cases
 
 - F-012 (`tasks/issues/conf-sync-F012-event-compression-unbounded-vec.md`), Round B verdict: confirmed, OOM overstated, severity → Low; closed won't-fix 2026-05-21.
-- Source: `src/core/gateway/conf_sync/cache_client/cache_data.rs` (`CompressEvent`, `add_event`, `process_compressed_events`).
+- Source: `edgion-gateway/src/conf_sync/cache_client/cache_data.rs` (`CompressEvent`, `add_event`, `process_compressed_events`).
 - Enum size: `edgion-common/src/conf_sync/traits.rs:5-19` (`ResourceChange` 1-byte `Copy`).
 - Methodology: [cpu-memory/performance-review-methodology.md](../performance-review-methodology.md).

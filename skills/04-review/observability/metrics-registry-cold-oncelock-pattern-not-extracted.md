@@ -7,7 +7,7 @@ description: Decision record for observe F-011 — the 12 cold `OnceLock<Counter
 
 ## Conclusion
 
-`src/core/gateway/observe/metrics/registry.rs` declares 12 cold metrics as
+`edgion-gateway/src/observe/metrics/registry.rs` declares 12 cold metrics as
 `OnceLock<Counter>` / `OnceLock<Gauge>` fields. Each metric is wired in three
 places:
 
@@ -139,7 +139,7 @@ Re-open this decision only if:
 - Closed finding: `tasks/observe/observe-F011-registry-extract-fn-registration-boilerplate.md`
   (closed 2026-05-28, ⚠️ accepted tradeoff).
 - Source kept as-is:
-  - `src/core/gateway/observe/metrics/registry.rs` (`GatewayMetrics` struct + `new()` + `record_*` methods)
+  - `edgion-gateway/src/observe/metrics/registry.rs` (`GatewayMetrics` struct + `new()` + `record_*` methods)
 - Sibling decision records:
   - `skills/04-review/observability/protocol-logger-oncelock-pattern-not-extracted.md`
   - `skills/04-review/architecture/style-consolidation-thresholds.md`

@@ -9,13 +9,13 @@ description: Decision record for observe F-010 — the OnceLock + init_*_logger 
 
 Four async sites already exist over `Arc<AccessLogger>`:
 
-- `src/core/gateway/observe/access_log/mod.rs:15-42`
+- `edgion-gateway/src/observe/access_log/mod.rs:15-42`
   (`ACCESS_LOGGER` / `init_access_logger` / `get_access_logger` plus the extra
   `get_access_logger_unchecked()` panic-on-miss helper used by callers that
   initialize early and want to skip the `Option` dance)
-- `src/core/gateway/observe/logs/tcp_log.rs:11,57-77`
-- `src/core/gateway/observe/logs/tls_log.rs:14,17-40`
-- `src/core/gateway/observe/logs/udp_log.rs:12,94-116`
+- `edgion-gateway/src/observe/logs/tcp_log.rs:11,57-77`
+- `edgion-gateway/src/observe/logs/tls_log.rs:14,17-40`
+- `edgion-gateway/src/observe/logs/udp_log.rs:12,94-116`
 
 Each declares:
 
@@ -27,7 +27,7 @@ Each declares:
 3. `pub fn get_*_logger() -> Option<&'static Arc<AccessLogger>>` and
    `pub async fn log_*(entry)` that early-returns when the `OnceLock` is empty.
 
-`src/core/gateway/observe/logs/ssl_log.rs:16,55-73` follows the same outer
+`edgion-gateway/src/observe/logs/ssl_log.rs:16,55-73` follows the same outer
 shape over a different backend (`SslLogger` with a `mpsc::Sender<String>` +
 sync `try_send`, bumps `global_metrics().ssl_log_dropped()` on overflow — not
 `Arc<AccessLogger>`).
@@ -76,7 +76,7 @@ abstraction reads have to chase.
 **3. `ssl_log.rs` cannot share the wrapper.**
 
 `SslLogger` is a `struct` with its own `tx: mpsc::Sender<String>` and a
-`spawn`-ed receiver loop (`src/core/gateway/observe/logs/ssl_log.rs:21-52`);
+`spawn`-ed receiver loop (`edgion-gateway/src/observe/logs/ssl_log.rs:21-52`);
 its `log(&self, entry: &TlsConnMeta)` is **sync** (must be safe to call from
 TLS callbacks), and on `try_send` failure it bumps
 `global_metrics().ssl_log_dropped()`. None of that fits an
@@ -163,13 +163,13 @@ Re-open this decision only if:
 
 - Closed finding: `tasks/observe/observe-F010-protocol-loggers-four-identical-onceLock-init-pattern.md` (closed 2026-05-28, ⚠️ accepted tradeoff).
 - Sources kept as-is:
-  - `src/core/gateway/observe/access_log/mod.rs:15-42`
-  - `src/core/gateway/observe/logs/tcp_log.rs:11,57-77`
-  - `src/core/gateway/observe/logs/tls_log.rs:14,17-40`
-  - `src/core/gateway/observe/logs/udp_log.rs:12,94-116`
-  - `src/core/gateway/observe/logs/ssl_log.rs:16,55-73`
+  - `edgion-gateway/src/observe/access_log/mod.rs:15-42`
+  - `edgion-gateway/src/observe/logs/tcp_log.rs:11,57-77`
+  - `edgion-gateway/src/observe/logs/tls_log.rs:14,17-40`
+  - `edgion-gateway/src/observe/logs/udp_log.rs:12,94-116`
+  - `edgion-gateway/src/observe/logs/ssl_log.rs:16,55-73`
 - Shared real work (intentional consolidation point):
-  `src/core/gateway/observe/logs/logger_factory.rs` — `create_async_logger`
+  `edgion-gateway/src/observe/logs/logger_factory.rs` — `create_async_logger`
   (called by access_log / tcp_log / tls_log / udp_log with the typed
   `LogType::Access` / `Tcp` / `Tls` / `Udp` enum variants, observe-FB03,
   2026-05-29), `create_sync_logger` (called by ssl_log, hard-wired to

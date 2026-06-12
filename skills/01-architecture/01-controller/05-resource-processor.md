@@ -233,4 +233,4 @@ When `raw_store` has not been injected (before the init phase), it returns `None
 
 ### Key Files
 
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/raw_store.rs` — `RawStore<K>` trait, `KubeRawStore<K>`, `FsRawStore<K>`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/raw_store.rs` — `RawStore<K>` trait, `KubeRawStore<K>`, `FsRawStore<K>`

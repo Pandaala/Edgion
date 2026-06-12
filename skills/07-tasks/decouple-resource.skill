@@ -54,7 +54,7 @@ silently and only surface under load.
 ## Parallel-safety note
 
 Multiple `/decouple` runs in separate sessions are fine for DISJOINT resources, but several
-tasks touch shared files (`src/core/gateway/ctx.rs` for `selected_*backend`, the `proxy_http/*`
+tasks touch shared files (`edgion-gateway/src/ctx.rs` for `selected_*backend`, the `proxy_http/*`
 filters, `conf_handler` patterns). If you detect the target task overlaps a file another run is
 likely editing, warn the user and suggest serializing those two. Never assume isolation.
 

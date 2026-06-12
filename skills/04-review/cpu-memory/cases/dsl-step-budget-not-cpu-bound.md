@@ -10,7 +10,7 @@ description: Use when reviewing findings that claim the DSL VM's `max_steps` bud
 # DSL VM step budget counts opcode dispatches, not CPU time (intentional)
 
 **Recurring finding shape**: a reviewer reads
-`src/core/gateway/plugins/http/dsl/lang/vm.rs` and notices that:
+`edgion-gateway/src/plugins/http/dsl/lang/vm.rs` and notices that:
 
 - `state.tick_step()?` deducts exactly **1** step before each opcode dispatch.
 - `OpCode::Matches` / `RegexFind` / `RegexReplace` (`vm.rs:578-645`) invoke
@@ -53,7 +53,7 @@ actually bounded by `max_steps`").
    caps; there is no path that bypasses all four.
 
 **Code-side documentation**: the module-level comment block at the top of
-`src/core/gateway/plugins/http/dsl/lang/vm.rs` explicitly calls this out
+`edgion-gateway/src/plugins/http/dsl/lang/vm.rs` explicitly calls this out
 ("Note on the step budget …"), with a reverse-link to
 [`dsl-engine-security-model.md`](../../../01-architecture/02-gateway/dsl-engine-security-model.md).
 

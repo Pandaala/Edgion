@@ -7,7 +7,7 @@ description: Use when reviewing DSL `url_decode` builtin findings; `url_decode(s
 
 ## Conclusion
 
-`BuiltinId::UrlDecode` in `src/core/gateway/plugins/http/dsl/lang/builtins.rs:448-480`
+`BuiltinId::UrlDecode` in `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs:448-480`
 decodes both `%XX` AND literal `+` (`+` → space), implementing
 `application/x-www-form-urlencoded` semantics rather than RFC 3986 path decoding.
 The name-vs-semantics mismatch is **documented** (api-reference §`url_decode` carries
@@ -109,7 +109,7 @@ Re-open this decision only if:
 
 - `tasks/plugins/plugins-http-dsl-F021-urldecode-plus-decodes-as-space.md`
   (F-021, 2026-05-26 — original finding, closed as 📝)
-- `src/core/gateway/plugins/http/dsl/lang/builtins.rs:448-480` —
+- `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs:448-480` —
   `BuiltinId::UrlDecode` arm with the in-source design-rationale comment
 - `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md`
   §`url_decode` — operator-facing semantics + security warning

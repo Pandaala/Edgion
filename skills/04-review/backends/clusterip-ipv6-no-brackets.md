@@ -10,7 +10,7 @@ description: ClusterIP backend address building now parses cluster_ip as IpAddr 
 
 ## Conclusion
 
-The `EdgionService::ServiceClusterIp` arm in `src/core/gateway/backends/mod.rs` now parses
+The `EdgionService::ServiceClusterIp` arm in `edgion-gateway/src/backends/mod.rs` now parses
 `cluster_ip` as `std::net::IpAddr` and builds the address via
 `SocketAddr::Inet(std::net::SocketAddr::new(ip, port))`, so IPv6 ClusterIP literals
 (`fd00::1`) produce a valid `SocketAddr` without manual bracketing.
@@ -61,6 +61,6 @@ Re-open only if:
 - backends-F017 (review finding, found during backends-F001 deep review 2026-05-20, fixed
   2026-05-21)
 - backends-F001 / link-sys-F001 — same IPv6-address-build defect class.
-- `src/core/gateway/backends/discovery/endpoint_slice/discovery_impl.rs:38` — the
+- `edgion-gateway/src/backends/discovery/endpoint_slice/discovery_impl.rs:38` — the
   `format!("[{}]:{}", address, port)` IPv6 bracketing pattern for the `address_type`-tagged
   EndpointSlice path.

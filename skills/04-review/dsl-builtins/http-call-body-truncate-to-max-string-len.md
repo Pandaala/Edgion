@@ -5,7 +5,7 @@ description: Use when a reviewer flags `http.call` returning a body up to `max_r
 
 # `http.call` body: silent truncation at `max_string_len` — RAISING IS NOT ACCEPTED
 
-**Status**: Resolved (plugins-http-dsl-FB03, 2026-05-26) — `Vm::call_builtin` for `BuiltinId::HttpCall` in `src/core/gateway/plugins/http/dsl/lang/builtins.rs` (after the `bytes_stream()` accumulation, before `result.insert("body", ...)`).
+**Status**: Resolved (plugins-http-dsl-FB03, 2026-05-26) — `Vm::call_builtin` for `BuiltinId::HttpCall` in `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` (after the `bytes_stream()` accumulation, before `result.insert("body", ...)`).
 **Tests**: `tests::http_call_tests::test_http_call_body_truncated_to_max_string_len` (locks "server returns 16 bytes, `max_string_len=4` → `r["body"] == "AAAA"`, call still succeeds").
 
 ## Conclusion
@@ -55,7 +55,7 @@ Revisit this decision if any of the following holds:
 ## Reference Cases
 
 - `tasks/plugins/plugins-http-dsl-FB03-http-call-body-bypasses-max-string-len.md` — original finding (Low / BadLogic), closed by this entry.
-- `src/core/gateway/plugins/http/dsl/lang/builtins.rs` — the truncation site at the end of the `BuiltinId::HttpCall` arm.
+- `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` — the truncation site at the end of the `BuiltinId::HttpCall` arm.
 - `docs/en/.../dsl/api-reference.md` and `docs/zh-CN/.../dsl/api-reference.md` — `### http.call` "Constraints" section, line that reads "body is truncated at `min(httpMaxResponseBodyBytes, max_string_len)`".
-- `src/core/gateway/plugins/http/dsl/tests/http_call_tests.rs::test_http_call_body_truncated_to_max_string_len` — regression guard.
+- `edgion-gateway/src/plugins/http/dsl/tests/http_call_tests.rs::test_http_call_body_truncated_to_max_string_len` — regression guard.
 - See also `[[string-len-bytes-vs-chars-contract]]` for why `max_string_len` is byte-measured (the cap walked here is in UTF-8 bytes, which is why the boundary check is required).

@@ -12,7 +12,7 @@ description: Use when reviewing `gateway/runtime/handler.rs::full_set` / `partia
 ## Conclusion
 
 `GatewayHandler::full_set` and `GatewayHandler::partial_update`
-(`src/core/gateway/runtime/handler.rs`) rebuild two independent ArcSwap-backed
+(`edgion-gateway/src/runtime/handler.rs`) rebuild two independent ArcSwap-backed
 globals **sequentially**, not atomically:
 
 1. `rebuild_gateway_tls_matcher(&gateways)` — single `ArcSwapOption::store` on

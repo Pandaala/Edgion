@@ -16,7 +16,7 @@ The Workqueue follows a Go controller-runtime style design. Each resource type o
 
 There is intentionally **no** exponential-backoff retry; failed status writes self-heal on watcher relist (see the note under WorkqueueConfig below).
 
-Source file: `src/core/controller/conf_mgr/sync_runtime/workqueue.rs`
+Source file: `edgion-controller/src/conf_mgr/sync_runtime/workqueue.rs`
 
 ## Data Structures
 
@@ -214,7 +214,7 @@ All metrics use `Ordering::Relaxed` atomic operations — fine for monitoring bu
 
 | File | Responsibility |
 |------|----------------|
-| `src/core/controller/conf_mgr/sync_runtime/workqueue.rs` | Full Workqueue implementation |
-| `src/core/controller/conf_mgr/sync_runtime/resource_processor/processor.rs` | ResourceProcessor; uses Workqueue |
-| `src/core/controller/conf_mgr/conf_center/kubernetes/resource_controller.rs` | K8s ResourceController, spawn_worker |
-| `src/core/controller/conf_mgr/conf_center/file_system/resource_controller.rs` | File-system ResourceController, spawn_worker |
+| `edgion-controller/src/conf_mgr/sync_runtime/workqueue.rs` | Full Workqueue implementation |
+| `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs` | ResourceProcessor; uses Workqueue |
+| `edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs` | K8s ResourceController, spawn_worker |
+| `edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs` | File-system ResourceController, spawn_worker |

@@ -24,8 +24,8 @@ hold at every consumer.
 
 | Site | File | Namespace source |
 |------|------|------------------|
-| L4 route resolver (shared by TCPRoute / TLSRoute / UDPRoute) | `src/core/gateway/routes/common.rs::resolve_stream_plugin_store_key` (takes `&ObjectMeta`) | `metadata.namespace` |
-| Gateway listener connection-filter (inline copy) | `src/core/gateway/runtime/server/listener_builder.rs::apply_connection_filter` | `context.gateway_namespace` |
+| L4 route resolver (shared by TCPRoute / TLSRoute / UDPRoute) | `edgion-gateway/src/routes/common.rs::resolve_stream_plugin_store_key` (takes `&ObjectMeta`) | `metadata.namespace` |
+| Gateway listener connection-filter (inline copy) | `edgion-gateway/src/runtime/server/listener_builder.rs::apply_connection_filter` | `context.gateway_namespace` |
 
 The Gateway listener implements the normalization inline because it receives the value
 via `ListenerContext` (a `HashMap` + a separate `Option<String>` namespace), not via an

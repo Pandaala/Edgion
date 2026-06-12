@@ -10,7 +10,7 @@ description: LB preload warm_cell now seeds the cell via hydrate_if_empty (doubl
 
 ## Conclusion
 
-`warm_cell` (`src/core/gateway/backends/preload.rs`) now seeds the cell through
+`warm_cell` (`edgion-gateway/src/backends/preload.rs`) now seeds the cell through
 `cell.hydrate_if_empty(|| get_roundrobin_store().get_backends_for_service(service_key))`
 instead of the old unguarded `if cell.backends.load().is_empty() { cell.replace_backends(backends) }`.
 The empty-check and the store now run under the cell's `build_lock` — the **same** lock held by

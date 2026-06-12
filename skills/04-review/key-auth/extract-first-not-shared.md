@@ -9,9 +9,9 @@ description: Use when reviewing findings that propose extracting a shared "first
 
 The two "iterate `&[KeyGet]`, call `session.key_get`, return the first non-empty
 value" loops in `region_route::extract_first`
-(`src/core/gateway/plugins/http/region_route/plugin.rs:127`) and
+(`edgion-gateway/src/plugins/http/region_route/plugin.rs:127`) and
 `key_auth::extract_key`
-(`src/core/gateway/plugins/http/key_auth/plugin.rs:84`) are intentionally NOT
+(`edgion-gateway/src/plugins/http/key_auth/plugin.rs:84`) are intentionally NOT
 consolidated into a `common/` helper. Re-reports of the form "extract a shared
 `first_key_get` helper" are not accepted on their own.
 

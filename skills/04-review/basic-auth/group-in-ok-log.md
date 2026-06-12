@@ -23,7 +23,7 @@ on the OK path).
 
 ## Implementation
 
-- `src/core/gateway/plugins/http/basic_auth/plugin.rs` — the single
+- `edgion-gateway/src/plugins/http/basic_auth/plugin.rs` — the single
   `OK group={} user {}` `push_fmt` is the only line that carries `group=`; the
   `Deny no credential`, `Deny bad credential`, and `Allow anonymous` `push` calls
   carry no group/username. An in-file test asserts the OK line matches

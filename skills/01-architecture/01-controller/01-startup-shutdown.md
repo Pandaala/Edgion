@@ -7,14 +7,14 @@ description: edgion-controller startup and shutdown — CLI entry, initializatio
 
 ## Entry Point
 
-The binary entry point is `src/bin/edgion_controller.rs`, which starts the `#[tokio::main(flavor = "multi_thread")]` multi-threaded runtime and performs two steps:
+The binary entry point is `edgion-controller/src/bin/edgion_controller.rs`, which starts the `#[tokio::main(flavor = "multi_thread")]` multi-threaded runtime and performs two steps:
 
 ```text
 EdgionControllerCli::parse_args()   // clap parses the command line
     └─► cli.run().await              // main flow
 ```
 
-`EdgionControllerCli` is defined in `src/core/controller/cli/mod.rs` and flat-embeds `EdgionControllerConfig` via `#[derive(Parser)]`.
+`EdgionControllerCli` is defined in `edgion-controller/src/cli/mod.rs` and flat-embeds `EdgionControllerConfig` via `#[derive(Parser)]`.
 
 ## Startup Sequence (`run()` method)
 
@@ -57,7 +57,7 @@ The gRPC server uses a Provider pattern (`ConfMgrProvider`) to dynamically obtai
 
 ## ShutdownHandle Architecture
 
-The shutdown mechanism is defined in `src/core/controller/conf_mgr/sync_runtime/shutdown.rs` and uses a `tokio::sync::watch` channel for broadcasting:
+The shutdown mechanism is defined in `edgion-controller/src/conf_mgr/sync_runtime/shutdown.rs` and uses a `tokio::sync::watch` channel for broadcasting:
 
 ```text
 ShutdownHandle
@@ -122,9 +122,9 @@ Shutdown order:
 
 | File | Responsibility |
 |------|----------------|
-| `src/bin/edgion_controller.rs` | Binary entry, tokio main |
-| `src/core/controller/cli/mod.rs` | `EdgionControllerCli` definition, `parse_args()` / `run()` |
-| `src/core/controller/conf_mgr/sync_runtime/shutdown.rs` | `ShutdownHandle` / `ShutdownController` / `ShutdownSignal` |
-| `src/core/controller/conf_mgr/manager.rs` | `ConfMgr::create()` / `start_with_shutdown()` |
-| `src/core/controller/api/` | Admin API (Axum) |
-| `src/core/controller/conf_sync/` | gRPC ConfigSyncServer |
+| `edgion-controller/src/bin/edgion_controller.rs` | Binary entry, tokio main |
+| `edgion-controller/src/cli/mod.rs` | `EdgionControllerCli` definition, `parse_args()` / `run()` |
+| `edgion-controller/src/conf_mgr/sync_runtime/shutdown.rs` | `ShutdownHandle` / `ShutdownController` / `ShutdownSignal` |
+| `edgion-controller/src/conf_mgr/manager.rs` | `ConfMgr::create()` / `start_with_shutdown()` |
+| `edgion-controller/src/api/` | Admin API (Axum) |
+| `edgion-controller/src/conf_sync/` | gRPC ConfigSyncServer |

@@ -48,8 +48,8 @@ A single Crate (not a workspace) with three `[[bin]]` targets:
 
 | Binary | Entry file | Runtime model | Role |
 |--------|---------|-----------|------|
-| `edgion-gateway` | `src/bin/edgion_gateway.rs` | Synchronous entry; internally manages its own Tokio + Pingora main loop | Data plane |
-| `edgion-controller` | `src/bin/edgion_controller.rs` | `#[tokio::main(multi_thread)]` | Control plane |
+| `edgion-gateway` | `edgion-gateway/src/bin/edgion_gateway.rs` | Synchronous entry; internally manages its own Tokio + Pingora main loop | Data plane |
+| `edgion-controller` | `edgion-controller/src/bin/edgion_controller.rs` | `#[tokio::main(multi_thread)]` | Control plane |
 | `edgion-cli` | `edgion-cli/src/bin/edgion_ctl.rs` | `#[tokio::main]` single-threaded | CLI tool |
 
 > The federation Center binary (`edgion-center`) has been extracted to the separate EdgionCenter repository.
@@ -111,7 +111,7 @@ src/
 
 ## EdgionHttpContext — per-request state container
 
-Defined in `src/core/gateway/ctx.rs`, the "backpack" carried through the entire HTTP request lifecycle:
+Defined in `edgion-gateway/src/ctx.rs`, the "backpack" carried through the entire HTTP request lifecycle:
 
 | Field | Purpose |
 |------|------|

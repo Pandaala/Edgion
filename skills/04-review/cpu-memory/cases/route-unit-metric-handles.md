@@ -26,7 +26,7 @@ over `attached_gateways` — typically 1-3 entries — plus two atomic ops).
 
 `attached_gateways` is the list of `(gateway_ns, gateway_name)` tuples
 resolved from `parent_refs` at conf-load time (via
-`gateways_from_parent_refs` in `src/core/gateway/routes/common.rs`).
+`gateways_from_parent_refs` in `edgion-gateway/src/routes/common.rs`).
 `backend_ref_idx` is set by the LB selection path in
 `init_backend_context_if_needed` via `backend_refs.iter().position(...)`.
 

@@ -10,7 +10,7 @@ description: When loud-failing a once-only OnceLock init in debug builds, the .s
 
 ## Pattern
 
-Five global `OnceLock`s in `src/core/gateway/cli/config.rs` (`REQUEST_DURATION_CONFIG`,
+Five global `OnceLock`s in `edgion-gateway/src/cli/config.rs` (`REQUEST_DURATION_CONFIG`,
 `BACKEND_REQUESTS_CONFIG`, `PATH_NORMALIZATION_CONFIG`, `ACCESS_LOG_OPTIONS`,
 `LRU_CACHE_GLOBAL_CONFIG`) are initialized once at Gateway startup and read on the
 hot path. The goal is: "if a second init ever happens (test pollution), panic loudly

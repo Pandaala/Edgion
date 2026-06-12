@@ -10,7 +10,7 @@ description: Use when reviewing link_sys webhook call.rs "webhook_call retry-loo
 
 ## Conclusion
 
-`webhook_call` (`src/core/gateway/link_sys/providers/webhook/call.rs`, ~139 LOC) has a
+`webhook_call` (`edgion-gateway/src/link_sys/providers/webhook/call.rs`, ~139 LOC) has a
 retry loop whose `Ok(resp)` arm (lines ~129–183) performs retry-on-status gating,
 passive health tracking, success classification, and size-capped body read in one block.
 The finding itself states **"No runtime bug exists in the current code"** — this is a
@@ -79,5 +79,5 @@ Re-open only if:
 ## Reference Cases
 
 - link-sys F-015 (`tasks/link/link-sys-F015-webhook-call-rs-extract-function.md`), audited 2026-05-25.
-- `src/core/gateway/link_sys/providers/webhook/call.rs` — `webhook_call`, the four `record_passive_result` sites.
+- `edgion-gateway/src/link_sys/providers/webhook/call.rs` — `webhook_call`, the four `record_passive_result` sites.
 - Sibling refactor-decline decisions: [link-sys-dispatch-extract-function.md](link-sys-dispatch-extract-function.md), [plugin-runtime-god-match.md](plugin-runtime-god-match.md), [style-consolidation-thresholds.md](style-consolidation-thresholds.md), [size-and-similarity-heuristics.md](size-and-similarity-heuristics.md).

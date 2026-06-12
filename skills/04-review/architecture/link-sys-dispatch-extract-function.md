@@ -13,7 +13,7 @@ description: Use when reviewing link_sys runtime/store.rs "dispatch_full_set / d
 The one concrete, low-risk extraction these findings asked for — a shared
 credential-readiness prelude helper — is **already implemented** as
 `credential_readiness<M>(ls, auth_fn) -> (ready, tls_ok, auth)`
-(`src/core/gateway/link_sys/runtime/store.rs`), called from all six non-Webhook
+(`edgion-gateway/src/link_sys/runtime/store.rs`), called from all six non-Webhook
 arms across both dispatch functions. Alongside it, `register_for_full_set`,
 `swap_and_shutdown_olds`, `spawn_and_swap_partial`, `carry_over_if_not_ready`,
 `preserve_if_not_ready`, and `spawn_shutdown_if_present` are already extracted.
@@ -80,5 +80,5 @@ Re-open only if:
 ## Reference Cases
 
 - link-sys F-013 (`tasks/link/link-sys-F013-store-rs-extract-function-dispatch.md`), link-sys F-008 (`tasks/link/link-sys-F008-dispatch-full-set-partial-update-code-duplication.md`), audited 2026-05-25.
-- `src/core/gateway/link_sys/runtime/store.rs` — `credential_readiness`, `dispatch_full_set`, `dispatch_partial_update`.
+- `edgion-gateway/src/link_sys/runtime/store.rs` — `credential_readiness`, `dispatch_full_set`, `dispatch_partial_update`.
 - Sibling refactor-decline decisions: [plugin-runtime-god-match.md](plugin-runtime-god-match.md), [style-consolidation-thresholds.md](style-consolidation-thresholds.md), [size-and-similarity-heuristics.md](size-and-similarity-heuristics.md).

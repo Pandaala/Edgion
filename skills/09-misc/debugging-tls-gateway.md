@@ -66,7 +66,7 @@ kubectl exec -n edgion-system $GW_POD -- \
 #### A. `Gateway TLS matcher: ports:0, hostname_entries:0`
 
 **Root cause**: `GatewayTlsMatcher::rebuild_from_gateways()` in
-`src/core/gateway/runtime/matching/tls.rs` skips listeners without
+`edgion-gateway/src/runtime/matching/tls.rs` skips listeners without
 `certificateRefs`. When using `edgion.io/cert-provider: EdgionTls` (no
 `certificateRefs`), the listener is silently skipped.
 
@@ -79,7 +79,7 @@ listener (same cert that EdgionTls uses).
 #### B. `cleaned up stale gateway entries, stale:1` — routes disappear
 
 **Root cause**: Race condition in `TlsRouteManager::rebuild_gateway_routes_map()`
-(`src/core/gateway/routes/tls/routes_mgr.rs`). When TLSRoute and Gateway
+(`edgion-gateway/src/routes/tls/routes_mgr.rs`). When TLSRoute and Gateway
 updates arrive near-simultaneously, the route may be registered then
 immediately cleaned as "stale" because the gateway config hasn't been
 processed yet. The stale cleanup removes the `GatewayTlsRoutes` entry from

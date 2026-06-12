@@ -128,7 +128,7 @@ The 7-report investigation series (sub-reports deleted 2026-05-19; this section 
 | `03-source-position-errors.md` §5.1 | `CompiledScript.source` field landed | `lang/compiler/mod.rs` `compile_with_source` + `compile_dsl_source` |
 | `03-source-position-errors.md` §5.2 | Runtime line-number access-log declined | [observability/dsl-error-line-number-declined.md](observability/dsl-error-line-number-declined.md) + `tasks/todo/dsl/03-runtime-fault-at-line.md` (gated) |
 | `04-builtin-registration.md` | Closed `BuiltinId` enum kept; non-exhaustive lint rejected | [architecture/builtin-dispatch-non-exhaustive-lint.md](architecture/builtin-dispatch-non-exhaustive-lint.md) |
-| `05-test-coverage.md` §6.2 ROI #1 | proptest target landed | `src/core/gateway/plugins/http/dsl/tests/property_bytecode.rs` + [deserialization/dsl-bytecode-deserialize-safety.md](deserialization/dsl-bytecode-deserialize-safety.md) |
+| `05-test-coverage.md` §6.2 ROI #1 | proptest target landed | `edgion-gateway/src/plugins/http/dsl/tests/property_bytecode.rs` + [deserialization/dsl-bytecode-deserialize-safety.md](deserialization/dsl-bytecode-deserialize-safety.md) |
 | `06-value-str-migration.md` | SSO migration deferred indefinitely | [dsl-value-str/sso-migration-not-worth-it.md](dsl-value-str/sso-migration-not-worth-it.md) |
 | `07-rhai-feature-shopping-list.md` | Engine-selection rationale frozen | **this file** |
 | `issue-10-fill-compiled-script-source.md` | Phase 0 implemented | `lang/compiler/mod.rs:99-101` (`compile_with_source`) |
@@ -144,5 +144,5 @@ The 7-report investigation series (sub-reports deleted 2026-05-19; this section 
 - `tasks/todo/dsl/03-runtime-fault-at-line.md` — gated runtime-line wrapper proposal; do not implement until one of its three gating conditions fires.
 - [`../01-architecture/02-gateway/dsl-engine.md`](../01-architecture/02-gateway/dsl-engine.md) — architectural overview (data flow, source layout, plugin entry points, async/sync bridging, panic isolation, runtime lifecycle).
 - [`../01-architecture/02-gateway/dsl-engine-security-model.md`](../01-architecture/02-gateway/dsl-engine-security-model.md) — sandbox cap enforcement, ReDoS posture, SSRF guard rationale.
-- `src/core/gateway/plugins/http/dsl/lang/` — the custom VM source tree, ~7k lines of safe Rust including inline tests.
+- `edgion-gateway/src/plugins/http/dsl/lang/` — the custom VM source tree, ~7k lines of safe Rust including inline tests.
 - User-facing docs (out of scope for this internal ADR): `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/`.

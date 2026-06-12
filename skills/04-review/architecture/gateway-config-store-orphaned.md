@@ -47,4 +47,4 @@ Re-open only on:
 
 - Source: 2026-05-28 gateway runtime store review (runtime-F003).
 - Companion finding: `architecture/listener-specificity-duplicated.md` (dissolved by this deletion).
-- Live store: `src/core/gateway/runtime/store/listener_gateway_info.rs`; deleted file was `config.rs` in that same `runtime/store/` directory.
+- Live store: `edgion-gateway/src/runtime/store/listener_gateway_info.rs`; deleted file was `config.rs` in that same `runtime/store/` directory.

@@ -11,15 +11,15 @@ Use this for tasks such as:
 - [../../../edgion-resources/src/resources/edgion_plugins/mod.rs](../../../edgion-resources/src/resources/edgion_plugins/mod.rs)
 - [../../../edgion-resources/src/resources/edgion_plugins/entry.rs](../../../edgion-resources/src/resources/edgion_plugins/entry.rs)
 - [../../../edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs](../../../edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs)
-- [../../../src/core/gateway/plugins/runtime/plugin_runtime.rs](../../../src/core/gateway/plugins/runtime/plugin_runtime.rs)
-- [../../../src/core/gateway/plugins/runtime/conditional_filter.rs](../../../src/core/gateway/plugins/runtime/conditional_filter.rs)
-- [../../../src/core/gateway/plugins/runtime/traits/session.rs](../../../src/core/gateway/plugins/runtime/traits/session.rs)
-- [../../../src/core/gateway/plugins/runtime/log.rs](../../../src/core/gateway/plugins/runtime/log.rs)
-- [../../../src/core/gateway/plugins/http/mod.rs](../../../src/core/gateway/plugins/http/mod.rs)
-- [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs)
-- [../../../src/core/gateway/plugins/http/conf_handler_impl.rs](../../../src/core/gateway/plugins/http/conf_handler_impl.rs)
-- [../../../src/core/gateway/plugins/http/plugin_store.rs](../../../src/core/gateway/plugins/http/plugin_store.rs)
-- [../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs](../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs)
+- [../../../edgion-gateway/src/plugins/runtime/plugin_runtime.rs](../../../edgion-gateway/src/plugins/runtime/plugin_runtime.rs)
+- [../../../edgion-gateway/src/plugins/runtime/conditional_filter.rs](../../../edgion-gateway/src/plugins/runtime/conditional_filter.rs)
+- [../../../edgion-gateway/src/plugins/runtime/traits/session.rs](../../../edgion-gateway/src/plugins/runtime/traits/session.rs)
+- [../../../edgion-gateway/src/plugins/runtime/log.rs](../../../edgion-gateway/src/plugins/runtime/log.rs)
+- [../../../edgion-gateway/src/plugins/http/mod.rs](../../../edgion-gateway/src/plugins/http/mod.rs)
+- [../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs](../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs)
+- [../../../edgion-gateway/src/plugins/http/conf_handler_impl.rs](../../../edgion-gateway/src/plugins/http/conf_handler_impl.rs)
+- [../../../edgion-gateway/src/plugins/http/plugin_store.rs](../../../edgion-gateway/src/plugins/http/plugin_store.rs)
+- [../../../edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs](../../../edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs)
 
 ## Key mental model
 
@@ -95,16 +95,16 @@ You typically touch at least these locations:
 2. `edgion-resources/src/resources/edgion_plugins/plugin_configs/mod.rs`
 3. `edgion-resources/src/resources/edgion_plugins/mod.rs`
 4. `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs`
-5. `src/core/gateway/plugins/http/<your_plugin>/mod.rs`
-6. `src/core/gateway/plugins/http/<your_plugin>/plugin.rs`
-7. `src/core/gateway/plugins/http/mod.rs`
-8. `src/core/gateway/plugins/runtime/plugin_runtime.rs`
+5. `edgion-gateway/src/plugins/http/<your_plugin>/mod.rs`
+6. `edgion-gateway/src/plugins/http/<your_plugin>/plugin.rs`
+7. `edgion-gateway/src/plugins/http/mod.rs`
+8. `edgion-gateway/src/plugins/runtime/plugin_runtime.rs`
 
 ### If the plugin depends on a Secret
 
 Continue with:
 
-- [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs)
+- [../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs](../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs)
 
 This handler currently covers:
 
@@ -152,8 +152,8 @@ At minimum, add:
 
 Typically located in:
 
-- `src/core/gateway/plugins/http/<your_plugin>/mod.rs`
-- `src/core/gateway/plugins/http/<your_plugin>/plugin.rs`
+- `edgion-gateway/src/plugins/http/<your_plugin>/mod.rs`
+- `edgion-gateway/src/plugins/http/<your_plugin>/plugin.rs`
 
 Good references in the current repo:
 
@@ -166,7 +166,7 @@ Good references in the current repo:
 
 Must read:
 
-- [../../../src/core/gateway/plugins/runtime/plugin_runtime.rs](../../../src/core/gateway/plugins/runtime/plugin_runtime.rs)
+- [../../../edgion-gateway/src/plugins/runtime/plugin_runtime.rs](../../../edgion-gateway/src/plugins/runtime/plugin_runtime.rs)
 
 The current real entry point is this file, not the old `runtime.rs` referenced by stale docs.
 
@@ -216,7 +216,7 @@ If the plugin is a user-facing capability, in addition to skill / dev-guide, als
 
 The actual conditional-execution wrapper is in:
 
-- [../../../src/core/gateway/plugins/runtime/conditional_filter.rs](../../../src/core/gateway/plugins/runtime/conditional_filter.rs)
+- [../../../edgion-gateway/src/plugins/runtime/conditional_filter.rs](../../../edgion-gateway/src/plugins/runtime/conditional_filter.rs)
 
 Important distinction:
 
@@ -271,13 +271,13 @@ The Controller admin API still keeps a diagnostic endpoint to enumerate residual
 GET /api/v1/diagnostics/nested_ext_ref_usage
 ```
 
-Implementation: `src/core/controller/api/diagnostics_handlers.rs`.
+Implementation: `edgion-controller/src/api/diagnostics_handlers.rs`.
 
 ## `ExtensionRef` execution chain
 
 If the plugin is referenced by a route through `ExtensionRef`, focus on:
 
-- [../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs](../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs)
+- [../../../edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs](../../../edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs)
 
 Current behavior:
 
@@ -356,7 +356,7 @@ Both must immediately be followed by `ctx.uri_finalized = true`. Any third site 
 
 The most-used read/write entry points are at:
 
-- [../../../src/core/gateway/plugins/runtime/traits/session.rs](../../../src/core/gateway/plugins/runtime/traits/session.rs)
+- [../../../edgion-gateway/src/plugins/runtime/traits/session.rs](../../../edgion-gateway/src/plugins/runtime/traits/session.rs)
 
 High-frequency APIs:
 
@@ -371,14 +371,14 @@ High-frequency APIs:
 
 If the plugin will call external HTTP services, prefer reusing:
 
-- `src/core/gateway/plugins/http/common/http_client.rs`
-- `src/core/gateway/plugins/http/common/auth_common.rs`
+- `edgion-gateway/src/plugins/http/common/http_client.rs`
+- `edgion-gateway/src/plugins/http/common/auth_common.rs`
 
 ## `PluginLog` rules
 
 Entry point:
 
-- [../../../src/core/gateway/plugins/runtime/log.rs](../../../src/core/gateway/plugins/runtime/log.rs)
+- [../../../edgion-gateway/src/plugins/runtime/log.rs](../../../edgion-gateway/src/plugins/runtime/log.rs)
 
 Keep the rules simple:
 

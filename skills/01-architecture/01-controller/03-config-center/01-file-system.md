@@ -204,11 +204,11 @@ Recommended principles:
 
 ## Key Files
 
-- `src/core/controller/conf_mgr/conf_center/file_system/center.rs` — `FileSystemCenter` (lifecycle)
-- `src/core/controller/conf_mgr/conf_center/file_system/controller.rs` — `FileSystemController` (spawns resource controllers)
-- `src/core/controller/conf_mgr/conf_center/file_system/storage.rs` — `FileSystemStorage` (CenterApi implementation)
-- `src/core/controller/conf_mgr/conf_center/file_system/file_watcher.rs` — `FileSystemWatcher` (file watching + event dispatch)
-- `src/core/controller/conf_mgr/conf_center/file_system/resource_controller.rs` — `FileSystemResourceController`
-- `src/core/controller/conf_mgr/conf_center/file_system/status.rs` — `FileSystemStatusHandler` (.status file I/O)
-- `src/core/controller/conf_mgr/conf_center/file_system/event.rs` — `FileSystemEvent` enum
-- `src/core/controller/conf_mgr/conf_center/file_system/config.rs` — `FileSystemConfig`
+- `edgion-controller/src/conf_mgr/conf_center/file_system/center.rs` — `FileSystemCenter` (lifecycle)
+- `edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs` — `FileSystemController` (spawns resource controllers)
+- `edgion-controller/src/conf_mgr/conf_center/file_system/storage.rs` — `FileSystemStorage` (CenterApi implementation)
+- `edgion-controller/src/conf_mgr/conf_center/file_system/file_watcher.rs` — `FileSystemWatcher` (file watching + event dispatch)
+- `edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs` — `FileSystemResourceController`
+- `edgion-controller/src/conf_mgr/conf_center/file_system/status.rs` — `FileSystemStatusHandler` (.status file I/O)
+- `edgion-controller/src/conf_mgr/conf_center/file_system/event.rs` — `FileSystemEvent` enum
+- `edgion-controller/src/conf_mgr/conf_center/file_system/config.rs` — `FileSystemConfig`

@@ -10,7 +10,7 @@ description: configure_gateway_frontend_mtls now returns Err when every referenc
 
 ## Conclusion
 
-`configure_gateway_frontend_mtls` (`src/core/gateway/tls/runtime/gateway/tls_pingora.rs`) now
+`configure_gateway_frontend_mtls` (`edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs`) now
 tracks `certs_added: usize` across the per-Secret loop. When every entry in a non-empty
 `resolved_frontend_ca_secrets` lacks the `CA_CERT` (`ca.crt`) key, the loop body never runs,
 `certs_added` stays `0`, and the function returns `Err(PingoraError::explain(InvalidCert, ...))`

@@ -8,7 +8,7 @@ redacted to `"[redacted]"`.
 `AdminRedactGuard` and two generic serde `serialize_with` adapters (`redact_opt`,
 `redact_required`). Secret-bearing fields on the synced resource structs carry the
 adapter; the guard is constructed inside the synchronous `list_client_resources`
-(`src/core/gateway/api/mod.rs`), covering both the list and get-by-name paths. Default
+(`edgion-gateway/src/api/mod.rs`), covering both the list and get-by-name paths. Default
 (no guard) emits real values, so the controller's conf_sync transport serialization
 — a different process that never constructs the guard — is unaffected.
 

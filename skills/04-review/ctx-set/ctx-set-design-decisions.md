@@ -31,7 +31,7 @@ description: Use when reviewing ctx_set plugin findings; covers cross-rule ctx v
 
 **Files involved**:
 - `edgion-resources/src/resources/edgion_plugins/plugin_configs/ctx_set.rs` — `CompiledTemplate`, `TemplateSegment`
-- `src/core/gateway/plugins/http/ctx_set/plugin.rs` — `evaluate_template`, `resolve_var`
+- `edgion-gateway/src/plugins/http/ctx_set/plugin.rs` — `evaluate_template`, `resolve_var`
 
 **Verdict**: Fixed. In future reviews, if a ctx_set template-related issue is seen again, first confirm whether the precompiled path is in use.
 
@@ -45,7 +45,7 @@ description: Use when reviewing ctx_set plugin findings; covers cross-rule ctx v
 
 1. **The real defect is already fixed.** The original P3-g4-006 report described a per-request `Regex::new` fallback. That regression was removed in commit `9074869` — the `None` arm no longer compiles a regex; it now emits `plugin_log.push_err("transform regex missing")` and returns `None`, letting the rule fall through to its declared `default`.
 2. **The current shape is the project's canonical idiom for unreachable invariant branches on long-running paths.** See [`03-coding/02-rust-coding-rules.md` §Rule 5](../../03-coding/02-rust-coding-rules.md): data-plane filters graceful-degrade with `plugin_log.push_err` + safe default; they do not panic.
-3. **`debug_assert!` is not a project idiom.** Whole-tree `grep -rl 'debug_assert!' src/` returns 3 sites (IP radix-tree builders × 2 — `ip_radix_tree/builder_v4.rs`, `builder_v6.rs` — and the gateway CLI config `OnceLock::set` init in `gateway/cli/config.rs` × 1; cf. [`../architecture/oncelock-debug-assert-pitfall.md`](../architecture/oncelock-debug-assert-pitfall.md)); `src/core/gateway/plugins/` has zero. Adding one here would be a local stylistic outlier with no test path to exercise it — every test for `apply_transform` already calls `validate()` first, so the tripwire would never fire even in CI.
+3. **`debug_assert!` is not a project idiom.** Whole-tree `grep -rl 'debug_assert!' src/` returns 3 sites (IP radix-tree builders × 2 — `ip_radix_tree/builder_v4.rs`, `builder_v6.rs` — and the gateway CLI config `OnceLock::set` init in `gateway/cli/config.rs` × 1; cf. [`../architecture/oncelock-debug-assert-pitfall.md`](../architecture/oncelock-debug-assert-pitfall.md)); `edgion-gateway/src/plugins/` has zero. Adding one here would be a local stylistic outlier with no test path to exercise it — every test for `apply_transform` already calls `validate()` first, so the tripwire would never fire even in CI.
 4. **`unreachable!()` is wrong on the data plane.** It panics in release too; one bad config would 5xx every in-flight request that hits this rule. `unreachable!()` belongs on exhaustive `match` arms of closed enums, not on validator-bypass fallbacks.
 
 **Verdict**: Closed (P3-g4-006). The `None` arm is intentionally graceful-degrade. Refactoring suggestions to add `debug_assert!` / `unreachable!()` / `panic!()` are not accepted. Re-reports require evidence that (a) the per-request `Regex::new` regression has returned, or (b) the existing graceful arm has lost its `push_err` observability.

@@ -14,8 +14,8 @@ Both redirect call sites now strip the Host-header port via the shared
 `host_without_port` helper (`edgion-common/src/utils/net.rs`), which preserves an IPv6
 literal's brackets so the host can be re-emitted into a valid URL authority:
 
-- `EdgionHttpRedirectProxy::build_redirect_url_from_parts` (`src/core/gateway/routes/http/redirect_http.rs`)
-- `RequestRedirectFilter::build_location` (`src/core/gateway/plugins/runtime/gateway_api_filters/request_redirect.rs`)
+- `EdgionHttpRedirectProxy::build_redirect_url_from_parts` (`edgion-gateway/src/routes/http/redirect_http.rs`)
+- `RequestRedirectFilter::build_location` (`edgion-gateway/src/plugins/runtime/gateway_api_filters/request_redirect.rs`)
 
 Re-reports of the form "redirect builds `https://[/...` for an IPv6 Host", "`[::1]:8443`
 Host is split into `[`", or "`host.split(':').next()` mangles IPv6 literals on the redirect

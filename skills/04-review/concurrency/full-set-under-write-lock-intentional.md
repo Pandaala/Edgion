@@ -10,7 +10,7 @@ description: Use when reviewing `CacheData::reset()` in conf_sync cache_client; 
 
 ## Conclusion
 
-`CacheData::reset()` (`src/core/gateway/conf_sync/cache_client/cache_data.rs:38-51`) replaces
+`CacheData::reset()` (`edgion-gateway/src/conf_sync/cache_client/cache_data.rs:38-51`) replaces
 `self.data`, calls `handler.processor.full_set(&self.data)`, and clears
 `handler.compressed_events` — **all while the `parking_lot::RwLock<CacheData<T>>` write lock
 is held** (taken by the two callers `cache.rs:106-112` and `event_dispatch.rs:117-119`). This
@@ -103,9 +103,9 @@ Re-open this decision only if:
 - [webhook-manager-rwlock-intentional.md](webhook-manager-rwlock-intentional.md) —
   sibling concurrency accepted-tradeoff: a lock kept intentionally because the
   finer-grained "fix" introduces more concurrency surface than the original cost.
-- `src/core/gateway/conf_sync/cache_client/cache_data.rs` — `CacheData::reset`,
+- `edgion-gateway/src/conf_sync/cache_client/cache_data.rs` — `CacheData::reset`,
   `process_compressed_events`, `add_compress_event`.
-- `src/core/gateway/conf_sync/cache_client/event_dispatch.rs` — `apply_change`,
+- `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` — `apply_change`,
   `list_and_reset`.
-- `src/core/gateway/routes/http/conf_handler_impl.rs` — representative `full_set` /
+- `edgion-gateway/src/routes/http/conf_handler_impl.rs` — representative `full_set` /
   `partial_update` pair that assumes mutual exclusion.

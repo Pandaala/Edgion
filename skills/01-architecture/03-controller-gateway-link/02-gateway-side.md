@@ -199,7 +199,7 @@ ConfigClient also provides an `is_ready()` method, checking whether all required
 ## Module structure
 
 ```
-src/core/gateway/conf_sync/
+edgion-gateway/src/conf_sync/
 ├── conf_client/
 │   ├── mod.rs              # Module exports
 │   ├── config_client.rs    # ConfigClient aggregation layer

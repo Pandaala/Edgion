@@ -8,7 +8,7 @@ description: Decision record for observe F-006 — AccessLogStore TTL cleanup is
 ## Conclusion
 
 `AccessLogStore::list()` and `AccessLogStore::status()` in
-`src/core/gateway/observe/access_log_store.rs` now each begin with a call to
+`edgion-gateway/src/observe/access_log_store.rs` now each begin with a call to
 `self.cleanup_expired()`. The previous behavior — where eviction only happened
 inside `store()` (every 100th call and on capacity overflow) — left expired
 entries lingering in the `DashMap` until the next write, inflating
@@ -26,7 +26,7 @@ cleanup was **not** accepted.
 `AccessLogStore` is a `LazyLock<AccessLogStore>` consumed only when the gateway
 is started with `--integration-testing-mode`; the only writer is
 `pg_logging.rs` and the only readers are the `/admin/v1/access_logs/*` Admin
-API handlers in `src/core/gateway/api/mod.rs`. Production binaries neither
+API handlers in `edgion-gateway/src/api/mod.rs`. Production binaries neither
 write nor read this state, so any "memory leak" or `entry_count` skew is
 bounded to the test process lifetime.
 
@@ -76,6 +76,6 @@ Re-open this decision only if:
 ## Reference Cases
 
 - Closed finding: `tasks/observe/observe-F006-access-log-store-ttl-no-cleanup-under-no-load.md` (closed 2026-05-28).
-- Source: `src/core/gateway/observe/access_log_store.rs` — `list()`, `status()`, `cleanup_expired()`.
-- Callers: `src/core/gateway/api/mod.rs` (Admin API `/admin/v1/access_logs/*`),
-  `src/core/gateway/routes/http/proxy_http/pg_logging.rs` (writer).
+- Source: `edgion-gateway/src/observe/access_log_store.rs` — `list()`, `status()`, `cleanup_expired()`.
+- Callers: `edgion-gateway/src/api/mod.rs` (Admin API `/admin/v1/access_logs/*`),
+  `edgion-gateway/src/routes/http/proxy_http/pg_logging.rs` (writer).

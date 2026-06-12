@@ -10,8 +10,8 @@ description: Use when reviewing session-affinity token findings claiming the CRC
 
 ## Conclusion
 
-`generate_session_token` (`src/core/gateway/routes/http/session_persistence.rs`) and
-`build_sp_affinity_map` (`src/core/gateway/lb/runtime_state/mod.rs`) compute the session-affinity
+`generate_session_token` (`edgion-gateway/src/routes/http/session_persistence.rs`) and
+`build_sp_affinity_map` (`edgion-gateway/src/lb/runtime_state/mod.rs`) compute the session-affinity
 token as `format!("{:08x}", crc32fast::hash(addr_str))` — a plain CRC32 of the backend `IP:port`
 with no per-process secret and no MAC. This is **intentional**: session affinity is a
 stickiness/performance feature, not an authentication or access-control boundary. The defect was
@@ -68,8 +68,8 @@ Re-open this decision (and implement the HMAC fix) only if:
 ## Reference Cases
 
 - lb-F011 (review finding, 2026-05-24)
-- `src/core/gateway/routes/http/session_persistence.rs` — `generate_session_token` (threat-model comment)
-- `src/core/gateway/lb/runtime_state/mod.rs` — `build_sp_affinity_map` (threat-model comment),
+- `edgion-gateway/src/routes/http/session_persistence.rs` — `generate_session_token` (threat-model comment)
+- `edgion-gateway/src/lb/runtime_state/mod.rs` — `build_sp_affinity_map` (threat-model comment),
   `sp_affinity_lookup`, `sp_affinity_get_or_build_key`
-- `src/core/gateway/routes/http/proxy_http/pg_upstream_peer.rs` — `sp_resolve_target`,
+- `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs` — `sp_resolve_target`,
   `get_peer_with_sp_fallback` (SSRF validation on the resolved sticky target)

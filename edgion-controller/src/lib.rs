@@ -1,0 +1,38 @@
+/// Name of the active global memory allocator (selected by the binary's
+/// `allocator-*` feature). Reported in startup/version output.
+pub fn allocator_name() -> &'static str {
+    #[cfg(all(feature = "allocator-jemalloc", not(target_env = "msvc")))]
+    {
+        "jemalloc"
+    }
+
+    #[cfg(feature = "allocator-mimalloc")]
+    {
+        "mimalloc"
+    }
+
+    #[cfg(feature = "allocator-system")]
+    {
+        "system"
+    }
+
+    #[cfg(not(any(
+        feature = "allocator-jemalloc",
+        feature = "allocator-mimalloc",
+        feature = "allocator-system"
+    )))]
+    {
+        "system (default)"
+    }
+}
+
+pub mod api;
+pub mod authz;
+pub mod cli;
+pub mod conf_mgr;
+pub mod conf_sync;
+pub mod fed_sync;
+pub mod observe;
+pub mod services;
+
+pub use cli::EdgionControllerCli;

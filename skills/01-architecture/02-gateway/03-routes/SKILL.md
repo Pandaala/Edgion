@@ -158,10 +158,10 @@ When listeners from multiple Gateways bind to the same address/protocol combinat
 
 | File | Responsibility |
 |------|----------------|
-| `src/core/gateway/routes/http/routes_mgr.rs` | `GlobalHttpRouteManagers`, `DomainRouteRules`, `RouteRules` |
-| `src/core/gateway/routes/http/conf_handler_impl.rs` | `ConfHandler<HTTPRoute>` implementation, route parsing and construction |
-| `src/core/gateway/routes/http/match_engine/radix_route_match.rs` | `RadixRouteMatchEngine` |
-| `src/core/gateway/routes/http/match_engine/regex_routes_engine.rs` | `RegexRoutesEngine` |
-| `src/core/gateway/routes/http/match_engine/radix_path.rs` | `RadixPath` priority calculation |
-| `src/core/gateway/routes/http/match_unit.rs` | `HttpRouteRuleUnit`, `deep_match_common` |
-| `src/core/gateway/runtime/matching/route.rs` | `check_gateway_listener_match`, `hostname_matches_listener` |
+| `edgion-gateway/src/routes/http/routes_mgr.rs` | `GlobalHttpRouteManagers`, `DomainRouteRules`, `RouteRules` |
+| `edgion-gateway/src/routes/http/conf_handler_impl.rs` | `ConfHandler<HTTPRoute>` implementation, route parsing and construction |
+| `edgion-gateway/src/routes/http/match_engine/radix_route_match.rs` | `RadixRouteMatchEngine` |
+| `edgion-gateway/src/routes/http/match_engine/regex_routes_engine.rs` | `RegexRoutesEngine` |
+| `edgion-gateway/src/routes/http/match_engine/radix_path.rs` | `RadixPath` priority calculation |
+| `edgion-gateway/src/routes/http/match_unit.rs` | `HttpRouteRuleUnit`, `deep_match_common` |
+| `edgion-gateway/src/runtime/matching/route.rs` | `check_gateway_listener_match`, `hostname_matches_listener` |

@@ -12,7 +12,7 @@ description: `UNSAFE_UPSTREAM_ADDRESS_LOG` is now a single `pub(crate) const` in
 
 The SSRF-guard access-log literal `"unsafe upstream address"` is now declared exactly once as
 `pub(crate) const UNSAFE_UPSTREAM_ADDRESS_LOG: &str` in
-`src/core/gateway/routes/common.rs` (the L4 shared helper module that already hosts
+`edgion-gateway/src/routes/common.rs` (the L4 shared helper module that already hosts
 `is_core_service_backend_ref` and `effective_hostnames`). All five SSRF-guard call sites import
 it:
 
@@ -80,6 +80,6 @@ Re-open only if:
 
 - `path-norm-nonhttp-routes-FB02-unsafe-upstream-address-log-constant-triplicated` (review
   finding, `tasks/path/`, fixed 2026-05-26)
-- `src/core/gateway/routes/common.rs` — canonical declaration site
-- `src/core/gateway/observe/logs/tcp_log.rs` — `deny_reason` is `#[serde(skip_serializing_if
+- `edgion-gateway/src/routes/common.rs` — canonical declaration site
+- `edgion-gateway/src/observe/logs/tcp_log.rs` — `deny_reason` is `#[serde(skip_serializing_if
   = "Option::is_none")]` and pre-existing tests cover its serialization

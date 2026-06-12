@@ -8,7 +8,7 @@ description: HTTP route matching engine — RadixPath, RegexSet, ConfHandler, pr
 ## Module structure
 
 ```
-src/core/gateway/routes/http/
+edgion-gateway/src/routes/http/
 ├── conf_handler_impl.rs        # ConfHandler<HTTPRoute> implementation, route parsing and DomainRouteRules construction
 ├── match_engine/
 │   ├── mod.rs
@@ -139,12 +139,12 @@ The radix tree internally supports `:param` parameter matching; a double colon `
 
 | File | Responsibility |
 |------|----------------|
-| `src/core/gateway/routes/http/routes_mgr.rs` | GlobalHttpRouteManagers, RouteRules, DomainRouteRules |
-| `src/core/gateway/routes/http/conf_handler_impl.rs` | ConfHandler implementation, route parsing |
-| `src/core/gateway/routes/http/match_engine/radix_route_match.rs` | RadixRouteMatchEngine |
-| `src/core/gateway/routes/http/match_engine/regex_routes_engine.rs` | RegexRoutesEngine |
-| `src/core/gateway/routes/http/match_engine/radix_path.rs` | RadixPath priority calculation |
-| `src/core/gateway/routes/http/match_unit.rs` | HttpRouteRuleUnit, deep_match |
-| `src/core/gateway/routes/http/proxy_http/mod.rs` | EdgionHttpProxy |
-| `src/core/gateway/routes/http/redirect_http.rs` | EdgionHttpRedirectProxy |
-| `src/core/gateway/routes/http/lb_policy_sync.rs` | LB policy sync |
+| `edgion-gateway/src/routes/http/routes_mgr.rs` | GlobalHttpRouteManagers, RouteRules, DomainRouteRules |
+| `edgion-gateway/src/routes/http/conf_handler_impl.rs` | ConfHandler implementation, route parsing |
+| `edgion-gateway/src/routes/http/match_engine/radix_route_match.rs` | RadixRouteMatchEngine |
+| `edgion-gateway/src/routes/http/match_engine/regex_routes_engine.rs` | RegexRoutesEngine |
+| `edgion-gateway/src/routes/http/match_engine/radix_path.rs` | RadixPath priority calculation |
+| `edgion-gateway/src/routes/http/match_unit.rs` | HttpRouteRuleUnit, deep_match |
+| `edgion-gateway/src/routes/http/proxy_http/mod.rs` | EdgionHttpProxy |
+| `edgion-gateway/src/routes/http/redirect_http.rs` | EdgionHttpRedirectProxy |
+| `edgion-gateway/src/routes/http/lb_policy_sync.rs` | LB policy sync |

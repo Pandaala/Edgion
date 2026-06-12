@@ -7,7 +7,7 @@ description: Decision rule for findings about BandwidthLimit plugin lacking per-
 
 ## Conclusion
 
-The `BandwidthLimit` HTTP plugin (`src/core/gateway/plugins/http/bandwidth_limit/plugin.rs`) deliberately
+The `BandwidthLimit` HTTP plugin (`edgion-gateway/src/plugins/http/bandwidth_limit/plugin.rs`) deliberately
 operates per response stream: each upstream body chunk yields `delay = chunk_size / rate_bps`, Pingora
 applies that delay before sending the next chunk, and there is **no per-connection token bucket, no
 wall-clock accounting, and no cross-stream coordination**. Fix suggestions of the form

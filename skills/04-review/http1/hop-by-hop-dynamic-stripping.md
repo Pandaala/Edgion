@@ -38,7 +38,7 @@ never affected by the gap.
 
 ## Code shape today
 
-- `src/core/gateway/plugins/http/common/http_client.rs`
+- `edgion-gateway/src/plugins/http/common/http_client.rs`
   - `HOP_BY_HOP_HEADERS` — canonical 8-entry set (doc-comment now cites
     RFC 9110 §7.6.1).
   - `is_hop_by_hop(name)` — unchanged signature; consults the static set only.

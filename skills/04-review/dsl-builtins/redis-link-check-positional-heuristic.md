@@ -5,7 +5,7 @@ description: Use when a reviewer flags `check_redis_link_names` (DSL plugin.rs) 
 
 # `check_redis_link_names` Positional Heuristic — FIXED (fail-open), PIN-IN-PLACE
 
-**Status**: Resolved (plugins-http-dsl-F015, 2026-05-26) — see `check_redis_link_names` + `is_single_push_op` in `src/core/gateway/plugins/http/dsl/plugin.rs`.
+**Status**: Resolved (plugins-http-dsl-F015, 2026-05-26) — see `check_redis_link_names` + `is_single_push_op` in `edgion-gateway/src/plugins/http/dsl/plugin.rs`.
 **Tests**: `plugin.rs::tests::validate_config_accepts_redis_with_multi_instruction_sibling_arg` (regression for the false-positive 500) and `validate_config_skips_check_when_layout_is_ambiguous` (documents fail-open); `validate_config_rejects_unknown_redis_link` still locks the all-literal reject path.
 
 ## Conclusion
@@ -56,4 +56,4 @@ Re-open only if:
 
 - Original finding: `tasks/plugins/plugins-http-dsl-F015-redis-link-check-false-positive-risk.md` (High / BadLogic).
 - Related DSL builtin review note: [[chrono-display-panic]].
-- Fail-closed wiring: `seal_fail_closed` / `RejectFilter` in `src/core/gateway/plugins/runtime/`.
+- Fail-closed wiring: `seal_fail_closed` / `RejectFilter` in `edgion-gateway/src/plugins/runtime/`.

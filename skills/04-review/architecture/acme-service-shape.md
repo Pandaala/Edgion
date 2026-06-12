@@ -7,7 +7,7 @@ description: Decide on ACME `service.rs` "huge phase function should be split / 
 
 **Audit date**: 2026-04-26
 **Linked issue**: P1-05 (closed, only the code-defect parts fixed; no architectural refactoring)
-**File**: `src/core/controller/services/acme/service.rs` (~1158 lines)
+**File**: `edgion-controller/src/services/acme/service.rs` (~1158 lines)
 
 ## Already Fixed (former real defects)
 

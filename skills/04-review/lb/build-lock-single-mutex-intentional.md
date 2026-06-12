@@ -10,7 +10,7 @@ description: Use when reviewing ServiceSelectorCell concurrency findings claimin
 
 ## Conclusion
 
-`ServiceSelectorCell` (`src/core/gateway/lb/compiled_selector.rs`) deliberately uses one
+`ServiceSelectorCell` (`edgion-gateway/src/lb/compiled_selector.rs`) deliberately uses one
 `build_lock: Mutex<()>` to cover the "compile a slot" critical section for all four policies
 (RR / CH / LeastConn / EWMA). Two concurrent first-build requests for *different* policies do
 serialize behind it, but this contention is init-only, bounded by `O(N_policies × build_time)`,
@@ -78,6 +78,6 @@ Re-open this decision only if:
 ## Reference Cases
 
 - lb-F010 (review finding, 2026-05-24)
-- `src/core/gateway/lb/compiled_selector.rs` — `ServiceSelectorCell::build_lock`,
+- `edgion-gateway/src/lb/compiled_selector.rs` — `ServiceSelectorCell::build_lock`,
   `get_or_build`, `replace_backends`, `hydrate_if_empty`
 - Standing posture: `concurrency/lb-false-positives.md`, `cpu-memory/performance-review-methodology.md`

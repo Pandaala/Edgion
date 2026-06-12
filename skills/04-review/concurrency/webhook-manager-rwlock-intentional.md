@@ -11,7 +11,7 @@ description: Use when reviewing the LinkSys WebhookManager read path; explains w
 ## Conclusion
 
 `WebhookManager::services` is `tokio::sync::RwLock<HashMap<String, WebhookEntry>>`
-(`src/core/gateway/link_sys/providers/webhook/manager.rs:55`) and `WebhookManager::get`
+(`edgion-gateway/src/link_sys/providers/webhook/manager.rs:55`) and `WebhookManager::get`
 (`manager.rs:66-68`) takes `self.services.read().await` on every outbound call. This stays as-is.
 The per-call read-lock is not a measurable cost and the `ArcSwap` migration the finding asks for is
 structurally heavier than the codebase-wide pattern it cites.
@@ -82,5 +82,5 @@ Re-open this decision only if:
 - [link-sys-runtime-insert-remove-rcu.md](link-sys-runtime-insert-remove-rcu.md) — the sibling
   `store.rs` stores that DO use `ArcSwap`, and why they can (single `Arc<Client>` per key, no
   coupled `JoinHandle`).
-- `src/core/gateway/link_sys/providers/webhook/manager.rs` — `WebhookManager`, `WebhookEntry`,
+- `edgion-gateway/src/link_sys/providers/webhook/manager.rs` — `WebhookManager`, `WebhookEntry`,
   `get` / `upsert` / `remove`.

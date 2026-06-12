@@ -54,4 +54,4 @@ Re-open only if:
 - `plugins-stream-F009` — original finding, fixed 2026-05-27 (this file).
 - `tasks/gateway-deep-review/plugins-stream/INDEX.md` row 23.
 - Sibling design note: [`stream-init-failed-pattern-duplication-not-extracted.md`](./stream-init-failed-pattern-duplication-not-extracted.md) — data-plane `validate_and_init` duplication is deliberately kept; do not conflate.
-- Source: `edgion-resources/src/resources/edgion_stream_plugins/connection_ip_restriction_rules.rs` (`impl PluginValidation`), `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs` (preparse Stage 1).
+- Source: `edgion-resources/src/resources/edgion_stream_plugins/connection_ip_restriction_rules.rs` (`impl PluginValidation`), `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs` (preparse Stage 1).

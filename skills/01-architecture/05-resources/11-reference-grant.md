@@ -11,8 +11,8 @@ ReferenceGrant is a Gateway API standard resource that authorizes cross-namespac
 
 ## Source code locations
 
-- Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/reference_grant.rs`
-- Authorization store: `src/core/controller/conf_mgr/sync_runtime/resource_processor/ref_grant/`
+- Controller Handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/reference_grant.rs`
+- Authorization store: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/`
 - Type definitions: `edgion-resources/src/resources/reference_grant.rs`
 
 ## Not synced to Gateway

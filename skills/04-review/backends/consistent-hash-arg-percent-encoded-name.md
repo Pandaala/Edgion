@@ -11,7 +11,7 @@ description: Consistent-hash ConsistentHashOn::Arg now decodes percent/plus-enco
 ## Conclusion
 
 The `ConsistentHashOn::Arg(arg_name)` branch of `extract_hash_key`
-(`src/core/gateway/backends/selector.rs`) now matches a query parameter when its
+(`edgion-gateway/src/backends/selector.rs`) now matches a query parameter when its
 name equals `arg_name` **byte-for-byte** OR — only when the raw name contains `%`
 or `+` — when `uri_utils::url_decode(name) == *arg_name`. So a client
 sending `?session%20id=abc` (or `?session+id=abc`) now matches an `arg_name` of

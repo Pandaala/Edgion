@@ -29,7 +29,7 @@ When reviewing the `resolve_credential/*.rs` handlers, **reject**:
 - **Silent drop**: the warn line is the only audit trail; do not remove it.
 
 Implementation (KeyAuth):
-`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/key_auth.rs`
+`edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/key_auth.rs`
 
 ## Secret data safety
 

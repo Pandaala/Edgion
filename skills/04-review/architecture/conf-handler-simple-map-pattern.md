@@ -15,9 +15,9 @@ declined. Only two production handlers (`GatewayClassHandler`,
 
 ## The two real sites
 
-- `src/core/gateway/config/gateway_class/conf_handler_impl.rs:57-104`
+- `edgion-gateway/src/config/gateway_class/conf_handler_impl.rs:57-104`
   (`GatewayClassHandler::partial_update`)
-- `src/core/gateway/config/edgion_gateway/conf_handler_impl.rs:67-116`
+- `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs:67-116`
   (`EdgionGatewayConfigHandler::partial_update`, differs only by an
   `apply_link_sys_config(&config)` side-effect on the `add` and `update` paths)
 

@@ -63,7 +63,7 @@ shortest body that conveys "the gateway has an internal problem" without naming 
   `{"message":"Internal gateway error"}`. The internal `push_err` tags
   (`service region-route ref unresolved`, `service region-route missing clusterRef`,
   `cluster region-route ref unresolved`) remain in `resolve_config` for the access log.
-  See `src/core/gateway/plugins/http/region_route/plugin.rs` BrokenRef arm.
+  See `edgion-gateway/src/plugins/http/region_route/plugin.rs` BrokenRef arm.
 - **gateway_api_filters::extension_ref (existing pattern)**: uses `body: None` on its
   fail-closed 500 — the canonical "no detail leak" shape; safe template.
 - **Sibling plugins with client-actionable validation messages**

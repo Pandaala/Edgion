@@ -141,7 +141,7 @@ Call sites:
 
 > **Note (EdgionGatewayConfig / GatewayClass → Gateway "no requeue" is intentional):** both resources
 > are independently synced to the data plane and consumed directly at listener-build time
-> (`src/core/gateway/runtime/server/base.rs:110-129`), and the controller-side `GatewayHandler`
+> (`edgion-gateway/src/runtime/server/base.rs:110-129`), and the controller-side `GatewayHandler`
 > derives no status from them, so requeuing a **Gateway** on their change would be a no-op. See
 > `skills/04-review/handler-requeue/controller-06-gatewayclass-egc-no-gateway-requeue.md`. This is
 > orthogonal to path 6 (EGC → **GatewayClass**), which is a real requeue because the GatewayClass

@@ -7,7 +7,7 @@ description: Use when reviewing findings that the TCP `check_stream_plugins` fai
 
 ## Conclusion
 
-`check_stream_plugins` (`src/core/gateway/routes/tcp/edgion_tcp.rs`) **must not**
+`check_stream_plugins` (`edgion-gateway/src/routes/tcp/edgion_tcp.rs`) **must not**
 emit `tracing::warn!` (or any `tracing::*`) on its fail-close branches. The two
 warns were removed on 2026-05-24 because:
 
@@ -41,7 +41,7 @@ When a review re-reports any of:
 2. "the TCP deny reason should be a dynamic `format!` carrying `store_key` /
    `client_addr` (parity with the TLS `ctx.err_log = Some(format!(...))`)"
 3. "`StreamPluginConnectionFilter::should_accept`
-   (`src/core/gateway/plugins/stream/connection_filter_bridge.rs`) collapses
+   (`edgion-gateway/src/plugins/stream/connection_filter_bridge.rs`) collapses
    `StreamPluginResult::Deny(reason)` to `false` with no `tracing` / counter /
    access-log field — operators cannot tell which listener-level deny fired or
    why; thread the reason into a context object / `TcpLogEntry`-equivalent /

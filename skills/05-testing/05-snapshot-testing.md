@@ -38,14 +38,14 @@ A snapshot cannot express the invariant being checked in these cases — it can 
 
 | Category | Named repo example |
 |----------|--------------------|
-| Data-structure invariants | `src/core/gateway/cache/lru.rs` — LRU underflow / hit-ratio NaN |
-| Error message text | `src/core/controller/conf_mgr/sync_runtime/resource_processor/status_utils.rs` Condition mapping |
+| Data-structure invariants | `edgion-gateway/src/cache/lru.rs` — LRU underflow / hit-ratio NaN |
+| Error message text | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_utils.rs` Condition mapping |
 | Algorithmic correctness | `edgion-resources/src/resources/tests/edgion_tls_test.rs` hostname wildcard tests |
-| Spec compliance | `src/core/gateway/routes/grpc/match_engine.rs` sort tests |
+| Spec compliance | `edgion-gateway/src/routes/grpc/match_engine.rs` sort tests |
 | Wire-format / serialization compatibility | `edgion-common/src/local_auth/handlers.rs` `AuthStatus` JSON wire format |
-| Security boundaries | `src/core/gateway/tls/validation/cert.rs` mTLS `verify_depth` / SAN coverage |
-| Version compatibility | `src/core/controller/conf_mgr/conf_center/file_system/resource_controller.rs` v1alpha3→v1 |
-| Regression fixes with bug IDs | `src/core/gateway/lb/runtime_state/mod.rs` P0-07 leastconn count |
+| Security boundaries | `edgion-gateway/src/tls/validation/cert.rs` mTLS `verify_depth` / SAN coverage |
+| Version compatibility | `edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs` v1alpha3→v1 |
+| Regression fixes with bug IDs | `edgion-gateway/src/lb/runtime_state/mod.rs` P0-07 leastconn count |
 | Pure cryptography / JWT issuance and verification | `edgion-common/src/unified_auth/mod.rs` `from_configs` / `require_auth` |
 
 ### Yellow light — usually refuse

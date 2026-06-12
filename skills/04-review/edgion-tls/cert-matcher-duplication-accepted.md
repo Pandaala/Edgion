@@ -14,8 +14,8 @@ proposal as a documented design decision.
 
 ## Conclusion
 
-`TlsCertMatcher` (`src/core/gateway/tls/store/cert_matcher.rs`) and
-`GatewayTlsMatcher` (`src/core/gateway/runtime/matching/tls.rs`) both wrap
+`TlsCertMatcher` (`edgion-gateway/src/tls/store/cert_matcher.rs`) and
+`GatewayTlsMatcher` (`edgion-gateway/src/runtime/matching/tls.rs`) both wrap
 `HashMap<ListenerKey, HashHost<Vec<T>>>` + `ArcSwap*` for lock-free SNI lookup at
 TLS handshake time. The two `match_sni` hot paths share the same shape:
 `load snapshot → get(listener_key) → get_rfc6125(sni) → entries.first()`.
@@ -107,8 +107,8 @@ Re-evaluation triggers (re-open under a new ID, not this one):
 - Issue: `tasks/tls/tls-F007-tls-cert-matcher-vs-gateway-tls-matcher-duplication.md`
   (closed as accepted tradeoff 2026-05-27)
 - Code:
-  - `src/core/gateway/tls/store/cert_matcher.rs` — `TlsCertMatcher`
-  - `src/core/gateway/runtime/matching/tls.rs` — `GatewayTlsMatcher`
+  - `edgion-gateway/src/tls/store/cert_matcher.rs` — `TlsCertMatcher`
+  - `edgion-gateway/src/runtime/matching/tls.rs` — `GatewayTlsMatcher`
   - `edgion-resources/src/matcher/` — shared `HashHost::get_rfc6125`
 - Related rules:
   - `edgion-tls/wildcard-depth-gateway-api-vs-rfc6125.md` (the shared SNI

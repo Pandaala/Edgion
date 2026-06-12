@@ -56,4 +56,4 @@ If Pingora is later upgraded and the `update_resp_headers` default flips or the 
 
 - Verifier: `tasks/todo/rfc-review/_raw/verification-a1.md → V4` (CONFIRM)
 - Pingora codec: `pingora-core-0.8.0/src/protocols/http/v1/server.rs:497-530`
-- Source: `src/core/gateway/routes/http/proxy_http/pg_response_filter.rs:22-29`, `pg_early_request_filter.rs:16-24`
+- Source: `edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs:22-29`, `pg_early_request_filter.rs:16-24`

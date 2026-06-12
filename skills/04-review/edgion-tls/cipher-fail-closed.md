@@ -10,7 +10,7 @@ description: spec.ciphers is now configured BEFORE cert/key in apply_edgion_tls_
 
 ## Conclusion
 
-`apply_edgion_tls_cert` (`src/core/gateway/tls/runtime/gateway/tls_pingora.rs`) now
+`apply_edgion_tls_cert` (`edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs`) now
 processes `spec.ciphers` **before** binding cert/key to the SSL. When
 `configure_ciphers` returns `Err`, the function stamps
 `ssl_ctx.meta.err_log = Some(format!("cipher config: {e}"))` and `return`s; because
@@ -71,7 +71,7 @@ Three things compounded into a silent security regression:
    "cipher config fail" note in `ssl.log` with no actual reason attached.
 
 No earlier gate caught this: the controller `validate()` for `EdgionTls`
-(`src/core/controller/conf_mgr/.../handlers/edgion_tls.rs`) checks only `parent_refs` and
+(`edgion-controller/src/conf_mgr/.../handlers/edgion_tls.rs`) checks only `parent_refs` and
 cert/key matching — it does no cipher-name validation, and the CRD field is a free-form
 `Option<Vec<String>>`.
 

@@ -7,7 +7,7 @@ description: Use when reviewing findings that HTTP `IpRestriction::create` clone
 
 ## Conclusion
 
-`IpRestriction::create` (`src/core/gateway/plugins/http/ip_restriction/plugin.rs`) now clones
+`IpRestriction::create` (`edgion-gateway/src/plugins/http/ip_restriction/plugin.rs`) now clones
 the config, calls `config.validate_and_init()` to compile `allow_matcher`/`deny_matcher`, and
 stores an `init_failed` flag. `run_request` denies every request (HTTP 403, `plugin_log` =
 `"ip init fail"`) when `init_failed` is set, instead of falling through to the uncompiled
@@ -71,5 +71,5 @@ Re-open only if:
 - `fr-types-01` — original finding, fixed 2026-05-29 (this file).
 - Sibling pattern: [`stream-init-failed-pattern-duplication-not-extracted.md`](./stream-init-failed-pattern-duplication-not-extracted.md)
   (data-plane `clone → validate_and_init → init_failed` constructors).
-- Source: `src/core/gateway/plugins/http/ip_restriction/plugin.rs` (`IpRestriction::create`, `run_request`),
-  `src/core/gateway/plugins/stream/tls_route/ip_restriction.rs` (`TlsRouteIpRestriction::new`).
+- Source: `edgion-gateway/src/plugins/http/ip_restriction/plugin.rs` (`IpRestriction::create`, `run_request`),
+  `edgion-gateway/src/plugins/stream/tls_route/ip_restriction.rs` (`TlsRouteIpRestriction::new`).

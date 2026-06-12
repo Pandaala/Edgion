@@ -10,7 +10,7 @@ description: Use when reviewing the LinkSys Webhook active health-check task lif
 
 ## Conclusion
 
-`spawn_active_health_check` (`src/core/gateway/link_sys/providers/webhook/health.rs:14-75`) runs an
+`spawn_active_health_check` (`edgion-gateway/src/link_sys/providers/webhook/health.rs:14-75`) runs an
 infinite `loop { tokio::time::sleep(interval).await; ...; client.get(..).send().await; ... }` with no
 cooperative exit branch. Termination is by `JoinHandle::abort()` only: `WebhookManager::upsert`
 (`manager.rs:187-190`) and `WebhookManager::remove` (`manager.rs:199-203`) abort the stored
@@ -95,6 +95,6 @@ Re-open this decision only if:
   abort-only precedent.
 - [link-sys-F011](webhook-manager-rwlock-intentional.md) — related decision on the
   `WebhookEntry { runtime, health_task }` coupling and why the `RwLock` registry stays.
-- `src/core/gateway/link_sys/providers/webhook/health.rs` — `spawn_active_health_check`.
-- `src/core/gateway/link_sys/providers/webhook/manager.rs` — `WebhookEntry`, `upsert` / `remove`
+- `edgion-gateway/src/link_sys/providers/webhook/health.rs` — `spawn_active_health_check`.
+- `edgion-gateway/src/link_sys/providers/webhook/manager.rs` — `WebhookEntry`, `upsert` / `remove`
   abort sites.

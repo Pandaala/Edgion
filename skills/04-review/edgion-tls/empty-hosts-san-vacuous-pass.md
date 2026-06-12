@@ -11,7 +11,7 @@ non-empty `hosts`, and the matcher skips no-host certs), defense-in-depth only.
 
 ## Conclusion
 
-`validate_cert` (`src/core/gateway/tls/validation/cert.rs`) now pushes
+`validate_cert` (`edgion-gateway/src/tls/validation/cert.rs`) now pushes
 `CertValidationError::NoHostsDeclared` when `tls.spec.hosts.is_empty()`. Previously, an empty
 `spec.hosts` flowed into `check_san_matches` as an empty slice, the `for declared_host in
 declared_hosts` loop never ran, `missing_hosts` stayed empty, and `Ok(())` was returned — SAN

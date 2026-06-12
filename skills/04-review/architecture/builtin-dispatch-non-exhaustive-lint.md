@@ -15,7 +15,7 @@ Fix suggestions of the form "add `#![warn(non_exhaustive_omitted_patterns)]` to 
 
 **1. The `non_exhaustive_omitted_patterns` lint is scoped to external `#[non_exhaustive]` types**
 
-Per the Rust reference, the lint detects a wildcard pattern that is reachable in a match on a `#[non_exhaustive]` enum or struct **from a different crate**. Within the defining crate `#[non_exhaustive]` is treated as exhaustive, and the lint is suppressed. `BuiltinId` lives in `src/core/gateway/plugins/http/dsl/lang/bytecode.rs` alongside its match sites in the same `edgion` crate, so even if the enum were re-marked `#[non_exhaustive]` the lint would still not fire on these dispatch files.
+Per the Rust reference, the lint detects a wildcard pattern that is reachable in a match on a `#[non_exhaustive]` enum or struct **from a different crate**. Within the defining crate `#[non_exhaustive]` is treated as exhaustive, and the lint is suppressed. `BuiltinId` lives in `edgion-gateway/src/plugins/http/dsl/lang/bytecode.rs` alongside its match sites in the same `edgion` crate, so even if the enum were re-marked `#[non_exhaustive]` the lint would still not fire on these dispatch files.
 
 **2. Native exhaustiveness checking is the real lever**
 
@@ -74,4 +74,4 @@ exhaustive `match`" are **not accepted** for the reason above.
 
 - `tasks/todo/dsl-vm-rhai-research/issues/issue-14-enable-non-exhaustive-lint.md` — closed via the explicit-list rewrite of `call_builtin_redis`
 - `tasks/todo/dsl-vm-rhai-research/04-builtin-registration.md` §"Quick improvements worth doing now" — original proposal (now superseded by this rule and the issue-14 fix)
-- `src/core/gateway/plugins/http/dsl/lang/builtins.rs::call_builtin_redis` — reference implementation of explicit non-Redis variant listing (the pattern any future BuiltinId-matching dispatcher should follow)
+- `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs::call_builtin_redis` — reference implementation of explicit non-Redis variant listing (the pattern any future BuiltinId-matching dispatcher should follow)

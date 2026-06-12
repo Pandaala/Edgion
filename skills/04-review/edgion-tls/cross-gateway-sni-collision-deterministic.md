@@ -28,16 +28,16 @@ first, so a missing timestamp is treated as oldest.
 
 Three matchers, all fixed the same way:
 
-1. **`GatewayTlsMatcher`** (`src/core/gateway/runtime/matching/tls.rs`) — Gateway
+1. **`GatewayTlsMatcher`** (`edgion-gateway/src/runtime/matching/tls.rs`) — Gateway
    listener certs. `rebuild_from_gateways` sorts colliding slots via `tls_entry_order`
    and warns via `warn_tls_sni_collision`. Added a `gateway_creation_ts: Option<Time>`
    field to `GatewayTlsEntry` (populated from `gateway.metadata.creation_timestamp`).
    Covers exact-hostname, **wildcard-hostname**, and catch-all slots.
-2. **`TlsCertMatcher` / `TlsStore`** (`src/core/gateway/tls/store/tls_store.rs`) —
+2. **`TlsCertMatcher` / `TlsStore`** (`edgion-gateway/src/tls/store/tls_store.rs`) —
    EdgionTls certs. `rebuild_matcher_from_data` sorts each `Vec<Arc<EdgionTls>>` slot
    with `len > 1` via `edgion_tls_precedence` and warns via `warn_edgion_tls_collision`.
    `cert_matcher.rs::match_sni` unchanged.
-3. **`TlsRouteTable`** (`src/core/gateway/routes/tls/gateway_tls_routes.rs`) — TLSRoute
+3. **`TlsRouteTable`** (`edgion-gateway/src/routes/tls/gateway_tls_routes.rs`) — TLSRoute
    passthrough routing. `from_routes` sorts each colliding hostname bucket (and the
    catch-all) via `tls_route_precedence` and warns via `warn_tls_route_collision`.
    `match_route` unchanged. (Lower severity — picks a route/backend, not a cert — but
@@ -169,5 +169,5 @@ test, it **skips when only LibreSSL is present** (macOS dev) and runs under genu
 
 - Issue: `tasks/issues/runtime-F007-gateway-tls-matcher-returns-first-entry-only.md` (Round B: confirmed, bump to High)
 - Sibling matchers found by deep multi-agent review (TlsCertMatcher, TlsRouteTable) and fixed in the same pass.
-- Convention reused: `BackendTLSPolicyStore::sort_policies_by_precedence` (`src/core/gateway/backends/policy/backend_tls/backend_tls_policy_store.rs`)
+- Convention reused: `BackendTLSPolicyStore::sort_policies_by_precedence` (`edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs`)
 - Related: [multi-certificate-ref.md](multi-certificate-ref.md) (multi-cert *within one* listener — RSA+ECDSA dual-cert selection, intentional, not a collision)

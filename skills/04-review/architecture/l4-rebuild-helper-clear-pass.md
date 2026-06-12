@@ -18,7 +18,7 @@ helpers:
 - `pub(crate) fn rebuild_all_l4_listener_managers<R, M>(...)`
 - `pub(crate) fn rebuild_affected_l4_listener_managers<R, M>(...)`
 
-in `src/core/gateway/routes/l4_rebuild.rs`. The per-family `routes_mgr.rs`
+in `edgion-gateway/src/routes/l4_rebuild.rs`. The per-family `routes_mgr.rs`
 methods are 13-line wrappers that fetch `pgis.all_listener_keys()` and
 delegate, passing closures for `resolved_listeners_for_route`,
 `get_or_create_listener_manager`, and `manager.rebuild`.
@@ -101,4 +101,4 @@ manager API surface, different rebuild input shape).
   — established the `&'static str` log-tag + closure callback convention
   this helper follows.
 - HTTP canonical clear-pass (the model we mirrored):
-  `src/core/gateway/routes/http/routes_mgr.rs:375-381`.
+  `edgion-gateway/src/routes/http/routes_mgr.rs:375-381`.

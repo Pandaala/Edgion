@@ -10,7 +10,7 @@ description: The health-check probe semaphore is now acquired per individual bac
 
 ## Conclusion
 
-`health_check_loop` (`src/core/gateway/backends/health/check/manager.rs`) now acquires the
+`health_check_loop` (`edgion-gateway/src/backends/health/check/manager.rs`) now acquires the
 `PROBE_SEMAPHORE` permit **inside the `for backend in backends` loop**, scoped to a single probe
 call and released (`drop(permit)`) immediately after the probe returns and before `record_check`.
 The global cap (renamed `MAX_CONCURRENT_PROBES`, value 50) therefore bounds the number of

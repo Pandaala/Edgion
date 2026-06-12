@@ -7,7 +7,7 @@ description: Use when reviewing findings that propose extracting the "clone → 
 
 ## Conclusion
 
-The ~12-line `let mut cfg = cfg.clone(); if let Err(e) = cfg.validate_and_init() { tracing::error!(...); true } else { false }` pattern is intentionally kept inlined in both `StreamIpRestriction::new` (`src/core/gateway/plugins/stream/ip_restriction/stream_ip_restriction.rs`) and `TlsRouteIpRestriction::new` (`src/core/gateway/plugins/stream/tls_route/ip_restriction.rs`). The two sites use different config types from different protocol layers and a shared trait + generic helper would add an abstraction whose net code saving is in the single-digit-line range. Closed as ⚠️ accepted tradeoff (`plugins-stream-F003`, 2026-05-26).
+The ~12-line `let mut cfg = cfg.clone(); if let Err(e) = cfg.validate_and_init() { tracing::error!(...); true } else { false }` pattern is intentionally kept inlined in both `StreamIpRestriction::new` (`edgion-gateway/src/plugins/stream/ip_restriction/stream_ip_restriction.rs`) and `TlsRouteIpRestriction::new` (`edgion-gateway/src/plugins/stream/tls_route/ip_restriction.rs`). The two sites use different config types from different protocol layers and a shared trait + generic helper would add an abstraction whose net code saving is in the single-digit-line range. Closed as ⚠️ accepted tradeoff (`plugins-stream-F003`, 2026-05-26).
 
 Fix suggestions of the form "introduce a crate-internal `ValidateAndInit` trait with a blanket / two impls and a generic `init_with_validate<C: Clone + ValidateAndInit>(cfg, label) -> (C, bool)` helper, then route both `*::new` through it" are **not accepted**.
 
@@ -70,4 +70,4 @@ Re-open only if:
 
 - `plugins-stream-F003` — original finding, 2026-05-26 (this file).
 - Sibling decisions: `plugins-http-dsl-F009` (giant-match extract declined), `plugins-http-F004` (rate-limit header-injection extraction declined; see [`../rate-limit/header-injection-duplication.md`](../rate-limit/header-injection-duplication.md)).
-- Source: `src/core/gateway/plugins/stream/ip_restriction/stream_ip_restriction.rs:13-29`, `src/core/gateway/plugins/stream/tls_route/ip_restriction.rs:20-34`.
+- Source: `edgion-gateway/src/plugins/stream/ip_restriction/stream_ip_restriction.rs:13-29`, `edgion-gateway/src/plugins/stream/tls_route/ip_restriction.rs:20-34`.

@@ -23,13 +23,13 @@ Suggestions of the form "the gateway still ignores `grpc-timeout`", "no upstream
 
 ## Code shape today
 
-- `src/core/gateway/routes/grpc/grpc_timeout.rs` — `parse_grpc_timeout(&str) -> Option<Duration>` and `format_grpc_timeout(Duration) -> String`; accepts the 6 spec units (`H`, `M`, `S`, `m`, `u`, `n`) with a max of 8 decimal digits per the gRPC-over-HTTP/2 spec. Malformed inputs return `None` so the caller falls back to route-level timeout semantics. The public parser also guards against multi-byte UTF-8 suffixes via `is_char_boundary` before slicing — wire callers go through `HeaderValue::to_str()` which is ASCII-only, but the boundary check closes a public-API panic surface.
-- `src/core/gateway/ctx.rs::RequestInfo::grpc_client_deadline: Option<Instant>` — `#[serde(skip)]`, set once per request from `start_time + parsed_value`.
-- `src/core/gateway/ctx.rs::EdgionHttpContext::grpc_remaining()` / `grpc_deadline_exceeded()` — helpers used by peer-timeout configuration and the early-abort check.
-- `src/core/gateway/routes/http/proxy_http/pg_request_filter.rs::build_request_metadata` — parses the header for any `is_grpc_request == true` request after protocol detection.
-- `src/core/gateway/routes/http/proxy_http/pg_upstream_peer.rs::upstream_peer` — runs the deadline check parallel to `request_timeout_exceeded`; `EdgionStatus::GrpcClientDeadlineExceeded = 504_02` is recorded.
-- `src/core/gateway/routes/http/proxy_http/pg_upstream_peer.rs::configure_peer_timeouts` — folds `grpc_remaining` into `effective_read_write_timeout` via `min()`, sharing the same `Duration::ZERO` guard as the existing `request_remaining` branch.
-- `src/core/gateway/routes/http/proxy_http/pg_upstream_request_filter.rs` — new `upstream_request_filter` hook that rewrites `grpc-timeout` on the upstream-bound `RequestHeader` to the formatted `grpc_remaining`.
+- `edgion-gateway/src/routes/grpc/grpc_timeout.rs` — `parse_grpc_timeout(&str) -> Option<Duration>` and `format_grpc_timeout(Duration) -> String`; accepts the 6 spec units (`H`, `M`, `S`, `m`, `u`, `n`) with a max of 8 decimal digits per the gRPC-over-HTTP/2 spec. Malformed inputs return `None` so the caller falls back to route-level timeout semantics. The public parser also guards against multi-byte UTF-8 suffixes via `is_char_boundary` before slicing — wire callers go through `HeaderValue::to_str()` which is ASCII-only, but the boundary check closes a public-API panic surface.
+- `edgion-gateway/src/ctx.rs::RequestInfo::grpc_client_deadline: Option<Instant>` — `#[serde(skip)]`, set once per request from `start_time + parsed_value`.
+- `edgion-gateway/src/ctx.rs::EdgionHttpContext::grpc_remaining()` / `grpc_deadline_exceeded()` — helpers used by peer-timeout configuration and the early-abort check.
+- `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs::build_request_metadata` — parses the header for any `is_grpc_request == true` request after protocol detection.
+- `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs::upstream_peer` — runs the deadline check parallel to `request_timeout_exceeded`; `EdgionStatus::GrpcClientDeadlineExceeded = 504_02` is recorded.
+- `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs::configure_peer_timeouts` — folds `grpc_remaining` into `effective_read_write_timeout` via `min()`, sharing the same `Duration::ZERO` guard as the existing `request_remaining` branch.
+- `edgion-gateway/src/routes/http/proxy_http/pg_upstream_request_filter.rs` — new `upstream_request_filter` hook that rewrites `grpc-timeout` on the upstream-bound `RequestHeader` to the formatted `grpc_remaining`.
 - Retry-decision sites (`pg_fail_to_connect.rs`, `pg_error_while_proxy.rs`, `pg_upstream_response_filter.rs` status-code retry branch) treat `request_timeout_exceeded() || grpc_deadline_exceeded()` as the unified "deadline blown — do not retry" guard, preventing a fresh LB pick / circuit-breaker counter increment after the caller has given up.
 - `pg_upstream_peer.rs` retry backoff sleep bounds the delay by `min(request_remaining, grpc_remaining)` and re-checks both deadlines after the sleep. Without this guard a tight `grpc-timeout` plus a coarse retry backoff (`grpc-timeout: 5S` + `retry.backoff: 10s` is the canonical case) would let the gateway sleep past the client's deadline and then open a fresh upstream connection nobody is waiting for.
 - `pg_upstream_request_filter.rs` writes `grpc-timeout: 1n` to the upstream when `grpc_remaining()` is exactly zero — the rare race between `upstream_peer` returning OK and Pingora invoking the filter (connect / TLS handshake) where the deadline decays to zero. Without this, the upstream would see the stale original client value (e.g. `5S`) and run the full duration the caller has already abandoned.
@@ -65,4 +65,4 @@ Pingora's `peer.options.read_timeout` / `write_timeout` are **per-I/O-call**, no
 
 - Verifier: `tasks/todo/rfc-review/_raw/verification-a2.md → V3` (CONFIRM)
 - Architecture: `skills/01-architecture/02-gateway/03-routes/02-grpc-route.md`
-- Mapping table: `src/core/gateway/runtime/server/error_response.rs::http_to_grpc_status` (`504 → (4, "deadline exceeded")`)
+- Mapping table: `edgion-gateway/src/runtime/server/error_response.rs::http_to_grpc_status` (`504 → (4, "deadline exceeded")`)

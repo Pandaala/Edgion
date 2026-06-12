@@ -8,7 +8,7 @@ description: Use when reviewing findings that `resolve_global_plugins` / `resolv
 ## Conclusion
 
 `resolve_global_plugins` and `resolve_route_ext_refs`
-(`src/core/gateway/routes/http/proxy_http/global_plugins_resolve.rs`)
+(`edgion-gateway/src/routes/http/proxy_http/global_plugins_resolve.rs`)
 **must not** emit `tracing::warn!` (or any `tracing::*`) for dangling
 `EdgionPlugins` references. The two warns were removed on 2026-05-24 because:
 

@@ -14,7 +14,7 @@ in one and `"Deny rate limit"` in the other). It is now extracted into a single
 shared free function:
 
 ```rust
-// src/core/gateway/plugins/http/common/mod.rs
+// edgion-gateway/src/plugins/http/common/mod.rs
 pub enum RateLimitKey { Resolved(String), Allow, Deny }
 
 pub async fn resolve_rate_limit_key(

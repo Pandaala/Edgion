@@ -11,7 +11,7 @@ description: Use when reviewing `gateway/conf_sync/cache_client/cache_data.rs::s
 ## Conclusion
 
 `CacheData::set_conf_processor`
-(`src/core/gateway/conf_sync/cache_client/cache_data.rs:101-124`) spawns a `tokio::spawn`
+(`edgion-gateway/src/conf_sync/cache_client/cache_data.rs:101-124`) spawns a `tokio::spawn`
 debounce task and drops the returned `JoinHandle`. The task loops on `notify.notified().await`
 and only exits via the `handler.as_mut()` `None` branch in `process_compressed_events`
 (lines 135-144), which is unreachable under current code because `self.handler` is only ever
@@ -28,7 +28,7 @@ branch with `unreachable!()`" are **not accepted**.
 **1. The orphan scenario has zero reachability today.**
 
 `set_conf_processor` is called exactly once per `ClientCache` in `ConfigClient::new`
-(`src/core/gateway/conf_sync/conf_client/config_client.rs:52-153`) — one site per resource kind,
+(`edgion-gateway/src/conf_sync/conf_client/config_client.rs:52-153`) — one site per resource kind,
 each on a freshly-constructed cache, no public API exposes a second call. There is no live bug:
 no orphan task can be produced, no `Arc<RwLock<CacheData<T>>>` is held against release, no Tokio
 worker slot is leaked. The finding is a latent-misuse hazard, not a defect.
@@ -122,7 +122,7 @@ Re-open this decision only if:
   — companion ⚠️ for the same `process_compressed_events` body (write-lock-held-across-
   `partial_update`); both rules together document the conf-sync debounce path's locking +
   task-lifecycle decisions.
-- `src/core/gateway/conf_sync/conf_client/config_client.rs:52-153` — the constructor that
+- `edgion-gateway/src/conf_sync/conf_client/config_client.rs:52-153` — the constructor that
   encodes the single-call invariant by construction.
-- `src/core/gateway/conf_sync/cache_client/cache_data.rs:270-291` — the test module's `//!`
+- `edgion-gateway/src/conf_sync/cache_client/cache_data.rs:270-291` — the test module's `//!`
   header documenting why `set_conf_processor` is not unit-tested.

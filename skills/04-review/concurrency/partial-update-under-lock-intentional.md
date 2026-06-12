@@ -10,7 +10,7 @@ description: Use when reviewing `gateway/conf_sync/cache_client/cache_data.rs::p
 
 ## Conclusion
 
-`CacheData::process_compressed_events` (`src/core/gateway/conf_sync/cache_client/cache_data.rs:128-218`)
+`CacheData::process_compressed_events` (`edgion-gateway/src/conf_sync/cache_client/cache_data.rs:128-218`)
 keeps the `parking_lot::RwLock<CacheData<T>>` write guard from line 132 through the
 `handler.processor.partial_update(add, update, remove)` call at line 202 and the final
 `handler.compressed_events.clear()` at line 213. This stays as-is.
@@ -112,9 +112,9 @@ Re-open this decision only if:
 - [webhook-manager-rwlock-intentional.md](webhook-manager-rwlock-intentional.md)
   — sibling accepted-tradeoff: a coarse lock kept intentionally because the fine-grained "fix"
   is structurally heavier than the cold-path benefit.
-- `src/core/gateway/conf_sync/cache_client/cache_data.rs` — `CacheData<T>`,
+- `edgion-gateway/src/conf_sync/cache_client/cache_data.rs` — `CacheData<T>`,
   `process_compressed_events`, `ConfHandlerData`.
-- `src/core/gateway/conf_sync/cache_client/event_dispatch.rs:332-351` — the watch ingestion
+- `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:332-351` — the watch ingestion
   path that takes the same `cache_data.write()` for `insert` + `add_compress_event`.
-- `src/core/gateway/routes/http/routes_mgr.rs::rebuild_affected_listener_managers` — the
+- `edgion-gateway/src/routes/http/routes_mgr.rs::rebuild_affected_listener_managers` — the
   CPU-bound work whose duration sets the lock-hold window.

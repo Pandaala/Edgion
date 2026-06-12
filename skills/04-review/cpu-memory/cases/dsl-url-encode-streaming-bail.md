@@ -9,7 +9,7 @@ description: Use when a finding flags that a DSL string-producing builtin (curre
 # `url_encode` builds incrementally and bails on overflow (fixed)
 
 **Original finding** (plugins-http-dsl F-B02, 2026-05-26): the previous body of
-`BuiltinId::UrlEncode` in `src/core/gateway/plugins/http/dsl/lang/builtins.rs`
+`BuiltinId::UrlEncode` in `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs`
 collected the full percent-encoded `String` via `s.chars().map(...).collect()`
 and then called `check_string_len(&encoded, max_string_len)`. Because each
 non-safe input byte expands to 3 encoded bytes (`%XX`), a maximally-sized

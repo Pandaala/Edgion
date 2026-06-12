@@ -14,7 +14,7 @@ Edgion's plugin phases are split into async phases (`RequestFilter`, `UpstreamRe
 work, resume" mechanism (Envoy's `FilterHeadersStatus::StopIteration` + `continueDecoding/
 continueEncoding`). A plugin needing async I/O in the sync response-header phase must bridge via
 `tokio::task::block_in_place` (as the shipped `DslPlugin::run_upstream_response_filter` does,
-`src/core/gateway/plugins/http/dsl/plugin.rs`). This is an **accepted tradeoff** bounded by
+`edgion-gateway/src/plugins/http/dsl/plugin.rs`). This is an **accepted tradeoff** bounded by
 Pingora's sync callback contract.
 
 Fix suggestions of the form "add a per-plugin `block_in_place` timeout", "introduce an
@@ -100,6 +100,6 @@ Re-open this decision only if:
 - Narrower sibling rule:
   [concurrency/block-in-place-multi-thread-runtime.md](../concurrency/block-in-place-multi-thread-runtime.md).
 - Response-replacement subset: `filter-04-response-filter-cannot-replace-response` (same review set).
-- Source: `src/core/gateway/plugins/http/dsl/plugin.rs` (`run_upstream_response_filter`);
-  `src/core/gateway/plugins/runtime/plugin_runtime.rs:1190` (`check_response_stage_terminate`);
-  `src/core/gateway/plugins/runtime/traits/upstream_response_filter.rs` (sync trait contract).
+- Source: `edgion-gateway/src/plugins/http/dsl/plugin.rs` (`run_upstream_response_filter`);
+  `edgion-gateway/src/plugins/runtime/plugin_runtime.rs:1190` (`check_response_stage_terminate`);
+  `edgion-gateway/src/plugins/runtime/traits/upstream_response_filter.rs` (sync trait contract).

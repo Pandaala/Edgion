@@ -7,7 +7,7 @@ description: Use when reviewing findings that ServerCache::apply_change emits pe
 
 ## Conclusion
 
-`CacheEventDispatch::apply_change` (`src/core/controller/conf_sync/cache_server/cache.rs`)
+`CacheEventDispatch::apply_change` (`edgion-controller/src/conf_sync/cache_server/cache.rs`)
 emits one `tracing::info!(component = "cache_server", event = "apply_change", ...)` per
 resource change (InitAdd / EventUpdate / EventDelete). A review (controller-05, review-2)
 reported this as INFO log spam and proposed downgrading it to `debug!` (or splitting it by

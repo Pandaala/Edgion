@@ -11,8 +11,8 @@ EdgionGatewayConfig is a cluster-scoped Edgion-extension resource used to config
 
 ## Source code locations
 
-- Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_gateway_config.rs`
-- Gateway ConfHandler: `src/core/gateway/config/edgion_gateway/conf_handler_impl.rs`
+- Controller Handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_gateway_config.rs`
+- Gateway ConfHandler: `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs`
 - Type definitions: `edgion-resources/src/resources/edgion_gateway_config.rs`
 
 ## Controller-side processing

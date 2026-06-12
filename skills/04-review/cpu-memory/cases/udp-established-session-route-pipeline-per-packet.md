@@ -10,7 +10,7 @@ description: Use when reviewing findings that flag EdgionUdpProxy::handle_client
 ## Conclusion
 
 **Confirmed-real, now fixed (F-016, 2026-05-26).** `EdgionUdpProxy::handle_client_packet`
-(`src/core/gateway/routes/udp/edgion_udp.rs`) used to run the full route pipeline —
+(`edgion-gateway/src/routes/udp/edgion_udp.rs`) used to run the full route pipeline —
 `udp_route_manager.load_route_table()` (ArcSwap load), `route_table.match_route()`,
 `rule.backend_finder.select()`, `select_roundrobin_backend_key()`, address resolution, and
 `validate_endpoint_backend_addr()` (SSRF) — unconditionally on **every** UDP packet, only
@@ -71,5 +71,5 @@ Re-open only if:
 ## Reference Cases
 
 - F-016 (BadLogic, Medium), fixed 2026-05-26.
-- Source: `src/core/gateway/routes/udp/edgion_udp.rs` `handle_client_packet` fast-path.
+- Source: `edgion-gateway/src/routes/udp/edgion_udp.rs` `handle_client_packet` fast-path.
 - Doc: `docs/en/user-guide/udp-route/overview.md` (Notes §3).

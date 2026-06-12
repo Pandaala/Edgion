@@ -10,13 +10,13 @@ description: LinkSys runtime-store insert/remove go through the generic Provider
 
 > Not to be confused with the IPv6 `extract_ready_ips` finding also tagged `link-sys-F001`
 > (controller path, `handlers/link_sys.rs`, fixed 2026-05-20). This entry is the **gateway**
-> runtime store (`src/core/gateway/link_sys/runtime/store.rs`).
+> runtime store (`edgion-gateway/src/link_sys/runtime/store.rs`).
 
 ## Conclusion
 
 As of F-007 (2026-05-25) the four per-provider `*_runtime_insert` / `*_runtime_remove` helpers
 were consolidated into a single generic `ProviderRuntimeStore<C>` newtype in
-`src/core/gateway/link_sys/runtime/store.rs`; every provider static (`REDIS_RUNTIME`,
+`edgion-gateway/src/link_sys/runtime/store.rs`; every provider static (`REDIS_RUNTIME`,
 `ETCD_RUNTIME`, `ES_RUNTIME`, `WEBHOOK_RUNTIME`) is now a `ProviderRuntimeStore<Client>`. Its
 `insert` / `remove` methods perform the map mutation through `ArcSwap::rcu`, which retries the
 load-clone-modify closure on CAS contention. The mutation is therefore atomic against concurrent
@@ -94,6 +94,6 @@ re-report of this finding.
 - link-sys-F001 runtime-store (review finding, `tasks/link/`, 2026-05-25)
 - backends-F002 / backends-F004 / backends-F005 — sibling fixes, same atomic-mutation principle
   on config-sync–driven maps.
-- `src/core/gateway/link_sys/runtime/store.rs` — `ProviderRuntimeStore::{insert,remove}` (F-007
+- `edgion-gateway/src/link_sys/runtime/store.rs` — `ProviderRuntimeStore::{insert,remove}` (F-007
   consolidated the eight per-provider helpers into this generic) and `LinkSysStore::update` /
   `replace_all` that spawn the racing dispatch tasks.

@@ -192,7 +192,7 @@ kubectl exec -n edgion-system $POD -- sh -c "kill -9 $CTRL_PID"
    kubectl get gateway <name> -n gateway-conformance-infra -o yaml | grep -A 30 "status:"
    ```
 
-3. Compare with the logic in `update_status()` and `update_listener_conditions()` in `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs`
+3. Compare with the logic in `update_status()` and `update_listener_conditions()` in `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs`
 
 ### Common status issues
 

@@ -10,7 +10,7 @@ description: Use when reviewing plugins-runtime `plugin_runtime.rs` "four `add_f
 
 ## Conclusion
 
-The four builder functions in `src/core/gateway/plugins/runtime/plugin_runtime.rs` —
+The four builder functions in `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` —
 `add_from_request_filters` (382–455), `add_from_upstream_response_filters` (463–539),
 `add_from_upstream_responses` (547–613), `add_from_upstream_response_body_filters`
 (621–697) — share the same loop skeleton (`is_enabled` → `validation_error` →
@@ -116,7 +116,7 @@ Re-open this decision only if:
 ## Reference Cases
 
 - Issue file: `tasks/plugins/plugins-runtime-F003-add-from-builder-functions-duplicated.md` (closed 2026-05-26, not refactored).
-- Source: `src/core/gateway/plugins/runtime/plugin_runtime.rs:382-697`.
+- Source: `edgion-gateway/src/plugins/runtime/plugin_runtime.rs:382-697`.
 - Project-level "looks duplicated needs evidence" rule: [`style-consolidation-thresholds.md`](style-consolidation-thresholds.md).
 - Three-precondition checklist for line-similarity refactors: [`size-and-similarity-heuristics.md`](size-and-similarity-heuristics.md) — precedent (d) (`rate_limit` vs `rate_limit_redis`) is the closest sibling.
 - Signature-bloat-dominates-body antipattern: [`../dsl-builtins/giant-match-extract-fn-declined.md`](../dsl-builtins/giant-match-extract-fn-declined.md).

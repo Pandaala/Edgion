@@ -36,6 +36,6 @@ Any other prefix returns `false`. Plaintext passwords in Secrets are auto-hashed
 
 ## Anchors
 
-- `src/core/gateway/plugins/http/basic_auth/htpasswd.rs` — the `verify()` switch and module-level docstring
-- `src/core/gateway/plugins/http/basic_auth/plugin.rs::load_users` — plaintext → `{SHA}` upgrade path
+- `edgion-gateway/src/plugins/http/basic_auth/htpasswd.rs` — the `verify()` switch and module-level docstring
+- `edgion-gateway/src/plugins/http/basic_auth/plugin.rs::load_users` — plaintext → `{SHA}` upgrade path
 - `docs/{en,zh-CN}/user-guide/http-route/filters/edgion-plugins/basic-auth.md` — operator-facing description

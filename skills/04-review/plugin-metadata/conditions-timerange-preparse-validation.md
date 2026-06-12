@@ -7,9 +7,9 @@ description: Use when reviewing `TimeRangeCondition::evaluate` / `PluginConditio
 
 ## Conclusion
 
-`TimeRangeCondition::evaluate` (`src/core/gateway/plugins/runtime/conditions/evaluator.rs:302-326`) wrapping each bound parse in `if let Ok(..) = chrono::DateTime::parse_from_rfc3339(...)` with no `else` arm WAS a fail-open defect (plugins-runtime-F002, 2026-05-26). It is now fixed at the preparse layer — the **only** correct location, mirroring how regex compile failures are handled.
+`TimeRangeCondition::evaluate` (`edgion-gateway/src/plugins/runtime/conditions/evaluator.rs:302-326`) wrapping each bound parse in `if let Ok(..) = chrono::DateTime::parse_from_rfc3339(...)` with no `else` arm WAS a fail-open defect (plugins-runtime-F002, 2026-05-26). It is now fixed at the preparse layer — the **only** correct location, mirroring how regex compile failures are handled.
 
-`compile_plugin_conditions` (`src/core/gateway/plugins/http/plugin_store.rs`) now calls `PluginConditions::validate()` alongside `PluginConditions::compile()`, and `Condition::validate()` dispatches `TimeRangeCondition::validate()` which re-runs `chrono::DateTime::parse_from_rfc3339` on each non-`None` `after` / `before` string. A parse failure pushes `"<stage>[<i>] conditions: timeRange.<field> '<value>' is not a valid RFC3339 timestamp: <err>"` into the compiled `preparse_errors`, which `compile_plugins()` forwards to `seal_fail_closed`; every request through that EdgionPlugins is then rejected with HTTP 500 and the Controller writes the message into the resource's K8s status condition.
+`compile_plugin_conditions` (`edgion-gateway/src/plugins/http/plugin_store.rs`) now calls `PluginConditions::validate()` alongside `PluginConditions::compile()`, and `Condition::validate()` dispatches `TimeRangeCondition::validate()` which re-runs `chrono::DateTime::parse_from_rfc3339` on each non-`None` `after` / `before` string. A parse failure pushes `"<stage>[<i>] conditions: timeRange.<field> '<value>' is not a valid RFC3339 timestamp: <err>"` into the compiled `preparse_errors`, which `compile_plugins()` forwards to `seal_fail_closed`; every request through that EdgionPlugins is then rejected with HTTP 500 and the Controller writes the message into the resource's K8s status condition.
 
 > **Location note (2026-06-11, types-decouple):** the condition types + `PluginConditions::validate()` now live in `edgion-resources/src/resources/edgion_plugins/conditions.rs` (schema leaf); the preparse gate that drives them moved from `EdgionPlugins::compile_conditions`/`preparse` (deleted from `types`) to the gateway's `compile_plugin_conditions`/`compile_plugins` in `plugin_store.rs`. The behavior below is unchanged — only the file locations moved.
 
@@ -39,6 +39,6 @@ Re-open this decision only if:
 ## Reference Cases
 
 - `tasks/plugins/plugins-runtime-F002-time-range-condition-silent-parse-fail.md` (closed 2026-05-26)
-- `src/core/gateway/plugins/http/plugin_store.rs::compile_plugin_conditions` (preparse gate)
+- `edgion-gateway/src/plugins/http/plugin_store.rs::compile_plugin_conditions` (preparse gate)
 - `edgion-resources/src/resources/edgion_plugins/conditions.rs::{Condition,PluginConditions,TimeRangeCondition}::validate`
-- Regression tests: `test_time_range_validate_rejects_malformed_{after,before}` + `test_time_range_validate_accepts_{well_formed_bounds,unset_bounds}` in `src/core/gateway/plugins/runtime/conditions/evaluator.rs`
+- Regression tests: `test_time_range_validate_rejects_malformed_{after,before}` + `test_time_range_validate_accepts_{well_formed_bounds,unset_bounds}` in `edgion-gateway/src/plugins/runtime/conditions/evaluator.rs`

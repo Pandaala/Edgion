@@ -12,7 +12,7 @@ the duplicated identity is the **username**; the warn carries `secret_key` +
 `username` + both `existing_group` and `incoming_group`.
 
 Implementation:
-`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/hmac.rs`
+`edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/hmac.rs`
 
 ## Secret data safety iron rule (HmacAuth-specific)
 

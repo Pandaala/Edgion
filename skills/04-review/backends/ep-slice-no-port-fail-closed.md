@@ -10,7 +10,7 @@ description: get_backends_for_service now fails closed (returns no backends → 
 
 ## Conclusion
 
-`get_backends_for_service` (`src/core/gateway/backends/discovery/endpoint_slice/ep_slice_store.rs`)
+`get_backends_for_service` (`edgion-gateway/src/backends/discovery/endpoint_slice/ep_slice_store.rs`)
 now **fails closed** when no EndpointSlice for the service declares a usable port: the
 `.find_map(...).unwrap_or(8080)` was replaced with a `let Some(port) = .find_map(...) else { return Vec::new(); }`.
 With no backends built, every caller's existing empty-list handling takes over and the data-plane

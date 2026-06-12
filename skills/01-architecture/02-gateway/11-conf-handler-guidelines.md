@@ -83,7 +83,7 @@ Reference implementation: HTTPRoute's `build_affected_hostnames` + per-hostname 
 | AcmeConfHandler | EdgionAcme | `services/acme/conf_handler_impl.rs` |
 | LinkSysStore | LinkSys | `link_sys/runtime/conf_handler.rs` |
 
-> All paths are relative to `src/core/gateway/`.
+> All paths are relative to `edgion-gateway/src/`.
 
 ## 7. Best practices for incremental updates of engine resources
 

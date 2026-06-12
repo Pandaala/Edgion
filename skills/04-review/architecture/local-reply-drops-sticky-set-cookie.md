@@ -90,7 +90,7 @@ Re-open this decision only if:
 
 - Finding `filter-04c #2` (`tasks/todo/filter-04c-local-reply-header-carryover.md`), 2026-06-09
   — accepted as designed; closed without code change.
-- Injection site: `src/core/gateway/routes/http/proxy_http/pg_upstream_response_filter.rs`,
+- Injection site: `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs`,
   `SessionPersistenceType::Cookie` arm (`append_header("Set-Cookie", ...)`).
 - Local-reply builder: `build_response_local_reply` (drains `pending_response_header_ops` onto
   a fresh header; does not touch the upstream header).

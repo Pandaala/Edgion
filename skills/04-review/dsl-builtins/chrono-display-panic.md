@@ -5,8 +5,8 @@ description: Use when a reviewer flags `dt.format(fmt).to_string()` or any other
 
 # Chrono `Display::to_string()` Panic on Bad Format — FIXED, PIN-IN-PLACE
 
-**Status**: Resolved — see `BuiltinId::TimeFormat` in `src/core/gateway/plugins/http/dsl/lang/builtins.rs` for the canonical pattern.
-**Test**: `src/core/gateway/plugins/http/dsl/tests/p3_utility_tests.rs::test_time_format_invalid_specifier_returns_api_error`.
+**Status**: Resolved — see `BuiltinId::TimeFormat` in `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` for the canonical pattern.
+**Test**: `edgion-gateway/src/plugins/http/dsl/tests/p3_utility_tests.rs::test_time_format_invalid_specifier_returns_api_error`.
 
 ## Conclusion
 

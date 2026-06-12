@@ -74,9 +74,9 @@ on the request path.
 - F-001 (`tasks/routes/routes-http-F001-per-request-dashmap-listener-lookup.md`),
   closed 2026-05-28.
 - Source:
-  `src/core/gateway/routes/http/proxy_http/mod.rs` (struct fields),
-  `src/core/gateway/routes/http/proxy_http/pg_request_filter.rs` (read sites),
-  `src/core/gateway/runtime/server/listener_builder.rs` (construction).
+  `edgion-gateway/src/routes/http/proxy_http/mod.rs` (struct fields),
+  `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs` (read sites),
+  `edgion-gateway/src/runtime/server/listener_builder.rs` (construction).
 - Stability rationale in `routes_mgr.rs`:
   `rebuild_all_listener_managers` / `rebuild_affected_listener_managers`
   preserve outer `Arc` identity; stale sweep guarded by `active_listeners`

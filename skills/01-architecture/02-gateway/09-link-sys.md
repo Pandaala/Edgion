@@ -163,7 +163,7 @@ impl ConfHandler<LinkSys> for Arc<LinkSysStore> {
 ## Directory layout
 
 ```
-src/core/gateway/link_sys/
+edgion-gateway/src/link_sys/
 ├── mod.rs                    # module exports
 ├── credential.rs             # materialise credentials from the embedded Secret in LinkSys.spec.*Auth
 ├── health.rs                 # LinkSysHealth status DTO shared by all providers

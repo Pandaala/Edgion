@@ -11,7 +11,7 @@ description: Decide on "Gateway admin API should unify response structs / return
 
 ## What was filed (F-002, Low / Redundancy / API Ergonomics)
 
-The finding flagged three coupled defects in `src/core/gateway/api/mod.rs` (+ `src/core/gateway/observe/access_log_store.rs:59-63`):
+The finding flagged three coupled defects in `edgion-gateway/src/api/mod.rs` (+ `edgion-gateway/src/observe/access_log_store.rs:59-63`):
 
 1. **Three parallel response structs**: `ApiResponse<T>` (generic, optional `data`/`error`), `ListResponse` (concrete, `success`/`data: Vec<Value>`/`count`), `AccessLogListResponse` (same shape as `ListResponse` over `AccessLogListItem`).
 2. **Defect A — unknown kind returns 200 + empty list**: `list_resources` calls `ResourceKind::from_kind_name(&kind_str).unwrap_or(ResourceKind::Unspecified)`; the `list_client_resources!` macro's catch-all `_ => vec![]` yields `{"success":true,"data":[],"count":0}` — clients cannot distinguish "kind does not exist" from "kind has zero resources".
@@ -63,4 +63,4 @@ Until one of those hits, re-reports of the following are **not accepted**:
 
 ## Related entries
 
-- `architecture/size-and-similarity-heuristics.md` — `infra-cluster-F003` covered the "split `src/core/gateway/api/mod.rs` (1644 lines) into submodules" finding on the same file. F-002 is the response-contract counterpart of that decision: same file, same admin-API surface, same accepted-tradeoff disposition.
+- `architecture/size-and-similarity-heuristics.md` — `infra-cluster-F003` covered the "split `edgion-gateway/src/api/mod.rs` (1644 lines) into submodules" finding on the same file. F-002 is the response-contract counterpart of that decision: same file, same admin-API surface, same accepted-tradeoff disposition.

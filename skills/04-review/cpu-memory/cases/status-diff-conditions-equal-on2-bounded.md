@@ -7,7 +7,7 @@ description: Use when reviewing findings that flag status_diff conditions_equal 
 
 # `status_diff::conditions_equal` O(n²) Linear Scan on Bounded Condition Arrays is Not an Issue
 
-**False-positive scenario**: `conditions_equal` in `src/core/controller/conf_mgr/sync_runtime/resource_processor/status_diff.rs` uses an O(n)-find inside an O(n) loop when matching new conditions against old conditions by `type`; flagged as "O(n²), should switch to `HashMap<&str, &Value>` for O(1) lookup". Same shape applies to the parent / ancestor / listener matchers in the same file (they all match by an identity field via `iter().find(...)`).
+**False-positive scenario**: `conditions_equal` in `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_diff.rs` uses an O(n)-find inside an O(n) loop when matching new conditions against old conditions by `type`; flagged as "O(n²), should switch to `HashMap<&str, &Value>` for O(1) lookup". Same shape applies to the parent / ancestor / listener matchers in the same file (they all match by an identity field via `iter().find(...)`).
 
 **Reality**:
 

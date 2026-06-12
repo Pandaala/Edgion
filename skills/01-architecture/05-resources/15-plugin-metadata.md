@@ -20,9 +20,9 @@ PluginMetaData is Edgion's custom-extension resource that carries one `MetaDataE
 - Controller Handler: `handlers/plugin_metadata.rs`
 - EdgionPlugins Handler (validation logic): `handlers/edgion_plugins.rs`
 - PluginMetaDataStore (Controller side): `plugin_metadata_utils/plugin_metadata_store.rs`
-- PluginMetaDataGatewayStore (Gateway side): `src/core/gateway/plugins/runtime/plugin_metadata/conf_handler.rs`
+- PluginMetaDataGatewayStore (Gateway side): `edgion-gateway/src/plugins/runtime/plugin_metadata/conf_handler.rs`
 - RegionRoute tables (Controller): `region_route_table/cluster_table.rs`, `region_route_table/service_table.rs`
-- Controller API: `src/core/controller/api/region_route_handlers.rs`
+- Controller API: `edgion-controller/src/api/region_route_handlers.rs`
 
 > The federation Center side (Center API list/failover/consistency handlers, CenterMetaDataStore, Center Watch cache, and the shared metadata ConfHandler) has been extracted to the separate EdgionCenter repository.
 

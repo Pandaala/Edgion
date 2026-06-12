@@ -10,7 +10,7 @@ description: Use when reviewing findings that flag `GlobalConnectionIpRestrictio
 ## Conclusion
 
 **Confirmed-real, now fixed (F-008, 2026-05-27).** `GlobalConnectionIpRestrictionPlugin::on_connection`
-in `src/core/gateway/plugins/stream/global_connection_ip_restriction/plugin.rs` runs on the L4
+in `edgion-gateway/src/plugins/stream/global_connection_ip_restriction/plugin.rs` runs on the L4
 listener accept path (one call per inbound TCP connection). It used to call the by-(ns, name)
 getter `PluginMetaDataStore::get_global_connection_ip_restriction(ns, name)`, which internally
 executed `format!("{}/{}", namespace, name)` to build the `HashMap` lookup key, producing one
@@ -41,7 +41,7 @@ let Some(pm) = store.get_global_connection_ip_restriction_by_key(&self.metadata_
 ```
 
 `get_global_connection_ip_restriction_by_key(&str)` already exists on
-`PluginMetaDataStore` (`src/core/gateway/plugins/runtime/plugin_metadata/conf_handler.rs`) and
+`PluginMetaDataStore` (`edgion-gateway/src/plugins/runtime/plugin_metadata/conf_handler.rs`) and
 performs the same `HashMap::get` against the same map; the by-(ns, name) variant is retained
 for non-hot-path callers that don't want to build the key themselves.
 
@@ -90,5 +90,5 @@ Re-open only if:
 ## Reference Cases
 
 - F-008 (BadLogic/Performance, Low), fixed 2026-05-27.
-- Source: `src/core/gateway/plugins/stream/global_connection_ip_restriction/plugin.rs`.
-- Getter: `src/core/gateway/plugins/runtime/plugin_metadata/conf_handler.rs::get_global_connection_ip_restriction_by_key`.
+- Source: `edgion-gateway/src/plugins/stream/global_connection_ip_restriction/plugin.rs`.
+- Getter: `edgion-gateway/src/plugins/runtime/plugin_metadata/conf_handler.rs::get_global_connection_ip_restriction_by_key`.

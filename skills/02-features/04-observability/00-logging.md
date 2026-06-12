@@ -22,7 +22,7 @@ Access Log is Edgion's core observability mechanism. Every request produces one 
 
 ### Fields
 
-Each entry is serialized from `AccessLogEntry` (`src/core/gateway/observe/access_log/entry.rs`). At a glance the most commonly inspected fields are:
+Each entry is serialized from `AccessLogEntry` (`edgion-gateway/src/observe/access_log/entry.rs`). At a glance the most commonly inspected fields are:
 
 | Field | Description |
 |-------|-------------|

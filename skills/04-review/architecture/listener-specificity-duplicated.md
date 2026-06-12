@@ -12,7 +12,7 @@ description: Use when reviewing runtime/store findings of the form "`GatewayList
 
 The three-tier listener-specificity check (exact > wildcard > catch-all) is implemented twice:
 
-1. `GatewayListeners::has_more_specific` (`src/core/gateway/runtime/store/listener_gateway_info.rs:102-132`) — port-naive; lives inside the per-port `GatewayInfoIndex` slice and is the only copy consulted by the data plane (`runtime/matching/route.rs:124,147`, `routes/http/proxy_http/pg_request_filter.rs:72`).
+1. `GatewayListeners::has_more_specific` (`edgion-gateway/src/runtime/store/listener_gateway_info.rs:102-132`) — port-naive; lives inside the per-port `GatewayInfoIndex` slice and is the only copy consulted by the data plane (`runtime/matching/route.rs:124,147`, `routes/http/proxy_http/pg_request_filter.rs:72`).
 2. `GatewayListenerConfig::has_more_specific_listener` (`runtime/store/config.rs:138-185`, file deleted in runtime-F003) — was port-aware (added an `if config.port != current_port { continue; }` guard to compensate for the all-ports-in-one-map layout). A codebase-wide grep across `src/` returned **zero** production callers; only the sibling `tests/config_test.rs` exercised it.
 
 The two bodies share `hostname_matches_listener`, the `!h.starts_with("*.")` early-return, and the `other_host.len() > current_host.len()` wildcard comparison; the port filter is structural compensation for a different container shape, not algorithmic divergence. The drift risk is real but bounded: any change to the live algorithm in `listener_gateway_info.rs` could silently leave `config.rs` behind, but the resulting divergence would only mis-grade the dead test-only path — production behaviour cannot regress because production never calls the `config.rs` copy.
@@ -56,7 +56,7 @@ Re-open this decision only if:
 
 - Issue file: `tasks/runtime/runtime-F002-has-more-specific-logic-duplicated.md` (closed 2026-05-28, no code change).
 - Companion finding (drives the actual deletion): `tasks/runtime/gateway-config-store-orphaned.md`.
-- Source: `src/core/gateway/runtime/store/listener_gateway_info.rs:102-132`; the second copy formerly lived at `runtime/store/config.rs:138-185` (file deleted in runtime-F003).
+- Source: `edgion-gateway/src/runtime/store/listener_gateway_info.rs:102-132`; the second copy formerly lived at `runtime/store/config.rs:138-185` (file deleted in runtime-F003).
 - Project-level "looks duplicated needs evidence" rule: [`style-consolidation-thresholds.md`](style-consolidation-thresholds.md).
 - Three-precondition checklist for line-similarity refactors: [`size-and-similarity-heuristics.md`](size-and-similarity-heuristics.md).
 - Signature-bloat-dominates-body antipattern: [`add-from-builders-duplication.md`](add-from-builders-duplication.md).

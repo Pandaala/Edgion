@@ -49,7 +49,7 @@ Always register the key string as a named constant first:
 | Step | File | What to do |
 |------|------|------------|
 | 1 | `edgion-resources/src/resources/<resource>_preparse.rs` or the resource's main `rs` file | Add a parsed field (e.g., `pub parsed_your_key: Option<bool>`) to the preparse struct |
-| 2 | `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs` | Read the annotation in `on_change` / parse phase; populate the parsed field |
+| 2 | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs` | Read the annotation in `on_change` / parse phase; populate the parsed field |
 | 3 | `edgion-resources/src/constants/annotations.rs` | Constant (Step 2 above) |
 | 4 | `skills/02-features/05-annotations/references/annotations-metadata.md` | Add a row to the relevant table and describe behavior, default, and effect |
 | 5 | `skills/02-features/05-annotations/00-annotations-overview.md` | Add a row to the quick-lookup table for the resource type |
@@ -69,9 +69,9 @@ Gateway runtime consumer locations by resource:
 
 | Resource | Runtime consumer file |
 |----------|-----------------------|
-| Gateway listeners | `src/core/gateway/runtime/server/listener_builder.rs`, `src/core/gateway/runtime/store/listener_gateway_info.rs` |
-| TCPRoute / TLSRoute | `src/core/gateway/routes/tcp/conf_handler_impl.rs`, `src/core/gateway/routes/tls/conf_handler_impl.rs` |
-| Service / health | `src/core/gateway/backends/health/check/annotation.rs` |
+| Gateway listeners | `edgion-gateway/src/runtime/server/listener_builder.rs`, `edgion-gateway/src/runtime/store/listener_gateway_info.rs` |
+| TCPRoute / TLSRoute | `edgion-gateway/src/routes/tcp/conf_handler_impl.rs`, `edgion-gateway/src/routes/tls/conf_handler_impl.rs` |
+| Service / health | `edgion-gateway/src/backends/health/check/annotation.rs` |
 | EdgionTls | `edgion-resources/src/resources/edgion_tls.rs` |
 
 ### 3c. `spec.options` path (listener options / policy options)

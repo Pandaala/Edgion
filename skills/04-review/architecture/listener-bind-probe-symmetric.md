@@ -10,7 +10,7 @@ description: Use when reviewing findings of the form "`add_http_listener` / `add
 
 ## Conclusion
 
-`src/core/gateway/runtime/server/listener_builder.rs` performs a synchronous
+`edgion-gateway/src/runtime/server/listener_builder.rs` performs a synchronous
 `std::net::TcpListener::bind(&addr)` probe before every Pingora call that
 queues a TCP / TLS listener address. The probe socket is dropped immediately;
 Pingora re-binds with `SO_REUSEADDR` when `start_service` runs. Failures

@@ -11,7 +11,7 @@ description: SlidingWindowCounter::try_acquire (webhook rate limiter) now decide
 ## Conclusion
 
 `SlidingWindowCounter::try_acquire`
-(`src/core/gateway/link_sys/providers/webhook/runtime.rs`) previously did the
+(`edgion-gateway/src/link_sys/providers/webhook/runtime.rs`) previously did the
 rate-limit decision as two non-atomic atomic ops: it loaded `current`, computed
 `estimated` and compared it to `limit`, then — in a separate step — called
 `self.current.fetch_add(1)`. Between the check and the increment there was no
@@ -102,5 +102,5 @@ Re-open only if:
   sibling link-sys atomic-mutation fix (`rcu`).
 - backends-F002 / F004 / F005 — same atomic-CAS-with-retry principle on
   config-sync–driven shared state.
-- `src/core/gateway/link_sys/providers/webhook/runtime.rs` — `SlidingWindowCounter`
+- `edgion-gateway/src/link_sys/providers/webhook/runtime.rs` — `SlidingWindowCounter`
   and its only production caller `call.rs::webhook_call` (rate-limit gate).

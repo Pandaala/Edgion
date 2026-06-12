@@ -11,7 +11,7 @@ description: should_halfopen_probe (webhook passive-only circuit recovery) now g
 ## Conclusion
 
 `should_halfopen_probe`
-(`src/core/gateway/link_sys/providers/webhook/health.rs`) gates circuit-breaker
+(`edgion-gateway/src/link_sys/providers/webhook/health.rs`) gates circuit-breaker
 recovery for passive-only webhook health checking. It previously decided as a
 non-atomic load → check → store on `last_halfopen`: it loaded `last`, tested
 `interval == 0 || now >= last + interval`, then — in a separate step — did a plain
@@ -102,7 +102,7 @@ Re-open only if:
   — structurally identical sibling (rate-limit counter CAS), fixed the same day.
 - backends-F002 / F004 / F005 — same atomic-CAS principle on config-sync–driven
   shared state.
-- `src/core/gateway/link_sys/providers/webhook/health.rs` —
+- `edgion-gateway/src/link_sys/providers/webhook/health.rs` —
   `should_halfopen_probe` and its only production caller `call.rs::webhook_call`
   (health gate). Concurrency regression test
   `test_halfopen_probe_admits_exactly_one_under_contention`.

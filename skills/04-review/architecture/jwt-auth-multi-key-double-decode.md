@@ -7,11 +7,11 @@ description: Decide on jwt_auth multi-key path `verify_token` "decodes payload t
 
 **Audit date**: 2026-05-15
 **Linked issue**: P3-g3-017 (closed, not fixed)
-**Conclusion**: **The multi-key branch in `src/core/gateway/plugins/http/jwt_auth/verify.rs::JwtAuth::verify_token` keeps its current "decode-twice (no-verify peek, then verified decode)" shape; fix suggestions that move credential selection to JWT header `kid` are not accepted.**
+**Conclusion**: **The multi-key branch in `edgion-gateway/src/plugins/http/jwt_auth/verify.rs::JwtAuth::verify_token` keeps its current "decode-twice (no-verify peek, then verified decode)" shape; fix suggestions that move credential selection to JWT header `kid` are not accepted.**
 
 ## Code Involved
 
-- `src/core/gateway/plugins/http/jwt_auth/verify.rs:83-129` — `Credentials::Multi` branch
+- `edgion-gateway/src/plugins/http/jwt_auth/verify.rs:83-129` — `Credentials::Multi` branch
   - First `decode::<Claims>` with `insecure_disable_signature_validation` → reads the `key_claim_name` value from the payload to look up the matching credential in the multi-key map.
   - Second `decode::<Claims>` with full validation → produces the verified claims that downstream code consumes.
 - `edgion-resources/src/resources/edgion_plugins/plugin_configs/jwt_auth.rs:93-95` — `key_claim_name` field documented as "Claim name in JWT **payload** that identifies the credential key (default: `key`)".

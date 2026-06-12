@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "edgion-resources", "edgion-common", "edgion-cli"]
+members = [".", "edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller"]
 # Pin resolver v2 explicitly: the root package builds with resolver 2 (edition
 # 2021), but a workspace defaults to resolver 1 unless stated. Resolver 1 would
 # union features across the dependency graph and could enable both
@@ -16,14 +16,6 @@ authors = ["pandalaa"]
 [lib]
 name = "edgion"
 path = "src/lib.rs"
-
-[[bin]]
-name = "edgion-gateway"
-path = "src/bin/edgion_gateway.rs"
-
-[[bin]]
-name = "edgion-controller"
-path = "src/bin/edgion_controller.rs"
 
 [[bin]]
 name = "cache_residue"
@@ -88,6 +80,10 @@ edgion-resources = { path = "edgion-resources" }
 
 # Shared common crate (config loader, observe, secret store, link core, etc.)
 edgion-common = { path = "edgion-common" }
+
+# Data-plane crate — the controller depends on it for plugin compilation
+# (the one intentional controller -> gateway edge).
+edgion-gateway = { path = "edgion-gateway" }
 
 # Core async runtime and error handling
 tokio = { version = "1.49", features = ["full"] }
@@ -212,6 +208,8 @@ tonic-build = "0.12"
 edgion-common = { path = "edgion-common", features = ["test-util"] }
 # The `test_client` example drives config via the CLI client (dev/example only).
 edgion-cli = { path = "edgion-cli" }
+# The `test_client` ACME suite drives the controller's ACME client (dev/example only).
+edgion-controller = { path = "edgion-controller" }
 tempfile = "3"
 h2 = "0.4"
 tokio-tungstenite = "0.28"

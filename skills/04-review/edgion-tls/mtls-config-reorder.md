@@ -11,7 +11,7 @@ description: mTLS verify-setup is now configured BEFORE cert/key in both apply_e
 ## Conclusion
 
 Both `apply_edgion_tls_cert` and `apply_gateway_tls_cert`
-(`src/core/gateway/tls/runtime/gateway/tls_pingora.rs`) now configure mTLS
+(`edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs`) now configure mTLS
 verification **before** binding cert/key to the SSL. When `configure_mtls`
 returns Err (CA Secret missing, garbage CA PEM, store build failure),
 `apply_edgion_tls_cert` stamps `err_log = Some(format!("mtls config: {e}"))`

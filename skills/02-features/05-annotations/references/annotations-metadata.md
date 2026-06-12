@@ -5,14 +5,14 @@ Use this file when the task is about real Kubernetes object annotations under `m
 ## Verify In Code
 
 - `edgion-resources/src/constants/annotations.rs`
-- `src/core/gateway/runtime/server/listener_builder.rs`
-- `src/core/gateway/runtime/store/listener_gateway_info.rs`
-- `src/core/gateway/routes/tcp/conf_handler_impl.rs`
-- `src/core/gateway/routes/tls/conf_handler_impl.rs`
+- `edgion-gateway/src/runtime/server/listener_builder.rs`
+- `edgion-gateway/src/runtime/store/listener_gateway_info.rs`
+- `edgion-gateway/src/routes/tcp/conf_handler_impl.rs`
+- `edgion-gateway/src/routes/tls/conf_handler_impl.rs`
 - `edgion-resources/src/resources/http_route_preparse.rs`
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs`
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/grpc_route.rs`
-- `src/core/gateway/backends/health/check/annotation.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/grpc_route.rs`
+- `edgion-gateway/src/backends/health/check/annotation.rs`
 - `edgion-resources/src/resources/edgion_tls.rs`
 
 ## Gateway `metadata.annotations`
@@ -108,7 +108,7 @@ Not an `edgion.io/*` annotation, but a standard Kubernetes field that Edgion rea
 | `kubernetes.io/h2c` or `h2c` | Forces HTTP/2 cleartext to upstream (`set_http_version(2, 2)`) |
 | `kubernetes.io/ws`, `ws`, `kubernetes.io/wss`, `wss` | Forces HTTP/1.1 for WebSocket upgrade (`set_http_version(1, 1)`) |
 
-Verify in code: `src/core/gateway/backends/mod.rs` (`detect_backend_app_protocol`, `apply_backend_app_protocol`).
+Verify in code: `edgion-gateway/src/backends/mod.rs` (`detect_backend_app_protocol`, `apply_backend_app_protocol`).
 
 GatewayClass declares `HTTPRouteBackendProtocolH2C` as a supported feature.
 
@@ -117,7 +117,7 @@ GatewayClass declares `HTTPRouteBackendProtocolH2C` as a supported feature.
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
 | `edgion.io/health-check` | YAML string | none | Configures active backend health checks (type: http/tcp/grpc). For gRPC, supports `grpcServiceName` field. Parsed from object metadata and validated before use. |
-| `edgion.io/circuit-breaker` | YAML string | none | Configures backend outlier-detection circuit breaking. Fields: `consecutiveErrors`, `ejectionSeconds`, `maxEjectionPercent`. Verify in code: `src/core/gateway/backends/circuit_breaker/config.rs`. |
+| `edgion.io/circuit-breaker` | YAML string | none | Configures backend outlier-detection circuit breaking. Fields: `consecutiveErrors`, `ejectionSeconds`, `maxEjectionPercent`. Verify in code: `edgion-gateway/src/backends/circuit_breaker/config.rs`. |
 | `edgion.io/panic-threshold` | integer string `0`–`100` | `0` (disabled) | Panic threshold percent. When the fraction of healthy backends (after health-check and circuit-breaker filtering) drops below this value, the gateway ignores health filtering and routes across **all** backends instead of returning 503. `0` disables panic mode. Values outside `0`–`100` are rejected. Overrides `EdgionGatewayConfig.spec.loadBalancing.panicThreshold` for this Service. |
 
 Notes:

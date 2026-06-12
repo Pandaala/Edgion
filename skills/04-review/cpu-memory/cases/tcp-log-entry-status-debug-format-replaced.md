@@ -10,10 +10,10 @@ description: Use when reviewing findings that flag `TcpLogEntry::from_context`'s
 ## Conclusion
 
 **Confirmed-real, now fixed (observe-F012, 2026-05-28).** `TcpLogEntry::from_context`
-in `src/core/gateway/observe/logs/tcp_log.rs` previously serialised
+in `edgion-gateway/src/observe/logs/tcp_log.rs` previously serialised
 `ctx.status: TcpStatus` into the `status: String` log field with
 `format!("{:?}", ctx.status)`. `TcpStatus`
-(`src/core/gateway/routes/tcp/edgion_tcp.rs`) is a `derive(Debug, Clone)` plain
+(`edgion-gateway/src/routes/tcp/edgion_tcp.rs`) is a `derive(Debug, Clone)` plain
 enum with 12 unit variants (`Success`, `NoRouteMatched`, ..., `DownstreamWriteError`)
 and no heap state, so every TCP connection close paid one `format!` + `Debug::fmt`
 + `String` allocation whose content was always one of 12 compile-time-known string
@@ -98,7 +98,7 @@ Re-open only if:
 ## Reference Cases
 
 - observe-F012 (BadLogic / Minor), fixed 2026-05-28.
-- Source: `src/core/gateway/observe/logs/tcp_log.rs`,
-  `src/core/gateway/routes/tcp/edgion_tcp.rs`.
+- Source: `edgion-gateway/src/observe/logs/tcp_log.rs`,
+  `edgion-gateway/src/routes/tcp/edgion_tcp.rs`.
 - Regression test: `tcp_status_as_str_matches_log_field` in
   `tcp_log.rs::tests` module.

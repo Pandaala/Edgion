@@ -171,7 +171,7 @@ policy/
 ## Directory layout
 
 ```
-src/core/gateway/backends/
+edgion-gateway/src/backends/
 ├── mod.rs                    # module exports
 ├── discovery/                # backend discovery
 │   ├── endpoint_slice/       # EndpointSlice discovery

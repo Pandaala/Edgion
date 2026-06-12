@@ -10,7 +10,7 @@ description: BackendTLSPolicy sectionName matching now filters targetRefs by tr.
 
 ## Conclusion
 
-`query_backend_tls_policy_for_service` (`src/core/gateway/backends/policy/mod.rs`) now selects
+`query_backend_tls_policy_for_service` (`edgion-gateway/src/backends/policy/mod.rs`) now selects
 through `select_policy_for_service`, whose exact-match and wildcard (no-`sectionName`) closures
 both require `tr.name == name` **before** testing `section_name`. A policy that references several
 Services with mixed `sectionName` values can therefore no longer have a ref aimed at a *different*
@@ -68,6 +68,6 @@ Re-open only if:
 ## Reference Cases
 
 - backends-F006 (review finding, fixed 2026-05-24)
-- `select_policy_for_service` unit tests in `src/core/gateway/backends/policy/mod.rs`
+- `select_policy_for_service` unit tests in `edgion-gateway/src/backends/policy/mod.rs`
   (`wildcard_ignores_other_service_ref`, `exact_match_ignores_other_service_ref`, plus two
   no-regression guards).

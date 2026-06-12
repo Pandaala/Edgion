@@ -94,7 +94,7 @@ Re-open this decision only if:
 - Original findings: `tasks/bug/fr-capi-01-failover-toctou.md` (closed),
   `tasks/todo/fr-capi-02-failover-vs-generic-put-residual-race.md` (closed by the
   same change).
-- Code: `src/core/controller/api/resource_locks.rs` (`lock_resource`),
+- Code: `edgion-controller/src/api/resource_locks.rs` (`lock_resource`),
   `region_route_handlers.rs` (`patch_plugin_metadata_failover`),
   `namespaced_handlers.rs` (`update_namespaced` PluginMetaData branch).
 - Sibling concurrency TOCTOU fixes: `backends/set-service-config-toctou-race.md`,

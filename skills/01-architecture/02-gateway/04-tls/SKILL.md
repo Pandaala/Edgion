@@ -31,7 +31,7 @@ The Edgion Gateway TLS subsystem is split into two directions plus a storage lay
 ## Module structure
 
 ```
-src/core/gateway/tls/
+edgion-gateway/src/tls/
 ├── mod.rs                          # module entry, feature-flag conditional compilation
 ├── store/
 │   ├── mod.rs
@@ -191,9 +191,9 @@ Match failures are handled in select_cb only (`"cert not found"`); cert_cb perfo
 
 | File | Responsibility |
 |------|----------------|
-| `src/core/gateway/tls/store/tls_store.rs` | TlsStore: certificate storage and validation |
-| `src/core/gateway/tls/store/cert_matcher.rs` | TlsCertMatcher: listener+SNI matching |
-| `src/core/gateway/tls/store/conf_handler.rs` | ConfHandler<EdgionTls> implementation |
-| `src/core/gateway/runtime/matching/tls.rs` | GatewayTlsMatcher |
-| `src/core/gateway/tls/runtime/gateway/tls_pingora.rs` | TlsCallback |
-| `src/core/gateway/tls/validation/cert.rs` | Certificate validation |
+| `edgion-gateway/src/tls/store/tls_store.rs` | TlsStore: certificate storage and validation |
+| `edgion-gateway/src/tls/store/cert_matcher.rs` | TlsCertMatcher: listener+SNI matching |
+| `edgion-gateway/src/tls/store/conf_handler.rs` | ConfHandler<EdgionTls> implementation |
+| `edgion-gateway/src/runtime/matching/tls.rs` | GatewayTlsMatcher |
+| `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` | TlsCallback |
+| `edgion-gateway/src/tls/validation/cert.rs` | Certificate validation |

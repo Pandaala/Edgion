@@ -10,7 +10,7 @@ description: LocalFileWriter's background thread now surfaces writeln! errors (d
 
 ## Conclusion
 
-`LocalFileWriter`'s background write thread (`src/core/gateway/link_sys/providers/local_file/data_sender_impl.rs`)
+`LocalFileWriter`'s background write thread (`edgion-gateway/src/link_sys/providers/local_file/data_sender_impl.rs`)
 now routes both the first-line write and every batched write through the module-level
 `write_log_line(file, line, current_size, consecutive_errors, log_type)` helper. The helper:
 

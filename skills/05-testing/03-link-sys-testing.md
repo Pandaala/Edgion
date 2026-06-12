@@ -112,8 +112,8 @@ examples/test/
 │           └── run_<future>_test.sh       # ← Future: Kafka, etc.
 └── ...
 
-src/core/gateway/api/mod.rs               # Gateway Admin API with testing endpoints
-src/core/gateway/link_sys/providers/redis/ # Redis runtime client (tested by the script)
+edgion-gateway/src/api/mod.rs               # Gateway Admin API with testing endpoints
+edgion-gateway/src/link_sys/providers/redis/ # Redis runtime client (tested by the script)
 ```
 
 ## Gateway Admin API: LinkSys Testing Endpoints
@@ -190,7 +190,7 @@ On failure:
 
 1. **Create Docker Compose** — `conf/Services/<type>/docker-compose.yaml`
 2. **Write LinkSys CRD YAML** — `conf/LinkSys/<Type>/01_LinkSys_*.yaml`
-3. **Add Gateway Admin API testing endpoints** — `src/core/gateway/api/mod.rs`
+3. **Add Gateway Admin API testing endpoints** — `edgion-gateway/src/api/mod.rs`
 4. **Write test script** — `scripts/integration/link_sys/run_<type>_test.sh`
 5. **Build & test** — run the script
 6. **Update this skill doc** — add the new type's info
@@ -241,7 +241,7 @@ spec:
 
 ### Step 3: Gateway Admin API Testing Endpoints
 
-Add testing endpoints to `src/core/gateway/api/mod.rs` inside the `create_testing_router()` function. Follow the Redis pattern:
+Add testing endpoints to `edgion-gateway/src/api/mod.rs` inside the `create_testing_router()` function. Follow the Redis pattern:
 
 ```rust
 // In create_testing_router():

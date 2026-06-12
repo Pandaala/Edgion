@@ -7,7 +7,7 @@ description: Use when reviewing findings that flag the workqueue BinaryHeap<Dela
 
 # Workqueue Delay Heap Without Explicit Size Cap is Not an Issue
 
-**False-positive scenario**: the `BinaryHeap<DelayedItem>` in `src/core/controller/conf_mgr/sync_runtime/workqueue.rs:330-384`'s `spawn_delay_loop` has no explicit capacity / size check; flagged as "unbounded growth can be abused / memory amplification risk"; suggests adding `max_heap_size` rejection or eviction policy.
+**False-positive scenario**: the `BinaryHeap<DelayedItem>` in `edgion-controller/src/conf_mgr/sync_runtime/workqueue.rs:330-384`'s `spawn_delay_loop` has no explicit capacity / size check; flagged as "unbounded growth can be abused / memory amplification risk"; suggests adding `max_heap_size` rejection or eviction policy.
 
 **Reality**:
 

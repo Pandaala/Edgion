@@ -25,7 +25,7 @@ When a review reports patterns like:
 
 → close as **fixed + design intent**. Verify before closing:
 
-- `Cors::from_arc` in `src/core/gateway/plugins/http/cors/plugin.rs` contains no `tracing::` calls.
+- `Cors::from_arc` in `edgion-gateway/src/plugins/http/cors/plugin.rs` contains no `tracing::` calls.
 - `Cors::new` contains no `tracing::` calls for the `**` cases.
 - The CRD schema doc on `CorsConfig.allow_origins` / `allow_methods` / `allow_headers` still describes the `**` semantics.
 - `CorsConfig::validation_error` still rejects `wildcard + allow_credentials = true`.

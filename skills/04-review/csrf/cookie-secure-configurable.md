@@ -15,7 +15,7 @@ Fix suggestions of the form "auto-derive `Secure` from `x-forwarded-proto`" are 
 
 **1. Configurable, default-secure**
 
-`set_csrf_cookie` builds the cookie with `.secure(self.config.cookie_secure)` (`src/core/gateway/plugins/http/csrf/plugin.rs`). The default is `true`, so the secure-by-default behavior is preserved; operators terminating TLS upstream (LB/sidecar) or running mesh-internal plain HTTP set `cookieSecure: false`.
+`set_csrf_cookie` builds the cookie with `.secure(self.config.cookie_secure)` (`edgion-gateway/src/plugins/http/csrf/plugin.rs`). The default is `true`, so the secure-by-default behavior is preserved; operators terminating TLS upstream (LB/sidecar) or running mesh-internal plain HTTP set `cookieSecure: false`.
 
 **2. Plain `bool`, consistent with OIDC**
 

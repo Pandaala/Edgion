@@ -10,7 +10,7 @@ description: HealthCheckManager::upsert_task now spawns then atomically swaps th
 
 ## Conclusion
 
-`HealthCheckManager::upsert_task` (`src/core/gateway/backends/health/check/manager.rs`)
+`HealthCheckManager::upsert_task` (`edgion-gateway/src/backends/health/check/manager.rs`)
 now spawns the new task first, then performs a **single write-locked** swap:
 `self.tasks.write().insert(service_key, handle)` returns the displaced handle (if any),
 which is always `abort()`-ed. The write-locked `insert` is the linearization point, so the

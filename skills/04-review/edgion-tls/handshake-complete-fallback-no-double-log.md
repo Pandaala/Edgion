@@ -10,7 +10,7 @@ description: handshake_complete_callback's no-snapshot fallback intentionally do
 
 ## Conclusion
 
-`handshake_complete_callback` in `src/core/gateway/tls/runtime/gateway/tls_pingora.rs`
+`handshake_complete_callback` in `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs`
 no longer calls `log_ssl(&meta)` in its no-snapshot fallback branch. It still
 returns `Some(Arc::new(meta))` so downstream consumers (TLS proxy, HTTP proxy)
 can read a minimal `TlsConnMeta` from the digest.
@@ -74,6 +74,6 @@ consumers continue to receive a minimal `TlsConnMeta` (port + sni at best).
 ## Reference
 
 - Issue: `tasks/tls/tls-F004-double-ssl-log-on-finalize-failure.md` (Medium · BadLogic)
-- Code: `src/core/gateway/tls/runtime/gateway/tls_pingora.rs` —
+- Code: `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` —
   `handshake_complete_callback` fallback branch + `store_ssl_ctx` failure
   emission in `ssl_ctx_ex_data`.

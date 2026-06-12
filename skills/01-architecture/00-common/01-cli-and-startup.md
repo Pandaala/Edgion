@@ -178,7 +178,7 @@ init_udp_logger(&config.udp_log);
 
 ### Controller — ShutdownHandle
 
-Location: `src/core/controller/conf_mgr/sync_runtime/shutdown.rs`
+Location: `edgion-controller/src/conf_mgr/sync_runtime/shutdown.rs`
 
 ```rust
 pub struct ShutdownHandle {

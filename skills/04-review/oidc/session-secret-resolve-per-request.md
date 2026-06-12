@@ -7,7 +7,7 @@ description: Use when reviewing OIDC findings claiming `resolve_session_secret` 
 
 ## Conclusion
 
-`resolve_session_secret` and `resolve_client_secret` (`src/core/gateway/plugins/http/openid_connect/session_cookie.rs`) are **not** a data-plane hot path. The happy-path short-circuit on `resolved_session_secret` / `resolved_client_secret` already eliminates the `get_secret()` fall-through in normal operation; the degraded path where the fall-through runs reads from a permanently-empty global store, so there is no `Secret::clone()` to eliminate and no `RwLock` contention with TLS / other consumers.
+`resolve_session_secret` and `resolve_client_secret` (`edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs`) are **not** a data-plane hot path. The happy-path short-circuit on `resolved_session_secret` / `resolved_client_secret` already eliminates the `get_secret()` fall-through in normal operation; the degraded path where the fall-through runs reads from a permanently-empty global store, so there is no `Secret::clone()` to eliminate and no `RwLock` contention with TLS / other consumers.
 
 Fix suggestions of the form "cache the session/client secret into an `OnceLock<Arc<str>>` / `OnceCell<Arc<str>>` on the plugin instance so every authenticated request avoids the lock + allocation + clone" are **not accepted** — they add a caching layer with refresh / staleness questions to eliminate a cost that does not exist.
 
@@ -54,7 +54,7 @@ Re-open only if:
 ## Reference Cases
 
 - F-015 (Round B follow-up, closed 2026-05-27) — `tasks/plugins/plugins-http-F015-oidc-session-secret-resolved-per-request.md`, closed as accepted-tradeoff with no code change.
-- Source: `src/core/gateway/plugins/http/openid_connect/session_cookie.rs:11-16,57-97,215-218`
-- Controller resolver: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/openid_connect.rs:23-112`
+- Source: `edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs:11-16,57-97,215-218`
+- Controller resolver: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/openid_connect.rs:23-112`
 - Empty global store: `edgion-common/src/secret/secret_store.rs:84-104` (no writers tree-wide)
 - Sibling skill: [oidc/resolved-secret-empty-fallthrough.md](resolved-secret-empty-fallthrough.md)

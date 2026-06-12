@@ -46,5 +46,5 @@ Re-open only if:
 
 - fr-cauth-01 (tasks/bug), closed 2026-05-29
 - Config allowlist: `edgion-common/src/auth/config.rs` (`skip_path_is_allowlisted`, `SKIP_PATHS_ALLOWLIST_ERR`, `AdminAuthConfig::validate`), `edgion-common/src/local_auth/config.rs` (`LocalAuthConfig::validate`)
-- Superuser gate: `src/core/controller/api/authz_middleware.rs` (`assign_superuser_if_no_role` Case 3/4) + regression test `no_claims_no_role_is_denied_not_superuser`
+- Superuser gate: `edgion-controller/src/api/authz_middleware.rs` (`assign_superuser_if_no_role` Case 3/4) + regression test `no_claims_no_role_is_denied_not_superuser`
 - Docs: `skills/02-features/02-config/00-controller-config.md` → `[auth]` / `[local_auth]` `skip_paths` rows

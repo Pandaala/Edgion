@@ -15,7 +15,7 @@ TLSRoute implements the SNI-based layer-4 routing capability of the Gateway API.
 ## Module structure
 
 ```
-src/core/gateway/routes/tls/
+edgion-gateway/src/routes/tls/
 ├── mod.rs                  # module entry and type exports
 ├── conf_handler_impl.rs    # ConfHandler<TLSRoute> implementation
 ├── routes_mgr.rs           # TlsRouteManager / GlobalTlsRouteManagers
@@ -88,9 +88,9 @@ TLSRoute (Terminate/Passthrough) and the HTTP/gRPC TLS subsystem (the `tls/` mod
 
 | File | Responsibility |
 |------|----------------|
-| `src/core/gateway/routes/tls/routes_mgr.rs` | GlobalTlsRouteManagers, TlsRouteManager |
-| `src/core/gateway/routes/tls/gateway_tls_routes.rs` | TlsRouteTable (SNI matching) |
-| `src/core/gateway/routes/tls/proxy.rs` | EdgionTlsTcpProxy (TLS-terminate-to-TCP) |
-| `src/core/gateway/routes/tls/passthrough_proxy.rs` | EdgionTlsPassthroughProxy (TLS passthrough) |
-| `src/core/gateway/routes/tls/sni_parser.rs` | raw-ClientHello SNI extraction (passthrough) |
-| `src/core/gateway/routes/tls/conf_handler_impl.rs` | ConfHandler<TLSRoute> implementation |
+| `edgion-gateway/src/routes/tls/routes_mgr.rs` | GlobalTlsRouteManagers, TlsRouteManager |
+| `edgion-gateway/src/routes/tls/gateway_tls_routes.rs` | TlsRouteTable (SNI matching) |
+| `edgion-gateway/src/routes/tls/proxy.rs` | EdgionTlsTcpProxy (TLS-terminate-to-TCP) |
+| `edgion-gateway/src/routes/tls/passthrough_proxy.rs` | EdgionTlsPassthroughProxy (TLS passthrough) |
+| `edgion-gateway/src/routes/tls/sni_parser.rs` | raw-ClientHello SNI extraction (passthrough) |
+| `edgion-gateway/src/routes/tls/conf_handler_impl.rs` | ConfHandler<TLSRoute> implementation |

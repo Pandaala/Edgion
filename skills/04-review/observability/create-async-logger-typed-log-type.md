@@ -10,7 +10,7 @@ description: create_async_logger now takes a typed LogType parameter (not a &str
 
 ## Conclusion
 
-`create_async_logger` (`src/core/gateway/observe/logs/logger_factory.rs:53`) now takes `log_type: LogType` directly:
+`create_async_logger` (`edgion-gateway/src/observe/logs/logger_factory.rs:53`) now takes `log_type: LogType` directly:
 
 ```rust
 pub async fn create_async_logger(
@@ -25,10 +25,10 @@ The four call sites pass typed enum variants:
 
 | File | Variant |
 |---|---|
-| `src/core/gateway/observe/access_log/mod.rs:25` | `LogType::Access` |
-| `src/core/gateway/observe/logs/tcp_log.rs:58` | `LogType::Tcp` |
-| `src/core/gateway/observe/logs/tls_log.rs:18` | `LogType::Tls` |
-| `src/core/gateway/observe/logs/udp_log.rs:95` | `LogType::Udp` |
+| `edgion-gateway/src/observe/access_log/mod.rs:25` | `LogType::Access` |
+| `edgion-gateway/src/observe/logs/tcp_log.rs:58` | `LogType::Tcp` |
+| `edgion-gateway/src/observe/logs/tls_log.rs:18` | `LogType::Tls` |
+| `edgion-gateway/src/observe/logs/udp_log.rs:95` | `LogType::Udp` |
 
 `LogType` is now re-exported from `crate::core::gateway::observe::logs` so callers do not reach into `link_sys::providers::local_file` directly.
 
@@ -68,5 +68,5 @@ Re-open only if:
 - observe F-B03 (`tasks/observe/observe-FB03-create-async-logger-log-type-unreachable-default.md`, closed 2026-05-29)
 - [[protocol-logger-oncelock-pattern-not-extracted]] — sibling decision on the four-async-loggers cluster; its rationale about the kind-name appearing in `tracing::info!` literals (`"TcpLogger initialized"` etc.) is unchanged, only the kind-to-LogType resolution step moved from string match to typed parameter
 - [[access-log-disabled-init-noop]] — the F-B01 disabled-mode no-op behavior is independent of this fix
-- `src/core/gateway/link_sys/providers/local_file/mod.rs:14-21` — `LogType` enum definition (source of truth, derives `Copy` so the typed parameter has no clone cost)
-- `src/core/gateway/link_sys/providers/local_file/data_sender_impl.rs:49-53` — the metrics dispatch that the silently-misrouted `LogType::Access` would have corrupted
+- `edgion-gateway/src/link_sys/providers/local_file/mod.rs:14-21` — `LogType` enum definition (source of truth, derives `Copy` so the typed parameter has no clone cost)
+- `edgion-gateway/src/link_sys/providers/local_file/data_sender_impl.rs:49-53` — the metrics dispatch that the silently-misrouted `LogType::Access` would have corrupted

@@ -12,7 +12,7 @@ TCPRoute implements the L4 TCP routing capability of the Gateway API. TCP routin
 ## Module structure
 
 ```
-src/core/gateway/routes/tcp/
+edgion-gateway/src/routes/tcp/
 ├── mod.rs                # module entry and type exports
 ├── conf_handler_impl.rs  # ConfHandler<TCPRoute> implementation
 ├── routes_mgr.rs         # TcpPortRouteManager / GlobalTcpRouteManagers
@@ -52,7 +52,7 @@ pub struct TcpRouteTable {
 
 | File | Responsibility |
 |------|----------------|
-| `src/core/gateway/routes/tcp/routes_mgr.rs` | GlobalTcpRouteManagers, TcpPortRouteManager |
-| `src/core/gateway/routes/tcp/tcp_route_table.rs` | TcpRouteTable |
-| `src/core/gateway/routes/tcp/edgion_tcp.rs` | EdgionTcpProxy |
-| `src/core/gateway/routes/tcp/conf_handler_impl.rs` | ConfHandler<TCPRoute> implementation |
+| `edgion-gateway/src/routes/tcp/routes_mgr.rs` | GlobalTcpRouteManagers, TcpPortRouteManager |
+| `edgion-gateway/src/routes/tcp/tcp_route_table.rs` | TcpRouteTable |
+| `edgion-gateway/src/routes/tcp/edgion_tcp.rs` | EdgionTcpProxy |
+| `edgion-gateway/src/routes/tcp/conf_handler_impl.rs` | ConfHandler<TCPRoute> implementation |

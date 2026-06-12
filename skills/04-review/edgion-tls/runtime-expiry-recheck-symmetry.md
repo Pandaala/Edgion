@@ -10,7 +10,7 @@ description: Both cert-install paths (apply_edgion_tls_cert and apply_secret_to_
 
 ## Conclusion
 
-`src/core/gateway/tls/runtime/gateway/tls_pingora.rs` now performs an `Asn1Time::days_from_now(0)`
+`edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` now performs an `Asn1Time::days_from_now(0)`
 recheck of `not_before` / `not_after` immediately after `X509::from_pem` in **both** cert-install
 entry points:
 

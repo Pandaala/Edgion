@@ -10,7 +10,7 @@ description: Use when reviewing findings that `RouteRules` (or any similar singl
 
 ## Conclusion
 
-`RouteRules` (`src/core/gateway/routes/http/routes_mgr.rs`) used to wrap
+`RouteRules` (`edgion-gateway/src/routes/http/routes_mgr.rs`) used to wrap
 three fields in `parking_lot::RwLock`:
 
 ```rust
@@ -80,11 +80,11 @@ For any struct whose fields are wrapped in `RwLock` / `Mutex` consider:
 
 - FB-03 (`tasks/routes/routes-http-FB03-route-rules-dead-rwlock-fields.md`),
   closed 2026-05-28.
-- Source: `src/core/gateway/routes/http/routes_mgr.rs` (field declarations,
-  `Clone`), `src/core/gateway/routes/http/conf_handler_impl.rs`
+- Source: `edgion-gateway/src/routes/http/routes_mgr.rs` (field declarations,
+  `Clone`), `edgion-gateway/src/routes/http/conf_handler_impl.rs`
   (construction at `build_domain_route_rules_from_routes`).
 - Sibling already-plain reference:
-  `src/core/gateway/routes/grpc/routes_mgr.rs:25-28` (`resource_keys`,
+  `edgion-gateway/src/routes/grpc/routes_mgr.rs:25-28` (`resource_keys`,
   `route_rules_list` as plain fields).
 - Outer swap point preserved: `HttpPortRouteManager.route_table:
   ArcSwap<DomainRouteRules>`.

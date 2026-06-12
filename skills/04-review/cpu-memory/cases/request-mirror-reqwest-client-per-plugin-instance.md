@@ -10,7 +10,7 @@ description: Use when reviewing findings that flag RequestMirrorPlugin (or any g
 ## Conclusion
 
 **Confirmed-real, now fixed (F-017, 2026-05-27).** `RequestMirrorPlugin::new` in
-`src/core/gateway/plugins/http/request_mirror/plugin.rs` used to build a private
+`edgion-gateway/src/plugins/http/request_mirror/plugin.rs` used to build a private
 `reqwest::Client` (with `pool_max_idle_per_host(32)`, its own TLS session cache, its own DNS
 cache) on every plugin construction and store it in a `client: reqwest::Client` field. Every
 route carrying a `RequestMirror` filter therefore owned an independent client; N mirror-enabled
@@ -48,7 +48,7 @@ total/connect timeout caps clipping operator-configured mirror timeouts.
 
 `reqwest::Client` is internally `Arc`-wrapped; cloning hands out a new reference to the same
 connection pool, TLS session cache, and DNS cache. The project already standardised on this in
-`src/core/gateway/plugins/http/common/http_client.rs` (`get_http_client()` / `OnceLock<Client>`),
+`edgion-gateway/src/plugins/http/common/http_client.rs` (`get_http_client()` / `OnceLock<Client>`),
 used by every other plugin that talks to external HTTP services. RequestMirror was the outlier.
 
 **2. The per-plugin differentiator collapses into the outer timeout wrapper**
@@ -91,5 +91,5 @@ Re-open only if:
 ## Reference Cases
 
 - F-017 (BadLogic, Medium), fixed 2026-05-27.
-- Source: `src/core/gateway/plugins/http/request_mirror/plugin.rs`.
-- Singleton: `src/core/gateway/plugins/http/common/http_client.rs::get_http_client`.
+- Source: `edgion-gateway/src/plugins/http/request_mirror/plugin.rs`.
+- Singleton: `edgion-gateway/src/plugins/http/common/http_client.rs::get_http_client`.

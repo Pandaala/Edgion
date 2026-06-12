@@ -17,14 +17,14 @@ Use this to answer questions like:
 - [../../../edgion-resources/src/resources/edgion_stream_plugins/stream_plugins.rs](../../../edgion-resources/src/resources/edgion_stream_plugins/stream_plugins.rs)
 - [../../../edgion-resources/src/resources/edgion_stream_plugins/tls_route_plugins.rs](../../../edgion-resources/src/resources/edgion_stream_plugins/tls_route_plugins.rs)
 - [../../../edgion-resources/src/resource/meta/impls.rs](../../../edgion-resources/src/resource/meta/impls.rs)
-- [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs)
-- [../../../src/core/gateway/plugins/stream/mod.rs](../../../src/core/gateway/plugins/stream/mod.rs)
-- [../../../src/core/gateway/plugins/stream/stream_plugin_trait.rs](../../../src/core/gateway/plugins/stream/stream_plugin_trait.rs)
-- [../../../src/core/gateway/plugins/stream/stream_plugin_runtime.rs](../../../src/core/gateway/plugins/stream/stream_plugin_runtime.rs)
-- [../../../src/core/gateway/plugins/stream/stream_plugin_store.rs](../../../src/core/gateway/plugins/stream/stream_plugin_store.rs)
-- [../../../src/core/gateway/runtime/server/listener_builder.rs](../../../src/core/gateway/runtime/server/listener_builder.rs)
-- [../../../src/core/gateway/routes/tcp/conf_handler_impl.rs](../../../src/core/gateway/routes/tcp/conf_handler_impl.rs)
-- [../../../src/core/gateway/routes/tls/proxy.rs](../../../src/core/gateway/routes/tls/proxy.rs)
+- [../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs](../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs)
+- [../../../edgion-gateway/src/plugins/stream/mod.rs](../../../edgion-gateway/src/plugins/stream/mod.rs)
+- [../../../edgion-gateway/src/plugins/stream/stream_plugin_trait.rs](../../../edgion-gateway/src/plugins/stream/stream_plugin_trait.rs)
+- [../../../edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs](../../../edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs)
+- [../../../edgion-gateway/src/plugins/stream/stream_plugin_store.rs](../../../edgion-gateway/src/plugins/stream/stream_plugin_store.rs)
+- [../../../edgion-gateway/src/runtime/server/listener_builder.rs](../../../edgion-gateway/src/runtime/server/listener_builder.rs)
+- [../../../edgion-gateway/src/routes/tcp/conf_handler_impl.rs](../../../edgion-gateway/src/routes/tcp/conf_handler_impl.rs)
+- [../../../edgion-gateway/src/routes/tls/proxy.rs](../../../edgion-gateway/src/routes/tls/proxy.rs)
 
 ## Mental model
 
@@ -48,7 +48,7 @@ edgion-resources/src/resources/edgion_stream_plugins/
   stream_plugins.rs         # Stage 1 plugin enum: EdgionStreamPlugin
   tls_route_plugins.rs      # Stage 2 plugin enum: TlsRouteStreamPlugin
 
-src/core/gateway/plugins/stream/
+edgion-gateway/src/plugins/stream/
   stream_plugin_trait.rs    # StreamPlugin / StreamContext / StreamPluginResult
   stream_plugin_runtime.rs  # Stage 1 runtime: builds the plugin chain from entries
   stream_plugin_store.rs    # Gateway global hot-reload store (ArcSwap)
@@ -61,7 +61,7 @@ src/core/gateway/plugins/stream/
 
 ### Stage 1: ConnectionFilter
 
-- The trait lives in [../../../src/core/gateway/plugins/stream/stream_plugin_trait.rs](../../../src/core/gateway/plugins/stream/stream_plugin_trait.rs).
+- The trait lives in [../../../edgion-gateway/src/plugins/stream/stream_plugin_trait.rs](../../../edgion-gateway/src/plugins/stream/stream_plugin_trait.rs).
 - The context is `StreamContext`.
 - Return value:
   - `StreamPluginResult::Allow`
@@ -76,7 +76,7 @@ src/core/gateway/plugins/stream/
 
 ### Stage 2: TlsRoute
 
-- The Stage-2 runtime (`run_tls_route_plugins`) is invoked from **both** TLS proxies: the TLS-terminate proxy [../../../src/core/gateway/routes/tls/proxy.rs](../../../src/core/gateway/routes/tls/proxy.rs) and the TLS-passthrough proxy [../../../src/core/gateway/routes/tls/passthrough_proxy.rs](../../../src/core/gateway/routes/tls/passthrough_proxy.rs). Any binding-site change must touch both paths.
+- The Stage-2 runtime (`run_tls_route_plugins`) is invoked from **both** TLS proxies: the TLS-terminate proxy [../../../edgion-gateway/src/routes/tls/proxy.rs](../../../edgion-gateway/src/routes/tls/proxy.rs) and the TLS-passthrough proxy [../../../edgion-gateway/src/routes/tls/passthrough_proxy.rs](../../../edgion-gateway/src/routes/tls/passthrough_proxy.rs). Any binding-site change must touch both paths.
 - `tls_route_plugin_runtime` runs first.
 - If a resource has no `tlsRoutePlugins` but has the legacy `plugins`, the current implementation falls back to the Stage 1 runtime for compatibility.
 - Suitable for:
@@ -130,21 +130,21 @@ pub trait StreamPlugin: Send + Sync {
 
 The most direct reference implementation:
 
-- [../../../src/core/gateway/plugins/stream/ip_restriction/stream_ip_restriction.rs](../../../src/core/gateway/plugins/stream/ip_restriction/stream_ip_restriction.rs)
+- [../../../edgion-gateway/src/plugins/stream/ip_restriction/stream_ip_restriction.rs](../../../edgion-gateway/src/plugins/stream/ip_restriction/stream_ip_restriction.rs)
 
 For Stage 2 plugins, look at:
 
-- [../../../src/core/gateway/plugins/stream/tls_route/](../../../src/core/gateway/plugins/stream/tls_route/)
+- [../../../edgion-gateway/src/plugins/stream/tls_route/](../../../edgion-gateway/src/plugins/stream/tls_route/)
 
 ## 5. Register the construction logic in the runtime
 
 Stage 1 runtime:
 
-- [../../../src/core/gateway/plugins/stream/stream_plugin_runtime.rs](../../../src/core/gateway/plugins/stream/stream_plugin_runtime.rs)
+- [../../../edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs](../../../edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs)
 
 Stage 2 runtime:
 
-- [../../../src/core/gateway/plugins/stream/tls_route/tls_route_plugin_runtime.rs](../../../src/core/gateway/plugins/stream/tls_route/tls_route_plugin_runtime.rs)
+- [../../../edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_runtime.rs](../../../edgion-gateway/src/plugins/stream/tls_route/tls_route_plugin_runtime.rs)
 
 This is the actual "resource configuration → runtime plugin object" assembly point. Modifying only the enum without modifying the runtime means the Gateway will not execute your new plugin.
 
@@ -159,12 +159,12 @@ That is, the `ResourceMeta` preprocessing phase calls:
 - `init_stream_plugin_runtime()`
 - `init_tls_route_plugin_runtime()`
 
-The Controller handler [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs) currently mainly handles status, not runtime construction.
+The Controller handler [../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs](../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs) currently mainly handles status, not runtime construction.
 
 The Gateway-side hot-reload entries are:
 
-- [../../../src/core/gateway/plugins/stream/stream_plugin_store.rs](../../../src/core/gateway/plugins/stream/stream_plugin_store.rs)
-- [../../../src/core/gateway/conf_sync/conf_client/config_client.rs](../../../src/core/gateway/conf_sync/conf_client/config_client.rs)
+- [../../../edgion-gateway/src/plugins/stream/stream_plugin_store.rs](../../../edgion-gateway/src/plugins/stream/stream_plugin_store.rs)
+- [../../../edgion-gateway/src/conf_sync/conf_client/config_client.rs](../../../edgion-gateway/src/conf_sync/conf_client/config_client.rs)
 
 ## 7. Bind via YAML annotation and verify the reference path
 

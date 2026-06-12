@@ -10,7 +10,7 @@ description: mTLS CA loading now parses every PEM block in the CA bundle via X50
 
 ## Conclusion
 
-Both mTLS CA-loading paths in `src/core/gateway/tls/runtime/gateway/tls_pingora.rs`
+Both mTLS CA-loading paths in `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs`
 now parse the whole CA bundle with `X509::stack_from_pem` and add **every**
 certificate to the `X509Store`:
 

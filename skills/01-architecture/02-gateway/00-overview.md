@@ -58,7 +58,7 @@ Each protocol has an independent `routes_mgr` (route manager) and `route_table`,
 ## Module layout
 
 ```
-src/core/gateway/
+edgion-gateway/src/
 ├── api/           # Admin API server (default :12001, configurable via admin_listen), exposes runtime state queries
 ├── backends/      # Backend management
 │   ├── discovery/ # Backend discovery: Endpoint / EndpointSlice / Service stores

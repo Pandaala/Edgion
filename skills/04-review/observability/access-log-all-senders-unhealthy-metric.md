@@ -10,7 +10,7 @@ description: AccessLogger::send now increments edgion_access_log_dropped_total w
 
 ## Conclusion
 
-`AccessLogger::send` (`src/core/gateway/observe/access_log/logger.rs`) now calls
+`AccessLogger::send` (`edgion-gateway/src/observe/access_log/logger.rs`) now calls
 `global_metrics().access_log_dropped()` after the sender loop exhausts without finding a healthy
 one, so a "writer task died / sender failed to initialize / channel was never created" state is
 visible on the same `edgion_access_log_dropped_total` counter used for queue-full
@@ -91,5 +91,5 @@ Re-open only if:
 - observe F-003 (`tasks/observe/observe-F003-access-logger-send-silent-drop-no-metric.md`, 2026-05-28)
 - `local-file-write-error-surfaced.md` — complementary fix at the writer level
 - `observability-review-rule.md` — Iron Rule 3 (Zero Tracing on the Data Plane)
-- `src/core/gateway/observe/metrics/registry.rs:178` — `access_log_dropped()` counter definition
-- `src/core/gateway/observe/logs/ssl_log.rs:48-50` — sibling pattern (metric-only on drop, no `tracing::warn!`)
+- `edgion-gateway/src/observe/metrics/registry.rs:178` — `access_log_dropped()` counter definition
+- `edgion-gateway/src/observe/logs/ssl_log.rs:48-50` — sibling pattern (metric-only on drop, no `tracing::warn!`)

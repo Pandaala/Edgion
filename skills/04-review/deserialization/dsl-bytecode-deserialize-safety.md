@@ -11,7 +11,7 @@ description: Use when reviewing the DSL bytecode load path (CompiledScript::dese
 
 ## Conclusion
 
-`CompiledScript::deserialize_base64` (`src/core/gateway/plugins/http/dsl/lang/bytecode.rs:276-307`) is an external trust boundary: bytecode is delivered via K8s CR / gRPC and may be attacker-controlled. The path has partial length guards but lacks fuzz coverage and does not bound `Constant::Regex` recompilation, leaving ReDoS / pathological-compile risk open.
+`CompiledScript::deserialize_base64` (`edgion-gateway/src/plugins/http/dsl/lang/bytecode.rs:276-307`) is an external trust boundary: bytecode is delivered via K8s CR / gRPC and may be attacker-controlled. The path has partial length guards but lacks fuzz coverage and does not bound `Constant::Regex` recompilation, leaving ReDoS / pathological-compile risk open.
 
 Fix suggestions of the form "serde will handle malformed input gracefully" are **not accepted** — serde-json has a documented CVE surface and does not bound recursion depth by default.
 
@@ -59,5 +59,5 @@ Re-open or escalate if:
 ## Reference Cases
 
 - `tasks/todo/dsl-vm-rhai-research/issues/issue-19-deserialize-base64-fuzz.md` — full implementation plan for the fuzz target; acceptance criteria and CI integration steps
-- `src/core/gateway/plugins/http/dsl/lang/bytecode.rs:276-307` — target function and existing length bounds
+- `edgion-gateway/src/plugins/http/dsl/lang/bytecode.rs:276-307` — target function and existing length bounds
 - Rhai reference: `fuzz/fuzz_targets/fuzz_serde.rs` — same-shape fuzz target in Rhai upstream

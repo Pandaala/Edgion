@@ -7,7 +7,7 @@ description: Use when reviewing findings that `run_tls_route_plugins` should emi
 
 ## Conclusion
 
-`run_tls_route_plugins` (`src/core/gateway/routes/tls/mod.rs`) **must not** emit
+`run_tls_route_plugins` (`edgion-gateway/src/routes/tls/mod.rs`) **must not** emit
 `tracing::debug!` / `tracing::info!` (or any `tracing::*`) on the backward-compat
 branch that falls back to `stream_plugin_runtime` when `tls_route_plugin_runtime`
 is empty. Fix suggestions of the form
@@ -26,8 +26,8 @@ wrong channel.
 
 **1. `run_tls_route_plugins` is on the TLS connection hot path.**
 The function is called once per accepted TLS connection from both
-`src/core/gateway/routes/tls/proxy.rs` (terminate mode) and
-`src/core/gateway/routes/tls/passthrough_proxy.rs` (passthrough mode). Both
+`edgion-gateway/src/routes/tls/proxy.rs` (terminate mode) and
+`edgion-gateway/src/routes/tls/passthrough_proxy.rs` (passthrough mode). Both
 files are explicitly listed under the "TCP/TLS connection path" entry of
 `skills/03-coding/01-log-safety.md` Iron Rule 3, and Stage-2 plugin dispatch
 under `plugins/stream/tls_route/*` is itself called out in the same rule's
@@ -86,7 +86,7 @@ When a review re-reports any of:
 
 → close as **accepted tradeoff + design intent**. Verify before closing:
 
-- `run_tls_route_plugins` in `src/core/gateway/routes/tls/mod.rs` contains no
+- `run_tls_route_plugins` in `edgion-gateway/src/routes/tls/mod.rs` contains no
   `tracing::*` calls in either the Stage 2 branch or the Stage 1 compat
   fallback.
 - The compat fallback still pushes `"stream plugin allowed (compat)"` /

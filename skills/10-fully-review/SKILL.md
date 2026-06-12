@@ -38,8 +38,8 @@ description: Use when running or preparing a global codebase review pass that pr
 
 ### Scope-split example (review-2 pattern)
 
-Six subtrees: `src/core/center/`, `src/core/controller/`, `src/core/gateway/runtime/`,
-`src/core/gateway/plugins/`, `src/core/gateway/routes/`, `edgion-common/src/ + types/`.
+Six subtrees: `src/core/center/`, `edgion-controller/src/`, `edgion-gateway/src/runtime/`,
+`edgion-gateway/src/plugins/`, `edgion-gateway/src/routes/`, `edgion-common/src/ + types/`.
 
 ---
 

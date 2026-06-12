@@ -10,7 +10,7 @@ description: ConsistentHashRing::select now charges the max_iterations budget on
 
 ## Conclusion
 
-`ConsistentHashRing::select` (`src/core/gateway/lb/selection/consistent_hash.rs`) now
+`ConsistentHashRing::select` (`edgion-gateway/src/lb/selection/consistent_hash.rs`) now
 increments the iteration counter (`steps`) **only when `seen.insert(backend_idx)` succeeds**
 (i.e. for a newly-encountered distinct backend), not on every ring slot. A duplicate virtual
 node belonging to an already-seen backend takes the `continue` branch without charging the

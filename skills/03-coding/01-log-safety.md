@@ -236,42 +236,42 @@ Use during code review:
 
 ```bash
 rg -n 'tracing::' \
-  src/core/gateway/routes/http/proxy_http/ \
-  src/core/gateway/routes/http/match_engine/ \
-  src/core/gateway/routes/http/match_unit.rs \
-  src/core/gateway/routes/http/session_persistence.rs \
-  src/core/gateway/routes/http/redirect_http.rs \
-  src/core/gateway/routes/tcp/edgion_tcp.rs \
-  src/core/gateway/routes/tls/passthrough_proxy.rs \
-  src/core/gateway/routes/tls/proxy.rs \
-  src/core/gateway/routes/udp/edgion_udp.rs \
-  src/core/gateway/routes/grpc/match_engine.rs \
-  src/core/gateway/routes/grpc/match_unit.rs \
-  src/core/gateway/routes/grpc/integration.rs \
-  src/core/gateway/tls/runtime/gateway/tls_pingora.rs \
-  src/core/gateway/tls/runtime/backend/backend_api.rs \
-  src/core/gateway/tls/runtime/backend/cert_extractor.rs \
-  src/core/gateway/tls/boringssl/mtls_verify_callback.rs \
-  src/core/gateway/tls/store/cert_matcher.rs \
-  src/core/gateway/plugins/stream/stream_plugin_runtime.rs \
-  src/core/gateway/plugins/stream/connection_filter_bridge.rs \
-  src/core/gateway/plugins/stream/tls_route/ \
-  src/core/gateway/plugins/stream/ip_restriction/ \
-  src/core/gateway/plugins/stream/global_connection_ip_restriction/ \
-  src/core/gateway/plugins/runtime/plugin_runtime.rs \
-  src/core/gateway/plugins/runtime/conditional_filter.rs \
-  src/core/gateway/plugins/runtime/session_adapter.rs \
-  src/core/gateway/plugins/runtime/gateway_api_filters/ \
-  src/core/gateway/plugins/http/*/plugin.rs \
-  src/core/gateway/plugins/http/*/request_filter_impl.rs \
-  src/core/gateway/lb/selection/ \
-  src/core/gateway/lb/runtime_state/ \
-  src/core/gateway/backends/mod.rs \
-  src/core/gateway/backends/validation.rs \
-  src/core/gateway/backends/circuit_breaker/store.rs \
-  src/core/gateway/backends/policy/ \
-  src/core/gateway/cache/ \
-  src/core/gateway/runtime/server/error_response.rs
+  edgion-gateway/src/routes/http/proxy_http/ \
+  edgion-gateway/src/routes/http/match_engine/ \
+  edgion-gateway/src/routes/http/match_unit.rs \
+  edgion-gateway/src/routes/http/session_persistence.rs \
+  edgion-gateway/src/routes/http/redirect_http.rs \
+  edgion-gateway/src/routes/tcp/edgion_tcp.rs \
+  edgion-gateway/src/routes/tls/passthrough_proxy.rs \
+  edgion-gateway/src/routes/tls/proxy.rs \
+  edgion-gateway/src/routes/udp/edgion_udp.rs \
+  edgion-gateway/src/routes/grpc/match_engine.rs \
+  edgion-gateway/src/routes/grpc/match_unit.rs \
+  edgion-gateway/src/routes/grpc/integration.rs \
+  edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs \
+  edgion-gateway/src/tls/runtime/backend/backend_api.rs \
+  edgion-gateway/src/tls/runtime/backend/cert_extractor.rs \
+  edgion-gateway/src/tls/boringssl/mtls_verify_callback.rs \
+  edgion-gateway/src/tls/store/cert_matcher.rs \
+  edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs \
+  edgion-gateway/src/plugins/stream/connection_filter_bridge.rs \
+  edgion-gateway/src/plugins/stream/tls_route/ \
+  edgion-gateway/src/plugins/stream/ip_restriction/ \
+  edgion-gateway/src/plugins/stream/global_connection_ip_restriction/ \
+  edgion-gateway/src/plugins/runtime/plugin_runtime.rs \
+  edgion-gateway/src/plugins/runtime/conditional_filter.rs \
+  edgion-gateway/src/plugins/runtime/session_adapter.rs \
+  edgion-gateway/src/plugins/runtime/gateway_api_filters/ \
+  edgion-gateway/src/plugins/http/*/plugin.rs \
+  edgion-gateway/src/plugins/http/*/request_filter_impl.rs \
+  edgion-gateway/src/lb/selection/ \
+  edgion-gateway/src/lb/runtime_state/ \
+  edgion-gateway/src/backends/mod.rs \
+  edgion-gateway/src/backends/validation.rs \
+  edgion-gateway/src/backends/circuit_breaker/store.rs \
+  edgion-gateway/src/backends/policy/ \
+  edgion-gateway/src/cache/ \
+  edgion-gateway/src/runtime/server/error_response.rs
 ```
 
 **Expected**: only the exempt items listed in the exception table remain (the access-log-send failure warn in `pg_logging.rs`, the panic-capture error in `mtls_verify_callback.rs`, etc.). Any new hit must either:
@@ -286,7 +286,7 @@ rg -n 'tracing::' \
 ```bash
 # Data-plane trait impls — every result's file path must match an entry in the "Data-plane entry list" table or the "Plugin dispatch" subsection
 rg -n 'impl (ProxyHttp|ServerApp|TlsAccept|ConnectionFilter|StreamPlugin|TlsRoutePlugin|RequestFilter|UpstreamResponseFilter|UpstreamResponseBodyFilter|UpstreamResponse) for ' \
-  src/core/gateway/
+  edgion-gateway/src/
 ```
 
 **Expected**: every hit is covered under "HTTP request path / TCP/TLS connection path / UDP connection path / TLS handshake callbacks / Plugin dispatch" in this rule. New trait impls must update the tables above; otherwise the next review-ticket triage will miss them.

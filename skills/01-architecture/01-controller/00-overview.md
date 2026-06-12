@@ -111,7 +111,7 @@ Core capabilities:
 ## Module Layout
 
 ```text
-src/core/controller/
+edgion-controller/src/
 ├── api/                        # Admin REST API (Axum, :12101)
 │   ├── mod.rs                  # Route registration and health-check handler
 │   ├── types.rs                # AdminState, ApiResponse, ListResponse

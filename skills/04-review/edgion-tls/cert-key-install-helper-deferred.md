@@ -16,7 +16,7 @@ review batch (same numeric ID, different finding).
 ## Conclusion
 
 `apply_edgion_tls_cert` and `apply_secret_to_ssl` in
-`src/core/gateway/tls/runtime/gateway/tls_pingora.rs` each carry their own
+`edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` each carry their own
 `X509::from_pem` → boringssl runtime expiry recheck → `ssl_use_certificate` →
 `PKey::private_key_from_pem` → `ssl_use_private_key` sequence, with matching
 `err_log; return` failure handling. The proposal to extract a shared private
@@ -103,8 +103,8 @@ tradeoff (deferred)" referencing this entry:
 - Issue: `tasks/tls/tls-F010-cert-key-install-boilerplate-duplicated.md`
   (closed as accepted tradeoff (deferred) 2026-05-27)
 - Code:
-  - `src/core/gateway/tls/runtime/gateway/tls_pingora.rs::apply_edgion_tls_cert`
-  - `src/core/gateway/tls/runtime/gateway/tls_pingora.rs::apply_secret_to_ssl`
+  - `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs::apply_edgion_tls_cert`
+  - `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs::apply_secret_to_ssl`
 - Related rules:
   - [runtime-expiry-recheck-symmetry.md](runtime-expiry-recheck-symmetry.md) —
     audit-signal symmetry on both install paths (already enforced)

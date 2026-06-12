@@ -18,7 +18,7 @@ before re-reporting.
 
 **1. Where the guard lives**
 
-`src/core/controller/conf_mgr/conf_center/file_system/storage.rs` defines
+`edgion-controller/src/conf_mgr/conf_center/file_system/storage.rs` defines
 `validate_path_components(kind, namespace, name)`, which rejects any component
 containing `..`, `/`, or `\` with `ConfWriterError::ValidationError` (mapped to
 HTTP `400 BAD_REQUEST` in `controller/api/common.rs`). It is called at the top of
@@ -67,6 +67,6 @@ Re-open only if:
 ## Reference Cases
 
 - `tasks/bug/fr-csync-01-file-backend-namespace-path-traversal.md` (closed 2026-05-29).
-- `src/core/controller/conf_mgr/conf_center/file_system/storage.rs`
+- `edgion-controller/src/conf_mgr/conf_center/file_system/storage.rs`
   (`validate_path_components`, `path_tests`).
-- `src/core/controller/api/common.rs` (`ValidationError` → 400).
+- `edgion-controller/src/api/common.rs` (`ValidationError` → 400).

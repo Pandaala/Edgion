@@ -7,7 +7,7 @@ description: Use when reviewing findings about per-key tracing::debug! inside St
 
 ## Conclusion
 
-`StreamPluginStore::partial_update` (`src/core/gateway/plugins/stream/stream_plugin_store.rs`)
+`StreamPluginStore::partial_update` (`edgion-gateway/src/plugins/stream/stream_plugin_store.rs`)
 used to emit one `tracing::debug!(key = %key, "Removing EdgionStreamPlugins")` per removed
 key in a loop, right after a batch `tracing::info!(rm = remove.len(), ...)` at function
 entry. **The per-key debug loop was removed (plugins-stream F-010, 2026-05-27).** The

@@ -1,0 +1,365 @@
+//! LinkSys Handler
+//!
+//! Handles LinkSys resources with:
+//! - Validation (preparse hook)
+//! - SecretRef resolution via `resolve_secret` pipeline (attaches Secret to spec)
+//! - SecretRefManager registration for cascading updates
+//! - Gateway API standard status management
+//!
+//! Note: the resolved Secret is embedded into the corresponding `*Auth.secret` field,
+//! which is serialized across conf_sync to the Gateway. Material parsing happens on
+//! the Gateway side via `edgion_resources::credentials`.
+
+use crate::conf_mgr::sync_runtime::resource_processor::credential::{
+    resolve_secret, InvalidCredentialError, PendingReason, ResolveOutcome,
+};
+use crate::conf_mgr::sync_runtime::resource_processor::{
+    accepted_condition, condition_false, condition_types, resolved_refs_condition, update_condition, HandlerContext,
+    ProcessResult, ProcessorHandler, ResolvedRefsError, ResourceRef,
+};
+use edgion_resources::credentials::SecretMaterialResolver;
+use edgion_resources::prelude_resources::LinkSys;
+use edgion_resources::resources::common::{EdgionService, SecretObjectReference};
+use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+use edgion_resources::resources::link_sys::{LinkSysStatus, SystemConfig};
+
+use super::auth_spec::{AuthSpec, TlsSpec};
+use edgion_resources::ResourceKind;
+use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::api::discovery::v1::EndpointSlice;
+
+/// LinkSys handler
+pub struct LinkSysHandler;
+
+impl LinkSysHandler {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for LinkSysHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Translate a pipeline `ResolveOutcome<T>` into `Result<T, ResolvedRefsError>`.
+///
+/// Cross-namespace denial maps to the Gateway-API standard `RefNotPermitted`
+/// (not a dedicated `ReferenceGrantMissing` reason): the pipeline cannot
+/// distinguish "no grant yet" from "grant denies", so a more specific reason
+/// would promise operators a signal we cannot deliver.
+fn outcome_to_result<T>(outcome: ResolveOutcome<T>) -> Result<T, ResolvedRefsError> {
+    match outcome {
+        ResolveOutcome::Ok(t) => Ok(t),
+        ResolveOutcome::Pending(PendingReason::SecretNotFound { namespace, name }) => {
+            Err(ResolvedRefsError::SecretNotFound { namespace, name })
+        }
+        ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
+            from_ns,
+            to_ns,
+            secret_name,
+        }) => Err(ResolvedRefsError::RefNotPermitted {
+            from_namespace: from_ns,
+            from_kind: ResourceKind::LinkSys.as_str(),
+            target_namespace: to_ns,
+            target_name: secret_name,
+        }),
+        ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(keys)) => {
+            Err(ResolvedRefsError::MissingKeys { keys })
+        }
+        ResolveOutcome::Invalid(InvalidCredentialError::DecodeError { key, detail }) => {
+            Err(ResolvedRefsError::DecodeError { key, detail })
+        }
+        ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType { got, allowed }) => {
+            Err(ResolvedRefsError::InvalidSecretType { got, allowed })
+        }
+    }
+}
+
+/// Build a `ResolvedRefs` condition reflecting the outcome of
+/// `resolve_for_spec` and merge it into `ls.status.conditions`.
+///
+/// Delegates reason/message formatting to `status_utils::resolved_refs_condition`
+/// so all credential-backed CRDs produce the same wording. This MUST run even
+/// on success so the condition transitions `False → True` when an operator
+/// fixes the Secret.
+fn apply_resolved_refs_condition(ls: &mut LinkSys, generation: Option<i64>, errors: &[ResolvedRefsError]) {
+    let status = ls.status.get_or_insert_with(LinkSysStatus::default);
+    update_condition(&mut status.conditions, resolved_refs_condition(errors, generation));
+}
+
+/// Does this resolution error require the operator to edit Secret *content*
+/// (keys / value format / Secret type) to recover, as opposed to just
+/// creating a missing Secret or ReferenceGrant?
+///
+/// - `false` (info-level log) — the Secret or ReferenceGrant is simply absent
+///   or denied. Reprocessing will pick up the fix once the missing resource
+///   arrives; no log volume amplification needed.
+/// - `true` (warn-level log) — the Secret exists but its content is unusable.
+///   Re-queues without operator edits won't help, so louder logging is
+///   justified. `RefNotPermitted` is intentionally *not* in this bucket even
+///   though "operator forgot Grant" is an edit-to-fix case, because the
+///   pipeline cannot distinguish "forgot to create Grant" from "deliberately
+///   denied".
+fn needs_operator_secret_edit(err: &ResolvedRefsError) -> bool {
+    matches!(
+        err,
+        ResolvedRefsError::MissingKeys { .. }
+            | ResolvedRefsError::DecodeError { .. }
+            | ResolvedRefsError::InvalidSecretType { .. }
+    )
+}
+
+#[async_trait::async_trait]
+impl ProcessorHandler<LinkSys> for LinkSysHandler {
+    fn preparse(&self, ls: &mut LinkSys, _ctx: &HandlerContext) -> Vec<String> {
+        ls.validate_config()
+    }
+
+    async fn parse(&self, mut ls: LinkSys, ctx: &HandlerContext) -> ProcessResult<LinkSys> {
+        let owner = ResourceRef::new(
+            ResourceKind::LinkSys,
+            ls.metadata.namespace.clone(),
+            ls.metadata.name.clone().unwrap_or_default(),
+        );
+
+        // Clear old references first (for update scenario).
+        // Both managers must be cleared so that changing target type (e.g. Service → Uri)
+        // does not leave stale registrations that trigger spurious requeues.
+        ctx.secret_ref_manager().clear_resource_refs(&owner);
+        ctx.runtime().service_ref_mgr.clear_resource_refs(&owner);
+
+        let errors = resolve_for_spec(ctx, &owner, &mut ls.spec.config).await;
+        let generation = ls.metadata.generation;
+        apply_resolved_refs_condition(&mut ls, generation, &errors);
+
+        for err in &errors {
+            if needs_operator_secret_edit(err) {
+                // Invalid Secret content: requeues without Secret edits won't
+                // help. The spec is still pushed to the Gateway via conf_sync
+                // with `auth.secret` / `tls.certs.secret` left as `None`
+                // (partially resolved when only one side failed). Gateway
+                // providers must check `CredentialState::is_buildable` and
+                // refuse to build a client on `Pending` / `Invalid` material;
+                // see `edgion_common::link::credential` for the contract.
+                tracing::warn!(
+                    link_sys = %owner.key(),
+                    ?err,
+                    "Credential resolution failed (invalid Secret data)"
+                );
+            } else {
+                tracing::info!(
+                    link_sys = %owner.key(),
+                    ?err,
+                    "Credential resolution pending, will reprocess when Secret/ReferenceGrant arrives"
+                );
+            }
+        }
+
+        // Continue either way so `update_status` persists `ResolvedRefs` and
+        // the resource stays alive for Secret/Grant wakeups.
+        ProcessResult::Continue(ls)
+    }
+
+    async fn on_delete(&self, ls: &LinkSys, ctx: &HandlerContext) {
+        let owner = ResourceRef::new(
+            ResourceKind::LinkSys,
+            ls.metadata.namespace.clone(),
+            ls.metadata.name.clone().unwrap_or_default(),
+        );
+        ctx.secret_ref_manager().clear_resource_refs(&owner);
+        ctx.runtime().service_ref_mgr.clear_resource_refs(&owner);
+        tracing::debug!(
+            link_sys = %owner.key(),
+            "Cleared SecretRefManager and ServiceRefManager references on LinkSys delete"
+        );
+    }
+
+    fn update_status(&self, ls: &mut LinkSys, _ctx: &HandlerContext, validation_errors: &[String]) {
+        let generation = ls.metadata.generation;
+
+        // `ResolvedRefs` is maintained by `parse` (see `apply_resolved_refs_condition`);
+        // this method only owns the `Accepted` condition (spec-level validation).
+        let status = ls.status.get_or_insert_with(LinkSysStatus::default);
+
+        if validation_errors.is_empty() {
+            update_condition(&mut status.conditions, accepted_condition(generation));
+        } else {
+            update_condition(
+                &mut status.conditions,
+                condition_false(
+                    condition_types::ACCEPTED,
+                    "Invalid",
+                    validation_errors.join("; "),
+                    generation,
+                ),
+            );
+        }
+    }
+}
+
+// ============================================================================
+// Helper functions: resolve Secret per auth variant and inject into spec
+// ============================================================================
+
+async fn drive_standard<A: AuthSpec, T: TlsSpec>(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    auth: Option<&mut A>,
+    tls: Option<&mut T>,
+) -> Vec<ResolvedRefsError> {
+    let mut errs = Vec::new();
+    if let Some(a) = auth {
+        if let Some(e) = a.resolve(ctx, owner).await {
+            errs.push(e);
+        }
+    }
+    if let Some(t) = tls {
+        if let Some(e) = t.resolve(ctx, owner).await {
+            errs.push(e);
+        }
+    }
+    errs
+}
+
+/// Attempt to resolve every Secret reference inside `config` and attach the
+/// resolved Secret onto the corresponding `auth.secret` / `tls.certs.secret`
+/// field. Returns the collected `ResolvedRefsError`s (empty on full success).
+///
+/// **Multi-error collection**: auth and tls are resolved independently —
+/// a failure on one side does not short-circuit the other. This matches the
+/// Gateway-API convention where `ResolvedRefs.message` aggregates all broken
+/// refs and `reason` is picked deterministically via
+/// `pick_resolved_refs_reason`'s priority table. Without this, an operator
+/// who mistypes both Secret names only sees the auth error first, then has
+/// to reconcile again to discover the tls error — and the priority table
+/// effectively never fires because the slice always has one element.
+///
+/// Leaving `secret: None` on the unresolved field is safe: gateway providers
+/// only build a client when `CredentialState::is_buildable` returns true, so
+/// a partially resolved spec never reaches a live client.
+async fn resolve_for_spec(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    config: &mut SystemConfig,
+) -> Vec<ResolvedRefsError> {
+    match config {
+        SystemConfig::Redis(r) => drive_standard(ctx, owner, r.auth.as_mut(), r.tls.as_mut()).await,
+        SystemConfig::Etcd(e) => drive_standard(ctx, owner, e.auth.as_mut(), e.tls.as_mut()).await,
+        SystemConfig::Elasticsearch(es) => drive_standard(ctx, owner, es.auth.as_mut(), es.tls.as_mut()).await,
+        SystemConfig::Webhook(w) => {
+            let errors = drive_standard(ctx, owner, w.auth.as_mut(), w.tls.as_mut()).await;
+
+            if let WebhookTarget::Service {
+                name,
+                namespace,
+                port,
+                kind,
+                endpoints,
+                ..
+            } = &mut w.target
+            {
+                if matches!(
+                    EdgionService::from_kind(kind.as_ref()),
+                    EdgionService::Service | EdgionService::ServiceEndpointSlice
+                ) {
+                    let ns = namespace.as_deref().or(owner.namespace.as_deref()).unwrap_or("default");
+                    let svc_key = format!("{ns}/{name}");
+
+                    ctx.runtime().service_ref_mgr.add_ref(svc_key.clone(), owner.clone());
+
+                    *endpoints = resolve_endpoints(ctx, ns, name, *port);
+
+                    if endpoints.is_empty() {
+                        tracing::debug!(
+                            link_sys = %owner.key(),
+                            service = %svc_key,
+                            "Webhook service endpoints not yet available (EndpointSlice pending)"
+                        );
+                    }
+                }
+            }
+            errors
+        }
+        SystemConfig::Kafka(_) => Vec::new(),
+    }
+}
+
+/// Collect ready pod IP:port strings for a Service from cached EndpointSlice objects.
+fn resolve_endpoints(ctx: &HandlerContext, namespace: &str, svc_name: &str, port: Option<i32>) -> Vec<String> {
+    let Some(proc) = ctx.runtime().processor_registry.get("EndpointSlice") else {
+        return vec![];
+    };
+    proc.list_keys()
+        .into_iter()
+        .filter_map(|key| {
+            let any = proc.get_raw_any(&key)?;
+            any.downcast::<EndpointSlice>().ok()
+        })
+        .filter(|eps| {
+            eps.metadata.namespace.as_deref() == Some(namespace)
+                && eps
+                    .metadata
+                    .labels
+                    .as_ref()
+                    .and_then(|l| l.get("kubernetes.io/service-name"))
+                    .map(|s| s == svc_name)
+                    .unwrap_or(false)
+        })
+        .flat_map(|eps| extract_ready_ips(&eps, port))
+        .collect()
+}
+
+/// Extract `"ip:port"` strings for ready endpoints from a single EndpointSlice.
+fn extract_ready_ips(eps: &EndpointSlice, port: Option<i32>) -> Vec<String> {
+    let target_port = port;
+    let ports = eps.ports.as_deref().unwrap_or(&[]);
+    if target_port.is_none() && ports.len() > 1 {
+        tracing::debug!(
+            eps = eps.metadata.name.as_deref().unwrap_or(""),
+            port_count = ports.len(),
+            "Webhook service target has no port specified; selecting first available EndpointSlice port"
+        );
+    }
+    let ep_port = ports
+        .iter()
+        .find(|p| target_port.is_none() || p.port == target_port)
+        .and_then(|p| p.port);
+    let Some(ep_port) = ep_port else {
+        return vec![];
+    };
+
+    // IPv6 literals must be bracketed in an authority (RFC 3986); the downstream
+    // webhook provider builds `{scheme}://{ep}` and feeds it to reqwest. Mirror the
+    // EndpointSlice discovery path (`discovery_impl.rs`) which branches on address_type.
+    let is_ipv6 = eps.address_type == "IPv6";
+    eps.endpoints
+        .iter()
+        .filter(|ep| ep.conditions.as_ref().and_then(|c| c.ready).unwrap_or(false))
+        .flat_map(|ep| {
+            ep.addresses.iter().map(move |ip| {
+                if is_ipv6 {
+                    format!("[{ip}]:{ep_port}")
+                } else {
+                    format!("{ip}:{ep_port}")
+                }
+            })
+        })
+        .collect()
+}
+
+pub(super) async fn resolve_one<R: SecretMaterialResolver>(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    secret_ref: &SecretObjectReference,
+    resolver: &R,
+) -> Result<Option<Secret>, ResolvedRefsError> {
+    let outcome = resolve_secret(ctx, owner, "edgion.io", "LinkSys", secret_ref, resolver).await;
+    outcome_to_result(outcome).map(Some)
+}
+
+// Unit tests for this module live in `tests/link_sys_test.rs`.
+#[cfg(test)]
+#[path = "tests/link_sys_test.rs"]
+mod tests;

@@ -45,5 +45,5 @@ Re-open this decision only if:
 - F-012 (Round B confirmed Medium, downgraded to ⚠️ accepted tradeoff 2026-05-21).
 - Sibling decision: [basic-auth-username-enumeration.md](basic-auth-username-enumeration.md) (same "no hit-path code fix" reasoning for basic_auth username-existence timing).
 - Cross-feature rules: [../security/iron-rules.md](../security/iron-rules.md) (timing-attack reachability + network-jitter checks).
-- Source: `src/core/gateway/plugins/http/ldap_auth/plugin.rs` (`check_cache` / `cache_key` / `apply_auth_failure_delay` call sites).
+- Source: `edgion-gateway/src/plugins/http/ldap_auth/plugin.rs` (`check_cache` / `cache_key` / `apply_auth_failure_delay` call sites).
 - Doc: `docs/{en,zh-CN}/user-guide/edgion-plugins/ldap-auth.md` Security Recommendations.

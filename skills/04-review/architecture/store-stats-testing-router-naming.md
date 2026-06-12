@@ -8,7 +8,7 @@ description: Use when reviewing Gateway/Controller findings of the form "/api/v1
 ## Conclusion
 
 `/api/v1/debug/store-stats` being registered inside `create_testing_router`
-(`src/core/gateway/api/mod.rs:513`, gated by `is_integration_testing_mode()` at
+(`edgion-gateway/src/api/mod.rs:513`, gated by `is_integration_testing_mode()` at
 `mod.rs:224`) while its URL path uses the `/api/v1/debug/` prefix instead of the
 `/api/v1/testing/` prefix shared by its sibling routes is an **accepted naming
 choice under the same boundary model that closed F-004**, and is not patched in
@@ -45,11 +45,11 @@ Gateway-local choice**
 The same path is used identically across both data-plane and control-plane
 binaries:
 
-- Gateway: `src/core/gateway/api/mod.rs:513` — gated by `is_integration_testing_mode()`
-- Controller: `src/core/controller/api/mod.rs:441` — gated by `is_test_mode()`
+- Gateway: `edgion-gateway/src/api/mod.rs:513` — gated by `is_integration_testing_mode()`
+- Controller: `edgion-controller/src/api/mod.rs:441` — gated by `is_test_mode()`
 
 Auth/authz wiring follows: `edgion-common/src/unified_auth/mod.rs:144` adds the
-path to the auth skip set, and `src/core/controller/api/authz_classifier.rs:62`
+path to the auth skip set, and `edgion-controller/src/api/authz_classifier.rs:62`
 classifies it under `Verb::Debug`. The `Verb::Debug` taxonomy is the canonical
 expression of "this is a diagnostic endpoint regardless of mount condition" —
 again decoupling function from gate.
@@ -68,7 +68,7 @@ would touch ~20+ files: `examples/test/scripts/conf-sync/run_conf_sync_test.sh`
 and `run_conf_sync_advanced_test.sh` (~15 call sites combined),
 `examples/code/validator/cache_residue.rs` (4 occurrences including mock-server
 paths), `edgion-common/src/unified_auth/mod.rs` (auth skip list),
-`src/core/controller/api/authz_classifier.rs` (classifier mapping + its unit
+`edgion-controller/src/api/authz_classifier.rs` (classifier mapping + its unit
 test at `:272`), Gateway `mod.rs:513`, Controller `mod.rs:441` +
 `debug_handlers.rs:51` doc comment, and 4 skill docs that document the path as
 canonical (`skills/05-testing/02-cache-residue-detection.md`,
@@ -140,8 +140,8 @@ Re-open this decision only if:
 - `skills/05-testing/04-conf-sync-leak-testing.md:84` and
   `skills/05-testing/02-cache-residue-detection.md:16-17` — confirm the
   endpoint's testing-mode-only contract from the consumer side.
-- `src/core/gateway/api/mod.rs:513` (Gateway route),
-  `src/core/controller/api/mod.rs:441` (Controller route),
-  `src/core/controller/api/debug_handlers.rs:51` (Controller handler doc),
+- `edgion-gateway/src/api/mod.rs:513` (Gateway route),
+  `edgion-controller/src/api/mod.rs:441` (Controller route),
+  `edgion-controller/src/api/debug_handlers.rs:51` (Controller handler doc),
   `edgion-common/src/unified_auth/mod.rs:144` (auth skip),
-  `src/core/controller/api/authz_classifier.rs:62` (Verb::Debug mapping).
+  `edgion-controller/src/api/authz_classifier.rs:62` (Verb::Debug mapping).

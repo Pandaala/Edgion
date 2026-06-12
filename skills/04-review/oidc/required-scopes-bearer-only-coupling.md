@@ -10,7 +10,7 @@ closed: 2026-05-30
 
 ## Conclusion
 
-`validate_required_scopes` (`src/core/gateway/plugins/http/openid_connect/config_validation.rs:88-91`) returns `Ok(())` immediately when `!self.config.bearer_only`, so `requiredScopes` is enforced **only in bearer-only mode**. This coupling is an intentional, reviewed design decision — not a silent code defect or an exploitable authorization bypass. The real, confirmable problem was a **documentation gap**: the user-guide parameter tables described `requiredScopes` as unconditional with no `bearerOnly=true` prerequisite. That gap is now fixed (en + zh-CN docs carry a note). The guard stays.
+`validate_required_scopes` (`edgion-gateway/src/plugins/http/openid_connect/config_validation.rs:88-91`) returns `Ok(())` immediately when `!self.config.bearer_only`, so `requiredScopes` is enforced **only in bearer-only mode**. This coupling is an intentional, reviewed design decision — not a silent code defect or an exploitable authorization bypass. The real, confirmable problem was a **documentation gap**: the user-guide parameter tables described `requiredScopes` as unconditional with no `bearerOnly=true` prerequisite. That gap is now fixed (en + zh-CN docs carry a note). The guard stays.
 
 Fix suggestions of the form "remove the `bearer_only` guard so scope enforcement applies in all modes", "add a config-validation error/warning when `requiredScopes` is non-empty with `bearerOnly=false`", or re-reports framing this as a "silent authorization bypass" are **not accepted**.
 
@@ -45,6 +45,6 @@ Re-open this decision only if:
 ## Reference Cases
 
 - fr-oidc-01 (closed 2026-05-30, doc-only) — `tasks/bug/fr-oidc-01-required-scopes-bypassed-in-session-mode.md` (Opus verification: ADJUST, downgrade P2 → P3, Doc/UX hardening).
-- Source: `src/core/gateway/plugins/http/openid_connect/config_validation.rs:88-133`
+- Source: `edgion-gateway/src/plugins/http/openid_connect/config_validation.rs:88-133`
 - Internal design lock: `docs/review/openid-connect-review-card.md:23`; unit test `test_validate_required_scopes_only_applies_to_bearer_only_mode`.
 - Docs fixed: `docs/en/user-guide/edgion-plugins/openid-connect.md` + `docs/zh-CN/user-guide/edgion-plugins/openid-connect.md` (`requiredScopes` row + note after the Basic Parameters table).

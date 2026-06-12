@@ -21,7 +21,7 @@ key prefixes and watch which group surfaces.)
 
 ## Implementation
 
-- `src/core/gateway/plugins/http/key_auth/plugin.rs` — the OK-log block in
+- `edgion-gateway/src/plugins/http/key_auth/plugin.rs` — the OK-log block in
   `run_request`. Test fixture format in
   `examples/code/client/suites/edgion_plugins/key_auth/key_auth.rs`.
 

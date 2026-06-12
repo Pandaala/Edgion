@@ -39,7 +39,7 @@ false-advertised feature, not an RFC text violation.
 - `tls/validation/cert.rs` (`validate_cert`) — config-time `tracing::warn!` when
   `revocationCheck.mode != Off` or `ocspStapling.enabled`; adds no error (resource
   stays valid). Regression test `test_unimplemented_revocation_config_is_not_rejected`.
-- `src/core/gateway/tls/**` — no consumer of `revocation_check` / `ocsp_stapling`
+- `edgion-gateway/src/tls/**` — no consumer of `revocation_check` / `ocsp_stapling`
   (the whole `EdgionTlsExtend` block is reserved schema).
 
 ## Why we diverge

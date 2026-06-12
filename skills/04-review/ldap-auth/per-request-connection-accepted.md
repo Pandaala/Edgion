@@ -7,7 +7,7 @@ description: Use when reviewing ldap_auth "no connection pool / per-request TCP 
 
 ## Conclusion
 
-`ldap_auth::ldap_bind` (`src/core/gateway/plugins/http/ldap_auth/plugin.rs`) opens a
+`ldap_auth::ldap_bind` (`edgion-gateway/src/plugins/http/ldap_auth/plugin.rs`) opens a
 fresh `LdapConnAsync::with_settings(...)` connection for every cache-miss
 authentication request and `unbind`s it immediately after the `simple_bind` result
 is read. There is no connection pool, no shared connection, and no in-flight
@@ -132,7 +132,7 @@ Re-open this decision only if:
 - F-B04 (Medium, Performance), accepted ⚠️ tradeoff on 2026-05-27 —
   `tasks/plugins/plugins-http-FB04-ldap-auth-per-request-new-tcp-connection.md`
   (closed).
-- Source: `src/core/gateway/plugins/http/ldap_auth/plugin.rs` (`ldap_bind`,
+- Source: `edgion-gateway/src/plugins/http/ldap_auth/plugin.rs` (`ldap_bind`,
   `check_cache`, `store_cache`).
 - Sibling decisions:
   [discriminated-error-log-tags.md](discriminated-error-log-tags.md) (other

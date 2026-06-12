@@ -10,7 +10,7 @@ closed: 2026-05-30
 
 ## Conclusion
 
-`resolve_rate_limit_key` (`src/core/gateway/plugins/http/common/mod.rs`) used to push
+`resolve_rate_limit_key` (`edgion-gateway/src/plugins/http/common/mod.rs`) used to push
 the identical `"key miss:allow"` PluginLog tag for two semantically opposite key-miss
 outcomes: the `default_key` fallback (request **is** rate-limited under the shared
 default-key bucket — `RateLimitKey::Resolved`) and `OnMissingKey::Allow` (request
@@ -70,6 +70,6 @@ Re-open this decision only if:
 ## Reference Cases
 
 - m8-01 (2026-05-30) — `tasks/bug/m8-01-rate-limit-default-key-misleading-log-tag.md`
-- Source: `src/core/gateway/plugins/http/common/mod.rs` (`resolve_rate_limit_key`)
+- Source: `edgion-gateway/src/plugins/http/common/mod.rs` (`resolve_rate_limit_key`)
 - Related: `skills/04-review/rate-limit/key-extraction-shared-helper.md` (plugins-http-F003)
 - Wording rule: `skills/03-coding/observability/00-access-log.md` §"PluginLog entry wording rules"

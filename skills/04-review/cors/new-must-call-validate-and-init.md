@@ -7,11 +7,11 @@ description: Use when reviewing findings that the CORS plugin constructor clones
 
 ## Conclusion
 
-`Cors::new` (`src/core/gateway/plugins/http/cors/plugin.rs`) now clones the config and calls
+`Cors::new` (`edgion-gateway/src/plugins/http/cors/plugin.rs`) now clones the config and calls
 `config.validate_and_init()` before wrapping it in the `Arc`, so `origins_cache`,
 `compiled_origins_regex`, and `compiled_timing_regex` are populated on the live request-filter
 path. The runtime's cached preflight Arc (`PluginRuntime::add_from_request_filters`,
-`src/core/gateway/plugins/runtime/plugin_runtime.rs`) likewise runs `validate_and_init()` on the
+`edgion-gateway/src/plugins/runtime/plugin_runtime.rs`) likewise runs `validate_and_init()` on the
 `CorsConfig` before caching it, so the global preflight handler's `Cors::from_arc` path is
 initialized too. Fixed by `fr-types-02` (2026-05-29).
 
@@ -88,6 +88,6 @@ Re-open only if:
   (HTTP `IpRestriction::create`, fr-types-01 — same `#[serde(skip)]` + constructor-skips-init class).
 - Related CORS credential guard: [`regex-origins-with-credentials-rejected.md`](./regex-origins-with-credentials-rejected.md)
   (fr-auth2-01 — why `allow_origins_by_regex` + credentials is rejected at preparse).
-- Source: `src/core/gateway/plugins/http/cors/plugin.rs` (`Cors::new`),
-  `src/core/gateway/plugins/runtime/plugin_runtime.rs` (`add_from_request_filters` CORS cache),
+- Source: `edgion-gateway/src/plugins/http/cors/plugin.rs` (`Cors::new`),
+  `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` (`add_from_request_filters` CORS cache),
   `edgion-resources/src/resources/edgion_plugins/plugin_configs/cors.rs` (`validate_and_init`, `is_origin_allowed`).

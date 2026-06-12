@@ -11,7 +11,7 @@ description: Use when reviewing `gateway/conf_sync/cache_client/event_dispatch.r
 ## Conclusion
 
 `ClientCache::start_watch`
-(`src/core/gateway/conf_sync/cache_client/event_dispatch.rs:129-388`) keeps its current
+(`edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:129-388`) keeps its current
 256-line, 4-level-nested shape (outer `loop` → `'watch_block:` → stream `loop` →
 `for event in events`) for now. The `list_and_reset` phase has already been extracted into
 its own `async fn` at lines 69-126; the remaining two structural phases — the watch setup +
@@ -148,11 +148,11 @@ Re-open this decision only if:
 - [`relist-backoff-on-server-switch-intentional.md`](relist-backoff-on-server-switch-intentional.md)
   — sibling conf-sync accepted-tradeoff on the same `start_watch` body; documents the
   precedent of keeping intentional structural shapes in this loop.
-- `src/core/gateway/conf_sync/cache_client/event_dispatch.rs:69-126` — the already-extracted
+- `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:69-126` — the already-extracted
   `list_and_reset`, sets the "extract when the contract is stable" precedent.
-- `src/core/gateway/conf_sync/cache_client/event_dispatch.rs:129-388` — the current
+- `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:129-388` — the current
   `start_watch` body; lines 234-380 are the `'watch_block` extraction candidate, lines
   311-362 are the `process_watch_event` extraction candidate.
-- `src/core/gateway/conf_sync/cache_client/event_dispatch.rs:392-401` — the test module's
+- `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:392-401` — the test module's
   `//!` header explaining the deferred integration-test coverage that gates standalone
   unit-test motivation for the extraction.

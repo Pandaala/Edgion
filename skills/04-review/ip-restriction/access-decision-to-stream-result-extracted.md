@@ -42,4 +42,4 @@ Re-open only if:
 
 - Source: 2026-05-26 stream-plugin review (plugins-stream-F001).
 - Distinct from `ip-restriction/deny-allow-default-algorithm-extracted-to-evaluate-ip-access.md` (plugins-stream-F012, the *pre-decision* algorithm) — F001 is the *downstream* `AccessDecision → StreamPluginResult` mapping; the boundary between the two is intentional, do not file a "consolidate into one mega-function" follow-up.
-- Single mapper: `src/core/gateway/plugins/stream/stream_plugin_trait.rs`.
+- Single mapper: `edgion-gateway/src/plugins/stream/stream_plugin_trait.rs`.

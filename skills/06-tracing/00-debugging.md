@@ -352,9 +352,9 @@ For those, jump to:
 
 ## Code entry-point quick reference
 
-- Controller Admin API: `src/core/controller/api/`
-- Gateway Admin API: `src/core/gateway/api/mod.rs`
+- Controller Admin API: `edgion-controller/src/api/`
+- Gateway Admin API: `edgion-gateway/src/api/mod.rs`
 - `edgion-cli`: `edgion-cli/src/cli/`
-- Gateway startup entry: `src/core/gateway/cli/mod.rs`
-- Controller startup entry: `src/core/controller/cli/mod.rs`
+- Gateway startup entry: `edgion-gateway/src/cli/mod.rs`
+- Controller startup entry: `edgion-controller/src/cli/mod.rs`
 - Resource sync verification tool: `examples/code/validator/resource_diff.rs`

@@ -9,11 +9,11 @@ Use this for tasks such as:
 ## Read these real entry points first
 
 - [../../../edgion-resources/src/resources/link_sys/mod.rs](../../../edgion-resources/src/resources/link_sys/mod.rs)
-- [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs)
-- [../../../src/core/gateway/conf_sync/conf_client/config_client.rs](../../../src/core/gateway/conf_sync/conf_client/config_client.rs)
-- [../../../src/core/gateway/link_sys/runtime/conf_handler.rs](../../../src/core/gateway/link_sys/runtime/conf_handler.rs)
-- [../../../src/core/gateway/link_sys/runtime/store.rs](../../../src/core/gateway/link_sys/runtime/store.rs)
-- [../../../src/core/gateway/link_sys/providers/webhook/mod.rs](../../../src/core/gateway/link_sys/providers/webhook/mod.rs)
+- [../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs](../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs)
+- [../../../edgion-gateway/src/conf_sync/conf_client/config_client.rs](../../../edgion-gateway/src/conf_sync/conf_client/config_client.rs)
+- [../../../edgion-gateway/src/link_sys/runtime/conf_handler.rs](../../../edgion-gateway/src/link_sys/runtime/conf_handler.rs)
+- [../../../edgion-gateway/src/link_sys/runtime/store.rs](../../../edgion-gateway/src/link_sys/runtime/store.rs)
+- [../../../edgion-gateway/src/link_sys/providers/webhook/mod.rs](../../../edgion-gateway/src/link_sys/providers/webhook/mod.rs)
 
 ## First, identify which kind of change you are making
 
@@ -27,7 +27,7 @@ LinkSys is no longer "one resource kind per external system" — it is a single 
 
 Another easy point of confusion:
 
-- The `local_file` provider lives at `src/core/gateway/link_sys/providers/local_file/`.
+- The `local_file` provider lives at `edgion-gateway/src/link_sys/providers/local_file/`.
 - It is not a `LinkSys` `SystemConfig` variant — it is a local `DataSender` for log persistence.
 
 So first decide:
@@ -68,9 +68,9 @@ These three follow the pattern "CRD config -> runtime client -> typed store / op
 The directory typically looks like:
 
 - `edgion-resources/src/resources/link_sys/<system>.rs`
-- `src/core/gateway/link_sys/providers/<system>/client.rs`
-- `src/core/gateway/link_sys/providers/<system>/config_mapping.rs`
-- `src/core/gateway/link_sys/providers/<system>/ops.rs`
+- `edgion-gateway/src/link_sys/providers/<system>/client.rs`
+- `edgion-gateway/src/link_sys/providers/<system>/config_mapping.rs`
+- `edgion-gateway/src/link_sys/providers/<system>/ops.rs`
 
 Where:
 
@@ -155,8 +155,8 @@ The bridging for LinkSys is now fixed:
 
 So if you are changing gateway-side runtime behavior, focus on:
 
-- [conf_handler.rs](../../../src/core/gateway/link_sys/runtime/conf_handler.rs)
-- [store.rs](../../../src/core/gateway/link_sys/runtime/store.rs)
+- [conf_handler.rs](../../../edgion-gateway/src/link_sys/runtime/conf_handler.rs)
+- [store.rs](../../../edgion-gateway/src/link_sys/runtime/store.rs)
 
 Don't build a parallel watcher of your own.
 
@@ -167,9 +167,9 @@ If you are adding a new system variant within the existing `LinkSys` resource, y
 1. `edgion-resources/src/resources/link_sys/<system>.rs`
 2. `edgion-resources/src/resources/link_sys/mod.rs`
 3. `config/crd/edgion-crd/link_sys_crd.yaml`
-4. `src/core/gateway/link_sys/providers/<system>/`
-5. `src/core/gateway/link_sys/runtime/store.rs`
-6. If needed, `src/core/gateway/api/mod.rs`
+4. `edgion-gateway/src/link_sys/providers/<system>/`
+5. `edgion-gateway/src/link_sys/runtime/store.rs`
+6. If needed, `edgion-gateway/src/api/mod.rs`
 7. `examples/test/conf/LinkSys/<System>/`
 8. `examples/test/conf/Services/<system>/docker-compose.yaml`
 9. `examples/test/scripts/integration/link_sys/run_<system>_test.sh`
@@ -214,7 +214,7 @@ If the system supports hot reload, prefer the existing pattern of "swap in the n
 
 If integration tests need to validate client behavior directly, add a testing-router endpoint in:
 
-- `src/core/gateway/api/mod.rs`
+- `edgion-gateway/src/api/mod.rs`
 
 The repo currently has these testing endpoints:
 

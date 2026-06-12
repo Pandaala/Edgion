@@ -11,7 +11,7 @@ description: Use when reviewing WeightedRoundRobin::new / with_equal_weights fin
 ## Conclusion
 
 `WeightedRoundRobin::new` and `with_equal_weights`
-(`src/core/gateway/lb/backend_selector/weighted_selector.rs`) previously enforced four
+(`edgion-gateway/src/lb/backend_selector/weighted_selector.rs`) previously enforced four
 construction invariants with unconditional `assert!` (real `assert!`, **not** compiled out in
 release): non-empty items, `items.len() == weights.len()`, `items.len() <= u16::MAX`, and
 `total_weight > 0`. They now return `Result<Self, WrrError>` where `WrrError` is a four-variant
@@ -64,7 +64,7 @@ arms changed from `panic!` to `Err`.
 ## Reference Cases
 
 - lb-FB01 (review finding, promoted to task then fixed 2026-05-25)
-- `src/core/gateway/lb/backend_selector/weighted_selector.rs` — `WrrError`, `new`, `with_equal_weights`
-- `src/core/gateway/lb/backend_selector/selector.rs` — `ERR_WRR_BUILD_FAILED`, `create_state`
-- `src/core/gateway/link_sys/providers/webhook/manager.rs` — `Pending` fallback
+- `edgion-gateway/src/lb/backend_selector/weighted_selector.rs` — `WrrError`, `new`, `with_equal_weights`
+- `edgion-gateway/src/lb/backend_selector/selector.rs` — `ERR_WRR_BUILD_FAILED`, `create_state`
+- `edgion-gateway/src/link_sys/providers/webhook/manager.rs` — `Pending` fallback
 - Sibling LB hardening: `weighted_selector.rs::normalize_weights` (lb-F005 weight-cap, orthogonal OOM guard)

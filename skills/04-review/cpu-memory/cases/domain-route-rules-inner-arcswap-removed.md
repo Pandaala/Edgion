@@ -9,7 +9,7 @@ description: Use when reviewing findings that `DomainRouteRules` (or any similar
 
 ## Conclusion
 
-`DomainRouteRules` (`src/core/gateway/routes/http/routes_mgr.rs`) used to wrap
+`DomainRouteRules` (`edgion-gateway/src/routes/http/routes_mgr.rs`) used to wrap
 its three routing components in individual `ArcSwap` / `ArcSwapOption` fields:
 
 ```rust
@@ -71,8 +71,8 @@ For any struct whose fields are wrapped in `ArcSwap*` consider:
 
 - F-003 (`tasks/routes/routes-http-F003-domain-route-rules-inner-arcswap-waste.md`),
   closed 2026-05-28.
-- Source: `src/core/gateway/routes/http/routes_mgr.rs` (field declarations,
-  `match_route`, `stats`), `src/core/gateway/routes/http/conf_handler_impl.rs`
+- Source: `edgion-gateway/src/routes/http/routes_mgr.rs` (field declarations,
+  `match_route`, `stats`), `edgion-gateway/src/routes/http/conf_handler_impl.rs`
   (`build_domain_route_rules_from_routes` construction).
 - Outer swap point preserved: `HttpPortRouteManager.route_table:
   ArcSwap<DomainRouteRules>` — the single atomic snapshot exchange used by

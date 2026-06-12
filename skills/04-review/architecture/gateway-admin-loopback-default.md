@@ -9,7 +9,7 @@ description: Use when reviewing Gateway admin API network-exposure findings; cov
 
 ## Conclusion
 
-`DEFAULT_GATEWAY_ADMIN_LISTEN` (`src/core/gateway/cli/config.rs`) was `0.0.0.0:5810` (later updated to
+`DEFAULT_GATEWAY_ADMIN_LISTEN` (`edgion-gateway/src/cli/config.rs`) was `0.0.0.0:5810` (later updated to
 `127.0.0.1:5810`; now `127.0.0.1:12001` after port unification), so a Gateway started without an explicit
 `admin_listen` exposed its admin API to every network interface — and the admin router still mounts
 secret-bearing introspection endpoints. The default is now `127.0.0.1:12001` (loopback), matching

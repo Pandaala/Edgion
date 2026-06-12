@@ -11,9 +11,9 @@ TCPRoute defines L4 TCP-layer routing rules, forwarding TCP connections to backe
 
 ## Source code locations
 
-- Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/tcp_route.rs`
-- Gateway ConfHandler: `src/core/gateway/routes/tcp/conf_handler_impl.rs`
-- Route manager: `src/core/gateway/routes/tcp/routes_mgr.rs`
+- Controller Handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/tcp_route.rs`
+- Gateway ConfHandler: `edgion-gateway/src/routes/tcp/conf_handler_impl.rs`
+- Route manager: `edgion-gateway/src/routes/tcp/routes_mgr.rs`
 - Type definitions: `edgion-resources/src/resources/tcp_route.rs`
 
 ## Controller-side processing

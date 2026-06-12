@@ -9,8 +9,8 @@ description: Entry points of the four binaries, full CLI argument reference, wor
 
 | Binary | Purpose | Default Ports | Entry |
 |--------|---------|---------------|-------|
-| `edgion-controller` | Control plane: resource ingestion/validation/processing/distribution | gRPC `:12151`, Admin `:12101`, Probe `:12100`, Metrics `:12190` | `src/bin/edgion_controller.rs` |
-| `edgion-gateway` | Data plane: high-performance proxy (based on Pingora) | Admin `:12001` (loopback, configurable), Probe `:12000` (outward, liveness+readiness), Metrics `:12090` (outward) | `src/bin/edgion_gateway.rs` |
+| `edgion-controller` | Control plane: resource ingestion/validation/processing/distribution | gRPC `:12151`, Admin `:12101`, Probe `:12100`, Metrics `:12190` | `edgion-controller/src/bin/edgion_controller.rs` |
+| `edgion-gateway` | Data plane: high-performance proxy (based on Pingora) | Admin `:12001` (loopback, configurable), Probe `:12000` (outward, liveness+readiness), Metrics `:12090` (outward) | `edgion-gateway/src/bin/edgion_gateway.rs` |
 | `edgion-cli` | CLI tool: resource CRUD and operations | — | `edgion-cli/src/bin/edgion_ctl.rs` |
 
 > The federation center (`edgion-center`) has been extracted to the separate EdgionCenter repository and is no longer built from this monorepo.

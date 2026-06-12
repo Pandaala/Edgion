@@ -31,7 +31,7 @@ username-enumeration oracle, downgrade/redact it for that security reason" are
 
 **1. LDAP rc 49 is uniform across nonexistent-user and wrong-password.**
 
-`ldap_bind` (`src/core/gateway/plugins/http/ldap_auth/plugin.rs`) calls
+`ldap_bind` (`edgion-gateway/src/plugins/http/ldap_auth/plugin.rs`) calls
 `simple_bind(bind_dn, password)` and maps `rc == 49` →
 `LdapAuthError::InvalidCredentials`. There is no preceding LDAP *search* to
 test existence; a bind against a DN that does not exist returns 49 exactly as
@@ -83,6 +83,6 @@ Re-open only if:
 ## Reference Cases
 
 - F-006 (2026-05-26) — `tasks/plugins/plugins-http-F006-ldap-auth-discriminated-error-log-tags.md`
-- Source: `src/core/gateway/plugins/http/ldap_auth/plugin.rs` (`ldap_bind` rc-49 mapping; InvalidCredentials log arm).
+- Source: `edgion-gateway/src/plugins/http/ldap_auth/plugin.rs` (`ldap_bind` rc-49 mapping; InvalidCredentials log arm).
 - Convention family: `skills/04-review/basic-auth/group-in-ok-log.md` (uniform `Deny bad credential`; rejects unknown-user/wrong-password split), and the matching `key-auth` / `hmac-auth` / `jwt-auth` `group-in-ok-log.md`.
 - Sibling ldap decision: `skills/04-review/auth-timing/ldap-auth-cache-timing-oracle.md`.

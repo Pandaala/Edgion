@@ -10,8 +10,8 @@ description: Full schema for the edgion-gateway YAML configuration.
 ## Files to Reference
 
 - Sample configuration: `config/edgion-gateway.yaml`
-- Configuration structure: `src/core/gateway/cli/config.rs`
-- Startup logic: `src/core/gateway/cli/mod.rs`
+- Configuration structure: `edgion-gateway/src/cli/config.rs`
+- Startup logic: `edgion-gateway/src/cli/mod.rs`
 - work_dir: `edgion-resources/src/work_dir.rs`
 - Common log structures: `edgion-resources/src/observe.rs`, `edgion-resources/src/output.rs`
 

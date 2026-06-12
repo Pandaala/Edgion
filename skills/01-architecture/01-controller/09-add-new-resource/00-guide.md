@@ -90,10 +90,10 @@ Notes:
 
 Usually update:
 
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs`
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`
-- `src/core/controller/conf_mgr/conf_center/file_system/controller.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`
+- `edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs`
 
 What the handler usually owns:
 
@@ -118,7 +118,7 @@ Important rules:
 
 If the resource must be available on Gateway, update:
 
-- `src/core/gateway/conf_sync/conf_client/config_client.rs`
+- `edgion-gateway/src/conf_sync/conf_client/config_client.rs`
 
 Usually that means:
 
@@ -136,10 +136,10 @@ If the resource is controller-only, do not add Gateway cache wiring.
 
 If Gateway must turn the synced resource into runtime state, add or update a handler under the relevant subsystem, for example:
 
-- `src/core/gateway/routes/*/conf_handler_impl.rs`
-- `src/core/gateway/tls/store/conf_handler.rs`
-- `src/core/gateway/link_sys/runtime/conf_handler.rs`
-- `src/core/gateway/services/acme/conf_handler_impl.rs`
+- `edgion-gateway/src/routes/*/conf_handler_impl.rs`
+- `edgion-gateway/src/tls/store/conf_handler.rs`
+- `edgion-gateway/src/link_sys/runtime/conf_handler.rs`
+- `edgion-gateway/src/services/acme/conf_handler_impl.rs`
 
 If the resource is only stored and queried but has no runtime side effects, a dedicated `ConfHandler` may be unnecessary.
 
@@ -147,18 +147,18 @@ If the resource is only stored and queried but has no runtime side effects, a de
 
 Controller Admin API is explicit, not automatic. If the new resource should support create/update via controller admin endpoints, update:
 
-- namespaced resources: `src/core/controller/api/namespaced_handlers.rs`
-- cluster-scoped resources: `src/core/controller/api/cluster_handlers.rs`
+- namespaced resources: `edgion-controller/src/api/namespaced_handlers.rs`
+- cluster-scoped resources: `edgion-controller/src/api/cluster_handlers.rs`
 
 Gateway Admin API read endpoints are also explicit. If the new resource should be listed or fetched from Gateway admin endpoints, update:
 
-- `src/core/gateway/api/mod.rs`
+- `edgion-gateway/src/api/mod.rs`
 
 ### 7. Wire K8s Dynamic Storage If Needed
 
 If the resource should support CRUD in Kubernetes mode through the controller's dynamic writer, update:
 
-- `src/core/controller/conf_mgr/conf_center/kubernetes/storage.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/storage.rs`
 
 This is especially important for custom Edgion CRDs and any new kind that the controller admin API should be able to create or update in K8s mode.
 

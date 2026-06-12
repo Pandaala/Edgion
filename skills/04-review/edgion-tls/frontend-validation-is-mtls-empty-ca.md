@@ -10,7 +10,7 @@ description: configure_gateway_frontend_mtls now returns a bool and the caller s
 
 ## Conclusion
 
-`apply_gateway_tls_cert` (`src/core/gateway/tls/runtime/gateway/tls_pingora.rs`) no longer
+`apply_gateway_tls_cert` (`edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs`) no longer
 stamps `ssl_ctx.meta.is_mtls = true` unconditionally on an `Ok` return from
 `configure_gateway_frontend_mtls`. The callee now returns `Result<bool, _>`: `Ok(false)` on
 the empty/None-CA-refs early return (no verify mode installed, no client cert requested) and

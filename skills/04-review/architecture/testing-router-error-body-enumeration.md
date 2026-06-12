@@ -9,9 +9,9 @@ description: Use when reviewing Gateway integration-testing API findings of the 
 
 The `Available: {:?}` client-name enumeration in
 `get_redis_client_by_name` / `get_etcd_client_by_name` / `get_es_client_by_name`
-not-found error bodies (`src/core/gateway/api/mod.rs:679-687`, `:972-980`, `:1246-1254`),
+not-found error bodies (`edgion-gateway/src/api/mod.rs:679-687`, `:972-980`, `:1246-1254`),
 and the absence of any authentication middleware on `create_testing_router`
-(`src/core/gateway/api/mod.rs:531-666`), are **accepted under the integration-testing-mode
+(`edgion-gateway/src/api/mod.rs:531-666`), are **accepted under the integration-testing-mode
 boundary model** and not patched in isolation.
 
 Fix suggestions of the form "strip `Available: {:?}` from the three helper error bodies
@@ -115,7 +115,7 @@ Re-open this decision only if:
 - `tasks/infra/infra-cluster-F001-api-no-auth-on-admin-endpoints.md` (open, High) —
   the broader Gateway admin-API auth/bind issue that subsumes the testing-router auth
   gap.
-- `src/core/gateway/api/mod.rs` — `create_admin_router` (`:212-229`),
+- `edgion-gateway/src/api/mod.rs` — `create_admin_router` (`:212-229`),
   `create_testing_router` (`:531-666`), `get_redis_client_by_name` (`:672-687`),
   `get_etcd_client_by_name` (`:965-980`), `get_es_client_by_name` (`:1239-1254`),
   `redis_list_clients` / `etcd_list_clients` / `es_list_clients` route entries

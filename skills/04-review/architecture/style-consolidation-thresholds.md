@@ -60,9 +60,9 @@ not, by itself, a finding.
   - `edgion-common/src/link/credential.rs`
   - `edgion-resources/src/resources/common/tls.rs`
   - `edgion-resources/src/credentials/materials.rs`
-  - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs`
-  - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs`
-  - `src/core/controller/conf_mgr/conf_center/etcd/config.rs`
+  - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs`
+  - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs`
+  - `edgion-controller/src/conf_mgr/conf_center/etcd/config.rs`
 - `edgion-common/src/fed_sync/mod.rs` adds a module-level comment explaining that it contains only proto types; runtime logic lives in `controller::fed_sync` / `center::fed_sync` respectively.
 
 If the strings `fix-change` or orphan codes like `I4/M6/C1` are spotted again in the future — those are newly introduced; treat as dead links; no need to scan the 6 already-cleaned files again.

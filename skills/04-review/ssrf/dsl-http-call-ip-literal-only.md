@@ -7,7 +7,7 @@ description: Use when reviewing DSL `http.call` `httpBlockPrivateIps` / `is_ssrf
 
 ## Conclusion
 
-`is_ssrf_blocked_ip_literal` (`src/core/gateway/plugins/http/dsl/lang/builtins.rs`) intentionally inspects the **URL host string** only and returns `false` for any host that is not an IP literal (`host.parse::<IpAddr>()` → `Err` → not blocked). When `httpBlockPrivateIps: true` is set, a DSL script can still reach a private / loopback / metadata address by using a **DNS name** that resolves to it (e.g. `kubernetes.default.svc.cluster.local`). This is an **accepted tradeoff** (F-018, 2026-05-26), already documented in `skills/01-architecture/02-gateway/dsl-engine-security-model.md` §7.
+`is_ssrf_blocked_ip_literal` (`edgion-gateway/src/plugins/http/dsl/lang/builtins.rs`) intentionally inspects the **URL host string** only and returns `false` for any host that is not an IP literal (`host.parse::<IpAddr>()` → `Err` → not blocked). When `httpBlockPrivateIps: true` is set, a DSL script can still reach a private / loopback / metadata address by using a **DNS name** that resolves to it (e.g. `kubernetes.default.svc.cluster.local`). This is an **accepted tradeoff** (F-018, 2026-05-26), already documented in `skills/01-architecture/02-gateway/dsl-engine-security-model.md` §7.
 
 Fix suggestions of the form "add a blocking `tokio::net::lookup_host` and apply `is_ssrf_blocked_ip_literal` to each resolved address before sending" are **not accepted** as written — see rationale.
 

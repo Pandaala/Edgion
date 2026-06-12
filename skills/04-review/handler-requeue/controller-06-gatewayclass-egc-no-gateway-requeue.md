@@ -16,7 +16,7 @@ description: Use when reviewing findings that EdgionGatewayConfig / GatewayClass
 ## Conclusion
 
 `EdgionGatewayConfigHandler` and `GatewayClassHandler`
-(`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/{edgion_gateway_config.rs, gateway_class.rs}`)
+(`edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/{edgion_gateway_config.rs, gateway_class.rs}`)
 intentionally have no `on_change` / `on_delete`, so a change to either resource does **not** requeue
 the Gateways that reference them. This is correct as-is. The finding's factual premise (no requeue)
 is true, but its causal claims (stale Gateway status / stale cached view / stale federation count)
@@ -34,9 +34,9 @@ analogous to `SecretRefManager`" are **not accepted**.
 
 `EdgionGatewayConfig` and `GatewayClass` are each independently synced resource kinds with their own
 gateway-side stores (`EDGION_GATEWAY_CONFIG_STORE` + `ConfHandler` in
-`src/core/gateway/config/edgion_gateway/conf_handler_impl.rs`; the GatewayClass store likewise). The
+`edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs`; the GatewayClass store likewise). The
 data plane reads them at listener-build time via `config_client.get_gateway_class()` /
-`get_edgion_gateway_config()` (`src/core/gateway/runtime/server/base.rs:110-129`). When either resource
+`get_edgion_gateway_config()` (`edgion-gateway/src/runtime/server/base.rs:110-129`). When either resource
 changes, the gateway receives the gRPC event and rebuilds its listener config (timeout / retry /
 connection settings) from the new values. No controller-side Gateway requeue is needed for the config
 to take effect.
@@ -87,6 +87,6 @@ Re-open this decision only if:
 - `tasks/review-envoy/controller-06-egc-gc-no-downstream-requeue.md` (closed 2026-05-29, ⚠️ accepted tradeoff).
 - Requeue inventory: `skills/01-architecture/01-controller/06-requeue-mechanism.md` (GatewayClass /
   EdgionGatewayConfig rows: "referenced by Gateway; no requeue").
-- Data-plane consumption: `src/core/gateway/runtime/server/base.rs:110-129`.
+- Data-plane consumption: `edgion-gateway/src/runtime/server/base.rs:110-129`.
 - Contrast with the genuine cascading-requeue case: `handler-requeue-rule.md` (handlers that call
   `lookup_gateway()` / `get_secret()` in `parse()` MUST register and requeue — these two do not).

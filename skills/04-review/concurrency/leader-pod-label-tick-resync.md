@@ -77,7 +77,7 @@ Re-open this decision only if:
 ## Reference Cases
 
 - Original task: `tasks/todo/leader-election-pod-label-set-failure.md` (closed 2026-06-10)
-- `src/core/controller/conf_mgr/conf_center/kubernetes/leader_election.rs` —
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/leader_election.rs` —
   `label_synced` in `run()`, `update_pod_leader_label` returning `bool`
 - `skills/01-architecture/01-controller/03-config-center/02-kubernetes/01-ha-mode.md` —
   leader-only mode, leader Service routing

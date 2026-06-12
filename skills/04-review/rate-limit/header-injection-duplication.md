@@ -99,7 +99,7 @@ Re-open this decision only if:
   `Duration::ZERO` omit + sub-second ceil guard, eliminating the RFC 7231 §7.1.3
   divergence on `OnMissingKey::Deny`.
 - link-sys-F008 — same redundancy class, "collapse divergent arms" declined.
-- Source: `src/core/gateway/plugins/http/rate_limit/plugin.rs:104-202`,
-  `src/core/gateway/plugins/http/rate_limit_redis/plugin.rs:372-467`.
+- Source: `edgion-gateway/src/plugins/http/rate_limit/plugin.rs:104-202`,
+  `edgion-gateway/src/plugins/http/rate_limit_redis/plugin.rs:372-467`.
 </content>
 </invoke>

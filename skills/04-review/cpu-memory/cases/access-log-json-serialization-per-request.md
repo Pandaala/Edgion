@@ -7,7 +7,7 @@ description: Use when reviewing findings that flag AccessLogEntry::to_json() per
 
 # Access Log JSON Serialization Allocating a New String per Request is Not an Issue
 
-**False-positive scenario**: `src/core/gateway/observe/access_log/entry.rs:103-110` `AccessLogEntry::to_json()` runs `serde_json::to_string(self)` on the request task context; allocates a new owned `String` per request; flagged as "hot-path per-request alloc; should use a buffer pool / defer to consumer thread / switch to `Bytes`/`Arc<str>`".
+**False-positive scenario**: `edgion-gateway/src/observe/access_log/entry.rs:103-110` `AccessLogEntry::to_json()` runs `serde_json::to_string(self)` on the request task context; allocates a new owned `String` per request; flagged as "hot-path per-request alloc; should use a buffer pool / defer to consumer thread / switch to `Bytes`/`Arc<str>`".
 
 **Reality**:
 

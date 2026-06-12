@@ -25,10 +25,10 @@ Important note:
 
 ## 2. Controller Processing
 
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/gateway_class.rs`
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_gateway_config.rs`
-- `src/core/controller/conf_mgr/conf_center/file_system/controller.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway_class.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_gateway_config.rs`
+- `edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs`
 
 What this pattern shows:
 
@@ -38,8 +38,8 @@ What this pattern shows:
 
 ## 3. Cluster-Scoped CRUD And K8s Writer
 
-- `src/core/controller/api/cluster_handlers.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/storage.rs`
+- `edgion-controller/src/api/cluster_handlers.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/storage.rs`
 
 Why it matters:
 
@@ -50,12 +50,12 @@ If you only wire namespaced CRUD paths, operators will not be able to manage the
 
 ## 4. Gateway Sync And Base-Conf Runtime Use
 
-- `src/core/gateway/conf_sync/conf_client/config_client.rs`
-- `src/core/gateway/conf_sync/conf_client/grpc_client.rs`
-- `src/core/gateway/config/gateway_class/conf_handler_impl.rs`
-- `src/core/gateway/config/edgion_gateway/conf_handler_impl.rs`
-- `src/core/gateway/runtime/server/base.rs`
-- `src/core/gateway/api/mod.rs`
+- `edgion-gateway/src/conf_sync/conf_client/config_client.rs`
+- `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs`
+- `edgion-gateway/src/config/gateway_class/conf_handler_impl.rs`
+- `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs`
+- `edgion-gateway/src/runtime/server/base.rs`
+- `edgion-gateway/src/api/mod.rs`
 
 What this pattern shows:
 

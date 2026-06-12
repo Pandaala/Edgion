@@ -7,7 +7,7 @@ description: Use when reviewing lint_rbac_policy / RBAC dangerous-grant findings
 
 ## Conclusion
 
-`lint_rbac_policy` (`src/core/controller/authz/lint.rs`) now treats `watch` as a
+`lint_rbac_policy` (`edgion-controller/src/authz/lint.rs`) now treats `watch` as a
 read verb for the advisory dangerous-grant WARNs. A `watch Secret` or `watch *`
 grant trips the same warning as `get`/`list`/`list-keys`. Re-reports of the form
 "`has_read_verb` omits `watch`, so a `watch Secret` / `watch *` policy passes
@@ -63,6 +63,6 @@ Re-open this decision only if:
 ## Reference Cases
 
 - m1-01 (2026-05-29) — original finding; P3 missing advisory warning.
-- `src/core/controller/authz/lint.rs` — `lint_rbac_policy`, dangerous-grant block
+- `edgion-controller/src/authz/lint.rs` — `lint_rbac_policy`, dangerous-grant block
   + `watch_secret_emits_dangerous_grant_warn` / `watch_wildcard_emits_dangerous_grant_warn` regression tests.
 - `docs/en/ops-guide/federation-rbac.md` — "Wildcard read exposes credential material" security note.

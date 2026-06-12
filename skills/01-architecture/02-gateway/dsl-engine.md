@@ -40,7 +40,7 @@ Each stage rejects oversized or malformed input independently. Pre-compiled byte
 
 | Stage / role | File |
 |---|---|
-| Parser (nom combinators, parse budget 50_000, source ≤64 KB) | `src/core/gateway/plugins/http/dsl/lang/parser/` |
+| Parser (nom combinators, parse budget 50_000, source ≤64 KB) | `edgion-gateway/src/plugins/http/dsl/lang/parser/` |
 | AST node types | `lang/ast.rs` |
 | Compiler (type check, regex pre-compile, constant pool, max regex pattern length 1024 B) | `lang/compiler/` |
 | Compile-time entry that ties parser + compiler together | `lang/validator.rs` — `compile_dsl_source()` |
@@ -96,7 +96,7 @@ This pairs with the runtime limits in `VmLimits` (step / loop / call / stack / s
 `DslRuntime` is **constructed per-plugin-instance at config-resolve time**, not per-request and not lazily — see `plugin.rs::resolve_parts`. It is `Send + Sync` and stored by value in `DslPlugin` (`self.runtime: DslRuntime`), so the hot path is a simple `&self.runtime` borrow.
 
 ```rust
-// src/core/gateway/plugins/http/dsl/runtime.rs
+// edgion-gateway/src/plugins/http/dsl/runtime.rs
 pub struct DslRuntime {
     pub max_timeout_ms: u64,            // http.call wall-clock cap
     pub max_response_body_bytes: usize, // http.call body cap

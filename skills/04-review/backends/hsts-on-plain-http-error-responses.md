@@ -10,7 +10,7 @@ description: get_peer's backend-selection-failure error path now reuses the list
 
 ## Conclusion
 
-`get_peer` (`src/core/gateway/backends/mod.rs`) no longer constructs a fresh
+`get_peer` (`edgion-gateway/src/backends/mod.rs`) no longer constructs a fresh
 `ServerHeaderOpts::default()` for its upstream-selection-failure error responses. It now takes a
 `server_header_opts: &ServerHeaderOpts` parameter and the four call sites in
 `pg_upstream_peer.rs` (171, 226, 397, 401) all pass `&edgion_http.server_header_opts` — the

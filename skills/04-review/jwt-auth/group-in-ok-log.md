@@ -35,8 +35,8 @@ via "bad algorithm"); leaking `kid` maps key distribution across groups (probe v
 
 ## Implementation
 
-- `src/core/gateway/plugins/http/jwt_auth/verify.rs` (8 Deny branches + 1 OK)
-- `src/core/gateway/plugins/http/jwt_auth/plugin.rs` (OK log push on the
+- `edgion-gateway/src/plugins/http/jwt_auth/verify.rs` (8 Deny branches + 1 OK)
+- `edgion-gateway/src/plugins/http/jwt_auth/plugin.rs` (OK log push on the
   `run_request` success path)
 
 ## Related

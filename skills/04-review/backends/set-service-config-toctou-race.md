@@ -10,7 +10,7 @@ description: CircuitBreakerStore::set_service_config now does a single DashMap e
 
 ## Conclusion
 
-`CircuitBreakerStore::set_service_config` (`src/core/gateway/backends/circuit_breaker/store.rs`)
+`CircuitBreakerStore::set_service_config` (`edgion-gateway/src/backends/circuit_breaker/store.rs`)
 now performs the "config changed → rebuild state" path through a single
 `self.services.entry(service_key.to_string())` match, so the check-and-swap runs under one
 DashMap shard write lock:

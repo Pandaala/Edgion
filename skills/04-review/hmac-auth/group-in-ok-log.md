@@ -33,7 +33,7 @@ non-Deny `push_err` calls and are unrelated to group attribution — do not add
 
 ## Implementation
 
-- `src/core/gateway/plugins/http/hmac_auth/plugin.rs` — the OK-log block in
+- `edgion-gateway/src/plugins/http/hmac_auth/plugin.rs` — the OK-log block in
   `run_request` (grep `OK group=`; line numbers drift).
 
 ## Related

@@ -38,7 +38,7 @@ When a review/audit report contains the following patterns, close as "design tra
 Verify three points before closing:
 
 - `use_nonce` / `use_pkce` in `edgion-resources/src/resources/edgion_plugins/plugin_configs/openid_connect.rs` still default to `false`
-- The implementation branches in `src/core/gateway/plugins/http/openid_connect/plugin.rs` and `src/core/gateway/plugins/http/openid_connect/token_verify.rs` are still correct:
+- The implementation branches in `edgion-gateway/src/plugins/http/openid_connect/plugin.rs` and `edgion-gateway/src/plugins/http/openid_connect/token_verify.rs` are still correct:
   - When enabled, `/authorize` carries the `nonce` parameter, the state cookie stores `nonce`, and the callback verifies the `nonce` claim
   - When enabled, `/authorize` carries `code_challenge`, and token exchange carries `code_verifier`
 - `docs/{zh-CN,en}/user-guide/edgion-plugins/openid-connect.md` still contains the "**Recommended Security Switches**" / "Recommended Security Switches" section, explicitly recommending `useNonce: true` + `usePkce: true` in production with reasons
