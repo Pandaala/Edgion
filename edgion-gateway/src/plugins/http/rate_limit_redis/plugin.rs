@@ -4,7 +4,7 @@
 //! Uses Lua scripts for atomic rate limit checks via EVALSHA with EVAL fallback.
 //!
 //! ## Architecture:
-//! - Each plugin instance holds a `tokio::sync::OnceCell<ScriptHashes>` for lazy script loading
+//! - Each plugin instance holds a `RedisRateLimiter` core for lazy script loading
 //! - Redis client is resolved at runtime via `get_redis_client()` (ArcSwap-backed, hot-swappable)
 //! - All Lua scripts operate on single KEYS[1] — Redis Cluster compatible
 //! - Multiple policies are evaluated independently; ALL must pass
@@ -21,86 +21,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::link_sys::get_redis_client;
 use crate::link_sys::providers::redis::RedisLinkClient;
+use crate::plugins::common::redis_rate_limiter::{RateLimitResult, RedisRateLimiter};
 use crate::plugins::http::common::{format_duration, resolve_rate_limit_key, RateLimitKey};
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{OnRedisFailure, RateLimitAlgorithm, RateLimitRedisConfig};
-
-use super::scripts::{FIXED_WINDOW_SCRIPT, SLIDING_WINDOW_SCRIPT, TOKEN_BUCKET_SCRIPT};
-
-use fred::interfaces::LuaInterface;
-
-// ========== Script Hashes ==========
-
-/// Pre-loaded SHA1 hashes for Lua scripts (EVALSHA optimization).
-struct ScriptHashes {
-    sliding_window: String,
-    fixed_window: String,
-    token_bucket: String,
-}
-
-// ========== Rate Limit Result ==========
-
-/// Result from a single policy evaluation via Lua script.
-///
-/// Parsed from Lua return value: {allowed(0/1), current, remaining, retry_ms}
-struct RateLimitResult {
-    allowed: bool,
-    current: i64,
-    remaining: i64,
-    limit: u64,
-    retry_ms: i64,
-}
-
-impl RateLimitResult {
-    /// Parse Lua script return values into a structured result.
-    ///
-    /// Lua returns an array of 4 integers: [allowed, current, remaining, retry_ms]
-    /// Missing values default to 0; `limit` comes from policy config, not Lua.
-    fn from_lua_result(values: &[i64], limit: u64) -> Self {
-        Self {
-            allowed: values.first().copied().unwrap_or(0) == 1,
-            current: values.get(1).copied().unwrap_or(0),
-            remaining: values.get(2).copied().unwrap_or(0),
-            limit,
-            retry_ms: values.get(3).copied().unwrap_or(0),
-        }
-    }
-}
-
-// ========== Helper Functions ==========
-
-/// Truncate a limit key to the configured max length.
-///
-/// Since we don't use hash tags, the limit_key is just a plain segment
-/// in the Redis key string. Redis keys are binary-safe, so any content
-/// is valid. We only truncate to prevent OOM from malicious long values.
-///
-/// This matches Kong/APISIX's approach: direct pass-through with no encoding.
-fn truncate_limit_key(raw: &str, max_len: usize) -> &str {
-    if raw.len() > max_len {
-        // Truncate at char boundary to avoid splitting multi-byte UTF-8
-        let mut end = max_len;
-        while end > 0 && !raw.is_char_boundary(end) {
-            end -= 1;
-        }
-        &raw[..end]
-    } else {
-        raw
-    }
-}
-
-/// Build Redis key. No hash tag needed — all algorithms use single KEYS.
-///
-/// Format: `{prefix}{algo}:{policy_idx}:{limit_key}[:{suffix}]`
-fn build_redis_key(prefix: &str, algo: &str, policy_idx: usize, limit_key: &str, suffix: &str) -> String {
-    if suffix.is_empty() {
-        format!("{prefix}{algo}:{policy_idx}:{limit_key}")
-    } else {
-        format!("{prefix}{algo}:{policy_idx}:{limit_key}:{suffix}")
-    }
-}
+use edgion_resources::resources::edgion_plugins::{OnRedisFailure, RateLimitRedisConfig};
 
 // ========== RateLimitRedis Plugin ==========
 
@@ -111,10 +37,7 @@ fn build_redis_key(prefix: &str, algo: &str, policy_idx: usize, limit_key: &str,
 pub struct RateLimitRedis {
     name: String,
     config: RateLimitRedisConfig,
-    /// Lazily loaded script hashes (loaded on first request, async-safe).
-    /// tokio::sync::OnceCell supports async init with guaranteed single-execution,
-    /// unlike std::sync::OnceLock which requires sync init (can't await inside).
-    script_hashes: tokio::sync::OnceCell<ScriptHashes>,
+    core: RedisRateLimiter,
 }
 
 impl RateLimitRedis {
@@ -125,248 +48,22 @@ impl RateLimitRedis {
         Box::new(RateLimitRedis {
             name: "RateLimitRedis".to_string(),
             config: validated,
-            script_hashes: tokio::sync::OnceCell::new(),
+            core: RedisRateLimiter::new(),
         })
-    }
-
-    /// Load scripts into Redis and cache SHA1 hashes.
-    ///
-    /// Called lazily on first request. tokio::sync::OnceCell guarantees only one
-    /// concurrent caller runs the init closure; others await the result.
-    /// If the closure fails, the error is NOT cached — next call retries.
-    async fn ensure_scripts_loaded(&self, client: &RedisLinkClient) -> anyhow::Result<&ScriptHashes> {
-        self.script_hashes
-            .get_or_try_init(|| async {
-                let sw: String = client
-                    .pool()
-                    .script_load(SLIDING_WINDOW_SCRIPT)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("script_load sliding_window: {:?}", e))?;
-                let fw: String = client
-                    .pool()
-                    .script_load(FIXED_WINDOW_SCRIPT)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("script_load fixed_window: {:?}", e))?;
-                let tb: String = client
-                    .pool()
-                    .script_load(TOKEN_BUCKET_SCRIPT)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("script_load token_bucket: {:?}", e))?;
-                Ok(ScriptHashes {
-                    sliding_window: sw,
-                    fixed_window: fw,
-                    token_bucket: tb,
-                })
-            })
-            .await
-    }
-
-    /// Execute Lua script via EVALSHA with automatic EVAL fallback on NOSCRIPT.
-    ///
-    /// NOSCRIPT occurs when Redis restarts or SCRIPT FLUSH is called, clearing
-    /// the script cache. We detect it via error details containing "NOSCRIPT"
-    /// and fall back to full EVAL (which re-caches the script).
-    async fn eval_script(
-        &self,
-        client: &RedisLinkClient,
-        hash: &str,
-        script: &str,
-        keys: Vec<String>,
-        args: Vec<String>,
-    ) -> anyhow::Result<Vec<i64>> {
-        match client
-            .pool()
-            .evalsha::<Vec<i64>, _, _, _>(hash, keys.clone(), args.clone())
-            .await
-        {
-            Ok(result) => Ok(result),
-            Err(ref e) if e.details().contains("NOSCRIPT") => {
-                // Redis restarted or SCRIPT FLUSH — fall back to EVAL (sends full script body)
-                client
-                    .pool()
-                    .eval(script, keys, args)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Redis EVAL fallback failed: {:?}", e))
-            }
-            Err(e) => Err(anyhow::anyhow!("Redis EVALSHA failed: {:?}", e)),
-        }
-    }
-
-    /// Execute sliding window rate limit check for a single policy.
-    #[allow(clippy::too_many_arguments)]
-    async fn eval_sliding_window(
-        &self,
-        client: &RedisLinkClient,
-        hash: &str,
-        idx: usize,
-        limit_key: &str,
-        rate: u64,
-        window_ms: i64,
-        now_ms: i64,
-    ) -> anyhow::Result<RateLimitResult> {
-        let redis_key = build_redis_key(&self.config.key_prefix, "sw", idx, limit_key, "");
-        let keys = vec![redis_key];
-        let args = vec![
-            rate.to_string(),
-            window_ms.to_string(),
-            now_ms.to_string(),
-            self.config.cost.to_string(),
-        ];
-        let values = self
-            .eval_script(client, hash, SLIDING_WINDOW_SCRIPT, keys, args)
-            .await?;
-        Ok(RateLimitResult::from_lua_result(&values, rate))
-    }
-
-    /// Execute fixed window rate limit check for a single policy.
-    #[allow(clippy::too_many_arguments)]
-    async fn eval_fixed_window(
-        &self,
-        client: &RedisLinkClient,
-        hash: &str,
-        idx: usize,
-        limit_key: &str,
-        rate: u64,
-        window_ms: i64,
-        now_ms: i64,
-    ) -> anyhow::Result<RateLimitResult> {
-        // Fixed window includes window_id in the key for automatic rotation
-        let window_id = now_ms / window_ms;
-        let redis_key = build_redis_key(&self.config.key_prefix, "fw", idx, limit_key, &window_id.to_string());
-        let keys = vec![redis_key];
-        let args = vec![rate.to_string(), window_ms.to_string(), self.config.cost.to_string()];
-        let values = self.eval_script(client, hash, FIXED_WINDOW_SCRIPT, keys, args).await?;
-        Ok(RateLimitResult::from_lua_result(&values, rate))
-    }
-
-    /// Execute token bucket rate limit check for a single policy.
-    #[allow(clippy::too_many_arguments)]
-    async fn eval_token_bucket(
-        &self,
-        client: &RedisLinkClient,
-        hash: &str,
-        idx: usize,
-        limit_key: &str,
-        rate: u64,
-        window_ms: i64,
-        now_ms: i64,
-    ) -> anyhow::Result<RateLimitResult> {
-        let redis_key = build_redis_key(&self.config.key_prefix, "tb", idx, limit_key, "");
-        let keys = vec![redis_key];
-        let args = vec![
-            rate.to_string(),             // max_tokens
-            rate.to_string(),             // refill_rate (same as max_tokens)
-            window_ms.to_string(),        // interval_ms
-            now_ms.to_string(),           // now
-            self.config.cost.to_string(), // cost
-        ];
-        let values = self.eval_script(client, hash, TOKEN_BUCKET_SCRIPT, keys, args).await?;
-        Ok(RateLimitResult::from_lua_result(&values, rate))
-    }
-
-    /// Merge two rate limit results, keeping the most restrictive.
-    ///
-    /// - If either is denied → result is denied (use largest retry_ms)
-    /// - If both allowed → use lowest remaining and lowest limit
-    fn merge_result(existing: Option<RateLimitResult>, new: RateLimitResult) -> RateLimitResult {
-        match existing {
-            None => new,
-            Some(prev) => {
-                if !prev.allowed || !new.allowed {
-                    // At least one denied — merge as denied
-                    RateLimitResult {
-                        allowed: false,
-                        current: prev.current.max(new.current),
-                        remaining: 0,
-                        limit: prev.limit.min(new.limit),
-                        retry_ms: prev.retry_ms.max(new.retry_ms),
-                    }
-                } else {
-                    // Both allowed — use most restrictive remaining
-                    if new.remaining < prev.remaining {
-                        RateLimitResult {
-                            allowed: true,
-                            current: new.current,
-                            remaining: new.remaining,
-                            limit: new.limit,
-                            retry_ms: 0,
-                        }
-                    } else {
-                        prev
-                    }
-                }
-            }
-        }
     }
 
     /// Check all policies against Redis. Returns aggregate result.
     async fn check_rate_limit(&self, client: &RedisLinkClient, limit_key: &str) -> anyhow::Result<RateLimitResult> {
-        // Check Redis health before expensive operations.
-        // healthy() is an AtomicBool — zero-cost check, NOT a PING.
-        if !client.healthy() {
-            anyhow::bail!("Redis client '{}' is not healthy", client.name());
-        }
-
-        let hashes = self.ensure_scripts_loaded(client).await?;
-
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-
-        // Truncate limit_key ONCE before all policy evaluations.
-        let safe_key = truncate_limit_key(limit_key, self.config.max_key_len);
-
-        let mut most_restrictive: Option<RateLimitResult> = None;
-
-        for (idx, policy) in self.config.policies.iter().enumerate() {
-            let window_ms = policy.interval_duration.unwrap_or(Duration::from_secs(1)).as_millis() as i64;
-
-            let result = match policy.algorithm {
-                RateLimitAlgorithm::SlidingWindow => {
-                    self.eval_sliding_window(
-                        client,
-                        &hashes.sliding_window,
-                        idx,
-                        safe_key,
-                        policy.rate,
-                        window_ms,
-                        now_ms,
-                    )
-                    .await?
-                }
-                RateLimitAlgorithm::FixedWindow => {
-                    self.eval_fixed_window(
-                        client,
-                        &hashes.fixed_window,
-                        idx,
-                        safe_key,
-                        policy.rate,
-                        window_ms,
-                        now_ms,
-                    )
-                    .await?
-                }
-                RateLimitAlgorithm::TokenBucket => {
-                    self.eval_token_bucket(
-                        client,
-                        &hashes.token_bucket,
-                        idx,
-                        safe_key,
-                        policy.rate,
-                        window_ms,
-                        now_ms,
-                    )
-                    .await?
-                }
-            };
-
-            most_restrictive = Some(Self::merge_result(most_restrictive, result));
-        }
-
-        most_restrictive.ok_or_else(|| {
-            anyhow::anyhow!("rate_limit_redis: no policy after iteration — validation invariant violated")
-        })
+        self.core
+            .check(
+                client,
+                &self.config.policies,
+                &self.config.key_prefix,
+                self.config.cost,
+                self.config.max_key_len,
+                limit_key,
+            )
+            .await
     }
 
     /// Add rate limit headers to response.
@@ -561,6 +258,7 @@ impl RequestFilter for RateLimitRedis {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::common::redis_rate_limiter::{build_redis_key, truncate_limit_key, RateLimitResult};
 
     #[test]
     fn test_truncate_limit_key_utf8_boundary() {
@@ -609,7 +307,7 @@ mod tests {
             limit: 1000,
             retry_ms: 3000,
         };
-        let merged = RateLimitRedis::merge_result(Some(r1), r2);
+        let merged = RateLimitResult::merge(Some(r1), r2);
         assert!(!merged.allowed);
         assert_eq!(merged.remaining, 0);
         assert_eq!(merged.retry_ms, 3000);

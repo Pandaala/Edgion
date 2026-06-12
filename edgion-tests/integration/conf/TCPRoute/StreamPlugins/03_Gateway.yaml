@@ -1,5 +1,6 @@
 # Gateway for TCPRoute StreamPlugins testing
-# 3 listeners: allow-localhost filter, deny-all filter, missing-ESP fail-close
+# 4 listeners: allow-localhost filter, deny-all filter, missing-ESP fail-close,
+#              connection-rate-limit (local token-bucket, no Redis)
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -17,3 +18,6 @@ spec:
     - name: tcp-fail-close
       protocol: TCP
       port: 31273
+    - name: tcp-conn-rate
+      protocol: TCP
+      port: 31277

@@ -1,7 +1,7 @@
 //! Stream plugin runtime for executing stream plugins
 
 use super::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
-use crate::plugins::stream::{GlobalConnectionIpRestrictionPlugin, StreamIpRestriction};
+use crate::plugins::stream::{ConnectionRateLimitPlugin, GlobalConnectionIpRestrictionPlugin, StreamIpRestriction};
 use edgion_resources::resources::edgion_stream_plugins::{EdgionStreamPlugin, StreamPluginEntry};
 use std::sync::Arc;
 
@@ -52,6 +52,7 @@ impl StreamPluginRuntime {
                         parent_namespace.to_string(),
                     ))
                 }
+                EdgionStreamPlugin::ConnectionRateLimit(cfg) => Arc::new(ConnectionRateLimitPlugin::new(cfg)),
             };
 
             plugins.push(plugin);

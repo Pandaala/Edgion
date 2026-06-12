@@ -1,5 +1,6 @@
 //! Filter system for request/response processing
 
+pub mod common;
 pub mod http;
 pub mod runtime;
 pub mod stream;

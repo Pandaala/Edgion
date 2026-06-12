@@ -5,6 +5,7 @@
 //! - **Stage 2 (TlsRoute):** post-handshake, post-route-match — `tls_route/`
 
 pub mod connection_filter_bridge;
+pub mod connection_rate_limit;
 pub mod global_connection_ip_restriction;
 pub mod ip_restriction;
 mod stream_plugin_runtime;
@@ -13,6 +14,7 @@ mod stream_plugin_trait;
 pub mod tls_route;
 
 pub use connection_filter_bridge::StreamPluginConnectionFilter;
+pub use connection_rate_limit::ConnectionRateLimitPlugin;
 pub use global_connection_ip_restriction::GlobalConnectionIpRestrictionPlugin;
 pub use ip_restriction::StreamIpRestriction;
 pub use stream_plugin_runtime::StreamPluginRuntime;

@@ -142,7 +142,8 @@
     "TCPRoute/StreamPlugins": {
       "tcp": 31274,
       "tcp_filtered": 31275,
-      "tcp_fail_close": 31273
+      "tcp_fail_close": 31273,
+      "tcp_conn_rate": 31277
     },
     "TCPRoute/StreamPlugins/Dynamic": {
       "tcp": 31388

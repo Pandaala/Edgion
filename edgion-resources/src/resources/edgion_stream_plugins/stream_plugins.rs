@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::resources::edgion_gateway_config::PluginReference;
 use crate::resources::edgion_stream_plugins::connection_ip_restriction_rules::ConnectionIpRestrictionRules;
+use crate::resources::edgion_stream_plugins::connection_rate_limit_config::ConnectionRateLimitConfig;
 
 /// Stream plugin enum for all supported stream plugin types.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -15,6 +16,9 @@ pub enum EdgionStreamPlugin {
 
     /// PM-referenced IP restriction; Center-managed, multi-Controller synced.
     GlobalConnectionIpRestriction(GlobalConnectionIpRestrictionEntry),
+
+    /// L4 connection-rate limiter (local gate + optional Redis).
+    ConnectionRateLimit(ConnectionRateLimitConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -30,6 +34,26 @@ impl EdgionStreamPlugin {
         match self {
             EdgionStreamPlugin::IpRestriction(_) => "IpRestriction",
             EdgionStreamPlugin::GlobalConnectionIpRestriction(_) => "GlobalConnectionIpRestriction",
+            EdgionStreamPlugin::ConnectionRateLimit(_) => "ConnectionRateLimit",
         }
+    }
+}
+
+#[cfg(test)]
+mod variant_tests {
+    use super::*;
+
+    #[test]
+    fn connection_rate_limit_deserializes_with_tag_content_shape() {
+        let yaml = r#"
+type: ConnectionRateLimit
+config:
+  redisRef: "default/redis"
+  perSourceIp:
+    rate: 50
+    interval: "1s"
+"#;
+        let p: EdgionStreamPlugin = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(p.type_name(), "ConnectionRateLimit");
     }
 }

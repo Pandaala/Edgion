@@ -62,6 +62,7 @@ impl EdgionStreamPluginsHandler {
                     Some((pm_ns, gcir.plugin_metadata_ref.name.clone()))
                 }
                 EdgionStreamPlugin::IpRestriction(_) => None,
+                EdgionStreamPlugin::ConnectionRateLimit(_) => None,
             })
     }
 }
@@ -107,6 +108,11 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                 }
                 if let Some(e) = rules.validation_error() {
                     errors.push(format!("plugins[{idx}] (IpRestriction): {e}"));
+                }
+            }
+            if let EdgionStreamPlugin::ConnectionRateLimit(cfg) = &entry.plugin {
+                if let Some(e) = cfg.validation_error() {
+                    errors.push(format!("plugins[{idx}] (ConnectionRateLimit): {e}"));
                 }
             }
         }
@@ -433,6 +439,33 @@ spec:
             .expect("Accepted condition present");
         assert_eq!(accepted.status, "False");
         assert_eq!(accepted.reason, "Invalid");
+    }
+
+    #[test]
+    fn preparse_rejects_connection_rate_limit_without_dimension() {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: t
+  namespace: default
+spec:
+  plugins:
+    - type: ConnectionRateLimit
+      config:
+        redisRef: "default/redis"
+"#;
+        let mut esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let handler = EdgionStreamPluginsHandler::new();
+        let errors = handler.preparse(&mut esp, &make_ctx());
+        assert_eq!(errors.len(), 1, "expected one validation error; got: {errors:?}");
+        let e = &errors[0];
+        assert!(
+            !e.starts_with(LEGACY_SCHEMA_MARKER),
+            "ConnectionRateLimit error must not carry legacy marker; got: {e}"
+        );
+        assert!(e.contains("plugins[0] (ConnectionRateLimit)"), "got: {e}");
+        assert!(e.contains("perListener") || e.contains("perSourceIp"), "got: {e}");
     }
 
     #[test]

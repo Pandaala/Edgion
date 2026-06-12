@@ -48,6 +48,8 @@ pub mod names {
     pub const ACME_CHALLENGE_LOOKUP_TOTAL: &str = "edgion_acme_challenge_lookup_total";
     // Stream plugin: GlobalConnectionIpRestriction decision events
     pub const CONN_IP_RESTRICTION_EVENTS_TOTAL: &str = "edgion_conn_ip_restriction_events_total";
+    // Stream plugin: ConnectionRateLimit rejections
+    pub const CONNECTION_RATE_LIMIT_REJECTED_TOTAL: &str = "edgion_connection_rate_limit_rejected_total";
     // RoundRobin selector: backend count > u16::MAX truncation
     pub const RR_SELECTOR_TRUNCATED_TOTAL: &str = "edgion_rr_selector_truncated_total";
     // Elasticsearch bulk producer: increments each time the producer→bulk-loop
@@ -466,6 +468,20 @@ pub fn record_config_event_parse_error(kind: &'static str) {
 /// Low, fixed cardinality — safe as a label.
 pub fn record_conn_ip_restriction_event(result: &'static str) {
     counter!(names::CONN_IP_RESTRICTION_EVENTS_TOTAL, "result" => result).increment(1);
+}
+
+/// Record a connection rejected by the ConnectionRateLimit stream plugin.
+///
+/// `dimension` must be `"listener"` or `"source_ip"`.
+/// `stage` must be `"local"` or `"redis"`.
+/// Both are fixed, low-cardinality `&'static str` — safe as labels.
+pub fn record_connection_rate_limit_reject(dimension: &'static str, stage: &'static str) {
+    counter!(
+        names::CONNECTION_RATE_LIMIT_REJECTED_TOTAL,
+        "dimension" => dimension,
+        "stage" => stage
+    )
+    .increment(1);
 }
 
 /// Record an Elasticsearch bulk channel "full" event.

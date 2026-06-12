@@ -212,6 +212,70 @@ metadata:
     edgion.io/edgion-stream-plugins: edgion-test/tcp-allow-localhost
 ```
 
+## ConnectionRateLimit (L4 connection-rate gate)
+
+`EdgionStreamPlugin::ConnectionRateLimit` bounds the **rate** of new downstream
+TCP/TLS connections. Two-stage admission per accepted connection (pre-TLS):
+
+1. **Stage 1 — local per-listener gate** (token bucket, process-global keyed by
+   listener port; survives config hot-reload). No external dependency, so it
+   stays available under flood when Redis is the first thing to fall over.
+2. **Stage 2 — optional Redis** (sliding/fixed/token-bucket via the shared
+   `RedisRateLimiter` core) for `perSourceIp` and, when `redisDistributed: true`,
+   a fleet-wide `perListener` cap. Accept-path Redis calls are capped by a
+   **100 ms timeout** so a slow Redis cannot pin downstream fds.
+
+Per-dimension `onRedisFailure` defaults differ on purpose:
+`perListener` defaults to `Deny` (fail-close — the process backstop must not
+vanish under attack); `perSourceIp` defaults to `Allow` (fail-open — a Redis
+blip must not blanket-block legitimate sources). Both are overridable.
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata: { name: tcp-conn-rate, namespace: edgion-test }
+spec:
+  plugins:
+    - type: ConnectionRateLimit
+      config:
+        # redisRef is required only when a Redis-backed dimension is on
+        # (perSourceIp, or perListener with redisDistributed: true).
+        redisRef: "default/shared-redis"
+        algorithm: SlidingWindow            # default
+        perListener:
+          rate: 10000
+          interval: "1s"
+          redisDistributed: false           # local-only by default
+          # onRedisFailure: Deny             # default
+        perSourceIp:
+          rate: 50
+          interval: "1s"
+          # onRedisFailure: Allow            # default
+```
+
+### Coverage limits (read before relying on this for fd-exhaustion defense)
+
+- **Opt-in only.** Requires the `edgion.io/edgion-stream-plugins` annotation
+  plus an `EdgionStreamPlugins` resource. A bare gateway has no admission
+  control.
+- **Does NOT cover** the admin API, probe API, or the controller↔gateway gRPC
+  link — those are not Pingora listeners (separate axum servers / outbound
+  client) and stream plugins cannot reach them.
+- **Does NOT cover UDP** (no `ConnectionFilter` is attached; UDP is
+  connectionless).
+- **Bounds connection rate, NOT concurrent fds.** A slowloris-style adversary
+  that opens connections slowly and never closes them can still exhaust fds
+  without tripping any rate. Defending against that needs concurrent-count
+  limiting (blocked on a Pingora connection-close hook) and/or handshake/idle
+  timeouts + OS-level limits. Pair this plugin with those, not as a substitute.
+- The source task's process-wide fd-exhaustion safety net remains open after
+  this plugin — see
+  `docs/superpowers/specs/2026-06-12-connection-rate-limit-stream-plugin-design.md`.
+
+Reject metric: `edgion_connection_rate_limit_rejected_total` with labels
+`dimension={listener|source_ip}` and `stage={local|redis}` (fixed, low
+cardinality).
+
 ## Key differences from HTTP plugins
 
 | Dimension | Stream plugin | HTTP plugin |

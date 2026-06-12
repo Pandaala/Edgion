@@ -237,6 +237,79 @@ impl TcpStreamPluginsTestSuite {
         )
     }
 
+    /// Test: ConnectionRateLimit local-only gate (no Redis) admits up to `rate`
+    /// connections per interval and rejects excess ones at L4.
+    ///
+    /// Config: perListener { rate: 2, interval: "1s" }
+    /// We open 5 connections in a tight sequential loop.  The local token-bucket
+    /// starts full (2 tokens); subsequent connects within the same second run out
+    /// of tokens and must be rejected (same accept-then-drop path as deny-all).
+    /// Assertion: admitted <= 2 AND rejected >= 1.
+    fn test_conn_rate_limit_local() -> TestCase {
+        TestCase::new(
+            "tcp_stream_plugin_conn_rate_limit_local",
+            "ConnectionRateLimit (local, no Redis): at most 2 connections admitted per 1s window",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let addr = format!("{}:{}", ctx.target_host, 31277);
+                    let total = 5;
+                    let mut admitted = 0usize;
+                    let mut rejected = 0usize;
+
+                    for _ in 0..total {
+                        match tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await {
+                            Ok(Ok(mut stream)) => {
+                                // Connection accepted at TCP level; try to send data and read.
+                                // If the rate gate admitted this connection the backend will echo.
+                                // If rejected, the gateway drops the connection after accept —
+                                // same path as deny-all: we see EOF (read returns 0) or a read error.
+                                let test_data = b"Hello";
+                                let _ = stream.write_all(test_data).await;
+                                let mut buf = vec![0u8; 1024];
+                                match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
+                                    Ok(Ok(0)) | Ok(Err(_)) => {
+                                        // EOF or read error — rate gate closed this connection.
+                                        rejected += 1;
+                                    }
+                                    Ok(Ok(_n)) => {
+                                        // Got data back — connection was admitted and proxied.
+                                        admitted += 1;
+                                    }
+                                    Err(_) => {
+                                        // Read timed out — not conclusive; treat as neither.
+                                    }
+                                }
+                            }
+                            Ok(Err(_)) | Err(_) => {
+                                // Refused or timed out at TCP level — also a rejection.
+                                rejected += 1;
+                            }
+                        }
+                    }
+
+                    if admitted <= 2 && rejected >= 1 {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!(
+                                "ConnectionRateLimit local gate working: admitted={} (≤2), rejected={} (≥1)",
+                                admitted, rejected
+                            ),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "ConnectionRateLimit local gate misbehaving: admitted={} rejected={} (expected admitted<=2, rejected>=1)",
+                                admitted, rejected
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
     /// Test: TCPRoute referencing a non-existent EdgionStreamPlugins must
     /// fail-close (reject the connection) rather than silently admit traffic.
     /// Locks in the fail-close contract introduced in the gateway TCP path.
@@ -302,6 +375,7 @@ impl TestSuite for TcpStreamPluginsTestSuite {
             Self::test_deny_all_multiple(),
             Self::test_short_name_annotation(),
             Self::test_missing_esp_fail_close(),
+            Self::test_conn_rate_limit_local(),
         ]
     }
 }
