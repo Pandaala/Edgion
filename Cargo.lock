@@ -1610,6 +1610,7 @@ dependencies = [
  "colored",
  "console",
  "cookie",
+ "crc32fast",
  "edgion-cli",
  "edgion-controller",
  "edgion-resources",
