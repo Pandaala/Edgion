@@ -88,7 +88,6 @@ rand.workspace = true
 smallvec.workspace = true
 indexmap.workspace = true
 nom.workspace = true
-bcrypt.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 crc32fast.workspace = true

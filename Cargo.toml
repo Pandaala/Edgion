@@ -124,7 +124,6 @@ hmac = "0.12"
 aes-gcm = "0.10"
 crc32fast = "1.4"
 subtle = "2"
-bcrypt = "0.18"
 jsonwebtoken = "9"
 zeroize = { version = "1", features = ["derive"] }
 

@@ -69,7 +69,6 @@ regex.workspace = true
 rand.workspace = true
 smallvec.workspace = true
 indexmap.workspace = true
-bcrypt.workspace = true
 sha2.workspace = true
 hex.workspace = true
 jsonwebtoken.workspace = true
