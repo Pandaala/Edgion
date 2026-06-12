@@ -128,7 +128,7 @@ check_binaries() {
         missing=true
     fi
     
-    if [ ! -f "${BIN_DIR}/examples/test_server" ]; then
+    if [ ! -f "${BIN_DIR}/test_server" ]; then
         log_error "test_server Build"
         missing=true
     fi
@@ -205,7 +205,7 @@ wait_for_health() {
 start_test_server() {
     log_section "Start test_server"
     
-    "${BIN_DIR}/examples/test_server" \
+    "${BIN_DIR}/test_server" \
         --http-ports "30001,30002,30003" \
         --grpc-ports "30021,30022,30023" \
         --websocket-port 30005 \

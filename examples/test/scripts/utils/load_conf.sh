@@ -251,12 +251,12 @@ load_directory_recursive() {
 verify_sync() {
     log_section "verifyresourcesync"
     
-    if [ ! -f "${BIN_DIR}/examples/resource_diff" ]; then
+    if [ ! -f "${BIN_DIR}/resource_diff" ]; then
         log_warn "resource_diff Build，Skipverify"
         return 0
     fi
     
-    "${BIN_DIR}/examples/resource_diff" \
+    "${BIN_DIR}/resource_diff" \
         --controller-url "$CONTROLLER_URL" \
         --gateway-url "$GATEWAY_ADMIN_URL" \
         --gateway-probe-url "${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"

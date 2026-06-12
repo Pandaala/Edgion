@@ -33,7 +33,7 @@ Suggestions of the form "the gateway still ignores `grpc-timeout`", "no upstream
 - Retry-decision sites (`pg_fail_to_connect.rs`, `pg_error_while_proxy.rs`, `pg_upstream_response_filter.rs` status-code retry branch) treat `request_timeout_exceeded() || grpc_deadline_exceeded()` as the unified "deadline blown — do not retry" guard, preventing a fresh LB pick / circuit-breaker counter increment after the caller has given up.
 - `pg_upstream_peer.rs` retry backoff sleep bounds the delay by `min(request_remaining, grpc_remaining)` and re-checks both deadlines after the sleep. Without this guard a tight `grpc-timeout` plus a coarse retry backoff (`grpc-timeout: 5S` + `retry.backoff: 10s` is the canonical case) would let the gateway sleep past the client's deadline and then open a fresh upstream connection nobody is waiting for.
 - `pg_upstream_request_filter.rs` writes `grpc-timeout: 1n` to the upstream when `grpc_remaining()` is exactly zero — the rare race between `upstream_peer` returning OK and Pingora invoking the filter (connect / TLS handshake) where the deadline decays to zero. Without this, the upstream would see the stale original client value (e.g. `5S`) and run the full duration the caller has already abandoned.
-- `examples/code/client/suites/grpc_route/basic/basic.rs::test_grpc_client_deadline_exceeded` — wire-level scenario: client sends `set_timeout(1ns)` and asserts `tonic::Code::DeadlineExceeded` arrives via the gateway.
+- `edgion-tests/src/client/suites/grpc_route/basic/basic.rs::test_grpc_client_deadline_exceeded` — wire-level scenario: client sends `set_timeout(1ns)` and asserts `tonic::Code::DeadlineExceeded` arrives via the gateway.
 
 ## Coverage scope
 

@@ -72,6 +72,6 @@ Re-open only if:
 - Same IPv6-authority defect class as [backends-F001](../backends/ipv6-probe-url-brackets.md),
   [backends-F017](../backends/clusterip-ipv6-no-brackets.md), and link-sys-F001.
 - Unit test `test_host_without_port` (`edgion-common/src/utils/net.rs`); integration regression
-  `http_redirect_ipv6_host_literal` (`examples/code/client/suites/http_route/filters/redirect.rs`)
+  `http_redirect_ipv6_host_literal` (`edgion-tests/src/client/suites/http_route/filters/redirect.rs`)
   sends `Host: [::1]:8443` to the global HTTP→HTTPS redirect listener and asserts the `Location`
   keeps the brackets.

@@ -29,8 +29,8 @@ Severity is Low / Admin-only / read-dominated / **no security impact, no runtime
 - Deleting `ListResponse` / `AccessLogListResponse` is a public response-shape change.
 - Multiple downstream consumers already parse the current shape:
   - **Dashboard** (`edgion-dashboard`) reads `success` / `data` / `count` from list endpoints.
-  - **Validator binaries** (`examples/code/validator/resource_diff.rs`, `cache_residue.rs`) hit `/configclient/<kind>/list` and parse the current shape.
-  - **Access-log client** (`examples/code/client/access_log_client.rs`) deserializes `AccessLogListResponse` as a named struct.
+  - **Validator binaries** (`edgion-tests/src/validator/resource_diff.rs`, `cache_residue.rs`) hit `/configclient/<kind>/list` and parse the current shape.
+  - **Access-log client** (`edgion-tests/src/client/access_log_client.rs`) deserializes `AccessLogListResponse` as a named struct.
   - **10+ conf-sync / k8s shell scripts** (`examples/test/scripts/conf-sync/*.sh`, `examples/k8stest/scripts/common/*.sh`) poll `/configclient/<kind>/list` with `curl -sf`; flipping unknown-kind to 400 changes `-f`'s behaviour and any typo'd kind path (lowercase variants, hypothetical k8s plural names, etc.) starts to fail loudly instead of silently returning an empty list.
 
 The cost/risk of the contract migration is asymmetric with a Low-severity DX defect that has **zero in-the-wild operational impact** (no incident, no report).
@@ -45,7 +45,7 @@ The admin API's intentional posture is body-level success signalling (`success: 
 
 ### Struct unification (cosmetic) is not a defect
 
-`ListResponse` and `AccessLogListResponse` differ from `ApiResponse<Vec<Value>>` in one concrete way: `count: usize` is a top-level field, not derived from `data.len()` by the client. The reduction is ~20 lines of struct definitions at the cost of changing two public response shapes in a way that breaks `examples/code/client/access_log_client.rs::AccessLogListResponse` deserialisation. Net negative for a Low-severity finding.
+`ListResponse` and `AccessLogListResponse` differ from `ApiResponse<Vec<Value>>` in one concrete way: `count: usize` is a top-level field, not derived from `data.len()` by the client. The reduction is ~20 lines of struct definitions at the cost of changing two public response shapes in a way that breaks `edgion-tests/src/client/access_log_client.rs::AccessLogListResponse` deserialisation. Net negative for a Low-severity finding.
 
 ## Re-open conditions
 

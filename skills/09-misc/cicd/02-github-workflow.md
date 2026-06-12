@@ -69,7 +69,7 @@ This action is the shared front layer used by both CI and release. It currently 
 When changing it, treat it as "shared infrastructure", not as a private script for some single job:
 
 - When changing the cache path or key, consider both `ci.yml` and `build-image.yml`
-- When changing the dependency list, verify [../../../build.rs](../../../build.rs) and the Docker builder dependencies remain consistent
+- When changing the dependency list, verify [../../../edgion-common/build.rs](../../../edgion-common/build.rs) and the Docker builder dependencies remain consistent
 - When changing the toolchain/component/target inputs, ensure `fmt`, `clippy`, and cross-compilation can still express what they need
 
 ## Current release workflow

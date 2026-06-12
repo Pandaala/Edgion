@@ -53,7 +53,7 @@ Unit tests in `tls_pingora.rs`:
   all three certs are added.
 - `ca_bundle_rejects_empty_or_garbage` — empty and non-PEM input both error.
 
-Integration test (`examples/code/client/suites/edgion_tls/mtls/mtls.rs`):
+Integration test (`edgion-tests/src/client/suites/edgion_tls/mtls/mtls.rs`):
 - `test_cert_chain_intermediate_in_ca_store` — connects to `mtls-chain.example.com`
   (EdgionTls `mtls-test-chain`, `caSecretRef: ca-chain` = root+intermediate bundle,
   Mutual, verifyDepth 2) with the **leaf-only** `chain-client.crt` (the

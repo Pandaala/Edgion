@@ -172,8 +172,11 @@ log_info "Run-all work directory: $WORK_DIR"
 
 if $DO_PREPARE; then
     log_section "Build: cargo build (top-level, once)"
-    if (cd "$PROJECT_ROOT" && cargo build --bin edgion-controller --bin edgion-gateway \
-        --bin edgion-cli --example test_server) \
+    if (cd "$PROJECT_ROOT" && cargo build \
+        -p edgion-controller --bin edgion-controller \
+        -p edgion-gateway --bin edgion-gateway \
+        -p edgion-cli --bin edgion-cli \
+        -p edgion-tests --bin test_server) \
         2>&1 | tee "${WORK_DIR}/build.log" | tail -5; then
         log_success "Build complete"
     else

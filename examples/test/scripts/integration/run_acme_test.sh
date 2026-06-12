@@ -112,7 +112,7 @@ fi
 cd "$PROJECT_ROOT"
 
 log_info "Building test client..."
-cargo build --example test_client 2>&1 | tail -3
+cargo build -p edgion-tests --bin test_client 2>&1 | tail -3
 if [ $? -ne 0 ]; then
     log_error "Failed to build test_client"
     exit 1
@@ -121,7 +121,7 @@ fi
 log_info "Running ACME integration tests..."
 echo ""
 
-TEST_CMD="cargo run --example test_client -- -r Services -i acme"
+TEST_CMD="cargo run -p edgion-tests --bin test_client -- -r Services -i acme"
 
 echo "$ $TEST_CMD"
 echo ""

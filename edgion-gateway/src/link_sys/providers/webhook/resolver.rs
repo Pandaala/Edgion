@@ -150,7 +150,7 @@ fn extract_value(result: &WebhookCallResult, extract: &WebhookExtract) -> Option
 
 // NOTE: extract_value tests require a real HTTP server (mockito).
 // These are covered by integration tests instead.
-// See examples/code/client/suites/edgion_plugins/webhook_key_get/ for full integration tests.
+// See edgion-tests/src/client/suites/edgion_plugins/webhook_key_get/ for full integration tests.
 
 #[cfg(test)]
 mod tests {

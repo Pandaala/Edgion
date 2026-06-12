@@ -43,4 +43,4 @@ Verify that the `BandwidthLimit` plugin correctly limits the downstream response
 - `Edgion/examples/test/conf/EdgionPlugins/BandwidthLimit/HTTPRoute_bandwidth_limit.yaml`
 
 ## Test Code
-- `Edgion/examples/code/client/suites/edgion_plugins/bandwidth_limit/bandwidth_limit.rs`
+- `Edgion/edgion-tests/src/client/suites/edgion_plugins/bandwidth_limit/bandwidth_limit.rs`

@@ -66,7 +66,7 @@ symmetric availability.
 Proposal 2 in the F-B01 issue file (rename to `/api/v1/testing/store-stats`)
 would touch ~20+ files: `examples/test/scripts/conf-sync/run_conf_sync_test.sh`
 and `run_conf_sync_advanced_test.sh` (~15 call sites combined),
-`examples/code/validator/cache_residue.rs` (4 occurrences including mock-server
+`edgion-tests/src/validator/cache_residue.rs` (4 occurrences including mock-server
 paths), `edgion-common/src/unified_auth/mod.rs` (auth skip list),
 `edgion-controller/src/api/authz_classifier.rs` (classifier mapping + its unit
 test at `:272`), Gateway `mod.rs:513`, Controller `mod.rs:441` +

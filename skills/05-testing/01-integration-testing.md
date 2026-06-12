@@ -114,7 +114,7 @@ The corresponding YAML directory, Rust suite, and whether `--gateway` is require
 Look for the closest template:
 
 ```bash
-rg -n "MultiSNI|KeyAuth|HealthCheckTransition|ReferenceGrant" examples/code examples/test/conf
+rg -n "MultiSNI|KeyAuth|HealthCheckTransition|ReferenceGrant" edgion-tests/src examples/test/conf
 ```
 
 Prefer copying a case with "same protocol, same validation method, same dependency type" rather than starting from scratch.

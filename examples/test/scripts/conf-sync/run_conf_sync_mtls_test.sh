@@ -380,7 +380,7 @@ EOF
         mtls_args="--https-backend-mtls-port 30052 --client-ca-file $backend_mtls_ca"
     fi
 
-    "${PROJECT_ROOT}/target/debug/examples/test_server" \
+    "${PROJECT_ROOT}/target/debug/test_server" \
         --http-ports "30001,30002,30003" \
         --grpc-ports "30021,30022,30023" \
         --websocket-port 30005 \
@@ -614,7 +614,7 @@ test_server_id_match() {
 # Test: resource_diff passes
 # =============================================================================
 test_resource_diff() {
-    local resource_diff="${PROJECT_ROOT}/target/debug/examples/resource_diff"
+    local resource_diff="${PROJECT_ROOT}/target/debug/resource_diff"
     if [ ! -f "$resource_diff" ]; then
         log_warn "resource_diff binary not found, skipping"
         return 0

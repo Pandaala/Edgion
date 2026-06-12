@@ -69,5 +69,5 @@ Re-open only if:
   `build_location_without_query_has_no_question_mark` /
   `build_location_appends_query_after_non_default_port` (`request_redirect.rs`); integration
   regression `redirect_only_preserves_query`
-  (`examples/code/client/suites/http_route/filters/filter_conflict.rs`, route
+  (`edgion-tests/src/client/suites/http_route/filters/filter_conflict.rs`, route
   `filter-conflict.example.com/redirect-only`).

@@ -192,4 +192,4 @@ See [DynamicTest/TEST_SUMMARY.md](DynamicTest/TEST_SUMMARY.md) for details.
 
 - [Kubernetes Gateway API Specification](https://gateway-api.sigs.k8s.io/)
 - Implementation: `src/core/gateway/runtime/matching/route.rs` (`check_gateway_listener_match`)
-- Test code: `examples/code/client/suites/gateway/`
+- Test code: `edgion-tests/src/client/suites/gateway/`

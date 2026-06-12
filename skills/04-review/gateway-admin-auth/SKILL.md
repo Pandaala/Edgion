@@ -35,7 +35,7 @@ bearer token. Every test-side consumer of the gateway admin API must present
 assertion failures and 30s timeouts in retry loops, not as an obvious auth error.
 
 Two touchpoints must stay in sync (both were missed once and caused ~20 failures):
-- `examples/code/client/access_log_client.rs` — `AccessLogClient` reads
+- `edgion-tests/src/client/access_log_client.rs` — `AccessLogClient` reads
   `EDGION_GATEWAY_ADMIN_TOKEN` and attaches `bearer_auth` to **every** admin
   request (status, get/delete access-log, list/clear). Do not drop this.
 - `examples/test/scripts/integration/run_integration.sh` — must `export`
@@ -51,7 +51,7 @@ start script's — they live in different processes; removing it reintroduces th
 
 Known false positives (do NOT report these):
 - "clap `env` feature is unused / dead — drop it from `Cargo.toml`." It is
-  **required** by the validator binaries `examples/code/validator/cache_residue.rs`
+  **required** by the validator binaries `edgion-tests/src/validator/cache_residue.rs`
   and `resource_diff.rs`, which use `#[arg(long, env = "EDGION_GATEWAY_ADMIN_TOKEN")]`
   to read the gateway admin token. A `src/`-only grep misses them. Removing the
   feature breaks those binaries.

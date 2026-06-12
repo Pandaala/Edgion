@@ -367,7 +367,7 @@ finalize_report() {
 # Dynamic Scenarios function (scenario-driven replacement of run_dynamic_tests)
 # =============================================================================
 run_dynamic_scenarios() {
-    local test_client="${PROJECT_ROOT}/target/debug/examples/test_client"
+    local test_client="${PROJECT_ROOT}/target/debug/test_client"
 
     log_section "🔄 Dynamic Scenarios"
 
@@ -865,129 +865,129 @@ run_all_tests() {
             HTTPRoute)
                 if [ -z "$G_ITEM" ]; then
                     # Run all HTTPRoute tests
-                    run_test "HTTPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Basic" || test_failed=true
-                    run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Match" || test_failed=true
-                    run_test "HTTPRoute_Backend" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend" || test_failed=true
+                    run_test "HTTPRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Basic" || test_failed=true
+                    run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Match" || test_failed=true
+                    run_test "HTTPRoute_Backend" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Backend" || test_failed=true
                     if ! should_skip_test "HTTPRoute_Backend_HealthCheckTransition"; then
-                        run_test "HTTPRoute_Backend_HealthCheckTransition" "${PROJECT_ROOT}/target/debug/examples/test_client -g health-check-transition" || test_failed=true
+                        run_test "HTTPRoute_Backend_HealthCheckTransition" "${PROJECT_ROOT}/target/debug/test_client -g health-check-transition" || test_failed=true
                     else
                         log_info "Skipping slow test: HTTPRoute_Backend_HealthCheckTransition (use --full-test to run)"
                     fi
-                    run_test "HTTPRoute_Filters" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters" || test_failed=true
-                    run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/WebSocket" || test_failed=true
-                    run_test "HTTPRoute_Protocol_H2C" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/H2C" || test_failed=true
-                    run_test "HTTPRoute_Protocol_GrpcWeb" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/GrpcWeb" || test_failed=true
-                    run_test "HTTPRoute_Protocol_H2TrailerMalformed" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Protocol/H2TrailerMalformed" || test_failed=true
-                    run_test "HTTPRoute_MultiPort" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i MultiPort" || test_failed=true
+                    run_test "HTTPRoute_Filters" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Filters" || test_failed=true
+                    run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Protocol/WebSocket" || test_failed=true
+                    run_test "HTTPRoute_Protocol_H2C" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Protocol/H2C" || test_failed=true
+                    run_test "HTTPRoute_Protocol_GrpcWeb" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Protocol/GrpcWeb" || test_failed=true
+                    run_test "HTTPRoute_Protocol_H2TrailerMalformed" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Protocol/H2TrailerMalformed" || test_failed=true
+                    run_test "HTTPRoute_MultiPort" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i MultiPort" || test_failed=true
                 else
                     # Run specified sub-item test
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
-                    run_test "HTTPRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i ${G_ITEM}" || test_failed=true
+                    run_test "HTTPRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             GRPCRoute)
                 if [ -z "$G_ITEM" ]; then
-                    run_test "GRPCRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Basic" || test_failed=true
-                    run_test "GRPCRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Match" || test_failed=true
-                    run_test "GRPCRoute_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i RateLimit" || test_failed=true
+                    run_test "GRPCRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g -r GRPCRoute -i Basic" || test_failed=true
+                    run_test "GRPCRoute_Match" "${PROJECT_ROOT}/target/debug/test_client -g -r GRPCRoute -i Match" || test_failed=true
+                    run_test "GRPCRoute_RateLimit" "${PROJECT_ROOT}/target/debug/test_client -g -r GRPCRoute -i RateLimit" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
-                    run_test "GRPCRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i ${G_ITEM}" || test_failed=true
+                    run_test "GRPCRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/test_client -g -r GRPCRoute -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             TCPRoute)
                 if [ -z "$G_ITEM" ]; then
-                    run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
-                    run_test "TCPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i StreamPlugins" || test_failed=true
-                    run_test "TCPRoute_GlobalConnectionIpRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i GlobalConnectionIpRestriction" || test_failed=true
-                    run_test "TCPRoute_IdleTimeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i IdleTimeout" || test_failed=true
+                    run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g -r TCPRoute -i Basic" || test_failed=true
+                    run_test "TCPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/test_client -g -r TCPRoute -i StreamPlugins" || test_failed=true
+                    run_test "TCPRoute_GlobalConnectionIpRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r TCPRoute -i GlobalConnectionIpRestriction" || test_failed=true
+                    run_test "TCPRoute_IdleTimeout" "${PROJECT_ROOT}/target/debug/test_client -g -r TCPRoute -i IdleTimeout" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
-                    run_test "TCPRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i ${G_ITEM}" || test_failed=true
+                    run_test "TCPRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/test_client -g -r TCPRoute -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             TLSRoute)
                 if [ -z "$G_ITEM" ]; then
-                    run_test "TLSRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i Basic" || test_failed=true
-                    run_test "TLSRoute_ProxyProtocol" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i ProxyProtocol" || test_failed=true
-                    run_test "TLSRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i StreamPlugins" || test_failed=true
-                    run_test "TLSRoute_MultiSNI" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i MultiSNI" || test_failed=true
-                    run_test "TLSRoute_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i BothAbsentParentRef" || test_failed=true
-                    run_test "TLSRoute_Passthrough" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i Passthrough" || test_failed=true
+                    run_test "TLSRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g -r TLSRoute -i Basic" || test_failed=true
+                    run_test "TLSRoute_ProxyProtocol" "${PROJECT_ROOT}/target/debug/test_client -g -r TLSRoute -i ProxyProtocol" || test_failed=true
+                    run_test "TLSRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/test_client -g -r TLSRoute -i StreamPlugins" || test_failed=true
+                    run_test "TLSRoute_MultiSNI" "${PROJECT_ROOT}/target/debug/test_client -g -r TLSRoute -i MultiSNI" || test_failed=true
+                    run_test "TLSRoute_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/test_client -g -r TLSRoute -i BothAbsentParentRef" || test_failed=true
+                    run_test "TLSRoute_Passthrough" "${PROJECT_ROOT}/target/debug/test_client -g -r TLSRoute -i Passthrough" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
-                    run_test "TLSRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i ${G_ITEM}" || test_failed=true
+                    run_test "TLSRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/test_client -g -r TLSRoute -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             UDPRoute)
-                run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r UDPRoute -i Basic" || test_failed=true
+                run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g -r UDPRoute -i Basic" || test_failed=true
                 ;;
             Gateway)
                 if [ -z "$G_ITEM" ]; then
-                    run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Security" || test_failed=true
-                    run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i RealIP" || test_failed=true
-                    run_test "Gateway_TLS_BackendTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/BackendTLS" || test_failed=true
-                    run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
-                    run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
-                    run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
-                    run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
-                    run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
-                    run_test "Gateway_AllowedRoutes_Selector" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Selector" || test_failed=true
-                    run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
-                    run_test "Gateway_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i StreamPlugins" || test_failed=true
-                    run_test "Gateway_TLS_BackendTLSSAN" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/BackendTLSSAN" || test_failed=true
-                    run_test "Gateway_TLS_NoHostnameListener" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/NoHostnameListener" || test_failed=true
-                    run_test "Gateway_FrontendValidation" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i FrontendValidation" || test_failed=true
-                    run_test "Gateway_PortConflict" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i PortConflict" || test_failed=true
+                    run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i Security" || test_failed=true
+                    run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i RealIP" || test_failed=true
+                    run_test "Gateway_TLS_BackendTLS" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i TLS/BackendTLS" || test_failed=true
+                    run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
+                    run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
+                    run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
+                    run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
+                    run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
+                    run_test "Gateway_AllowedRoutes_Selector" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i AllowedRoutes/Selector" || test_failed=true
+                    run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i Combined" || test_failed=true
+                    run_test "Gateway_StreamPlugins" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i StreamPlugins" || test_failed=true
+                    run_test "Gateway_TLS_BackendTLSSAN" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i TLS/BackendTLSSAN" || test_failed=true
+                    run_test "Gateway_TLS_NoHostnameListener" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i TLS/NoHostnameListener" || test_failed=true
+                    run_test "Gateway_FrontendValidation" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i FrontendValidation" || test_failed=true
+                    run_test "Gateway_PortConflict" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i PortConflict" || test_failed=true
                 else
                     # Replace / with _ in item name for log file
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
-                    run_test "Gateway_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ${G_ITEM}" || test_failed=true
+                    run_test "Gateway_${item_safe}" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             EdgionPlugins)
                 if [ -z "$G_ITEM" ]; then
-                    run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
-                    run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
-                    run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
-                    run_test "EdgionPlugins_CtxSet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i CtxSet" || test_failed=true
-                    run_test "EdgionPlugins_JwtAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i JwtAuth" || test_failed=true
-                    run_test "EdgionPlugins_JweDecrypt" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i JweDecrypt" || test_failed=true
-                    run_test "EdgionPlugins_HmacAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i HmacAuth" || test_failed=true
-                    run_test "EdgionPlugins_HeaderCertAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i HeaderCertAuth" || test_failed=true
-                    run_test "EdgionPlugins_KeyAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i KeyAuth" || test_failed=true
-                    run_test "EdgionPlugins_BasicAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BasicAuth" || test_failed=true
+                    run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
+                    run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
+                    run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
+                    run_test "EdgionPlugins_CtxSet" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i CtxSet" || test_failed=true
+                    run_test "EdgionPlugins_JwtAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i JwtAuth" || test_failed=true
+                    run_test "EdgionPlugins_JweDecrypt" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i JweDecrypt" || test_failed=true
+                    run_test "EdgionPlugins_HmacAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i HmacAuth" || test_failed=true
+                    run_test "EdgionPlugins_HeaderCertAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i HeaderCertAuth" || test_failed=true
+                    run_test "EdgionPlugins_KeyAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i KeyAuth" || test_failed=true
+                    run_test "EdgionPlugins_BasicAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i BasicAuth" || test_failed=true
                     if ! should_skip_test "EdgionPlugins_LdapAuth"; then
-                        run_test "EdgionPlugins_LdapAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i LdapAuth" || test_failed=true
+                        run_test "EdgionPlugins_LdapAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i LdapAuth" || test_failed=true
                     else
                         log_info "Skipping complex test: EdgionPlugins_LdapAuth (requires --full-test)"
                     fi
-                    run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
-                    run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
-                    run_test "EdgionPlugins_RateLimitRedis" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
-                    run_test "EdgionPlugins_RealIp" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RealIp" || test_failed=true
-                    run_test "EdgionPlugins_RequestMirror" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestMirror" || test_failed=true
-                    run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
-                    run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
-                    run_test "EdgionPlugins_IpRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i IpRestriction" || test_failed=true
-                    run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
-                    run_test "EdgionPlugins_PathNormalization_ForwardView" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
-                    run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
-                    run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
-                    run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
-                    run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
-                    run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
-                    run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
-                    run_test "EdgionPlugins_RegionRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RegionRoute" || test_failed=true
-                    run_test "EdgionPlugins_GlobalConnectionIpRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i GlobalConnectionIpRestriction" || test_failed=true
-                    run_test "EdgionPlugins_PluginMetaDataStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginMetaDataStatus" || test_failed=true
-                    run_test "EdgionPlugins_ResolvedRefs" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResolvedRefs" || test_failed=true
-                    run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
-                    run_test "EdgionPlugins_Cors" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Cors" || test_failed=true
-                    run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true
-                    run_test "EdgionPlugins_DslGrpcError" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DslGrpcError" || test_failed=true
+                    run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
+                    run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
+                    run_test "EdgionPlugins_RateLimitRedis" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
+                    run_test "EdgionPlugins_RealIp" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RealIp" || test_failed=true
+                    run_test "EdgionPlugins_RequestMirror" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RequestMirror" || test_failed=true
+                    run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
+                    run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
+                    run_test "EdgionPlugins_IpRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i IpRestriction" || test_failed=true
+                    run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
+                    run_test "EdgionPlugins_PathNormalization_ForwardView" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
+                    run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
+                    run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
+                    run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
+                    run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
+                    run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
+                    run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
+                    run_test "EdgionPlugins_RegionRoute" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RegionRoute" || test_failed=true
+                    run_test "EdgionPlugins_GlobalConnectionIpRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i GlobalConnectionIpRestriction" || test_failed=true
+                    run_test "EdgionPlugins_PluginMetaDataStatus" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginMetaDataStatus" || test_failed=true
+                    run_test "EdgionPlugins_ResolvedRefs" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ResolvedRefs" || test_failed=true
+                    run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
+                    run_test "EdgionPlugins_Cors" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i Cors" || test_failed=true
+                    run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true
+                    run_test "EdgionPlugins_DslGrpcError" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DslGrpcError" || test_failed=true
                     if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
-                        run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
+                        run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
                     else
                         log_info "Skipping slow test: EdgionPlugins_AllEndpointStatus (use --full-test to run)"
                     fi
@@ -995,7 +995,7 @@ run_all_tests() {
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     local test_name="EdgionPlugins_${item_safe}"
                     if ! should_skip_test "$test_name"; then
-                        run_test "$test_name" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ${G_ITEM}" || test_failed=true
+                        run_test "$test_name" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ${G_ITEM}" || test_failed=true
                     else
                         log_info "Skipping complex test: ${test_name} (requires --full-test)"
                     fi
@@ -1003,41 +1003,41 @@ run_all_tests() {
                 ;;
             EdgionTls)
                 if [ -z "$G_ITEM" ]; then
-                    run_test "EdgionTls_https" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i https" || test_failed=true
-                    run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
-                    run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
-                    run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
-                    run_test "EdgionTls_mtls_failclose" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mtls_failclose" || test_failed=true
-                    run_test "EdgionTls_fallback_sni" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i fallback_sni" || test_failed=true
-                    run_test "EdgionTls_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i BothAbsentParentRef" || test_failed=true
+                    run_test "EdgionTls_https" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i https" || test_failed=true
+                    run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i grpctls" || test_failed=true
+                    run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i mTLS" || test_failed=true
+                    run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i cipher" || test_failed=true
+                    run_test "EdgionTls_mtls_failclose" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i mtls_failclose" || test_failed=true
+                    run_test "EdgionTls_fallback_sni" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i fallback_sni" || test_failed=true
+                    run_test "EdgionTls_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i BothAbsentParentRef" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
-                    run_test "EdgionTls_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i ${G_ITEM}" || test_failed=true
+                    run_test "EdgionTls_${item_safe}" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             Status)
                 if [ -z "$G_ITEM" ]; then
-                    run_test "Status_RefGrant" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant" || test_failed=true
-                    run_test "Status_RefGrant_TCPRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant/TCPRouteCrossNsSvc" || test_failed=true
-                    run_test "Status_RefGrant_TLSRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant/TLSRouteCrossNsSvc" || test_failed=true
-                    run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
-                    run_test "Status_GatewayFrontendValidation" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i GatewayFrontendValidation" || test_failed=true
-                    run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSListenerMode" || test_failed=true
-                    run_test "Status_TLSRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSRoute" || test_failed=true
+                    run_test "Status_RefGrant" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i RefGrant" || test_failed=true
+                    run_test "Status_RefGrant_TCPRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i RefGrant/TCPRouteCrossNsSvc" || test_failed=true
+                    run_test "Status_RefGrant_TLSRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i RefGrant/TLSRouteCrossNsSvc" || test_failed=true
+                    run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
+                    run_test "Status_GatewayFrontendValidation" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i GatewayFrontendValidation" || test_failed=true
+                    run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i TLSListenerMode" || test_failed=true
+                    run_test "Status_TLSRoute" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i TLSRoute" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
-                    run_test "Status_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i ${G_ITEM}" || test_failed=true
+                    run_test "Status_${item_safe}" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             "LinkSys")
                 if [ -z "$G_ITEM" ]; then
-                    run_test "LinkSys_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i Status" || test_failed=true
+                    run_test "LinkSys_Status" "${PROJECT_ROOT}/target/debug/test_client -g -r LinkSys -i Status" || test_failed=true
                     run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
                 elif [ "$G_ITEM" = "Redis" ]; then
                     run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
-                    run_test "LinkSys_${item_safe}" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i ${G_ITEM}" || test_failed=true
+                    run_test "LinkSys_${item_safe}" "${PROJECT_ROOT}/target/debug/test_client -g -r LinkSys -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
             *)
@@ -1049,11 +1049,11 @@ run_all_tests() {
         # Run all tests
         log_section "Run Direct mode tests"
         
-        run_test "http_direct" "${PROJECT_ROOT}/target/debug/examples/test_client http" || test_failed=true
-        run_test "grpc_direct" "${PROJECT_ROOT}/target/debug/examples/test_client grpc" || test_failed=true
-        run_test "websocket_direct" "${PROJECT_ROOT}/target/debug/examples/test_client websocket" || test_failed=true
-        run_test "tcp_direct" "${PROJECT_ROOT}/target/debug/examples/test_client tcp" || test_failed=true
-        run_test "udp_direct" "${PROJECT_ROOT}/target/debug/examples/test_client udp" || test_failed=true
+        run_test "http_direct" "${PROJECT_ROOT}/target/debug/test_client http" || test_failed=true
+        run_test "grpc_direct" "${PROJECT_ROOT}/target/debug/test_client grpc" || test_failed=true
+        run_test "websocket_direct" "${PROJECT_ROOT}/target/debug/test_client websocket" || test_failed=true
+        run_test "tcp_direct" "${PROJECT_ROOT}/target/debug/test_client tcp" || test_failed=true
+        run_test "udp_direct" "${PROJECT_ROOT}/target/debug/test_client udp" || test_failed=true
         
         if $test_failed; then
             log_error "Direct mode tests failed"
@@ -1063,144 +1063,144 @@ run_all_tests() {
         log_section "Run Gateway mode tests"
         
         # HTTPRoute Tests
-        run_test "HTTPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g http" || test_failed=true
-        run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-match" || test_failed=true
-        run_test "HTTPRoute_Backend_LBRoundRobin" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-rr" || test_failed=true
-        run_test "HTTPRoute_Backend_LBConsistentHash" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-ch" || test_failed=true
-        run_test "HTTPRoute_Backend_LBLeastConn" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-lc" || test_failed=true
-        run_test "HTTPRoute_Backend_LBLeastConnRetryOnStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g lb-lc-rs" || test_failed=true
-        run_test "HTTPRoute_Backend_WeightedBackend" "${PROJECT_ROOT}/target/debug/examples/test_client -g weighted-backend" || test_failed=true
-        run_test "HTTPRoute_Backend_HealthCheck" "${PROJECT_ROOT}/target/debug/examples/test_client -g health-check" || test_failed=true
+        run_test "HTTPRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g http" || test_failed=true
+        run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/test_client -g http-match" || test_failed=true
+        run_test "HTTPRoute_Backend_LBRoundRobin" "${PROJECT_ROOT}/target/debug/test_client -g lb-rr" || test_failed=true
+        run_test "HTTPRoute_Backend_LBConsistentHash" "${PROJECT_ROOT}/target/debug/test_client -g lb-ch" || test_failed=true
+        run_test "HTTPRoute_Backend_LBLeastConn" "${PROJECT_ROOT}/target/debug/test_client -g lb-lc" || test_failed=true
+        run_test "HTTPRoute_Backend_LBLeastConnRetryOnStatus" "${PROJECT_ROOT}/target/debug/test_client -g lb-lc-rs" || test_failed=true
+        run_test "HTTPRoute_Backend_WeightedBackend" "${PROJECT_ROOT}/target/debug/test_client -g weighted-backend" || test_failed=true
+        run_test "HTTPRoute_Backend_HealthCheck" "${PROJECT_ROOT}/target/debug/test_client -g health-check" || test_failed=true
         if ! should_skip_test "HTTPRoute_Backend_Timeout"; then
-            run_test "HTTPRoute_Backend_Timeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g timeout" || test_failed=true
+            run_test "HTTPRoute_Backend_Timeout" "${PROJECT_ROOT}/target/debug/test_client -g timeout" || test_failed=true
         else
             log_info "Skipping slow test: HTTPRoute_Backend_Timeout (use --full-test to run)"
         fi
         if ! should_skip_test "HTTPRoute_Backend_HealthCheckTransition"; then
-            run_test "HTTPRoute_Backend_HealthCheckTransition" "${PROJECT_ROOT}/target/debug/examples/test_client -g health-check-transition" || test_failed=true
+            run_test "HTTPRoute_Backend_HealthCheckTransition" "${PROJECT_ROOT}/target/debug/test_client -g health-check-transition" || test_failed=true
         else
             log_info "Skipping slow test: HTTPRoute_Backend_HealthCheckTransition (use --full-test to run)"
         fi
-        run_test "HTTPRoute_Backend_RetryOnStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/RetryOnStatus" || test_failed=true
+        run_test "HTTPRoute_Backend_RetryOnStatus" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Backend/RetryOnStatus" || test_failed=true
         if ! should_skip_test "HTTPRoute_Backend_PerTryTimeout"; then
-            run_test "HTTPRoute_Backend_PerTryTimeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/PerTryTimeout" || test_failed=true
+            run_test "HTTPRoute_Backend_PerTryTimeout" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Backend/PerTryTimeout" || test_failed=true
         else
             log_info "Skipping slow test: HTTPRoute_Backend_PerTryTimeout (use --full-test to run)"
         fi
-        run_test "HTTPRoute_Backend_CircuitBreaker" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/CircuitBreaker" || test_failed=true
-        run_test "HTTPRoute_Backend_SessionPersistence" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/SessionPersistence" || test_failed=true
-        run_test "HTTPRoute_Backend_H2BackendMtlsPersistence" "${PROJECT_ROOT}/target/debug/examples/test_client -g h2-mtls-sp" || test_failed=true
-        run_test "HTTPRoute_Backend_BackendTLSSNIHostOverride" "${PROJECT_ROOT}/target/debug/examples/test_client -g btls-sni" || test_failed=true
-        run_test "HTTPRoute_Backend_PartiallyInvalid" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/PartiallyInvalid" || test_failed=true
-        run_test "HTTPRoute_Backend_GrpcHealthCheck" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/GrpcHealthCheck" || test_failed=true
-        run_test "HTTPRoute_Backend_DnsResolutionFailure" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Backend/DnsResolutionFailure" || test_failed=true
-        run_test "HTTPRoute_Filters_Redirect" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-redirect" || test_failed=true
-        run_test "HTTPRoute_Filters_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g http-security" || test_failed=true
-        run_test "HTTPRoute_Filters_HeaderModifier" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters/HeaderModifier" || test_failed=true
-        run_test "HTTPRoute_Filters_FilterConflict" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i Filters/FilterConflict" || test_failed=true
-        run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/examples/test_client -g websocket" || test_failed=true
-        run_test "HTTPRoute_MultiPort" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r HTTPRoute -i MultiPort" || test_failed=true
+        run_test "HTTPRoute_Backend_CircuitBreaker" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Backend/CircuitBreaker" || test_failed=true
+        run_test "HTTPRoute_Backend_SessionPersistence" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Backend/SessionPersistence" || test_failed=true
+        run_test "HTTPRoute_Backend_H2BackendMtlsPersistence" "${PROJECT_ROOT}/target/debug/test_client -g h2-mtls-sp" || test_failed=true
+        run_test "HTTPRoute_Backend_BackendTLSSNIHostOverride" "${PROJECT_ROOT}/target/debug/test_client -g btls-sni" || test_failed=true
+        run_test "HTTPRoute_Backend_PartiallyInvalid" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Backend/PartiallyInvalid" || test_failed=true
+        run_test "HTTPRoute_Backend_GrpcHealthCheck" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Backend/GrpcHealthCheck" || test_failed=true
+        run_test "HTTPRoute_Backend_DnsResolutionFailure" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Backend/DnsResolutionFailure" || test_failed=true
+        run_test "HTTPRoute_Filters_Redirect" "${PROJECT_ROOT}/target/debug/test_client -g http-redirect" || test_failed=true
+        run_test "HTTPRoute_Filters_Security" "${PROJECT_ROOT}/target/debug/test_client -g http-security" || test_failed=true
+        run_test "HTTPRoute_Filters_HeaderModifier" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Filters/HeaderModifier" || test_failed=true
+        run_test "HTTPRoute_Filters_FilterConflict" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Filters/FilterConflict" || test_failed=true
+        run_test "HTTPRoute_Protocol_WebSocket" "${PROJECT_ROOT}/target/debug/test_client -g websocket" || test_failed=true
+        run_test "HTTPRoute_MultiPort" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i MultiPort" || test_failed=true
         
         # GRPCRoute Tests
-        run_test "GRPCRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Basic" || test_failed=true
-        run_test "GRPCRoute_Match" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i Match" || test_failed=true
-        run_test "GRPCRoute_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r GRPCRoute -i RateLimit" || test_failed=true
+        run_test "GRPCRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g -r GRPCRoute -i Basic" || test_failed=true
+        run_test "GRPCRoute_Match" "${PROJECT_ROOT}/target/debug/test_client -g -r GRPCRoute -i Match" || test_failed=true
+        run_test "GRPCRoute_RateLimit" "${PROJECT_ROOT}/target/debug/test_client -g -r GRPCRoute -i RateLimit" || test_failed=true
         
         # TCPRoute Tests
-        run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i Basic" || test_failed=true
-        run_test "TCPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i StreamPlugins" || test_failed=true
-        run_test "TCPRoute_IdleTimeout" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TCPRoute -i IdleTimeout" || test_failed=true
+        run_test "TCPRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g -r TCPRoute -i Basic" || test_failed=true
+        run_test "TCPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/test_client -g -r TCPRoute -i StreamPlugins" || test_failed=true
+        run_test "TCPRoute_IdleTimeout" "${PROJECT_ROOT}/target/debug/test_client -g -r TCPRoute -i IdleTimeout" || test_failed=true
         
         # TLSRoute Tests
-        run_test "TLSRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i Basic" || test_failed=true
-        run_test "TLSRoute_ProxyProtocol" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i ProxyProtocol" || test_failed=true
-        run_test "TLSRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i StreamPlugins" || test_failed=true
-        run_test "TLSRoute_MultiSNI" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i MultiSNI" || test_failed=true
-        run_test "TLSRoute_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i BothAbsentParentRef" || test_failed=true
-        run_test "TLSRoute_Passthrough" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r TLSRoute -i Passthrough" || test_failed=true
+        run_test "TLSRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g -r TLSRoute -i Basic" || test_failed=true
+        run_test "TLSRoute_ProxyProtocol" "${PROJECT_ROOT}/target/debug/test_client -g -r TLSRoute -i ProxyProtocol" || test_failed=true
+        run_test "TLSRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/test_client -g -r TLSRoute -i StreamPlugins" || test_failed=true
+        run_test "TLSRoute_MultiSNI" "${PROJECT_ROOT}/target/debug/test_client -g -r TLSRoute -i MultiSNI" || test_failed=true
+        run_test "TLSRoute_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/test_client -g -r TLSRoute -i BothAbsentParentRef" || test_failed=true
+        run_test "TLSRoute_Passthrough" "${PROJECT_ROOT}/target/debug/test_client -g -r TLSRoute -i Passthrough" || test_failed=true
 
         # UDPRoute Tests
-        run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r UDPRoute -i Basic" || test_failed=true
+        run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g -r UDPRoute -i Basic" || test_failed=true
         
         # Gateway Tests
-        run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Security" || test_failed=true
-        run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i RealIP" || test_failed=true
-        run_test "Gateway_TLS_BackendTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/BackendTLS" || test_failed=true
+        run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i Security" || test_failed=true
+        run_test "Gateway_RealIP" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i RealIP" || test_failed=true
+        run_test "Gateway_TLS_BackendTLS" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i TLS/BackendTLS" || test_failed=true
         # EdgionPlugins Tests
-        run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
-        run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
-        run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
-        run_test "EdgionPlugins_CtxSet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i CtxSet" || test_failed=true
-        run_test "EdgionPlugins_JwtAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i JwtAuth" || test_failed=true
-        run_test "EdgionPlugins_JweDecrypt" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i JweDecrypt" || test_failed=true
-        run_test "EdgionPlugins_HmacAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i HmacAuth" || test_failed=true
-        run_test "EdgionPlugins_HeaderCertAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i HeaderCertAuth" || test_failed=true
-        run_test "EdgionPlugins_KeyAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i KeyAuth" || test_failed=true
-        run_test "EdgionPlugins_BasicAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BasicAuth" || test_failed=true
+        run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
+        run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
+        run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
+        run_test "EdgionPlugins_CtxSet" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i CtxSet" || test_failed=true
+        run_test "EdgionPlugins_JwtAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i JwtAuth" || test_failed=true
+        run_test "EdgionPlugins_JweDecrypt" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i JweDecrypt" || test_failed=true
+        run_test "EdgionPlugins_HmacAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i HmacAuth" || test_failed=true
+        run_test "EdgionPlugins_HeaderCertAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i HeaderCertAuth" || test_failed=true
+        run_test "EdgionPlugins_KeyAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i KeyAuth" || test_failed=true
+        run_test "EdgionPlugins_BasicAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i BasicAuth" || test_failed=true
         if ! should_skip_test "EdgionPlugins_LdapAuth"; then
-            run_test "EdgionPlugins_LdapAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i LdapAuth" || test_failed=true
+            run_test "EdgionPlugins_LdapAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i LdapAuth" || test_failed=true
         else
             log_info "Skipping complex test: EdgionPlugins_LdapAuth (requires --full-test)"
         fi
-        run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
-        run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
-        run_test "EdgionPlugins_RateLimitRedis" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
-        run_test "EdgionPlugins_RealIp" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RealIp" || test_failed=true
-        run_test "EdgionPlugins_RequestMirror" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestMirror" || test_failed=true
-        run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
-        run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
-        run_test "EdgionPlugins_IpRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i IpRestriction" || test_failed=true
-        run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
-        run_test "EdgionPlugins_PathNormalization_ForwardView" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
-        run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
-        run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
-        run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
-        run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
-        run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
-        run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
-        run_test "EdgionPlugins_RegionRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i RegionRoute" || test_failed=true
-        run_test "EdgionPlugins_GlobalConnectionIpRestriction" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i GlobalConnectionIpRestriction" || test_failed=true
-        run_test "EdgionPlugins_PluginMetaDataStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i PluginMetaDataStatus" || test_failed=true
-        run_test "EdgionPlugins_ResolvedRefs" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i ResolvedRefs" || test_failed=true
-        run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
-        run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true
-        run_test "EdgionPlugins_DslGrpcError" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i DslGrpcError" || test_failed=true
+        run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
+        run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
+        run_test "EdgionPlugins_RateLimitRedis" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
+        run_test "EdgionPlugins_RealIp" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RealIp" || test_failed=true
+        run_test "EdgionPlugins_RequestMirror" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RequestMirror" || test_failed=true
+        run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
+        run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
+        run_test "EdgionPlugins_IpRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i IpRestriction" || test_failed=true
+        run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
+        run_test "EdgionPlugins_PathNormalization_ForwardView" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
+        run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
+        run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
+        run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
+        run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
+        run_test "EdgionPlugins_DynamicInternalUpstream" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DynamicInternalUpstream" || test_failed=true
+        run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
+        run_test "EdgionPlugins_RegionRoute" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RegionRoute" || test_failed=true
+        run_test "EdgionPlugins_GlobalConnectionIpRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i GlobalConnectionIpRestriction" || test_failed=true
+        run_test "EdgionPlugins_PluginMetaDataStatus" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginMetaDataStatus" || test_failed=true
+        run_test "EdgionPlugins_ResolvedRefs" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ResolvedRefs" || test_failed=true
+        run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
+        run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true
+        run_test "EdgionPlugins_DslGrpcError" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DslGrpcError" || test_failed=true
         if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
-            run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
+            run_test "EdgionPlugins_AllEndpointStatus" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
         else
             log_info "Skipping slow test: EdgionPlugins_AllEndpointStatus (use --full-test to run)"
         fi
-        run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
-        run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
-        run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
-        run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
-        run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
-        run_test "Gateway_AllowedRoutes_Selector" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i AllowedRoutes/Selector" || test_failed=true
-        run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i Combined" || test_failed=true
-        run_test "Gateway_StreamPlugins" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i StreamPlugins" || test_failed=true
-        run_test "Gateway_TLS_BackendTLSSAN" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/BackendTLSSAN" || test_failed=true
-        run_test "Gateway_TLS_NoHostnameListener" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i TLS/NoHostnameListener" || test_failed=true
-        run_test "Gateway_FrontendValidation" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i FrontendValidation" || test_failed=true
-        run_test "Gateway_PortConflict" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Gateway -i PortConflict" || test_failed=true
+        run_test "Gateway_TLS_GatewayTLS" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i TLS/GatewayTLS" || test_failed=true
+        run_test "Gateway_ListenerHostname" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i ListenerHostname" || test_failed=true
+        run_test "Gateway_AllowedRoutes_Same" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i AllowedRoutes/Same" || test_failed=true
+        run_test "Gateway_AllowedRoutes_All" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i AllowedRoutes/All" || test_failed=true
+        run_test "Gateway_AllowedRoutes_Kinds" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i AllowedRoutes/Kinds" || test_failed=true
+        run_test "Gateway_AllowedRoutes_Selector" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i AllowedRoutes/Selector" || test_failed=true
+        run_test "Gateway_Combined" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i Combined" || test_failed=true
+        run_test "Gateway_StreamPlugins" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i StreamPlugins" || test_failed=true
+        run_test "Gateway_TLS_BackendTLSSAN" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i TLS/BackendTLSSAN" || test_failed=true
+        run_test "Gateway_TLS_NoHostnameListener" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i TLS/NoHostnameListener" || test_failed=true
+        run_test "Gateway_FrontendValidation" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i FrontendValidation" || test_failed=true
+        run_test "Gateway_PortConflict" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i PortConflict" || test_failed=true
 
         # EdgionTls Tests
-        run_test "EdgionTls_https" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i https" || test_failed=true
-        run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i grpctls" || test_failed=true
-        run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mTLS" || test_failed=true
-        run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i cipher" || test_failed=true
-        run_test "EdgionTls_mtls_failclose" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i mtls_failclose" || test_failed=true
-        run_test "EdgionTls_fallback_sni" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i fallback_sni" || test_failed=true
-        run_test "EdgionTls_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r EdgionTls -i BothAbsentParentRef" || test_failed=true
+        run_test "EdgionTls_https" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i https" || test_failed=true
+        run_test "EdgionTls_grpctls" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i grpctls" || test_failed=true
+        run_test "EdgionTls_mTLS" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i mTLS" || test_failed=true
+        run_test "EdgionTls_cipher" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i cipher" || test_failed=true
+        run_test "EdgionTls_mtls_failclose" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i mtls_failclose" || test_failed=true
+        run_test "EdgionTls_fallback_sni" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i fallback_sni" || test_failed=true
+        run_test "EdgionTls_BothAbsentParentRef" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionTls -i BothAbsentParentRef" || test_failed=true
         
         # Controller Status Tests
-        run_test "Status_RefGrant" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant" || test_failed=true
-        run_test "Status_RefGrant_TCPRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant/TCPRouteCrossNsSvc" || test_failed=true
-        run_test "Status_RefGrant_TLSRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i RefGrant/TLSRouteCrossNsSvc" || test_failed=true
-        run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
-        run_test "Status_GatewayFrontendValidation" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i GatewayFrontendValidation" || test_failed=true
-        run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSListenerMode" || test_failed=true
-        run_test "Status_TLSRoute" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r Status -i TLSRoute" || test_failed=true
-        run_test "LinkSys_Status" "${PROJECT_ROOT}/target/debug/examples/test_client -g -r LinkSys -i Status" || test_failed=true
+        run_test "Status_RefGrant" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i RefGrant" || test_failed=true
+        run_test "Status_RefGrant_TCPRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i RefGrant/TCPRouteCrossNsSvc" || test_failed=true
+        run_test "Status_RefGrant_TLSRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i RefGrant/TLSRouteCrossNsSvc" || test_failed=true
+        run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
+        run_test "Status_GatewayFrontendValidation" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i GatewayFrontendValidation" || test_failed=true
+        run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i TLSListenerMode" || test_failed=true
+        run_test "Status_TLSRoute" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i TLSRoute" || test_failed=true
+        run_test "LinkSys_Status" "${PROJECT_ROOT}/target/debug/test_client -g -r LinkSys -i Status" || test_failed=true
         run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
 
         # Controller Resource-Abnormal Metric (standalone shell test; slow, runs its own controller with tick_secs=30)
@@ -1718,7 +1718,7 @@ main() {
         # rarely, but a stale binary silently runs old logic or rejects new flags
         # (e.g. --controller-token), surfacing as a confusing rc=2 infra error.
         log_info "Building cache_residue (incremental)..."
-        if ! (cd "$PROJECT_ROOT" && cargo build --bin cache_residue); then
+        if ! (cd "$PROJECT_ROOT" && cargo build -p edgion-tests --bin cache_residue); then
             log_error "cache_residue build failed — skipping leak check"
             # do not fail the run on build failure; fall through
             residue_bin=""

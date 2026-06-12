@@ -182,12 +182,12 @@ check_binaries() {
         missing=true
     fi
     
-    if [ ! -f "${BIN_DIR}/examples/test_server" ]; then
+    if [ ! -f "${BIN_DIR}/test_server" ]; then
         log_error "test_server Build"
         missing=true
     fi
     
-    if [ ! -f "${BIN_DIR}/examples/resource_diff" ]; then
+    if [ ! -f "${BIN_DIR}/resource_diff" ]; then
         log_error "resource_diff Build"
         missing=true
     fi
@@ -344,7 +344,7 @@ start_test_server() {
         log_warning "Backend multi-SNI certs not found, skipping multi-SNI backend (port 30026)"
     fi
 
-    "${BIN_DIR}/examples/test_server" \
+    "${BIN_DIR}/test_server" \
         --http-ports "30001,30002,30003" \
         --grpc-ports "30021,30022,30023" \
         --websocket-port 30005 \
@@ -728,7 +728,7 @@ load_configs() {
 verify_sync() {
     log_section "verifyresourcesync"
     
-    local resource_diff="${BIN_DIR}/examples/resource_diff"
+    local resource_diff="${BIN_DIR}/resource_diff"
     
     if [ ! -f "$resource_diff" ]; then
         log_warning "resource_diff ，Skipverify"

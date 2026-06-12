@@ -174,4 +174,4 @@ These tests validate the following Gateway API behaviors:
 
 - [Kubernetes Gateway API Specification](https://gateway-api.sigs.k8s.io/)
 - Implementation: [`src/core/gateway/runtime/matching/route.rs`](../../../src/core/gateway/runtime/matching/route.rs)
-- Test framework: [`examples/code/client/framework.rs`](../../code/client/framework.rs)
+- Test framework: [`edgion-tests/src/client/framework.rs`](../../../edgion-tests/src/client/framework.rs)

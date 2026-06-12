@@ -148,7 +148,7 @@ start_test_server() {
     sleep 1
     
     # CheckBuild
-    local test_server_bin="${PROJECT_ROOT}/target/debug/examples/test_server"
+    local test_server_bin="${PROJECT_ROOT}/target/debug/test_server"
     if [ ! -f "$test_server_bin" ]; then
         log_error "test_server Build，PleaseRun prepare.sh"
         exit 1
@@ -188,7 +188,7 @@ run_tests() {
     log_section "RunTest: $test_command"
     
     # Check test_client_direct
-    local test_client_bin="${PROJECT_ROOT}/target/debug/examples/test_client_direct"
+    local test_client_bin="${PROJECT_ROOT}/target/debug/test_client_direct"
     if [ ! -f "$test_client_bin" ]; then
         log_error "test_client_direct Build，PleaseRun prepare.sh"
         exit 1

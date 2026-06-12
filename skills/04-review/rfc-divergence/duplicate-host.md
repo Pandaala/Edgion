@@ -25,7 +25,7 @@ Suggestions of the form "accept and pick the first/last Host", "downgrade to `tr
 - `redirect_http.rs::EdgionHttpRedirectProxy::request_filter` — same gate at the top of the HTTP→HTTPS redirect listener; prevents an attacker from echoing a smuggled Host into the 301 `Location:` URL.
 - `edgion_gateway_config.rs::SecurityProtectConfig.reject_duplicate_host: bool` — default `true` (`default_reject_duplicate_host`).
 - `edgion_status.rs::EdgionStatus::DuplicateHostHeader = 400_05` — exhaustive `expected_http()` arm + test array updated.
-- Integration: `examples/code/client/suites/http_route/filters/security.rs` — `test_duplicate_host_headers` (same-case `Host:` × 2) and `test_duplicate_host_headers_mixed_case` (`Host:` + `host:`); both raw TCP, both assert HTTP/1.1 400.
+- Integration: `edgion-tests/src/client/suites/http_route/filters/security.rs` — `test_duplicate_host_headers` (same-case `Host:` × 2) and `test_duplicate_host_headers_mixed_case` (`Host:` + `host:`); both raw TCP, both assert HTTP/1.1 400.
 
 ### Test coverage gaps (intentional)
 

@@ -21,12 +21,12 @@ echo "=========================================="
 echo ""
 
 # Run the build_test_proto example
-cargo run --example build_test_proto
+cargo run -p edgion-tests --bin build_test_proto
 
 echo ""
 echo "=========================================="
 echo "Generation complete!"
 echo "=========================================="
 echo ""
-echo "Generated file: examples/code/proto_gen/test.rs"
+echo "Generated file: edgion-tests/src/proto_gen/test.rs"
 echo ""

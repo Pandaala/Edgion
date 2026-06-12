@@ -28,7 +28,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         return Err(
-            "test_service.proto not found (checked: examples/proto, examples/test/proto, examples/code/proto)".into(),
+            "test_service.proto not found (checked: examples/proto, examples/test/proto, edgion-tests/src/proto)"
+                .into(),
         );
     };
     let include_dir = Path::new(proto_path)
@@ -55,7 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nNext steps:");
     println!("  1. Review the generated code: {}/test.rs", out_dir);
     println!("  2. Commit it to git");
-    println!("  3. Update examples to use #[path = \"proto_gen/test.rs\"]");
+    println!("  3. The bins reference it via #[path = \"proto_gen/test.rs\"]");
 
     Ok(())
 }

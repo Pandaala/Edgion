@@ -53,7 +53,7 @@ The `Mutual` / `OptionalMutual` arms are byte-for-byte unchanged; the only edit 
 `examples/test/conf/EdgionTls/mTLS/EdgionTls_edge_mtls-test-terminate.yaml` previously carried
 a `caSecretRef` solely to work around this bug (a comment said so). The ref was removed so the
 existing Terminate suite cases — `test_terminate_without_cert` and `test_terminate_with_cert`
-in `examples/code/client/suites/edgion_tls/mtls/mtls.rs` — now exercise a genuine no-CA
+in `edgion-tests/src/client/suites/edgion_tls/mtls/mtls.rs` — now exercise a genuine no-CA
 Terminate listener. Before the fix, removing that ref would make both cases fail at the
 handshake.
 

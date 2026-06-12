@@ -139,7 +139,7 @@ src/
 ### Testing
 
 - Write unit tests in the same file using `#[cfg(test)]`
-- Local integration manifests live under `examples/test/conf/`, and Rust test code lives under `examples/code/`
+- Local integration manifests live under `examples/test/conf/`, and Rust test code lives under `edgion-tests/src/`
 - Aim for meaningful test coverage
 
 ## Commit Message Guidelines

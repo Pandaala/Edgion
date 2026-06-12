@@ -117,35 +117,35 @@ main() {
 
     # Build test_server
     log_section "Build test_server"
-    if ! build_binary "test_server" "--example test_server"; then
+    if ! build_binary "test_server" "-p edgion-tests --bin test_server"; then
         log_error "Build failed! Exiting..."
         exit 1
     fi
     
     # Build test_client
     log_section "Build test_client"
-    if ! build_binary "test_client" "--example test_client"; then
+    if ! build_binary "test_client" "-p edgion-tests --bin test_client"; then
         log_error "Build failed! Exiting..."
         exit 1
     fi
     
     # Build test_client_direct
     log_section "Build test_client_direct"
-    if ! build_binary "test_client_direct" "--example test_client_direct"; then
+    if ! build_binary "test_client_direct" "-p edgion-tests --bin test_client_direct"; then
         log_error "Build failed! Exiting..."
         exit 1
     fi
     
     # Build resource_diff
     log_section "Build resource_diff"
-    if ! build_binary "resource_diff" "--example resource_diff"; then
+    if ! build_binary "resource_diff" "-p edgion-tests --bin resource_diff"; then
         log_error "Build failed! Exiting..."
         exit 1
     fi
     
     # Build config_load_validator
     log_section "Build config_load_validator"
-    if ! build_binary "config_load_validator" "--example config_load_validator"; then
+    if ! build_binary "config_load_validator" "-p edgion-tests --bin config_load_validator"; then
         log_error "Build failed! Exiting..."
         exit 1
     fi

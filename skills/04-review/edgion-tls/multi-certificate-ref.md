@@ -110,6 +110,6 @@ cert_cb fail-closed convention and the "do not silently drop" intent.
 - Verifier: `tasks/todo/rfc-review/_raw/verification-a4.md → V07`
 - Integration test: `gateway_tls_dual_cert` (TLS1.3 ECDSA/RSA sigalg pinning +
   TLS1.2 RSA guard) in
-  `examples/code/client/suites/gateway/tls/gateway_tls/gateway_tls.rs`
+  `edgion-tests/src/client/suites/gateway/tls/gateway_tls/gateway_tls.rs`
 - Unit test: `pick_secret_index` tests in `tls_pingora.rs`
 - Architecture: [01-architecture/02-gateway/04-tls/01-downstream-tls.md](../../01-architecture/02-gateway/04-tls/01-downstream-tls.md)

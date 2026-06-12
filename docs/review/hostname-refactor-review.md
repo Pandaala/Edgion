@@ -418,7 +418,7 @@ pub fn load_gateways(&self) -> arc_swap::Guard<Arc<HashMap<...>>>
 ## T10. 测试修复：HeaderCertAuth 运行时证书
 
 ### 文件
-- `examples/code/client/suites/edgion_plugins/header_cert_auth/header_cert_auth.rs`（+17, -3 行）
+- `edgion-tests/src/client/suites/edgion_plugins/header_cert_auth/header_cert_auth.rs`（+17, -3 行）
 - `examples/test/scripts/integration/run_integration.sh`（+2 行）
 
 ### 问题背景
@@ -490,7 +490,7 @@ export EDGION_WORK_DIR="${WORK_DIR}"
 | `src/core/gateway/gateway/config_store.rs` | T8 | +230 |
 | `src/core/gateway/gateway/route_match.rs` | T8 | +21 |
 | `src/core/gateway/gateway/handler.rs` | T9 | +21/-21 |
-| `examples/code/client/.../header_cert_auth.rs` | T10 | +17/-3 |
+| `edgion-tests/src/client/.../header_cert_auth.rs` | T10 | +17/-3 |
 | `examples/test/scripts/.../run_integration.sh` | T10 | +2 |
 
 ### 新增文件（2 个）

@@ -93,7 +93,7 @@ SAN-mirror logic), the ordering decision must be revisited.
 
 ## Tests guarding this
 
-- `examples/code/client/suites/edgion_tls/mtls_failclose/mtls_failclose.rs::test_mtls_ca_missing_failclosed`
+- `edgion-tests/src/client/suites/edgion_tls/mtls_failclose/mtls_failclose.rs::test_mtls_ca_missing_failclosed`
   drives the EdgionTls path with `caSecretRef` to a Secret that does not
   exist, asserts openssl s_client handshake aborts (`Cipher=(NONE)`), and
   cross-checks `ssl.log` for an `err_log` entry with prefix `mtls config:`
