@@ -8,7 +8,7 @@
 //   3. Header value == cookie value
 //   4. Token signature is valid and not expired
 //
-// Required config files (in examples/test/conf/EdgionPlugins/Csrf/):
+// Required config files (in edgion-tests/conf/EdgionPlugins/Csrf/):
 //   - EdgionPlugins_default_csrf-test.yaml   # Csrf plugin with key/name config
 //   - HTTPRoute_default_csrf-test.yaml        # Route: csrf-test.example.com
 

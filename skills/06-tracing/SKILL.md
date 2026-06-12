@@ -19,7 +19,7 @@ description: Debugging and troubleshooting skill for Edgion. Use when local code
 ### Fastest local debugging
 
 ```bash
-./examples/test/scripts/integration/run_integration.sh --keep-alive -r <Resource> -i <Item>
+./edgion-tests/scripts/integration/run_integration.sh --keep-alive -r <Resource> -i <Item>
 ```
 
 ### Three views to locate the issue layer

@@ -5,7 +5,7 @@
 //   FAIL: SNI `a.b.example.com`       → two labels left of the dot → no matching cert → handshake fails.
 //   FAIL: SNI `example.com`           → bare apex, no wildcard label → no matching cert → handshake fails.
 //
-// Required config files (examples/test/conf/EdgionTls/wildcard_single_label/):
+// Required config files (edgion-tests/conf/EdgionTls/wildcard_single_label/):
 //   - Gateway.yaml       — HTTPS listener on port 31387
 //   - EdgionTls.yaml     — EdgionTls with hosts: ["*.example.com"], secretRef: edge-tls
 //   - HTTPRoute.yaml     — Route matching *.example.com → test-http:30001
@@ -13,7 +13,7 @@
 //   - EndpointSlice.yaml — test-http EndpointSlice pointing to 127.0.0.1:30001
 //
 // The edge-tls Secret must include DNS:*.example.com in its SAN list.
-// This is ensured by examples/test/scripts/gen_certs/generate_tls_certs.sh.
+// This is ensured by edgion-tests/scripts/gen_certs/generate_tls_certs.sh.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;

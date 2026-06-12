@@ -22,7 +22,7 @@ COPY Cargo.toml Cargo.lock build.rs ./
 # Copy source
 COPY src src
 COPY config config
-COPY examples/test/conf examples/test/conf
+COPY edgion-tests/conf edgion-tests/conf
 
 # Build with persistent cargo/target cache mounts
 # - /usr/local/cargo/registry: downloaded crate sources (shared across builds)
@@ -41,6 +41,6 @@ RUN apt-get update && apt-get install -y ca-certificates curl iproute2 net-tools
 COPY --from=builder /usr/local/bin/edgion-controller /usr/local/bin/
 COPY --from=builder /usr/local/bin/edgion-cli /usr/local/bin/
 COPY --from=builder /app/config /edgion/config
-COPY --from=builder /app/examples/test/conf /edgion/test-conf
+COPY --from=builder /app/edgion-tests/conf /edgion/test-conf
 WORKDIR /edgion
 CMD ["sleep", "infinity"]

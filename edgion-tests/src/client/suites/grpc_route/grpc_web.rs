@@ -4,7 +4,7 @@
 // converts the grpc-web request to native gRPC (h2) toward the backend, and encodes the
 // gRPC trailers back into a 0x80-prefixed body frame for the grpc-web client.
 //
-// Required config (examples/test/conf/HTTPRoute/Protocol/GrpcWeb/):
+// Required config (edgion-tests/conf/HTTPRoute/Protocol/GrpcWeb/):
 // - Service_test-grpc.yaml (appProtocol: kubernetes.io/h2c), EndpointSlice_test-grpc.yaml
 // - Gateway.yaml, HTTPRoute.yaml (host grpcweb.test.example.com)
 

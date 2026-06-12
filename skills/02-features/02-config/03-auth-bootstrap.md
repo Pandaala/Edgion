@@ -221,10 +221,10 @@ operator.
 
 ## Related Regression Tests
 
-- `examples/test/scripts/integration/test_center_no_auth.sh` —
+- `edgion-tests/scripts/integration/test_center_no_auth.sh` —
   Integration-layer structural regression for Center starting without auth configured + 503 on `/api/v1/controllers` business paths + WARN log.
   Included in the prerequisites of `run_integration.sh`.
-- `examples/test/scripts/integration/test_controller_no_auth.sh` (added 2026-06-01) —
+- `edgion-tests/scripts/integration/test_controller_no_auth.sh` (added 2026-06-01) —
   Mirrors the Center test for the Controller: no auth config → `/health`+`/ready` 200,
   business route 503, startup WARN; second positive case exports `EDGION_ADMIN_PASSWORD`
   + `EDGION_ADMIN_JWT_SECRET` and asserts login succeeds.

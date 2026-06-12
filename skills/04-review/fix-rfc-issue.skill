@@ -356,11 +356,11 @@ Suggestions of the form "<rejected suggestion>" are **not accepted**.
 - (optional) Gateway API test / Pingora upstream issue
 ```
 
-### 4d. Integration tests (`examples/test/`)
+### 4d. Integration tests (`edgion-tests/`)
 
 For RFC fixes that change observable behavior — STATUS code, header presence, error mapping, framing — a regression test is highly recommended.
 
-- Search `examples/test/` for related scenarios first.
+- Search `edgion-tests/` for related scenarios first.
 - If the fix changes a wire-observable property (`405 + Allow`, `WWW-Authenticate` on admin 401, percent-encoded `grpc-message`, etc.) add a scenario that asserts the new property; follow `skills/05-testing/01-integration-testing.md`.
 - For Type D doc-comment-only fixes: integration test is not needed.
 
@@ -402,7 +402,7 @@ Please:
 1. Read the changed files in full + the cited RFC §<sec> at datatracker.ietf.org.
 2. Check all callers / usages of modified symbols.
 3. Verify the fix actually addresses the cited RFC clause (does the new code satisfy the MUST/SHOULD?).
-4. **Gateway API regression sweep**: list any Gateway API conformance test under examples/test/ that touches the changed surface; assess whether the fix could flip its result. If unclear, name the test and recommend a manual run.
+4. **Gateway API regression sweep**: list any Gateway API conformance test under edgion-tests/ that touches the changed surface; assess whether the fix could flip its result. If unclear, name the test and recommend a manual run.
 5. **Project-constraint sweep**: confirm the fix does NOT (a) remove an operator-facing CRD field, (b) silently change a default, (c) add tracing::* on a data-plane hot path (refer to skills/03-coding/01-log-safety.md), (d) break a plugin trait or pub-export.
 6. Look for regressions, edge cases, or new bugs introduced by the fix.
 

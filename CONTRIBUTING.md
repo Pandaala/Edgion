@@ -53,7 +53,7 @@ cargo fmt --all
 ### Running Integration Tests
 
 ```bash
-./examples/test/scripts/integration/run_integration.sh
+./edgion-tests/scripts/integration/run_integration.sh
 ```
 
 ## How to Contribute
@@ -139,7 +139,7 @@ src/
 ### Testing
 
 - Write unit tests in the same file using `#[cfg(test)]`
-- Local integration manifests live under `examples/test/conf/`, and Rust test code lives under `edgion-tests/src/`
+- Local integration manifests live under `edgion-tests/conf/`, and Rust test code lives under `edgion-tests/src/`
 - Aim for meaningful test coverage
 
 ## Commit Message Guidelines

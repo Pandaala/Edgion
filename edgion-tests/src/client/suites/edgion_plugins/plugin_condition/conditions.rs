@@ -2,11 +2,11 @@
 //
 // Tests plugin conditional execution based on keyExist condition
 //
-// Required config files (in examples/test/conf/EdgionPlugins/PluginCondition/):
+// Required config files (in edgion-tests/conf/EdgionPlugins/PluginCondition/):
 // - EdgionPlugins_default_condition-test.yaml  # CORS with skip condition on X-Skip-Cors header
 // - HTTPRoute_default_condition-test.yaml      # Route for condition-test.example.com
 //
-// Also requires base config (in examples/test/conf/EdgionPlugins/base/):
+// Also requires base config (in edgion-tests/conf/EdgionPlugins/base/):
 // - Gateway.yaml                               # Gateway for EdgionPlugins tests
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};

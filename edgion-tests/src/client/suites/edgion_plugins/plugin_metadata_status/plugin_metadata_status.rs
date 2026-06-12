@@ -2,7 +2,7 @@
 //
 // Verifies the Accepted and ResolvedRefs status conditions on PluginMetaData resources.
 //
-// Required conf files (examples/test/conf/EdgionPlugins/PluginMetaDataStatus/):
+// Required conf files (edgion-tests/conf/EdgionPlugins/PluginMetaDataStatus/):
 //   01_PluginMetaData_pm-status-gcir-valid.yaml        — valid GCIR PM
 //   02_PluginMetaData_pm-status-gcir-invalid.yaml      — GCIR PM with bad activeProfile
 //   03_PluginMetaData_pm-status-cluster-valid.yaml     — valid ClusterRegionRoute PM

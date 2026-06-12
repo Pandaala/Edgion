@@ -94,10 +94,10 @@ cargo test --all
 make check-agent-docs
 
 # Targeted integration test
-./examples/test/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
+./edgion-tests/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
 
 # Full integration test
-./examples/test/scripts/integration/run_integration.sh
+./edgion-tests/scripts/integration/run_integration.sh
 ```
 
 ## Pre-commit checks (trigger phrases)

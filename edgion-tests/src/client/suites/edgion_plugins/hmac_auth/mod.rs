@@ -1,6 +1,6 @@
 // HMAC Auth plugin tests
 //
-// Required config files (in examples/test/conf/EdgionPlugins/HmacAuth/):
+// Required config files (in edgion-tests/conf/EdgionPlugins/HmacAuth/):
 // - 01_Secret_default_hmac-credentials.yaml
 // - EdgionPlugins_default_hmac-auth.yaml
 // - HTTPRoute_default_hmac-auth-test.yaml

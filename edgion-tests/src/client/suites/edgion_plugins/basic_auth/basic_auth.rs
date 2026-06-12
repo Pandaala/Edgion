@@ -3,7 +3,7 @@
 // Tests the BasicAuth plugin which validates HTTP Basic Authentication credentials.
 // Credentials are stored in a Kubernetes Secret (htpasswd / plain-text format).
 //
-// Required config files (in examples/test/conf/EdgionPlugins/BasicAuth/):
+// Required config files (in edgion-tests/conf/EdgionPlugins/BasicAuth/):
 //   - 01_Secret_default_basic-auth-users.yaml          # Test users (alice/alice-password, bob/bob-secret)
 //   - EdgionPlugins_default_basic-auth-test.yaml       # Basic auth: hideCredentials=false
 //   - HTTPRoute_default_basic-auth-test.yaml            # Route: basic-auth-test.example.com

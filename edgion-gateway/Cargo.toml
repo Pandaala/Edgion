@@ -1,8 +1,8 @@
 [package]
 name = "edgion-gateway"
-version = "0.1.0"
-edition = "2021"
-authors = ["pandalaa"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
 
 [lib]
 name = "edgion_gateway"
@@ -38,143 +38,133 @@ legacy_route_tests = []
 
 [dependencies]
 # Memory allocators (optional, controlled by features)
-tikv-jemallocator = { version = "0.6", optional = true }
-mimalloc = { version = "0.1", default-features = false, optional = true }
+tikv-jemallocator = { workspace = true, optional = true }
+mimalloc = { workspace = true, optional = true }
 
 # Shared resource/config schema crate (leaf; reused by the future EdgionCenter)
-edgion-resources = { path = "../edgion-resources" }
+edgion-resources.workspace = true
 
 # Shared common crate (config loader, observe, secret store, link core, etc.)
-edgion-common = { path = "../edgion-common" }
+edgion-common.workspace = true
 
 # Core async runtime and error handling
-tokio = { version = "1.49", features = ["full"] }
-tokio-util = "0.7"
-tokio-stream = "0.1"
-anyhow = "1.0"
-async-trait = "0.1"
-thiserror = "2.0.18"
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-stream.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
 
 # Serialization/Deserialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde_yaml = "0.9"
-jsonschema = { version = "0.40", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+jsonschema.workspace = true
 
 # Kubernetes conf_client and types
-kube = { version = "2.0.1", features = ["runtime", "derive"] }
-k8s-openapi = { version = "0.26.1", features = ["latest", "schemars"] }
-schemars = { version = "1" }
+kube.workspace = true
+k8s-openapi.workspace = true
+schemars.workspace = true
 
 # gRPC (config sync)
-tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
-# rustls （tonic TLS ）
-rustls = { version = "0.23", features = ["ring"] }
-tokio-rustls = "0.26"
+tonic.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
 # System CA roots for building custom rustls ClientConfig (Redis LinkSys TLS)
-rustls-native-certs = "0.8"
-x509-parser = { version = "0.18", features = ["verify"] }  # Certificate parsing and signature verification
-tonic-reflection = "0.12"
-prost = "0.13"
+rustls-native-certs.workspace = true
+x509-parser.workspace = true
+tonic-reflection.workspace = true
+prost.workspace = true
 
 # File system monitoring
-notify = "8.2"
-walkdir = "2"
-futures = "0.3.31"
+notify.workspace = true
+walkdir.workspace = true
+futures.workspace = true
 
 # HTTP server
-axum = { version = "0.8.8", features = ["macros", "ws"] }
-axum-server = { version = "0.8", features = ["tls-rustls"] }
+axum.workspace = true
+axum-server.workspace = true
 
 # Utilities
-bytes = "1.11.1"
-base64 = "0.22"
-chrono = "0.4"
-parking_lot = "0.12"
-uuid = { version = "1.19", features = ["v4"] }
-arc-swap = "1.8"
-dashmap = "6.1"
-regex = "1.12"
-rand = "0.9"
-smallvec = "1.15"
-indexmap = "2"
-nom = "7"
-bcrypt = "0.18"
-sha2 = "0.10"
-subtle = "2"
-crc32fast = "1.4"
-hmac = "0.12"
-aes-gcm = "0.10"
-hex = "0.4"
-jsonwebtoken = "9"
+bytes.workspace = true
+base64.workspace = true
+chrono.workspace = true
+parking_lot.workspace = true
+uuid.workspace = true
+arc-swap.workspace = true
+dashmap.workspace = true
+regex.workspace = true
+rand.workspace = true
+smallvec.workspace = true
+indexmap.workspace = true
+nom.workspace = true
+bcrypt.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+crc32fast.workspace = true
+hmac.workspace = true
+aes-gcm.workspace = true
+hex.workspace = true
+jsonwebtoken.workspace = true
 
 # Pingora
-pingora-core = { version = "0.8.1", features = ["connection_filter"] }
-pingora-http = "0.8.1"
-pingora-limits = "0.8.1"
-pingora-load-balancing = "0.8.1"
-pingora-proxy = { version = "0.8.1" }
-etcd-client = { version = "0.18", features = ["tls"] }
-fred = { version = "10", default-features = false, features = [
-    "enable-rustls",       # TLS via rustls (consistent with Edgion)
-    "i-std",               # Standard data structures (GET, SET, lists, etc.)
-    "i-keys",              # Key commands (EXPIRE, TTL, EXISTS, etc.)
-    "i-hashes",            # Hash commands (HGET, HSET, HGETALL, etc.)
-    "i-scripts",           # Lua scripting (for distributed locks)
-    "i-lists",             # List commands (RPUSH, LPOP, LLEN, LTRIM)
-    "partial-tracing",     # Tracing integration
-] }
+pingora-core.workspace = true
+pingora-http.workspace = true
+pingora-limits.workspace = true
+pingora-load-balancing.workspace = true
+pingora-proxy.workspace = true
+etcd-client.workspace = true
+fred.workspace = true
 
 # BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)
-boring-sys = { version = "4", optional = true }
-boring = { version = "4", optional = true }
+boring-sys = { workspace = true, optional = true }
+boring = { workspace = true, optional = true }
 
 # Metrics
-metrics = "0.24"
-metrics-exporter-prometheus = "0.18"
-metrics-util = { version = "0.20", features = ["debugging"] }
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+metrics-util.workspace = true
 
 # CLI
-clap = { version = "4.5", features = ["derive", "env"] }
-rpassword = "7"
-zeroize = { version = "1", features = ["derive"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-tracing-appender = "0.2"
-http = "1.4.0"
-percent-encoding = "2.3"
+clap.workspace = true
+rpassword.workspace = true
+zeroize.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+http.workspace = true
+percent-encoding.workspace = true
 
 # Test client dependencies
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2", "stream"] }
+reqwest.workspace = true
 
 # CLI table formatting
-tabled = "0.20"
+tabled.workspace = true
 
-rusqlite = { version = "0.31", features = ["bundled"] }
-md-5 = "0.10"
-cookie = "0.18.1"
-instant-acme = "0.8.4"
-rcgen = { version = "0.14.7", features = ["x509-parser"] }
-time = { version = "0.3", features = ["std"] }
-sha1 = "0.10.6"
-# Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
-ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
-pingora-ketama = "0.8.1"
-tower = { version = "0.5", features = ["util"] }
+rusqlite.workspace = true
+md-5.workspace = true
+cookie.workspace = true
+instant-acme.workspace = true
+rcgen.workspace = true
+time.workspace = true
+sha1.workspace = true
+ldap3.workspace = true
+pingora-ketama.workspace = true
+tower.workspace = true
 
 
 [dev-dependencies]
-edgion-common = { path = "../edgion-common", features = ["test-util"] }
-tempfile = "3"
-h2 = "0.4"
-tokio-tungstenite = "0.28"
-base64 = "0.22"
-mockall = "0.14.0"
-colored = "2.2"
-console = "0.16"
-expect-test = "1.5"
-proxy-header = "0.1.2"
-tower = "0.5"
-hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
-wiremock = "0.6"
-proptest = "1"
+edgion-common = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true
+h2.workspace = true
+tokio-tungstenite.workspace = true
+base64.workspace = true
+mockall.workspace = true
+colored.workspace = true
+console.workspace = true
+expect-test.workspace = true
+proxy-header.workspace = true
+tower.workspace = true
+hyper-util.workspace = true
+wiremock.workspace = true
+proptest.workspace = true

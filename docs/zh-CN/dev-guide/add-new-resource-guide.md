@@ -56,7 +56,7 @@ Edgion 采用**单一数据源 + 宏生成**的架构：
 13. **`src/core/gateway/api/mod.rs`** - 如果要支持 Gateway Admin API 查询
 14. **`src/core/controller/conf_mgr/conf_center/kubernetes/storage.rs`** - 如果要支持 Kubernetes 模式下的动态 CRUD
 15. **`config/crd/`** - CRD 定义或上游 CRD 更新
-16. **测试与示例配置** - `examples/test/`、测试 YAML、集成测试
+16. **测试与示例配置** - `edgion-tests/`、测试 YAML、集成测试
 
 ---
 
@@ -205,7 +205,7 @@ Gateway API 标准或实验性资源，优先跟随：
 至少要覆盖：
 
 - Rust 单元测试
-- `examples/test/` 下的集成测试
+- `edgion-tests/` 下的集成测试
 - 如果暴露了 API，补 controller / gateway admin API 的验证
 
 对 route-like、plugin-like、依赖型资源来说，集成测试往往是最关键的安全网。

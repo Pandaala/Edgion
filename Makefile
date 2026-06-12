@@ -264,7 +264,7 @@ coverage-unit: ## Unit tests only, collect profraw via cargo llvm-cov
 	cargo llvm-cov --no-report --workspace
 
 coverage-integration: ## Integration tests with instrumented binaries
-	EDGION_COVERAGE=1 ./examples/test/scripts/integration/run_integration.sh
+	EDGION_COVERAGE=1 ./edgion-tests/scripts/integration/run_integration.sh
 
 coverage-report: ## Merge profraw and generate HTML + lcov
 	cargo llvm-cov report \

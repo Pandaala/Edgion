@@ -7,7 +7,7 @@
 //! 4. ConfigMap caCertificateRef with valid ConfigMap → Accepted=True, ResolvedRefs=True
 //! 5. ConfigMap caCertificateRef with missing ConfigMap → ResolvedRefs=False
 //!
-//! Required config files (in examples/test/conf/Status/BackendTLSPolicy/):
+//! Required config files (in edgion-tests/conf/Status/BackendTLSPolicy/):
 //!
 //! Ancestor chain (Gateway + Route + Services — needed to populate status.ancestors):
 //! - Gateway_edgion-test_btls-status-gateway.yaml

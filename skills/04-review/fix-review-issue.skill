@@ -330,11 +330,11 @@ Ask: does the fix resolve a pattern that could be re-reported in a future review
   documented in an EXISTING specific skill file (not an index)? If so, update that one file.
 - Check `skills/SKILL.md` "Key constraints" table — if the fix touches a listed constraint, update the table entry.
 
-### 4c. Integration tests (`examples/test/`)
+### 4c. Integration tests (`edgion-tests/`)
 
 Ask: is there an existing integration test scenario that covers the fixed code path?
 
-- Run a quick search: `grep -r "<relevant keyword>" examples/test/` to find related scenarios.
+- Run a quick search: `grep -r "<relevant keyword>" edgion-tests/` to find related scenarios.
 - If an existing scenario covers this path, verify conceptually that it would still pass.
 - If the fix is **behavioral** (changes observable output, status conditions, error handling, metrics) and no existing test covers it: add a new integration test scenario following `skills/05-testing/01-integration-testing.md`. If a hot-reload path was changed, also add a dynamic scenario per the instructions in that file.
 - If the fix is **non-behavioral** (code clarity, dead code removal, comment only): note "integration test not needed" and continue.

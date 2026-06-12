@@ -39,8 +39,8 @@ Verify that the `BandwidthLimit` plugin correctly limits the downstream response
 - **Expected Behavior**: Request succeeds immediately (no throttling).
 
 ## Configuration Files
-- `Edgion/examples/test/conf/EdgionPlugins/BandwidthLimit/01_BandwidthLimit_plugin.yaml`
-- `Edgion/examples/test/conf/EdgionPlugins/BandwidthLimit/HTTPRoute_bandwidth_limit.yaml`
+- `Edgion/edgion-tests/conf/EdgionPlugins/BandwidthLimit/01_BandwidthLimit_plugin.yaml`
+- `Edgion/edgion-tests/conf/EdgionPlugins/BandwidthLimit/HTTPRoute_bandwidth_limit.yaml`
 
 ## Test Code
 - `Edgion/edgion-tests/src/client/suites/edgion_plugins/bandwidth_limit/bandwidth_limit.rs`

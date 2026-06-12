@@ -36,7 +36,7 @@ Closed cases (do not reopen without new requirement): see the "Closed: not group
 | **Rolling-upgrade safety** | Any new field added to a struct that crosses the controller → gateway gRPC boundary (`ResolvedKey`, `HmacCredential`, `ResolvedJwtCredential`, `ResolvedUser`, `KeyMetadata`, …) **must** carry `#[serde(default = "…")]` with a reasonable default. Otherwise a new gateway deserializing an old controller's payload fails for the whole `EdgionPlugins` resource. |
 | **Group name validation** | Reuse [`validate_group_name`](../../../edgion-resources/src/resources/common/group_name.rs) (≤ 63 chars, K8s label-value charset `^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`). Do not invent a per-plugin variant. |
 | **CRD schema shape** | For nested `config:` under `requestPlugins[]`, declare grouped fields with `properties:` + `x-kubernetes-preserve-unknown-fields: true`. Do **not** try to use `oneOf` keyed on the sibling `type` field — CRDs cannot cross-field branch without `x-kubernetes-validations` CEL. |
-| **Fixture coverage** | Update both `examples/test/conf/EdgionPlugins/<Plugin>/` **and** `examples/k8stest/conf/EdgionPlugins/<Plugin>/`. K8s integration breaks with `unknown field` if one side is missed. |
+| **Fixture coverage** | Update both `edgion-tests/conf/EdgionPlugins/<Plugin>/` **and** `examples/k8stest/conf/EdgionPlugins/<Plugin>/`. K8s integration breaks with `unknown field` if one side is missed. |
 
 ## 3. Controller resolution contract
 
@@ -63,7 +63,7 @@ At minimum each grouped plugin / list must add:
 - **Cross-group first-wins** covered at the **unit-test** level (integration is not worth the echo-upstream-header wiring).
 
 For `DynamicTest` mode, new subdirectories (`initial_grouped/`, `updates_grouped/`, …) must be added to **both** skip lists:
-`examples/test/scripts/utils/start_all_with_conf.sh` *and* `examples/test/scripts/utils/load_conf.sh`. Missing the second causes `updates_grouped/` to be applied during the initial phase and silently shadow the initial fixture.
+`edgion-tests/scripts/utils/start_all_with_conf.sh` *and* `edgion-tests/scripts/utils/load_conf.sh`. Missing the second causes `updates_grouped/` to be applied during the initial phase and silently shadow the initial fixture.
 
 ## 7. Existing instances (templates to copy)
 

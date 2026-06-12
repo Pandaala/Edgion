@@ -68,7 +68,7 @@ This differs from route-like resources because the object becomes shared runtime
 ## 5. Manifests And Tests
 
 - `config/crd/edgion-crd/edgion_plugins_crd.yaml`
-- `examples/test/conf/EdgionPlugins/`
+- `edgion-tests/conf/EdgionPlugins/`
 
 What to copy:
 

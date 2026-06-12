@@ -1,6 +1,6 @@
 // ResponseRewrite plugin tests
 //
-// Required config files (in examples/test/conf/EdgionPlugins/ResponseRewrite/):
+// Required config files (in edgion-tests/conf/EdgionPlugins/ResponseRewrite/):
 // - 01_EdgionPlugins_status-code.yaml
 // - 02_EdgionPlugins_headers-set.yaml
 // - 03_EdgionPlugins_headers-rename.yaml

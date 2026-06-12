@@ -1,6 +1,6 @@
 // ProxyRewrite plugin tests
 //
-// Required config files (in examples/test/conf/EdgionPlugins/ProxyRewrite/):
+// Required config files (in edgion-tests/conf/EdgionPlugins/ProxyRewrite/):
 // - EdgionPlugins_default_proxy-rewrite.yaml
 // - HTTPRoute_default_proxy-rewrite.yaml
 

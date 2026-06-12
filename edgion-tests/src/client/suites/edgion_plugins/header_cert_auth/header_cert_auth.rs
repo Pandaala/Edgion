@@ -12,13 +12,13 @@ const TEST_HOST: &str = "header-cert-auth-test.example.com";
 const CERT_HEADER_NAME: &str = "X-Client-Cert";
 
 const COMPILE_TIME_SECRET_YAML: &str = include_str!(
-    "../../../../../../examples/test/conf/HTTPRoute/Backend/BackendTLS/ClientCert_edge_backend-client-cert.yaml"
+    "../../../../../../edgion-tests/conf/HTTPRoute/Backend/BackendTLS/ClientCert_edge_backend-client-cert.yaml"
 );
 
 const RUNTIME_SECRET_RELATIVE: &str =
     "generated-secrets/HTTPRoute/Backend/BackendTLS/ClientCert_edge_backend-client-cert.yaml";
-const K8S_MOUNTED_CERT_PATH: &str = "/usr/local/edgion/examples/test/certs/mtls/valid-client.crt";
-const REPO_CERT_PATH: &str = "examples/test/certs/mtls/valid-client.crt";
+const K8S_MOUNTED_CERT_PATH: &str = "/usr/local/edgion/edgion-tests/certs/mtls/valid-client.crt";
+const REPO_CERT_PATH: &str = "edgion-tests/certs/mtls/valid-client.crt";
 
 fn read_secret_data_field(yaml: &str, key: &str) -> Option<String> {
     let value: Value = serde_yaml::from_str(yaml).ok()?;

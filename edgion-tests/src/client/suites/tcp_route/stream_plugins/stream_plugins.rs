@@ -3,7 +3,7 @@
 // Tests that stream plugins on TCPRoute annotations work correctly,
 // especially verifying that real client IP is extracted (not hardcoded "0.0.0.0").
 //
-// Required config files (in examples/test/conf/TCPRoute/StreamPlugins/):
+// Required config files (in edgion-tests/conf/TCPRoute/StreamPlugins/):
 // - 01_EdgionStreamPlugins_deny.yaml          # deny-all resource
 // - 02_EdgionStreamPlugins_allow_localhost.yaml # allow 127.0.0.0/8 only
 // - 03_Gateway.yaml                           # Gateway with 2 TCP listeners

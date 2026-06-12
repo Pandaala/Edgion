@@ -172,9 +172,9 @@ metadata:
 
 现成样例和集成测试配置主要在：
 
-- `examples/test/conf/Gateway/StreamPlugins/`
-- `examples/test/conf/TCPRoute/StreamPlugins/`
-- `examples/test/conf/TLSRoute/StreamPlugins/`
+- `edgion-tests/conf/Gateway/StreamPlugins/`
+- `edgion-tests/conf/TCPRoute/StreamPlugins/`
+- `edgion-tests/conf/TLSRoute/StreamPlugins/`
 
 ## 人工审查清单
 

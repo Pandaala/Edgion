@@ -38,16 +38,16 @@ Both scripts are **self-contained** — they auto-start and auto-stop the enviro
 
 ```bash
 # Basic test (full lifecycle: start → test → stop)
-./examples/test/scripts/conf-sync/run_conf_sync_test.sh
+./edgion-tests/scripts/conf-sync/run_conf_sync_test.sh
 
 # Advanced test
-./examples/test/scripts/conf-sync/run_conf_sync_advanced_test.sh
+./edgion-tests/scripts/conf-sync/run_conf_sync_advanced_test.sh
 
 # Attach to already-running environment (skip start/stop)
-./examples/test/scripts/conf-sync/run_conf_sync_test.sh --no-start --keep-alive
+./edgion-tests/scripts/conf-sync/run_conf_sync_test.sh --no-start --keep-alive
 
 # Stress test (50 cycles)
-./examples/test/scripts/conf-sync/run_conf_sync_test.sh --stress
+./edgion-tests/scripts/conf-sync/run_conf_sync_test.sh --stress
 ```
 
 ## Resource Coverage
@@ -105,7 +105,7 @@ Returns counts from all derived stores. Key fields:
 ## File Layout
 
 ```
-examples/test/conf/conf-sync-leak-test/
+edgion-tests/conf/conf-sync-leak-test/
 ├── base/
 │   └── Gateway.yaml                      # Multi-protocol Gateway (HTTP/gRPC/TCP/UDP/TLS)
 └── inject/
@@ -125,14 +125,14 @@ examples/test/conf/conf-sync-leak-test/
     ├── Service_leak-svc.yaml
     └── EndpointSlice_leak-svc.yaml
 
-examples/test/scripts/conf-sync/
+edgion-tests/scripts/conf-sync/
 ├── run_conf_sync_test.sh                 # Basic cyclic test
 ├── run_conf_sync_advanced_test.sh        # Advanced scenario test
 ├── run_conf_sync_mtls_test.sh            # mTLS end-to-end test
 ├── run_controller_reconnect_test.sh      # Gateway survives Controller restart/reconnect
 └── run_controller_stress_restart_test.sh # Controller reconverges 200+ routes after restart
 
-examples/test/scripts/gen_certs/
+edgion-tests/scripts/gen_certs/
 └── generate_conf_sync_certs.sh           # Uses edgion-cli gen-certs for conf_sync mTLS certs
 ```
 
@@ -148,10 +148,10 @@ examples/test/scripts/gen_certs/
 
 ```bash
 # Full run
-./examples/test/scripts/conf-sync/run_conf_sync_mtls_test.sh
+./edgion-tests/scripts/conf-sync/run_conf_sync_mtls_test.sh
 
 # Keep services running after test for manual inspection
-./examples/test/scripts/conf-sync/run_conf_sync_mtls_test.sh --keep-alive
+./edgion-tests/scripts/conf-sync/run_conf_sync_mtls_test.sh --keep-alive
 ```
 
 ## Adding New Resources to Coverage

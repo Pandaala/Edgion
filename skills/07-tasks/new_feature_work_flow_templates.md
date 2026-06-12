@@ -145,7 +145,7 @@ Minimum design requirements:
 | `cargo fmt --all -- --check` | pass/fail |  |
 | `cargo clippy --all-targets` | pass/fail |  |
 | `cargo test --all` | pass/fail |  |
-| `./examples/test/scripts/integration/run_integration.sh --no-prepare -r ... -i ...` | pass/fail |  |
+| `./edgion-tests/scripts/integration/run_integration.sh --no-prepare -r ... -i ...` | pass/fail |  |
 
 ## Failure attribution
 - This change:

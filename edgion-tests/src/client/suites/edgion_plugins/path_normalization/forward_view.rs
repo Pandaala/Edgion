@@ -25,7 +25,7 @@
 //   region_route plugin controls routing decisions, not upstream forwarding; the
 //   annotation (or global flag) controls what path upstream sees.
 //   Manual verification requires a working region_route fixture — see
-//   examples/test/conf/EdgionPlugins/RegionRoute/ for the region_route test setup.
+//   edgion-tests/conf/EdgionPlugins/RegionRoute/ for the region_route test setup.
 //
 // Covered by:
 //   ForwardView/03_HTTPRoute_default-normalized-forward.yaml

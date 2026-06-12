@@ -4,7 +4,7 @@
 // (Let's Encrypt's official ACME test server).
 //
 // Prerequisites:
-//   cd examples/test/conf/Services/acme/pebble
+//   cd edgion-tests/conf/Services/acme/pebble
 //   docker compose up -d
 //
 // Run via test_client:
@@ -66,7 +66,7 @@ impl AcmeTestSuite {
                         ),
                         false => TestResult::failed(
                             start.elapsed(),
-                            "Pebble not reachable. Start with: cd examples/test/conf/Services/acme/pebble && docker compose up -d".to_string(),
+                            "Pebble not reachable. Start with: cd edgion-tests/conf/Services/acme/pebble && docker compose up -d".to_string(),
                         ),
                     }
                 })

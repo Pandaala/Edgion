@@ -56,7 +56,7 @@ Adding a new resource type usually requires touching these core locations:
 13. **`src/core/gateway/api/mod.rs`** - If Gateway Admin API should expose it
 14. **`src/core/controller/conf_mgr/conf_center/kubernetes/storage.rs`** - If Kubernetes-mode dynamic CRUD should support it
 15. **`config/crd/`** - CRD manifests or upstream CRD updates
-16. **Tests and example configs** - `examples/test/`, YAML fixtures, integration tests
+16. **Tests and example configs** - `edgion-tests/`, YAML fixtures, integration tests
 
 ---
 
@@ -206,7 +206,7 @@ Keep these aligned with the Rust type:
 At minimum, cover:
 
 - Rust unit tests
-- integration tests under `examples/test/`
+- integration tests under `edgion-tests/`
 - controller / gateway API validation when new endpoints are exposed
 
 For route-like, plugin-like, or dependency-heavy resources, integration tests are usually the most important safety net.

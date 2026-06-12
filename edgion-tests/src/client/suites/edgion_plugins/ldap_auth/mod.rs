@@ -1,6 +1,6 @@
 // LDAP Auth plugin tests
 //
-// Required config files (in examples/test/conf/EdgionPlugins/LdapAuth/):
+// Required config files (in edgion-tests/conf/EdgionPlugins/LdapAuth/):
 // - EdgionPlugins_default_ldap-auth.yaml                  # LDAP auth base config
 // - HTTPRoute_default_ldap-auth-test.yaml                 # Route for base tests
 // - 02_EdgionPlugins_default_ldap-auth-anonymous.yaml     # LDAP auth anonymous mode
@@ -10,7 +10,7 @@
 // - 06_EdgionPlugins_default_ldap-auth-hide-creds.yaml    # LDAP auth with hideCredentials=true
 // - 07_HTTPRoute_default_ldap-auth-hide-creds.yaml        # Route for hideCredentials tests
 //
-// Also requires base config (in examples/test/conf/EdgionPlugins/base/):
+// Also requires base config (in edgion-tests/conf/EdgionPlugins/base/):
 // - Gateway.yaml                                          # Gateway for EdgionPlugins tests
 
 mod ldap_auth;

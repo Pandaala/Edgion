@@ -1,7 +1,7 @@
 // TLS Cipher Test Suite
 // Test TLS 1.2 cipher configuration support
 //
-// Required config files (in examples/test/conf/EdgionTls/cipher/):
+// Required config files (in edgion-tests/conf/EdgionTls/cipher/):
 // - Gateway.yaml                      # Gateway with cipher test listeners
 // - HTTPRoute.yaml                    # Routes for cipher test hosts
 // - EdgionTls_cipher_legacy.yaml      # TLS 1.2 + legacy ciphers (AES128-SHA, etc.)

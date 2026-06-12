@@ -2,7 +2,7 @@
 //
 // Verifies that the ResolvedRefs condition is correctly set on EP and ESP resources.
 //
-// Required conf files (examples/test/conf/EdgionPlugins/ResolvedRefs/):
+// Required conf files (edgion-tests/conf/EdgionPlugins/ResolvedRefs/):
 //   01_Secret_edgion-test_ep-resolved-refs-test-secret.yaml         — real Secret
 //   02_EdgionPlugins_edgion-test_ep-secret-exists.yaml              — EP refs existing Secret
 //   03_EdgionPlugins_edgion-test_ep-secret-missing.yaml             — EP refs missing Secret

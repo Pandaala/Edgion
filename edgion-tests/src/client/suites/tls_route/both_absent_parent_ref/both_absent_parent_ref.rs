@@ -7,7 +7,7 @@
 // This exercises the Gateway API spec rule: when neither sectionName nor
 // port is set, the resource should attach to ALL listeners of the Gateway.
 //
-// Required config files (in examples/test/conf/TLSRoute/BothAbsentParentRef/):
+// Required config files (in edgion-tests/conf/TLSRoute/BothAbsentParentRef/):
 // - 01_Gateway.yaml        # Gateway with TLS listener on port 31288
 // - 02_EdgionTls.yaml      # EdgionTls with parentRef (name+ns only)
 // - 03_TLSRoute.yaml       # TLSRoute with parentRef (name+ns only)

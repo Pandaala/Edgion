@@ -1,40 +1,45 @@
-# Edgion Examples & Tests
+# Edgion Kubernetes & Conformance Suites
 
-This directory contains integration tests, conformance tests, and example configurations for the Edgion Gateway.
-
-## Directory Structure
+This directory holds the two **system-level** test suites that are independent of
+the in-process integration harness:
 
 ```
 examples/
-├── code/                          # Rust integration test code
-│   ├── client/                    # Test client framework & suites
-│   │   └── suites/                # Per-feature test suites
-│   ├── server/                    # Test backend servers
-│   └── validator/                 # Configuration validators
-├── gateway-api-conformance/       # Gateway API conformance tests (Go)
+├── gateway-api-conformance/   # Gateway API conformance tests (standalone Go module)
 │   ├── conformance_test.go
 │   └── manifests/
-└── k8stest/                       # Kubernetes integration tests
-    ├── conf/                      # Test YAML manifests
-    ├── kubernetes/                # Deployment manifests
-    └── scripts/                   # Test runner scripts
+└── k8stest/                   # Kubernetes end-to-end tests
+    ├── conf/                  # K8s test manifests (derived from edgion-tests/conf)
+    ├── kubernetes/            # Deployment manifests
+    └── scripts/               # K8s test runner scripts
 ```
 
-## Integration Tests
+> **The local integration harness moved.** The Rust test code, orchestration
+> scripts, YAML fixtures, and certificates now live in the **`edgion-tests`**
+> workspace crate, not here:
+>
+> ```
+> edgion-tests/
+> ├── src/        # Rust: suites, test_server, validators (test_client, etc.)
+> ├── scripts/    # run_integration.sh, prepare.sh, start_all.sh, gen_certs, ...
+> ├── conf/       # YAML fixtures by resource type (HTTPRoute, GRPCRoute, ...)
+> └── certs/      # auto-generated test certificates (gitignored)
+> ```
 
-### Running Unit Tests
+## Local integration tests (now under `edgion-tests/`)
 
 ```bash
-cargo test --all --tests
+# Full local integration sweep
+./edgion-tests/scripts/integration/run_integration.sh
+
+# Targeted run (skip build)
+./edgion-tests/scripts/integration/run_integration.sh --no-prepare -r HTTPRoute -i Basic
+
+# Build the harness binaries
+cargo build -p edgion-tests --bins
 ```
 
-### Running Local Integration Tests
-
-```bash
-./test/scripts/integration/run_integration.sh
-```
-
-### Running Kubernetes Integration Tests
+## Kubernetes integration tests
 
 See [k8stest/README.md](k8stest/README.md) for detailed instructions.
 
@@ -42,31 +47,16 @@ See [k8stest/README.md](k8stest/README.md) for detailed instructions.
 # Full Kubernetes integration test
 ./examples/k8stest/scripts/run_k8s_integration.sh
 
-# Run specific test suite
+# Run a specific suite / item
 ./examples/k8stest/scripts/run_k8s_integration.sh -r HTTPRoute -i Match
-
-# Run specific plugin tests
-./examples/k8stest/scripts/run_k8s_integration.sh --start-from EdgionPlugins/JwtAuth
 ```
 
-### Gateway API Conformance Tests
+## Gateway API conformance tests
 
 ```bash
 cd examples/gateway-api-conformance
 go test -v -run TestConformance
 ```
-
-## Test Configuration
-
-Test YAML manifests are organized under `k8stest/conf/` by resource type:
-
-- `EdgionPlugins/` — Plugin test configurations (BasicAuth, CORS, JWT, RateLimit, etc.)
-- `HTTPRoute/` — HTTP routing test configurations
-- `GRPCRoute/` — gRPC routing tests
-- `TCPRoute/` — TCP routing tests
-- `UDPRoute/` — UDP routing tests
-- `TLSRoute/` — TLS routing tests
-- `Gateway/` — Gateway configuration tests
 
 ## Related Documentation
 

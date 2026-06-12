@@ -119,7 +119,7 @@ The validator-side rebuild at `validator.rs:114-125` is the key safeguard agains
 
 **Why is the default `false`?** Two reasons:
 1. Many real deployments call internal services (Redis admin APIs, sidecar `/healthz` endpoints) from DSL scripts. Defaulting to "block private" would break the common case.
-2. SSRF is a deployment-level concern: when the gateway runs in a cluster where `http.call` should never touch the cluster network, the operator enables the guard; when it runs as a per-tenant Lua-style scripting hook, the guard is on by default in the example configs (`examples/test/conf/EdgionPlugins/Dsl/`).
+2. SSRF is a deployment-level concern: when the gateway runs in a cluster where `http.call` should never touch the cluster network, the operator enables the guard; when it runs as a per-tenant Lua-style scripting hook, the guard is on by default in the example configs (`edgion-tests/conf/EdgionPlugins/Dsl/`).
 
 The blocklist is **host-string** based, not post-DNS-resolution. If the URL host is a name (`internal-svc.local`), the script can still reach private IPs by resolving in the upstream DNS. A future tightening would resolve before checking — out of scope today because it would require a synchronous resolver in the path. Reopen when an SSRF report cites this gap.
 

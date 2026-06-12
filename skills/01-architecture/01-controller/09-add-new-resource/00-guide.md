@@ -184,7 +184,7 @@ Make sure the Rust type definition and manifest agree on:
 At minimum, decide which of these you need:
 
 - Rust unit tests near the resource type or handler
-- integration tests under `examples/test/`
+- integration tests under `edgion-tests/`
 - controller / gateway admin API coverage if you exposed new endpoints
 
 For route-like or dependency-heavy resources, integration coverage is usually the real safety net.
@@ -205,7 +205,7 @@ Run the smallest checks that prove the new resource is really wired:
 ```bash
 cargo check
 cargo test
-./examples/test/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
+./edgion-tests/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
 ```
 
 Also verify that your template resource and the new resource have comparable touchpoints:

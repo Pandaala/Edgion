@@ -3,7 +3,7 @@
 // Integration coverage for the unified per-request global plugin snapshot
 // (EdgionGatewayConfig.globalPluginsRef -> EdgionHttpContext cache).
 //
-// Configs defined in examples/test/conf/EdgionPlugins/GlobalPluginsSnapshot/:
+// Configs defined in edgion-tests/conf/EdgionPlugins/GlobalPluginsSnapshot/:
 //   01 EdgionPlugins gp-resp-header-modifier:
 //        upstreamResponseFilterPlugins -> ResponseHeaderModifier add X-Global-Plugin: yes
 //   02 EdgionGatewayConfig example-gateway override:

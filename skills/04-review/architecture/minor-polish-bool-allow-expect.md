@@ -41,7 +41,7 @@ Location: `edgion-common/src/startup.rs:3-7`.
 
 **Why not accepted**:
 
-1. The four callers are top-level `main()` of `edgion_controller` / `edgion_center` / `edgion_gateway` / `edgion_ctl`. Each binary is a single-process entry; **no Rust test or library code calls `init_crypto`**. The "twice-called in a test harness" scenario described in the finding does not exist — integration tests are bash-driven (`examples/test/scripts/integration/`) with one binary per process.
+1. The four callers are top-level `main()` of `edgion_controller` / `edgion_center` / `edgion_gateway` / `edgion_ctl`. Each binary is a single-process entry; **no Rust test or library code calls `init_crypto`**. The "twice-called in a test harness" scenario described in the finding does not exist — integration tests are bash-driven (`edgion-tests/scripts/integration/`) with one binary per process.
 2. At a binary entry point, `.expect` is the correct policy: if `install_default()` returns `Err`, it means some other code already installed a different `CryptoProvider`. Silently `.ok()`-ing would let the binary continue with an unknown provider while we believed we installed `ring` — a real-world security configuration drift becomes invisible.
 3. If a Rust integration test ever needs to install crypto in-process, the right shape is `let _ = rustls::crypto::ring::default_provider().install_default();` inside the test (or a `OnceLock`), **not** a permanent downgrade of the production main-entry helper.
 

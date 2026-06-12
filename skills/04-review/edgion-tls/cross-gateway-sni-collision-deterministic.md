@@ -116,7 +116,7 @@ collisions reach the data plane unguarded.
   Controller→Gateway sync — the gRPC `ConfigSync` proto carries the whole object as a JSON
   `string data` payload, `clean_metadata` strips only blocked annotations + `managed_fields`,
   and serde round-trips `ObjectMeta` losslessly, so oldest-wins genuinely happens. In
-  **FileSystem mode** (integration-test harness, `examples/test/conf/...`), the field is
+  **FileSystem mode** (integration-test harness, `edgion-tests/conf/...`), the field is
   present only if the source YAML includes `metadata.creationTimestamp`, which test fixtures
   usually omit. When `creationTimestamp` is **universally absent**, every entry ties on the
   timestamp and selection reduces to `(namespace, name)` lexicographic — i.e. the very
@@ -146,7 +146,7 @@ Unit tests in `tls_store.rs` (EdgionTls):
 Unit test in `gateway_tls_routes.rs` (TLSRoute):
 - `test_same_hostname_collision_prefers_oldest_deterministically`.
 
-Integration scenario `EdgionTls/sni_collision` (`examples/test/conf/EdgionTls/sni_collision/`
+Integration scenario `EdgionTls/sni_collision` (`edgion-tests/conf/EdgionTls/sni_collision/`
 + suite `edgion-tests/src/client/suites/edgion_tls/sni_collision/`): two EdgionTls bind the same
 host `shared-collision.example.com` on one HTTPS listener — older (`creationTimestamp`
 2020-01-01) → RSA `edge-tls` (CN=test.example.com), newer (2024-01-01) → ECDSA

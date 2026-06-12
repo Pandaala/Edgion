@@ -102,7 +102,7 @@ branches in `apply_edgion_tls_cert` and `apply_gateway_tls_cert`; see
 ## Tests guarding this
 
 - `edgion-tests/src/client/suites/edgion_tls/cipher/cipher.rs::test_bad_cipher_name_failclosed`
-  drives a `cipher-badname` EdgionTls (`examples/test/conf/EdgionTls/cipher/EdgionTls_cipher_badname.yaml`)
+  drives a `cipher-badname` EdgionTls (`edgion-tests/conf/EdgionTls/cipher/EdgionTls_cipher_badname.yaml`)
   with an obviously-invalid cipher name and asserts the openssl `s_client` handshake does
   NOT complete. Before the fix this test would have failed (handshake completed with a
   default-suite cipher).

@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let proto_candidates = [
         "examples/proto/test_service.proto",
-        "examples/test/proto/test_service.proto",
+        "edgion-tests/proto/test_service.proto",
         "edgion-tests/src/proto/test_service.proto",
     ];
     let proto_path = proto_candidates.iter().find(|p| Path::new(*p).exists()).copied();
@@ -28,8 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         return Err(
-            "test_service.proto not found (checked: examples/proto, examples/test/proto, edgion-tests/src/proto)"
-                .into(),
+            "test_service.proto not found (checked: examples/proto, edgion-tests/proto, edgion-tests/src/proto)".into(),
         );
     };
     let include_dir = Path::new(proto_path)

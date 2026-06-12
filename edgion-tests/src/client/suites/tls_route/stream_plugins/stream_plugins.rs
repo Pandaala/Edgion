@@ -3,7 +3,7 @@
 // Tests that stream plugins on TLSRoute annotations work correctly,
 // mirroring the TCPRoute StreamPlugins tests but over TLS connections.
 //
-// Required config files (in examples/test/conf/TLSRoute/StreamPlugins/):
+// Required config files (in edgion-tests/conf/TLSRoute/StreamPlugins/):
 // - 01_EdgionStreamPlugins_deny.yaml            # deny-all resource (plugins field)
 // - 02_EdgionStreamPlugins_allow_localhost.yaml  # allow 127.0.0.0/8 only (plugins field)
 // - 06_EdgionStreamPlugins_tls_route_deny.yaml   # deny-all via tlsRoutePlugins (Stage 2)

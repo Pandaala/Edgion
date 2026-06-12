@@ -45,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wrap_with_unified_auth_layer, apply_cors_layer}` downgraded from
   `pub` to `pub(crate)`. External crate callers are no longer supported;
   use `compose_admin_routes` as the single entry point.
-- New integration regression `examples/test/scripts/integration/test_center_no_auth.sh`
+- New integration regression `edgion-tests/scripts/integration/test_center_no_auth.sh`
   wired into `run_integration.sh` default sweep.
 
 ### Breaking Changes

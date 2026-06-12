@@ -70,7 +70,7 @@ This is different from ordinary cluster-scoped data because these resources are 
 
 - `config/crd/gateway-api/gateway-api-standard-v1.5.0.yaml`
 - `config/crd/edgion-crd/edgion_gateway_config_crd.yaml`
-- `examples/test/conf/base/`
+- `edgion-tests/conf/base/`
 
 What to copy:
 

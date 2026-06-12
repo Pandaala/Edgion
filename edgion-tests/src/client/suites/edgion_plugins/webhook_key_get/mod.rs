@@ -4,7 +4,7 @@
 // Verifies that webhook-based key resolution works correctly through
 // the full gateway pipeline: request → webhook call → response extraction → ctx set.
 //
-// Required config files (in examples/test/conf/EdgionPlugins/WebhookKeyGet/):
+// Required config files (in edgion-tests/conf/EdgionPlugins/WebhookKeyGet/):
 // - 01_LinkSys_edgion-default_webhook-resolver.yaml    # LinkSys Webhook resource
 // - 02_LinkSys_edgion-default_webhook-body-resolver.yaml
 // - 03_EdgionPlugins_default_webhook-ctx-set.yaml      # CtxSet plugin with webhook key_get

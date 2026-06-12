@@ -4,7 +4,7 @@ This directory is the Kubernetes test entry for Edgion examples.
 
 ## Layout
 
-- `conf/`: Kubernetes-oriented test manifests converted from `examples/test/conf`.
+- `conf/`: Kubernetes-oriented test manifests converted from `edgion-tests/conf`.
 - `scripts/`: K8s integration runner and helpers.
 - `kubernetes/`: self-contained deployment manifests for controller/gateway/test workloads.
 
@@ -16,7 +16,7 @@ Validate conf does not contain Endpoint/EndpointSlice:
 ./examples/k8stest/scripts/common/validate_no_endpoints.sh
 ```
 
-Refresh k8s conf from `examples/test/conf`:
+Refresh k8s conf from `edgion-tests/conf`:
 
 ```bash
 ```
@@ -93,6 +93,6 @@ Clean test environment:
 - `run_k8s_integration.sh` and `deploy_integration.sh` will fail fast if
   `examples/k8stest/conf` contains `Endpoint` or `EndpointSlice`.
 - `run_k8s_integration.sh` applies configs directly from `examples/k8stest/conf`
-  (no runtime conversion from `examples/test/conf`).
+  (no runtime conversion from `edgion-tests/conf`).
 - TLS-related Secrets are not committed as runtime outputs; they are generated
   before each prepare run into `examples/k8stest/generated/` and ignored by git.

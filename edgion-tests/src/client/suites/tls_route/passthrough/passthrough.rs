@@ -4,7 +4,7 @@
 // terminating TLS, then transparently relays encrypted traffic to backend.
 // The TLS handshake completes between client and backend, not at the gateway.
 //
-// Required config files (in examples/test/conf/TLSRoute/Passthrough/):
+// Required config files (in edgion-tests/conf/TLSRoute/Passthrough/):
 // - 01_Gateway.yaml                          # Gateway with TLS listener (mode=Passthrough)
 // - 03_TLSRoute.yaml                         # TLSRoute matching *.sandbox.example.com
 // - Service_test-https-backend.yaml          # HTTPS backend service

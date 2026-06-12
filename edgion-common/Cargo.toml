@@ -1,110 +1,110 @@
 [package]
 name = "edgion-common"
-version = "0.1.0"
-edition = "2021"
-authors = ["pandalaa"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
 
 [lib]
 name = "edgion_common"
 path = "src/lib.rs"
 
 # TLS backend selection is driven by the workspace: `pingora-core` is unified
-# across the dependency graph (resolver 2), so the root crate's `boringssl` /
+# across the dependency graph (resolver 2), so the binary crates' `boringssl` /
 # `rustls` feature flows into this crate's `pingora-core` automatically — the
 # same arrangement `edgion-resources` relies on. `edgion-common` has no
 # TLS-backend-gated code, so it deliberately exposes no TLS feature of its own.
 
 [features]
 # Exposes cross-crate test helpers (env-var serialization locks, JWKS discovery
-# seeding) to the root crate's test build. Enabled via the root crate's
-# `[dev-dependencies]` so it is off for normal/production builds.
+# seeding) to other crates' test builds. Enabled via their `[dev-dependencies]`
+# so it is off for normal/production builds.
 test-util = []
 
 [dependencies]
 # Shared resource/config schema crate (leaf)
-edgion-resources = { path = "../edgion-resources" }
+edgion-resources.workspace = true
 
 # Core async runtime and error handling
-tokio = { version = "1.49", features = ["full"] }
-tokio-util = "0.7"
-tokio-stream = "0.1"
-anyhow = "1.0"
-async-trait = "0.1"
-thiserror = "2.0.18"
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-stream.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
 
 # Serialization/Deserialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde_yaml = "0.9"
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
 
 # Kubernetes client and types
-kube = { version = "2.0.1", features = ["runtime", "derive"] }
-k8s-openapi = { version = "0.26.1", features = ["latest", "schemars"] }
-schemars = { version = "1" }
+kube.workspace = true
+k8s-openapi.workspace = true
+schemars.workspace = true
 
 # gRPC (config sync + fed sync)
-tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
-tonic-reflection = "0.12"
-prost = "0.13"
-rustls = { version = "0.23", features = ["ring"] }
-tokio-rustls = "0.26"
-rustls-native-certs = "0.8"
-x509-parser = { version = "0.18", features = ["verify"] }
+tonic.workspace = true
+tonic-reflection.workspace = true
+prost.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-native-certs.workspace = true
+x509-parser.workspace = true
 
-futures = "0.3.31"
+futures.workspace = true
 
 # HTTP server
-axum = { version = "0.8.8", features = ["macros", "ws"] }
-axum-server = { version = "0.8", features = ["tls-rustls"] }
+axum.workspace = true
+axum-server.workspace = true
 
 # Utilities
-bytes = "1.11.1"
-base64 = "0.22"
-chrono = "0.4"
-parking_lot = "0.12"
-uuid = { version = "1.19", features = ["v4"] }
-arc-swap = "1.8"
-dashmap = "6.1"
-regex = "1.12"
-rand = "0.9"
-smallvec = "1.15"
-indexmap = "2"
-bcrypt = "0.18"
-sha2 = "0.10"
-hex = "0.4"
-jsonwebtoken = "9"
+bytes.workspace = true
+base64.workspace = true
+chrono.workspace = true
+parking_lot.workspace = true
+uuid.workspace = true
+arc-swap.workspace = true
+dashmap.workspace = true
+regex.workspace = true
+rand.workspace = true
+smallvec.workspace = true
+indexmap.workspace = true
+bcrypt.workspace = true
+sha2.workspace = true
+hex.workspace = true
+jsonwebtoken.workspace = true
 
 # Pingora (TLS backend feature flows from the workspace via unification)
-pingora-core = { version = "0.8.1", features = ["connection_filter"] }
-pingora-http = "0.8.1"
-etcd-client = { version = "0.18", features = ["tls"] }
+pingora-core.workspace = true
+pingora-http.workspace = true
+etcd-client.workspace = true
 
 # Metrics
-metrics = "0.24"
-metrics-exporter-prometheus = "0.18"
-metrics-util = { version = "0.20", features = ["debugging"] }
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+metrics-util.workspace = true
 
 # CLI / logging
-clap = { version = "4.5", features = ["derive", "env"] }
-zeroize = { version = "1", features = ["derive"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-tracing-appender = "0.2"
-http = "1.4.0"
-percent-encoding = "2.3"
+clap.workspace = true
+zeroize.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+http.workspace = true
+percent-encoding.workspace = true
 
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2", "stream"] }
+reqwest.workspace = true
 
-rcgen = { version = "0.14.7", features = ["x509-parser"] }
-time = { version = "0.3", features = ["std"] }
+rcgen.workspace = true
+time.workspace = true
 
 [build-dependencies]
-tonic-build = "0.12"
+tonic-build.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
-wiremock = "0.6"
-mockall = "0.14.0"
-proptest = "1"
-expect-test = "1.5"
-tower = "0.5"
+tempfile.workspace = true
+wiremock.workspace = true
+mockall.workspace = true
+proptest.workspace = true
+expect-test.workspace = true
+tower.workspace = true

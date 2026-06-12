@@ -1,6 +1,6 @@
 // PluginCondition tests
 //
-// Required config files (in examples/test/conf/EdgionPlugins/PluginCondition/):
+// Required config files (in edgion-tests/conf/EdgionPlugins/PluginCondition/):
 // - EdgionPlugins_default_condition-test.yaml
 // - HTTPRoute_default_condition-test.yaml
 // - EdgionPlugins_default_condition-all-types.yaml  (all condition types)

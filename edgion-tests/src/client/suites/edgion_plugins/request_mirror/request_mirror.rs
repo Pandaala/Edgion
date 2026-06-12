@@ -13,7 +13,7 @@
 // - Verify POST requests with body are mirrored correctly
 // - Verify channelFullTimeoutMs: main request completes normally even when mirror is slow
 //
-// Config files (examples/test/conf/EdgionPlugins/RequestMirror/):
+// Config files (edgion-tests/conf/EdgionPlugins/RequestMirror/):
 //   01_EdgionPlugins_request-mirror-basic.yaml    → 100% mirror, host: mirror-basic.example.com
 //   02_EdgionPlugins_request-mirror-sampled.yaml  → 50% mirror, host: mirror-sampled.example.com
 //   03_EdgionPlugins_request-mirror-with-timeout  → channelFullTimeoutMs=200, host: mirror-timeout.example.com

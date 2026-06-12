@@ -5,7 +5,7 @@
 //! 2. Route with non-existent backend → ResolvedRefs=False(BackendNotFound)
 //! 3. Route with invalid backend kind → ResolvedRefs=False(InvalidKind)
 //!
-//! Required config files (in examples/test/conf/Status/GRPCRoute/):
+//! Required config files (in edgion-tests/conf/Status/GRPCRoute/):
 //! - Gateway_edgion-test_grpc-status-gateway.yaml
 //! - Service_edgion-default_grpc-status-svc.yaml
 //! - EndpointSlice_edgion-default_grpc-status-svc.yaml

@@ -69,12 +69,12 @@ The repository already contains a few useful starting points:
 - `config/edgion-controller.yaml`
 - `config/edgion-gateway.yaml`
 - `examples/k8stest/conf/`
-- `examples/test/conf/`
+- `edgion-tests/conf/`
 
 A practical reading pattern is:
 
 - Kubernetes examples: `examples/k8stest/conf/`
-- local integration and file-system mode: `examples/test/conf/`
+- local integration and file-system mode: `edgion-tests/conf/`
 - process-level configuration: `config/*.yaml`
 
 ## Admin API authentication

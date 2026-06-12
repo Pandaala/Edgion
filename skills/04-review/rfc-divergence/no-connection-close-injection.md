@@ -42,7 +42,7 @@ No targeted integration test was added because:
 
 1. The fix changes **no wire-observable bytes** — Pingora's H1 codec rewrites `Connection` based on `will_keepalive()` regardless of what the filter chain leaves. Pre-fix wire and post-fix wire are identical for shutdown-window responses.
 2. The only meaningful regression target ("graceful-shutdown responses still carry `Connection: close`") would be asserting a Pingora codec invariant, not Edgion code; that belongs in a Pingora-upgrade smoke test, not in this fix's regression suite.
-3. Triggering graceful shutdown mid-request from an integration test (SIGTERM + in-flight request observation) has no template in `examples/test/`; building one from scratch is disproportionate to the value.
+3. Triggering graceful shutdown mid-request from an integration test (SIGTERM + in-flight request observation) has no template in `edgion-tests/`; building one from scratch is disproportionate to the value.
 
 If Pingora is later upgraded and the `update_resp_headers` default flips or the `header::CONNECTION` rewrite at `write_response_header` is removed, the rollback is to un-comment the 3 lines in `pg_response_filter.rs:27-29` (kept as a rollback marker for exactly this reason).
 

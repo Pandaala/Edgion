@@ -1,6 +1,6 @@
 // AllEndpointStatus Plugin Integration Test Suite
 //
-// Required config files (in examples/test/conf/EdgionPlugins/AllEndpointStatus/):
+// Required config files (in edgion-tests/conf/EdgionPlugins/AllEndpointStatus/):
 // - EdgionPlugins_default_all-endpoint-status.yaml          # Basic plugin config
 // - HTTPRoute_default_all-endpoint-status-test.yaml         # Route with host: all-endpoint-status-test.example.com
 // - 02_EdgionPlugins_default_all-endpoint-status-headers.yaml  # Plugin with includeResponseHeaders
@@ -8,7 +8,7 @@
 // - 04_EdgionPlugins_default_all-endpoint-status-no-backend.yaml # Plugin for no-backend test
 // - 05_HTTPRoute_default_all-endpoint-status-no-backend.yaml    # Route with nonexistent backend
 //
-// Also requires base config (in examples/test/conf/EdgionPlugins/base/):
+// Also requires base config (in edgion-tests/conf/EdgionPlugins/base/):
 // - Gateway.yaml                                            # Gateway for EdgionPlugins tests
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};

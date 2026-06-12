@@ -3,7 +3,7 @@
 // Verifies that the controller's preparse step correctly detects invalid plugin
 // configurations and surfaces them as Accepted=False/Invalid on EdgionPlugins.
 //
-// Required conf files (examples/test/conf/EdgionPlugins/PluginValidationStatus/):
+// Required conf files (edgion-tests/conf/EdgionPlugins/PluginValidationStatus/):
 //   01_EdgionPlugins_ep-validation-jwt-auth-invalid.yaml        — JwtAuth: no credential + no anonymous
 //   02_EdgionPlugins_ep-validation-cors-invalid.yaml            — Cors: allowCredentials=true + wildcard origin
 //   03_EdgionPlugins_ep-validation-direct-endpoint-invalid.yaml — DirectEndpoint: invalid extract regex

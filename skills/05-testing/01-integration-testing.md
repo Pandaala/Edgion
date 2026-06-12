@@ -3,7 +3,7 @@
 Use for these tasks:
 
 - Running or narrowing down local integration tests
-- Adding a new `examples/test/` case
+- Adding a new `edgion-tests/` case
 - Investigating "YAML loaded but gateway behaves wrong / test result unstable / cert or backend behavior mismatched"
 
 Read this page first to get the main workflow; for specific mappings read these next:
@@ -22,19 +22,19 @@ Read this page first to get the main workflow; for specific mappings read these 
 
 ```bash
 # Full local integration test
-./examples/test/scripts/integration/run_integration.sh
+./edgion-tests/scripts/integration/run_integration.sh
 
 # Run only one resource family
-./examples/test/scripts/integration/run_integration.sh -r HTTPRoute
+./edgion-tests/scripts/integration/run_integration.sh -r HTTPRoute
 
 # Run only one item
-./examples/test/scripts/integration/run_integration.sh -r TLSRoute -i MultiSNI
+./edgion-tests/scripts/integration/run_integration.sh -r TLSRoute -i MultiSNI
 
 # Already built, skip prepare
-./examples/test/scripts/integration/run_integration.sh --no-prepare -r EdgionPlugins -i KeyAuth
+./edgion-tests/scripts/integration/run_integration.sh --no-prepare -r EdgionPlugins -i KeyAuth
 
 # Keep the scene after the run for manual investigation
-./examples/test/scripts/integration/run_integration.sh --no-prepare --keep-alive -r Gateway -i StreamPlugins
+./edgion-tests/scripts/integration/run_integration.sh --no-prepare --keep-alive -r Gateway -i StreamPlugins
 ```
 
 ### Run every integration test in one shot
@@ -43,34 +43,34 @@ Read this page first to get the main workflow; for specific mappings read these 
 
 ```bash
 # Run every job in fast mode, continue on failure, unified report at the end
-./examples/test/scripts/integration/run_all_integration.sh
+./edgion-tests/scripts/integration/run_all_integration.sh
 
 # Skip the top-level cargo build (children may still rebuild incrementally)
-./examples/test/scripts/integration/run_all_integration.sh --no-prepare
+./edgion-tests/scripts/integration/run_all_integration.sh --no-prepare
 
 # Propagate --full-test to the main runner (LdapAuth, slow timeouts, etc.)
-./examples/test/scripts/integration/run_all_integration.sh --full-test
+./edgion-tests/scripts/integration/run_all_integration.sh --full-test
 
 # Limit the run
-./examples/test/scripts/integration/run_all_integration.sh --only main,linksys_etcd
-./examples/test/scripts/integration/run_all_integration.sh --skip acme,center
+./edgion-tests/scripts/integration/run_all_integration.sh --only main,linksys_etcd
+./edgion-tests/scripts/integration/run_all_integration.sh --skip acme,center
 ```
 
 Each job's stdout/stderr is captured to `integration_testing/run_all_<timestamp>/<job>.log` plus a machine-readable `summary.txt`. Job names: `main`, `linksys_etcd`, `linksys_es`, `acme`, `center`, `cli`, `file_watcher`. All children share controller/gateway ports (12101/12001) so they run sequentially even when their topologies differ.
 
 ## Memorize the actual directory layout
 
-- `examples/test/conf/`: test YAML, organized by resource/item
+- `edgion-tests/conf/`: test YAML, organized by resource/item
 - `edgion-tests/src/client/`: Rust test client and suite implementations
 - `edgion-tests/src/server/test_server.rs`: local HTTP/gRPC/WebSocket/TCP/UDP test backend
 - `edgion-tests/src/validator/`: `resource_diff`, `config_load_validator`
-- `examples/test/scripts/integration/run_integration.sh`: main entry (shared controller/gateway suites)
-- `examples/test/scripts/integration/run_all_integration.sh`: top-level orchestrator that sequences `run_integration.sh` plus every standalone integration script (Etcd / ES LinkSys, ACME, Center, CLI, FileWatcher) and emits a unified report
-- `examples/test/scripts/utils/`: `prepare.sh`, `start_all_with_conf.sh`, `load_conf.sh`, `kill_all.sh`
-- `examples/test/scripts/gen_certs/`: test certificate generation scripts
+- `edgion-tests/scripts/integration/run_integration.sh`: main entry (shared controller/gateway suites)
+- `edgion-tests/scripts/integration/run_all_integration.sh`: top-level orchestrator that sequences `run_integration.sh` plus every standalone integration script (Etcd / ES LinkSys, ACME, Center, CLI, FileWatcher) and emits a unified report
+- `edgion-tests/scripts/utils/`: `prepare.sh`, `start_all_with_conf.sh`, `load_conf.sh`, `kill_all.sh`
+- `edgion-tests/scripts/gen_certs/`: test certificate generation scripts
 - `integration_testing/testing_<timestamp>/`: this run's logs, PIDs, generated Secrets, and report directory
 
-Do not search for code or cert scripts using older test-directory conventions. Current code lives in `edgion-tests/src/`; cert scripts are in `examples/test/scripts/gen_certs/`.
+Do not search for code or cert scripts using older test-directory conventions. Current code lives in `edgion-tests/src/`; cert scripts are in `edgion-tests/scripts/gen_certs/`.
 
 ## Run flow
 
@@ -80,7 +80,7 @@ The actual responsibilities of `run_integration.sh` are:
 2. Call `start_all_with_conf.sh` to clean the scene and create `integration_testing/testing_<timestamp>/`
 3. Generate runtime Secrets under `${WORK_DIR}/generated-secrets/` and load them once after the suite YAML
 4. Start `test_server`, controller, gateway, and wait for health checks
-5. First load `examples/test/conf/base/`, then load the configuration of the target suite, and finally load runtime-generated Secrets
+5. First load `edgion-tests/conf/base/`, then load the configuration of the target suite, and finally load runtime-generated Secrets
 6. Use `resource_diff` to verify the controller↔gateway sync state
 7. Call `test_client -g -r <Resource> -i <Item>` to run the tests
 8. Clean up by default; with `--keep-alive` the processes, logs, and working directory are kept
@@ -114,7 +114,7 @@ The corresponding YAML directory, Rust suite, and whether `--gateway` is require
 Look for the closest template:
 
 ```bash
-rg -n "MultiSNI|KeyAuth|HealthCheckTransition|ReferenceGrant" edgion-tests/src examples/test/conf
+rg -n "MultiSNI|KeyAuth|HealthCheckTransition|ReferenceGrant" edgion-tests/src edgion-tests/conf
 ```
 
 Prefer copying a case with "same protocol, same validation method, same dependency type" rather than starting from scratch.
@@ -123,8 +123,8 @@ Prefer copying a case with "same protocol, same validation method, same dependen
 
 The usual order is:
 
-1. Write or modify YAML under `examples/test/conf/<Resource>/<Item>/`
-2. Update `examples/test/conf/ports.json` if a new listener port is needed
+1. Write or modify YAML under `edgion-tests/conf/<Resource>/<Item>/`
+2. Update `edgion-tests/conf/ports.json` if a new listener port is needed
 3. If the YAML uses a new field, first confirm the corresponding CRD covers it
 4. Then modify `edgion-tests/src/client/suites/...`
 
@@ -173,7 +173,7 @@ Rules of thumb:
 First run the narrowest command:
 
 ```bash
-./examples/test/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
+./edgion-tests/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
 ```
 
 If you need to repeatedly hit traffic or control phases yourself, after preserving the scene call:
@@ -190,10 +190,10 @@ Hot-reload tests are orchestrated by the Rust-side scenario framework and **run 
 
 ```bash
 # Default run: includes dynamic scenarios (all families + dynamic at the end)
-./examples/test/scripts/integration/run_integration.sh
+./edgion-tests/scripts/integration/run_integration.sh
 
 # Running only -r Gateway: still includes dynamic (migrated from the legacy run_dynamic_tests behavior)
-./examples/test/scripts/integration/run_integration.sh -r Gateway
+./edgion-tests/scripts/integration/run_integration.sh -r Gateway
 
 # Narrow run (-r set to non-Gateway, e.g. -r EdgionPlugins): skips dynamic for faster iteration
 
@@ -235,7 +235,7 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 
 ### Adding a dynamic scenario
 
-1. Write `initial/` + `updates/` YAML under `examples/test/conf/<Resource>/<Item>/DynamicTest/` (`load_conf.sh` automatically skips `updates/` and `delete/`)
+1. Write `initial/` + `updates/` YAML under `edgion-tests/conf/<Resource>/<Item>/DynamicTest/` (`load_conf.sh` automatically skips `updates/` and `delete/`)
 2. Write two phase suites in `edgion-tests/src/client/suites/<family>/dynamic.rs` (`<Name>InitialTestSuite` / `<Name>UpdateTestSuite`); re-export them via the family `mod.rs` to `suites::*`
 3. Add branches to the three dispatch tables in `test_client.rs`: `resolve_suite` (for aliases if needed), `suite_to_port_key`, `add_suites_for_suite` (selects a suite by `--phase`)
 4. Write the scenario in `edgion-tests/src/client/dynamic/scenarios/<id>.rs`; the `run` function chains the N phases in order: `assert_phase` (initial) → `apply_dir` / `delete_resources` (changes) → `wait_phase` (with timeout, until the final-state business assertions all pass). **Do not** rely on `sleep` as a fallback and **do not** use `wait_resource_sync` — the former is unreliable, and the latter is no longer exposed on ScenarioCtx
@@ -253,7 +253,7 @@ A scenario internally schedules suites via `ctx.assert_phase(scenario, "initial"
 ./target/debug/test_client -g -r <Resource> -i <Item> --phase initial
 # After manually applying updates/, run the update-phase assertions
 ./target/debug/edgion-cli --server http://127.0.0.1:12101 \
-    apply -f examples/test/conf/<Resource>/<Item>/DynamicTest/updates/
+    apply -f edgion-tests/conf/<Resource>/<Item>/DynamicTest/updates/
 sleep 3
 ./target/debug/test_client -g -r <Resource> -i <Item> --phase update
 ```
@@ -283,7 +283,7 @@ In integration tests, authentication is handled by the framework automatically �
 
 ### Center no-auth-config regression test
 
-`examples/test/scripts/integration/test_center_no_auth.sh` is a self-contained integration-layer regression
+`edgion-tests/scripts/integration/test_center_no_auth.sh` is a self-contained integration-layer regression
 verifying that, with neither `[local_auth]` nor `[auth]` configured, the Center: starts successfully, returns 200 for `/health` and
 `/api/v1/auth/status`, returns 503 (fail-close) for business paths like `/api/v1/controllers`, and the startup log contains a
 `No authentication configured` WARN. It is included in the preflight of `run_integration.sh` as a structural regression for fix #01 bug 1/4 + Task 4 fix and does not depend on the Controller/Gateway/test_server environment.
@@ -317,7 +317,7 @@ A new standalone script must include a header comment explaining "why the main e
 When a new suite / new script contains any of the following, the reviewer must block the merge and ask the author to either reuse the main process or be added to the exception list above:
 
 - `Command::new("edgion-gateway")` / `Command::new("./edgion-gateway")` / `spawn_gateway`-style calls
-- A new script under `edgion-tests/src/client/` or `examples/test/scripts/` (not in the exception list) calling `start_all` / `start_all_with_conf`
+- A new script under `edgion-tests/src/client/` or `edgion-tests/scripts/` (not in the exception list) calling `start_all` / `start_all_with_conf`
 - Repeatedly killing / restarting `edgion-gateway` within the same script (unless the test is specifically about Gateway restart behavior — even then only one restart cycle is allowed)
 
 Reasonable `Command::new` examples (do not block): invoking external tools like `openssl`, `docker`, `curl` to validate client-side protocols — they don't count as "starting Gateway".
@@ -328,7 +328,7 @@ After startup, `run_integration.sh` does a self-check `pgrep -c edgion-gateway`;
 
 ## Common pitfalls
 
-- YAML written under `examples/test/conf/` but not registered in `test_client.rs` — the case never runs
+- YAML written under `edgion-tests/conf/` but not registered in `test_client.rs` — the case never runs
 - New item missing in `suite_to_port_key()` — traffic hits the wrong listener
 - `--gateway` missing — a suite that should go through the gateway errors out
 - Reusing old test certificates — SAN mismatch

@@ -419,7 +419,7 @@ pub fn load_gateways(&self) -> arc_swap::Guard<Arc<HashMap<...>>>
 
 ### 文件
 - `edgion-tests/src/client/suites/edgion_plugins/header_cert_auth/header_cert_auth.rs`（+17, -3 行）
-- `examples/test/scripts/integration/run_integration.sh`（+2 行）
+- `edgion-tests/scripts/integration/run_integration.sh`（+2 行）
 
 ### 问题背景
 测试用 `include_str!` 在编译时嵌入 `ClientCert_edge_backend-client-cert.yaml` 模板文件，但该模板是 `data: {}`（空）。实际 TLS 证书由 `generate_mtls_certs.sh` 在运行时生成到 `$WORK_DIR/generated-secrets/` 目录。
@@ -491,7 +491,7 @@ export EDGION_WORK_DIR="${WORK_DIR}"
 | `src/core/gateway/gateway/route_match.rs` | T8 | +21 |
 | `src/core/gateway/gateway/handler.rs` | T9 | +21/-21 |
 | `edgion-tests/src/client/.../header_cert_auth.rs` | T10 | +17/-3 |
-| `examples/test/scripts/.../run_integration.sh` | T10 | +2 |
+| `edgion-tests/scripts/.../run_integration.sh` | T10 | +2 |
 
 ### 新增文件（2 个）
 

@@ -1,6 +1,6 @@
 // DynamicInternalUpstream Integration Test Suite
 //
-// Required config files (in examples/test/conf/EdgionPlugins/DynamicInternalUpstream/):
+// Required config files (in edgion-tests/conf/EdgionPlugins/DynamicInternalUpstream/):
 // - 01_Service_default_diu-backend-{stable,canary,debug}.yaml
 // - 02_EndpointSlice_default_diu-backend-{stable,canary,debug}-slice.yaml
 // - 03_EdgionPlugins_default_diu-rules.yaml        (rules mode, onMissing=fallback)

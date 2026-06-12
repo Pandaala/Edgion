@@ -69,12 +69,12 @@ deploy/standalone/start.sh
 - `config/edgion-controller.yaml`
 - `config/edgion-gateway.yaml`
 - `examples/k8stest/conf/`
-- `examples/test/conf/`
+- `edgion-tests/conf/`
 
 理解方式建议是：
 
 - Kubernetes 侧看 `examples/k8stest/conf/`
-- 本地集成测试和文件系统模式看 `examples/test/conf/`
+- 本地集成测试和文件系统模式看 `edgion-tests/conf/`
 - 进程级配置看 `config/*.yaml`
 
 ## Admin API 认证

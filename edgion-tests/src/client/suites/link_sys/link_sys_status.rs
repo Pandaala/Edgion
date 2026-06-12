@@ -2,7 +2,7 @@
 //
 // Verifies the Accepted status condition on LinkSys resources.
 //
-// Required conf files (examples/test/conf/LinkSys/Status/):
+// Required conf files (edgion-tests/conf/LinkSys/Status/):
 //   01_LinkSys_edgion-test_ls-status-redis-valid.yaml          — Redis with endpoints → Accepted=True
 //   02_LinkSys_edgion-test_ls-status-redis-empty-endpoints.yaml — Redis with no endpoints → Accepted=False/Invalid
 //

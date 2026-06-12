@@ -71,10 +71,10 @@ spec:
           mountPath: /usr/local/edgion/conf
           readOnly: true
         - name: test-certs
-          mountPath: /usr/local/edgion/examples/test/certs
+          mountPath: /usr/local/edgion/edgion-tests/certs
           readOnly: true
         - name: test-mtls-certs
-          mountPath: /usr/local/edgion/examples/test/certs/mtls
+          mountPath: /usr/local/edgion/edgion-tests/certs/mtls
           readOnly: true
       volumes:
       - name: test-conf

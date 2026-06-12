@@ -2,7 +2,7 @@
 // Tests Gateway API v1.5 gateway-level spec.tls.frontend config for downstream mTLS.
 // Covers default.validation on one HTTPS listener and perPort override on another.
 //
-// Config files (in examples/test/conf/Gateway/FrontendValidation/):
+// Config files (in edgion-tests/conf/Gateway/FrontendValidation/):
 // - Gateway_edgion-test_frontend-validation-gateway.yaml  # Gateway with default + perPort frontend TLS
 // - HTTPRoute_edgion-test_fv-route.yaml                   # Route for default-validation listener
 // - HTTPRoute_edgion-test_fv-route-insecure.yaml          # Route for perPort InsecureFallback listener
@@ -11,7 +11,7 @@
 // - fv-server-cert (server cert with SAN fv-mtls.example.com)
 // - fv-client-ca (client CA for verification)
 //
-// Client certs (in examples/test/certs/mtls/):
+// Client certs (in edgion-tests/certs/mtls/):
 // - valid-client.crt + .key (signed by trusted CA)
 // - invalid-client.crt + .key (signed by untrusted CA)
 
@@ -92,8 +92,8 @@ impl FrontendValidationTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let cert_path = "examples/test/certs/mtls/valid-client.crt";
-                    let key_path = "examples/test/certs/mtls/valid-client.key";
+                    let cert_path = "edgion-tests/certs/mtls/valid-client.crt";
+                    let key_path = "edgion-tests/certs/mtls/valid-client.key";
 
                     let client = match create_mtls_client(cert_path, key_path, HOSTNAME, &ctx.target_host, PORT) {
                         Ok(c) => c,
@@ -177,8 +177,8 @@ impl FrontendValidationTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let cert_path = "examples/test/certs/mtls/invalid-client.crt";
-                    let key_path = "examples/test/certs/mtls/invalid-client.key";
+                    let cert_path = "edgion-tests/certs/mtls/invalid-client.crt";
+                    let key_path = "edgion-tests/certs/mtls/invalid-client.key";
 
                     let client = match create_mtls_client(cert_path, key_path, HOSTNAME, &ctx.target_host, PORT) {
                         Ok(c) => c,
@@ -220,8 +220,8 @@ impl FrontendValidationTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let cert_path = "examples/test/certs/mtls/valid-client.crt";
-                    let key_path = "examples/test/certs/mtls/valid-client.key";
+                    let cert_path = "edgion-tests/certs/mtls/valid-client.crt";
+                    let key_path = "edgion-tests/certs/mtls/valid-client.key";
 
                     let client =
                         match create_mtls_client(cert_path, key_path, HOSTNAME, &ctx.target_host, PORT_INSECURE) {
@@ -349,8 +349,8 @@ impl FrontendValidationTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let cert_path = "examples/test/certs/mtls/invalid-client.crt";
-                    let key_path = "examples/test/certs/mtls/invalid-client.key";
+                    let cert_path = "edgion-tests/certs/mtls/invalid-client.crt";
+                    let key_path = "edgion-tests/certs/mtls/invalid-client.key";
 
                     let client =
                         match create_mtls_client(cert_path, key_path, HOSTNAME, &ctx.target_host, PORT_INSECURE) {

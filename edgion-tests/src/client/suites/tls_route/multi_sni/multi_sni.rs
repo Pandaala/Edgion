@@ -7,7 +7,7 @@
 // now loads a fresh route table snapshot per-connection (via ArcSwap), route
 // updates are always visible regardless of timing.
 //
-// Required config files (in examples/test/conf/TLSRoute/MultiSNI/):
+// Required config files (in edgion-tests/conf/TLSRoute/MultiSNI/):
 // - 01_Gateway.yaml              # Single TLS listener on port 31284
 // - 02_EdgionTls_alpha.yaml      # Wildcard cert for *.alpha.example.com
 // - 02_EdgionTls_beta.yaml       # Wildcard cert for *.beta.example.com

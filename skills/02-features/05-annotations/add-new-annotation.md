@@ -101,7 +101,7 @@ Gateway runtime consumer locations by resource:
 
 1. Add a unit test in the handler or preparse file covering the annotation's
    parse logic (present/absent/malformed).
-2. Add an integration scenario in `examples/test/` that exercises the annotation
+2. Add an integration scenario in `edgion-tests/` that exercises the annotation
    end-to-end. Consult
    [05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md)
    for the scenario structure.

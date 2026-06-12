@@ -172,9 +172,9 @@ At minimum, cover three layers.
 
 Existing examples and integration fixtures are mainly under:
 
-- `examples/test/conf/Gateway/StreamPlugins/`
-- `examples/test/conf/TCPRoute/StreamPlugins/`
-- `examples/test/conf/TLSRoute/StreamPlugins/`
+- `edgion-tests/conf/Gateway/StreamPlugins/`
+- `edgion-tests/conf/TCPRoute/StreamPlugins/`
+- `edgion-tests/conf/TLSRoute/StreamPlugins/`
 
 ## Manual Review Checklist
 

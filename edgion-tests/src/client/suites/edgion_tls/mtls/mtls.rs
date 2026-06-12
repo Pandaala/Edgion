@@ -17,15 +17,15 @@
 // - GatewayClass__public-gateway.yaml         # GatewayClass config
 //
 // Generated certificate files (by generate_mtls_certs.sh):
-// - examples/test/certs/mtls/valid-client.crt          # client certificate
-// - examples/test/certs/mtls/valid-client.key          # valid client private key
-// - examples/test/certs/mtls/invalid-client.crt        # client certificate（ CA）
-// - examples/test/certs/mtls/invalid-client.key        # invalid client private key
-// - examples/test/certs/mtls/nonmatching-client.crt    # SAN matchclient certificate
-// - examples/test/certs/mtls/nonmatching-client.key    # SAN mismatched client private key
-// - examples/test/certs/mtls/chain-client-bundle.crt   # client certificate with chain (leaf + intermediate)
-// - examples/test/certs/mtls/chain-client.crt          # leaf-only client certificate (intermediate-signed)
-// - examples/test/certs/mtls/chain-client.key          # certificate chain client private key
+// - edgion-tests/certs/mtls/valid-client.crt          # client certificate
+// - edgion-tests/certs/mtls/valid-client.key          # valid client private key
+// - edgion-tests/certs/mtls/invalid-client.crt        # client certificate（ CA）
+// - edgion-tests/certs/mtls/invalid-client.key        # invalid client private key
+// - edgion-tests/certs/mtls/nonmatching-client.crt    # SAN matchclient certificate
+// - edgion-tests/certs/mtls/nonmatching-client.key    # SAN mismatched client private key
+// - edgion-tests/certs/mtls/chain-client-bundle.crt   # client certificate with chain (leaf + intermediate)
+// - edgion-tests/certs/mtls/chain-client.crt          # leaf-only client certificate (intermediate-signed)
+// - edgion-tests/certs/mtls/chain-client.key          # certificate chain client private key
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -99,8 +99,8 @@ impl MtlsTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let cert_path = "examples/test/certs/mtls/valid-client.crt";
-                    let key_path = "examples/test/certs/mtls/valid-client.key";
+                    let cert_path = "edgion-tests/certs/mtls/valid-client.crt";
+                    let key_path = "edgion-tests/certs/mtls/valid-client.key";
                     let hostname = "mtls.example.com";
 
                     let client =
@@ -192,8 +192,8 @@ impl MtlsTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let cert_path = "examples/test/certs/mtls/invalid-client.crt";
-                    let key_path = "examples/test/certs/mtls/invalid-client.key";
+                    let cert_path = "edgion-tests/certs/mtls/invalid-client.crt";
+                    let key_path = "edgion-tests/certs/mtls/invalid-client.key";
                     let hostname = "mtls.example.com";
 
                     // If client creation fails due to invalid cert, that's also a valid rejection
@@ -242,8 +242,8 @@ impl MtlsTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let cert_path = "examples/test/certs/mtls/valid-client.crt";
-                    let key_path = "examples/test/certs/mtls/valid-client.key";
+                    let cert_path = "edgion-tests/certs/mtls/valid-client.crt";
+                    let key_path = "edgion-tests/certs/mtls/valid-client.key";
                     let hostname = "mtls-optional.example.com";
 
                     let client =
@@ -332,8 +332,8 @@ impl MtlsTestSuite {
                     let start = Instant::now();
 
                     // valid-client has SAN=client1.example.com which matches whitelist
-                    let cert_path = "examples/test/certs/mtls/valid-client.crt";
-                    let key_path = "examples/test/certs/mtls/valid-client.key";
+                    let cert_path = "edgion-tests/certs/mtls/valid-client.crt";
+                    let key_path = "edgion-tests/certs/mtls/valid-client.key";
                     let hostname = "mtls-san.example.com";
 
                     let client =
@@ -376,8 +376,8 @@ impl MtlsTestSuite {
                     let start = Instant::now();
 
                     // nonmatching-client has SAN=notinwhitelist.example.com which doesn't match
-                    let cert_path = "examples/test/certs/mtls/nonmatching-client.crt";
-                    let key_path = "examples/test/certs/mtls/nonmatching-client.key";
+                    let cert_path = "edgion-tests/certs/mtls/nonmatching-client.crt";
+                    let key_path = "edgion-tests/certs/mtls/nonmatching-client.key";
                     let hostname = "mtls-san.example.com";
 
                     let client =
@@ -474,8 +474,8 @@ impl MtlsTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let cert_path = "examples/test/certs/mtls/valid-client.crt";
-                    let key_path = "examples/test/certs/mtls/valid-client.key";
+                    let cert_path = "edgion-tests/certs/mtls/valid-client.crt";
+                    let key_path = "edgion-tests/certs/mtls/valid-client.key";
                     let hostname = "mtls-terminate.example.com";
 
                     let client =
@@ -518,8 +518,8 @@ impl MtlsTestSuite {
                     let start = Instant::now();
 
                     // chain-client-bundle contains client cert + intermediate CA
-                    let cert_path = "examples/test/certs/mtls/chain-client-bundle.crt";
-                    let key_path = "examples/test/certs/mtls/chain-client.key";
+                    let cert_path = "edgion-tests/certs/mtls/chain-client-bundle.crt";
+                    let key_path = "edgion-tests/certs/mtls/chain-client.key";
                     let hostname = "mtls-chain.example.com";
 
                     let client =
@@ -570,8 +570,8 @@ impl MtlsTestSuite {
                     // Leaf-only client cert (signed by the intermediate). The
                     // intermediate is intentionally NOT bundled with the client
                     // identity — it must come from the gateway's ca-chain Secret.
-                    let cert_path = "examples/test/certs/mtls/chain-client.crt";
-                    let key_path = "examples/test/certs/mtls/chain-client.key";
+                    let cert_path = "edgion-tests/certs/mtls/chain-client.crt";
+                    let key_path = "edgion-tests/certs/mtls/chain-client.key";
                     let hostname = "mtls-chain.example.com";
 
                     let client =

@@ -8,7 +8,7 @@
 //      (upstream status = 504 from ConnectTimedout path in pg_fail_to_connect)
 //   3. The HTTPRoute Accepted=True (config is valid; the failure is runtime/data-plane only)
 //
-// Required config files (in examples/test/conf/HTTPRoute/Backend/DnsResolutionFailure/):
+// Required config files (in edgion-tests/conf/HTTPRoute/Backend/DnsResolutionFailure/):
 //   - Gateway_default_dns-fail-gateway.yaml         # HTTP listener on port 31339
 //   - HTTPRoute_default_dns-fail-route.yaml         # Routes dns-fail.example.com → nonexistent-backend
 //                                                   #   timeouts: request=8s, backendRequest=1s
