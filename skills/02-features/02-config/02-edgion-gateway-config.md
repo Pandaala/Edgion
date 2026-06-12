@@ -196,7 +196,7 @@ Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed i
 
 - **No `enabled` field** — path normalization is Edgion's default behavior and **cannot be disabled**.
 - **No per-Gateway / per-Listener override** — these two switches are global.
-- For the security guarantee scope see spec §1.4: [tasks/todo/uri-normalization.md](../../../tasks/todo/uri-normalization.md).
+- For the security guarantee scope see the URI normalization architecture doc: [../../01-architecture/02-gateway/uri-normalization/SKILL.md](../../01-architecture/02-gateway/uri-normalization/SKILL.md).
 
 ### spec.linkSys
 
