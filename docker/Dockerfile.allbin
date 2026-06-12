@@ -30,8 +30,8 @@ COPY examples/test/conf examples/test/conf
 # After build, copy binaries out of the cache mount to a regular layer
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    cargo build --release --features default \
-      --bin edgion-controller --bin edgion-cli \
+    cargo build --release -p edgion-controller --features default --bin edgion-controller \
+    && cargo build --release -p edgion-cli --bin edgion-cli \
     && cp target/release/edgion-controller target/release/edgion-cli /usr/local/bin/
 
 # Runtime

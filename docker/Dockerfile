@@ -106,7 +106,8 @@ RUN PROFILE_FLAG=$([ "${PROFILE}" = "release" ] && echo "--release" || echo "");
       touch /app/edgion-cli-binary; \
     else \
       echo "Building bin: ${BINARY} (${PROFILE})"; \
-      cargo build ${PROFILE_FLAG} --features "${FEATURES}" --bin "${BINARY}" --bin edgion-cli; \
+      cargo build ${PROFILE_FLAG} -p "${BINARY}" --features "${FEATURES}" --bin "${BINARY}"; \
+      cargo build ${PROFILE_FLAG} -p edgion-cli --bin edgion-cli; \
       cp /app/target/${OUT_DIR}/${BINARY} /app/edgion-binary; \
       cp /app/target/${OUT_DIR}/edgion-cli /app/edgion-cli-binary; \
     fi

@@ -7,6 +7,16 @@ It supports HTTP/1.1, HTTP/2, gRPC, TCP, UDP, TLS, and WebSocket, and includes a
 
 **Three binaries**: Controller (handles K8s resources), Gateway (data-plane proxy), edgion-cli (CLI debugging tool). The federation Center has been extracted to the separate EdgionCenter repository.
 
+**Workspace layout** (Cargo workspace, resolver 2): the code is split across crates rather than one root crate —
+- `edgion-resources` — shared resource/config schema (leaf).
+- `edgion-common` — shared infra: config loader, observability/log bootstrap, secret store, link-system core (+ etcd provider), TLS validation, auth, conf_sync/fed_sync proto codegen. Depends on `edgion-resources`. Backend-agnostic (TLS backend flows in via workspace `pingora-core` feature unification). Exposes a `test-util` feature for cross-crate test helpers.
+- `edgion-gateway` — data plane; the `edgion-gateway` binary lives here. Owns `boringssl`/`rustls` + allocator features.
+- `edgion-controller` — control plane; the `edgion-controller` binary lives here. Depends on `edgion-gateway` for the single retained edge (`plugins::http::compile_plugins`, used to validate plugins on resource ingest).
+- `edgion-cli` — the `edgion-cli` binary + lib; depends only on `edgion-common`/`edgion-resources`.
+- root `edgion` package — a thin umbrella that only hosts integration-test `examples/` and the `cache_residue` helper bin.
+
+Each binary crate sets its own `#[global_allocator]`; libraries set none. Because each binary is its own package, build them with `cargo build -p <crate> --bin <name>` (a bare `--bin <name>` from the workspace root no longer resolves).
+
 **Feature Flags** (mutually exclusive — pay attention at build time):
 - TLS backend: `boringssl` (default) | `rustls`
 - Memory allocator: `allocator-jemalloc` (default) | `allocator-mimalloc` | `allocator-system`

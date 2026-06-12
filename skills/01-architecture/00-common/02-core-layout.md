@@ -9,23 +9,27 @@ description: Core module layering conventions — top-level grouping, per-bin la
 
 ## Top-level grouping
 
-`src/core/` has five top-level groups:
+The code is a Cargo workspace (resolver 2); each plane is its own crate (the old
+single-crate `src/core/` layout is gone):
 
 ```
-src/core/
-├── controller/   # Logic belonging to edgion-controller
-├── gateway/      # Logic belonging to edgion-gateway
-├── ctl/          # Logic belonging to edgion-cli
-├── center/       # Logic belonging to edgion-center (federation center)
-└── common/       # Code shared across bins
+edgion-resources/    # Shared resource/config schema (leaf)
+edgion-common/       # Code shared across bins (depends on edgion-resources)
+edgion-gateway/      # Data plane + `edgion-gateway` binary
+edgion-controller/   # Control plane + `edgion-controller` binary (depends on edgion-gateway for compile_plugins)
+edgion-cli/          # CLI lib + `edgion-cli` binary
+.  (root `edgion`)   # Thin umbrella — only hosts integration-test examples + cache_residue bin
 ```
 
 **Placement principles**:
-- Serves the control plane only → `controller/`
-- Serves the data plane only → `gateway/`
-- Serves only the CLI → `ctl/`
-- Serves only the federation center → `center/`
-- Depended on by at least two bins with no implicit runtime coupling → `common/`
+- Serves the control plane only → `edgion-controller/`
+- Serves the data plane only → `edgion-gateway/`
+- Serves only the CLI → `edgion-cli/`
+- Depended on by at least two bins with no implicit runtime coupling → `edgion-common/`
+- Pure resource/config schema (no runtime) → `edgion-resources/`
+
+The federation Center is a separate repository (EdgionCenter); only its shared
+`fed_sync` proto remains here, in `edgion-common/src/fed_sync/`.
 
 ## Gateway layout
 
@@ -139,9 +143,9 @@ edgion-controller/src/
 
 ## Center layout
 
-The federation Center binary (edgion-center) and its `src/core/center/` tree have been extracted to the
+The federation Center binary (edgion-center) and its tree have been extracted to the
 separate EdgionCenter repository. The Controller side still depends on the shared federation-sync proto in
-`common/fed_sync/`; cross-bin types live in `types/`.
+`edgion-common/src/fed_sync/`; cross-crate schema types live in `edgion-resources`.
 
 ## Common layout
 
@@ -177,19 +181,22 @@ edgion-common/src/
     └── proxy_protocol/   # PROXY Protocol
 ```
 
-**Dependency direction constraints**:
-- `common` must not depend on `gateway`
-- `common` must not depend on `controller` (2 historical legacy exceptions remain to be cleaned up; see below)
+**Dependency direction constraints** (now enforced by the crate boundary — a
+violation is a compile error, not just a convention):
+- `edgion-common` must not depend on `edgion-gateway` or `edgion-controller`.
+- The only retained control→data edge is `edgion-controller` → `edgion-gateway`
+  via `plugins::http::compile_plugins` (plugin validation on resource ingest).
+- The config-center schema (`ConfCenterConfig`, `FileSystemConfig`,
+  `KubernetesConfig`, `MetadataFilterConfig`, `EtcdConfig`) now lives in
+  `edgion-common/src/config/conf_center/`; the controller re-exports it from its
+  old paths. (This removed the former `common → controller` cycle.)
 
-Types shared across bins (such as RegionRoute Entry types) must live in `types/`, so each side depends on `types` rather than depending on each other. JWT/JWK utilities and other logic shared by both sides must live in `common/`, with gateway/center depending on it.
+Types shared across bins must live in `edgion-resources` (pure schema) or
+`edgion-common` (shared runtime infra), so each side depends on those rather than
+on each other.
 
-**Known historical legacy exceptions (`common → controller`, to be cleaned up later):**
-- `common/config/mod.rs` → `controller::conf_mgr::{ConfCenterConfig, FileSystemConfig}`
-- `common/utils/metadata_filter.rs` → `controller::conf_mgr::conf_center::MetadataFilterConfig`
-
-When you encounter these two places do not mistake them for new violations; fixing them requires lifting the related configuration/traits up into `types/` or `common/`, which is a separate task.
-
-Do not move code into `common/` simply to avoid a cross-module import. Keep ownership clear by business domain.
+Do not move code into `edgion-common` simply to avoid a cross-crate import. Keep
+ownership clear by business domain.
 
 ## Types layout
 
